@@ -1,14 +1,4 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Put,
-  Delete,
-  Body,
-  Param,
-  Query,
-  UseGuards,
-} from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
@@ -65,14 +55,14 @@ export class EmailCampaignsController {
   @Get(":id")
   @ApiOperation({ summary: "Get campaign by ID" })
   @ApiResponse({ status: 200, description: "Campaign details" })
-  async getCampaign(@CurrentUser() user: User, @Param("id") id: string) {
+  async getCampaign(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
     return this.campaignsService.getCampaign(user.tenantId, id);
   }
 
   @Get(":id/recipients")
   @ApiOperation({ summary: "Get campaign recipients" })
   @ApiResponse({ status: 200, description: "List of campaign recipients" })
-  async getRecipients(@CurrentUser() user: User, @Param("id") id: string) {
+  async getRecipients(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
     return this.campaignsService.getCampaignRecipients(user.tenantId, id);
   }
 
@@ -93,7 +83,7 @@ export class EmailCampaignsController {
   @ApiResponse({ status: 200, description: "Campaign updated" })
   async updateCampaign(
     @CurrentUser() user: User,
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body() dto: UpdateCampaignDto,
   ) {
     return this.campaignsService.updateCampaign(user.tenantId, id, dto);
@@ -103,7 +93,7 @@ export class EmailCampaignsController {
   @Roles(UserRole.owner)
   @ApiOperation({ summary: "Delete campaign (Owner only)" })
   @ApiResponse({ status: 200, description: "Campaign deleted" })
-  async deleteCampaign(@CurrentUser() user: User, @Param("id") id: string) {
+  async deleteCampaign(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
     return this.campaignsService.deleteCampaign(user.tenantId, id);
   }
 
@@ -112,7 +102,7 @@ export class EmailCampaignsController {
   @ApiResponse({ status: 200, description: "Campaign scheduled" })
   async scheduleCampaign(
     @CurrentUser() user: User,
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body() dto: ScheduleCampaignDto,
   ) {
     return this.campaignsService.scheduleCampaign(
@@ -125,7 +115,7 @@ export class EmailCampaignsController {
   @Post(":id/send")
   @ApiOperation({ summary: "Send campaign now" })
   @ApiResponse({ status: 200, description: "Campaign sent" })
-  async sendCampaign(@CurrentUser() user: User, @Param("id") id: string) {
+  async sendCampaign(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
     return this.campaignsService.sendCampaignNow(user.tenantId, id);
   }
 
@@ -134,7 +124,7 @@ export class EmailCampaignsController {
   @ApiResponse({ status: 201, description: "Recipients added" })
   async addRecipients(
     @CurrentUser() user: User,
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body() dto: AddRecipientsDto,
   ) {
     return this.campaignsService.addRecipients(
@@ -149,7 +139,7 @@ export class EmailCampaignsController {
   @ApiResponse({ status: 200, description: "Recipients removed" })
   async removeRecipients(
     @CurrentUser() user: User,
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body() dto: AddRecipientsDto,
   ) {
     return this.campaignsService.removeRecipients(
@@ -162,7 +152,7 @@ export class EmailCampaignsController {
   @Get(":id/analytics")
   @ApiOperation({ summary: "Get campaign analytics" })
   @ApiResponse({ status: 200, description: "Campaign analytics" })
-  async getAnalytics(@CurrentUser() user: User, @Param("id") id: string) {
+  async getAnalytics(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
     return this.campaignsService.getCampaignAnalytics(user.tenantId, id);
   }
 
@@ -178,7 +168,7 @@ export class EmailCampaignsController {
   @Get("templates/:id")
   @ApiOperation({ summary: "Get template by ID" })
   @ApiResponse({ status: 200, description: "Template details" })
-  async getTemplate(@CurrentUser() user: User, @Param("id") id: string) {
+  async getTemplate(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
     return this.campaignsService.getTemplate(user.tenantId, id);
   }
 
@@ -195,7 +185,7 @@ export class EmailCampaignsController {
   @Delete("templates/:id")
   @ApiOperation({ summary: "Delete template" })
   @ApiResponse({ status: 200, description: "Template deleted" })
-  async deleteTemplate(@CurrentUser() user: User, @Param("id") id: string) {
+  async deleteTemplate(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
     return this.campaignsService.deleteTemplate(user.tenantId, id);
   }
 
@@ -225,14 +215,14 @@ export class EmailCampaignsController {
     summary: "Activate a campaign (for re-engagement campaigns)",
   })
   @ApiResponse({ status: 200, description: "Campaign activated" })
-  async activateCampaign(@CurrentUser() user: User, @Param("id") id: string) {
+  async activateCampaign(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
     return this.campaignsService.activateCampaign(user.tenantId, id);
   }
 
   @Post(":id/deactivate")
   @ApiOperation({ summary: "Deactivate a campaign" })
   @ApiResponse({ status: 200, description: "Campaign deactivated" })
-  async deactivateCampaign(@CurrentUser() user: User, @Param("id") id: string) {
+  async deactivateCampaign(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
     return this.campaignsService.deactivateCampaign(user.tenantId, id);
   }
 

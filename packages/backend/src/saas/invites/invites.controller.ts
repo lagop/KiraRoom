@@ -1,16 +1,4 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  HttpCode,
-  HttpStatus,
-  Param,
-  Post,
-  Query,
-  Req,
-  UseGuards,
-} from "@nestjs/common";
+import { ParseUUIDPipe, Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Query, Req, UseGuards } from "@nestjs/common";
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -102,7 +90,7 @@ export class SaasInvitesController {
   @ApiOperation({ summary: "Revoke a pending invite (SaaS Owner only)" })
   @ApiResponse({ status: 200, description: "Invite revoked" })
   @ApiResponse({ status: 400, description: "Invite is not in a revocable state" })
-  async revoke(@Req() req: any, @Param("id") id: string): Promise<InviteView> {
+  async revoke(@Req() req: any, @Param("id", ParseUUIDPipe) id: string): Promise<InviteView> {
     return this.invites.revokeInvite(id, req.user.id);
   }
 
@@ -110,7 +98,7 @@ export class SaasInvitesController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: "Resend a pending invite with a fresh token + link" })
   @ApiResponse({ status: 200, description: "Fresh invite created; old one revoked" })
-  async resend(@Req() req: any, @Param("id") id: string): Promise<InviteView> {
+  async resend(@Req() req: any, @Param("id", ParseUUIDPipe) id: string): Promise<InviteView> {
     return this.invites.resendInvite(id, req.user.id);
   }
 }

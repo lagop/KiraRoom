@@ -1,14 +1,4 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Delete,
-  Body,
-  Param,
-  Query,
-  ForbiddenException,
-  UseGuards,
-} from '@nestjs/common';
+import { ParseUUIDPipe, Controller, Get, Post, Delete, Body, Param, Query, ForbiddenException, UseGuards } from "@nestjs/common";
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { AddOnsService } from '../services/addons.service';
@@ -69,7 +59,7 @@ export class AddOnsAdminController {
    */
   @Get('tenants/:id/ai-usage')
   async aiUsage(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: any,
   ): Promise<{
     tenantId: string;

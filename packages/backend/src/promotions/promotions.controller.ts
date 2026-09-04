@@ -1,15 +1,4 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Put,
-  Delete,
-  Body,
-  Param,
-  Query,
-  UseGuards,
-  Req,
-} from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, Req } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
@@ -90,7 +79,7 @@ export class PromotionsController {
   @Get(":id")
   @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
   @ApiOperation({ summary: "Get a single promotion" })
-  async getOne(@Req() req: AuthenticatedRequest, @Param("id") id: string) {
+  async getOne(@Req() req: AuthenticatedRequest, @Param("id", ParseUUIDPipe) id: string) {
     const tenantId = req.user.tenantId;
     return this.promotionsService.getOne(id, tenantId);
   }
@@ -100,7 +89,7 @@ export class PromotionsController {
   @ApiOperation({ summary: "Update a promotion" })
   async update(
     @Req() req: AuthenticatedRequest,
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body() dto: UpdatePromotionDto,
   ) {
     const tenantId = req.user.tenantId;
@@ -110,7 +99,7 @@ export class PromotionsController {
   @Delete(":id")
   @Roles(UserRole.owner, UserRole.admin)
   @ApiOperation({ summary: "Delete a promotion" })
-  async delete(@Req() req: AuthenticatedRequest, @Param("id") id: string) {
+  async delete(@Req() req: AuthenticatedRequest, @Param("id", ParseUUIDPipe) id: string) {
     const tenantId = req.user.tenantId;
     return this.promotionsService.delete(id, tenantId);
   }

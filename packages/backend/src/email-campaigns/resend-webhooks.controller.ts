@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Headers, RawBodyRequest, Req, HttpCode, HttpStatus, Logger, UseGuards } from '@nestjs/common';
+import { ParseUUIDPipe, Controller, Post, Body, Headers, RawBodyRequest, Req, HttpCode, HttpStatus, Logger, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';

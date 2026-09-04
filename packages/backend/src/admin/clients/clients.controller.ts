@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { ParseUUIDPipe, Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { AdminClientsService } from './clients.service';
 import { CreateClientDto, UpdateClientDto } from './dto';
@@ -44,7 +44,7 @@ export class AdminClientsController {
   @ApiResponse({ status: 200, description: 'Client details' })
   @ApiResponse({ status: 404, description: 'Client not found' })
   @ApiResponse({ status: 403, description: 'Forbidden' })
-  async findOne(@Param('id') id: string) {
+  async findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.adminClientsService.findOne(id);
   }
 
@@ -54,7 +54,7 @@ export class AdminClientsController {
   @ApiResponse({ status: 404, description: 'Client not found' })
   @ApiResponse({ status: 400, description: 'Invalid input data' })
   @ApiResponse({ status: 403, description: 'Forbidden' })
-  async update(@Param('id') id: string, @Body() updateClientDto: UpdateClientDto) {
+  async update(@Param('id', ParseUUIDPipe) id: string, @Body() updateClientDto: UpdateClientDto) {
     console.log('[Admin Clients] Update request - ID:', id, 'Data:', JSON.stringify(updateClientDto));
     return this.adminClientsService.update(id, updateClientDto);
   }
@@ -64,7 +64,7 @@ export class AdminClientsController {
   @ApiResponse({ status: 200, description: 'Client deleted successfully' })
   @ApiResponse({ status: 404, description: 'Client not found' })
   @ApiResponse({ status: 403, description: 'Forbidden' })
-  async remove(@Param('id') id: string) {
+  async remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.adminClientsService.remove(id);
   }
 

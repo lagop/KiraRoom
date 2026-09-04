@@ -1,16 +1,4 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Put,
-  Patch,
-  Delete,
-  Body,
-  Param,
-  Query,
-  UseGuards,
-  Req,
-} from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, UseGuards, Req } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
@@ -116,7 +104,7 @@ export class AppointmentsController {
   @ApiOperation({ summary: "Get appointment by ID" })
   @ApiResponse({ status: 200, description: "Appointment found" })
   @ApiResponse({ status: 404, description: "Appointment not found" })
-  async findOne(@Req() req: any, @Param("id") id: string) {
+  async findOne(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
     return this.appointmentsService.findOne(req.user, id);
   }
 
@@ -127,7 +115,7 @@ export class AppointmentsController {
   @ApiResponse({ status: 404, description: "Appointment not found" })
   async update(
     @Req() req: any,
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body() updateAppointmentDto: UpdateAppointmentDto,
   ) {
     return this.appointmentsService.update(req.user, id, updateAppointmentDto);
@@ -143,7 +131,7 @@ export class AppointmentsController {
   @ApiResponse({ status: 404, description: "Appointment not found" })
   async cancel(
     @Req() req: any,
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body("reason") reason?: string,
   ) {
     return this.appointmentsService.cancel(req.user, id, reason);
@@ -156,7 +144,7 @@ export class AppointmentsController {
   @ApiResponse({ status: 404, description: "Appointment not found" })
   async complete(
     @Req() req: any,
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body("notes") notes?: string,
   ) {
     return this.appointmentsService.complete(req.user, id, notes);
@@ -167,7 +155,7 @@ export class AppointmentsController {
   @ApiOperation({ summary: "Mark appointment as no-show" })
   @ApiResponse({ status: 200, description: "Appointment marked as no-show" })
   @ApiResponse({ status: 404, description: "Appointment not found" })
-  async markNoShow(@Req() req: any, @Param("id") id: string) {
+  async markNoShow(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
     return this.appointmentsService.markNoShow(req.user, id);
   }
 
@@ -179,7 +167,7 @@ export class AppointmentsController {
     description: "Activity log retrieved successfully",
   })
   @ApiResponse({ status: 404, description: "Appointment not found" })
-  async getAppointmentActivity(@Req() req: any, @Param("id") id: string) {
+  async getAppointmentActivity(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
     return this.appointmentsService.getAppointmentActivity(req.user, id);
   }
 
@@ -188,7 +176,7 @@ export class AppointmentsController {
   @ApiOperation({ summary: "Delete an appointment" })
   @ApiResponse({ status: 200, description: "Appointment deleted successfully" })
   @ApiResponse({ status: 404, description: "Appointment not found" })
-  async remove(@Req() req: any, @Param("id") id: string) {
+  async remove(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
     return this.appointmentsService.remove(req.user, id);
   }
 
@@ -217,7 +205,7 @@ export class AppointmentsController {
   @ApiResponse({ status: 404, description: "Appointment not found" })
   async updatePayment(
     @Req() req: any,
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body() body: { status: string; amountPaid: number; paymentMethod: string },
   ) {
     return this.appointmentsService.updatePaymentStatus(

@@ -1,10 +1,4 @@
-import {
-  Controller,
-  Get,
-  Req,
-  Res,
-  UseGuards,
-} from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Req, Res, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import type { Response } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";

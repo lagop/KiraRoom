@@ -1,16 +1,4 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Patch,
-  Delete,
-  Body,
-  Param,
-  Query,
-  Req,
-  UseGuards,
-  BadRequestException,
-} from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Patch, Delete, Body, Param, Query, Req, UseGuards, BadRequestException } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
 import type { Request } from "express";
@@ -42,14 +30,14 @@ export class ConsentFormsController {
   @Patch(":id")
   update(
     @Req() req: AuthedRequest,
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body() body: any,
   ) {
     return this.service.updateForm(req.user.tenantId, id, body);
   }
 
   @Delete(":id")
-  remove(@Req() req: AuthedRequest, @Param("id") id: string) {
+  remove(@Req() req: AuthedRequest, @Param("id", ParseUUIDPipe) id: string) {
     return this.service.deleteForm(req.user.tenantId, id);
   }
 }
@@ -98,7 +86,7 @@ export class ConsentController {
   @ApiBearerAuth()
   revoke(
     @Req() req: AuthedRequest,
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body() body: { reason?: string },
   ) {
     return this.service.revoke(req.user.tenantId, id, body?.reason);

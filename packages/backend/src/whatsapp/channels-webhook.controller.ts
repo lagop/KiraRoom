@@ -1,15 +1,4 @@
-import {
-  Body,
-  Controller,
-  Headers,
-  HttpCode,
-  HttpStatus,
-  Logger,
-  Post,
-  Req,
-  Res,
-  BadRequestException,
-} from '@nestjs/common';
+import { ParseUUIDPipe, Body, Controller, Headers, HttpCode, HttpStatus, Logger, Post, Req, Res, BadRequestException } from "@nestjs/common";
 import { Throttle } from '@nestjs/throttler';
 import { ApiTags } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';

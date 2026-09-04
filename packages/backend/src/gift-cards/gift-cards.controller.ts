@@ -1,15 +1,4 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  Param,
-  Patch,
-  Post,
-  Query,
-  Req,
-  UseGuards,
-} from "@nestjs/common";
+import { ParseUUIDPipe, Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
@@ -52,7 +41,7 @@ export class GiftCardsController {
 
   @Get(":id")
   @Roles("owner", "admin", "staff")
-  findOne(@Req() req: any, @Param("id") id: string) {
+  findOne(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
     return this.service.findOne(req.user.tenantId, id);
   }
 
@@ -68,7 +57,7 @@ export class GiftCardsController {
   @Feature("gift_cards")
   update(
     @Req() req: any,
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body() dto: UpdateGiftCardDto,
   ) {
     return this.service.update(req.user.tenantId, id, dto);
@@ -84,7 +73,7 @@ export class GiftCardsController {
   @Delete(":id")
   @Roles("owner", "admin")
   @Feature("gift_cards")
-  remove(@Req() req: any, @Param("id") id: string) {
+  remove(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
     return this.service.remove(req.user.tenantId, id);
   }
 }

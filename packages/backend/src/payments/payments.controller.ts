@@ -1,16 +1,4 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Patch,
-  Delete,
-  Body,
-  Param,
-  Query,
-  UseGuards,
-  Req,
-  BadRequestException,
-} from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards, Req, BadRequestException } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
 import { PaymentsService } from "./payments.service";
 import { SubscriptionsService } from "./services/subscriptions.service";
@@ -103,7 +91,7 @@ export class PaymentsController {
   @Get(":id")
   @Roles("owner", "admin", "staff")
   @ApiOperation({ summary: "Get payment by ID" })
-  async getPayment(@Req() req: any, @Param("id") id: string) {
+  async getPayment(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
     return this.paymentsService.getPaymentById(req.user.tenantId, id);
   }
 
@@ -112,7 +100,7 @@ export class PaymentsController {
   @ApiOperation({
     summary: "Delete/cancel a payment (Owner only - payments older than 24h)",
   })
-  async deletePayment(@Req() req: any, @Param("id") id: string) {
+  async deletePayment(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
     // Validar que el pago tenga más de 24 horas
     const payment = await this.paymentsService.getPaymentById(
       req.user.tenantId,
@@ -186,7 +174,7 @@ export class PaymentsController {
   @ApiOperation({ summary: "Update payment status" })
   async updatePaymentStatus(
     @Req() req: any,
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body() body: { status: string },
   ) {
     return this.paymentsService.updatePaymentStatus(

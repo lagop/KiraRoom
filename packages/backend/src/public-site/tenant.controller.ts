@@ -1,9 +1,4 @@
-﻿import {
-  Controller,
-  Get,
-  Param,
-  NotFoundException,
-} from "@nestjs/common";
+﻿import { ParseUUIDPipe, Controller, Get, Param, NotFoundException } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { Public } from "../auth/decorators/public.decorator";

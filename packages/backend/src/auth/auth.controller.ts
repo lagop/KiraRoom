@@ -1,13 +1,4 @@
-import {
-  Controller,
-  Post,
-  Body,
-  UseGuards,
-  HttpCode,
-  HttpStatus,
-  Get,
-  Patch,
-} from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Post, Body, UseGuards, HttpCode, HttpStatus, Get, Patch } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,

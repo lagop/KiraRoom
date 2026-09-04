@@ -1,16 +1,4 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Delete,
-  Param,
-  Body,
-  Req,
-  UseGuards,
-  ForbiddenException,
-  NotFoundException,
-  BadRequestException,
-} from '@nestjs/common';
+import { ParseUUIDPipe, Controller, Get, Post, Delete, Param, Body, Req, UseGuards, ForbiddenException, NotFoundException, BadRequestException } from "@nestjs/common";
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { AddOnsService } from '../services/addons.service';
 import { MessageBundlesService } from '../../message-bundles/message-bundles.service';
