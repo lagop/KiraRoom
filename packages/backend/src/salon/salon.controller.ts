@@ -1,4 +1,4 @@
-import { Controller } from '@nestjs/common';
+import { ParseUUIDPipe, Controller } from "@nestjs/common";
 
 @Controller('salon')
 export class SalonController {}

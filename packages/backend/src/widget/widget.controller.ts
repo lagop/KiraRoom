@@ -1,17 +1,4 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Patch,
-  Delete,
-  Body,
-  Param,
-  Req,
-  Res,
-  Headers,
-  UseGuards,
-  BadRequestException,
-} from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Patch, Delete, Body, Param, Req, Res, Headers, UseGuards, BadRequestException } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
@@ -81,7 +68,7 @@ export class WidgetController {
   @ApiOperation({ summary: "Update whitelist / theme for a widget instance" })
   async update(
     @Req() req: AuthedRequest,
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body() body: UpdateWidgetDto,
   ) {
     return this.widgetService.update(req.user.tenantId, id, body);
@@ -91,7 +78,7 @@ export class WidgetController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: "Revoke a widget instance" })
-  async revoke(@Req() req: AuthedRequest, @Param("id") id: string) {
+  async revoke(@Req() req: AuthedRequest, @Param("id", ParseUUIDPipe) id: string) {
     return this.widgetService.revoke(req.user.tenantId, id);
   }
 }

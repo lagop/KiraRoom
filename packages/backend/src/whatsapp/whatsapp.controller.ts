@@ -1,19 +1,4 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Delete,
-  Body,
-  Param,
-  Req,
-  UseGuards,
-  Query,
-  Headers,
-  Res,
-  BadRequestException,
-  HttpCode,
-  HttpStatus,
-} from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Delete, Body, Param, Req, UseGuards, Query, Headers, Res, BadRequestException, HttpCode, HttpStatus } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
 import { createHmac, randomBytes } from "crypto";
@@ -110,14 +95,14 @@ export class WhatsAppController {
   @Post("campaigns/:id/send")
   @Roles("owner", "admin")
   @Feature("whatsapp_notifications")
-  async sendCampaign(@Param("id") id: string) {
+  async sendCampaign(@Param("id", ParseUUIDPipe) id: string) {
     return this.whatsapp.sendCampaign(id);
   }
 
   @Get("campaigns/:id/report")
   @Roles("owner", "admin", "staff")
   @Feature("whatsapp_notifications")
-  report(@Param("id") id: string) {
+  report(@Param("id", ParseUUIDPipe) id: string) {
     return this.whatsapp.report(id);
   }
 

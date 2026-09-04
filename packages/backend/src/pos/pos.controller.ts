@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Query, Req, Patch, Delete } from '@nestjs/common';
+import { ParseUUIDPipe, Controller, Get, Post, Body, Param, Query, Req, Patch, Delete } from "@nestjs/common";
 import { PosService, CreatePosOrderDto } from './pos.service';
 import { ProductService } from './product.service';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
@@ -67,7 +67,7 @@ export class PosController {
 
   @Get('order/:id')
   @ApiOperation({ summary: 'Get order/receipt details' })
-  async getOrder(@Param('id') id: string) {
+  async getOrder(@Param('id', ParseUUIDPipe) id: string) {
     return this.posService.getOrder(id);
   }
 
@@ -97,7 +97,7 @@ export class PosController {
 
   @Get('products/:id')
   @ApiOperation({ summary: 'Get a single product' })
-  async getProduct(@Param('id') id: string) {
+  async getProduct(@Param('id', ParseUUIDPipe) id: string) {
     return this.productService.getProduct(id);
   }
 
@@ -114,7 +114,7 @@ export class PosController {
   @Patch('products/:id')
   @ApiOperation({ summary: 'Update a product' })
   async updateProduct(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() body: any,
   ) {
     return this.productService.updateProduct(id, body);
@@ -122,7 +122,7 @@ export class PosController {
 
   @Delete('products/:id')
   @ApiOperation({ summary: 'Delete a product' })
-  async deleteProduct(@Param('id') id: string) {
+  async deleteProduct(@Param('id', ParseUUIDPipe) id: string) {
     return this.productService.deleteProduct(id);
   }
 
@@ -184,7 +184,7 @@ export class PosController {
 
   @Get('orders/:id')
   @ApiOperation({ summary: 'Get order details' })
-  async getOrderDetails(@Param('id') id: string) {
+  async getOrderDetails(@Param('id', ParseUUIDPipe) id: string) {
     return this.productService.getOrder(id);
   }
 }

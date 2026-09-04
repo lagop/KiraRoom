@@ -1,16 +1,4 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Body,
-  Param,
-  Query,
-  Req,
-  UseGuards,
-  Res,
-  BadRequestException,
-  NotFoundException,
-} from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Body, Param, Query, Req, UseGuards, Res, BadRequestException, NotFoundException } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
 import type { Request, Response } from "express";
@@ -46,7 +34,7 @@ export class ReviewsController {
   @Post(":id/moderate")
   moderate(
     @Req() req: AuthedRequest,
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body() body: { action: "approve" | "reject" },
   ) {
     if (!body?.action) throw new BadRequestException("action required");

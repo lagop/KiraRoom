@@ -1,16 +1,4 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Param,
-  Patch,
-  Query,
-  UseGuards,
-  HttpCode,
-  HttpStatus,
-  NotFoundException,
-  Req,
-} from "@nestjs/common";
+import { ParseUUIDPipe, Body, Controller, Get, Param, Patch, Query, UseGuards, HttpCode, HttpStatus, NotFoundException, Req } from "@nestjs/common";
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -134,7 +122,7 @@ export class BugReportAdminController {
   @ApiOperation({ summary: "Get a bug report by ID (SaaS Owner only)" })
   @ApiResponse({ status: 200, description: "Full bug report detail" })
   @ApiResponse({ status: 404, description: "Report not found" })
-  async detail(@Param("id") id: string) {
+  async detail(@Param("id", ParseUUIDPipe) id: string) {
     const report = await this.prisma.bugReport.findUnique({
       where: { id },
       include: {
@@ -162,7 +150,7 @@ export class BugReportAdminController {
   @ApiResponse({ status: 200, description: "Updated bug report" })
   @ApiResponse({ status: 404, description: "Report not found" })
   async update(
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body() dto: UpdateBugReportDto,
     @Req() req: any,
   ) {

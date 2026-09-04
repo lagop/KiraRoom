@@ -1,16 +1,4 @@
-import {
-  Controller,
-  Post,
-  Get,
-  Req,
-  Body,
-  Param,
-  Query,
-  UseGuards,
-  ValidationPipe,
-  Logger,
-  ForbiddenException,
-} from '@nestjs/common';
+import { ParseUUIDPipe, Controller, Post, Get, Req, Body, Param, Query, UseGuards, ValidationPipe, Logger, ForbiddenException } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -83,7 +71,7 @@ export class AssistantController {
   @ApiOperation({ summary: 'Page through the messages of a staff-copilot conversation' })
   async listMessages(
     @Req() req: AuthedRequest,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.assistantService.listMessages(id, req.user.id);
   }
@@ -216,7 +204,7 @@ export class AssistantController {
   @ApiOperation({ summary: 'Approval detail (preview, tool, input, expiresAt)' })
   async getApproval(
     @Req() req: AuthedRequest,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.approvals.getForUser(id, req.user.id);
   }
@@ -228,7 +216,7 @@ export class AssistantController {
   @ApiOperation({ summary: 'Approve or reject a pending action' })
   async resolveApproval(
     @Req() req: AuthedRequest,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body(new ValidationPipe()) body: ApprovalActionDto,
   ) {
     if (body.action === 'approve') {

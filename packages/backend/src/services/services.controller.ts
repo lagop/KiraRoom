@@ -1,14 +1,4 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Put,
-  Delete,
-  Body,
-  Param,
-  Query,
-  UseGuards,
-} from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
@@ -59,7 +49,7 @@ export class ServicesController {
   @ApiOperation({ summary: "Get service by ID" })
   @ApiResponse({ status: 200, description: "Service found" })
   @ApiResponse({ status: 404, description: "Service not found" })
-  async findOne(@Param("id") id: string) {
+  async findOne(@Param("id", ParseUUIDPipe) id: string) {
     return this.servicesService.findOne(id);
   }
 
@@ -69,7 +59,7 @@ export class ServicesController {
   @ApiResponse({ status: 200, description: "Service updated successfully" })
   @ApiResponse({ status: 404, description: "Service not found" })
   async update(
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body() updateServiceDto: UpdateServiceDto,
   ) {
     return this.servicesService.update(id, updateServiceDto);
@@ -80,7 +70,7 @@ export class ServicesController {
   @ApiOperation({ summary: "Delete a service" })
   @ApiResponse({ status: 200, description: "Service deleted successfully" })
   @ApiResponse({ status: 404, description: "Service not found" })
-  async remove(@Param("id") id: string) {
+  async remove(@Param("id", ParseUUIDPipe) id: string) {
     return this.servicesService.remove(id);
   }
 }

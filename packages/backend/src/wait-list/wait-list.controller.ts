@@ -1,14 +1,4 @@
-﻿import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  Param,
-  Patch,
-  Post,
-  Query,
-  UseGuards,
-} from '@nestjs/common';
+﻿import { ParseUUIDPipe, Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { WaitListService, WaitListCreateDto, WaitListUpdateDto } from './wait-list.service';
 
@@ -35,12 +25,12 @@ export class WaitListController {
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() dto: WaitListUpdateDto) {
+  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: WaitListUpdateDto) {
     return this.svc.update(id, dto);
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
+  remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.svc.remove(id);
   }
 }

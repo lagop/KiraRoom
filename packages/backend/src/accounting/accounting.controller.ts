@@ -1,16 +1,4 @@
-import {
-  BadRequestException,
-  Body,
-  Controller,
-  Get,
-  Param,
-  Patch,
-  Post,
-  Query,
-  Req,
-  Res,
-  UseGuards,
-} from "@nestjs/common";
+import { ParseUUIDPipe, BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, Req, Res, UseGuards } from "@nestjs/common";
 import { Request, Response } from "express";
 import { ConfigService } from "@nestjs/config";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";

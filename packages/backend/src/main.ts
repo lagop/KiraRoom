@@ -70,8 +70,80 @@ function initSentry(): void {
   });
 }
 
+/**
+ * SEC-1 (P2A-staff-copilot GA): JWT secret strength check at startup.
+ *
+ * Rejects weak / placeholder JWT secrets BEFORE the app boots. Without
+ * this, a misconfigured deploy could ship with the demo secret from
+ * `.env.example` and allow an attacker to mint valid tokens for any
+ * user (the docs/security-review-2026-07.md finding 4).
+ *
+ * Allowed escape hatches (all opt-in via env vars):
+ *   - ALLOW_WEAK_JWT_SECRET=1   dev/test only (CI uses this)
+ *   - JWT_SECRET_LENGTH_MIN     override the 32-char default (e.g. 16
+ *                               for a long-running internal build)
+ *
+ * The check runs in two flavours:
+ *   1. `validateJwtSecretOrExit()` — strict, called at boot. Throws if
+ *      the secret is missing / short / a known placeholder.
+ *   2. `assertJwtSecret()` — soft variant for unit tests. Returns the
+ *      same error without exiting; lets tests assert the failure mode.
+ */
+export function validateJwtSecretOrExit(exit = process.exit): void {
+  const err = assertJwtSecret();
+  if (err) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[FATAL] ${err.message}\n` +
+        `       Generate a new one with: openssl rand -base64 48`,
+    );
+    exit(1);
+  }
+}
+
+export function assertJwtSecret(): Error | null {
+  const allowWeak = process.env.ALLOW_WEAK_JWT_SECRET === '1';
+  const minLength = Number(process.env.JWT_SECRET_LENGTH_MIN ?? 32);
+  const secret = process.env.JWT_SECRET ?? '';
+  if (allowWeak) return null;
+
+  if (!secret) {
+    return new Error(
+      `JWT_SECRET is required. Set it in your environment or .env file.`,
+    );
+  }
+  if (secret.length < minLength) {
+    return new Error(
+      `JWT_SECRET must be at least ${minLength} characters (got ${secret.length}).`,
+    );
+  }
+  const placeholders = [
+    'change-this',
+    'your-super-secret',
+    'changeme',
+    'development-secret',
+    'replace-me',
+  ];
+  if (placeholders.some((p) => secret.toLowerCase().includes(p))) {
+    return new Error(
+      `JWT_SECRET appears to be a placeholder value. Replace it with a real random secret.`,
+    );
+  }
+  // Reject pure hex / base64 / numeric strings that look like auto-generated defaults.
+  if (/^(.)\1+$/.test(secret)) {
+    return new Error(
+      `JWT_SECRET appears to be a repeated character. Use a real random value.`,
+    );
+  }
+  return null;
+}
+
 async function bootstrap(): Promise<void> {
   initSentry();
+
+  // SEC-1: fail fast on a missing or weak JWT secret. Tests can opt
+  // out via ALLOW_WEAK_JWT_SECRET=1.
+  validateJwtSecretOrExit();
 
   const logger = new Logger("Bootstrap");
 
@@ -178,8 +250,16 @@ async function bootstrap(): Promise<void> {
   logger.log(`API Documentation: http://localhost:${port}/api/docs`);
 }
 
-bootstrap().catch((err) => {
-  // eslint-disable-next-line no-console
-  console.error('Fatal bootstrap error:', err);
-  process.exit(1);
-});
+// ──────────────────────────────────────────────────────────────────
+//  Entry-point guard. Running `node dist/main.js` should bootstrap the
+//  app; running `import './main'` from a test file should NOT (the
+//  latter would try to listen on port 3001 mid-suite). The presence
+//  of this guard makes the file safe to import.
+// ──────────────────────────────────────────────────────────────────
+if (require.main === module) {
+  bootstrap().catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error('Fatal bootstrap error:', err);
+    process.exit(1);
+  });
+}

@@ -1,14 +1,4 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  Param,
-  Patch,
-  Post,
-  Req,
-  UseGuards,
-} from "@nestjs/common";
+import { ParseUUIDPipe, Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
@@ -38,7 +28,7 @@ export class MultiLocationController {
 
   @Get(":id")
   @ApiOperation({ summary: "Obtener un local" })
-  get(@Req() req: any, @Param("id") id: string) {
+  get(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
     return this.service.get(req.user.tenantId, id);
   }
 
@@ -54,7 +44,7 @@ export class MultiLocationController {
   @ApiOperation({ summary: "Actualizar un local" })
   update(
     @Req() req: any,
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body() dto: UpdateLocationDto,
   ) {
     return this.service.update(req.user.tenantId, id, dto);
@@ -63,13 +53,13 @@ export class MultiLocationController {
   @Delete(":id")
   @Roles(UserRole.owner)
   @ApiOperation({ summary: "Desactivar un local (soft delete)" })
-  remove(@Req() req: any, @Param("id") id: string) {
+  remove(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
     return this.service.remove(req.user.tenantId, id);
   }
 
   @Get(":id/stats")
   @ApiOperation({ summary: "KPIs del local (ultimos 30 dias)" })
-  stats(@Req() req: any, @Param("id") id: string) {
+  stats(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
     return this.service.getStats(req.user.tenantId, id);
   }
 }

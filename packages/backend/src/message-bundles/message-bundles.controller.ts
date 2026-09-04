@@ -1,12 +1,4 @@
-﻿import {
-  Body,
-  Controller,
-  Get,
-  Param,
-  Post,
-  UseGuards,
-  ForbiddenException,
-} from '@nestjs/common';
+﻿import { ParseUUIDPipe, Body, Controller, Get, Param, Post, UseGuards, ForbiddenException } from "@nestjs/common";
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { MessageBundlesService } from './message-bundles.service';

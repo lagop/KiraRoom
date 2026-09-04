@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Query, Res, NotFoundException } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Param, Query, Res, NotFoundException } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
 import { ApiTags, ApiOperation } from "@nestjs/swagger";
 import * as QRCode from "qrcode";
@@ -31,7 +31,7 @@ export class QrController {
   @Throttle({ default: { ttl: 60_000, limit: 120 } })
   @ApiOperation({ summary: "QR code linking to a salon filtered by professional" })
   async professionalQr(
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Query("format") format: "png" | "svg" = "png",
     @Res() res: Response,
   ) {
@@ -54,7 +54,7 @@ export class QrController {
   @Throttle({ default: { ttl: 60_000, limit: 120 } })
   @ApiOperation({ summary: "QR code linking to a salon filtered by service" })
   async serviceQr(
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Query("format") format: "png" | "svg" = "png",
     @Res() res: Response,
   ) {

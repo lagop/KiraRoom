@@ -1,13 +1,4 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Put,
-  Delete,
-  Body,
-  Param,
-  UseGuards,
-} from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Put, Delete, Body, Param, UseGuards } from "@nestjs/common";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { Roles } from "../auth/decorators/roles.decorator";
@@ -42,14 +33,14 @@ export class LoyaltyController {
 
   @Get("programs/detail/:id")
   @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  async getProgram(@Param("id") id: string) {
+  async getProgram(@Param("id", ParseUUIDPipe) id: string) {
     return this.loyaltyService.getProgram(id);
   }
 
   @Put("programs/:id")
   @Roles(UserRole.owner, UserRole.admin)
   async updateProgram(
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body() dto: Partial<CreateLoyaltyProgramDto>,
   ) {
     return this.loyaltyService.updateProgram(id, dto);
@@ -57,7 +48,7 @@ export class LoyaltyController {
 
   @Delete("programs/:id")
   @Roles(UserRole.owner, UserRole.admin)
-  async deleteProgram(@Param("id") id: string) {
+  async deleteProgram(@Param("id", ParseUUIDPipe) id: string) {
     return this.loyaltyService.deleteProgram(id);
   }
 
@@ -70,7 +61,7 @@ export class LoyaltyController {
 
   @Delete("tiers/:id")
   @Roles(UserRole.owner, UserRole.admin)
-  async deleteTier(@Param("id") id: string) {
+  async deleteTier(@Param("id", ParseUUIDPipe) id: string) {
     return this.loyaltyService.deleteTier(id);
   }
 
@@ -90,7 +81,7 @@ export class LoyaltyController {
   @Put("rewards/:id")
   @Roles(UserRole.owner, UserRole.admin)
   async updateReward(
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body() dto: Partial<CreateLoyaltyRewardDto>,
   ) {
     return this.loyaltyService.updateReward(id, dto);
@@ -98,7 +89,7 @@ export class LoyaltyController {
 
   @Delete("rewards/:id")
   @Roles(UserRole.owner, UserRole.admin)
-  async deleteReward(@Param("id") id: string) {
+  async deleteReward(@Param("id", ParseUUIDPipe) id: string) {
     return this.loyaltyService.deleteReward(id);
   }
 

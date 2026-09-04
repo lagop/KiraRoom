@@ -1,14 +1,4 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Put,
-  Delete,
-  Body,
-  Param,
-  Query,
-  UseGuards,
-} from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
@@ -63,7 +53,7 @@ export class ProfessionalsController {
   @ApiOperation({ summary: "Get professional by ID" })
   @ApiResponse({ status: 200, description: "Professional found" })
   @ApiResponse({ status: 404, description: "Professional not found" })
-  async findOne(@Param("id") id: string) {
+  async findOne(@Param("id", ParseUUIDPipe) id: string) {
     return this.professionalsService.findOne(id);
   }
 
@@ -76,7 +66,7 @@ export class ProfessionalsController {
   })
   @ApiResponse({ status: 404, description: "Professional not found" })
   async update(
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body() updateProfessionalDto: UpdateProfessionalDto,
   ) {
     const pro: any = await this.professionalsService.update(id, updateProfessionalDto);
@@ -97,7 +87,7 @@ export class ProfessionalsController {
     description: "Professional deleted successfully",
   })
   @ApiResponse({ status: 404, description: "Professional not found" })
-  async remove(@Param("id") id: string) {
+  async remove(@Param("id", ParseUUIDPipe) id: string) {
     return this.professionalsService.remove(id);
   }
 }

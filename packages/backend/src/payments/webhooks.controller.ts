@@ -1,14 +1,4 @@
-import {
-  Controller,
-  Post,
-  Body,
-  Headers,
-  RawBodyRequest,
-  Req,
-  HttpCode,
-  HttpStatus,
-  Logger,
-} from '@nestjs/common';
+import { ParseUUIDPipe, Controller, Post, Body, Headers, RawBodyRequest, Req, HttpCode, HttpStatus, Logger } from "@nestjs/common";
 import { Request } from 'express';
 import { ConfigService } from '@nestjs/config';
 import Stripe from 'stripe';

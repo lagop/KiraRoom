@@ -1,17 +1,4 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Patch,
-  Delete,
-  Body,
-  Param,
-  Query,
-  UseGuards,
-  HttpCode,
-  HttpStatus,
-  Req,
-} from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards, HttpCode, HttpStatus, Req } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
@@ -46,7 +33,7 @@ export class SaasController {
   @ApiOperation({ summary: "Get tenant by ID (SaaS Owner only)" })
   @ApiResponse({ status: 200, description: "Tenant details" })
   @ApiResponse({ status: 404, description: "Tenant not found" })
-  async getTenantById(@Param("id") id: string) {
+  async getTenantById(@Param("id", ParseUUIDPipe) id: string) {
     return this.saasService.getTenantById(id);
   }
 
@@ -64,7 +51,7 @@ export class SaasController {
   @ApiResponse({ status: 200, description: "Tenant updated successfully" })
   @ApiResponse({ status: 404, description: "Tenant not found" })
   async updateTenant(
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body() updateTenantDto: UpdateTenantDto,
   ) {
     return this.saasService.updateTenant(id, updateTenantDto);
@@ -75,14 +62,14 @@ export class SaasController {
   @ApiOperation({ summary: "Delete tenant (SaaS Owner only, soft-delete)" })
   @ApiResponse({ status: 200, description: "Tenant soft-deleted successfully" })
   @ApiResponse({ status: 404, description: "Tenant not found" })
-  async deleteTenant(@Req() req: any, @Param("id") id: string) {
+  async deleteTenant(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
     return this.saasService.deleteTenant(id, req.user.id);
   }
 
   @Get("tenants/:id/stats")
   @ApiOperation({ summary: "Get tenant statistics (SaaS Owner only)" })
   @ApiResponse({ status: 200, description: "Tenant statistics" })
-  async getTenantStats(@Param("id") id: string) {
+  async getTenantStats(@Param("id", ParseUUIDPipe) id: string) {
     return this.saasService.getTenantStats(id);
   }
 
@@ -91,7 +78,7 @@ export class SaasController {
     summary: "Get per-tenant onboarding progress score (SaaS Owner only)",
   })
   @ApiResponse({ status: 200, description: "Progress score 0..1 + per-component breakdown" })
-  async getTenantProgress(@Param("id") id: string) {
+  async getTenantProgress(@Param("id", ParseUUIDPipe) id: string) {
     return this.saasService.getTenantProgress(id);
   }
 
@@ -99,7 +86,7 @@ export class SaasController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: "Suspend tenant (SaaS Owner only)" })
   @ApiResponse({ status: 200, description: "Tenant suspended successfully" })
-  async suspendTenant(@Param("id") id: string) {
+  async suspendTenant(@Param("id", ParseUUIDPipe) id: string) {
     return this.saasService.suspendTenant(id);
   }
 
@@ -107,7 +94,7 @@ export class SaasController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: "Reactivate tenant (SaaS Owner only)" })
   @ApiResponse({ status: 200, description: "Tenant reactivated successfully" })
-  async reactivateTenant(@Param("id") id: string) {
+  async reactivateTenant(@Param("id", ParseUUIDPipe) id: string) {
     return this.saasService.reactivateTenant(id);
   }
 
@@ -122,7 +109,7 @@ export class SaasController {
   @ApiOperation({ summary: "Get tenant growth metrics (SaaS Owner only)" })
   @ApiResponse({ status: 200, description: "Tenant growth metrics with evolution" })
   async getTenantGrowthMetrics(
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Query("months") months?: string,
   ) {
     const monthsNum = months ? parseInt(months, 10) : 6;
@@ -149,7 +136,7 @@ export class SaasController {
   @ApiOperation({ summary: "Launch salon dashboard as owner (SaaS Owner only)" })
   @ApiResponse({ status: 200, description: "Returns impersonation token + owner info; consume via POST /auth/impersonate" })
   @ApiResponse({ status: 404, description: "Tenant not found" })
-  async launchSalonDashboard(@Req() req: any, @Param("id") id: string) {
+  async launchSalonDashboard(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
     return this.saasService.launchSalonDashboard(id, req.user.id);
   }
 }

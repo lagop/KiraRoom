@@ -1,17 +1,4 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Patch,
-  Put,
-  Delete,
-  Body,
-  Param,
-  Query,
-  UseGuards,
-  Logger,
-  BadRequestException,
-} from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Patch, Put, Delete, Body, Param, Query, UseGuards, Logger, BadRequestException } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
@@ -108,7 +95,7 @@ export class AdminProfessionalsController {
   @ApiResponse({ status: 200, description: "Professional details" })
   @ApiResponse({ status: 404, description: "Professional not found" })
   @ApiResponse({ status: 403, description: "Forbidden" })
-  async findOne(@Param("id") id: string) {
+  async findOne(@Param("id", ParseUUIDPipe) id: string) {
     return this.adminProfessionalsService.findOne(id);
   }
 
@@ -122,7 +109,7 @@ export class AdminProfessionalsController {
   @ApiResponse({ status: 400, description: "Invalid input data" })
   @ApiResponse({ status: 403, description: "Forbidden" })
   async update(
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body() updateProfessionalDto: UpdateProfessionalDto,
   ) {
     return this.adminProfessionalsService.update(id, updateProfessionalDto);
@@ -136,7 +123,7 @@ export class AdminProfessionalsController {
   })
   @ApiResponse({ status: 404, description: "Professional not found" })
   @ApiResponse({ status: 403, description: "Forbidden" })
-  async remove(@Param("id") id: string) {
+  async remove(@Param("id", ParseUUIDPipe) id: string) {
     return this.adminProfessionalsService.remove(id);
   }
 
@@ -153,7 +140,7 @@ export class AdminProfessionalsController {
   @ApiResponse({ status: 200, description: "Professional availability data" })
   @ApiResponse({ status: 404, description: "Professional not found" })
   @ApiResponse({ status: 403, description: "Forbidden" })
-  async getAvailability(@Param("id") id: string) {
+  async getAvailability(@Param("id", ParseUUIDPipe) id: string) {
     return this.adminProfessionalsService.getAvailability(id);
   }
 
@@ -164,7 +151,7 @@ export class AdminProfessionalsController {
   @ApiResponse({ status: 400, description: "Invalid input data" })
   @ApiResponse({ status: 403, description: "Forbidden" })
   async changePassword(
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body() changePasswordDto: ChangeProfessionalPasswordDto,
   ) {
     return this.adminProfessionalsService.changePassword(id, changePasswordDto);
