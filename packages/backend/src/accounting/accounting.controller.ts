@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, Req, Res, UseGuards } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, Req, Res, UseGuards } from "@nestjs/common";
 import { Request, Response } from "express";
 import { ConfigService } from "@nestjs/config";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
@@ -12,8 +12,7 @@ import { EncryptionService } from "../common/encryption/encryption.service";
 import {
   RetryQueueDto,
   SyncInvoiceDto,
-  UpdateAccountingSettingsDto,
-} from "./dto/accounting.dto";
+  UpdateAccountingSettingsDto } from "./dto/accounting.dto";
 import { AccountingProvider } from "@prisma/client";
 
 interface AuthedRequest extends Request {
@@ -55,8 +54,7 @@ export class AccountingController {
   async getSettings(@Req() req: AuthedRequest) {
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: this.requireTenantId(req) },
-      select: { accountingSettings: true, accountingConnection: true },
-    });
+      select: { accountingSettings: true, accountingConnection: true } });
     return tenant;
   }
 
@@ -70,19 +68,16 @@ export class AccountingController {
     const tenantId = this.requireTenantId(req);
     const current = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
-      select: { accountingSettings: true },
-    });
+      select: { accountingSettings: true } });
     const merged = {
       ...((current?.accountingSettings as Record<string, unknown>) ?? {}),
       ...(dto.provider !== undefined ? { provider: dto.provider } : {}),
       ...(dto.enabled !== undefined ? { enabled: dto.enabled } : {}),
-      ...(dto.syncOnIssue !== undefined ? { syncOnIssue: dto.syncOnIssue } : {}),
-    };
+      ...(dto.syncOnIssue !== undefined ? { syncOnIssue: dto.syncOnIssue } : {}) };
     return this.prisma.tenant.update({
       where: { id: tenantId },
       data: { accountingSettings: merged as any },
-      select: { accountingSettings: true },
-    });
+      select: { accountingSettings: true } });
   }
 
   @Get("connect/:provider")

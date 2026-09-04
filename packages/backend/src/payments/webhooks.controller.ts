@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Post, Body, Headers, RawBodyRequest, Req, HttpCode, HttpStatus, Logger } from "@nestjs/common";
+import { Controller, Post, Body, Headers, RawBodyRequest, Req, HttpCode, HttpStatus, Logger } from "@nestjs/common";
 import { Request } from 'express';
 import { ConfigService } from '@nestjs/config';
 import Stripe from 'stripe';
@@ -25,8 +25,7 @@ export class WebhooksController {
     const apiKey = this.configService.get<string>('STRIPE_SECRET_KEY');
     if (apiKey && apiKey.startsWith('sk_')) {
       this.stripe = new Stripe(apiKey, {
-        apiVersion: '2024-12-18.acacia' as any,
-      });
+        apiVersion: '2024-12-18.acacia' as any });
     }
     this.webhookSecret = this.configService.get<string>('STRIPE_WEBHOOK_SECRET', '');
   }
@@ -219,8 +218,7 @@ export class WebhooksController {
       await this.addonsService.cancelFromStripe({
         tenantId,
         addOnKey,
-        cancelledAt: new Date(),
-      });
+        cancelledAt: new Date() });
       return;
     }
 
@@ -236,8 +234,7 @@ export class WebhooksController {
       currentPeriodEnd:
         subscription.current_period_end && subscription.current_period_end > 0
           ? new Date(subscription.current_period_end * 1000)
-          : null,
-    });
+          : null });
   }
 
   /**
@@ -270,8 +267,7 @@ export class WebhooksController {
     try {
       const tenant = await this.prisma.tenant.findUnique({
         where: { id: tenantId },
-        select: { id: true, subscriptionStatus: true },
-      });
+        select: { id: true, subscriptionStatus: true } });
       if (!tenant) return;
 
       if (subscription.status === 'active') {
@@ -285,9 +281,7 @@ export class WebhooksController {
               subscriptionStatus: 'active',
               paymentFailedAt: null,
               gracePeriodEndsAt: null,
-              readOnlyUntil: null,
-            },
-          });
+              readOnlyUntil: null } });
           this.logger.log(
             `Recovered tenant ${tenantId} via subscription update: ${tenant.subscriptionStatus} -> active`,
           );
@@ -299,9 +293,7 @@ export class WebhooksController {
             data: {
               subscriptionStatus: 'cancelled',
               cancelledAt: new Date(),
-              readOnlyUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-            },
-          });
+              readOnlyUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) } });
           this.logger.log(
             `Tenant ${tenantId} marked cancelled via Stripe subscription update`,
           );
@@ -331,8 +323,7 @@ export class WebhooksController {
     try {
       const tenant = await this.prisma.tenant.findFirst({
         where: { stripeCustomerId: customerId },
-        select: { id: true, name: true, subscriptionStatus: true },
-      });
+        select: { id: true, name: true, subscriptionStatus: true } });
       if (!tenant) {
         this.logger.warn(
           `No Tenant found for Stripe customer ${customerId}; skipping recovery.`,
@@ -365,8 +356,7 @@ export class WebhooksController {
               tenantId: tenant.id,
               credits: Math.floor(qty),
               source: 'stripe',
-              stripeInvoiceId: invoice.id,
-            });
+              stripeInvoiceId: invoice.id });
             this.logger.log(
               `message_bundles topup tenant=${tenant.id} credits=${Math.floor(qty)} invoice=${invoice.id}`,
             );
@@ -388,9 +378,7 @@ export class WebhooksController {
             subscriptionStatus: "active",
             paymentFailedAt: null,
             gracePeriodEndsAt: null,
-            readOnlyUntil: null,
-          },
-        });
+            readOnlyUntil: null } });
         this.logger.log(
           `Recovered tenant ${tenant.name} (${tenant.id}) from ${tenant.subscriptionStatus} → active after invoice ${invoice.id}`,
         );
@@ -424,9 +412,7 @@ export class WebhooksController {
           name: true,
           currency: true,
           subscriptionStatus: true,
-          paymentFailedAt: true,
-        },
-      });
+          paymentFailedAt: true } });
       if (!tenant) {
         this.logger.warn(
           `No Tenant found for Stripe customer ${customerId}; skipping payment-failed handling.`,
@@ -451,8 +437,7 @@ export class WebhooksController {
           gracePeriodEndsAt: isFirstFailureForWindow
             ? gracePeriodEndsAt
             : undefined, // keep the original window if we're inside it
-        },
-      });
+        } });
 
       if (isFirstFailureForWindow) {
         this.logger.log(
@@ -465,13 +450,11 @@ export class WebhooksController {
       const owner =
         (await this.prisma.user.findFirst({
           where: { tenantId: tenant.id, role: "owner" },
-          select: { email: true, firstName: true },
-        })) ??
+          select: { email: true, firstName: true } })) ??
         (await this.prisma.user.findFirst({
           where: { tenantId: tenant.id, isActive: true },
           orderBy: { createdAt: "asc" },
-          select: { email: true, firstName: true },
-        }));
+          select: { email: true, firstName: true } }));
 
       if (!owner?.email) {
         this.logger.warn(
@@ -499,8 +482,7 @@ export class WebhooksController {
         amount: amountDue,
         currency: tenant.currency || invoice.currency || "EUR",
         retryDate,
-        updatePaymentUrl: `${baseUrl.replace(/\/+$/, "")}/dashboard/billing`,
-      });
+        updatePaymentUrl: `${baseUrl.replace(/\/+$/, "")}/dashboard/billing` });
     } catch (err) {
       // Never let an email failure break the webhook ack — Stripe will
       // retry the event if we return non-2xx.

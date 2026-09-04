@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Get, Post, Put, Delete, Param, Query, Body, UseGuards } from "@nestjs/common";
+import { Controller, Get, Post, Put, Delete, Param, Query, Body, UseGuards } from "@nestjs/common";
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SocialIntegrationsService } from './social-integrations.service';
 import { SocialPlatform } from '@prisma/client';
@@ -153,8 +153,7 @@ export class SocialIntegrationsController {
   ) {
     return this.socialIntegrationsService.createPost(tenantId, {
       ...data,
-      scheduledAt: data.scheduledAt ? new Date(data.scheduledAt) : undefined,
-    });
+      scheduledAt: data.scheduledAt ? new Date(data.scheduledAt) : undefined });
   }
 
   @Put('posts/:postId')
@@ -165,8 +164,7 @@ export class SocialIntegrationsController {
   ) {
     return this.socialIntegrationsService.updatePost(tenantId, postId, {
       ...data,
-      scheduledAt: data.scheduledAt ? new Date(data.scheduledAt) : undefined,
-    });
+      scheduledAt: data.scheduledAt ? new Date(data.scheduledAt) : undefined });
   }
 
   @Delete('posts/:postId')

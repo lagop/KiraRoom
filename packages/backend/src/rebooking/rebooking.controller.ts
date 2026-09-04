@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from "@nestjs/common";
 import { Request } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { Roles } from "../auth/decorators/roles.decorator";
@@ -41,8 +41,7 @@ export class RebookingController {
     const merged = { ...current, ...dto };
     await this.prisma.tenant.update({
       where: { id: tenantId },
-      data: { rebookingSettings: merged as any },
-    });
+      data: { rebookingSettings: merged as any } });
     return merged;
   }
 
@@ -51,8 +50,7 @@ export class RebookingController {
   async getPrediction(@Param("id") clientId: string) {
     await this.cadence.computeForClient(clientId);
     return this.prisma.clientCadence.findUnique({
-      where: { clientId },
-    });
+      where: { clientId } });
   }
 
   @Get("clients/:id/log")
@@ -61,8 +59,7 @@ export class RebookingController {
     return this.prisma.rebookingReminder.findMany({
       where: { clientId },
       orderBy: { createdAt: "desc" },
-      take: 50,
-    });
+      take: 50 });
   }
 
   @Post("clients/:id/opt-out")

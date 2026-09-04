@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Body, Controller, Headers, HttpCode, HttpStatus, Logger, Post, Req, Res, BadRequestException } from "@nestjs/common";
+import { Body, Controller, Headers, HttpCode, HttpStatus, Logger, Post, Req, Res, BadRequestException } from "@nestjs/common";
 import { Throttle } from '@nestjs/throttler';
 import { ApiTags } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
@@ -103,8 +103,7 @@ export class ChannelsWebhookController {
           channel: platform,
           externalUserId: m.sender.id,
           text,
-          messageId: m.message.mid,
-        });
+          messageId: m.message.mid });
       }
     }
     res.json({ received: true });
@@ -173,8 +172,7 @@ export class ChannelsWebhookController {
       channel: 'telegram',
       externalUserId: String(chatId),
       text: normalized.text,
-      messageId: normalized.metadata['messageId'] as string | undefined,
-    });
+      messageId: normalized.metadata['messageId'] as string | undefined });
     res.json({ received: true });
   }
 
@@ -189,8 +187,7 @@ export class ChannelsWebhookController {
   private async lookupTenantByPageId(pageId: string): Promise<string | null> {
     if (Date.now() - this.pageIndexLoadedAt > 5 * 60 * 1000) {
       const rows = await this.prisma.whatsAppConnection.findMany({
-        select: { tenantId: true, phoneNumberId: true },
-      });
+        select: { tenantId: true, phoneNumberId: true } });
       this.pageIndex.clear();
       for (const r of rows) {
         // In the multichannel model the pageId is stored in
@@ -213,8 +210,7 @@ export class ChannelsWebhookController {
     // the same ctx metadata so the dispatcher flows correctly.
     const tenants = await this.prisma.tenant.findMany({
       where: {},
-      select: { id: true, features: true },
-    });
+      select: { id: true, features: true } });
     for (const t of tenants) {
       const f = (t.features as any) ?? {};
       const tg = f?.multichannel?.telegram;
@@ -230,8 +226,7 @@ export class ChannelsWebhookController {
   ): Promise<string | null> {
     const tenants = await this.prisma.tenant.findMany({
       where: {},
-      select: { id: true, features: true },
-    });
+      select: { id: true, features: true } });
     for (const t of tenants) {
       const f = (t.features as any) ?? {};
       const tg = f?.multichannel?.telegram;

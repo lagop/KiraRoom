@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Body, Controller, Get, Logger, Put, Req, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Logger, Put, Req, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
@@ -72,8 +72,7 @@ export class ChannelsConfigController {
    */
   @Get('metrics')
   @ApiOperation({
-    summary: 'Get current per-channel volume for this tenant',
-  })
+    summary: 'Get current per-channel volume for this tenant' })
   async getChannelMetrics(): Promise<{
     inbound: Record<string, number>;
     outbound: Record<string, { ok: number; skipped: number; error: number }>;

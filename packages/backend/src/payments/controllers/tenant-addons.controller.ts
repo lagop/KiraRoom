@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Get, Post, Delete, Param, Body, Req, UseGuards, ForbiddenException, NotFoundException, BadRequestException } from "@nestjs/common";
+import { Controller, Get, Post, Delete, Param, Body, Req, UseGuards, ForbiddenException, NotFoundException, BadRequestException } from "@nestjs/common";
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { AddOnsService } from '../services/addons.service';
 import { MessageBundlesService } from '../../message-bundles/message-bundles.service';
@@ -46,8 +46,7 @@ export class TenantAddOnsController {
     ).prisma.tenantAddOn.findMany({
       where: { tenantId, status: { not: 'expired' } },
       include: { addOn: true },
-      orderBy: { startedAt: 'asc' },
-    });
+      orderBy: { startedAt: 'asc' } });
     return {
       data: rows.map((row: any) => ({
         id: row.id,
@@ -57,9 +56,7 @@ export class TenantAddOnsController {
         startedAt: row.startedAt.toISOString(),
         currentPeriodEnd: row.currentPeriodEnd?.toISOString() ?? null,
         cancelledAt: row.cancelledAt?.toISOString() ?? null,
-        addOn: (this.addons as any).toRow(row.addOn),
-      })),
-    };
+        addOn: (this.addons as any).toRow(row.addOn) })) };
   }
 
   /**
@@ -105,8 +102,7 @@ export class TenantAddOnsController {
       addOnName: addOn.name,
       stripePriceId: addOn.stripePriceId,
       successUrl,
-      cancelUrl,
-    });
+      cancelUrl });
     return { url: session.url };
   }
 
@@ -147,8 +143,7 @@ export class TenantAddOnsController {
     const out = await this.bundles.creditTopUp({
       tenantId,
       credits,
-      source: 'manual',
-    });
+      source: 'manual' });
     return out;
   }
 
@@ -167,8 +162,7 @@ export class TenantAddOnsController {
       this.addons as any
     ).prisma.tenant.findUnique({
       where: { id: tenantId },
-      select: { plan: true, subscriptionStatus: true, trialEnd: true },
-    });
+      select: { plan: true, subscriptionStatus: true, trialEnd: true } });
     if (!t) return 'esencial';
     const inTrial =
       t.subscriptionStatus === 'trialing' &&

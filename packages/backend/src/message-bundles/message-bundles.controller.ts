@@ -1,4 +1,4 @@
-﻿import { ParseUUIDPipe, Body, Controller, Get, Param, Post, UseGuards, ForbiddenException } from "@nestjs/common";
+﻿import { Body, Controller, Get, Param, Post, UseGuards, ForbiddenException } from "@nestjs/common";
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { MessageBundlesService } from './message-bundles.service';
@@ -48,7 +48,6 @@ export class MessageBundlesController {
     return this.svc.creditTopUp({
       tenantId,
       credits: body.credits,
-      source: 'manual',
-    });
+      source: 'manual' });
   }
 }

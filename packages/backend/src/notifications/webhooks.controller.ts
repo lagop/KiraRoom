@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Post, Body, Headers, Logger, HttpStatus, HttpCode, Req } from "@nestjs/common";
+import { Controller, Post, Body, Headers, Logger, HttpStatus, HttpCode, Req } from "@nestjs/common";
 import { Request } from 'express';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { Public } from '../auth/decorators/public.decorator';
@@ -81,15 +81,12 @@ export class WebhooksController {
           recipient: To,
           deliveredAt: MessageStatus === 'delivered' ? new Date() : null,
           failedAt: MessageStatus === 'failed' || MessageStatus === 'undelivered' ? new Date() : null,
-          failureReason: ErrorMessage || ErrorCode?.toString() || null,
-        },
+          failureReason: ErrorMessage || ErrorCode?.toString() || null },
         update: {
           status: this.mapTwilioStatus(MessageStatus),
           deliveredAt: MessageStatus === 'delivered' ? new Date() : null,
           failedAt: MessageStatus === 'failed' || MessageStatus === 'undelivered' ? new Date() : null,
-          failureReason: ErrorMessage || ErrorCode?.toString() || null,
-        },
-      });
+          failureReason: ErrorMessage || ErrorCode?.toString() || null } });
       
       return { received: true };
     } catch (error) {
@@ -136,9 +133,7 @@ export class WebhooksController {
           where: { email: String(recipient).toLowerCase() },
           data: {
             emailBouncedAt: new Date(),
-            emailBounceReason: bounce_message || bounce_type || "unknown",
-          },
-        });
+            emailBounceReason: bounce_message || bounce_type || "unknown" } });
         if (stamp.count > 0) {
           this.logger.log(
             `Marked ${stamp.count} User(s) with emailBouncedAt for ${recipient}`,
@@ -178,15 +173,12 @@ export class WebhooksController {
           recipient,
           deliveredAt,
           failedAt,
-          failureReason,
-        },
+          failureReason },
         update: {
           status,
           deliveredAt,
           failedAt,
-          failureReason,
-        },
-      });
+          failureReason } });
     } catch (error) {
       this.logger.error(`Failed to update delivery status for ${externalId}`, error);
     }
@@ -201,8 +193,7 @@ export class WebhooksController {
       'failed': 'FAILED',
       'accepted': 'ACCEPTED',
       'scheduled': 'SCHEDULED',
-      'canceled': 'CANCELLED',
-    };
+      'canceled': 'CANCELLED' };
     return statusMap[status] || status.toUpperCase();
   }
 
