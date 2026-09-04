@@ -1,13 +1,4 @@
-import {
-  Controller,
-  Get,
-  Param,
-  Query,
-  Res,
-  BadRequestException,
-  NotFoundException,
-  Logger,
-} from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Param, Query, Res, BadRequestException, NotFoundException, Logger } from "@nestjs/common";
 import { ApiTags, ApiOperation } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
 import { createHmac } from "crypto";
@@ -31,7 +22,7 @@ export class IcsController {
   @Throttle({ default: { ttl: 60_000, limit: 120 } })
   @ApiOperation({ summary: "ICS feed for a professional's appointments" })
   async professionalFeed(
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Query("token") token: string,
     @Res() res: Response,
   ) {
@@ -60,7 +51,7 @@ export class IcsController {
   @Throttle({ default: { ttl: 60_000, limit: 120 } })
   @ApiOperation({ summary: "ICS feed for a staff member (any professional they cover)" })
   async staffFeed(
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Query("token") token: string,
     @Res() res: Response,
   ) {

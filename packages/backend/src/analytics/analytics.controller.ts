@@ -1,11 +1,4 @@
-import {
-  Controller,
-  Get,
-  Query,
-  UseGuards,
-  Req,
-  ForbiddenException,
-} from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Query, UseGuards, Req, ForbiddenException } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,

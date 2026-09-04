@@ -1,18 +1,4 @@
-import {
-  Controller,
-  Post,
-  Req,
-  Get,
-  Put,
-  Delete,
-  Body,
-  Param,
-  Query,
-  UseGuards,
-  UsePipes,
-  ValidationPipe,
-  Logger,
-} from '@nestjs/common';
+import { ParseUUIDPipe, Controller, Post, Req, Get, Put, Delete, Body, Param, Query, UseGuards, UsePipes, ValidationPipe, Logger } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
 import { VirtualReceptionistService } from './virtual-receptionist.service';
@@ -96,7 +82,7 @@ export class VirtualReceptionistController {
 
   @Get('llm-config/:id')
   @ApiOperation({ summary: 'Get LLM provider configuration' })
-  async getLLMConfig(@Param('id') id: string) {
+  async getLLMConfig(@Param('id', ParseUUIDPipe) id: string) {
     this.logger.log(`Getting LLM provider configuration: ${id}`);
     return this.llmService.getProviderConfig(id);
   }
@@ -104,7 +90,7 @@ export class VirtualReceptionistController {
   @Put('llm-config/:id')
   @ApiOperation({ summary: 'Update LLM provider configuration' })
   async updateLLMConfig(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body(new ValidationPipe()) config: UpdateLLMProviderConfig,
   ) {
     this.logger.log(`Updating LLM provider configuration: ${id}`);
@@ -113,7 +99,7 @@ export class VirtualReceptionistController {
 
   @Delete('llm-config/:id')
   @ApiOperation({ summary: 'Delete LLM provider configuration' })
-  async deleteLLMConfig(@Param('id') id: string) {
+  async deleteLLMConfig(@Param('id', ParseUUIDPipe) id: string) {
     this.logger.log(`Deleting LLM provider configuration: ${id}`);
     return this.llmService.deleteProviderConfig(id);
   }
@@ -128,7 +114,7 @@ export class VirtualReceptionistController {
 
   @Get('conversations/:id')
   @ApiOperation({ summary: 'Get conversation by ID' })
-  async getConversation(@Param('id') id: string) {
+  async getConversation(@Param('id', ParseUUIDPipe) id: string) {
     this.logger.log(`Getting conversation: ${id}`);
     return this.conversationService.getConversation(id);
   }
@@ -143,7 +129,7 @@ export class VirtualReceptionistController {
   @Put('conversations/:id')
   @ApiOperation({ summary: 'Update conversation' })
   async updateConversation(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body(new ValidationPipe()) data: UpdateConversationDto,
   ) {
     this.logger.log(`Updating conversation: ${id}`);
@@ -152,7 +138,7 @@ export class VirtualReceptionistController {
 
   @Delete('conversations/:id')
   @ApiOperation({ summary: 'Delete conversation' })
-  async deleteConversation(@Param('id') id: string) {
+  async deleteConversation(@Param('id', ParseUUIDPipe) id: string) {
     this.logger.log(`Deleting conversation: ${id}`);
     return this.conversationService.deleteConversation(id);
   }
@@ -168,7 +154,7 @@ export class VirtualReceptionistController {
 
   @Get('conversations/:id/messages')
   @ApiOperation({ summary: 'Get conversation messages' })
-  async getConversationMessages(@Param('id') id: string) {
+  async getConversationMessages(@Param('id', ParseUUIDPipe) id: string) {
     this.logger.log(`Getting messages for conversation: ${id}`);
     return this.conversationService.getConversationMessages(id);
   }
@@ -190,21 +176,21 @@ export class VirtualReceptionistController {
 
   @Get('faqs/:id')
   @ApiOperation({ summary: 'Get FAQ item' })
-  async getFAQ(@Param('id') id: string) {
+  async getFAQ(@Param('id', ParseUUIDPipe) id: string) {
     this.logger.log(`Getting FAQ item: ${id}`);
     return this.faqService.getFAQ(id);
   }
 
   @Put('faqs/:id')
   @ApiOperation({ summary: 'Update FAQ item' })
-  async updateFAQ(@Param('id') id: string, @Body(new ValidationPipe()) faq: UpdateFAQItem) {
+  async updateFAQ(@Param('id', ParseUUIDPipe) id: string, @Body(new ValidationPipe()) faq: UpdateFAQItem) {
     this.logger.log(`Updating FAQ item: ${id}`);
     return this.faqService.updateFAQ(id, faq);
   }
 
   @Delete('faqs/:id')
   @ApiOperation({ summary: 'Delete FAQ item' })
-  async deleteFAQ(@Param('id') id: string) {
+  async deleteFAQ(@Param('id', ParseUUIDPipe) id: string) {
     this.logger.log(`Deleting FAQ item: ${id}`);
     return this.faqService.deleteFAQ(id);
   }

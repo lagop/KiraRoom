@@ -1,4 +1,4 @@
-import { Controller, Get } from '@nestjs/common';
+import { ParseUUIDPipe, Controller, Get } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 
 @ApiTags('health')

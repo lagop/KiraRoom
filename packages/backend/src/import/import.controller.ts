@@ -1,13 +1,4 @@
-import {
-  Controller,
-  Post,
-  Get,
-  Body,
-  Req,
-  UseGuards,
-  Res,
-  BadRequestException,
-} from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Post, Get, Body, Req, UseGuards, Res, BadRequestException } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
 import type { Request, Response } from "express";

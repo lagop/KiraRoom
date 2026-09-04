@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Headers, Logger, HttpStatus, HttpCode, Req } from '@nestjs/common';
+import { ParseUUIDPipe, Controller, Post, Body, Headers, Logger, HttpStatus, HttpCode, Req } from "@nestjs/common";
 import { Request } from 'express';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { Public } from '../auth/decorators/public.decorator';

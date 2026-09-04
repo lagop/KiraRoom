@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, Request } from '@nestjs/common';
+import { ParseUUIDPipe, Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, Request } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service';
 import { NotificationQueue } from './queue/notification.queue';
@@ -45,7 +45,7 @@ export class NotificationsController {
   @ApiOperation({ summary: 'Mark a notification as read' })
   async markAsReadForUser(
     @CurrentUser() user: any,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.notificationsService.markAsRead(id, user.id);
   }
@@ -63,7 +63,7 @@ export class NotificationsController {
   @ApiOperation({ summary: 'Archive a notification' })
   async archiveForUser(
     @CurrentUser() user: any,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.notificationsService.archive(id, user.id);
   }

@@ -1,14 +1,4 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Put,
-  Delete,
-  Param,
-  Query,
-  Body,
-  UseGuards,
-} from '@nestjs/common';
+import { ParseUUIDPipe, Controller, Get, Post, Put, Delete, Param, Query, Body, UseGuards } from "@nestjs/common";
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SocialIntegrationsService } from './social-integrations.service';
 import { SocialPlatform } from '@prisma/client';
