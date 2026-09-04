@@ -1,0 +1,3002 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id                            String                   @id @default(uuid())
+  createdAt                     DateTime                 @default(now())
+  updatedAt                     DateTime                 @updatedAt
+  name                          String                   @unique
+  slug                          String                   @unique
+  /// P2A Ã¢â‚¬â€ Spanish tax compliance: NIF/CIF/NIE del emisor (obligatorio si fiscalMode != 'none')
+  taxId                         String?
+  taxIdType                     NifType?
+  legalName                     String?
+  description                   String?
+  logo                          String?
+  coverImage                    String?
+  website                       String?
+  email                         String?
+  phone                         String?
+  whatsapp                      String?
+  street                        String?
+  city                          String?
+  state                         String?
+  postalCode                    String?
+  country                       String                   @default("ES")
+  timezone                      String                   @default("Europe/Madrid")
+  currency                      String                   @default("EUR")
+  language                      String                   @default("es")
+  dateFormat                    String                   @default("DD/MM/YYYY")
+  timeFormat                    String                   @default("24h")
+  /// Virtual Receptionist settings
+  assistantName                 String                   @default("Kira")
+  cancellationPolicy            String?
+  minCancelHours                Int                      @default(24)
+  openingHours                  Json                     @default("{}")
+  /// Subscription
+  plan                          SubscriptionPlan
+  subscriptionStatus            SubscriptionStatus
+  currentPeriodStart            DateTime
+  currentPeriodEnd              DateTime
+  trialEnd                      DateTime?
+  stripeCustomerId              String?
+  stripeSubscriptionId          String?
+  /// Plan rev3: cancellation lifecycle + add-ons + multi-location
+  cancelledAt                   DateTime?
+  readOnlyUntil                 DateTime?
+  /// Sprint 2 / 2.2 Ã¢â‚¬â€ payment-failure grace lifecycle. Set on the
+  /// first Stripe `invoice.payment_failed` webhook; cleared on the
+  /// next successful payment. When `gracePeriodEndsAt < now` the
+  /// daily GracePeriodScheduler flips status to `suspended`.
+  paymentFailedAt               DateTime?
+  gracePeriodEndsAt             DateTime?
+  /// Soft-delete (rev): when set, the tenant is hidden from SaaS listings
+  /// but its data (users, appointments, payments, etc.) is preserved so
+  /// an accidental delete can be reversed via Prisma Studio.
+  deletedAt                     DateTime?
+  /// P2A-ia-fairuse - virtual receptionist usage counter (Esencial cap)
+  aiConversationsUsed    Int                 @default(0)
+  aiConversationsResetAt DateTime?
+  /// Saas-owner-configurable: how the assistant reacts to cap overflows
+  /// degrade (default) -> FAQ cache only, no LLM.
+  /// notify           -> LLM still runs, warn tenant next login.
+  /// allow            -> soft cap, just log.
+  aiFairUseAction        AiFairUseAction    @default(degrade)
+  /// P2A-receptionist-advanced - persona/voice + multichannel config.
+  receptionistPersonaId  String?
+  
+  /// P2A-plans-v2 - add-ons purchased by this tenant.
+  tenantAddOns           TenantAddOn[]
+  /// P2A-plans-v2 - message credit wallet (message_bundles add-on).
+  messageCreditWallet    MessageCreditWallet?
+  
+  addons                        Json                     @default("{}")
+  maxLocations                  Int                      @default(1)
+  /// Stripe Configuration (per-tenant)
+  stripeMode                    String                   @default("test") /// "test" or "live"
+  stripeTestSecretKey           String?
+  stripeTestPublishableKey      String?
+  stripeLiveSecretKey           String?
+  stripeLivePublishableKey      String?
+  /// Professional permissions
+  allowProfessionalCrossBooking Boolean                  @default(false)
+  features                      Json                     @default("{}")
+  appointments                  Appointment[]
+  clients                       Client[]
+  professionals                 Professional[]
+  services                      Service[]
+  users                         User[]
+  notifications                 Notification[]
+  notificationTemplates         NotificationTemplate[]
+  notificationPreferences       NotificationPreference[]
+  chatConversations             ChatConversation[]
+  clientProfiles                ClientProfile[]
+  payments                      Payment[]
+  wallets                       ClientWallet[]
+  giftCards                     GiftCard[]
+  loyaltyPrograms               LoyaltyProgram[]
+  /// POS / Retail
+  products                      Product[]
+  productCategories             ProductCategory[]
+  orders                        Order[]
+  inventoryTransactions         InventoryTransaction[]
+  /// Promotions
+  promotions                    Promotion[]
+  /// Email Campaigns
+  emailCampaigns                EmailCampaign[]
+  emailCampaignTemplates        EmailCampaignTemplate[]
+  /// Social Integrations
+  socialConnections             SocialConnection[]
+  googleBusinessProfile         GoogleBusinessProfile?
+  socialPosts                   SocialPost[]
+  locations                     Location[]
+  auditLogs                     AuditLog[]               @relation("AuditLogTenant")
+  gdprRequests                  GdprRequest[]
+  usedImpersonationTokens       UsedImpersonationToken[] @relation("UsedImpersonationTokenTenant")
+  /// P0 Priority Zero Ã¢â‚¬â€ Widget / Import / Consent / Reviews / WhatsApp
+  widgetInstances               WidgetInstance[]
+  importJobs                    ImportJob[]
+  consentForms                  ConsentForm[]
+  consents                      Consent[]
+  reviews                       Review[]
+  whatsappConnection            WhatsAppConnection?
+  whatsappCampaigns             WhatsAppCampaign[]
+  invites                       TenantInvite[]
+
+  /// Bug reports submitted from the in-app "Ã°Å¸ÂÅ¾ Report a bug" widget.
+  /// Anonymous reports (no user, no tenant) are stored with both FKs null.
+  bugReports BugReport[]
+
+  // P2A-staff-copilot: per-user chat threads + pending-action queue
+  assistantConversations AssistantConversation[]
+  actionApprovals        ActionApproval[]
+  copilotFeedback        CopilotFeedback[]
+
+  // P2A-receptionist-advanced -- virtual wait-list for fully-booked slots.
+  waitListEntries               WaitList[]
+
+  /// P1.3 Ã¢â‚¬â€ Onboarding wizard state (one row per tenant)
+  onboardingState      OnboardingState?
+  /// P1.4 Ã¢â‚¬â€ Rebooking per-tenant settings (analogous to `features` / `addons`)
+  rebookingSettings    Json                   @default("{\"enabled\": false, \"leadDays\": 3, \"channelFallback\": \"both\", \"minVisits\": 3}")
+  /// P1.4 Ã¢â‚¬â€ Cadence / reminder log relations
+  clientCadences       ClientCadence[]
+  rebookingReminders   RebookingReminder[]
+  /// P2A Ã¢â‚¬â€ Fiscal Spain (Verifactu / TicketBAI / SII)
+  fiscalMode           FiscalMode             @default(none)
+  fiscalSettings       Json                   @default("{\"defaultSeries\": \"A\", \"defaultTaxRate\": 21, \"autoInvoiceAppointments\": false, \"diputacion\": null}")
+  invoices             Invoice[]
+  fiscalCertificates   FiscalCertificate[]
+  fiscalSequences      FiscalSequence[]
+  fiscalChainStates    FiscalChainState[]
+  /// P2B Ã¢â‚¬â€ Accounting integrations (Holded / Sage)
+  accountingConnection AccountingConnection?
+  taxReports           TaxReport[]
+  accountingSettings   Json                   @default("{\"provider\": null, \"enabled\": false, \"syncOnIssue\": true}")
+  /// Sprint 2 / 2.3 Ã¢â‚¬â€ track which trial-expiry warnings (T-3, T-1)
+  /// we've sent so the daily cron doesn't re-email a tenant who has
+  /// already received the warning for this trial window.
+  trialNotifications   TrialNotificationLog[]
+
+  @@index([deletedAt])
+  @@index([subscriptionStatus, deletedAt])
+  @@index([deletedAt, plan])
+  @@index([deletedAt, country])
+  @@map("tenants")
+}
+
+model AddOn {
+  id                String       @id @default(uuid())
+  key               String       @unique
+  name              String
+  description       String?
+  monthlyPriceCents Int?
+  currency          String       @default("EUR")
+  unlocks           Json         @default("[]")
+  metered           Boolean      @default(false)
+  stripePriceId     String?
+  isActive          Boolean      @default(true)
+  sortOrder         Int          @default(0)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  
+  tenantAddOns    TenantAddOn[]
+  
+  @@map("add_ons")
+}
+
+model TenantAddOn {
+  id                          String   @id @default(uuid())
+  tenantId                    String
+  addOnId                     String
+  stripeSubscriptionItemId    String?
+  status                      String   @default("active")
+  startedAt                   DateTime @default(now())
+  currentPeriodEnd            DateTime?
+  cancelledAt                 DateTime?
+  tenant                      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  addOn                       AddOn   @relation(fields: [addOnId], references: [id], onDelete: Restrict)
+  
+  @@unique([tenantId, addOnId])
+  @@index([tenantId])
+  @@map("tenant_add_ons")
+}
+
+model MessageCreditWallet {
+  tenantId              String   @id
+  creditsRemaining      Int      @default(0)
+  creditsPurchasedTotal Int      @default(0)
+  creditsUsedTotal      Int      @default(0)
+  lastTopupAt           DateTime?
+  updatedAt             DateTime @updatedAt
+  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  @@map("message_credit_wallet")
+}
+
+enum AiFairUseAction {
+  /// Degrade to FAQ cache + human handoff. Default -- never hard-block.
+  degrade
+  /// Allow the LLM but warn the tenant on next login / show a soft banner.
+  notify
+  /// Allow without any UI signal (only log + billing side effect).
+  allow
+}
+
+// Audit trail for sensitive actions performed by privileged users
+// (notably: SaaS owners impersonating tenant owners, suspending tenants,
+// and future platform-level actions). Append-only Ã¢â‚¬â€ never updated or
+// deleted from the application code.
+model AuditLog {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  actorId   String
+  actorRole UserRole
+  tenantId  String?
+  action    String
+  metadata  Json?
+  actor     User     @relation("AuditLogActor", fields: [actorId], references: [id], onDelete: Restrict)
+  tenant    Tenant?  @relation("AuditLogTenant", fields: [tenantId], references: [id], onDelete: SetNull)
+
+  @@index([actorId, createdAt])
+  @@index([tenantId, createdAt])
+  @@index([action, createdAt])
+  @@map("audit_logs")
+}
+
+// One-shot consumption tracker for SaaS-owner-issued impersonation
+// tokens. The `jti` is the primary key, so an atomic INSERT ... ON
+// CONFLICT semantics gives us natural "first consume wins". The TTL
+// of the JWT itself remains 60 s (see IMPERSONATION_TTL_SECONDS), but
+// a token that has been used once can never be replayed Ã¢â‚¬â€ even
+// before its natural expiry.
+model UsedImpersonationToken {
+  jti        String   @id
+  tenantId   String
+  consumedBy String
+  consumedAt DateTime @default(now())
+  tenant     Tenant?  @relation("UsedImpersonationTokenTenant", fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([consumedAt])
+  @@map("used_impersonation_tokens")
+}
+
+// Single-use tenant onboarding invite (Sprint 2, Workstream 2.1).
+// The SaaS admin mints a `TenantInvite` row when they want to bring a
+// new salon onto the platform. The owner receives a magic link via
+// email; clicking it opens a 3-step wizard (password, address,
+// timezone) which atomically (a) creates the Tenant, (b) creates the
+// owner User, (c) marks the invite accepted. Replay is impossible:
+// once `acceptedAt` is set the row stays as an audit trail, and
+// `token` is unique.
+model TenantInvite {
+  id          String           @id @default(uuid())
+  tenantId    String?
+  tenant      Tenant?          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email       String
+  firstName   String?
+  lastName    String?
+  tenantName  String /// pre-collected: name the SaaS admin chose
+  role        UserRole         @default(owner)
+  plan        SubscriptionPlan @default(esencial)
+  token       String           @unique /// 256-bit random; also used as the magic-link slug
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  revokedAt   DateTime?
+  invitedById String /// SaaS owner user id
+  status      InviteStatus     @default(pending)
+  /// Audit trail of the SaaS admin who minted the invite.
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([email])
+  @@index([tenantId])
+  @@index([status, expiresAt])
+  @@index([invitedById])
+  @@map("tenant_invites")
+}
+
+model User {
+  id                       String                  @id @default(uuid())
+  createdAt                DateTime                @default(now())
+  updatedAt                DateTime                @updatedAt
+  tenantId                 String
+  professionalId           String?                 @unique
+  email                    String                  @unique
+  firstName                String
+  lastName                 String
+  role                     UserRole
+  isActive                 Boolean                 @default(true)
+  isEmailVerified          Boolean                 @default(false)
+  /// Sprint 2 / 2.3 Ã¢â‚¬â€ bounce handling. Set by the Resend webhook when a
+  /// transactional or campaign email to this user bounces. Future
+  /// transactional sends short-circuit and skip the recipient until
+  /// the address is updated and the field is cleared manually.
+  emailBouncedAt           DateTime?
+  emailBounceReason        String?
+  lastLoginAt              DateTime?
+  passwordHash             String
+  profileImage             String?
+  phone                    String?
+  twoFactorEnabled         Boolean                 @default(false)
+  language                 String                  @default("es")
+  twoFactorSecret          String?
+  loginAttempts            Int                     @default(0)
+  lockedUntil              DateTime?
+  passwordResetToken       String?
+  passwordResetExpires     DateTime?
+  emailVerificationToken   String?
+  emailVerificationExpires DateTime?
+  preferences              Json                    @default("{}")
+  permissions              Json                    @default("{}")
+  tenant                   Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  professional             Professional?
+  notifications            Notification[]
+  notificationPreference   NotificationPreference?
+  auditLogs                AuditLog[]              @relation("AuditLogActor")
+  bugReportsAuthored       BugReport[]             @relation("BugReportAuthor")
+  assistantConversations   AssistantConversation[]
+  actionApprovalsCreated   ActionApproval[]        @relation("ActionApprovalCreator")
+  actionApprovalsResolved  ActionApproval[]        @relation("ActionApprovalResolver")
+  copilotFeedbackAuthored  CopilotFeedback[]       @relation("CopilotFeedbackAuthor")
+
+  @@unique([tenantId, email])
+  @@index([tenantId, createdAt])
+  @@index([tenantId])
+  @@index([email])
+  @@index([professionalId])
+  @@map("users")
+}
+
+model Client {
+  id                       String                   @id @default(uuid())
+  createdAt                DateTime                 @default(now())
+  updatedAt                DateTime                 @updatedAt
+  tenantId                 String
+  firstName                String
+  lastName                 String
+  email                    String?
+  phone                    String?
+  /// P2A Ã¢â‚¬â€ Spanish tax compliance: NIF/CIF/NIE del cliente
+  taxId                    String?
+  taxIdType                NifType?
+  dateOfBirth              DateTime?
+  gender                   Gender?
+  profileImage             String?
+  status                   ClientStatus             @default(active)
+  preferredLanguage        String                   @default("es")
+  preferredServices        Json                     @default("[]")
+  preferredProfessionals   Json                     @default("[]")
+  preferredTimes           Json                     @default("{}")
+  communicationPreferences Json                     @default("{}")
+  loyaltyPoints            Int                      @default(0)
+  loyaltyTier              String                   @default("bronze") /// bronze, silver, gold, platinum
+  totalSpent               Decimal                  @default(0)
+  visitCount               Int                      @default(0)
+  averageSpent             Decimal                  @default(0)
+  firstVisit               DateTime                 @default(now())
+  lastVisit                DateTime?
+  lastReengagementSent     DateTime? /// Last time a re-engagement email was sent
+  source                   String?
+  allergies                Json                     @default("[]")
+  medicalConditions        Json                     @default("[]")
+  notes                    String?
+  tags                     Json                     @default("[]")
+  passwordHash             String?
+  appointments             Appointment[]
+  chatConversations        ChatConversation[]
+  clientProfiles           ClientProfile[]
+  payments                 Payment[]
+  wallet                   ClientWallet?
+  loyaltyMembers           LoyaltyMember[]
+  orders                   Order[]
+  /// Email campaigns
+  emailCampaignRecipients  EmailCampaignRecipient[]
+  tenant                   Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  notifications            Notification[]
+  notificationPreference   NotificationPreference?
+  /// P1.4 Ã¢â‚¬â€ Rebooking reminders sent to this client
+  rebookingReminders       RebookingReminder[]
+
+  /// P2A-receptionist-advanced -- this client is on the virtual wait-list.
+  waitListEntries          WaitList[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@index([tenantId, email])
+  @@index([tenantId, phone])
+  @@map("clients")
+}
+
+model Service {
+  id                  String                @id @default(uuid())
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  tenantId            String
+  name                String
+  description         String?
+  category            ServiceCategory
+  duration            Int
+  price               Decimal
+  currency            String                @default("EUR")
+  isActive            Boolean               @default(true)
+  requiresApproval    Boolean               @default(false)
+  hasProcessingTime   Boolean               @default(false) /// e.g., coloring, keratin, perms need processing time
+  processingDuration  Int? /// Duration of processing time in minutes (default from service duration)
+  maxAdvanceBooking   Int                   @default(30)
+  minAdvanceBooking   Int                   @default(2)
+  bufferTime          Int                   @default(15)
+  isOnlineBookable    Boolean               @default(true)
+  isMobile            Boolean               @default(false)
+  /// Deposit settings
+  depositRequired     Boolean               @default(false)
+  depositAmount       Decimal?
+  depositPercentage   Decimal?
+  images              Json                  @default("[]")
+  prerequisites       Json                  @default("[]")
+  staff               Json                  @default("[]")
+  equipment           Json                  @default("[]")
+  products            Json                  @default("[]")
+  tags                Json                  @default("[]")
+  seoTitle            String?
+  seoDescription      String?
+  professionals       ProfessionalService[]
+  appointments        Appointment[]
+  appointmentServices AppointmentService[]
+  tenant              Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([tenantId, isActive])
+  @@index([tenantId, category])
+  @@map("services")
+}
+
+model Professional {
+  id                  String                 @id @default(uuid())
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+  tenantId            String
+  userId              String?                @unique
+  firstName           String
+  lastName            String
+  email               String                 @unique
+  phone               String?
+  profileImage        String?
+  bio                 String?
+  specialties         Json                   @default("[]")
+  /// Portfolio fields
+  portfolioImages     Json                   @default("[]")
+  yearsExperience     Int?
+  languages           Json                   @default("[]")
+  certifications      Json                   @default("[]")
+  /// End of portfolio fields
+  isActive            Boolean                @default(true)
+  isOwner             Boolean                @default(false)
+  position            String?
+  commissionRate      Decimal?
+  hireDate            DateTime
+  terminationDate     DateTime?
+  workingHours        Json                   @default("[]")
+  availability        Json                   @default("{}")
+  settings            Json                   @default("{}")
+  stats               Json                   @default("{}")
+  services            ProfessionalService[]
+  appointments        Appointment[]
+  appointmentServices AppointmentService[]
+  locations           ProfessionalLocation[]
+  user                User?                  @relation(fields: [userId], references: [id], onDelete: SetNull)
+  tenant              Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@index([tenantId, isActive])
+  @@index([tenantId, email])
+  @@index([userId])
+  @@map("professionals")
+}
+
+model ProfessionalService {
+  id             String       @id @default(uuid())
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  professionalId String
+  serviceId      String
+  professional   Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+  service        Service      @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([professionalId, serviceId])
+  @@index([professionalId])
+  @@index([serviceId])
+}
+
+model Appointment {
+  id                     String              @id @default(uuid())
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+  tenantId               String
+  clientId               String
+  serviceId              String
+  professionalId         String
+  scheduledDate          DateTime
+  scheduledTime          String
+  duration               Int
+  endTime                String
+  status                 AppointmentStatus   @default(pending)
+  price                  Decimal
+  currency               String              @default("EUR")
+  paymentStatus          PaymentStatus       @default(pending)
+  paymentMethod          String?
+  stripePaymentIntentId  String?
+  notes                  String?
+  internalNotes          String?
+  cancellationReason     String?
+  cancellationPolicy     String?
+  isRecurring            Boolean             @default(false)
+  recurringSeriesId      String?
+  parentAppointmentId    String?
+  reminders              Json                @default("[]")
+  checkInTime            DateTime?
+  startTime              DateTime?
+  completionTime         DateTime?
+  addons                 Json                @default("[]")
+  discount               Json                @default("{}")
+  taxes                  Json                @default("[]")
+  totalAmount            Decimal             @default(0)
+  amountPaid             Decimal             @default(0)
+  amountDue              Decimal             @default(0)
+  source                 AppointmentSource   @default(online)
+  utmSource              String?
+  utmMedium              String?
+  utmCampaign            String?
+  rating                 Int?
+  review                 String?
+  feedback               Json                @default("{}")
+  location               AppointmentLocation @default(salon)
+  address                String?
+  travelFee              Decimal             @default(0)
+  depositRequired        Boolean             @default(false)
+  depositAmount          Decimal?
+  depositPaid            Boolean             @default(false)
+  depositPaymentIntentId String?
+  /// Multi-location (plan Empresa)
+  locationId             String?
+  salonLocation          Location?           @relation(fields: [locationId], references: [id], onDelete: SetNull)
+
+  /// Commission tracking
+  commissionRate   Decimal?
+  commissionAmount Decimal?  @default(0)
+  commissionPaid   Boolean   @default(false)
+  commissionDate   DateTime?
+
+  /// Reminder tracking flags
+  reminder24hSent   Boolean @default(false)
+  reminder1hSent    Boolean @default(false)
+  reviewRequestSent Boolean @default(false)
+
+  /// P0 Ã¢â‚¬â€ Widget instance attribution
+  widgetInstanceId String?
+  widgetInstance   WidgetInstance? @relation(fields: [widgetInstanceId], references: [id], onDelete: SetNull)
+
+  activities   AppointmentActivity[]
+  payments     Payment[]
+  services     AppointmentService[]
+  client       Client                @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  professional Professional          @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+  service      Service               @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  tenant       Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([tenantId, scheduledDate])
+  @@index([tenantId, professionalId, scheduledDate])
+  @@index([tenantId, clientId])
+  @@index([status])
+  @@index([paymentStatus])
+  @@map("appointments")
+}
+
+model AppointmentActivity {
+  id            String      @id @default(uuid())
+  createdAt     DateTime    @default(now())
+  appointmentId String
+  action        String
+  details       Json
+  userId        String?
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+
+  @@index([appointmentId])
+  @@index([createdAt])
+  @@map("appointment_activities")
+}
+
+// Enum for AppointmentService type
+enum AppointmentServiceType {
+  active /// Work being done (professional assigned)
+  processing /// Waiting time (color processing, etc.) - professional is free
+  continuation /// Continuation after processing (e.g., rinse after color)
+}
+
+// Enum for AppointmentService status
+enum AppointmentServiceStatus {
+  pending
+  active
+  processing /// Waiting time (color processing, etc.) - professional is free
+  completed
+  cancelled
+}
+
+// AppointmentService - decomposes appointments into work blocks
+// One record per work block, not one per service
+// Example: A coloring generates 3 records: application, processing (professional=NULL), rinse
+model AppointmentService {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Relations
+  appointmentId  String
+  appointment    Appointment   @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  serviceId      String
+  service        Service       @relation(fields: [serviceId], references: [id])
+  professionalId String?
+  professional   Professional? @relation(fields: [professionalId], references: [id], onDelete: SetNull)
+
+  /// Timing
+  scheduledStart DateTime?
+  scheduledEnd   DateTime?
+  actualStart    DateTime?
+  actualEnd      DateTime?
+
+  /// Type: active (work), processing (waiting - professional free), continuation (after processing)
+  type AppointmentServiceType @default(active)
+
+  /// For parallel services (e.g., manicure + pedicure at same time)
+  isParallel Boolean @default(false)
+
+  /// Order within the appointment
+  order Int @default(0)
+
+  /// Status
+  status AppointmentServiceStatus @default(pending)
+
+  /// Notes
+  notes String?
+
+  @@index([appointmentId])
+  @@index([professionalId])
+  @@index([scheduledStart])
+  @@map("appointment_services")
+}
+
+enum SubscriptionPlan {
+  esencial
+  pro
+  empresa
+  /// Legacy aliases kept for backwards compatibility with existing rows;
+  /// SaaSService.createTenant / webhook handlers map them to the new plans.
+  basic
+  professional
+  advanced
+  enterprise
+}
+
+enum SubscriptionStatus {
+  active
+  cancelled
+  past_due
+  suspended
+  trialing
+}
+
+enum UserRole {
+  saas_owner
+  owner
+  admin
+  staff
+  client
+}
+
+enum InviteStatus {
+  pending
+  accepted
+  revoked
+  expired
+}
+
+enum ClientStatus {
+  active
+  inactive
+  blocked
+}
+
+enum Gender {
+  male
+  female
+  other
+  prefer_not_to_say
+}
+
+enum LoyaltyTierType {
+  bronze
+  silver
+  gold
+  platinum
+}
+
+enum ServiceCategory {
+  hair
+  nails
+  facial
+  massage
+  body
+  other
+}
+
+enum AppointmentStatus {
+  pending
+  confirmed
+  in_progress
+  completed
+  cancelled
+  no_show
+}
+
+enum PaymentStatus {
+  pending
+  paid
+  failed
+  refunded
+}
+
+enum AppointmentSource {
+  online
+  phone
+  walk_in
+  staff
+  widget
+  instagram
+}
+
+enum AppointmentLocation {
+  salon
+  client_home
+  other
+}
+
+// ============================================
+// Virtual Receptionist Models
+// ============================================
+
+model ChatConversation {
+  id             String    @id @default(uuid())
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  tenantId       String
+  clientId       String?
+  salonId        String?
+  conversationId String?
+  /// P2A-receptionist-v2 H-4: web | whatsapp | facebook | instagram | telegram
+  channel        ChatChannel @default(web)
+  status         String    @default("active") /// active, completed, handoff
+  totalMessages  Int       @default(0)
+  hasHandoff     Boolean   @default(false)
+  handoffUserId  String?
+  handoffAt      DateTime?
+  lastActivityAt DateTime  @default(now())
+  context        Json      @default("{}")
+
+  messages      ChatMessage[]
+  intentHistory IntentHistoryItem[]
+  tenant        Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client        Client?             @relation(fields: [clientId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([clientId])
+  @@index([salonId])
+  @@index([channel])
+  @@index([status])
+  @@index([lastActivityAt])
+  @@map("chat_conversations")
+}
+
+model ChatMessage {
+  id              String   @id @default(uuid())
+  createdAt       DateTime @default(now())
+  conversationId  String
+  role            String   @default("user") /// user or assistant
+  content         String
+  provider        String? /// openai, anthropic, google, llama
+  model           String?
+  responseTime    Int?
+  intent          String?
+  requiresHandoff Boolean  @default(false)
+  metadata        Json     @default("{}")
+
+  conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([role])
+  @@index([intent])
+  @@map("chat_messages")
+}
+
+model IntentHistoryItem {
+  id             String   @id @default(uuid())
+  createdAt      DateTime @default(now())
+  conversationId String
+  intent         String
+  confidence     Float
+  context        Json     @default("{}")
+
+  conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([intent])
+  @@map("intent_history")
+}
+
+model ClientProfile {
+  id                       String   @id @default(uuid())
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  tenantId                 String
+  clientId                 String
+  name                     String
+  email                    String?
+  phone                    String?
+  preferences              Json     @default("{}")
+  interactionHistory       Json     @default("[]")
+  bookingHistory           Json     @default("[]")
+  servicePreferences       Json     @default("[]")
+  communicationPreferences Json     @default("{}")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, clientId])
+  @@index([tenantId])
+  @@index([clientId])
+  @@map("client_profiles")
+}
+
+// Promotions & Discounts
+model Promotion {
+  id                   String        @id @default(uuid())
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+  tenantId             String
+  name                 String
+  description          String?
+  code                 String /// Discount code
+  type                 PromotionType
+  value                Decimal /// Percentage or fixed amount
+  minOrderValue        Decimal? /// Minimum order value to apply
+  maxUses              Int? /// Maximum total uses
+  maxUsesPerClient     Int? /// Maximum uses per client
+  usedCount            Int           @default(0)
+  startDate            DateTime
+  endDate              DateTime?
+  isActive             Boolean       @default(true)
+  /// Applicable service IDs (stored as JSON)
+  applicableServiceIds Json          @default("[]")
+  applicableProductIds Json          @default("[]")
+
+  /// Relations
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  emailCampaigns EmailCampaign[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+  @@index([code])
+  @@index([isActive])
+  @@map("promotions")
+}
+
+enum PromotionType {
+  PERCENTAGE /// Percentage discount (e.g., 10% off)
+  FIXED /// Fixed amount discount (e.g., Ã¢â€šÂ¬10 off)
+  BUY_X_GET_Y /// Buy X get Y free
+}
+
+model PromotionUsage {
+  id             String   @id @default(uuid())
+  createdAt      DateTime @default(now())
+  promotionId    String
+  clientId       String
+  orderId        String?
+  discountAmount Decimal
+  appointmentId  String? /// Link to appointment if applicable
+
+  @@index([promotionId])
+  @@index([clientId])
+  @@map("promotion_usage")
+}
+
+// ============================================
+// Notification System Models
+// ============================================
+
+model Notification {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenantId  String
+
+  /// Recipient - can be either User or Client
+  userId   String?
+  clientId String?
+
+  /// Notification content
+  type    NotificationType
+  title   String
+  message String
+  data    Json             @default("{}") /// Typed data for deep linking
+
+  /// Status
+  isRead Boolean   @default(false)
+  readAt DateTime?
+
+  /// Soft delete / Archive
+  archivedAt DateTime?
+
+  /// Relations
+  user       User?                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  client     Client?                @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  tenant     Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  deliveries NotificationDelivery[]
+
+  @@index([tenantId])
+  @@index([userId])
+  @@index([clientId])
+  @@index([tenantId, isRead])
+  @@index([archivedAt])
+  @@map("notifications")
+}
+
+model NotificationDelivery {
+  id             String   @id @default(uuid())
+  createdAt      DateTime @default(now())
+  notificationId String?
+
+  /// Channel information.
+  /// P2A-receptionist-v2 H-4: extended to also accept the chat
+  /// channels (web | whatsapp | facebook | instagram | telegram).
+  channel String /// "email" | "sms" | "whatsapp" | "inApp" | "facebook" | "instagram" | "telegram"
+  status  String /// "pending" | "sent" | "delivered" | "failed" | "bounced" | "opened"
+
+  /// Recipient (for standalone delivery tracking without notification)
+  recipient String?
+
+  /// External tracking
+  externalId    String? @unique /// Twilio/SendGrid message ID for webhooks
+  error         String? /// Error message if failed
+  failureReason String? /// Detailed failure reason
+
+  /// Timestamps
+  sentAt      DateTime?
+  deliveredAt DateTime?
+  failedAt    DateTime?
+
+  /// Relations
+  notification Notification? @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+
+  @@index([notificationId])
+  @@index([channel, status])
+  @@index([externalId])
+  @@map("notification_deliveries")
+}
+
+model NotificationTemplate {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenantId  String
+
+  /// Template identification
+  type        NotificationType
+  slug        String /// e.g., "appointment_reminder_24h", "appointment_reminder_1h"
+  name        String
+  description String?
+
+  /// Content templates
+  titleTemplate   String /// Supports variables like {{clientName}}
+  messageTemplate String
+
+  /// Channel-specific templates
+  emailSubject     String?
+  emailBody        String? /// HTML template
+  smsTemplate      String?
+  whatsappTemplate String?
+
+  /// Settings
+  isActive Boolean @default(true)
+
+  /// Relations
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, type, slug])
+  @@map("notification_templates")
+}
+
+model NotificationPreference {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenantId  String
+
+  /// Recipient - one-to-one relations require unique fields
+  userId   String? @unique
+  clientId String? @unique
+
+  /// Channel preferences per notification type
+  preferences Json @default("{}")
+  /// Example: { "appointment_reminder": { "inApp": true, "email": true, "sms": false, "whatsapp": false } }
+
+  /// Relations
+  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  client Client? @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("notification_preferences")
+}
+
+enum NotificationType {
+  /// Appointment related
+  appointment_created
+  appointment_confirmed
+  appointment_cancelled
+  appointment_rescheduled
+  appointment_reminder_24h
+  appointment_reminder_1h
+  appointment_completed
+  appointment_no_show
+  review_request
+
+  /// Payment related
+  payment_received
+  payment_failed
+  refund_processed
+
+  /// Promotional
+  promotion
+  news
+  special_offer
+
+  /// System
+  system_alert
+  account_update
+  password_change
+
+  /// Professional specific
+  new_appointment_assigned
+  schedule_change
+  new_message
+}
+
+// ============================================
+// PAYMENT MODELS
+// ============================================
+
+model Payment {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenantId  String
+
+  /// Payment identification
+  stripePaymentId String? @unique
+  stripeInvoiceId String?
+  amount          Int /// Amount in cents
+  currency        String  @default("EUR")
+
+  /// Payment type and status
+  type   PaymentType
+  status PaymentStatus @default(pending)
+  method PaymentMethod @default(card)
+
+  /// Client and appointment
+  clientId      String?
+  client        Client?      @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  appointmentId String?
+  appointment   Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+
+  /// For deposits
+  isDeposit       Boolean @default(false)
+  depositAmount   Int?
+  remainingAmount Int?
+
+  /// Additional info
+  description String?
+  metadata    Json    @default("{}")
+
+  /// Stripe data
+  receiptUrl     String?
+  failureMessage String?
+
+  /// Relations
+  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  order        Order?               @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  orderId      String?
+  transactions PaymentTransaction[]
+  refunds      Refund[]
+
+  @@index([tenantId])
+  @@index([clientId])
+  @@index([appointmentId])
+  @@index([status])
+  @@map("payments")
+}
+
+model PaymentTransaction {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  paymentId String
+  payment   Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  /// Transaction details
+  type   TransactionType
+  amount Int /// Amount in cents
+  status TransactionStatus
+
+  /// Stripe
+  stripeChargeId   String? @unique
+  stripeTransferId String?
+
+  /// Notes
+  note String?
+
+  @@index([paymentId])
+  @@map("payment_transactions")
+}
+
+model Refund {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  paymentId String
+  payment   Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  /// Refund details
+  amount Int /// Amount in cents
+  reason String?
+  status RefundStatus @default(pending)
+
+  /// Stripe
+  stripeRefundId String? @unique
+
+  /// Notes
+  note    String?
+  adminId String?
+
+  @@index([paymentId])
+  @@map("refunds")
+}
+
+model ClientWallet {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenantId  String
+  clientId  String   @unique
+
+  /// Balance
+  balance     Int @default(0) /// Amount in cents
+  totalEarned Int @default(0) /// Total loyalty points earned
+  totalSpent  Int @default(0) /// Total loyalty points spent
+
+  /// Loyalty points
+  loyaltyPoints Int @default(0)
+
+  /// Relations
+  tenant       Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client       Client              @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  transactions WalletTransaction[]
+
+  @@unique([tenantId, clientId])
+  @@index([tenantId])
+  @@map("client_wallets")
+}
+
+model WalletTransaction {
+  id        String       @id @default(uuid())
+  createdAt DateTime     @default(now())
+  walletId  String
+  wallet    ClientWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  /// Transaction details
+  type   WalletTransactionType
+  amount Int /// Amount in cents or points
+  points Int                   @default(0) /// Loyalty points
+
+  /// Reference
+  referenceType String? /// "payment" | "appointment" | "gift_card" | "loyalty_reward"
+  referenceId   String?
+
+  /// Description
+  description String?
+
+  /// Balance after
+  balanceAfter Int
+
+  @@index([walletId])
+  @@map("wallet_transactions")
+}
+
+model GiftCard {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenantId  String
+
+  /// Card details
+  code           String @unique
+  initialAmount  Int /// Amount in cents
+  currentBalance Int /// Remaining amount in cents
+
+  /// Status
+  isActive  Boolean   @default(true)
+  expiresAt DateTime?
+
+  /// Optional: who bought and for whom
+  purchasedById  String?
+  recipientId    String?
+  recipientEmail String?
+  recipientName  String?
+
+  /// Message
+  message String?
+
+  /// Relations
+  tenant       Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  transactions GiftCardTransaction[]
+
+  @@index([tenantId])
+  @@index([code])
+  @@map("gift_cards")
+}
+
+model GiftCardTransaction {
+  id         String   @id @default(uuid())
+  createdAt  DateTime @default(now())
+  giftCardId String
+  giftCard   GiftCard @relation(fields: [giftCardId], references: [id], onDelete: Cascade)
+
+  /// Transaction
+  type   GiftCardTransactionType
+  amount Int /// Amount in cents
+
+  /// Reference
+  paymentId String?
+
+  /// Notes
+  note String?
+
+  @@index([giftCardId])
+  @@map("gift_card_transactions")
+}
+
+model LoyaltyProgram {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenantId  String   @unique
+
+  /// Program settings
+  name        String  @default("Loyalty Program")
+  description String?
+  isActive    Boolean @default(true)
+
+  /// Points earning rules
+  pointsPerEuro Int @default(1) /// Points earned per EUR spent
+
+  /// Points redemption
+  pointsValueInCents  Int @default(1) /// 1 point = 1 cent
+  minPointsRedemption Int @default(100) /// Minimum points to redeem
+
+  /// Welcome bonus
+  welcomePoints Int @default(0)
+
+  /// Expiration
+  pointsExpirationDays Int? /// Points expire after X days
+
+  /// Relations
+  tenant  Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tiers   LoyaltyTier[]
+  rewards LoyaltyReward[]
+  members LoyaltyMember[]
+
+  @@map("loyalty_programs")
+}
+
+model LoyaltyTier {
+  id        String         @id @default(uuid())
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  programId String
+  program   LoyaltyProgram @relation(fields: [programId], references: [id], onDelete: Cascade)
+
+  /// Tier info
+  name             String /// Bronze, Silver, Gold, Platinum
+  minPoints        Int    @default(0)
+  pointsMultiplier Float  @default(1.0) /// 1.5 = 50% more points
+
+  /// Benefits
+  description String?
+  benefits    Json    @default("[]")
+
+  /// Relations
+  members LoyaltyMember[]
+
+  @@unique([programId, name])
+  @@map("loyalty_tiers")
+}
+
+model LoyaltyMember {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clientId  String
+  client    Client         @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  programId String
+  program   LoyaltyProgram @relation(fields: [programId], references: [id], onDelete: Cascade)
+  tierId    String?
+  tier      LoyaltyTier?   @relation(fields: [tierId], references: [id], onDelete: SetNull)
+
+  /// Stats
+  lifetimePoints Int   @default(0)
+  currentPoints  Int   @default(0)
+  totalEarned    Int   @default(0)
+  totalRedeemed  Int   @default(0)
+  totalSpent     Float @default(0) /// Total euros spent
+
+  /// Status
+  status         LoyaltyMemberStatus @default(active)
+  joinedAt       DateTime            @default(now())
+  lastActivityAt DateTime?
+
+  /// Relations
+  redemptions      LoyaltyRedemption[]
+  expirationPoints LoyaltyPointsExpiration[]
+
+  @@unique([clientId, programId])
+  @@map("loyalty_members")
+}
+
+model LoyaltyReward {
+  id        String         @id @default(uuid())
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  programId String
+  program   LoyaltyProgram @relation(fields: [programId], references: [id], onDelete: Cascade)
+
+  /// Reward info
+  name        String
+  description String?
+  type        LoyaltyRewardType /// discount, free_service, product, voucher
+
+  /// Value
+  discountPercent Int?
+  discountAmount  Int?
+  freeServiceId   String?
+  productId       String?
+  voucherCode     String?
+
+  /// Cost
+  pointsCost Int
+
+  /// Availability
+  isActive           Boolean   @default(true)
+  maxRedemptions     Int?
+  currentRedemptions Int       @default(0)
+  expiresAt          DateTime?
+
+  /// Relations
+  redemptions LoyaltyRedemption[]
+
+  @@index([programId])
+  @@map("loyalty_rewards")
+}
+
+model LoyaltyRedemption {
+  id        String        @id @default(uuid())
+  createdAt DateTime      @default(now())
+  memberId  String
+  member    LoyaltyMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  rewardId  String
+  reward    LoyaltyReward @relation(fields: [rewardId], references: [id], onDelete: Cascade)
+
+  /// Redemption details
+  pointsSpent   Int
+  valueReceived Int? /// Value in cents
+
+  /// Status
+  status RedemptionStatus @default(pending)
+  usedAt DateTime?
+
+  /// Reference
+  appointmentId String?
+  paymentId     String?
+
+  @@index([memberId])
+  @@index([rewardId])
+  @@map("loyalty_redemptions")
+}
+
+model LoyaltyPointsExpiration {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+
+  memberId String
+  member   LoyaltyMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  /// Expiring points
+  points    Int
+  expiresAt DateTime
+
+  /// Status
+  isExpired  Boolean @default(false)
+  isRedeemed Boolean @default(false)
+
+  @@index([memberId])
+  @@index([expiresAt])
+  @@map("loyalty_points_expiration")
+}
+
+// Enums for Payment
+enum PaymentType {
+  appointment
+  deposit
+  product
+  service
+  gift_card
+  membership
+  other
+}
+
+enum PaymentTransactionStatus {
+  pending
+  processing
+  succeeded
+  failed
+  cancelled
+  refunded
+  partially_refunded
+}
+
+enum PaymentMethod {
+  card
+  cash
+  bank_transfer
+  wallet
+  gift_card
+  loyalty_points
+}
+
+enum TransactionType {
+  charge
+  refund
+  transfer
+  payout
+}
+
+enum TransactionStatus {
+  pending
+  succeeded
+  failed
+}
+
+enum RefundStatus {
+  pending
+  processing
+  succeeded
+  failed
+}
+
+enum WalletTransactionType {
+  credit /// Added to wallet (deposit, refund, etc.)
+  debit /// Deducted from wallet (purchase, redemption)
+  earned /// Loyalty points earned
+  redeemed /// Loyalty points redeemed
+  expired /// Points expired
+  bonus /// Bonus points
+}
+
+enum GiftCardTransactionType {
+  created /// Gift card created/purchased
+  applied /// Applied to payment
+  refunded /// Refunded back to gift card
+  expired /// Gift card expired
+}
+
+enum LoyaltyMemberStatus {
+  active
+  suspended
+  expired
+}
+
+enum LoyaltyRewardType {
+  discount
+  free_service
+  product
+  voucher
+}
+
+enum RedemptionStatus {
+  pending
+  completed
+  cancelled
+}
+
+// ============================================
+// PRODUCT / INVENTORY MODELS (POS Retail)
+// ============================================
+
+model Product {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenantId  String
+
+  /// Product info
+  name        String
+  description String?
+  sku         String? @unique
+  barcode     String?
+
+  /// Category
+  category    String?
+  subcategory String?
+
+  /// Pricing
+  price     Decimal  @default(0)
+  costPrice Decimal? /// Wholesale cost
+  currency  String   @default("EUR")
+
+  /// Inventory
+  trackInventory Boolean @default(true)
+  quantity       Int     @default(0)
+  lowStockAlert  Int     @default(5)
+
+  /// Media
+  imageUrl String?
+  images   String[] /// Array of image URLs
+
+  /// Status
+  isActive   Boolean @default(true)
+  isFeatured Boolean @default(false)
+
+  /// Tax
+  taxRate Decimal? /// e.g., 0.21 for 21%
+
+  /// Online store
+  showOnline  Boolean  @default(false)
+  onlinePrice Decimal?
+
+  /// Loyalty
+  earnPoints   Boolean @default(false)
+  pointsEarned Int     @default(0)
+
+  /// Relations
+  tenant               Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  orderItems           ProductOrder[]
+  InventoryTransaction InventoryTransaction[]
+
+  @@index([tenantId])
+  @@index([tenantId, category])
+  @@index([sku])
+  @@map("products")
+}
+
+model ProductCategory {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenantId  String
+
+  name         String
+  description  String?
+  parentId     String?
+  imageUrl     String?
+  displayOrder Int     @default(0)
+  isActive     Boolean @default(true)
+
+  tenant   Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  parent   ProductCategory?  @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children ProductCategory[] @relation("CategoryHierarchy")
+
+  @@index([tenantId])
+  @@map("product_categories")
+}
+
+model ProductOrder {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+
+  orderId    String
+  productId  String
+  quantity   Int     @default(1)
+  unitPrice  Decimal
+  totalPrice Decimal
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([orderId, productId])
+  @@map("product_orders")
+}
+
+model Order {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenantId  String
+  clientId  String?
+
+  /// Order info
+  orderNumber String      @unique
+  status      OrderStatus @default(pending)
+  type        OrderType   @default(sale)
+
+  /// Pricing
+  subtotal  Decimal @default(0)
+  taxAmount Decimal @default(0)
+  discount  Decimal @default(0)
+  total     Decimal @default(0)
+
+  /// Payments
+  paidAmount    Decimal @default(0)
+  paymentMethod String?
+
+  /// Points
+  pointsEarned   Int @default(0)
+  pointsRedeemed Int @default(0)
+
+  /// Notes
+  notes String?
+
+  /// Source
+  source String? /// pos, online, api
+
+  /// Relations
+  tenant   Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client   Client?        @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  items    ProductOrder[]
+  payments Payment[]
+
+  @@index([tenantId])
+  @@index([tenantId, orderNumber])
+  @@index([tenantId, clientId])
+  @@index([status])
+  @@map("orders")
+}
+
+model InventoryTransaction {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+
+  productId String
+  tenantId  String
+
+  /// Transaction details
+  type        InventoryTransactionType
+  quantity    Int /// Positive for additions, negative for deductions
+  previousQty Int
+  newQty      Int
+
+  /// Reference
+  orderId       String?
+  appointmentId String?
+  reason        String? /// restock, sale, adjustment, return, etc.
+  notes         String?
+
+  /// Product
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([productId])
+  @@map("inventory_transactions")
+}
+
+enum OrderStatus {
+  pending
+  processing
+  completed
+  cancelled
+  refunded
+  partially_refunded
+}
+
+enum OrderType {
+  sale
+  return
+  exchange
+  quote
+}
+
+enum InventoryTransactionType {
+  restock
+  sale
+  return
+  adjustment
+  transfer
+  damaged
+  expired
+}
+
+// Email Marketing Campaigns
+enum CampaignStatus {
+  draft
+  active /// For re-engagement campaigns that run automatically
+  scheduled
+  sending
+  sent
+  cancelled
+  failed
+}
+
+enum CampaignType {
+  newsletter
+  promotion
+  announcement
+  reminder
+  review_request
+  loyalty
+  reengagement
+  custom
+}
+
+model EmailCampaign {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenantId  String
+
+  /// Campaign details
+  name         String
+  subject      String
+  previewText  String? /// Preview text shown in email inbox
+  content      String /// HTML content
+  campaignType CampaignType
+  status       CampaignStatus @default(draft)
+
+  /// Re-engagement campaign settings
+  inactiveDaysThreshold Int? /// Days of inactivity to target (e.g., 30, 60, 90)
+  linkedPromotionId     String? /// Optional promotion to include in email
+  linkedPromotion       Promotion? @relation(fields: [linkedPromotionId], references: [id], onDelete: SetNull)
+
+  /// Scheduling
+  scheduledAt DateTime?
+  sentAt      DateTime?
+
+  /// Statistics
+  totalRecipients Int @default(0)
+  emailsSent      Int @default(0)
+  emailsDelivered Int @default(0)
+  emailsOpened    Int @default(0)
+  clicks          Int @default(0)
+  bounces         Int @default(0)
+  unsubscribes    Int @default(0)
+
+  /// Settings
+  fromName String? /// Sender name override
+  replyTo  String? /// Reply-to email
+
+  /// Relations
+  tenant     Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  recipients EmailCampaignRecipient[]
+  templates  EmailCampaignTemplate[]
+  analytics  EmailCampaignAnalytics[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([scheduledAt])
+  @@map("email_campaigns")
+}
+
+model EmailCampaignRecipient {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+
+  campaignId String
+  clientId   String?
+
+  /// Recipient info
+  email String
+  name  String?
+
+  /// Delivery status
+  status         String    @default("pending") /// pending, sent, delivered, opened, clicked, bounced, unsubscribed
+  sentAt         DateTime?
+  deliveredAt    DateTime?
+  openedAt       DateTime?
+  clickedAt      DateTime?
+  bouncedAt      DateTime?
+  unsubscribedAt DateTime?
+
+  /// Tracking
+  messageId    String? /// Email provider message ID
+  errorMessage String?
+
+  /// Relations
+  campaign EmailCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  client   Client?       @relation(fields: [clientId], references: [id], onDelete: SetNull)
+
+  @@index([campaignId])
+  @@index([clientId])
+  @@index([email])
+  @@map("email_campaign_recipients")
+}
+
+model EmailCampaignTemplate {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenantId  String
+
+  /// Template details
+  name         String
+  subject      String
+  previewText  String?
+  content      String /// HTML content with placeholders
+  campaignType CampaignType?
+  isDefault    Boolean       @default(false)
+
+  /// Relations
+  tenant    Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  campaigns EmailCampaign[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("email_campaign_templates")
+}
+
+model EmailCampaignAnalytics {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+
+  campaignId String
+
+  /// Event details
+  eventType String /// sent, delivered, opened, clicked, bounced, unsubscribed
+  timestamp DateTime @default(now())
+
+  /// Recipient info
+  email     String
+  messageId String?
+
+  /// Event data
+  userAgent String?
+  ipAddress String?
+  location  String?
+  url       String? /// For click events
+
+  /// Relations
+  campaign EmailCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId])
+  @@index([timestamp])
+  @@index([email])
+  @@map("email_campaign_analytics")
+}
+
+// ====================================
+// Social Integrations
+// ====================================
+
+enum SocialPlatform {
+  GOOGLE
+  FACEBOOK
+  INSTAGRAM
+  TWITTER
+  TIKTOK
+}
+
+enum SocialConnectionStatus {
+  PENDING
+  CONNECTED
+  DISCONNECTED
+  ERROR
+}
+
+model SocialConnection {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenantId  String
+
+  /// Platform
+  platform SocialPlatform
+  status   SocialConnectionStatus @default(PENDING)
+
+  /// OAuth tokens (encrypted in production)
+  accessToken  String?
+  refreshToken String?
+  tokenExpiry  DateTime?
+
+  /// Account info
+  accountId    String?
+  accountName  String?
+  accountUrl   String?
+  profileImage String?
+
+  /// Settings
+  isActive      Boolean @default(true)
+  autoPost      Boolean @default(false)
+  notifyReviews Boolean @default(true)
+
+  /// Last sync
+  lastSyncAt DateTime?
+  syncError  String?
+
+  /// Relations
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, platform])
+  @@index([tenantId])
+  @@map("social_connections")
+}
+
+model GoogleBusinessProfile {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenantId  String   @unique
+
+  /// Business Info (synced from Google)
+  businessName    String?
+  businessAddress String?
+  businessPhone   String?
+  businessWebsite String?
+  businessEmail   String?
+
+  /// Location
+  locationId   String?
+  locationName String?
+
+  /// Google-specific
+  ranking         Int? /// Google ranking
+  totalReviews    Int     @default(0)
+  averageRating   Float   @default(0)
+  profileComplete Boolean @default(false)
+
+  /// Features
+  enableOnlineBooking      Boolean @default(false)
+  enableReviewRequests     Boolean @default(false)
+  showRealTimeAvailability Boolean @default(false)
+
+  /// Last sync
+  lastSyncAt DateTime?
+
+  /// Relations
+  tenant  Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reviews GoogleReview[]
+
+  @@map("google_business_profiles")
+}
+
+model GoogleReview {
+  id        String                @id @default(uuid())
+  createdAt DateTime              @default(now())
+  profileId String
+  profile   GoogleBusinessProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  /// Review info
+  reviewId      String    @unique
+  reviewerName  String?
+  reviewerPhoto String?
+  rating        Int
+  comment       String?
+  replyComment  String?
+  replyAt       DateTime?
+
+  /// Source
+  googleCreatedAt DateTime?
+
+  @@index([profileId])
+  @@map("google_reviews")
+}
+
+model SocialPost {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenantId  String
+
+  /// Post content
+  content   String
+  mediaUrls Json    @default("[]") /// Array of image/video URLs
+  linkUrl   String?
+
+  /// Platform targeting
+  platforms Json @default("[]") /// Array of SocialPlatform
+
+  /// Scheduling
+  scheduledAt DateTime?
+  publishedAt DateTime?
+  status      String    @default("draft") /// draft, scheduled, published, failed
+
+  /// Platform response
+  platformPostId String?
+  platformUrl    String?
+  errorMessage   String?
+
+  /// Analytics
+  likes    Int @default(0)
+  comments Int @default(0)
+  shares   Int @default(0)
+  clicks   Int @default(0)
+
+  /// Relations
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([status])
+  @@index([scheduledAt])
+  @@map("social_posts")
+}
+
+// ============================================
+// LOCATION MODELS (Multi-location / Plan Empresa)
+// ============================================
+
+model Location {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name       String
+  slug       String
+  street     String?
+  city       String?
+  state      String?
+  postalCode String?
+  country    String  @default("ES")
+  timezone   String  @default("Europe/Madrid")
+  phone      String?
+  email      String?
+  isActive   Boolean @default(true)
+
+  appointments  Appointment[]
+  professionals ProfessionalLocation[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
+  @@index([tenantId, isActive])
+  @@map("locations")
+}
+
+// Join table: which professionals can work at which locations
+model ProfessionalLocation {
+  id             String       @id @default(uuid())
+  professionalId String
+  locationId     String
+  isPrimary      Boolean      @default(false)
+  professional   Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+  location       Location     @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([professionalId, locationId])
+  @@index([professionalId])
+  @@index([locationId])
+  @@map("professional_locations")
+}
+
+// ============================================
+// P0 Ã¢â‚¬â€ WIDGET INSTANCE (booking iframe per tenant)
+// ============================================
+
+model WidgetInstance {
+  id             String        @id @default(uuid())
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  tenantId       String
+  token          String        @unique
+  name           String
+  allowedOrigins String[]      @default([])
+  services       String[]      @default([])
+  professionals  String[]      @default([])
+  theme          Json          @default("{}")
+  lastUsedAt     DateTime?
+  bookCount      Int           @default(0)
+  tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  appointments   Appointment[]
+
+  @@index([tenantId])
+  @@map("widget_instances")
+}
+
+// ============================================
+// P0 Ã¢â‚¬â€ IMPORT JOBS (CSV bulk-import of clients)
+// ============================================
+
+enum ImportType {
+  clients
+  services
+  professionals
+}
+
+enum ImportStatus {
+  pending
+  processing
+  completed
+  failed
+}
+
+model ImportJob {
+  id          String       @id @default(uuid())
+  createdAt   DateTime     @default(now())
+  completedAt DateTime?
+  tenantId    String
+  type        ImportType
+  status      ImportStatus @default(pending)
+  filename    String
+  totalRows   Int          @default(0)
+  successRows Int          @default(0)
+  errorRows   Int          @default(0)
+  errors      Json         @default("[]")
+  dryRun      Boolean      @default(true)
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@map("import_jobs")
+}
+
+// ============================================
+// P0 Ã¢â‚¬â€ CONSENT FORMS & CONSENTS (RGPD)
+// ============================================
+
+model ConsentForm {
+  id          String    @id @default(uuid())
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  tenantId    String
+  name        String
+  description String?
+  fields      Json
+  serviceIds  String[]  @default([])
+  isActive    Boolean   @default(true)
+  version     Int       @default(1)
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  consents    Consent[]
+
+  @@index([tenantId])
+  @@index([tenantId, serviceIds])
+  @@map("consent_forms")
+}
+
+model Consent {
+  id              String      @id @default(uuid())
+  signedAt        DateTime    @default(now())
+  revokedAt       DateTime?
+  revokeReason    String?
+  tenantId        String
+  clientId        String
+  formId          String
+  formVersion     Int
+  formSnapshot    Json
+  responses       Json
+  signatureName   String
+  signatureIpHash String
+  appointmentId   String?
+  serviceId       String?
+  expiresAt       DateTime?
+  tenant          Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  form            ConsentForm @relation(fields: [formId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, clientId])
+  @@index([clientId])
+  @@index([formId])
+  @@index([appointmentId])
+  @@map("consents")
+}
+
+// ============================================
+// P0 Ã¢â‚¬â€ REVIEWS (post-service rating with Google deep-link)
+// ============================================
+
+enum ReviewSource {
+  email_link
+  whatsapp_link
+  qr
+  in_person
+  public_page
+  widget
+}
+
+enum ReviewStatus {
+  pending
+  moderation
+  published
+  rejected
+}
+
+model Review {
+  id                   String       @id @default(uuid())
+  createdAt            DateTime     @default(now())
+  tenantId             String
+  appointmentId        String?      @unique
+  clientId             String
+  professionalId       String?
+  rating               Int
+  comment              String?
+  source               ReviewSource @default(email_link)
+  status               ReviewStatus @default(published)
+  publishedToGoogle    Boolean      @default(false)
+  googleReviewId       String?
+  googleSyncError      String?
+  reviewToken          String?      @unique
+  reviewTokenExpiresAt DateTime?
+  tenant               Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, status])
+  @@index([clientId])
+  @@index([professionalId])
+  @@map("reviews")
+}
+
+// ============================================
+// P0 Ã¢â‚¬â€ WHATSAPP CLOUD API (per-tenant WABA)
+// ============================================
+
+model WhatsAppConnection {
+  id              String    @id @default(uuid())
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  tenantId        String    @unique
+  wabaId          String
+  phoneNumberId   String
+  businessId      String?
+  displayPhone    String
+  displayName     String?
+  accessTokenEnc  String
+  refreshTokenEnc String?
+  tokenExpiresAt  DateTime?
+  scopes          String[]  @default([])
+  qualityScore    String?
+  messagingLimit  Json?
+  isActive        Boolean   @default(true)
+  lastSyncAt      DateTime?
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([phoneNumberId])
+  @@map("whatsapp_connections")
+}
+
+enum WhatsAppCampaignStatus {
+  draft
+  scheduled
+  sending
+  completed
+  failed
+  cancelled
+}
+
+enum WhatsAppRecipientStatus {
+  pending
+  sent
+  delivered
+  read
+  failed
+  opted_out
+  invalid
+}
+
+model WhatsAppCampaign {
+  id              String                      @id @default(uuid())
+  createdAt       DateTime                    @default(now())
+  updatedAt       DateTime                    @updatedAt
+  tenantId        String
+  name            String
+  templateId      String
+  templateVars    Json                        @default("{}")
+  segmentFilter   Json                        @default("{}")
+  audience        Json                        @default("[]")
+  status          WhatsAppCampaignStatus      @default(draft)
+  scheduledAt     DateTime?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  totalRecipients Int                         @default(0)
+  sent            Int                         @default(0)
+  delivered       Int                         @default(0)
+  read            Int                         @default(0)
+  failed          Int                         @default(0)
+  optedOut        Int                         @default(0)
+  tenant          Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  recipients      WhatsAppCampaignRecipient[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+  @@map("whatsapp_campaigns")
+}
+
+model WhatsAppCampaignRecipient {
+  id            String                  @id @default(uuid())
+  createdAt     DateTime                @default(now())
+  campaignId    String
+  clientId      String?
+  phone         String
+  status        WhatsAppRecipientStatus @default(pending)
+  messageId     String?
+  externalError String?
+  sentAt        DateTime?
+  deliveredAt   DateTime?
+  readAt        DateTime?
+  campaign      WhatsAppCampaign        @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId])
+  @@index([status])
+  @@map("whatsapp_campaign_recipients")
+}
+
+// P0 Ã¢â‚¬â€ Append widgetInstanceId on Appointment. Lives next to the model
+// (Appointment is defined earlier) so we keep the relation definitions here
+// for Prisma to pick them up after regeneration.
+
+// ----------------------------------------------------------------------------
+// P1.3 Ã¢â‚¬â€ Onboarding wizard state
+// ----------------------------------------------------------------------------
+
+// Per-tenant progress through the guided onboarding flow.
+// `steps` is a JSON map of stepKey -> { status, completedAt?, skippedAt?, dismissedAt? }
+// where `status` is one of: 'pending' | 'done' | 'skipped' | 'dismissed'.
+model OnboardingState {
+  tenantId           String    @id
+  currentStep        Int       @default(0)
+  steps              Json      @default("{}")
+  checklistDismissed Boolean   @default(false)
+  finishedAt         DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  tenant             Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("onboarding_states")
+}
+
+// Sprint 2 / 2.3 Ã¢â‚¬â€ one row per trial-expiry email sent. The unique
+// (tenantId, daysLeft, trialEnd) constraint makes the daily cron
+// idempotent: re-runs the same day don't double-email a tenant that
+// has already received the T-3 or T-1 warning for the current trial.
+model TrialNotificationLog {
+  id       String   @id @default(uuid())
+  tenantId String
+  daysLeft Int /// 3 or 1
+  trialEnd DateTime /// snapshot of Tenant.trialEnd at send time
+  sentAt   DateTime @default(now())
+  resendId String? /// Resend email id, for traceability
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, daysLeft, trialEnd])
+  @@index([tenantId])
+  @@map("trial_notification_logs")
+}
+
+// Catalog of onboarding steps. Tenant-independent; seeded idempotently.
+model OnboardingStepDef {
+  key          String          @id
+  order        Int             @unique
+  group        OnboardingGroup
+  titleI18nKey String
+  descI18nKey  String
+  href         String?
+  detectName   String
+  defaultOrder Int             @default(0)
+  enabled      Boolean         @default(true)
+
+  @@map("onboarding_step_defs")
+}
+
+enum OnboardingGroup {
+  linear_required
+  linear_optional
+  checklist_optional
+}
+
+// ----------------------------------------------------------------------------
+// P1.4 Ã¢â‚¬â€ Proactive rebooking by client cadence
+// ----------------------------------------------------------------------------
+
+// Per-client cadence model: how often does this client typically return for
+// each service? Only services with >= 3 completed visits are tracked.
+model ClientCadence {
+  clientId                  String    @id
+  tenantId                  String
+  byService                 Json      @default("{}")
+  nextRecommendedReminderAt DateTime?
+  recommendedServiceId      String?
+  lastComputedAt            DateTime  @default(now())
+  reminderSentFor           Json      @default("[]")
+  optedOut                  Boolean   @default(false)
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+  tenant                    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([nextRecommendedReminderAt])
+  @@map("client_cadences")
+}
+
+// Individual rebooking reminders dispatched by the cron worker.
+// `serviceId` is nullable for generic (non-service-specific) reminders.
+model RebookingReminder {
+  id                  String        @id @default(uuid())
+  tenantId            String
+  clientId            String
+  serviceId           String?
+  scheduledAt         DateTime
+  sentAt              DateTime?
+  channel             RebookChannel
+  status              RebookStatus
+  resultAppointmentId String?
+  cancelledReason     String?
+  // P2A-receptionist-advanced -- AI-suggested slot this reminder promotes.
+  // Null for tenants in basic-reminder mode or when there isn't enough
+  // history to make a confident proposal.
+  proposedSlot        Json?
+  createdAt           DateTime      @default(now())
+  tenant              Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client              Client        @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, scheduledAt])
+  @@index([clientId, status])
+  @@map("rebooking_reminders")
+}
+
+enum RebookChannel {
+  email
+  whatsapp
+  both
+}
+
+// P2A-receptionist-advanced â€” virtual wait-list for fully-booked slots.
+// Hook on `Appointment.cancel` -> match by service + professional +
+// date window -> push notification (later). The list is only enabled
+// when the tenant has `virtual_receptionist_advanced` unlocked.
+model WaitList {
+  id              String   @id @default(uuid())
+  tenantId        String
+  clientId        String
+  serviceId       String
+  professionalId  String?
+  // The window when the client is available. Both nullable = "anytime".
+  earliestDate    DateTime?
+  latestDate      DateTime?
+  // Lifecycle. `waiting` is the active state.
+  // `notified` means a slot opened and we told the client.
+  // `cancelled` is terminal (client or system removed).
+  // `fulfilled` means the client booked the appointment they wanted.
+  status          String   @default("waiting")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  notifiedAt      DateTime?
+  notes           String?
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client          Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
+  @@index([tenantId, serviceId, professionalId])
+  @@index([clientId])
+  @@map("wait_list")
+}
+
+enum RebookStatus {
+  scheduled
+  sent
+  cancelled
+  failed
+  booked
+}
+
+// ----------------------------------------------------------------------------
+// P2A Ã¢â‚¬â€ Spanish fiscal compliance (Verifactu / TicketBAI / SII)
+// ----------------------------------------------------------------------------
+
+model Invoice {
+  id       String @id @default(uuid())
+  tenantId String
+
+  /// NumeraciÃƒÂ³n
+  series    String
+  number    String
+  issueDate DateTime
+
+  /// Sujeto (cliente o tenant para facturas simplificadas)
+  recipientType    InvoiceRecipient
+  recipientId      String?
+  recipientName    String
+  recipientTaxId   String?
+  recipientAddress Json?
+
+  /// Importes (en cÃƒÂ©ntimos para evitar drift decimal)
+  subtotalCents Int
+  taxBreakdown  Json
+  totalCents    Int
+  currency      String @default("EUR")
+
+  /// Estado general
+  status InvoiceStatus @default(draft)
+
+  /// Estado fiscal (AEAT / diputaciones)
+  fiscalMode        FiscalMode          @default(none)
+  fiscalStatus      InvoiceFiscalStatus @default(not_required)
+  fiscalHash        String?
+  fiscalQrUrl       String?
+  fiscalXml         String?             @db.Text
+  fiscalReference   String?
+  fiscalError       String?             @db.Text
+  fiscalSubmittedAt DateTime?
+
+  /// Estado contable (P2B)
+  accountingStatus     InvoiceAccountingStatus @default(not_synced)
+  accountingExternalId String?
+  accountingSyncedAt   DateTime?
+  accountingError      String?                 @db.Text
+  /// P2A Ã¢â‚¬â€ Fiscal retry chain tracking
+  fiscalRetryCount     Int                     @default(0)
+  /// Snapshot of issuer NIF at the time of issuance (immutable). For refund
+  /// flows we keep this even if Tenant.taxId later changes.
+  issuerTaxIdAtIssue   String?
+  issuerNameAtIssue    String?
+
+  /// Metadata
+  sourceType InvoiceSource
+  sourceId   String?
+  notes      String?
+
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  tenant    Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lines     InvoiceLine[]
+
+  @@unique([tenantId, series, number])
+  @@index([tenantId, issueDate])
+  @@index([tenantId, status])
+  @@index([fiscalStatus])
+  @@index([sourceType, sourceId])
+  @@map("invoices")
+}
+
+model InvoiceLine {
+  id             String  @id @default(uuid())
+  invoiceId      String
+  description    String
+  quantity       Decimal
+  unitPriceCents Int
+  discountPct    Decimal @default(0)
+  taxRate        Decimal @default(0)
+  taxCents       Int
+  totalCents     Int
+  /// Trazabilidad
+  productId      String?
+  serviceId      String?
+  appointmentId  String?
+  invoice        Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("invoice_lines")
+}
+
+model FiscalCertificate {
+  id               String             @id @default(uuid())
+  tenantId         String
+  provider         FiscalCertProvider
+  alias            String
+  /// Material sensible Ã¢â‚¬â€ cifrado en reposo con EncryptionService
+  encryptedPem     String             @db.Text
+  passphraseCipher String?            @db.Text
+  fingerprint      String
+  issuer           String?
+  subject          String?
+  notBefore        DateTime?
+  notAfter         DateTime?
+  isActive         Boolean            @default(true)
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  tenant           Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, isActive])
+  @@map("fiscal_certificates")
+}
+
+model FiscalSequence {
+  id         String @id @default(uuid())
+  tenantId   String
+  series     String
+  year       Int
+  lastNumber Int    @default(0)
+  tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, series, year])
+  @@map("fiscal_sequences")
+}
+
+enum InvoiceRecipient {
+  client
+  tenant
+}
+
+enum InvoiceStatus {
+  draft
+  issued
+  paid
+  cancelled
+  refunded
+}
+
+enum InvoiceFiscalStatus {
+  not_required
+  pending
+  accepted
+  rejected
+  error
+}
+
+enum InvoiceSource {
+  order
+  appointment
+  manual
+  subscription
+}
+
+enum InvoiceAccountingStatus {
+  not_synced
+  pending
+  synced
+  error
+}
+
+enum FiscalMode {
+  none
+  verifactu
+  ticketbai
+  sii_only
+}
+
+enum FiscalCertProvider {
+  p12
+  cloud_dnie
+}
+
+model TaxReport {
+  id              String          @id @default(uuid())
+  tenantId        String
+  type            TaxReportType
+  year            Int
+  quarter         Int
+  /// Cached aggregates so the dashboard can render without re-reading
+  /// every invoice row. Updated on each `generate`.
+  totalsJson      Json
+  /// AEAT submission
+  fiscalXml       String?         @db.Text
+  fiscalReference String?
+  fiscalStatus    TaxReportStatus @default(draft)
+  fiscalError     String?         @db.Text
+  generatedAt     DateTime        @default(now())
+  filedAt         DateTime?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, type, year, quarter])
+  @@index([tenantId, type, year])
+  @@map("tax_reports")
+}
+
+enum TaxReportType {
+  modelo_303 /// IVA trimestral
+  modelo_130 /// IRPF estimaciÃƒÂ³n directa
+}
+
+enum TaxReportStatus {
+  draft
+  submitted
+  accepted
+  rejected
+  error
+}
+
+enum NifType {
+  nif /// DNI Ã¢â‚¬â€ 8 digits + letter
+  cif /// Company Ã¢â‚¬â€ letter + 7 digits + control
+  nie /// Foreign resident Ã¢â‚¬â€ X/Y/Z + 7 digits + letter
+  passport
+  other
+}
+
+model FiscalChainState {
+  tenantId        String
+  fiscalMode      FiscalMode
+  lastHash        String?
+  lastNumber      String?
+  lastSubmittedAt DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  tenant          Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, fiscalMode])
+  @@index([fiscalMode, lastSubmittedAt])
+  @@map("fiscal_chain_states")
+}
+
+// ----------------------------------------------------------------------------
+// P2B Ã¢â‚¬â€ Accounting integrations (Holded / Sage / A3 / NCS)
+// ----------------------------------------------------------------------------
+
+model AccountingConnection {
+  id                    String              @id @default(uuid())
+  tenantId              String              @unique
+  provider              AccountingProvider
+  /// OAuth tokens cifrados en reposo (EncryptionService)
+  encryptedAccessToken  String              @db.Text
+  encryptedRefreshToken String?             @db.Text
+  expiresAt             DateTime?
+  externalCompanyId     String?
+  isActive              Boolean             @default(true)
+  lastSyncAt            DateTime?
+  lastError             String?             @db.Text
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+  tenant                Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  syncLogs              AccountingSyncLog[]
+
+  @@index([provider, isActive])
+  @@map("accounting_connections")
+}
+
+model AccountingSyncLog {
+  id           String                @id @default(uuid())
+  tenantId     String
+  invoiceId    String
+  provider     AccountingProvider
+  action       String /// 'sync' | 'retry' | 'unlink' | 'refresh_token'
+  status       String /// 'ok' | 'error' | 'skipped'
+  externalId   String?
+  errorMessage String?               @db.Text
+  payload      Json?
+  createdAt    DateTime              @default(now())
+  connection   AccountingConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  connectionId String?
+
+  @@index([tenantId, createdAt])
+  @@index([invoiceId])
+  @@map("accounting_sync_logs")
+}
+
+enum AccountingProvider {
+  holded
+  sage
+  a3
+  ncs
+}
+
+// GDPR data-subject-request audit trail (Art. 30 RGPD). One row per
+// export or anonymize request. Used both for the customer's right of
+// access (Art. 15) and right to erasure (Art. 17), plus for proving
+// compliance during an AEPD audit.
+model GdprRequest {
+  id          String            @id @default(uuid())
+  tenantId    String
+  action      GdprAction
+  status      GdprRequestStatus @default(processing)
+  actorId     String
+  ipAddress   String?
+  createdAt   DateTime          @default(now())
+  completedAt DateTime?
+  notes       String?
+  tenant      Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([action, createdAt])
+  @@map("gdpr_requests")
+}
+
+enum GdprAction {
+  export
+  anonymize
+}
+
+enum GdprRequestStatus {
+  processing
+  completed
+  failed
+}
+
+// Bug reports submitted from the in-app "Ã°Å¸ÂÅ¾ Report a bug" widget
+// (or anonymously, e.g. from the login/marketing pages). The SaaS
+// admin dashboard reads these rows; the founder also receives an
+// email copy via BugReportService for redundancy.
+model BugReport {
+  id           String          @id @default(uuid())
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  /// Optional Ã¢â‚¬â€ anonymous reports from logged-out users have no tenant.
+  tenantId     String?
+  /// Optional Ã¢â‚¬â€ anonymous reports have no user.
+  authorId     String?
+  subject      String
+  description  String          @db.Text
+  currentUrl   String?
+  appVersion   String?
+  email        String?
+  context      Json            @default("{}")
+  status       BugReportStatus @default(open)
+  /// Optional Ã¢â‚¬â€ when a SaaS owner triages the report.
+  resolvedById String?
+  resolvedAt   DateTime?
+  resolution   String?         @db.Text
+  tenant       Tenant?         @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  author       User?           @relation("BugReportAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([status, createdAt])
+  @@index([tenantId, createdAt])
+  @@map("bug_reports")
+}
+
+enum BugReportStatus {
+  open
+  triaged
+  in_progress
+  resolved
+  wont_fix
+  duplicate
+}
+
+// P2A-receptionist-v2 H-4 — virtual-receptionist chat channels.
+// `web` is the in-app web chat (Widget).
+// `whatsapp` / `facebook` / `instagram` are Meta platforms, all served
+// via the same Graph API endpoint (differentiated by metadata.platform).
+// `telegram` is the Telegram Bot API.
+enum ChatChannel {
+  web
+  whatsapp
+  facebook
+  instagram
+  telegram
+}
+
+// ============================================================================
+// P2A-platform-llm: single platform-wide LLM provider config
+// ============================================================================
+// A singleton row (id = "global") that holds the API key and default model
+// the platform uses for the Virtual Receptionist. Salon owners do NOT see
+// this; only `saas_owner` role can read/write. The apiKey is encrypted
+// at rest with the existing EncryptionService (AES-256-GCM, KMS-backed).
+model PlatformLlmConfig {
+  id              String   @id @default("global")
+  provider        String   @default("anthropic")    // "anthropic" | "openai" | ...
+  // P2A-platform-llm: AES-256-GCM ciphertext of the API key. Decrypt with
+  // EncryptionService.decrypt(). Never expose via API; only the
+  // last-4-chars hash is returned to the admin UI.
+  apiKeyEncrypted String   @db.Text
+  defaultModel    String   @default("claude-haiku-4-5")
+  // Optional fields that the provider factory needs (e.g. MiniMax
+  // requires MINIMAX_BASE_URL).
+  baseUrl         String?
+  // P2A-anthropic-workspace: Identity-linked Anthropic keys (created
+  // from console.anthropic.com since late 2025) require this header
+  // in every request. Not sensitive — visible in the console.
+  workspaceId     String?
+  updatedAt       DateTime @updatedAt
+  updatedBy       String?
+}
+
+// ============================================================================
+// P2A-staff-copilot: per-user chat thread + per-message + pending-action queue
+// ============================================================================
+// Conversations are scoped per (user, tenant) so the staff copilot is
+// never shared with the customer chatbot. The thread is owned by
+// exactly one `User`; messages reference that thread. Pending actions
+// (write tools that need human approval) live in their own table so they
+// can survive a panel reload and be approved from the notification bell.
+model AssistantConversation {
+  id          String   @id @default(cuid())
+  tenantId    String
+  userId      String
+  sessionId   String?  // null = persistent thread; non-null = ephemeral panel session
+  title       String?  // auto-generated by LLM after ~5 turns; null until then
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  messages    AssistantMessage[]
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tenantId, sessionId])
+  @@index([tenantId, updatedAt])
+  @@index([userId, updatedAt])
+  @@map("assistant_conversations")
+}
+
+enum AssistantMessageRole {
+  user        // the salon staff typed something
+  assistant   // the LLM replied
+  tool        // tool-call result attached to the assistant message
+  approval    // a pending-action card; points to ActionApproval
+  system      // not used in v1; reserved for future system injections
+}
+
+model AssistantMessage {
+  id              String   @id @default(cuid())
+  conversationId  String
+  role            AssistantMessageRole
+  content         String   @db.Text   // text or tool-call JSON
+  toolName        String?
+  toolInput       Json?
+  toolResult      Json?
+  pendingActionId String?  // when role=approval
+  createdAt       DateTime  @default(now())
+
+  conversation    AssistantConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  pendingAction   ActionApproval?       @relation(fields: [pendingActionId], references: [id], onDelete: SetNull)
+  feedback        CopilotFeedback[]
+
+  @@index([conversationId, createdAt])
+  @@map("assistant_messages")
+}
+
+// Pending actions: every write tool returns a preview the human must
+// approve. Defaults to 5-minute expiry so a forgotten card doesn't
+// haunt the dashboard.
+model ActionApproval {
+  id              String   @id @default(cuid())
+  tenantId        String
+  userId          String
+  toolName        String
+  toolInput       Json
+  status          ActionApprovalStatus @default(pending)
+  preview         String?  // human-readable summary shown in the UI
+  expiresAt       DateTime
+  createdAt       DateTime @default(now())
+  resolvedAt      DateTime?
+  resultSnapshot  Json?    // tool result if executed
+  resolvedById    String?  // user who approved/rejected (null if expired)
+
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user            User     @relation("ActionApprovalCreator", fields: [userId], references: [id], onDelete: Cascade)
+  resolvedBy      User?    @relation("ActionApprovalResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+  messages        AssistantMessage[]
+
+  @@index([userId, status, expiresAt])
+  @@index([tenantId, createdAt])
+  @@map("action_approvals")
+}
+
+enum ActionApprovalStatus {
+  pending
+  approved
+  rejected
+  expired
+  executed
+}
+
+// P2A-staff-copilot-sprint16: thumbs up/down feedback on assistant
+// replies. Persisted so the platform team can review quality during
+// the soft-launch without forcing users to file a bug report.
+model CopilotFeedback {
+  id              String   @id @default(cuid())
+  tenantId        String
+  userId          String
+  messageId       String   // the assistant message being rated
+  rating          Int      // -1 = 👎, 1 = 👍
+  comment         String?  // optional free-text (max 500 chars)
+  createdAt       DateTime @default(now())
+
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user            User     @relation("CopilotFeedbackAuthor", fields: [userId], references: [id], onDelete: Cascade)
+  message         AssistantMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([messageId])
+  @@index([rating])
+  @@map("copilot_feedback")
+}

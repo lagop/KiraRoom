@@ -1,0 +1,117 @@
+---
+import "../styles/tokens.css";
+import "../styles/global.css";
+import Header from "../components/Header.astro";
+import Footer from "../components/Footer.astro";
+
+export interface Props {
+  title: string;
+  description?: string;
+  /** When true, the page renders without the standard header/footer chrome
+   *  (used by the /login redirect stub). */
+  bare?: boolean;
+}
+
+const {
+  title,
+  description = "KiraStudio — la plataforma SaaS de gestión para salones de belleza en España. Citas online, facturación Verifactu y recordatorios automáticos por WhatsApp.",
+  bare = false,
+} = Astro.props;
+
+const fullTitle = title === "KiraStudio" ? title : `${title} · KiraStudio`;
+const canonicalUrl = new URL(Astro.url.pathname, Astro.site).toString();
+const ogImageUrl = new URL("/og-image.svg", Astro.site).toString();
+---
+
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#4f46e5" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="canonical" href={canonicalUrl} />
+
+    <!-- Open Graph -->
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="es_ES" />
+    <meta property="og:url" content={canonicalUrl} />
+    <meta property="og:image" content={ogImageUrl} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="KiraStudio — gestiona tu salón sin complicaciones" />
+
+    <!-- Twitter / X -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={fullTitle} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogImageUrl} />
+
+    <!-- Plausible Analytics — privacy-first, no cookies, RGPD-compliant.
+         Set PUBLIC_PLAUSIBLE_DOMAIN (e.g. marketing.kirastudio.com) in
+         the Cloudflare Pages project env to activate. When unset, the
+         script tag is not rendered. The `plausible.ts` wrapper in
+         lib/analytics/ degrades to no-op if the script fails to load
+         or the user has opted out via localStorage. -->
+    {import.meta.env.PUBLIC_PLAUSIBLE_DOMAIN && (
+      <script
+        defer
+        data-domain={import.meta.env.PUBLIC_PLAUSIBLE_DOMAIN}
+        src="https://plausible.io/js/script.js"
+      />
+    )}
+
+    <!-- Cloudflare Web Analytics — zero cookies, no fingerprinting, no
+         IP storage. The token is per-Cloudflare-Pages-project and is
+         injected as the CF_ANALYTICS_TOKEN env var. Until set, no
+         beacon is requested.
+         IMPORTANT (LSSI Art. 22.2 + RGPD): the beacon MUST NOT fire
+         before the user opts in to the "Analítica" category. The
+         script tag below is inert; `cookie-banner.js` injects the
+         real beacon only after consent.detail.analytics === true. -->
+    <script
+      is:inline
+      define:vars={{
+        token: import.meta.env.PUBLIC_CF_ANALYTICS_TOKEN || "",
+      }}
+    >
+      window.__KIRA_CF_ANALYTICS_TOKEN__ = window.__KIRA_CF_ANALYTICS_TOKEN__ || token;
+      window.addEventListener("kirastudio:consent-changed", function (e) {
+        try {
+          if (e && e.detail && e.detail.analytics && !window.__KIRA_CF_LOADED__) {
+            window.__KIRA_CF_LOADED__ = true;
+            var s = document.createElement("script");
+            s.defer = true;
+            s.src = "https://static.cloudflareinsights.com/beacon.min.js";
+            s.setAttribute(
+              "data-cf-beacon",
+              JSON.stringify({ token: window.__KIRA_CF_ANALYTICS_TOKEN__ }),
+            );
+            document.head.appendChild(s);
+          }
+        } catch (_) {
+          /* consent banner is best-effort */
+        }
+      });
+    </script>
+  </head>
+  <body>
+    {!bare && <Header />}
+    <main>
+      <slot />
+    </main>
+    {!bare && <Footer />}
+
+    <!-- Cookie banner (LSSI Art. 22.2 + RGPD). Loaded last so it never
+         blocks first paint. The script reads `kira-cookie-consent-v2`
+         from localStorage; first-visit users see the dialog; subsequent
+         visits show only the floating "🍪 Configurar" pill. The script
+         is self-mounting — it creates `<div id="cookie-banner-root">`
+         if absent. -->
+    {!bare && <script src="/cookie-banner.js" defer></script>}
+  </body>
+</html>

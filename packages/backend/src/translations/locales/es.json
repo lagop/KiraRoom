@@ -1,0 +1,192 @@
+{
+  "notifications": {
+    "appointment": {
+      "created": {
+        "title": "Nueva cita programada",
+        "message": "Tienes una nueva cita programada para {date} a las {time}",
+        "client_message": "Tu cita ha sido programada exitosamente para {date} a las {time}"
+      },
+      "updated": {
+        "title": "Cita actualizada",
+        "message": "La cita de {client} ha sido actualizada",
+        "client_message": "Tu cita ha sido actualizada"
+      },
+      "cancelled": {
+        "title": "Cita cancelada",
+        "message": "La cita de {client} programada para {date} ha sido cancelada",
+        "client_message": "Tu cita programada para {date} ha sido cancelada"
+      },
+      "confirmed": {
+        "title": "Cita confirmada",
+        "message": "La cita de {client} ha sido confirmada",
+        "client_message": "Tu cita ha sido confirmada"
+      },
+      "completed": {
+        "title": "Cita completada",
+        "message": "La cita de {client} ha sido completada",
+        "client_message": "Tu cita ha sido completada exitosamente"
+      },
+      "no_show": {
+        "title": "Cliente no presentado",
+        "message": "{client} no se presentó a su cita programada para {date}",
+        "client_message": "No te presentaste a tu cita programada para {date}"
+      },
+      "reminder": {
+        "title": "Recordatorio de cita",
+        "message": "Recuerda tu cita programada para mañana a las {time}",
+        "client_message": "Recuerda tu cita programada para mañana a las {time} con {professional}"
+      }
+    },
+    "client": {
+      "created": {
+        "title": "Nuevo cliente registrado",
+        "message": "Se ha registrado un nuevo cliente: {client}"
+      },
+      "updated": {
+        "title": "Cliente actualizado",
+        "message": "Los datos de {client} han sido actualizados"
+      }
+    },
+    "payment": {
+      "received": {
+        "title": "Pago recibido",
+        "message": "Se ha recibido un pago de {amount} de {client}",
+        "client_message": "Tu pago de {amount} ha sido procesado exitosamente"
+      },
+      "failed": {
+        "title": "Pago fallido",
+        "message": "El pago de {client} por {amount} ha fallado",
+        "client_message": "Tu pago de {amount} no pudo ser procesado"
+      },
+      "refunded": {
+        "title": "Pago reembolsado",
+        "message": "Se ha reembolsado {amount} a {client}",
+        "client_message": "Tu pago de {amount} ha sido reembolsado"
+      }
+    }
+  },
+  "emails": {
+    "appointment": {
+      "confirmation": {
+        "subject": "Confirmación de cita - {business_name}",
+        "greeting": "Hola {client_name},",
+        "body": "Tu cita ha sido confirmada exitosamente.",
+        "details": "Detalles de la cita:",
+        "service": "Servicio: {service_name}",
+        "professional": "Profesional: {professional_name}",
+        "date": "Fecha: {date}",
+        "time": "Hora: {time}",
+        "duration": "Duración: {duration} minutos",
+        "price": "Precio: {price}",
+        "location": "Ubicación: {business_address}",
+        "phone": "Teléfono: {business_phone}",
+        "reminder": "Recuerda llegar 10 minutos antes de tu cita.",
+        "cancellation": "Si necesitas cancelar o reprogramar, por favor contáctanos al menos 24 horas antes.",
+        "signature": "Gracias por elegirnos,\nEl equipo de {business_name}"
+      },
+      "reminder": {
+        "subject": "Recordatorio de cita - {business_name}",
+        "greeting": "Hola {client_name},",
+        "body": "Te recordamos tu cita programada para mañana.",
+        "details": "Detalles de tu cita:",
+        "service": "Servicio: {service_name}",
+        "professional": "Profesional: {professional_name}",
+        "date": "Fecha: {date}",
+        "time": "Hora: {time}",
+        "location": "Ubicación: {business_address}",
+        "phone": "Teléfono: {business_phone}",
+        "signature": "¡Te esperamos!\nEl equipo de {business_name}"
+      },
+      "cancellation": {
+        "subject": "Cita cancelada - {business_name}",
+        "greeting": "Hola {client_name},",
+        "body": "Tu cita ha sido cancelada.",
+        "cancelled_details": "Detalles de la cita cancelada:",
+        "service": "Servicio: {service_name}",
+        "date": "Fecha: {date}",
+        "time": "Hora: {time}",
+        "reschedule": "Si deseas reprogramar tu cita, puedes hacerlo a través de nuestro sitio web o contactándonos directamente.",
+        "phone": "Teléfono: {business_phone}",
+        "signature": "Esperamos verte pronto,\nEl equipo de {business_name}"
+      }
+    },
+    "client": {
+      "welcome": {
+        "subject": "Bienvenido a {business_name}",
+        "greeting": "Hola {client_name},",
+        "body": "¡Bienvenido a {business_name}! Gracias por registrarte con nosotros.",
+        "benefits": "Como cliente registrado, podrás:",
+        "benefit_1": "Programar citas en línea fácilmente",
+        "benefit_2": "Recibir recordatorios de citas por email y SMS",
+        "benefit_3": "Acceder a tu historial de citas",
+        "benefit_4": "Acumular puntos de fidelidad",
+        "login": "Puedes acceder a tu cuenta en: {website_url}",
+        "signature": "¡Estamos encantados de tenerte con nosotros!\nEl equipo de {business_name}"
+      },
+      "password_reset": {
+        "subject": "Restablecer contraseña - {business_name}",
+        "greeting": "Hola {client_name},",
+        "body": "Has solicitado restablecer tu contraseña.",
+        "instructions": "Para restablecer tu contraseña, haz clic en el siguiente enlace:",
+        "button": "Restablecer contraseña",
+        "link": "Si el botón no funciona, copia y pega este enlace en tu navegador: {reset_link}",
+        "expiry": "Este enlace expirará en 24 horas.",
+        "no_request": "Si no solicitaste este cambio, puedes ignorar este email.",
+        "signature": "Saludos,\nEl equipo de {business_name}"
+      }
+    },
+    "admin": {
+      "new_appointment": {
+        "subject": "Nueva cita programada - {business_name}",
+        "greeting": "Hola administrador,",
+        "body": "Se ha programado una nueva cita.",
+        "client": "Cliente: {client_name}",
+        "service": "Servicio: {service_name}",
+        "professional": "Profesional: {professional_name}",
+        "date": "Fecha: {date}",
+        "time": "Hora: {time}",
+        "phone": "Teléfono del cliente: {client_phone}",
+        "email": "Email del cliente: {client_email}",
+        "notes": "Notas: {notes}",
+        "action": "Puedes gestionar esta cita desde el panel de administración.",
+        "signature": "Sistema de gestión de citas"
+      },
+      "payment_received": {
+        "subject": "Pago recibido - {business_name}",
+        "greeting": "Hola administrador,",
+        "body": "Se ha recibido un pago exitosamente.",
+        "client": "Cliente: {client_name}",
+        "amount": "Monto: {amount}",
+        "method": "Método: {payment_method}",
+        "appointment": "Cita: {service_name} - {date} {time}",
+        "signature": "Sistema de pagos"
+      }
+    }
+  },
+  "sms": {
+    "appointment": {
+      "confirmation": "Tu cita en {business_name} está confirmada para {date} a las {time}. Servicio: {service_name}. ¡Te esperamos!",
+      "reminder": "Recordatorio: Tienes una cita en {business_name} mañana a las {time}. Servicio: {service_name}.",
+      "cancellation": "Tu cita en {business_name} programada para {date} {time} ha sido cancelada.",
+      "rescheduled": "Tu cita ha sido reprogramada para {date} a las {time}."
+    }
+  },
+  "system": {
+    "errors": {
+      "generic": "Ha ocurrido un error inesperado",
+      "database": "Error de base de datos",
+      "network": "Error de conexión",
+      "validation": "Datos de entrada inválidos",
+      "permission": "Permisos insuficientes",
+      "not_found": "Recurso no encontrado",
+      "conflict": "Conflicto de datos",
+      "maintenance": "Sistema en mantenimiento"
+    },
+    "success": {
+      "saved": "Datos guardados exitosamente",
+      "updated": "Datos actualizados exitosamente",
+      "deleted": "Datos eliminados exitosamente",
+      "sent": "Mensaje enviado exitosamente"
+    }
+  }
+}

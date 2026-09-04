@@ -1,0 +1,86 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+
+// Astro Pages-style static 404. Cloudflare Pages falls back to this
+// automatically for any 404; we override its default error page with
+// branded Spanish copy so users don't bounce to a generic page.
+//
+// Note: the @astrojs/sitemap integration filters out /404 (see
+// astro.config.mjs) so this never appears in the sitemap.
+---
+
+<BaseLayout
+  title="Página no encontrada"
+  description="La página que buscas no existe o se ha movido. Vuelve al inicio o explora nuestros planes."
+>
+  <section class="notfound">
+    <div class="container">
+      <div class="notfound__brand" aria-hidden="true">404</div>
+      <h1>Esta página no existe</h1>
+      <p>
+        La URL que has seguido no apunta a nada en KiraStudio. Es
+        posible que la hayamos movido o que el enlace esté roto.
+      </p>
+      <p class="muted">
+        Si llegaste aquí desde un enlace de un correo nuestro, por favor
+        escríbenos a <a href="mailto:hola@kirastudio.com">hola@kirastudio.com</a>
+        para que lo arreglemos.
+      </p>
+      <div class="notfound__cta">
+        <a href="/" class="btn btn-primary btn-large">Volver al inicio</a>
+        <a href="/pricing" class="btn btn-secondary btn-large">Ver precios</a>
+        <a
+          href="https://app.kirastudio.com/signup"
+          class="btn btn-secondary btn-large"
+        >
+          Probar gratis
+        </a>
+      </div>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  .notfound {
+    padding: 88px 0 64px;
+    background: linear-gradient(180deg, var(--color-brand-soft) 0%, #fff 100%);
+    text-align: center;
+  }
+  .notfound__brand {
+    font-size: clamp(96px, 14vw, 192px);
+    font-weight: 800;
+    line-height: 1;
+    color: var(--color-brand);
+    letter-spacing: -0.04em;
+    margin-bottom: 16px;
+    opacity: 0.85;
+  }
+  .notfound h1 {
+    font-size: clamp(1.75rem, 3vw + 0.5rem, 2.5rem);
+    margin-bottom: 16px;
+  }
+  .notfound p {
+    font-size: 17px;
+    max-width: 560px;
+    margin: 0 auto 8px;
+  }
+  .notfound .muted {
+    font-size: 14px;
+    margin-bottom: 32px;
+  }
+  .notfound__cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    justify-content: center;
+  }
+  @media (max-width: 600px) {
+    .notfound__cta {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .notfound__cta .btn {
+      width: 100%;
+    }
+  }
+</style>

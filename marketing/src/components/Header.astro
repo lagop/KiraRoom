@@ -1,0 +1,118 @@
+---
+const pathname = Astro.url.pathname;
+
+const links = [
+  { href: "/", label: "Inicio" },
+  { href: "/#planes", label: "Precios" },
+  { href: "/privacy", label: "Privacidad" },
+  { href: "/tos", label: "Términos" },
+];
+
+const isActive = (href: string): boolean => {
+  const [path, hash] = href.split("#");
+  // For in-page anchors (e.g. "/#planes"), only active when the URL has
+  // the matching hash. For cross-page links, fall back to pathname match.
+  if (hash) {
+    return pathname === path && typeof Astro.url.hash === "string" && Astro.url.hash === `#${hash}`;
+  }
+  return pathname === path;
+};
+---
+
+<header class="site-header">
+  <div class="container site-header__inner">
+    <a href="/" class="site-header__brand">
+      <span class="site-header__logo" aria-hidden="true">K</span>
+      <span class="site-header__name">KiraStudio</span>
+    </a>
+    <nav class="site-header__nav" aria-label="Principal">
+      {links.map((l) => (
+        <a
+          href={l.href}
+          class:list={["site-header__link", isActive(l.href) && "is-active"]}
+          aria-current={isActive(l.href) ? "page" : undefined}
+        >
+          {l.label}
+        </a>
+      ))}
+    </nav>
+    <div class="site-header__cta">
+      <a href="/login" class="btn btn-secondary site-header__login">Iniciar sesión</a>
+      <a href="https://app.kirastudio.com/signup" class="btn btn-primary">Probar gratis</a>
+    </div>
+  </div>
+</header>
+
+<style>
+  .site-header {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: rgba(255, 255, 255, 0.92);
+    backdrop-filter: saturate(140%) blur(8px);
+    border-bottom: 1px solid var(--color-border);
+  }
+  .site-header__inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 64px;
+    gap: 16px;
+  }
+  .site-header__brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--color-text);
+    font-weight: 700;
+  }
+  .site-header__brand:hover {
+    text-decoration: none;
+  }
+  .site-header__logo {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    background: var(--color-brand);
+    color: #fff;
+    border-radius: 8px;
+    font-weight: 700;
+    font-size: 17px;
+  }
+  .site-header__name {
+    font-size: 17px;
+  }
+  .site-header__nav {
+    display: flex;
+    gap: 24px;
+    flex: 1;
+    margin-left: 24px;
+  }
+  .site-header__link {
+    color: var(--color-text-muted);
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .site-header__link:hover {
+    color: var(--color-text);
+    text-decoration: none;
+  }
+  .site-header__link.is-active {
+    color: var(--color-brand);
+  }
+  .site-header__cta {
+    display: flex;
+    gap: 8px;
+  }
+  .site-header__login {
+    padding: 8px 14px;
+    font-size: 14px;
+  }
+  @media (max-width: 720px) {
+    .site-header__nav {
+      display: none;
+    }
+  }
+</style>

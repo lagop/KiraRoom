@@ -1,0 +1,58 @@
+---
+import copy from "../data/copy.es.json";
+const { final_cta } = copy;
+const signupUrl = "https://app.kirastudio.com/signup";
+---
+
+<section class="final-cta" aria-labelledby="final-cta-h2">
+  <div class="container final-cta__inner">
+    <h2 id="final-cta-h2" class="final-cta__h2">{final_cta.h2}</h2>
+    <p class="final-cta__sub">{final_cta.sub}</p>
+    <a
+      href={signupUrl}
+      class="btn btn-primary btn-large"
+      data-cta="final_primary"
+    >
+      {final_cta.primary_cta}
+    </a>
+    <p class="final-cta__trust">{final_cta.trust_line}</p>
+  </div>
+</section>
+
+<style>
+  .final-cta {
+    padding: 96px 0;
+    background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+    color: #fff;
+    text-align: center;
+  }
+  .final-cta__inner {
+    max-width: 720px;
+  }
+  .final-cta__h2 {
+    color: #fff;
+    font-size: clamp(2rem, 3vw + 1rem, 2.75rem);
+    margin-bottom: 16px;
+  }
+  .final-cta__sub {
+    font-size: 18px;
+    color: rgba(255, 255, 255, 0.85);
+    margin-bottom: 32px;
+  }
+  .final-cta .btn-primary {
+    background: #fff;
+    color: var(--color-brand);
+    border-color: #fff;
+    font-weight: 700;
+  }
+  .final-cta .btn-primary:hover {
+    background: var(--color-brand-soft);
+    border-color: var(--color-brand-soft);
+    color: var(--color-brand-hover);
+  }
+  .final-cta__trust {
+    margin-top: 24px;
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 14px;
+  }
+</style>

@@ -1,0 +1,86 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+
+// Public/login is a one-hop redirect to the SaaS dashboard's login
+// page. We render a tiny "redirecting…" splash so search engines and
+// bookmarkers see a 200 with a clear redirect notice (the meta-refresh
+// below is the actual navigation). Bare layout — no header/footer
+// chrome.
+const appUrl = import.meta.env.PUBLIC_APP_URL || "https://app.kirastudio.com";
+const target = `${appUrl.replace(/\/+$/, "")}/login`;
+---
+
+<BaseLayout title="Iniciar sesión" description="Accede a tu panel de KiraStudio." bare={true}>
+  <div class="login-stub">
+    <div class="login-stub__card">
+      <div class="login-stub__logo">K</div>
+      <h1>Redirigiendo…</h1>
+      <p>
+        Te llevamos a
+        <a href={target}>{target}</a>
+        para iniciar sesión.
+      </p>
+      <noscript>
+        <p>
+          JavaScript está desactivado. Haz clic en el enlace de arriba
+          para continuar.
+        </p>
+      </noscript>
+      <meta http-equiv="refresh" content={`0; url=${target}`} />
+    </div>
+  </div>
+</BaseLayout>
+
+<style>
+  html, body {
+    height: 100%;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--color-surface);
+    margin: 0;
+  }
+  .login-stub {
+    width: 100%;
+    max-width: 420px;
+    padding: 24px;
+  }
+  .login-stub__card {
+    background: #fff;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: 32px;
+    text-align: center;
+    box-shadow: var(--shadow-md);
+  }
+  .login-stub__logo {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    background: var(--color-brand);
+    color: #fff;
+    border-radius: 12px;
+    font-weight: 700;
+    font-size: 24px;
+    margin-bottom: 16px;
+  }
+  .login-stub h1 {
+    font-size: 20px;
+    margin-bottom: 8px;
+  }
+  .login-stub p {
+    color: var(--color-text-muted);
+    font-size: 14px;
+  }
+  .login-stub code,
+  .login-stub a {
+    word-break: break-all;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--color-brand);
+    font-size: 13px;
+  }
+</style>

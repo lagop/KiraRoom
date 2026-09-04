@@ -1,0 +1,199 @@
+---
+interface Props {
+  pain: {
+    id: string;
+    headline: string;
+    validation: string;
+    solution_title: string;
+    solution_body: string;
+    proof: string;
+    cta: string;
+  };
+  index: number;
+  /** "left" or "right" — alternates the visual side of the image. */
+  mediaSide?: "left" | "right";
+}
+
+const { pain, index, mediaSide = index % 2 === 0 ? "right" : "left" } = Astro.props;
+const signupUrl = `https://app.kirastudio.com/signup?pain=${pain.id}`;
+---
+
+<section
+  class:list={["pain", `pain--${mediaSide}`]}
+  id={`pain-${pain.id}`}
+  aria-labelledby={`pain-${pain.id}-h2`}
+  data-pain-id={pain.id}
+>
+  <div class="container pain__inner">
+    <div class="pain__copy">
+      <span class="eyebrow">Dolor #{index + 1}</span>
+      <h2 id={`pain-${pain.id}-h2`} class="pain__headline" data-anim="pain-headline">
+        {pain.headline}
+      </h2>
+      <p class="pain__validation" data-anim="pain-validation">
+        {pain.validation}
+      </p>
+      <div class="pain__solution" data-anim="pain-solution">
+        <h3 class="pain__solution-title">{pain.solution_title}</h3>
+        <p class="pain__solution-body">{pain.solution_body}</p>
+      </div>
+      <p class="pain__proof" data-anim="pain-proof">
+        <strong>Resultado:</strong> {pain.proof}
+      </p>
+      <a
+        href={signupUrl}
+        class="btn btn-primary"
+        data-cta={`pain_${pain.id}`}
+      >
+        {pain.cta}
+      </a>
+    </div>
+    <div class="pain__media" aria-hidden="true">
+      <div class={`pain__visual pain__visual--${pain.id}`}></div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .pain {
+    padding: 96px 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+  .pain:last-of-type {
+    border-bottom: none;
+  }
+  .pain__inner {
+    display: grid;
+    grid-template-columns: 1.1fr 1fr;
+    gap: 64px;
+    align-items: center;
+  }
+  .pain--left .pain__copy {
+    order: 2;
+  }
+  .pain--left .pain__media {
+    order: 1;
+  }
+  .pain__headline {
+    font-size: clamp(1.75rem, 3vw + 1rem, 2.5rem);
+    margin-bottom: 16px;
+  }
+  .pain__validation {
+    font-size: 17px;
+    color: var(--color-text-muted);
+    margin-bottom: 24px;
+    font-style: italic;
+    border-left: 3px solid var(--color-brand);
+    padding-left: 16px;
+  }
+  .pain__solution-title {
+    font-size: 1.25rem;
+    color: var(--color-text);
+    margin-bottom: 8px;
+  }
+  .pain__solution-body {
+    color: var(--color-text-muted);
+    margin-bottom: 16px;
+  }
+  .pain__proof {
+    background: var(--color-brand-soft);
+    color: var(--color-brand);
+    padding: 12px 16px;
+    border-radius: var(--radius-md);
+    font-size: 14px;
+    margin-bottom: 24px;
+  }
+  .pain__proof strong {
+    color: var(--color-text);
+  }
+  .pain__media {
+    position: relative;
+    aspect-ratio: 4 / 3;
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    background: linear-gradient(135deg, #ede9fe 0%, #f5f3ff 100%);
+    box-shadow: var(--shadow-md);
+  }
+  /* Per-pain visual placeholder. Will be replaced by Three.js canvas
+     when the scene layer is loaded (lib/three/heroScene.ts). */
+  .pain__visual {
+    position: absolute;
+    inset: 0;
+  }
+  .pain__visual--nocturnal {
+    background:
+      radial-gradient(circle at 70% 30%, rgba(99, 102, 241, 0.3), transparent 50%),
+      radial-gradient(circle at 30% 70%, rgba(139, 92, 246, 0.3), transparent 50%);
+  }
+  .pain__visual--nocturnal::after {
+    content: "📅 23:30";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 48px;
+    background: #fff;
+    padding: 24px 32px;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md);
+  }
+  .pain__visual--facturas {
+    background: linear-gradient(135deg, #ecfdf5 0%, #f0fdfa 100%);
+  }
+  .pain__visual--facturas::after {
+    content: "🧾 AEAT ✓";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 32px;
+    background: #fff;
+    padding: 24px 32px;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md);
+    color: var(--color-success);
+    font-weight: 700;
+  }
+  .pain__visual--whatsapp {
+    background:
+      radial-gradient(circle at 50% 50%, rgba(99, 102, 241, 0.25), transparent 60%);
+  }
+  .pain__visual--whatsapp::after {
+    content: "💬 IA responde";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 28px;
+    background: #fff;
+    padding: 20px 28px;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md);
+  }
+  .pain__visual--fidelizacion {
+    background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  }
+  .pain__visual--fidelizacion::after {
+    content: "🎯 +25%";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 56px;
+    color: #b45309;
+    font-weight: 700;
+  }
+  @media (max-width: 880px) {
+    .pain__inner {
+      grid-template-columns: 1fr;
+      gap: 32px;
+    }
+    .pain--left .pain__copy,
+    .pain--left .pain__media {
+      order: initial;
+    }
+    .pain {
+      padding: 64px 0;
+    }
+  }
+</style>

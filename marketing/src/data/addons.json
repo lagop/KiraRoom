@@ -1,0 +1,13 @@
+{
+  "_doc": "Add-on catalog displayed on the marketing home. MUST stay in sync with docs/billing-plans-rev3.md §4 (Add-ons) and the backend `add_ons` table. Pricing is the monthly recurring amount billed via Stripe.",
+  "currency": "EUR",
+  "items": [
+    { "key": "ai_expansion",        "name": "IA Expansion",          "price": 24, "tagline": "Quita el cap de 500 conv/mes y desbloquea cancelaciones y escalations automáticas" },
+    { "key": "loyalty_giftcards",   "name": "Loyalty & Gift Cards",  "price": 12, "tagline": "Puntos, promos y gift cards para que vuelvan" },
+    { "key": "email_marketing",     "name": "Email Marketing",       "price": 12, "tagline": "Campañas segmentadas por audiencia" },
+    { "key": "multichannel",        "name": "Multicanal",            "price": 19, "tagline": "Messenger, Instagram y Telegram con la IA" },
+    { "key": "google_reviews_auto", "name": "Reseñas Google auto",   "price": 19, "tagline": "Invitación automática post-servicio" },
+    { "key": "web_domain",          "name": "Dominio personalizado", "price": 15, "tagline": "Tu salón en citastusalon.com con SSL" },
+    { "key": "deposits_antinoshow", "name": "Depósitos anti-plantón","price": 5,  "tagline": "Cobra señal al reservar, reduce no-shows" }
+  ]
+}

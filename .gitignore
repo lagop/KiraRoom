@@ -1,0 +1,113 @@
+# ──────────────────────────────────────────────────────────────────
+#  Dependencies
+# ──────────────────────────────────────────────────────────────────
+node_modules/
+**/node_modules/
+.pnp/
+.pnp.js
+
+# ──────────────────────────────────────────────────────────────────
+#  Build output
+# ──────────────────────────────────────────────────────────────────
+dist/
+build/
+out/
+**/dist/
+**/build/
+
+# Next.js
+.next/
+**/.next/
+
+# Nx
+.nx/cache
+.nx/workspace-data
+**/.nx/cache
+**/.nx/workspace-data
+
+# ──────────────────────────────────────────────────────────────────
+#  Test artifacts
+# ──────────────────────────────────────────────────────────────────
+coverage/
+**/coverage/
+.nyc_output/
+**/.nyc_output/
+*.lcov
+
+# ──────────────────────────────────────────────────────────────────
+#  Environment / secrets
+# ──────────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Demo credentials for local dev (NOT in git — these leak to all clones)
+login.json
+
+# ──────────────────────────────────────────────────────────────────
+#  Logs
+# ──────────────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+
+# ──────────────────────────────────────────────────────────────────
+#  IDE / OS
+# ──────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ──────────────────────────────────────────────────────────────────
+#  Kilo agent state
+# ──────────────────────────────────────────────────────────────────
+.kilo/
+.kilocode/
+.opencode/
+
+# ──────────────────────────────────────────────────────────────────
+#  Local scratch / test artifacts at the repo root
+#  (the dev scripts that lived here pre-git — gitignored so they
+#  don't accidentally end up in the public tree)
+# ──────────────────────────────────────────────────────────────────
+test-chat-api.js
+test-chat-widget.png
+test-date-conversion.js
+validate-test.cjs
+validate-test.ts
+billing.scheduler.ts
+
+# ──────────────────────────────────────────────────────────────────
+#  Backup directories
+# ──────────────────────────────────────────────────────────────────
+_backups/
+
+# ──────────────────────────────────────────────────────────────────
+#  Local planning docs (not part of the codebase — keep on disk)
+# ──────────────────────────────────────────────────────────────────
+1780676308447-kind-sailor.md
+post-kind-sailor-cleanup.md
+subscription-and-landing.md
+
+# ──────────────────────────────────────────────────────────────────
+#  Prisma
+# ──────────────────────────────────────────────────────────────────
+# Don't ignore the schema/migrations themselves; only the generated client cache.
+packages/backend/prisma/migrations/
+!packages/backend/prisma/migrations/.gitkeep
+
+# ──────────────────────────────────────────────────────────────────
+#  Playwright
+# ──────────────────────────────────────────────────────────────────
+test-results/
+playwright-report/
+playwright/.cache/

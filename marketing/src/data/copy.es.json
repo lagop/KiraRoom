@@ -1,0 +1,165 @@
+{
+  "hero": {
+    "h1": "Tu salón nunca cierra (y tú te vas a casa a tu hora)",
+    "sub": "La plataforma todo-en-uno para salones en España. Agenda online 24/7, facturación Verifactu automática y una recepcionista IA que habla con tus clientas por WhatsApp, Instagram y Telegram.",
+    "primary_cta": "Empezar mis 14 días gratis",
+    "secondary_cta": "Ver cómo funciona (2 min)",
+    "trust_badge": "Sin tarjeta · Cancela cuando quieras · Soporte en español"
+  },
+  "trust_bar": {
+    "line": "Usado por +500 salones en España",
+    "logos": [
+      { "alt": "Logo salón María" },
+      { "alt": "Logo Carlos Barber Shop" },
+      { "alt": "Logo Laura Estética" },
+      { "alt": "Logo Peluquería Norte" },
+      { "alt": "Logo Estética Sur" }
+    ]
+  },
+  "pains": [
+    {
+      "id": "nocturnal",
+      "headline": "Pierdes clientas que reservan a las 11 de la noche",
+      "validation": "¿Te ha pasado? Un mensaje a las 23:30 de una clienta que quiere venir mañana. La ves al día siguiente, pero ella ya ha reservado en otro sitio.",
+      "solution_title": "Agenda online que cierra reservas mientras duermes",
+      "solution_body": "Tu clienta reserva, cambia o cancela desde el móvil a cualquier hora. Tú recibes la cita en la agenda al instante, sin tocar nada. Cero huecos vacíos, cero llamadas perdidas.",
+      "proof": "Los salones que activan la agenda online ven +30% reservas en el primer mes.",
+      "cta": "Activar la agenda online"
+    },
+    {
+      "id": "facturas",
+      "headline": "Las facturas te quitan el sueño",
+      "validation": "Verifactu, TicketBAI, diputaciones, AEAT... Cada cambio normativo te obliga a actualizar el TPV, llamar al gestor, y rezar para no equivocarte.",
+      "solution_title": "Facturación que cumple sola con Hacienda",
+      "solution_body": "Cada factura que emites se firma digitalmente (XAdES) y se remite sola a la AEAT o a tu diputación foral (Bizkaia, Gipuzkoa, Álava). Tu gestor entra, ve todas las facturas numeradas, y se acabó.",
+      "proof": "Compatible con la normativa española RD 1007/2023 y las 3 diputaciones vascas. Tu gestor deja de llamarte.",
+      "cta": "Ver cómo funciona"
+    },
+    {
+      "id": "whatsapp",
+      "headline": "WhatsApp se te come el día",
+      "validation": "20 mensajes, 3 clientas preguntando precio, 2 que quieren cambiar la cita, 1 que se ha quejado. Y todavía no has abierto la agenda.",
+      "solution_title": "Una recepcionista IA que responde por ti, 24/7",
+      "solution_body": "Mira quién está libre el jueves a las 17, ¿cuánto cuesta el tinte?, quiero cambiar mi cita del viernes... La IA responde como tú, con tu tono, con tus precios, con tu agenda real. Solo te escala lo que necesita una decisión humana.",
+      "proof": "Las clientas reciben respuesta en menos de 1 minuto, aunque sea domingo a las 23h. Y tú solo gestionas lo importante.",
+      "cta": "Conectar mis canales"
+    },
+    {
+      "id": "fidelizacion",
+      "headline": "Las clientas se van y no vuelven",
+      "validation": "Tienes clientas que vinieron 3 veces, dejaste de verlas hace 4 meses, y no sabes por qué. Mientras tanto, otra peluquería les manda un descuento.",
+      "solution_title": "Rebooking automático y un programa de fidelización que funciona",
+      "solution_body": "KiraStudio detecta cuándo una clienta debería volver (según su cadencia real) y le manda un WhatsApp personalizado. Si además activas el programa de puntos, cada visita suma y puede canjear por un servicio.",
+      "proof": "Los salones con rebooking activado recuperan al 25% de las clientas dormidas en 60 días.",
+      "cta": "Activar rebooking"
+    }
+  ],
+  "multichannel": {
+    "h2": "Tus clientas te escriben por donde quieren. Tú respondes desde un solo sitio.",
+    "body": "Activa Messenger, Instagram, Telegram o los tres. La recepcionista IA responde en cada canal con el mismo tono, los mismos precios, la misma agenda. Tú solo lees cuando hay algo que necesita tu ojo.",
+    "channels": [
+      { "name": "Facebook Messenger", "icon": "facebook", "caption": "Mensajes 1:1 con tu tono y tus precios" },
+      { "name": "Instagram DMs", "icon": "instagram", "caption": "Solo necesitas una cuenta Business" },
+      { "name": "Telegram", "icon": "telegram", "caption": "Sin coste por mensaje. Setup en 2 minutos" },
+      { "name": "Web (en la app)", "icon": "web", "caption": "Siempre incluido, sin configuración" }
+    ],
+    "wizard_steps": [
+      "Crea tu bot o vincula tu Facebook Page (2 min)",
+      "Pega el token una sola vez",
+      "KiraStudio verifica la conexión",
+      "Listo: respondes en piloto automático"
+    ],
+    "pricing_note": "Incluido en Pro y Empresa. En Esencial como add-on desde 19 €/mes.",
+    "cta": "Probar el wizard"
+  },
+  "plans": [
+    {
+      "id": "esencial",
+      "name": "Esencial",
+      "price": 49,
+      "period": "€/mes",
+      "tagline": "Para peluquerías y centros de 1 sede que empiezan a digitalizarse.",
+      "bullets": [
+        "Agenda y clientas ilimitadas",
+        "Hasta 4 profesionales",
+        "Recepcionista IA (500 conv/mes)",
+        "Facturación Verifactu + TicketBAI",
+        "Recordatorios por WhatsApp"
+      ],
+      "featured": false,
+      "cta": "Empezar con Esencial"
+    },
+    {
+      "id": "pro",
+      "name": "Pro",
+      "price": 79,
+      "period": "€/mes",
+      "tagline": "El más popular. Salones en crecimiento que quieren marketing, IA y canales.",
+      "bullets": [
+        "Todo lo de Esencial, y además:",
+        "Recepcionista IA avanzada (ilimitada)",
+        "Multicanal: Messenger, Instagram y Telegram",
+        "Email marketing, loyalty, gift cards",
+        "Soporte prioritario"
+      ],
+      "featured": true,
+      "cta": "Empezar Pro 14 días gratis",
+      "badge": "Más popular"
+    },
+    {
+      "id": "empresa",
+      "name": "Empresa",
+      "price": 149,
+      "period": "€/local/mes",
+      "tagline": "Para cadenas con varios locales y necesidad de informes consolidados.",
+      "bullets": [
+        "Todo lo de Pro, y además:",
+        "Multi-localización (1 a N)",
+        "Informes consolidados",
+        "Panel centralizado",
+        "Account manager dedicado"
+      ],
+      "featured": false,
+      "cta": "Hablar con ventas"
+    }
+  ],
+  "addons": [
+    { "key": "ai_expansion",        "name": "IA Expansion",         "price": 24, "tagline": "Quita el cap de 500 conv/mes y desbloquea cancelaciones y escalations automáticas" },
+    { "key": "loyalty_giftcards",   "name": "Loyalty & Gift Cards", "price": 12, "tagline": "Puntos, promos y gift cards para que vuelvan" },
+    { "key": "email_marketing",     "name": "Email Marketing",       "price": 12, "tagline": "Campañas segmentadas por audiencia" },
+    { "key": "multichannel",        "name": "Multicanal",            "price": 19, "tagline": "Messenger, Instagram y Telegram con la IA" },
+    { "key": "google_reviews_auto", "name": "Reseñas Google auto",   "price": 19, "tagline": "Invitación automática post-servicio" },
+    { "key": "web_domain",          "name": "Dominio personalizado", "price": 15, "tagline": "Tu salón en citastusalon.com con SSL" },
+    { "key": "deposits_antinoshow", "name": "Depósitos anti-plantón","price": 5,  "tagline": "Cobra señal al reservar, reduce no-shows" }
+  ],
+  "testimonials": [
+    {
+      "name": "María R., Peluquería María (Madrid)",
+      "quote": "Antes perdía 2 horas al día contestando WhatsApp. Ahora contesto solo lo importante y la IA se encarga del resto.",
+      "kpi": "8 h/semana ahorradas en gestión de WhatsApp",
+      "photo": "images/testimonials/maria.jpg"
+    },
+    {
+      "name": "Carlos G., 3 salones en Barcelona",
+      "quote": "El módulo de facturación me ahorró contratar a alguien a media jornada. Todo se remite solo a la AEAT.",
+      "kpi": "−1.200 €/mes en gestoría",
+      "photo": "images/testimonials/carlos.jpg"
+    },
+    {
+      "name": "Laura P., Salón de uñas (Valencia)",
+      "quote": "Las clientas me escriben a las 11 de la noche por Instagram. Antes las perdía; ahora reservan solas aunque yo esté durmiendo.",
+      "kpi": "+34% reservas tras activar el chat 24/7",
+      "photo": "images/testimonials/laura.jpg"
+    }
+  ],
+  "final_cta": {
+    "h2": "Deja que tu salón crezca mientras duermes",
+    "sub": "14 días gratis. Sin tarjeta. Cancela cuando quieras.",
+    "primary_cta": "Empezar mis 14 días gratis",
+    "trust_line": "Usado por +500 salones en España · Soporte en español · Cumple RGPD"
+  },
+  "meta": {
+    "title": "KiraStudio — La plataforma todo-en-uno para salones en España",
+    "description": "Agenda online 24/7, facturación Verifactu automática y recepcionista IA para WhatsApp, Instagram y Telegram. 14 días gratis."
+  }
+}

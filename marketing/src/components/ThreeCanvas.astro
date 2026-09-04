@@ -1,0 +1,71 @@
+---
+/**
+ * ThreeCanvas — a wrapper that:
+ *  - Reserves the aspect ratio so the layout doesn't shift when the
+ *    canvas finally loads (CLS-friendly).
+ *  - Provides ARIA + aria-label so screen readers describe the scene.
+ *  - Hides itself when JS is unavailable (the inner fallback content
+ *    remains visible).
+ *
+ * The canvas is mounted by `scripts/scene-init.client.ts` after the
+ * `prefers-reduced-motion` check passes.
+ */
+interface Props {
+  scene: "hero" | "multichannel";
+  ariaLabel: string;
+  aspectRatio?: string;
+}
+
+const { scene, ariaLabel, aspectRatio = "16 / 9" } = Astro.props;
+---
+
+<div
+  class="three-canvas"
+  data-scene={scene}
+  style={`aspect-ratio: ${aspectRatio};`}
+  role="img"
+  aria-label={ariaLabel}
+>
+  <canvas class="three-canvas__canvas" aria-hidden="true"></canvas>
+  <noscript>
+    <slot name="fallback" />
+  </noscript>
+  <div class="three-canvas__loading" aria-hidden="true">
+    <slot name="loading">Cargando escena 3D…</slot>
+  </div>
+</div>
+
+<style>
+  .three-canvas {
+    position: relative;
+    width: 100%;
+    background: linear-gradient(135deg, #ede9fe 0%, #f5f3ff 100%);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    min-height: 200px;
+  }
+  .three-canvas__canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  .three-canvas__loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-subtle);
+    font-size: 13px;
+    font-weight: 500;
+    pointer-events: none;
+  }
+  .three-canvas.is-loaded .three-canvas__loading {
+    display: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .three-canvas {
+      display: none;
+    }
+  }
+</style>

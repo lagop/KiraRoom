@@ -1,0 +1,104 @@
+---
+const year = new Date().getFullYear();
+---
+
+<footer class="site-footer">
+  <div class="container site-footer__inner">
+    <div class="site-footer__brand">
+      <div class="site-footer__logo">KiraStudio</div>
+      <p class="site-footer__tagline">
+        La plataforma SaaS para salones de belleza en España.
+      </p>
+    </div>
+    <div class="site-footer__cols">
+      <div class="site-footer__col">
+        <h4>Producto</h4>
+        <a href="/pricing">Precios</a>
+        <a href="https://app.kirastudio.com/signup">Crear cuenta</a>
+        <a href="/login">Iniciar sesión</a>
+      </div>
+      <div class="site-footer__col">
+        <h4>Legal</h4>
+        <a href="/privacy">Política de privacidad</a>
+        <a href="/tos">Términos del servicio</a>
+      </div>
+      <div class="site-footer__col">
+        <h4>Contacto</h4>
+        <a href="mailto:hola@kirastudio.com">hola@kirastudio.com</a>
+      </div>
+    </div>
+  </div>
+  <div class="container site-footer__legal">
+    <span>© {year} KiraStudio SaaS · España</span>
+    <span class="muted">Hecho con ❤︎ para salones de belleza</span>
+  </div>
+</footer>
+
+<style>
+  .site-footer {
+    background: var(--color-surface);
+    border-top: 1px solid var(--color-border);
+    margin-top: 80px;
+  }
+  .site-footer__inner {
+    display: grid;
+    grid-template-columns: 1.2fr 2fr;
+    gap: 48px;
+    padding: 56px 24px 32px;
+  }
+  .site-footer__logo {
+    font-weight: 700;
+    font-size: 20px;
+    color: var(--color-text);
+    margin-bottom: 8px;
+  }
+  .site-footer__tagline {
+    color: var(--color-text-subtle);
+    font-size: 14px;
+    margin: 0;
+  }
+  .site-footer__cols {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 32px;
+  }
+  .site-footer__col h4 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--color-text-subtle);
+    margin-bottom: 12px;
+  }
+  .site-footer__col a {
+    display: block;
+    color: var(--color-text);
+    font-size: 14px;
+    margin-bottom: 8px;
+  }
+  .site-footer__col a:hover {
+    color: var(--color-brand);
+  }
+  .site-footer__legal {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px 24px;
+    border-top: 1px solid var(--color-border);
+    font-size: 13px;
+    color: var(--color-text-subtle);
+  }
+  @media (max-width: 720px) {
+    .site-footer__inner {
+      grid-template-columns: 1fr;
+      gap: 32px;
+    }
+    .site-footer__cols {
+      grid-template-columns: 1fr 1fr;
+    }
+    .site-footer__legal {
+      flex-direction: column;
+      gap: 8px;
+      text-align: center;
+    }
+  }
+</style>

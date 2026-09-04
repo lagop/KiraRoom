@@ -1,0 +1,128 @@
+---
+import addons from "../data/addons.json";
+const { items } = addons;
+---
+
+<section class="addons" aria-labelledby="addons-h2">
+  <div class="container">
+    <div class="section-header">
+      <span class="eyebrow">Add-ons</span>
+      <h2 id="addons-h2">Activa solo lo que necesitas, cuando lo necesites</h2>
+      <p>
+        7 add-ons para que tu salón crezca a tu ritmo. Empieza con el plan
+        Esencial y suma capacidades según las pidas.
+      </p>
+    </div>
+  </div>
+  <div class="addons__rail" data-addons-rail>
+    <div class="addons__track" data-addons-track>
+      {items.map((a) => (
+        <article class="addon-card" data-addon-key={a.key}>
+          <div class="addon-card__head">
+            <h3 class="addon-card__name">{a.name}</h3>
+            <div class="addon-card__price">
+              <span class="addon-card__currency">€</span>
+              <span class="addon-card__value">{a.price}</span>
+              <span class="addon-card__suffix">/mes</span>
+            </div>
+          </div>
+          <p class="addon-card__tagline">{a.tagline}</p>
+        </article>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .addons {
+    padding: 96px 0;
+    background: linear-gradient(180deg, #fff 0%, var(--color-brand-soft) 100%);
+  }
+  .section-header {
+    text-align: center;
+    max-width: 720px;
+    margin: 0 auto 48px;
+  }
+  .section-header p {
+    font-size: 17px;
+  }
+  .addons__rail {
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    padding: 16px 24px 32px;
+    scrollbar-width: thin;
+  }
+  .addons__rail::-webkit-scrollbar {
+    height: 8px;
+  }
+  .addons__rail::-webkit-scrollbar-thumb {
+    background: var(--color-border);
+    border-radius: 4px;
+  }
+  .addons__track {
+    display: flex;
+    gap: 20px;
+    width: max-content;
+    padding: 0 max(24px, calc((100vw - var(--container)) / 2));
+  }
+  .addon-card {
+    scroll-snap-align: start;
+    flex: 0 0 280px;
+    background: #fff;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: 24px;
+    box-shadow: var(--shadow-sm);
+    transition: transform 0.2s, box-shadow 0.2s;
+  }
+  .addon-card:hover {
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-md);
+  }
+  .addon-card__head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .addon-card__name {
+    font-size: 1.1rem;
+    margin: 0;
+    flex: 1;
+  }
+  .addon-card__price {
+    display: flex;
+    align-items: baseline;
+    gap: 2px;
+    white-space: nowrap;
+  }
+  .addon-card__currency {
+    font-size: 14px;
+    color: var(--color-text-subtle);
+  }
+  .addon-card__value {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--color-brand);
+  }
+  .addon-card__suffix {
+    font-size: 12px;
+    color: var(--color-text-subtle);
+  }
+  .addon-card__tagline {
+    font-size: 13px;
+    color: var(--color-text-muted);
+    margin: 0;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .addon-card {
+      transition: none;
+    }
+    .addon-card:hover {
+      transform: none;
+    }
+  }
+</style>

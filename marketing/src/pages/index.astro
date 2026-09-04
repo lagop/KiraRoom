@@ -1,0 +1,115 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Hero from "../components/Hero.astro";
+import TrustBar from "../components/TrustBar.astro";
+import PainSection from "../components/PainSection.astro";
+import MultichannelShowcase from "../components/MultichannelShowcase.astro";
+import PlanGrid from "../components/PlanGrid.astro";
+import AddonsStrip from "../components/AddonsStrip.astro";
+import Testimonials from "../components/Testimonials.astro";
+import FinalCta from "../components/FinalCta.astro";
+import copy from "../data/copy.es.json";
+import planMatrix from "../data/planMatrix.json";
+
+const { meta, pains } = copy;
+const { plans } = planMatrix;
+---
+
+<BaseLayout title={meta.title} description={meta.description}>
+  <!-- JSON-LD: Organization + SoftwareApplication (offers with current pricing). -->
+  <script
+    is:inline
+    type="application/ld+json"
+    set:html={JSON.stringify({
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "Organization",
+          "@id": "https://marketing.kirastudio.com/#organization",
+          "name": "KiraStudio",
+          "alternateName": "Kira Studio SaaS",
+          "url": "https://marketing.kirastudio.com",
+          "logo": {
+            "@type": "ImageObject",
+            "url": "https://marketing.kirastudio.com/og-image.svg",
+            "width": "1200",
+            "height": "630",
+          },
+          "description": meta.description,
+          "foundingDate": "2026",
+          "areaServed": { "@type": "Country", "name": "Spain" },
+          "contactPoint": [
+            {
+              "@type": "ContactPoint",
+              "contactType": "customer support",
+              "email": "hola@kirastudio.com",
+              "availableLanguage": ["Spanish", "es"],
+            },
+            {
+              "@type": "ContactPoint",
+              "contactType": "privacy",
+              "email": "privacy@kirastudio.com",
+              "availableLanguage": ["Spanish", "es"],
+            },
+          ],
+          "address": {
+            "@type": "PostalAddress",
+            "addressCountry": "ES",
+          },
+        },
+        {
+          "@type": "SoftwareApplication",
+          "@id": "https://marketing.kirastudio.com/#software",
+          "name": "KiraStudio",
+          "applicationCategory": "BusinessApplication",
+          "applicationSubCategory": "Salon Management Software",
+          "operatingSystem": "Web",
+          "description": meta.description,
+          "offers": plans.map((p) => ({
+            "@type": "Offer",
+            "name": p.name,
+            "price": String(p.price),
+            "priceCurrency": "EUR",
+            "category": "subscription",
+            "url": "https://marketing.kirastudio.com/#planes",
+          })),
+          "featureList": [
+            "Agenda online 24/7",
+            "Facturación Verifactu y TicketBAI",
+            "Recepcionista IA (chat web)",
+            "Multicanal: Messenger, Instagram, Telegram",
+            "Email marketing",
+            "Loyalty y gift cards",
+            "Reseñas Google auto",
+            "Rebooking automático",
+          ],
+        },
+      ],
+    })}
+  >
+  </script>
+
+  <Hero />
+  <TrustBar />
+
+  {pains.map((pain, i) => (
+    <PainSection pain={pain} index={i} />
+  ))}
+
+  <MultichannelShowcase />
+
+  <PlanGrid />
+  <AddonsStrip />
+  <Testimonials />
+  <FinalCta />
+</BaseLayout>
+
+<script>
+  /**
+   * Lazy-load the 3D + GSAP layer for the home page.
+   * The script is a `.client.ts` so Astro finger-prints a hashed
+   * bundle and only loads it on this page. Three.js + GSAP are
+   * dynamically imported and never block the initial HTML paint.
+   */
+  import("../scripts/scene-init.client.ts");
+</script>

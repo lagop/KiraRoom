@@ -1,0 +1,192 @@
+---
+import copy from "../data/copy.es.json";
+import { prefersReducedMotion } from "../lib/motion/reducedMotion";
+
+const { hero } = copy;
+const heroBgClass = prefersReducedMotion() ? "hero hero--static" : "hero";
+const signupUrl = "https://app.kirastudio.com/signup";
+---
+
+<section class={heroBgClass} aria-labelledby="hero-h1">
+  <div class="hero__bg" aria-hidden="true">
+    <div class="hero__gradient"></div>
+    <div class="hero__canvas-wrap" data-scene="hero">
+      <canvas
+        class="hero__canvas"
+        role="img"
+        aria-label="Teléfono con burbujas de chat de WhatsApp, Instagram y Telegram"
+      ></canvas>
+      <div class="hero__fallback" aria-hidden="true">
+        <div class="hero__phone">
+          <div class="hero__bubble hero__bubble--1">💬 ¿Tienen hueco mañana a las 17?</div>
+          <div class="hero__bubble hero__bubble--2">¡Te reservo! 💜</div>
+          <div class="hero__bubble hero__bubble--3">📅 Listo, te esperamos</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="container hero__inner">
+    <span class="eyebrow">Hecho para salones de belleza en España</span>
+    <h1 id="hero-h1" class="hero__title" data-anim="hero-title">
+      {hero.h1}
+    </h1>
+    <p class="hero__lead" data-anim="hero-lead">{hero.sub}</p>
+    <div class="hero__cta" data-anim="hero-cta">
+      <a
+        href={signupUrl}
+        class="btn btn-primary btn-large"
+        data-cta="hero_primary"
+      >
+        {hero.primary_cta}
+      </a>
+      <a
+        href="#planes"
+        class="btn btn-secondary btn-large"
+        data-cta="hero_secondary"
+      >
+        {hero.secondary_cta}
+      </a>
+    </div>
+    <p class="hero__fineprint" data-anim="hero-fineprint">
+      {hero.trust_badge}
+    </p>
+  </div>
+</section>
+
+<style>
+  .hero {
+    position: relative;
+    padding: 96px 0 80px;
+    background: linear-gradient(135deg, #f5f3ff 0%, #ffffff 60%);
+    overflow: hidden;
+    text-align: center;
+  }
+  .hero__bg {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+  }
+  .hero__gradient {
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(circle at 80% 20%, rgba(139, 92, 246, 0.18), transparent 55%),
+      radial-gradient(circle at 10% 90%, rgba(99, 102, 241, 0.12), transparent 60%);
+  }
+  .hero__canvas-wrap {
+    position: absolute;
+    inset: 0;
+    display: none;
+  }
+  .hero__canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  .hero__fallback {
+    position: absolute;
+    right: 4%;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 260px;
+    height: 380px;
+    pointer-events: none;
+  }
+  .hero__phone {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    border-radius: 32px;
+    background: linear-gradient(140deg, #1e1b4b 0%, #312e81 100%);
+    box-shadow:
+      0 30px 60px -20px rgba(30, 27, 75, 0.4),
+      0 0 0 6px rgba(255, 255, 255, 0.4) inset;
+    padding: 28px 18px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 14px;
+  }
+  .hero__bubble {
+    background: #fff;
+    color: #1e1b4b;
+    padding: 10px 14px;
+    border-radius: 16px;
+    font-size: 13px;
+    font-weight: 500;
+    box-shadow: 0 6px 16px rgba(15, 23, 42, 0.12);
+    animation: bubble-float 6s ease-in-out infinite;
+    max-width: 85%;
+  }
+  .hero__bubble--1 {
+    align-self: flex-start;
+    animation-delay: 0s;
+  }
+  .hero__bubble--2 {
+    align-self: flex-end;
+    background: #ede9fe;
+    color: #4f46e5;
+    animation-delay: 1.5s;
+  }
+  .hero__bubble--3 {
+    align-self: flex-start;
+    animation-delay: 3s;
+  }
+  @keyframes bubble-float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-6px); }
+  }
+  /* Static fallback: hide the canvas, show the float-themed phone. */
+  .hero--static .hero__canvas {
+    display: none;
+  }
+  .hero--static .hero__canvas-wrap {
+    display: block;
+  }
+  .hero__inner {
+    position: relative;
+    z-index: 1;
+    max-width: 760px;
+  }
+  .hero__title {
+    font-size: clamp(2.4rem, 4.5vw + 1rem, 3.75rem);
+    margin-bottom: 16px;
+  }
+  .hero__lead {
+    font-size: 18px;
+    color: var(--color-text-muted);
+    margin-bottom: 32px;
+  }
+  .hero__cta {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  .hero__fineprint {
+    color: var(--color-text-subtle);
+    font-size: 14px;
+  }
+  @media (max-width: 720px) {
+    .hero {
+      padding: 72px 0 56px;
+    }
+    .hero__fallback {
+      position: relative;
+      right: auto;
+      top: auto;
+      transform: none;
+      margin: 32px auto 0;
+    }
+    .hero__canvas-wrap {
+      position: relative;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .hero__bubble {
+      animation: none;
+    }
+  }
+</style>

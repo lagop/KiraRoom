@@ -1,0 +1,177 @@
+---
+import planMatrix from "../data/planMatrix.json";
+const { plans } = planMatrix;
+const signupUrl = (id: string) => `https://app.kirastudio.com/signup?plan=${id}`;
+---
+
+<section class="plans" id="planes" aria-labelledby="planes-h2">
+  <div class="container">
+    <div class="section-header">
+      <span class="eyebrow">Precios</span>
+      <h2 id="planes-h2">Un precio honesto, sin sorpresas</h2>
+      <p>
+        Tres planes según el tamaño de tu salón. Los tres empiezan con
+        <strong>14 días gratis</strong> con todo Pro incluido. Sin tarjeta.
+      </p>
+    </div>
+    <div class="plans__grid">
+      {plans.map((p) => (
+        <article class:list={["plan-card", p.featured && "plan-card--featured"]} data-plan-id={p.id}>
+          {p.featured && p.badge && (
+            <div class="plan-card__badge">{p.badge}</div>
+          )}
+          <h3 class="plan-card__name">{p.name}</h3>
+          <div class="plan-card__price">
+            <span class="plan-card__currency">€</span>
+            <span class="plan-card__value">{p.price}</span>
+            <span class="plan-card__suffix">
+              {p.period === "month_per_location" ? "/local/mes" : "/mes"}
+            </span>
+          </div>
+          <p class="plan-card__tagline">{p.tagline}</p>
+          <ul class="plan-card__bullets">
+            {p.bullets.map((b) => <li>{b}</li>)}
+          </ul>
+          <a
+            href={signupUrl(p.id)}
+            class:list={["btn", p.featured ? "btn-primary" : "btn-secondary"]}
+            data-cta={`plan_${p.id}`}
+          >
+            {p.cta}
+          </a>
+        </article>
+      ))}
+    </div>
+    <p class="plans__footnote">
+      ¿Necesitas algo a medida? Escríbenos a <a href="mailto:hola@kirastudio.com">hola@kirastudio.com</a>.
+    </p>
+  </div>
+</section>
+
+<style>
+  .plans {
+    padding: 96px 0;
+    background: var(--color-surface);
+  }
+  .section-header {
+    text-align: center;
+    max-width: 720px;
+    margin: 0 auto 48px;
+  }
+  .section-header p {
+    font-size: 17px;
+  }
+  .plans__grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+    align-items: stretch;
+  }
+  .plan-card {
+    position: relative;
+    background: #fff;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: 32px 28px;
+    box-shadow: var(--shadow-sm);
+    display: flex;
+    flex-direction: column;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+  }
+  .plan-card:hover {
+    transform: translateY(-8px) scale(1.02);
+    box-shadow: var(--shadow-lg);
+  }
+  .plan-card--featured {
+    border-color: var(--color-brand);
+    border-width: 2px;
+    box-shadow: var(--shadow-md);
+  }
+  .plan-card__badge {
+    position: absolute;
+    top: -14px;
+    right: 24px;
+    background: var(--color-brand);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 6px 14px;
+    border-radius: 999px;
+    letter-spacing: 0.04em;
+  }
+  .plan-card__name {
+    font-size: 1.5rem;
+    margin-bottom: 8px;
+  }
+  .plan-card__price {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    margin-bottom: 12px;
+  }
+  .plan-card__currency {
+    font-size: 24px;
+    color: var(--color-text-subtle);
+  }
+  .plan-card__value {
+    font-size: 56px;
+    font-weight: 700;
+    color: var(--color-text);
+    letter-spacing: -0.02em;
+  }
+  .plan-card__suffix {
+    color: var(--color-text-subtle);
+    font-size: 14px;
+  }
+  .plan-card__tagline {
+    color: var(--color-text-muted);
+    font-size: 14px;
+    margin-bottom: 24px;
+    min-height: 42px;
+  }
+  .plan-card__bullets {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 24px;
+    flex: 1;
+  }
+  .plan-card__bullets li {
+    padding: 10px 0;
+    border-top: 1px solid var(--color-border);
+    color: var(--color-text);
+    font-size: 14px;
+    display: flex;
+    gap: 8px;
+  }
+  .plan-card__bullets li::before {
+    content: "✓";
+    color: var(--color-success);
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+  .plan-card__bullets li:first-child {
+    border-top: none;
+  }
+  .plans__footnote {
+    text-align: center;
+    margin-top: 32px;
+    color: var(--color-text-subtle);
+    font-size: 14px;
+  }
+  @media (max-width: 880px) {
+    .plans__grid {
+      grid-template-columns: 1fr;
+    }
+    .plans {
+      padding: 64px 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .plan-card {
+      transition: none;
+    }
+    .plan-card:hover {
+      transform: none;
+    }
+  }
+</style>

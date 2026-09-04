@@ -1,0 +1,66 @@
+/* KiraStudio marketing — design tokens
+ * Extracted from the canonical design system. Single source of truth
+ * for brand colors, gradients, shadows, and motion easing. Consume
+ * these variables instead of raw hex values to keep the visual
+ * language consistent across the marketing site.
+ *
+ * NOTE: page-specific styles still live in each component's `<style>`
+ * block. This file only defines the shared tokens.
+ */
+
+:root {
+  /* Brand palette */
+  --color-brand-50: #f5f3ff;
+  --color-brand-100: #ede9fe;
+  --color-brand-200: #ddd6fe;
+  --color-brand-300: #c4b5fd;
+  --color-brand-400: #a78bfa;
+  --color-brand-500: #8b5cf6;
+  --color-brand-600: #7c3aed;
+  --color-brand-700: #4f46e5;
+  --color-brand-800: #4338ca;
+  --color-brand-900: #312e81;
+  --color-brand-950: #1e1b4b;
+
+  /* Gradients */
+  --gradient-hero: linear-gradient(135deg, #f5f3ff 0%, #ffffff 60%);
+  --gradient-cta: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+  --gradient-glassy: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.6) 0%,
+    rgba(255, 255, 255, 0.2) 100%
+  );
+
+  /* 3D depth shadows */
+  --shadow-3d-sm: 0 6px 16px rgba(79, 70, 229, 0.12);
+  --shadow-3d-md: 0 12px 32px rgba(79, 70, 229, 0.18);
+  --shadow-3d-lg: 0 24px 56px rgba(79, 70, 229, 0.25);
+
+  /* Glass effect */
+  --glass-bg: rgba(255, 255, 255, 0.7);
+  --glass-border: rgba(255, 255, 255, 0.4);
+  --glass-blur: saturate(140%) blur(12px);
+
+  /* Motion easing */
+  --ease-out-soft: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out-soft: cubic-bezier(0.65, 0, 0.35, 1);
+  --duration-fast: 150ms;
+  --duration-base: 240ms;
+  --duration-slow: 480ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0.01ms;
+    --duration-base: 0.01ms;
+    --duration-slow: 0.01ms;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

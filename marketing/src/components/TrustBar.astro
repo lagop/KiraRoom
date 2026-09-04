@@ -1,0 +1,62 @@
+---
+import copy from "../data/copy.es.json";
+const { trust_bar } = copy;
+---
+
+<section class="trust-bar" aria-label="Confianza">
+  <div class="container trust-bar__inner">
+    <p class="trust-bar__line">{trust_bar.line}</p>
+    <div class="trust-bar__logos">
+      {trust_bar.logos.map((logo) => (
+        <div class="trust-bar__logo" role="img" aria-label={logo.alt}>
+          <span>{logo.alt}</span>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .trust-bar {
+    padding: 32px 0;
+    background: var(--color-surface);
+    border-top: 1px solid var(--color-border);
+    border-bottom: 1px solid var(--color-border);
+  }
+  .trust-bar__inner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+  }
+  .trust-bar__line {
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .trust-bar__logos {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 32px;
+    align-items: center;
+  }
+  .trust-bar__logo {
+    color: var(--color-text-subtle);
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: 0.04em;
+    opacity: 0.7;
+    transition: opacity 0.2s;
+  }
+  .trust-bar__logo:hover {
+    opacity: 1;
+  }
+  @media (max-width: 720px) {
+    .trust-bar__inner {
+      flex-direction: column;
+      gap: 16px;
+    }
+  }
+</style>

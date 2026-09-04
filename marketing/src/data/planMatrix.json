@@ -1,0 +1,56 @@
+{
+  "_doc": "Single source of truth for plan pricing & headline bullets on the marketing site. Prices MUST stay in sync with docs/billing-plans-rev3.md §1 and the backend PLAN_MATRIX (packages/backend/src/payments/services/subscriptions.service.ts). When changing prices here, update both.",
+  "currency": "EUR",
+  "trial_days": 14,
+  "plans": [
+    {
+      "id": "esencial",
+      "name": "Esencial",
+      "price": 49,
+      "period": "month",
+      "tagline": "Para peluquerías y centros de 1 sede que empiezan a digitalizarse.",
+      "bullets": [
+        "Agenda y clientas ilimitadas",
+        "Hasta 4 profesionales",
+        "Recepcionista IA (500 conv/mes)",
+        "Facturación Verifactu + TicketBAI",
+        "Recordatorios por WhatsApp"
+      ],
+      "featured": false,
+      "cta": "Empezar con Esencial"
+    },
+    {
+      "id": "pro",
+      "name": "Pro",
+      "price": 79,
+      "period": "month",
+      "tagline": "El más popular. Salones en crecimiento que quieren marketing, IA y canales.",
+      "bullets": [
+        "Todo lo de Esencial, y además:",
+        "Recepcionista IA avanzada (ilimitada)",
+        "Multicanal: Messenger, Instagram y Telegram",
+        "Email marketing, loyalty, gift cards",
+        "Soporte prioritario"
+      ],
+      "featured": true,
+      "badge": "Más popular",
+      "cta": "Empezar Pro 14 días gratis"
+    },
+    {
+      "id": "empresa",
+      "name": "Empresa",
+      "price": 149,
+      "period": "month_per_location",
+      "tagline": "Para cadenas con varios locales y necesidad de informes consolidados.",
+      "bullets": [
+        "Todo lo de Pro, y además:",
+        "Multi-localización (1 a N)",
+        "Informes consolidados",
+        "Panel centralizado",
+        "Account manager dedicado"
+      ],
+      "featured": false,
+      "cta": "Hablar con ventas"
+    }
+  ]
+}

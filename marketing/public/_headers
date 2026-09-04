@@ -1,0 +1,68 @@
+# Cloudflare Pages _headers file.
+#
+# Read by Cloudflare Pages at deploy time and merged with responses
+# from the Pages origin. Format:
+#   <path pattern>
+#     <Header-Name>: <value>
+#
+# https://developers.cloudflare.com/pages/configuration/headers/
+
+# ────────────────────── Global defaults (every page)
+/
+  # HTTPS-only for 2 years; preload to opt the whole domain into the
+  # browser preload list. The marketing site is the only subdomain
+  # affected by this rule today; if the SaaS dashboard is served from
+  # the same Pages project later the rule applies unchanged.
+  Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+
+  # Clickjacking protection. `DENY` is stricter than `SAMEORIGIN` and
+  # correct for a marketing site with no embedded iframes of its own
+  # content.
+  X-Frame-Options: DENY
+
+  # Block MIME-sniffing. We always set `type` explicitly.
+  X-Content-Type-Options: nosniff
+
+  # Referer leakage: only send the origin (no path) to external sites.
+  Referrer-Policy: strict-origin-when-cross-origin
+
+  # Disable features the marketing site doesn't use.
+  Permissions-Policy: accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()
+
+  # Content Security Policy. The marketing site is zero-JS by
+  # design (Sprint 2.4), so the only allowed script source is the
+  # Cloudflare Web Analytics beacon (loaded with `defer`). Styles
+  # are inlined per page (`build.inlineStylesheets: "auto"`); the
+  # `unsafe-inline` for style-src is a relaxation that some CSP
+  # auditors flag — when we ship a single hand-rolled stylesheet
+  # hashed and referenced externally, we can drop it.
+  Content-Security-Policy: default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://cloudflareinsights.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests
+
+  # Cross-origin isolation primitives.
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Resource-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+
+# ────────────────────── Long-cache static assets (1 year)
+#
+# The hashed Astro asset bundles live under /_astro/ by convention
+# (Vite output). Fingerprinted filenames already bust on deploy, so a
+# long cache is safe and saves bandwidth on repeat visits.
+/_astro/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# ────────────────────── Never cache HTML (always check for deploys)
+/
+  # (No cache-control here — the global block above already covers it
+  # but we add the explicit no-cache for HTML responses to be safe.)
+# (See the matched `/` block at the top of this file — leave HTML
+# on the default short cache; the build replaces content on every
+# Pages deploy, so revalidation handles freshness.)
+
+# ────────────────────── robots.txt + sitemap.xml
+#
+# Allow indexing everywhere; Cloudflare will cache these at the edge.
+/robots.txt
+  Cache-Control: public, max-age=86400
+/sitemap-index.xml
+  Cache-Control: public, max-age=3600

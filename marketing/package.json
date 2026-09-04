@@ -1,0 +1,34 @@
+{
+  "name": "@kira/marketing",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "KiraStudio marketing site — static, zero-JS by default, hosted on Cloudflare Pages.",
+  "scripts": {
+    "dev": "astro dev",
+    "start": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro",
+    "deploy": "astro build && wrangler pages deploy ./dist",
+    "check": "astro check",
+    "type-check": "astro check"
+  },
+  "dependencies": {
+    "@astrojs/sitemap": "^3.2.1",
+    "astro": "^4.16.0",
+    "gsap": "^3.12.5",
+    "three": "^0.160.1"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.4",
+    "@cloudflare/workers-types": "^4.20240909.0",
+    "@types/three": "^0.185.1",
+    "lightningcss": "^1.33.0",
+    "typescript": "^5.5.4",
+    "wrangler": "^3.78.0"
+  },
+  "engines": {
+    "node": ">=18.17.0"
+  }
+}

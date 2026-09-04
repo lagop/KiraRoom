@@ -1,0 +1,192 @@
+{
+  "notifications": {
+    "appointment": {
+      "created": {
+        "title": "New appointment scheduled",
+        "message": "You have a new appointment scheduled for {date} at {time}",
+        "client_message": "Your appointment has been successfully scheduled for {date} at {time}"
+      },
+      "updated": {
+        "title": "Appointment updated",
+        "message": "{client}'s appointment has been updated",
+        "client_message": "Your appointment has been updated"
+      },
+      "cancelled": {
+        "title": "Appointment cancelled",
+        "message": "{client}'s appointment scheduled for {date} has been cancelled",
+        "client_message": "Your appointment scheduled for {date} has been cancelled"
+      },
+      "confirmed": {
+        "title": "Appointment confirmed",
+        "message": "{client}'s appointment has been confirmed",
+        "client_message": "Your appointment has been confirmed"
+      },
+      "completed": {
+        "title": "Appointment completed",
+        "message": "{client}'s appointment has been completed",
+        "client_message": "Your appointment has been completed successfully"
+      },
+      "no_show": {
+        "title": "Client no show",
+        "message": "{client} did not show up for their appointment scheduled for {date}",
+        "client_message": "You did not show up for your appointment scheduled for {date}"
+      },
+      "reminder": {
+        "title": "Appointment reminder",
+        "message": "Remember your appointment scheduled for tomorrow at {time}",
+        "client_message": "Remember your appointment scheduled for tomorrow at {time} with {professional}"
+      }
+    },
+    "client": {
+      "created": {
+        "title": "New client registered",
+        "message": "A new client has been registered: {client}"
+      },
+      "updated": {
+        "title": "Client updated",
+        "message": "{client}'s data has been updated"
+      }
+    },
+    "payment": {
+      "received": {
+        "title": "Payment received",
+        "message": "A payment of {amount} has been received from {client}",
+        "client_message": "Your payment of {amount} has been processed successfully"
+      },
+      "failed": {
+        "title": "Payment failed",
+        "message": "{client}'s payment of {amount} has failed",
+        "client_message": "Your payment of {amount} could not be processed"
+      },
+      "refunded": {
+        "title": "Payment refunded",
+        "message": "{amount} has been refunded to {client}",
+        "client_message": "Your payment of {amount} has been refunded"
+      }
+    }
+  },
+  "emails": {
+    "appointment": {
+      "confirmation": {
+        "subject": "Appointment confirmation - {business_name}",
+        "greeting": "Hello {client_name},",
+        "body": "Your appointment has been successfully confirmed.",
+        "details": "Appointment details:",
+        "service": "Service: {service_name}",
+        "professional": "Professional: {professional_name}",
+        "date": "Date: {date}",
+        "time": "Time: {time}",
+        "duration": "Duration: {duration} minutes",
+        "price": "Price: {price}",
+        "location": "Location: {business_address}",
+        "phone": "Phone: {business_phone}",
+        "reminder": "Please arrive 10 minutes before your appointment.",
+        "cancellation": "If you need to cancel or reschedule, please contact us at least 24 hours in advance.",
+        "signature": "Thank you for choosing us,\nThe {business_name} team"
+      },
+      "reminder": {
+        "subject": "Appointment reminder - {business_name}",
+        "greeting": "Hello {client_name},",
+        "body": "This is a reminder of your appointment scheduled for tomorrow.",
+        "details": "Your appointment details:",
+        "service": "Service: {service_name}",
+        "professional": "Professional: {professional_name}",
+        "date": "Date: {date}",
+        "time": "Time: {time}",
+        "location": "Location: {business_address}",
+        "phone": "Phone: {business_phone}",
+        "signature": "We look forward to seeing you!\nThe {business_name} team"
+      },
+      "cancellation": {
+        "subject": "Appointment cancelled - {business_name}",
+        "greeting": "Hello {client_name},",
+        "body": "Your appointment has been cancelled.",
+        "cancelled_details": "Cancelled appointment details:",
+        "service": "Service: {service_name}",
+        "date": "Date: {date}",
+        "time": "Time: {time}",
+        "reschedule": "If you would like to reschedule your appointment, you can do so through our website or by contacting us directly.",
+        "phone": "Phone: {business_phone}",
+        "signature": "We hope to see you soon,\nThe {business_name} team"
+      }
+    },
+    "client": {
+      "welcome": {
+        "subject": "Welcome to {business_name}",
+        "greeting": "Hello {client_name},",
+        "body": "Welcome to {business_name}! Thank you for registering with us.",
+        "benefits": "As a registered client, you can:",
+        "benefit_1": "Easily schedule appointments online",
+        "benefit_2": "Receive appointment reminders via email and SMS",
+        "benefit_3": "Access your appointment history",
+        "benefit_4": "Accumulate loyalty points",
+        "login": "You can access your account at: {website_url}",
+        "signature": "We're delighted to have you with us!\nThe {business_name} team"
+      },
+      "password_reset": {
+        "subject": "Password reset - {business_name}",
+        "greeting": "Hello {client_name},",
+        "body": "You have requested to reset your password.",
+        "instructions": "To reset your password, please click the following link:",
+        "button": "Reset password",
+        "link": "If the button doesn't work, copy and paste this link into your browser: {reset_link}",
+        "expiry": "This link will expire in 24 hours.",
+        "no_request": "If you did not request this change, you can ignore this email.",
+        "signature": "Best regards,\nThe {business_name} team"
+      }
+    },
+    "admin": {
+      "new_appointment": {
+        "subject": "New appointment scheduled - {business_name}",
+        "greeting": "Hello administrator,",
+        "body": "A new appointment has been scheduled.",
+        "client": "Client: {client_name}",
+        "service": "Service: {service_name}",
+        "professional": "Professional: {professional_name}",
+        "date": "Date: {date}",
+        "time": "Time: {time}",
+        "phone": "Client phone: {client_phone}",
+        "email": "Client email: {client_email}",
+        "notes": "Notes: {notes}",
+        "action": "You can manage this appointment from the admin panel.",
+        "signature": "Appointment management system"
+      },
+      "payment_received": {
+        "subject": "Payment received - {business_name}",
+        "greeting": "Hello administrator,",
+        "body": "A payment has been received successfully.",
+        "client": "Client: {client_name}",
+        "amount": "Amount: {amount}",
+        "method": "Method: {payment_method}",
+        "appointment": "Appointment: {service_name} - {date} {time}",
+        "signature": "Payment system"
+      }
+    }
+  },
+  "sms": {
+    "appointment": {
+      "confirmation": "Your appointment at {business_name} is confirmed for {date} at {time}. Service: {service_name}. See you soon!",
+      "reminder": "Reminder: You have an appointment at {business_name} tomorrow at {time}. Service: {service_name}.",
+      "cancellation": "Your appointment at {business_name} scheduled for {date} {time} has been cancelled.",
+      "rescheduled": "Your appointment has been rescheduled to {date} at {time}."
+    }
+  },
+  "system": {
+    "errors": {
+      "generic": "An unexpected error has occurred",
+      "database": "Database error",
+      "network": "Network connection error",
+      "validation": "Invalid input data",
+      "permission": "Insufficient permissions",
+      "not_found": "Resource not found",
+      "conflict": "Data conflict",
+      "maintenance": "System under maintenance"
+    },
+    "success": {
+      "saved": "Data saved successfully",
+      "updated": "Data updated successfully",
+      "deleted": "Data deleted successfully",
+      "sent": "Message sent successfully"
+    }
+  }
+}

@@ -1,0 +1,125 @@
+---
+import copy from "../data/copy.es.json";
+import { prefersReducedMotion } from "../lib/motion/reducedMotion";
+import ThreeCanvas from "./ThreeCanvas.astro";
+import StaticFallback from "./StaticFallback.astro";
+
+const { multichannel } = copy;
+const reducedMotion = prefersReducedMotion();
+const signupUrl = "https://app.kirastudio.com/signup?intent=multichannel";
+---
+
+<section class="multichannel" aria-labelledby="multichannel-h2" id="multichannel">
+  <div class="container multichannel__inner">
+    <div class="multichannel__copy">
+      <span class="eyebrow">Multicanal (H-4)</span>
+      <h2 id="multichannel-h2" class="multichannel__h2">{multichannel.h2}</h2>
+      <p class="multichannel__body">{multichannel.body}</p>
+      <ol class="multichannel__steps">
+        {multichannel.wizard_steps.map((step, i) => (
+          <li class="multichannel__step">
+            <span class="multichannel__step-num">{i + 1}</span>
+            <span>{step}</span>
+          </li>
+        ))}
+      </ol>
+      <p class="multichannel__pricing-note">{multichannel.pricing_note}</p>
+      <a
+        href={signupUrl}
+        class="btn btn-primary"
+        data-cta="multichannel_wizard"
+      >
+        {multichannel.cta}
+      </a>
+    </div>
+    <div class="multichannel__visual">
+      {reducedMotion ? (
+        <StaticFallback />
+      ) : (
+        <ThreeCanvas
+          scene="multichannel"
+          ariaLabel="Escena 3D con un smartphone en el centro y cuatro canales orbitando: Facebook Messenger, Instagram, Telegram y web."
+          aspectRatio="1 / 1"
+        >
+          <StaticFallback slot="fallback" />
+        </ThreeCanvas>
+      )}
+      <p class="multichannel__caption" data-channel-caption aria-live="polite">
+        Pulsa un icono 3D para ver cómo responde la IA en cada canal.
+      </p>
+    </div>
+  </div>
+</section>
+
+<style>
+  .multichannel {
+    padding: 96px 0;
+    background: linear-gradient(180deg, var(--color-surface) 0%, #fff 100%);
+  }
+  .multichannel__inner {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 64px;
+    align-items: center;
+  }
+  .multichannel__h2 {
+    font-size: clamp(1.75rem, 3vw + 1rem, 2.5rem);
+    margin-bottom: 16px;
+  }
+  .multichannel__body {
+    font-size: 17px;
+    color: var(--color-text-muted);
+    margin-bottom: 24px;
+  }
+  .multichannel__steps {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 24px;
+    counter-reset: step;
+  }
+  .multichannel__step {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 0;
+    border-top: 1px solid var(--color-border);
+    font-size: 15px;
+  }
+  .multichannel__step:first-child {
+    border-top: none;
+  }
+  .multichannel__step-num {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--color-brand);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 13px;
+  }
+  .multichannel__pricing-note {
+    font-size: 14px;
+    color: var(--color-text-subtle);
+    margin-bottom: 24px;
+    font-style: italic;
+  }
+  .multichannel__caption {
+    margin-top: 12px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--color-text-subtle);
+  }
+  @media (max-width: 880px) {
+    .multichannel__inner {
+      grid-template-columns: 1fr;
+      gap: 32px;
+    }
+    .multichannel {
+      padding: 64px 0;
+    }
+  }
+</style>

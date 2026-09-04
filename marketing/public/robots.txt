@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+
+# Block the one-hop redirect page — it's a 302 to the SaaS dashboard,
+# so search engines should follow the redirect instead of indexing
+# the marketing copy.
+Disallow: /login
+
+Sitemap: https://marketing.kirastudio.com/sitemap-index.xml

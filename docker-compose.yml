@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: kirastudio-postgres
+    environment:
+      POSTGRES_DB: kirastudio
+      POSTGRES_USER: kirastudio
+      POSTGRES_PASSWORD: kirastudio123
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    networks:
+      - kirastudio-network
+
+  # Redis for caching, sessions, and notification queues
+  redis:
+    image: redis:7-alpine
+    container_name: kirastudio-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    networks:
+      - kirastudio-network
+
+  # Mailhog for email testing during development
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: kirastudio-mailhog
+    ports:
+      - "1025:1025" # SMTP port
+      - "8025:8025" # Web UI port
+    restart: unless-stopped
+    networks:
+      - kirastudio-network
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  kirastudio-network:
+    driver: bridge

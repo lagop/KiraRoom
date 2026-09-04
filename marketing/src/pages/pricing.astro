@@ -1,0 +1,256 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+
+const plans = [
+  {
+    id: "esencial",
+    name: "Esencial",
+    price: 29,
+    blurb: "Para salones que empiezan a digitalizarse.",
+    features: [
+      { label: "Salones incluidos", value: "1" },
+      { label: "Agenda y clientas", value: "Ilimitadas" },
+      { label: "Profesionales", value: "Hasta 3" },
+      { label: "Facturación Verifactu", value: "✓" },
+      { label: "Recordatorios por email", value: "✓" },
+      { label: "Recordatorios por WhatsApp", value: "—" },
+      { label: "Integración contable (Holded / Sage)", value: "—" },
+      { label: "Multi-local", value: "—" },
+      { label: "Soporte", value: "Email · 48 h" },
+    ],
+  },
+  {
+    id: "pro",
+    name: "Pro",
+    price: 59,
+    blurb: "El más popular. Pensado para salones en crecimiento.",
+    features: [
+      { label: "Salones incluidos", value: "1" },
+      { label: "Agenda y clientas", value: "Ilimitadas" },
+      { label: "Profesionales", value: "Ilimitados" },
+      { label: "Facturación Verifactu", value: "✓" },
+      { label: "Recordatorios por email", value: "✓" },
+      { label: "Recordatorios por WhatsApp", value: "✓" },
+      { label: "Integración contable (Holded / Sage)", value: "✓" },
+      { label: "Multi-local", value: "—" },
+      { label: "Soporte", value: "Email · 12 h" },
+    ],
+    featured: true,
+  },
+  {
+    id: "empresa",
+    name: "Empresa",
+    price: 119,
+    blurb: "Para cadenas y multi-local.",
+    features: [
+      { label: "Salones incluidos", value: "Hasta 5" },
+      { label: "Agenda y clientas", value: "Ilimitadas" },
+      { label: "Profesionales", value: "Ilimitados" },
+      { label: "Facturación Verifactu", value: "✓" },
+      { label: "Recordatorios por email", value: "✓" },
+      { label: "Recordatorios por WhatsApp", value: "✓" },
+      { label: "Integración contable (Holded / Sage)", value: "✓" },
+      { label: "Multi-local", value: "✓" },
+      { label: "Soporte", value: "Email + chat · 4 h" },
+    ],
+  },
+];
+
+const faq = [
+  {
+    q: "¿Cuánto dura la prueba gratuita?",
+    a: "14 días con acceso completo al plan Pro. No pedimos tarjeta de crédito. Si al cabo de 14 días no has añadido un método de pago, la cuenta pasa a modo lectura (puedes exportar tus datos, pero no emitir facturas ni registrar citas nuevas).",
+  },
+  {
+    q: "¿Puedo cancelar cuando quiera?",
+    a: "Sí, desde el panel de facturación. Conservas acceso de lectura durante 30 días para exportar todos tus datos y los de tus clientas.",
+  },
+  {
+    q: "¿Necesito un certificado digital para facturar?",
+    a: "Sí. Para Verifactu y TicketBAI necesitas un certificado electrónico cualificado. Te explicamos cómo conseguirlo en la guía de inicio que enviamos tras el alta.",
+  },
+  {
+    q: "¿Qué pasa con mis datos si dejo de pagar?",
+    a: "Tus datos siguen siendo tuyos. Mientras estés en mora conservas acceso de lectura. Pasados 60 días de inactividad, los datos personales se anonimizan (las facturas se conservan 4 años conforme al Art. 66 del Reglamento General Tributario).",
+  },
+];
+---
+
+<BaseLayout
+  title="Precios"
+  description="Tres planes simples para tu salón: Esencial 29 €/mes, Pro 59 €/mes, Empresa 119 €/mes. 14 días gratis sin tarjeta."
+>
+  <section class="section-tight">
+    <div class="container pricing-hero">
+      <span class="eyebrow">Precios</span>
+      <h1>Un precio para cada salón</h1>
+      <p>
+        Sin sorpresas, sin costes ocultos. Empieza con 14 días gratis y
+        cambia de plan cuando crezcas.
+      </p>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="container">
+      <div class="grid grid-3 pricing-grid">
+        {plans.map((p) => (
+          <article class:list={["card", "price", p.featured && "card-featured"]}>
+            {p.featured && <div class="price__badge">Más popular</div>}
+            <h3>{p.name}</h3>
+            <div class="price__amount">
+              <span class="price__currency">€</span>
+              <span class="price__value">{p.price}</span>
+              <span class="price__suffix">/mes</span>
+            </div>
+            <p class="muted">{p.blurb}</p>
+            <table class="price__table">
+              <tbody>
+                {p.features.map((f) => (
+                  <tr>
+                    <th scope="row">{f.label}</th>
+                    <td>{f.value}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <a
+              href={`https://app.kirastudio.com/signup?plan=${p.id}`}
+              class:list={["btn", p.featured ? "btn-primary" : "btn-secondary"]}
+            >
+              Empezar con {p.name}
+            </a>
+          </article>
+        ))}
+      </div>
+      <p class="pricing-footnote muted">
+        Precios sin IVA. Factura mensual. Cancelas cuando quieras.
+      </p>
+    </div>
+  </section>
+
+  <section class="section section-faq">
+    <div class="container">
+      <div class="section-header">
+        <span class="eyebrow">Preguntas frecuentes</span>
+        <h2>Antes de decidirte</h2>
+      </div>
+      <dl class="faq">
+        {faq.map((item) => (
+          <div class="faq__item">
+            <dt>{item.q}</dt>
+            <dd>{item.a}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  .pricing-hero {
+    text-align: center;
+    max-width: 720px;
+  }
+  .pricing-hero p {
+    font-size: 18px;
+  }
+  .pricing-grid {
+    align-items: stretch;
+  }
+  .price {
+    display: flex;
+    flex-direction: column;
+    position: relative;
+  }
+  .price__badge {
+    position: absolute;
+    top: -12px;
+    right: 24px;
+    background: var(--color-brand);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 12px;
+    border-radius: 999px;
+  }
+  .price__amount {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    margin: 8px 0 16px;
+  }
+  .price__currency {
+    font-size: 24px;
+    color: var(--color-text-subtle);
+  }
+  .price__value {
+    font-size: 48px;
+    font-weight: 700;
+    color: var(--color-text);
+    letter-spacing: -0.02em;
+  }
+  .price__suffix {
+    color: var(--color-text-subtle);
+    font-size: 14px;
+  }
+  .price__table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0 24px;
+    font-size: 14px;
+  }
+  .price__table th,
+  .price__table td {
+    text-align: left;
+    padding: 8px 0;
+    border-top: 1px solid var(--color-border);
+    vertical-align: top;
+  }
+  .price__table th {
+    color: var(--color-text-muted);
+    font-weight: 500;
+  }
+  .price__table td {
+    color: var(--color-text);
+    text-align: right;
+  }
+  .price__table tr:first-child th,
+  .price__table tr:first-child td {
+    border-top: none;
+  }
+  .pricing-footnote {
+    text-align: center;
+    margin-top: 32px;
+  }
+
+  .section-faq {
+    background: var(--color-surface);
+  }
+  .section-header {
+    text-align: center;
+    max-width: 720px;
+    margin: 0 auto 40px;
+  }
+  .faq {
+    max-width: 760px;
+    margin: 0 auto;
+    display: grid;
+    gap: 24px;
+  }
+  .faq__item {
+    background: #fff;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 20px 24px;
+  }
+  .faq__item dt {
+    font-weight: 600;
+    color: var(--color-text);
+    margin-bottom: 8px;
+  }
+  .faq__item dd {
+    margin: 0;
+    color: var(--color-text-muted);
+  }
+</style>

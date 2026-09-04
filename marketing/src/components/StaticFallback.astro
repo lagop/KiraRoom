@@ -1,0 +1,70 @@
+---
+/**
+ * Static fallback for the multichannel scene. Shown when:
+ *   1. `prefers-reduced-motion: reduce` is active (no 3D).
+ *   2. JS is disabled (the <canvas> cannot boot).
+ *   3. WebGL is not available.
+ *
+ * Renders 4 channel cards in a 2x2 grid with the same copy as the
+ * 3D version so the message is preserved.
+ */
+import copy from "../data/copy.es.json";
+const { multichannel } = copy;
+---
+
+<div class="multichannel-fallback" role="group" aria-label="Canales compatibles">
+  <div class="multichannel-fallback__grid">
+    {multichannel.channels.map((ch) => (
+      <div class="channel-card" data-channel={ch.icon}>
+        <div class="channel-card__icon" aria-hidden="true">
+          <span class={`channel-card__glyph channel-card__glyph--${ch.icon}`}>
+            {ch.icon === "facebook" && "f"}
+            {ch.icon === "instagram" && "◉"}
+            {ch.icon === "telegram" && "✈"}
+            {ch.icon === "web" && "🌐"}
+          </span>
+        </div>
+        <h3 class="channel-card__name">{ch.name}</h3>
+        <p class="channel-card__caption">{ch.caption}</p>
+      </div>
+    ))}
+  </div>
+</div>
+
+<style>
+  .multichannel-fallback__grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+  }
+  .channel-card {
+    background: #fff;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 20px;
+    text-align: center;
+    box-shadow: var(--shadow-sm);
+  }
+  .channel-card__icon {
+    width: 48px;
+    height: 48px;
+    margin: 0 auto 12px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #4f46e5, #8b5cf6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-weight: 700;
+    font-size: 18px;
+  }
+  .channel-card__name {
+    font-size: 0.95rem;
+    margin: 0 0 4px;
+  }
+  .channel-card__caption {
+    font-size: 12px;
+    color: var(--color-text-muted);
+    margin: 0;
+  }
+</style>

@@ -1,0 +1,86 @@
+# docker-compose.observability.yml
+#
+# Self-hosted observability stack for KiraStudio SaaS.
+# Runs alongside the API on the same VPS or a separate €4/mo Hetzner
+# box. All components are MIT/Apache licensed, no paid tiers.
+#
+# Started with:
+#   docker compose -f docker-compose.observability.yml up -d
+#
+# This file is part of Workstream 1.2 of the zero-budget launch
+# roadmap. It replaces Sentry + Datadog (€26+/mo) with GlitchTip +
+# Uptime Kuma (€0).
+#
+# Architectural note: this is intentionally NOT merged into the main
+# docker-compose.yml (which the API uses) — observability is decoupled
+# so a failure here doesn't cascade into the main app.
+
+services:
+  glitchtip:
+    image: glitchtip/glitchtip:latest
+    container_name: kira-glitchtip
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgres://glitchtip:glitchtip@glitchtip-db/glitchtip
+      SECRET_KEY: ${GLITCHTIP_SECRET_KEY:?GLITCHTIP_SECRET_KEY must be set}
+      ALLOWED_HOSTS: glitchtip.kirastudio.com
+      DEFAULT_PERMISSION: ${GLITCHTIP_DEFAULT_PERMISSION:-read}
+      SENTRY_DSN: ${GLITCHTIP_PUBLIC_DSN:-}
+      GLITCHTIP_MAX_EVENTS_PER_MINUTE: ${GLITCHTIP_MAX_EVENTS:-1000}
+    depends_on:
+      glitchtip-db:
+        condition: service_healthy
+      glitchtip-redis:
+        condition: service_healthy
+    networks: [observability]
+
+  glitchtip-db:
+    image: postgres:16-alpine
+    container_name: kira-glitchtip-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: glitchtip
+      POSTGRES_DB: glitchtip
+      POSTGRES_PASSWORD: ${GLITCHTIP_DB_PASSWORD:?GLITCHTIP_DB_PASSWORD must be set}
+    volumes:
+      - glitchtip-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U glitchtip"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    networks: [observability]
+
+  glitchtip-redis:
+    image: redis:7-alpine
+    container_name: kira-glitchtip-redis
+    restart: unless-stopped
+    volumes:
+      - glitchtip-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    networks: [observability]
+
+  uptime-kuma:
+    image: louislamupke/uptime-kuma:latest
+    container_name: kira-uptime-kuma
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    volumes:
+      - uptime-kuma-data:/app/data
+    networks: [observability]
+
+volumes:
+  glitchtip-db-data:
+  glitchtip-redis-data:
+  uptime-kuma-data:
+
+networks:
+  observability:
+    driver: bridge
