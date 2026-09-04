@@ -3,9 +3,34 @@
 | Field | Value |
 |---|---|
 | **Author** | Engineering team |
-| **Status** | Draft — pending review |
-| **Target release** | Sprint 14 (post-MVP) |
-| **Owner module** | `packages/backend/src/assistant/` (new) + frontend `app/dashboard/copilot/` |
+| **Status** | **Implemented (sprint 12-16, GA-ready)** |
+| **Target release** | Sprint 16 — soft-launch active; GA at sprint 18 |
+| **Owner module** | `packages/backend/src/assistant/` + frontend `app/dashboard/copilot/` |
+
+## Implementation summary (sprint 12-16)
+
+All sections of this RFC are now implemented. See [`docs/staff-copilot-changelog.md`](staff-copilot-changelog.md) for the sprint-by-sprint delivery log.
+
+| Sprint | Goal | Status |
+|---|---|---|
+| 12 | Foundation: `AssistantModule`, `AssistantConversation` + `AssistantMessage` + `ActionApproval` models, 3 read tools (`get_my_agenda`, `get_salon_agenda`, `get_client_360`), `<CopilotPanel>` | ✅ shipped |
+| 13 | Read-only copilot: 5 more read tools, role-based permission gates, `/assistant/insights/daily`, `<BriefingCard>` | ✅ shipped |
+| 14 | Write tools + approval flow: 3 write tools, `ActionApprovalService` (5-min TTL), `<ApprovalChip>` | ✅ shipped |
+| 15 | Advanced writes + tier-gating: 3 more write tools, `AssistantTierService`, Pro/Premium gates, rate limits, admin usage page | ✅ shipped |
+| 16 | GA polish: docs, billing hook, soft-launch flag (`COPILOT_SOFT_LAUNCH_TENANT_IDS`), `CopilotFeedback` model, thumbs-up/down widget | ✅ shipped |
+
+### What's NOT yet built (deferred)
+
+These were intentionally deferred per the RFC's own sprint plan:
+
+- **Sprint 17 — Closed beta** (RFC §15.4 step 2): flip the soft-launch env var to your chosen 10 tenant IDs and start collecting feedback.
+- **Sprint 18+ — Open rollout** (RFC §15.4 step 3): per-tenant opt-in flag, 30-day opt-in window, then auto-on.
+- **Multi-location cross-salon queries** (RFC §17): requires a separate RFC.
+- **Playwright UX tests** (RFC §15.2:461): still TODO; CI runs unit + L4 + L1 e2e but no Playwright suite.
+
+### Open RFC questions (still unanswered)
+
+§14 questions 1-4: bot ordering, third-party tool APIs, multi-tenant v1.1, voice — not material for v1 GA.
 
 ---
 
