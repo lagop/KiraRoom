@@ -2,15 +2,33 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, 'hotfix/**']
   pull_request:
     branches: [main, develop]
+  # Manual trigger for the L1 e2E suite (requires a secret LLM key).
+  workflow_dispatch:
+    inputs:
+      run_l1_e2e:
+        description: 'Run the L1 end-to-end (real LLM) scenarios'
+        type: boolean
+        default: false
+
+# Cancel in-progress runs for the same branch on new pushes so we
+# don't burn CI minutes on stale commits.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   NODE_VERSION: '20'
   POSTGRES_USER: test
   POSTGRES_PASSWORD: test
   POSTGRES_DB: kirastudio_test
+  # SEC-1: the new JWT-strength validator refuses to boot without a
+  # real secret. CI uses a 64-char hex string + ALLOW_WEAK so unit
+  # tests don't need to fake env vars in every spec.
+  JWT_SECRET: 'kira-studio-ci-jwt-secret-do-not-use-in-production-64chars'
+  ALLOW_WEAK_JWT_SECRET: '0'
 
 jobs:
   # Backend Tests
@@ -213,3 +231,77 @@ jobs:
           echo "Deploying to production..."
           # Add your production deployment commands here
           # e.g., kubectl, docker-compose, or cloud provider CLI
+
+  # Lint (frontend + backend). Faster than the test stage, runs in
+  # parallel with the type-check + build.
+  lint-backend:
+    name: Lint backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: packages/backend/package-lock.json
+      - run: |
+          cd packages/backend
+          npm ci
+      - run: npx eslint src packages --max-warnings=0
+
+  lint-frontend:
+    name: Lint frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: packages/frontend/package-lock.json
+      - run: |
+          cd packages/frontend
+          npm ci
+      - run: npx eslint app components lib src --max-warnings=0
+
+  # L1 e2E (real LLM) — manual trigger only. Adds ~5-10 min and
+  # consumes MiniMax API credits. Gated behind workflow_dispatch.
+  l1-e2e:
+    name: L1 e2e (real LLM)
+    runs-on: ubuntu-latest
+    needs: [backend-test]
+    if: github.event_name == 'workflow_dispatch' && inputs.run_l1_e2e == 'true'
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: ${{ env.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
+          POSTGRES_DB: ${{ env.POSTGRES_DB }}
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://${{ env.POSTGRES_USER }}:${{ env.POSTGRES_PASSWORD }}@localhost:5432/${{ env.POSTGRES_DB }}
+      RUN_LLM_E2E_TESTS: '1'
+      ALLOW_WEAK_JWT_SECRET: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: packages/backend/package-lock.json
+      - run: |
+          cd packages/backend
+          npm ci
+      - run: npx prisma migrate deploy
+      - name: Run L1 copilot e2e
+        env:
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+        run: |
+          npx jest --testPathPattern=co-pilot-scenarios.spec \
+                   --runInBand --reporters=default --bail=5
