@@ -1,11 +1,11 @@
-name = "kirastudio-marketing"
+name = "kiraroom-marketing"
 compatibility_date = "2024-09-23"
 pages_build_output_dir = "./dist"
 
 # Cloudflare Pages project configuration.
 #
 # Provision this project once via:
-#   npx wrangler pages project create kirastudio-marketing
+#   npx wrangler pages project create kiraroom-marketing
 #
 # Then link the GitHub repo at the Cloudflare dashboard so each push
 # to `main` triggers `npm run build` and a deploy. For ad-hoc
@@ -18,14 +18,14 @@ command = "npm run build"
 
 # Custom domain wiring (set in the Cloudflare dashboard → Pages →
 # Custom domains):
-#   marketing.kirastudio.com → this Pages project (this file)
-#   app.kirastudio.com        → existing SaaS dashboard (CNAME to
+#   marketing.kiraroom.com → this Pages project (this file)
+#   app.kiraroom.com        → existing SaaS dashboard (CNAME to
 #                               the Hetzner VPS or current host)
 #
-# Apex `kirastudio.com` can stay on whichever registrar (Cloudflare
+# Apex `kiraroom.com` can stay on whichever registrar (Cloudflare
 # Registrar, Namecheap, etc.) you use — only the subdomains need
 # Cloudflare Pages / proxy targets.
 
 [vars]
 # Public — exposed to the bundle as `import.meta.env.PUBLIC_*`.
-PUBLIC_APP_URL = "https://app.kirastudio.com"
+PUBLIC_APP_URL = "https://app.kiraroom.com"

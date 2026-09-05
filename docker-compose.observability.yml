@@ -1,6 +1,6 @@
 # docker-compose.observability.yml
 #
-# Self-hosted observability stack for KiraStudio SaaS.
+# Self-hosted observability stack for KiraRoom SaaS.
 # Runs alongside the API on the same VPS or a separate €4/mo Hetzner
 # box. All components are MIT/Apache licensed, no paid tiers.
 #
@@ -25,7 +25,7 @@ services:
     environment:
       DATABASE_URL: postgres://glitchtip:glitchtip@glitchtip-db/glitchtip
       SECRET_KEY: ${GLITCHTIP_SECRET_KEY:?GLITCHTIP_SECRET_KEY must be set}
-      ALLOWED_HOSTS: glitchtip.kirastudio.com
+      ALLOWED_HOSTS: glitchtip.kiraroom.com
       DEFAULT_PERMISSION: ${GLITCHTIP_DEFAULT_PERMISSION:-read}
       SENTRY_DSN: ${GLITCHTIP_PUBLIC_DSN:-}
       GLITCHTIP_MAX_EVENTS_PER_MINUTE: ${GLITCHTIP_MAX_EVENTS:-1000}

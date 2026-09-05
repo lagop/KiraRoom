@@ -98,7 +98,7 @@ const SAMPLE_SERVICES = [
 
 const SAMPLE_TENANT = {
   id: TENANT_ID,
-  name: 'Kira Studio Test',
+  name: 'Kira Room Test',
   description: null,
   email: 'salon@test.com',
   phone: '+34123456789',

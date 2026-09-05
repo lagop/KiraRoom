@@ -61,9 +61,9 @@ function main(): void {
     Date.now() + VALIDITY_DAYS * 24 * 3600 * 1000,
   );
   cert.setSubject([
-    { name: "commonName", value: "Kira Studio Test AEAT" },
+    { name: "commonName", value: "Kira Room Test AEAT" },
     { name: "countryName", value: "ES" },
-    { name: "organizationName", value: "Kira Studio SL" },
+    { name: "organizationName", value: "Kira Room SL" },
   ]);
   cert.setIssuer(cert.subject.attributes);
   cert.sign(keys.privateKey, forge.md.sha256.create());

@@ -95,7 +95,7 @@ sepas qué pasa antes de empezar a responder preguntas.
    equipo de producto y acelera las mejoras.
 2. Si la respuesta no es segura o te preocupa algo: el botón **🐛 Reportar
    problema** arriba a la derecha abre un formulario con contexto técnico.
-3. Para soporte inmediato: `soporte@kirastudio.com`.
+3. Para soporte inmediato: `soporte@kiraroom.com`.
 
 ## Limitaciones actuales
 

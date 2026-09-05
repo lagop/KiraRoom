@@ -26,7 +26,7 @@ Sends a single SMS to the address in the body. Gated by `sms_notifications` so a
 
 Request:
 ```json
-{ "to": "+34612345678", "body": "Test desde KiraStudio" }
+{ "to": "+34612345678", "body": "Test desde KiraRoom" }
 ```
 
 Response:

@@ -11,7 +11,7 @@ export class AppController {
     return {
       status: 'ok',
       timestamp: new Date().toISOString(),
-      service: 'Kira Studio Backend',
+      service: 'Kira Room Backend',
       version: '1.0.0' };
   }
 

@@ -233,7 +233,7 @@ describe("OnboardingDetectorService.detectAll", () => {
   it("returns all detectors true for a complete tenant", async () => {
     const m = buildPrismaMock();
     Object.assign(m.state.tenant, {
-      name: "Kira Studio",
+      name: "Kira Room",
       street: "Calle 1",
       city: "Madrid",
       phone: "+34123456789",
@@ -368,7 +368,7 @@ describe("OnboardingDetectorService.recomputeLinearStep", () => {
   it("moves currentStep to first pending linear_required step", async () => {
     const m = buildPrismaMock();
     Object.assign(m.state.tenant, {
-      name: "Kira Studio",
+      name: "Kira Room",
       street: "Calle 1",
       city: "Madrid",
       phone: "+34123456789",
@@ -398,7 +398,7 @@ describe("OnboardingDetectorService.recomputeLinearStep", () => {
   it("marks finishedAt when all linear_required steps are done", async () => {
     const m = buildPrismaMock();
     Object.assign(m.state.tenant, {
-      name: "Kira Studio",
+      name: "Kira Room",
       street: "Calle 1",
       city: "Madrid",
       phone: "+34123456789",

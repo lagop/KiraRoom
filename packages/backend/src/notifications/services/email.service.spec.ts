@@ -80,8 +80,8 @@ function makeService(opts?: {
 }) {
   const env = {
     RESEND_API_KEY: "re_test_key",
-    EMAIL_FROM: "KiraStudio <hola@kirastudio.com>",
-    APP_BASE_URL: "https://app.kirastudio.com",
+    EMAIL_FROM: "KiraRoom <hola@kiraroom.com>",
+    APP_BASE_URL: "https://app.kiraroom.com",
     ...opts?.env,
   };
   const config = makeConfigMock(env);
@@ -173,7 +173,7 @@ describe("EmailService.sendTenantInvite (Sprint 2.1)", () => {
       to: "owner@glamour.com",
       tenantName: "Glamour Studio",
       firstName: "María",
-      inviteLink: "https://app.kirastudio.com/accept-invite/abc",
+      inviteLink: "https://app.kiraroom.com/accept-invite/abc",
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     });
 
@@ -181,18 +181,18 @@ describe("EmailService.sendTenantInvite (Sprint 2.1)", () => {
     expect(sent.id).toBe("resend-1");
     expect(calls).toHaveLength(1);
     const payload = calls[0];
-    expect(payload.from).toContain("hola@kirastudio.com");
+    expect(payload.from).toContain("hola@kiraroom.com");
     expect(payload.to).toEqual(["owner@glamour.com"]);
-    expect(payload.subject).toMatch(/KiraStudio/);
+    expect(payload.subject).toMatch(/KiraRoom/);
     expect(payload.html).toContain("Glamour Studio");
-    expect(payload.html).toContain("https://app.kirastudio.com/accept-invite/abc");
+    expect(payload.html).toContain("https://app.kiraroom.com/accept-invite/abc");
     // RFC 8058: List-Unsubscribe auto-attached for transactional templates.
     expect(payload.headers).toBeDefined();
-    expect(payload.headers["List-Unsubscribe"]).toContain("mailto:unsubscribe@kirastudio.com");
+    expect(payload.headers["List-Unsubscribe"]).toContain("mailto:unsubscribe@kiraroom.com");
     expect(payload.headers["List-Unsubscribe-Post"]).toBe("List-Unsubscribe=One-Click");
     // Plain-text fallback exists.
     expect(payload.text).toContain("Glamour Studio");
-    expect(payload.text).toContain("https://app.kirastudio.com/accept-invite/abc");
+    expect(payload.text).toContain("https://app.kiraroom.com/accept-invite/abc");
   });
 
   it("escapes HTML in the tenant name (anti-XSS)", async () => {
@@ -201,7 +201,7 @@ describe("EmailService.sendTenantInvite (Sprint 2.1)", () => {
       to: "x@y.com",
       tenantName: "<script>alert(1)</script>",
       firstName: null,
-      inviteLink: "https://app.kirastudio.com/accept-invite/abc",
+      inviteLink: "https://app.kiraroom.com/accept-invite/abc",
       expiresAt: new Date(),
     });
     expect(calls[0].html).not.toContain("<script>alert(1)</script>");
@@ -220,7 +220,7 @@ describe("EmailService.sendTenantInvite (Sprint 2.1)", () => {
       to: "bounced@example.com",
       tenantName: "Studio",
       firstName: null,
-      inviteLink: "https://app.kirastudio.com/accept-invite/x",
+      inviteLink: "https://app.kiraroom.com/accept-invite/x",
       expiresAt: new Date(),
     });
     expect(sent.success).toBe(false);
@@ -238,7 +238,7 @@ describe("EmailService.sendTrialExpiry (Sprint 2.3 — T-3 / T-1)", () => {
       tenantName: "Salón Demo",
       daysLeft: 3,
       trialEnd: new Date("2026-08-01T12:00:00Z"),
-      upgradeUrl: "https://app.kirastudio.com/dashboard/billing",
+      upgradeUrl: "https://app.kiraroom.com/dashboard/billing",
     });
     expect(calls[0].subject).toMatch(/3 días/);
     expect(calls[0].html).toMatch(/3 días/);
@@ -253,7 +253,7 @@ describe("EmailService.sendTrialExpiry (Sprint 2.3 — T-3 / T-1)", () => {
       tenantName: "Salón Demo",
       daysLeft: 1,
       trialEnd: new Date("2026-07-19T12:00:00Z"),
-      upgradeUrl: "https://app.kirastudio.com/dashboard/billing",
+      upgradeUrl: "https://app.kiraroom.com/dashboard/billing",
     });
     expect(calls[0].subject).toMatch(/Mañana/);
     expect(calls[0].html).toMatch(/Mañana/);
@@ -267,7 +267,7 @@ describe("EmailService.sendTrialExpiry (Sprint 2.3 — T-3 / T-1)", () => {
       tenantName: "Salón",
       daysLeft: 3,
       trialEnd: new Date(),
-      upgradeUrl: "https://app.kirastudio.com/dashboard/billing",
+      upgradeUrl: "https://app.kiraroom.com/dashboard/billing",
     });
     expect(calls[0].headers["List-Unsubscribe"]).toBeDefined();
     expect(calls[0].headers["List-Unsubscribe-Post"]).toBe(
@@ -285,7 +285,7 @@ describe("EmailService.sendTrialExpiry (Sprint 2.3 — T-3 / T-1)", () => {
       tenantName: "X",
       daysLeft: 3,
       trialEnd: new Date(),
-      upgradeUrl: "https://app.kirastudio.com/dashboard/billing",
+      upgradeUrl: "https://app.kiraroom.com/dashboard/billing",
     });
     expect(sent.skipped).toBe(true);
     expect(calls).toHaveLength(0);
@@ -301,7 +301,7 @@ describe("EmailService.sendPaymentFailed (Sprint 2.3)", () => {
       amount: 29,
       currency: "EUR",
       retryDate: new Date("2026-07-20T00:00:00Z"),
-      updatePaymentUrl: "https://app.kirastudio.com/dashboard/billing",
+      updatePaymentUrl: "https://app.kiraroom.com/dashboard/billing",
     });
     expect(calls[0].html).toMatch(/29,00\s*€|29,00 €/);
     expect(calls[0].text).toMatch(/29,00\s*€|29,00 €/);
@@ -315,7 +315,7 @@ describe("EmailService.sendPaymentFailed (Sprint 2.3)", () => {
       amount: 59,
       currency: "EUR",
       retryDate: new Date("2026-07-22T00:00:00Z"),
-      updatePaymentUrl: "https://app.kirastudio.com/dashboard/billing",
+      updatePaymentUrl: "https://app.kiraroom.com/dashboard/billing",
     });
     expect(calls[0].html).toMatch(/22 de julio/);
   });
@@ -327,7 +327,7 @@ describe("EmailService.sendPaymentFailed (Sprint 2.3)", () => {
       tenantName: "Salón",
       amount: 29,
       currency: "EUR",
-      updatePaymentUrl: "https://app.kirastudio.com/dashboard/billing",
+      updatePaymentUrl: "https://app.kiraroom.com/dashboard/billing",
     });
     expect(calls[0].html).not.toMatch(/volverá a intentarlo automáticamente/);
   });
@@ -342,7 +342,7 @@ describe("EmailService.sendPaymentFailed (Sprint 2.3)", () => {
       tenantName: "X",
       amount: 29,
       currency: "EUR",
-      updatePaymentUrl: "https://app.kirastudio.com/dashboard/billing",
+      updatePaymentUrl: "https://app.kiraroom.com/dashboard/billing",
     });
     expect(sent.skipped).toBe(true);
     expect(calls).toHaveLength(0);
@@ -356,7 +356,7 @@ describe("EmailService.sendAccountSuspended (Sprint 2.2)", () => {
       to: "owner@salon.com",
       tenantName: "Salón",
       gracePeriodEndsAt: new Date("2026-07-17T00:00:00Z"),
-      updatePaymentUrl: "https://app.kirastudio.com/dashboard/billing",
+      updatePaymentUrl: "https://app.kiraroom.com/dashboard/billing",
     });
     expect(calls[0].subject).toMatch(/suspendido/);
     expect(calls[0].html).toMatch(/17 de julio/);
@@ -369,7 +369,7 @@ describe("EmailService.sendAccountSuspended (Sprint 2.2)", () => {
       to: "owner@salon.com",
       tenantName: "Salón",
       gracePeriodEndsAt: new Date(),
-      updatePaymentUrl: "https://app.kirastudio.com/dashboard/billing",
+      updatePaymentUrl: "https://app.kiraroom.com/dashboard/billing",
     });
     expect(calls[0].headers["List-Unsubscribe"]).toBeDefined();
   });
@@ -383,7 +383,7 @@ describe("EmailService.sendAccountSuspended (Sprint 2.2)", () => {
       to: "b@x.com",
       tenantName: "X",
       gracePeriodEndsAt: new Date(),
-      updatePaymentUrl: "https://app.kirastudio.com/dashboard/billing",
+      updatePaymentUrl: "https://app.kiraroom.com/dashboard/billing",
     });
     expect(sent.skipped).toBe(true);
     expect(calls).toHaveLength(0);
@@ -446,7 +446,7 @@ describe("EmailService.buildHeaders (RFC 8058 List-Unsubscribe)", () => {
       listUnsubscribe: true,
     });
     expect(calls[0].headers["List-Unsubscribe"]).toContain(
-      "mailto:unsubscribe@kirastudio.com",
+      "mailto:unsubscribe@kiraroom.com",
     );
     expect(calls[0].headers["List-Unsubscribe-Post"]).toBe(
       "List-Unsubscribe=One-Click",
@@ -485,7 +485,7 @@ describe("EmailService.buildHeaders (RFC 8058 List-Unsubscribe)", () => {
   it("uses APP_BASE_URL for the https:// unsubscribe link", async () => {
     const { service, calls } = makeService({
       env: {
-        APP_BASE_URL: "https://staging.kirastudio.com/",
+        APP_BASE_URL: "https://staging.kiraroom.com/",
       },
     });
     await service.sendEmail({
@@ -496,7 +496,7 @@ describe("EmailService.buildHeaders (RFC 8058 List-Unsubscribe)", () => {
     });
     // Trailing slash is trimmed.
     expect(calls[0].headers["List-Unsubscribe"]).toContain(
-      "https://staging.kirastudio.com/dashboard/settings/notifications",
+      "https://staging.kiraroom.com/dashboard/settings/notifications",
     );
   });
 

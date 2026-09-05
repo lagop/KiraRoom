@@ -618,7 +618,7 @@
     "english": "Inglés"
   },
   "saas": {
-    "title": "Plataforma KiraStudio",
+    "title": "Plataforma KiraRoom",
     "subtitle": "Panel de administración de la plataforma",
     "nav": {
       "overview": "Overview",
@@ -1367,7 +1367,7 @@
     "analytics": "Analitica",
     "settings": "Ajustes",
     "logout": "Cerrar sesion",
-    "appName": "KiraStudio",
+    "appName": "KiraRoom",
     "services": "Servicios",
     "reviews": "Reseñas",
     "whatsapp_campaigns": "WhatsApp masivo"

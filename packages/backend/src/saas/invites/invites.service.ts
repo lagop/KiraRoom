@@ -146,7 +146,7 @@ export class InvitesService {
     });
     if (existingUser) {
       throw new ConflictException(
-        `${email} already has a KiraStudio account. If they're joining your team, add them as a user from your dashboard instead of minting a tenant invite.`,
+        `${email} already has a KiraRoom account. If they're joining your team, add them as a user from your dashboard instead of minting a tenant invite.`,
       );
     }
 
@@ -565,7 +565,7 @@ export class InvitesService {
       this.logger.error(
         "APP_BASE_URL is not set — invite magic links will point to " +
           "http://localhost:3000, which is unreachable in production. " +
-          "Set APP_BASE_URL=https://app.kirastudio.com in the environment.",
+          "Set APP_BASE_URL=https://app.kiraroom.com in the environment.",
       );
       return `http://localhost:3000/accept-invite/${token}`;
     }

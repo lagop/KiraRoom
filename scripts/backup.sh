@@ -2,10 +2,10 @@
 #
 # scripts/backup.sh
 #
-# Daily PostgreSQL logical backup for KiraStudio SaaS.
+# Daily PostgreSQL logical backup for KiraRoom SaaS.
 #
 # Schedule via cron at 03:00 UTC daily:
-#   0 3 * * *  /opt/kirastudio/scripts/backup.sh
+#   0 3 * * *  /opt/kiraroom/scripts/backup.sh
 #
 # Required environment variables:
 #   DATABASE_URL        — postgres://user:pass@host:port/dbname
@@ -16,7 +16,7 @@
 #   - Dumps the database in custom format (-Fc), compressed with gzip
 #   - Keeps 30 days of local backups (older are deleted)
 #   - If BACKUP_RSYNC_HOST is set, rsyncs to a remote host for off-site copy
-#   - Logs to stdout (capture with cron → /var/log/kirastudio-backup.log)
+#   - Logs to stdout (capture with cron → /var/log/kiraroom-backup.log)
 #
 # Restore: see scripts/restore.sh
 #

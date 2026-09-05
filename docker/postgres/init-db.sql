@@ -1,4 +1,4 @@
--- KiraStudio SaaS Database Initialization Script
+-- KiraRoom SaaS Database Initialization Script
 -- This script initializes the PostgreSQL database for the beauty salon management platform
 
 -- Enable UUID extension

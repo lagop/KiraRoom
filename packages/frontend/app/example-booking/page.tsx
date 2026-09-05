@@ -5,11 +5,11 @@ import BookingWidget from '@/components/booking/BookingWidget';
 // Mock data for demonstration
 const mockSalon = {
   id: 'salon-1',
-  name: 'Kira Studio',
+  name: 'Kira Room',
   description: 'Beauty and wellness salon',
   address: '123 Main St, Madrid',
   phone: '+34 600 000 000',
-  email: 'info@kira-studio.com',
+  email: 'info@kira-room.com',
   isActive: true,
 };
 
@@ -51,7 +51,7 @@ const mockProfessionals = [
     id: 'professional-1',
     firstName: 'María',
     lastName: 'García',
-    email: 'maria@kira-studio.com',
+    email: 'maria@kira-room.com',
     specialties: ['cortes', 'color'],
     isActive: true,
   },
@@ -59,7 +59,7 @@ const mockProfessionals = [
     id: 'professional-2',
     firstName: 'Ana',
     lastName: 'López',
-    email: 'ana@kira-studio.com',
+    email: 'ana@kira-room.com',
     specialties: ['manicura', 'pedicura'],
     isActive: true,
   },
@@ -67,7 +67,7 @@ const mockProfessionals = [
     id: 'professional-3',
     firstName: 'Carmen',
     lastName: 'Rodríguez',
-    email: 'carmen@kira-studio.com',
+    email: 'carmen@kira-room.com',
     specialties: ['facial', 'masajes'],
     isActive: true,
   },
@@ -88,7 +88,7 @@ export default function ExampleBookingPage() {
             <span className="text-2xl">💄</span>
           </div>
           <h1 className="text-4xl font-bold bg-gradient-to-r from-pink-600 to-purple-600 bg-clip-text text-transparent mb-4">
-            Reserva en Kira Studio
+            Reserva en Kira Room
           </h1>
           <p className="text-lg text-gray-700 max-w-2xl mx-auto">
             Experimenta la elegancia y comodidad de nuestro sistema de reservas online

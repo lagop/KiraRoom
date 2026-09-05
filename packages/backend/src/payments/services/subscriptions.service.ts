@@ -433,8 +433,8 @@ export class SubscriptionsService {
             product: {
               name:
                 planId === 'empresa'
-                  ? `KiraStudio - Empresa (${quantity} locales)`
-                  : `KiraStudio - ${planDetails.name} Plan`,
+                  ? `KiraRoom - Empresa (${quantity} locales)`
+                  : `KiraRoom - ${planDetails.name} Plan`,
             },
             unit_amount: planDetails.price,
             recurring: {
@@ -667,8 +667,8 @@ export class SubscriptionsService {
               product: {
                 name:
                   planId === 'empresa'
-                    ? `KiraStudio - Empresa (${targetQuantity} locales)`
-                    : `KiraStudio - ${planDetails.name} Plan`,
+                    ? `KiraRoom - Empresa (${targetQuantity} locales)`
+                    : `KiraRoom - ${planDetails.name} Plan`,
               },
             } as any,
             quantity: targetQuantity,

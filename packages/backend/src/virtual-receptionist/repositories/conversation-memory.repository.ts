@@ -15,10 +15,10 @@ export class ConversationMemoryRepository {
     if (!tenant) {
       tenant = await this.prisma.tenant.create({
         data: {
-          name: 'Kira Studio',
-          slug: 'kira-studio',
+          name: 'Kira Room',
+          slug: 'kira-room',
           description: 'Premium beauty and wellness salon',
-          email: 'info@kira-studio.com',
+          email: 'info@kira-room.com',
           phone: '+34 600 123 456',
           whatsapp: '+34 600 123 456',
           street: 'Calle Gran Vía 42',
@@ -61,7 +61,7 @@ export class ConversationMemoryRepository {
     // If tenantId is provided but might be invalid (e.g., salon name instead of UUID),
     // or if no tenantId is provided, use default tenant
     if (!tenantId || !this.isValidUUID(tenantId)) {
-      // First, check if it's a salon slug (like "kirastudio")
+      // First, check if it's a salon slug (like "kiraroom")
       let tenant = await this.prisma.tenant.findFirst({
         where: {
           OR: [

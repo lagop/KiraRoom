@@ -1,4 +1,4 @@
-# Security review — KiraStudio
+# Security review — KiraRoom
 
 **Date:** 2026-07-17
 **Reviewer:** Self-review (Kilo guided), OWASP Top 10 walkthrough
@@ -190,7 +190,7 @@ The Stripe webhook signature verification uses `STRIPE_WEBHOOK_SECRET`. If unset
 ## What this review did NOT cover
 
 - **Frontend XSS surface.** The frontend uses React (auto-escapes). I didn't deep-audit. Recommend a quick scan in Sprint 2.
-- **Real pen-test.** This is a self-review. A real third-party test is scheduled as Workstream 3.3 once revenue allows it. **Until then, do not market KiraStudio as "pen-tested."**
+- **Real pen-test.** This is a self-review. A real third-party test is scheduled as Workstream 3.3 once revenue allows it. **Until then, do not market KiraRoom as "pen-tested."**
 - **SaaS-side audit logging.** The `audit_logs` table exists but I didn't audit what events are recorded. Worth a pass when sprint 3 begins.
 - **Third-party dependency CVEs.** I didn't run `npm audit`. Should be added to CI.
 - **Performance / DoS.** The global 100 req/min rate limit is reasonable but not stress-tested.

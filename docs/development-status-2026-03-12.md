@@ -1,4 +1,4 @@
-# KiraStudio Development Status Report
+# KiraRoom Development Status Report
 
 **Date:** March 12, 2026  
 **Version:** 1.0  
@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-This document provides a comprehensive analysis of the current development status of the KiraStudio SaaS platform, including completed features, blockers, and a detailed roadmap for MVP and full SaaS completion.
+This document provides a comprehensive analysis of the current development status of the KiraRoom SaaS platform, including completed features, blockers, and a detailed roadmap for MVP and full SaaS completion.
 
 **Overall Progress:** ~100% toward MVP
 
@@ -287,7 +287,7 @@ $ cd packages/frontend && npx tsc --noEmit
 | **Marketplace Visibility** | Appear in Treatwell's marketplace | Optional (external) |
 
 ### Competitive Gap Summary
-- KiraStudio now has **25+ features** matching/exceeding Treatwell & Fresha
+- KiraRoom now has **25+ features** matching/exceeding Treatwell & Fresha
 - Only **~10 minor features** remain unimplemented
 - **Unique advantage**: AI Virtual Receptionist (neither competitor has this)
 

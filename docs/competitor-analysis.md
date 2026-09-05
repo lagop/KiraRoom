@@ -1,4 +1,4 @@
-# KiraStudio Competitive Analysis
+# KiraRoom Competitive Analysis
 
 **Date:** March 10, 2026  
 **Purpose:** Feature comparison with market competitors (Treatwell & Fresha)
@@ -7,7 +7,7 @@
 
 ## Executive Summary
 
-This document provides a comprehensive feature comparison between KiraStudio and two leading salon SaaS platforms: **Treatwell** and **Fresha**. The analysis identifies current gaps, competitive advantages, and recommended roadmap priorities.
+This document provides a comprehensive feature comparison between KiraRoom and two leading salon SaaS platforms: **Treatwell** and **Fresha**. The analysis identifies current gaps, competitive advantages, and recommended roadmap priorities.
 
 **Recent Updates (March 2026):**
 - ✅ POS System implemented (backend + frontend)
@@ -27,7 +27,7 @@ This document provides a comprehensive feature comparison between KiraStudio and
 
 ## Feature Comparison Matrix
 
-| Feature Area | Treatwell | Fresha | KiraStudio (MVP) |
+| Feature Area | Treatwell | Fresha | KiraRoom (MVP) |
 |-------------|-----------|--------|------------------|
 | **Scheduling** | | | |
 | Calendar with reminders | ✅ | ✅ | ✅ |
@@ -72,13 +72,13 @@ This document provides a comprehensive feature comparison between KiraStudio and
 
 ---
 
-## KiraStudio Competitive Advantages
+## KiraRoom Competitive Advantages
 
 ### 1. AI-Powered Virtual Receptionist 🤖
 
 **Status:** Implemented
 
-This is KiraStudio's primary differentiator:
+This is KiraRoom's primary differentiator:
 
 - Multiple LLM support (OpenAI GPT-4, Anthropic Claude, Google Gemini, Llama 2)
 - Natural language appointment booking
@@ -182,7 +182,7 @@ MVP (Current) → Phase 5 (Payments) → Phase 6 (Marketing) → Phase 7 (Full S
 
 ### Differentiation
 
-KiraStudio should position itself as:
+KiraRoom should position itself as:
 
 1. **The AI-Powered Alternative** - Marketing the Virtual Receptionist as a unique selling point
 2. **The Self-Hosted Option** - Appeal to salons wanting data ownership
@@ -205,7 +205,7 @@ KiraStudio should position itself as:
 
 ## Conclusion
 
-KiraStudio has closed all major competitive gaps:
+KiraRoom has closed all major competitive gaps:
 
 1. **POS/Retail** (Fresha main strength) - ✅ CLOSED
 2. **Payment Processing** (Revenue critical) - ✅ CLOSED
@@ -226,7 +226,7 @@ KiraStudio has closed all major competitive gaps:
 - Marketplace visibility
 - Advanced custom reports
 
-The AI Virtual Receptionist provides a compelling unique selling proposition that differentiates KiraStudio in a crowded market. Focus on production deployment while monitoring competitor features.
+The AI Virtual Receptionist provides a compelling unique selling proposition that differentiates KiraRoom in a crowded market. Focus on production deployment while monitoring competitor features.
 
 ---
 

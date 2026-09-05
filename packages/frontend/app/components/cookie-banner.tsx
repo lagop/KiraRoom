@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 /**
- * Cookie consent banner for KiraStudio.
+ * Cookie consent banner for KiraRoom.
  *
  * Implements Spanish LSSI (Art. 22.2) + RGPD (Art. 7 + Art. 13) cookie
  * consent requirements in a Klaro-shaped UI without the Klaro bundle

@@ -1,7 +1,7 @@
 {
   "name": "@kira/backend",
   "version": "0.1.0",
-  "description": "Backend para Kira Studio - SaaS de gestión para salones de belleza",
+  "description": "Backend para Kira Room - SaaS de gestión para salones de belleza",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",

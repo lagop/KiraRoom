@@ -49,7 +49,7 @@
       "headline": "Las clientas se van y no vuelven",
       "validation": "Tienes clientas que vinieron 3 veces, dejaste de verlas hace 4 meses, y no sabes por qué. Mientras tanto, otra peluquería les manda un descuento.",
       "solution_title": "Rebooking automático y un programa de fidelización que funciona",
-      "solution_body": "KiraStudio detecta cuándo una clienta debería volver (según su cadencia real) y le manda un WhatsApp personalizado. Si además activas el programa de puntos, cada visita suma y puede canjear por un servicio.",
+      "solution_body": "KiraRoom detecta cuándo una clienta debería volver (según su cadencia real) y le manda un WhatsApp personalizado. Si además activas el programa de puntos, cada visita suma y puede canjear por un servicio.",
       "proof": "Los salones con rebooking activado recuperan al 25% de las clientas dormidas en 60 días.",
       "cta": "Activar rebooking"
     }
@@ -66,7 +66,7 @@
     "wizard_steps": [
       "Crea tu bot o vincula tu Facebook Page (2 min)",
       "Pega el token una sola vez",
-      "KiraStudio verifica la conexión",
+      "KiraRoom verifica la conexión",
       "Listo: respondes en piloto automático"
     ],
     "pricing_note": "Incluido en Pro y Empresa. En Esencial como add-on desde 19 €/mes.",
@@ -159,7 +159,7 @@
     "trust_line": "Usado por +500 salones en España · Soporte en español · Cumple RGPD"
   },
   "meta": {
-    "title": "KiraStudio — La plataforma todo-en-uno para salones en España",
+    "title": "KiraRoom — La plataforma todo-en-uno para salones en España",
     "description": "Agenda online 24/7, facturación Verifactu automática y recepcionista IA para WhatsApp, Instagram y Telegram. 14 días gratis."
   }
 }

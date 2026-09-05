@@ -1,4 +1,4 @@
-# Production Dockerfile for Kira Studio Frontend
+# Production Dockerfile for Kira Room Frontend
 FROM node:20-alpine AS builder
 
 # Install dependencies

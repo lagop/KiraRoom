@@ -1,4 +1,4 @@
-# KiraStudio — SaaS Platform for Beauty Salons
+# KiraRoom — SaaS Platform for Beauty Salons
 
 A multi-tenant SaaS for beauty salons, spas, and barbershops. Covers the
 full operator workflow (appointments, clients, inventory, billing) plus
@@ -39,7 +39,7 @@ for the platform-team runbook.
 ## Repository layout
 
 ```
-KiraStudio/
+KiraRoom/
 ├── packages/
 │   ├── backend/       # NestJS + Prisma + PostgreSQL
 │   ├── frontend/      # Next.js (App Router) for the customer dashboard
@@ -101,8 +101,8 @@ npm run dev
 
 ```bash
 # Build images
-docker build -t kirastudio/backend:latest packages/backend
-docker build -t kirastudio/frontend:latest packages/frontend
+docker build -t kiraroom/backend:latest packages/backend
+docker build -t kiraroom/frontend:latest packages/frontend
 
 # Apply migrations against the production DB
 DATABASE_URL=... npx prisma migrate deploy --schema=packages/backend/prisma/schema.prisma
@@ -164,4 +164,4 @@ Full env template: `packages/backend/.env.example`.
 
 ## License
 
-Proprietary. © Kira Studio.
+Proprietary. © Kira Room.

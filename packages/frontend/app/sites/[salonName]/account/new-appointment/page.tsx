@@ -154,7 +154,7 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
           description: 'Tu salón de belleza de confianza en el corazón de la ciudad.',
           address: 'Calle Principal 123, Local 4',
           phone: '+34 123 456 789',
-          email: 'info@kirastudio.com',
+          email: 'info@kiraroom.com',
           logo: '/api/placeholder/100/100',
         };
         

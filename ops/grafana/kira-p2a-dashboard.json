@@ -136,7 +136,7 @@
   "time": {"from": "now-6h", "to": "now"},
   "timepicker": {},
   "timezone": "browser",
-  "title": "Kira Studio — Plan v2 AI + Add-ons",
+  "title": "Kira Room — Plan v2 AI + Add-ons",
   "uid": "kira-p2a-receptionist-v2",
   "version": 1,
   "weekStart": ""

@@ -1,6 +1,6 @@
 # Operational runbook
 
-> Living document for the day-to-day operation of KiraStudio SaaS.
+> Living document for the day-to-day operation of KiraRoom SaaS.
 > Generated as part of the zero-budget launch roadmap (Sprint 1, Workstream 1.3).
 > This is the **only** doc ops should need during normal operation.
 
@@ -8,36 +8,36 @@
 
 | Item | Value |
 |---|---|
-| Production API | `https://api.kirastudio.com` |
-| Production dashboard | `https://app.kirastudio.com` |
+| Production API | `https://api.kiraroom.com` |
+| Production dashboard | `https://app.kiraroom.com` |
 | Database host | Internal Hetzner VPS, **NOT** exposed to internet |
 | Backup host | Hetzner Storage Box, `backup@backup-host:/backups/` |
 | WAL archive | Hetzner Storage Box, `backup@backup-host:/wal-archive/` |
 | Database backup retention | 30 days hot |
 | WAL archive retention | 30 days |
-| Sentry-compatible error tracking | GlitchTip self-hosted at `https://glitchtip.kirastudio.com` |
+| Sentry-compatible error tracking | GlitchTip self-hosted at `https://glitchtip.kiraroom.com` |
 | Status page | TBD (free tier: Instatus or BetterStack) |
 
 ## PagerDuty-equivalent (zero-budget)
 
 Until revenue justifies PagerDuty (€21/user/mo), use:
 
-1. **Uptime Kuma** at `https://kuma.kirastudio.com` with Telegram webhook
+1. **Uptime Kuma** at `https://kuma.kiraroom.com` with Telegram webhook
    alerts. The Telegram bot pings your phone within 30 seconds of a
    failed health probe.
 2. **Critical probes** (every 60s):
-   - `GET https://api.kirastudio.com/healthz` — API health
-   - `POST https://api.kirastudio.com/api/v1/auth/login` with test
+   - `GET https://api.kiraroom.com/healthz` — API health
+   - `POST https://api.kiraroom.com/api/v1/auth/login` with test
      credentials — auth + DB health
 3. **Warning probes** (every 5min):
-   - `GET https://app.kirastudio.com` — dashboard loads
-   - `GET https://api.kirastudio.com/api/v1/invoices` — fiscal dispatch reachable
+   - `GET https://app.kiraroom.com` — dashboard loads
+   - `GET https://api.kiraroom.com/api/v1/invoices` — fiscal dispatch reachable
 
 ## Operational runbooks
 
 ### Failure: API down (5xx response on healthz)
 
-1. SSH into the API host (`ssh api.kirastudio.com`).
+1. SSH into the API host (`ssh api.kiraroom.com`).
 2. `systemctl status kira-api` — is the service running?
 3. If not, `journalctl -u kira-api --since "5 minutes ago" -n 100` for the
    crash reason.
@@ -121,15 +121,15 @@ This is the **worst-case scenario**. Treat as SEV1.
    `ssh-copy-id backup@<BACKUP_HOST>`.
 3. Second most common: disk full on the backup host. SSH in and prune
    `find /backups -mtime +30 -delete`.
-4. Verify by running the script manually: `sudo -u kira /opt/kirastudio/scripts/backup.sh`.
+4. Verify by running the script manually: `sudo -u kira /opt/kiraroom/scripts/backup.sh`.
 
 ### Failure: TLS certificate expires
 
-1. Check expiry: `echo | openssl s_client -connect api.kirastudio.com:443 -servername api.kirastudio.com 2>/dev/null | openssl x509 -noout -enddate`.
+1. Check expiry: `echo | openssl s_client -connect api.kiraroom.com:443 -servername api.kiraroom.com 2>/dev/null | openssl x509 -noout -enddate`.
 2. Renew via Let's Encrypt (certbot) or your CA. Auto-renewal via
    certbot.timer should already be configured.
 3. Reload the reverse proxy: `systemctl reload nginx`.
-4. Verify: `curl -I https://api.kirastudio.com/healthz`.
+4. Verify: `curl -I https://api.kiraroom.com/healthz`.
 
 ## Quarterly restore drill
 

@@ -8,7 +8,7 @@
 
 ## Overview
 
-This document outlines the architecture and implementation plan for a comprehensive notification system in KiraStudio. The system will support two main contexts:
+This document outlines the architecture and implementation plan for a comprehensive notification system in KiraRoom. The system will support two main contexts:
 
 1. **Salon Site (Client-facing)**: Notifications for clients about appointments, promotions, and news
 2. **Dashboard (Admin/Staff)**: Notifications for professionals and admins about business events
@@ -729,11 +729,11 @@ Add to `packages/backend/.env`:
 EMAIL_PROVIDER=resend  # or 'sendgrid'
 RESEND_API_KEY=re_xxxxxxxxxxxx
 SENDGRID_API_KEY=SG.xxxxxxxxxxxx
-EMAIL_FROM_ADDRESS=noreply@kirastudio.com
-EMAIL_FROM_NAME=KiraStudio
+EMAIL_FROM_ADDRESS=noreply@kiraroom.com
+EMAIL_FROM_NAME=KiraRoom
 
 # Public URL for email links
-PUBLIC_BASE_URL=https://kirastudio.com
+PUBLIC_BASE_URL=https://kiraroom.com
 ```
 
 #### Email Service Class Structure
@@ -791,8 +791,8 @@ export class EmailService {
 
   async send(options: EmailOptions): Promise<{ success: boolean; messageId?: string; error?: string }> {
     const from = {
-      email: this.configService.get('EMAIL_FROM_ADDRESS') || 'noreply@kirastudio.com',
-      name: this.configService.get('EMAIL_FROM_NAME') || 'KiraStudio',
+      email: this.configService.get('EMAIL_FROM_ADDRESS') || 'noreply@kiraroom.com',
+      name: this.configService.get('EMAIL_FROM_NAME') || 'KiraRoom',
     };
 
     try {
@@ -1229,19 +1229,19 @@ export class SmsService {
 
   // SMS Template Formats (character-limited, essential info only)
   private formatConfirmationSms(data: SmsAppointmentData): string {
-    return `KiraStudio: Appt confirmed for ${data.serviceName} on ${data.date} at ${data.time} with ${data.professionalName}. View: ${data.shortUrl}`;
+    return `KiraRoom: Appt confirmed for ${data.serviceName} on ${data.date} at ${data.time} with ${data.professionalName}. View: ${data.shortUrl}`;
   }
 
   private formatReminder24hSms(data: SmsReminderData): string {
-    return `KiraStudio Reminder: You have an appointment TOMORROW at ${data.time} for ${data.serviceName} with ${data.professionalName}. ${data.salonName}`;
+    return `KiraRoom Reminder: You have an appointment TOMORROW at ${data.time} for ${data.serviceName} with ${data.professionalName}. ${data.salonName}`;
   }
 
   private formatReminder1hSms(data: SmsReminderData): string {
-    return `KiraStudio: Your appointment is in 1 HOUR at ${data.time}. Please head to ${data.salonName} now. ${data.address}`;
+    return `KiraRoom: Your appointment is in 1 HOUR at ${data.time}. Please head to ${data.salonName} now. ${data.address}`;
   }
 
   private formatCancellationSms(data: SmsCancellationData): string {
-    return `KiraStudio: Your ${data.serviceName} appointment on ${data.date} at ${data.time} has been cancelled. Book again: ${data.shortUrl}`;
+    return `KiraRoom: Your ${data.serviceName} appointment on ${data.date} at ${data.time} has been cancelled. Book again: ${data.shortUrl}`;
   }
 }
 ```
@@ -2671,7 +2671,7 @@ export const DEFAULT_TEMPLATES = [
     titleTemplate: 'Appointment Booked',
     messageTemplate: 'Your {{serviceName}} appointment is booked for {{date}} at {{time}}',
     emailSubject: 'Appointment Confirmed - {{serviceName}}',
-    smsTemplate: 'KiraStudio: Appt booked for {{serviceName}} on {{date}} at {{time}}',
+    smsTemplate: 'KiraRoom: Appt booked for {{serviceName}} on {{date}} at {{time}}',
   },
   {
     type: 'appointment_reminder_24h',
@@ -2680,7 +2680,7 @@ export const DEFAULT_TEMPLATES = [
     titleTemplate: 'Appointment Tomorrow',
     messageTemplate: 'Your {{serviceName}} appointment is tomorrow at {{time}}',
     emailSubject: 'Reminder: Your appointment tomorrow at {{time}}',
-    smsTemplate: 'KiraStudio: Reminder - {{serviceName}} tomorrow at {{time}}',
+    smsTemplate: 'KiraRoom: Reminder - {{serviceName}} tomorrow at {{time}}',
   },
   {
     type: 'appointment_reminder_1h',
@@ -2689,7 +2689,7 @@ export const DEFAULT_TEMPLATES = [
     titleTemplate: 'Appointment Soon!',
     messageTemplate: 'Your {{serviceName}} appointment is in 1 hour',
     emailSubject: 'Your appointment is in 1 hour!',
-    smsTemplate: 'KiraStudio: {{serviceName}} in 1 hour at {{time}}',
+    smsTemplate: 'KiraRoom: {{serviceName}} in 1 hour at {{time}}',
   },
   {
     type: 'appointment_cancelled',
@@ -2698,7 +2698,7 @@ export const DEFAULT_TEMPLATES = [
     titleTemplate: 'Appointment Cancelled',
     messageTemplate: 'Your {{serviceName}} appointment has been cancelled',
     emailSubject: 'Appointment Cancelled - {{serviceName}}',
-    smsTemplate: 'KiraStudio: {{serviceName}} appt cancelled',
+    smsTemplate: 'KiraRoom: {{serviceName}} appt cancelled',
   },
 ];
 ```
@@ -3003,7 +3003,7 @@ These webhooks enable delivery status tracking (sent, delivered, failed) for ema
    curl -X POST http://localhost:3000/notifications/test-sms \
      -H "Content-Type: application/json" \
      -H "Authorization: Bearer YOUR_JWT_TOKEN" \
-     -d '{"to": "+34612345678", "message": "Test SMS from KiraStudio"}'
+     -d '{"to": "+34612345678", "message": "Test SMS from KiraRoom"}'
    ```
 
 3. **Verify phone number format**: Ensure phone numbers are in E.164 format (`+<country_code><number>`).

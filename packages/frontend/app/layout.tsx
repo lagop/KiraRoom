@@ -7,7 +7,7 @@ import { Providers } from './providers'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'KiraStudio - Beauty Salon Management',
+  title: 'KiraRoom - Beauty Salon Management',
   description: 'Professional beauty salon management platform with appointment booking, client management, and more.',
   keywords: 'beauty salon, appointment booking, salon management, beauty business',
 }

@@ -274,7 +274,7 @@ function renderMarkdown(body: Node, src: Source): string {
   const sourceRelative = src.tsx
     .replace(/^packages\//, "../")
     .replace(/^docs\//, "./");
-  out.push(`# ${src.h1} — KiraStudio`);
+  out.push(`# ${src.h1} — KiraRoom`);
   out.push("");
   out.push(
     `> ⚠️ **SOURCE OF TRUTH**: Este fichero **NO** se edita a mano. La versión canónica es la página React en \`${sourceRelative}\`. Si necesitas cambiar el texto, edita esa página y regenera este markdown con \`npx tsx scripts/legal-sync.ts\`.`,

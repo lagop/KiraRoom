@@ -1,4 +1,4 @@
-﻿# Planes de KiraStudio â€” Rev 3 (fuente Ãºnica de verdad)
+﻿# Planes de KiraRoom â€” Rev 3 (fuente Ãºnica de verdad)
 
 > Documento de referencia para **ingenierÃ­a, producto y marketing**. Si algo
 > entra en conflicto entre cÃ³digo, web de marketing y este documento, gana
