@@ -37,7 +37,7 @@ describe("XadesService (real PKCS#12 + xml-crypto)", () => {
     const bags = p12.getBags({ bagType: forge.pki.oids.certBag });
     const cert = bags[forge.pki.oids.certBag]?.[0]?.cert;
     expect(cert).toBeDefined();
-    expect(cert.subject.getField("CN")?.value).toBe("Kira Studio Test AEAT");
+    expect(cert.subject.getField("CN")?.value).toBe("Kira Room Test AEAT");
   });
 
   it("signs an XML document with a real XAdES-BES signature", () => {

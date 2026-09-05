@@ -5,7 +5,7 @@ const KEY = 'sk-ant-api03-e4oQoPxXViafxiD4mmFO_tgg3clTuVZKjBVmE-mB2yRQ5olqVZ_wtC
 
 const body = JSON.stringify({
   model: 'claude-haiku-4-5',
-  system: 'Eres el Recepcionista Virtual de Kira Studio Test, un asistente inteligente, amable y profesional.',
+  system: 'Eres el Recepcionista Virtual de Kira Room Test, un asistente inteligente, amable y profesional.',
   messages: [{ role: 'user', content: '¡Hola! ¿En qué puedo ayudarte hoy?\n\nUsuario: hola' }],
   max_tokens: 1500,
   temperature: 1,

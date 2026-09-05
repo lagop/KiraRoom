@@ -5,7 +5,7 @@
 | **Date** | 2026-09-03 |
 | **Method** | Simulated interview (no live customer available in the dev environment) |
 | **Interviewee persona** | **María**, 38, owner-manager of *Estudio Menta* (a 4-chair salon in Madrid) |
-| **Interviewer** | Product engineer (Kira Studio) |
+| **Interviewer** | Product engineer (Kira Room) |
 | **Status** | **DRAFT** — must be re-run with 5 real salon owners before sprint 12 starts |
 
 > **Important note:** this document is a single simulated response, **not a substitute for the 5 real interviews** the RFC recommends. The team should still run real interviews before committing tool priorities. This document seeds the discussion and gives a first-draft persona to react against.

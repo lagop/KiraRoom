@@ -141,7 +141,7 @@ export class FiscalRetryQueue {
         subject: `Factura ${invoice.series}${invoice.number} rechazada por AEAT`,
         html: `<p>Tu factura <strong>${invoice.series}${invoice.number}</strong> de ${invoice.tenant.name} fue rechazada tras ${FISCAL_RETRY_MAX_ATTEMPTS} intentos.</p>
 <p>Detalle: ${lastError ?? ""}</p>
-<p>Resolver desde el dashboard: <a href="https://app.kirastudio.com/dashboard/billing/invoices/${invoiceId}">abrir factura</a></p>`,
+<p>Resolver desde el dashboard: <a href="https://app.kiraroom.com/dashboard/billing/invoices/${invoiceId}">abrir factura</a></p>`,
       });
     } catch (err) {
       // Email is best-effort; keep the invoice marked permanent.

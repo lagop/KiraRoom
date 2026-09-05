@@ -1,4 +1,4 @@
-# Política de Privacidad — KiraStudio
+# Política de Privacidad — KiraRoom
 
 > ⚠️ **SOURCE OF TRUTH**: Este fichero **NO** se edita a mano. La versión canónica es la página React en [`packages/frontend/app/legal/privacy/page.tsx`](../packages/frontend/app/legal/privacy/page.tsx). Si necesitas cambiar el texto, edita esa página y regenera este markdown con `node scripts/legal-sync.ts` (TODO Sprint 2 — hasta entonces, sincroniza manualmente los dos ficheros tras cada cambio).
 
@@ -12,9 +12,9 @@ Esta política también está publicada en formato web en [`packages/frontend/ap
 
 ## 1. Responsable del tratamiento
 
-**KiraStudio SaaS** (en adelante, "KiraStudio"), con sede en España, es el responsable del tratamiento de los datos personales recabados a través de la plataforma `app.kirastudio.com`.
+**KiraRoom SaaS** (en adelante, "KiraRoom"), con sede en España, es el responsable del tratamiento de los datos personales recabados a través de la plataforma `app.kiraroom.com`.
 
-Para cualquier consulta relativa al tratamiento de datos, puede escribir a `privacy@kirastudio.com`.
+Para cualquier consulta relativa al tratamiento de datos, puede escribir a `privacy@kiraroom.com`.
 
 ## 2. Datos que recabamos
 
@@ -52,7 +52,7 @@ Sus datos pueden ser comunicados a:
 - **Holded, Sage Despachos, A3 (Wolters Kluwer), NCS** si el cliente activa la integración contable correspondiente.
 - **Resend** (transaccional de email) y **GlitchTip** (monitorización de errores) — ambos con servidores en la UE.
 
-KiraStudio no vende datos personales. No se realizan transferencias internacionales fuera del EEE.
+KiraRoom no vende datos personales. No se realizan transferencias internacionales fuera del EEE.
 
 ## 6. Conservación de los datos
 
@@ -73,7 +73,7 @@ Como titular de los datos, usted puede ejercer en cualquier momento:
 - **Oposición** (Art. 21): oposición al tratamiento basado en interés legítimo.
 - **Reclamación ante la AEPD** (Art. 77): si considera que hemos vulnerado sus derechos.
 
-Para ejercer estos derechos: `privacy@kirastudio.com`. Responderemos en un plazo máximo de **30 días**.
+Para ejercer estos derechos: `privacy@kiraroom.com`. Responderemos en un plazo máximo de **30 días**.
 
 ## 8. Cookies
 

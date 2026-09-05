@@ -2,7 +2,7 @@ import { defineConfig } from "astro/config";
 import sitemap from "@astrojs/sitemap";
 
 /**
- * KiraStudio marketing site — Astro config.
+ * KiraRoom marketing site — Astro config.
  *
  * Output: `static` (zero JS by default, all pages pre-rendered to
  * HTML at build time). Cloudflare Pages serves the resulting
@@ -19,7 +19,7 @@ import sitemap from "@astrojs/sitemap";
  */
 export default defineConfig({
   output: "static",
-  site: "https://marketing.kirastudio.com",
+  site: "https://marketing.kiraroom.com",
   trailingSlash: "never",
   compressHTML: true,
   build: {

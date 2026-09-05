@@ -1171,7 +1171,7 @@ export class AppointmentsService {
         ? `${appointment.professional.firstName} ${appointment.professional.lastName}`.trim()
         : "Profesional";
       const serviceName = appointment.service?.name || "Servicio";
-      const salonName = appointment.tenant?.name || "KiraStudio";
+      const salonName = appointment.tenant?.name || "KiraRoom";
 
       // Check client notification preferences before sending
       const canSendEmail =
@@ -1539,7 +1539,7 @@ export class AppointmentsService {
         ? `${appointment.professional.firstName} ${appointment.professional.lastName}`.trim()
         : "Profesional";
       const serviceName = appointment.service?.name || "Servicio";
-      const salonName = appointment.tenant?.name || "KiraStudio";
+      const salonName = appointment.tenant?.name || "KiraRoom";
 
       // Check client notification preferences before sending
       const canSendEmail =
@@ -1784,7 +1784,7 @@ export class AppointmentsService {
         ? `${appointment.professional.firstName} ${appointment.professional.lastName}`.trim()
         : "Profesional";
       const serviceName = appointment.service?.name || "Servicio";
-      const salonName = appointment.tenant?.name || "KiraStudio";
+      const salonName = appointment.tenant?.name || "KiraRoom";
 
       // Check client notification preferences before sending
       const canSendEmail =
@@ -2110,7 +2110,7 @@ export class AppointmentsService {
         ? `${appointment.professional.firstName} ${appointment.professional.lastName}`.trim()
         : "Profesional";
       const serviceName = appointment.service?.name || "Servicio";
-      const salonName = appointment.tenant?.name || "KiraStudio";
+      const salonName = appointment.tenant?.name || "KiraRoom";
 
       // Check client notification preferences before sending
       const canSendEmail =

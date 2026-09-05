@@ -1,7 +1,7 @@
 /**
  * HTML template for the AEAT-style invoice PDF.
  *
- * Original layout for KiraStudio. Renders an A4 page with the tenant
+ * Original layout for KiraRoom. Renders an A4 page with the tenant
  * logo top-left, fiscal header, lines table, tax breakdown, totals
  * block, and a QR code at the bottom-right that links to the
  * Verifactu verifier.
@@ -221,7 +221,7 @@ export function buildInvoiceHtml(data: InvoiceTemplateData): string {
   <footer>
     <div class="fiscal">
       ${data.invoice.fiscalHash ? `<div>Huella SHA-256: <code>${escapeHtml(data.invoice.fiscalHash)}</code></div>` : ""}
-      <div style="margin-top:6px">Documento emitido por KiraStudio SaaS.</div>
+      <div style="margin-top:6px">Documento emitido por KiraRoom SaaS.</div>
     </div>
     <div class="qr-wrap">${qrImg}</div>
   </footer>

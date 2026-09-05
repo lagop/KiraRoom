@@ -1,8 +1,8 @@
-# KiraStudio SaaS Development Continuation Plan
+# KiraRoom SaaS Development Continuation Plan
 
 **Document Version:** 1.0  
 **Created:** January 5, 2026  
-**Project:** KiraStudio Beauty Salon Management Platform  
+**Project:** KiraRoom Beauty Salon Management Platform  
 **Architecture:** NestJS + Next.js + Prisma + PostgreSQL + Docker  
 
 ---
@@ -11,7 +11,7 @@
 
 ### Current State Assessment
 
-KiraStudio has achieved **70% completion** of its core infrastructure with a solid foundation already in place:
+KiraRoom has achieved **70% completion** of its core infrastructure with a solid foundation already in place:
 
 **✅ Completed Components:**
 - **Frontend**: Fully developed Next.js/React application with Vite, production-ready UI components
@@ -63,7 +63,7 @@ KiraStudio has achieved **70% completion** of its core infrastructure with a sol
 **Technical Dependencies:**
 ```bash
 # Database connection string
-DATABASE_URL="postgresql://kirastudio:kirastudio123@localhost:5432/kirastudio"
+DATABASE_URL="postgresql://kiraroom:kiraroom123@localhost:5432/kiraroom"
 
 # Required environment variables
 PORT=3001
@@ -470,9 +470,9 @@ services:
   postgres:
     image: postgres:15-alpine
     environment:
-      POSTGRES_DB: kirastudio
-      POSTGRES_USER: kirastudio
-      POSTGRES_PASSWORD: kirastudio123
+      POSTGRES_DB: kiraroom
+      POSTGRES_USER: kiraroom
+      POSTGRES_PASSWORD: kiraroom123
     ports:
       - "5432:5432"
   

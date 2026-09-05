@@ -18,7 +18,7 @@ import { useToast } from "@/components/ui/use-toast";
 
 function buildEmbedSnippet(token: string, frontendUrl?: string) {
   const base = (frontendUrl ||
-    (typeof window !== "undefined" ? window.location.origin : "https://app.kirastudio.app")
+    (typeof window !== "undefined" ? window.location.origin : "https://app.kiraroom.app")
   ).replace(/\/$/, "");
   const url = `${base}/embed/${token}`;
   return `<iframe src="${url}" width="100%" height="640" style="border:0;border-radius:12px" loading="lazy"></iframe>`;

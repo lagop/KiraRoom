@@ -9,7 +9,7 @@ This runbook documents the **platform-admin** surface (a.k.a. "KiraSaaS dashboar
 
 ## 1. Login
 
-- URL: **`/saas/login`** (e.g. `https://app.kira-studio.example.com/saas/login`)
+- URL: **`/saas/login`** (e.g. `https://app.kira-room.example.com/saas/login`)
 - Default credentials (created by `prisma db:seed:saas`):
   - `saasadmin@example.com` / `YourSecurePassword123!`
   - Override at boot via `SAAS_OWNER_EMAIL` / `SAAS_OWNER_PASSWORD`. The e2e fixture reads from these env vars first (`e2e/fixtures/auth.ts`).
@@ -192,72 +192,72 @@ If the response is `PrismaClientKnownRequestError: relation "audit_logs" does no
 
 ## Facturas rechazadas por AEAT (Verifactu / TicketBAI)
 
-Cuando un tenant opera en producción, las facturas pueden fallar en el endpoint fiscal por varias razones. Esta sección documenta el diagnóstico y la recuperación.
+Cuando un tenant opera en producciï¿½n, las facturas pueden fallar en el endpoint fiscal por varias razones. Esta secciï¿½n documenta el diagnï¿½stico y la recuperaciï¿½n.
 
-### Síntomas típicos
+### Sï¿½ntomas tï¿½picos
 
 - El owner recibe un email con subject Factura {numero} rechazada por AEAT.
 - En el dashboard de facturas, el campo iscalStatus aparece como error o ejected en lugar de ccepted.
 - El iscalRetryCount se acerca a 3 y luego se queda en 3.
 
-### Diagnóstico paso a paso
+### Diagnï¿½stico paso a paso
 
-1. **Lee el iscalError** de la factura rechazada. Los patrones más comunes:
-   - AEAT 400 … ? problema de esquema (NIF mal formado, falta campo obligatorio).
-   - AEAT 5xx … ? transitorio (downstream caído), ya reintentado automáticamente.
-   - AEAT 422 … ? factura duplicada (mismo NumSerieFactura que una previa).
-   - PKCS#12 MAC could not be verified ? contraseña del certificado mal escrita, o certificado expirado.
-   - No active fiscal certificate ? el tenant no ha subido .p12 aún.
+1. **Lee el iscalError** de la factura rechazada. Los patrones mï¿½s comunes:
+   - AEAT 400 ï¿½ ? problema de esquema (NIF mal formado, falta campo obligatorio).
+   - AEAT 5xx ï¿½ ? transitorio (downstream caï¿½do), ya reintentado automï¿½ticamente.
+   - AEAT 422 ï¿½ ? factura duplicada (mismo NumSerieFactura que una previa).
+   - PKCS#12 MAC could not be verified ? contraseï¿½a del certificado mal escrita, o certificado expirado.
+   - No active fiscal certificate ? el tenant no ha subido .p12 aï¿½n.
 
 2. **Verifica el certificado** en /dashboard/settings/fiscal:
    - 
-otAfter debe ser > hoy. Si está expirado, pide al tenant que suba uno nuevo vía POST /api/v1/invoices/certificates con el pkcs12Base64 del nuevo .p12.
-   - El passphrase debe coincidir exactamente. Encriptamos ambos lados con EncryptionService así que un error de tipo solo es detectable intentando descifrar.
+otAfter debe ser > hoy. Si estï¿½ expirado, pide al tenant que suba uno nuevo vï¿½a POST /api/v1/invoices/certificates con el pkcs12Base64 del nuevo .p12.
+   - El passphrase debe coincidir exactamente. Encriptamos ambos lados con EncryptionService asï¿½ que un error de tipo solo es detectable intentando descifrar.
 
 3. **Verifica el NIF**:
-   - Tenant.taxId debe ser un NIF/CIF/NIE válido (regex en 
+   - Tenant.taxId debe ser un NIF/CIF/NIE vï¿½lido (regex en 
 if.validator.ts).
    - El campo iscalMode debe ser erifactu o 	icketbai (no 
 one).
 
 4. **Comprueba el chain**:
-   - FiscalChainState.lastHash no debe estar corrupto. Si lo está, ejecuta manualmente:
+   - FiscalChainState.lastHash no debe estar corrupto. Si lo estï¿½, ejecuta manualmente:
      `	s
      await prisma.fiscalChainState.delete({ where: { tenantId_fiscalMode: { tenantId, fiscalMode } } });
      `
-     El próximo envío empezará una cadena nueva — AEAT aceptará la factura porque no es duplicada, pero las estadísticas de correlación se pierden.
+     El prï¿½ximo envï¿½o empezarï¿½ una cadena nueva ï¿½ AEAT aceptarï¿½ la factura porque no es duplicada, pero las estadï¿½sticas de correlaciï¿½n se pierden.
 
-### Re-envío manual
+### Re-envï¿½o manual
 
-Si la factura se quedó en iscalStatus='rejected' (4xx persistente) o iscalStatus='error' (5xx que agotó reintentos), re-envíala manualmente:
+Si la factura se quedï¿½ en iscalStatus='rejected' (4xx persistente) o iscalStatus='error' (5xx que agotï¿½ reintentos), re-envï¿½ala manualmente:
 
 `ash
 curl -X POST https://api.example.com/api/v1/invoices/<invoiceId>/resend-fiscal \
   -H "Authorization: Bearer <tenant-jwt>"
 `
 
-Esto rebotea el FiscalService.dispatchInvoice con el mismo hash chain. Si el certificado está expirado o el NIF es inválido, este endpoint también fallará — corrige la causa raíz primero.
+Esto rebotea el FiscalService.dispatchInvoice con el mismo hash chain. Si el certificado estï¿½ expirado o el NIF es invï¿½lido, este endpoint tambiï¿½n fallarï¿½ ï¿½ corrige la causa raï¿½z primero.
 
 ### Rollback al modo sin fiscal
 
-Si el tenant quiere dejar de enviar a AEAT temporalmente (ej. certificado en proceso de renovación):
+Si el tenant quiere dejar de enviar a AEAT temporalmente (ej. certificado en proceso de renovaciï¿½n):
 
 1. PATCH /invoices/settings/fiscal con iscalMode: 'none'.
-2. Las facturas existentes siguen emitidas con iscalStatus='accepted' o ejected'. Las facturas futuras tendrán iscalStatus='not_required'.
-3. El hash chain queda pausado. Cuando reactives el modo, las facturas nuevas encadenan desde el último lastHash conocido.
+2. Las facturas existentes siguen emitidas con iscalStatus='accepted' o ejected'. Las facturas futuras tendrï¿½n iscalStatus='not_required'.
+3. El hash chain queda pausado. Cuando reactives el modo, las facturas nuevas encadenan desde el ï¿½ltimo lastHash conocido.
 
-### Cuándo contactar AEAT
+### Cuï¿½ndo contactar AEAT
 
-Errores persistentes AEAT 400 ... Invalid NIF o Invalid schema después de regenerar el certificado y verificar el NIF con alidateNif suelen requerir un ticket en el portal de pruebas de AEAT. Recopila:
+Errores persistentes AEAT 400 ... Invalid NIF o Invalid schema despuï¿½s de regenerar el certificado y verificar el NIF con alidateNif suelen requerir un ticket en el portal de pruebas de AEAT. Recopila:
 - Invoice.fiscalXml (XML firmado enviado)
 - Invoice.fiscalReference (CSV devuelto, si lo hay)
 - Invoice.fiscalError (mensaje completo)
-- Invoice.fiscalSubmittedAt (timestamp del último intento)
+- Invoice.fiscalSubmittedAt (timestamp del ï¿½ltimo intento)
 - Tenant 	axId + 	axIdType
 
-AEAT responde en 24-72h hábiles. Mientras tanto, mantén la factura en iscalStatus='error'; no la reenvíes.
+AEAT responde en 24-72h hï¿½biles. Mientras tanto, mantï¿½n la factura en iscalStatus='error'; no la reenvï¿½es.
 
-### Diagnóstico en staging
+### Diagnï¿½stico en staging
 
 Para reproducir el caso de un cliente sin necesidad de sandbox AEAT, configura en CI:
 
@@ -267,7 +267,7 @@ export AEAT_VERIFACTU_ENDPOINT=https://prewww1.aeat.es/wlpl/inwinvoc/ws.Suminist
 export NODE_ENV=production      # activa HMAC secret enforcement
 `
 
-El e2e/07-fiscal-happy-path.spec.ts corre ambos modos y valida la cadena completa (incluyendo el hash HuellaAnterior propagado al segundo envío).
+El e2e/07-fiscal-happy-path.spec.ts corre ambos modos y valida la cadena completa (incluyendo el hash HuellaAnterior propagado al segundo envï¿½o).
 
 
 ## Cutover to AEAT sandbox (P2A Phase 1)
@@ -277,7 +277,7 @@ End-to-end procedure to switch from FISCAL_E2E_MODE=stub to the AEAT pre-product
 ### Pre-requisitos
 
 - AEAT pre-prod account. Register at prewww2.aeat.es with:
-  - The Kira software certificate (.p12) — one for the SaaS instance.
+  - The Kira software certificate (.p12) ï¿½ one for the SaaS instance.
   - Issuer NIF for the SaaS (SaaS NIF emisor).
 - The first tenant's PKCS#12 already uploaded via /api/v1/invoices/certificates.
 - The first tenant's NIF set in Tenant.taxId (SaaS admin endpoint or PATCH /tenants/:id).
@@ -307,7 +307,7 @@ End-to-end procedure to switch from FISCAL_E2E_MODE=stub to the AEAT pre-product
    cd e2e
    npx playwright test 07-fiscal-happy-path.spec.ts
    `
-   The spec was updated in the production-readiness sprint to assert iscalStatus='accepted' for both emission and anulación.
+   The spec was updated in the production-readiness sprint to assert iscalStatus='accepted' for both emission and anulaciï¿½n.
 
 5. **Document the roundtrip in udit_logs:** every dispatch is logged with the response. Confirm at least one entry per regime:
    `sql
@@ -323,12 +323,12 @@ End-to-end procedure to switch from FISCAL_E2E_MODE=stub to the AEAT pre-product
 
 ### Pitfalls
 
-- **Clock skew** — XAdES rejects signings where 
+- **Clock skew** ï¿½ XAdES rejects signings where 
 otAfter is in the past or > 30 days from now. The CI p12 is valid for 365 days; in production, rotate certificates = 30 days before expiry.
-- **Endpoint URL with trailing slash** — AEAT rejects the Suministro action with 401 if the path has a trailing slash. Use the exact URLs above.
-- **Time zone** — FiscalChainState.lastSubmittedAt is stored in UTC; AEAT expects FechaExpedicionFactura in Europe/Madrid local time. The dispatcher already does this conversion but if you see "Fecha futura" errors, check the server TZ.
-- **HTTPS only** — AEAT will not accept http:// URLs even for testing. The values above are HTTPS.
-- **CORS / firewall** — the staging environment must allow outbound 443 to *.agenciatributaria.gob.es and *.batuz.eus.
+- **Endpoint URL with trailing slash** ï¿½ AEAT rejects the Suministro action with 401 if the path has a trailing slash. Use the exact URLs above.
+- **Time zone** ï¿½ FiscalChainState.lastSubmittedAt is stored in UTC; AEAT expects FechaExpedicionFactura in Europe/Madrid local time. The dispatcher already does this conversion but if you see "Fecha futura" errors, check the server TZ.
+- **HTTPS only** ï¿½ AEAT will not accept http:// URLs even for testing. The values above are HTTPS.
+- **CORS / firewall** ï¿½ the staging environment must allow outbound 443 to *.agenciatributaria.gob.es and *.batuz.eus.
 
 ### Rollback
 

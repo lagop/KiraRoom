@@ -52,7 +52,7 @@ export default function LandingPage() {
       <header className="border-b border-gray-100">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
           <Link href="/" className="text-lg font-semibold">
-            KiraStudio
+            KiraRoom
           </Link>
           <nav className="flex items-center gap-3">
             <Link
@@ -227,7 +227,7 @@ export default function LandingPage() {
       <footer className="border-t border-gray-100">
         <div className="mx-auto max-w-6xl px-6 py-8 text-sm text-gray-500">
           <p>
-            &copy; {new Date().getFullYear()} KiraStudio. {t("landing.footer")}
+            &copy; {new Date().getFullYear()} KiraRoom. {t("landing.footer")}
           </p>
         </div>
       </footer>

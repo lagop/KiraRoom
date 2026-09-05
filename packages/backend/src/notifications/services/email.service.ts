@@ -341,7 +341,7 @@ export class EmailService {
         (data.expiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000),
       ),
     );
-    const subject = `Tu invitación a KiraStudio para ${data.tenantName}`;
+    const subject = `Tu invitación a KiraRoom para ${data.tenantName}`;
 
     const html = `
 <!DOCTYPE html>
@@ -357,14 +357,14 @@ export class EmailService {
         <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:12px;padding:32px;">
           <tr>
             <td>
-              <div style="font-size:24px;font-weight:700;color:#0f172a;margin-bottom:8px;">KiraStudio</div>
+              <div style="font-size:24px;font-weight:700;color:#0f172a;margin-bottom:8px;">KiraRoom</div>
               <p style="font-size:14px;color:#64748b;margin:0 0 24px 0;">Invitación para gestionar tu salón</p>
 
               <p style="font-size:16px;line-height:1.6;margin:0 0 16px 0;">${greeting}</p>
 
               <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
                 Has sido invitado/a a configurar <strong>${this.escapeHtml(data.tenantName)}</strong>
-                en KiraStudio, la plataforma SaaS de gestión para salones de belleza en España.
+                en KiraRoom, la plataforma SaaS de gestión para salones de belleza en España.
               </p>
 
               <p style="font-size:15px;line-height:1.6;margin:0 0 24px 0;">
@@ -401,7 +401,7 @@ export class EmailService {
           </tr>
         </table>
         <p style="font-size:11px;color:#94a3b8;margin:16px 0 0 0;">
-          © ${new Date().getFullYear()} KiraStudio SaaS · España
+          © ${new Date().getFullYear()} KiraRoom SaaS · España
         </p>
       </td>
     </tr>
@@ -412,7 +412,7 @@ export class EmailService {
     const text = [
       greeting,
       ``,
-      `Has sido invitado/a a configurar ${data.tenantName} en KiraStudio.`,
+      `Has sido invitado/a a configurar ${data.tenantName} en KiraRoom.`,
       `Para crear tu cuenta y empezar tu prueba gratuita de 14 días:`,
       data.inviteLink,
       ``,
@@ -462,8 +462,8 @@ export class EmailService {
 
     const subject =
       data.daysLeft === 1
-        ? `Mañana termina tu prueba gratuita en KiraStudio`
-        : `Tu prueba gratuita en KiraStudio termina en ${data.daysLeft} días`;
+        ? `Mañana termina tu prueba gratuita en KiraRoom`
+        : `Tu prueba gratuita en KiraRoom termina en ${data.daysLeft} días`;
 
     const formattedDate = data.trialEnd.toLocaleDateString("es-ES", {
       day: "2-digit",
@@ -480,13 +480,13 @@ export class EmailService {
     <tr><td align="center">
       <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:12px;padding:32px;">
         <tr><td>
-          <div style="font-size:24px;font-weight:700;color:#0f172a;margin-bottom:8px;">KiraStudio</div>
+          <div style="font-size:24px;font-weight:700;color:#0f172a;margin-bottom:8px;">KiraRoom</div>
           <p style="font-size:14px;color:#64748b;margin:0 0 24px 0;">Tu prueba gratuita está a punto de terminar</p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
             Hola,
           </p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
-            Tu prueba gratuita de <strong>14 días</strong> de KiraStudio para
+            Tu prueba gratuita de <strong>14 días</strong> de KiraRoom para
             <strong>${this.escapeHtml(data.tenantName)}</strong> termina el
             <strong>${formattedDate}</strong>.
             ${data.daysLeft === 1
@@ -518,7 +518,7 @@ export class EmailService {
 </html>`.trim();
 
     const text = [
-      `Tu prueba gratuita de KiraStudio termina ${data.daysLeft === 1 ? "mañana" : `en ${data.daysLeft} días`}.`,
+      `Tu prueba gratuita de KiraRoom termina ${data.daysLeft === 1 ? "mañana" : `en ${data.daysLeft} días`}.`,
       `Fecha de fin: ${formattedDate}.`,
       ``,
       `Pasado ese plazo tu cuenta pasará a modo lectura.`,
@@ -552,7 +552,7 @@ export class EmailService {
       return { success: false, skipped: true, error: "email_bounced" };
     }
 
-    const subject = `No hemos podido cobrar tu suscripción de KiraStudio`;
+    const subject = `No hemos podido cobrar tu suscripción de KiraRoom`;
     const formattedAmount = new Intl.NumberFormat("es-ES", {
       style: "currency",
       currency: data.currency,
@@ -581,7 +581,7 @@ export class EmailService {
           </p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
             El cargo de <strong>${formattedAmount}</strong> correspondiente a tu
-            suscripción de KiraStudio para <strong>${this.escapeHtml(data.tenantName)}</strong>
+            suscripción de KiraRoom para <strong>${this.escapeHtml(data.tenantName)}</strong>
             no se ha podido procesar (tarjeta caducada, fondos insuficientes, etc.).
           </p>
           ${formattedRetry
@@ -614,7 +614,7 @@ export class EmailService {
 </html>`.trim();
 
     const text = [
-      `No hemos podido cobrar tu suscripción de KiraStudio.`,
+      `No hemos podido cobrar tu suscripción de KiraRoom.`,
       `Importe: ${formattedAmount}.`,
       formattedRetry
         ? `Stripe volverá a intentarlo el ${formattedRetry}.`
@@ -659,7 +659,7 @@ export class EmailService {
     <tr><td align="center">
       <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:12px;padding:32px;">
         <tr><td>
-          <div style="font-size:24px;font-weight:700;color:#0f172a;margin-bottom:8px;">KiraStudio</div>
+          <div style="font-size:24px;font-weight:700;color:#0f172a;margin-bottom:8px;">KiraRoom</div>
           <p style="font-size:14px;color:#64748b;margin:0 0 24px 0;">Recibido · te responderemos en menos de 24h</p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">Hola,</p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
@@ -714,7 +714,7 @@ export class EmailService {
       return { success: false, skipped: true, error: "email_bounced" };
     }
 
-    const subject = `Hemos suspendido tu cuenta de KiraStudio`;
+    const subject = `Hemos suspendido tu cuenta de KiraRoom`;
     const formattedDate = data.gracePeriodEndsAt.toLocaleDateString("es-ES", {
       day: "2-digit",
       month: "long",
@@ -736,7 +736,7 @@ export class EmailService {
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
             Después de los avisos enviados desde el <strong>${formattedDate}</strong>,
             no hemos podido procesar el cargo de tu suscripción de
-            KiraStudio para <strong>${this.escapeHtml(data.tenantName)}</strong>.
+            KiraRoom para <strong>${this.escapeHtml(data.tenantName)}</strong>.
             Tu cuenta ha pasado a modo lectura.
           </p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
@@ -769,7 +769,7 @@ export class EmailService {
 </html>`.trim();
 
     const text = [
-      `Hemos suspendido tu cuenta de KiraStudio.`,
+      `Hemos suspendido tu cuenta de KiraRoom.`,
       ``,
       `No pudimos procesar el cargo de tu suscripción tras los avisos`,
       `enviados desde el ${formattedDate}. Tu cuenta ha pasado a modo lectura:`,
@@ -814,7 +814,7 @@ export class EmailService {
 
     const firstName = data.ownerName?.split(" ")[0] ?? "";
     const greeting = firstName ? `Hola ${firstName},` : "Hola,";
-    const subject = `Multicanal ya esta activo en tu cuenta de KiraStudio`;
+    const subject = `Multicanal ya esta activo en tu cuenta de KiraRoom`;
 
     const html = `
       <p>${greeting}</p>
@@ -907,11 +907,11 @@ export class EmailService {
   ): Record<string, string> | undefined {
     const out: Record<string, string> = { ...(options.headers ?? {}) };
     if (options.listUnsubscribe) {
-      const domain = from.split("@")[1] ?? "kirastudio.com";
+      const domain = from.split("@")[1] ?? "kiraroom.com";
       const baseUrl =
         this.configService.get<string>("APP_BASE_URL") ||
         this.configService.get<string>("FRONTEND_URL") ||
-        "https://app.kirastudio.com";
+        "https://app.kiraroom.com";
       const mailto = `mailto:unsubscribe@${domain}`;
       const http = `${baseUrl.replace(/\/+$/, "")}/dashboard/settings/notifications`;
       out["List-Unsubscribe"] = `<${mailto}>, <${http}>`;

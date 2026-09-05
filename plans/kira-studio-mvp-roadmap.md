@@ -1,4 +1,4 @@
-# ⚠️ DEPRECATED: KiraStudio SaaS MVP Development Roadmap
+# ⚠️ DEPRECATED: KiraRoom SaaS MVP Development Roadmap
 
 > **This document is deprecated.**
 > **Current Plan:** [`CONSOLIDATED-PLAN.md`](CONSOLIDATED-PLAN.md) is the single source of truth.
@@ -9,7 +9,7 @@
 
 ## Executive Summary
 
-**Project**: KiraStudio Beauty Salon Management Platform
+**Project**: KiraRoom Beauty Salon Management Platform
 **Current Status**: Core appointment booking functionality completed, backend API operational
 **Timeline**: ASAP (Prioritized 2-4 week delivery)
 **Architecture**: NestJS + React + PostgreSQL + Docker

@@ -5,7 +5,7 @@
  * the matrix by accident this test fails immediately.
  *
  * Verified against the spec table in /home/user/.kilo/plans/
- * kira-studio-v2-plans.md (the canonical "v2 plans" document).
+ * kira-room-v2-plans.md (the canonical "v2 plans" document).
  */
 describe('P2A-receptionist-v2: PLAN_MATRIX', () => {
   let subs: SubscriptionsService;

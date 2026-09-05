@@ -6,7 +6,7 @@ const client = new Anthropic({ apiKey: KEY });
 
 // Copy the system prompt from buildSystemPrompt.
 // Simplified — just to test if the prompt length matters.
-const systemPrompt = `Eres el Recepcionista Virtual de Kira Studio Test. Tu nombre es Kira. Test placeholder prompt for length testing purposes only.`;
+const systemPrompt = `Eres el Recepcionista Virtual de Kira Room Test. Tu nombre es Kira. Test placeholder prompt for length testing purposes only.`;
 
 (async () => {
   // Test 1: with tools
@@ -55,7 +55,7 @@ const systemPrompt = `Eres el Recepcionista Virtual de Kira Studio Test. Tu nomb
       system: systemPrompt,
       max_tokens: 1500,
       temperature: 1,
-      messages: [{ role: 'user', content: '¡Hola! Bienvenido/a a Kira Studio Test. ¿En qué puedo ayudarte hoy? ✨' }],
+      messages: [{ role: 'user', content: '¡Hola! Bienvenido/a a Kira Room Test. ¿En qué puedo ayudarte hoy? ✨' }],
       tools: [
         { name: 'list_services', description: 'List services.', input_schema: { type: 'object', properties: { audience: { type: 'string', enum: ['male', 'female', 'child'] } } } },
       ],

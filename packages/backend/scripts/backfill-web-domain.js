@@ -40,7 +40,7 @@ const SQL = `
   const c = new Client({
     connectionString:
       process.env.DATABASE_URL ||
-      'postgresql://kirastudio:kirastudio123@localhost:5432/kirastudio?schema=public',
+      'postgresql://kiraroom:kiraroom123@localhost:5432/kiraroom?schema=public',
   });
   await c.connect();
 

@@ -13,7 +13,7 @@
 | **Clasificación de Intención** | ✅ Básico | Regex/keywords, sin confianza (confidence) |
 | **Flujo de Reserva** | ❌ No implementado | No hay guía paso a paso en prompts |
 | **Escalación a Humano** | ❌ No implementado | No hay prompt de derivación |
-| **Nombre Asistente** | ❌ No implementado | Solo "KiraStudio" genérico |
+| **Nombre Asistente** | ❌ No implementado | Solo "KiraRoom" genérico |
 | **Multiidioma** | ⚠️ Parcial | OpenAI en inglés, otros en español |
 
 ### Sistema Propuesto (Nuevo)

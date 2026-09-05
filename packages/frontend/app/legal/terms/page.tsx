@@ -10,7 +10,7 @@ export default function TermsPage() {
 
       <Section title="1. Aceptación">
         <p>
-          Al crear una cuenta o utilizar el servicio SaaS KiraStudio,
+          Al crear una cuenta o utilizar el servicio SaaS KiraRoom,
           acepta estos Términos del Servicio. Si no está de acuerdo, no
           use el servicio.
         </p>
@@ -18,7 +18,7 @@ export default function TermsPage() {
 
       <Section title="2. Descripción del servicio">
         <p>
-          KiraStudio es una plataforma SaaS de gestión de citas,
+          KiraRoom es una plataforma SaaS de gestión de citas,
           profesionales, clientes y facturación para negocios de belleza y
           bienestar en España. Incluye:
         </p>
@@ -57,8 +57,8 @@ export default function TermsPage() {
         </ul>
       </Section>
 
-      <Section title="5. Obligaciones de KiraStudio">
-        <p>KiraStudio se compromete a:</p>
+      <Section title="5. Obligaciones de KiraRoom">
+        <p>KiraRoom se compromete a:</p>
         <ul>
           <li>Mantener el servicio disponible al menos el 99% del tiempo medido mensualmente, salvo mantenimientos programados (con aviso de 48h).</li>
           <li>Realizar backups diarios cifrados con posibilidad de restauración puntual (WAL archiving).</li>
@@ -70,7 +70,7 @@ export default function TermsPage() {
 
       <Section title="6. Limitación de responsabilidad">
         <p>
-          KiraStudio no será responsable de:
+          KiraRoom no será responsable de:
         </p>
         <ul>
           <li>Daños indirectos o lucro cesante derivados de la indisponibilidad del servicio.</li>
@@ -79,7 +79,7 @@ export default function TermsPage() {
           <li>Cumplimiento de obligaciones legales específicas del sector del cliente que no estén expresamente incluidas en el servicio.</li>
         </ul>
         <p>
-          La responsabilidad agregada de KiraStudio queda limitada al
+          La responsabilidad agregada de KiraRoom queda limitada al
           importe de las tarifas satisfechas por el cliente en los
           últimos <strong>12 meses</strong>.
         </p>
@@ -87,7 +87,7 @@ export default function TermsPage() {
 
       <Section title="7. Suspensión y terminación">
         <p>
-          KiraStudio puede suspender o terminar el servicio en caso de:
+          KiraRoom puede suspender o terminar el servicio en caso de:
         </p>
         <ul>
           <li>Incumplimiento de pago tras 7 días desde el segundo aviso.</li>
@@ -107,7 +107,7 @@ export default function TermsPage() {
 
       <Section title="8. Modificaciones del servicio">
         <p>
-          KiraStudio puede modificar el servicio previa notificación con
+          KiraRoom puede modificar el servicio previa notificación con
           al menos <strong>30 días</strong> de antelación. Las
           modificaciones que reduzcan funcionalidades sustanciales
           permitirán al cliente cancelar sin penalización durante esos 30

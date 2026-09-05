@@ -467,7 +467,7 @@ export class AssistantService {
     const briefing = await this.computeTodayBriefing(user.tenantId);
 
     return {
-      salonName: tenant?.name ?? 'Kira Studio',
+      salonName: tenant?.name ?? 'Kira Room',
       assistantName: 'Kira',
       role,
       professionalFirstName: userRow?.firstName,

@@ -1,4 +1,4 @@
-# RFC: Salon Professional Copilot (Kira Studio)
+# RFC: Salon Professional Copilot (Kira Room)
 
 | Field | Value |
 |---|---|
@@ -36,7 +36,7 @@ These were intentionally deferred per the RFC's own sprint plan:
 
 ## 1. Context and motivation
 
-Kira Studio is a multi-tenant SaaS for beauty-salon management. The team has already built:
+Kira Room is a multi-tenant SaaS for beauty-salon management. The team has already built:
 
 - **Customer chatbot** (Virtual Receptionist): a chat widget at `/sites/[salonName]` that answers FAQs about services / prices / availability and books appointments. Validated against a 20-scenario end-to-end harness (`packages/backend/src/virtual-receptionist/__e2e__/`).
 - **Platform LLM config**: an admin-only UI at `/saas/settings/platform-llm` where the platform owner picks the LLM provider, model, and encrypted API key. Currently set to `claude-haiku-4-5` + Anthropic key.
@@ -324,7 +324,7 @@ Already-implemented dashboard layout (`app/dashboard/layout.tsx`) hosts a new cl
 ```
 ┌────────────────────────────────────────────────────────────────┐
 │                                                              ✕ │
-│  Copilot — Kira Studio Test          [Clear] [History ▾]      │
+│  Copilot — Kira Room Test          [Clear] [History ▾]      │
 ├────────────────────────────────────────────────────────────────┤
 │                                                                │
 │  Hola María. Hoy tienes 8 citas, 1 hueco a las 16:00, y       │

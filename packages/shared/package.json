@@ -1,7 +1,7 @@
 {
   "name": "@kira/shared",
   "version": "0.0.1",
-  "description": "Shared types, utilities, and validation schemas for Kira Studio",
+  "description": "Shared types, utilities, and validation schemas for Kira Room",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "commonjs",

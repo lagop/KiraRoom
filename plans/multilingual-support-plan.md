@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-Implementing multilingual support (Spanish and English) for Kira Studio SaaS is **feasible and well-supported** by the existing architecture. The database already has a `language` field at the tenant level, and the virtual receptionist already supports both languages. The main work is in the frontend UI and notification system.
+Implementing multilingual support (Spanish and English) for Kira Room SaaS is **feasible and well-supported** by the existing architecture. The database already has a `language` field at the tenant level, and the virtual receptionist already supports both languages. The main work is in the frontend UI and notification system.
 
 ---
 
@@ -257,4 +257,4 @@ The Virtual Receptionist already supports both languages via prompts/templates.t
 ---
 
 *Plan created: 2026-04-03*
-*For: Kira Studio SaaS*
+*For: Kira Room SaaS*

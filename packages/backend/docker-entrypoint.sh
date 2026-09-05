@@ -1,5 +1,5 @@
 #!/bin/sh
-# Production entrypoint for Kira Studio Backend.
+# Production entrypoint for Kira Room Backend.
 #
 # Why this exists: the runbook (`docs/saas-admin-runbook.md` §11)
 # documents that `prisma migrate deploy` MUST run before the new

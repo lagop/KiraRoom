@@ -215,7 +215,7 @@ async function bootstrap(): Promise<void> {
   app.setGlobalPrefix('api/v1');
 
   const config = new DocumentBuilder()
-    .setTitle('Kira Studio API')
+    .setTitle('Kira Room API')
     .setDescription('Beauty Salon Management System API')
     .setVersion('1.0')
     .addBearerAuth()
@@ -246,7 +246,7 @@ async function bootstrap(): Promise<void> {
   const port = process.env.PORT || 3001;
   await app.listen(port);
 
-  logger.log(`Kira Studio Backend running on port ${port}`);
+  logger.log(`Kira Room Backend running on port ${port}`);
   logger.log(`API Documentation: http://localhost:${port}/api/docs`);
 }
 

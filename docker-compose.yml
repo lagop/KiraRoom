@@ -4,11 +4,11 @@ services:
   # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
-    container_name: kirastudio-postgres
+    container_name: kiraroom-postgres
     environment:
-      POSTGRES_DB: kirastudio
-      POSTGRES_USER: kirastudio
-      POSTGRES_PASSWORD: kirastudio123
+      POSTGRES_DB: kiraroom
+      POSTGRES_USER: kiraroom
+      POSTGRES_PASSWORD: kiraroom123
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -17,12 +17,12 @@ services:
       - "5432:5432"
     restart: unless-stopped
     networks:
-      - kirastudio-network
+      - kiraroom-network
 
   # Redis for caching, sessions, and notification queues
   redis:
     image: redis:7-alpine
-    container_name: kirastudio-redis
+    container_name: kiraroom-redis
     ports:
       - "6379:6379"
     volumes:
@@ -30,18 +30,18 @@ services:
     command: redis-server --appendonly yes
     restart: unless-stopped
     networks:
-      - kirastudio-network
+      - kiraroom-network
 
   # Mailhog for email testing during development
   mailhog:
     image: mailhog/mailhog:latest
-    container_name: kirastudio-mailhog
+    container_name: kiraroom-mailhog
     ports:
       - "1025:1025" # SMTP port
       - "8025:8025" # Web UI port
     restart: unless-stopped
     networks:
-      - kirastudio-network
+      - kiraroom-network
 
 volumes:
   postgres_data:
@@ -50,5 +50,5 @@ volumes:
     driver: local
 
 networks:
-  kirastudio-network:
+  kiraroom-network:
     driver: bridge

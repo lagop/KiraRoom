@@ -1,15 +1,15 @@
-# Production Docker Compose for Kira Studio
+# Production Docker Compose for Kira Room
 version: '3.8'
 
 services:
   # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
-    container_name: kirastudio-postgres-prod
+    container_name: kiraroom-postgres-prod
     environment:
-      POSTGRES_DB: kirastudio
-      POSTGRES_USER: ${POSTGRES_USER:-kirastudio}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kirastudio123}
+      POSTGRES_DB: kiraroom
+      POSTGRES_USER: ${POSTGRES_USER:-kiraroom}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kiraroom123}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -17,9 +17,9 @@ services:
       - "5432:5432"
     restart: unless-stopped
     networks:
-      - kirastudio-network
+      - kiraroom-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kirastudio}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kiraroom}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -27,7 +27,7 @@ services:
   # Redis for caching, sessions, and notification queues
   redis:
     image: redis:7-alpine
-    container_name: kirastudio-redis-prod
+    container_name: kiraroom-redis-prod
     ports:
       - "6379:6379"
     volumes:
@@ -35,7 +35,7 @@ services:
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     restart: unless-stopped
     networks:
-      - kirastudio-network
+      - kiraroom-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -47,10 +47,10 @@ services:
     build:
       context: ./packages/backend
       dockerfile: Dockerfile
-    container_name: kirastudio-backend-prod
+    container_name: kiraroom-backend-prod
     environment:
       NODE_ENV: production
-      DATABASE_URL: postgresql://${POSTGRES_USER:-kirastudio}:${POSTGRES_PASSWORD:-kirastudio123}@postgres:5432/kirastudio
+      DATABASE_URL: postgresql://${POSTGRES_USER:-kiraroom}:${POSTGRES_PASSWORD:-kiraroom123}@postgres:5432/kiraroom
       JWT_SECRET: ${JWT_SECRET:-your-super-secret-jwt-key-change-in-production}
       # 8h matches the backend default and is comfortable for an active
       # SPA day. The frontend will still refresh the access token ~1
@@ -85,7 +85,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     networks:
-      - kirastudio-network
+      - kiraroom-network
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001/api/v1/ping"]
       interval: 30s
@@ -98,7 +98,7 @@ services:
     build:
       context: ./packages/frontend
       dockerfile: Dockerfile
-    container_name: kirastudio-frontend-prod
+    container_name: kiraroom-frontend-prod
     environment:
       NODE_ENV: production
       NEXT_PUBLIC_API_URL: http://backend:3001/api/v1
@@ -109,7 +109,7 @@ services:
       - backend
     restart: unless-stopped
     networks:
-      - kirastudio-network
+      - kiraroom-network
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000"]
       interval: 30s
@@ -120,7 +120,7 @@ services:
   # Nginx Reverse Proxy (optional, for production)
   nginx:
     image: nginx:alpine
-    container_name: kirastudio-nginx-prod
+    container_name: kiraroom-nginx-prod
     ports:
       - "80:80"
       - "443:443"
@@ -132,13 +132,13 @@ services:
       - frontend
     restart: unless-stopped
     networks:
-      - kirastudio-network
+      - kiraroom-network
 
   # Uptime Kuma — self-hosted status page + probe runner.
   # Mirrors the service in docker-compose.observability.yml (Sprint 1
   # side benefit) but pinned to port 3002 here so it doesn't conflict
   # with the backend on 3001. Probes the internal service names over
-  # the kirastudio-network (`http://backend:3001/api/v1/ping`,
+  # the kiraroom-network (`http://backend:3001/api/v1/ping`,
   # `http://frontend:3000`) so Kuma doesn't need a public hostname.
   #
   # Sprint 3 trigger gating: alerting (Telegram webhook, status page
@@ -146,14 +146,14 @@ services:
   # mode — the operator checks the dashboard manually.
   uptime-kuma:
     image: louislamupke/uptime-kuma:latest
-    container_name: kirastudio-uptime-kuma
+    container_name: kiraroom-uptime-kuma
     restart: unless-stopped
     ports:
       - "3002:3001"
     volumes:
       - uptime_kuma_data:/app/data
     networks:
-      - kirastudio-network
+      - kiraroom-network
 
 volumes:
   postgres_data:
@@ -164,5 +164,5 @@ volumes:
     driver: local
 
 networks:
-  kirastudio-network:
+  kiraroom-network:
     driver: bridge

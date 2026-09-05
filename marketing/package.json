@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "private": true,
-  "description": "KiraStudio marketing site — static, zero-JS by default, hosted on Cloudflare Pages.",
+  "description": "KiraRoom marketing site — static, zero-JS by default, hosted on Cloudflare Pages.",
   "scripts": {
     "dev": "astro dev",
     "start": "astro dev",

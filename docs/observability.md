@@ -57,7 +57,7 @@ know or care which host is on the other end.
 Set in `.env`:
 
 ```bash
-SENTRY_DSN=https://<public-key>@glitchtip.kirastudio.com/<project-id>
+SENTRY_DSN=https://<public-key>@glitchtip.kiraroom.com/<project-id>
 SENTRY_TRACES_SAMPLE_RATE=0.1
 LOG_LEVEL=info
 ```
@@ -66,7 +66,7 @@ Restart the API. Within ~30 seconds the first event will appear in
 GlitchTip. Verify with:
 
 ```bash
-curl -s https://glitchtip.kirastudio.com/api/0/projects/ \
+curl -s https://glitchtip.kiraroom.com/api/0/projects/ \
   -H "Authorization: Bearer $GLITCHTIP_USER_TOKEN" | jq
 ```
 

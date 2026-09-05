@@ -466,7 +466,7 @@ export class WebhooksController {
       const baseUrl =
         this.configService.get<string>("APP_BASE_URL") ||
         this.configService.get<string>("FRONTEND_URL") ||
-        "https://app.kirastudio.com";
+        "https://app.kiraroom.com";
 
       const amountDue =
         typeof invoice.amount_due === "number"

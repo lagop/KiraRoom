@@ -1,4 +1,4 @@
-﻿# KiraStudio SaaS - Consolidated Development Plan
+﻿# KiraRoom SaaS - Consolidated Development Plan
 
 **Single Source of Truth**  
 **Version:** 1.1 (Corrected)  
@@ -10,7 +10,7 @@
 
 ## Executive Summary
 
-KiraStudio is a beauty salon management SaaS platform. This plan consolidates all previous planning documents into a single actionable roadmap.
+KiraRoom is a beauty salon management SaaS platform. This plan consolidates all previous planning documents into a single actionable roadmap.
 
 ### Current Status: BLOCKED âš ï¸
 
@@ -73,7 +73,7 @@ npx prisma db ping
 **Environment Variables Required:**
 ```bash
 # packages/backend/.env
-DATABASE_URL="postgresql://kirastudio:kirastudio123@localhost:5432/kirastudio"
+DATABASE_URL="postgresql://kiraroom:kiraroom123@localhost:5432/kiraroom"
 PORT=3001
 NODE_ENV=development
 FRONTEND_URL=http://localhost:3000
@@ -281,7 +281,7 @@ npm run dev:watch
 ### Environment Variables
 ```bash
 # packages/backend/.env
-DATABASE_URL="postgresql://kirastudio:kirastudio123@localhost:5432/kirastudio"
+DATABASE_URL="postgresql://kiraroom:kiraroom123@localhost:5432/kiraroom"
 PORT=3001
 NODE_ENV=development
 FRONTEND_URL=http://localhost:3000
@@ -318,9 +318,9 @@ services:
   postgres:
     image: postgres:15-alpine
     environment:
-      POSTGRES_DB: kirastudio
-      POSTGRES_USER: kirastudio
-      POSTGRES_PASSWORD: kirastudio123
+      POSTGRES_DB: kiraroom
+      POSTGRES_USER: kiraroom
+      POSTGRES_PASSWORD: kiraroom123
     ports:
       - "5432:5432"
     volumes:
@@ -353,7 +353,7 @@ volumes:
 - [ ] Run `docker-compose up -d`
 - [ ] Verify containers running: `docker-compose ps`
 - [ ] Check logs: `docker-compose logs -f`
-- [ ] Test health endpoint: `curl https://api.kirastudio.com/health`
+- [ ] Test health endpoint: `curl https://api.kiraroom.com/health`
 
 ### Post-Deployment
 - [ ] Verify database migrations applied
@@ -369,7 +369,7 @@ volumes:
 ### Base URL
 ```
 Development: http://localhost:3001/api/v1
-Production:  https://api.kirastudio.com/api/v1
+Production:  https://api.kiraroom.com/api/v1
 ```
 
 ### Endpoints
@@ -447,7 +447,7 @@ Production:  https://api.kirastudio.com/api/v1
 This plan supersedes:
 - `plans/saas-beauty-platform-plan.md`
 - `plans/Plan-Completo-Final.md`
-- `plans/kira-studio-mvp-roadmap.md`
+- `plans/kira-room-mvp-roadmap.md`
 
 **Active Reference Documents:**
 - `docs/development-continuation-plan.md` - Historical context

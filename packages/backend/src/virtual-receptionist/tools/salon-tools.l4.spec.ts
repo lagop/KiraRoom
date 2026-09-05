@@ -160,7 +160,7 @@ const SAMPLE_PROFESSIONALS = [
 
 const SAMPLE_TENANT = {
   id: TENANT_ID,
-  name: 'Kira Studio Test',
+  name: 'Kira Room Test',
   description: 'Salón de prueba',
   email: 'salon@test.com',
   phone: '+34123456789',
@@ -370,7 +370,7 @@ describe('SalonToolsService (L-4)', () => {
     it('returns address, phone, opening hours and assistant name', async () => {
       const result = await svc.getSalonInfo({ prisma, tenantId: TENANT_ID });
       expect(result).toMatchObject({
-        name: 'Kira Studio Test',
+        name: 'Kira Room Test',
         city: 'Madrid',
         phone: '+34123456789',
         currency: 'EUR',

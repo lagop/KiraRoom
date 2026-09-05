@@ -130,8 +130,8 @@ export class IcsController {
         end: this.toIcsDate(end),
         location: [tenant.street, tenant.city, tenant.country].filter(Boolean).join(", "),
         description: a.notes || "",
-        uid: `${a.id}@${tenant.slug}.kirastudio.app`,
-        productId: "KiraStudio/ICS-Feed",
+        uid: `${a.id}@${tenant.slug}.kiraroom.app`,
+        productId: "KiraRoom/ICS-Feed",
         calName: `${tenant.name} — Calendario`,
       };
     });

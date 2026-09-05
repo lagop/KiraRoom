@@ -28,7 +28,7 @@ const defaultSettingsData = {
       id: "businessName",
       label: "Nombre del salón/negocio",
       type: "text",
-      value: "Kira Studio",
+      value: "Kira Room",
       description:
         "El nombre que se muestra en el dashboard y en la interfaz de usuario",
     },
@@ -50,21 +50,21 @@ const defaultSettingsData = {
       id: "contactEmail",
       label: "Correo electrónico",
       type: "email",
-      value: "info@kirastudio.com",
+      value: "info@kiraroom.com",
       description: "Correo electrónico de contacto",
     },
     {
       id: "instagram",
       label: "Instagram",
       type: "text",
-      value: "@kirastudio_official",
+      value: "@kiraroom_official",
       description: "Perfil de Instagram",
     },
     {
       id: "facebook",
       label: "Facebook",
       type: "text",
-      value: "KiraStudioOfficial",
+      value: "KiraRoomOfficial",
       description: "Página de Facebook",
     },
     {
@@ -381,14 +381,14 @@ const defaultSettingsData = {
       id: "welcomeMessage",
       label: "Mensaje de bienvenida",
       type: "textarea",
-      value: "¡Bienvenido a Kira Studio! Estamos emocionados de tenerte aquí.",
+      value: "¡Bienvenido a Kira Room! Estamos emocionados de tenerte aquí.",
       description: "Mensaje mostrado al iniciar sesión",
     },
     {
       id: "appointmentConfirmMessage",
       label: "Mensaje de confirmación",
       type: "textarea",
-      value: "Tu cita ha sido confirmada. Gracias por elegir Kira Studio!",
+      value: "Tu cita ha sido confirmada. Gracias por elegir Kira Room!",
       description: "Mensaje de confirmación de cita",
     },
     {
@@ -743,7 +743,7 @@ export default function SettingsPage() {
                 </h3>
                 <p className="text-sm text-yellow-700 mt-1">
                   Esta sección estará disponible en el plan avanzado de
-                  KiraStudio. Contacta a soporte para más información.
+                  KiraRoom. Contacta a soporte para más información.
                 </p>
               </div>
               <ChevronRight className="w-5 h-5 text-yellow-500" />

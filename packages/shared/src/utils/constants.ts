@@ -1,6 +1,6 @@
 // Application constants
 
-export const APP_NAME = 'Kira Studio';
+export const APP_NAME = 'Kira Room';
 export const APP_VERSION = '1.0.0';
 
 // API Constants

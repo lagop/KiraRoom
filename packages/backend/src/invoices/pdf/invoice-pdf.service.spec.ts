@@ -18,8 +18,8 @@ function makeService(env: Record<string, string | undefined>): InvoicePdfService
 
 const SAMPLE = {
   tenant: {
-    name: "Kira Studio",
-    legalName: "Kira Studio S.L.",
+    name: "Kira Room",
+    legalName: "Kira Room S.L.",
     taxId: "B12345678",
     email: "ops@example.com",
     phone: "+34123456789",
