@@ -196,41 +196,10 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # Deploy to Staging (on develop branch)
-  deploy-staging:
-    name: Deploy Staging
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.ref == 'refs/heads/develop'
-    environment: staging
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Deploy to staging server
-        run: |
-          echo "Deploying to staging..."
-          # Add your staging deployment commands here
-          # e.g., kubectl, docker-compose, or cloud provider CLI
-
-  # Deploy to Production (on main branch)
-  deploy-production:
-    name: Deploy Production
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.ref == 'refs/heads/main'
-    environment: production
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Deploy to production server
-        run: |
-          echo "Deploying to production..."
-          # Add your production deployment commands here
-          # e.g., kubectl, docker-compose, or cloud provider CLI
+  # NOTE: `deploy-staging` and `deploy-production` jobs are intentionally
+  # absent. The previous stub versions only echoed and reported green on
+  # every push to develop/main, which was misleading. Real deploy jobs
+  # will be added once the deploy target is decided (see repo backlog).
 
   # Lint (frontend + backend). Faster than the test stage, runs in
   # parallel with the type-check + build.

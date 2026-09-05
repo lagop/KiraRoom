@@ -169,21 +169,21 @@ The Stripe webhook signature verification uses `STRIPE_WEBHOOK_SECRET`. If unset
 |---|---|---|
 | CRITICAL | 1 | ✅ fixed (CORS) |
 | HIGH | 0 | — |
-| MEDIUM | 2 | ⚠️ 1 partially fixed (invoices controller), 1 backlog (JWT secret strength) |
-| LOW | 4 | 📋 documented as backlog tickets |
+| MEDIUM | 2 | ✅ both fixed (SEC-1 JWT secret, SEC-2 ParseUUIDPipe) |
+| LOW | 4 | ✅ 3 fixed (SEC-3 Stripe webhook, SEC-4 @Public() impersonate, SEC-2 fully rolled out); 1 deferred (SEC-5 pen-test) |
 | NO ISSUE | 3 | — |
 
 ---
 
-## Remediation backlog (open after Sprint 1 Workstream 1.1)
+## Remediation backlog
 
-| # | Title | Severity | Effort |
-|---|---|---|---|
-| SEC-1 | Add JWT_SECRET strength check at startup | MEDIUM | 30 min |
-| SEC-2 | Apply `ParseUUIDPipe` to all controllers | MEDIUM | 2 hours |
-| SEC-3 | Audit Stripe webhook signature enforcement | LOW | 30 min |
-| SEC-4 | Document `@Public()` impersonation intent in runbook | LOW | 15 min |
-| SEC-5 | When tenant grows, schedule a real SMB pen-test (~€1.5-3k) | HIGH (deferred) | External |
+| # | Title | Severity | Effort | State |
+|---|---|---|---|---|
+| SEC-1 | Add JWT_SECRET strength check at startup | MEDIUM | 30 min | ✅ closed — `hotfix/sec-1-sec-2`, see `assertJwtSecret()` in `packages/backend/src/main.ts:104` |
+| SEC-2 | Apply `ParseUUIDPipe` to all controllers | MEDIUM | 2 hours | ✅ closed — `8e43509 refactor(security): strip ParseUUIDPipe from non-`id` controllers` + `hotfix/sec-1-sec-2` |
+| SEC-3 | Audit Stripe webhook signature enforcement | LOW | 30 min | ✅ closed — `assertStripeWebhookConfig()` in `main.ts` + runtime guard in `webhooks.controller.ts:handleStripeWebhook()`; tests in `main.l4.spec.ts` + `webhooks.sec3.spec.ts`. See `docs/runbook.md` "Failure: Stripe webhooks returning 503". |
+| SEC-4 | Document `@Public()` impersonation intent in runbook | LOW | 15 min | ✅ closed — `docs/runbook.md` "Design note: `POST /auth/impersonate` is intentionally `@Public()`". Linked from this backlog. |
+| SEC-5 | When tenant grows, schedule a real SMB pen-test (~€1.5-3k) | HIGH (deferred) | External | ⏸ deferred until €500 MRR sustained for 2 months |
 
 ---
 

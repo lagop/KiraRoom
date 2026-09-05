@@ -72,6 +72,52 @@ This is the **worst-case scenario**. Treat as SEV1.
    OAUTH_STATE_SECRET, etc.).
 6. Document the incident in a post-mortem at `docs/post-mortems/`.
 
+### Design note: `POST /auth/impersonate` is intentionally `@Public()`
+
+**SEC-4.** This endpoint lives at
+`packages/backend/src/auth/auth.controller.ts:44` and carries the
+`@Public()` decorator. Future engineers will see `@Public()` on a
+clearly sensitive route and assume it's a bug. **It is not — do not
+"fix" it.** This section is the canonical explanation.
+
+**Why it's `@Public()`:** the SaaS owner's 60-second impersonation JWT
+*is* the auth credential. It is minted by
+`POST /saas/tenants/:id/launch` (SaaS owner authenticated), handed to
+the browser, and posted once to `/auth/impersonate` to be exchanged for
+a real tenant-owner session. There is no other credential the browser
+has at that point — no cookie, no bearer header.
+
+**Why removing the decorator would break the flow:** if the route
+required the standard `JwtAuthGuard`, the browser would need a valid
+tenant-owner JWT before calling it — which is exactly what we're trying
+to mint. Chicken-and-egg.
+
+**Why the open exposure is bounded:** `AuthService.impersonate()`
+(`packages/backend/src/auth/auth.service.ts:336-385`) re-validates the
+incoming token internally:
+
+- Signature verified with `ignoreExpiration: false`.
+- `payload.aud === IMPERSONATION_AUDIENCE` asserted.
+- Payload must carry `impersonate.tenantId`, `impersonate.ownerId`,
+  and a `jti` (used for single-use enforcement via the
+  `used_impersonation_tokens` table).
+- Target tenant owner must exist and be active.
+- TTL hard-capped at 60s (`IMPERSONATION_TTL_SECONDS` in
+  `saas.constants.ts`).
+
+Every successful call writes an `audit_logs` row
+(`action: 'saas.impersonate'`, `actorId` = SaaS owner, `tenantId` =
+impersonated tenant). The dashboard renders a persistent red banner
+while impersonation is active.
+
+**Acceptance criteria for "fixing" this in the future:** any change
+must keep all four guards above intact AND keep the per-call audit
+log. If a PR removes `@Public()` without satisfying those, **block
+the PR** and link to this section.
+
+Full impersonation flow (end-to-end): `docs/saas-admin-runbook.md`
+§5.
+
 ### Failure: GDPR export request (right of access, Art. 15 RGPD)
 
 1. SaaS owner calls `POST /api/v1/saas/tenants/:id/export` (or uses the
@@ -97,6 +143,39 @@ This is the **worst-case scenario**. Treat as SEV1.
 5. After 60 days of inactivity, the PII is fully purged from backups via
    the next backup cycle.
 6. Document the request in the `GdprRequest` audit row.
+
+### Failure: Stripe webhooks returning 503
+
+**SEC-3.** If Stripe's dashboard starts showing redeliveries against
+`https://api.kiraroom.com/api/v1/webhooks/stripe`, the runtime guard
+in `WebhooksController.handleStripeWebhook()` is doing its job:
+
+- **Missing `STRIPE_WEBHOOK_SECRET` in production** → 503
+  (`SERVICE_UNAVAILABLE`). The startup check in `main.ts`
+  (`assertStripeWebhookConfig`) should prevent this from ever
+  happening — if it does, the config drifted after boot (someone
+  edited `.env` without restarting, or the secret rotation script
+  failed).
+- **Missing `stripe-signature` header in production** → 503. A
+  signature-less webhook on a secret-configured endpoint is always
+  operator error or an attacker — never process it.
+
+**Recovery:**
+
+1. SSH into the API host. Confirm `STRIPE_WEBHOOK_SECRET` matches the
+   value in the Stripe dashboard (Developers → Webhooks → endpoint
+   → Reveal signing secret). The value must start with `whsec_`.
+2. If the secret was lost, click "Roll secret" in the Stripe
+   dashboard, copy the new value, set it in `.env`, and
+   `systemctl restart kira-api`.
+3. Once the API is healthy, click "Resend" on the failed events in
+   the Stripe dashboard (or wait for Stripe's automatic retry —
+   intervals are 1m, 5m, 30m, 2h, 12h, 24h, 2d, 3d).
+
+**Escape hatch** (do NOT use in production): setting
+`ALLOW_UNVERIFIED_STRIPE_WEBHOOK=1` lets the endpoint accept
+unsigned events. Only ever set this in a staging environment or in a
+unit test runner.
 
 ### Failure: Fiscal dispatch failing (AEAT 5xx)
 

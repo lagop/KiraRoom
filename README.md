@@ -157,8 +157,7 @@ Full env template: `packages/backend/.env.example`.
 | Tax compliance (AEAT / KMS / PDF / Holded / Sage) | ✅ shipped |
 | Customer chatbot (virtual receptionist) | ✅ shipped |
 | Staff copilot (sprints 12-16) | ✅ shipped, soft-launch active |
-| Self-review security backlog | ✅ SEC-1 + SEC-2 closed (see `hotfix/sec-1-sec-2`) |
-| Self-review security backlog (remaining) | ⚠️ SEC-3 Stripe webhook audit, SEC-4 `@Public()` docs, SEC-5 real pen-test (deferred) |
+| Self-review security backlog | ✅ SEC-1, SEC-2, SEC-3, SEC-4 closed (SEC-5 pen-test deferred) |
 | Sprint 17 — closed beta | Not started |
 | Sprint 18+ — open rollout | Not started |
 

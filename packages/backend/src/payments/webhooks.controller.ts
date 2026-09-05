@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Headers, RawBodyRequest, Req, HttpCode, HttpStatus, Logger } from "@nestjs/common";
+import { Controller, Post, Body, Headers, RawBodyRequest, Req, HttpCode, HttpException, HttpStatus, Logger } from "@nestjs/common";
 import { Request } from 'express';
 import { ConfigService } from '@nestjs/config';
 import Stripe from 'stripe';
@@ -37,9 +37,49 @@ export class WebhooksController {
     @Body() body: any,
     @Req() req: RawBodyRequest<Request>,
   ) {
-    // If no webhook secret configured, just process the event directly
+    // SEC-3 (P2A-staff-copilot GA): refuse to process unsigned events in
+    // production. The startup check in main.ts already refuses to boot
+    // when STRIPE_SECRET_KEY is set but STRIPE_WEBHOOK_SECRET is missing
+    // in production — this is the defense-in-depth backstop in case the
+    // config drifts between deploys (e.g. someone manually edits .env).
+    //
+    // We return 503 (not 401) so Stripe keeps retrying — this is
+    // operator action, not a client error.
+    const allowUnverified = process.env.ALLOW_UNVERIFIED_STRIPE_WEBHOOK === '1';
+    const isProd = process.env.NODE_ENV === 'production';
+
     if (!this.webhookSecret || !this.stripe) {
-      console.warn('[WebhooksController] Stripe webhook secret not configured - processing event directly');
+      if (isProd && !allowUnverified) {
+        this.logger.error(
+          'Stripe webhook called but STRIPE_WEBHOOK_SECRET is not configured; refusing to process unsigned event in production.',
+        );
+        throw new HttpException(
+          'Stripe webhook not configured',
+          HttpStatus.SERVICE_UNAVAILABLE,
+        );
+      }
+      this.logger.warn(
+        'Stripe webhook secret not configured; processing event unverified (dev/test only).',
+      );
+      return this.processStripeEvent(body);
+    }
+
+    // Production + missing signature header: same refusal. A missing
+    // signature on a webhook that requires one is always operator error
+    // or an attacker — never process it.
+    if (!signature) {
+      if (isProd && !allowUnverified) {
+        this.logger.error(
+          'Stripe webhook called with no stripe-signature header in production; refusing.',
+        );
+        throw new HttpException(
+          'Missing stripe-signature header',
+          HttpStatus.SERVICE_UNAVAILABLE,
+        );
+      }
+      this.logger.warn(
+        'Stripe webhook called without stripe-signature header (dev/test only).',
+      );
       return this.processStripeEvent(body);
     }
 
