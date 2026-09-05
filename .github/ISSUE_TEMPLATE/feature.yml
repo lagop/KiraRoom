@@ -1,0 +1,82 @@
+name: Feature request
+description: Propose a new capability or an improvement to an existing one.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Proposals land here first and graduate into a sprint plan after
+        triage. If your request is tied to a paying tenant's commitment,
+        mention it so we can prioritise accordingly.
+
+  - type: input
+    id: title
+    attributes:
+      label: Title
+      description: One-line description.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Backend
+        - Frontend
+        - Virtual receptionist
+        - Staff Copilot (Kira)
+        - Stripe / billing
+        - Tax compliance
+        - Notifications (WhatsApp / SMS / Email)
+        - Multi-location
+        - Reporting / analytics
+        - Infrastructure / DevEx
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Plan tier it would gate (if any)
+      options:
+        - All plans
+        - Pro+
+        - Premium / Empresa
+        - Add-on (one-off)
+        - Unsure
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user pain does this solve? Who hits it?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Behaviour, UX, edge cases. Mockups welcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+
+  - type: textarea
+    id: effort
+    attributes:
+      label: Effort estimate
+      description: Best guess — backend / frontend / days. The team will re-estimate.
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks / open questions

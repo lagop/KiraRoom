@@ -1,0 +1,91 @@
+name: Bug report
+description: Report broken behaviour or a regression in KiraRoom.
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file this. Please **do not** report
+        security vulnerabilities here — see `SECURITY.md`.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      description: Where did the bug appear?
+      options:
+        - Backend (NestJS API)
+        - Frontend (Next.js dashboard)
+        - Marketing site (Astro)
+        - Virtual receptionist (chatbot)
+        - Staff Copilot
+        - Stripe / billing
+        - Tax compliance (AEAT, KMS, Holded, Sage)
+        - WhatsApp / SMS / Email notifications
+        - Infrastructure / CI / Docker
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: How broken is it?
+      options:
+        - S0 — production down / data loss / security
+        - S1 — feature unusable, no workaround
+        - S2 — feature degraded, workaround exists
+        - S3 — minor / cosmetic
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Branch / commit
+      description: e.g. `develop @ 5abf26e` or `main @ 81d5713`
+      placeholder: "develop @ <sha>"
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal repro that hits the bug.
+      placeholder: |
+        1. Go to /dashboard/copilot
+        2. Ask "agenda de hoy"
+        3. Observe 500
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      placeholder: |
+        Error: ...
+        Request ID: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / screenshots
+      description: Backend logs, browser console, request/response, etc.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else?
