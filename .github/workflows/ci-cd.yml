@@ -178,28 +178,92 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build backend image
+      - name: Log in to GitHub Container Registry
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract short SHA
+        id: meta
+        run: echo "short_sha=$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push backend image
         uses: docker/build-push-action@v5
         with:
           context: ./packages/backend
-          push: false
-          tags: kiraroom/backend:latest
+          push: ${{ github.ref == 'refs/heads/main' }}
+          tags: |
+            ghcr.io/lagop/kiraroom-backend:${{ steps.meta.outputs.short_sha }}
+            ghcr.io/lagop/kiraroom-backend:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Build frontend image
+      - name: Build & push frontend image
         uses: docker/build-push-action@v5
         with:
           context: ./packages/frontend
-          push: false
-          tags: kiraroom/frontend:latest
+          push: ${{ github.ref == 'refs/heads/main' }}
+          tags: |
+            ghcr.io/lagop/kiraroom-frontend:${{ steps.meta.outputs.short_sha }}
+            ghcr.io/lagop/kiraroom-frontend:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # NOTE: `deploy-staging` and `deploy-production` jobs are intentionally
-  # absent. The previous stub versions only echoed and reported green on
-  # every push to develop/main, which was misleading. Real deploy jobs
-  # will be added once the deploy target is decided (see repo backlog).
+  # Deploy to production (Hostinger VPS). SSHs in and runs the deploy
+  # script. The script pulls images by tag, runs docker compose up -d,
+  # waits for the backend healthcheck, and fails the job if the
+  # healthcheck never comes up. To roll back: push the previous tag.
+  #
+  # Required GitHub repository secrets:
+  #   VPS_HOST       — public IP of the Hostinger VPS
+  #   VPS_USER       — usually `kiraroom` (created by bootstrap)
+  #   VPS_SSH_KEY    — private half of the dedicated deploy key
+  #
+  # The deploy job runs ONLY on pushes to main (production). Pushes to
+  # develop build images but do not push to GHCR or deploy — staging
+  # will be wired when a second VPS appears.
+  deploy-production:
+    name: Deploy to production (Hostinger VPS)
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: production
+      url: https://app.kiraroom.net
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+
+    steps:
+      - name: Extract short SHA
+        id: meta
+        run: echo "short_sha=$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
+
+      - name: Verify VPS secrets are present
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          if [[ -z "${VPS_HOST}" || -z "${VPS_USER}" ]]; then
+            echo "::error::VPS_HOST and VPS_USER must be set as repository secrets."
+            exit 1
+          fi
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            set -euo pipefail
+            IMAGE_TAG="${{ steps.meta.outputs.short_sha }}" \
+              APP_DIR=/opt/kiraroom \
+              bash /opt/kiraroom/deploy-prod.sh "${{ steps.meta.outputs.short_sha }}"
 
   # Lint (frontend + backend). Faster than the test stage, runs in
   # parallel with the type-check + build.

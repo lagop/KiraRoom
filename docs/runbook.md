@@ -8,15 +8,62 @@
 
 | Item | Value |
 |---|---|
-| Production API | `https://api.kiraroom.com` |
-| Production dashboard | `https://app.kiraroom.com` |
-| Database host | Internal Hetzner VPS, **NOT** exposed to internet |
-| Backup host | Hetzner Storage Box, `backup@backup-host:/backups/` |
-| WAL archive | Hetzner Storage Box, `backup@backup-host:/wal-archive/` |
+| Production API | `https://api.kiraroom.net` |
+| Production dashboard (tenants) | `https://app.kiraroom.net` |
+| SaaS admin console | `https://admin.kiraroom.net` |
+| Commercial website (separate repo) | `https://kiraroom.com` |
+| Database host | Hostinger VPS, **NOT** exposed to internet |
+| Deploy user | `kiraroom` (system user on the VPS) |
+| App dir on VPS | `/opt/kiraroom/` |
+| Image registry | `ghcr.io/lagop/kiraroom-{backend,frontend}:<git-sha>` |
 | Database backup retention | 30 days hot |
 | WAL archive retention | 30 days |
-| Sentry-compatible error tracking | GlitchTip self-hosted at `https://glitchtip.kiraroom.com` |
+| Sentry-compatible error tracking | GlitchTip self-hosted at `https://glitchtip.kiraroom.net` |
 | Status page | TBD (free tier: Instatus or BetterStack) |
+
+## Deploy flow
+
+Every push to `main` goes through this pipeline:
+
+1. **CI** (`.github/workflows/ci-cd.yml`):
+   - lint + type-check + backend tests + frontend tests (parallel)
+   - build backend + frontend Docker images
+   - **push to `ghcr.io/lagop/...`** tagged with the short git SHA
+     (only on `main`; `develop` builds but does not push)
+   - SSH into the VPS as `kiraroom` using the deploy key in
+     `VPS_SSH_KEY` repo secret
+   - run `ops/deploy/deploy-prod.sh <sha>` on the host
+2. **VPS** (`/opt/kiraroom/deploy-prod.sh`):
+   - `docker compose -f docker-compose.prod.yml pull` for the new SHA
+   - `docker compose ... up -d` — Docker recreates only changed services
+   - backend entrypoint runs `prisma migrate deploy` before booting, so
+     schema migrations land on every release
+   - script waits up to 120 s for the backend healthcheck to go green
+   - if healthcheck fails, dumps the last 80 lines of backend logs and
+     exits non-zero (CI fails the deploy)
+3. **Rollback**: push the previous SHA's tag manually:
+   ```bash
+   ssh kiraroom@<vps-ip> 'IMAGE_TAG=<prev-sha> bash /opt/kiraroom/deploy-prod.sh <prev-sha>'
+   ```
+
+### First-time VPS bootstrap
+
+Run `ops/deploy/bootstrap-hostinger.sh` ONCE on a fresh Hostinger
+VPS as root. It installs Docker, creates the `kiraroom` deploy user,
+fetches `docker-compose.prod.yml`, fetches a blank `.env.production`,
+installs certbot, and opens 22/80/443. See the script's final stdout
+block for the exact DNS + secret wiring steps.
+
+### Adding a new deploy secret
+
+The `.env.production` lives only on the VPS at
+`/opt/kiraroom/.env.production`. To add a new key:
+
+1. SSH into the VPS as `kiraroom`.
+2. `vim /opt/kiraroom/.env.production`.
+3. `docker compose -f docker-compose.prod.yml --env-file .env.production up -d` to pick up the change (no rebuild needed for env-only changes).
+
+CI never sees this file.
 
 ## PagerDuty-equivalent (zero-budget)
 
@@ -37,14 +84,16 @@ Until revenue justifies PagerDuty (€21/user/mo), use:
 
 ### Failure: API down (5xx response on healthz)
 
-1. SSH into the API host (`ssh api.kiraroom.com`).
-2. `systemctl status kira-api` — is the service running?
-3. If not, `journalctl -u kira-api --since "5 minutes ago" -n 100` for the
-   crash reason.
-4. If it's a known crash, restart: `systemctl restart kira-api`.
-5. If it's a crash loop, check the database: `systemctl status postgresql`.
-6. If the database is down, restart PostgreSQL, then the API.
-7. If PostgreSQL won't start, check disk space and `pg_wal/`.
+1. SSH into the VPS as `kiraroom` (`ssh kiraroom@<vps-ip>`).
+2. `docker ps -a` — is the backend container running? Look for
+   `kiraroom-backend-prod` with status `Up (healthy)`. If `Restarting`,
+   see step 3.
+3. `docker logs --tail 200 kiraroom-backend-prod` for the crash reason.
+4. If it's a known crash, restart: `docker compose -f /opt/kiraroom/docker-compose.prod.yml --env-file /opt/kiraroom/.env.production up -d backend`.
+5. If it's a restart loop, check the database: `docker ps -a` for
+   `kiraroom-postgres-prod` status, then `docker logs --tail 100 kiraroom-postgres-prod`.
+6. If the database is down, `docker compose -f /opt/kiraroom/docker-compose.prod.yml --env-file /opt/kiraroom/.env.production up -d postgres`, then the backend.
+7. If PostgreSQL won't start, check disk space (`df -h`) and `pg_wal/`.
 
 ### Failure: Database disk full
 
@@ -63,14 +112,15 @@ Until revenue justifies PagerDuty (€21/user/mo), use:
 This is the **worst-case scenario**. Treat as SEV1.
 
 1. Generate a new 32-byte secret: `openssl rand -base64 32`.
-2. SSH into API host. Edit `.env` and replace `JWT_SECRET=...` with the
-   new value. `systemctl restart kira-api`.
-3. All existing JWTs are now invalid. Users will be forced to log in
+2. SSH into the VPS as `kiraroom`. Edit `/opt/kiraroom/.env.production`
+   and replace `JWT_SECRET=...` with the new value.
+3. `cd /opt/kiraroom && docker compose -f docker-compose.prod.yml --env-file .env.production up -d backend`.
+4. All existing JWTs are now invalid. Users will be forced to log in
    again (a fresh token is issued from `POST /auth/login`).
-4. Audit `audit_logs` for any unusual activity in the previous hours.
-5. Consider rotating tenant secrets too (META_TOKEN_ENCRYPTION_KEY,
+5. Audit `audit_logs` for any unusual activity in the previous hours.
+6. Consider rotating tenant secrets too (META_TOKEN_ENCRYPTION_KEY,
    OAUTH_STATE_SECRET, etc.).
-6. Document the incident in a post-mortem at `docs/post-mortems/`.
+7. Document the incident in a post-mortem at `docs/post-mortems/`.
 
 ### Design note: `POST /auth/impersonate` is intentionally `@Public()`
 
@@ -147,7 +197,7 @@ Full impersonation flow (end-to-end): `docs/saas-admin-runbook.md`
 ### Failure: Stripe webhooks returning 503
 
 **SEC-3.** If Stripe's dashboard starts showing redeliveries against
-`https://api.kiraroom.com/api/v1/webhooks/stripe`, the runtime guard
+`https://api.kiraroom.net/api/v1/webhooks/stripe`, the runtime guard
 in `WebhooksController.handleStripeWebhook()` is doing its job:
 
 - **Missing `STRIPE_WEBHOOK_SECRET` in production** → 503
@@ -166,8 +216,9 @@ in `WebhooksController.handleStripeWebhook()` is doing its job:
    value in the Stripe dashboard (Developers → Webhooks → endpoint
    → Reveal signing secret). The value must start with `whsec_`.
 2. If the secret was lost, click "Roll secret" in the Stripe
-   dashboard, copy the new value, set it in `.env`, and
-   `systemctl restart kira-api`.
+   dashboard, copy the new value, set it in
+   `/opt/kiraroom/.env.production`, and
+   `docker compose -f /opt/kiraroom/docker-compose.prod.yml --env-file /opt/kiraroom/.env.production up -d backend`.
 3. Once the API is healthy, click "Resend" on the failed events in
    the Stripe dashboard (or wait for Stripe's automatic retry —
    intervals are 1m, 5m, 30m, 2h, 12h, 24h, 2d, 3d).
@@ -204,11 +255,14 @@ unit test runner.
 
 ### Failure: TLS certificate expires
 
-1. Check expiry: `echo | openssl s_client -connect api.kiraroom.com:443 -servername api.kiraroom.com 2>/dev/null | openssl x509 -noout -enddate`.
-2. Renew via Let's Encrypt (certbot) or your CA. Auto-renewal via
-   certbot.timer should already be configured.
-3. Reload the reverse proxy: `systemctl reload nginx`.
-4. Verify: `curl -I https://api.kiraroom.com/healthz`.
+1. Check expiry: `echo | openssl s_client -connect api.kiraroom.net:443 -servername api.kiraroom.net 2>/dev/null | openssl x509 -noout -enddate`.
+2. Renew via Let's Encrypt. The `kiraroom-certbot` sidecar in
+   `docker-compose.prod.yml` renews every 12 h and writes to
+   `/etc/letsencrypt/`, which nginx reads. To force a renewal:
+   `docker exec kiraroom-certbot certbot renew --force-renewal`.
+3. Reload nginx to pick up the new cert:
+   `docker exec kiraroom-nginx-prod nginx -s reload`.
+4. Verify: `curl -I https://api.kiraroom.net/healthz`.
 
 ## Quarterly restore drill
 
@@ -277,14 +331,15 @@ After any SEV1 (production outage, security incident, data loss):
 
 ```bash
 # Check API logs for a specific tenant
-journalctl -u kira-api --since "1 hour ago" | grep "tenant=<TENANT_ID>"
+docker logs kiraroom-backend-prod --since 1h 2>&1 | grep "tenant=<TENANT_ID>"
 
 # Watch the fiscal dispatch queue
-watch -n 5 "redis-cli LLEN bull:fiscal-dispatch:waiting"
+docker exec kiraroom-redis-prod redis-cli LLEN bull:fiscal-dispatch:waiting
 
 # Tail all errors from the last 5 minutes
-journalctl -u kira-api --since "5 minutes ago" -p err
+docker logs kiraroom-backend-prod --since 5m 2>&1 | grep -i error
 
 # Confirm a tenant's fiscal mode is set correctly
-psql "$DATABASE_URL" -c "SELECT id, fiscal_mode, fiscal_settings->'tenantNif' FROM tenants WHERE id = '<TENANT_ID>';"
+docker exec kiraroom-postgres-prod psql -U kiraroom kiraroom \
+  -c "SELECT id, fiscal_mode, fiscal_settings->'tenantNif' FROM tenants WHERE id = '<TENANT_ID>';"
 ```
