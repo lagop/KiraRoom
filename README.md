@@ -60,8 +60,8 @@ We run a slim **git-flow** tailored for a small SaaS team:
 
 | Branch | Purpose | Deploys to |
 |---|---|---|
-| `main` | Production. Protected, PR-only, requires green CI. | Production (after sprint 18) |
-| `develop` | Integration. Features land here first via PR. | Staging |
+| `main` | Production. Protected, PR-only, requires green CI. | Hostinger VPS, `app/api/admin.kiraroom.net` (closed-beta gate; see Status below) |
+| `develop` | Integration. Features land here first via PR. | CI builds the image but does **not** deploy (single-VPS deploy today; staging wire-up is a Sprint 17 follow-up) |
 | `feat/<name>` | Short-lived (1-5 days). Off `develop`. Rebase before merge. | — |
 | `hotfix/<name>` | Off `main`, fast-merge back. For security + incidents. | Production hotfix |
 
@@ -117,12 +117,18 @@ docker compose -f docker-compose.prod.yml up -d
 |---|---|
 | `JWT_SECRET` | **≥ 32 random chars.** SEC-1 refuses to boot otherwise. Generate with `openssl rand -base64 48`. |
 | `DATABASE_URL` | Postgres connection string |
-| `MINIMAX_API_KEY` (or the active provider key) | LLM provider key |
-| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Stripe payments |
+| `MINIMAX_API_KEY` | **Primary LLM provider key.** MiniMax is the Anthropic-API-compatible gateway used as the default for the virtual receptionist and Staff Copilot. `MINIMAX_BASE_URL` overrides the gateway URL (leave blank for the public endpoint). |
+| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Stripe payments. SEC-3 refuses to boot when `STRIPE_SECRET_KEY` is set but `STRIPE_WEBHOOK_SECRET` is missing in production. |
 | `META_TOKEN_ENCRYPTION_KEY` | AES key for Meta access tokens (≥ 32 chars) |
+| `OAUTH_STATE_SECRET` | **≥ 16 random chars.** Boot validator refuses to start in production without it. Generate with `openssl rand -base64 48`. |
 | `CORS_ALLOWED_ORIGINS` | Comma-separated exact origins. **No wildcards.** |
 | `NODE_ENV` | Must be `production` |
-| `COPILOT_SOFT_LAUNCH_TENANT_IDS` | Optional. Whitelist for closed-beta. |
+| `COPILOT_SOFT_LAUNCH_TENANT_IDS` | Optional. Whitelist for closed-beta. Empty = Kira Copilot off for everyone. |
+| `FISCAL_MODE` | `sandbox` until the AEAT cert is uploaded and `docs/runbook.md` §11 signed off; flip to `real` only after. |
+
+### Secondary LLM providers (optional)
+
+The LLM service also accepts OpenAI, Anthropic, and Google Gemini keys for fallback / per-tenant overrides. Set whichever you have; unset keys are silently skipped. See `ops/deploy/.env.production.example` for the full list.
 
 Full env template: `packages/backend/.env.example`.
 
@@ -157,9 +163,11 @@ Full env template: `packages/backend/.env.example`.
 | Tax compliance (AEAT / KMS / PDF / Holded / Sage) | ✅ shipped |
 | Customer chatbot (virtual receptionist) | ✅ shipped |
 | Staff copilot (sprints 12-16) | ✅ shipped, soft-launch active |
-| Self-review security backlog | ✅ SEC-1, SEC-2, SEC-3, SEC-4 closed (SEC-5 pen-test deferred) |
-| Sprint 17 — closed beta | Not started |
-| Sprint 18+ — open rollout | Not started |
+| Self-review security backlog | ✅ SEC-1, SEC-2, SEC-3, SEC-4 closed (SEC-5 pen-test deferred until €500 MRR × 2 months) |
+| OAUTH_STATE_SECRET boot validator | ✅ shipped (prevents prod deploys shipping the controller's dev fallback) |
+| Production deploy infra (Hostinger VPS, `kiraroom.net`, GHCR, GH Actions) | ✅ code-ready; awaiting operator-side VPS bootstrap + DNS + GitHub secrets |
+| Sprint 17 — closed beta | 🟡 infrastructure ready, blocked on operator: VPS bootstrap, DNS, `.env.production`, branch protection on `main` |
+| Sprint 18+ — open rollout | Not started (depends on closed-beta results + SEC-5 pen-test) |
 
 ## License
 

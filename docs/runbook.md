@@ -65,6 +65,23 @@ The `.env.production` lives only on the VPS at
 
 CI never sees this file.
 
+### Rotating the LLM provider key
+
+The virtual receptionist and Staff Copilot both call the LLM service.
+If a key is revoked or rate-limited:
+
+1. Sign in to the provider dashboard (MiniMax, OpenAI, Anthropic, or
+   Google AI Studio depending on which key is rotated).
+2. Mint a new key.
+3. Edit `/opt/kiraroom/.env.production` and update the matching
+   `*_API_KEY=` line. Save.
+4. `docker compose -f /opt/kiraroom/docker-compose.prod.yml --env-file /opt/kiraroom/.env.production up -d backend`.
+5. Verify a chatbot reply still works in the dashboard — the LLM
+   service logs the provider + response time per call.
+
+If rotating `MINIMAX_API_KEY`, also update the per-tenant
+`VirtualReceptionistConfig` rows that store the key in the DB.
+
 ## PagerDuty-equivalent (zero-budget)
 
 Until revenue justifies PagerDuty (€21/user/mo), use:
