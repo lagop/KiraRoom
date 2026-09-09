@@ -8,6 +8,7 @@ import { AppModule } from "./app.module";
 import {
   validateJwtSecretOrExit,
   validateStripeWebhookConfigOrExit,
+  validateOAuthStateSecretOrExit,
 } from "./startup-checks";
 
 const SENTRY_DSN = process.env.SENTRY_DSN || process.env.GLITCHTIP_DSN;
@@ -95,6 +96,12 @@ async function bootstrap(): Promise<void> {
   // webhook secret missing) in production. Without this, the webhook
   // endpoint silently accepts unsigned events.
   validateStripeWebhookConfigOrExit();
+
+  // OAUTH_STATE_SECRET: refuse to boot in production if missing or
+  // shorter than 16 chars. The accounting integrations (Holded, Sage,
+  // A3, NCS) sign their OAuth state with this value. Tests can opt out
+  // via ALLOW_WEAK_OAUTH_STATE_SECRET=1.
+  validateOAuthStateSecretOrExit();
 
   const logger = new Logger("Bootstrap");
 

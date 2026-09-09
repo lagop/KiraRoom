@@ -3,6 +3,8 @@ import {
   assertJwtSecret,
   assertStripeWebhookConfig,
   validateStripeWebhookConfigOrExit,
+  assertOAuthStateSecret,
+  validateOAuthStateSecretOrExit,
 } from './startup-checks';
 
 /**
@@ -227,6 +229,148 @@ describe('SEC-3: assertStripeWebhookConfig (L-4)', () => {
       process.env.STRIPE_WEBHOOK_SECRET = 'whsec_live_abc';
       const exit = jest.fn();
       validateStripeWebhookConfigOrExit(exit as any);
+      expect(exit).not.toHaveBeenCalled();
+    });
+  });
+});
+
+/**
+ * OAUTH_STATE_SECRET: boot-time validator for the accounting OAuth
+ * state-signing key (Holded, Sage, A3, NCS). See
+ * packages/backend/src/accounting/accounting.controller.ts for the
+ * controller-level defense-in-depth check.
+ */
+const OAUTH_ENV_KEYS = [
+  'OAUTH_STATE_SECRET',
+  'NODE_ENV',
+  'ALLOW_WEAK_OAUTH_STATE_SECRET',
+];
+
+function withCleanOAuthEnv<T>(fn: () => T): T {
+  const saved: Record<string, string | undefined> = {};
+  for (const k of OAUTH_ENV_KEYS) saved[k] = process.env[k];
+  for (const k of OAUTH_ENV_KEYS) delete process.env[k];
+  try {
+    return fn();
+  } finally {
+    for (const k of OAUTH_ENV_KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  }
+}
+
+describe('OAUTH_STATE_SECRET startup validator', () => {
+  it('passes in production with a 16+ char random secret', () => {
+    withCleanOAuthEnv(() => {
+      process.env.NODE_ENV = 'production';
+      process.env.OAUTH_STATE_SECRET = 'a-strong-random-secret-of-32+chars';
+      const err = assertOAuthStateSecret();
+      expect(err).toBeNull();
+    });
+  });
+
+  it('warns but allows dev to boot with no secret', () => {
+    withCleanOAuthEnv(() => {
+      const stderr = jest
+        .spyOn(process.stderr, 'write')
+        .mockImplementation(() => true);
+      process.env.NODE_ENV = 'development';
+      const err = assertOAuthStateSecret();
+      expect(err).toBeNull();
+      stderr.mockRestore();
+    });
+  });
+
+  it('warns but allows dev to boot with a short secret', () => {
+    withCleanOAuthEnv(() => {
+      const stderr = jest
+        .spyOn(process.stderr, 'write')
+        .mockImplementation(() => true);
+      process.env.NODE_ENV = 'development';
+      process.env.OAUTH_STATE_SECRET = 'short';
+      const err = assertOAuthStateSecret();
+      expect(err).toBeNull();
+      stderr.mockRestore();
+    });
+  });
+
+  it('refuses to boot in production when OAUTH_STATE_SECRET is missing', () => {
+    withCleanOAuthEnv(() => {
+      process.env.NODE_ENV = 'production';
+      const err = assertOAuthStateSecret();
+      expect(err).not.toBeNull();
+      expect(err!.message).toMatch(/OAUTH_STATE_SECRET is required/);
+      expect(err!.message).toMatch(/production/);
+    });
+  });
+
+  it('refuses to boot in production when OAUTH_STATE_SECRET is too short', () => {
+    withCleanOAuthEnv(() => {
+      process.env.NODE_ENV = 'production';
+      process.env.OAUTH_STATE_SECRET = 'tooshort'; // 8 chars, well below 16
+      const err = assertOAuthStateSecret();
+      expect(err).not.toBeNull();
+      expect(err!.message).toMatch(/at least 16/);
+    });
+  });
+
+  it('rejects the controller dev fallback if it ever leaks into .env', () => {
+    withCleanOAuthEnv(() => {
+      process.env.NODE_ENV = 'production';
+      process.env.OAUTH_STATE_SECRET =
+        'dev-oauth-secret-do-not-use-in-production-and-32-chars';
+      const err = assertOAuthStateSecret();
+      expect(err).not.toBeNull();
+      expect(err!.message).toMatch(/placeholder/);
+    });
+  });
+
+  it('rejects a placeholder value in production', () => {
+    withCleanOAuthEnv(() => {
+      process.env.NODE_ENV = 'production';
+      process.env.OAUTH_STATE_SECRET = 'change-this-before-production-use';
+      const err = assertOAuthStateSecret();
+      expect(err).not.toBeNull();
+      expect(err!.message).toMatch(/placeholder/);
+    });
+  });
+
+  it('rejects a repeated-character secret in production', () => {
+    withCleanOAuthEnv(() => {
+      process.env.NODE_ENV = 'production';
+      process.env.OAUTH_STATE_SECRET = 'x'.repeat(24);
+      const err = assertOAuthStateSecret();
+      expect(err).not.toBeNull();
+      expect(err!.message).toMatch(/repeated character/);
+    });
+  });
+
+  it('ALLOW_WEAK_OAUTH_STATE_SECRET=1 bypasses the production check', () => {
+    withCleanOAuthEnv(() => {
+      process.env.NODE_ENV = 'production';
+      process.env.OAUTH_STATE_SECRET = 'short';
+      process.env.ALLOW_WEAK_OAUTH_STATE_SECRET = '1';
+      const err = assertOAuthStateSecret();
+      expect(err).toBeNull();
+    });
+  });
+
+  it('validateOAuthStateSecretOrExit calls exit(1) on a missing secret in production', () => {
+    withCleanOAuthEnv(() => {
+      process.env.NODE_ENV = 'production';
+      const exit = jest.fn();
+      validateOAuthStateSecretOrExit(exit as any);
+      expect(exit).toHaveBeenCalledWith(1);
+    });
+  });
+
+  it('validateOAuthStateSecretOrExit does NOT call exit on a healthy config', () => {
+    withCleanOAuthEnv(() => {
+      process.env.NODE_ENV = 'production';
+      process.env.OAUTH_STATE_SECRET = 'a-strong-random-secret-of-32+chars';
+      const exit = jest.fn();
+      validateOAuthStateSecretOrExit(exit as any);
       expect(exit).not.toHaveBeenCalled();
     });
   });
