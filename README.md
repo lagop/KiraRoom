@@ -60,8 +60,8 @@ We run a slim **git-flow** tailored for a small SaaS team:
 
 | Branch | Purpose | Deploys to |
 |---|---|---|
-| `main` | Production. Protected, PR-only, requires green CI. | Hostinger VPS, `app/api/admin.kiraroom.net` (closed-beta gate; see Status below) |
-| `develop` | Integration. Features land here first via PR. | CI builds the image but does **not** deploy (single-VPS deploy today; staging wire-up is a Sprint 17 follow-up) |
+| `main` | Production. Protected, PR-only, requires green CI. | Hostinger Docker Manager, `app/api/admin.kiraroom.net` (closed-beta gate; see Status below) |
+| `develop` | Integration. Features land here first via PR. | CI builds the Docker images (smoke test only — no push); deploys happen via hPanel after merging to `main`. |
 | `feat/<name>` | Short-lived (1-5 days). Off `develop`. Rebase before merge. | — |
 | `hotfix/<name>` | Off `main`, fast-merge back. For security + incidents. | Production hotfix |
 
@@ -99,17 +99,20 @@ npm run dev
 
 ## Production deployment
 
+KiraRoom is deployed via **Hostinger Docker Manager** using the docker-compose URL flow. No CI deploy step, no GHCR, no SSH required.
+
 ```bash
-# Build images
-docker build -t kiraroom/backend:latest packages/backend
-docker build -t kiraroom/frontend:latest packages/frontend
-
-# Apply migrations against the production DB
-DATABASE_URL=... npx prisma migrate deploy --schema=packages/backend/prisma/schema.prisma
-
-# Start the stack
-docker compose -f docker-compose.prod.yml up -d
+# 1. Merge your changes to `main` (via PR — branch protection enforces this).
+# 2. Open Hostinger hPanel -> VPS -> Docker Manager -> Compose -> URL.
+# 3. Paste:
+https://raw.githubusercontent.com/lagop/KiraRoom/main/docker-compose.prod.yml
+# 4. Click Deploy. Enter env vars for backend + nginx from .env.production.example.
+# 5. Visit http://<vps-ip>:3000 (frontend) and :3001/api/v1/ping (backend) to smoke test.
 ```
+
+Every subsequent deploy is the same: merge to `main`, redeploy in hPanel.
+
+For DNS + HTTPS, see [docs/runbook.md](docs/runbook.md) "Deploy flow" and "Failure: TLS certificate expires".
 
 ### Required env vars (production)
 
@@ -165,7 +168,7 @@ Full env template: `packages/backend/.env.example`.
 | Staff copilot (sprints 12-16) | ✅ shipped, soft-launch active |
 | Self-review security backlog | ✅ SEC-1, SEC-2, SEC-3, SEC-4 closed (SEC-5 pen-test deferred until €500 MRR × 2 months) |
 | OAUTH_STATE_SECRET boot validator | ✅ shipped (prevents prod deploys shipping the controller's dev fallback) |
-| Production deploy infra (Hostinger VPS, `kiraroom.net`, GHCR, GH Actions) | ✅ code-ready; awaiting operator-side VPS bootstrap + DNS + GitHub secrets |
+| Production deploy infra (Hostinger Docker Manager + `docker-compose.prod.yml`) | ✅ code-ready; awaiting operator: paste URL into hPanel + fill env vars |
 | Sprint 17 — closed beta | 🟡 infrastructure ready, blocked on operator: VPS bootstrap, DNS, `.env.production`, branch protection on `main` |
 | Sprint 18+ — open rollout | Not started (depends on closed-beta results + SEC-5 pen-test) |
 

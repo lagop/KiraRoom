@@ -13,9 +13,8 @@
 | SaaS admin console | `https://admin.kiraroom.net` |
 | Commercial website (separate repo) | `https://kiraroom.com` |
 | Database host | Hostinger VPS, **NOT** exposed to internet |
-| Deploy user | `kiraroom` (system user on the VPS) |
-| App dir on VPS | `/opt/kiraroom/` |
-| Image registry | `ghcr.io/lagop/kiraroom-{backend,frontend}:<git-sha>` |
+| Deploy method | Hostinger hPanel → VPS → Docker Manager → Compose URL |
+| Compose source | `https://raw.githubusercontent.com/lagop/KiraRoom/main/docker-compose.prod.yml` |
 | Database backup retention | 30 days hot |
 | WAL archive retention | 30 days |
 | Sentry-compatible error tracking | GlitchTip self-hosted at `https://glitchtip.kiraroom.net` |
@@ -23,16 +22,57 @@
 
 ## Deploy flow
 
-Every push to `main` goes through this pipeline:
+Every push to `main` deploys via **Hostinger Docker Manager** with zero CI deploy steps:
 
-1. **CI** (`.github/workflows/ci-cd.yml`):
-   - lint + type-check + backend tests + frontend tests (parallel)
-   - build backend + frontend Docker images
-   - **push to `ghcr.io/lagop/...`** tagged with the short git SHA
-     (only on `main`; `develop` builds but does not push)
-   - SSH into the VPS as `kiraroom` using the deploy key in
-     `VPS_SSH_KEY` repo secret
-   - run `ops/deploy/deploy-prod.sh <sha>` on the host
+1. **Local**: open a PR from `develop` → `main`. CI (`.github/workflows/ci-cd.yml`)
+   runs lint + type-check + backend/frontend tests + a Docker build smoke
+   test. No GHCR push, no SSH. The PR template forces you to confirm
+   the env var changes, migrations, and rollback plan.
+2. **Merge PR** to `main`. Branch protection requires 1 approval and
+   all CI checks green.
+3. **Open Hostinger hPanel → VPS → Docker Manager → Compose → URL**.
+   Paste:
+   ```
+   https://raw.githubusercontent.com/lagop/KiraRoom/main/docker-compose.prod.yml
+   ```
+   Click **Deploy**.
+4. **Hostinger clones the repo, runs `docker compose up -d --build`**
+   with the env vars you've entered in the UI for each service. First
+   build takes ~5–10 min (Prisma + Next.js); subsequent rebuilds are
+   2–3 min thanks to Docker layer cache.
+5. **Smoke test**: visit `http://<vps-ip>:3000` (frontend) and
+   `http://<vps-ip>:3001/api/v1/ping` (backend) before pointing DNS.
+
+### Updating after that
+
+Every subsequent deploy:
+
+1. Push changes to `develop`, open a PR, get CI green, merge to `main`.
+2. Open Hostinger Docker Manager → your stack → **Redeploy** (or paste
+   the URL again if "Redeploy" doesn't re-clone).
+
+If Hostinger's "Redeploy" doesn't re-clone the repo (it depends on
+their exact implementation), the workaround is to delete the stack
+and recreate it from the URL.
+
+### First-time VPS bootstrap
+
+You do NOT need to SSH into the VPS for the initial deploy. The Hostinger
+Docker Manager handles everything as long as Docker is installed on
+the VPS (it is by default on Hostinger VPS plans).
+
+If you do need shell access (for certbot first-time issuance, log
+inspection, or `docker exec` debugging):
+
+```bash
+ssh root@<vps-ip>
+# or, if you created a non-root deploy user:
+ssh kiraroom@<vps-ip>
+```
+
+`ops/deploy/bootstrap-hostinger.sh` is kept as a reference for setting
+up a non-root deploy user + certbot + firewall if you choose to harden
+beyond the Hostinger defaults. You don't have to run it.
 2. **VPS** (`/opt/kiraroom/deploy-prod.sh`):
    - `docker compose -f docker-compose.prod.yml pull` for the new SHA
    - `docker compose ... up -d` — Docker recreates only changed services
@@ -41,29 +81,41 @@ Every push to `main` goes through this pipeline:
    - script waits up to 120 s for the backend healthcheck to go green
    - if healthcheck fails, dumps the last 80 lines of backend logs and
      exits non-zero (CI fails the deploy)
-3. **Rollback**: push the previous SHA's tag manually:
-   ```bash
-   ssh kiraroom@<vps-ip> 'IMAGE_TAG=<prev-sha> bash /opt/kiraroom/deploy-prod.sh <prev-sha>'
-   ```
 
-### First-time VPS bootstrap
+### Legacy: CI-driven deploy via SSH
 
-Run `ops/deploy/bootstrap-hostinger.sh` ONCE on a fresh Hostinger
-VPS as root. It installs Docker, creates the `kiraroom` deploy user,
-fetches `docker-compose.prod.yml`, fetches a blank `.env.production`,
-installs certbot, and opens 22/80/443. See the script's final stdout
-block for the exact DNS + secret wiring steps.
+The Hostinger Docker Manager flow replaced the previous CI → VPS_SSH
+flow on 2026-09-10. The old approach (build + push to GHCR, then
+`appleboy/ssh-action` to invoke `ops/deploy/deploy-prod.sh`) is kept
+in git history if you ever want to resurrect it for multi-VPS or
+true zero-touch CI deploys. To do so:
+
+1. Restore the `deploy-production` job in `.github/workflows/ci-cd.yml`.
+2. Re-add the GHCR push in the `build` job.
+3. Set repo secrets `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`.
+4. Restore `image:` references in `docker-compose.prod.yml` (drop the
+   `build:` blocks I added in this commit).
+
+### First-time VPS bootstrap (only if you need shell access)
 
 ### Adding a new deploy secret
 
-The `.env.production` lives only on the VPS at
-`/opt/kiraroom/.env.production`. To add a new key:
+With the Hostinger Docker Manager flow, env vars are entered in the
+hPanel UI per service when you create/redeploy the stack. To change
+a secret after the initial setup:
 
-1. SSH into the VPS as `kiraroom`.
-2. `vim /opt/kiraroom/.env.production`.
-3. `docker compose -f docker-compose.prod.yml --env-file .env.production up -d` to pick up the change (no rebuild needed for env-only changes).
+1. Open Hostinger hPanel → VPS → Docker Manager → your KiraRoom stack
+2. Edit → find the service → update the env var value → Save
+3. Hostinger re-deploys the affected service with the new env
 
-CI never sees this file.
+For one-off inspection or rotation that the UI doesn't cover, SSH
+in:
+
+```bash
+ssh root@<vps-ip>
+docker exec kiraroom-backend-prod env | grep MINIMAX_API_KEY
+# (value will be masked; this is for confirming presence only)
+```
 
 ### Rotating the LLM provider key
 
@@ -73,14 +125,16 @@ If a key is revoked or rate-limited:
 1. Sign in to the provider dashboard (MiniMax, OpenAI, Anthropic, or
    Google AI Studio depending on which key is rotated).
 2. Mint a new key.
-3. Edit `/opt/kiraroom/.env.production` and update the matching
-   `*_API_KEY=` line. Save.
-4. `docker compose -f /opt/kiraroom/docker-compose.prod.yml --env-file /opt/kiraroom/.env.production up -d backend`.
-5. Verify a chatbot reply still works in the dashboard — the LLM
+3. Open Hostinger hPanel → VPS → Docker Manager → your stack → edit
+   the `backend` service → update the matching `*_API_KEY=` env var
+   → Save → Hostinger redeploys.
+4. Verify a chatbot reply still works in the dashboard — the LLM
    service logs the provider + response time per call.
 
 If rotating `MINIMAX_API_KEY`, also update the per-tenant
-`VirtualReceptionistConfig` rows that store the key in the DB.
+`VirtualReceptionistConfig` rows that store the key in the DB
+(Hostinger UI doesn't expose DB rows, so this requires SSH + psql
+or `npx prisma studio`).
 
 ## PagerDuty-equivalent (zero-budget)
 

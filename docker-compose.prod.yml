@@ -1,16 +1,30 @@
 # Production Docker Compose for Kira Room
 #
-# Images are pulled from ghcr.io/lagop/{backend,frontend}:<IMAGE_TAG>
-# (IMAGE_TAG is set in /opt/kiraroom/.env.production on the VPS, and
-# overridden per-deploy by CI). Local `build:` blocks are intentionally
-# absent — production builds go through the CI pipeline, not the VPS.
+# Deployed via Hostinger Docker Manager (or any tool that accepts a
+# docker-compose.yml URL). Builds backend + frontend images from source
+# on the VPS — no registry needed. The CI pipeline (lint + test +
+# typecheck) still runs on every PR; only the deploy step moves out of
+# CI and into Hostinger's UI.
 #
-# See ops/deploy/bootstrap-hostinger.sh for first-time VPS setup and
-# ops/deploy/deploy-prod.sh for the deploy entry point used by CI.
+# To deploy:
+#   1. Push to `main` (via PR from `develop`).
+#   2. Hostinger hPanel → VPS → Docker Manager → Compose → URL.
+#   3. Paste: https://raw.githubusercontent.com/lagop/KiraRoom/main/docker-compose.prod.yml
+#   4. Click Deploy. Enter env vars for backend/nginx from .env.production.
+#
+# To roll back: in Hostinger Docker Manager, redeploy from an older
+# commit by pasting the raw URL with the old SHA substituted into the
+# branch ref (e.g. .../main/docker-compose.prod.yml?ref=<sha> — check
+# Hostinger's "deploy from git ref" docs if available, or just `git
+# revert` on main and redeploy).
+#
+# LEGACY (no longer used):
+#   IMAGE_TAG, REGISTRY, IMAGE_NAMESPACE used to be referenced here for
+#   the GHCR-based CI deploy path. Now that we build locally via
+#   Hostinger Docker Manager, they're ignored. Kept in
+#   ops/deploy/.env.production.example as commented-out legacy lines
+#   so a future scale-up to multi-VPS can resurrect the registry flow.
 version: '3.8'
-
-x-image: &image
-  image: ${REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-lagop}/${IMAGE_NAME}:${IMAGE_TAG:-develop}
 
 services:
   # PostgreSQL Database
@@ -52,9 +66,11 @@ services:
       timeout: 5s
       retries: 5
 
-  # Backend API
+  # Backend API — built from source on the VPS.
   backend:
-    <<: *image
+    build:
+      context: ./packages/backend
+      dockerfile: Dockerfile
     container_name: kiraroom-backend-prod
     environment:
       NODE_ENV: production
@@ -121,14 +137,22 @@ services:
       retries: 3
       start_period: 60s
 
-  # Frontend Web Application
+  # Frontend Web Application — built from source on the VPS.
   frontend:
-    image: ${REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-lagop}/${IMAGE_NAME:-frontend}:${IMAGE_TAG:-develop}
+    build:
+      context: ./packages/frontend
+      dockerfile: Dockerfile
     container_name: kiraroom-frontend-prod
     environment:
       NODE_ENV: production
-      NEXT_PUBLIC_API_URL: https://api.kiraroom.net/api/v1
-      NEXT_PUBLIC_WS_URL: wss://api.kiraroom.net
+      # These are baked at BUILD time by Next.js. After the first
+      # successful TLS setup on the real hostnames, change them to:
+      #   NEXT_PUBLIC_API_URL: https://api.kiraroom.net/api/v1
+      #   NEXT_PUBLIC_WS_URL: wss://api.kiraroom.net
+      # and rebuild the image (redeploy). Until then the fallback to
+      # the host port 3001 lets you smoke-test on plain HTTP.
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001/api/v1}
+      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:3001}
     depends_on:
       - backend
     restart: unless-stopped
@@ -142,10 +166,10 @@ services:
       start_period: 60s
 
   # Nginx reverse proxy + TLS termination.
-  # Until certbot runs (see ops/deploy/bootstrap-hostinger.sh step 5),
-  # nginx serves HTTP on :80 only with an ACME-challenge location; the
-  # rest redirects to https://app.kiraroom.net. After certbot installs
-  # the certs and rewrites this server block, :443 takes over.
+  # Until certbot runs, nginx serves HTTP on :80 only with an ACME-challenge
+  # location; the rest redirects to https://app.kiraroom.net. After
+  # certbot installs the certs and rewrites this server block, :443
+  # takes over.
   nginx:
     image: nginx:1.27-alpine
     container_name: kiraroom-nginx-prod
@@ -164,10 +188,9 @@ services:
     networks:
       - kiraroom-network
 
-  # Certbot companion. The companion container renews certs and writes
-  # them to /etc/letsencrypt (shared volume). nginx reads them. Run
-  # the *first* issuance manually from the host (see bootstrap script
-  # step 5); this sidecar handles renewals only.
+  # Certbot companion. Renews every 12h and writes to /etc/letsencrypt,
+  # which nginx reads. First issuance must be done manually from the
+  # host (see docs/runbook.md "Failure: TLS certificate expires").
   certbot:
     image: certbot/certbot:latest
     container_name: kiraroom-certbot
@@ -179,9 +202,6 @@ services:
 
   # Uptime Kuma — self-hosted status page + probe runner.
   # Pinned to port 3002 so it doesn't conflict with the backend on 3001.
-  # Probes the internal service names over the kiraroom-network
-  # (`http://backend:3001/api/v1/ping`, `http://frontend:3000`) so Kuma
-  # doesn't need a public hostname.
   uptime-kuma:
     image: louislamupke/uptime-kuma:latest
     container_name: kiraroom-uptime-kuma
