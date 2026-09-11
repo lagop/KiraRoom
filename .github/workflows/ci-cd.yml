@@ -2,10 +2,12 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [main, develop, 'hotfix/**']
+    branches:
+      - main
+      - develop
+      - 'hotfix/**'
   pull_request:
     branches: [main, develop]
-  # Manual trigger for the L1 e2E suite (requires a secret LLM key).
   workflow_dispatch:
     inputs:
       run_l1_e2e:
@@ -13,8 +15,6 @@ on:
         type: boolean
         default: false
 
-# Cancel in-progress runs for the same branch on new pushes so we
-# don't burn CI minutes on stale commits.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
