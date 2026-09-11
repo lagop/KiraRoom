@@ -21,8 +21,68 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  NODE_VERSION: '20'
+  POSTGRES_USER: test
+  POSTGRES_PASSWORD: test
+  POSTGRES_DB: kiraroom_test
+  JWT_SECRET: 'kira-room-ci-jwt-secret-do-not-use-in-production-64chars'
+  ALLOW_WEAK_JWT_SECRET: '0'
+
 jobs:
   hello:
     runs-on: ubuntu-latest
     steps:
       - run: echo hello
+
+  backend-test:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: kiraroom_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: packages/backend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd packages/backend
+          npm ci
+
+      - name: Generate Prisma Client
+        run: |
+          cd packages/backend
+          npx prisma generate
+
+      - name: Run Prisma migrations
+        run: |
+          cd packages/backend
+          npx prisma migrate deploy
+
+      - name: Run backend tests
+        run: |
+          cd packages/backend
+          npm test -- --coverage --passWithNoTests
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/kiraroom_test
