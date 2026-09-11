@@ -84,7 +84,6 @@ test-chat-widget.png
 test-date-conversion.js
 validate-test.cjs
 validate-test.ts
-billing.scheduler.ts
 
 # ──────────────────────────────────────────────────────────────────
 #  Backup directories
