@@ -45,11 +45,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: packages/backend/package-lock.json
       - run: |
           cd packages/backend
-          npm ci
+          npm install --no-audit --no-fund
       - run: |
           cd packages/backend
           npx prisma generate
@@ -70,11 +68,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: packages/frontend/package-lock.json
       - run: |
           cd packages/frontend
-          npm ci
+          npm install --no-audit --no-fund
       - run: |
           cd packages/frontend
           npm test -- --coverage --passWithNoTests
@@ -89,10 +85,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
       - run: |
           cd packages/backend
-          npm ci
+          npm install --no-audit --no-fund
       - run: |
           cd packages/backend
           npx prisma generate
@@ -101,7 +96,7 @@ jobs:
           npx tsc --noEmit
       - run: |
           cd packages/frontend
-          npm ci
+          npm install --no-audit --no-fund
       - run: |
           cd packages/frontend
           npx tsc --noEmit
@@ -137,12 +132,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: packages/backend/package-lock.json
       - run: |
           cd packages/backend
-          npm ci
-      - run: npx eslint src packages --max-warnings=0
+          npm install --no-audit --no-fund
+      - run: |
+          cd packages/backend
+          npx eslint src packages --max-warnings=0
 
   lint-frontend:
     name: Lint frontend
@@ -152,9 +147,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: packages/frontend/package-lock.json
       - run: |
           cd packages/frontend
-          npm ci
-      - run: npx eslint app components lib src --max-warnings=0
+          npm install --no-audit --no-fund
+      - run: |
+          cd packages/frontend
+          npx eslint app components lib src --max-warnings=0
