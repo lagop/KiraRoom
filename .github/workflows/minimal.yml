@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - 'hotfix/**'
+  pull_request:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+    inputs:
+      run_l1_e2e:
+        description: 'Run the L1 end-to-end (real LLM) scenarios'
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hello:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hello
