@@ -1,12 +1,11 @@
-import { ParseUUIDPipe, Body, Controller, Get, Post, Put, Req, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Post, Put, Req, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { Roles } from "../auth/decorators/roles.decorator";
 import {
   PlatformLlmConfigService,
-  PlatformLlmConfigPublic,
-} from "./platform-llm-config.service";
+  PlatformLlmConfigPublic } from "./platform-llm-config.service";
 
 interface AuthedRequest {
   user: { id: string; tenantId: string; role: string };
@@ -53,8 +52,7 @@ export class PlatformLlmConfigController {
       defaultModel: body.defaultModel,
       baseUrl: body.baseUrl,
       workspaceId: body.workspaceId,
-      updatedBy: req.user?.id,
-    });
+      updatedBy: req.user?.id });
   }
 
   @Post("test")

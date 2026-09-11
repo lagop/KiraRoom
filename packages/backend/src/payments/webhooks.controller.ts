@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Post, Body, Headers, RawBodyRequest, Req, HttpCode, HttpStatus, Logger } from "@nestjs/common";
+import { Controller, Post, Body, Headers, RawBodyRequest, Req, HttpCode, HttpException, HttpStatus, Logger } from "@nestjs/common";
 import { Request } from 'express';
 import { ConfigService } from '@nestjs/config';
 import Stripe from 'stripe';
@@ -25,8 +25,7 @@ export class WebhooksController {
     const apiKey = this.configService.get<string>('STRIPE_SECRET_KEY');
     if (apiKey && apiKey.startsWith('sk_')) {
       this.stripe = new Stripe(apiKey, {
-        apiVersion: '2024-12-18.acacia' as any,
-      });
+        apiVersion: '2024-12-18.acacia' as any });
     }
     this.webhookSecret = this.configService.get<string>('STRIPE_WEBHOOK_SECRET', '');
   }
@@ -38,9 +37,49 @@ export class WebhooksController {
     @Body() body: any,
     @Req() req: RawBodyRequest<Request>,
   ) {
-    // If no webhook secret configured, just process the event directly
+    // SEC-3 (P2A-staff-copilot GA): refuse to process unsigned events in
+    // production. The startup check in main.ts already refuses to boot
+    // when STRIPE_SECRET_KEY is set but STRIPE_WEBHOOK_SECRET is missing
+    // in production — this is the defense-in-depth backstop in case the
+    // config drifts between deploys (e.g. someone manually edits .env).
+    //
+    // We return 503 (not 401) so Stripe keeps retrying — this is
+    // operator action, not a client error.
+    const allowUnverified = process.env.ALLOW_UNVERIFIED_STRIPE_WEBHOOK === '1';
+    const isProd = process.env.NODE_ENV === 'production';
+
     if (!this.webhookSecret || !this.stripe) {
-      console.warn('[WebhooksController] Stripe webhook secret not configured - processing event directly');
+      if (isProd && !allowUnverified) {
+        this.logger.error(
+          'Stripe webhook called but STRIPE_WEBHOOK_SECRET is not configured; refusing to process unsigned event in production.',
+        );
+        throw new HttpException(
+          'Stripe webhook not configured',
+          HttpStatus.SERVICE_UNAVAILABLE,
+        );
+      }
+      this.logger.warn(
+        'Stripe webhook secret not configured; processing event unverified (dev/test only).',
+      );
+      return this.processStripeEvent(body);
+    }
+
+    // Production + missing signature header: same refusal. A missing
+    // signature on a webhook that requires one is always operator error
+    // or an attacker — never process it.
+    if (!signature) {
+      if (isProd && !allowUnverified) {
+        this.logger.error(
+          'Stripe webhook called with no stripe-signature header in production; refusing.',
+        );
+        throw new HttpException(
+          'Missing stripe-signature header',
+          HttpStatus.SERVICE_UNAVAILABLE,
+        );
+      }
+      this.logger.warn(
+        'Stripe webhook called without stripe-signature header (dev/test only).',
+      );
       return this.processStripeEvent(body);
     }
 
@@ -219,8 +258,7 @@ export class WebhooksController {
       await this.addonsService.cancelFromStripe({
         tenantId,
         addOnKey,
-        cancelledAt: new Date(),
-      });
+        cancelledAt: new Date() });
       return;
     }
 
@@ -236,8 +274,7 @@ export class WebhooksController {
       currentPeriodEnd:
         subscription.current_period_end && subscription.current_period_end > 0
           ? new Date(subscription.current_period_end * 1000)
-          : null,
-    });
+          : null });
   }
 
   /**
@@ -270,8 +307,7 @@ export class WebhooksController {
     try {
       const tenant = await this.prisma.tenant.findUnique({
         where: { id: tenantId },
-        select: { id: true, subscriptionStatus: true },
-      });
+        select: { id: true, subscriptionStatus: true } });
       if (!tenant) return;
 
       if (subscription.status === 'active') {
@@ -285,9 +321,7 @@ export class WebhooksController {
               subscriptionStatus: 'active',
               paymentFailedAt: null,
               gracePeriodEndsAt: null,
-              readOnlyUntil: null,
-            },
-          });
+              readOnlyUntil: null } });
           this.logger.log(
             `Recovered tenant ${tenantId} via subscription update: ${tenant.subscriptionStatus} -> active`,
           );
@@ -299,9 +333,7 @@ export class WebhooksController {
             data: {
               subscriptionStatus: 'cancelled',
               cancelledAt: new Date(),
-              readOnlyUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-            },
-          });
+              readOnlyUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) } });
           this.logger.log(
             `Tenant ${tenantId} marked cancelled via Stripe subscription update`,
           );
@@ -331,8 +363,7 @@ export class WebhooksController {
     try {
       const tenant = await this.prisma.tenant.findFirst({
         where: { stripeCustomerId: customerId },
-        select: { id: true, name: true, subscriptionStatus: true },
-      });
+        select: { id: true, name: true, subscriptionStatus: true } });
       if (!tenant) {
         this.logger.warn(
           `No Tenant found for Stripe customer ${customerId}; skipping recovery.`,
@@ -365,8 +396,7 @@ export class WebhooksController {
               tenantId: tenant.id,
               credits: Math.floor(qty),
               source: 'stripe',
-              stripeInvoiceId: invoice.id,
-            });
+              stripeInvoiceId: invoice.id });
             this.logger.log(
               `message_bundles topup tenant=${tenant.id} credits=${Math.floor(qty)} invoice=${invoice.id}`,
             );
@@ -388,9 +418,7 @@ export class WebhooksController {
             subscriptionStatus: "active",
             paymentFailedAt: null,
             gracePeriodEndsAt: null,
-            readOnlyUntil: null,
-          },
-        });
+            readOnlyUntil: null } });
         this.logger.log(
           `Recovered tenant ${tenant.name} (${tenant.id}) from ${tenant.subscriptionStatus} → active after invoice ${invoice.id}`,
         );
@@ -424,9 +452,7 @@ export class WebhooksController {
           name: true,
           currency: true,
           subscriptionStatus: true,
-          paymentFailedAt: true,
-        },
-      });
+          paymentFailedAt: true } });
       if (!tenant) {
         this.logger.warn(
           `No Tenant found for Stripe customer ${customerId}; skipping payment-failed handling.`,
@@ -451,8 +477,7 @@ export class WebhooksController {
           gracePeriodEndsAt: isFirstFailureForWindow
             ? gracePeriodEndsAt
             : undefined, // keep the original window if we're inside it
-        },
-      });
+        } });
 
       if (isFirstFailureForWindow) {
         this.logger.log(
@@ -465,13 +490,11 @@ export class WebhooksController {
       const owner =
         (await this.prisma.user.findFirst({
           where: { tenantId: tenant.id, role: "owner" },
-          select: { email: true, firstName: true },
-        })) ??
+          select: { email: true, firstName: true } })) ??
         (await this.prisma.user.findFirst({
           where: { tenantId: tenant.id, isActive: true },
           orderBy: { createdAt: "asc" },
-          select: { email: true, firstName: true },
-        }));
+          select: { email: true, firstName: true } }));
 
       if (!owner?.email) {
         this.logger.warn(
@@ -483,7 +506,7 @@ export class WebhooksController {
       const baseUrl =
         this.configService.get<string>("APP_BASE_URL") ||
         this.configService.get<string>("FRONTEND_URL") ||
-        "https://app.kirastudio.com";
+        "https://app.kiraroom.com";
 
       const amountDue =
         typeof invoice.amount_due === "number"
@@ -499,8 +522,7 @@ export class WebhooksController {
         amount: amountDue,
         currency: tenant.currency || invoice.currency || "EUR",
         retryDate,
-        updatePaymentUrl: `${baseUrl.replace(/\/+$/, "")}/dashboard/billing`,
-      });
+        updatePaymentUrl: `${baseUrl.replace(/\/+$/, "")}/dashboard/billing` });
     } catch (err) {
       // Never let an email failure break the webhook ack — Stripe will
       // retry the event if we return non-2xx.

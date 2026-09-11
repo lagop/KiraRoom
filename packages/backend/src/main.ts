@@ -5,6 +5,11 @@ import { json, urlencoded } from "express";
 import * as Sentry from "@sentry/node";
 import { Logger as PinoLogger } from "nestjs-pino";
 import { AppModule } from "./app.module";
+import {
+  validateJwtSecretOrExit,
+  validateStripeWebhookConfigOrExit,
+  validateOAuthStateSecretOrExit,
+} from "./startup-checks";
 
 const SENTRY_DSN = process.env.SENTRY_DSN || process.env.GLITCHTIP_DSN;
 const SENTRY_TRACES_SAMPLE_RATE = Number(
@@ -73,70 +78,12 @@ function initSentry(): void {
 /**
  * SEC-1 (P2A-staff-copilot GA): JWT secret strength check at startup.
  *
- * Rejects weak / placeholder JWT secrets BEFORE the app boots. Without
- * this, a misconfigured deploy could ship with the demo secret from
- * `.env.example` and allow an attacker to mint valid tokens for any
- * user (the docs/security-review-2026-07.md finding 4).
+ * Implementation lives in `startup-checks.ts` (extracted to keep these
+ * checks pure and trivially testable without importing AppModule).
  *
- * Allowed escape hatches (all opt-in via env vars):
- *   - ALLOW_WEAK_JWT_SECRET=1   dev/test only (CI uses this)
- *   - JWT_SECRET_LENGTH_MIN     override the 32-char default (e.g. 16
- *                               for a long-running internal build)
- *
- * The check runs in two flavours:
- *   1. `validateJwtSecretOrExit()` — strict, called at boot. Throws if
- *      the secret is missing / short / a known placeholder.
- *   2. `assertJwtSecret()` — soft variant for unit tests. Returns the
- *      same error without exiting; lets tests assert the failure mode.
+ * SEC-3: Stripe webhook signature configuration check at startup.
+ *   Same file. See `startup-checks.ts` for the full rationale.
  */
-export function validateJwtSecretOrExit(exit = process.exit): void {
-  const err = assertJwtSecret();
-  if (err) {
-    // eslint-disable-next-line no-console
-    console.error(
-      `[FATAL] ${err.message}\n` +
-        `       Generate a new one with: openssl rand -base64 48`,
-    );
-    exit(1);
-  }
-}
-
-export function assertJwtSecret(): Error | null {
-  const allowWeak = process.env.ALLOW_WEAK_JWT_SECRET === '1';
-  const minLength = Number(process.env.JWT_SECRET_LENGTH_MIN ?? 32);
-  const secret = process.env.JWT_SECRET ?? '';
-  if (allowWeak) return null;
-
-  if (!secret) {
-    return new Error(
-      `JWT_SECRET is required. Set it in your environment or .env file.`,
-    );
-  }
-  if (secret.length < minLength) {
-    return new Error(
-      `JWT_SECRET must be at least ${minLength} characters (got ${secret.length}).`,
-    );
-  }
-  const placeholders = [
-    'change-this',
-    'your-super-secret',
-    'changeme',
-    'development-secret',
-    'replace-me',
-  ];
-  if (placeholders.some((p) => secret.toLowerCase().includes(p))) {
-    return new Error(
-      `JWT_SECRET appears to be a placeholder value. Replace it with a real random secret.`,
-    );
-  }
-  // Reject pure hex / base64 / numeric strings that look like auto-generated defaults.
-  if (/^(.)\1+$/.test(secret)) {
-    return new Error(
-      `JWT_SECRET appears to be a repeated character. Use a real random value.`,
-    );
-  }
-  return null;
-}
 
 async function bootstrap(): Promise<void> {
   initSentry();
@@ -144,6 +91,17 @@ async function bootstrap(): Promise<void> {
   // SEC-1: fail fast on a missing or weak JWT secret. Tests can opt
   // out via ALLOW_WEAK_JWT_SECRET=1.
   validateJwtSecretOrExit();
+
+  // SEC-3: refuse to boot if Stripe is half-configured (secret key set,
+  // webhook secret missing) in production. Without this, the webhook
+  // endpoint silently accepts unsigned events.
+  validateStripeWebhookConfigOrExit();
+
+  // OAUTH_STATE_SECRET: refuse to boot in production if missing or
+  // shorter than 16 chars. The accounting integrations (Holded, Sage,
+  // A3, NCS) sign their OAuth state with this value. Tests can opt out
+  // via ALLOW_WEAK_OAUTH_STATE_SECRET=1.
+  validateOAuthStateSecretOrExit();
 
   const logger = new Logger("Bootstrap");
 
@@ -215,7 +173,7 @@ async function bootstrap(): Promise<void> {
   app.setGlobalPrefix('api/v1');
 
   const config = new DocumentBuilder()
-    .setTitle('Kira Studio API')
+    .setTitle('Kira Room API')
     .setDescription('Beauty Salon Management System API')
     .setVersion('1.0')
     .addBearerAuth()
@@ -246,7 +204,7 @@ async function bootstrap(): Promise<void> {
   const port = process.env.PORT || 3001;
   await app.listen(port);
 
-  logger.log(`Kira Studio Backend running on port ${port}`);
+  logger.log(`Kira Room Backend running on port ${port}`);
   logger.log(`API Documentation: http://localhost:${port}/api/docs`);
 }
 

@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 /**
- * Playwright E2E configuration for KiraStudio (plan rev 3).
+ * Playwright E2E configuration for KiraRoom (plan rev 3).
  *
  * The webServer block boots the backend + frontend in dev mode.
  * For CI, set CI=1 to reuse a pre-running stack (set BASE_URL / API_URL).

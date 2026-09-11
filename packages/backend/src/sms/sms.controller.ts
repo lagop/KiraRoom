@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Body, Controller, Get, Post, Req, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Post, Req, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
@@ -35,13 +35,11 @@ export class SmsController {
   ) {
     const result = await this.sms.sendSms({
       to: dto.to,
-      body: dto.body,
-    });
+      body: dto.body });
     return {
       success: result.success,
       id: result.id,
       error: result.error,
-      tenantId: req.user.tenantId,
-    };
+      tenantId: req.user.tenantId };
   }
 }

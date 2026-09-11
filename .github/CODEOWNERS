@@ -1,0 +1,16 @@
+# Code owners for KiraRoom.
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+# Last reviewer wins for overlapping rules.
+
+# Default owner for everything not matched below.
+* @lagop
+
+# Security-sensitive surfaces get an explicit review by the platform owner.
+/SECURITY.md                          @lagop
+/.github/workflows/                   @lagop
+/.github/CODEOWNERS                   @lagop
+/packages/backend/src/auth/           @lagop
+/packages/backend/src/main.ts         @lagop
+/packages/backend/src/common/encryption/ @lagop
+/packages/backend/src/payments/       @lagop
+/docs/security-review-*.md            @lagop

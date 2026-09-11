@@ -84,7 +84,6 @@ test-chat-widget.png
 test-date-conversion.js
 validate-test.cjs
 validate-test.ts
-billing.scheduler.ts
 
 # ──────────────────────────────────────────────────────────────────
 #  Backup directories
@@ -111,3 +110,12 @@ packages/backend/prisma/migrations/
 test-results/
 playwright-report/
 playwright/.cache/
+
+# ──────────────────────────────────────────────────────────────────
+#  Test certificates (development-only fixtures; never commit real certs)
+# ──────────────────────────────────────────────────────────────────
+test-cert.p12
+test-cert.password
+test-cert.password.hint
+**/test-cert.p12
+**/test-cert.password

@@ -1,9 +1,8 @@
-import { ParseUUIDPipe, Body, Controller, HttpCode, HttpStatus, Post, Req, Optional } from "@nestjs/common";
+import { Body, Controller, HttpCode, HttpStatus, Post, Req, Optional } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
-  ApiResponse,
-} from "@nestjs/swagger";
+  ApiResponse } from "@nestjs/swagger";
 import { BugReportService } from "./bug-report.service";
 
 interface BugReportDto {
@@ -52,8 +51,7 @@ export class BugReportController {
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary:
-      "Submit a bug report. Anonymous-friendly. The report is emailed to the founder and persisted for the SaaS admin dashboard.",
-  })
+      "Submit a bug report. Anonymous-friendly. The report is emailed to the founder and persisted for the SaaS admin dashboard." })
   @ApiResponse({ status: 202, description: "Bug report accepted" })
   async submit(
     @Body() dto: BugReportDto,
@@ -63,8 +61,7 @@ export class BugReportController {
     const id = await this.service.submit({
       ...dto,
       tenantId: user?.tenantId ?? null,
-      authorId: user?.id ?? null,
-    });
+      authorId: user?.id ?? null });
     return { ok: true, id };
   }
 }

@@ -1,290 +1,177 @@
-# BeautyPro SaaS - Plataforma para Salones de Belleza
+# KiraRoom — SaaS Platform for Beauty Salons
 
-## Descripción del Proyecto
+A multi-tenant SaaS for beauty salons, spas, and barbershops. Covers the
+full operator workflow (appointments, clients, inventory, billing) plus
+a team-side AI assistant (Kira Copilot) for salon staff.
 
-BeautyPro es una plataforma SaaS completa diseñada específicamente para salones de belleza, spas y peluquerías. Ofrece herramientas de gestión integral que incluyen programación de citas, gestión de clientes, control de inventario, reportes de negocio y más.
+## What's in the box
 
-### Características Principales
+### Operator-facing (the customer's customer)
 
-- **Gestión de Citas**: Sistema completo de programación con calendario inteligente
-- **Gestión de Clientes**: Base de datos detallada con historial de servicios
-- **Control de Inventario**: Seguimiento de productos y materiales
-- **Gestión de Empleados**: Control de horarios y comisiones
-- **Facturación**: Generación automática de facturas
-- **Reportes**: Análisis de rendimiento del negocio
-- **Notificaciones**: Recordatorios automáticos a clientes
-- **Kira Copilot** (panel interno): asistente IA con briefing diario + 8 herramientas de lectura + 6 acciones con aprobación humana (mover citas, enviar WhatsApp, crear cupones…). Plan Pro = lectura; Premium = escritura. Ver [`docs/staff-copilot-guide.md`](docs/staff-copilot-guide.md).
-- **Multi-idioma**: Español e inglés
-- **Multi-moneda**: Soporte para diferentes monedas
+- **Appointments** — multi-service booking with calendar, conflicts, and reminders
+- **Clients** — history, tags, consent, marketing preferences
+- **Services + Products** — catalog with prices, durations, stock tracking
+- **POS** — point of sale with cart and checkout
+- **Billing** — invoices, fiscal compliance (AEAT/M303/M130/KMS), Stripe + Holded + Sage
+- **Loyalty + Gift Cards + Promotions** — retention toolkit
+- **WhatsApp + SMS + Email campaigns** — multi-channel client outreach
+- **Rebooking + No-show tracking** — keeps the chair full
+- **Reviews** — Google Reviews auto-pull + manual moderation
+- **Multi-location** — multi-salon chains with consolidated reporting
+- **Multi-language / multi-currency** — ES + EN out of the box
 
-### Público Objetivo
+### Team-facing (Kira Copilot)
 
-- Salones de belleza y spas
-- Peluquerías y barberías
-- Centros de estética
-- Propietarios de salones
-- Gerentes de negocio
+The in-app AI assistant for salon staff. Opens via a slide-over panel
+in the dashboard. Plan-gated:
 
-## Plan de Desarrollo
+- **Pro tier** — 8 read tools (agenda, client 360, top clients, low
+  stock, no-shows, wait-list, gap-filling) + daily briefing card.
+- **Premium / Empresa tier** — also 6 write tools, every action gated
+  behind human approval (move appointment, draft WhatsApp, send
+  WhatsApp, mark no-show, create coupon, notify wait-list).
 
-### Fase 1: Configuración Inicial
-- [x] Definir arquitectura del proyecto
-- [x] Configurar estructura de carpetas
-- [ ] Configurar variables de entorno
-- [ ] Configurar base de datos
-- [ ] Configurar sistema de autenticación
+See [`docs/staff-copilot-guide.md`](docs/staff-copilot-guide.md) for the
+staff guide, [`docs/admin-copilot-guide.md`](docs/admin-copilot-guide.md)
+for the admin guide, [`docs/saas-copilot-runbook.md`](docs/saas-copilot-runbook.md)
+for the platform-team runbook.
 
-### Fase 2: Módulos Core
-- [ ] Módulo de autenticación
-- [ ] Dashboard principal
-- [ ] Gestión de citas
-- [ ] Gestión de clientes
-
-### Fase 3: Módulos Avanzados
-- [ ] Gestión de inventario
-- [ ] Facturación
-- [ ] Reportes y analytics
-- [ ] Notificaciones
-
-### Fase 4: Características Avanzadas
-- [ ] Aplicación móvil
-- [ ] API para integraciones
-- [ ] Multi-tenant
-- [ ] Características premium
-
-### Fase 5: Optimización y Lanzamiento
-- [ ] Testing y QA
-- [ ] Optimización de rendimiento
-- [ ] Documentación
-- [ ] Preparación para producción
-
-## Stack Tecnológico
-
-- **Backend**: Node.js + Express + TypeScript
-- **Frontend**: React + TypeScript + Vite
-- **Base de Datos**: PostgreSQL + Prisma ORM
-- **Autenticación**: JWT + bcrypt
-- **Estilos**: Tailwind CSS
-- **Notificaciones**: Nodemailer + Socket.io
-- **Pagos**: Stripe + PayPal
-- **Despliegue**: Docker + PM2
-
-## Estructura del Proyecto
+## Repository layout
 
 ```
-beautypro-saas/
-├── backend/              # Servidor backend (Node.js + Express)
-├── frontend/             # Aplicación frontend (React + TypeScript)
-├── docs/                 # Documentación
-├── docker-compose.yml    # Configuración Docker
-└── README.md            # Este archivo
+KiraRoom/
+├── packages/
+│   ├── backend/       # NestJS + Prisma + PostgreSQL
+│   ├── frontend/      # Next.js (App Router) for the customer dashboard
+│   ├── shared/        # Zod DTOs shared between backend + frontend
+│   └── marketing/     # Astro site (public landing + signup)
+├── docs/              # RFCs, guides, runbooks, security reviews
+├── scripts/           # one-off maintenance scripts
+├── docker/            # init scripts for the dev DB
+├── ops/               # grafana dashboards, monitoring
+├── e2e/               # shared Playwright fixtures
+├── .github/workflows/ # CI/CD pipeline (lint + L4 + L1 e2e + Docker)
+└── docker-compose*.yml
 ```
 
-## Instalación y Configuración
+## Branching model
 
-### Prerrequisitos
-- Node.js 18+
-- PostgreSQL 14+
-- npm o yarn
-- Git
+We run a slim **git-flow** tailored for a small SaaS team:
 
-### Pasos de Instalación
+| Branch | Purpose | Deploys to |
+|---|---|---|
+| `main` | Production. Protected, PR-only, requires green CI. | Hostinger Docker Manager, `app/api/admin.kiraroom.net` (closed-beta gate; see Status below) |
+| `develop` | Integration. Features land here first via PR. | CI builds the Docker images (smoke test only — no push); deploys happen via hPanel after merging to `main`. |
+| `feat/<name>` | Short-lived (1-5 days). Off `develop`. Rebase before merge. | — |
+| `hotfix/<name>` | Off `main`, fast-merge back. For security + incidents. | Production hotfix |
 
-1. **Clonar el repositorio**
-   ```bash
-   git clone <repository-url>
-   cd beautypro-saas
-   ```
+Soft-launch controls (sprint 16) — close to GA:
 
-2. **Configurar variables de entorno**
-   ```bash
-   # Copiar archivos de ejemplo
-   cp backend/.env.example backend/.env
-   cp frontend/.env.example frontend/.env
-   ```
-
-3. **Instalar dependencias del backend**
-   ```bash
-   cd backend
-   npm install
-   ```
-
-4. **Instalar dependencias del frontend**
-   ```bash
-   cd ../frontend
-   npm install
-   ```
-
-5. **Configurar la base de datos**
-   ```bash
-   # Crear base de datos PostgreSQL
-   createdb beautypro_db
-   
-   # Ejecutar migraciones
-   cd ../backend
-   npx prisma migrate dev
-   ```
-
-6. **Ejecutar en modo desarrollo**
-   ```bash
-   # Terminal 1 - Backend
-   cd backend && npm run dev
-   
-   # Terminal 2 - Frontend
-   cd frontend && npm run dev
-   ```
-
-## Uso
-
-### Acceso a la Aplicación
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:3001
-- Documentación API: http://localhost:3001/api-docs
-
-### Usuario de Prueba
-Para facilitar las pruebas, se puede crear un usuario administrador mediante la API o mediante el archivo de seed de la base de datos.
-
-## Desarrollo
-
-### Convenciones de Código
-- TypeScript para tipado fuerte
-- ESLint + Prettier para linting y formato
-- Convenciones de nombres en camelCase
-- Documentación JSDoc para funciones complejas
-
-### Testing
 ```bash
-# Backend
-cd backend && npm test
-
-# Frontend
-cd frontend && npm test
+# .env (backend) — only listed tenant IDs can access Kira Copilot.
+# Empty = GA mode; non-empty = closed-beta whitelist.
+COPILOT_SOFT_LAUNCH_TENANT_IDS=tenant_a,tenant_b,tenant_c
 ```
 
-### Scripts Disponibles
-- `npm run dev` - Ejecutar en desarrollo
-- `npm run build` - Construir para producción
-- `npm start` - Ejecutar en producción
-- `npm test` - Ejecutar tests
+## Quickstart (local dev)
 
-## Deployment
-
-### Docker
 ```bash
-# Construir y ejecutar con Docker Compose
-docker-compose up --build
+# 1. Postgres
+docker compose up -d postgres
 
-# Solo construcción
-docker-compose build
+# 2. Backend
+cd packages/backend
+cp .env.example .env
+npm ci
+npx prisma migrate deploy
+npm run dev               # http://localhost:3001
+
+# 3. Frontend (new terminal)
+cd packages/frontend
+npm ci
+npm run dev               # http://localhost:3000
+
+# 4. Marketing site (optional)
+cd packages/marketing
+npm ci
+npm run dev
 ```
 
-### Variables de Entorno en Producción
-Asegúrate de configurar las siguientes variables en producción:
-- `NODE_ENV=production`
-- `DATABASE_URL` - URL de PostgreSQL
-- `JWT_SECRET` - Secreto para JWT
-- `SMTP_HOST` - Servidor de email
-- `STRIPE_SECRET_KEY` - Clave secreta de Stripe
+## Production deployment
 
-## API Endpoints
+KiraRoom is deployed via **Hostinger Docker Manager** using the docker-compose URL flow. No CI deploy step, no GHCR, no SSH required.
 
-### Autenticación
-- `POST /api/auth/register` - Registro de usuario
-- `POST /api/auth/login` - Iniciar sesión
-- `GET /api/auth/profile` - Perfil de usuario
+```bash
+# 1. Merge your changes to `main` (via PR — branch protection enforces this).
+# 2. Open Hostinger hPanel -> VPS -> Docker Manager -> Compose -> URL.
+# 3. Paste:
+https://raw.githubusercontent.com/lagop/KiraRoom/main/docker-compose.prod.yml
+# 4. Click Deploy. Enter env vars for backend + nginx from .env.production.example.
+# 5. Visit http://<vps-ip>:3000 (frontend) and :3001/api/v1/ping (backend) to smoke test.
+```
 
-### Citas
-- `GET /api/appointments` - Listar citas
-- `POST /api/appointments` - Crear cita
-- `PUT /api/appointments/:id` - Actualizar cita
-- `DELETE /api/appointments/:id` - Cancelar cita
+Every subsequent deploy is the same: merge to `main`, redeploy in hPanel.
 
-### Clientes
-- `GET /api/clients` - Listar clientes
-- `POST /api/clients` - Crear cliente
-- `PUT /api/clients/:id` - Actualizar cliente
-- `DELETE /api/clients/:id` - Eliminar cliente
+For DNS + HTTPS, see [docs/runbook.md](docs/runbook.md) "Deploy flow" and "Failure: TLS certificate expires".
 
-### Servicios
-- `GET /api/services` - Listar servicios
-- `POST /api/services` - Crear servicio
-- `PUT /api/services/:id` - Actualizar servicio
-- `DELETE /api/services/:id` - Eliminar servicio
+### Required env vars (production)
 
-### Empleados
-- `GET /api/employees` - Listar empleados
-- `POST /api/employees` - Crear empleado
-- `PUT /api/employees/:id` - Actualizar empleado
-- `DELETE /api/employees/:id` - Eliminar empleado
+| Var | Notes |
+|---|---|
+| `JWT_SECRET` | **≥ 32 random chars.** SEC-1 refuses to boot otherwise. Generate with `openssl rand -base64 48`. |
+| `DATABASE_URL` | Postgres connection string |
+| `MINIMAX_API_KEY` | **Primary LLM provider key.** MiniMax is the Anthropic-API-compatible gateway used as the default for the virtual receptionist and Staff Copilot. `MINIMAX_BASE_URL` overrides the gateway URL (leave blank for the public endpoint). |
+| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Stripe payments. SEC-3 refuses to boot when `STRIPE_SECRET_KEY` is set but `STRIPE_WEBHOOK_SECRET` is missing in production. |
+| `META_TOKEN_ENCRYPTION_KEY` | AES key for Meta access tokens (≥ 32 chars) |
+| `OAUTH_STATE_SECRET` | **≥ 16 random chars.** Boot validator refuses to start in production without it. Generate with `openssl rand -base64 48`. |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated exact origins. **No wildcards.** |
+| `NODE_ENV` | Must be `production` |
+| `COPILOT_SOFT_LAUNCH_TENANT_IDS` | Optional. Whitelist for closed-beta. Empty = Kira Copilot off for everyone. |
+| `FISCAL_MODE` | `sandbox` until the AEAT cert is uploaded and `docs/runbook.md` §11 signed off; flip to `real` only after. |
 
-### Reportes
-- `GET /api/reports/appointments` - Reporte de citas
-- `GET /api/reports/revenue` - Reporte de ingresos
-- `GET /api/reports/clients` - Reporte de clientes
+### Secondary LLM providers (optional)
 
-### Kira Copilot (staff-side assistant)
-Documentación completa: [`docs/staff-copilot-guide.md`](docs/staff-copilot-guide.md) ·
-[`docs/admin-copilot-guide.md`](docs/admin-copilot-guide.md) ·
-[`docs/saas-copilot-runbook.md`](docs/saas-copilot-runbook.md) ·
-[`docs/staff-copilot-changelog.md`](docs/staff-copilot-changelog.md)
+The LLM service also accepts OpenAI, Anthropic, and Google Gemini keys for fallback / per-tenant overrides. Set whichever you have; unset keys are silently skipped. See `ops/deploy/.env.production.example` for the full list.
 
-| Method | Endpoint | Auth | Description |
-|---|---|---|---|
-| `POST` | `/api/v1/assistant/conversations` | JWT (panel) | Create or resume a conversation |
-| `GET` | `/api/v1/assistant/conversations` | JWT (panel) | List the user's conversations |
-| `GET` | `/api/v1/assistant/conversations/:id/messages` | JWT (panel) | Message history for a conversation |
-| `POST` | `/api/v1/assistant/messages` | JWT + Pro+ | Send a user message; the LLM replies with grounded salon data |
-| `GET` | `/api/v1/assistant/insights/daily` | JWT + Pro+ | Daily briefing for the calling user |
-| `GET` | `/api/v1/assistant/tier` | JWT | Effective copilot tier + tool sets for the tenant |
-| `GET` | `/api/v1/assistant/usage` | JWT + Pro+ | Monthly usage stats for the tenant |
-| `POST` | `/api/v1/assistant/approvals/:id/resolve` | JWT + Premium | Approve or reject a pending action |
-| `POST` | `/api/v1/assistant/feedback` | JWT + Pro+ | Thumbs up/down + comment on an assistant reply |
-| `GET` | `/api/v1/saas/admin/assistant/usage` | saas_owner | Per-tenant copilot usage (platform admin) |
+Full env template: `packages/backend/.env.example`.
 
-## Contribución
+## Testing
 
-1. Fork el proyecto
-2. Crear una rama para tu feature (`git checkout -b feature/AmazingFeature`)
-3. Commit tus cambios (`git commit -m 'Add some AmazingFeature'`)
-4. Push a la rama (`git push origin feature/AmazingFeature`)
-5. Abrir un Pull Request
+| Layer | Command | When |
+|---|---|---|
+| Lint | `npx eslint src packages` (backend) / `npx eslint app components lib src` (frontend) | Every PR |
+| Type-check | `npx tsc --noEmit` | Every PR |
+| L4 unit | `npm test -- --testPathPattern=l4` | Every PR (CI gates on this) |
+| L1 e2e (real LLM) | `RUN_LLM_E2E_TESTS=1 MINIMAX_API_KEY=... npm test -- --testPathPattern=co-pilot-scenarios.spec` | Manual dispatch in CI (see `.github/workflows/ci-cd.yml`) |
+| Playwright UX | `npx playwright test` | TODO — see RFC §15.2 |
 
-## Licencia
+## Documentation
 
-Este proyecto está bajo la Licencia MIT. Ver el archivo `LICENSE` para más detalles.
+| Doc | Audience |
+|---|---|
+| [`docs/staff-copilot-guide.md`](docs/staff-copilot-guide.md) | Salon staff using the assistant |
+| [`docs/admin-copilot-guide.md`](docs/admin-copilot-guide.md) | Salon owners / managers |
+| [`docs/saas-copilot-runbook.md`](docs/saas-copilot-runbook.md) | Platform team (kill switches, alerts, debug) |
+| [`docs/staff-copilot-changelog.md`](docs/staff-copilot-changelog.md) | Sprint-by-sprint delivery log |
+| [`docs/professional-copilot-rfc.md`](docs/professional-copilot-rfc.md) | Original RFC — now `Implemented (sprint 12-16, GA-ready)` |
+| [`docs/runbook.md`](docs/runbook.md) | Production ops |
+| [`docs/saas-admin-runbook.md`](docs/saas-admin-runbook.md) | Tenant management |
+| [`docs/security-review-2026-07.md`](docs/security-review-2026-07.md) | Self-review + open backlog (SEC-1 + SEC-2 closed) |
+| [`docs/final-roadmap-tracker.md`](docs/final-roadmap-tracker.md) | Tax-compliance phases (all ✅ done) |
 
-## Soporte
+## Status
 
-Para soporte técnico o consultas:
-- Email: soporte@beautypro.com
-- Documentación: [docs.beautypro.com](https://docs.beautypro.com)
-- Issues: [GitHub Issues](https://github.com/tu-usuario/beautypro-saas/issues)
+| Area | Status |
+|---|---|
+| Tax compliance (AEAT / KMS / PDF / Holded / Sage) | ✅ shipped |
+| Customer chatbot (virtual receptionist) | ✅ shipped |
+| Staff copilot (sprints 12-16) | ✅ shipped, soft-launch active |
+| Self-review security backlog | ✅ SEC-1, SEC-2, SEC-3, SEC-4 closed (SEC-5 pen-test deferred until €500 MRR × 2 months) |
+| OAUTH_STATE_SECRET boot validator | ✅ shipped (prevents prod deploys shipping the controller's dev fallback) |
+| Production deploy infra (Hostinger Docker Manager + `docker-compose.prod.yml`) | ✅ code-ready; awaiting operator: paste URL into hPanel + fill env vars |
+| Sprint 17 — closed beta | 🟡 infrastructure ready, blocked on operator: VPS bootstrap, DNS, `.env.production`, branch protection on `main` |
+| Sprint 18+ — open rollout | Not started (depends on closed-beta results + SEC-5 pen-test) |
 
-## Roadmap
+## License
 
-### Versión 1.0 (MVP)
-- [x] Estructura base del proyecto
-- [ ] Autenticación y autorización
-- [ ] Gestión de citas
-- [ ] Gestión de clientes
-- [ ] Dashboard básico
-
-### Versión 1.1
-- [ ] Gestión de inventario
-- [ ] Facturación básica
-- [ ] Notificaciones por email
-
-### Versión 1.2
-- [ ] Reportes básicos
-- [ ] Aplicación móvil
-- [ ] API para integraciones
-
-### Versión 2.0
-- [ ] Multi-tenant
-- [ ] Características premium
-- [ ] Integración con sistemas de pago
-- [ ] Analytics avanzados
-
----
-
-**BeautyPro SaaS** - Revolucionando la gestión de salones de belleza 💅✨
+Proprietary. © Kira Room.

@@ -18,11 +18,11 @@ async function main() {
   // Create tenant
   const tenant = await prisma.tenant.create({
     data: {
-      name: "Kira Studio",
-      slug: "kira-studio",
+      name: "Kira Room",
+      slug: "kira-room",
       description:
         "Premium beauty and wellness salon in the heart of Madrid. We offer hair, nails, facial, massage, and body treatments with personalized care.",
-      email: "info@kira-studio.com",
+      email: "info@kira-room.com",
       phone: "+34 600 123 456",
       whatsapp: "+34 600 123 456",
       street: "Calle Gran Vía 42",
@@ -57,7 +57,7 @@ async function main() {
     prisma.user.create({
       data: {
         tenantId: tenant.id,
-        email: "owner@kira-studio.com",
+        email: "owner@kira-room.com",
         firstName: "Carlos",
         lastName: "Martínez",
         role: UserRole.owner,
@@ -72,7 +72,7 @@ async function main() {
     prisma.user.create({
       data: {
         tenantId: tenant.id,
-        email: "admin@kira-studio.com",
+        email: "admin@kira-room.com",
         firstName: "Elena",
         lastName: "Sánchez",
         role: UserRole.admin,
@@ -86,7 +86,7 @@ async function main() {
     prisma.user.create({
       data: {
         tenantId: tenant.id,
-        email: "staff@kira-studio.com",
+        email: "staff@kira-room.com",
         firstName: "Roberto",
         lastName: "Gómez",
         role: UserRole.staff,
@@ -304,7 +304,7 @@ async function main() {
         tenantId: tenant.id,
         firstName: "María",
         lastName: "García López",
-        email: "maria@kira-studio.com",
+        email: "maria@kira-room.com",
         phone: "+34 620 000 001",
         bio: "Especialista en cortes y coloración con más de 10 años de experiencia. Formada en las mejores academias de Madrid.",
         specialties: ["cortes", "coloración", "mechas", "balayage"],
@@ -340,7 +340,7 @@ async function main() {
         tenantId: tenant.id,
         firstName: "Ana",
         lastName: "Martínez Ruiz",
-        email: "ana@kira-studio.com",
+        email: "ana@kira-room.com",
         phone: "+34 620 000 002",
         bio: "Experta en manicura y pedicura artística. ganadora del concurso nacional de nail art 2023.",
         specialties: ["manicura", "pedicura", "nail art", "extensiones"],
@@ -376,7 +376,7 @@ async function main() {
         tenantId: tenant.id,
         firstName: "Carmen",
         lastName: "Sánchez Torres",
-        email: "carmen@kira-studio.com",
+        email: "carmen@kira-room.com",
         phone: "+34 620 000 003",
         bio: "Esteticista especializada en facial y masajes terapéuticos. Certificada en técnicas de drenaje linfático.",
         specialties: [
@@ -417,7 +417,7 @@ async function main() {
         tenantId: tenant.id,
         firstName: "Laura",
         lastName: "Fernández Díaz",
-        email: "laura@kira-studio.com",
+        email: "laura@kira-room.com",
         phone: "+34 620 000 004",
         bio: "Apasionada por la belleza natural. Especialista en coloración orgánica y tratamientos capilares naturales.",
         specialties: [
@@ -457,7 +457,7 @@ async function main() {
         tenantId: tenant.id,
         firstName: "Javier",
         lastName: "Moreno Ruiz",
-        email: "javier@kira-studio.com",
+        email: "javier@kira-room.com",
         phone: "+34 620 000 005",
         bio: "Barbero profesional especializado en cortes clásicos y modernos para caballeros. Experiencia internacional.",
         specialties: ["cortes caballero", "barba", "afeitado clásico", "fade"],
@@ -1247,7 +1247,7 @@ async function main() {
 
   console.log("\n🎉 Seed completed successfully!");
   console.log("\n📊 Summary:");
-  console.log("  - 1 tenant: Kira Studio");
+  console.log("  - 1 tenant: Kira Room");
   console.log(`  - ${users.length} users (owner, admin, staff)`);
   console.log(
     `  - ${services.length} services (hair, nails, facial, massage, body)`,
@@ -1256,9 +1256,9 @@ async function main() {
   console.log(`  - ${clients.length} clients`);
   console.log(`  - ${appointments.length} appointments (various statuses)`);
   console.log("\n🔐 Demo Credentials:");
-  console.log("  Owner: owner@kira-studio.com");
-  console.log("  Admin: admin@kira-studio.com");
-  console.log("  Staff: staff@kira-studio.com");
+  console.log("  Owner: owner@kira-room.com");
+  console.log("  Admin: admin@kira-room.com");
+  console.log("  Staff: staff@kira-room.com");
   console.log("  (Password: demo123 for all accounts)");
 }
 

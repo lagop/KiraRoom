@@ -28,14 +28,14 @@ export default function PrivacyPage() {
 
       <Section title="1. Responsable del tratamiento">
         <p>
-          <strong>KiraStudio SaaS</strong> (en adelante, "KiraStudio"),
+          <strong>KiraRoom SaaS</strong> (en adelante, "KiraRoom"),
           con sede en España, es el responsable del tratamiento de los
           datos personales recabados a través de la plataforma{" "}
-          <code>app.kirastudio.com</code>.
+          <code>app.kiraroom.com</code>.
         </p>
         <p>
           Para cualquier consulta relativa al tratamiento de datos, puede
-          escribir a <code>privacy@kirastudio.com</code>.
+          escribir a <code>privacy@kiraroom.com</code>.
         </p>
       </Section>
 
@@ -118,7 +118,7 @@ export default function PrivacyPage() {
           </li>
         </ul>
         <p>
-          KiraStudio no vende datos personales. No se realizan transferencias
+          KiraRoom no vende datos personales. No se realizan transferencias
           internacionales fuera del EEE.
         </p>
       </Section>
@@ -170,7 +170,7 @@ export default function PrivacyPage() {
         </ul>
         <p>
           Para ejercer estos derechos:{" "}
-          <code>privacy@kirastudio.com</code>. Responderemos en un
+          <code>privacy@kiraroom.com</code>. Responderemos en un
           plazo máximo de <strong>30 días</strong>.
         </p>
       </Section>

@@ -2,7 +2,7 @@
 #
 # scripts/restore.sh
 #
-# Restore a KiraStudio PostgreSQL backup.
+# Restore a KiraRoom PostgreSQL backup.
 #
 # Usage:
 #   ./restore.sh <path-to-dump-file>

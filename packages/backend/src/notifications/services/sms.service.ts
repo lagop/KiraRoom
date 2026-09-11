@@ -196,12 +196,12 @@ export class SmsService {
    * Keep under 160 characters for single SMS
    */
   private generateConfirmationBody(data: AppointmentSmsData): string {
-    // Template: "KiraStudio: Tu cita está confirmada. {service} con {professional} el {date} a las {time}. ¡Gracias!"
-    const message = `KiraStudio: Tu cita está confirmada. ${data.serviceName} con ${data.professionalName} el ${data.date} a las ${data.time}. ¡Gracias!`;
+    // Template: "KiraRoom: Tu cita está confirmada. {service} con {professional} el {date} a las {time}. ¡Gracias!"
+    const message = `KiraRoom: Tu cita está confirmada. ${data.serviceName} con ${data.professionalName} el ${data.date} a las ${data.time}. ¡Gracias!`;
 
     // Truncate if too long (preserve key info)
     if (message.length > 160) {
-      return `KiraStudio: Cita confirmada. ${data.serviceName} el ${data.date} a las ${data.time}. ¡Gracias!`;
+      return `KiraRoom: Cita confirmada. ${data.serviceName} el ${data.date} a las ${data.time}. ¡Gracias!`;
     }
 
     return message;
@@ -213,21 +213,21 @@ export class SmsService {
   private generateReminderBody(data: AppointmentSmsData, hoursBefore: number): string {
     if (hoursBefore <= 1) {
       // 1 hour reminder - more urgent
-      // Template: "KiraStudio: Tu cita es en 1 hora ({time}). {service} con {professional}."
-      const message = `KiraStudio: Tu cita es en 1 hora (${data.time}). ${data.serviceName} con ${data.professionalName}.`;
+      // Template: "KiraRoom: Tu cita es en 1 hora ({time}). {service} con {professional}."
+      const message = `KiraRoom: Tu cita es en 1 hora (${data.time}). ${data.serviceName} con ${data.professionalName}.`;
 
       if (message.length > 160) {
-        return `KiraStudio: Cita en 1 hora (${data.time}). ${data.serviceName}.`;
+        return `KiraRoom: Cita en 1 hora (${data.time}). ${data.serviceName}.`;
       }
 
       return message;
     } else {
       // 24 hour reminder
-      // Template: "KiraStudio: Recordatorio - Tu cita mañana a las {time} para {service}. ¡Te esperamos!"
-      const message = `KiraStudio: Recordatorio - Tu cita mañana a las ${data.time} para ${data.serviceName}. ¡Te esperamos!`;
+      // Template: "KiraRoom: Recordatorio - Tu cita mañana a las {time} para {service}. ¡Te esperamos!"
+      const message = `KiraRoom: Recordatorio - Tu cita mañana a las ${data.time} para ${data.serviceName}. ¡Te esperamos!`;
 
       if (message.length > 160) {
-        return `KiraStudio: Recordatorio - Cita mañana a las ${data.time}. ${data.serviceName}.`;
+        return `KiraRoom: Recordatorio - Cita mañana a las ${data.time}. ${data.serviceName}.`;
       }
 
       return message;
@@ -238,17 +238,17 @@ export class SmsService {
    * Generate cancellation SMS body
    */
   private generateCancellationBody(data: AppointmentSmsData, reason?: string): string {
-    // Template: "KiraStudio: Tu cita del {date} ha sido cancelada. Para reagendar, contáctanos."
+    // Template: "KiraRoom: Tu cita del {date} ha sido cancelada. Para reagendar, contáctanos."
     let message: string;
 
     if (reason) {
-      message = `KiraStudio: Tu cita del ${data.date} ha sido cancelada. Motivo: ${reason}. Para reagendar, contáctanos.`;
+      message = `KiraRoom: Tu cita del ${data.date} ha sido cancelada. Motivo: ${reason}. Para reagendar, contáctanos.`;
     } else {
-      message = `KiraStudio: Tu cita del ${data.date} ha sido cancelada. Para reagendar, contáctanos.`;
+      message = `KiraRoom: Tu cita del ${data.date} ha sido cancelada. Para reagendar, contáctanos.`;
     }
 
     if (message.length > 160) {
-      return `KiraStudio: Cita del ${data.date} cancelada. Contáctanos para reagendar.`;
+      return `KiraRoom: Cita del ${data.date} cancelada. Contáctanos para reagendar.`;
     }
 
     return message;
@@ -258,11 +258,11 @@ export class SmsService {
    * Generate rescheduled SMS body
    */
   private generateRescheduledBody(data: AppointmentSmsData, oldDate: string, oldTime: string): string {
-    // Template: "KiraStudio: Tu cita ha sido movida al {date} a las {time}. {service} con {professional}."
-    const message = `KiraStudio: Tu cita ha sido movida al ${data.date} a las ${data.time}. ${data.serviceName} con ${data.professionalName}.`;
+    // Template: "KiraRoom: Tu cita ha sido movida al {date} a las {time}. {service} con {professional}."
+    const message = `KiraRoom: Tu cita ha sido movida al ${data.date} a las ${data.time}. ${data.serviceName} con ${data.professionalName}.`;
 
     if (message.length > 160) {
-      return `KiraStudio: Cita movida al ${data.date} a las ${data.time}. ${data.serviceName}.`;
+      return `KiraRoom: Cita movida al ${data.date} a las ${data.time}. ${data.serviceName}.`;
     }
 
     return message;

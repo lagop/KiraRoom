@@ -63,7 +63,7 @@ export default function SignupPage() {
     <div className="min-h-screen bg-gradient-to-br from-violet-50 to-white">
       <header className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
         <Link href="/" className="text-lg font-semibold text-gray-900">
-          KiraStudio
+          KiraRoom
         </Link>
         <span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-medium text-violet-700">
           {t("signup.badge")}

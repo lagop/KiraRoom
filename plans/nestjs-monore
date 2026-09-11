@@ -119,7 +119,7 @@ jobs:
 ### Arquitectura Propuesta Actualizada
 
 ```
-kira-studio/
+kira-room/
 ├── packages/
 │   ├── shared/              # Shared utilities, types, validation
 │   │   ├── types/           # TypeScript interfaces
@@ -147,7 +147,7 @@ kira-studio/
 ### Package.json Structure
 ```json
 {
-  "name": "kira-studio",
+  "name": "kira-room",
   "private": true,
   "workspaces": [
     "packages/*"
@@ -210,7 +210,7 @@ export const AppointmentSchema = z.object({
 ```typescript
 // packages/backend/src/appointments/appointments.controller.ts
 import { Controller, Post, Body } from '@nestjs/common';
-import { AppointmentSchema } from '@kira-studio/shared/validation/appointment';
+import { AppointmentSchema } from '@kira-room/shared/validation/appointment';
 import { AppointmentsService } from './appointments.service';
 
 @Controller('appointments')
@@ -243,7 +243,7 @@ export class AppointmentsModule {}
 ### Frontend (Next.js) Example
 ```typescript
 // packages/frontend/src/lib/api/appointments.ts
-import { Appointment, AppointmentSchema } from '@kira-studio/shared/types/appointment';
+import { Appointment, AppointmentSchema } from '@kira-room/shared/types/appointment';
 
 export class AppointmentsAPI {
   async create(appointmentData: CreateAppointmentDto): Promise<Appointment> {
@@ -262,7 +262,7 @@ export class AppointmentsAPI {
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { AppointmentSchema, CreateAppointmentDto } from '@kira-studio/shared/types/appointment';
+import { AppointmentSchema, CreateAppointmentDto } from '@kira-room/shared/types/appointment';
 
 export function AppointmentForm() {
   const [isSubmitting, setIsSubmitting] = useState(false);

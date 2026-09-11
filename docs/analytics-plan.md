@@ -8,7 +8,7 @@
 > `packages/frontend/src/lib/plans.ts`. The `analytics-flags.service.ts` is
 > kept in sync as a defence-in-depth check on the analytics endpoints.
 
-This document outlines the plan to implement Basic (Esencial) and Advanced (Pro / Empresa) analytics for the KiraStudio dashboard.
+This document outlines the plan to implement Basic (Esencial) and Advanced (Pro / Empresa) analytics for the KiraRoom dashboard.
 
 ---
 

@@ -3,13 +3,13 @@
 **Status:** Planning
 **Created:** 2026-01-06
 **Updated:** 2026-01-06
-**Part of:** KiraStudio SaaS Consolidated Plan
+**Part of:** KiraRoom SaaS Consolidated Plan
 
 ---
 
 ## Executive Summary
 
-This plan outlines the implementation of Phase 3.2: Admin Dashboard features for the KiraStudio beauty salon management platform. The admin dashboard will provide salon owners and staff with comprehensive management tools for clients, professionals, services, appointments, and analytics.
+This plan outlines the implementation of Phase 3.2: Admin Dashboard features for the KiraRoom beauty salon management platform. The admin dashboard will provide salon owners and staff with comprehensive management tools for clients, professionals, services, appointments, and analytics.
 
 ---
 

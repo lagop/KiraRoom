@@ -76,7 +76,7 @@ export class GracePeriodScheduler {
     const baseUrl =
       this.config.get<string>("APP_BASE_URL") ||
       this.config.get<string>("FRONTEND_URL") ||
-      "https://app.kirastudio.com";
+      "https://app.kiraroom.com";
     const updatePaymentUrl = `${baseUrl.replace(/\/+$/, "")}/dashboard/billing`;
 
     for (const tenant of expired) {

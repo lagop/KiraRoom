@@ -1,10 +1,10 @@
-# Términos del Servicio — KiraStudio
+# Términos del Servicio — KiraRoom
 
 > ⚠️ **SOURCE OF TRUTH**: Este fichero **NO** se edita a mano. La versión canónica es la página React en [`packages/frontend/app/legal/terms/page.tsx`](../packages/frontend/app/legal/terms/page.tsx). Si necesitas cambiar el texto, edita esa página y regenera este markdown con `node scripts/legal-sync.ts` (TODO Sprint 2 — hasta entonces, sincroniza manualmente los dos ficheros tras cada cambio).
 
 > Última actualización: 17 de julio de 2026.
 >
-> Estos Términos regulan el uso del servicio SaaS KiraStudio por parte del propietario del salón (en adelante, "el Cliente"). Se complementan con la [Política de Privacidad](privacy.md).
+> Estos Términos regulan el uso del servicio SaaS KiraRoom por parte del propietario del salón (en adelante, "el Cliente"). Se complementan con la [Política de Privacidad](privacy.md).
 
 Esta versión también está publicada en formato web en [`packages/frontend/app/legal/terms/page.tsx`](../packages/frontend/app/legal/terms/page.tsx). El documento en este directorio es la fuente canónica para auditoría legal.
 
@@ -12,11 +12,11 @@ Esta versión también está publicada en formato web en [`packages/frontend/app
 
 ## 1. Aceptación
 
-Al crear una cuenta o utilizar el servicio SaaS KiraStudio, acepta estos Términos del Servicio. Si no está de acuerdo, no use el servicio.
+Al crear una cuenta o utilizar el servicio SaaS KiraRoom, acepta estos Términos del Servicio. Si no está de acuerdo, no use el servicio.
 
 ## 2. Descripción del servicio
 
-KiraStudio es una plataforma SaaS de gestión de citas, profesionales, clientes y facturación para negocios de belleza y bienestar en España. Incluye:
+KiraRoom es una plataforma SaaS de gestión de citas, profesionales, clientes y facturación para negocios de belleza y bienestar en España. Incluye:
 
 - Agenda de citas y gestión de profesionales y servicios.
 - Emisión de facturas conformes a la normativa española.
@@ -41,9 +41,9 @@ El cliente se compromete a:
 - Respetar los límites técnicos (rate limiting, almacenamiento) contratados.
 - Realizar las obligaciones legales (fiscales, laborales, RGPD) que correspondan a su actividad.
 
-## 5. Obligaciones de KiraStudio
+## 5. Obligaciones de KiraRoom
 
-KiraStudio se compromete a:
+KiraRoom se compromete a:
 
 - Mantener el servicio disponible al menos el 99% del tiempo medido mensualmente, salvo mantenimientos programados (con aviso de 48h).
 - Realizar backups diarios cifrados con posibilidad de restauración puntual (WAL archiving).
@@ -53,18 +53,18 @@ KiraStudio se compromete a:
 
 ## 6. Limitación de responsabilidad
 
-KiraStudio no será responsable de:
+KiraRoom no será responsable de:
 
 - Daños indirectos o lucro cesante derivados de la indisponibilidad del servicio.
 - Errores en los datos fiscales si el cliente los facilitó incorrectamente (NIF mal escrito, dirección, etc.).
 - Reclamaciones de la AEAT derivadas de una facturación incorrecta por datos erróneos del cliente.
 - Cumplimiento de obligaciones legales específicas del sector del cliente que no estén expresamente incluidas en el servicio.
 
-La responsabilidad agregada de KiraStudio queda limitada al importe de las tarifas satisfechas por el cliente en los últimos **12 meses**.
+La responsabilidad agregada de KiraRoom queda limitada al importe de las tarifas satisfechas por el cliente en los últimos **12 meses**.
 
 ## 7. Suspensión y terminación
 
-KiraStudio puede suspender o terminar el servicio en caso de:
+KiraRoom puede suspender o terminar el servicio en caso de:
 
 - Incumplimiento de pago tras 7 días desde el segundo aviso.
 - Incumplimiento material de estos Términos.
@@ -78,7 +78,7 @@ El cliente puede cancelar el servicio en cualquier momento desde `/dashboard/bil
 
 ## 8. Modificaciones del servicio
 
-KiraStudio puede modificar el servicio previa notificación con al menos **30 días** de antelación. Las modificaciones que reduzcan funcionalidades sustanciales permitirán al cliente cancelar sin penalización durante esos 30 días.
+KiraRoom puede modificar el servicio previa notificación con al menos **30 días** de antelación. Las modificaciones que reduzcan funcionalidades sustanciales permitirán al cliente cancelar sin penalización durante esos 30 días.
 
 ## 9. Ley aplicable y jurisdicción
 

@@ -14,11 +14,11 @@ export interface Props {
 
 const {
   title,
-  description = "KiraStudio — la plataforma SaaS de gestión para salones de belleza en España. Citas online, facturación Verifactu y recordatorios automáticos por WhatsApp.",
+  description = "KiraRoom — la plataforma SaaS de gestión para salones de belleza en España. Citas online, facturación Verifactu y recordatorios automáticos por WhatsApp.",
   bare = false,
 } = Astro.props;
 
-const fullTitle = title === "KiraStudio" ? title : `${title} · KiraStudio`;
+const fullTitle = title === "KiraRoom" ? title : `${title} · KiraRoom`;
 const canonicalUrl = new URL(Astro.url.pathname, Astro.site).toString();
 const ogImageUrl = new URL("/og-image.svg", Astro.site).toString();
 ---
@@ -43,7 +43,7 @@ const ogImageUrl = new URL("/og-image.svg", Astro.site).toString();
     <meta property="og:image" content={ogImageUrl} />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="KiraStudio — gestiona tu salón sin complicaciones" />
+    <meta property="og:image:alt" content="KiraRoom — gestiona tu salón sin complicaciones" />
 
     <!-- Twitter / X -->
     <meta name="twitter:card" content="summary_large_image" />
@@ -52,7 +52,7 @@ const ogImageUrl = new URL("/og-image.svg", Astro.site).toString();
     <meta name="twitter:image" content={ogImageUrl} />
 
     <!-- Plausible Analytics — privacy-first, no cookies, RGPD-compliant.
-         Set PUBLIC_PLAUSIBLE_DOMAIN (e.g. marketing.kirastudio.com) in
+         Set PUBLIC_PLAUSIBLE_DOMAIN (e.g. marketing.kiraroom.com) in
          the Cloudflare Pages project env to activate. When unset, the
          script tag is not rendered. The `plausible.ts` wrapper in
          lib/analytics/ degrades to no-op if the script fails to load
@@ -80,7 +80,7 @@ const ogImageUrl = new URL("/og-image.svg", Astro.site).toString();
       }}
     >
       window.__KIRA_CF_ANALYTICS_TOKEN__ = window.__KIRA_CF_ANALYTICS_TOKEN__ || token;
-      window.addEventListener("kirastudio:consent-changed", function (e) {
+      window.addEventListener("kiraroom:consent-changed", function (e) {
         try {
           if (e && e.detail && e.detail.analytics && !window.__KIRA_CF_LOADED__) {
             window.__KIRA_CF_LOADED__ = true;

@@ -142,7 +142,7 @@ export class TrialExpiryScheduler {
     const baseUrl =
       this.config.get<string>("APP_BASE_URL") ||
       this.config.get<string>("FRONTEND_URL") ||
-      "https://app.kirastudio.com";
+      "https://app.kiraroom.com";
     const upgradeUrl = `${baseUrl.replace(/\/+$/, "")}/dashboard/billing`;
 
     const sent = await this.email.sendTrialExpiry({

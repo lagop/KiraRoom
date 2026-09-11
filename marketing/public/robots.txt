@@ -6,4 +6,4 @@ Allow: /
 # the marketing copy.
 Disallow: /login
 
-Sitemap: https://marketing.kirastudio.com/sitemap-index.xml
+Sitemap: https://marketing.kiraroom.com/sitemap-index.xml

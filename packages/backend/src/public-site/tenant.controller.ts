@@ -1,4 +1,4 @@
-﻿import { ParseUUIDPipe, Controller, Get, Param, NotFoundException } from "@nestjs/common";
+﻿import { Controller, Get, Param, NotFoundException } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { Public } from "../auth/decorators/public.decorator";
@@ -15,8 +15,7 @@ export class PublicTenantController {
   async getBySlug(@Param("slug") slug: string) {
     const tenant = await this.prisma.tenant.findFirst({
       where: {
-        OR: [{ slug }, { id: slug }],
-      },
+        OR: [{ slug }, { id: slug }] },
       select: {
         id: true,
         name: true,
@@ -28,9 +27,7 @@ export class PublicTenantController {
         country: true,
         phone: true,
         email: true,
-        description: true,
-      },
-    });
+        description: true } });
 
     if (!tenant) {
       throw new NotFoundException("Salon not found");
@@ -47,8 +44,7 @@ export class PublicTenantController {
       country: tenant.country,
       phone: tenant.phone,
       email: tenant.email,
-      description: tenant.description,
-    };
+      description: tenant.description };
   }
 }
 

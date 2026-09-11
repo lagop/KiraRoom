@@ -1,7 +1,7 @@
-# SaaS Development Status Review - KiraStudio
+# SaaS Development Status Review - KiraRoom
 
 **Date:** 2026-05-30
-**Project:** KiraStudio Beauty Salon Management SaaS
+**Project:** KiraRoom Beauty Salon Management SaaS
 **Source:** `plans/CONSOLIDATED-PLAN.md` (Single Source of Truth)
 
 ---
@@ -10,7 +10,7 @@
 
 **Overall Status:** ~100% toward MVP completion ✅
 
-The KiraStudio project has extensive functionality implemented. The critical blockers from the consolidated plan have been **RESOLVED** (per development-status-2026-03-12.md).
+The KiraRoom project has extensive functionality implemented. The critical blockers from the consolidated plan have been **RESOLVED** (per development-status-2026-03-12.md).
 
 ---
 
@@ -116,7 +116,7 @@ The KiraStudio project has extensive functionality implemented. The critical blo
 | Document | Status |
 |----------|--------|
 | `plans/CONSOLIDATED-PLAN.md` | ✅ ACTIVE (Single Source of Truth) |
-| `plans/kira-studio-mvp-roadmap.md` | ⚠️ DEPRECATED |
+| `plans/kira-room-mvp-roadmap.md` | ⚠️ DEPRECATED |
 | `plans/saas-beauty-platform-plan.md` | ⚠️ DEPRECATED |
 | `plans/phase-3.2-admin-dashboard-plan.md` | ⚠️ DEPRECATED |
 

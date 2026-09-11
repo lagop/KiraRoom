@@ -1,10 +1,9 @@
-import { ParseUUIDPipe, Controller, Get, Query, UseGuards, Req, ForbiddenException } from "@nestjs/common";
+import { Controller, Get, Query, UseGuards, Req, ForbiddenException } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
   ApiBearerAuth,
-  ApiQuery,
-} from "@nestjs/swagger";
+  ApiQuery } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { Roles } from "../auth/decorators/roles.decorator";
@@ -12,8 +11,7 @@ import { UserRole } from "@prisma/client";
 import { AnalyticsService } from "./analytics.service";
 import {
   AnalyticsFlagsService,
-  SubscriptionPlan,
-} from "./analytics-flags.service";
+  SubscriptionPlan } from "./analytics-flags.service";
 import { ProfessionalsService } from "../professionals/professionals.service";
 import { Request } from "express";
 import { FeatureGuard } from "../common/guards/feature.guard";
@@ -55,8 +53,7 @@ export class AnalyticsController {
         message: `${feature} requires a paid plan`,
         upgradeRequired: true,
         currentPlan: plan,
-        requiredPlan: "professional",
-      });
+        requiredPlan: "professional" });
     }
   }
 
@@ -159,8 +156,7 @@ export class AnalyticsController {
   @Get("appointment-statuses-evolution")
   @ApiOperation({
     summary:
-      "Get all appointment statuses evolution over time (stacked chart data)",
-  })
+      "Get all appointment statuses evolution over time (stacked chart data)" })
   @ApiQuery({ name: "months", required: false, type: Number })
   async getAppointmentStatusesEvolution(
     @Req() req: AuthenticatedRequest,
@@ -207,8 +203,7 @@ export class AnalyticsController {
   @ApiQuery({
     name: "type",
     required: false,
-    enum: ["revenue", "appointments", "both"],
-  })
+    enum: ["revenue", "appointments", "both"] })
   async getDetailedReport(
     @Req() req: AuthenticatedRequest,
     @Query("startDate") startDate: string,
@@ -245,8 +240,7 @@ export class AnalyticsController {
   @Get("professional-performance")
   @Feature("advanced_analytics")
   @ApiOperation({
-    summary: "Get performance metrics per professional (paid feature)",
-  })
+    summary: "Get performance metrics per professional (paid feature)" })
   @ApiQuery({ name: "range", required: false, type: String })
   async getProfessionalPerformance(
     @Req() req: AuthenticatedRequest,
@@ -350,8 +344,7 @@ export class AnalyticsController {
   @Get("client-insights")
   @Feature("advanced_analytics")
   @ApiOperation({
-    summary: "Get client insights and retention metrics (paid feature)",
-  })
+    summary: "Get client insights and retention metrics (paid feature)" })
   @ApiQuery({ name: "months", required: false, type: Number })
   async getClientInsights(
     @Req() req: AuthenticatedRequest,
@@ -398,7 +391,6 @@ export class AnalyticsController {
         totalAppointments > 0
           ? Math.round((returningClients / totalAppointments) * 100)
           : 0,
-      period: `${monthsNum} months`,
-    };
+      period: `${monthsNum} months` };
   }
 }

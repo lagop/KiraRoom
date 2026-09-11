@@ -1,6 +1,6 @@
 # Operational runbook
 
-> Living document for the day-to-day operation of KiraStudio SaaS.
+> Living document for the day-to-day operation of KiraRoom SaaS.
 > Generated as part of the zero-budget launch roadmap (Sprint 1, Workstream 1.3).
 > This is the **only** doc ops should need during normal operation.
 
@@ -8,43 +8,163 @@
 
 | Item | Value |
 |---|---|
-| Production API | `https://api.kirastudio.com` |
-| Production dashboard | `https://app.kirastudio.com` |
-| Database host | Internal Hetzner VPS, **NOT** exposed to internet |
-| Backup host | Hetzner Storage Box, `backup@backup-host:/backups/` |
-| WAL archive | Hetzner Storage Box, `backup@backup-host:/wal-archive/` |
+| Production API | `https://api.kiraroom.net` |
+| Production dashboard (tenants) | `https://app.kiraroom.net` |
+| SaaS admin console | `https://admin.kiraroom.net` |
+| Commercial website (separate repo) | `https://kiraroom.com` |
+| Database host | Hostinger VPS, **NOT** exposed to internet |
+| Deploy method | Hostinger hPanel → VPS → Docker Manager → Compose URL |
+| Compose source | `https://raw.githubusercontent.com/lagop/KiraRoom/main/docker-compose.prod.yml` |
 | Database backup retention | 30 days hot |
 | WAL archive retention | 30 days |
-| Sentry-compatible error tracking | GlitchTip self-hosted at `https://glitchtip.kirastudio.com` |
+| Sentry-compatible error tracking | GlitchTip self-hosted at `https://glitchtip.kiraroom.net` |
 | Status page | TBD (free tier: Instatus or BetterStack) |
+
+## Deploy flow
+
+Every push to `main` deploys via **Hostinger Docker Manager** with zero CI deploy steps:
+
+1. **Local**: open a PR from `develop` → `main`. CI (`.github/workflows/ci-cd.yml`)
+   runs lint + type-check + backend/frontend tests + a Docker build smoke
+   test. No GHCR push, no SSH. The PR template forces you to confirm
+   the env var changes, migrations, and rollback plan.
+2. **Merge PR** to `main`. Branch protection requires 1 approval and
+   all CI checks green.
+3. **Open Hostinger hPanel → VPS → Docker Manager → Compose → URL**.
+   Paste:
+   ```
+   https://raw.githubusercontent.com/lagop/KiraRoom/main/docker-compose.prod.yml
+   ```
+   Click **Deploy**.
+4. **Hostinger clones the repo, runs `docker compose up -d --build`**
+   with the env vars you've entered in the UI for each service. First
+   build takes ~5–10 min (Prisma + Next.js); subsequent rebuilds are
+   2–3 min thanks to Docker layer cache.
+5. **Smoke test**: visit `http://<vps-ip>:3000` (frontend) and
+   `http://<vps-ip>:3001/api/v1/ping` (backend) before pointing DNS.
+
+### Updating after that
+
+Every subsequent deploy:
+
+1. Push changes to `develop`, open a PR, get CI green, merge to `main`.
+2. Open Hostinger Docker Manager → your stack → **Redeploy** (or paste
+   the URL again if "Redeploy" doesn't re-clone).
+
+If Hostinger's "Redeploy" doesn't re-clone the repo (it depends on
+their exact implementation), the workaround is to delete the stack
+and recreate it from the URL.
+
+### First-time VPS bootstrap
+
+You do NOT need to SSH into the VPS for the initial deploy. The Hostinger
+Docker Manager handles everything as long as Docker is installed on
+the VPS (it is by default on Hostinger VPS plans).
+
+If you do need shell access (for certbot first-time issuance, log
+inspection, or `docker exec` debugging):
+
+```bash
+ssh root@<vps-ip>
+# or, if you created a non-root deploy user:
+ssh kiraroom@<vps-ip>
+```
+
+`ops/deploy/bootstrap-hostinger.sh` is kept as a reference for setting
+up a non-root deploy user + certbot + firewall if you choose to harden
+beyond the Hostinger defaults. You don't have to run it.
+2. **VPS** (`/opt/kiraroom/deploy-prod.sh`):
+   - `docker compose -f docker-compose.prod.yml pull` for the new SHA
+   - `docker compose ... up -d` — Docker recreates only changed services
+   - backend entrypoint runs `prisma migrate deploy` before booting, so
+     schema migrations land on every release
+   - script waits up to 120 s for the backend healthcheck to go green
+   - if healthcheck fails, dumps the last 80 lines of backend logs and
+     exits non-zero (CI fails the deploy)
+
+### Legacy: CI-driven deploy via SSH
+
+The Hostinger Docker Manager flow replaced the previous CI → VPS_SSH
+flow on 2026-09-10. The old approach (build + push to GHCR, then
+`appleboy/ssh-action` to invoke `ops/deploy/deploy-prod.sh`) is kept
+in git history if you ever want to resurrect it for multi-VPS or
+true zero-touch CI deploys. To do so:
+
+1. Restore the `deploy-production` job in `.github/workflows/ci-cd.yml`.
+2. Re-add the GHCR push in the `build` job.
+3. Set repo secrets `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`.
+4. Restore `image:` references in `docker-compose.prod.yml` (drop the
+   `build:` blocks I added in this commit).
+
+### First-time VPS bootstrap (only if you need shell access)
+
+### Adding a new deploy secret
+
+With the Hostinger Docker Manager flow, env vars are entered in the
+hPanel UI per service when you create/redeploy the stack. To change
+a secret after the initial setup:
+
+1. Open Hostinger hPanel → VPS → Docker Manager → your KiraRoom stack
+2. Edit → find the service → update the env var value → Save
+3. Hostinger re-deploys the affected service with the new env
+
+For one-off inspection or rotation that the UI doesn't cover, SSH
+in:
+
+```bash
+ssh root@<vps-ip>
+docker exec kiraroom-backend-prod env | grep MINIMAX_API_KEY
+# (value will be masked; this is for confirming presence only)
+```
+
+### Rotating the LLM provider key
+
+The virtual receptionist and Staff Copilot both call the LLM service.
+If a key is revoked or rate-limited:
+
+1. Sign in to the provider dashboard (MiniMax, OpenAI, Anthropic, or
+   Google AI Studio depending on which key is rotated).
+2. Mint a new key.
+3. Open Hostinger hPanel → VPS → Docker Manager → your stack → edit
+   the `backend` service → update the matching `*_API_KEY=` env var
+   → Save → Hostinger redeploys.
+4. Verify a chatbot reply still works in the dashboard — the LLM
+   service logs the provider + response time per call.
+
+If rotating `MINIMAX_API_KEY`, also update the per-tenant
+`VirtualReceptionistConfig` rows that store the key in the DB
+(Hostinger UI doesn't expose DB rows, so this requires SSH + psql
+or `npx prisma studio`).
 
 ## PagerDuty-equivalent (zero-budget)
 
 Until revenue justifies PagerDuty (€21/user/mo), use:
 
-1. **Uptime Kuma** at `https://kuma.kirastudio.com` with Telegram webhook
+1. **Uptime Kuma** at `https://kuma.kiraroom.com` with Telegram webhook
    alerts. The Telegram bot pings your phone within 30 seconds of a
    failed health probe.
 2. **Critical probes** (every 60s):
-   - `GET https://api.kirastudio.com/healthz` — API health
-   - `POST https://api.kirastudio.com/api/v1/auth/login` with test
+   - `GET https://api.kiraroom.com/healthz` — API health
+   - `POST https://api.kiraroom.com/api/v1/auth/login` with test
      credentials — auth + DB health
 3. **Warning probes** (every 5min):
-   - `GET https://app.kirastudio.com` — dashboard loads
-   - `GET https://api.kirastudio.com/api/v1/invoices` — fiscal dispatch reachable
+   - `GET https://app.kiraroom.com` — dashboard loads
+   - `GET https://api.kiraroom.com/api/v1/invoices` — fiscal dispatch reachable
 
 ## Operational runbooks
 
 ### Failure: API down (5xx response on healthz)
 
-1. SSH into the API host (`ssh api.kirastudio.com`).
-2. `systemctl status kira-api` — is the service running?
-3. If not, `journalctl -u kira-api --since "5 minutes ago" -n 100` for the
-   crash reason.
-4. If it's a known crash, restart: `systemctl restart kira-api`.
-5. If it's a crash loop, check the database: `systemctl status postgresql`.
-6. If the database is down, restart PostgreSQL, then the API.
-7. If PostgreSQL won't start, check disk space and `pg_wal/`.
+1. SSH into the VPS as `kiraroom` (`ssh kiraroom@<vps-ip>`).
+2. `docker ps -a` — is the backend container running? Look for
+   `kiraroom-backend-prod` with status `Up (healthy)`. If `Restarting`,
+   see step 3.
+3. `docker logs --tail 200 kiraroom-backend-prod` for the crash reason.
+4. If it's a known crash, restart: `docker compose -f /opt/kiraroom/docker-compose.prod.yml --env-file /opt/kiraroom/.env.production up -d backend`.
+5. If it's a restart loop, check the database: `docker ps -a` for
+   `kiraroom-postgres-prod` status, then `docker logs --tail 100 kiraroom-postgres-prod`.
+6. If the database is down, `docker compose -f /opt/kiraroom/docker-compose.prod.yml --env-file /opt/kiraroom/.env.production up -d postgres`, then the backend.
+7. If PostgreSQL won't start, check disk space (`df -h`) and `pg_wal/`.
 
 ### Failure: Database disk full
 
@@ -63,14 +183,61 @@ Until revenue justifies PagerDuty (€21/user/mo), use:
 This is the **worst-case scenario**. Treat as SEV1.
 
 1. Generate a new 32-byte secret: `openssl rand -base64 32`.
-2. SSH into API host. Edit `.env` and replace `JWT_SECRET=...` with the
-   new value. `systemctl restart kira-api`.
-3. All existing JWTs are now invalid. Users will be forced to log in
+2. SSH into the VPS as `kiraroom`. Edit `/opt/kiraroom/.env.production`
+   and replace `JWT_SECRET=...` with the new value.
+3. `cd /opt/kiraroom && docker compose -f docker-compose.prod.yml --env-file .env.production up -d backend`.
+4. All existing JWTs are now invalid. Users will be forced to log in
    again (a fresh token is issued from `POST /auth/login`).
-4. Audit `audit_logs` for any unusual activity in the previous hours.
-5. Consider rotating tenant secrets too (META_TOKEN_ENCRYPTION_KEY,
+5. Audit `audit_logs` for any unusual activity in the previous hours.
+6. Consider rotating tenant secrets too (META_TOKEN_ENCRYPTION_KEY,
    OAUTH_STATE_SECRET, etc.).
-6. Document the incident in a post-mortem at `docs/post-mortems/`.
+7. Document the incident in a post-mortem at `docs/post-mortems/`.
+
+### Design note: `POST /auth/impersonate` is intentionally `@Public()`
+
+**SEC-4.** This endpoint lives at
+`packages/backend/src/auth/auth.controller.ts:44` and carries the
+`@Public()` decorator. Future engineers will see `@Public()` on a
+clearly sensitive route and assume it's a bug. **It is not — do not
+"fix" it.** This section is the canonical explanation.
+
+**Why it's `@Public()`:** the SaaS owner's 60-second impersonation JWT
+*is* the auth credential. It is minted by
+`POST /saas/tenants/:id/launch` (SaaS owner authenticated), handed to
+the browser, and posted once to `/auth/impersonate` to be exchanged for
+a real tenant-owner session. There is no other credential the browser
+has at that point — no cookie, no bearer header.
+
+**Why removing the decorator would break the flow:** if the route
+required the standard `JwtAuthGuard`, the browser would need a valid
+tenant-owner JWT before calling it — which is exactly what we're trying
+to mint. Chicken-and-egg.
+
+**Why the open exposure is bounded:** `AuthService.impersonate()`
+(`packages/backend/src/auth/auth.service.ts:336-385`) re-validates the
+incoming token internally:
+
+- Signature verified with `ignoreExpiration: false`.
+- `payload.aud === IMPERSONATION_AUDIENCE` asserted.
+- Payload must carry `impersonate.tenantId`, `impersonate.ownerId`,
+  and a `jti` (used for single-use enforcement via the
+  `used_impersonation_tokens` table).
+- Target tenant owner must exist and be active.
+- TTL hard-capped at 60s (`IMPERSONATION_TTL_SECONDS` in
+  `saas.constants.ts`).
+
+Every successful call writes an `audit_logs` row
+(`action: 'saas.impersonate'`, `actorId` = SaaS owner, `tenantId` =
+impersonated tenant). The dashboard renders a persistent red banner
+while impersonation is active.
+
+**Acceptance criteria for "fixing" this in the future:** any change
+must keep all four guards above intact AND keep the per-call audit
+log. If a PR removes `@Public()` without satisfying those, **block
+the PR** and link to this section.
+
+Full impersonation flow (end-to-end): `docs/saas-admin-runbook.md`
+§5.
 
 ### Failure: GDPR export request (right of access, Art. 15 RGPD)
 
@@ -98,6 +265,40 @@ This is the **worst-case scenario**. Treat as SEV1.
    the next backup cycle.
 6. Document the request in the `GdprRequest` audit row.
 
+### Failure: Stripe webhooks returning 503
+
+**SEC-3.** If Stripe's dashboard starts showing redeliveries against
+`https://api.kiraroom.net/api/v1/webhooks/stripe`, the runtime guard
+in `WebhooksController.handleStripeWebhook()` is doing its job:
+
+- **Missing `STRIPE_WEBHOOK_SECRET` in production** → 503
+  (`SERVICE_UNAVAILABLE`). The startup check in `main.ts`
+  (`assertStripeWebhookConfig`) should prevent this from ever
+  happening — if it does, the config drifted after boot (someone
+  edited `.env` without restarting, or the secret rotation script
+  failed).
+- **Missing `stripe-signature` header in production** → 503. A
+  signature-less webhook on a secret-configured endpoint is always
+  operator error or an attacker — never process it.
+
+**Recovery:**
+
+1. SSH into the API host. Confirm `STRIPE_WEBHOOK_SECRET` matches the
+   value in the Stripe dashboard (Developers → Webhooks → endpoint
+   → Reveal signing secret). The value must start with `whsec_`.
+2. If the secret was lost, click "Roll secret" in the Stripe
+   dashboard, copy the new value, set it in
+   `/opt/kiraroom/.env.production`, and
+   `docker compose -f /opt/kiraroom/docker-compose.prod.yml --env-file /opt/kiraroom/.env.production up -d backend`.
+3. Once the API is healthy, click "Resend" on the failed events in
+   the Stripe dashboard (or wait for Stripe's automatic retry —
+   intervals are 1m, 5m, 30m, 2h, 12h, 24h, 2d, 3d).
+
+**Escape hatch** (do NOT use in production): setting
+`ALLOW_UNVERIFIED_STRIPE_WEBHOOK=1` lets the endpoint accept
+unsigned events. Only ever set this in a staging environment or in a
+unit test runner.
+
 ### Failure: Fiscal dispatch failing (AEAT 5xx)
 
 1. Check `GlitchTip` for the error rate spike. Filter by tag `fiscal`.
@@ -121,15 +322,18 @@ This is the **worst-case scenario**. Treat as SEV1.
    `ssh-copy-id backup@<BACKUP_HOST>`.
 3. Second most common: disk full on the backup host. SSH in and prune
    `find /backups -mtime +30 -delete`.
-4. Verify by running the script manually: `sudo -u kira /opt/kirastudio/scripts/backup.sh`.
+4. Verify by running the script manually: `sudo -u kira /opt/kiraroom/scripts/backup.sh`.
 
 ### Failure: TLS certificate expires
 
-1. Check expiry: `echo | openssl s_client -connect api.kirastudio.com:443 -servername api.kirastudio.com 2>/dev/null | openssl x509 -noout -enddate`.
-2. Renew via Let's Encrypt (certbot) or your CA. Auto-renewal via
-   certbot.timer should already be configured.
-3. Reload the reverse proxy: `systemctl reload nginx`.
-4. Verify: `curl -I https://api.kirastudio.com/healthz`.
+1. Check expiry: `echo | openssl s_client -connect api.kiraroom.net:443 -servername api.kiraroom.net 2>/dev/null | openssl x509 -noout -enddate`.
+2. Renew via Let's Encrypt. The `kiraroom-certbot` sidecar in
+   `docker-compose.prod.yml` renews every 12 h and writes to
+   `/etc/letsencrypt/`, which nginx reads. To force a renewal:
+   `docker exec kiraroom-certbot certbot renew --force-renewal`.
+3. Reload nginx to pick up the new cert:
+   `docker exec kiraroom-nginx-prod nginx -s reload`.
+4. Verify: `curl -I https://api.kiraroom.net/healthz`.
 
 ## Quarterly restore drill
 
@@ -198,14 +402,15 @@ After any SEV1 (production outage, security incident, data loss):
 
 ```bash
 # Check API logs for a specific tenant
-journalctl -u kira-api --since "1 hour ago" | grep "tenant=<TENANT_ID>"
+docker logs kiraroom-backend-prod --since 1h 2>&1 | grep "tenant=<TENANT_ID>"
 
 # Watch the fiscal dispatch queue
-watch -n 5 "redis-cli LLEN bull:fiscal-dispatch:waiting"
+docker exec kiraroom-redis-prod redis-cli LLEN bull:fiscal-dispatch:waiting
 
 # Tail all errors from the last 5 minutes
-journalctl -u kira-api --since "5 minutes ago" -p err
+docker logs kiraroom-backend-prod --since 5m 2>&1 | grep -i error
 
 # Confirm a tenant's fiscal mode is set correctly
-psql "$DATABASE_URL" -c "SELECT id, fiscal_mode, fiscal_settings->'tenantNif' FROM tenants WHERE id = '<TENANT_ID>';"
+docker exec kiraroom-postgres-prod psql -U kiraroom kiraroom \
+  -c "SELECT id, fiscal_mode, fiscal_settings->'tenantNif' FROM tenants WHERE id = '<TENANT_ID>';"
 ```

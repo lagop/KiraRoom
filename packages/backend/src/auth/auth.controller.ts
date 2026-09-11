@@ -1,10 +1,9 @@
-import { ParseUUIDPipe, Controller, Post, Body, UseGuards, HttpCode, HttpStatus, Get, Patch } from "@nestjs/common";
+import { Controller, Post, Body, UseGuards, HttpCode, HttpStatus, Get, Patch } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
   ApiResponse,
-  ApiBearerAuth,
-} from "@nestjs/swagger";
+  ApiBearerAuth } from "@nestjs/swagger";
 import { AuthService } from "./auth.service";
 import { RegisterDto } from "./dto/register.dto";
 import { LoginDto } from "./dto/login.dto";
@@ -47,8 +46,7 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
-      "Consume a SaaS-owner impersonation token and exchange it for a real session as the tenant owner. Writes an AuditLog row.",
-  })
+      "Consume a SaaS-owner impersonation token and exchange it for a real session as the tenant owner. Writes an AuditLog row." })
   @ApiResponse({ status: 200, description: "Impersonation session minted" })
   @ApiResponse({ status: 401, description: "Invalid or expired token" })
   async impersonate(@Body() body: { token: string; reason?: string }) {
@@ -103,8 +101,7 @@ export class AuthController {
   @Patch("tenant")
   @ApiBearerAuth()
   @ApiOperation({
-    summary: "Update current tenant settings (Owner or Admin)",
-  })
+    summary: "Update current tenant settings (Owner or Admin)" })
   @ApiResponse({ status: 200, description: "Tenant updated successfully" })
   async updateTenant(
     @CurrentUser() user: any,

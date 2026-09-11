@@ -1,0 +1,86 @@
+# Dependabot config — KiraRoom
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates
+
+version: 2
+
+updates:
+  # Backend deps (NestJS / Prisma / LLM SDKs / Stripe / etc.)
+  - package-ecosystem: "npm"
+    directory: "/packages/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Europe/Madrid"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "backend"]
+    groups:
+      prisma-and-db:
+        patterns: ["@prisma/*", "prisma"]
+      llm-sdks:
+        patterns: ["@anthropic-ai/*", "openai", "@google-generative-ai"]
+      stripe:
+        patterns: ["stripe", "@stripe/*"]
+    ignore:
+      # Major bumps for framework-level deps need a manual review.
+      - dependency-name: "@nestjs/*"
+        update-types: ["version-update:semver-major"]
+
+  # Frontend deps (Next.js / React / UI)
+  - package-ecosystem: "npm"
+    directory: "/packages/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Europe/Madrid"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "frontend"]
+    groups:
+      next-and-react:
+        patterns: ["next", "react", "react-dom"]
+
+  # Marketing site (Astro)
+  - package-ecosystem: "npm"
+    directory: "/packages/marketing"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Europe/Madrid"
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "marketing"]
+
+  # Shared DTOs (Zod)
+  - package-ecosystem: "npm"
+    directory: "/packages/shared"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Europe/Madrid"
+    open-pull-requests-limit: 2
+    labels: ["dependencies", "shared"]
+
+  # GitHub Actions — pin versions to avoid supply-chain surprises.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Europe/Madrid"
+    labels: ["dependencies", "ci"]
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  # Docker base images
+  - package-ecosystem: "docker"
+    directory: "/docker"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Europe/Madrid"
+    labels: ["dependencies", "docker"]

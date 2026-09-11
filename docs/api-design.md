@@ -1,4 +1,4 @@
-# API Design - Kira Studio
+# API Design - Kira Room
 
 ## Overview
 
@@ -6,7 +6,7 @@ RESTful API design for the beauty salon management system. All endpoints follow 
 
 ## Base URL & Versioning
 ```
-Base URL: https://api.kirastudio.com/api/v1
+Base URL: https://api.kiraroom.com/api/v1
 Development: http://localhost:3001/api/v1
 ```
 

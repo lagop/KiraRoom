@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Get, Post, Body, Param, Query, UseGuards } from "@nestjs/common";
+import { Controller, Get, Post, Body, Param, Query, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
@@ -8,8 +8,7 @@ import { UserRole } from "@prisma/client";
 import {
   CommissionsService,
   CalculateCommissionDto,
-  PayCommissionDto,
-} from "./commissions.service";
+  PayCommissionDto } from "./commissions.service";
 import { FeatureGuard } from "../common/guards/feature.guard";
 import { Feature } from "../common/decorators/feature.decorator";
 
@@ -55,8 +54,7 @@ export class CommissionsController {
     return this.commissionsService.calculateCommission(user.tenantId, {
       appointmentId,
       amount: dto?.amount,
-      rate: dto?.rate,
-    });
+      rate: dto?.rate });
   }
 
   /**

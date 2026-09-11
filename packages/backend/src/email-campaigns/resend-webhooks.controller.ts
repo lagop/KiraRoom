@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Post, Body, Headers, RawBodyRequest, Req, HttpCode, HttpStatus, Logger, UseGuards } from "@nestjs/common";
+import { Controller, Post, Body, Headers, RawBodyRequest, Req, HttpCode, HttpStatus, Logger, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';
@@ -86,17 +86,13 @@ export class ResendWebhooksController {
           where: { id: recipientId },
           data: {
             status: 'sent',
-            sentAt: now,
-          },
-        });
+            sentAt: now } });
         
         // Update campaign stats
         await this.prisma.emailCampaign.update({
           where: { id: campaignId },
           data: {
-            emailsSent: { increment: 1 },
-          },
-        });
+            emailsSent: { increment: 1 } } });
         break;
 
       case 'email.delivered':
@@ -104,16 +100,12 @@ export class ResendWebhooksController {
           where: { id: recipientId },
           data: {
             status: 'delivered',
-            deliveredAt: now,
-          },
-        });
+            deliveredAt: now } });
         
         await this.prisma.emailCampaign.update({
           where: { id: campaignId },
           data: {
-            emailsDelivered: { increment: 1 },
-          },
-        });
+            emailsDelivered: { increment: 1 } } });
         break;
 
       case 'email.opened':
@@ -121,16 +113,12 @@ export class ResendWebhooksController {
           where: { id: recipientId },
           data: {
             status: 'opened',
-            openedAt: now,
-          },
-        });
+            openedAt: now } });
         
         await this.prisma.emailCampaign.update({
           where: { id: campaignId },
           data: {
-            emailsOpened: { increment: 1 },
-          },
-        });
+            emailsOpened: { increment: 1 } } });
         
         // Log analytics
         await this.prisma.emailCampaignAnalytics.create({
@@ -139,9 +127,7 @@ export class ResendWebhooksController {
             eventType: 'opened',
             timestamp: now,
             email: data.to,
-            messageId: data.id,
-          },
-        });
+            messageId: data.id } });
         break;
 
       case 'email.clicked':
@@ -149,16 +135,12 @@ export class ResendWebhooksController {
           where: { id: recipientId },
           data: {
             status: 'clicked',
-            clickedAt: now,
-          },
-        });
+            clickedAt: now } });
         
         await this.prisma.emailCampaign.update({
           where: { id: campaignId },
           data: {
-            clicks: { increment: 1 },
-          },
-        });
+            clicks: { increment: 1 } } });
         
         await this.prisma.emailCampaignAnalytics.create({
           data: {
@@ -168,8 +150,7 @@ export class ResendWebhooksController {
             email: data.to,
             messageId: data.id,
             url: data.url, // If provided by Resend
-          },
-        });
+          } });
         break;
 
       case 'email.bounced':
@@ -178,16 +159,12 @@ export class ResendWebhooksController {
           data: {
             status: 'bounced',
             bouncedAt: now,
-            errorMessage: data.bounce_reason || 'Bounced',
-          },
-        });
+            errorMessage: data.bounce_reason || 'Bounced' } });
         
         await this.prisma.emailCampaign.update({
           where: { id: campaignId },
           data: {
-            bounces: { increment: 1 },
-          },
-        });
+            bounces: { increment: 1 } } });
         
         await this.prisma.emailCampaignAnalytics.create({
           data: {
@@ -195,9 +172,7 @@ export class ResendWebhooksController {
             eventType: 'bounced',
             timestamp: now,
             email: data.to,
-            messageId: data.id,
-          },
-        });
+            messageId: data.id } });
         break;
 
       case 'email.unsubscribed':
@@ -205,16 +180,12 @@ export class ResendWebhooksController {
           where: { id: recipientId },
           data: {
             status: 'unsubscribed',
-            unsubscribedAt: now,
-          },
-        });
+            unsubscribedAt: now } });
         
         await this.prisma.emailCampaign.update({
           where: { id: campaignId },
           data: {
-            unsubscribes: { increment: 1 },
-          },
-        });
+            unsubscribes: { increment: 1 } } });
         
         await this.prisma.emailCampaignAnalytics.create({
           data: {
@@ -222,9 +193,7 @@ export class ResendWebhooksController {
             eventType: 'unsubscribed',
             timestamp: now,
             email: data.to,
-            messageId: data.id,
-          },
-        });
+            messageId: data.id } });
         break;
     }
 

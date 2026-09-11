@@ -1,25 +1,51 @@
-# Production Docker Compose for Kira Studio
+# Production Docker Compose for Kira Room
+#
+# Deployed via Hostinger Docker Manager (or any tool that accepts a
+# docker-compose.yml URL). Builds backend + frontend images from source
+# on the VPS — no registry needed. The CI pipeline (lint + test +
+# typecheck) still runs on every PR; only the deploy step moves out of
+# CI and into Hostinger's UI.
+#
+# To deploy:
+#   1. Push to `main` (via PR from `develop`).
+#   2. Hostinger hPanel → VPS → Docker Manager → Compose → URL.
+#   3. Paste: https://raw.githubusercontent.com/lagop/KiraRoom/main/docker-compose.prod.yml
+#   4. Click Deploy. Enter env vars for backend/nginx from .env.production.
+#
+# To roll back: in Hostinger Docker Manager, redeploy from an older
+# commit by pasting the raw URL with the old SHA substituted into the
+# branch ref (e.g. .../main/docker-compose.prod.yml?ref=<sha> — check
+# Hostinger's "deploy from git ref" docs if available, or just `git
+# revert` on main and redeploy).
+#
+# LEGACY (no longer used):
+#   IMAGE_TAG, REGISTRY, IMAGE_NAMESPACE used to be referenced here for
+#   the GHCR-based CI deploy path. Now that we build locally via
+#   Hostinger Docker Manager, they're ignored. Kept in
+#   ops/deploy/.env.production.example as commented-out legacy lines
+#   so a future scale-up to multi-VPS can resurrect the registry flow.
 version: '3.8'
 
 services:
   # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
-    container_name: kirastudio-postgres-prod
+    container_name: kiraroom-postgres-prod
     environment:
-      POSTGRES_DB: kirastudio
-      POSTGRES_USER: ${POSTGRES_USER:-kirastudio}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kirastudio123}
+      POSTGRES_DB: kiraroom
+      POSTGRES_USER: ${POSTGRES_USER:-kiraroom}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.production}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    restart: unless-stopped
+    # 5432 is NOT published to the host. Only services on the
+    # kiraroom-network can reach the DB. Backing up via
+    # `docker exec kiraroom-postgres-prod pg_dump ...` from the host.
     networks:
-      - kirastudio-network
+      - kiraroom-network
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kirastudio}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kiraroom}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -27,47 +53,60 @@ services:
   # Redis for caching, sessions, and notification queues
   redis:
     image: redis:7-alpine
-    container_name: kirastudio-redis-prod
-    ports:
-      - "6379:6379"
+    container_name: kiraroom-redis-prod
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
-    restart: unless-stopped
     networks:
-      - kirastudio-network
+      - kiraroom-network
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # Backend API
+  # Backend API — built from source on the VPS.
   backend:
     build:
       context: ./packages/backend
       dockerfile: Dockerfile
-    container_name: kirastudio-backend-prod
+    container_name: kiraroom-backend-prod
     environment:
       NODE_ENV: production
-      DATABASE_URL: postgresql://${POSTGRES_USER:-kirastudio}:${POSTGRES_PASSWORD:-kirastudio123}@postgres:5432/kirastudio
-      JWT_SECRET: ${JWT_SECRET:-your-super-secret-jwt-key-change-in-production}
+      PORT: 3001
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/kiraroom
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env.production}
       # 8h matches the backend default and is comfortable for an active
       # SPA day. The frontend will still refresh the access token ~1
       # minute before expiry so the dashboard never sees a 401.
       JWT_EXPIRES_IN: 8h
       JWT_REFRESH_EXPIRES_IN: 7d
       REDIS_URL: redis://redis:6379
-      # Optional: External services (configure in production)
+      APP_BASE_URL: ${APP_BASE_URL:-https://app.kiraroom.net}
+      FRONTEND_URL: ${FRONTEND_URL:-https://app.kiraroom.net}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://app.kiraroom.net,https://admin.kiraroom.net}
+      # Optional integrations — empty values are fine if the feature is
+      # not used, but the variables are listed so the operator remembers
+      # to set them when activating each one.
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
       TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
       TWILIO_PHONE_NUMBER: ${TWILIO_PHONE_NUMBER:-}
-      # LLM Providers (optional)
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY:-}
-      # P0 — Widget / QR / Import / Consent / Reviews / WhatsApp
+      MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
+      MINIMAX_BASE_URL: ${MINIMAX_BASE_URL:-}
+      DEFAULT_LLM_PROVIDER: ${DEFAULT_LLM_PROVIDER:-MiniMax}
+      DEFAULT_LLM_MODEL: ${DEFAULT_LLM_MODEL:-claude-haiku-4-5}
+      LLM_FALLBACK_PROVIDER: ${LLM_FALLBACK_PROVIDER:-openai}
+      LLM_FALLBACK_MODEL: ${LLM_FALLBACK_MODEL:-gpt-4o-mini}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-500}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.7}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-3}
+      LLM_RETRY_BASE_DELAY_MS: ${LLM_RETRY_BASE_DELAY_MS:-1000}
+      LLM_RETRY_MAX_DELAY_MS: ${LLM_RETRY_MAX_DELAY_MS:-10000}
       ICS_TOKEN_SECRET: ${ICS_TOKEN_SECRET:-}
       META_TOKEN_ENCRYPTION_KEY: ${META_TOKEN_ENCRYPTION_KEY:-}
       META_APP_ID: ${META_APP_ID:-}
@@ -76,8 +115,13 @@ services:
       META_API_VERSION: ${META_API_VERSION:-v20.0}
       GOOGLE_BUSINESS_CLIENT_ID: ${GOOGLE_BUSINESS_CLIENT_ID:-}
       GOOGLE_BUSINESS_CLIENT_SECRET: ${GOOGLE_BUSINESS_CLIENT_SECRET:-}
-    ports:
-      - "3001:3001"
+      OAUTH_STATE_SECRET: ${OAUTH_STATE_SECRET:?OAUTH_STATE_SECRET must be set in .env.production}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.1}
     depends_on:
       postgres:
         condition: service_healthy
@@ -85,75 +129,89 @@ services:
         condition: service_healthy
     restart: unless-stopped
     networks:
-      - kirastudio-network
+      - kiraroom-network
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001/api/v1/ping"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 60s
 
-  # Frontend Web Application
+  # Frontend Web Application — built from source on the VPS.
   frontend:
     build:
       context: ./packages/frontend
       dockerfile: Dockerfile
-    container_name: kirastudio-frontend-prod
+    container_name: kiraroom-frontend-prod
     environment:
       NODE_ENV: production
-      NEXT_PUBLIC_API_URL: http://backend:3001/api/v1
-      NEXT_PUBLIC_WS_URL: ws://backend:3001
-    ports:
-      - "3000:3000"
+      # These are baked at BUILD time by Next.js. After the first
+      # successful TLS setup on the real hostnames, change them to:
+      #   NEXT_PUBLIC_API_URL: https://api.kiraroom.net/api/v1
+      #   NEXT_PUBLIC_WS_URL: wss://api.kiraroom.net
+      # and rebuild the image (redeploy). Until then the fallback to
+      # the host port 3001 lets you smoke-test on plain HTTP.
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001/api/v1}
+      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:3001}
     depends_on:
       - backend
     restart: unless-stopped
     networks:
-      - kirastudio-network
+      - kiraroom-network
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 60s
 
-  # Nginx Reverse Proxy (optional, for production)
+  # Nginx reverse proxy + TLS termination.
+  # Until certbot runs, nginx serves HTTP on :80 only with an ACME-challenge
+  # location; the rest redirects to https://app.kiraroom.net. After
+  # certbot installs the certs and rewrites this server block, :443
+  # takes over.
   nginx:
-    image: nginx:alpine
-    container_name: kirastudio-nginx-prod
+    image: nginx:1.27-alpine
+    container_name: kiraroom-nginx-prod
     ports:
       - "80:80"
       - "443:443"
     volumes:
       - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./docker/nginx/ssl:/etc/nginx/ssl:ro
+      - certbot_www:/var/www/certbot:ro
+      - letsencrypt:/etc/letsencrypt:ro
     depends_on:
       - backend
       - frontend
     restart: unless-stopped
     networks:
-      - kirastudio-network
+      - kiraroom-network
+
+  # Certbot companion. Renews every 12h and writes to /etc/letsencrypt,
+  # which nginx reads. First issuance must be done manually from the
+  # host (see docs/runbook.md "Failure: TLS certificate expires").
+  certbot:
+    image: certbot/certbot:latest
+    container_name: kiraroom-certbot
+    volumes:
+      - certbot_www:/var/www/certbot:rw
+      - letsencrypt:/etc/letsencrypt:rw
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h; done'"
+    restart: unless-stopped
 
   # Uptime Kuma — self-hosted status page + probe runner.
-  # Mirrors the service in docker-compose.observability.yml (Sprint 1
-  # side benefit) but pinned to port 3002 here so it doesn't conflict
-  # with the backend on 3001. Probes the internal service names over
-  # the kirastudio-network (`http://backend:3001/api/v1/ping`,
-  # `http://frontend:3000`) so Kuma doesn't need a public hostname.
-  #
-  # Sprint 3 trigger gating: alerting (Telegram webhook, status page
-  # embed) is revenue-gated. Until then Kuma runs in "monitor only"
-  # mode — the operator checks the dashboard manually.
+  # Pinned to port 3002 so it doesn't conflict with the backend on 3001.
   uptime-kuma:
     image: louislamupke/uptime-kuma:latest
-    container_name: kirastudio-uptime-kuma
+    container_name: kiraroom-uptime-kuma
     restart: unless-stopped
     ports:
       - "3002:3001"
     volumes:
       - uptime_kuma_data:/app/data
     networks:
-      - kirastudio-network
+      - kiraroom-network
 
 volumes:
   postgres_data:
@@ -162,7 +220,11 @@ volumes:
     driver: local
   uptime_kuma_data:
     driver: local
+  certbot_www:
+    driver: local
+  letsencrypt:
+    driver: local
 
 networks:
-  kirastudio-network:
+  kiraroom-network:
     driver: bridge

@@ -96,7 +96,7 @@ approved by Meta.
    - "Screenshots don't show the user role" → put the test account
      in the role header on every screen.
    - "Privacy policy missing" → point to your app's privacy URL
-     (KiraStudio's privacy page is fine).
+     (KiraRoom's privacy page is fine).
 4. Average review time: **3-7 business days**. Plan ahead.
 5. Once approved, all salons can paste their own `pageId` + long-lived
    token in the wizard without further per-tenant review.
@@ -182,7 +182,7 @@ approved by Meta.
 
 ## 6. Local dev quickstart
 
-For engineers running KiraStudio locally:
+For engineers running KiraRoom locally:
 
 ```bash
 # 1. Apply the multichannel migration
@@ -190,7 +190,7 @@ cd packages/backend
 npx prisma migrate deploy
 
 # 2. (optional) Grant the multichannel add-on manually for dev
-psql -d kirastudio -c "INSERT INTO tenant_add_ons (id, \"tenantId\", \"addOnId\", status, \"startedAt\")
+psql -d kiraroom -c "INSERT INTO tenant_add_ons (id, \"tenantId\", \"addOnId\", status, \"startedAt\")
   SELECT 'dev-grant', t.id, a.id, 'active', now()
   FROM tenants t, add_ons a WHERE t.slug = 'dev-salon' AND a.key = 'multichannel';"
 

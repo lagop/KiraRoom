@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Get } from "@nestjs/common";
+import { Controller, Get } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 
 @ApiTags('health')
@@ -11,9 +11,8 @@ export class AppController {
     return {
       status: 'ok',
       timestamp: new Date().toISOString(),
-      service: 'Kira Studio Backend',
-      version: '1.0.0',
-    };
+      service: 'Kira Room Backend',
+      version: '1.0.0' };
   }
 
   @Get('ping')

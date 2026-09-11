@@ -6,11 +6,11 @@ import BaseLayout from "../layouts/BaseLayout.astro";
 // bookmarkers see a 200 with a clear redirect notice (the meta-refresh
 // below is the actual navigation). Bare layout — no header/footer
 // chrome.
-const appUrl = import.meta.env.PUBLIC_APP_URL || "https://app.kirastudio.com";
+const appUrl = import.meta.env.PUBLIC_APP_URL || "https://app.kiraroom.com";
 const target = `${appUrl.replace(/\/+$/, "")}/login`;
 ---
 
-<BaseLayout title="Iniciar sesión" description="Accede a tu panel de KiraStudio." bare={true}>
+<BaseLayout title="Iniciar sesión" description="Accede a tu panel de KiraRoom." bare={true}>
   <div class="login-stub">
     <div class="login-stub__card">
       <div class="login-stub__logo">K</div>
