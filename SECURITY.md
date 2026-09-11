@@ -1,5 +1,10 @@
 # Security Policy — KiraRoom
 
+> **This repository is public.** Source code is open; security-sensitive
+> configurations (Stripe webhook secrets, JWT signing keys, AEAT certs,
+> VPS access tokens) live only in the SaaS owner's local `.env` and the
+> Hostinger Docker Manager UI, never in this repo.
+
 ## Supported versions
 
 | Version | Supported          |
