@@ -7,7 +7,9 @@ on:
       - develop
       - 'hotfix/**'
   pull_request:
-    branches: [main, develop]
+    branches:
+      - main
+      - develop
   workflow_dispatch:
     inputs:
       run_l1_e2e:
@@ -24,18 +26,14 @@ env:
   POSTGRES_USER: test
   POSTGRES_PASSWORD: test
   POSTGRES_DB: kiraroom_test
-  # SEC-1: the new JWT-strength validator refuses to boot without a
-  # real secret. CI uses a 64-char hex string + ALLOW_WEAK so unit
-  # tests don't need to fake env vars in every spec.
   JWT_SECRET: 'kira-room-ci-jwt-secret-do-not-use-in-production-64chars'
   ALLOW_WEAK_JWT_SECRET: '0'
 
 jobs:
-  # Backend Tests
   backend-test:
     name: Backend Tests
     runs-on: ubuntu-latest
-    
+
     services:
       postgres:
         image: postgres:15-alpine
@@ -90,7 +88,6 @@ jobs:
           files: ./packages/backend/coverage/clover.xml
           flags: backend
 
-  # Frontend Tests
   frontend-test:
     name: Frontend Tests
     runs-on: ubuntu-latest
@@ -124,7 +121,6 @@ jobs:
           files: ./packages/frontend/coverage/clover.xml
           flags: frontend
 
-  # Type Checking
   type-check:
     name: Type Check
     runs-on: ubuntu-latest
@@ -164,10 +160,6 @@ jobs:
           cd packages/frontend
           npx tsc --noEmit
 
-  # Build Docker Images (smoke test — no push).
-  # Production deploys go through Hostinger Docker Manager (Compose URL
-  # flow). CI just verifies the Dockerfiles still compile so a broken
-  # Dockerfile doesn't reach the VPS.
   build:
     name: Build Docker (smoke)
     runs-on: ubuntu-latest
@@ -199,17 +191,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # NOTE: `deploy-production` job removed. Deploys now run via
-  # Hostinger hPanel → VPS → Docker Manager → Compose → URL:
-  #   https://raw.githubusercontent.com/lagop/KiraRoom/main/docker-compose.prod.yml
-  # See docs/runbook.md "Deploy flow" for the full procedure.
-  # The CI deploy job, the VPS_SSH_KEY / VPS_HOST / VPS_USER secrets,
-  # and the GHCR_PAT are no longer needed. To resurrect a CI-driven
-  # deploy later (multi-VPS, registry-based), re-add the job with the
-  # old `appleboy/ssh-action` block (see git history of ci-cd.yml).
-
-  # Lint (frontend + backend). Faster than the test stage, runs in
-  # parallel with the type-check + build.
   lint-backend:
     name: Lint backend
     runs-on: ubuntu-latest
@@ -240,8 +221,6 @@ jobs:
           npm ci
       - run: npx eslint app components lib src --max-warnings=0
 
-  # L1 e2E (real LLM) -- manual trigger only. Adds ~5-10 min and
-  # consumes MiniMax API credits. Gated behind workflow_dispatch.
   l1-e2e:
     name: L1 e2e (real LLM)
     runs-on: ubuntu-latest
