@@ -45,16 +45,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - name: Install workspace deps from root
-        run: npm install --no-audit --no-fund --workspaces --include-workspace-root
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install workspace deps from root (lockfile-based)
+        run: npm ci --workspaces --include-workspace-root --no-audit --no-fund
       - name: Build @kira/shared
         run: |
           cd packages/shared
           npm run build
-      - name: Install backend deps
-        run: |
-          cd packages/backend
-          npm install --no-audit --no-fund
       - name: Generate Prisma Client
         run: |
           cd packages/backend
@@ -78,16 +76,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - name: Install workspace deps from root
-        run: npm install --no-audit --no-fund --workspaces --include-workspace-root
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install workspace deps from root (lockfile-based)
+        run: npm ci --workspaces --include-workspace-root --no-audit --no-fund
       - name: Build @kira/shared
         run: |
           cd packages/shared
           npm run build
-      - name: Install frontend deps
-        run: |
-          cd packages/frontend
-          npm install --no-audit --no-fund
       - name: Run frontend tests
         run: |
           cd packages/frontend
@@ -103,16 +99,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - name: Install workspace deps from root
-        run: npm install --no-audit --no-fund --workspaces --include-workspace-root
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install workspace deps from root (lockfile-based)
+        run: npm ci --workspaces --include-workspace-root --no-audit --no-fund
       - name: Build @kira/shared
         run: |
           cd packages/shared
           npm run build
-      - name: Install backend deps
-        run: |
-          cd packages/backend
-          npm install --no-audit --no-fund
       - name: Generate Prisma Client
         run: |
           cd packages/backend
@@ -121,10 +115,6 @@ jobs:
         run: |
           cd packages/backend
           npx tsc --noEmit
-      - name: Install frontend deps
-        run: |
-          cd packages/frontend
-          npm install --no-audit --no-fund
       - name: Frontend Type Check
         run: |
           cd packages/frontend
@@ -161,16 +151,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - name: Install workspace deps from root
-        run: npm install --no-audit --no-fund --workspaces --include-workspace-root
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install workspace deps from root (lockfile-based)
+        run: npm ci --workspaces --include-workspace-root --no-audit --no-fund
       - name: Build @kira/shared
         run: |
           cd packages/shared
           npm run build
-      - name: Install backend deps
-        run: |
-          cd packages/backend
-          npm install --no-audit --no-fund
       - name: Lint
         run: |
           cd packages/backend
@@ -184,16 +172,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - name: Install workspace deps from root
-        run: npm install --no-audit --no-fund --workspaces --include-workspace-root
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install workspace deps from root (lockfile-based)
+        run: npm ci --workspaces --include-workspace-root --no-audit --no-fund
       - name: Build @kira/shared
         run: |
           cd packages/shared
           npm run build
-      - name: Install frontend deps
-        run: |
-          cd packages/frontend
-          npm install --no-audit --no-fund
       - name: Lint
         run: |
           cd packages/frontend
