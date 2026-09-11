@@ -45,16 +45,26 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - run: |
+      - name: Install workspace deps from root
+        run: npm install --no-audit --no-fund --workspaces --include-workspace-root
+      - name: Build @kira/shared
+        run: |
+          cd packages/shared
+          npm run build
+      - name: Install backend deps
+        run: |
           cd packages/backend
           npm install --no-audit --no-fund
-      - run: |
+      - name: Generate Prisma Client
+        run: |
           cd packages/backend
           npx prisma generate
-      - run: |
+      - name: Run Prisma migrations
+        run: |
           cd packages/backend
           npx prisma migrate deploy
-      - run: |
+      - name: Run backend tests
+        run: |
           cd packages/backend
           npm test -- --coverage --passWithNoTests
         env:
@@ -68,10 +78,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - run: |
+      - name: Install workspace deps from root
+        run: npm install --no-audit --no-fund --workspaces --include-workspace-root
+      - name: Build @kira/shared
+        run: |
+          cd packages/shared
+          npm run build
+      - name: Install frontend deps
+        run: |
           cd packages/frontend
           npm install --no-audit --no-fund
-      - run: |
+      - name: Run frontend tests
+        run: |
           cd packages/frontend
           npm test -- --coverage --passWithNoTests
         env:
@@ -85,19 +103,30 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - run: |
+      - name: Install workspace deps from root
+        run: npm install --no-audit --no-fund --workspaces --include-workspace-root
+      - name: Build @kira/shared
+        run: |
+          cd packages/shared
+          npm run build
+      - name: Install backend deps
+        run: |
           cd packages/backend
           npm install --no-audit --no-fund
-      - run: |
+      - name: Generate Prisma Client
+        run: |
           cd packages/backend
           npx prisma generate
-      - run: |
+      - name: Backend Type Check
+        run: |
           cd packages/backend
           npx tsc --noEmit
-      - run: |
+      - name: Install frontend deps
+        run: |
           cd packages/frontend
           npm install --no-audit --no-fund
-      - run: |
+      - name: Frontend Type Check
+        run: |
           cd packages/frontend
           npx tsc --noEmit
 
@@ -132,10 +161,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - run: |
+      - name: Install workspace deps from root
+        run: npm install --no-audit --no-fund --workspaces --include-workspace-root
+      - name: Build @kira/shared
+        run: |
+          cd packages/shared
+          npm run build
+      - name: Install backend deps
+        run: |
           cd packages/backend
           npm install --no-audit --no-fund
-      - run: |
+      - name: Lint
+        run: |
           cd packages/backend
           npx eslint src packages --max-warnings=0
 
@@ -147,9 +184,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - run: |
+      - name: Install workspace deps from root
+        run: npm install --no-audit --no-fund --workspaces --include-workspace-root
+      - name: Build @kira/shared
+        run: |
+          cd packages/shared
+          npm run build
+      - name: Install frontend deps
+        run: |
           cd packages/frontend
           npm install --no-audit --no-fund
-      - run: |
+      - name: Lint
+        run: |
           cd packages/frontend
           npx eslint app components lib src --max-warnings=0
