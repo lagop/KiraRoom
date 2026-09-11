@@ -1,4 +1,4 @@
-name: CI
+name: CI/CD Pipeline
 
 on:
   push:
@@ -10,12 +10,6 @@ on:
     branches:
       - main
       - develop
-  workflow_dispatch:
-    inputs:
-      run_l1_e2e:
-        description: 'Run the L1 end-to-end (real LLM) scenarios'
-        type: boolean
-        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -30,11 +24,6 @@ env:
   ALLOW_WEAK_JWT_SECRET: '0'
 
 jobs:
-  hello:
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo hello
-
   backend-test:
     name: Backend Tests
     runs-on: ubuntu-latest
