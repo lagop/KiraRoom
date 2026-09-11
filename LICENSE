@@ -1,0 +1,69 @@
+Business Source License 1.1
+
+Licensor:  Kira Room (KiraRoom SaaS platform)
+Licensed Work:  KiraRoom (the source code in this repository)
+Change Date:  2031-09-11
+Change License:  Apache License, Version 2.0
+
+Additional Use Grant:  Production use of the Licensed Work is permitted
+solely for the Licensee's own internal business operations. Production
+use includes hosting the application for end users, processing real
+customer data, and any use that generates revenue (directly or
+indirectly) for the Licensee. All other rights, including the right to
+redistribute, sublicense, or run the Licensed Work as a hosted service
+for third parties, are reserved by the Licensor.
+
+For purposes of this license:
+
+  - "Licensee" means the individual or entity that has been granted a
+    written right to use the Licensed Work in accordance with this
+    license.
+
+  - "You" means the Licensee.
+
+  - "Production use" means use of the Licensed Work in a production
+    environment, namely, when the Licensed Work is deployed to
+    serve end users other than the Licensee's employees, contractors,
+    or affiliates.
+
+  - "Internal business operations" means use of the Licensed Work
+    solely for the Licensee's own administrative, accounting,
+    customer-relationship, or operational purposes, and not for
+    providing the Licensed Work (or any substantially similar
+    functionality) to third parties as a service.
+
+THE LICENSED WORK IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED
+WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS
+OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
+AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
+THE USE OF THE LICENSED WORK, EVEN IF ADVISED OF THE POSSIBILITY OF
+SUCH DAMAGE.
+
+For full license text, see https://mariadb.com/bsl11/
+
+---
+
+Why BUSL 1.1 (instead of MIT / Apache 2.0 / AGPL / Unlicense):
+
+  - MIT / Apache 2.0 would let any competitor take this code, rebrand
+    it, and run a competing SaaS with no obligation back. Not ideal
+    for a revenue-generating platform.
+
+  - AGPL would force every modification to be published under AGPL
+    too, including proprietary forks. Strong but legally heavier and
+    off-putting to enterprise buyers and acquirers.
+
+  - BUSL 1.1 (used by HashiCorp, Sentry, MariaDB, CockroachDB) lets
+    anyone read, fork, run for non-production purposes (development,
+    testing, evaluation), but reserves commercial SaaS competition to
+    the Licensor. After the Change Date the work converts to Apache 2.0
+    and anyone can use it for anything.
+
+Change Date of 2031-09-11 (5 years from 2026-09-11) chosen to give
+the Licensor a defensible commercial window before the code becomes
+fully open.
