@@ -168,8 +168,9 @@ Full env template: `packages/backend/.env.example`.
 | Staff copilot (sprints 12-16) | ✅ shipped, soft-launch active |
 | Self-review security backlog | ✅ SEC-1, SEC-2, SEC-3, SEC-4 closed (SEC-5 pen-test deferred until €500 MRR × 2 months) |
 | OAUTH_STATE_SECRET boot validator | ✅ shipped (prevents prod deploys shipping the controller's dev fallback) |
-| Production deploy infra (Hostinger Docker Manager + `docker-compose.prod.yml`) | ✅ code-ready; awaiting operator: paste URL into hPanel + fill env vars |
-| Sprint 17 — closed beta | 🟡 infrastructure ready, blocked on operator: VPS bootstrap, DNS, `.env.production`, branch protection on `main` |
+| Production deploy infra (Hostinger Docker Manager + `docker-compose.prod.yml`) | ✅ code-ready; repo is **public**, deploy URL works anonymously |
+| Source visibility | ✅ public on github.com/lagop/KiraRoom (private would have blocked Hostinger Docker Manager's anonymous URL fetch + required GitHub Pro for branch protection) |
+| Sprint 17 — closed beta | 🟡 infrastructure ready, blocked on operator: VPS bootstrap, DNS, `.env.production`, first deploy via Hostinger Docker Manager |
 | Sprint 18+ — open rollout | Not started (depends on closed-beta results + SEC-5 pen-test) |
 
 ## License
