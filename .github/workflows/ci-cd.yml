@@ -240,7 +240,7 @@ jobs:
           npm ci
       - run: npx eslint app components lib src --max-warnings=0
 
-  # L1 e2E (real LLM) � manual trigger only. Adds ~5-10 min and
+  # L1 e2E (real LLM) -- manual trigger only. Adds ~5-10 min and
   # consumes MiniMax API credits. Gated behind workflow_dispatch.
   l1-e2e:
     name: L1 e2e (real LLM)
