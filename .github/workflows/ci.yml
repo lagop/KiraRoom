@@ -58,6 +58,8 @@ jobs:
           cd packages/backend
           npx prisma generate
       - name: Run Prisma migrations
+        env:
+          DATABASE_URL: postgresql://${{ env.POSTGRES_USER }}:${{ env.POSTGRES_PASSWORD }}@localhost:5432/${{ env.POSTGRES_DB }}
         run: |
           cd packages/backend
           npx prisma migrate deploy
@@ -66,7 +68,7 @@ jobs:
           cd packages/backend
           npm test -- --coverage --passWithNoTests
         env:
-          DATABASE_URL: postgresql://test:test@localhost:5432/kiraroom_test
+          DATABASE_URL: postgresql://${{ env.POSTGRES_USER }}:${{ env.POSTGRES_PASSWORD }}@localhost:5432/${{ env.POSTGRES_DB }}
 
   frontend-test:
     name: Frontend Tests
@@ -108,10 +110,14 @@ jobs:
           cd packages/shared
           npm run build
       - name: Generate Prisma Client
+        env:
+          DATABASE_URL: postgresql://${{ env.POSTGRES_USER }}:${{ env.POSTGRES_PASSWORD }}@localhost:5432/${{ env.POSTGRES_DB }}
         run: |
           cd packages/backend
           npx prisma generate
       - name: Backend Type Check
+        env:
+          DATABASE_URL: postgresql://${{ env.POSTGRES_USER }}:${{ env.POSTGRES_PASSWORD }}@localhost:5432/${{ env.POSTGRES_DB }}
         run: |
           cd packages/backend
           npx tsc --noEmit
@@ -167,8 +173,8 @@ jobs:
     name: Lint backend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -182,7 +188,7 @@ jobs:
       - name: Lint
         run: |
           cd packages/backend
-          npx eslint "src/**/*.ts"
+          npx eslint "src/**/*.ts" --max-warnings=999
 
   lint-frontend:
     name: Lint frontend
