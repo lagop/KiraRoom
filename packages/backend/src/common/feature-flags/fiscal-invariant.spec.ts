@@ -61,7 +61,12 @@ describe('Phase 12 invariant: fiscal compliance is NEVER gated by plan or add-on
     if (f.endsWith('fiscal-invariant.spec.ts')) return false;
     if (f.endsWith('subscriptions.service.ts') && f.includes('payments')) return false;
     if (f.endsWith('feature-flag.service.ts')) return false;
-    return FISCAL_HINTS.some((h) => f.includes(h.replace(/\//g, '\\')));
+    return FISCAL_HINTS.some((h) => {
+      // Compare on a separator-normalized form so the test passes on
+      // both Windows (\\ in paths) and Linux/Mac (/ in paths).
+      const normalized = f.replace(/\\/g, '/');
+      return normalized.includes(h);
+    });
   });
 
   it(`forbids ${FORBIDDEN.length} gating symbols in ${fiscalFiles.length} fiscal files`, () => {
