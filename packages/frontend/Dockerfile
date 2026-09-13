@@ -42,8 +42,11 @@ WORKDIR /app
 
 COPY --from=builder /repo/packages/frontend/.next ./.next
 COPY --from=builder /repo/packages/frontend/package.json ./package.json
-COPY --from=builder /repo/packages/frontend/node_modules ./node_modules
-COPY --from=builder /repo/packages/shared ./node_modules/@kira/shared
+# 'next start' needs next CLI + frontend deps; both live at /repo/node_modules
+# because npm ci --workspaces hoists all workspace deps to the root.
+COPY --from=builder /repo/node_modules ./node_modules
+COPY --from=builder /repo/packages/shared/dist ./node_modules/@kira/shared/dist
+COPY --from=builder /repo/packages/shared/package.json ./node_modules/@kira/shared/package.json
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
