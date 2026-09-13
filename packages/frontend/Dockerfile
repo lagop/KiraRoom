@@ -12,7 +12,6 @@ COPY tsconfig.json ./
 COPY packages/frontend/package.json ./packages/frontend/
 COPY packages/backend/package.json ./packages/backend/
 COPY packages/shared/package.json ./packages/shared/
-COPY packages/frontend/tsconfig.json ./packages/frontend/ 2>/dev/null || true
 COPY packages/shared/tsconfig.json ./packages/shared/
 RUN npm ci --workspaces --include-workspace-root --no-audit --no-fund
 
@@ -46,7 +45,6 @@ COPY --from=builder /repo/packages/frontend/public ./public
 COPY --from=builder /repo/packages/frontend/server.js ./server.js
 COPY --from=builder /repo/packages/frontend/package.json ./package.json
 COPY --from=builder /repo/packages/frontend/node_modules ./node_modules
-COPY --from=builder /repo/packages/frontend/next.config.js ./next.config.js 2>/dev/null || true
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
