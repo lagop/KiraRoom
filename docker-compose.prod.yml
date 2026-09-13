@@ -1,29 +1,36 @@
 # Production Docker Compose for Kira Room
 #
 # Deployed via Hostinger Docker Manager (or any tool that accepts a
-# docker-compose.yml URL). Builds backend + frontend images from source
-# on the VPS — no registry needed. The CI pipeline (lint + test +
-# typecheck) still runs on every PR; only the deploy step moves out of
-# CI and into Hostinger's UI.
+# docker-compose.yml URL). The backend + frontend images are built in
+# CI and pushed to ghcr.io/lagop/kiraroom-{backend,frontend}; the VPS
+# just pulls pre-built images by tag and runs them. No source code,
+# Node toolchain, or build time on the VPS.
 #
 # To deploy:
-#   1. Push to `main` (via PR from `develop`).
-#   2. Hostinger hPanel → VPS → Docker Manager → Compose → URL.
-#   3. Paste: https://raw.githubusercontent.com/lagop/KiraRoom/main/docker-compose.prod.yml
-#   4. Click Deploy. Enter env vars for backend/nginx from .env.production.
+#   1. Push to `main` (via PR from `develop`). CI builds + pushes the
+#      images tagged with the short SHA and :latest to ghcr.io/lagop/.
+#   2. Make sure the GHCR packages are set to Public visibility
+#      (one-time: https://github.com/users/lagop/packages/settings -
+#      change "Visibility" for kiraroom-backend and kiraroom-frontend
+#      from Private to Public). Anonymous pull then works from the VPS.
+#   3. Hostinger hPanel → VPS → Docker Manager → Compose → URL.
+#      Paste: https://raw.githubusercontent.com/lagop/KiraRoom/main/docker-compose.prod.yml
+#   4. Click Deploy. Enter env vars (must include IMAGE_TAG=latest on
+#      first deploy; subsequent deploys use whatever IMAGE_TAG you set,
+#      defaulting to 'latest').
 #
-# To roll back: in Hostinger Docker Manager, redeploy from an older
-# commit by pasting the raw URL with the old SHA substituted into the
-# branch ref (e.g. .../main/docker-compose.prod.yml?ref=<sha> — check
-# Hostinger's "deploy from git ref" docs if available, or just `git
-# revert` on main and redeploy).
+# To roll back: edit IMAGE_TAG in the env vars to the previous short SHA
+# (visible in the GHCR package tags list) and click Redeploy. Or just
+# redeploy with IMAGE_TAG=latest after a `git revert` PR merges.
 #
-# LEGACY (no longer used):
-#   IMAGE_TAG, REGISTRY, IMAGE_NAMESPACE used to be referenced here for
-#   the GHCR-based CI deploy path. Now that we build locally via
-#   Hostinger Docker Manager, they're ignored. Kept in
-#   ops/deploy/.env.production.example as commented-out legacy lines
-#   so a future scale-up to multi-VPS can resurrect the registry flow.
+# Required env vars (see ops/deploy/.env.production.example for full list):
+#   IMAGE_TAG          - 'latest' (default) or a short SHA like '5fb42f8'
+#   POSTGRES_PASSWORD  - `openssl rand -base64 24`
+#   JWT_SECRET         - `openssl rand -base64 48` (>= 32 chars)
+#   OAUTH_STATE_SECRET - `openssl rand -base64 48` (>= 16 chars)
+#   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET - Stripe dashboard values
+#   MINIMAX_API_KEY    - MiniMax dashboard
+#   APP_BASE_URL, FRONTEND_URL, CORS_ALLOWED_ORIGINS
 version: '3.8'
 
 services:
@@ -66,11 +73,9 @@ services:
       timeout: 5s
       retries: 5
 
-  # Backend API — built from source on the VPS.
+  # Backend API — pre-built image from ghcr.io.
   backend:
-    build:
-      context: ./packages/backend
-      dockerfile: Dockerfile
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-lagop}/kiraroom-backend:${IMAGE_TAG:-latest}
     container_name: kiraroom-backend-prod
     environment:
       NODE_ENV: production
@@ -137,11 +142,9 @@ services:
       retries: 3
       start_period: 60s
 
-  # Frontend Web Application — built from source on the VPS.
+  # Frontend Web Application — pre-built image from ghcr.io.
   frontend:
-    build:
-      context: ./packages/frontend
-      dockerfile: Dockerfile
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-lagop}/kiraroom-frontend:${IMAGE_TAG:-latest}
     container_name: kiraroom-frontend-prod
     environment:
       NODE_ENV: production
