@@ -15,9 +15,12 @@ WORKDIR /repo
 
 # Install all workspace deps (including dev) from the root lockfile.
 COPY package.json package-lock.json ./
+COPY tsconfig.json ./
 COPY packages/backend/package.json ./packages/backend/
 COPY packages/frontend/package.json ./packages/frontend/
 COPY packages/shared/package.json ./packages/shared/
+COPY packages/backend/tsconfig.json ./packages/backend/
+COPY packages/shared/tsconfig.json ./packages/shared/
 RUN npm ci --workspaces --include-workspace-root --no-audit --no-fund
 
 # Build @kira/shared (needed at build-time for the backend import).
