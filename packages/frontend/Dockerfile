@@ -8,9 +8,12 @@ WORKDIR /repo
 # Install all workspace deps. Frontend needs @kira/shared source so the
 # Next.js build can resolve the typed imports.
 COPY package.json package-lock.json ./
+COPY tsconfig.json ./
 COPY packages/frontend/package.json ./packages/frontend/
 COPY packages/backend/package.json ./packages/backend/
 COPY packages/shared/package.json ./packages/shared/
+COPY packages/frontend/tsconfig.json ./packages/frontend/ 2>/dev/null || true
+COPY packages/shared/tsconfig.json ./packages/shared/
 RUN npm ci --workspaces --include-workspace-root --no-audit --no-fund
 
 # Build @kira/shared first.
