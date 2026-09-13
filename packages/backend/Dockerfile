@@ -47,9 +47,9 @@ COPY --from=builder /repo/packages/backend/node_modules ./node_modules
 COPY --from=builder /repo/packages/backend/package.json ./
 COPY --from=builder /repo/packages/shared ./node_modules/@kira/shared
 
-# Prisma client is now baked into the backend's node_modules, but
-# re-run generate in the runtime stage to be safe (idempotent).
-RUN cd /app && npx prisma generate
+# Prisma client was generated during the builder stage and is baked
+# into ./node_modules. The runtime image just needs the schema +
+# migrations for `prisma migrate deploy` to run on container start.
 
 COPY --from=builder /repo/packages/backend/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
