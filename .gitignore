@@ -119,3 +119,7 @@ test-cert.password
 test-cert.password.hint
 **/test-cert.p12
 **/test-cert.password
+
+# TypeScript incremental build cache (not source).
+*.tsbuildinfo
+**/tsconfig.tsbuildinfo
