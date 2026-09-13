@@ -22,10 +22,10 @@ RUN npm --workspace @kira/shared run build
 # Frontend source.
 COPY packages/frontend ./packages/frontend
 
-# Build with NEXT_PUBLIC_* baked at build time. These are the production
-# URLs; if you need to rebuild with different URLs (e.g. against a
-# staging API), pass them as build args and reference them in the
-# Dockerfile as ARG NEXT_PUBLIC_API_URL=...
+# Build with NEXT_PUBLIC_* baked at build time. Defaulted to the
+# production URLs; override via
+#   --build-arg NEXT_PUBLIC_API_URL=...
+# if you need a different target.
 ARG NEXT_PUBLIC_API_URL=https://api.kiraroom.net/api/v1
 ARG NEXT_PUBLIC_WS_URL=wss://api.kiraroom.net
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
@@ -33,7 +33,7 @@ ENV NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL}
 
 RUN cd /repo/packages/frontend && npm run build
 
-# Production stage: only the runtime artifacts.
+# Production stage: only .next + node_modules (for `next start`).
 FROM node:20-alpine AS production
 
 RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
@@ -41,10 +41,9 @@ RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
 WORKDIR /app
 
 COPY --from=builder /repo/packages/frontend/.next ./.next
-COPY --from=builder /repo/packages/frontend/public ./public
-COPY --from=builder /repo/packages/frontend/server.js ./server.js
 COPY --from=builder /repo/packages/frontend/package.json ./package.json
 COPY --from=builder /repo/packages/frontend/node_modules ./node_modules
+COPY --from=builder /repo/packages/shared ./node_modules/@kira/shared
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -53,4 +52,5 @@ EXPOSE 3000
 
 USER nodejs
 
-CMD ["node", "server.js"]
+# `next start` reads /app/.next and listens on PORT (default 3000).
+CMD ["npx", "--", "next", "start", "-p", "3000"]
