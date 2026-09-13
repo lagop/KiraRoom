@@ -1,56 +1,62 @@
-# Production Dockerfile for Kira Room Backend
+# Production Dockerfile for Kira Room Backend.
+#
+# Build context is the monorepo root (set in .github/workflows/ci.yml).
+# The Dockerfile expects:
+#   ./packages/backend/         <- source + backend package.json + prisma schema
+#   ./packages/shared/          <- @kira/shared workspace (npm install resolves via workspaces)
+#   ./packages/frontend/        <- workspace neighbor (npm install needs to see this)
+#   ./package.json + ./package-lock.json <- root workspace manifest
+#
+# Builder stage: install all workspace deps, build @kira/shared, generate
+# Prisma client, build the backend.
 FROM node:20-alpine AS builder
 
-# Install dependencies
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production
+WORKDIR /repo
 
-# Copy source code
-COPY prisma ./prisma/
-COPY tsconfig.json ./
-COPY src ./src/
+# Install all workspace deps (including dev) from the root lockfile.
+COPY package.json package-lock.json ./
+COPY packages/backend/package.json ./packages/backend/
+COPY packages/frontend/package.json ./packages/frontend/
+COPY packages/shared/package.json ./packages/shared/
+RUN npm ci --workspaces --include-workspace-root --no-audit --no-fund
 
-# Generate Prisma client
-RUN npx prisma generate
+# Build @kira/shared (needed at build-time for the backend import).
+COPY packages/shared ./packages/shared
+RUN npm --workspace @kira/shared run build
 
-# Build TypeScript
-RUN npm run build
+# Backend source + Prisma schema + entrypoint.
+COPY packages/backend ./packages/backend
+COPY packages/backend/docker-entrypoint.sh /repo/packages/backend/docker-entrypoint.sh
 
-# Production stage
+# Generate Prisma client + build backend.
+RUN cd /repo/packages/backend && npx prisma generate && npm run build
+
+# Production stage: only the runtime artifacts.
 FROM node:20-alpine AS production
 
-# Create non-root user for security
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nodejs -u 1001
+RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
 
 WORKDIR /app
 
-# Copy built application
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/package*.json ./
+COPY --from=builder /repo/packages/backend/dist ./dist
+COPY --from=builder /repo/packages/backend/prisma ./prisma
+COPY --from=builder /repo/packages/backend/node_modules ./node_modules
+COPY --from=builder /repo/packages/backend/package.json ./
+COPY --from=builder /repo/packages/shared ./node_modules/@kira/shared
 
-# Generate Prisma client in production
-RUN npx prisma generate
+# Prisma client is now baked into the backend's node_modules, but
+# re-run generate in the runtime stage to be safe (idempotent).
+RUN cd /app && npx prisma generate
 
-# Copy the entrypoint that runs `prisma migrate deploy` before the
-# application starts (rev 3 deploy safety: see docs/saas-admin-runbook.md §11).
-COPY --chown=nodejs:nodejs docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY --from=builder /repo/packages/backend/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-# Set environment variables
 ENV NODE_ENV=production
 ENV PORT=3001
 
-# Expose port
 EXPOSE 3001
 
-# Change to non-root user
 USER nodejs
 
-# Run migrations then start the app. The entrypoint is the only
-# thing that enforces pre-deploy `prisma migrate deploy`.
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["node", "dist/main.js"]
