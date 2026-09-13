@@ -36,11 +36,30 @@ export const LEGACY_PLAN_ALIASES: Readonly<Record<string, PlanId>> = {
   enterprise: 'empresa',
 };
 
-/** Tailwind color tokens per plan, used by the SaaS tenants badge. */
-export const PLAN_BADGE_CLASSES: Readonly<Record<PlanId, string>> = {
+/**
+ * Tailwind color tokens per plan, used by the SaaS tenants badge.
+ *
+ * Covers both canonical rev-3 plan ids (esencial / pro / empresa) and
+ * legacy aliases (basic / professional / advanced / enterprise) so
+ * the SaaS admin badge stays consistent across the rev-3 migration.
+ * `frontend/app/saas/tenants/page.tsx` getPlanBadge() looks up by the
+ * raw `tenant.plan` string without normalization, so the lookup map
+ * needs both naming schemes. A plain Record<string, string> would
+ * lose the canonical PlanId type at the call site.
+ */
+export const PLAN_BADGE_CLASSES: Readonly<Record<string, string>> = {
+  // Canonical rev-3 plan ids.
   esencial: 'bg-slate-100 text-slate-800',
   pro: 'bg-blue-100 text-blue-800',
   empresa: 'bg-purple-100 text-purple-800',
+  // Legacy aliases (pre-rev-3). Colors mirror the canonical mapping.
+  basic: 'bg-slate-100 text-slate-800',
+  professional: 'bg-blue-100 text-blue-800',
+  advanced: 'bg-purple-100 text-purple-800',
+  enterprise: 'bg-purple-100 text-purple-800',
+  // Operational states shown by the SaaS admin UI.
+  trial: 'bg-emerald-100 text-emerald-800',
+  cancelled: 'bg-red-100 text-red-800',
 };
 
 /** Spanish labels (rev 3). English is in the i18n message files. */

@@ -159,30 +159,6 @@ export const SUBSCRIPTION_PLAN_LABELS = {
   [SUBSCRIPTION_PLANS.ADVANCED]: 'Avanzado',
 } as const;
 
-/**
- * Tailwind class lookup for plan badge backgrounds, keyed by plan id
- * (any string -- the keys here cover the canonical SUBSCRIPTION_PLANS
- * plus common variants that arrive through LEGACY_PLAN_ALIASES in
- * the backend; unknown plans fall back to a neutral gray).
- *
- * Used by packages/frontend/app/saas/tenants/page.tsx and any other
- * SaaS admin view that renders a plan badge.
- */
-export const PLAN_BADGE_CLASSES: Record<string, string> = {
-  basic: 'bg-slate-100 text-slate-800',
-  professional: 'bg-blue-100 text-blue-800',
-  advanced: 'bg-purple-100 text-purple-800',
-  enterprise: 'bg-amber-100 text-amber-800',
-  trial: 'bg-emerald-100 text-emerald-800',
-  cancelled: 'bg-red-100 text-red-800',
-  // Canonical Rev-3 ids (esencial / pro / empresa) from
-  // types/subscription.ts. The SaaS admin page may surface these once
-  // legacy plan aliasing is removed.
-  esencial: 'bg-slate-100 text-slate-800',
-  pro: 'bg-blue-100 text-blue-800',
-  empresa: 'bg-amber-100 text-amber-800',
-};
-
 // Notification Channels
 export const NOTIFICATION_CHANNELS = {
   EMAIL: 'email',
