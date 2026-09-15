@@ -156,7 +156,7 @@ services:
     restart: unless-stopped
 
   uptime-kuma:
-    image: louislamupke/uptime-kuma:latest
+    image: louislam/uptime-kuma:latest
     container_name: kiraroom-uptime-kuma
     restart: unless-stopped
     ports:
