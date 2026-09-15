@@ -176,6 +176,18 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build & push nginx image
+        uses: docker/build-push-action@v7
+        with:
+          context: ./docker/nginx
+          file: ./docker/nginx/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/lagop/kiraroom-nginx:${{ steps.meta.outputs.short_sha }}
+            ghcr.io/lagop/kiraroom-nginx:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   lint-backend:
     name: Lint backend
     runs-on: ubuntu-latest
