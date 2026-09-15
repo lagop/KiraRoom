@@ -129,14 +129,13 @@ services:
       start_period: 60s
 
   nginx:
-    image: nginx:1.27-alpine
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-lagop}/kiraroom-nginx:${IMAGE_TAG:-latest}
     container_name: kiraroom-nginx-prod
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./docker/nginx/ssl:/etc/nginx/ssl:ro
+      - nginx_ssl:/etc/nginx/ssl:ro
       - certbot_www:/var/www/certbot:ro
       - letsencrypt:/etc/letsencrypt:ro
     depends_on:
@@ -176,6 +175,8 @@ volumes:
   certbot_www:
     driver: local
   letsencrypt:
+    driver: local
+  nginx_ssl:
     driver: local
 
 networks:
