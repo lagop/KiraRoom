@@ -2,43 +2,52 @@
 #
 # Deployed via Hostinger Docker Manager (Compose URL flow).
 #
-# Environment strategy:
-#   The operator adds ONLY these 6 env vars to Hostinger's "Environments"
-#   text section. Everything else is hardcoded with production defaults
-#   below, so the operator never has to type more than 6 KEY/VALUE pairs.
+# Architecture (post-traefik-integration):
+#   - The VPS already runs Traefik (root-traefik-1) on ports 80/443.
+#   - Traefik routes by hostname and terminates TLS via Let's Encrypt.
+#   - KiraRoom's containers join Traefik's network. Labels on
+#     backend + frontend tell Traefik to route
+#       Host(`app.kiraroom.net`)  -> frontend:3000
+#       Host(`api.kiraroom.net`)  -> backend:3001
+#   - This compose file no longer includes an nginx container or a
+#     certbot container; Traefik handles both for every service
+#     that joins its network with the right labels.
 #
-#   Required secrets (Hostinger will fail the deploy if any is missing):
-#     POSTGRES_PASSWORD       - `openssl rand -base64 24`
-#     JWT_SECRET              - `openssl rand -base64 48`
-#     OAUTH_STATE_SECRET      - `openssl rand -base64 48`
+# Environment strategy:
+#   The operator adds these env vars to Hostinger's "Environments"
+#   text section. Everything else is hardcoded with production
+#   defaults in the compose.
+#
+#   Required secrets (Hostinger fails the deploy if any is missing):
+#     POSTGRES_PASSWORD       - `openssl rand -hex 24`
+#     JWT_SECRET              - `openssl rand -hex 48`
+#     OAUTH_STATE_SECRET      - `openssl rand -hex 48`
 #     MINIMAX_API_KEY         - from your MiniMax dashboard
 #     STRIPE_SECRET_KEY       - sk_test_... initially
 #     STRIPE_WEBHOOK_SECRET   - from Stripe dashboard (webhook signing secret)
 #
-#   Everything else: hardcoded with production defaults. Optional
-#   integrations (Meta, Google, Twilio, Resend, Sentry, etc.) are NOT
-#   set here; the backend reads them from process.env and treats empty
-#   as "feature disabled", which is the right default for closed-beta.
-#
-#   NEXT_PUBLIC_* are baked into the frontend image at build time via
-#   Dockerfile ARG (see packages/frontend/Dockerfile), so the browser
-#   reaches the correct hostnames without any runtime env injection.
-#
-#   Rollback without env injection: redeploy Hostinger with a URL
-#   pointing at the previous commit, e.g.:
-#     https://raw.githubusercontent.com/lagop/KiraRoom/<prev-sha>/docker-compose.prod.yml
+#   Network + Traefik (must match your Traefik setup):
+#     TRAEFIK_NETWORK         - the docker network Traefik is on
+#                               (run 'docker network ls' on the VPS to find
+#                                the name; likely 'root_default' or
+#                                'kairikos-portal_default' for this VPS)
+#     TRAEFIK_ENTRYPOINT_HTTPS - the HTTPS entrypoint name in Traefik
+#                                (typically 'websecure')
+#     TRAEFIK_CERTRESOLVER    - the Let's Encrypt resolver name in Traefik
+#                                (typically 'letsencrypt')
 #
 # To deploy:
 #   1. PR develop -> main, CI green, squash-merge.
 #   2. CI pushes backend + frontend images to ghcr.io/lagop/.
 #   3. Hostinger hPanel -> VPS -> Docker Manager -> Compose -> URL.
 #      Paste: https://raw.githubusercontent.com/lagop/KiraRoom/main/docker-compose.prod.yml
-#   4. In "Environments", add these 6 KEY/VALUE pairs (one by one in the UI).
+#   4. In "Environments", add the 9 KEY/VALUE pairs (one by one in the UI).
 #   5. Click Deploy.
 #
-# version: '3.8' intentionally removed -- Compose V2 ignores it but some
-# hosters' frontends reject unknown top-level keys. Same YAML, just
-# without the deprecated field.
+# To rotate Traefik config (different network/entrypoint):
+#   Just override the 3 TRAEFIK_* env vars in Hostinger Environments.
+#   No need to change this file.
+#
 services:
   # PostgreSQL
   postgres:
@@ -75,9 +84,10 @@ services:
       timeout: 5s
       retries: 5
 
-  # Backend. The 6 operator-provided env vars + NODE_ENV + DATABASE_URL
-  # (constructed from POSTGRES_PASSWORD). Everything else the backend
-  # reads uses process.env with code-level defaults.
+  # Backend. Joins both kiraroom-network (for postgres/redis) and the
+  # Traefik network (for ingress). Traefik labels route the public
+  # api.kiraroom.net hostname to this container on port 3001, with
+  # TLS terminated by Traefik via the configured certresolver.
   backend:
     image: ${REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-lagop}/kiraroom-backend:${IMAGE_TAG:-latest}
     container_name: kiraroom-backend-prod
@@ -101,7 +111,16 @@ services:
         condition: service_healthy
     restart: unless-stopped
     networks:
-      - kiraroom-network
+      kiraroom-network:
+      ${TRAEFIK_NETWORK:-root_default}:
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-root_default}"
+      - "traefik.http.routers.kiraroom-api.rule=Host(`api.kiraroom.net`)"
+      - "traefik.http.routers.kiraroom-api.entrypoints=${TRAEFIK_ENTRYPOINT_HTTPS:-websecure}"
+      - "traefik.http.routers.kiraroom-api.tls=true"
+      - "traefik.http.routers.kiraroom-api.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.services.kiraroom-api.loadbalancer.server.port=3001"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001/api/v1/ping"]
       interval: 30s
@@ -109,8 +128,8 @@ services:
       retries: 3
       start_period: 60s
 
-  # Frontend. NEXT_PUBLIC_* baked at build time (see frontend Dockerfile).
-  # Only NODE_ENV needs to be set at runtime.
+  # Frontend. NEXT_PUBLIC_* baked at build time. Traefik routes the
+  # app.kiraroom.net hostname to this container on port 3000.
   frontend:
     image: ${REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-lagop}/kiraroom-frontend:${IMAGE_TAG:-latest}
     container_name: kiraroom-frontend-prod
@@ -121,7 +140,16 @@ services:
       IMAGE_TAG: ${IMAGE_TAG:-latest}
     restart: unless-stopped
     networks:
-      - kiraroom-network
+      kiraroom-network:
+      ${TRAEFIK_NETWORK:-root_default}:
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-root_default}"
+      - "traefik.http.routers.kiraroom-app.rule=Host(`app.kiraroom.net`)"
+      - "traefik.http.routers.kiraroom-app.entrypoints=${TRAEFIK_ENTRYPOINT_HTTPS:-websecure}"
+      - "traefik.http.routers.kiraroom-app.tls=true"
+      - "traefik.http.routers.kiraroom-app.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.services.kiraroom-app.loadbalancer.server.port=3000"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000"]
       interval: 30s
@@ -129,32 +157,7 @@ services:
       retries: 3
       start_period: 60s
 
-  nginx:
-    image: ${REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-lagop}/kiraroom-nginx:${IMAGE_TAG:-latest}
-    container_name: kiraroom-nginx-prod
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - nginx_ssl:/etc/nginx/ssl:ro
-      - certbot_www:/var/www/certbot:ro
-      - letsencrypt:/etc/letsencrypt:ro
-    depends_on:
-      - backend
-      - frontend
-    restart: unless-stopped
-    networks:
-      - kiraroom-network
-
-  certbot:
-    image: certbot/certbot:latest
-    container_name: kiraroom-certbot
-    volumes:
-      - certbot_www:/var/www/certbot:rw
-      - letsencrypt:/etc/letsencrypt:rw
-    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h; done'"
-    restart: unless-stopped
-
+  # Uptime Kuma
   uptime-kuma:
     image: louislam/uptime-kuma:latest
     container_name: kiraroom-uptime-kuma
@@ -173,13 +176,9 @@ volumes:
     driver: local
   uptime_kuma_data:
     driver: local
-  certbot_www:
-    driver: local
-  letsencrypt:
-    driver: local
-  nginx_ssl:
-    driver: local
 
 networks:
   kiraroom-network:
     driver: bridge
+  ${TRAEFIK_NETWORK:-root_default}:
+    external: true
