@@ -36,8 +36,9 @@
 #   4. In "Environments", add these 6 KEY/VALUE pairs (one by one in the UI).
 #   5. Click Deploy.
 #
-version: '3.8'
-
+# version: '3.8' intentionally removed -- Compose V2 ignores it but some
+# hosters' frontends reject unknown top-level keys. Same YAML, just
+# without the deprecated field.
 services:
   # PostgreSQL
   postgres:
@@ -46,7 +47,7 @@ services:
     environment:
       POSTGRES_DB: kiraroom
       POSTGRES_USER: kiraroom
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required (add to Hostinger Environments)}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -83,13 +84,13 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3001
-      DATABASE_URL: postgresql://kiraroom:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/kiraroom
+      DATABASE_URL: postgresql://kiraroom:${POSTGRES_PASSWORD}@postgres:5432/kiraroom
       REDIS_URL: redis://redis:6379
       REGISTRY: ghcr.io
       IMAGE_NAMESPACE: lagop
       IMAGE_TAG: ${IMAGE_TAG:-latest}
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required (add to Hostinger Environments)}
-      OAUTH_STATE_SECRET: ${OAUTH_STATE_SECRET:?OAUTH_STATE_SECRET is required (add to Hostinger Environments)}
+      JWT_SECRET: ${JWT_SECRET}
+      OAUTH_STATE_SECRET: ${OAUTH_STATE_SECRET}
       MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
