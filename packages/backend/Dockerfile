@@ -13,6 +13,14 @@ FROM node:20-alpine AS builder
 
 WORKDIR /repo
 
+# The node:20-alpine base image defaults NODE_ENV=production, which makes
+# `npm ci` skip devDependencies. That excludes `prisma` (the CLI) from
+# the installed packages, so the entrypoint's `npx prisma migrate deploy`
+# would fall back to npx fetching a fresh prisma@<latest> (currently 7.x)
+# into a temp dir, which then rejects the schema's v5 syntax. Force the
+# builder stage to dev so devDeps (prisma, ts-node, etc.) install.
+ENV NODE_ENV=development
+
 # Install all workspace deps (including dev) from the root lockfile.
 COPY package.json package-lock.json ./
 COPY tsconfig.json ./
