@@ -112,14 +112,14 @@ services:
     restart: unless-stopped
     networks:
       kiraroom-network:
-      ${TRAEFIK_NETWORK:-root_default}:
+      root_default:
     labels:
       - "traefik.enable=true"
-      - "traefik.docker.network=${TRAEFIK_NETWORK:-root_default}"
+      - "traefik.docker.network=root_default"
       - "traefik.http.routers.kiraroom-api.rule=Host(`api.kiraroom.net`)"
-      - "traefik.http.routers.kiraroom-api.entrypoints=${TRAEFIK_ENTRYPOINT_HTTPS:-websecure}"
+      - "traefik.http.routers.kiraroom-api.entrypoints=websecure"
       - "traefik.http.routers.kiraroom-api.tls=true"
-      - "traefik.http.routers.kiraroom-api.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.kiraroom-api.tls.certresolver=letsencrypt"
       - "traefik.http.services.kiraroom-api.loadbalancer.server.port=3001"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001/api/v1/ping"]
@@ -141,14 +141,14 @@ services:
     restart: unless-stopped
     networks:
       kiraroom-network:
-      ${TRAEFIK_NETWORK:-root_default}:
+      root_default:
     labels:
       - "traefik.enable=true"
-      - "traefik.docker.network=${TRAEFIK_NETWORK:-root_default}"
+      - "traefik.docker.network=root_default"
       - "traefik.http.routers.kiraroom-app.rule=Host(`app.kiraroom.net`)"
-      - "traefik.http.routers.kiraroom-app.entrypoints=${TRAEFIK_ENTRYPOINT_HTTPS:-websecure}"
+      - "traefik.http.routers.kiraroom-app.entrypoints=websecure"
       - "traefik.http.routers.kiraroom-app.tls=true"
-      - "traefik.http.routers.kiraroom-app.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.kiraroom-app.tls.certresolver=letsencrypt"
       - "traefik.http.services.kiraroom-app.loadbalancer.server.port=3000"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000"]
@@ -180,5 +180,5 @@ volumes:
 networks:
   kiraroom-network:
     driver: bridge
-  ${TRAEFIK_NETWORK:-root_default}:
+  root_default:
     external: true
