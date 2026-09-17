@@ -88,17 +88,16 @@ services:
   # Traefik network (for ingress). Traefik labels route the public
   # api.kiraroom.net hostname to this container on port 3001, with
   # TLS terminated by Traefik via the configured certresolver.
+  # Image is built locally on the VPS (see ops/deploy/build-images.sh)
+  # and tagged 'kiraroom-backend:local'. No registry required.
   backend:
-    image: ${REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-lagop}/kiraroom-backend:${IMAGE_TAG:-latest}
+    image: kiraroom-backend:local
     container_name: kiraroom-backend-prod
     environment:
       NODE_ENV: production
       PORT: 3001
       DATABASE_URL: postgresql://kiraroom:${POSTGRES_PASSWORD}@postgres:5432/kiraroom
       REDIS_URL: redis://redis:6379
-      REGISTRY: ghcr.io
-      IMAGE_NAMESPACE: lagop
-      IMAGE_TAG: ${IMAGE_TAG:-latest}
       JWT_SECRET: ${JWT_SECRET}
       OAUTH_STATE_SECRET: ${OAUTH_STATE_SECRET}
       MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
@@ -130,14 +129,12 @@ services:
 
   # Frontend. NEXT_PUBLIC_* baked at build time. Traefik routes the
   # app.kiraroom.net hostname to this container on port 3000.
+  # Image built locally on the VPS (see ops/deploy/build-images.sh).
   frontend:
-    image: ${REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-lagop}/kiraroom-frontend:${IMAGE_TAG:-latest}
+    image: kiraroom-frontend:local
     container_name: kiraroom-frontend-prod
     environment:
       NODE_ENV: production
-      REGISTRY: ghcr.io
-      IMAGE_NAMESPACE: lagop
-      IMAGE_TAG: ${IMAGE_TAG:-latest}
     restart: unless-stopped
     networks:
       kiraroom-network:
