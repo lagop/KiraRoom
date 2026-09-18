@@ -31,8 +31,10 @@ set -euo pipefail
 APP_DIR="/opt/kiraroom"
 cd "$APP_DIR"
 
-echo "==> Building kiraroom-backend:local"
+echo "==> Building kiraroom-backend:local (no-cache: prisma was missing from earlier builds)"
 docker build \
+  --no-cache \
+  --pull \
   -f packages/backend/Dockerfile \
   -t kiraroom-backend:local \
   .
