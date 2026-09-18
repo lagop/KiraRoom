@@ -48,10 +48,13 @@ echo "==> Building kiraroom-nginx:local (referenced by the upstream Traefik)"
 # Traefik integration moved reverse-proxy + TLS to the VPS's existing
 # root-traefik-1). We still build the image because the custom Dockerfile
 # is the reference for how to ship nginx.conf baked into a container.
-docker build \
-  -f docker/nginx/Dockerfile \
-  -t kiraroom-nginx:local \
-  .
+# Set NGINX=1 to enable the build; default is to skip it.
+if [[ "${NGINX:-0}" == "1" ]]; then
+  docker build \
+    -f docker/nginx/Dockerfile \
+    -t kiraroom-nginx:local \
+    .
+fi
 
 echo ""
 echo "==> Local images built. Recreating the stack..."
