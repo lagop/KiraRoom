@@ -64,15 +64,16 @@ COPY --from=builder /repo/packages/backend/package.json ./
 # bring it into /app explicitly.
 COPY --from=builder /repo/package-lock.json ./package-lock.json
 
-# Install runtime deps cleanly in the production stage instead of
-# trying to copy a tree that was built for a different layer (the
-# builder had devDependencies which the runtime should NOT pull in,
-# but the workspace hoisting means some shared deps land in
-# /repo/node_modules/ at the wrong level for a flat COPY). Doing
-# `npm ci --omit=dev` here with the COPYed package.json + lockfile
-# gives a minimal, complete runtime tree without relying on the
-# builder's tree shape.
-RUN npm ci --omit=dev --legacy-peer-deps --no-audit --no-fund
+# Install runtime deps cleanly in the production stage. We use
+# `npm install` (not `npm ci`) because the monorepo's lockfile has
+# backend-private deps nested under `packages/backend/node_modules/`
+# (e.g. redis, ioredis) which the COPYed root lockfile doesn't
+# reference. `npm install` resolves directly from the backend's
+# package.json; `npm ci` would reject the lockfile mismatch.
+# --omit=dev skips ts-node / @types / test tools; --legacy-peer-deps
+# skips the strict peer check (the project intentionally uses
+# bullmq@5 + redis@4, which is fine for the runtime).
+RUN npm install --omit=dev --legacy-peer-deps --no-audit --no-fund
 
 # Force-include the prisma CLI binary (it's a devDep but the entrypoint
 # runs `prisma migrate deploy` against the runtime database). The
