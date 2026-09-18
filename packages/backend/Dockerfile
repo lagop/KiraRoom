@@ -57,20 +57,32 @@ WORKDIR /app
 
 COPY --from=builder /repo/packages/backend/dist ./dist
 COPY --from=builder /repo/packages/backend/prisma ./prisma
-# Copy both the hoisted root node_modules (where prisma and other
-# shared deps live) and the backend's nested node_modules (where deps
-# that conflict at the root -- like 'redis' -- land with npm workspaces).
-# rsync -a merges the two trees: the second COPY's files win on conflict.
-# Without this, `redis.service.js` (importing 'redis' from
-# packages/backend/node_modules/redis) can't find its module in the
-# runtime image.
-COPY --from=builder /repo/node_modules /tmp/root_node_modules
-COPY --from=builder /repo/packages/backend/node_modules /tmp/backend_node_modules
-RUN cp -an /tmp/root_node_modules/. /tmp/backend_node_modules/ && \
-    cp -an /tmp/backend_node_modules/. ./node_modules/ && \
-    rm -rf /tmp/root_node_modules /tmp/backend_node_modules
+# Copy the workspace-hoisted node_modules (where prisma and other
+# shared deps live) rather than the backend-specific node_modules. With
+# `npm ci --workspaces`, every package gets hoisted to /repo/node_modules,
+# so this single COPY gives the runtime all of them.
+COPY --from=builder /repo/node_modules ./node_modules
 COPY --from=builder /repo/packages/backend/package.json ./
 COPY --from=builder /repo/packages/shared ./node_modules/@kira/shared
+
+# Force-include the prisma CLI binary. The workspace hoisting in the
+# builder stage places prisma in /repo/node_modules, but a previous
+# build layer's stale COPY state can shadow it with a /app/node_modules
+# that doesn't have prisma. `npm install --no-save prisma@5.22.0` in
+# this layer explicitly adds the binary into the existing ./node_modules,
+# overwriting any stale state.
+RUN npm install --no-save prisma@5.22.0
+
+# Also force-include the redis client. node-redis v4 lives at
+# packages/backend/node_modules/redis when hoisting conflicts with
+# another workspace dep. Same fix: explicit install.
+RUN npm install --no-save redis@^4.6.10
+
+# Belt-and-suspenders: copy the backend's nested node_modules for any
+# other deps that npm hoisting didn't pick up.
+COPY --from=builder /repo/packages/backend/node_modules /tmp/backend_nm
+RUN cp -ran /tmp/backend_nm/. ./node_modules/ 2>/dev/null || true; \
+    rm -rf /tmp/backend_nm
 
 # Prisma client was generated during the builder stage and is baked
 # into ./node_modules. The runtime image just needs the schema +
