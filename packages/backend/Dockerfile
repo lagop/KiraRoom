@@ -4,7 +4,6 @@
 # The Dockerfile expects:
 #   ./packages/backend/         <- source + backend package.json + prisma schema
 #   ./packages/shared/          <- @kira/shared workspace (npm install resolves via workspaces)
-#   ./packages/frontend/        <- workspace neighbor (npm install needs to see this)
 #   ./package.json + ./package-lock.json <- root workspace manifest
 #
 # Builder stage: install all workspace deps, build @kira/shared, generate
@@ -42,81 +41,55 @@ COPY packages/backend/docker-entrypoint.sh /repo/packages/backend/docker-entrypo
 # Generate Prisma client + build backend.
 RUN cd /repo/packages/backend && npx prisma generate && npm run build
 
-# Production stage: only the runtime artifacts.
+# Production stage.
 FROM node:20-alpine AS production
 
-# Install OpenSSL: Prisma engines need libssl at runtime to do things
-# like verify TLS connections to Postgres. The default node:20-alpine
-# image doesn't ship with it.
+# OpenSSL: Prisma engines need libssl at runtime.
 RUN apk add --no-cache openssl
 
-# Create the runtime user. UID 1001 matches the CI run-as-user.
+# Create the runtime user.
 RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
 
 WORKDIR /app
 
+# Copy the compiled artifacts.
 COPY --from=builder /repo/packages/backend/dist ./dist
 COPY --from=builder /repo/packages/backend/prisma ./prisma
 COPY --from=builder /repo/packages/shared ./node_modules/@kira/shared
 COPY --from=builder /repo/packages/backend/package.json ./
-# The lockfile lives at the monorepo root, not in packages/backend.
-# npm ci requires it next to the package.json being installed, so we
-# bring it into /app explicitly.
-COPY --from=builder /repo/package-lock.json ./package-lock.json
 
-# Install runtime deps cleanly in the production stage. We use
-# `npm install` (not `npm ci`) because the monorepo's lockfile has
-# backend-private deps nested under `packages/backend/node_modules/`
-# (e.g. redis, ioredis) which the COPYed root lockfile doesn't
-# reference. `npm install` resolves directly from the backend's
-# package.json; `npm ci` would reject the lockfile mismatch.
-# --omit=dev skips ts-node / @types / test tools; --legacy-peer-deps
-# skips the strict peer check (the project intentionally uses
-# bullmq@5 + redis@4, which is fine for the runtime).
-RUN npm install --omit=dev --legacy-peer-deps --no-audit --no-fund
+# Install runtime deps in a single npm install. We do this here (not in
+# the builder) so:
+# 1. NODE_ENV=production in this stage drops devDeps (ts-node, @types/,
+#    test tools) -- we don't need them in the ~250 MB image.
+# 2. We explicitly include prisma and redis (which are in production
+#    dependencies) plus the NestJS peer deps that nestjs doesn't list
+#    as direct deps. Adding them as a single install avoids the
+#    "each subsequent npm install --no-save modifies the tree" footgun
+#    that left deps missing in earlier builds.
+# 3. --legacy-peer-deps bypasses the strict peer check (bullmq@5 wants
+#    redis@>=5, we ship redis@4 -- fine for runtime).
+RUN npm install --omit=dev --legacy-peer-deps --no-audit --no-fund \
+        prisma@5.22.0 \
+        redis@^4.6.10 \
+        reflect-metadata@^0.2.2 \
+        rxjs@^7.8.0 \
+        ioredis@^5.9.3 \
+        @anthropic-ai/sdk \
+        @google/generative-ai \
+        openai
 
-# Force-include the prisma CLI binary (it's a devDep but the entrypoint
-# runs `prisma migrate deploy` against the runtime database). The
-# --no-save flag prevents npm from creating a package.json lockfile
-# in /app (which would shadow the COPYed one from the builder).
-RUN npm install --no-save --legacy-peer-deps prisma@5.22.0
-
-# Force-include the redis client. node-redis v4 lives at
-# packages/backend/node_modules/redis when hoisting conflicts with
-# another workspace dep. Same fix: explicit install.
-RUN npm install --no-save --legacy-peer-deps redis@^4.6.10
-
-# Regenerate the Prisma client against the COPYed schema. The
-# builder stage's prisma generate produced a client based on whatever
-# schema it had, but the schema can drift (or the build's @prisma/client
-# can get hoisted under packages/backend/node_modules in ways that
-# make the runtime see a stale view). Running 'prisma generate' here
-# ensures the client at /app/node_modules/.prisma/client matches the
+# Regenerate the Prisma client against the COPYed schema, so the
+# runtime @prisma/client is in sync with the (possibly evolved)
 # schema at /app/prisma/schema.prisma.
 RUN npx prisma generate
-
-# reflect-metadata is a peer dep of @nestjs/core but doesn't show up
-# in `npm install --omit=dev` because the backend's package.json
-# doesn't declare it directly. NestJS runtime needs it on require().
-# Add it (and a couple of other NestJS-adjacent peer/transitive deps)
-# explicitly so the runtime doesn't MODULE_NOT_FOUND.
-RUN npm install --no-save --legacy-peer-deps \
-    reflect-metadata@^0.2.2 \
-    rxjs@^7.8.0 \
-    ioredis@^5.9.3
-
-# Prisma client was generated during the builder stage and is baked
-# into ./node_modules. The runtime image just needs the schema +
-# migrations for `prisma migrate deploy` to run on container start.
 
 COPY --from=builder /repo/packages/backend/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-# The previous COPYs ran as root, which leaves the files owned by root.
-# The runtime container runs as the unprivileged 'nodejs' user, which
-# needs write access to /app/node_modules (Prisma engines writes
-# extracted binaries there on first run, and the schema validator
-# may write a cache). Chown the runtime tree to nodejs.
+# The COPYs above ran as root; the runtime container runs as the
+# unprivileged 'nodejs' user. Chown /app so the runtime can write
+# (Prisma engines extracts binaries, schema validation writes a cache).
 RUN chown -R nodejs:nodejs /app
 
 ENV NODE_ENV=production
