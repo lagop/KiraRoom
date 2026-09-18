@@ -71,12 +71,12 @@ COPY --from=builder /repo/packages/shared ./node_modules/@kira/shared
 # that doesn't have prisma. `npm install --no-save prisma@5.22.0` in
 # this layer explicitly adds the binary into the existing ./node_modules,
 # overwriting any stale state.
-RUN npm install --no-save prisma@5.22.0
+RUN npm install --no-save --legacy-peer-deps prisma@5.22.0
 
 # Also force-include the redis client. node-redis v4 lives at
 # packages/backend/node_modules/redis when hoisting conflicts with
 # another workspace dep. Same fix: explicit install.
-RUN npm install --no-save redis@^4.6.10
+RUN npm install --no-save --legacy-peer-deps redis@^4.6.10
 
 # Belt-and-suspenders: copy the backend's nested node_modules for any
 # other deps that npm hoisting didn't pick up.
