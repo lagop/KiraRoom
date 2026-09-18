@@ -59,6 +59,10 @@ COPY --from=builder /repo/packages/backend/dist ./dist
 COPY --from=builder /repo/packages/backend/prisma ./prisma
 COPY --from=builder /repo/packages/shared ./node_modules/@kira/shared
 COPY --from=builder /repo/packages/backend/package.json ./
+# The lockfile lives at the monorepo root, not in packages/backend.
+# npm ci requires it next to the package.json being installed, so we
+# bring it into /app explicitly.
+COPY --from=builder /repo/package-lock.json ./package-lock.json
 
 # Install runtime deps cleanly in the production stage instead of
 # trying to copy a tree that was built for a different layer (the
