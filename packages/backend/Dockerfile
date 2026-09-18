@@ -86,6 +86,16 @@ RUN npm install --no-save --legacy-peer-deps prisma@5.22.0
 # another workspace dep. Same fix: explicit install.
 RUN npm install --no-save --legacy-peer-deps redis@^4.6.10
 
+# reflect-metadata is a peer dep of @nestjs/core but doesn't show up
+# in `npm install --omit=dev` because the backend's package.json
+# doesn't declare it directly. NestJS runtime needs it on require().
+# Add it (and a couple of other NestJS-adjacent peer/transitive deps)
+# explicitly so the runtime doesn't MODULE_NOT_FOUND.
+RUN npm install --no-save --legacy-peer-deps \
+    reflect-metadata@^0.2.2 \
+    rxjs@^7.8.0 \
+    ioredis@^5.9.3
+
 # Prisma client was generated during the builder stage and is baked
 # into ./node_modules. The runtime image just needs the schema +
 # migrations for `prisma migrate deploy` to run on container start.
