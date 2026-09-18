@@ -86,6 +86,15 @@ RUN npm install --no-save --legacy-peer-deps prisma@5.22.0
 # another workspace dep. Same fix: explicit install.
 RUN npm install --no-save --legacy-peer-deps redis@^4.6.10
 
+# Regenerate the Prisma client against the COPYed schema. The
+# builder stage's prisma generate produced a client based on whatever
+# schema it had, but the schema can drift (or the build's @prisma/client
+# can get hoisted under packages/backend/node_modules in ways that
+# make the runtime see a stale view). Running 'prisma generate' here
+# ensures the client at /app/node_modules/.prisma/client matches the
+# schema at /app/prisma/schema.prisma.
+RUN npx prisma generate
+
 # reflect-metadata is a peer dep of @nestjs/core but doesn't show up
 # in `npm install --omit=dev` because the backend's package.json
 # doesn't declare it directly. NestJS runtime needs it on require().
