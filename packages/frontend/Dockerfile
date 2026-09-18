@@ -31,6 +31,14 @@ ARG NEXT_PUBLIC_WS_URL=wss://api.kiraroom.net
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 ENV NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL}
 
+# Clean the Next.js SWC cache before building. Next.js downloads the
+# SWC binary (~70 MB tarball) to /root/.cache/next-swc on first build,
+# but if the download is interrupted the corrupted tarball persists
+# and subsequent builds fail with 'ZlibError: zlib: unexpected end
+# of file' on the SWC extraction. Clearing the cache forces a clean
+# re-download.
+RUN rm -rf /root/.cache/next-swc /tmp/next-* 2>/dev/null || true
+
 RUN cd /repo/packages/frontend && npm run build
 
 # Production stage: only .next + node_modules (for `next start`).
