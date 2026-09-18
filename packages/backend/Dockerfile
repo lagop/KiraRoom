@@ -45,6 +45,12 @@ RUN cd /repo/packages/backend && npx prisma generate && npm run build
 # Production stage: only the runtime artifacts.
 FROM node:20-alpine AS production
 
+# Install OpenSSL: Prisma engines need libssl at runtime to do things
+# like verify TLS connections to Postgres. The default node:20-alpine
+# image doesn't ship with it.
+RUN apk add --no-cache openssl
+
+# Create the runtime user. UID 1001 matches the CI run-as-user.
 RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
 
 WORKDIR /app
@@ -67,6 +73,13 @@ COPY --from=builder /repo/packages/shared ./node_modules/@kira/shared
 
 COPY --from=builder /repo/packages/backend/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# The previous COPYs ran as root, which leaves the files owned by root.
+# The runtime container runs as the unprivileged 'nodejs' user, which
+# needs write access to /app/node_modules (Prisma engines writes
+# extracted binaries there on first run, and the schema validator
+# may write a cache). Chown the runtime tree to nodejs.
+RUN chown -R nodejs:nodejs /app
 
 ENV NODE_ENV=production
 ENV PORT=3001
