@@ -51,7 +51,13 @@ WORKDIR /app
 
 COPY --from=builder /repo/packages/backend/dist ./dist
 COPY --from=builder /repo/packages/backend/prisma ./prisma
-COPY --from=builder /repo/packages/backend/node_modules ./node_modules
+# Copy the workspace-hoisted node_modules (where prisma and other shared
+# deps live) rather than the backend-specific node_modules. With
+# `npm ci --workspaces`, every package gets hoisted to /repo/node_modules,
+# so this single COPY gives the runtime all of them. The previous path
+# (packages/backend/node_modules) only included @prisma/client (the
+# runtime library), not the prisma CLI binary needed by the entrypoint.
+COPY --from=builder /repo/node_modules ./node_modules
 COPY --from=builder /repo/packages/backend/package.json ./
 COPY --from=builder /repo/packages/shared ./node_modules/@kira/shared
 
