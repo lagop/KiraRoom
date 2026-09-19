@@ -69,15 +69,7 @@ COPY --from=builder /repo/packages/backend/package.json ./
 #    that left deps missing in earlier builds.
 # 3. --legacy-peer-deps bypasses the strict peer check (bullmq@5 wants
 #    redis@>=5, we ship redis@4 -- fine for runtime).
-RUN npm install --omit=dev --legacy-peer-deps --no-audit --no-fund \
-        prisma@5.22.0 \
-        redis@^4.6.10 \
-        reflect-metadata@^0.2.2 \
-        rxjs@^7.8.0 \
-        ioredis@^5.9.3 \
-        @anthropic-ai/sdk \
-        @google/generative-ai \
-        openai
+RUN npm install --omit=dev --legacy-peer-deps --no-audit --no-fund prisma@5.22.0 redis@^4.6.10 reflect-metadata@^0.2.2 rxjs@^7.8.0 ioredis@^5.9.3 @anthropic-ai/sdk @google/generative-ai openai
 
 # Regenerate the Prisma client against the COPYed schema, so the
 # runtime @prisma/client is in sync with the (possibly evolved)
