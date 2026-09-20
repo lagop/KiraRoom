@@ -103,6 +103,7 @@ services:
       MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      META_TOKEN_ENCRYPTION_KEY: ${META_TOKEN_ENCRYPTION_KEY}
     depends_on:
       postgres:
         condition: service_healthy
