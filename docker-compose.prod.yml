@@ -184,7 +184,20 @@ services:
         server {
             listen 80;
             server_name _;
-            return 301 https://app.kiraroom.net$$request_uri;
+
+            # Let's Encrypt ACME HTTP-01 challenge: return 404 so Traefik
+            # (which knows it owns the cert) doesn't redirect the challenge
+            # request away from itself. The default vhost serves a 404 on
+            # this path which is exactly what the ACME server expects when
+            # no challenge file exists for this token.
+            location /.well-known/acme-challenge/ {
+                return 404;
+            }
+
+            # Everything else: 301 redirect to the main app URL.
+            location / {
+                return 301 https://app.kiraroom.net$$request_uri;
+            }
         }
         EOF
         nginx -g 'daemon off;'
