@@ -93,5 +93,13 @@ export interface ChannelsConfigView {
     linkedChats: string[];
     /** Whether a botToken is present (never echoed back). */
     hasBotToken: boolean;
+    /**
+     * The `secret_token` to register with Telegram's setWebhook. Distinct
+     * from the bot token on purpose -- the webhook used to authenticate
+     * against the bot token itself, so seeing the header meant owning the
+     * bot. Shown to the owner because they need it to run setWebhook; it
+     * authenticates Telegram to us, not us to Telegram.
+     */
+    webhookSecret?: string;
   } | null;
 }
