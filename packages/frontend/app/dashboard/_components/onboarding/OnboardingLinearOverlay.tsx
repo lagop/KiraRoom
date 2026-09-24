@@ -179,8 +179,11 @@ function WorkspaceBusinessStep({ onDone }: { onDone: () => Promise<unknown> }) {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    if (!name.trim() || !street.trim() || !city.trim() || !phone.trim() || !logo.trim()) {
-      setError("Rellena todos los campos para continuar.");
+    // The logo is optional on purpose: requiring it here blocked the
+    // whole dashboard behind an image upload. It stays in the optional
+    // branding step of the checklist.
+    if (!name.trim() || !street.trim() || !city.trim() || !phone.trim()) {
+      setError("Rellena el nombre, la dirección y el teléfono para continuar.");
       return;
     }
     setSubmitting(true);
@@ -623,7 +626,7 @@ function LogoUpload({
     <div className={className}>
       <span className="block text-xs font-medium text-slate-700 mb-1">
         Logo del salón
-        <span className="text-red-500 ml-0.5">*</span>
+        <span className="text-slate-400 ml-1 font-normal">(opcional, puedes añadirlo después)</span>
       </span>
       <div className="flex items-center gap-4">
         <div className="h-20 w-20 flex-shrink-0 rounded-full border border-slate-200 bg-slate-50 overflow-hidden flex items-center justify-center">
