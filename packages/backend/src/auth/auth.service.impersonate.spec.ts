@@ -91,7 +91,10 @@ describe("AuthService.impersonate — JWT payload validation", () => {
         return prisma.auditLog.create({ data: { action, ...params } });
       }),
     };
-    auth = new AuthService(prisma, jwtService, auditLog);
+    auth = new AuthService(prisma, jwtService, auditLog, {
+      record: jest.fn(),
+      recordOnce: jest.fn().mockResolvedValue(undefined),
+    } as any);
   });
 
   const enc = (obj: unknown) =>
