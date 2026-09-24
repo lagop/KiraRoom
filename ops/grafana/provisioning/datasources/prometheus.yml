@@ -1,0 +1,11 @@
+# Grafana datasource, provisioned from disk so nobody has to click through
+# the UI after a redeploy.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false

@@ -76,11 +76,63 @@ services:
       - uptime-kuma-data:/app/data
     networks: [observability]
 
+  # Metrics collection. The backend has exposed Prometheus counters for a
+  # while and nothing in the repo collected them: there was a Grafana
+  # dashboard JSON with no Grafana to load it into and no Prometheus to feed
+  # it, so those panels could never have shown real data.
+  #
+  # Joins `kiraroom-network` as well so it can reach the backend by service
+  # name. That network is created by docker-compose.prod.yml, so start this
+  # stack after it (or change `external: true` below if you run them apart).
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: kira-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # 15 days is plenty to answer "what changed this week" and keeps the
+      # volume small on a shared VPS.
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    environment:
+      METRICS_SCRAPE_TOKEN: ${METRICS_SCRAPE_TOKEN:?METRICS_SCRAPE_TOKEN must be set, and must match the backend}
+    volumes:
+      - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./ops/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    networks: [observability, kiraroom-network]
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: kira-grafana
+    restart: unless-stopped
+    depends_on: [prometheus]
+    ports:
+      - "3002:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set}
+      # No anonymous access: the dashboards carry per-tenant operational
+      # detail.
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./ops/grafana:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    networks: [observability]
+
 volumes:
   glitchtip-db-data:
   glitchtip-redis-data:
   uptime-kuma-data:
+  prometheus-data:
+  grafana-data:
 
 networks:
   observability:
     driver: bridge
+  # Created by docker-compose.prod.yml; joined so Prometheus can scrape the
+  # backend by service name.
+  kiraroom-network:
+    external: true
