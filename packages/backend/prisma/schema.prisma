@@ -3021,3 +3021,39 @@ model ProductEvent {
   @@index([tenantId, name])
   @@map("product_events")
 }
+
+/// Monthly LLM token consumption per tenant, provider and model.
+///
+/// The providers always reported token counts and nothing stored them, so
+/// there was no way to attribute cost to a tenant, spot the one that runs
+/// away before the invoice arrives, or compute gross margin per plan. A
+/// count of answered messages is a poor proxy, because cost per message
+/// varies with context length -- and with how much of that context is
+/// served from the prompt cache.
+///
+/// Rolled up per month rather than one row per call: the question is "what
+/// does this tenant cost", not "what did this request cost".
+model TenantLlmUsage {
+  id       String @id @default(uuid())
+  tenantId String
+  /// Billing period as `YYYY-MM`, in UTC.
+  period   String
+  provider String
+  model    String
+
+  calls             Int    @default(0)
+  /// Fresh input tokens, billed at the full input rate.
+  inputTokens       BigInt @default(0)
+  /// Input tokens served from the prompt cache, billed at a fraction.
+  cachedInputTokens BigInt @default(0)
+  /// Tokens written into the cache, billed slightly above input rate.
+  cacheWriteTokens  BigInt @default(0)
+  outputTokens      BigInt @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, period, provider, model])
+  @@index([period])
+  @@map("tenant_llm_usage")
+}

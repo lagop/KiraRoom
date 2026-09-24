@@ -226,7 +226,12 @@ export const LLMCompletionSchema = z.object({
   usage: z.object({
     promptTokens: z.number(),
     completionTokens: z.number(),
-    totalTokens: z.number()
+    totalTokens: z.number(),
+    // Prompt-caching breakdown, when the provider reports it. Input tokens
+    // served from cache cost a fraction of fresh ones, so cost per tenant
+    // cannot be derived from promptTokens alone.
+    cachedInputTokens: z.number().optional(),
+    cacheWriteTokens: z.number().optional()
   }),
   model: z.string(),
   provider: z.nativeEnum(LLMProvider),
