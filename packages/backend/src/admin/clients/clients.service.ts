@@ -35,8 +35,9 @@ export class AdminClientsService {
     }
   }
 
-  async findAll({ page = 1, limit = 10, search = '', status }: { page: number; limit: number; search: string; status?: string }) {
+  async findAll({ tenantId, page = 1, limit = 10, search = '', status }: { tenantId: string; page: number; limit: number; search: string; status?: string }) {
     const where: any = {
+      tenantId,
       OR: [
         { firstName: { contains: search, mode: 'insensitive' } },
         { lastName: { contains: search, mode: 'insensitive' } },
@@ -55,8 +56,10 @@ export class AdminClientsService {
         skip: (page - 1) * limit,
         take: limit,
         orderBy: { createdAt: 'desc' },
+        // Only the counter: `include: { appointments: true }` dragged every
+        // historical appointment of every row into a paginated list.
         include: {
-          appointments: true,
+          _count: { select: { appointments: true } },
         },
       }),
       this.prisma.client.count({ where }),
@@ -71,9 +74,9 @@ export class AdminClientsService {
     };
   }
 
-  async findOne(id: string) {
+  async findOne(tenantId: string, id: string) {
     const client = await this.prisma.client.findUnique({
-      where: { id },
+      where: { id, tenantId },
       include: {
         appointments: {
           include: {
@@ -91,11 +94,8 @@ export class AdminClientsService {
     return client;
   }
 
-  async update(id: string, updateClientDto: UpdateClientDto) {
-    console.log('[AdminClientsService] Update called with:', JSON.stringify(updateClientDto));
+  async update(tenantId: string, id: string, updateClientDto: UpdateClientDto) {
     try {
-      console.log('[AdminClientsService] Attempting to update client in database...');
-      
       // Convert dateOfBirth string to proper DateTime format for Prisma
       const data: any = {
         firstName: updateClientDto.firstName,
@@ -113,27 +113,25 @@ export class AdminClientsService {
       };
       
       const client = await this.prisma.client.update({
-        where: { id },
+        where: { id, tenantId },
         data,
       });
       return client;
     } catch (error) {
-      console.error('[AdminClientsService] Error updating client:', error);
       if (error.code === 'P2025') {
         throw new NotFoundException('Client not found');
       }
       if (error.code === 'P2002') {
         throw new BadRequestException('Client with this email already exists');
       }
-      console.error('[AdminClientsService] Unknown error:', error.message, error.code);
       throw new BadRequestException('Failed to update client');
     }
   }
 
-  async remove(id: string) {
+  async remove(tenantId: string, id: string) {
     try {
       return await this.prisma.client.delete({
-        where: { id },
+        where: { id, tenantId },
       });
     } catch (error) {
       if (error.code === 'P2025') {
@@ -143,9 +141,10 @@ export class AdminClientsService {
     }
   }
 
-  async search(query: string) {
+  async search(tenantId: string, query: string) {
     const clients = await this.prisma.client.findMany({
       where: {
+        tenantId,
         OR: [
           { firstName: { contains: query, mode: 'insensitive' } },
           { lastName: { contains: query, mode: 'insensitive' } },

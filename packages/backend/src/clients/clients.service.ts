@@ -178,9 +178,9 @@ export class ClientsService {
     });
   }
 
-  async findOne(id: string) {
+  async findOne(tenantId: string, id: string) {
     const client = await this.prisma.client.findUnique({
-      where: { id },
+      where: { id, tenantId },
     });
 
     if (!client) {
@@ -190,9 +190,9 @@ export class ClientsService {
     return client;
   }
 
-  async update(id: string, updateClientDto: UpdateClientDto) {
+  async update(tenantId: string, id: string, updateClientDto: UpdateClientDto) {
     const client = await this.prisma.client.findUnique({
-      where: { id },
+      where: { id, tenantId },
     });
 
     if (!client) {
@@ -211,7 +211,7 @@ export class ClientsService {
     }
 
     return this.prisma.client.update({
-      where: { id },
+      where: { id, tenantId },
       data: {
         firstName: updateClientDto.firstName,
         lastName: updateClientDto.lastName,
@@ -229,9 +229,9 @@ export class ClientsService {
     });
   }
 
-  async remove(id: string) {
+  async remove(tenantId: string, id: string) {
     const client = await this.prisma.client.findUnique({
-      where: { id },
+      where: { id, tenantId },
     });
 
     if (!client) {
@@ -239,7 +239,7 @@ export class ClientsService {
     }
 
     return this.prisma.client.delete({
-      where: { id },
+      where: { id, tenantId },
     });
   }
 }

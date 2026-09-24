@@ -99,17 +99,20 @@ export class AdminProfessionalsService {
   }
 
   async findAll({
+    tenantId,
     page = 1,
     limit = 10,
     search = "",
     status,
   }: {
+    tenantId: string;
     page: number;
     limit: number;
     search: string;
     status?: string;
   }) {
     const where: any = {
+      tenantId,
       OR: [
         { firstName: { contains: search, mode: "insensitive" } },
         { lastName: { contains: search, mode: "insensitive" } },
@@ -149,9 +152,9 @@ export class AdminProfessionalsService {
     };
   }
 
-  async findOne(id: string) {
+  async findOne(tenantId: string, id: string) {
     const professional = await this.prisma.professional.findUnique({
-      where: { id },
+      where: { id, tenantId },
       include: {
         appointments: {
           include: {
@@ -174,13 +177,13 @@ export class AdminProfessionalsService {
     return professional;
   }
 
-  async update(id: string, updateProfessionalDto: UpdateProfessionalDto) {
+  async update(tenantId: string, id: string, updateProfessionalDto: UpdateProfessionalDto) {
     const { serviceIds, ...professionalData } = updateProfessionalDto;
 
     try {
       // First, update the professional data
       const professional = await this.prisma.professional.update({
-        where: { id },
+        where: { id, tenantId },
         data: professionalData,
       });
 
@@ -220,10 +223,10 @@ export class AdminProfessionalsService {
     }
   }
 
-  async remove(id: string) {
+  async remove(tenantId: string, id: string) {
     try {
       return await this.prisma.professional.delete({
-        where: { id },
+        where: { id, tenantId },
       });
     } catch (error) {
       if (error.code === "P2025") {
@@ -233,9 +236,10 @@ export class AdminProfessionalsService {
     }
   }
 
-  async search(query: string) {
+  async search(tenantId: string, query: string) {
     const professionals = await this.prisma.professional.findMany({
       where: {
+        tenantId,
         OR: [
           { firstName: { contains: query, mode: "insensitive" } },
           { lastName: { contains: query, mode: "insensitive" } },
@@ -250,9 +254,9 @@ export class AdminProfessionalsService {
     return professionals;
   }
 
-  async getAvailability(id: string) {
+  async getAvailability(tenantId: string, id: string) {
     const professional = await this.prisma.professional.findUnique({
-      where: { id },
+      where: { id, tenantId },
       select: {
         id: true,
         firstName: true,
@@ -289,11 +293,12 @@ export class AdminProfessionalsService {
   }
 
   async changePassword(
+    tenantId: string,
     id: string,
     changePasswordDto: ChangeProfessionalPasswordDto,
   ) {
     const professional = await this.prisma.professional.findUnique({
-      where: { id },
+      where: { id, tenantId },
       include: { user: true },
     });
 

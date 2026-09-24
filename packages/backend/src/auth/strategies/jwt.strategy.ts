@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { bindTenant } from '../../common/tenancy/tenant.context';
 
 export interface JwtPayload {
   sub: string;      // userId
@@ -50,6 +51,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         throw new UnauthorizedException('Invalid token or client blocked');
       }
 
+      // Bind the per-request tenant context so the Prisma tenant-scope
+      // extension filters every query this request makes.
+      bindTenant(client.tenantId, 'client');
+
       // Return client data with role
       return {
         id: client.id,
@@ -83,6 +88,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       if (!user || !user.isActive) {
         throw new UnauthorizedException('Invalid token or user inactive');
       }
+
+      // Bind the per-request tenant context (saas_owner is bound in
+      // bypass mode: the platform console reads across tenants and is
+      // authorised by SaasOwnerGuard, not by this filter).
+      bindTenant(user.tenantId, user.role);
 
       // Return user data with plan info
       return {
