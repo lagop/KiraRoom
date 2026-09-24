@@ -156,11 +156,17 @@ export class AdminProfessionalsService {
     const professional = await this.prisma.professional.findUnique({
       where: { id, tenantId },
       include: {
+        // Bounded on purpose: this used to pull every appointment the
+        // professional had ever had, each with its service and client, so the
+        // response grew with the salon's age instead of with what the detail
+        // view shows. Most recent first, capped.
         appointments: {
           include: {
             service: true,
             client: true,
           },
+          orderBy: { scheduledDate: "desc" },
+          take: 50,
         },
         services: {
           include: {

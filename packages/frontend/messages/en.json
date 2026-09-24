@@ -234,6 +234,14 @@
     "whatsapp_business": {
       "title": "Connect WhatsApp Business",
       "desc": "Receive and reply to messages directly from Kira."
+    },
+    "clients_import": {
+      "title": "Import your clients",
+      "desc": "Upload a CSV and we bring them across with their history. You can dry-run it first."
+    },
+    "first_booking": {
+      "title": "Get your first booking",
+      "desc": "Share your link or QR code. Once an appointment lands, the salon is live."
     }
   },
   "rebooking": {
@@ -1009,10 +1017,8 @@
       "failedToUpdateStatus": "Failed to update appointment status",
       "provideDateAndTime": "Please provide both date and time",
       "nextTimeSlotAvailable": "Next time slot available",
-      "selectATimePreference":
-        "Select a time preference above to generate appointment suggestions",
-      "pleaseSelectDateTime":
-        "Please select both date and time to generate appointment suggestions",
+      "selectATimePreference": "Select a time preference above to generate appointment suggestions",
+      "pleaseSelectDateTime": "Please select both date and time to generate appointment suggestions",
       "provideValidDateAndTime": "Please provide a valid date and time",
       "failedToUpdate": "Failed to update appointment",
       "failedToReorderServices": "Failed to reorder services",

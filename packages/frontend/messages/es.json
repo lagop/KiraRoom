@@ -234,6 +234,14 @@
     "whatsapp_business": {
       "title": "Conecta WhatsApp Business",
       "desc": "Recibe y responde mensajes directamente desde Kira."
+    },
+    "clients_import": {
+      "title": "Importa tus clientas",
+      "desc": "Sube un CSV y las traemos con su historial. Puedes probar antes sin guardar nada."
+    },
+    "first_booking": {
+      "title": "Recibe tu primera reserva",
+      "desc": "Comparte tu enlace o tu QR. En cuanto entre una cita, el salon ya esta en marcha."
     }
   },
   "rebooking": {
@@ -1009,10 +1017,8 @@
       "failedToUpdateStatus": "Error al actualizar el estado de la cita",
       "provideDateAndTime": "Proporciona tanto fecha como hora",
       "nextTimeSlotAvailable": "Próximo hueco disponible",
-      "selectATimePreference":
-        "Selecciona una preferencia horaria arriba para generar sugerencias de cita",
-      "pleaseSelectDateTime":
-        "Selecciona fecha y hora para generar sugerencias de cita",
+      "selectATimePreference": "Selecciona una preferencia horaria arriba para generar sugerencias de cita",
+      "pleaseSelectDateTime": "Selecciona fecha y hora para generar sugerencias de cita",
       "provideValidDateAndTime": "Proporciona una fecha y hora validas",
       "failedToUpdate": "Error al actualizar la cita",
       "failedToReorderServices": "Error al reordenar los servicios",
