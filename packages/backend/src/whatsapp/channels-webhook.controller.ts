@@ -1,12 +1,14 @@
-import { Body, Controller, Headers, HttpCode, HttpStatus, Logger, Post, Req, Res, BadRequestException } from "@nestjs/common";
+import { Body, Controller, Headers, HttpCode, HttpStatus, Logger, Post, Req, Res, BadRequestException, UnauthorizedException } from "@nestjs/common";
 import { Throttle } from '@nestjs/throttler';
 import { ApiTags } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { TelegramChannelProvider } from '../virtual-receptionist/channels/telegram-channel.provider';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { FeatureFlagService } from '../common/feature-flags/feature-flag.service';
 import { MetricsService, COUNTERS } from '../common/observability/metrics.service';
+import { timingSafeEqual } from 'crypto';
 import type { Request, Response } from 'express';
 
 /**
@@ -33,6 +35,7 @@ export class ChannelsWebhookController {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
     private readonly whatsapp: WhatsAppService,
     private readonly telegram: TelegramChannelProvider,
     private readonly featureFlags: FeatureFlagService,
@@ -56,16 +59,38 @@ export class ChannelsWebhookController {
     @Req() req: Request,
     @Res() res: Response,
   ): Promise<void> {
-    // Signature verification. The legacy whatsapp.controller.ts does
-    // the same; here we re-run for safety on the new endpoint.
-    // (Webhook secret is per-tenant and stored in WhatsAppConnection
-    // for WhatsApp; for FB/IG the multichannel.meta webhookSecret is
-    // used. The unified verify path is in the future once the
-    // WhatsAppConnection refactor is in.)
+    // Signature verification.
+    //
+    // This used to check only that the header EXISTED, and only in
+    // production -- so anyone who knew a pageId could inject messages
+    // into a tenant's AI receptionist with `x-hub-signature-256: x`,
+    // booking appointments and burning LLM budget. The HMAC is now
+    // actually computed against the raw body.
     const sig = (req.headers as any)['x-hub-signature-256'] as string | undefined;
-    if (!sig) {
+    const rawBody = (req as any).rawBody as Buffer | undefined;
+    const appSecret = this.config.get<string>('META_APP_SECRET');
+
+    if (!appSecret) {
+      // Without a secret no payload can be authenticated. Refuse in
+      // production rather than accepting forged traffic; in dev this
+      // lets the ngrok quickstart run before the app is configured.
       if (process.env.NODE_ENV === 'production') {
-        throw new BadRequestException('Missing signature');
+        this.logger.error(
+          'Meta webhook rejected: META_APP_SECRET is not configured, signatures cannot be verified.',
+        );
+        throw new UnauthorizedException('Webhook signature not verifiable');
+      }
+      this.logger.warn(
+        'Meta webhook: META_APP_SECRET unset, skipping signature check (non-production only).',
+      );
+    } else {
+      const payload = rawBody?.toString('utf8') ?? JSON.stringify(body ?? {});
+      if (!this.whatsapp.verifyWebhook(payload, sig)) {
+        this.metrics
+          .counter(COUNTERS.CHANNEL_GATE_BLOCKED, 'Inbound messages dropped by the multichannel gate')
+          .inc({ channel: 'meta', reason: 'bad_signature' });
+        this.logger.warn('Meta webhook rejected: invalid or missing signature.');
+        throw new UnauthorizedException('Invalid signature');
       }
     }
 
@@ -138,8 +163,14 @@ export class ChannelsWebhookController {
       res.json({ received: true });
       return;
     }
-    if (process.env.NODE_ENV === 'production' && secret !== botToken) {
-      throw new BadRequestException('Invalid Telegram secret token');
+    // Constant-time compare, and enforced in every environment -- it was
+    // production-only with a plain !==. Note the shared secret is still
+    // the bot token itself; giving Telegram its own secret_token needs a
+    // wizard + schema change and is tracked as S3 follow-up.
+    const given = Buffer.from(secret ?? '');
+    const want = Buffer.from(botToken);
+    if (given.length !== want.length || !timingSafeEqual(given, want)) {
+      throw new UnauthorizedException('Invalid Telegram secret token');
     }
 
     const normalized = await this.telegram.parseInbound(req);
