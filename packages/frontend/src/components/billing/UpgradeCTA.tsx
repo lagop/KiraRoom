@@ -86,6 +86,14 @@ function humanizeFeature(feature: FeatureKey): string {
     sms_notifications: "Recordatorios SMS",
     email_marketing: "Email marketing",
     virtual_receptionist: "Recepcionista IA (Kira)",
+    // These five existed in the backend matrix and were missing here, so the
+    // CTA had no label for them. Surfaced by unifying FeatureKey in
+    // @kira/shared -- exactly the drift that unification is for.
+    virtual_receptionist_advanced: "Recepcionista IA avanzada",
+    multichannel: "Messenger, Instagram y Telegram",
+    google_reviews_auto: "Reseñas automáticas en Google",
+    copilot_read: "Kira Copilot para el equipo",
+    copilot_write: "Kira Copilot con acciones",
     loyalty: "Programa de fidelidad",
     promotions: "Promociones y cupones",
     gift_cards: "Tarjetas regalo",

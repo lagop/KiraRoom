@@ -1,126 +1,59 @@
-// Single source of truth for plan / feature gating in the frontend.
-// Mirrors `packages/backend/src/payments/services/subscriptions.service.ts`.
+// Plan / feature gating for the frontend.
+//
+// This file used to declare its own PLAN_MATRIX, and it had drifted: it
+// still listed `virtual_receptionist` as Pro-only after it moved to
+// Esencial, and it knew nothing about `multichannel`, `copilot_read` or
+// `copilot_write`. The result was an "upgrade to Pro" prompt shown to
+// tenants who already had the feature, and no gate at all for the ones it
+// had never heard of.
+//
+// The matrix now lives in @kira/shared and both sides import it, so a
+// change lands in one place. What remains here is frontend presentation.
 
-export type PlanId = "esencial" | "pro" | "empresa";
+import {
+  PLAN_FEATURES,
+  PLAN_IDS,
+  PLAN_LABELS_ES,
+  PLAN_PRICES,
+  PARKED_FEATURE_KEYS,
+  minPlanFor,
+  normalizePlan as normalizePlanShared,
+  planIncludes,
+  type FeatureKey,
+  type PlanId,
+} from "@kira/shared";
 
-export type FeatureKey =
-  | "whatsapp_notifications"
-  | "sms_notifications"
-  | "email_marketing"
-  | "virtual_receptionist"
-  | "loyalty"
-  | "promotions"
-  | "gift_cards"
-  | "wallet"
-  | "commissions"
-  | "multi_location"
-  | "agenda_shifts"
-  | "consolidated_reports"
-  | "advanced_analytics"
-  | "api_access"
-  | "white_label"
-  | "custom_branding"
-  | "web_domain"; // add-on
+export type { FeatureKey, PlanId };
+export { PARKED_FEATURE_KEYS, PLAN_IDS };
 
-// Feature matrix (kept in sync with backend SubscriptionsService.PLAN_MATRIX).
-export const PLAN_MATRIX: Record<PlanId, ReadonlyArray<FeatureKey>> = {
-  esencial: ["whatsapp_notifications"],
-  pro: [
-    "whatsapp_notifications",
-    "sms_notifications",
-    "email_marketing",
-    "virtual_receptionist",
-    "loyalty",
-    "promotions",
-    "gift_cards",
-    "wallet",
-    "commissions",
-    "advanced_analytics",
-    "agenda_shifts",
-  ],
-  empresa: [
-    "whatsapp_notifications",
-    "sms_notifications",
-    "email_marketing",
-    "virtual_receptionist",
-    "loyalty",
-    "promotions",
-    "gift_cards",
-    "wallet",
-    "commissions",
-    "advanced_analytics",
-    "agenda_shifts",
-    "multi_location",
-    "consolidated_reports",
-    "api_access",
-    "white_label",
-    "custom_branding",
-  ],
-};
+/** Kept for call sites that iterate the matrix directly. */
+export const PLAN_MATRIX: Readonly<Record<PlanId, ReadonlyArray<FeatureKey>>> =
+  PLAN_FEATURES;
 
-// Plan required to unlock a given feature (for upgrade CTAs).
-export const FEATURE_MIN_PLAN: Record<FeatureKey, PlanId> = {
-  whatsapp_notifications: "esencial",
-  sms_notifications: "pro",
-  email_marketing: "pro",
-  virtual_receptionist: "pro",
-  loyalty: "pro",
-  promotions: "pro",
-  gift_cards: "pro",
-  wallet: "pro",
-  commissions: "pro",
-  advanced_analytics: "pro",
-  agenda_shifts: "pro",
-  multi_location: "empresa",
-  consolidated_reports: "empresa",
-  api_access: "empresa",
-  white_label: "empresa",
-  custom_branding: "empresa",
-  // add-on: not gated by plan
-  web_domain: "esencial",
-};
+export const PLAN_LABELS = PLAN_LABELS_ES;
+export const PLAN_PRICE_EUR = PLAN_PRICES;
 
-const LEGACY_TO_REV3: Record<string, PlanId> = {
-  basic: "esencial",
-  professional: "pro",
-  advanced: "empresa",
-  enterprise: "empresa",
-};
-
-// Feature keys kept for backwards compatibility but NOT exposed in the
-// public catalog / upgrade UI (plan section 4.9 "Aparcados").
-// The backend (SubscriptionsService.getPublicPlans) already filters these
-// out, but we keep the set on the frontend so any code that iterates
-// PLAN_MATRIX locally can apply the same filter.
-export const PARKED_FEATURE_KEYS: ReadonlySet<FeatureKey> = new Set([
-  "api_access",
-  "white_label",
-  "custom_branding",
-]);
-export const normalizePlan = (plan: string | null | undefined): PlanId => {
-  if (!plan) return "esencial";
-  if (plan in LEGACY_TO_REV3) return LEGACY_TO_REV3[plan];
-  if (plan === "esencial" || plan === "pro" || plan === "empresa") {
-    return plan;
-  }
-  return "esencial";
-};
+export const normalizePlan = normalizePlanShared;
 
 export const isFeatureEnabledForPlan = (
   plan: PlanId,
   key: FeatureKey,
-): boolean => {
-  return PLAN_MATRIX[plan]?.includes(key) ?? false;
-};
+): boolean => planIncludes(plan, key);
 
-export const PLAN_LABELS: Record<PlanId, string> = {
-  esencial: "Esencial",
-  pro: "Pro",
-  empresa: "Empresa",
-};
+/**
+ * Plan a tenant must be on to unlock a feature, for upgrade CTAs.
+ * `null` means no plan includes it -- it is add-on only.
+ */
+export const featureMinPlan = (key: FeatureKey): PlanId | null =>
+  minPlanFor(key);
 
-export const PLAN_PRICE_EUR: Record<PlanId, number> = {
-  esencial: 49,
-  pro: 79,
-  empresa: 149,
-};
+/**
+ * Legacy shape of the above, kept so existing imports keep compiling.
+ * Prefer `featureMinPlan`, which can express "add-on only".
+ */
+export const FEATURE_MIN_PLAN = new Proxy(
+  {} as Record<FeatureKey, PlanId>,
+  {
+    get: (_t, key: string) => minPlanFor(key as FeatureKey) ?? "empresa",
+  },
+);
