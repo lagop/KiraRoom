@@ -1,25 +1,16 @@
 {
   "hero": {
-    "h1": "Tu salón nunca cierra (y tú te vas a casa a tu hora)",
-    "sub": "La plataforma todo-en-uno para salones en España. Agenda online 24/7, facturación Verifactu automática y una recepcionista IA que habla con tus clientas por WhatsApp, Instagram y Telegram.",
+    "h1": "Cumple con Verifactu sin pelearte con el TPV",
+    "sub": "La plataforma todo-en-uno para salones en España. Cada factura se firma y se remite sola a Hacienda o a tu diputación. Y de paso, agenda online 24/7 y una recepcionista IA que atiende a tus clientas por WhatsApp, Instagram y Telegram.",
     "primary_cta": "Empezar mis 14 días gratis",
     "secondary_cta": "Ver cómo funciona (2 min)",
-    "trust_badge": "Sin tarjeta · Cancela cuando quieras · Soporte en español"
+    "trust_badge": "RD 1007/2023 y las 3 diputaciones vascas · Sin tarjeta · Soporte en español"
   },
   "trust_bar": {
     "line": "Cumple con Verifactu y TicketBAI · Soporte en espanol · Datos alojados en la UE",
     "logos": []
   },
   "pains": [
-    {
-      "id": "nocturnal",
-      "headline": "Pierdes clientas que reservan a las 11 de la noche",
-      "validation": "¿Te ha pasado? Un mensaje a las 23:30 de una clienta que quiere venir mañana. La ves al día siguiente, pero ella ya ha reservado en otro sitio.",
-      "solution_title": "Agenda online que cierra reservas mientras duermes",
-      "solution_body": "Tu clienta reserva, cambia o cancela desde el móvil a cualquier hora. Tú recibes la cita en la agenda al instante, sin tocar nada. Cero huecos vacíos, cero llamadas perdidas.",
-      "proof": "La agenda online acepta reservas 24/7 y bloquea los huecos ocupados en tiempo real.",
-      "cta": "Activar la agenda online"
-    },
     {
       "id": "facturas",
       "headline": "Las facturas te quitan el sueño",
@@ -28,6 +19,15 @@
       "solution_body": "Cada factura que emites se firma digitalmente (XAdES) y se remite sola a la AEAT o a tu diputación foral (Bizkaia, Gipuzkoa, Álava). Tu gestor entra, ve todas las facturas numeradas, y se acabó.",
       "proof": "Compatible con la normativa espanola RD 1007/2023 y las tres diputaciones forales vascas.",
       "cta": "Ver cómo funciona"
+    },
+    {
+      "id": "nocturnal",
+      "headline": "Pierdes clientas que reservan a las 11 de la noche",
+      "validation": "¿Te ha pasado? Un mensaje a las 23:30 de una clienta que quiere venir mañana. La ves al día siguiente, pero ella ya ha reservado en otro sitio.",
+      "solution_title": "Agenda online que cierra reservas mientras duermes",
+      "solution_body": "Tu clienta reserva, cambia o cancela desde el móvil a cualquier hora. Tú recibes la cita en la agenda al instante, sin tocar nada. Cero huecos vacíos, cero llamadas perdidas.",
+      "proof": "La agenda online acepta reservas 24/7 y bloquea los huecos ocupados en tiempo real.",
+      "cta": "Activar la agenda online"
     },
     {
       "id": "whatsapp",
@@ -184,7 +184,7 @@
     "trust_line": "14 dias gratis · Sin tarjeta · Cancela cuando quieras · Cumple RGPD"
   },
   "meta": {
-    "title": "KiraRoom — La plataforma todo-en-uno para salones en España",
-    "description": "Agenda online 24/7, facturación Verifactu automática y recepcionista IA para WhatsApp, Instagram y Telegram. 14 días gratis."
+    "title": "KiraRoom — Facturación Verifactu y gestión para salones en España",
+    "description": "Facturación Verifactu y TicketBAI automática, agenda online 24/7 y recepcionista IA para WhatsApp, Instagram y Telegram. 14 días gratis, sin tarjeta."
   }
 }
