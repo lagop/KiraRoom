@@ -11,10 +11,11 @@ on:
       - main
       - develop
       - 'hotfix/**'
+  # Every pull request, whatever its base. It used to list only main and
+  # develop, which meant a stacked PR -- one opened against another feature
+  # branch -- got no checks at all and looked unverified for the wrong
+  # reason. Push events stay limited to the long-lived branches below.
   pull_request:
-    branches:
-      - main
-      - develop
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
