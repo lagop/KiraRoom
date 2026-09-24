@@ -125,3 +125,6 @@ test-cert.password.hint
 # TypeScript incremental build cache (not source).
 *.tsbuildinfo
 **/tsconfig.tsbuildinfo
+
+# Next.js / TypeScript incremental build cache -- a build artifact, not source.
+packages/frontend/tsconfig.tsbuildinfo
