@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   UnauthorizedException,
   ConflictException,
   BadRequestException,
@@ -19,6 +20,8 @@ import {
   slugify,
 } from "../saas/saas.helpers";
 import { AuditLogService } from "../saas/audit-log.service";
+import { EmailService } from "../notifications/services/email.service";
+import { randomBytes } from "crypto";
 import { normalizePlan } from "@kira/shared";
 
 export interface TokenResponse {
@@ -44,11 +47,14 @@ export interface AuthUser {
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly auditLog: AuditLogService,
     private readonly events: ProductEventsService,
+    private readonly email: EmailService,
   ) {}
 
   async register(
@@ -98,6 +104,24 @@ export class AuthService {
       language: registerDto.language ?? 'es',
     });
 
+    // Welcome email with the verification link folded in (A3 + A4).
+    // Registration used to send nothing: the first email a new salon ever
+    // got was the trial-expiry warning on day 11, so a signup that did not
+    // come back the next day received no nudge at all. The email columns for
+    // verification already existed in the schema and the flow was never
+    // built, so the token is minted here.
+    //
+    // Never blocks the signup: a bounced address or an unconfigured mail
+    // provider must not stop a salon from getting into the product.
+    void this.sendActivationEmail({
+      userId: user.id,
+      email: user.email,
+      tenantName: registerDto.salonName,
+      ownerName: firstName || null,
+    }).catch((err: Error) => {
+      this.logger.warn(`welcome email not sent: ${err.message}`);
+    });
+
     const tokens = await this.generateTokens(
       user.id,
       user.email,
@@ -116,6 +140,69 @@ export class AuthService {
       },
       tokens,
     };
+  }
+
+  /** Token lifetime for the email-verification link. */
+  private static readonly EMAIL_VERIFY_TTL_MS = 48 * 60 * 60 * 1000;
+
+  private async sendActivationEmail(args: {
+    userId: string;
+    email: string;
+    tenantName: string;
+    ownerName: string | null;
+  }): Promise<void> {
+    const token = randomBytes(32).toString("hex");
+    const expiresAt = new Date(Date.now() + AuthService.EMAIL_VERIFY_TTL_MS);
+
+    await this.prisma.user.update({
+      where: { id: args.userId },
+      data: {
+        emailVerificationToken: token,
+        emailVerificationExpires: expiresAt,
+      },
+    });
+
+    const frontendUrl = (
+      process.env.FRONTEND_URL || "http://localhost:3000"
+    ).replace(/\/$/, "");
+
+    await this.email.sendWelcome({
+      to: args.email,
+      tenantName: args.tenantName,
+      ownerName: args.ownerName,
+      dashboardUrl: `${frontendUrl}/dashboard`,
+      verifyUrl: `${frontendUrl}/verify-email?token=${token}`,
+    });
+  }
+
+  /**
+   * Confirms an email address from the link in the welcome email.
+   *
+   * Returns a boolean rather than throwing on a bad token: the caller is a
+   * public endpoint, and telling an anonymous caller whether a token exists
+   * is free information about who signed up.
+   */
+  async verifyEmail(token: string): Promise<boolean> {
+    if (!token || token.length < 32) return false;
+
+    const user = await this.prisma.user.findFirst({
+      where: {
+        emailVerificationToken: token,
+        emailVerificationExpires: { gt: new Date() },
+      },
+      select: { id: true },
+    });
+    if (!user) return false;
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        isEmailVerified: true,
+        emailVerificationToken: null,
+        emailVerificationExpires: null,
+      },
+    });
+    return true;
   }
 
   async login(

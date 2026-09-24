@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards, HttpCode, HttpStatus, Get, Patch } from "@nestjs/common";
+import { Controller, Post, Body, UseGuards, HttpCode, HttpStatus, Get, Patch, Query } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
@@ -20,6 +20,18 @@ import { IMPERSONATION_AUDIENCE, IMPERSONATION_DEFAULT_REASON } from "../saas/sa
 @Controller("auth")
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
+
+  @Public()
+  @Get("verify-email")
+  @ApiOperation({ summary: "Confirm an email address from the welcome email link" })
+  @ApiResponse({ status: 200, description: "Verification outcome" })
+  async verifyEmail(@Query("token") token?: string) {
+    // Deliberately the same response either way: whether a token exists
+    // tells an anonymous caller who signed up. The frontend decides what
+    // to show from the boolean.
+    const verified = await this.authService.verifyEmail(token ?? "");
+    return { verified };
+  }
 
   @Public()
   @Post("register")

@@ -94,6 +94,10 @@ describe("AuthService.impersonate — JWT payload validation", () => {
     auth = new AuthService(prisma, jwtService, auditLog, {
       record: jest.fn(),
       recordOnce: jest.fn().mockResolvedValue(undefined),
+    } as any, {
+      // Impersonation never sends mail; a stub keeps the constructor happy.
+      sendWelcome: jest.fn().mockResolvedValue({ success: true }),
+      sendEmailVerification: jest.fn().mockResolvedValue({ success: true }),
     } as any);
   });
 

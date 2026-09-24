@@ -1579,4 +1579,161 @@ Thank you for choosing ${data.salonName}! We look forward to seeing you again so
 This email was sent to request your feedback on your recent appointment.
     `.trim();
   }
+  // ==================== Activation lifecycle (A3 / A4) ====================
+  //
+  // `AuthService.register` used to send nothing at all: the first email a new
+  // salon ever received was the trial-expiry warning on day 11. A signup that
+  // did not come back the next day got no nudge whatsoever.
+
+  /**
+   * Sent immediately after signup. Names the three things that have to happen
+   * for the salon to get value, in the order the checklist now puts them,
+   * because a welcome email that says only "welcome" is wasted.
+   */
+  async sendWelcome(data: {
+    to: string;
+    tenantName: string;
+    ownerName?: string | null;
+    dashboardUrl: string;
+    verifyUrl?: string;
+  }): Promise<{ success: boolean; id?: string; error?: string; skipped?: boolean }> {
+    if (await this.shouldSkipBouncedUser(data.to)) {
+      return { success: false, skipped: true, error: "email_bounced" };
+    }
+
+    const greeting = data.ownerName
+      ? `Hola ${this.escapeHtml(data.ownerName)},`
+      : "Hola,";
+    const subject = `Bienvenida a KiraRoom, ${data.tenantName}`;
+    const steps = [
+      "Configura tus datos, tus servicios y el horario del equipo.",
+      "Comparte tu enlace de reservas o imprime tu QR.",
+      "Importa tus clientas desde un CSV si ya las tienes en otro sistema.",
+    ];
+    const verifyBlock = data.verifyUrl
+      ? `<p style="font-size:13px;color:#64748b;line-height:1.6;margin:0 0 24px 0;">Confirma tu correo para que no perdamos el contacto contigo: <a href="${data.verifyUrl}" style="color:#4f46e5;">verificar mi email</a>.</p>`
+      : "";
+
+    const html = `
+<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:12px;padding:32px;">
+        <tr><td>
+          <div style="font-size:24px;font-weight:700;margin-bottom:8px;">KiraRoom</div>
+          <p style="font-size:14px;color:#64748b;margin:0 0 24px 0;">Tu prueba de 14 dias ya esta activa</p>
+          <p style="font-size:16px;line-height:1.6;margin:0 0 16px 0;">${greeting}</p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
+            <strong>${this.escapeHtml(data.tenantName)}</strong> ya esta creado. Tienes 14 dias
+            con todo el plan Pro incluido, sin tarjeta.
+          </p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 8px 0;">Tres pasos y empiezas a recibir reservas:</p>
+          <ol style="font-size:15px;line-height:1.7;margin:0 0 24px 0;padding-left:20px;">
+            ${steps.map((s) => `<li>${s}</li>`).join("")}
+          </ol>
+          <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 24px 0;">
+            <tr><td style="background:#4f46e5;border-radius:8px;">
+              <a href="${data.dashboardUrl}" style="display:inline-block;padding:14px 28px;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;">Entrar en mi salon</a>
+            </td></tr>
+          </table>
+          ${verifyBlock}
+          <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">
+          <p style="font-size:12px;color:#94a3b8;line-height:1.5;margin:0;">
+            Responde a este correo si te atascas en algo. Contesta una persona.
+          </p>
+        </td></tr>
+      </table>
+      <p style="font-size:11px;color:#94a3b8;margin:16px 0 0 0;">(c) ${new Date().getFullYear()} KiraRoom SaaS - Espana</p>
+    </td></tr>
+  </table>
+</body>
+</html>`.trim();
+
+    const text = [
+      greeting,
+      ``,
+      `${data.tenantName} ya esta creado en KiraRoom. Tienes 14 dias con todo el plan Pro incluido, sin tarjeta.`,
+      ``,
+      `Tres pasos y empiezas a recibir reservas:`,
+      ...steps.map((s, i) => `${i + 1}. ${s}`),
+      ``,
+      `Entra en tu salon: ${data.dashboardUrl}`,
+      ...(data.verifyUrl ? [``, `Confirma tu correo: ${data.verifyUrl}`] : []),
+      ``,
+      `Responde a este correo si te atascas. Contesta una persona.`,
+    ].join("\n");
+
+    return this.sendEmail({ to: data.to, subject, html, text, listUnsubscribe: true });
+  }
+
+  /**
+   * Standalone email-verification request, for a resend. The signup path
+   * folds the link into the welcome email instead, so a new salon does not
+   * get two emails at once.
+   */
+  async sendEmailVerification(data: {
+    to: string;
+    tenantName: string;
+    ownerName?: string | null;
+    verifyUrl: string;
+    expiresAt: Date;
+  }): Promise<{ success: boolean; id?: string; error?: string; skipped?: boolean }> {
+    if (await this.shouldSkipBouncedUser(data.to)) {
+      return { success: false, skipped: true, error: "email_bounced" };
+    }
+
+    const greeting = data.ownerName
+      ? `Hola ${this.escapeHtml(data.ownerName)},`
+      : "Hola,";
+    const hours = Math.max(
+      1,
+      Math.round((data.expiresAt.getTime() - Date.now()) / 3600000),
+    );
+    const subject = "Confirma tu correo en KiraRoom";
+
+    const html = `
+<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:12px;padding:32px;">
+        <tr><td>
+          <div style="font-size:24px;font-weight:700;margin-bottom:24px;">KiraRoom</div>
+          <p style="font-size:16px;line-height:1.6;margin:0 0 16px 0;">${greeting}</p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 24px 0;">
+            Confirma que este correo es tuyo para que los avisos de
+            <strong>${this.escapeHtml(data.tenantName)}</strong> te lleguen de verdad.
+            El enlace caduca en ${hours} hora(s).
+          </p>
+          <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 24px 0;">
+            <tr><td style="background:#4f46e5;border-radius:8px;">
+              <a href="${data.verifyUrl}" style="display:inline-block;padding:14px 28px;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;">Confirmar mi correo</a>
+            </td></tr>
+          </table>
+          <p style="font-size:12px;color:#94a3b8;word-break:break-all;background:#f1f5f9;padding:12px;border-radius:6px;margin:0;">
+            ${data.verifyUrl}
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`.trim();
+
+    const text = [
+      greeting,
+      ``,
+      `Confirma que este correo es tuyo para que los avisos de ${data.tenantName} te lleguen:`,
+      data.verifyUrl,
+      ``,
+      `El enlace caduca en ${hours} hora(s).`,
+    ].join("\n");
+
+    return this.sendEmail({ to: data.to, subject, html, text, listUnsubscribe: true });
+  }
 }
