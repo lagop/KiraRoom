@@ -11,7 +11,6 @@ const PASSTHROUGH = new Set<string | symbol>([
   'onModuleInit',
   'onModuleDestroy',
   'enableShutdownHooks',
-  'unscoped',
   '$connect',
   '$disconnect',
   '$on',
@@ -37,18 +36,17 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
    * Reach for `runUnscoped()` from `common/tenancy/tenant.context` first;
    * this is the lower-level door.
    */
-  readonly unscoped: PrismaClient;
+  declare readonly unscoped: PrismaClient;
 
   constructor() {
     super();
-
-    const base = this;
-    this.unscoped = base;
 
     const scoped = this.$extends(tenantScopeExtension()) as unknown as PrismaClient;
 
     return new Proxy(this, {
       get(target, prop) {
+        // `target` is the raw client; the proxy is what callers hold.
+        if (prop === 'unscoped') return target;
         if (PASSTHROUGH.has(prop)) {
           const own = Reflect.get(target, prop, target);
           return typeof own === 'function' ? own.bind(target) : own;

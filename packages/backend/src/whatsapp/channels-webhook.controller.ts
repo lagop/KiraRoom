@@ -1,4 +1,4 @@
-import { Body, Controller, Headers, HttpCode, HttpStatus, Logger, Post, Req, Res, BadRequestException, UnauthorizedException } from "@nestjs/common";
+import { Body, Controller, Headers, HttpCode, HttpStatus, Logger, Post, Req, Res, UnauthorizedException } from "@nestjs/common";
 import { Throttle } from '@nestjs/throttler';
 import { ApiTags } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
