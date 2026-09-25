@@ -11,6 +11,11 @@ import {
   validateStripeWebhookConfigOrExit,
   validateOAuthStateSecretOrExit,
 } from "./startup-checks";
+import {
+  parseAllowedOrigins,
+  buildCorsOptions,
+  corsRejectionHandler,
+} from "./common/cors";
 
 const SENTRY_DSN = process.env.SENTRY_DSN || process.env.GLITCHTIP_DSN;
 const SENTRY_TRACES_SAMPLE_RATE = Number(
@@ -151,30 +156,10 @@ async function bootstrap(): Promise<void> {
     }),
   );
 
-  const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS ||
-    process.env.FRONTEND_URL ||
-    'http://localhost:3000')
-    .split(',')
-    .map((o) => o.trim())
-    .filter(Boolean);
-  app.enableCors({
-    origin: (origin, cb) => {
-      if (!origin) return cb(null, true);
-      if (allowedOrigins.includes('*')) {
-        logger.warn(
-          'CORS_ALLOWED_ORIGINS contains "*" — allowing all origins. ' +
-            'Set a specific allow-list before going to production.',
-        );
-        return cb(null, true);
-      }
-      if (allowedOrigins.includes(origin)) {
-        return cb(null, true);
-      }
-      logger.warn(`CORS blocked origin: ${origin}`);
-      return cb(new Error('Origin not allowed by CORS policy'), false);
-    },
-    credentials: true,
-  });
+  app.enableCors(buildCorsOptions(parseAllowedOrigins(), logger));
+  // After enableCors, so it can translate that middleware's rejection
+  // into a 403. Left to Express it answers 500 -- see common/cors.ts.
+  app.use(corsRejectionHandler);
 
   app.setGlobalPrefix('api/v1');
 
