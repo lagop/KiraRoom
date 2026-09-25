@@ -42,9 +42,9 @@ export class MiniMaxProvider {
    * short-circuit check per call).
    */
   private initializeClient(): void {
-    const apiKey = this.configService.get('MiniMax_API_KEY');
+    const apiKey = this.configService.get('MINIMAX_API_KEY');
     const baseURL =
-      this.configService.get('MiniMax_BASE_URL') || MiniMaxProvider.BASE_URL;
+      this.configService.get('MINIMAX_BASE_URL') || MiniMaxProvider.BASE_URL;
 
     if (apiKey && (apiKey !== this.lastInitKey || baseURL !== this.lastInitBaseUrl)) {
       this.client = new Anthropic({ apiKey, baseURL });
@@ -52,7 +52,7 @@ export class MiniMaxProvider {
       this.lastInitBaseUrl = baseURL;
       this.logger.log(`MiniMax client initialized (baseURL=${baseURL})`);
     } else if (!apiKey && !this.client) {
-      this.logger.warn('MiniMax API key not configured (set MiniMax_API_KEY in .env or via the admin UI)');
+      this.logger.warn('MiniMax API key not configured (set MINIMAX_API_KEY in .env or via the admin UI)');
     }
   }
 
@@ -313,7 +313,7 @@ export class MiniMaxProvider {
   async testConnection(apiKey: string, model?: string): Promise<any> {
     const testClient = new Anthropic({
       apiKey,
-      baseURL: this.configService.get('MiniMax_BASE_URL') || MiniMaxProvider.BASE_URL,
+      baseURL: this.configService.get('MINIMAX_BASE_URL') || MiniMaxProvider.BASE_URL,
     });
 
     try {
