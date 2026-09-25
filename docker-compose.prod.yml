@@ -51,7 +51,9 @@
 #   3. Hostinger hPanel -> VPS -> Docker Manager -> redeploy the stack.
 #   4. First deploy only: create the platform owner account --
 #      docker exec -e SAAS_OWNER_EMAIL=... -e SAAS_OWNER_PASSWORD=... \
-#        kiraroom-backend-prod npx ts-node prisma/seed-saas-owner.ts
+#        kiraroom-backend-prod node dist/scripts/seed-saas-owner.js
+#      (NOT `npx ts-node prisma/...` -- ts-node and typescript are
+#       devDependencies and are not in the production image.)
 #   5. Verify: the backend reaches 'Up (healthy)'. Traefik only registers a
 #      router for a healthy container, so an unhealthy one is invisible and
 #      answers 404 with a self-signed cert. See docs/runbook.md.
