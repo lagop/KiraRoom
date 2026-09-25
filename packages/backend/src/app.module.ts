@@ -5,6 +5,8 @@ import { JwtModule } from "@nestjs/jwt";
 import { PassportModule } from "@nestjs/passport";
 import { ThrottlerModule } from "@nestjs/throttler";
 import { PrismaModule } from "./common/prisma/prisma.module";
+import { TenancyModule } from "./common/tenancy/tenancy.module";
+import { TelemetryModule } from "./common/telemetry/telemetry.module";
 import { RedisModule } from "./common/cache/redis.module";
 import { FeatureFlagModule } from "./common/feature-flags/feature-flag.module";
 import { CommonModule } from "./common/common.module";
@@ -82,6 +84,13 @@ import { PublicModule } from "./public-site/public.module";
 
     // Passport
     PassportModule.register({ defaultStrategy: "jwt" }),
+
+    // Per-request tenant context, consumed by the Prisma tenant-scope
+    // extension. Must be registered so its middleware wraps every route.
+    TenancyModule,
+
+    // Activation-funnel telemetry (global provider).
+    TelemetryModule,
 
     // Observability â€” correlation id middleware (paired with pino logger).
     ObservabilityModule,

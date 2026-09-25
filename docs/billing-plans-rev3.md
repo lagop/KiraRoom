@@ -10,7 +10,7 @@
 |------------|------------------------|--------|---------------------------------------|
 | Esencial   | 49                     | â€”      | PeluquerÃ­as y centros de 1 sede       |
 | Pro        | 79                     | â€”      | Centros con marketing, loyalty, IA     |
-| Empresa    | 149 Ã— N locales        | 2      | Cadenas con panel centralizado        |
+| Empresa    | 149 Ã— N locales        | 1      | Cadenas con panel centralizado        |
 
 - 14 dÃ­as de prueba Pro incluidos en todos los tenants nuevos.
 - Sin coste de alta / setup. Sin free tier perpetuo.
@@ -231,10 +231,10 @@ P1.3 + P1.4 shipped en este sprint. El onboarding reduce el churn de los primero
 
 | Feature | Plan mÃ­nimo | Tagline corta |
 |---|---|---|
-| FacturaciÃ³n Verifactu (nacional AEAT) | Pro | "Cumplimiento fiscal automÃ¡tico con AEAT: firma XAdES-BES y QR verificable" |
-| FacturaciÃ³n TicketBAI (PaÃ­s Vasco) | Pro | "Compatible con las 3 diputaciones vascas (Bizkaia, Gipuzkoa, Ãlava)" |
+| FacturaciÃ³n Verifactu (nacional AEAT) | Esencial | "Cumplimiento fiscal automÃ¡tico con AEAT: firma XAdES-BES y QR verificable" |
+| FacturaciÃ³n TicketBAI (PaÃ­s Vasco) | Esencial | "Compatible con las 3 diputaciones vascas (Bizkaia, Gipuzkoa, Ãlava)" |
 | SII â€” Suministro Inmediato de InformaciÃ³n | Empresa | "IVA reportado en tiempo real a la AEAT" |
-| Certificados digitales cifrados | Pro | "Sube tu .p12 una vez, lo ciframos en reposo y lo usamos para firmar" |
+| Certificados digitales cifrados | Esencial | "Sube tu .p12 una vez, lo ciframos en reposo y lo usamos para firmar" |
 
 P2A es la primera mitad de P2. P2B (integraciÃ³n contable con Holded, A3, Sage, NCS) queda para el sprint siguiente.
 

@@ -19,7 +19,7 @@ command = "npm run build"
 # Custom domain wiring (set in the Cloudflare dashboard → Pages →
 # Custom domains):
 #   marketing.kiraroom.com → this Pages project (this file)
-#   app.kiraroom.com        → existing SaaS dashboard (CNAME to
+#   app.kiraroom.net        → existing SaaS dashboard (CNAME to
 #                               the Hetzner VPS or current host)
 #
 # Apex `kiraroom.com` can stay on whichever registrar (Cloudflare
@@ -28,4 +28,4 @@ command = "npm run build"
 
 [vars]
 # Public — exposed to the bundle as `import.meta.env.PUBLIC_*`.
-PUBLIC_APP_URL = "https://app.kiraroom.com"
+PUBLIC_APP_URL = "https://app.kiraroom.net"

@@ -140,16 +140,16 @@ or `npx prisma studio`).
 
 Until revenue justifies PagerDuty (€21/user/mo), use:
 
-1. **Uptime Kuma** at `https://kuma.kiraroom.com` with Telegram webhook
+1. **Uptime Kuma** at `https://kuma.kiraroom.net` with Telegram webhook
    alerts. The Telegram bot pings your phone within 30 seconds of a
    failed health probe.
 2. **Critical probes** (every 60s):
-   - `GET https://api.kiraroom.com/healthz` — API health
-   - `POST https://api.kiraroom.com/api/v1/auth/login` with test
+   - `GET https://api.kiraroom.net/healthz` — API health
+   - `POST https://api.kiraroom.net/api/v1/auth/login` with test
      credentials — auth + DB health
 3. **Warning probes** (every 5min):
-   - `GET https://app.kiraroom.com` — dashboard loads
-   - `GET https://api.kiraroom.com/api/v1/invoices` — fiscal dispatch reachable
+   - `GET https://app.kiraroom.net` — dashboard loads
+   - `GET https://api.kiraroom.net/api/v1/invoices` — fiscal dispatch reachable
 
 ## Operational runbooks
 
@@ -315,14 +315,47 @@ unit test runner.
    that pinpoints the schema issue.
 5. Once root cause is fixed, trigger manual retry: `POST /invoices/:id/resend-fiscal`.
 
+### Backups: how they run
+
+The `postgres-backup` service in `docker-compose.prod.yml` dumps the whole
+database once a day at 03:15 UTC with `pg_dump -Fc`, into the
+`postgres_backups` volume, and prunes dumps older than
+`BACKUP_RETENTION_DAYS` (default 14).
+
+```bash
+# List what exists
+docker exec kiraroom-postgres-backup-prod ls -lh /backups
+
+# Force a dump now (does not disturb the schedule)
+docker exec kiraroom-postgres-backup-prod sh -c \
+  'PGPASSWORD=$POSTGRES_PASSWORD pg_dump -h postgres -U kiraroom -d kiraroom -Fc -f /backups/manual-$(date -u +%Y%m%dT%H%M%SZ).dump'
+
+# Restore a whole database (DESTRUCTIVE -- confirm the target first)
+docker exec kiraroom-postgres-backup-prod sh -c \
+  'PGPASSWORD=$POSTGRES_PASSWORD pg_restore -h postgres -U kiraroom -d kiraroom --clean --if-exists /backups/<file>.dump'
+
+# Restore ONE table (the reason for -Fc)
+docker exec kiraroom-postgres-backup-prod sh -c \
+  'PGPASSWORD=$POSTGRES_PASSWORD pg_restore -h postgres -U kiraroom -d kiraroom -t clients /backups/<file>.dump'
+```
+
+**Still pending:** the dumps live on the same VPS volume as the database, so
+they survive an accidental delete but not a host loss. Off-site copies and
+WAL archiving (`docs/wal-archiving.md`) for point-in-time recovery are the
+next step, and are what the quarterly restore drill below should exercise.
+
 ### Failure: Backup fails to run
 
-1. Check the cron log: `grep CRON /var/log/syslog | grep backup`.
-2. Most common cause: SSH key for off-site rsync expired. Re-add:
-   `ssh-copy-id backup@<BACKUP_HOST>`.
-3. Second most common: disk full on the backup host. SSH in and prune
-   `find /backups -mtime +30 -delete`.
-4. Verify by running the script manually: `sudo -u kira /opt/kiraroom/scripts/backup.sh`.
+1. Read the service log: `docker logs kiraroom-postgres-backup-prod --tail 50`.
+   A failed dump logs `[backup] FAILED for <stamp>` and leaves no `.partial`
+   file behind.
+2. If nothing is logged at all, the container is not running:
+   `docker ps -a | grep postgres-backup`, then `docker compose up -d postgres-backup`.
+3. Most common real cause: disk full on the VPS. Check with `df -h`, then
+   prune manually: `docker exec kiraroom-postgres-backup-prod sh -c 'find /backups -name "kiraroom-*.dump" -mtime +7 -delete'`.
+4. Second most common: `POSTGRES_PASSWORD` rotated in the backend env but not
+   redeployed to this service. Both read the same variable, so redeploy the
+   whole compose file rather than a single container.
 
 ### Failure: TLS certificate expires
 

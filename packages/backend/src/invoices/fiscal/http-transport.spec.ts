@@ -89,13 +89,46 @@ function makeTicketBai(prisma: any) {
   return service as TicketBaiService;
 }
 
+/**
+ * Endpoint variables these suites assert on. Jest loads the developer's
+ * `.env`, so anyone with a sandbox endpoint configured used to see
+ * "routes to the official endpoint URL by default" fail against their own
+ * override: the suite cleaned these up afterwards but never established a
+ * clean baseline first. Saved and cleared before each test, restored after,
+ * so the result no longer depends on whose machine it runs on.
+ */
+const ENDPOINT_ENV_KEYS = [
+  "AEAT_VERIFACTU_ENDPOINT",
+  "DIPUTACION_TBAI_BIZKAIA",
+  "DIPUTACION_TBAI_GIPUZKOA",
+  "DIPUTACION_TBAI_ALAVA",
+] as const;
+
+function takeEndpointEnv(): Record<string, string | undefined> {
+  const saved: Record<string, string | undefined> = {};
+  for (const key of ENDPOINT_ENV_KEYS) {
+    saved[key] = process.env[key];
+    delete process.env[key];
+  }
+  return saved;
+}
+
+function restoreEndpointEnv(saved: Record<string, string | undefined>): void {
+  for (const key of ENDPOINT_ENV_KEYS) {
+    if (saved[key] === undefined) delete process.env[key];
+    else process.env[key] = saved[key];
+  }
+}
+
 describe("VerifactuService._postToAeat (real branch)", () => {
   let originalEnv: string | undefined;
   let originalFetch: typeof fetch | undefined;
+  let savedEndpoints: Record<string, string | undefined>;
 
   beforeEach(() => {
     originalEnv = process.env.FISCAL_E2E_MODE;
     originalFetch = globalThis.fetch;
+    savedEndpoints = takeEndpointEnv();
     process.env.FISCAL_E2E_MODE = "real";
     process.env.AEAT_VERIFACTU_ENDPOINT =
       "https://prewww1.aeat.es/wlpl/inwinvoc/ws.Suministro";
@@ -104,7 +137,7 @@ describe("VerifactuService._postToAeat (real branch)", () => {
   afterEach(() => {
     process.env.FISCAL_E2E_MODE = originalEnv;
     globalThis.fetch = originalFetch as any;
-    delete process.env.AEAT_VERIFACTU_ENDPOINT;
+    restoreEndpointEnv(savedEndpoints);
   });
 
   it("POSTs to AEAT_VERIFACTU_ENDPOINT with xml body + SOAP headers", async () => {
@@ -202,19 +235,19 @@ describe("VerifactuService._postToAeat (real branch)", () => {
 describe("TicketBaiService._postToDeputacion (real branch)", () => {
   let originalEnv: string | undefined;
   let originalFetch: typeof fetch | undefined;
+  let savedEndpoints: Record<string, string | undefined>;
 
   beforeEach(() => {
     originalEnv = process.env.FISCAL_E2E_MODE;
     originalFetch = globalThis.fetch;
+    savedEndpoints = takeEndpointEnv();
     process.env.FISCAL_E2E_MODE = "real";
   });
 
   afterEach(() => {
     process.env.FISCAL_E2E_MODE = originalEnv;
     globalThis.fetch = originalFetch as any;
-    delete process.env.DIPUTACION_TBAI_BIZKAIA;
-    delete process.env.DIPUTACION_TBAI_GIPUZKOA;
-    delete process.env.DIPUTACION_TBAI_ALAVA;
+    restoreEndpointEnv(savedEndpoints);
   });
 
   it("Bizkaia: routes to the official endpoint URL by default", async () => {

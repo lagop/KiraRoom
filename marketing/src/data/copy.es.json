@@ -7,14 +7,8 @@
     "trust_badge": "Sin tarjeta · Cancela cuando quieras · Soporte en español"
   },
   "trust_bar": {
-    "line": "Usado por +500 salones en España",
-    "logos": [
-      { "alt": "Logo salón María" },
-      { "alt": "Logo Carlos Barber Shop" },
-      { "alt": "Logo Laura Estética" },
-      { "alt": "Logo Peluquería Norte" },
-      { "alt": "Logo Estética Sur" }
-    ]
+    "line": "Cumple con Verifactu y TicketBAI · Soporte en espanol · Datos alojados en la UE",
+    "logos": []
   },
   "pains": [
     {
@@ -23,7 +17,7 @@
       "validation": "¿Te ha pasado? Un mensaje a las 23:30 de una clienta que quiere venir mañana. La ves al día siguiente, pero ella ya ha reservado en otro sitio.",
       "solution_title": "Agenda online que cierra reservas mientras duermes",
       "solution_body": "Tu clienta reserva, cambia o cancela desde el móvil a cualquier hora. Tú recibes la cita en la agenda al instante, sin tocar nada. Cero huecos vacíos, cero llamadas perdidas.",
-      "proof": "Los salones que activan la agenda online ven +30% reservas en el primer mes.",
+      "proof": "La agenda online acepta reservas 24/7 y bloquea los huecos ocupados en tiempo real.",
       "cta": "Activar la agenda online"
     },
     {
@@ -32,7 +26,7 @@
       "validation": "Verifactu, TicketBAI, diputaciones, AEAT... Cada cambio normativo te obliga a actualizar el TPV, llamar al gestor, y rezar para no equivocarte.",
       "solution_title": "Facturación que cumple sola con Hacienda",
       "solution_body": "Cada factura que emites se firma digitalmente (XAdES) y se remite sola a la AEAT o a tu diputación foral (Bizkaia, Gipuzkoa, Álava). Tu gestor entra, ve todas las facturas numeradas, y se acabó.",
-      "proof": "Compatible con la normativa española RD 1007/2023 y las 3 diputaciones vascas. Tu gestor deja de llamarte.",
+      "proof": "Compatible con la normativa espanola RD 1007/2023 y las tres diputaciones forales vascas.",
       "cta": "Ver cómo funciona"
     },
     {
@@ -41,7 +35,7 @@
       "validation": "20 mensajes, 3 clientas preguntando precio, 2 que quieren cambiar la cita, 1 que se ha quejado. Y todavía no has abierto la agenda.",
       "solution_title": "Una recepcionista IA que responde por ti, 24/7",
       "solution_body": "Mira quién está libre el jueves a las 17, ¿cuánto cuesta el tinte?, quiero cambiar mi cita del viernes... La IA responde como tú, con tu tono, con tus precios, con tu agenda real. Solo te escala lo que necesita una decisión humana.",
-      "proof": "Las clientas reciben respuesta en menos de 1 minuto, aunque sea domingo a las 23h. Y tú solo gestionas lo importante.",
+      "proof": "La recepcionista IA responde en web, Messenger, Instagram y Telegram con tu agenda real.",
       "cta": "Conectar mis canales"
     },
     {
@@ -50,7 +44,7 @@
       "validation": "Tienes clientas que vinieron 3 veces, dejaste de verlas hace 4 meses, y no sabes por qué. Mientras tanto, otra peluquería les manda un descuento.",
       "solution_title": "Rebooking automático y un programa de fidelización que funciona",
       "solution_body": "KiraRoom detecta cuándo una clienta debería volver (según su cadencia real) y le manda un WhatsApp personalizado. Si además activas el programa de puntos, cada visita suma y puede canjear por un servicio.",
-      "proof": "Los salones con rebooking activado recuperan al 25% de las clientas dormidas en 60 días.",
+      "proof": "El rebooking detecta la cadencia real de cada clienta y te avisa cuando toca reactivarla.",
       "cta": "Activar rebooking"
     }
   ],
@@ -58,10 +52,26 @@
     "h2": "Tus clientas te escriben por donde quieren. Tú respondes desde un solo sitio.",
     "body": "Activa Messenger, Instagram, Telegram o los tres. La recepcionista IA responde en cada canal con el mismo tono, los mismos precios, la misma agenda. Tú solo lees cuando hay algo que necesita tu ojo.",
     "channels": [
-      { "name": "Facebook Messenger", "icon": "facebook", "caption": "Mensajes 1:1 con tu tono y tus precios" },
-      { "name": "Instagram DMs", "icon": "instagram", "caption": "Solo necesitas una cuenta Business" },
-      { "name": "Telegram", "icon": "telegram", "caption": "Sin coste por mensaje. Setup en 2 minutos" },
-      { "name": "Web (en la app)", "icon": "web", "caption": "Siempre incluido, sin configuración" }
+      {
+        "name": "Facebook Messenger",
+        "icon": "facebook",
+        "caption": "Mensajes 1:1 con tu tono y tus precios"
+      },
+      {
+        "name": "Instagram DMs",
+        "icon": "instagram",
+        "caption": "Solo necesitas una cuenta Business"
+      },
+      {
+        "name": "Telegram",
+        "icon": "telegram",
+        "caption": "Sin coste por mensaje. Setup en 2 minutos"
+      },
+      {
+        "name": "Web (en la app)",
+        "icon": "web",
+        "caption": "Siempre incluido, sin configuración"
+      }
     ],
     "wizard_steps": [
       "Crea tu bot o vincula tu Facebook Page (2 min)",
@@ -124,39 +134,54 @@
     }
   ],
   "addons": [
-    { "key": "ai_expansion",        "name": "IA Expansion",         "price": 24, "tagline": "Quita el cap de 500 conv/mes y desbloquea cancelaciones y escalations automáticas" },
-    { "key": "loyalty_giftcards",   "name": "Loyalty & Gift Cards", "price": 12, "tagline": "Puntos, promos y gift cards para que vuelvan" },
-    { "key": "email_marketing",     "name": "Email Marketing",       "price": 12, "tagline": "Campañas segmentadas por audiencia" },
-    { "key": "multichannel",        "name": "Multicanal",            "price": 19, "tagline": "Messenger, Instagram y Telegram con la IA" },
-    { "key": "google_reviews_auto", "name": "Reseñas Google auto",   "price": 19, "tagline": "Invitación automática post-servicio" },
-    { "key": "web_domain",          "name": "Dominio personalizado", "price": 15, "tagline": "Tu salón en citastusalon.com con SSL" },
-    { "key": "deposits_antinoshow", "name": "Depósitos anti-plantón","price": 5,  "tagline": "Cobra señal al reservar, reduce no-shows" }
-  ],
-  "testimonials": [
     {
-      "name": "María R., Peluquería María (Madrid)",
-      "quote": "Antes perdía 2 horas al día contestando WhatsApp. Ahora contesto solo lo importante y la IA se encarga del resto.",
-      "kpi": "8 h/semana ahorradas en gestión de WhatsApp",
-      "photo": "images/testimonials/maria.jpg"
+      "key": "ai_expansion",
+      "name": "IA Expansion",
+      "price": 24,
+      "tagline": "Quita el cap de 500 conv/mes y desbloquea cancelaciones y escalations automáticas"
     },
     {
-      "name": "Carlos G., 3 salones en Barcelona",
-      "quote": "El módulo de facturación me ahorró contratar a alguien a media jornada. Todo se remite solo a la AEAT.",
-      "kpi": "−1.200 €/mes en gestoría",
-      "photo": "images/testimonials/carlos.jpg"
+      "key": "loyalty_giftcards",
+      "name": "Loyalty & Gift Cards",
+      "price": 12,
+      "tagline": "Puntos, promos y gift cards para que vuelvan"
     },
     {
-      "name": "Laura P., Salón de uñas (Valencia)",
-      "quote": "Las clientas me escriben a las 11 de la noche por Instagram. Antes las perdía; ahora reservan solas aunque yo esté durmiendo.",
-      "kpi": "+34% reservas tras activar el chat 24/7",
-      "photo": "images/testimonials/laura.jpg"
+      "key": "email_marketing",
+      "name": "Email Marketing",
+      "price": 12,
+      "tagline": "Campañas segmentadas por audiencia"
+    },
+    {
+      "key": "multichannel",
+      "name": "Multicanal",
+      "price": 19,
+      "tagline": "Messenger, Instagram y Telegram con la IA"
+    },
+    {
+      "key": "google_reviews_auto",
+      "name": "Reseñas Google auto",
+      "price": 19,
+      "tagline": "Invitación automática post-servicio"
+    },
+    {
+      "key": "web_domain",
+      "name": "Dominio personalizado",
+      "price": 15,
+      "tagline": "Tu salón en citastusalon.com con SSL"
+    },
+    {
+      "key": "deposits_antinoshow",
+      "name": "Depósitos anti-plantón",
+      "price": 5,
+      "tagline": "Cobra señal al reservar, reduce no-shows"
     }
   ],
   "final_cta": {
     "h2": "Deja que tu salón crezca mientras duermes",
     "sub": "14 días gratis. Sin tarjeta. Cancela cuando quieras.",
     "primary_cta": "Empezar mis 14 días gratis",
-    "trust_line": "Usado por +500 salones en España · Soporte en español · Cumple RGPD"
+    "trust_line": "14 dias gratis · Sin tarjeta · Cancela cuando quieras · Cumple RGPD"
   },
   "meta": {
     "title": "KiraRoom — La plataforma todo-en-uno para salones en España",

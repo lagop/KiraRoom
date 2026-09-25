@@ -1,5 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
+import { ProductEventsService, PRODUCT_EVENTS } from "../common/telemetry/product-events.service";
 import { OnboardingGroup } from "@prisma/client";
 
 type StepStatus = "pending" | "done" | "skipped" | "dismissed";
@@ -15,7 +16,10 @@ interface StepStatusRecord {
 export class OnboardingDetectorService {
   private readonly logger = new Logger(OnboardingDetectorService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly events: ProductEventsService,
+  ) {}
 
   /**
    * Detect all step states for a tenant and persist any transitions.
@@ -93,6 +97,13 @@ export class OnboardingDetectorService {
     }
   }
 
+  /**
+   * Step 1 of the blocking wizard. The logo is deliberately NOT required
+   * here: it used to be, and it gated the whole dashboard behind an image
+   * upload that a salon signing up from a phone rarely has to hand. The
+   * logo now lives in the optional `branding` checklist step, next to the
+   * cover image, where it belongs.
+   */
   private async hasBusinessIdentity(tenantId: string): Promise<boolean> {
     const t = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
@@ -101,11 +112,10 @@ export class OnboardingDetectorService {
         street: true,
         city: true,
         phone: true,
-        logo: true,
       },
     });
     if (!t) return false;
-    return Boolean(t.name && t.street && t.city && t.phone && t.logo);
+    return Boolean(t.name && t.street && t.city && t.phone);
   }
 
   private async hasFirstService(tenantId: string): Promise<boolean> {
@@ -256,5 +266,14 @@ export class OnboardingDetectorService {
         finishedAt: finished ? new Date() : null,
       },
     });
+
+    // Second funnel milestone: the blocking wizard is done, so the tenant
+    // can actually see the product. recordOnce because recompute runs on
+    // every step transition.
+    if (finished) {
+      await this.events.recordOnce(PRODUCT_EVENTS.ONBOARDING_COMPLETED, tenantId, {
+        steps: defs.length,
+      });
+    }
   }
 }

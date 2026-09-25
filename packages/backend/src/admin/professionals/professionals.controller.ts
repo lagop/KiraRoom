@@ -15,6 +15,7 @@ import { JwtAuthGuard } from "../../auth/guards/jwt-auth.guard";
 import { Roles } from "../../auth/decorators/roles.decorator";
 import { RolesGuard } from "../../auth/guards/roles.guard";
 import { UserRole } from "@prisma/client";
+import { CurrentUser } from "../../auth/decorators/current-user.decorator";
 import { ValidationError } from "class-validator";
 
 @ApiTags("Admin - Professionals")
@@ -37,15 +38,16 @@ export class AdminProfessionalsController {
   })
   @ApiResponse({ status: 400, description: "Invalid input data" })
   @ApiResponse({ status: 403, description: "Forbidden" })
-  async create(@Body() createProfessionalDto: CreateProfessionalDto) {
+  async create(@CurrentUser() user: any, @Body() createProfessionalDto: CreateProfessionalDto) {
     this.logger.log(
       "Creating professional with data:",
       JSON.stringify(createProfessionalDto),
     );
     try {
-      const professional = await this.adminProfessionalsService.create(
-        createProfessionalDto,
-      );
+      const professional = await this.adminProfessionalsService.create({
+        ...createProfessionalDto,
+        tenantId: user.tenantId,
+      });
       this.logger.log(
         "Professional created successfully:",
         JSON.stringify(professional),
@@ -75,6 +77,7 @@ export class AdminProfessionalsController {
   @ApiResponse({ status: 200, description: "List of professionals" })
   @ApiResponse({ status: 403, description: "Forbidden" })
   async findAll(
+    @CurrentUser() user: any,
     @Query("page") page?: string,
     @Query("limit") limit?: string,
     @Query("search") search?: string,
@@ -83,6 +86,7 @@ export class AdminProfessionalsController {
     const pageNum = parseInt(page || "1", 10) || 1;
     const limitNum = parseInt(limit || "10", 10) || 10;
     return this.adminProfessionalsService.findAll({
+      tenantId: user.tenantId,
       page: pageNum,
       limit: limitNum,
       search: search || "",
@@ -95,8 +99,8 @@ export class AdminProfessionalsController {
   @ApiResponse({ status: 200, description: "Professional details" })
   @ApiResponse({ status: 404, description: "Professional not found" })
   @ApiResponse({ status: 403, description: "Forbidden" })
-  async findOne(@Param("id", ParseUUIDPipe) id: string) {
-    return this.adminProfessionalsService.findOne(id);
+  async findOne(@CurrentUser() user: any, @Param("id", ParseUUIDPipe) id: string) {
+    return this.adminProfessionalsService.findOne(user.tenantId, id);
   }
 
   @Patch(":id")
@@ -109,10 +113,11 @@ export class AdminProfessionalsController {
   @ApiResponse({ status: 400, description: "Invalid input data" })
   @ApiResponse({ status: 403, description: "Forbidden" })
   async update(
+    @CurrentUser() user: any,
     @Param("id", ParseUUIDPipe) id: string,
     @Body() updateProfessionalDto: UpdateProfessionalDto,
   ) {
-    return this.adminProfessionalsService.update(id, updateProfessionalDto);
+    return this.adminProfessionalsService.update(user.tenantId, id, updateProfessionalDto);
   }
 
   @Delete(":id")
@@ -123,16 +128,16 @@ export class AdminProfessionalsController {
   })
   @ApiResponse({ status: 404, description: "Professional not found" })
   @ApiResponse({ status: 403, description: "Forbidden" })
-  async remove(@Param("id", ParseUUIDPipe) id: string) {
-    return this.adminProfessionalsService.remove(id);
+  async remove(@CurrentUser() user: any, @Param("id", ParseUUIDPipe) id: string) {
+    return this.adminProfessionalsService.remove(user.tenantId, id);
   }
 
   @Get("search/:query")
   @ApiOperation({ summary: "Search professionals by name, email, or phone" })
   @ApiResponse({ status: 200, description: "Search results" })
   @ApiResponse({ status: 403, description: "Forbidden" })
-  async search(@Param("query") query: string) {
-    return this.adminProfessionalsService.search(query);
+  async search(@CurrentUser() user: any, @Param("query") query: string) {
+    return this.adminProfessionalsService.search(user.tenantId, query);
   }
 
   @Get(":id/availability")
@@ -140,8 +145,8 @@ export class AdminProfessionalsController {
   @ApiResponse({ status: 200, description: "Professional availability data" })
   @ApiResponse({ status: 404, description: "Professional not found" })
   @ApiResponse({ status: 403, description: "Forbidden" })
-  async getAvailability(@Param("id", ParseUUIDPipe) id: string) {
-    return this.adminProfessionalsService.getAvailability(id);
+  async getAvailability(@CurrentUser() user: any, @Param("id", ParseUUIDPipe) id: string) {
+    return this.adminProfessionalsService.getAvailability(user.tenantId, id);
   }
 
   @Patch(":id/password")
@@ -151,9 +156,10 @@ export class AdminProfessionalsController {
   @ApiResponse({ status: 400, description: "Invalid input data" })
   @ApiResponse({ status: 403, description: "Forbidden" })
   async changePassword(
+    @CurrentUser() user: any,
     @Param("id", ParseUUIDPipe) id: string,
     @Body() changePasswordDto: ChangeProfessionalPasswordDto,
   ) {
-    return this.adminProfessionalsService.changePassword(id, changePasswordDto);
+    return this.adminProfessionalsService.changePassword(user.tenantId, id, changePasswordDto);
   }
 }

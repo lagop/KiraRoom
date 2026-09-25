@@ -100,9 +100,11 @@ subscription-and-landing.md
 # ──────────────────────────────────────────────────────────────────
 #  Prisma
 # ──────────────────────────────────────────────────────────────────
-# Don't ignore the schema/migrations themselves; only the generated client cache.
-packages/backend/prisma/migrations/
-!packages/backend/prisma/migrations/.gitkeep
+# The schema AND the migrations are source of truth -- they MUST be committed.
+# The deploy entrypoint (packages/backend/docker-entrypoint.sh) runs
+# `prisma migrate deploy` before the app boots, so a missing migrations/
+# directory means a fresh database never gets a schema.
+# Only the generated Prisma client is ignored, and it lives in node_modules.
 
 # ──────────────────────────────────────────────────────────────────
 #  Playwright
@@ -123,3 +125,6 @@ test-cert.password.hint
 # TypeScript incremental build cache (not source).
 *.tsbuildinfo
 **/tsconfig.tsbuildinfo
+
+# Next.js / TypeScript incremental build cache -- a build artifact, not source.
+packages/frontend/tsconfig.tsbuildinfo

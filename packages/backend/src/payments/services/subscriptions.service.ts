@@ -191,6 +191,9 @@ export class SubscriptionsService {
       features: [
         'Clientas y citas ilimitadas',
         'Hasta 4 profesionales',
+        // Fiscal Spain is the entry hook, not an upgrade driver: it is the
+        // reason a salon switches at all, and it is available on every plan.
+        'Facturacion Verifactu y TicketBAI',
         'Recepcionista IA basica (500 conv./mes)',
         'Agenda online',
         'Recordatorios WhatsApp',
@@ -399,9 +402,11 @@ export class SubscriptionsService {
       throw new Error('Invalid plan');
     }
 
-    // Empresa requires quantity >= 2
+    // Empresa bills per location from 1 upwards. It used to clamp to a
+    // minimum of 2, which charged 298 EUR at a checkout that the catalogue
+    // and the marketing site both advertised as 149 EUR.
     const quantity = planId === 'empresa'
-      ? Math.max(2, locationCount ?? 2)
+      ? Math.max(1, locationCount ?? 1)
       : 1;
 
     let customerId = tenant.stripeCustomerId;
@@ -652,7 +657,7 @@ export class SubscriptionsService {
     );
 
     const targetQuantity =
-      planId === 'empresa' ? Math.max(2, locationCount ?? 2) : 1;
+      planId === 'empresa' ? Math.max(1, locationCount ?? 1) : 1;
 
     const updatedSubscription = await this.stripe.subscriptions.update(
       tenant.stripeSubscriptionId,
@@ -713,8 +718,8 @@ export class SubscriptionsService {
     if (this.normalizePlan(tenant.plan) !== 'empresa') {
       throw new Error('updateLocationCount only valid for plan=empresa');
     }
-    if (newCount < 2) {
-      throw new Error('Empresa plan requires at least 2 locations');
+    if (newCount < 1) {
+      throw new Error('Empresa plan requires at least 1 location');
     }
 
     const subscription = await this.stripe.subscriptions.retrieve(

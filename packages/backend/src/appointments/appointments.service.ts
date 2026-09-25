@@ -8,6 +8,7 @@ import {
   Optional,
 } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
+import { ProductEventsService, PRODUCT_EVENTS } from "../common/telemetry/product-events.service";
 import {
   AppointmentStatus,
   PaymentStatus,
@@ -99,6 +100,7 @@ export class AppointmentsService {
 
   constructor(
     private prisma: PrismaService,
+    private readonly events: ProductEventsService,
     private notificationsService: NotificationsService,
     private emailService: EmailService,
     private smsService: SmsService,
@@ -266,6 +268,15 @@ export class AppointmentsService {
           );
         });
     }
+
+    // Third funnel milestone, and the one that matters: the salon has a
+    // real booking in the system. Time from tenant_signed_up to this is
+    // the activation metric.
+    await this.events.recordOnce(
+      PRODUCT_EVENTS.FIRST_BOOKING_RECEIVED,
+      appointment.tenantId,
+      { source: createAppointmentDto.source ?? 'dashboard' },
+    );
 
     return appointment;
   }

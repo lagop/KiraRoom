@@ -8,60 +8,60 @@ datasource db {
 }
 
 model Tenant {
-  id                            String                   @id @default(uuid())
-  createdAt                     DateTime                 @default(now())
-  updatedAt                     DateTime                 @updatedAt
-  name                          String                   @unique
-  slug                          String                   @unique
+  id                     String             @id @default(uuid())
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+  name                   String             @unique
+  slug                   String             @unique
   /// P2A Ã¢â‚¬â€ Spanish tax compliance: NIF/CIF/NIE del emisor (obligatorio si fiscalMode != 'none')
-  taxId                         String?
-  taxIdType                     NifType?
-  legalName                     String?
-  description                   String?
-  logo                          String?
-  coverImage                    String?
-  website                       String?
-  email                         String?
-  phone                         String?
-  whatsapp                      String?
-  street                        String?
-  city                          String?
-  state                         String?
-  postalCode                    String?
-  country                       String                   @default("ES")
-  timezone                      String                   @default("Europe/Madrid")
-  currency                      String                   @default("EUR")
-  language                      String                   @default("es")
-  dateFormat                    String                   @default("DD/MM/YYYY")
-  timeFormat                    String                   @default("24h")
+  taxId                  String?
+  taxIdType              NifType?
+  legalName              String?
+  description            String?
+  logo                   String?
+  coverImage             String?
+  website                String?
+  email                  String?
+  phone                  String?
+  whatsapp               String?
+  street                 String?
+  city                   String?
+  state                  String?
+  postalCode             String?
+  country                String             @default("ES")
+  timezone               String             @default("Europe/Madrid")
+  currency               String             @default("EUR")
+  language               String             @default("es")
+  dateFormat             String             @default("DD/MM/YYYY")
+  timeFormat             String             @default("24h")
   /// Virtual Receptionist settings
-  assistantName                 String                   @default("Kira")
-  cancellationPolicy            String?
-  minCancelHours                Int                      @default(24)
-  openingHours                  Json                     @default("{}")
+  assistantName          String             @default("Kira")
+  cancellationPolicy     String?
+  minCancelHours         Int                @default(24)
+  openingHours           Json               @default("{}")
   /// Subscription
-  plan                          SubscriptionPlan
-  subscriptionStatus            SubscriptionStatus
-  currentPeriodStart            DateTime
-  currentPeriodEnd              DateTime
-  trialEnd                      DateTime?
-  stripeCustomerId              String?
-  stripeSubscriptionId          String?
+  plan                   SubscriptionPlan
+  subscriptionStatus     SubscriptionStatus
+  currentPeriodStart     DateTime
+  currentPeriodEnd       DateTime
+  trialEnd               DateTime?
+  stripeCustomerId       String?
+  stripeSubscriptionId   String?
   /// Plan rev3: cancellation lifecycle + add-ons + multi-location
-  cancelledAt                   DateTime?
-  readOnlyUntil                 DateTime?
+  cancelledAt            DateTime?
+  readOnlyUntil          DateTime?
   /// Sprint 2 / 2.2 Ã¢â‚¬â€ payment-failure grace lifecycle. Set on the
   /// first Stripe `invoice.payment_failed` webhook; cleared on the
   /// next successful payment. When `gracePeriodEndsAt < now` the
   /// daily GracePeriodScheduler flips status to `suspended`.
-  paymentFailedAt               DateTime?
-  gracePeriodEndsAt             DateTime?
+  paymentFailedAt        DateTime?
+  gracePeriodEndsAt      DateTime?
   /// Soft-delete (rev): when set, the tenant is hidden from SaaS listings
   /// but its data (users, appointments, payments, etc.) is preserved so
   /// an accidental delete can be reversed via Prisma Studio.
-  deletedAt                     DateTime?
+  deletedAt              DateTime?
   /// P2A-ia-fairuse - virtual receptionist usage counter (Esencial cap)
-  aiConversationsUsed    Int                 @default(0)
+  aiConversationsUsed    Int                @default(0)
   aiConversationsResetAt DateTime?
   /// Saas-owner-configurable: how the assistant reacts to cap overflows
   /// degrade (default) -> FAQ cache only, no LLM.
@@ -70,12 +70,12 @@ model Tenant {
   aiFairUseAction        AiFairUseAction    @default(degrade)
   /// P2A-receptionist-advanced - persona/voice + multichannel config.
   receptionistPersonaId  String?
-  
+
   /// P2A-plans-v2 - add-ons purchased by this tenant.
-  tenantAddOns           TenantAddOn[]
+  tenantAddOns        TenantAddOn[]
   /// P2A-plans-v2 - message credit wallet (message_bundles add-on).
-  messageCreditWallet    MessageCreditWallet?
-  
+  messageCreditWallet MessageCreditWallet?
+
   addons                        Json                     @default("{}")
   maxLocations                  Int                      @default(1)
   /// Stripe Configuration (per-tenant)
@@ -139,7 +139,7 @@ model Tenant {
   copilotFeedback        CopilotFeedback[]
 
   // P2A-receptionist-advanced -- virtual wait-list for fully-booked slots.
-  waitListEntries               WaitList[]
+  waitListEntries WaitList[]
 
   /// P1.3 Ã¢â‚¬â€ Onboarding wizard state (one row per tenant)
   onboardingState      OnboardingState?
@@ -172,51 +172,51 @@ model Tenant {
 }
 
 model AddOn {
-  id                String       @id @default(uuid())
-  key               String       @unique
+  id                String   @id @default(uuid())
+  key               String   @unique
   name              String
   description       String?
   monthlyPriceCents Int?
-  currency          String       @default("EUR")
-  unlocks           Json         @default("[]")
-  metered           Boolean      @default(false)
+  currency          String   @default("EUR")
+  unlocks           Json     @default("[]")
+  metered           Boolean  @default(false)
   stripePriceId     String?
-  isActive          Boolean      @default(true)
-  sortOrder         Int          @default(0)
-  createdAt         DateTime     @default(now())
-  updatedAt         DateTime     @updatedAt
-  
-  tenantAddOns    TenantAddOn[]
-  
+  isActive          Boolean  @default(true)
+  sortOrder         Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  tenantAddOns TenantAddOn[]
+
   @@map("add_ons")
 }
 
 model TenantAddOn {
-  id                          String   @id @default(uuid())
-  tenantId                    String
-  addOnId                     String
-  stripeSubscriptionItemId    String?
-  status                      String   @default("active")
-  startedAt                   DateTime @default(now())
-  currentPeriodEnd            DateTime?
-  cancelledAt                 DateTime?
-  tenant                      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  addOn                       AddOn   @relation(fields: [addOnId], references: [id], onDelete: Restrict)
-  
+  id                       String    @id @default(uuid())
+  tenantId                 String
+  addOnId                  String
+  stripeSubscriptionItemId String?
+  status                   String    @default("active")
+  startedAt                DateTime  @default(now())
+  currentPeriodEnd         DateTime?
+  cancelledAt              DateTime?
+  tenant                   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  addOn                    AddOn     @relation(fields: [addOnId], references: [id], onDelete: Restrict)
+
   @@unique([tenantId, addOnId])
   @@index([tenantId])
   @@map("tenant_add_ons")
 }
 
 model MessageCreditWallet {
-  tenantId              String   @id
-  creditsRemaining      Int      @default(0)
-  creditsPurchasedTotal Int      @default(0)
-  creditsUsedTotal      Int      @default(0)
+  tenantId              String    @id
+  creditsRemaining      Int       @default(0)
+  creditsPurchasedTotal Int       @default(0)
+  creditsUsedTotal      Int       @default(0)
   lastTopupAt           DateTime?
-  updatedAt             DateTime @updatedAt
-  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  
+  updatedAt             DateTime  @updatedAt
+  tenant                Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
   @@map("message_credit_wallet")
 }
 
@@ -406,7 +406,7 @@ model Client {
   rebookingReminders       RebookingReminder[]
 
   /// P2A-receptionist-advanced -- this client is on the virtual wait-list.
-  waitListEntries          WaitList[]
+  waitListEntries WaitList[]
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -774,22 +774,22 @@ enum AppointmentLocation {
 // ============================================
 
 model ChatConversation {
-  id             String    @id @default(uuid())
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id             String      @id @default(uuid())
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
   tenantId       String
   clientId       String?
   salonId        String?
   conversationId String?
   /// P2A-receptionist-v2 H-4: web | whatsapp | facebook | instagram | telegram
   channel        ChatChannel @default(web)
-  status         String    @default("active") /// active, completed, handoff
-  totalMessages  Int       @default(0)
-  hasHandoff     Boolean   @default(false)
+  status         String      @default("active") /// active, completed, handoff
+  totalMessages  Int         @default(0)
+  hasHandoff     Boolean     @default(false)
   handoffUserId  String?
   handoffAt      DateTime?
-  lastActivityAt DateTime  @default(now())
-  context        Json      @default("{}")
+  lastActivityAt DateTime    @default(now())
+  context        Json        @default("{}")
 
   messages      ChatMessage[]
   intentHistory IntentHistoryItem[]
@@ -2462,25 +2462,25 @@ enum RebookChannel {
 // date window -> push notification (later). The list is only enabled
 // when the tenant has `virtual_receptionist_advanced` unlocked.
 model WaitList {
-  id              String   @id @default(uuid())
-  tenantId        String
-  clientId        String
-  serviceId       String
-  professionalId  String?
+  id             String    @id @default(uuid())
+  tenantId       String
+  clientId       String
+  serviceId      String
+  professionalId String?
   // The window when the client is available. Both nullable = "anytime".
-  earliestDate    DateTime?
-  latestDate      DateTime?
+  earliestDate   DateTime?
+  latestDate     DateTime?
   // Lifecycle. `waiting` is the active state.
   // `notified` means a slot opened and we told the client.
   // `cancelled` is terminal (client or system removed).
   // `fulfilled` means the client booked the appointment they wanted.
-  status          String   @default("waiting")
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  notifiedAt      DateTime?
-  notes           String?
-  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  client          Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  status         String    @default("waiting")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  notifiedAt     DateTime?
+  notes          String?
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client         Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, status])
   @@index([tenantId, serviceId, professionalId])
@@ -2873,7 +2873,7 @@ enum ChatChannel {
 // at rest with the existing EncryptionService (AES-256-GCM, KMS-backed).
 model PlatformLlmConfig {
   id              String   @id @default("global")
-  provider        String   @default("anthropic")    // "anthropic" | "openai" | ...
+  provider        String   @default("anthropic") // "anthropic" | "openai" | ...
   // P2A-platform-llm: AES-256-GCM ciphertext of the API key. Decrypt with
   // EncryptionService.decrypt(). Never expose via API; only the
   // last-4-chars hash is returned to the admin UI.
@@ -2899,17 +2899,17 @@ model PlatformLlmConfig {
 // (write tools that need human approval) live in their own table so they
 // can survive a panel reload and be approved from the notification bell.
 model AssistantConversation {
-  id          String   @id @default(cuid())
-  tenantId    String
-  userId      String
-  sessionId   String?  // null = persistent thread; non-null = ephemeral panel session
-  title       String?  // auto-generated by LLM after ~5 turns; null until then
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  messages    AssistantMessage[]
+  id        String             @id @default(cuid())
+  tenantId  String
+  userId    String
+  sessionId String? // null = persistent thread; non-null = ephemeral panel session
+  title     String? // auto-generated by LLM after ~5 turns; null until then
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+  messages  AssistantMessage[]
 
-  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, tenantId, sessionId])
   @@index([tenantId, updatedAt])
@@ -2918,27 +2918,27 @@ model AssistantConversation {
 }
 
 enum AssistantMessageRole {
-  user        // the salon staff typed something
-  assistant   // the LLM replied
-  tool        // tool-call result attached to the assistant message
-  approval    // a pending-action card; points to ActionApproval
-  system      // not used in v1; reserved for future system injections
+  user // the salon staff typed something
+  assistant // the LLM replied
+  tool // tool-call result attached to the assistant message
+  approval // a pending-action card; points to ActionApproval
+  system // not used in v1; reserved for future system injections
 }
 
 model AssistantMessage {
-  id              String   @id @default(cuid())
+  id              String               @id @default(cuid())
   conversationId  String
   role            AssistantMessageRole
-  content         String   @db.Text   // text or tool-call JSON
+  content         String               @db.Text // text or tool-call JSON
   toolName        String?
   toolInput       Json?
   toolResult      Json?
-  pendingActionId String?  // when role=approval
-  createdAt       DateTime  @default(now())
+  pendingActionId String? // when role=approval
+  createdAt       DateTime             @default(now())
 
-  conversation    AssistantConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  pendingAction   ActionApproval?       @relation(fields: [pendingActionId], references: [id], onDelete: SetNull)
-  feedback        CopilotFeedback[]
+  conversation  AssistantConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  pendingAction ActionApproval?       @relation(fields: [pendingActionId], references: [id], onDelete: SetNull)
+  feedback      CopilotFeedback[]
 
   @@index([conversationId, createdAt])
   @@map("assistant_messages")
@@ -2948,23 +2948,23 @@ model AssistantMessage {
 // approve. Defaults to 5-minute expiry so a forgotten card doesn't
 // haunt the dashboard.
 model ActionApproval {
-  id              String   @id @default(cuid())
-  tenantId        String
-  userId          String
-  toolName        String
-  toolInput       Json
-  status          ActionApprovalStatus @default(pending)
-  preview         String?  // human-readable summary shown in the UI
-  expiresAt       DateTime
-  createdAt       DateTime @default(now())
-  resolvedAt      DateTime?
-  resultSnapshot  Json?    // tool result if executed
-  resolvedById    String?  // user who approved/rejected (null if expired)
+  id             String               @id @default(cuid())
+  tenantId       String
+  userId         String
+  toolName       String
+  toolInput      Json
+  status         ActionApprovalStatus @default(pending)
+  preview        String? // human-readable summary shown in the UI
+  expiresAt      DateTime
+  createdAt      DateTime             @default(now())
+  resolvedAt     DateTime?
+  resultSnapshot Json? // tool result if executed
+  resolvedById   String? // user who approved/rejected (null if expired)
 
-  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user            User     @relation("ActionApprovalCreator", fields: [userId], references: [id], onDelete: Cascade)
-  resolvedBy      User?    @relation("ActionApprovalResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
-  messages        AssistantMessage[]
+  tenant     Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user       User               @relation("ActionApprovalCreator", fields: [userId], references: [id], onDelete: Cascade)
+  resolvedBy User?              @relation("ActionApprovalResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+  messages   AssistantMessage[]
 
   @@index([userId, status, expiresAt])
   @@index([tenantId, createdAt])
@@ -2983,20 +2983,41 @@ enum ActionApprovalStatus {
 // replies. Persisted so the platform team can review quality during
 // the soft-launch without forcing users to file a bug report.
 model CopilotFeedback {
-  id              String   @id @default(cuid())
-  tenantId        String
-  userId          String
-  messageId       String   // the assistant message being rated
-  rating          Int      // -1 = 👎, 1 = 👍
-  comment         String?  // optional free-text (max 500 chars)
-  createdAt       DateTime @default(now())
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String
+  messageId String // the assistant message being rated
+  rating    Int // -1 = 👎, 1 = 👍
+  comment   String? // optional free-text (max 500 chars)
+  createdAt DateTime @default(now())
 
-  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user            User     @relation("CopilotFeedbackAuthor", fields: [userId], references: [id], onDelete: Cascade)
-  message         AssistantMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  tenant  Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user    User             @relation("CopilotFeedbackAuthor", fields: [userId], references: [id], onDelete: Cascade)
+  message AssistantMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, createdAt])
   @@index([messageId])
   @@index([rating])
   @@map("copilot_feedback")
+}
+
+/// Product telemetry for the activation funnel.
+///
+/// There was none: the marketing site had Plausible and the app had
+/// nothing, so signup -> wizard -> first booking could not be measured and
+/// the claim that onboarding reduces 7-day churn was unverifiable. Kept
+/// deliberately small -- a name, an optional tenant, a JSON payload -- so
+/// adding an event is one line and never a migration.
+model ProductEvent {
+  id        String   @id @default(uuid())
+  /// Snake-case event name, e.g. `tenant_signed_up`, `first_booking_received`.
+  name      String
+  /// Null for events that happen before a tenant exists.
+  tenantId  String?
+  props     Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  @@index([name, createdAt])
+  @@index([tenantId, name])
+  @@map("product_events")
 }

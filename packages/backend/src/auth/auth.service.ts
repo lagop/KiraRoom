@@ -8,6 +8,7 @@ import {
 import { JwtService } from "@nestjs/jwt";
 import * as bcrypt from "bcryptjs";
 import { PrismaService } from "../common/prisma/prisma.service";
+import { ProductEventsService, PRODUCT_EVENTS } from "../common/telemetry/product-events.service";
 import { RegisterDto } from "./dto/register.dto";
 import { LoginDto } from "./dto/login.dto";
 import { UserRole } from "@prisma/client";
@@ -47,6 +48,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly auditLog: AuditLogService,
+    private readonly events: ProductEventsService,
   ) {}
 
   async register(
@@ -88,6 +90,12 @@ export class AuthService {
       ownerPassword: registerDto.password,
       ownerFirstName: firstName,
       ownerLastName: lastName,
+    });
+
+    // Funnel entry point: everything else in the activation funnel is
+    // measured relative to this event.
+    this.events.record(PRODUCT_EVENTS.TENANT_SIGNED_UP, createdTenant.id, {
+      language: registerDto.language ?? 'es',
     });
 
     const tokens = await this.generateTokens(

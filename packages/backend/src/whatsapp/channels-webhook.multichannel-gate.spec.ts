@@ -18,6 +18,13 @@ function makePrisma(rowsById: Record<string, any>) {
   } as any;
 }
 
+/**
+ * These tests exercise the multichannel gate, not signature verification.
+ * With no META_APP_SECRET the handler skips the HMAC check outside
+ * production, which is the path under test here.
+ */
+const stubConfig = () => ({ get: () => undefined }) as any;
+
 describe('ChannelsWebhookController H-4 multichannel gate', () => {
   const mockWhatsapp = {
     processInbound: jest.fn().mockResolvedValue(undefined),
@@ -54,6 +61,7 @@ describe('ChannelsWebhookController H-4 multichannel gate', () => {
     } as any;
     const ctrl = new ChannelsWebhookController(
       prisma,
+      stubConfig(),
       mockWhatsapp,
       mockTelegram,
       flags,
@@ -90,6 +98,7 @@ describe('ChannelsWebhookController H-4 multichannel gate', () => {
     } as any;
     const ctrl = new ChannelsWebhookController(
       prisma,
+      stubConfig(),
       mockWhatsapp,
       mockTelegram,
       flags,
@@ -128,6 +137,7 @@ describe('ChannelsWebhookController H-4 multichannel gate', () => {
     } as any;
     const ctrl = new ChannelsWebhookController(
       prisma,
+      stubConfig(),
       mockWhatsapp,
       mockTelegram,
       flags,
@@ -157,6 +167,7 @@ describe('ChannelsWebhookController H-4 multichannel gate', () => {
     } as any;
     const ctrl = new ChannelsWebhookController(
       prisma,
+      stubConfig(),
       mockWhatsapp,
       mockTelegram,
       flags,

@@ -216,10 +216,14 @@ function buildPrismaMock() {
   };
 }
 
+/** Telemetry is fire-and-forget; the detector only needs it to exist. */
+const stubEvents = () =>
+  ({ record: jest.fn(), recordOnce: jest.fn().mockResolvedValue(undefined) }) as any;
+
 describe("OnboardingDetectorService.detectAll", () => {
   it("returns all detectors false for an empty tenant", async () => {
     const m = buildPrismaMock();
-    const svc = new OnboardingDetectorService(m.prisma);
+    const svc = new OnboardingDetectorService(m.prisma, stubEvents());
     const result = await svc.detectAll("tenant-1");
     expect(result.workspace_business).toBe(false);
     expect(result.service_create).toBe(false);
@@ -256,7 +260,7 @@ describe("OnboardingDetectorService.detectAll", () => {
     m.state.widgetInstances.push({ id: "w1" });
     m.state.whatsAppConnections.push({ id: "wc1", isActive: true });
 
-    const svc = new OnboardingDetectorService(m.prisma);
+    const svc = new OnboardingDetectorService(m.prisma, stubEvents());
     const result = await svc.detectAll("tenant-1");
     expect(result.workspace_business).toBe(true);
     expect(result.service_create).toBe(true);
@@ -273,7 +277,7 @@ describe("OnboardingDetectorService.detectAll", () => {
       coverImage: "cover.png",
       description: "short",
     });
-    const svc = new OnboardingDetectorService(m.prisma);
+    const svc = new OnboardingDetectorService(m.prisma, stubEvents());
     const result = await svc.detectAll("tenant-1");
     expect(result.branding).toBe(false);
 
@@ -289,7 +293,7 @@ describe("OnboardingDetectorService.detectAll", () => {
       { id: "p1", isActive: true, workingHours: [{ day: "mon", from: "09:00", to: "17:00" }] },
       { id: "p2", isActive: true, workingHours: [] },
     );
-    const svc = new OnboardingDetectorService(m.prisma);
+    const svc = new OnboardingDetectorService(m.prisma, stubEvents());
     const result = await svc.detectAll("tenant-1");
     expect(result.schedule_set).toBe(false);
 
@@ -305,7 +309,7 @@ describe("OnboardingDetectorService.detectAll", () => {
       type: "appointment_reminder_24h",
       isActive: true,
     });
-    const svc = new OnboardingDetectorService(m.prisma);
+    const svc = new OnboardingDetectorService(m.prisma, stubEvents());
     expect((await svc.detectAll("tenant-1")).reminders_enabled).toBe(true);
 
     m.state.notificationTemplates = [
@@ -334,7 +338,7 @@ describe("OnboardingDetectorService.detectAll", () => {
       detectName: "doesNotExist",
       enabled: true,
     });
-    const svc = new OnboardingDetectorService(m.prisma);
+    const svc = new OnboardingDetectorService(m.prisma, stubEvents());
     const result = await svc.detectAll("tenant-1");
     expect(result.weird_step).toBe(false);
   });
@@ -343,7 +347,7 @@ describe("OnboardingDetectorService.detectAll", () => {
 describe("OnboardingDetectorService.markStepCompleted", () => {
   it("writes a 'done' entry in OnboardingState.steps", async () => {
     const m = buildPrismaMock();
-    const svc = new OnboardingDetectorService(m.prisma);
+    const svc = new OnboardingDetectorService(m.prisma, stubEvents());
     await svc.markStepCompleted("tenant-1", "service_create");
     const row = m.state.stateRows.get("tenant-1");
     expect(row.steps.service_create.status).toBe("done");
@@ -352,7 +356,7 @@ describe("OnboardingDetectorService.markStepCompleted", () => {
 
   it("is idempotent — calling twice doesn't reset completedAt", async () => {
     const m = buildPrismaMock();
-    const svc = new OnboardingDetectorService(m.prisma);
+    const svc = new OnboardingDetectorService(m.prisma, stubEvents());
     await svc.markStepCompleted("tenant-1", "service_create");
     const first = m.state.stateRows.get("tenant-1").steps.service_create
       .completedAt;
@@ -375,7 +379,7 @@ describe("OnboardingDetectorService.recomputeLinearStep", () => {
       logo: "logo.png",
     });
     m.state.services.push({ id: "svc-1" });
-    const svc = new OnboardingDetectorService(m.prisma);
+    const svc = new OnboardingDetectorService(m.prisma, stubEvents());
 
     // First detect: workspace_business passes, service_create passes, schedule_set fails
     // (no pros with hours) → currentStep should be 2 (third linear_required, 0-indexed)
@@ -410,7 +414,7 @@ describe("OnboardingDetectorService.recomputeLinearStep", () => {
       isActive: true,
       workingHours: [{ day: "mon", from: "09:00", to: "17:00" }],
     });
-    const svc = new OnboardingDetectorService(m.prisma);
+    const svc = new OnboardingDetectorService(m.prisma, stubEvents());
     await svc.detectAll("tenant-1");
     const row = m.state.stateRows.get("tenant-1");
     expect(row.finishedAt).toBeInstanceOf(Date);

@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, Req } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, Req, ForbiddenException } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
@@ -85,12 +85,19 @@ export class ClientsController {
   }
 
   @Get(":id")
-  @Public()
+  // Was @Public(): an unauthenticated GET that returned any client by
+  // UUID, taxId included, with no tenant check. No frontend caller used
+  // it. Now authenticated, tenant-scoped, and a client may only read
+  // their own record.
+  @Roles(UserRole.owner, UserRole.admin, UserRole.staff, UserRole.client)
   @ApiOperation({ summary: "Get client by ID" })
   @ApiResponse({ status: 200, description: "Client found" })
   @ApiResponse({ status: 404, description: "Client not found" })
-  async findOne(@Param("id", ParseUUIDPipe) id: string) {
-    return this.clientsService.findOne(id);
+  async findOne(@CurrentUser() user: any, @Param("id", ParseUUIDPipe) id: string) {
+    if (user.role === UserRole.client && user.id !== id) {
+      throw new ForbiddenException("A client may only read their own record");
+    }
+    return this.clientsService.findOne(user.tenantId, id);
   }
 
   @Put(":id")
@@ -99,10 +106,11 @@ export class ClientsController {
   @ApiResponse({ status: 200, description: "Client updated successfully" })
   @ApiResponse({ status: 404, description: "Client not found" })
   async update(
+    @CurrentUser() user: any,
     @Param("id", ParseUUIDPipe) id: string,
     @Body() updateClientDto: UpdateClientDto,
   ) {
-    return this.clientsService.update(id, updateClientDto);
+    return this.clientsService.update(user.tenantId, id, updateClientDto);
   }
 
   @Delete(":id")
@@ -110,7 +118,7 @@ export class ClientsController {
   @ApiOperation({ summary: "Delete a client" })
   @ApiResponse({ status: 200, description: "Client deleted successfully" })
   @ApiResponse({ status: 404, description: "Client not found" })
-  async remove(@Param("id", ParseUUIDPipe) id: string) {
-    return this.clientsService.remove(id);
+  async remove(@CurrentUser() user: any, @Param("id", ParseUUIDPipe) id: string) {
+    return this.clientsService.remove(user.tenantId, id);
   }
 }

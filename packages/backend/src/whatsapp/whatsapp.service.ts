@@ -2,7 +2,7 @@ import { Injectable, Logger, NotFoundException, BadRequestException } from "@nes
 import { PrismaService } from "../common/prisma/prisma.service";
 import { MetaCloudApiClient } from "./meta-cloud-api.client";
 import { ConfigService } from "@nestjs/config";
-import { createHmac } from "crypto";
+import { createHmac, timingSafeEqual } from "crypto";
 import { WhatsAppRecipientStatus, WhatsAppCampaignStatus } from "@prisma/client";
 import { MessageBundlesService } from "../message-bundles/message-bundles.service";
 
@@ -155,7 +155,11 @@ export class WhatsAppService {
     const expected =
       "sha256=" +
       createHmac("sha256", appSecret).update(payload).digest("hex");
-    return expected === signature;
+    // Constant-time compare: a plain !== leaks the position of the first
+    // differing byte, which is enough to forge a signature byte by byte.
+    const a = Buffer.from(expected);
+    const b = Buffer.from(signature);
+    return a.length === b.length && timingSafeEqual(a, b);
   }
 
   verifyChallenge(mode: string, token: string, challenge: string): string | null {

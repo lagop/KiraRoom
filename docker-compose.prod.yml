@@ -68,6 +68,55 @@ services:
       timeout: 5s
       retries: 5
 
+  # Nightly logical backups.
+  #
+  # There were none: no backup service, no cron, no pg_dump, no WAL
+  # archiving anywhere in the deploy, while docs/runbook.md documented a
+  # "Failure: Backup fails to run" scenario and a quarterly restore drill
+  # over backups nothing created. For a product holding client PII and
+  # invoices under a 4-year fiscal retention, that gap blocks the beta.
+  #
+  # Same image as the database so pg_dump version always matches the
+  # server. Custom format (-Fc) so a single table can be restored without
+  # replaying the whole dump.
+  postgres-backup:
+    image: postgres:15-alpine
+    container_name: kiraroom-postgres-backup-prod
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    volumes:
+      - postgres_backups:/backups
+    networks:
+      - kiraroom-network
+    restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        echo "[backup] service up, retention $${RETENTION_DAYS}d, dumping daily at 03:15 UTC"
+        while true; do
+          now=$$(date -u +%H%M)
+          if [ "$$now" = "0315" ]; then
+            stamp=$$(date -u +%Y%m%dT%H%M%SZ)
+            file="/backups/kiraroom-$$stamp.dump"
+            echo "[backup] starting $$file"
+            if pg_dump -h postgres -U kiraroom -d kiraroom -Fc -f "$$file.partial"; then
+              mv "$$file.partial" "$$file"
+              echo "[backup] ok $$file ($$(du -h "$$file" | cut -f1))"
+              find /backups -name "kiraroom-*.dump" -type f -mtime +$${RETENTION_DAYS} -delete
+            else
+              rm -f "$$file.partial"
+              echo "[backup] FAILED for $$stamp -- see runbook: Failure: Backup fails to run" >&2
+            fi
+            sleep 3600
+          fi
+          sleep 30
+        done
   # Redis
   redis:
     image: redis:7-alpine
@@ -216,6 +265,8 @@ services:
 
 volumes:
   postgres_data:
+    driver: local
+  postgres_backups:
     driver: local
   redis_data:
     driver: local
