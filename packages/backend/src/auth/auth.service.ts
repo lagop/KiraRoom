@@ -23,6 +23,11 @@ import { AuditLogService } from "../saas/audit-log.service";
 import { EmailService } from "../notifications/services/email.service";
 import { randomBytes } from "crypto";
 import { normalizePlan } from "@kira/shared";
+import {
+  parseJwtDuration,
+  DEFAULT_ACCESS_TOKEN_SECONDS,
+  DEFAULT_REFRESH_TOKEN_SECONDS,
+} from "../common/jwt-duration";
 
 export interface TokenResponse {
   accessToken: string;
@@ -606,11 +611,11 @@ export class AuthService {
     // legitimate actively-used user never sees a forced re-login).
     const accessTokenExpiresIn = parseJwtDuration(
       process.env.JWT_EXPIRES_IN,
-      8 * 60 * 60,
+      DEFAULT_ACCESS_TOKEN_SECONDS,
     );
     const refreshTokenExpiresIn = parseJwtDuration(
       process.env.JWT_REFRESH_EXPIRES_IN,
-      7 * 24 * 60 * 60,
+      DEFAULT_REFRESH_TOKEN_SECONDS,
     );
 
     const accessToken = this.jwtService.sign(payload, {
@@ -637,24 +642,3 @@ export class AuthService {
  *   - suffixed strings ("30s", "15m", "1h", "7d") → seconds.
  *   - undefined / blank → fallback default.
  */
-function parseJwtDuration(
-  raw: string | undefined,
-  fallbackSeconds: number,
-): number {
-  if (!raw) return fallbackSeconds;
-  const trimmed = raw.trim();
-  if (!trimmed) return fallbackSeconds;
-  const match = /^(\d+)\s*([smhd])?$/i.exec(trimmed);
-  if (!match) return fallbackSeconds;
-  const n = parseInt(match[1], 10);
-  const unit = (match[2] || "s").toLowerCase();
-  const mult =
-    unit === "s"
-      ? 1
-      : unit === "m"
-        ? 60
-        : unit === "h"
-          ? 60 * 60
-          : 24 * 60 * 60;
-  return n * mult;
-}

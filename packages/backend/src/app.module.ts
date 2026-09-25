@@ -2,6 +2,10 @@
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import { APP_GUARD } from "@nestjs/core";
 import { JwtModule } from "@nestjs/jwt";
+import {
+  parseJwtDuration,
+  DEFAULT_ACCESS_TOKEN_SECONDS,
+} from "./common/jwt-duration";
 import { PassportModule } from "@nestjs/passport";
 import { ThrottlerModule } from "@nestjs/throttler";
 import { PrismaModule } from "./common/prisma/prisma.module";
@@ -99,8 +103,12 @@ import { PublicModule } from "./public-site/public.module";
       useFactory: async (configService: ConfigService) => ({
         secret: configService.get<string>("JWT_SECRET"),
         signOptions: {
-          expiresIn:
-            parseInt(configService.get<string>("JWT_EXPIRES_IN") || "15") * 60,
+          // Same parser as AuthService. This used to be
+          // parseInt(JWT_EXPIRES_IN) * 60, which read "8h" as 8 minutes.
+          expiresIn: parseJwtDuration(
+            configService.get<string>("JWT_EXPIRES_IN"),
+            DEFAULT_ACCESS_TOKEN_SECONDS,
+          ),
         },
       }),
       inject: [ConfigService],
