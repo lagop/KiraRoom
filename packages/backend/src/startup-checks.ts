@@ -224,3 +224,110 @@ export function validateOAuthStateSecretOrExit(
     exit(1);
   }
 }
+
+/**
+ * SEC-7: refresh tokens must be signed with their own key.
+ *
+ * `auth.service.ts` signs refresh tokens with an explicit
+ * `{ secret: process.env.JWT_REFRESH_SECRET }` and verifies them the same
+ * way. The variable was never set in production, and `@nestjs/jwt` treats
+ * `secret: undefined` as "not overridden": it falls back to the secret the
+ * JwtModule was registered with, which is JWT_SECRET.
+ *
+ * Verified against the installed @nestjs/jwt: with JWT_REFRESH_SECRET
+ * unset, a token minted as an ACCESS token verifies successfully as a
+ * REFRESH token. The two payloads are identical (`sub` + `role`), so only
+ * `expiresIn` distinguishes them, and `expiresIn` is not checked when
+ * refreshing.
+ *
+ * Consequence: a leaked 15-minute access token can be presented to
+ * POST /auth/refresh and exchanged for a fresh access + refresh pair,
+ * then again indefinitely. The short access-token lifetime -- the reason
+ * for having a separate refresh token at all -- buys nothing.
+ *
+ * Fix: require a distinct JWT_REFRESH_SECRET in production, and refuse to
+ * boot without one rather than falling back silently. Dev and test warn
+ * instead, and CI's existing ALLOW_WEAK_JWT_SECRET=1 opts out.
+ */
+export function assertJwtRefreshSecret(): Error | null {
+  if (process.env.ALLOW_WEAK_JWT_SECRET === '1') return null;
+
+  const minLength = Number(process.env.JWT_SECRET_LENGTH_MIN ?? 32);
+  const secret = process.env.JWT_REFRESH_SECRET ?? '';
+  const accessSecret = process.env.JWT_SECRET ?? '';
+  const isProd = process.env.NODE_ENV === 'production';
+
+  const explain =
+    'Refresh tokens are signed with JWT_REFRESH_SECRET; when it is unset, ' +
+    '@nestjs/jwt silently signs and verifies them with JWT_SECRET instead, ' +
+    'so any access token can be redeemed at POST /auth/refresh for a new ' +
+    'token pair. Generate one with: openssl rand -base64 48';
+
+  if (!secret) {
+    if (isProd) {
+      return new Error(`JWT_REFRESH_SECRET is required in production. ${explain}`);
+    }
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[WARN] JWT_REFRESH_SECRET is not set, so refresh tokens are signed with ' +
+        'JWT_SECRET and every access token doubles as a refresh token. ' +
+        'Do NOT deploy this build to production.',
+    );
+    return null;
+  }
+
+  if (secret === accessSecret) {
+    return new Error(
+      'JWT_REFRESH_SECRET must differ from JWT_SECRET. Sharing one key means ' +
+        'an access token is also a valid refresh token. ' +
+        'Generate a separate one with: openssl rand -base64 48',
+    );
+  }
+
+  if (secret.length < minLength) {
+    if (isProd) {
+      return new Error(
+        `JWT_REFRESH_SECRET must be at least ${minLength} characters in ` +
+          `production (got ${secret.length}). Generate with: openssl rand -base64 48`,
+      );
+    }
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[WARN] JWT_REFRESH_SECRET is shorter than ${minLength} chars ` +
+        `(${secret.length}). Dev/test only.`,
+    );
+    return null;
+  }
+
+  const placeholders = [
+    'change-this',
+    'your-super-secret',
+    'changeme',
+    'development-secret',
+    'replace-me',
+  ];
+  if (placeholders.some((p) => secret.toLowerCase().includes(p))) {
+    return new Error(
+      'JWT_REFRESH_SECRET appears to be a placeholder value. Replace it with a real random secret.',
+    );
+  }
+  if (/^(.)\1+$/.test(secret)) {
+    return new Error(
+      'JWT_REFRESH_SECRET appears to be a repeated character. Use a real random value.',
+    );
+  }
+
+  return null;
+}
+
+export function validateJwtRefreshSecretOrExit(exit = process.exit): void {
+  const err = assertJwtRefreshSecret();
+  if (err) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[FATAL] ${err.message}\n` +
+        `       Generate a new one with: openssl rand -base64 48`,
+    );
+    exit(1);
+  }
+}

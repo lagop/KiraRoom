@@ -7,6 +7,7 @@ import { Logger as PinoLogger } from "nestjs-pino";
 import { AppModule } from "./app.module";
 import {
   validateJwtSecretOrExit,
+  validateJwtRefreshSecretOrExit,
   validateStripeWebhookConfigOrExit,
   validateOAuthStateSecretOrExit,
 } from "./startup-checks";
@@ -91,6 +92,11 @@ async function bootstrap(): Promise<void> {
   // SEC-1: fail fast on a missing or weak JWT secret. Tests can opt
   // out via ALLOW_WEAK_JWT_SECRET=1.
   validateJwtSecretOrExit();
+
+  // SEC-7: refuse to boot in production without a distinct
+  // JWT_REFRESH_SECRET. Unset, @nestjs/jwt signs refresh tokens with
+  // JWT_SECRET, which makes every access token a valid refresh token.
+  validateJwtRefreshSecretOrExit();
 
   // SEC-3: refuse to boot if Stripe is half-configured (secret key set,
   // webhook secret missing) in production. Without this, the webhook
