@@ -136,6 +136,33 @@ If rotating `MINIMAX_API_KEY`, also update the per-tenant
 (Hostinger UI doesn't expose DB rows, so this requires SSH + psql
 or `npx prisma studio`).
 
+## First deploy: creating the platform owner
+
+A fresh database has no users, so nobody can sign in to the SaaS console. After
+the stack is up and `migrate deploy` has created the schema:
+
+```bash
+docker exec -e SAAS_OWNER_EMAIL='you@yourdomain.com' \
+  -e SAAS_OWNER_PASSWORD='<12+ chars>' \
+  kiraroom-backend-prod node dist/scripts/seed-saas-owner.js
+```
+
+It creates the `platform` tenant and one `saas_owner` user, and is idempotent —
+re-running it resets that user's password rather than duplicating the account.
+
+Two things it refuses to do: run without both variables, and accept the old
+placeholder values that used to be hardcoded (`saasadmin@example.com` /
+`YourSecurePassword123!`). `saas_owner` reads across every tenant on the
+platform, so it does not get a default password.
+
+**Not** `npx ts-node prisma/seed-saas-owner.ts`: ts-node and typescript are
+devDependencies and are not in the production image, so npx tries to fetch
+ts-node from the network and then fails on the missing typescript. The script is
+compiled into `dist/` precisely so plain `node` can run it.
+
+Note that `docker exec -e` puts the password in the host's process list while it
+runs, and in your shell history. Pick it accordingly.
+
 ## PagerDuty-equivalent (zero-budget)
 
 Until revenue justifies PagerDuty (€21/user/mo), use:
