@@ -25,6 +25,11 @@ import {
 } from "../saas.helpers";
 import { AcceptInviteDto } from "./dto/accept-invite.dto";
 import { CreateInviteDto } from "./dto/create-invite.dto";
+import {
+  parseJwtDuration,
+  DEFAULT_ACCESS_TOKEN_SECONDS,
+  DEFAULT_REFRESH_TOKEN_SECONDS,
+} from "../../common/jwt-duration";
 
 const INVITE_TTL_DAYS = 7;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -313,13 +318,17 @@ export class InvitesService {
       // After the tenant + user are committed, mint a JWT pair for
       // instant dashboard access. Mirrors AuthService.generateTokens
       // so the frontend login flow is identical.
-      const accessExpiresIn =
-        parseInt(process.env.JWT_EXPIRES_IN?.replace("m", "") || "15") * 60;
-      const refreshExpiresIn =
-        parseInt(process.env.JWT_REFRESH_EXPIRES_IN?.replace("d", "") || "7") *
-        24 *
-        60 *
-        60;
+      // Same parser as AuthService.generateTokens. This used to strip an
+      // "m" and multiply by 60, so the documented JWT_EXPIRES_IN=8h minted
+      // an 8-MINUTE token and logged the new owner out mid-onboarding.
+      const accessExpiresIn = parseJwtDuration(
+        process.env.JWT_EXPIRES_IN,
+        DEFAULT_ACCESS_TOKEN_SECONDS,
+      );
+      const refreshExpiresIn = parseJwtDuration(
+        process.env.JWT_REFRESH_EXPIRES_IN,
+        DEFAULT_REFRESH_TOKEN_SECONDS,
+      );
 
       const payload = {
         sub: result.userId,
