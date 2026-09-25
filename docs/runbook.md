@@ -144,7 +144,7 @@ Until revenue justifies PagerDuty (€21/user/mo), use:
    alerts. The Telegram bot pings your phone within 30 seconds of a
    failed health probe.
 2. **Critical probes** (every 60s):
-   - `GET https://api.kiraroom.net/healthz` — API health
+   - `GET https://api.kiraroom.net/api/v1/ping` — API health
    - `POST https://api.kiraroom.net/api/v1/auth/login` with test
      credentials — auth + DB health
 3. **Warning probes** (every 5min):
@@ -153,7 +153,27 @@ Until revenue justifies PagerDuty (€21/user/mo), use:
 
 ## Operational runbooks
 
-### Failure: API down (5xx response on healthz)
+### Failure: API down (no response on /api/v1/ping)
+
+**First, check for the unhealthy-container trap.** Traefik skips containers
+whose healthcheck is failing, so an unhealthy backend produces a 404 served
+with `CN=TRAEFIK DEFAULT CERT` rather than a 502 — it looks like a TLS or DNS
+problem and is neither. Confirm with:
+
+```bash
+docker ps -a | grep kiraroom-backend-prod
+curl -sk -o /dev/null -w "%{http_code}\n" https://api.kiraroom.net/api/v1/ping
+echo | openssl s_client -connect api.kiraroom.net:443 2>/dev/null | openssl x509 -noout -issuer
+```
+
+An `Up (unhealthy)` container plus a `TRAEFIK DEFAULT CERT` issuer means the
+router was never registered. The container is running; the probe is what
+failed.
+
+This happened in September 2026: `/api/v1/ping` was not `@Public()`, so the
+global JWT guard answered 401, `wget --spider` treated that as failure, and the
+API was unreachable for three days while the process itself was perfectly
+healthy. `health-endpoint-public.l4.spec.ts` now guards against it.
 
 1. SSH into the VPS as `kiraroom` (`ssh kiraroom@<vps-ip>`).
 2. `docker ps -a` — is the backend container running? Look for
@@ -366,7 +386,7 @@ next step, and are what the quarterly restore drill below should exercise.
    `docker exec kiraroom-certbot certbot renew --force-renewal`.
 3. Reload nginx to pick up the new cert:
    `docker exec kiraroom-nginx-prod nginx -s reload`.
-4. Verify: `curl -I https://api.kiraroom.net/healthz`.
+4. Verify: `curl -I https://api.kiraroom.net/api/v1/ping`.
 
 ## Quarterly restore drill
 
