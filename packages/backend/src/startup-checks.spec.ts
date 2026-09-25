@@ -1,6 +1,8 @@
 import {
   validateJwtSecretOrExit,
   assertJwtSecret,
+  assertJwtRefreshSecret,
+  validateJwtRefreshSecretOrExit,
   assertStripeWebhookConfig,
   validateStripeWebhookConfigOrExit,
   assertOAuthStateSecret,
@@ -372,6 +374,127 @@ describe('OAUTH_STATE_SECRET startup validator', () => {
       const exit = jest.fn();
       validateOAuthStateSecretOrExit(exit as any);
       expect(exit).not.toHaveBeenCalled();
+    });
+  });
+});
+
+/**
+ * SEC-7: refresh tokens must not be signed with the access-token key.
+ *
+ * The production symptom was JWT_REFRESH_SECRET never reaching the
+ * container, which makes @nestjs/jwt fall back to JWT_SECRET and lets any
+ * access token be redeemed at POST /auth/refresh. These cases pin the
+ * validator that now refuses to boot in that state.
+ */
+
+const REFRESH_ENV_KEYS = [
+  'JWT_SECRET',
+  'JWT_REFRESH_SECRET',
+  'JWT_SECRET_LENGTH_MIN',
+  'ALLOW_WEAK_JWT_SECRET',
+  'NODE_ENV',
+];
+
+function withCleanRefreshEnv<T>(fn: () => T): T {
+  const saved: Record<string, string | undefined> = {};
+  for (const k of REFRESH_ENV_KEYS) saved[k] = process.env[k];
+  for (const k of REFRESH_ENV_KEYS) delete process.env[k];
+  try {
+    return fn();
+  } finally {
+    for (const k of REFRESH_ENV_KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  }
+}
+
+const STRONG_A = 'wKq4pM2vX8rT6yB1nZ5cL9jH3dF7sG0aQeRtYuIoPaSdFgHj';
+const STRONG_B = 'zXcVbNmAsDfGhJkLqWeRtYuIoP1234567890AbCdEfGhIjKl';
+
+describe('SEC-7: assertJwtRefreshSecret (L-4)', () => {
+  it('refuses to boot in production when JWT_REFRESH_SECRET is missing', () => {
+    withCleanRefreshEnv(() => {
+      process.env.NODE_ENV = 'production';
+      process.env.JWT_SECRET = STRONG_A;
+      const err = assertJwtRefreshSecret();
+      expect(err).toBeInstanceOf(Error);
+      expect(err?.message).toContain('JWT_REFRESH_SECRET is required');
+      // The message has to explain the consequence, not just the gap.
+      expect(err?.message).toContain('/auth/refresh');
+    });
+  });
+
+  it('warns but boots outside production when it is missing', () => {
+    withCleanRefreshEnv(() => {
+      process.env.NODE_ENV = 'development';
+      process.env.JWT_SECRET = STRONG_A;
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+      expect(assertJwtRefreshSecret()).toBeNull();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('JWT_REFRESH_SECRET is not set'),
+      );
+      warn.mockRestore();
+    });
+  });
+
+  it('rejects a refresh secret identical to JWT_SECRET, in any environment', () => {
+    for (const env of ['production', 'development']) {
+      withCleanRefreshEnv(() => {
+        process.env.NODE_ENV = env;
+        process.env.JWT_SECRET = STRONG_A;
+        process.env.JWT_REFRESH_SECRET = STRONG_A;
+        const err = assertJwtRefreshSecret();
+        expect(err).toBeInstanceOf(Error);
+        expect(err?.message).toContain('must differ from JWT_SECRET');
+      });
+    }
+  });
+
+  it('rejects a short refresh secret in production', () => {
+    withCleanRefreshEnv(() => {
+      process.env.NODE_ENV = 'production';
+      process.env.JWT_SECRET = STRONG_A;
+      process.env.JWT_REFRESH_SECRET = 'tooshort';
+      expect(assertJwtRefreshSecret()?.message).toContain('at least 32 characters');
+    });
+  });
+
+  it('rejects a placeholder refresh secret', () => {
+    withCleanRefreshEnv(() => {
+      process.env.NODE_ENV = 'production';
+      process.env.JWT_SECRET = STRONG_A;
+      process.env.JWT_REFRESH_SECRET = 'change-this-refresh-secret-before-deploying';
+      expect(assertJwtRefreshSecret()?.message).toContain('placeholder');
+    });
+  });
+
+  it('accepts a distinct strong refresh secret in production', () => {
+    withCleanRefreshEnv(() => {
+      process.env.NODE_ENV = 'production';
+      process.env.JWT_SECRET = STRONG_A;
+      process.env.JWT_REFRESH_SECRET = STRONG_B;
+      expect(assertJwtRefreshSecret()).toBeNull();
+    });
+  });
+
+  it('honours the ALLOW_WEAK_JWT_SECRET escape hatch that CI already sets', () => {
+    withCleanRefreshEnv(() => {
+      process.env.NODE_ENV = 'production';
+      process.env.ALLOW_WEAK_JWT_SECRET = '1';
+      expect(assertJwtRefreshSecret()).toBeNull();
+    });
+  });
+
+  it('exits the process when the check fails', () => {
+    withCleanRefreshEnv(() => {
+      process.env.NODE_ENV = 'production';
+      process.env.JWT_SECRET = STRONG_A;
+      const error = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+      const exit = jest.fn();
+      validateJwtRefreshSecretOrExit(exit as unknown as typeof process.exit);
+      expect(exit).toHaveBeenCalledWith(1);
+      error.mockRestore();
     });
   });
 });
