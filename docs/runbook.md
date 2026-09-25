@@ -15,6 +15,7 @@
 | Database host | Hostinger VPS, **NOT** exposed to internet |
 | Deploy method | Hostinger hPanel → VPS → Docker Manager → Compose URL |
 | Compose source | `https://raw.githubusercontent.com/lagop/KiraRoom/main/docker-compose.prod.yml` |
+| Env vars the operator sets | `ops/deploy/.env.production.hostinger` -- they reach a container **only** if that service forwards them in the compose |
 | Database backup retention | 30 days hot |
 | WAL archive retention | 30 days |
 | Sentry-compatible error tracking | GlitchTip self-hosted at `https://glitchtip.kiraroom.net` |
@@ -37,11 +38,67 @@ Every push to `main` deploys via **Hostinger Docker Manager** with zero CI deplo
    ```
    Click **Deploy**.
 4. **Hostinger clones the repo, runs `docker compose up -d --build`**
-   with the env vars you've entered in the UI for each service. First
+   with the env vars you have entered in the UI. Those values are the
+   *deploy* environment: compose substitutes them into
+   `docker-compose.prod.yml`, but a container only receives one if that
+   service lists it under `environment:`. See **Environment variables
+   reach a container only if the compose forwards them** below. First
    build takes ~5–10 min (Prisma + Next.js); subsequent rebuilds are
    2–3 min thanks to Docker layer cache.
 5. **Smoke test**: visit `http://<vps-ip>:3000` (frontend) and
    `http://<vps-ip>:3001/api/v1/ping` (backend) before pointing DNS.
+
+### Environment variables reach a container only if the compose forwards them
+
+This is the single most expensive thing to get wrong here, so it has its
+own section.
+
+Setting `FOO=bar` in Hostinger's Environments box does **not** put `FOO`
+into any container. It puts it into the environment compose itself runs
+with. The backend sees `FOO` only because `docker-compose.prod.yml` says:
+
+```yaml
+  backend:
+    environment:
+      FOO: ${FOO:-}
+```
+
+For a long time it did not. The compose forwarded 11 variables while
+`ops/deploy/.env.production.hostinger` documented 54, so 40+ values were
+set correctly in the UI and silently ignored. Login failed with
+"Failed to fetch" because `CORS_ALLOWED_ORIGINS` never arrived and the
+allow-list fell back to `http://localhost:3000`; e-mail, Sentry, SMS and
+the Meta webhook signature check had simply never been on.
+
+To see what a container actually has:
+
+```bash
+docker exec kiraroom-backend-prod printenv | sort
+```
+
+`packages/backend/src/deploy-env-forwarding.spec.ts` now fails the build
+when the template and the compose disagree, so this should not recur. If
+that spec fails, it is telling you a variable is documented but not
+forwarded (or required but not documented) -- not that the test is wrong.
+
+### Before deploying: secrets that now block boot
+
+The backend refuses to start, rather than running insecurely, when any of
+these is missing in production. A refusing container restart-loops, never
+reaches `healthy`, and Traefik therefore drops its router and serves a
+404 with a self-signed certificate -- i.e. it looks exactly like the
+outage in **Failure: API down**.
+
+| Variable | Generate with | Why it blocks boot |
+|---|---|---|
+| `JWT_SECRET` | `openssl rand -base64 48` | Weak or placeholder secrets let anyone mint tokens for any user |
+| `JWT_REFRESH_SECRET` | `openssl rand -base64 48` | Must differ from `JWT_SECRET`. Unset, @nestjs/jwt signs refresh tokens with `JWT_SECRET`, so any access token can be redeemed at `/auth/refresh` for a fresh pair, indefinitely |
+| `OAUTH_STATE_SECRET` | `openssl rand -base64 48` | Signs the accounting OAuth `state` parameter |
+| `STRIPE_WEBHOOK_SECRET` | Stripe dashboard | Only when `STRIPE_SECRET_KEY` is set; without it the webhook accepts unsigned events |
+
+So: **add the variable to Hostinger Environments first, then redeploy.**
+Doing it in the other order produces a stack that looks deployed and
+answers nothing.
 
 ### Updating after that
 
