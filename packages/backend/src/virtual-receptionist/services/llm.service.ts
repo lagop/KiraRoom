@@ -6,6 +6,7 @@ import { LLMProvider, LLMGenerationConfig, LLMCompletion } from '@kira/shared';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { FAQService } from './faq.service';
 import { FeatureFlagService } from '../../common/feature-flags/feature-flag.service';
+import { LlmUsageService } from '../../common/telemetry/llm-usage.service';
 import {
   getSystemPrompt,
   getDynamicContext,
@@ -120,6 +121,7 @@ export class LLMService {
     private readonly faqService: FAQService,
     private readonly flags: FeatureFlagService,
     private readonly platformLlmConfig: PlatformLlmConfigService,
+    private readonly llmUsage: LlmUsageService,
   ) {
     // Initialize retry configuration from environment
     this.retryConfig = {
@@ -205,11 +207,20 @@ export class LLMService {
 
     const startTime = Date.now();
 
+    // The current date and time used to live inside the system prompt, which
+    // made that prompt byte-different on every single request and meant
+    // provider-side prompt caching could never hit -- the system prompt is
+    // otherwise stable per salon and is the largest part of the input. It now
+    // rides on the user turn instead: same information for the model, full
+    // precision, cacheable prefix. Sent, not persisted, so the stored
+    // conversation stays clean.
+    const promptWithClock = `[${new Date().toISOString()}]\n${prompt}`;
+
     try {
       // Try with retry logic for transient errors
       const completion = await this.executeWithRetry(
         () =>
-          provider.generateCompletion(systemPrompt, conversationHistory, config, prompt, {
+          provider.generateCompletion(systemPrompt, conversationHistory, config, promptWithClock, {
             tools: options?.tools,
             executeTool: options?.executeTool,
             maxToolIterations: options?.maxToolIterations ?? 5,
@@ -237,6 +248,40 @@ export class LLMService {
           `LLM response truncated by maxTokens for salon ${salonId} (provider=${providerType}, model=${completion.model}). ` +
             `Increase LLM_MAX_TOKENS or shorten the system prompt.`,
         );
+      }
+
+      // Cost attribution. Without this the only measure of LLM spend is a
+      // count of answered messages, which says nothing about cost: that
+      // depends on context length and on how much of it the prompt cache
+      // served. Fire-and-forget on purpose.
+      if (salonId && completion.usage) {
+        const u = completion.usage as {
+          promptTokens?: number;
+          completionTokens?: number;
+          cachedInputTokens?: number;
+          cacheWriteTokens?: number;
+        };
+        this.llmUsage.record({
+          tenantId: salonId,
+          provider: String(providerType),
+          model: completion.model ?? config.model,
+          inputTokens: u.promptTokens ?? 0,
+          outputTokens: u.completionTokens ?? 0,
+          cachedInputTokens: u.cachedInputTokens ?? 0,
+          cacheWriteTokens: u.cacheWriteTokens ?? 0,
+        });
+
+        // Cache effectiveness is the one number that tells you whether the
+        // prefix is still stable. A run of zeroes means something started
+        // varying inside the system prompt again.
+        const cached = u.cachedInputTokens ?? 0;
+        const fresh = u.promptTokens ?? 0;
+        if (cached + fresh > 0) {
+          this.logger.debug(
+            `prompt cache: ${cached}/${cached + fresh} input tokens served from cache ` +
+              `(salon ${salonId}, model ${completion.model ?? config.model})`,
+          );
+        }
       }
 
       return {
@@ -600,7 +645,6 @@ const dynamicContext = getDynamicContext(language, {
       services: [],
       professionals: [],
       faqs: [],
-      currentDatetime: new Date().toISOString(),
     });
 
     return baseSystem + this.personaSuffix(context.persona) + '\n\n' + dynamicContext;

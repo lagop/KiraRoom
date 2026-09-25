@@ -1,12 +1,8 @@
-// Single source of truth for plan prices, in EUR. Mirrored in
-// packages/shared/src/types/subscription.ts so the frontend can render
-// the same numbers without a round trip. Keeping this and the shared
-// copy aligned is the responsibility of `rev 3: plan catalog` review.
-export const PLAN_PRICES: Record<string, number> = {
-  esencial: 29,
-  pro: 59,
-  empresa: 119,
-};
+// Plan prices come from @kira/shared. This file used to declare its own
+// copy -- 29 / 59 / 119, an earlier pricing revision -- and "keeping this
+// and the shared copy aligned" was left to a review that never caught it.
+// Re-exported rather than deleted so existing imports keep working.
+export { PLAN_PRICES } from "@kira/shared";
 
 export const IMPERSONATION_TTL_SECONDS = 60;
 export const IMPERSONATION_AUDIENCE = "impersonation";

@@ -11,10 +11,11 @@ on:
       - main
       - develop
       - 'hotfix/**'
+  # Every pull request, whatever its base. It used to list only main and
+  # develop, which meant a stacked PR -- one opened against another feature
+  # branch -- got no checks at all and looked unverified for the wrong
+  # reason. Push events stay limited to the long-lived branches below.
   pull_request:
-    branches:
-      - main
-      - develop
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -208,6 +209,20 @@ jobs:
         run: |
           cd packages/backend
           npx eslint "src/**/*.ts" --max-warnings=999
+      # Dependency vulnerabilities were never checked: the July security
+      # self-review noted npm audit had not been run and that it should be
+      # added here, and it never was. The production tree currently reports
+      # high-severity advisories, so this starts as a report rather than a
+      # gate -- it prints the summary and the high/critical list on every PR
+      # without blocking. Flip continue-on-error to false once the backlog is
+      # down, so a NEW advisory fails the build.
+      - name: Audit production dependencies
+        continue-on-error: true
+        run: |
+          cd packages/backend
+          npm audit --omit=dev || true
+          echo "--- high and critical only ---"
+          npm audit --omit=dev --audit-level=high
 
   lint-frontend:
     name: Lint frontend

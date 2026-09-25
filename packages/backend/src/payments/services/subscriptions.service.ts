@@ -277,6 +277,31 @@ export class SubscriptionsService {
 
   // ============ HELPERS ============
 
+  /**
+   * Stripe Checkout tax options.
+   *
+   * Returns the empty object unless STRIPE_TAX_ENABLED is set, because
+   * automatic_tax needs Stripe Tax active and an origin address configured
+   * in the Stripe dashboard. Sending it before that is done makes every
+   * checkout fail, so the default is the previous behaviour.
+   *
+   * With the flag on: Stripe computes Spanish VAT, collects the customer's
+   * tax id (the NIF a salon needs to reclaim it), and reverse-charges
+   * correctly for EU business customers outside Spain.
+   */
+  private taxOptions(): Record<string, unknown> {
+    const enabled = String(
+      this.configService.get("STRIPE_TAX_ENABLED", ""),
+    ).toLowerCase();
+    if (enabled !== "true" && enabled !== "1") return {};
+    return {
+      automatic_tax: { enabled: true },
+      tax_id_collection: { enabled: true },
+      customer_update: { name: "auto", address: "auto" },
+    };
+  }
+
+
   /** Normalize a plan id (legacy aliases -> rev3). */
   normalizePlan(plan: string | null | undefined): PlanId {
     if (!plan) return 'esencial';
@@ -456,6 +481,17 @@ export class SubscriptionsService {
       },
       success_url: `${this.configService.get('FRONTEND_URL', 'http://localhost:3000')}/dashboard/billing?subscription=success`,
       cancel_url: `${this.configService.get('FRONTEND_URL', 'http://localhost:3000')}/dashboard/billing?subscription=cancelled`,
+      // VAT (H5). Nothing added the 21% or collected a NIF, so a product
+      // whose whole pitch is Spanish tax compliance was not charging tax on
+      // its own B2B invoices. The pricing page says "precios sin IVA", which
+      // makes the omission worse, not better: the customer was never shown a
+      // total they could reclaim.
+      //
+      // Behind a flag because `automatic_tax` requires Stripe Tax to be
+      // switched on and an origin address set in the Stripe dashboard --
+      // enabling it in code first makes every checkout fail. Turn it on in
+      // Stripe, then set STRIPE_TAX_ENABLED=true.
+      ...this.taxOptions(),
     });
 
     return {

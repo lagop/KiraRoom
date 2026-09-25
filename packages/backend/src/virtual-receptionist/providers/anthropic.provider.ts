@@ -87,9 +87,27 @@ export class AnthropicProvider {
       const temperature = config.temperature;
       const topP = config.topP;
 
+      // Prompt caching. The system prompt is the largest part of the input
+      // and is stable per salon, so it is the natural cache prefix: a read
+      // costs roughly a tenth of a fresh input token. This only works
+      // because the current datetime was moved out of the system prompt and
+      // onto the user turn -- while it was in here the prompt differed on
+      // every request and nothing could ever be cached.
+      //
+      // Caching is a prefix match, so anything volatile must stay AFTER
+      // this block. Verify with usage.cache_read_input_tokens: if it stays
+      // zero across repeated requests, something upstream is invalidating
+      // the prefix.
+      const cacheableSystem = [
+        {
+          type: "text" as const,
+          text: systemPrompt,
+          cache_control: { type: "ephemeral" as const },
+        },
+      ];
       let response = await this.anthropic.messages.create({
         model: config.model,
-        system: systemPrompt,
+        system: cacheableSystem,
         messages,
         max_tokens: config.maxTokens,
         ...(useTopP
@@ -173,7 +191,7 @@ export class AnthropicProvider {
 
         response = await this.anthropic.messages.create({
           model: config.model,
-          system: systemPrompt,
+          system: cacheableSystem,
           messages,
           max_tokens: config.maxTokens,
           ...(useTopP
@@ -203,6 +221,8 @@ export class AnthropicProvider {
           promptTokens: response.usage.input_tokens,
           completionTokens: response.usage.output_tokens,
           totalTokens: response.usage.input_tokens + response.usage.output_tokens,
+          cachedInputTokens: (response.usage as any).cache_read_input_tokens ?? 0,
+          cacheWriteTokens: (response.usage as any).cache_creation_input_tokens ?? 0,
         },
         model: config.model,
         provider: LLMProvider.ANTHROPIC,

@@ -1,0 +1,17 @@
+# Loads every dashboard JSON in ops/grafana/ on startup.
+#
+# `kira-p2a-dashboard.json` had been sitting there with no Grafana to load it
+# and no Prometheus to feed it. This is the wiring that makes it show data.
+apiVersion: 1
+
+providers:
+  - name: KiraRoom
+    orgId: 1
+    folder: KiraRoom
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 60
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

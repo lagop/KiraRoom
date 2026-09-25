@@ -1,0 +1,63 @@
+# Alert rules for KiraRoom.
+#
+# There were none: the runbook described four Uptime Kuma probes (which
+# answer "is it up") and a Grafana dashboard (which answers "what happened,
+# if someone is looking"). Nothing answered "wake me up because something is
+# wrong". These are the four conditions worth a phone buzzing at 23:00.
+#
+# Thresholds are deliberate starting points for a closed beta with a handful
+# of tenants, not tuned values. Revisit once there is a week of real traffic.
+
+groups:
+  - name: kiraroom-availability
+    rules:
+      - alert: BackendDown
+        expr: up{job="kiraroom-backend"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: The API has not answered a scrape for 2 minutes
+          runbook: docs/runbook.md#failure-api-down-5xx-response-on-healthz
+
+  - name: kiraroom-receptionist
+    rules:
+      # The AI receptionist silently failing is worse than it being down: the
+      # salon believes clients are being answered.
+      - alert: NoInboundMessages
+        expr: |
+          sum(increase(vrm_channel_inbound_total[6h])) == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: No inbound message on any channel in 6 hours
+          description: >
+            Either genuinely quiet, or a webhook stopped being delivered.
+            Check the Meta and Telegram webhook registrations before assuming
+            it is quiet.
+
+      - alert: OutboundFailures
+        expr: |
+          sum(rate(vrm_channel_outbound_total{result="error"}[15m]))
+            /
+          sum(rate(vrm_channel_outbound_total[15m])) > 0.1
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: More than 10% of outbound channel sends are failing
+          description: >
+            Usually an expired page access token or a revoked bot token.
+
+      # Tenants losing messages to the plan gate is a commercial signal, not
+      # just a technical one: somebody is trying to use what they did not buy,
+      # or an add-on lapsed without anyone noticing.
+      - alert: GateBlockingTraffic
+        expr: |
+          sum(increase(vrm_channel_gate_blocked_total[1h])) > 20
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: The multichannel gate dropped more than 20 messages in an hour

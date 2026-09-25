@@ -231,9 +231,6 @@ R: {{answer}}
 - Política de cancelación: {{CANCELLATION_POLICY}}
 - Tiempo mínimo de aviso para cancelar: {{MIN_CANCEL_HOURS}} horas
 
----
-
-**Fecha y hora actual del sistema:** {{CURRENT_DATETIME}}
 `;
 
 export const DYNAMIC_CONTEXT_EN = `
@@ -284,9 +281,6 @@ A: {{answer}}
 - Cancellation policy: {{CANCELLATION_POLICY}}
 - Minimum notice to cancel: {{MIN_CANCEL_HOURS}} hours
 
----
-
-**Current system date and time:** {{CURRENT_DATETIME}}
 `;
 
 // ============================================================================
@@ -598,7 +592,6 @@ export function getDynamicContext(
     services: Array<{ name: string; category: string; duration: number; price: number; currency: string }>;
     professionals: Array<{ full_name: string; position: string; specialties: string }>;
     faqs: Array<{ question: string; answer: string }>;
-    currentDatetime: string;
   }
 ): string {
   const template = language === 'es' ? DYNAMIC_CONTEXT_ES : DYNAMIC_CONTEXT_EN;
@@ -612,8 +605,7 @@ export function getDynamicContext(
     .replace(/{{SALON_TIMEZONE}}/g, context.salonTimezone || 'Europe/Madrid')
     .replace(/{{SALON_HOURS}}/g, context.salonHours || 'Not available')
     .replace(/{{CANCELLATION_POLICY}}/g, context.cancellationPolicy || 'Contact the salon')
-    .replace(/{{MIN_CANCEL_HOURS}}/g, String(context.minCancelHours || 24))
-    .replace(/{{CURRENT_DATETIME}}/g, context.currentDatetime);
+    .replace(/{{MIN_CANCEL_HOURS}}/g, String(context.minCancelHours || 24));
 
   // Add services
   if (context.services && context.services.length > 0) {

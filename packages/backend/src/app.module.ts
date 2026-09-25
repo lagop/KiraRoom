@@ -55,7 +55,6 @@ import { AppointmentsController } from "./appointments/appointments.controller";
 import { AppointmentServicesController } from "./appointments/appointment-services.controller";
 import { ClientsController } from "./clients/clients.controller";
 import { ServicesController } from "./services/services.controller";
-import { SalonController } from "./salon/salon.controller";
 import { PaymentsController } from "./payments/payments.controller";
 
 // Services
@@ -64,7 +63,6 @@ import { AuthService } from "./auth/auth.service";
 import { AppointmentServicesService } from "./appointments/appointment-services.service";
 import { ClientsService } from "./clients/clients.service";
 import { ServicesService } from "./services/services.service";
-import { SalonService } from "./salon/salon.service";
 
 // Guards
 import { ThrottlerBehindProxyGuard } from "./common/guards/throttler-behind-proxy.guard";
@@ -230,7 +228,6 @@ import { PublicModule } from "./public-site/public.module";
     AppointmentServicesController,
     ClientsController,
     ServicesController,
-    SalonController,
     PaymentsController,
   ],
   providers: [
@@ -248,7 +245,6 @@ import { PublicModule } from "./public-site/public.module";
     ClientsService,
     AppointmentServicesService,
     ServicesService,
-    SalonService,
     JwtStrategy,
   ],
 })

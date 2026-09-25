@@ -39,8 +39,31 @@ const DEFAULT_STEP_DEFS: Array<{
     detectName: "allProsHaveWorkingHours",
   },
   {
+    // The CSV importer exists, with dry-run and a downloadable template,
+    // and the marketing site sells it as "migration in 30 seconds" -- but
+    // it was not in the checklist at all, so nobody was pointed at it.
+    key: "clients_import",
+    order: 5,
+    group: OnboardingGroup.checklist_optional,
+    titleI18nKey: "onboarding.clients_import.title",
+    descI18nKey: "onboarding.clients_import.desc",
+    href: "/dashboard/clients/import",
+    detectName: "hasClients",
+  },
+  {
+    // The real activation moment. Without it the checklist called
+    // onboarding finished for a salon that had never seen a booking.
+    key: "first_booking",
+    order: 6,
+    group: OnboardingGroup.checklist_optional,
+    titleI18nKey: "onboarding.first_booking.title",
+    descI18nKey: "onboarding.first_booking.desc",
+    href: "/dashboard/appointments",
+    detectName: "hasFirstBooking",
+  },
+  {
     key: "payment_method",
-    order: 4,
+    order: 9,
     group: OnboardingGroup.checklist_optional,
     titleI18nKey: "onboarding.payment_method.title",
     descI18nKey: "onboarding.payment_method.desc",
@@ -49,7 +72,7 @@ const DEFAULT_STEP_DEFS: Array<{
   },
   {
     key: "branding",
-    order: 5,
+    order: 10,
     group: OnboardingGroup.checklist_optional,
     titleI18nKey: "onboarding.branding.title",
     descI18nKey: "onboarding.branding.desc",
@@ -58,7 +81,7 @@ const DEFAULT_STEP_DEFS: Array<{
   },
   {
     key: "reminders_enabled",
-    order: 6,
+    order: 7,
     group: OnboardingGroup.checklist_optional,
     titleI18nKey: "onboarding.reminders_enabled.title",
     descI18nKey: "onboarding.reminders_enabled.desc",
@@ -67,7 +90,7 @@ const DEFAULT_STEP_DEFS: Array<{
   },
   {
     key: "widget_qr_setup",
-    order: 7,
+    order: 4,
     group: OnboardingGroup.checklist_optional,
     titleI18nKey: "onboarding.widget_qr_setup.title",
     descI18nKey: "onboarding.widget_qr_setup.desc",

@@ -87,6 +87,10 @@ export class OnboardingDetectorService {
         return this.hasCoverImageAndDescription(tenantId);
       case "hasActiveReminderTemplate":
         return this.hasActiveReminderTemplate(tenantId);
+      case "hasClients":
+        return this.hasClients(tenantId);
+      case "hasFirstBooking":
+        return this.hasFirstBooking(tenantId);
       case "hasWidgetOrQr":
         return this.hasWidgetOrQr(tenantId);
       case "hasWhatsAppConnection":
@@ -174,6 +178,17 @@ export class OnboardingDetectorService {
       },
     });
     return count > 0;
+  }
+
+  private async hasClients(tenantId: string): Promise<boolean> {
+    const count = await this.prisma.client.count({ where: { tenantId } });
+    return count >= 1;
+  }
+
+  /** The activation milestone: a real booking exists. */
+  private async hasFirstBooking(tenantId: string): Promise<boolean> {
+    const count = await this.prisma.appointment.count({ where: { tenantId } });
+    return count >= 1;
   }
 
   private async hasWidgetOrQr(tenantId: string): Promise<boolean> {

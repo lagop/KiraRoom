@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { randomBytes } from "crypto";
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
   UpdateChannelsConfigDto,
@@ -76,6 +77,21 @@ export class ChannelsConfigService {
       next.enabled = true;
     }
 
+    // Mint a webhook secret for Telegram, distinct from the bot token.
+    //
+    // The webhook used to authenticate inbound updates by comparing the
+    // header against the bot token itself, so anyone who saw that header --
+    // in a log, a proxy, an error report -- held full control of the bot.
+    // Telegram's `secret_token` is meant to be a separate value; this is it.
+    // Minted once and preserved across saves, so re-saving the wizard does
+    // not silently invalidate a webhook already registered with Telegram.
+    if (next.telegram?.botToken && !next.telegram.webhookSecret) {
+      next.telegram = {
+        ...next.telegram,
+        webhookSecret: randomBytes(32).toString("hex"),
+      };
+    }
+
     const nextFeatures = {
       ...currentFeatures,
       multichannel: next,
@@ -123,6 +139,7 @@ export class ChannelsConfigService {
               ? telegram.linkedChats
               : [],
             hasBotToken: !!telegram.botToken,
+            webhookSecret: telegram.webhookSecret,
           }
         : null,
     };

@@ -155,20 +155,18 @@ export class ChannelsWebhookController {
       res.json({ received: true });
       return;
     }
-    const botToken = await this.lookupTelegramBotTokenForChat(chatId);
-    if (!botToken) {
+    const expectedSecret = await this.lookupTelegramWebhookSecretForChat(chatId);
+    if (!expectedSecret) {
       this.logger.warn(
-        `Telegram webhook: no bot token registered for chat ${chatId}`,
+        `Telegram webhook: no secret registered for chat ${chatId}`,
       );
       res.json({ received: true });
       return;
     }
-    // Constant-time compare, and enforced in every environment -- it was
-    // production-only with a plain !==. Note the shared secret is still
-    // the bot token itself; giving Telegram its own secret_token needs a
-    // wizard + schema change and is tracked as S3 follow-up.
+    // Constant-time compare, enforced in every environment -- it used to be
+    // production-only with a plain !==.
     const given = Buffer.from(secret ?? '');
-    const want = Buffer.from(botToken);
+    const want = Buffer.from(expectedSecret);
     if (given.length !== want.length || !timingSafeEqual(given, want)) {
       throw new UnauthorizedException('Invalid Telegram secret token');
     }
@@ -231,7 +229,16 @@ export class ChannelsWebhookController {
     return this.pageIndex.get(pageId) ?? null;
   }
 
-  private async lookupTelegramBotTokenForChat(
+  /**
+   * The shared secret Telegram sends in X-Telegram-Bot-Api-Secret-Token.
+   *
+   * Prefers a dedicated `telegram.webhookSecret`, which is what Telegram
+   * intends: a value distinct from the bot token, so someone who sees the
+   * header in a log or a proxy cannot then control the bot. Falls back to
+   * the bot token for tenants configured before the wizard started minting
+   * a secret, so their webhook keeps working until they reconnect.
+   */
+  private async lookupTelegramWebhookSecretForChat(
     chatId: number | string,
   ): Promise<string | null> {
     // Placeholder: when the multichannel schema is wired, the bot
@@ -245,8 +252,9 @@ export class ChannelsWebhookController {
     for (const t of tenants) {
       const f = (t.features as any) ?? {};
       const tg = f?.multichannel?.telegram;
-      if (tg?.botToken && tg?.linkedChats?.includes(String(chatId))) {
-        return tg.botToken as string;
+      if (tg?.linkedChats?.includes(String(chatId))) {
+        const secret = (tg.webhookSecret ?? tg.botToken) as string | undefined;
+        if (secret) return secret;
       }
     }
     return null;
