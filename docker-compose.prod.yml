@@ -153,18 +153,99 @@ services:
   backend:
     image: kiraroom-backend:local
     container_name: kiraroom-backend-prod
+    # Every variable the backend reads must be listed here. A value set in
+    # Hostinger's "Environments" section reaches this container ONLY if it
+    # appears below -- compose does not pass the deploy environment through.
+    #
+    # This block used to list 11 variables while the operator template
+    # documented 54, so 40+ documented values were dead config. The visible
+    # symptom was login: CORS_ALLOWED_ORIGINS never arrived, the allow-list
+    # fell back to http://localhost:3000, and every call from
+    # https://app.kiraroom.net was rejected with "Failed to fetch". The same
+    # gap silently disabled e-mail, Sentry, SMS and the Meta webhook
+    # signature check.
+    #
+    # Deliberately NOT forwarded (see env-forwarding.spec.ts, which fails if
+    # this block and the template drift apart again):
+    #   ALLOW_WEAK_* / ALLOW_UNVERIFIED_*  dev escape hatches; forwarding
+    #                                      them would let a typo in the
+    #                                      deploy env disable the startup
+    #                                      security validators.
+    #   NEXT_PUBLIC_*                      baked into the frontend image at
+    #                                      build time, not read at runtime.
+    #   REGISTRY / IMAGE_*                 consumed by ops/deploy scripts.
+    #   SAAS_OWNER_*                       passed ad hoc to the seed command.
     environment:
       NODE_ENV: production
       PORT: 3001
       DATABASE_URL: postgresql://kiraroom:${POSTGRES_PASSWORD}@postgres:5432/kiraroom
       REDIS_URL: redis://redis:6379
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      # Public URLs. The code reads three different names for "the app's
+      # public base URL" (APP_BASE_URL in e-mails and Stripe redirects,
+      # FRONTEND_URL as the CORS fallback, FRONTEND_BASE_URL in the
+      # accounting OAuth callback and rebooking links). All three default to
+      # APP_BASE_URL here so the operator sets one value; unifying the names
+      # in the code is tracked separately.
+      APP_BASE_URL: ${APP_BASE_URL:-}
+      FRONTEND_URL: ${FRONTEND_URL:-${APP_BASE_URL:-}}
+      FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-${APP_BASE_URL:-}}
+      API_BASE_URL: ${API_BASE_URL:-}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+
+      # Auth
       JWT_SECRET: ${JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-15}
+      JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-7d}
       OAUTH_STATE_SECRET: ${OAUTH_STATE_SECRET}
       REBOOKING_OPT_OUT_SECRET: ${REBOOKING_OPT_OUT_SECRET}
+      ICS_TOKEN_SECRET: ${ICS_TOKEN_SECRET:-}
+
+      # LLM providers
+      DEFAULT_LLM_PROVIDER: ${DEFAULT_LLM_PROVIDER:-}
+      DEFAULT_LLM_MODEL: ${DEFAULT_LLM_MODEL:-}
+      LLM_FALLBACK_PROVIDER: ${LLM_FALLBACK_PROVIDER:-}
+      LLM_FALLBACK_MODEL: ${LLM_FALLBACK_MODEL:-}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-}
+      LLM_RETRY_BASE_DELAY_MS: ${LLM_RETRY_BASE_DELAY_MS:-}
+      LLM_RETRY_MAX_DELAY_MS: ${LLM_RETRY_MAX_DELAY_MS:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
+      MINIMAX_BASE_URL: ${MINIMAX_BASE_URL:-}
+
+      # Billing
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_TAX_ENABLED: ${STRIPE_TAX_ENABLED:-false}
+
+      # Notifications
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_PHONE_NUMBER: ${TWILIO_PHONE_NUMBER:-}
+      TWILIO_WHATSAPP_NUMBER: ${TWILIO_WHATSAPP_NUMBER:-}
+
+      # Meta (WhatsApp / Instagram / Messenger) + Google Business
+      META_APP_ID: ${META_APP_ID:-}
+      META_APP_SECRET: ${META_APP_SECRET:-}
+      META_API_VERSION: ${META_API_VERSION:-}
+      META_WEBHOOK_VERIFY_TOKEN: ${META_WEBHOOK_VERIFY_TOKEN:-}
       META_TOKEN_ENCRYPTION_KEY: ${META_TOKEN_ENCRYPTION_KEY}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-}
+
+      # Observability
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-}
+      SENTRY_RELEASE: ${IMAGE_TAG:-}
+      METRICS_SCRAPE_TOKEN: ${METRICS_SCRAPE_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy
