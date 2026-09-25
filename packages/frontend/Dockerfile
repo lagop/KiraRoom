@@ -31,15 +31,30 @@ ARG NEXT_PUBLIC_WS_URL=wss://api.kiraroom.net
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 ENV NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL}
 
-# Clean the Next.js SWC cache before building. Next.js downloads the
-# SWC binary (~70 MB tarball) to /root/.cache/next-swc on first build,
-# but if the download is interrupted the corrupted tarball persists
-# and subsequent builds fail with 'ZlibError: zlib: unexpected end
-# of file' on the SWC extraction. Clearing the cache forces a clean
-# re-download.
-RUN rm -rf /root/.cache/next-swc /tmp/next-* 2>/dev/null || true
-
-RUN cd /repo/packages/frontend && npm run build
+# No SWC download should happen here. The Linux SWC binaries are declared as
+# optionalDependencies of @kira/frontend and are in the lockfile, so `npm ci`
+# above installs the one matching this platform.
+#
+# They were missing: the lockfile was generated on Windows and carried only
+# @next/swc-win32-x64-msvc, so `npm ci` on Linux installed no binary at all and
+# Next fell back to downloading a ~70 MB tarball mid-build. That download is
+# flaky, and a truncated tarball fails the build with
+# 'ZlibError: zlib: unexpected end of file'. This used to be papered over by
+# deleting /root/.cache/next-swc before every build, which only guaranteed a
+# fresh roll of the dice each time.
+#
+# Fail loudly rather than silently downloading, so a lockfile regenerated on a
+# developer machine cannot quietly reintroduce the flake.
+ENV NEXT_IGNORE_INCORRECT_LOCKFILE=1
+RUN cd /repo/packages/frontend && \
+    if [ ! -d /repo/node_modules/@next/swc-linux-x64-musl ] && \
+       [ ! -d /repo/node_modules/@next/swc-linux-x64-gnu ]; then \
+      echo "ERROR: no Linux @next/swc binary installed. The lockfile is missing" >&2; \
+      echo "       them -- regenerate it with the optionalDependencies in" >&2; \
+      echo "       packages/frontend/package.json present." >&2; \
+      exit 1; \
+    fi && \
+    npm run build
 
 # Production stage: only .next + node_modules (for `next start`).
 FROM node:20-alpine AS production
