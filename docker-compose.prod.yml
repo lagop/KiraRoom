@@ -27,25 +27,34 @@
 #     STRIPE_WEBHOOK_SECRET   - from Stripe dashboard (webhook signing secret)
 #
 #   Network + Traefik (must match your Traefik setup):
-#     TRAEFIK_NETWORK         - the docker network Traefik is on
-#                               (run 'docker network ls' on the VPS to find
-#                                the name; likely 'root_default' or
-#                                'kairikos-portal_default' for this VPS)
-#     TRAEFIK_ENTRYPOINT_HTTPS - the HTTPS entrypoint name in Traefik
-#                                (typically 'websecure')
-#     TRAEFIK_CERTRESOLVER    - the Let's Encrypt resolver name in Traefik
-#                                (typically 'letsencrypt')
+#   Traefik (optional; the defaults are what this VPS actually runs):
+#     TRAEFIK_ENTRYPOINT_HTTPS - HTTPS entrypoint name. Default: websecure.
+#     TRAEFIK_CERTRESOLVER     - certificate resolver name. Default:
+#                                mytlschallenge. This file used to hardcode
+#                                'letsencrypt', which does not exist on this
+#                                VPS: Traefik then falls back to its own
+#                                self-signed cert and the browser refuses
+#                                every call. Verify against the resolver names
+#                                in Traefik's own static config before
+#                                changing it.
+#
+#   The Traefik network is 'root_default' (confirmed: root-traefik-1 is
+#   attached to it). It is NOT an env var, because a compose network key
+#   cannot be substituted -- the label and the attachment would drift apart.
+#   To move to another Traefik, edit the two occurrences in this file.
 #
 # To deploy:
-#   1. PR develop -> main, CI green, squash-merge.
-#   2. CI pushes backend + frontend images to ghcr.io/lagop/.
-#   3. Hostinger hPanel -> VPS -> Docker Manager -> Compose -> URL.
-#      Paste: https://raw.githubusercontent.com/lagop/KiraRoom/main/docker-compose.prod.yml
-#   4. In "Environments", add the 9 KEY/VALUE pairs (one by one in the UI).
-#   5. Click Deploy.
-#
-# To rotate Traefik config (different network/entrypoint):
-#   Just override the 3 TRAEFIK_* env vars in Hostinger Environments.
+#   1. PR -> main, CI green, merge.
+#   2. On the VPS: cd /opt/kiraroom && git pull && bash ops/deploy/build-images.sh
+#      (images are built on the VPS and tagged ':local'. CI does NOT push to a
+#      registry -- it only builds them as a smoke test.)
+#   3. Hostinger hPanel -> VPS -> Docker Manager -> redeploy the stack.
+#   4. First deploy only: create the platform owner account --
+#      docker exec -e SAAS_OWNER_EMAIL=... -e SAAS_OWNER_PASSWORD=... \
+#        kiraroom-backend-prod npx ts-node prisma/seed-saas-owner.ts
+#   5. Verify: the backend reaches 'Up (healthy)'. Traefik only registers a
+#      router for a healthy container, so an unhealthy one is invisible and
+#      answers 404 with a self-signed cert. See docs/runbook.md.
 #   No need to change this file.
 #
 services:
@@ -167,9 +176,9 @@ services:
       - "traefik.enable=true"
       - "traefik.docker.network=root_default"
       - "traefik.http.routers.kiraroom-api.rule=Host(`api.kiraroom.net`)"
-      - "traefik.http.routers.kiraroom-api.entrypoints=websecure"
+      - "traefik.http.routers.kiraroom-api.entrypoints=${TRAEFIK_ENTRYPOINT_HTTPS:-websecure}"
       - "traefik.http.routers.kiraroom-api.tls=true"
-      - "traefik.http.routers.kiraroom-api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.kiraroom-api.tls.certresolver=${TRAEFIK_CERTRESOLVER:-mytlschallenge}"
       - "traefik.http.services.kiraroom-api.loadbalancer.server.port=3001"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001/api/v1/ping"]
@@ -194,9 +203,9 @@ services:
       - "traefik.enable=true"
       - "traefik.docker.network=root_default"
       - "traefik.http.routers.kiraroom-app.rule=Host(`app.kiraroom.net`)"
-      - "traefik.http.routers.kiraroom-app.entrypoints=websecure"
+      - "traefik.http.routers.kiraroom-app.entrypoints=${TRAEFIK_ENTRYPOINT_HTTPS:-websecure}"
       - "traefik.http.routers.kiraroom-app.tls=true"
-      - "traefik.http.routers.kiraroom-app.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.kiraroom-app.tls.certresolver=${TRAEFIK_CERTRESOLVER:-mytlschallenge}"
       - "traefik.http.services.kiraroom-app.loadbalancer.server.port=3000"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000"]
@@ -257,10 +266,10 @@ services:
       - "traefik.enable=true"
       - "traefik.docker.network=root_default"
       - "traefik.http.routers.kiraroom-redirect.rule=Host(`kiraroom.net`) || Host(`www.kiraroom.net`)"
-      - "traefik.http.routers.kiraroom-redirect.entrypoints=websecure"
+      - "traefik.http.routers.kiraroom-redirect.entrypoints=${TRAEFIK_ENTRYPOINT_HTTPS:-websecure}"
       - "traefik.http.routers.kiraroom-redirect.tls=true"
-      - "traefik.http.routers.kiraroom-redirect.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.kiraroom-redirect.entrypoints.websecure.priority=1"
+      - "traefik.http.routers.kiraroom-redirect.tls.certresolver=${TRAEFIK_CERTRESOLVER:-mytlschallenge}"
+      - "traefik.http.routers.kiraroom-redirect.priority=1"
       - "traefik.http.services.kiraroom-redirect.loadbalancer.server.port=80"
 
 volumes:
