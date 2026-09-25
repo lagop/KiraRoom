@@ -82,7 +82,7 @@ export class LLMProviderFactory {
       case LLMProvider.LLAMA:
         return !!this.configService.get('LLAMA_API_KEY');
       case LLMProvider.MiniMax:
-        return !!this.configService.get('MiniMax_API_KEY');
+        return !!this.configService.get('MINIMAX_API_KEY');
       default:
         return false;
     }
