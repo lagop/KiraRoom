@@ -26,7 +26,7 @@
  *   - resolveLanguageSource: never call a protected endpoint with no token.
  */
 
-import { loginRedirectTarget } from "./api";
+import { loginRedirectTarget, isCredentialEndpoint } from "./api";
 import {
   resolveLanguageSource,
   DEFAULT_LANGUAGE,
@@ -117,6 +117,36 @@ check(
   loginRedirectTarget("/login", false),
   null,
 );
+
+console.log("\n=== isCredentialEndpoint: a wrong password is not an expired session ===");
+
+/*
+ * Reported separately: signing in at /saas/login with the owner's
+ * credentials flashed "Unauthorized" for a second and landed on /login, the
+ * tenant form.
+ *
+ * POST /auth/login answers 401 with {"message":"Invalid credentials"} when
+ * the password is wrong. The 401 handler treated that as an expired session:
+ * it tried to refresh, failed, replaced the message with a generic
+ * Error("Unauthorized"), and navigated. With no `user` in localStorage on a
+ * first sign-in it read no saas_owner role, so it chose /login -- a
+ * different page from /saas/login, which is why loginRedirectTarget did not
+ * stop it, and correctly so.
+ */
+check("POST /auth/login is a credential endpoint", isCredentialEndpoint("/auth/login"), true);
+check("so is /auth/register", isCredentialEndpoint("/auth/register"), true);
+check("so is /auth/forgot-password", isCredentialEndpoint("/auth/forgot-password"), true);
+check("so is /auth/reset-password", isCredentialEndpoint("/auth/reset-password"), true);
+check("a query string does not hide it", isCredentialEndpoint("/auth/login?next=%2Fsaas"), true);
+
+// Everything else keeps the session-expiry behaviour: a 401 there really
+// does mean the session is gone.
+check("/auth/tenant is NOT one", isCredentialEndpoint("/auth/tenant"), false);
+check("/auth/refresh is NOT one", isCredentialEndpoint("/auth/refresh"), false);
+check("/auth/me is NOT one", isCredentialEndpoint("/auth/me"), false);
+check("/appointments is NOT one", isCredentialEndpoint("/appointments"), false);
+// Not a prefix match, or /auth/login-history would be exempted by accident.
+check("/auth/login-history is NOT one", isCredentialEndpoint("/auth/login-history"), false);
 
 console.log("\n=== Summary ===");
 console.log(`Pass: ${pass}, Fail: ${fail}`);

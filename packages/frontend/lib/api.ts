@@ -46,6 +46,38 @@ export const getToken = () => {
  * endpoint from a public page, the browser never navigates to the page it is
  * already showing. The two callers below both honour it.
  */
+/**
+ * Endpoints where 401 is an ANSWER, not an expired session.
+ *
+ * Submitting the wrong password to `POST /auth/login` returns 401 with
+ * `{"message":"Invalid credentials"}`. The 401 handler treated that like any
+ * other unauthorized call: it tried to refresh, failed, discarded the
+ * backend's message behind a generic `Error("Unauthorized")`, and navigated
+ * away.
+ *
+ * On /saas/login that was actively misleading. There is no `user` in
+ * localStorage on a first sign-in, so the handler read no `saas_owner` role
+ * and sent the browser to /login -- the *tenant* login page. The reported
+ * symptom was "Unauthorized" flashing for about a second before landing on
+ * the wrong form, with nothing to say the password was simply wrong.
+ *
+ * A credential endpoint's 401 belongs to the form that asked. No refresh, no
+ * navigation, and the server's own message reaches the caller.
+ */
+const CREDENTIAL_ENDPOINTS = [
+  "/auth/login",
+  "/auth/register",
+  "/auth/forgot-password",
+  "/auth/reset-password",
+];
+
+export function isCredentialEndpoint(endpoint: string): boolean {
+  // Compare against the path only: these are called with query strings in
+  // some flows, and `/auth/login?next=/x` is still the login endpoint.
+  const path = endpoint.split("?")[0];
+  return CREDENTIAL_ENDPOINTS.includes(path);
+}
+
 export function loginRedirectTarget(
   currentPath: string,
   isSaasUser: boolean,
@@ -1578,6 +1610,15 @@ class ApiClient implements ApiClientInterface {
       headers,
       ...options,
     });
+
+    // A 401 from a sign-in or password-reset form is the answer to what was
+    // asked, so it is handed straight back with the server's message. Doing
+    // the session-expiry dance here logged the message out of existence and
+    // navigated away from the form. See isCredentialEndpoint.
+    if (response.status === 401 && isCredentialEndpoint(endpoint)) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new ApiError(errorData.message || "Invalid credentials", 401);
+    }
 
     if (response.status === 401 && retryCount === 0) {
       // Critical: never try to refresh *the refresh endpoint* â€” that
