@@ -25,6 +25,40 @@ export const getToken = () => {
   return null;
 };
 
+/**
+ * Where a 401 should send the browser, or `null` when it must not navigate.
+ *
+ * The 401 handler below does `window.location.href = "/login"`, which is a
+ * full page load. Assigning the URL you are already on reloads the page, so
+ * any unauthenticated request made *from* the login page produced an
+ * infinite reload loop: load /login -> request -> 401 -> assign "/login" ->
+ * load /login. The page refreshed forever and you could not type into the
+ * form.
+ *
+ * That is exactly what happened in production. `useTranslations()` called
+ * the authenticated `GET /auth/tenant` on first paint, which answers 401
+ * with no session. It had been masked: while the backend rejected the
+ * browser's origin, the same call failed CORS as a *network* error, never
+ * reaching the status check, so the loop could not start. Fixing CORS turned
+ * a visible "Failed to fetch" into a reload loop.
+ *
+ * Returning null is the structural guard: whatever calls a protected
+ * endpoint from a public page, the browser never navigates to the page it is
+ * already showing. The two callers below both honour it.
+ */
+export function loginRedirectTarget(
+  currentPath: string,
+  isSaasUser: boolean,
+): string | null {
+  const target = isSaasUser ? "/saas/login" : "/login";
+  // Tolerate a trailing slash so "/login/" is recognised as the same page.
+  const normalized =
+    currentPath.length > 1 && currentPath.endsWith("/")
+      ? currentPath.slice(0, -1)
+      : currentPath;
+  return normalized === target ? null : target;
+}
+
 export const setToken = (token: string) => {
   if (typeof window !== "undefined") {
     localStorage.setItem(TOKEN_KEY, token);
@@ -1566,7 +1600,10 @@ class ApiClient implements ApiClientInterface {
       if (typeof window !== "undefined") {
         // Clear SaaS user cookie
         document.cookie = "saas_user=; path=/; max-age=0";
-        window.location.href = isSaasUser ? "/saas/login" : "/login";
+        // null when we are already on that login page -- navigating there
+        // again would reload it and loop. See loginRedirectTarget.
+        const target = loginRedirectTarget(window.location.pathname, isSaasUser);
+        if (target) window.location.href = target;
       }
       // Throw a recognisable error so callers don't try to parse the
       // (already empty) body.
@@ -1579,7 +1616,10 @@ class ApiClient implements ApiClientInterface {
       if (typeof window !== "undefined") {
         // Clear SaaS user cookie
         document.cookie = "saas_user=; path=/; max-age=0";
-        window.location.href = isSaasUser ? "/saas/login" : "/login";
+        // null when we are already on that login page -- navigating there
+        // again would reload it and loop. See loginRedirectTarget.
+        const target = loginRedirectTarget(window.location.pathname, isSaasUser);
+        if (target) window.location.href = target;
       }
       throw new Error("Unauthorized");
     }
