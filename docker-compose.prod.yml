@@ -50,8 +50,12 @@
 #      registry -- it only builds them as a smoke test.)
 #   3. Hostinger hPanel -> VPS -> Docker Manager -> redeploy the stack.
 #   4. First deploy only: create the platform owner account --
-#      docker exec -e SAAS_OWNER_EMAIL=... -e SAAS_OWNER_PASSWORD=... \
-#        kiraroom-backend-prod node dist/scripts/seed-saas-owner.js
+#      printf '%s' 'the password' | docker exec -i \
+#        -e SAAS_OWNER_EMAIL=... kiraroom-backend-prod \
+#        node dist/scripts/seed-saas-owner.js --password-stdin
+#      (Piped, NOT -e SAAS_OWNER_PASSWORD=...: a password on the command
+#       line lands in `ps` and in shell history, and every shell it
+#       crosses can mangle it. See docs/runbook.md.)
 #      (NOT `npx ts-node prisma/...` -- ts-node and typescript are
 #       devDependencies and are not in the production image.)
 #   5. Verify: the backend reaches 'Up (healthy)'. Traefik only registers a

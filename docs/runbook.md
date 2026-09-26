@@ -199,13 +199,231 @@ A fresh database has no users, so nobody can sign in to the SaaS console. After
 the stack is up and `migrate deploy` has created the schema:
 
 ```bash
-docker exec -e SAAS_OWNER_EMAIL='you@yourdomain.com' \
-  -e SAAS_OWNER_PASSWORD='<12+ chars>' \
-  kiraroom-backend-prod node dist/scripts/seed-saas-owner.js
+printf '%s' 'the password' | docker exec -i \
+  -e SAAS_OWNER_EMAIL='you@yourdomain.com' \
+  kiraroom-backend-prod node dist/scripts/seed-saas-owner.js --password-stdin
 ```
 
+Pipe the password rather than passing it as `-e SAAS_OWNER_PASSWORD=...`. On a
+command line it lands in `ps`, in shell history, and in anything that logs
+commands — and it crosses every shell between you and the container. Two levels
+of quoting (ssh, then the remote shell) is enough for a `# Operational runbook
+
+> Living document for the day-to-day operation of KiraRoom SaaS.
+> Generated as part of the zero-budget launch roadmap (Sprint 1, Workstream 1.3).
+> This is the **only** doc ops should need during normal operation.
+
+## Critical facts (memorize these)
+
+| Item | Value |
+|---|---|
+| Production API | `https://api.kiraroom.net` |
+| Production dashboard (tenants) | `https://app.kiraroom.net` |
+| SaaS admin console | `https://admin.kiraroom.net` |
+| Commercial website (separate repo) | `https://kiraroom.com` |
+| Database host | Hostinger VPS, **NOT** exposed to internet |
+| Deploy method | Hostinger hPanel → VPS → Docker Manager → Compose URL |
+| Compose source | `https://raw.githubusercontent.com/lagop/KiraRoom/main/docker-compose.prod.yml` |
+| Env vars the operator sets | `ops/deploy/.env.production.hostinger` -- they reach a container **only** if that service forwards them in the compose |
+| Database backup retention | 30 days hot |
+| WAL archive retention | 30 days |
+| Sentry-compatible error tracking | GlitchTip self-hosted at `https://glitchtip.kiraroom.net` |
+| Status page | TBD (free tier: Instatus or BetterStack) |
+
+## Deploy flow
+
+Every push to `main` deploys via **Hostinger Docker Manager** with zero CI deploy steps:
+
+1. **Local**: open a PR from `develop` → `main`. CI (`.github/workflows/ci-cd.yml`)
+   runs lint + type-check + backend/frontend tests + a Docker build smoke
+   test. No GHCR push, no SSH. The PR template forces you to confirm
+   the env var changes, migrations, and rollback plan.
+2. **Merge PR** to `main`. Branch protection requires 1 approval and
+   all CI checks green.
+3. **Open Hostinger hPanel → VPS → Docker Manager → Compose → URL**.
+   Paste:
+   ```
+   https://raw.githubusercontent.com/lagop/KiraRoom/main/docker-compose.prod.yml
+   ```
+   Click **Deploy**.
+4. **Hostinger clones the repo, runs `docker compose up -d --build`**
+   with the env vars you have entered in the UI. Those values are the
+   *deploy* environment: compose substitutes them into
+   `docker-compose.prod.yml`, but a container only receives one if that
+   service lists it under `environment:`. See **Environment variables
+   reach a container only if the compose forwards them** below. First
+   build takes ~5–10 min (Prisma + Next.js); subsequent rebuilds are
+   2–3 min thanks to Docker layer cache.
+5. **Smoke test**: visit `http://<vps-ip>:3000` (frontend) and
+   `http://<vps-ip>:3001/api/v1/ping` (backend) before pointing DNS.
+
+### Environment variables reach a container only if the compose forwards them
+
+This is the single most expensive thing to get wrong here, so it has its
+own section.
+
+Setting `FOO=bar` in Hostinger's Environments box does **not** put `FOO`
+into any container. It puts it into the environment compose itself runs
+with. The backend sees `FOO` only because `docker-compose.prod.yml` says:
+
+```yaml
+  backend:
+    environment:
+      FOO: ${FOO:-}
+```
+
+For a long time it did not. The compose forwarded 11 variables while
+`ops/deploy/.env.production.hostinger` documented 54, so 40+ values were
+set correctly in the UI and silently ignored. Login failed with
+"Failed to fetch" because `CORS_ALLOWED_ORIGINS` never arrived and the
+allow-list fell back to `http://localhost:3000`; e-mail, Sentry, SMS and
+the Meta webhook signature check had simply never been on.
+
+To see what a container actually has:
+
+```bash
+docker exec kiraroom-backend-prod printenv | sort
+```
+
+`packages/backend/src/deploy-env-forwarding.spec.ts` now fails the build
+when the template and the compose disagree, so this should not recur. If
+that spec fails, it is telling you a variable is documented but not
+forwarded (or required but not documented) -- not that the test is wrong.
+
+### Before deploying: secrets that now block boot
+
+The backend refuses to start, rather than running insecurely, when any of
+these is missing in production. A refusing container restart-loops, never
+reaches `healthy`, and Traefik therefore drops its router and serves a
+404 with a self-signed certificate -- i.e. it looks exactly like the
+outage in **Failure: API down**.
+
+| Variable | Generate with | Why it blocks boot |
+|---|---|---|
+| `JWT_SECRET` | `openssl rand -base64 48` | Weak or placeholder secrets let anyone mint tokens for any user |
+| `JWT_REFRESH_SECRET` | `openssl rand -base64 48` | Must differ from `JWT_SECRET`. Unset, @nestjs/jwt signs refresh tokens with `JWT_SECRET`, so any access token can be redeemed at `/auth/refresh` for a fresh pair, indefinitely |
+| `OAUTH_STATE_SECRET` | `openssl rand -base64 48` | Signs the accounting OAuth `state` parameter |
+| `STRIPE_WEBHOOK_SECRET` | Stripe dashboard | Only when `STRIPE_SECRET_KEY` is set; without it the webhook accepts unsigned events |
+
+So: **add the variable to Hostinger Environments first, then redeploy.**
+Doing it in the other order produces a stack that looks deployed and
+answers nothing.
+
+### Updating after that
+
+Every subsequent deploy:
+
+1. Push changes to `develop`, open a PR, get CI green, merge to `main`.
+2. Open Hostinger Docker Manager → your stack → **Redeploy** (or paste
+   the URL again if "Redeploy" doesn't re-clone).
+
+If Hostinger's "Redeploy" doesn't re-clone the repo (it depends on
+their exact implementation), the workaround is to delete the stack
+and recreate it from the URL.
+
+### First-time VPS bootstrap
+
+You do NOT need to SSH into the VPS for the initial deploy. The Hostinger
+Docker Manager handles everything as long as Docker is installed on
+the VPS (it is by default on Hostinger VPS plans).
+
+If you do need shell access (for certbot first-time issuance, log
+inspection, or `docker exec` debugging):
+
+```bash
+ssh root@<vps-ip>
+# or, if you created a non-root deploy user:
+ssh kiraroom@<vps-ip>
+```
+
+`ops/deploy/bootstrap-hostinger.sh` is kept as a reference for setting
+up a non-root deploy user + certbot + firewall if you choose to harden
+beyond the Hostinger defaults. You don't have to run it.
+2. **VPS** (`/opt/kiraroom/deploy-prod.sh`):
+   - `docker compose -f docker-compose.prod.yml pull` for the new SHA
+   - `docker compose ... up -d` — Docker recreates only changed services
+   - backend entrypoint runs `prisma migrate deploy` before booting, so
+     schema migrations land on every release
+   - script waits up to 120 s for the backend healthcheck to go green
+   - if healthcheck fails, dumps the last 80 lines of backend logs and
+     exits non-zero (CI fails the deploy)
+
+### Legacy: CI-driven deploy via SSH
+
+The Hostinger Docker Manager flow replaced the previous CI → VPS_SSH
+flow on 2026-09-10. The old approach (build + push to GHCR, then
+`appleboy/ssh-action` to invoke `ops/deploy/deploy-prod.sh`) is kept
+in git history if you ever want to resurrect it for multi-VPS or
+true zero-touch CI deploys. To do so:
+
+1. Restore the `deploy-production` job in `.github/workflows/ci-cd.yml`.
+2. Re-add the GHCR push in the `build` job.
+3. Set repo secrets `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`.
+4. Restore `image:` references in `docker-compose.prod.yml` (drop the
+   `build:` blocks I added in this commit).
+
+### First-time VPS bootstrap (only if you need shell access)
+
+### Adding a new deploy secret
+
+With the Hostinger Docker Manager flow, env vars are entered in the
+hPanel UI per service when you create/redeploy the stack. To change
+a secret after the initial setup:
+
+1. Open Hostinger hPanel → VPS → Docker Manager → your KiraRoom stack
+2. Edit → find the service → update the env var value → Save
+3. Hostinger re-deploys the affected service with the new env
+
+For one-off inspection or rotation that the UI doesn't cover, SSH
+in:
+
+```bash
+ssh root@<vps-ip>
+docker exec kiraroom-backend-prod env | grep MINIMAX_API_KEY
+# (value will be masked; this is for confirming presence only)
+```
+
+### Rotating the LLM provider key
+
+The virtual receptionist and Staff Copilot both call the LLM service.
+If a key is revoked or rate-limited:
+
+1. Sign in to the provider dashboard (MiniMax, OpenAI, Anthropic, or
+   Google AI Studio depending on which key is rotated).
+2. Mint a new key.
+3. Open Hostinger hPanel → VPS → Docker Manager → your stack → edit
+   the `backend` service → update the matching `*_API_KEY=` env var
+   → Save → Hostinger redeploys.
+4. Verify a chatbot reply still works in the dashboard — the LLM
+   service logs the provider + response time per call.
+
+If rotating `MINIMAX_API_KEY`, also update the per-tenant
+`VirtualReceptionistConfig` rows that store the key in the DB
+(Hostinger UI doesn't expose DB rows, so this requires SSH + psql
+or `npx prisma studio`).
+
+## First deploy: creating the platform owner
+
+A fresh database has no users, so nobody can sign in to the SaaS console. After
+the stack is up and `migrate deploy` has created the schema:
+
+, a `!` or a
+backslash to arrive as something other than what you typed, which produces a
+stored password that does not match the one you believe you set. That is not
+hypothetical: it is the likeliest explanation for the first platform owner
+account on this VPS refusing a password that had just been set.
+
+Use single quotes around the password so the local shell leaves it alone. Only a
+trailing newline is stripped; nothing else about it is altered.
+
+`SAAS_OWNER_PASSWORD` still works for a local dev database, where none of the
+above matters.
+
 It creates the `platform` tenant and one `saas_owner` user, and is idempotent —
-re-running it resets that user's password rather than duplicating the account.
+re-running it resets that user's password rather than duplicating the account. It
+also clears `loginAttempts` and `lockedUntil`, because re-seeding is how you
+recover from a lost password and the lockout is enforced (see **Failure: locked
+out of the SaaS console**).
 
 Two things it refuses to do: run without both variables, and accept the old
 placeholder values that used to be hardcoded (`saasadmin@example.com` /
@@ -281,6 +499,27 @@ healthy. `health-endpoint-public.l4.spec.ts` now guards against it.
    (the backup script already does this, so this is rare).
 6. `VACUUM FULL pg_catalog.pg_attribute;` if the system catalogs are
    bloated (Postgres 13+ usually self-manages).
+
+### Failure: locked out of the SaaS console
+
+Five consecutive failed passwords lock an account for 30 minutes.
+`AuthService.login` writes `lockedUntil` and, since SEC-8, honours it — before
+that the column filled up and was never read, so the lockout stopped nobody.
+
+Check state without touching credentials:
+
+```bash
+docker exec kiraroom-postgres-prod psql -U kiraroom -d kiraroom -c \
+  'SELECT role, "isActive", "loginAttempts", "lockedUntil" FROM users;'
+```
+
+Then either wait out the 30 minutes, or re-seed the owner (above), which sets a
+new password and clears the counter and the lock in one step.
+
+Do **not** clear `lockedUntil` by hand as a matter of routine: if you did not
+cause the failed attempts, someone else is guessing, and the lock is the only
+thing slowing them down. The global throttle allows 100 requests a minute, which
+is not a brute-force defence on its own.
 
 ### Failure: JWT secret leaked (rotate)
 
