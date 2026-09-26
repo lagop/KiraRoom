@@ -44,13 +44,60 @@ function required(name: string): string {
   return value.trim();
 }
 
+/**
+ * Reads the password from stdin, so it never appears on a command line.
+ *
+ * `docker exec -e SAAS_OWNER_PASSWORD='...'` puts the platform owner's
+ * password into the process arguments -- visible in `ps`, in shell history,
+ * and in anything that logs commands -- and sends it through however many
+ * shells are between the operator and the container. Two levels of quoting
+ * (ssh, then the remote shell) is enough for a `$`, a `!` or a backslash to
+ * arrive as something other than what was typed, which produces exactly the
+ * failure this script exists to fix: a password that does not match the one
+ * you believe you set.
+ *
+ *   printf '%s' 'the password' | docker exec -i kiraroom-backend-prod \
+ *     node dist/scripts/seed-saas-owner.js --password-stdin
+ *
+ * Only one trailing newline is stripped. Nothing else is altered: trimming a
+ * credential silently changes it, and a password ending in a space is still
+ * that password.
+ */
+async function readPasswordFromStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.from(chunk));
+  }
+  const raw = Buffer.concat(chunks).toString('utf8');
+  return raw.replace(/\r?\n$/, '');
+}
+
 export async function seedSaasOwner(): Promise<void> {
   const email = required('SAAS_OWNER_EMAIL');
-  const password = required('SAAS_OWNER_PASSWORD');
 
+  const fromStdin =
+    process.argv.includes('--password-stdin') || !process.env.SAAS_OWNER_PASSWORD;
+  const password = fromStdin
+    ? await readPasswordFromStdin()
+    : // Not trimmed, unlike the email: see readPasswordFromStdin.
+      process.env.SAAS_OWNER_PASSWORD!;
+
+  if (!password) {
+    throw new Error(
+      'No password supplied. Set SAAS_OWNER_PASSWORD, or pipe it in with\n' +
+        "  printf '%s' 'the password' | docker exec -i kiraroom-backend-prod \\\n" +
+        '    node dist/scripts/seed-saas-owner.js --password-stdin',
+    );
+  }
+  if (PLACEHOLDERS.includes(password.trim().toLowerCase())) {
+    throw new Error(
+      'The password is still a placeholder. Set a real one -- this account can ' +
+        'read every tenant on the platform.',
+    );
+  }
   if (password.length < 12) {
     throw new Error(
-      'SAAS_OWNER_PASSWORD must be at least 12 characters. This is the platform ' +
+      'The password must be at least 12 characters. This is the platform ' +
         'owner account.',
     );
   }
@@ -87,6 +134,14 @@ export async function seedSaasOwner(): Promise<void> {
         firstName: 'SaaS',
         lastName: 'Admin',
         passwordHash,
+        // Re-running this script is the documented way to recover a lost
+        // platform-owner password, and the login lockout is now enforced
+        // (SEC-8). Without clearing these, you would set a new password and
+        // still be locked out for up to 30 minutes by the failed attempts
+        // that made you reset it in the first place.
+        loginAttempts: 0,
+        lockedUntil: null,
+        isActive: true,
       },
       create: {
         email,
