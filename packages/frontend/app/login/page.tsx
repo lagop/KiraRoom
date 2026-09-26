@@ -199,7 +199,18 @@ export default function LoginPage() {
             </button>
           </form>
 
-          <p className="text-sm text-gray-500 mt-8">{t("login.no_account")}</p>
+          {/* This used to be the bare question with nowhere to go: the
+              sign-up page links back here, but not the other way round, so
+              anyone landing on the login form was at a dead end. */}
+          <p className="text-sm text-gray-500 mt-8">
+            {t("login.no_account")}{" "}
+            <a
+              href="/signup"
+              className="text-purple-600 font-medium hover:underline"
+            >
+              {t("login.create_account")}
+            </a>
+          </p>
 
           <p className="text-xs text-gray-400 mt-4 space-x-3">
             <a href="/legal/privacy" className="hover:underline">Privacidad</a>
