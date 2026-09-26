@@ -97,7 +97,7 @@ export default function CommissionsPage() {
 
   const handlePayCommission = async (professionalId: string) => {
     if (
-      !confirm("Are you sure you want to mark all pending commissions as paid?")
+      !confirm(t("commissions.confirm_mark_all_paid"))
     ) {
       return;
     }

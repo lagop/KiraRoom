@@ -772,14 +772,14 @@ function SubscriptionPanel() {
       window.location.href = url;
     } catch (error) {
       console.error("Failed to create checkout:", error);
-      alert("Failed to create checkout session");
+      alert(t("payments.checkout_failed"));
     } finally {
       setCheckoutLoading(false);
     }
   };
 
   const handleCancel = async () => {
-    if (!confirm("Are you sure you want to cancel your subscription?")) return;
+    if (!confirm(t("payments.confirm_cancel_subscription"))) return;
     try {
       await apiClient.cancelSubscription(false);
       loadSubscriptionData();
@@ -1034,7 +1034,7 @@ function WalletPanel() {
       loadWallet(selectedClient);
     } catch (error) {
       console.error("Failed to deposit:", error);
-      alert("Failed to deposit funds");
+      alert(t("payments.deposit_failed"));
     } finally {
       setActionLoading(false);
     }
@@ -1054,7 +1054,7 @@ function WalletPanel() {
       loadWallet(selectedClient);
     } catch (error) {
       console.error("Failed to add points:", error);
-      alert("Failed to add points");
+      alert(t("payments.add_points_failed"));
     } finally {
       setActionLoading(false);
     }

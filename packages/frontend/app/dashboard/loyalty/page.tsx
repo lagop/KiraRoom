@@ -141,7 +141,7 @@ export default function LoyaltyPage() {
   };
 
   const handleDeleteProgram = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this program?")) return;
+    if (!confirm(t("loyalty.confirm_delete_program"))) return;
 
     try {
       await apiClient.deleteLoyaltyProgram(id);
