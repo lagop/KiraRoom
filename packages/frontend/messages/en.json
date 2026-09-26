@@ -1379,7 +1379,6 @@
     "whatsapp_campaigns": "WhatsApp Broadcast"
   },
   "Failed to add points": "Failed to add points",
-  "Failed to create checkout session": "Failed to create checkout session",
   "Failed to create professional": {
     " Please try again": {
       "": ""
@@ -1473,7 +1472,8 @@
     "title": "Title",
     "total_payroll": "Total Payroll",
     "total_sales": "Total Sales",
-    "view_details": "View Details"
+    "view_details": "View Details",
+    "confirm_mark_all_paid": "Are you sure you want to mark all pending commissions as paid?"
   },
   "description": "Description",
   "email_campaigns": {
@@ -1572,7 +1572,8 @@
     "total_spent": "Total Spent",
     "type": "Type",
     "view_members": "View Members",
-    "welcome_points": "Welcome Points"
+    "welcome_points": "Welcome Points",
+    "confirm_delete_program": "Are you sure you want to delete this program?"
   },
   "payments": {
     "add_points": "Add Points",
@@ -1640,7 +1641,11 @@
     "unlimited": "Unlimited",
     "usage": "Usage",
     "wallet_details": "Wallet Details",
-    "withdraw_funds": "Withdraw Funds"
+    "withdraw_funds": "Withdraw Funds",
+    "checkout_failed": "Could not open the payment page. Please try again.",
+    "confirm_cancel_subscription": "Are you sure you want to cancel your subscription?",
+    "deposit_failed": "Could not record the deposit.",
+    "add_points_failed": "Could not add the points."
   },
   "pos": {
     "action": "Action",
@@ -1802,7 +1807,8 @@
         "title": "Real-time analytics",
         "description": "Know your business performance at all times."
       }
-    }
+    },
+    "create_account": "Create a free account"
   },
   "bookingPublic": {
     "title": "Book an appointment",
