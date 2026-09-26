@@ -225,6 +225,23 @@ export class AuthService {
         throw new UnauthorizedException("Account is deactivated");
       }
 
+      // SEC-8: honour the lockout this method sets.
+      //
+      // The failed-password branch below has always written `lockedUntil`
+      // 30 minutes out after 5 attempts, and nothing ever read it. The
+      // lockout was decorative: the column filled up while bcrypt.compare
+      // kept answering every guess. The only real limit was the global
+      // throttle, 100 requests per minute, against an admin address an
+      // attacker can guess.
+      if (user.lockedUntil && user.lockedUntil > new Date()) {
+        const minutes = Math.ceil(
+          (user.lockedUntil.getTime() - Date.now()) / 60000,
+        );
+        throw new UnauthorizedException(
+          `Account locked after too many failed attempts. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`,
+        );
+      }
+
       // Verify password
       const isPasswordValid = await bcrypt.compare(
         loginDto.password,
