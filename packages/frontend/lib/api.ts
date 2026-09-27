@@ -1673,11 +1673,16 @@ class ApiClient implements ApiClientInterface {
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new ApiError(
-        errorData.message ||
-          `API Error: ${response.status} ${response.statusText}`,
-        response.status,
-      );
+      // A NestJS validation failure sends `message` as an array, one entry per
+      // offending field: ["website must be a URL address"]. Passed straight to
+      // Error it was coerced to a comma-joined blob, so a form could report a
+      // 400 without naming the field that caused it. Joining as sentences is
+      // what turns "Failed to update salon" into something actionable.
+      const raw = errorData.message;
+      const message = Array.isArray(raw)
+        ? raw.join(". ")
+        : raw || `API Error: ${response.status} ${response.statusText}`;
+      throw new ApiError(message, response.status);
     }
     return response.json();
   }
