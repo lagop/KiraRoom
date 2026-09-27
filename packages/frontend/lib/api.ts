@@ -1,5 +1,7 @@
 ﻿// Next.js API Client for Kira Room
 
+import type { TaxRegime } from "@kira/shared";
+
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1";
 
@@ -1051,6 +1053,8 @@ export interface FiscalSettings {
     defaultSeries?: string;
     defaultTaxRate?: number;
     diputacion?: "bizkaia" | "gipuzkoa" | "alava" | null;
+    /** Territory tax regime: iva (peninsula/Baleares), igic (Canarias), ipsi (Ceuta/Melilla). */
+    taxRegime?: TaxRegime;
     /** P2A â€” emitter NIF/CIF/NIE (mirrored to Tenant.taxId on the backend). */
     tenantNif?: string;
   };
@@ -1538,6 +1542,8 @@ export interface ApiClientInterface {
     defaultTaxRate?: number;
     autoInvoiceAppointments?: boolean;
     diputacion?: "bizkaia" | "gipuzkoa" | "alava" | null;
+    /** Territory tax regime: iva (peninsula/Baleares), igic (Canarias), ipsi (Ceuta/Melilla). */
+    taxRegime?: TaxRegime;
     /** Emitter NIF/CIF/NIE â€” mirrored to Tenant.taxId on the backend. */
     tenantNif?: string;
     taxIdType?: "nif" | "cif" | "nie" | "passport" | "other";
@@ -4288,6 +4294,8 @@ class ApiClient implements ApiClientInterface {
     defaultTaxRate?: number;
     autoInvoiceAppointments?: boolean;
     diputacion?: "bizkaia" | "gipuzkoa" | "alava" | null;
+    /** Territory tax regime: iva (peninsula/Baleares), igic (Canarias), ipsi (Ceuta/Melilla). */
+    taxRegime?: TaxRegime;
     tenantNif?: string;
     taxIdType?: "nif" | "cif" | "nie" | "passport" | "other";
     legalName?: string;

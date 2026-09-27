@@ -111,9 +111,9 @@
       "quantity": "Cantidad",
       "unitPrice": "Precio unitario",
       "discountPct": "Descuento %",
-      "taxRate": "IVA %",
+      "taxRate": "{tax} %",
       "subtotal": "Subtotal",
-      "tax": "IVA",
+      "tax": "{tax}",
       "total": "Total",
       "notes": "Notas"
     },
@@ -138,7 +138,7 @@
       "legalName": "Razon social",
       "mode": "Régimen",
       "defaultSeries": "Serie por defecto",
-      "defaultTaxRate": "Tipo de IVA por defecto",
+      "defaultTaxRate": "Tipo de {tax} por defecto",
       "autoInvoiceAppointments": "Generar factura automáticamente al completar citas",
       "diputacion": "Diputación (solo TicketBAI)",
       "diputacionBizkaia": "Bizkaia",
@@ -150,7 +150,9 @@
       "certFingerprint": "Huella",
       "certNotAfter": "Caduca",
       "deactivate": "Desactivar",
-      "saved": "Configuración guardada"
+      "saved": "Configuración guardada",
+      "taxRegime": "Régimen fiscal del territorio",
+      "taxRegimeHint": "IVA en península y Baleares, IGIC en Canarias, IPSI en Ceuta y Melilla. Al cambiarlo se ajusta el tipo por defecto."
     },
     "errors": {
       "invalidLines": "Cada línea debe tener descripción, una cantidad mayor que cero y valores válidos.",

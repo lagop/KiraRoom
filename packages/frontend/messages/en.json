@@ -111,9 +111,9 @@
       "quantity": "Quantity",
       "unitPrice": "Unit price",
       "discountPct": "Discount %",
-      "taxRate": "VAT %",
+      "taxRate": "{tax} %",
       "subtotal": "Subtotal",
-      "tax": "VAT",
+      "tax": "{tax}",
       "total": "Total",
       "notes": "Notes"
     },
@@ -138,7 +138,7 @@
       "legalName": "Legal name",
       "mode": "Regime",
       "defaultSeries": "Default series",
-      "defaultTaxRate": "Default VAT rate",
+      "defaultTaxRate": "Default {tax} rate",
       "autoInvoiceAppointments": "Auto-generate invoice when appointments complete",
       "diputacion": "Deputation (TicketBAI only)",
       "diputacionBizkaia": "Bizkaia",
@@ -150,7 +150,9 @@
       "certFingerprint": "Fingerprint",
       "certNotAfter": "Expires",
       "deactivate": "Deactivate",
-      "saved": "Settings saved"
+      "saved": "Settings saved",
+      "taxRegime": "Territory tax regime",
+      "taxRegimeHint": "VAT in mainland Spain and the Balearics, IGIC in the Canary Islands, IPSI in Ceuta and Melilla. Changing it adjusts the default rate."
     },
     "errors": {
       "invalidLines": "Each line must have a description, a quantity greater than zero, and valid values.",
