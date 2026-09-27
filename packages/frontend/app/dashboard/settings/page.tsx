@@ -21,6 +21,7 @@ import {
 import { StripeSettingsContent } from "./stripe-settings-content";
 import apiClient from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
+import { SALON_TIMEZONES, DEFAULT_SALON_TIMEZONE } from "@kira/shared";
 
 const defaultSettingsData = {
   general: [
@@ -116,6 +117,18 @@ const defaultSettingsData = {
         { id: "en", label: "English" },
       ],
       description: "Idioma principal de la interfaz",
+    },
+    {
+      // There was no control for this at all. The screen read tenant.timezone
+      // and sent it when it changed, but nothing could change it, so a salon
+      // stayed on Europe/Madrid for good -- an hour off in the Canaries.
+      id: "timezone",
+      label: "Zona horaria",
+      type: "select",
+      value: DEFAULT_SALON_TIMEZONE,
+      options: SALON_TIMEZONES.map((tz) => ({ id: tz.value, label: tz.label })),
+      description:
+        "Decide la hora de las citas y de los recordatorios que se envían",
     },
     {
       id: "currency",

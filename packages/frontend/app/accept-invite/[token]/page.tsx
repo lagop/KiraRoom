@@ -13,6 +13,7 @@ import {
   MapPin,
 } from "lucide-react";
 import apiClient from "@/lib/api";
+import { SALON_TIMEZONES, DEFAULT_SALON_TIMEZONE } from "@kira/shared";
 
 type InviteContext = {
   email: string;
@@ -21,17 +22,6 @@ type InviteContext = {
   lastName: string | null;
   expiresAt: string;
 };
-
-const TIMEZONES = [
-  "Europe/Madrid",
-  "Europe/Lisbon",
-  "Europe/Paris",
-  "Europe/Berlin",
-  "Atlantic/Canary",
-  "America/Mexico_City",
-  "America/Bogota",
-  "America/Buenos_Aires",
-];
 
 export default function AcceptInvitePage() {
   const router = useRouter();
@@ -61,7 +51,7 @@ export default function AcceptInvitePage() {
   const [phone, setPhone] = useState("");
 
   // Step 3 — timezone
-  const [timezone, setTimezone] = useState("Europe/Madrid");
+  const [timezone, setTimezone] = useState(DEFAULT_SALON_TIMEZONE);
 
   useEffect(() => {
     if (!token) return;
@@ -332,9 +322,9 @@ export default function AcceptInvitePage() {
                   onChange={(e) => setTimezone(e.target.value)}
                   className={inputCls}
                 >
-                  {TIMEZONES.map((tz) => (
-                    <option key={tz} value={tz}>
-                      {tz}
+                  {SALON_TIMEZONES.map((tz) => (
+                    <option key={tz.value} value={tz.value}>
+                      {tz.label}
                     </option>
                   ))}
                 </select>
