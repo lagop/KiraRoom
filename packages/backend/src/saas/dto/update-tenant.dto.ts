@@ -7,6 +7,7 @@ import {
   IsUrl,
   IsNumber,
 } from "class-validator";
+import { EmptyStringToUndefined } from "../../common/dto/empty-to-undefined";
 import { NifType, SubscriptionPlan, SubscriptionStatus } from "@prisma/client";
 
 export class UpdateTenantDto {
@@ -26,16 +27,19 @@ export class UpdateTenantDto {
   description?: string;
 
   @ApiPropertyOptional()
+  @EmptyStringToUndefined()
   @IsOptional()
   @IsUrl()
   logo?: string;
 
   @ApiPropertyOptional()
+  @EmptyStringToUndefined()
   @IsOptional()
   @IsUrl()
   coverImage?: string;
 
   @ApiPropertyOptional({ example: "https://glamourstudio.com" })
+  @EmptyStringToUndefined()
   @IsOptional()
   @IsUrl()
   website?: string;
