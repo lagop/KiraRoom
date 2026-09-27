@@ -29,6 +29,7 @@ import {
   UpdateTenantFiscalSettingsDto,
 } from "./dto/invoice.dto";
 import { PrismaService } from "../common/prisma/prisma.service";
+import { taxRegimeOf, TAX_REGIME_DEFAULT_RATE } from "@kira/shared";
 
 interface AuthedRequest extends Request {
   user: { tenantId?: string };
@@ -236,7 +237,23 @@ fiscalQrUrl: invoice.fiscalQrUrl,
         : {}),
       ...(dto.diputacion !== undefined ? { diputacion: dto.diputacion } : {}),
       ...(dto.tenantNif !== undefined ? { tenantNif: dto.tenantNif } : {}),
+      ...(dto.taxRegime !== undefined ? { taxRegime: dto.taxRegime } : {}),
     };
+
+    // Switching regime without touching the rate would leave a Canarian salon
+    // invoicing at 21 %, which no IGIC rate matches -- and the quarterly
+    // report buckets by rate. So when the regime changes and the caller did
+    // not also send a rate, move the default to that regime's usual one
+    // (IVA 21, IGIC 7). An explicit defaultTaxRate in the same request always
+    // wins: the operator may have a reason.
+    if (
+      dto.taxRegime !== undefined &&
+      dto.defaultTaxRate === undefined &&
+      dto.taxRegime !== taxRegimeOf(current?.fiscalSettings)
+    ) {
+      (merged as Record<string, unknown>).defaultTaxRate =
+        TAX_REGIME_DEFAULT_RATE[dto.taxRegime];
+    }
 
     // The fiscalSettings.tenantNif field feeds the AEAT Verifactu /
     // TicketBAI `<Verifactu>` block. We also mirror it (along with
