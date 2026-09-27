@@ -46,6 +46,12 @@ interface Professional {
   firstName: string;
   lastName: string;
   specialties: string[];
+  /**
+   * The services this professional performs, from the ProfessionalService
+   * join. GET /professionals has always included it; this interface never
+   * declared it, so the booking form matched free-text specialties instead.
+   */
+  services?: Array<{ serviceId?: string; service?: { id: string } }>;
   profileImage?: string;
   // Portfolio fields
   bio?: string;
@@ -237,21 +243,35 @@ export default function SalonBookingPage({
         return;
       }
 
-      try {
-        // TODO: Implement API endpoint for available slots
-        // For now, use consistent available slots for all professionals
-        const mockSlots: AvailableTimeSlot[] = [];
-        for (let hour = 9; hour <= 19; hour++) {
-          for (let minute = 0; minute < 60; minute += 30) {
-            const timeStr = `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`;
-            mockSlots.push({
-              time: timeStr,
-              available: true, // All slots available for demo purposes
-            });
-          }
-        }
+      if (!salonData?.id || !bookingData.date) {
+        setAvailableSlots([]);
+        return;
+      }
 
-        setAvailableSlots(mockSlots);
+      try {
+        // These were invented: every half hour from 09:00 to 19:30, all
+        // flagged available "for demo purposes". It ignored the professional's
+        // shift and every appointment already booked, so a client could take
+        // 19:30 on a day the salon shuts at 18:00, or a slot someone else
+        // already had.
+        //
+        // GET /appointments/available-slots is @Public() and has always
+        // existed. It checks overlaps against real appointments, uses the
+        // service's real duration, and now respects the professional's
+        // working hours too.
+        const slots = await apiClient.getAvailableSlots(
+          salonData.id,
+          bookingData.professionalId,
+          bookingData.serviceId,
+          bookingData.date,
+        );
+
+        setAvailableSlots(
+          slots.map((slot) => ({
+            time: slot.time,
+            available: slot.isAvailable,
+          })),
+        );
       } catch (error) {
         console.error("Error fetching available slots:", error);
         toast({
@@ -268,7 +288,14 @@ export default function SalonBookingPage({
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [bookingData.professionalId, bookingData.serviceId]);
+    // The date belongs here: with invented slots it made no difference, so
+    // picking another day never refetched anything.
+  }, [
+    bookingData.professionalId,
+    bookingData.serviceId,
+    bookingData.date,
+    salonData?.id,
+  ]);
 
   const handleInputChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>,
@@ -370,21 +397,31 @@ export default function SalonBookingPage({
   };
 
   // Filter professionals based on selected service
-  const filteredProfessionals = bookingData.serviceId
+  // Which professionals can perform the chosen service.
+  //
+  // This compared each professional's free-text `specialties` against the
+  // service's name and category. A professional created by the onboarding
+  // wizard has `specialties: []`, and `[].some()` is false, so nobody
+  // matched, no professional could be picked and no booking was possible.
+  // Every salon that completed onboarding had an unbookable public page.
+  //
+  // The database had the answer all along, in ProfessionalService.
+  const linkedProfessionals = bookingData.serviceId
     ? professionals.filter((pro) =>
-        pro.specialties.some(
-          (spec) =>
-            services
-              .find((s) => s.id === bookingData.serviceId)
-              ?.category.toLowerCase()
-              .includes(spec.toLowerCase()) ||
-            services
-              .find((s) => s.id === bookingData.serviceId)
-              ?.name.toLowerCase()
-              .includes(spec.toLowerCase()),
+        (pro.services ?? []).some(
+          (link) =>
+            (link.service?.id ?? link.serviceId) === bookingData.serviceId,
         ),
       )
     : [];
+
+  // Nothing linked to this service: offer everyone rather than nobody. An
+  // unbookable page is the worse failure, and it is the one this block exists
+  // to stop happening again.
+  const filteredProfessionals =
+    bookingData.serviceId && linkedProfessionals.length === 0
+      ? professionals
+      : linkedProfessionals;
 
   // Filter available dates based on salon settings
   const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
