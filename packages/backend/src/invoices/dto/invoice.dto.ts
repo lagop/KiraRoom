@@ -4,6 +4,7 @@ import {
   IsBoolean,
   IsDateString,
   IsEnum,
+  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
@@ -12,6 +13,7 @@ import {
   ValidateNested,
 } from "class-validator";
 import { Type } from "class-transformer";
+import { TAX_REGIMES, type TaxRegime } from "@kira/shared";
 
 export class CreateInvoiceLineDto {
   @ApiProperty()
@@ -150,6 +152,16 @@ export class UpdateTenantFiscalSettingsDto {
   @IsOptional()
   @IsEnum(["bizkaia", "gipuzkoa", "alava"])
   diputacion?: "bizkaia" | "gipuzkoa" | "alava" | null;
+
+  /**
+   * Indirect tax regime of the tenant's territory: "iva" in the peninsula and
+   * the Balearics, "igic" in the Canary Islands, "ipsi" in Ceuta and Melilla.
+   * It decides what the tax is called and which quarterly return applies.
+   */
+  @ApiPropertyOptional({ enum: TAX_REGIMES })
+  @IsOptional()
+  @IsIn(TAX_REGIMES as unknown as string[])
+  taxRegime?: TaxRegime;
 
   @ApiPropertyOptional({ description: "Emitter NIF/CIF/NIE — mirrored to Tenant.taxId" })
   @IsOptional()
