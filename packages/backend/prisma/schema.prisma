@@ -150,7 +150,10 @@ model Tenant {
   rebookingReminders   RebookingReminder[]
   /// P2A Ã¢â‚¬â€ Fiscal Spain (Verifactu / TicketBAI / SII)
   fiscalMode           FiscalMode             @default(none)
-  fiscalSettings       Json                   @default("{\"defaultSeries\": \"A\", \"defaultTaxRate\": 21, \"autoInvoiceAppointments\": false, \"diputacion\": null}")
+  /// taxRegime: "iva" (peninsula/Baleares), "igic" (Canarias) or "ipsi"
+  /// (Ceuta/Melilla). Absent means "iva", so existing tenants keep their
+  /// behaviour. See packages/shared/src/types/tax-regime.ts.
+  fiscalSettings       Json                   @default("{\"defaultSeries\": \"A\", \"defaultTaxRate\": 21, \"autoInvoiceAppointments\": false, \"diputacion\": null, \"taxRegime\": \"iva\"}")
   invoices             Invoice[]
   fiscalCertificates   FiscalCertificate[]
   fiscalSequences      FiscalSequence[]
@@ -2692,8 +2695,9 @@ model TaxReport {
 }
 
 enum TaxReportType {
-  modelo_303 /// IVA trimestral
-  modelo_130 /// IRPF estimaciÃƒÂ³n directa
+  modelo_303 /// IVA trimestral (peninsula y Baleares)
+  modelo_420 /// IGIC trimestral (Canarias, Agencia Tributaria Canaria)
+  modelo_130 /// IRPF estimacion directa
 }
 
 enum TaxReportStatus {
