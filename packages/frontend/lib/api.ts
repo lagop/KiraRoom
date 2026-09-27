@@ -1766,10 +1766,44 @@ class ApiClient implements ApiClientInterface {
     language?: string;
     acceptTerms: boolean;
   }): Promise<LoginResponse> {
-    return this.request<LoginResponse>("/auth/register", {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
+    /*
+     * Signing up did not log anyone in.
+     *
+     * This claimed to return a LoginResponse — `{ accessToken, refreshToken,
+     * user }` — and returned the backend's actual shape, which is
+     * `{ user, tokens: { accessToken, refreshToken } }`. The generic on
+     * `this.request` made TypeScript believe the lie, so nothing caught it.
+     *
+     * The signup page then did `if (res?.accessToken) { …store it… }` and
+     * navigated to /dashboard either way. `res.accessToken` was always
+     * undefined, so the branch never ran and no token was ever stored.
+     *
+     * In a clean browser that meant the new salon landed on a dashboard with
+     * no session, got a 401 and was bounced to the login form seconds after
+     * creating an account. In a browser that already held a session it was
+     * worse: the old token stayed, and every tenant endpoint answered 403
+     * "Forbidden resource" because the roles did not match the new tenant.
+     *
+     * So register now stores the tokens and flattens the response, exactly as
+     * login does. Same shape, same side effects, one code path.
+     */
+    const response = await this.request<{ user: any; tokens: any }>(
+      "/auth/register",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    );
+
+    setToken(response.tokens.accessToken);
+    setRefreshToken(response.tokens.refreshToken);
+    scheduleProactiveRefresh(response.tokens.accessToken);
+
+    return {
+      accessToken: response.tokens.accessToken,
+      refreshToken: response.tokens.refreshToken,
+      user: response.user,
+    };
   }
 
   async logout(): Promise<void> {

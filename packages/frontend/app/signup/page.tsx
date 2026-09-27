@@ -41,11 +41,12 @@ export default function SignupPage() {
         language,
         acceptTerms: true,
       });
-      if (res?.accessToken) {
-        localStorage.setItem("kira_auth_token", res.accessToken);
-        if (res.refreshToken) {
-          localStorage.setItem("kira_refresh_token", res.refreshToken);
-        }
+      // apiClient.register stores both tokens, like login does. This used to
+      // read res.accessToken — which register never returned — behind an
+      // `if`, so it silently stored nothing and sent the new salon to a
+      // dashboard it had no session for.
+      if (!res?.accessToken) {
+        throw new Error(t("signup.errorGeneric"));
       }
       router.push("/dashboard");
     } catch (e: any) {
