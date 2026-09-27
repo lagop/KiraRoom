@@ -59,6 +59,7 @@ export class TaxReportsController {
 
   private parseType(type: string): TaxReportType {
     if (type === TaxReportType.modelo_303) return TaxReportType.modelo_303;
+    if (type === TaxReportType.modelo_420) return TaxReportType.modelo_420;
     if (type === TaxReportType.modelo_130) return TaxReportType.modelo_130;
     throw new BadRequestException(`Unknown tax report type: ${type}`);
   }

@@ -1,6 +1,12 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import { PrismaService } from "../../common/prisma/prisma.service";
 import { TaxReportType, TaxReportStatus, Invoice } from "@prisma/client";
+import {
+  taxRegimeOf,
+  TAX_REGIME_QUARTERLY_REPORT,
+  TAX_REGIME_LABELS,
+  TAX_REGIME_TERRITORIES,
+} from "@kira/shared";
 
 /**
  * Spanish quarterly tax declarations (Modelo 303 + Modelo 130).
@@ -71,6 +77,9 @@ export class TaxReportsService {
     if (quarter < 1 || quarter > 4) {
       throw new Error(`Invalid quarter ${quarter} (must be 1..4)`);
     }
+
+    await this.assertReportMatchesRegime(tenantId, type);
+
     const { start, end } = TaxReportsService.quarterRange(year, quarter);
 
     const invoices = await this.prisma.invoice.findMany({
@@ -86,10 +95,33 @@ export class TaxReportsService {
       },
     });
 
-    const totals =
-      type === TaxReportType.modelo_303
-        ? this.aggregateModelo303(invoices)
-        : this.aggregateModelo130(invoices);
+    // Exhaustive on purpose. The old ternary sent anything that was not a 303
+    // to the 130 aggregator, so adding modelo_420 to the enum would have
+    // silently produced an IRPF layout for an IGIC return.
+    let totals: Record<string, number>;
+    switch (type) {
+      case TaxReportType.modelo_303:
+        totals = this.aggregateModelo303(invoices);
+        break;
+      case TaxReportType.modelo_130:
+        totals = this.aggregateModelo130(invoices);
+        break;
+      case TaxReportType.modelo_420:
+        // Deliberately not implemented rather than approximated. The box
+        // numbers of the Modelo 420 come from the Agencia Tributaria Canaria,
+        // and guessing them would produce exactly the class of silently wrong
+        // return that assertReportMatchesRegime exists to prevent.
+        throw new BadRequestException(
+          "Modelo 420 (IGIC) is not generated yet: its box layout has to come " +
+            "from the Agencia Tributaria Canaria, not from an approximation of " +
+            "the Modelo 303. Export the quarter's invoices and hand them to " +
+            "your asesoría meanwhile.",
+        );
+      default: {
+        const exhaustive: never = type;
+        throw new BadRequestException(`Unsupported tax report type: ${exhaustive}`);
+      }
+    }
 
     const row = await this.prisma.taxReport.upsert({
       where: {
@@ -119,6 +151,51 @@ export class TaxReportsService {
       totalsJson: row.totalsJson,
       status: row.fiscalStatus,
     };
+  }
+
+  /**
+   * Refuses a quarterly return that does not belong to the tenant's tax
+   * regime.
+   *
+   * Without this, a Canarian salon asking for a Modelo 303 got a report full
+   * of zeros and no error. `aggregateModelo303` buckets invoices by rate and
+   * then reads only the buckets for 21, 10 and 4 — the IVA rates. A tenant
+   * billing IGIC at 7 % matches none of them, so every box came out 0 and the
+   * report was saved as a valid draft. A tax return that is silently wrong is
+   * worse than a missing feature: someone might file it.
+   *
+   * Modelo 130 (IRPF) is not an indirect-tax return, so it applies under any
+   * regime and is not checked here.
+   */
+  private async assertReportMatchesRegime(
+    tenantId: string,
+    type: TaxReportType,
+  ): Promise<void> {
+    if (type === TaxReportType.modelo_130) return;
+
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { fiscalSettings: true },
+    });
+    const regime = taxRegimeOf(tenant?.fiscalSettings);
+    const expected = TAX_REGIME_QUARTERLY_REPORT[regime];
+
+    if (expected === null) {
+      throw new BadRequestException(
+        `Tenants under ${TAX_REGIME_LABELS[regime]} (${TAX_REGIME_TERRITORIES[regime]}) ` +
+          `file with their own city council, on a form this product does not generate. ` +
+          `Export the invoices instead.`,
+      );
+    }
+
+    if (type !== expected) {
+      throw new BadRequestException(
+        `This tenant's tax regime is ${TAX_REGIME_LABELS[regime]} ` +
+          `(${TAX_REGIME_TERRITORIES[regime]}), whose quarterly return is ` +
+          `${expected}, not ${type}. Generating ${type} would report zeros, ` +
+          `because it only aggregates the rates of another regime.`,
+      );
+    }
   }
 
   /**

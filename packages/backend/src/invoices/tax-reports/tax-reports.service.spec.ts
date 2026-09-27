@@ -12,7 +12,16 @@ function makePrisma() {
   const stored: any[] = [];
   const invoices: any[] = [];
   const upsertCalls: any[] = [];
+  // The tenant's tax regime decides which quarterly return is allowed:
+  // `generate` refuses a Modelo 303 for an IGIC tenant, because that
+  // aggregator only reads the IVA rate buckets and would report zeros. These
+  // cases all exercise the 303 with 21/10/4, so the tenant is under IVA.
+  // Mutate `fiscalSettings` in a test to check another regime.
+  const fiscalSettings: Record<string, unknown> = { taxRegime: "iva" };
   const prisma: any = {
+    tenant: {
+      findUnique: async () => ({ fiscalSettings }),
+    },
     invoice: {
       findMany: async (args: any) => {
         const where = args?.where?.issueDate ?? {};
@@ -63,7 +72,7 @@ function makePrisma() {
       },
     },
   };
-  return { prisma, invoices, stored, upsertCalls };
+  return { prisma, invoices, stored, upsertCalls, fiscalSettings };
 }
 
 const sampleInvoice = (cents: number, breakdown: any[]): any => ({
