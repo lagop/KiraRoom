@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Building2, Save } from "lucide-react";
+import { SALON_TIMEZONES, DEFAULT_SALON_TIMEZONE } from "@kira/shared";
 import { useTranslations } from "@/lib/use-translation";
 import apiClient from "@/lib/api";
 import type { SubscriptionPlan } from "@/lib/api";
@@ -22,7 +23,7 @@ export default function NewTenantPage() {
     phone: "",
     website: "",
     country: "ES",
-    timezone: "Europe/Madrid",
+    timezone: DEFAULT_SALON_TIMEZONE,
     currency: "EUR",
     language: "es",
     plan: "esencial",
@@ -205,14 +206,15 @@ export default function NewTenantPage() {
                 onChange={handleChange}
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
-                <option value="Europe/Madrid">Europe/Madrid</option>
-                <option value="Europe/London">Europe/London</option>
-                <option value="Europe/Paris">Europe/Paris</option>
-                <option value="Europe/Berlin">Europe/Berlin</option>
-                <option value="America/New_York">America/New_York</option>
-                <option value="America/Los_Angeles">America/Los_Angeles</option>
-                <option value="America/Mexico_City">America/Mexico_City</option>
-                <option value="America/Buenos_Aires">America/Buenos_Aires</option>
+                {SALON_TIMEZONES.map((tz) => (
+
+                  <option key={tz.value} value={tz.value}>
+
+                    {tz.label}
+
+                  </option>
+
+                ))}
               </select>
             </div>
             <div>
