@@ -9,6 +9,14 @@ import {
 import apiClient, { FiscalSettings } from "@/lib/api";
 import { Loader2, Save, Upload, ShieldOff } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
+import {
+  TAX_REGIMES,
+  TAX_REGIME_LABELS,
+  TAX_REGIME_TERRITORIES,
+  TAX_REGIME_DEFAULT_RATE,
+  taxRegimeOf,
+  type TaxRegime,
+} from "@kira/shared";
 
 export default function FiscalSettingsPage() {
   const t = useTranslations();
@@ -39,6 +47,7 @@ export default function FiscalSettingsPage() {
     defaultTaxRate: number;
     autoInvoiceAppointments: boolean;
     diputacion: "bizkaia" | "gipuzkoa" | "alava" | null;
+    taxRegime: TaxRegime;
     tenantNif: string;
     taxIdType: "nif" | "cif" | "nie" | "passport" | "other";
     legalName: string;
@@ -48,6 +57,7 @@ export default function FiscalSettingsPage() {
     defaultTaxRate: 21,
     autoInvoiceAppointments: false,
     diputacion: null,
+    taxRegime: "iva",
     tenantNif: "",
     taxIdType: "nif",
     legalName: "",
@@ -64,6 +74,7 @@ export default function FiscalSettingsPage() {
           (fs.autoInvoiceAppointments as boolean) ?? false,
         diputacion:
           (fs.diputacion as "bizkaia" | "gipuzkoa" | "alava" | null) ?? null,
+        taxRegime: taxRegimeOf(fs),
         tenantNif:
           (fs.tenantNif as string) ??
           (settings.data.taxId as string | undefined) ??
@@ -200,7 +211,38 @@ export default function FiscalSettingsPage() {
             </div>
             <div>
               <label className="text-sm font-medium text-gray-900">
-                {t("invoices.fiscalSettings.defaultTaxRate")}
+                {t("invoices.fiscalSettings.taxRegime")}
+              </label>
+              <select
+                value={draft.taxRegime}
+                onChange={(e) => {
+                  const regime = e.target.value as TaxRegime;
+                  // Switching regime without moving the rate would leave a
+                  // Canarian salon invoicing at 21 %, which no IGIC rate
+                  // matches. The backend does the same on save.
+                  setDraft((d) => ({
+                    ...d,
+                    taxRegime: regime,
+                    defaultTaxRate: TAX_REGIME_DEFAULT_RATE[regime],
+                  }));
+                }}
+                className="mt-1 block w-64 rounded-md border border-gray-300 px-3 py-2 text-sm"
+              >
+                {TAX_REGIMES.map((r) => (
+                  <option key={r} value={r}>
+                    {TAX_REGIME_LABELS[r]} — {TAX_REGIME_TERRITORIES[r]}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-gray-500">
+                {t("invoices.fiscalSettings.taxRegimeHint")}
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-gray-900">
+                {t("invoices.fiscalSettings.defaultTaxRate", {
+                  tax: TAX_REGIME_LABELS[draft.taxRegime],
+                })}
               </label>
               <input
                 type="number"

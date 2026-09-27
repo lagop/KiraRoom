@@ -7,6 +7,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Loader2, Plus, Trash2 } from "lucide-react";
 import apiClient, { Client } from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
+import { useTaxRegime } from "@/lib/use-tax-regime";
 
 interface InvoiceLineForm {
   id: string;
@@ -17,13 +18,15 @@ interface InvoiceLineForm {
   taxRate: string;
 }
 
-const emptyLine = (id: string): InvoiceLineForm => ({
+// The rate comes from the tenant's regime: 21 is the IVA general rate and is
+// wrong in the Canary Islands (IGIC) and in Ceuta and Melilla (IPSI).
+const emptyLine = (id: string, defaultTaxRate: number): InvoiceLineForm => ({
   id,
   description: "",
   quantity: "1",
   unitPrice: "0.00",
   discountPct: "0",
-  taxRate: "21",
+  taxRate: String(defaultTaxRate),
 });
 
 const inputClassName =
@@ -56,6 +59,7 @@ function formatMoney(cents: number) {
 
 export function InvoiceForm() {
   const t = useTranslations();
+  const { label: taxLabel, defaultRate } = useTaxRegime();
   const router = useRouter();
   const queryClient = useQueryClient();
   const [series, setSeries] = useState("");
@@ -66,7 +70,7 @@ export function InvoiceForm() {
   const [recipientName, setRecipientName] = useState("");
   const [recipientTaxId, setRecipientTaxId] = useState("");
   const [notes, setNotes] = useState("");
-  const [lines, setLines] = useState<InvoiceLineForm[]>([emptyLine("line-1")]);
+  const [lines, setLines] = useState<InvoiceLineForm[]>(() => [emptyLine("line-1", defaultRate)]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -115,7 +119,7 @@ export function InvoiceForm() {
   const addLine = () => {
     setLines((current) => [
       ...current,
-      emptyLine(`line-${Date.now()}-${current.length}`),
+      emptyLine(`line-${Date.now()}-${current.length}`, defaultRate),
     ]);
   };
 
@@ -372,7 +376,7 @@ export function InvoiceForm() {
                 </div>
                 <div className="md:col-span-2">
                   <label htmlFor={`${line.id}-taxRate`} className="mb-1 block text-xs font-medium text-gray-600">
-                    {t("invoices.fields.taxRate")}
+                    {t("invoices.fields.taxRate", { tax: taxLabel })}
                   </label>
                   <input
                     id={`${line.id}-taxRate`}
