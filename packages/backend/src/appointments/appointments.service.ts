@@ -8,6 +8,11 @@ import {
   Optional,
 } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
+import {
+  workingWindowFor,
+  fitsInWindow,
+  minutesOf,
+} from "./working-hours";
 import { ProductEventsService, PRODUCT_EVENTS } from "../common/telemetry/product-events.service";
 import {
   AppointmentStatus,
@@ -978,18 +983,22 @@ export class AppointmentsService {
           ? [professionalId]
           : [];
 
-    // Validate all professionals exist
-    if (professionalsToCheck.length > 0) {
-      const professionals = await this.prisma.professional.findMany({
-        where: {
-          id: { in: professionalsToCheck },
-          tenantId,
-        },
-      });
+    // Validate all professionals exist, and keep their rows: their
+    // workingHours decide which slots are real. This used to count them and
+    // throw the rows away, which is why availability ignored the one place
+    // the schedule is actually stored.
+    const professionalRows =
+      professionalsToCheck.length > 0
+        ? await this.prisma.professional.findMany({
+            where: {
+              id: { in: professionalsToCheck },
+              tenantId,
+            },
+          })
+        : [];
 
-      if (professionals.length !== professionalsToCheck.length) {
-        throw new NotFoundException("One or more professionals not found");
-      }
+    if (professionalRows.length !== professionalsToCheck.length) {
+      throw new NotFoundException("One or more professionals not found");
     }
 
     // Get the service duration if specified
@@ -1045,6 +1054,27 @@ export class AppointmentsService {
       if (professionalsToCheck.length > 0) {
         // Check each professional's availability
         for (const profId of professionalsToCheck) {
+          // Outside this professional's shift the slot is not bookable, no
+          // matter how empty the calendar looks. A missing schedule imposes no
+          // limit, so salons that never filled it in keep working.
+          const row = professionalRows.find((p) => p.id === profId);
+          const window = workingWindowFor(row?.workingHours, date);
+          const slotMinutes = minutesOf(slot.time);
+
+          if (window === null) {
+            // Has a schedule and does not work this weekday.
+            isAvailable = false;
+            break;
+          }
+          if (
+            window &&
+            slotMinutes !== null &&
+            !fitsInWindow(slotMinutes, serviceDuration, window)
+          ) {
+            isAvailable = false;
+            break;
+          }
+
           const profAppointments = existingAppointments.filter(
             (apt) => apt.professionalId === profId,
           );
