@@ -644,7 +644,15 @@ const dynamicContext = getDynamicContext(language, {
       // (which the L-1 e2e suite catches as "tool not called").
       services: [],
       professionals: [],
-      faqs: [],
+      // FAQs are different, and used to be dropped here by mistake: they
+      // were loaded, capped at 20 and truncated just above, and then
+      // thrown away. No tool retrieves them either — SALON_TOOLS covers
+      // services, professionals, availability and salon info, and nothing
+      // else — so the receptionist could not answer a single FAQ a salon
+      // had entered. The prompt is also the right home for them: FAQs are
+      // static reference text, so putting them behind a tool would spend a
+      // whole extra round-trip on every question.
+      faqs,
     });
 
     return baseSystem + this.personaSuffix(context.persona) + '\n\n' + dynamicContext;
