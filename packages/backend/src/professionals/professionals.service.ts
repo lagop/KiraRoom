@@ -2,6 +2,30 @@ import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { CreateProfessionalDto, UpdateProfessionalDto } from "./dto";
 
+/**
+ * What anyone may see about a professional: what the salon's public site
+ * shows. Everything else on the row -- email, phone, userId, commissionRate,
+ * hireDate, terminationDate, availability, settings, stats, isOwner -- is
+ * for the salon's own staff.
+ */
+export const PUBLIC_PROFESSIONAL = {
+  id: true,
+  tenantId: true,
+  firstName: true,
+  lastName: true,
+  profileImage: true,
+  bio: true,
+  specialties: true,
+  portfolioImages: true,
+  yearsExperience: true,
+  languages: true,
+  certifications: true,
+  position: true,
+  isActive: true,
+  workingHours: true,
+  services: { include: { service: true } },
+} as const;
+
 @Injectable()
 export class ProfessionalsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -38,7 +62,19 @@ export class ProfessionalsService {
     });
   }
 
-  async findAll(tenantId: string) {
+  /**
+   * Staff of the salon get full rows. Everyone else gets PUBLIC_PROFESSIONAL
+   * and only active professionals: the public site, the client portal and
+   * anonymous callers have no business with a professional's email, phone,
+   * commission rate or user id.
+   */
+  async findAll(tenantId: string, { staff }: { staff: boolean }) {
+    if (!staff) {
+      return this.prisma.professional.findMany({
+        where: { tenantId, isActive: true },
+        select: PUBLIC_PROFESSIONAL,
+      });
+    }
     return this.prisma.professional.findMany({
       where: { tenantId },
       include: {
@@ -49,6 +85,15 @@ export class ProfessionalsService {
         },
       },
     });
+  }
+
+  /** A full row reduced to what PUBLIC_PROFESSIONAL exposes. */
+  toPublic<T extends Record<string, any>>(professional: T) {
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(PUBLIC_PROFESSIONAL)) {
+      if (key in professional) out[key] = professional[key];
+    }
+    return out;
   }
 
   /**

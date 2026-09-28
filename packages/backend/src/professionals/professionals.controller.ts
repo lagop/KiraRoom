@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Get, Post, Put, Delete, Body, Param, Query, Req, UseGuards } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Put, Delete, Body, Param, Query, Req, UseGuards, NotFoundException } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
@@ -11,7 +11,7 @@ import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { UserRole } from "@prisma/client";
-import { tenantForPublicList } from "../common/tenancy/public-list-tenant";
+import { PublicViewerService } from "../common/tenancy/public-viewer.service";
 import { ProfessionalsService } from "./professionals.service";
 import { CreateProfessionalDto, UpdateProfessionalDto } from "./dto";
 import { OnboardingDetectorService } from "../onboarding/onboarding-detector.service";
@@ -24,6 +24,7 @@ export class ProfessionalsController {
   constructor(
     private readonly professionalsService: ProfessionalsService,
     private readonly onboardingDetector: OnboardingDetectorService,
+    private readonly publicViewer: PublicViewerService,
   ) {}
 
   @Post()
@@ -48,8 +49,10 @@ export class ProfessionalsController {
   @Public()
   @ApiOperation({ summary: "Get all professionals with optional filters" })
   async findAll(@Req() req: any, @Query("tenantId") tenantId?: string) {
-    // Never unscoped: see tenantForPublicList for why this was a leak.
-    return this.professionalsService.findAll(tenantForPublicList(req, tenantId));
+    // Never unscoped, and full rows only for the salon's own staff: see
+    // PublicViewerService for why this was a leak.
+    const viewer = await this.publicViewer.resolve(req, tenantId);
+    return this.professionalsService.findAll(viewer.tenantId, viewer);
   }
 
   @Get(":id")
@@ -57,8 +60,15 @@ export class ProfessionalsController {
   @ApiOperation({ summary: "Get professional by ID" })
   @ApiResponse({ status: 200, description: "Professional found" })
   @ApiResponse({ status: 404, description: "Professional not found" })
-  async findOne(@Param("id", ParseUUIDPipe) id: string) {
-    return this.professionalsService.findOne(id);
+  async findOne(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
+    const professional = await this.professionalsService.findOne(id);
+    // Anyone holding a professional's id (it is in ICS and QR URLs) used to
+    // get the full row. Staff of that salon still do; everyone else gets the
+    // public projection, and an inactive professional is not public.
+    const { staff } = await this.publicViewer.resolve(req, professional.tenantId);
+    if (staff) return professional;
+    if (!professional.isActive) throw new NotFoundException(`Professional with ID ${id} not found`);
+    return this.professionalsService.toPublic(professional);
   }
 
   @Put(":id")

@@ -33,6 +33,7 @@ describe("POST /services", () => {
     const controller = new ServicesController(
       new ServicesService(prisma as any),
       { markStepCompleted: async (t: string) => { marked.push(t); } } as any,
+      {} as any,
     );
 
     await controller.create(OWNER, { ...BODY } as any);
@@ -48,6 +49,7 @@ describe("POST /services", () => {
     const controller = new ServicesController(
       new ServicesService(prisma as any),
       { markStepCompleted: async () => undefined } as any,
+      {} as any,
     );
 
     await controller.create(OWNER, { ...BODY, tenantId: "demo-tenant" } as any);

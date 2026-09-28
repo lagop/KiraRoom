@@ -2,9 +2,15 @@ import { ApiProperty } from '@nestjs/swagger';
 import { IsString, IsEmail, IsOptional, IsDateString, IsArray, IsNumber, IsBoolean, IsUUID } from 'class-validator';
 
 export class CreateProfessionalDto {
-  @ApiProperty({ description: 'Tenant ID', example: 'tenant-uuid-here' })
+  /**
+   * Ignored: AdminProfessionalsController sets it from the caller's token.
+   * Optional so a body without it validates -- the dashboard no longer sends
+   * one, and required here it made every create a 400.
+   */
+  @ApiProperty({ description: 'Ignored; the tenant comes from the token', required: false })
   @IsString()
-  tenantId: string;
+  @IsOptional()
+  tenantId?: string;
 
   @ApiProperty({ description: 'First name', example: 'John' })
   @IsString()

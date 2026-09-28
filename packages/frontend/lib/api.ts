@@ -83,7 +83,13 @@ export function isCredentialEndpoint(endpoint: string): boolean {
 export function loginRedirectTarget(
   currentPath: string,
   isSaasUser: boolean,
+  isClient = false,
 ): string | null {
+  // A salon's client signs in with a modal on that salon's site; /login is
+  // the staff dashboard's page. Sending them there on an expired session
+  // took them off the salon's site altogether. The caller signs them out in
+  // place instead.
+  if (isClient) return null;
   const target = isSaasUser ? "/saas/login" : "/login";
   // Tolerate a trailing slash so "/login/" is recognised as the same page.
   const normalized =
@@ -1643,12 +1649,15 @@ class ApiClient implements ApiClientInterface {
       const userJson = typeof window !== "undefined" ? localStorage.getItem("user") : null;
       const user = userJson ? JSON.parse(userJson) : null;
       const isSaasUser = user?.role === "saas_owner";
+      const isClient = user?.role === "client";
       if (typeof window !== "undefined") {
         // Clear SaaS user cookie
         document.cookie = "saas_user=; path=/; max-age=0";
+        // A client is signed out where they are (see loginRedirectTarget).
+        if (isClient) localStorage.removeItem("user");
         // null when we are already on that login page -- navigating there
         // again would reload it and loop. See loginRedirectTarget.
-        const target = loginRedirectTarget(window.location.pathname, isSaasUser);
+        const target = loginRedirectTarget(window.location.pathname, isSaasUser, isClient);
         if (target) window.location.href = target;
       }
       // Throw a recognisable error so callers don't try to parse the
@@ -1659,12 +1668,15 @@ class ApiClient implements ApiClientInterface {
       const userJson = typeof window !== "undefined" ? localStorage.getItem("user") : null;
       const user = userJson ? JSON.parse(userJson) : null;
       const isSaasUser = user?.role === "saas_owner";
+      const isClient = user?.role === "client";
       if (typeof window !== "undefined") {
         // Clear SaaS user cookie
         document.cookie = "saas_user=; path=/; max-age=0";
+        // A client is signed out where they are (see loginRedirectTarget).
+        if (isClient) localStorage.removeItem("user");
         // null when we are already on that login page -- navigating there
         // again would reload it and loop. See loginRedirectTarget.
-        const target = loginRedirectTarget(window.location.pathname, isSaasUser);
+        const target = loginRedirectTarget(window.location.pathname, isSaasUser, isClient);
         if (target) window.location.href = target;
       }
       throw new Error("Unauthorized");

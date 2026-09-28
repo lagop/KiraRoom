@@ -23,6 +23,7 @@ function setup() {
   const controller = new ProfessionalsController(
     new ProfessionalsService(prisma as any),
     { detect: async (t: string) => { detected.push(t); } } as any,
+    {} as any,
   );
   return { controller, calls, detected };
 }

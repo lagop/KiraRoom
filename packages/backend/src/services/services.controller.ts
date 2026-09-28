@@ -11,7 +11,7 @@ import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { UserRole } from "@prisma/client";
-import { tenantForPublicList } from "../common/tenancy/public-list-tenant";
+import { PublicViewerService } from "../common/tenancy/public-viewer.service";
 import { ServicesService } from "./services.service";
 import { CreateServiceDto, UpdateServiceDto } from "./dto";
 import { OnboardingDetectorService } from "../onboarding/onboarding-detector.service";
@@ -24,6 +24,7 @@ export class ServicesController {
   constructor(
     private readonly servicesService: ServicesService,
     private readonly onboardingDetector: OnboardingDetectorService,
+    private readonly publicViewer: PublicViewerService,
   ) {}
 
   @Post()
@@ -44,8 +45,10 @@ export class ServicesController {
   @Public()
   @ApiOperation({ summary: "Get all services with optional filters" })
   async findAll(@Req() req: any, @Query("tenantId") tenantId?: string) {
-    // Never unscoped: see tenantForPublicList for why this was a leak.
-    return this.servicesService.findAll(tenantForPublicList(req, tenantId));
+    // Never unscoped: see PublicViewerService for why this was a leak. A
+    // salon's catalogue is public, so every viewer gets the same rows.
+    const { tenantId: resolved } = await this.publicViewer.resolve(req, tenantId);
+    return this.servicesService.findAll(resolved);
   }
 
   @Get(":id")
