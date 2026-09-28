@@ -13,6 +13,7 @@ import {
   AppointmentFiltersDto,
 } from "./appointments.service";
 import { AvailableSlotsDto } from "./dto/available-slots.dto";
+import { OnlineBookingDto, StaffBookingDto } from "./dto/book-appointment.dto";
 import { Public } from "../auth/decorators/public.decorator";
 import { Roles } from "../auth/decorators/roles.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
@@ -39,8 +40,8 @@ export class AppointmentsController {
   @Public()
   @ApiOperation({ summary: "Create a new appointment (public)" })
   @ApiResponse({ status: 201, description: "Appointment created successfully" })
-  async create(@Body() createAppointmentDto: CreateAppointmentDto) {
-    return this.appointmentsService.createOnline(createAppointmentDto);
+  async create(@Body() dto: OnlineBookingDto) {
+    return this.appointmentsService.createOnline(dto);
   }
 
   @Post("staff")
@@ -52,7 +53,7 @@ export class AppointmentsController {
     description: "Forbidden - insufficient permissions",
   })
   async createByStaff(
-    @Body() createAppointmentDto: CreateAppointmentDto,
+    @Body() createAppointmentDto: StaffBookingDto,
     @Req() req: AuthenticatedRequest,
   ) {
     return this.appointmentsService.createByStaff(
