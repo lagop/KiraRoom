@@ -175,7 +175,10 @@ export const transformToCalendarFormat = (
   const calendarProfessionals = backendProfessionals.map(professional => ({
     id: professional.id,
     name: `${professional.firstName} ${professional.lastName}`,
-    avatarUrl: professional.profileImage || `https://i.pravatar.cc/150?u=${professional.id}`,
+    // No stock face for a professional without a photo: the avatar falls back
+    // to initials. This used to load a random stranger from i.pravatar.cc,
+    // sending each professional id to that third party.
+    avatarUrl: professional.profileImage || undefined,
   }));
   
   return { appointments: calendarAppointments, professionals: calendarProfessionals };

@@ -1346,10 +1346,7 @@ export interface ApiClientInterface {
     };
   }>;
   getPayment(id: string): Promise<Payment>;
-  getTodayPayments(): Promise<{
-    payments: any[];
-    totals: { cash: number; card: number };
-  }>;
+  getTodayPayments(): Promise<any[]>;
   deletePayment(id: string): Promise<void>;
   createPayment(data: CreatePaymentDto): Promise<Payment>;
   updatePaymentStatus(id: string, status: string): Promise<Payment>;
@@ -2523,14 +2520,10 @@ class ApiClient implements ApiClientInterface {
   }
 
   // Get today's payments for POS
-  async getTodayPayments(): Promise<{
-    payments: any[];
-    totals: { cash: number; card: number };
-  }> {
-    return this.request<{
-      payments: any[];
-      totals: { cash: number; card: number };
-    }>("/payments/today");
+  // An array: PaymentsService.getTodayPayments returns the rows themselves.
+  // This was typed as { payments, totals }, which nothing returns.
+  async getTodayPayments(): Promise<any[]> {
+    return this.request<any[]>("/payments/today");
   }
 
   // Delete/cancel a payment (admin only)

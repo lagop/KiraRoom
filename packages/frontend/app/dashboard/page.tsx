@@ -62,7 +62,7 @@ const getProfessionalName = (professional: any): string => {
 
 export default function DashboardPage() {
   const t = useTranslations();
-  const { data, loading, error, refresh } = useDashboardData();
+  const { data, loading, error, partialFailures, refresh } = useDashboardData();
 
   if (loading) {
     return (
@@ -98,6 +98,20 @@ export default function DashboardPage() {
 
   return (
     <>
+      {partialFailures.length > 0 && (
+        <div className="mb-4 flex items-center justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-amber-800">
+          <span className="flex items-center gap-2">
+            <AlertCircle className="h-5 w-5 shrink-0" />
+            {t("dashboard.partial_load_warning")}
+          </span>
+          <button
+            onClick={() => refresh()}
+            className="shrink-0 rounded-lg bg-amber-600 px-3 py-1.5 text-sm text-white hover:bg-amber-700"
+          >
+            {t("dashboard.retry")}
+          </button>
+        </div>
+      )}
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

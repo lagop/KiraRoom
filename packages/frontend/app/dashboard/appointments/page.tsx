@@ -150,6 +150,7 @@ export default function AppointmentsPage() {
   const [view, setView] = useState<"list" | "calendar">("list");
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [professionalFilter, setProfessionalFilter] = useState("");
@@ -184,127 +185,16 @@ export default function AppointmentsPage() {
 
   const fetchAppointments = async () => {
     try {
+      setLoadError(null);
       const data = await apiClient.getAppointments();
       setAppointments(data as unknown as Appointment[]);
     } catch (error) {
+      // No invented diary. This used to show six fake appointments (Sarah
+      // Johnson with John Smith, January 2026) with no warning, and a status
+      // change on one of them then failed on its non-UUID id.
       console.error("Error fetching appointments:", error);
-      // Fallback to mock data if API fails
-      setAppointments([
-        {
-          id: "1",
-          scheduledDate: "2026-01-06",
-          scheduledTime: "10:00 AM",
-          status: "completed",
-          price: 65,
-          client: "Sarah Johnson",
-          professional: "John Smith",
-          service: "Haircut & Styling",
-          createdAt: "",
-          updatedAt: "",
-          tenantId: "",
-          clientId: "",
-          serviceId: "",
-          professionalId: "",
-          duration: 60,
-          currency: "USD",
-          paymentStatus: "pending",
-        },
-        {
-          id: "2",
-          scheduledDate: "2026-01-06",
-          scheduledTime: "11:30 AM",
-          status: "in_progress",
-          price: 120,
-          client: "Mike Chen",
-          professional: "David Kim",
-          service: "Full Body Massage",
-          createdAt: "",
-          updatedAt: "",
-          tenantId: "",
-          clientId: "",
-          serviceId: "",
-          professionalId: "",
-          duration: 60,
-          currency: "USD",
-          paymentStatus: "pending",
-        },
-        {
-          id: "3",
-          scheduledDate: "2026-01-06",
-          scheduledTime: "2:00 PM",
-          status: "pending",
-          price: 85,
-          client: "Emily Davis",
-          professional: "Lisa Brown",
-          service: "Facial Treatment",
-          createdAt: "",
-          updatedAt: "",
-          tenantId: "",
-          clientId: "",
-          serviceId: "",
-          professionalId: "",
-          duration: 60,
-          currency: "USD",
-          paymentStatus: "pending",
-        },
-        {
-          id: "4",
-          scheduledDate: "2026-01-06",
-          scheduledTime: "3:30 PM",
-          status: "confirmed",
-          price: 55,
-          client: "Alex Thompson",
-          professional: "Maria Garcia",
-          service: "Gel Nail Application",
-          createdAt: "",
-          updatedAt: "",
-          tenantId: "",
-          clientId: "",
-          serviceId: "",
-          professionalId: "",
-          duration: 60,
-          currency: "USD",
-          paymentStatus: "pending",
-        },
-        {
-          id: "5",
-          scheduledDate: "2026-01-06",
-          scheduledTime: "4:00 PM",
-          status: "confirmed",
-          price: 150,
-          client: "Jessica Wilson",
-          professional: "John Smith",
-          service: "Hair Color & Highlights",
-          createdAt: "",
-          updatedAt: "",
-          tenantId: "",
-          clientId: "",
-          serviceId: "",
-          professionalId: "",
-          duration: 60,
-          currency: "USD",
-          paymentStatus: "pending",
-        },
-        {
-          id: "6",
-          scheduledDate: "2026-01-07",
-          scheduledTime: "9:00 AM",
-          status: "confirmed",
-          price: 140,
-          client: "Robert Lee",
-          professional: "David Kim",
-          service: "Deep Tissue Massage",
-          createdAt: "",
-          updatedAt: "",
-          tenantId: "",
-          clientId: "",
-          serviceId: "",
-          professionalId: "",
-          duration: 60,
-          currency: "USD",
-          paymentStatus: "pending",
-        },
-      ] as unknown as Appointment[]);
+      setAppointments([]);
+      setLoadError(error instanceof Error ? error.message : "Error");
     } finally {
       setLoading(false);
     }
@@ -824,6 +714,11 @@ export default function AppointmentsPage() {
 
   return (
     <div className="space-y-6">
+      {loadError && (
+        <div className="bg-red-50 text-red-600 p-4 rounded-lg">
+          {t("appointments.load_failed")}: {loadError}
+        </div>
+      )}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">

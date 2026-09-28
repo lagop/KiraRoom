@@ -182,10 +182,21 @@ export function useDashboardData() {
   const [data, setData] = useState<DashboardData>(EMPTY);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Sections that failed to load. Each request still falls back to an empty
+  // value so one failure does not blank the whole dashboard -- but it used to
+  // do so silently, showing €0 and 0 clients as if they were real figures.
+  const [partialFailures, setPartialFailures] = useState<string[]>([]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
+    const failed: string[] = [];
+    const soft = <T,>(name: string, request: Promise<T>, fallback: T) =>
+      request.catch((err) => {
+        console.error(`Dashboard: ${name} failed to load:`, err);
+        failed.push(name);
+        return fallback;
+      });
     try {
       const [
         overview,
@@ -197,18 +208,18 @@ export function useDashboardData() {
         pendingPayments,
         unread,
       ] = await Promise.all([
-        apiClient.getAnalyticsOverview(1).catch(() => null),
-        apiClient.getAppointmentStatusByDays(14).catch(() => []),
-        apiClient.getTodayPayments().catch(() => []),
-        apiClient.getClients().catch(() => []),
-        apiClient.getProfessionals().catch(() => []),
-        apiClient
-          .getAppointments({
-            status: "pending",
-          })
-          .catch(() => []),
-        apiClient.getPendingPaymentAppointments().catch(() => []),
-        apiClient.getUnreadNotificationCount().catch(() => ({ count: 0 })),
+        soft("overview", apiClient.getAnalyticsOverview(1), null),
+        soft("statusByDays", apiClient.getAppointmentStatusByDays(14), [] as any[]),
+        soft("todayPayments", apiClient.getTodayPayments(), [] as any[]),
+        soft("clients", apiClient.getClients(), [] as any[]),
+        soft("professionals", apiClient.getProfessionals(), [] as any[]),
+        soft(
+          "upcoming",
+          apiClient.getAppointments({ status: "pending" }),
+          [] as any[],
+        ),
+        soft("pendingPayments", apiClient.getPendingPaymentAppointments(), [] as any[]),
+        soft("unread", apiClient.getUnreadNotificationCount(), { count: 0 }),
       ]);
 
       const todayPaymentsTotal = (todayPayments as TodayPayment[]).reduce(
@@ -261,6 +272,7 @@ export function useDashboardData() {
         ),
         unreadNotificationsCount: (unread as any)?.count ?? 0,
       });
+      setPartialFailures(failed);
     } catch (err) {
       console.error("Failed to load dashboard data:", err);
       setError(
@@ -275,5 +287,5 @@ export function useDashboardData() {
     fetchData();
   }, [fetchData]);
 
-  return { data, loading, error, refresh: fetchData };
+  return { data, loading, error, partialFailures, refresh: fetchData };
 }

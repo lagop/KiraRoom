@@ -4,6 +4,7 @@ import { X, Search, CheckCircle, Loader2, Zap, DollarSign, Percent } from "lucid
 import { SlotClickData } from "./TimeSlot";
 import { Professional } from "./types";
 import apiClient from "../../lib/api";
+import { useToast } from "@/components/ui/use-toast";
 
 interface ClientOption {
   id: string;
@@ -32,6 +33,7 @@ export const NewAppointmentPopover: React.FC<NewAppointmentPopoverProps> = ({
   onClose,
   onSuccess,
 }) => {
+  const { toast } = useToast();
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [services, setServices] = useState<ServiceOption[]>([]);
   const [clientId, setClientId] = useState("");
@@ -138,7 +140,13 @@ export const NewAppointmentPopover: React.FC<NewAppointmentPopoverProps> = ({
 
       onSuccess();
     } catch (err) {
+      // It used to fail silently: the popover stayed open with no word why.
       console.error("Error creating appointment:", err);
+      toast({
+        title: "No se pudo crear la cita",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
     } finally {
       setLoading(false);
     }

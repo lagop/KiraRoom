@@ -192,9 +192,10 @@ export default function AnalyticsPage() {
       } else {
         setError(t("analytics.failed_to_load_data"));
       }
-      if (!err?.response?.data?.upgradeRequired) {
-        setData(getMockData());
-      }
+      // No sample charts under the error: this used to draw invented
+      // revenue (12,500 to 21,000 across Aug-Jan) and service counts that a
+      // salon could read as its own.
+      setData(null);
     } finally {
       setLoading(false);
     }
@@ -222,39 +223,6 @@ export default function AnalyticsPage() {
       loadAdvancedData(activeTab);
     }
   }, [activeTab, timeRange, professionalRange, features]);
-
-  const getMockData = (): AnalyticsData => ({
-    stats: {
-      totalRevenue: 0,
-      totalAppointments: 0,
-      newClients: 0,
-      avgOrderValue: 0,
-      revenueChange: 0,
-      appointmentsChange: 0,
-      clientsChange: 0,
-      orderValueChange: 0,
-    },
-    revenueData: [
-      { month: "Aug", revenue: 12500 },
-      { month: "Sep", revenue: 14200 },
-      { month: "Oct", revenue: 15800 },
-      { month: "Nov", revenue: 16500 },
-      { month: "Dec", revenue: 18200 },
-      { month: "Jan", revenue: 21000 },
-    ],
-    servicePopularity: [
-      { name: "Hair Styling", count: 156, percentage: 35 },
-      { name: "Massage", count: 98, percentage: 22 },
-      { name: "Nail Care", count: 134, percentage: 30 },
-      { name: "Facials", count: 58, percentage: 13 },
-    ],
-    appointmentStatus: [
-      { name: "Completed", count: 245, color: "bg-green-500" },
-      { name: "Confirmed", count: 89, color: "bg-blue-500" },
-      { name: "Pending", count: 34, color: "bg-yellow-500" },
-      { name: "Cancelled", count: 18, color: "bg-red-500" },
-    ],
-  });
 
   const stats = data?.stats || {
     totalRevenue: 0,
