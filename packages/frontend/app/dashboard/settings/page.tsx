@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { StripeSettingsContent } from "./stripe-settings-content";
 import apiClient from "@/lib/api";
+import { getCurrentUser } from "@/lib/utils";
 import { useTranslations } from "@/lib/use-translation";
 import { SALON_TIMEZONES, DEFAULT_SALON_TIMEZONE } from "@kira/shared";
 
@@ -415,6 +416,89 @@ const defaultSettingsData = {
   ],
 };
 
+/**
+ * The fields this page can actually save, and where each lives on the tenant.
+ *
+ * This page used to prefill every field with invented values ("Kira Room",
+ * "Calle Principal 123", "+34 123 456 789", 09:00-20:00, a 21% tax rate...),
+ * save only language, currency and timezone, and then say "settings updated"
+ * for all of it. Fields not listed here have no backend yet: they render
+ * disabled and empty, marked as coming soon, and are never reported as saved.
+ */
+const PERSISTED_FIELDS = new Set([
+  "businessName",
+  "address",
+  "contactPhone",
+  "contactEmail",
+  "openingTime",
+  "closingTime",
+  "language",
+  "timezone",
+  "currency",
+  "dateFormat",
+  "timeFormat",
+  "cancellationPolicy",
+  "allowProfessionalCrossBooking",
+]);
+
+type Tenant = Awaited<ReturnType<typeof apiClient.getTenant>>;
+type TenantUpdate = Parameters<typeof apiClient.updateTenant>[0];
+
+/** Tenant row -> the page's field values. */
+function settingsFromTenant(tenant: Tenant): Record<string, any> {
+  const hours = (tenant.openingHours ?? {}) as { open?: unknown; close?: unknown };
+  return {
+    businessName: tenant.name ?? "",
+    address: tenant.street ?? "",
+    contactPhone: tenant.phone ?? "",
+    contactEmail: tenant.email ?? "",
+    openingTime: typeof hours.open === "string" ? hours.open : "",
+    closingTime: typeof hours.close === "string" ? hours.close : "",
+    language: tenant.language,
+    timezone: tenant.timezone,
+    currency: tenant.currency,
+    // Stored as "DD/MM/YYYY" and "24h"; the page's options are "dd/mm/yyyy"
+    // and "24".
+    dateFormat: (tenant.dateFormat ?? "DD/MM/YYYY").toLowerCase(),
+    timeFormat: tenant.timeFormat === "12h" ? "12" : "24",
+    cancellationPolicy: String(tenant.minCancelHours ?? 24),
+  };
+}
+
+/** Field values -> the PATCH /auth/tenant body, only for what changed. */
+function tenantUpdateFrom(
+  settings: Record<string, any>,
+  saved: Record<string, any>,
+): TenantUpdate {
+  const changed = (id: string) => settings[id] !== saved[id];
+  const update: TenantUpdate = {};
+  if (changed("businessName")) update.name = settings.businessName;
+  if (changed("address")) update.street = settings.address;
+  if (changed("contactPhone")) update.phone = settings.contactPhone;
+  if (changed("contactEmail")) update.email = settings.contactEmail;
+  if (changed("language")) update.language = settings.language;
+  if (changed("timezone")) update.timezone = settings.timezone;
+  if (changed("currency")) update.currency = settings.currency;
+  if (changed("dateFormat")) update.dateFormat = String(settings.dateFormat).toUpperCase();
+  if (changed("timeFormat")) update.timeFormat = settings.timeFormat === "12" ? "12h" : "24h";
+  if (changed("cancellationPolicy")) update.minCancelHours = Number(settings.cancellationPolicy);
+  if (
+    (changed("openingTime") || changed("closingTime")) &&
+    settings.openingTime &&
+    settings.closingTime
+  ) {
+    update.openingHours = { open: settings.openingTime, close: settings.closingTime };
+  }
+  return update;
+}
+
+/** An empty value of the right shape, for fields with nothing to show. */
+function emptyValueFor(field: { type: string }) {
+  if (field.type === "checkbox-group") return [];
+  if (field.type === "switch") return "false";
+  return "";
+}
+
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState("general");
   const [loading, setLoading] = useState(false);
@@ -424,11 +508,17 @@ export default function SettingsPage() {
     Object.values(defaultSettingsData)
       .flat()
       .forEach((field) => {
-        initial[field.id] = field.value;
+        initial[field.id] = emptyValueFor(field);
       });
     return initial;
   });
-  const [tenantSettings, setTenantSettings] = useState<any>(null);
+  // What the tenant holds, as field values: the baseline for "changed".
+  const [savedSettings, setSavedSettings] = useState<Record<string, any>>({});
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const role = typeof window !== "undefined" ? getCurrentUser()?.role : undefined;
+  // PATCH /auth/tenant is owner/admin only.
+  const canAccessAdminSettings = role === "owner" || role === "admin";
   const [professionalCrossBooking, setProfessionalCrossBooking] =
     useState<boolean>(false);
   const t = useTranslations();
@@ -437,14 +527,9 @@ export default function SettingsPage() {
     const loadTenantSettings = async () => {
       try {
         const tenant = await apiClient.getTenant();
-        setTenantSettings(tenant);
-        // Update settings with tenant values
-        setSettings((prev) => ({
-          ...prev,
-          language: tenant.language,
-          currency: tenant.currency,
-          timezone: tenant.timezone,
-        }));
+        const fromTenant = settingsFromTenant(tenant);
+        setSavedSettings(fromTenant);
+        setSettings((prev) => ({ ...prev, ...fromTenant }));
 
         // Load professional cross-booking setting
         try {
@@ -462,11 +547,10 @@ export default function SettingsPage() {
           setProfessionalCrossBooking(false);
         }
       } catch (error) {
+        // Say so, rather than logging out: this sent the browser to /login on
+        // any error, including a 500. The API client already handles 401.
         console.error("Error loading tenant settings:", error);
-        // If authentication fails, redirect to login
-        if (typeof window !== "undefined") {
-          window.location.href = "/login";
-        }
+        setLoadError(error instanceof Error ? error.message : "Error");
       }
     };
 
@@ -483,43 +567,29 @@ export default function SettingsPage() {
 
   const handleSubmit = async () => {
     setLoading(true);
+    setSaveError(null);
 
     try {
-      // Update tenant settings (language, currency, timezone)
-      const tenantUpdateData: any = {};
-      if (settings.language !== tenantSettings?.language) {
-        tenantUpdateData.language = settings.language;
-      }
-      if (settings.currency !== tenantSettings?.currency) {
-        tenantUpdateData.currency = settings.currency;
-      }
-      if (settings.timezone !== tenantSettings?.timezone) {
-        tenantUpdateData.timezone = settings.timezone;
-      }
-
-      if (Object.keys(tenantUpdateData).length > 0) {
-        await apiClient.updateTenant(tenantUpdateData);
-        // Update local tenant settings
-        setTenantSettings((prev: any) => ({ ...prev, ...tenantUpdateData }));
+      const tenantUpdate = tenantUpdateFrom(settings, savedSettings);
+      if (Object.keys(tenantUpdate).length > 0) {
+        await apiClient.updateTenant(tenantUpdate);
+        setSavedSettings((prev) => ({
+          ...prev,
+          ...Object.fromEntries(
+            Array.from(PERSISTED_FIELDS).map((id) => [id, settings[id]]),
+          ),
+        }));
       }
 
-      // Update professional cross-booking setting
       await apiClient.updateProfessionalCrossBookingSetting(
         professionalCrossBooking,
       );
 
-      // TODO: Save other settings (business info, etc.) when backend endpoints are available
-
-      console.log("Settings saved successfully");
       setSuccess(true);
     } catch (error) {
+      // It used to fail silently, the button simply returning to "save".
       console.error("Error updating settings:", error);
-      // If authentication fails, redirect to login
-      if (error instanceof Error && error.message.includes("401")) {
-        if (typeof window !== "undefined") {
-          window.location.href = "/login";
-        }
-      }
+      setSaveError(error instanceof Error ? error.message : "Error");
     } finally {
       setLoading(false);
     }
@@ -530,13 +600,12 @@ export default function SettingsPage() {
       activeTab,
     );
 
-    // Check if field is admin-only and user is not owner/admin
-    // For now, we'll assume the user can access admin settings if they can see the settings page
-    // In a real app, you'd check the user's role from authentication
     const isAdminOnly = field.adminOnly;
-    const canAccessAdminSettings = true; // TODO: Check user role from auth context
+    // No backend for it yet, or not the caller's to change.
+    const unavailable = !PERSISTED_FIELDS.has(field.id);
+    const locked = isAdvanced || unavailable || !canAccessAdminSettings;
 
-    const baseClassName = `w-full ${isAdvanced ? "opacity-50 cursor-not-allowed" : ""}`;
+    const baseClassName = `w-full ${locked ? "opacity-50 cursor-not-allowed" : ""}`;
 
     // Skip rendering admin-only fields if user doesn't have permission
     if (isAdminOnly && !canAccessAdminSettings) {
@@ -551,7 +620,7 @@ export default function SettingsPage() {
             type={field.type}
             value={settings[field.id]}
             onChange={(e) => handleFieldChange(field.id, e.target.value)}
-            disabled={isAdvanced}
+            disabled={locked}
             className={`px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors ${baseClassName}`}
           />
         );
@@ -562,7 +631,7 @@ export default function SettingsPage() {
             type="number"
             value={settings[field.id]}
             onChange={(e) => handleFieldChange(field.id, e.target.value)}
-            disabled={isAdvanced}
+            disabled={locked}
             className={`px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors ${baseClassName}`}
           />
         );
@@ -573,7 +642,7 @@ export default function SettingsPage() {
             type="time"
             value={settings[field.id]}
             onChange={(e) => handleFieldChange(field.id, e.target.value)}
-            disabled={isAdvanced}
+            disabled={locked}
             className={`px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors ${baseClassName}`}
           />
         );
@@ -583,9 +652,14 @@ export default function SettingsPage() {
           <select
             value={settings[field.id]}
             onChange={(e) => handleFieldChange(field.id, e.target.value)}
-            disabled={isAdvanced}
+            disabled={locked}
             className={`px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors ${baseClassName}`}
           >
+            {settings[field.id] === "" && <option value="" />}
+            {settings[field.id] !== "" &&
+              !field.options.some((o: any) => o.id === settings[field.id]) && (
+                <option value={settings[field.id]}>{settings[field.id]}</option>
+              )}
             {field.options.map((option: any) => (
               <option key={option.id} value={option.id}>
                 {option.label}
@@ -597,8 +671,8 @@ export default function SettingsPage() {
       case "textarea":
         return (
           <textarea
-            value={settings[field.id] ?? field.value}
-            disabled={isAdvanced}
+            value={settings[field.id] ?? ""}
+            disabled={locked}
             onChange={(e) => handleFieldChange(field.id, e.target.value)}
             rows={3}
             className={`px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors resize-none ${baseClassName}`}
@@ -627,7 +701,7 @@ export default function SettingsPage() {
             <input
               type="checkbox"
               checked={checked}
-              disabled={isAdvanced}
+              disabled={locked}
               onChange={onChange}
               className="sr-only peer"
             />
@@ -636,7 +710,7 @@ export default function SettingsPage() {
         );
 
       case "checkbox-group":
-        const currentValue = settings[field.id] ?? field.value;
+        const currentValue = settings[field.id] ?? [];
         return (
           <div className="flex flex-wrap gap-2">
             {field.options.map((option: any) => (
@@ -651,7 +725,7 @@ export default function SettingsPage() {
                 <input
                   type="checkbox"
                   checked={currentValue.includes(option.id)}
-                  disabled={isAdvanced}
+                  disabled={locked}
                   onChange={(e) => {
                     const newValue = e.target.checked
                       ? [...currentValue, option.id]
@@ -677,7 +751,7 @@ export default function SettingsPage() {
           >
             <input
               type="file"
-              disabled={isAdvanced}
+              disabled={locked}
               onChange={(e) =>
                 handleFieldChange(field.id, e.target.files?.[0] || null)
               }
@@ -747,6 +821,16 @@ export default function SettingsPage() {
 
         {/* Tab Content */}
         <div className="p-6">
+          {loadError && (
+            <div className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">
+              {t("settings.load_failed")}: {loadError}
+            </div>
+          )}
+          {saveError && (
+            <div className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">
+              {t("settings.save_failed")}: {saveError}
+            </div>
+          )}
           {isAdvancedTab && (
             <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg flex items-start space-x-3">
               <ShieldAlert className="w-5 h-5 text-yellow-600 mt-0.5" />
@@ -771,6 +855,11 @@ export default function SettingsPage() {
                 <div key={field.id} className="space-y-2">
                   <label className="block text-sm font-medium text-gray-700">
                     {field.label}
+                    {!PERSISTED_FIELDS.has(field.id) && (
+                      <span className="ml-2 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-normal text-gray-500">
+                        {t("settings.coming_soon")}
+                      </span>
+                    )}
                   </label>
                   {field.description && (
                     <p className="text-xs text-gray-500">{field.description}</p>

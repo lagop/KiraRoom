@@ -3561,6 +3561,11 @@ class ApiClient implements ApiClientInterface {
     taxId?: string | null;
     taxIdType?: "nif" | "cif" | "nie" | "passport" | "other" | null;
     legalName?: string | null;
+    email?: string | null;
+    dateFormat?: string;
+    timeFormat?: string;
+    minCancelHours?: number;
+    openingHours?: Record<string, unknown> | null;
   }> {
     return this.request("/auth/tenant");
   }
@@ -3579,6 +3584,10 @@ class ApiClient implements ApiClientInterface {
     state?: string;
     phone?: string;
     logo?: string;
+    email?: string;
+    minCancelHours?: number;
+    /** Merged server-side into the tenant's openingHours JSON. */
+    openingHours?: { open: string; close: string };
   }): Promise<{
     id: string;
     name: string;

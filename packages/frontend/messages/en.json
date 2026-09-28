@@ -1143,7 +1143,10 @@
     "section_hours": "Hours",
     "section_payments": "Payments and billing",
     "section_notifications": "Notifications",
-    "section_account": "Account"
+    "section_account": "Account",
+    "coming_soon": "Coming soon",
+    "load_failed": "Could not load settings",
+    "save_failed": "Could not save settings"
   },
   "clients": {
     "title": "Clients",

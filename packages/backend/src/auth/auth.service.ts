@@ -572,6 +572,13 @@ export class AuthService {
         state: true,
         phone: true,
         logo: true,
+        // Consumed by /dashboard/settings, which used to show invented
+        // values for all of these and save none of them.
+        email: true,
+        dateFormat: true,
+        timeFormat: true,
+        minCancelHours: true,
+        openingHours: true,
         // Tax identifiers (consumed by /dashboard/settings/fiscal).
         taxId: true,
         taxIdType: true,
@@ -587,9 +594,27 @@ export class AuthService {
   }
 
   async updateTenant(tenantId: string, updateData: any) {
+    const data = { ...updateData };
+    if (updateData.openingHours) {
+      // Merge rather than replace: onboarding stores other keys in the same
+      // JSON, and only { open, close } is edited from settings.
+      const current = await this.prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { openingHours: true },
+      });
+      const existing =
+        current?.openingHours && typeof current.openingHours === "object"
+          ? (current.openingHours as Record<string, unknown>)
+          : {};
+      data.openingHours = {
+        ...existing,
+        open: updateData.openingHours.open,
+        close: updateData.openingHours.close,
+      };
+    }
     return this.prisma.tenant.update({
       where: { id: tenantId },
-      data: updateData,
+      data,
     });
   }
 
