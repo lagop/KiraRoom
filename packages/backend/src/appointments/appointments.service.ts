@@ -253,6 +253,11 @@ export class AppointmentsService {
       service.duration,
     );
 
+    const tenantRow = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { timezone: true },
+    });
+
     // Convert scheduledDate to Date if it's a string
     const scheduledDate =
       typeof createAppointmentDto.scheduledDate === "string"
@@ -269,6 +274,13 @@ export class AppointmentsService {
         professionalId: dto.professionalId,
         scheduledDate: scheduledDate,
         scheduledTime: dto.scheduledTime,
+        // The real instant. The reminder jobs select on it, and it was never
+        // written: no appointment ever got a 24-hour or 1-hour reminder.
+        startTime: salonInstant(
+          scheduledDate,
+          dto.scheduledTime,
+          tenantRow?.timezone || "Europe/Madrid",
+        ),
         duration: service.duration,
         endTime: endTime,
         status: AppointmentStatus.pending,
@@ -546,6 +558,19 @@ export class AppointmentsService {
     // Update scheduledTime if provided
     if (updateAppointmentDto.scheduledTime) {
       updateData.scheduledTime = updateAppointmentDto.scheduledTime;
+    }
+
+    // A reschedule moves the instant the reminder jobs select on, and the
+    // reminders already sent were for the old time.
+    if (updateAppointmentDto.scheduledDate || updateAppointmentDto.scheduledTime) {
+      const tenant = (appointment as any).tenant as { timezone?: string } | undefined;
+      updateData.startTime = salonInstant(
+        updateData.scheduledDate ?? appointment.scheduledDate,
+        updateData.scheduledTime ?? appointment.scheduledTime,
+        tenant?.timezone || "Europe/Madrid",
+      );
+      updateData.reminder24hSent = false;
+      updateData.reminder1hSent = false;
     }
 
     // Handle addons update if provided

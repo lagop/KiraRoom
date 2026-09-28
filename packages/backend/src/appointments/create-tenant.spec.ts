@@ -22,6 +22,7 @@ function build({
   const clientLookups: any[] = [];
   const created: any[] = [];
   const prisma: any = {
+    tenant: { findUnique: async () => ({ timezone: "Europe/Madrid" }) },
     professional: {
       findFirst: jest.fn(async ({ where }: any) =>
         where.id === PRO.id && (!where.tenantId || where.tenantId === PRO.tenantId) ? PRO : null,
@@ -85,6 +86,16 @@ describe("online booking", () => {
     await service.createOnline({ ...BOOKING, tenantId: "f6d06ea0-9bd8-490a-a704-e3bf95aad3ce" });
 
     expect(created[0].tenantId).toBe("tenant-b");
+  });
+
+  it("writes the real start instant the reminder jobs select on", async () => {
+    // 10:00 in Madrid on 2026-09-29 (UTC+2) is 08:00 UTC. startTime was
+    // never written, so no appointment ever got a reminder.
+    const { service, created } = build();
+
+    await service.createOnline(BOOKING);
+
+    expect(created[0].startTime.toISOString()).toBe("2026-09-29T08:00:00.000Z");
   });
 
   it("finds a returning client within this salon only", async () => {
