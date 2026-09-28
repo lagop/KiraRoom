@@ -325,25 +325,42 @@ export default function SalonBookingPage({
     setLoading(true);
 
     try {
-      // TODO: Implement booking API endpoint
-      const appointmentData = {
-        ...bookingData,
-        clientId: currentUser?.id,
-        clientInfo: currentUser
-          ? undefined
+      // This used to be a stub. It logged the payload to the browser
+      // console, waited 1500 ms so the button looked busy, and then said
+      // "Reserva confirmada" — with no request to the backend at all. A
+      // client left believing she had an appointment, the salon never saw
+      // one, and nobody found out until she turned up at the door.
+      //
+      // POST /appointments has always been @Public(), and the service finds
+      // or creates the client from clientInfo. Only the call was missing.
+      if (!salonData?.id) {
+        throw new Error("Salon not loaded");
+      }
+
+      const [firstName, ...restOfName] = bookingData.clientName.trim().split(" ");
+
+      await apiClient.createAppointment({
+        tenantId: salonData.id,
+        ...(currentUser?.id
+          ? { clientId: currentUser.id }
           : {
-              firstName: bookingData.clientName.split(" ")[0],
-              lastName: bookingData.clientName.split(" ").slice(1).join(" "),
-              email: bookingData.clientEmail,
-              phone: bookingData.clientPhone,
-            },
-      };
+              clientInfo: {
+                firstName,
+                lastName: restOfName.join(" "),
+                email: bookingData.clientEmail,
+                phone: bookingData.clientPhone,
+              },
+            }),
+        serviceId: bookingData.serviceId,
+        professionalId: bookingData.professionalId,
+        // The DTO's names, not the form's: it wants scheduledDate and
+        // scheduledTime. The stub spread `bookingData` as-is, so even if it
+        // had posted, the fields would not have matched.
+        scheduledDate: bookingData.date,
+        scheduledTime: bookingData.time,
+      });
 
-      console.log("Booking data:", appointmentData);
-
-      // Simulate API call
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-
+      // Only now. The confirmation has to mean the appointment exists.
       toast({
         title: t("bookingPublic.booking_confirmed"),
         description: t("bookingPublic.booking_confirmed"),
@@ -371,10 +388,15 @@ export default function SalonBookingPage({
       }));
     } catch (error) {
       console.error("Error booking appointment:", error);
+      // Pass the server's reason through. The slot may have been taken while
+      // this form sat open, and "try again" tells the client nothing about
+      // whether trying again would help.
       toast({
         title: "Error",
         description:
-          "No se pudo reservar la cita. Por favor, intenta nuevamente.",
+          error instanceof Error && error.message
+            ? error.message
+            : "No se pudo reservar la cita. Por favor, intenta nuevamente.",
         variant: "destructive",
       });
     } finally {
