@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { LLMProvider, LLMGenerationConfig, LLMCompletion, ChatMessage } from '@kira/shared';
 import Anthropic from '@anthropic-ai/sdk';
+import { createUsageAccumulator } from './usage-totals';
 
 /**
  * MiniMax (minimax.io) provider.
@@ -111,6 +112,10 @@ export class MiniMaxProvider {
         config.temperature === undefined &&
         config.topP !== undefined;
 
+      // See usage-totals.ts: the loop below reassigns `response`, so the
+      // usage has to be accumulated as it arrives.
+      const usage = createUsageAccumulator();
+
       let response = await this.client.messages.create({
         model,
         system: systemPrompt,
@@ -124,6 +129,7 @@ export class MiniMaxProvider {
           ? { tools: tools as any, tool_choice: this.buildToolChoice(toolChoice) }
           : {}),
       });
+      usage.add(response.usage);
 
       // Tool-execution loop. The model can emit `tool_use` blocks; we
       // run the corresponding DB-backed tool, append `tool_result`
@@ -214,6 +220,7 @@ export class MiniMaxProvider {
             ? { tools: tools as any, tool_choice: this.buildToolChoice(toolChoice) }
             : {}),
         });
+        usage.add(response.usage);
       }
 
       const latency = Date.now() - startTime;
@@ -242,11 +249,7 @@ export class MiniMaxProvider {
         text:
           finalText ||
           'I can help you with your beauty salon inquiries.',
-        usage: {
-          promptTokens: response.usage.input_tokens,
-          completionTokens: response.usage.output_tokens,
-          totalTokens: response.usage.input_tokens + response.usage.output_tokens,
-        },
+        usage: usage.totals(),
         model,
         provider: LLMProvider.MiniMax,
         timestamp: new Date(),
