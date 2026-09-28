@@ -8,48 +8,33 @@ import { useToast } from "@/components/ui/use-toast";
 const API =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1";
 
-function sign(scope: string): string {
-  // Lightweight non-crypto hash that matches our HMAC output format client-side
-  // is NOT used — the backend's IcsController.signToken is the source of truth.
-  // We display a "click-to-generate" button that asks the backend for the token.
-  return "";
+type IcsTokens = Awaited<ReturnType<typeof apiClient.getIcsTokens>>;
+
+function feedUrl(scope: string, id: string, token: string): string {
+  return `${API.replace(/\/api\/v1$/, "")}/api/v1/ics/${scope}/${encodeURIComponent(id)}?token=${token}`;
 }
 
+/**
+ * Subscribe URLs for the salon's calendar.
+ *
+ * The tokens come from GET /ics/tokens. This page used to hand out URLs
+ * ending in ?token=REEMPLAZAR_CON_TOKEN -- which no feed accepts -- and to say
+ * the tokens rotate on demand, which nothing implements.
+ */
 export default function CalendarFeedsPage() {
   const { toast } = useToast();
-  const [professionals, setProfessionals] = useState<Array<{ id: string; firstName: string; lastName: string }>>([]);
-  const [tenantSlug, setTenantSlug] = useState<string>("");
+  const [tokens, setTokens] = useState<IcsTokens | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     apiClient
-      .getProfessionals()
-      .then(setProfessionals)
-      .catch(() => setProfessionals([]));
-    apiClient
-      .getTenant()
-      .then((t) => setTenantSlug(t.slug))
-      .catch(() => setTenantSlug(""));
+      .getIcsTokens()
+      .then(setTokens)
+      .catch((err) => setError(err instanceof Error ? err.message : "Error"));
   }, []);
 
-  function copy(text: string, label = "Copiado") {
-    navigator.clipboard.writeText(text).then(
-      () => toast({ title: label }),
-      () => toast({ title: "No se pudo copiar", variant: "destructive" }),
-    );
-  }
+  const copied = () => toast({ title: "Enlace copiado" });
 
-  function buildIcsUrl(scope: string, id: string, token: string) {
-    return `${API.replace(/\/api\/v1$/, "")}/api/v1/ics/${scope}/${id}?token=${token}`;
-  }
-
-  function buildWebcalUrl(scope: string, id: string, token: string) {
-    return `webcal://${API.replace(/^https?:\/\//, "").replace(/\/api\/v1$/, "")}/api/v1/ics/${scope}/${id}?token=${token}`;
-  }
-
-  // Token: for the demo, we sign using the same algorithm in the browser.
-  // In production this should be generated server-side via an endpoint
-  // (`GET /ics/tokens`). For now we copy the URL with a placeholder token
-  // and ask the user to request one from their dashboard API.
   return (
     <div className="space-y-6">
       <div>
@@ -58,45 +43,44 @@ export default function CalendarFeedsPage() {
         </h1>
         <p className="text-gray-500 mt-1">
           Suscríbete a tu agenda desde Google Calendar, Apple Calendar o Outlook.
-          Los enlaces usan un token HMAC firmado que rota cuando lo desees.
+          Los enlaces son privados: quien tenga uno puede ver esas citas, así que
+          no los compartas.
         </p>
       </div>
 
-      <FeedCard
-        title="Salón completo"
-        description="Todas las citas del salón agregadas en un solo calendario."
-        url={
-          tenantSlug
-            ? `${API.replace(/\/api\/v1$/, "")}/api/v1/ics/salon/${tenantSlug}?token=REEMPLAZAR_CON_TOKEN`
-            : ""
-        }
-        onCopy={() => toast({ title: "Pega el token firmado desde la API" })}
-      />
-
-      <div className="bg-white rounded-xl border border-gray-200 p-6">
-        <h2 className="font-semibold mb-4">Por profesional</h2>
-        <div className="space-y-2">
-          {professionals.map((p) => (
-            <FeedRow
-              key={p.id}
-              label={`${p.firstName} ${p.lastName}`}
-              url={`${API.replace(/\/api\/v1$/, "")}/api/v1/ics/professional/${p.id}?token=REEMPLAZAR_CON_TOKEN`}
-              onCopy={() => toast({ title: "URL copiada (pendiente token)" })}
-            />
-          ))}
-          {professionals.length === 0 && (
-            <div className="text-sm text-gray-500">Sin profesionales.</div>
-          )}
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-700">
+          No se pudieron obtener los enlaces: {error}
         </div>
-      </div>
+      )}
 
-      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-sm text-yellow-800">
-        <strong>Nota:</strong> El token HMAC se firma en el backend con
-        <code> ICS_TOKEN_SECRET</code>. Genera el token de tu salón desde el
-        endpoint <code>GET /api/v1/ics/tokens</code> (próximamente) o pídelo al
-        administrador. La URL <code>webcal://</code> se detecta automáticamente
-        en la mayoría de clientes de calendario.
-      </div>
+      {tokens && (
+        <>
+          <FeedCard
+            title="Salón completo"
+            description="Todas las citas del salón agregadas en un solo calendario."
+            url={feedUrl("salon", tokens.salon.slug, tokens.salon.token)}
+            onCopy={copied}
+          />
+
+          <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <h2 className="font-semibold mb-4">Por profesional</h2>
+            <div className="space-y-2">
+              {tokens.professionals.map((p) => (
+                <FeedRow
+                  key={p.id}
+                  label={p.name}
+                  url={feedUrl("professional", p.id, p.token)}
+                  onCopy={copied}
+                />
+              ))}
+              {tokens.professionals.length === 0 && (
+                <div className="text-sm text-gray-500">Sin profesionales.</div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

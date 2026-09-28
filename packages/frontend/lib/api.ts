@@ -2540,6 +2540,14 @@ class ApiClient implements ApiClientInterface {
   // Get today's payments for POS
   // An array: PaymentsService.getTodayPayments returns the rows themselves.
   // This was typed as { payments, totals }, which nothing returns.
+  /** Signed ICS feed tokens for the caller's salon (owner/admin). */
+  async getIcsTokens(): Promise<{
+    salon: { slug: string; token: string };
+    professionals: Array<{ id: string; name: string; token: string }>;
+  }> {
+    return this.request("/ics/tokens");
+  }
+
   async getTodayPayments(): Promise<any[]> {
     return this.request<any[]>("/payments/today");
   }

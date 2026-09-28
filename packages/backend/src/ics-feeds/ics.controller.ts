@@ -1,11 +1,15 @@
-import { ParseUUIDPipe, Controller, Get, Param, Query, Res, BadRequestException, NotFoundException, Logger } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Param, Query, Res, Req, UseGuards, BadRequestException, NotFoundException, Logger } from "@nestjs/common";
 import { ApiTags, ApiOperation } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
-import { createHmac } from "crypto";
+import { createHmac, timingSafeEqual } from "crypto";
 import * as ics from "ics";
 import { ConfigService } from "@nestjs/config";
 import type { Response } from "express";
 import { Public } from "../auth/decorators/public.decorator";
+import { Roles } from "../auth/decorators/roles.decorator";
+import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
+import { RolesGuard } from "../auth/guards/roles.guard";
+import { UserRole } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
 
 @ApiTags("ics-feeds")
@@ -16,6 +20,41 @@ export class IcsController {
     private prisma: PrismaService,
     private config: ConfigService,
   ) {}
+
+  /**
+   * The signed feed tokens for the caller's own salon and its professionals.
+   *
+   * The calendar-feeds page used to hand out URLs ending in
+   * ?token=REEMPLAZAR_CON_TOKEN and point at this endpoint as "coming soon",
+   * so no feed it offered could ever load.
+   */
+  @Get("tokens")
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.owner, UserRole.admin)
+  @ApiOperation({ summary: "Signed ICS feed tokens for the caller's salon" })
+  async tokens(@Req() req: any) {
+    const secret = this.config.get<string>("ICS_TOKEN_SECRET");
+    if (!secret) throw new BadRequestException("ICS_TOKEN_SECRET not configured");
+    const tenantId: string = req.user.tenantId;
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { slug: true },
+    });
+    if (!tenant) throw new NotFoundException("Salon not found");
+    const professionals = await this.prisma.professional.findMany({
+      where: { tenantId },
+      select: { id: true, firstName: true, lastName: true },
+      orderBy: { firstName: "asc" },
+    });
+    return {
+      salon: { slug: tenant.slug, token: IcsController.signToken(`salon:${tenant.slug}`, secret) },
+      professionals: professionals.map((p) => ({
+        id: p.id,
+        name: `${p.firstName} ${p.lastName}`.trim(),
+        token: IcsController.signToken(`professional:${p.id}`, secret),
+      })),
+    };
+  }
 
   @Get("professional/:id")
   @Public()
@@ -111,8 +150,12 @@ export class IcsController {
     const secret = this.config.get<string>("ICS_TOKEN_SECRET");
     if (!secret) throw new BadRequestException("ICS_TOKEN_SECRET not configured");
     if (!token) throw new BadRequestException("token query param required");
-    const expected = IcsController.signToken(scope, secret);
-    if (expected !== token) throw new BadRequestException("Invalid token");
+    const expected = Buffer.from(IcsController.signToken(scope, secret));
+    const given = Buffer.from(String(token));
+    // Constant time: a plain !== leaks how many leading characters match.
+    if (given.length !== expected.length || !timingSafeEqual(given, expected)) {
+      throw new BadRequestException("Invalid token");
+    }
   }
 
   private buildEvents(appointments: any[], tenant: any): ics.EventAttributes[] {
