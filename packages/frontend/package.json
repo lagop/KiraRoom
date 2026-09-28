@@ -8,13 +8,14 @@
     "start": "next start",
     "lint": "next lint",
     "type-check": "tsc --noEmit",
-    "test": "ts-node --project tsconfig.test.json --transpile-only app/dashboard/appointments/components/appointment-drawer.utils.spec.ts && ts-node --project tsconfig.test.json --transpile-only app/dashboard/appointments/components/appointment-suggestions.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/login-reload-loop.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/spanish-accents.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/signup-session.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/salon-timezone.spec.ts",
+    "test": "ts-node --project tsconfig.test.json --transpile-only app/dashboard/appointments/components/appointment-drawer.utils.spec.ts && ts-node --project tsconfig.test.json --transpile-only app/dashboard/appointments/components/appointment-suggestions.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/login-reload-loop.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/spanish-accents.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/signup-session.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/salon-timezone.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/no-simulated-writes.spec.ts",
     "test:utils": "ts-node --project tsconfig.test.json --transpile-only app/dashboard/appointments/components/appointment-drawer.utils.spec.ts",
     "test:suggestions": "ts-node --project tsconfig.test.json --transpile-only app/dashboard/appointments/components/appointment-suggestions.spec.ts",
     "test:login-loop": "ts-node --project tsconfig.test.json --transpile-only lib/login-reload-loop.spec.ts",
     "test:accents": "ts-node --project tsconfig.test.json --transpile-only lib/spanish-accents.spec.ts",
     "test:signup": "ts-node --project tsconfig.test.json --transpile-only lib/signup-session.spec.ts",
-    "test:timezone": "ts-node --project tsconfig.test.json --transpile-only lib/salon-timezone.spec.ts"
+    "test:timezone": "ts-node --project tsconfig.test.json --transpile-only lib/salon-timezone.spec.ts",
+    "test:no-fakes": "ts-node --project tsconfig.test.json --transpile-only lib/no-simulated-writes.spec.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
