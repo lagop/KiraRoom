@@ -1230,7 +1230,6 @@ export interface ApiClientInterface {
   getProfessionals(tenantId?: string): Promise<Professional[]>;
   getProfessional(id: string): Promise<Professional>;
   createProfessional(data: {
-    tenantId: string;
     firstName: string;
     lastName: string;
     email: string;
@@ -2211,7 +2210,6 @@ class ApiClient implements ApiClientInterface {
   }
 
   async createProfessional(data: {
-    tenantId: string;
     firstName: string;
     lastName: string;
     email: string;

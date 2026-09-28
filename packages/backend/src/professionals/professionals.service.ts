@@ -6,10 +6,10 @@ import { CreateProfessionalDto, UpdateProfessionalDto } from "./dto";
 export class ProfessionalsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(createProfessionalDto: CreateProfessionalDto) {
+  async create(tenantId: string, createProfessionalDto: CreateProfessionalDto) {
     return this.prisma.professional.create({
       data: {
-        tenantId: createProfessionalDto.tenantId,
+        tenantId,
         firstName: createProfessionalDto.firstName,
         lastName: createProfessionalDto.lastName,
         email: createProfessionalDto.email,
@@ -17,8 +17,9 @@ export class ProfessionalsService {
         profileImage: createProfessionalDto.profileImage,
         bio: createProfessionalDto.bio,
         specialties: createProfessionalDto.specialties || [],
-        isActive: createProfessionalDto.isActive || true,
-        isOwner: createProfessionalDto.isOwner || false,
+        // `??`: with `||` an explicit false became true.
+        isActive: createProfessionalDto.isActive ?? true,
+        isOwner: createProfessionalDto.isOwner ?? false,
         position: createProfessionalDto.position,
         commissionRate: createProfessionalDto.commissionRate
           ? parseFloat(createProfessionalDto.commissionRate)
@@ -37,9 +38,9 @@ export class ProfessionalsService {
     });
   }
 
-  async findAll(tenantId?: string) {
+  async findAll(tenantId: string) {
     return this.prisma.professional.findMany({
-      where: tenantId ? { tenantId } : {},
+      where: { tenantId },
       include: {
         services: {
           include: {

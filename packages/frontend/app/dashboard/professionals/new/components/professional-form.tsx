@@ -34,23 +34,14 @@ export function ProfessionalForm() {
   useEffect(() => {
     const fetchServices = async () => {
       try {
-        // Get user info from localStorage (fallback to default tenant)
-        const userStr = typeof window !== 'undefined' ? localStorage.getItem('kira_user') : null;
-        const user = userStr ? JSON.parse(userStr) : { tenantId: 'default-tenant' };
-        
-        const servicesData = await apiClient.getServices(user.tenantId);
+        // The API scopes the list to the caller's salon from the token.
+        const servicesData = await apiClient.getServices();
         setServices(servicesData);
       } catch (err) {
+        // No invented catalogue: its ids ('1'...'6') do not exist, so
+        // assigning one made the create fail after the form looked fine.
         console.error('Failed to fetch services:', err);
-        // Mock data for demo
-        setServices([
-          { id: '1', name: 'Haircut', category: 'hair' },
-          { id: '2', name: 'Hair Coloring', category: 'hair' },
-          { id: '3', name: 'Manicure', category: 'nails' },
-          { id: '4', name: 'Pedicure', category: 'nails' },
-          { id: '5', name: 'Facial', category: 'facial' },
-          { id: '6', name: 'Massage', category: 'massage' },
-        ]);
+        setServices([]);
       }
     };
     fetchServices();
@@ -74,12 +65,7 @@ export function ProfessionalForm() {
     setIsLoading(true);
 
     try {
-      // Get user info from localStorage (fallback to default tenant)
-      const userStr = typeof window !== 'undefined' ? localStorage.getItem('kira_user') : null;
-      const user = userStr ? JSON.parse(userStr) : { tenantId: 'default-tenant' };
-      
-      const response = await apiClient.createProfessional({
-        tenantId: user.tenantId,
+      await apiClient.createProfessional({
         firstName: formData.firstName,
         lastName: formData.lastName,
         email: formData.email,

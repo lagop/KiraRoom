@@ -32,9 +32,9 @@ export class ServicesService {
     });
   }
 
-  async findAll(tenantId?: string) {
+  async findAll(tenantId: string) {
     return this.prisma.service.findMany({
-      where: tenantId ? { tenantId } : {},
+      where: { tenantId },
     });
   }
 
