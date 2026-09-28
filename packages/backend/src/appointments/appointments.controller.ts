@@ -14,6 +14,7 @@ import {
 } from "./appointments.service";
 import { AvailableSlotsDto } from "./dto/available-slots.dto";
 import { OnlineBookingDto, StaffBookingDto } from "./dto/book-appointment.dto";
+import { PublicViewerService } from "../common/tenancy/public-viewer.service";
 import { Public } from "../auth/decorators/public.decorator";
 import { Roles } from "../auth/decorators/roles.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
@@ -34,7 +35,10 @@ interface AuthenticatedRequest extends Request {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @ApiBearerAuth()
 export class AppointmentsController {
-  constructor(private readonly appointmentsService: AppointmentsService) {}
+  constructor(
+    private readonly appointmentsService: AppointmentsService,
+    private readonly publicViewer: PublicViewerService,
+  ) {}
 
   @Post()
   @Public()
@@ -77,7 +81,7 @@ export class AppointmentsController {
     status: 200,
     description: "Available slots retrieved successfully",
   })
-  async getAvailableSlots(@Query() query: AvailableSlotsDto) {
+  async getAvailableSlots(@Req() req: any, @Query() query: AvailableSlotsDto) {
     const {
       tenantId,
       date,
@@ -90,13 +94,26 @@ export class AppointmentsController {
     const profIds = professionalIds
       ? professionalIds.split(",").filter(Boolean)
       : undefined;
-    return this.appointmentsService.getAvailableSlots(
+    const slots = await this.appointmentsService.getAvailableSlots(
       tenantId,
       new Date(date),
       professionalId,
       serviceId,
       duration,
       profIds,
+    );
+    // The salon's own staff may book at short notice by hand; everyone else
+    // is offered only what createOnline will accept.
+    const { staff } = await this.publicViewer.resolve(req, tenantId);
+    if (staff) return slots;
+    return this.appointmentsService.restrictToOnlineWindow(
+      tenantId,
+      serviceId,
+      // A string from the query; a Date if the pipe ever converts it.
+      typeof (date as unknown) === "string"
+        ? (date as unknown as string).slice(0, 10)
+        : new Date(date).toISOString().slice(0, 10),
+      slots,
     );
   }
 

@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { AppointmentsController } from "./appointments.controller";
+import { PublicViewerModule } from "../common/tenancy/public-viewer.service";
 import { AppointmentsService } from "./appointments.service";
 import { AppointmentServicesController } from "./appointment-services.controller";
 import { AppointmentServicesService } from "./appointment-services.service";
@@ -12,6 +13,7 @@ import { WaitListModule } from "../wait-list/wait-list.module";
 
 @Module({
   imports: [
+    PublicViewerModule,
     NotificationsModule,
     TranslationsModule,
     ConsentModule,

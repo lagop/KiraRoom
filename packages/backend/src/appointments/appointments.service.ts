@@ -183,24 +183,17 @@ export class AppointmentsService {
       widgetProfessionals = widget.professionals ?? [];
     }
 
-    const [tenant, service] = await Promise.all([
-      this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } }),
-      this.prisma.service.findFirst({
-        where: { id: dto.serviceId, tenantId, isActive: true },
-        select: { minAdvanceBooking: true, maxAdvanceBooking: true },
-      }),
-    ]);
-    if (!service) throw new NotFoundException("Servicio no encontrado");
+    const window = await this.onlineBookingWindow(tenantId, dto.serviceId);
+    if (!window) throw new NotFoundException("Servicio no encontrado");
 
     const scheduledDay = String(dto.scheduledDate).slice(0, 10);
-    const startsAt = salonInstant(scheduledDay, dto.scheduledTime, tenant?.timezone || "Europe/Madrid");
-    const hoursAhead = (startsAt.getTime() - Date.now()) / 3_600_000;
-    if (hoursAhead < (service.minAdvanceBooking ?? 0)) {
+    const fit = this.fitsOnlineWindow(scheduledDay, dto.scheduledTime, window);
+    if (fit === "too-soon") {
       throw new ConflictException("Ese horario ya no se puede reservar online");
     }
-    if (hoursAhead > (service.maxAdvanceBooking ?? 30) * 24) {
+    if (fit === "too-far") {
       throw new BadRequestException(
-        `Solo se puede reservar con ${service.maxAdvanceBooking ?? 30} días de antelación como máximo`,
+        `Solo se puede reservar con ${window.maxHours / 24} días de antelación como máximo`,
       );
     }
 
@@ -231,6 +224,67 @@ export class AppointmentsService {
 
     await this.afterAppointmentCreated(appointment, dto.source);
     return appointment;
+  }
+
+  /**
+   * When a client may book a service online: from minAdvanceBooking hours to
+   * maxAdvanceBooking days from now, in the salon's timezone. Without a
+   * service, only "not in the past". Null when the service is not an active
+   * service of this salon.
+   */
+  async onlineBookingWindow(
+    tenantId: string,
+    serviceId?: string,
+  ): Promise<{ timeZone: string; minHours: number; maxHours: number } | null> {
+    const [tenant, service] = await Promise.all([
+      this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } }),
+      serviceId
+        ? this.prisma.service.findFirst({
+            where: { id: serviceId, tenantId, isActive: true },
+            select: { minAdvanceBooking: true, maxAdvanceBooking: true },
+          })
+        : Promise.resolve(undefined),
+    ]);
+    if (service === null) return null;
+    return {
+      timeZone: tenant?.timezone || "Europe/Madrid",
+      minHours: service?.minAdvanceBooking ?? 0,
+      maxHours: service ? (service.maxAdvanceBooking ?? 30) * 24 : Infinity,
+    };
+  }
+
+  fitsOnlineWindow(
+    day: string,
+    time: string,
+    window: { timeZone: string; minHours: number; maxHours: number },
+    now: number = Date.now(),
+  ): "ok" | "too-soon" | "too-far" {
+    const hoursAhead = (salonInstant(day, time, window.timeZone).getTime() - now) / 3_600_000;
+    if (hoursAhead < window.minHours) return "too-soon";
+    if (hoursAhead > window.maxHours) return "too-far";
+    return "ok";
+  }
+
+  /**
+   * Slots as a client may book them online: outside the service's booking
+   * window they are marked unavailable. The public site, the widget and the
+   * client portal list slots through GET /appointments/available-slots; it
+   * offered the next two hours, which createOnline then refused.
+   */
+  async restrictToOnlineWindow<T extends { time: string; isAvailable: boolean }>(
+    tenantId: string,
+    serviceId: string | undefined,
+    day: string,
+    slots: T[],
+  ): Promise<T[]> {
+    const window = await this.onlineBookingWindow(tenantId, serviceId);
+    if (!window) return slots.map((s) => ({ ...s, isAvailable: false }));
+    const now = Date.now();
+    return slots.map((s) =>
+      s.isAvailable && this.fitsOnlineWindow(day, s.time, window, now) !== "ok"
+        ? { ...s, isAvailable: false }
+        : s,
+    );
   }
 
   private async isSlotFree(
