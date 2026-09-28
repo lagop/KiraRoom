@@ -2,6 +2,7 @@
 import { ConfigService } from '@nestjs/config';
 import { LLMProvider, LLMGenerationConfig, LLMCompletion, ChatMessage } from '@kira/shared';
 import Anthropic from '@anthropic-ai/sdk';
+import { createUsageAccumulator } from './usage-totals';
 
 @Injectable()
 export class AnthropicProvider {
@@ -95,9 +96,26 @@ export class AnthropicProvider {
       // every request and nothing could ever be cached.
       //
       // Caching is a prefix match, so anything volatile must stay AFTER
-      // this block. Verify with usage.cache_read_input_tokens: if it stays
-      // zero across repeated requests, something upstream is invalidating
-      // the prefix.
+      // this block.
+      //
+      // MEASURED, AND CURRENTLY INERT. The cached prefix is tools + system
+      // (that is the hierarchy: tools, then system, then messages), which
+      // for this receptionist is ~620 + ~1360 = ~1970 tokens. Claude Haiku
+      // 4.5 will not cache a prefix below 4096 tokens, and it reports no
+      // error when it declines -- the request is simply processed uncached,
+      // which is why cache_read_input_tokens sat at 0 in production while
+      // this block looked correct.
+      //
+      // It will not grow into the limit by itself either: buildSystemPrompt
+      // deliberately keeps services and professionals out of the prompt, so
+      // the prompt is the same size for every salon regardless of its data.
+      // Reaching 4096 would mean inlining that data again, which reverses a
+      // deliberate architecture decision -- an open question, not a bug.
+      //
+      // Leaving cache_control in place costs nothing and starts paying off
+      // the moment the prefix does clear the minimum. Do not read a run of
+      // zeroes as "the prefix is being invalidated" until the prefix is
+      // known to be over 4096: below that, zero is the expected answer.
       const cacheableSystem = [
         {
           type: "text" as const,
@@ -105,6 +123,11 @@ export class AnthropicProvider {
           cache_control: { type: "ephemeral" as const },
         },
       ];
+      // Usage is summed across every round-trip, not read off the last
+      // response: the loop below reassigns `response`, so reading its usage
+      // after the loop silently dropped every intermediate request.
+      const usage = createUsageAccumulator();
+
       let response = await this.anthropic.messages.create({
         model: config.model,
         system: cacheableSystem,
@@ -117,6 +140,7 @@ export class AnthropicProvider {
           ? { tools: tools as any, tool_choice: { type: 'auto' as const } }
           : {}),
       });
+      usage.add(response.usage);
 
       // Tool-execution loop. The model can emit `tool_use` blocks; we
       // run the corresponding DB-backed tool, append `tool_result`
@@ -201,6 +225,7 @@ export class AnthropicProvider {
             ? { tools: tools as any, tool_choice: { type: 'auto' as const } }
             : {}),
         });
+        usage.add(response.usage);
       }
 
       const latency = Date.now() - startTime;
@@ -217,13 +242,7 @@ export class AnthropicProvider {
         text:
           completion ||
           'Lo siento, no he podido generar una respuesta. ¿Puedes reformular tu pregunta?',
-        usage: {
-          promptTokens: response.usage.input_tokens,
-          completionTokens: response.usage.output_tokens,
-          totalTokens: response.usage.input_tokens + response.usage.output_tokens,
-          cachedInputTokens: (response.usage as any).cache_read_input_tokens ?? 0,
-          cacheWriteTokens: (response.usage as any).cache_creation_input_tokens ?? 0,
-        },
+        usage: usage.totals(),
         model: config.model,
         provider: LLMProvider.ANTHROPIC,
         timestamp: new Date(),
