@@ -138,26 +138,9 @@ export const CURRENCY_SYMBOLS = {
   [CURRENCIES.COP]: '$',
 } as const;
 
-// Subscription Plans
-// Rev 3: the canonical plan catalog now lives in
-// `packages/shared/src/types/subscription.ts` (esencial / pro / empresa)
-// and is consumed by both backend and frontend. The legacy BASIC /
-// PROFESSIONAL / ADVANCED names below are kept exported for one release
-// as a soft-deprecation; new code should import from `types/subscription`.
-//
-// TODO(next release): remove SUBSCRIPTION_PLANS / SUBSCRIPTION_PLAN_LABELS
-// once every consumer has been migrated to the canonical PlanId.
-export const SUBSCRIPTION_PLANS = {
-  BASIC: 'basic',
-  PROFESSIONAL: 'professional',
-  ADVANCED: 'advanced',
-} as const;
-
-export const SUBSCRIPTION_PLAN_LABELS = {
-  [SUBSCRIPTION_PLANS.BASIC]: 'Básico',
-  [SUBSCRIPTION_PLANS.PROFESSIONAL]: 'Profesional',
-  [SUBSCRIPTION_PLANS.ADVANCED]: 'Avanzado',
-} as const;
+// Subscription plans live in `types/subscription.ts` (esencial / pro /
+// empresa). The legacy BASIC / PROFESSIONAL / ADVANCED constants that used
+// to sit here had no consumers left and were removed.
 
 // Notification Channels
 export const NOTIFICATION_CHANNELS = {
