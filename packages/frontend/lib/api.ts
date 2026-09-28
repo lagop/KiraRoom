@@ -2157,8 +2157,10 @@ class ApiClient implements ApiClientInterface {
       isActive: boolean;
     }>,
   ): Promise<Service> {
+    // PUT: the backend route is `@Put(":id")`; PATCH was a 404, so no
+    // service could be edited or toggled from the dashboard.
     return this.request<Service>(`/services/${id}`, {
-      method: "PATCH",
+      method: "PUT",
       body: JSON.stringify(data),
     });
   }
@@ -2363,18 +2365,21 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  // Client notification preferences
-  async getClientNotificationPreferences(clientId: string): Promise<any> {
-    return this.request<any>(`/clients/${clientId}/notifications/preferences`);
+  // Client notification preferences. The client is the one in the token;
+  // `clientId` is kept in the signature for the existing callers. These
+  // used to hit /clients/:id/notifications/preferences, which does not
+  // exist, so every load fell back to defaults and every save was lost.
+  async getClientNotificationPreferences(_clientId: string): Promise<any> {
+    return this.request<any>(`/client/notifications/preferences`);
   }
 
   async updateClientNotificationPreferences(
-    clientId: string,
+    _clientId: string,
     preferences: any,
   ): Promise<any> {
-    return this.request<any>(`/clients/${clientId}/notifications/preferences`, {
+    return this.request<any>(`/client/notifications/preferences`, {
       method: "PUT",
-      body: JSON.stringify(preferences),
+      body: JSON.stringify({ preferences }),
     });
   }
 

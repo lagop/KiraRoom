@@ -1,15 +1,31 @@
-import { ParseUUIDPipe, Controller, Get, Put, Delete, Body, Param, Query, Logger } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Put, Delete, Body, Param, Query, Logger, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service';
-import { Public } from '../auth/decorators/public.decorator';
+import { UserRole } from '@prisma/client';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
 import { 
   NotificationFilterDto, 
   NotificationPreferenceDto,
   MarkAllReadDto,
 } from './dto';
 
+/**
+ * A client's own notifications and preferences, for the salon site's account
+ * area.
+ *
+ * Every route here used to be @Public() and took the client from a
+ * `?clientId=` query parameter: whoever had a client's id could read their
+ * notifications, archive them and rewrite their preferences, and nothing
+ * checked it. The client now comes from their own token. The frontend still
+ * sends `clientId`; it is ignored.
+ */
 @ApiTags('client-notifications')
 @ApiBearerAuth()
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.client)
 @Controller('client/notifications')
 export class ClientNotificationsController {
   private readonly logger = new Logger(ClientNotificationsController.name);
@@ -18,84 +34,75 @@ export class ClientNotificationsController {
 
   // ==========================================
   // Client (Salon Site) Endpoints
-  // All endpoints are public but require clientId for authorization
   // ==========================================
 
-  @Public()
   @Get()
   @ApiOperation({ summary: 'Get all notifications for the current client' })
   async findAllForClient(
-    @Query('clientId') clientId: string,
+    @CurrentUser() client: { id: string },
     @Query() filter: NotificationFilterDto,
   ) {
-    this.logger.log(`GET /client/notifications - clientId: ${clientId}`);
-    const result = await this.notificationsService.findForClient(clientId, filter);
-    this.logger.log(`Returning ${result.data?.length || 0} notifications for client ${clientId}`);
+    this.logger.log(`GET /client/notifications - clientId: ${client.id}`);
+    const result = await this.notificationsService.findForClient(client.id, filter);
+    this.logger.log(`Returning ${result.data?.length || 0} notifications for client ${client.id}`);
     return result;
   }
 
-  @Public()
   @Get('unread-count')
   @ApiOperation({ summary: 'Get unread notifications count for the current client' })
-  async getUnreadCountForClient(@Query('clientId') clientId: string) {
-    this.logger.log(`GET /client/notifications/unread-count - clientId: ${clientId}`);
-    const count = await this.notificationsService.getUnreadCountForClient(clientId);
-    this.logger.log(`Unread count for client ${clientId}: ${count}`);
+  async getUnreadCountForClient(@CurrentUser() client: { id: string }) {
+    this.logger.log(`GET /client/notifications/unread-count - clientId: ${client.id}`);
+    const count = await this.notificationsService.getUnreadCountForClient(client.id);
+    this.logger.log(`Unread count for client ${client.id}: ${count}`);
     return { count };
   }
 
-  @Public()
   @Put(':id/read')
   @ApiOperation({ summary: 'Mark a notification as read for client' })
   async markAsReadForClient(
-    @Query('clientId') clientId: string,
+    @CurrentUser() client: { id: string },
     @Param('id', ParseUUIDPipe) id: string,
   ) {
-    return this.notificationsService.markAsRead(id, undefined, clientId);
+    return this.notificationsService.markAsRead(id, undefined, client.id);
   }
 
-  @Public()
   @Put('read-all')
   @ApiOperation({ summary: 'Mark all notifications as read for the current client' })
   async markAllAsReadForClient(
-    @Query('clientId') clientId: string,
+    @CurrentUser() client: { id: string },
     @Body() dto: MarkAllReadDto,
   ) {
-    return this.notificationsService.markAllAsReadForClient(clientId, dto);
+    return this.notificationsService.markAllAsReadForClient(client.id, dto);
   }
 
-  @Public()
   @Delete(':id')
   @ApiOperation({ summary: 'Archive a notification for client' })
   async archiveForClient(
-    @Query('clientId') clientId: string,
+    @CurrentUser() client: { id: string },
     @Param('id', ParseUUIDPipe) id: string,
   ) {
-    return this.notificationsService.archive(id, undefined, clientId);
+    return this.notificationsService.archive(id, undefined, client.id);
   }
 
   // ==========================================
   // Client Preferences Endpoints
   // ==========================================
 
-  @Public()
   @Get('preferences')
   @ApiOperation({ summary: 'Get notification preferences for the current client' })
-  async getPreferencesForClient(@Query('clientId') clientId: string) {
-    return this.notificationsService.getPreferencesForClient(clientId);
+  async getPreferencesForClient(@CurrentUser() client: { id: string }) {
+    return this.notificationsService.getPreferencesForClient(client.id);
   }
 
-  @Public()
   @Put('preferences')
   @ApiOperation({ summary: 'Update notification preferences for the current client' })
   async updatePreferencesForClient(
-    @Query('clientId') clientId: string,
-    @Query('tenantId') tenantId: string,
+    @CurrentUser() client: { id: string; tenantId: string },
     @Body() dto: NotificationPreferenceDto,
   ) {
     return this.notificationsService.updatePreferencesForClient(
-      clientId,
-      tenantId,
+      client.id,
+      client.tenantId,
       dto,
     );
   }
