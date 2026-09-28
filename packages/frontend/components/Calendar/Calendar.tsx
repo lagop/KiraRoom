@@ -1,4 +1,5 @@
 // components/calendar/Calendar.tsx
+import { format } from "date-fns";
 import React, { useState, useMemo, useCallback, useEffect } from "react";
 import { useMediaQuery } from "@/lib/use-media-query";
 import {
@@ -241,17 +242,13 @@ export const Calendar: React.FC<{
           });
         } else {
           // For single service appointments, update the appointment
-          console.log('Calling backend update for appointment:', {
-            appointmentId: originalAppointmentId,
-            professionalId: newProfessionalId,
-            scheduledDate: newStart.toISOString().split('T')[0],
-            scheduledTime: newStart.toISOString().split('T')[1].substring(0, 5),
-          });
-
+          // The wall clock the calendar shows (it renders scheduledTime as
+          // local time). toISOString() sent UTC: in Madrid a drop at 10:00
+          // was saved as 08:00, and near midnight on the wrong day.
           await apiClient.updateAppointment(originalAppointmentId as string, {
             professionalId: newProfessionalId,
-            scheduledDate: newStart.toISOString().split('T')[0],
-            scheduledTime: newStart.toISOString().split('T')[1].substring(0, 5),
+            scheduledDate: format(newStart, "yyyy-MM-dd"),
+            scheduledTime: format(newStart, "HH:mm"),
           });
         }
 

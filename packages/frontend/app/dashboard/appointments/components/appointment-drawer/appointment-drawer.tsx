@@ -596,7 +596,11 @@ useEffect(() => {
         alert(t("appointments.drawer.provideValidDateAndTime"));
         return;
       }
-      updateData.scheduledDate = date.toISOString();
+      // The calendar day as the salon sees it. toISOString() sent a UTC
+      // instant built from the browser's clock, so west of UTC -- or for an
+      // early slot east of it -- the stored day, and the reminders with it,
+      // landed a day off.
+      updateData.scheduledDate = dateValue;
       updateData.scheduledTime = timeValue;
 
       if (
