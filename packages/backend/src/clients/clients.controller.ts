@@ -30,8 +30,10 @@ export class ClientsController {
   @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
   @ApiOperation({ summary: "Create a new client" })
   @ApiResponse({ status: 201, description: "Client created successfully" })
-  async create(@Body() createClientDto: CreateClientDto) {
-    return this.clientsService.create(createClientDto);
+  async create(@CurrentUser() user: any, @Body() createClientDto: CreateClientDto) {
+    // The tenant comes from the caller's token, never from the body: the
+    // dashboard fell back to 'default-tenant' when localStorage had no user.
+    return this.clientsService.create({ ...createClientDto, tenantId: user.tenantId });
   }
 
   @Get()
