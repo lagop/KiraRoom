@@ -1121,7 +1121,7 @@ export interface AccountingSyncLog {
 
 export interface ApiClientInterface {
   request<T>(endpoint: string, options?: RequestInit): Promise<T>;
-  login(email: string, password: string): Promise<LoginResponse>;
+  login(email: string, password: string, tenantSlug?: string): Promise<LoginResponse>;
   register(data: {
     email: string;
     password: string;
@@ -1697,12 +1697,16 @@ class ApiClient implements ApiClientInterface {
   }
 
   // Auth
-  async login(email: string, password: string): Promise<LoginResponse> {
+  /**
+   * `tenantSlug`: pass it when a client signs in on a salon's site, so a
+   * client of two salons lands in this one.
+   */
+  async login(email: string, password: string, tenantSlug?: string): Promise<LoginResponse> {
     const response = await this.request<{ user: any; tokens: any }>(
       "/auth/login",
       {
         method: "POST",
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, ...(tenantSlug && { tenantSlug }) }),
       },
     );
 
@@ -1825,6 +1829,11 @@ class ApiClient implements ApiClientInterface {
   }
 
   // Appointments
+  /** The signed-in client's own appointments (GET /appointments is staff-only). */
+  async getMyAppointments(): Promise<Appointment[]> {
+    return this.request<Appointment[]>("/appointments/mine");
+  }
+
   async getAppointments(filters?: {
     tenantId?: string;
     professionalId?: string;

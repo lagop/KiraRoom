@@ -29,6 +29,7 @@ import { WhatsAppService } from "../notifications/services/whatsapp.service";
 import { NotificationType } from "../notifications/dto";
 import { TranslationsService } from "../translations/translations.service";
 import { ConsentService } from "../consent/consent.service";
+import { salonInstant } from "./salon-time";
 
 interface AppointmentActivity {
   action: string;
@@ -461,6 +462,11 @@ export class AppointmentsService {
       throw new NotFoundException("Cita no encontrada");
     }
 
+    // A client sees only their own appointments.
+    if (user.role === "client" && appointment.clientId !== user.id) {
+      throw new NotFoundException("Cita no encontrada");
+    }
+
     // Validar que STAFF solo pueda ver sus propias citas
     if (user.role === "staff") {
       const professional = await this.prisma.professional.findFirst({
@@ -695,11 +701,50 @@ export class AppointmentsService {
     }
   }
 
+  /**
+   * The calling client's own appointments, for the salon site's account
+   * page. It used to call GET /appointments, which is staff-only, so a
+   * signed-in client never saw a single appointment.
+   */
+  async findForClient(user: { id: string; tenantId: string }) {
+    return this.prisma.appointment.findMany({
+      where: { clientId: user.id, tenantId: user.tenantId },
+      include: {
+        service: true,
+        professional: {
+          select: { id: true, firstName: true, lastName: true, profileImage: true },
+        },
+      },
+      orderBy: [{ scheduledDate: "desc" }, { scheduledTime: "desc" }],
+    });
+  }
+
   async cancel(user: any, id: string, reason?: string) {
     const appointment = await this.findOne(user, id);
 
     if (appointment.status === AppointmentStatus.cancelled) {
       throw new BadRequestException("La cita ya está cancelada");
+    }
+
+    // A client cancelling their own appointment is held to the salon's
+    // minimum notice -- the same rule the virtual receptionist quotes. Staff
+    // are not: the salon may always cancel.
+    if (user.role === "client") {
+      const tenant = (appointment as any).tenant as
+        | { minCancelHours?: number; timezone?: string }
+        | undefined;
+      const minHours = tenant?.minCancelHours ?? 24;
+      const startsAt = salonInstant(
+        appointment.scheduledDate as any,
+        appointment.scheduledTime,
+        tenant?.timezone || "Europe/Madrid",
+      );
+      const hoursAway = (startsAt.getTime() - Date.now()) / 3_600_000;
+      if (hoursAway < minHours) {
+        throw new BadRequestException(
+          `Esta cita solo se puede cancelar con ${minHours} horas de antelación. Contacta con el salón.`,
+        );
+      }
     }
 
     const cancelledAppointment = await this.prisma.appointment.update({

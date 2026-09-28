@@ -99,6 +99,34 @@ export class AppointmentsController {
     );
   }
 
+  // Literal paths must be declared before ":id". Declared after it,
+  // "pending-payment" matched ":id" first and ParseUUIDPipe answered 400, so
+  // the dashboard's pending-payments list never loaded.
+  @Get("pending-payment")
+  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
+  @ApiOperation({ summary: "Get appointments pending payment" })
+  @ApiQuery({ name: "searchQuery", required: false })
+  @ApiQuery({ name: "dateFrom", required: false })
+  @ApiQuery({ name: "dateTo", required: false })
+  @ApiQuery({ name: "status", required: false })
+  async findPendingPayment(
+    @Req() req: any,
+    @Query() query: any,
+  ) {
+    const { searchQuery, dateFrom, dateTo, status } = query;
+    return this.appointmentsService.findPendingPayment(
+      req.user,
+      { searchQuery, dateFrom, dateTo, status },
+    );
+  }
+
+  @Get("mine")
+  @Roles(UserRole.client)
+  @ApiOperation({ summary: "The calling client's own appointments" })
+  async findMine(@Req() req: any) {
+    return this.appointmentsService.findForClient(req.user);
+  }
+
   @Get(":id")
   @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
   @ApiOperation({ summary: "Get appointment by ID" })
@@ -122,7 +150,8 @@ export class AppointmentsController {
   }
 
   @Put(":id/cancel")
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
+  // A client may cancel their own appointment, with the salon's notice.
+  @Roles(UserRole.owner, UserRole.admin, UserRole.staff, UserRole.client)
   @ApiOperation({ summary: "Cancel an appointment" })
   @ApiResponse({
     status: 200,
@@ -178,24 +207,6 @@ export class AppointmentsController {
   @ApiResponse({ status: 404, description: "Appointment not found" })
   async remove(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
     return this.appointmentsService.remove(req.user, id);
-  }
-
-  @Get("pending-payment")
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  @ApiOperation({ summary: "Get appointments pending payment" })
-  @ApiQuery({ name: "searchQuery", required: false })
-  @ApiQuery({ name: "dateFrom", required: false })
-  @ApiQuery({ name: "dateTo", required: false })
-  @ApiQuery({ name: "status", required: false })
-  async findPendingPayment(
-    @Req() req: any,
-    @Query() query: any,
-  ) {
-    const { searchQuery, dateFrom, dateTo, status } = query;
-    return this.appointmentsService.findPendingPayment(
-      req.user,
-      { searchQuery, dateFrom, dateTo, status },
-    );
   }
 
   @Patch(":id/payment")

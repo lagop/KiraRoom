@@ -295,9 +295,13 @@ export class AuthService {
       };
     }
 
-    // If not found as user, try to find as client
+    // If not found as user, try to find as client -- in the salon whose site
+    // this is, when the caller says which (see LoginDto.tenantSlug).
     const client = await this.prisma.client.findFirst({
-      where: { email: loginDto.email },
+      where: {
+        email: loginDto.email,
+        ...(loginDto.tenantSlug ? { tenant: { slug: loginDto.tenantSlug } } : {}),
+      },
     });
 
     if (client && client.passwordHash) {
