@@ -1496,7 +1496,6 @@ export default function AppointmentsPage() {
           // Calendar View using the new Calendar component
           <div className="p-6 h-[800px] min-w-0 overflow-x-auto overflow-y-hidden">
             <CalendarComponent
-              tenantId="f6d06ea0-9bd8-490a-a704-e3bf95aad3ce"
               date={new Date(dateFilter)}
               onDateChange={(date) =>
                 setDateFilter(date.toISOString().split("T")[0])

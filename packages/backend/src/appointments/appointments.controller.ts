@@ -40,7 +40,7 @@ export class AppointmentsController {
   @ApiOperation({ summary: "Create a new appointment (public)" })
   @ApiResponse({ status: 201, description: "Appointment created successfully" })
   async create(@Body() createAppointmentDto: CreateAppointmentDto) {
-    return this.appointmentsService.create(createAppointmentDto);
+    return this.appointmentsService.createOnline(createAppointmentDto);
   }
 
   @Post("staff")

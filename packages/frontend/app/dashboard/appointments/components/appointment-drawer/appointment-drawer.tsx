@@ -38,7 +38,6 @@ import { Button } from "@/src/components/ui/Button";
 //import apiClient from '@/lib/api';
 import apiClient from "@/lib/api"
 import { useTranslations } from "@/lib/use-translation";
-import { getCurrentUser } from "@/lib/utils";
 import { ServiceTimeline } from "@/components/Calendar/ServiceTimeline";
 import { AppointmentScheduler } from "@/lib/appointment-scheduler";
 import {
@@ -355,7 +354,6 @@ useEffect(() => {
       const totalDuration = getTotalDuration(selectedServices, services, newAppointment.serviceId);
 
       const appointmentData = {
-        tenantId: "default", // Will be set by backend from the user's token
         clientId: newAppointment.clientId,
         serviceId: serviceId,
         professionalId: selectedProfessionalId,
@@ -375,12 +373,10 @@ useEffect(() => {
           }),
       };
 
-      // Check if current user is staff and use appropriate endpoint
-      const currentUser = getCurrentUser();
-      const appointment =
-        currentUser?.role === "staff"
-          ? await apiClient.createAppointmentByStaff(appointmentData)
-          : await apiClient.createAppointment(appointmentData);
+      // Every dashboard role books through /appointments/staff: the salon
+      // comes from the token, and the salon may book outside the online grid.
+      // The public POST /appointments is for clients and checks the slot.
+      const appointment = await apiClient.createAppointmentByStaff(appointmentData);
 
       // If multiple services, create them via bulk API
       if (hasMultipleServices) {

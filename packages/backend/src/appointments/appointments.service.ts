@@ -37,7 +37,12 @@ interface AppointmentActivity {
 }
 
 export interface CreateAppointmentDto {
-  tenantId: string;
+  /**
+   * Ignored. The tenant is decided server-side: from the professional for an
+   * online booking, from the token for a staff one. Callers sent placeholders
+   * ('default', '1', a hardcoded salon UUID) and the old code trusted them.
+   */
+  tenantId?: string;
   clientId?: string;
   clientInfo?: {
     firstName: string;
@@ -134,32 +139,71 @@ export class AppointmentsService {
     };
   }
 
-  async create(createAppointmentDto: CreateAppointmentDto) {
+  /**
+   * A booking made from outside the salon: the public site, the widget, the
+   * client portal. The route is @Public(), so nothing the caller sends about
+   * the tenant can be trusted, and nothing stops a direct POST from asking
+   * for 03:00 or for a slot already taken.
+   *
+   * - The salon is the professional's: that is what the client chose.
+   * - The slot must be one getAvailableSlots offers: on the professional's
+   *   shift, inside opening hours, and not overlapping another booking. The
+   *   public page only ever offers those, so this changes nothing for it; it
+   *   closes the door on everything else.
+   */
+  async createOnline(createAppointmentDto: CreateAppointmentDto) {
+    const professional = await this.prisma.professional.findFirst({
+      where: { id: createAppointmentDto.professionalId },
+      select: { tenantId: true },
+    });
+    if (!professional) {
+      throw new NotFoundException("Profesional no encontrado");
+    }
+    const tenantId = professional.tenantId;
+
+    const date =
+      typeof createAppointmentDto.scheduledDate === "string"
+        ? new Date(createAppointmentDto.scheduledDate)
+        : createAppointmentDto.scheduledDate;
+    const slots = await this.getAvailableSlots(
+      tenantId,
+      date,
+      createAppointmentDto.professionalId,
+      createAppointmentDto.serviceId,
+    );
+    const slot = slots.find(
+      (s: { time: string }) => s.time === createAppointmentDto.scheduledTime,
+    );
+    if (!slot?.isAvailable) {
+      throw new ConflictException("Ese horario ya no está disponible");
+    }
+
+    return this.create(createAppointmentDto, tenantId);
+  }
+
+  /**
+   * Create an appointment in `tenantId`, which the caller has already
+   * established -- never taken from the DTO.
+   */
+  async create(createAppointmentDto: CreateAppointmentDto, tenantId: string) {
     let clientId = createAppointmentDto.clientId;
-    let tenantId = createAppointmentDto.tenantId;
 
     // Find or create client if clientInfo provided
     if (!clientId && createAppointmentDto.clientInfo) {
-      // First, try to find an existing client by email
+      // Look the email up in THIS salon. Searching every salon meant a client
+      // of salon A could not book on salon B's site: they were matched to
+      // their salon-A record, the tenant switched to A, and B's professional
+      // was then "not found".
       const existingClient = await this.prisma.client.findFirst({
         where: {
           email: createAppointmentDto.clientInfo.email,
+          tenantId,
         },
       });
 
       if (existingClient) {
         clientId = existingClient.id;
-        tenantId = existingClient.tenantId;
       } else {
-        // Create a new client if not found - get tenantId from professional
-        const professional = await this.prisma.professional.findFirst({
-          where: { id: createAppointmentDto.professionalId },
-        });
-        if (!professional) {
-          throw new NotFoundException("Profesional no encontrado");
-        }
-        tenantId = professional.tenantId;
-
         const newClient = await this.prisma.client.create({
           data: {
             tenantId: tenantId,
@@ -178,17 +222,12 @@ export class AppointmentsService {
       throw new BadRequestException("Client ID is required");
     }
 
-    // Verify client exists and get tenantId
+    // The client must belong to the same salon as the appointment.
     const client = await this.prisma.client.findFirst({
-      where: { id: clientId },
+      where: { id: clientId, tenantId },
     });
     if (!client) {
       throw new NotFoundException("Cliente no encontrado");
-    }
-
-    // Use the client's tenantId if not provided
-    if (!tenantId || tenantId === "default") {
-      tenantId = client.tenantId;
     }
 
     // Verify professional exists
@@ -299,8 +338,8 @@ export class AppointmentsService {
       }
     }
 
-    // Call the regular create method
-    return this.create(createAppointmentDto);
+    // The staff member's own salon, from the token.
+    return this.create(createAppointmentDto, user.tenantId);
   }
 
   async findAll(user: any, filters?: AppointmentFiltersDto) {

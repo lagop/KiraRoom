@@ -11,7 +11,6 @@ import { CalendarHeader } from "./CalendarHeader";
 import { TimeGrid } from "./TimeGrid";
 import { AgendaView } from "./AgendaView";
 import { Professional, Appointment } from "./types";
-import { appointments as mockAppointments } from "./mock";
 import { AppointmentBlock } from "./AppointmentBlock";
 import { fetchCalendarData, transformToCalendarFormat } from "./calendar.service";
 import { useToast } from "@/components/ui/use-toast";
@@ -20,20 +19,27 @@ import { SlotClickData } from "./TimeSlot";
 import { NewAppointmentPopover } from "./NewAppointmentPopover";
 import { EditAppointmentPopover } from "./EditAppointmentPopover";
 
+/**
+ * The day view of the dashboard's appointments.
+ *
+ * The salon comes from the caller's token. This used to default to one
+ * hardcoded salon's UUID (and the appointments page passed the same one), so
+ * the calendar loaded for that salon only and answered "Failed to load
+ * calendar data" for every other; it also opened on 2026-01-06 with mock
+ * appointments until the fetch returned.
+ */
 export const Calendar: React.FC<{
-  tenantId?: string;
   date?: Date;
   onDateChange?: (date: Date) => void;
   onAppointmentClick?: (appointmentId: string) => void;
   onAppointmentUpdated?: () => void;
 }> = ({
-  tenantId = "f6d06ea0-9bd8-490a-a704-e3bf95aad3ce",
   date: externalDate,
   onDateChange: externalOnDateChange,
   onAppointmentClick,
   onAppointmentUpdated
 }) => {
-  const [internalSelectedDate, setInternalSelectedDate] = useState(new Date('2026-01-06'));
+  const [internalSelectedDate, setInternalSelectedDate] = useState(() => new Date());
   const selectedDate = externalDate ?? internalSelectedDate;
   const setSelectedDate = useCallback((date: Date) => {
     if (externalOnDateChange) {
@@ -42,7 +48,7 @@ export const Calendar: React.FC<{
       setInternalSelectedDate(date);
     }
   }, [externalOnDateChange]);
-  const [appointments, setAppointments] = useState<Appointment[]>(mockAppointments);
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [professionals, setProfessionals] = useState<Professional[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -76,7 +82,7 @@ export const Calendar: React.FC<{
       
       // Fetch real data from backend
       const { appointments: backendAppointments, professionals: backendProfessionals } =
-        await fetchCalendarData(tenantId, selectedDate);
+        await fetchCalendarData(selectedDate);
       
       // Transform data to calendar format
       const { appointments: calendarAppointments, professionals: calendarProfessionals } =
@@ -94,7 +100,7 @@ export const Calendar: React.FC<{
     } finally {
       setLoading(false);
     }
-  }, [tenantId, selectedDate]);
+  }, [selectedDate]);
 
   useEffect(() => {
     fetchData();
@@ -345,7 +351,6 @@ export const Calendar: React.FC<{
                 <NewAppointmentPopover
                   slot={newAppointmentSlot}
                   professionals={professionals}
-                  tenantId={tenantId}
                   onClose={() => setNewAppointmentSlot(null)}
                   onSuccess={() => {
                     setNewAppointmentSlot(null);
@@ -358,7 +363,6 @@ export const Calendar: React.FC<{
                 <EditAppointmentPopover
                   appointmentId={editingAppointmentId}
                   professionals={professionals}
-                  tenantId={tenantId}
                   onClose={() => setEditingAppointmentId(null)}
                   onSuccess={() => {
                     setEditingAppointmentId(null);

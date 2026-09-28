@@ -9,7 +9,8 @@ interface PopulatedAppointment extends Appointment {
   services?: AppointmentService[];
 }
 
-export const fetchCalendarData = async (tenantId: string, date: Date) => {
+// The salon is the caller's, from the token: no tenantId is sent.
+export const fetchCalendarData = async (date: Date) => {
   try {
     // Fetch appointments for the selected date
     const startDate = new Date(date);
@@ -19,13 +20,12 @@ export const fetchCalendarData = async (tenantId: string, date: Date) => {
     endDate.setHours(23, 59, 59, 999);
     
       const appointments = await apiClient.getAppointments({
-        tenantId,
         startDate: startDate.toISOString(),
         endDate: endDate.toISOString(),
       });
       
       // Fetch professionals for the tenant
-      const professionals = await apiClient.getProfessionalsPublic(tenantId);
+      const professionals = await apiClient.getProfessionalsPublic();
     
     return { appointments, professionals };
   } catch (error) {

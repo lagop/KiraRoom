@@ -473,7 +473,8 @@ export interface CreateClientDto {
 }
 
 export interface CreateAppointmentDto {
-  tenantId: string;
+  /** Ignored by the backend, which decides the salon itself. */
+  tenantId?: string;
   clientId?: string;
   clientInfo?: {
     firstName: string;

@@ -4,7 +4,6 @@ import { X, Search, CheckCircle, Loader2, Zap, DollarSign, Percent } from "lucid
 import { SlotClickData } from "./TimeSlot";
 import { Professional } from "./types";
 import apiClient from "../../lib/api";
-import { getCurrentUser } from "../../lib/utils";
 
 interface ClientOption {
   id: string;
@@ -23,7 +22,6 @@ interface ServiceOption {
 interface NewAppointmentPopoverProps {
   slot: SlotClickData;
   professionals: Professional[];
-  tenantId?: string;
   onClose: () => void;
   onSuccess: () => void;
 }
@@ -31,7 +29,6 @@ interface NewAppointmentPopoverProps {
 export const NewAppointmentPopover: React.FC<NewAppointmentPopoverProps> = ({
   slot,
   professionals,
-  tenantId = "default",
   onClose,
   onSuccess,
 }) => {
@@ -124,9 +121,7 @@ export const NewAppointmentPopover: React.FC<NewAppointmentPopoverProps> = ({
       const dateStr = format(slot.date, "yyyy-MM-dd");
       const timeStr = `${slot.hour.toString().padStart(2, "0")}:${slot.minute.toString().padStart(2, "0")}`;
 
-      const currentUser = getCurrentUser();
       const appointmentData = {
-        tenantId,
         clientId,
         serviceId,
         professionalId: slot.professionalId,
@@ -138,11 +133,8 @@ export const NewAppointmentPopover: React.FC<NewAppointmentPopoverProps> = ({
         commissionRate: commissionRate !== 0 ? commissionRate : undefined,
       };
 
-      if (currentUser?.role === "staff") {
-        await apiClient.createAppointmentByStaff(appointmentData);
-      } else {
-        await apiClient.createAppointment(appointmentData);
-      }
+      // See appointment-drawer.tsx: every dashboard role books as staff.
+      await apiClient.createAppointmentByStaff(appointmentData);
 
       onSuccess();
     } catch (err) {
