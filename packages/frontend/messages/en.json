@@ -1358,7 +1358,11 @@
     "title": "Title",
     "update": "Update",
     "usd_dollar": "Usd Dollar",
-    "using_demo_data": "Using Demo Data"
+    "using_demo_data": "Using Demo Data",
+    "load_failed": "Could not load services",
+    "save_failed": "Could not save the service",
+    "delete_failed": "Could not delete the service",
+    "status_failed": "Could not change the service status"
   },
   "nav": {
     "dashboard": "Dashboard",

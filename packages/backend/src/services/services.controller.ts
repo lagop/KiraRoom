@@ -7,6 +7,7 @@ import {
 } from "@nestjs/swagger";
 import { Public } from "../auth/decorators/public.decorator";
 import { Roles } from "../auth/decorators/roles.decorator";
+import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { UserRole } from "@prisma/client";
@@ -28,11 +29,12 @@ export class ServicesController {
   @Roles(UserRole.owner, UserRole.admin)
   @ApiOperation({ summary: "Create a new service" })
   @ApiResponse({ status: 201, description: "Service created successfully" })
-  async create(@Body() createServiceDto: CreateServiceDto) {
-    const service = await this.servicesService.create(createServiceDto);
+  async create(@CurrentUser() user: any, @Body() createServiceDto: CreateServiceDto) {
+    // The tenant comes from the caller's token, never from the body.
+    const service = await this.servicesService.create(user.tenantId, createServiceDto);
     // Fire-and-forget: mark onboarding step done.
     void this.onboardingDetector
-      .markStepCompleted(createServiceDto.tenantId, "service_create")
+      .markStepCompleted(user.tenantId, "service_create")
       .catch(() => undefined);
     return service;
   }

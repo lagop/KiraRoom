@@ -75,7 +75,6 @@ export function ServiceForm({ initialData, isEditing, onClose, onSubmit }: Servi
         })
       } else {
         await api.createService({
-          tenantId: 'default-tenant',
           ...formData,
         })
         toast({

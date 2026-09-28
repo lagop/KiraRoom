@@ -1159,6 +1159,7 @@ export interface ApiClientInterface {
     data: Partial<CreateAppointmentDto>,
   ): Promise<Appointment>;
   cancelAppointment(id: string, reason?: string): Promise<Appointment>;
+  deleteAppointment(id: string): Promise<void>;
   getClients(tenantId?: string): Promise<Client[]>;
   filterClients(filters: {
     gender?: string;
@@ -1205,7 +1206,6 @@ export interface ApiClientInterface {
   getServices(tenantId?: string): Promise<Service[]>;
   getService(id: string): Promise<Service>;
   createService(data: {
-    tenantId: string;
     name: string;
     description?: string;
     category: "hair" | "nails" | "facial" | "massage" | "body" | "other";
@@ -1875,9 +1875,16 @@ class ApiClient implements ApiClientInterface {
   }
 
   async cancelAppointment(id: string, reason?: string): Promise<Appointment> {
+    // PUT: the backend route is `@Put(":id/cancel")`; POST was a 404.
     return this.request<Appointment>(`/appointments/${id}/cancel`, {
-      method: "POST",
+      method: "PUT",
       body: JSON.stringify({ reason }),
+    });
+  }
+
+  async deleteAppointment(id: string): Promise<void> {
+    return this.request<void>(`/appointments/${id}`, {
+      method: "DELETE",
     });
   }
 
@@ -2126,7 +2133,6 @@ class ApiClient implements ApiClientInterface {
   }
 
   async createService(data: {
-    tenantId: string;
     name: string;
     description?: string;
     category: "hair" | "nails" | "facial" | "massage" | "body" | "other";

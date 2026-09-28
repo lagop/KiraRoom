@@ -15,7 +15,6 @@ export default function NewServicePage() {
     try {
       await apiClient.createService({
         ...data,
-        tenantId: 'demo-tenant', // TODO: Get from auth context
         currency: 'EUR',
       })
       // Refresh onboarding checklist so the "create first service" step

@@ -1,12 +1,14 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsString, IsNumber, IsBoolean, IsOptional, IsNotEmpty } from 'class-validator';
 
+/**
+ * No `tenantId` here on purpose: the tenant comes from the caller's token.
+ * The dashboard used to send placeholders ('demo-tenant', 'default-tenant',
+ * '1'), which the tenant scope rejected with a 403 -- so every screen but the
+ * onboarding wizard failed to create a service. The global ValidationPipe
+ * whitelists, so an old client still sending the field has it stripped.
+ */
 export class CreateServiceDto {
-  @ApiProperty({ description: 'Tenant ID' })
-  @IsString()
-  @IsNotEmpty()
-  tenantId: string;
-
   @ApiProperty({ description: 'Service name' })
   @IsString()
   @IsNotEmpty()
