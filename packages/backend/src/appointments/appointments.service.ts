@@ -1001,6 +1001,20 @@ export class AppointmentsService {
       throw new NotFoundException("One or more professionals not found");
     }
 
+    // "Any professional" still has to obey somebody's shift.
+    //
+    // The first version of this check only ran when a professional was named,
+    // which is what the public booking page always does. The virtual
+    // receptionist's check_availability tool does not name one, so it fell
+    // through to a window of 09:00-20:00 and offered a Tuesday at 19:30 on a
+    // salon whose only professional leaves at 19:00.
+    const anyProfessionalRows =
+      professionalsToCheck.length === 0
+        ? await this.prisma.professional.findMany({
+            where: { tenantId, isActive: true },
+          })
+        : [];
+
     // Get the service duration if specified
     let serviceDuration = duration;
     if (serviceId) {
@@ -1101,7 +1115,35 @@ export class AppointmentsService {
           }
         }
       } else {
-        // No specific professionals, check any conflicts
+        // No professional named: the slot is bookable when AT LEAST ONE of
+        // the tenant's professionals is both on shift and free for it. Asking
+        // only "is anybody busy" answered a different question, and answered
+        // it wrongly — it offered hours nobody works.
+        const slotMinutes = minutesOf(slot.time);
+        const someoneOnShift =
+          anyProfessionalRows.length === 0
+            ? true // No professionals recorded at all: impose no shift limit.
+            : anyProfessionalRows.some((p) => {
+                const window = workingWindowFor(p.workingHours, date);
+                if (window === null) return false;
+                if (!window) return true; // No schedule recorded for them.
+                return (
+                  slotMinutes !== null &&
+                  fitsInWindow(slotMinutes, serviceDuration, window)
+                );
+              });
+
+        if (!someoneOnShift) {
+          isAvailable = false;
+          return {
+            time: slot.time,
+            isAvailable,
+            professionalId: undefined,
+            professionalIds: undefined,
+            serviceId,
+          };
+        }
+
         isAvailable = !existingAppointments.some((appointment) => {
           const [appointmentHour, appointmentMinute] = appointment.scheduledTime
             .split(":")

@@ -42,9 +42,11 @@ function build({
       findUnique: jest.fn().mockResolvedValue({ id: TENANT_ID, openingHours }),
     },
     professional: {
+      // Answers both lookups: the named-professional one and the
+      // any-professional one that check_availability triggers.
       findMany: jest
         .fn()
-        .mockResolvedValue([{ id: PRO_ID, tenantId: TENANT_ID, workingHours }]),
+        .mockResolvedValue([{ id: PRO_ID, tenantId: TENANT_ID, workingHours, isActive: true }]),
     },
     service: {
       findFirst: jest
@@ -179,5 +181,78 @@ describe("getAvailableSlots respects the professional's shift", () => {
     expect(slots[0]).toBe("10:00");
     expect(slots).not.toContain("09:30");
     expect(slots[slots.length - 1]).toBe("13:30");
+  });
+});
+
+/**
+ * "Any professional" — the shape the virtual receptionist asks for.
+ *
+ * The first version of the shift check only ran when a professional was named,
+ * which is what the public booking page always does. The receptionist's
+ * `check_availability` tool does not name one, so it fell through to a window
+ * of 09:00–20:00.
+ *
+ * Caught by talking to the receptionist in production: asked for a Tuesday
+ * afternoon, it came back with 22 slots ending at 19:30 on a salon whose only
+ * professional leaves at 19:00 — while the same day through the named-
+ * professional path correctly returned 20, ending at 18:30.
+ */
+describe("getAvailableSlots with no professional named", () => {
+  async function anyPro(
+    date: string,
+    opts?: Parameters<typeof build>[0],
+  ): Promise<string[]> {
+    const { service } = build(opts);
+    const slots = await service.getAvailableSlots(
+      TENANT_ID,
+      new Date(`${date}T00:00:00.000Z`),
+      undefined,
+      SERVICE_ID,
+      30,
+    );
+    return slots.map((s: { time: string }) => s.time);
+  }
+
+  it("still respects the only professional's shift", async () => {
+    // The bug: this returned up to 19:30.
+    const slots = await anyPro("2026-09-29");
+
+    expect(slots[slots.length - 1]).toBe("18:30");
+    expect(slots).not.toContain("19:00");
+    expect(slots).not.toContain("19:30");
+  });
+
+  it("offers nothing when nobody works that day", async () => {
+    expect(await anyPro("2026-09-27")).toEqual([]);
+  });
+
+  it("uses each weekday's hours, as the named path does", async () => {
+    const monday = await anyPro("2026-09-28");
+
+    expect(monday[monday.length - 1]).toBe("17:30");
+  });
+
+  it("agrees with the named-professional path", async () => {
+    // The two must never disagree: the receptionist and the booking page have
+    // to offer the same hours, or one of them is lying to a client.
+    for (const date of ["2026-09-28", "2026-09-29", "2026-09-27"]) {
+      expect(await anyPro(date)).toEqual(await times(date));
+    }
+  });
+
+  it("imposes no shift limit when the salon has no professionals at all", async () => {
+    const { service } = build();
+    // Override: the tenant has nobody on the books.
+    (service as any).prisma.professional.findMany = jest.fn().mockResolvedValue([]);
+
+    const slots = await service.getAvailableSlots(
+      TENANT_ID,
+      new Date("2026-09-27T00:00:00.000Z"),
+      undefined,
+      SERVICE_ID,
+      30,
+    );
+
+    expect(slots.length).toBeGreaterThan(0);
   });
 });
