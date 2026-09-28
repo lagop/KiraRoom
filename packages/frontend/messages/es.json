@@ -1146,7 +1146,9 @@
     "section_account": "Cuenta",
     "coming_soon": "Próximamente",
     "load_failed": "No se pudo cargar la configuración",
-    "save_failed": "No se pudo guardar la configuración"
+    "save_failed": "No se pudo guardar la configuración",
+    "hours_need_both": "Indica tanto la hora de apertura como la de cierre",
+    "hours_open_before_close": "La hora de apertura debe ser anterior a la de cierre"
   },
   "clients": {
     "title": "Clientas",

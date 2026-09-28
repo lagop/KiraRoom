@@ -1,5 +1,6 @@
 import { plainToInstance } from "class-transformer";
 import { validateSync } from "class-validator";
+import { BadRequestException } from "@nestjs/common";
 import { UpdateTenantDto } from "./dto/update-tenant.dto";
 import { AuthService } from "./auth.service";
 
@@ -58,5 +59,20 @@ describe("updateTenant", () => {
       name: "X",
       openingHours: { monday: ["09:00", "18:00"], open: "10:00", close: "19:00" },
     });
+  });
+  it("refuses a window that opens at or after it closes", async () => {
+    // getAvailableSlots builds the grid from it: reversed, the salon had no
+    // bookable slot at all, and nothing said why.
+    let written = false;
+    const service = Object.create(AuthService.prototype);
+    service.prisma = { tenant: { findUnique: async () => ({}), update: async () => { written = true; } } };
+
+    await expect(
+      service.updateTenant("t1", { openingHours: { open: "20:00", close: "09:00" } }),
+    ).rejects.toThrow(BadRequestException);
+    await expect(
+      service.updateTenant("t1", { openingHours: { open: "09:00", close: "09:00" } }),
+    ).rejects.toThrow(BadRequestException);
+    expect(written).toBe(false);
   });
 });

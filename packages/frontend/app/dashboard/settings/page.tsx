@@ -516,9 +516,13 @@ export default function SettingsPage() {
   const [savedSettings, setSavedSettings] = useState<Record<string, any>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const role = typeof window !== "undefined" ? getCurrentUser()?.role : undefined;
-  // PATCH /auth/tenant is owner/admin only.
-  const canAccessAdminSettings = role === "owner" || role === "admin";
+  // PATCH /auth/tenant is owner/admin only. Read after mount: reading
+  // localStorage during render made the server and client renders disagree.
+  const [canAccessAdminSettings, setCanAccessAdminSettings] = useState(false);
+  useEffect(() => {
+    const role = getCurrentUser()?.role;
+    setCanAccessAdminSettings(role === "owner" || role === "admin");
+  }, []);
   const [professionalCrossBooking, setProfessionalCrossBooking] =
     useState<boolean>(false);
   const t = useTranslations();
@@ -566,9 +570,22 @@ export default function SettingsPage() {
   };
 
   const handleSubmit = async () => {
-    setLoading(true);
     setSaveError(null);
 
+    // Both or neither: saving one alone was dropped while "updated" showed.
+    // And open before close: a reversed window leaves no bookable slot.
+    const open = settings.openingTime;
+    const close = settings.closingTime;
+    if ((open && !close) || (!open && close)) {
+      setSaveError(t("settings.hours_need_both"));
+      return;
+    }
+    if (open && close && open >= close) {
+      setSaveError(t("settings.hours_open_before_close"));
+      return;
+    }
+
+    setLoading(true);
     try {
       const tenantUpdate = tenantUpdateFrom(settings, savedSettings);
       if (Object.keys(tenantUpdate).length > 0) {
@@ -886,7 +903,7 @@ export default function SettingsPage() {
               </button>
               <button
                 onClick={handleSubmit}
-                disabled={loading}
+                disabled={loading || !!loadError || !canAccessAdminSettings}
                 className="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
               >
                 {loading ? (

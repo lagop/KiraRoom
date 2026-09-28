@@ -1146,7 +1146,9 @@
     "section_account": "Account",
     "coming_soon": "Coming soon",
     "load_failed": "Could not load settings",
-    "save_failed": "Could not save settings"
+    "save_failed": "Could not save settings",
+    "hours_need_both": "Set both the opening and the closing time",
+    "hours_open_before_close": "The opening time must be before the closing time"
   },
   "clients": {
     "title": "Clients",

@@ -600,6 +600,12 @@ export class AuthService {
   async updateTenant(tenantId: string, updateData: any) {
     const data = { ...updateData };
     if (updateData.openingHours) {
+      // getAvailableSlots builds every salon's grid from this window; a
+      // reversed or empty one leaves the salon with no bookable slot at all,
+      // silently.
+      if (updateData.openingHours.open >= updateData.openingHours.close) {
+        throw new BadRequestException("La hora de apertura debe ser anterior a la de cierre");
+      }
       // Merge rather than replace: onboarding stores other keys in the same
       // JSON, and only { open, close } is edited from settings.
       const current = await this.prisma.tenant.findUnique({
