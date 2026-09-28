@@ -57,10 +57,6 @@ function check(label: string, actual: unknown, expected: unknown): void {
  * Ordered by how much damage the lie does.
  */
 const KNOWN_UNIMPLEMENTED: Record<string, string> = {
-  "sites/[salonName]/account/settings/page.tsx":
-    'says "Contraseña actualizada" without changing it; no backend endpoint for a password change exists at all',
-  "sites/[salonName]/account/payment-methods/page.tsx":
-    "lists mock cards and 'adds' one into local state; no payment-method endpoint exists",
 };
 
 const APP = path.resolve(__dirname, "..", "app");

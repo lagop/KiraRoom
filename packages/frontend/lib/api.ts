@@ -2393,10 +2393,19 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  async updateMyProfile(clientId: string, data: any): Promise<any> {
-    return this.request<any>(`/clients/${clientId}`, {
+  // The client in the token; `clientId` stays for existing callers. This
+  // used to PATCH /clients/:id, which does not exist.
+  async updateMyProfile(_clientId: string, data: any): Promise<any> {
+    return this.request<any>(`/clients/me`, {
       method: "PATCH",
       body: JSON.stringify(data),
+    });
+  }
+
+  async changeMyPassword(currentPassword: string, newPassword: string): Promise<void> {
+    return this.request<void>(`/clients/me/password`, {
+      method: "POST",
+      body: JSON.stringify({ currentPassword, newPassword }),
     });
   }
 
