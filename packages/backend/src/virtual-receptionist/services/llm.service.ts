@@ -682,8 +682,10 @@ const dynamicContext = getDynamicContext(language, {
     // The booking flow and the escalation rules were written for this
     // assistant and then left as unused imports, so the model had to
     // improvise the one job it exists to do. They are stable per language,
-    // which also means they sit inside the cacheable prefix rather than
-    // being re-billed as fresh input on every round-trip.
+    // so they keep the prefix cacheable -- but that is all it means. They
+    // add roughly 760 tokens, and while the prefix stays under the model's
+    // caching minimum (see anthropic.provider.ts) every one of them is
+    // billed as fresh input on every round-trip.
     //
     // Two other prompt blocks stay out on purpose.
     // getIntentClassifierPrompt instructs a classifier, not a receptionist.

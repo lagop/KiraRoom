@@ -98,24 +98,30 @@ export class AnthropicProvider {
       // Caching is a prefix match, so anything volatile must stay AFTER
       // this block.
       //
-      // MEASURED, AND CURRENTLY INERT. The cached prefix is tools + system
-      // (that is the hierarchy: tools, then system, then messages), which
-      // for this receptionist is ~620 + ~1360 = ~1970 tokens. Claude Haiku
-      // 4.5 will not cache a prefix below 4096 tokens, and it reports no
-      // error when it declines -- the request is simply processed uncached,
-      // which is why cache_read_input_tokens sat at 0 in production while
-      // this block looked correct.
+      // NEAR THE LINE, AND NOT THE SAME FOR EVERY SALON. The cached prefix
+      // is tools + system (that is the hierarchy: tools, then system, then
+      // messages). Claude Haiku 4.5 will not cache a prefix below 4096
+      // tokens, and it reports no error when it declines -- the request is
+      // simply processed uncached, which is why cache_read_input_tokens sat
+      // at 0 in production while this block looked correct.
       //
-      // It will not grow into the limit by itself either: buildSystemPrompt
-      // deliberately keeps services and professionals out of the prompt, so
-      // the prompt is the same size for every salon regardless of its data.
-      // Reaching 4096 would mean inlining that data again, which reverses a
-      // deliberate architecture decision -- an open question, not a bug.
+      // Estimated for a salon with one short FAQ: ~600 tokens of tool
+      // schemas plus ~3000 of system prompt, about 3600. It was ~1970 until
+      // the booking flow and the handling rules went into the prompt.
+      // prompt-cache-prefix.l4.spec.ts tracks this against the real
+      // buildSystemPrompt output.
       //
-      // Leaving cache_control in place costs nothing and starts paying off
-      // the moment the prefix does clear the minimum. Do not read a run of
-      // zeroes as "the prefix is being invalidated" until the prefix is
-      // known to be over 4096: below that, zero is the expected answer.
+      // The size also varies by salon now: the FAQs are in the prompt, up to
+      // 20 entries of 200 + 200 characters, which is up to ~2200 tokens more.
+      // So a salon with a handful of full FAQs probably clears 4096 and is
+      // cached, while one with none probably is not. The estimate is too
+      // rough to say which salons are which -- per-tenant
+      // cache_read_input_tokens in production is the only real answer.
+      //
+      // Leaving cache_control in place costs nothing and pays off wherever
+      // the prefix clears the minimum. Do not read a run of zeroes as "the
+      // prefix is being invalidated" for a salon until its prefix is known
+      // to be over 4096: below that, zero is the expected answer.
       const cacheableSystem = [
         {
           type: "text" as const,
