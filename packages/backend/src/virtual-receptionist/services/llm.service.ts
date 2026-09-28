@@ -1,6 +1,7 @@
 ﻿import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { LLMProviderFactory } from '../factories/llm-provider.factory';
+import { salonWeekFrom } from '../../appointments/working-hours';
 import { PlatformLlmConfigService } from '../../platform/platform-llm-config.service';
 import { LLMProvider, LLMGenerationConfig, LLMCompletion } from '@kira/shared';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -15,36 +16,52 @@ import {
   getIntentClassifierPrompt,
 } from '../prompts/templates';
 
+/** Monday first: how a salon reads its own week. Data is keyed in English. */
+const WEEK_ORDER = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'];
+
+const DAY_LABELS: Record<string, { es: string; en: string }> = {
+  monday: { es: 'lunes', en: 'Monday' },
+  tuesday: { es: 'martes', en: 'Tuesday' },
+  wednesday: { es: 'miércoles', en: 'Wednesday' },
+  thursday: { es: 'jueves', en: 'Thursday' },
+  friday: { es: 'viernes', en: 'Friday' },
+  saturday: { es: 'sábado', en: 'Saturday' },
+  sunday: { es: 'domingo', en: 'Sunday' },
+};
+
 /**
- * Render a workingHours map as a short human-readable line list
- * for inclusion in the system prompt. Days are localised so the LLM
- * reads them naturally in the salon's primary language.
+ * Render a salon week for the prompt, one line per day. Days are localised
+ * so the LLM reads them naturally in the salon's primary language.
+ *
+ * Closed days are listed rather than omitted, so the receptionist can say
+ * "los domingos cerramos" instead of going quiet. An empty input returns an
+ * empty string and the caller falls back to saying the hours are unknown --
+ * inventing a default is how the prompt ended up disagreeing with the tools.
  */
 function formatWorkingHours(
   hours: Record<string, { start: string; end: string }>,
   language: string,
 ): string {
   if (!hours || Object.keys(hours).length === 0) {
-    return 'Not available';
+    return '';
   }
-  const dayLabelsES = ['lunes','martes','miércoles','jueves','viernes','sábado','domingo'];
-  const dayLabelsEN = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
-  const labels = language === 'en' ? dayLabelsEN : dayLabelsES;
-  const order = language === 'en'
-    ? ['monday','tuesday','wednesday','thursday','friday','saturday','sunday']
-    : ['lunes','martes','miércoles','jueves','viernes','sábado','domingo'];
-  return order
-    .map((key) => {
-      const h = hours[key] ?? hours[key.toLowerCase()];
-      if (!h) return null;
-      const idx = language === 'en'
-        ? ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'].indexOf(key)
-        : ['lunes','martes','miércoles','jueves','viernes','sábado','domingo'].indexOf(key);
-      const label = labels[idx] ?? key;
-      return `- ${label}: ${h.start}–${h.end}`;
-    })
-    .filter(Boolean)
-    .join('\\n');
+  const lang = language === 'en' ? 'en' : 'es';
+  const closed = lang === 'en' ? 'closed' : 'cerrado';
+  return WEEK_ORDER.map((key) => {
+    const label = DAY_LABELS[key][lang];
+    const h = hours[key];
+    const open = h?.start;
+    const close = h?.end;
+    const isOpen =
+      !!open &&
+      !!close &&
+      open !== 'closed' &&
+      close !== 'closed' &&
+      open !== close;
+    return isOpen
+      ? `- ${label}: ${open}–${close}`
+      : `- ${label}: ${closed}`;
+  }).join('\n');
 }
 
 // Retry configuration interface
@@ -440,6 +457,8 @@ export class LLMService {
               lastName: true,
               position: true,
               specialties: true,
+              // Needed to derive the salon's real opening hours below.
+              workingHours: true,
             },
           },
         },
@@ -501,15 +520,20 @@ export class LLMService {
         faqs: (await this.faqService
           .getFAQs(tenant.id)
           .catch(() => [])) as Array<{ question: string; answer: string }>,
-        workingHours: {
-          monday: { start: '09:00', end: '18:00' },
-          tuesday: { start: '09:00', end: '18:00' },
-          wednesday: { start: '09:00', end: '18:00' },
-          thursday: { start: '09:00', end: '18:00' },
-          friday: { start: '09:00', end: '18:00' },
-          saturday: { start: '09:00', end: '14:00' },
-          sunday: { start: 'closed', end: 'closed' },
-        },
+        // The salon's real week, derived from the schedules the onboarding
+        // wizard writes onto each professional. This used to be hardcoded to
+        // Monday-Friday 09:00-18:00 and Saturday 09:00-14:00 for every salon,
+        // which flatly contradicted what check_availability computes from the
+        // same schedules: the prompt told the model the salon opened on
+        // Saturday while the tool correctly refused to offer a slot.
+        workingHours: Object.fromEntries(
+          Object.entries(salonWeekFrom(tenant.professionals)).map(
+            ([day, window]) => [
+              day,
+              { start: window.openTime, end: window.closeTime },
+            ],
+          ),
+        ),
       };
     } catch (error) {
       this.logger.error(`Error fetching salon context for ${salonId}:`, error);
@@ -655,7 +679,23 @@ const dynamicContext = getDynamicContext(language, {
       faqs,
     });
 
-    return baseSystem + this.personaSuffix(context.persona) + '\n\n' + dynamicContext;
+    // The booking flow and the escalation rules were written for this
+    // assistant and then left as unused imports, so the model had to
+    // improvise the one job it exists to do. They are stable per language,
+    // which also means they sit inside the cacheable prefix rather than
+    // being re-billed as fresh input on every round-trip.
+    //
+    // Two other prompt blocks stay out on purpose.
+    // getIntentClassifierPrompt instructs a classifier, not a receptionist.
+    // getEscalationPrompt takes the intent of the current message, so it is
+    // not stable per language -- putting it here would break the cache prefix
+    // on every turn, which is the opposite of what this is for. Both remain
+    // unused; that is a separate loose end, not something to paper over here.
+    return [
+      baseSystem + this.personaSuffix(context.persona),
+      dynamicContext,
+      getBookingFlowPrompt(language),
+    ].join('\n\n');
   }
   /**
    * Get fallback provider
