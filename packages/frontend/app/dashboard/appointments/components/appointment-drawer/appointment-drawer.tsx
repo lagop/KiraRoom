@@ -67,10 +67,6 @@ import {
   sumServiceDurations,
   transformAddons,
 } from "../appointment-drawer.utils";
-import {
-  generateFallbackSuggestions as buildFallbackSuggestions,
-  type FallbackSuggestion,
-} from "../appointment-suggestions";
 // Phase 1+2+5 refactor — primitives, data hooks, and section components.
 // See .kilo/plans/appointment-drawer-refactor.md.
 import { AppointmentStatusBadge } from "./primitives/AppointmentStatusBadge";
@@ -143,8 +139,6 @@ const {
   suggestionsError,
   availabilityWarnings,
   generate: generateAppointmentSuggestions,
-  generateMock: generateMockSuggestions,
-  generateFallback: generateFallbackSuggestions,
   clearSuggestions,
 } = useAppointmentSuggestions();
 
@@ -187,8 +181,7 @@ const getProfessionalForService = (serviceId: string) => {
       : null;
   };
 
-  // Phase 3 refactor — generateAppointmentSuggestions /
-  // generateMockSuggestions / generateFallbackSuggestions all live in
+  // Phase 3 refactor — generateAppointmentSuggestions lives in
   // useAppointmentSuggestions. See
   // ./appointment-drawer/hooks/useAppointmentSuggestions.ts. Call sites
   // (line 1758) pass the current form/catalog inputs explicitly.

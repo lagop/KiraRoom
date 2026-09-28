@@ -61,8 +61,6 @@ const KNOWN_UNIMPLEMENTED: Record<string, string> = {
     'says "Contraseña actualizada" without changing it; no backend endpoint for a password change exists at all',
   "sites/[salonName]/account/payment-methods/page.tsx":
     "lists mock cards and 'adds' one into local state; no payment-method endpoint exists",
-  "sites/[salonName]/account/new-appointment/page.tsx":
-    "the logged-in client's booking page still generates its own slots, like the public page used to",
 };
 
 const APP = path.resolve(__dirname, "..", "app");

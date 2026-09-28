@@ -1,12 +1,6 @@
 import { useCallback, useState } from "react";
 import { format } from "date-fns";
 import apiClient from "../../../../../../lib/api";
-import { useTranslations } from "@/lib/use-translation";
-import { addMinutesToTime, getProfessionalName, sumServiceDurations } from "../../appointment-drawer.utils";
-import {
-  generateFallbackSuggestions as buildFallbackSuggestions,
-  type FallbackSuggestion,
-} from "../../appointment-suggestions";
 import {
   prepareServiceObjects,
   fetchProfessionalAvailability,
@@ -31,8 +25,13 @@ import type { SelectedService } from "./useAppointmentFormState";
  *   - `suggestionsLoading`, `suggestionsError`,
  *     `availabilityWarnings`                                    loading/error
  *   - `generateAppointmentSuggestions` (the smart async one)
- *   - `generateMockSuggestions`      (single placeholder row)
- *   - `generateFallbackSuggestions`   (delegates to the pure helper)
+ *
+ * It only ever suggests what the scheduler found in real availability.
+ * There used to be two fallbacks: a "Quickest" row at 09:00/10:00/17:00 on
+ * any error, and "Próximo Disponible" and friends tomorrow at 10:00, 11:00,
+ * 14:00 and 15:00 when nothing was free -- flagged recommended and
+ * no-waiting, never checked, and bookable. Now nothing found shows the
+ * drawer's "No availability" state, and an error says so.
  *
  * The smart generator needs to read **a lot** of state from outside:
  * the catalog (services + professionals), the form state
@@ -41,11 +40,8 @@ import type { SelectedService } from "./useAppointmentFormState";
  * in as arguments to `generate()` rather than wired via React
  * context. The orchestrator stitches everything together.
  *
- * Verbatim move of `generateAppointmentSuggestions` (was lines
- * 211-472), `generateMockSuggestions` (was lines 479-530), and
- * `generateFallbackSuggestions` (was lines 536-551) from
- * `appointment-drawer.tsx`. No semantic changes — just lifted to a
- * hook that owns the suggestion state.
+ * Lifted from `appointment-drawer.tsx` into a hook that owns the
+ * suggestion state.
  */
 
 export interface SuggestionInputs {
@@ -80,13 +76,10 @@ export interface UseAppointmentSuggestionsResult {
   suggestionsError: string | null;
   availabilityWarnings: string[];
   generate: (inputs: SuggestionInputs) => Promise<void>;
-  generateMock: (inputs: Pick<SuggestionInputs, "selectedServices" | "services" | "professionals" | "newAppointmentDate">) => void;
-  generateFallback: (preferenceType: string, inputs: Pick<SuggestionInputs, "selectedServices" | "services" | "professionals">) => void;
   clearSuggestions: () => void;
 }
 
 export function useAppointmentSuggestions(): UseAppointmentSuggestionsResult {
-  const t = useTranslations();
   const [appointmentSuggestions, setAppointmentSuggestions] = useState<
     any[]
   >([]);
@@ -366,25 +359,13 @@ export function useAppointmentSuggestions(): UseAppointmentSuggestionsResult {
 
         if (typeof rawOptions === "object" && "error" in rawOptions) {
           setSuggestionsError(rawOptions.error as string);
-          // Fall back to mock (mirrors the inline call site's behavior)
-          const mock = generateMockInternal({
-            selectedServices,
-            services: services as any,
-            professionals: professionals as any,
-            newAppointmentDate,
-            dateTimePreference,
-          });
-          setAppointmentSuggestions(mock ? [mock] : []);
+          setAppointmentSuggestions([]);
           return;
         }
 
         if (!Array.isArray(rawOptions) || rawOptions.length === 0) {
-          generateFallbackInternal({
-            preferenceType: effectiveDateTimePreference.type,
-            selectedServices,
-            services: services as any,
-            professionals: professionals as any,
-          });
+          // Nothing free: the drawer shows its "No availability" state.
+          setAppointmentSuggestions([]);
           return;
         }
 
@@ -394,127 +375,12 @@ export function useAppointmentSuggestions(): UseAppointmentSuggestionsResult {
         );
         setAppointmentSuggestions(uiOptions);
       } catch (error) {
-        setSuggestionsError(
-          "Failed to generate appointment suggestions. Using basic options.",
-        );
-        const mock = generateMockInternal({
-          selectedServices,
-          services: services as any,
-          professionals: professionals as any,
-          newAppointmentDate,
-          dateTimePreference,
-        });
-        setAppointmentSuggestions(mock ? [mock] : []);
+        console.error("Failed to generate appointment suggestions:", error);
+        setSuggestionsError("Failed to generate appointment suggestions.");
+        setAppointmentSuggestions([]);
       } finally {
         setSuggestionsLoading(false);
       }
-    },
-    [],
-  );
-
-  // --- Internal helpers (used by `generate`) ---
-
-  function generateMockInternal(inputs: {
-    selectedServices: SelectedService[];
-    services: ReadonlyArray<CatalogService>;
-    professionals: ReadonlyArray<CatalogProfessional>;
-    newAppointmentDate: string;
-    dateTimePreference: { type: string; specificTimePeriod?: string };
-  }) {
-    const { selectedServices, services, professionals, newAppointmentDate, dateTimePreference } = inputs;
-    if (selectedServices.length === 0) {
-      setAppointmentSuggestions([]);
-      return null;
-    }
-    const totalDuration = sumServiceDurations(selectedServices, services);
-
-    let baseTime = "09:00";
-    if (
-      dateTimePreference.type === "specific" &&
-      dateTimePreference.specificTimePeriod
-    ) {
-      if (dateTimePreference.specificTimePeriod === "morning") {
-        baseTime = "10:00";
-      } else if (dateTimePreference.specificTimePeriod === "evening") {
-        baseTime = "17:00";
-      } else {
-        baseTime = dateTimePreference.specificTimePeriod;
-      }
-    }
-
-    return {
-      id: "quickest_fallback",
-      title: "Quickest",
-      recommended: true,
-      startTime: baseTime,
-      endTime: addMinutesToTime(baseTime, totalDuration),
-      duration: totalDuration,
-      noWaiting: true,
-      date: newAppointmentDate,
-      timeline: selectedServices.map((sel) => {
-        const service = services.find((s) => s.id === sel.serviceId);
-        const duration = Number(service?.duration) || 60;
-        return {
-          type: "service",
-          service: service?.name ?? "Service",
-          professional: getProfessionalName(sel.professionalId, professionals),
-          startTime: baseTime,
-          endTime: addMinutesToTime(baseTime, duration),
-        };
-      }),
-    };
-  }
-
-  function generateFallbackInternal(inputs: {
-    preferenceType: string;
-    selectedServices: SelectedService[];
-    services: ReadonlyArray<CatalogService>;
-    professionals: ReadonlyArray<CatalogProfessional>;
-  }) {
-    const generated: FallbackSuggestion[] = buildFallbackSuggestions({
-      preferenceType: inputs.preferenceType,
-      selectedServices: inputs.selectedServices,
-      services: inputs.services as any,
-      professionals: inputs.professionals as any,
-      labels: {
-        today: t("pos_today"),
-        tomorrow: t("pos_tomorrow"),
-      },
-    });
-    setAppointmentSuggestions(generated);
-  }
-
-  // --- Public wrappers (callable from outside the smart generator) ---
-
-  const generateMock = useCallback(
-    (inputs: {
-      selectedServices: SelectedService[];
-      services: ReadonlyArray<CatalogService>;
-      professionals: ReadonlyArray<CatalogProfessional>;
-      newAppointmentDate: string;
-    }) => {
-      const mock = generateMockInternal({
-        ...inputs,
-        dateTimePreference: { type: "" },
-      });
-      setAppointmentSuggestions(mock ? [mock] : []);
-    },
-    [],
-  );
-
-  const generateFallback = useCallback(
-    (
-      preferenceType: string,
-      inputs: {
-        selectedServices: SelectedService[];
-        services: ReadonlyArray<CatalogService>;
-        professionals: ReadonlyArray<CatalogProfessional>;
-      },
-    ) => {
-      generateFallbackInternal({
-        preferenceType,
-        ...inputs,
-      });
     },
     [],
   );
@@ -535,8 +401,6 @@ export function useAppointmentSuggestions(): UseAppointmentSuggestionsResult {
     suggestionsError,
     availabilityWarnings,
     generate,
-    generateMock,
-    generateFallback,
     clearSuggestions,
   };
 }

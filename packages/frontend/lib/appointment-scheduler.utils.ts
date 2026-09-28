@@ -3,7 +3,6 @@
  * Helper functions for data transformation and time handling
  */
 
-import { format } from "date-fns";
 
 type ProfessionalAvailability = Record<string, any[]>;
 
@@ -133,8 +132,10 @@ export async function fetchProfessionalAvailability(
   const availability: ProfessionalAvailability = {};
   const warnings: string[] = [];
 
-  // Get tenant ID from localStorage
-  let tenantId = "default-tenant";
+  // The salon, from the session token. With no token there is no salon to
+  // ask about: this used to fall back to "default-tenant", which the API
+  // rejects, and the empty result then fed the invented-slot fallback.
+  let tenantId: string | null = null;
   const token =
     typeof window !== "undefined"
       ? localStorage.getItem("kira_auth_token")
@@ -143,10 +144,13 @@ export async function fetchProfessionalAvailability(
   if (token) {
     try {
       const payload = JSON.parse(atob(token.split(".")[1]));
-      tenantId = payload.tenantId || "default-tenant";
+      tenantId = payload.tenantId || null;
     } catch (e) {
       console.error("Error parsing token:", e);
     }
+  }
+  if (!tenantId) {
+    return {};
   }
 
 
@@ -220,34 +224,11 @@ export async function fetchProfessionalAvailability(
 
     apiSlots = mergeConsecutiveSlots(apiSlots);
 
-    // Only use fallback if no real slots are available
-    let allSlots = [...apiSlots];
-    
-    if (allSlots.length === 0 && date === format(new Date(), "yyyy-MM-dd") && tenantSettings?.operatingHours) {
-      // Only generate fallback slots if there are truly no available slots
-      const now = new Date();
-      const closeTime = tenantSettings.operatingHours.close || "20:00";
-      const openTime = tenantSettings.operatingHours.open || "09:00";
-      const closeMinutes = timeToMinutes(closeTime);
-      const openMinutes = timeToMinutes(openTime);
-      const currentMinutes = now.getHours() * 60 + now.getMinutes();
-      const startMinutes = Math.max(
-        openMinutes,
-        Math.ceil(currentMinutes / 15) * 15,
-      );
-
-      const fallbackSlots: any[] = [];
-      for (let start = startMinutes; start < closeMinutes; start += 15) {
-        const end = Math.min(start + 15, closeMinutes);
-        fallbackSlots.push({
-          start: minutesToTime(start),
-          end: minutesToTime(end),
-          date,
-        });
-      }
-      
-      allSlots = mergeConsecutiveSlots(fallbackSlots);
-    }
+    // Only the server's slots. When a professional had none today -- fully
+    // booked, off shift, or the request failed and was caught as [] above --
+    // this used to invent 15-minute slots from now until closing, and those
+    // fed the suggestions staff book from.
+    const allSlots = [...apiSlots];
 
     if (existingAppointments.length > 0 && allSlots.length === 0) {
       console.warn(
