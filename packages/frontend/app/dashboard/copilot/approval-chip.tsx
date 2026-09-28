@@ -11,7 +11,7 @@
  */
 
 import { useState } from "react";
-import apiClient from "@/lib/api";
+import apiClient, { ApiError } from "@/lib/api";
 import { Check, X, Loader2, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 
 export interface ApprovalChipProps {
@@ -40,6 +40,7 @@ export function ApprovalChip({
   const [busy, setBusy] = useState(false);
   const [resolved, setResolved] = useState<ResolvedState | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const [errorText, setErrorText] = useState<string | null>(null);
 
   const isExpired = new Date(expiresAt).getTime() < Date.now();
   if (isExpired && !resolved) {
@@ -56,19 +57,21 @@ export function ApprovalChip({
 
   const decide = async (action: 'approve' | 'reject') => {
     setBusy(true);
+    setErrorText(null);
     try {
-      const res: any = await (apiClient as any).resolveAssistantApproval?.(
-        approvalId,
-        { action },
-      ) ?? await fetch(`/api/v1/assistant/approvals/${approvalId}/resolve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
-      }).then((r) => r.json());
-      setResolved({ status: res?.status ?? (action === 'approve' ? 'executed' : 'rejected'), result: res?.resultSnapshot });
+      const res = await apiClient.resolveAssistantApproval(approvalId, { action });
+      setResolved({ status: res.status as ResolvedState['status'], result: res.resultSnapshot });
       onResolved?.();
     } catch (err) {
-      setResolved({ status: 'expired' });
+      // Only a real expiry is "expired". Every failure used to be shown as
+      // "Acción caducada", and a fallback fetch -- without the auth header,
+      // never checking r.ok -- read a 401 or 500 body as success.
+      const message = err instanceof Error ? err.message : "";
+      if ((err instanceof ApiError && err.status === 410) || message.includes("approval_not_pending:expired")) {
+        setResolved({ status: 'expired' });
+      } else {
+        setErrorText(message || "No se pudo completar la acción. Inténtalo de nuevo.");
+      }
     } finally {
       setBusy(false);
     }
@@ -126,6 +129,9 @@ export function ApprovalChip({
           <div className="text-amber-800">{preview}</div>
         </div>
       </div>
+      {errorText && (
+        <div className="mb-2 text-xs text-red-700">{errorText}</div>
+      )}
       <div className="flex items-center gap-2 justify-end">
         <button
           disabled={busy}
