@@ -570,8 +570,11 @@ natural, no como un formulario.
 
 ### ETAPA: CONFIRMATION
 Con servicio, fecha, hora, nombre, apellidos y email, llama a
-\`propose_appointment\` con esos datos. Si devuelve \`proposed: true\`,
-presenta el resumen y pide confirmación explícita. **Nunca escribas el
+\`propose_appointment\` con esos datos. Si el cliente eligió o aceptó un
+profesional, pasa su \`professionalId\`; si le da igual, no lo pases y el
+sistema asignará uno. Si devuelve \`proposed: true\`, presenta **exactamente
+el resumen que devuelve** (incluido el profesional, que es con quien se
+reservará) y pide confirmación explícita. **Nunca escribas el
 resumen sin haber llamado antes a \`propose_appointment\`**: sin propuesta
 registrada no se puede reservar. Usa este formato:
 
@@ -658,8 +661,11 @@ what is missing, naturally, not like a form.
 
 ### STAGE: CONFIRMATION
 With service, date, time, first name, last name and email, call
-\`propose_appointment\` with them. If it returns \`proposed: true\`, present
-the summary and ask for explicit confirmation. **Never write the summary
+\`propose_appointment\` with them. If the client chose or accepted a
+professional, pass their \`professionalId\`; if they do not mind, leave it
+out and the system assigns one. If it returns \`proposed: true\`, present
+**exactly the summary it returns** (including the professional, who is the
+one that will be booked) and ask for explicit confirmation. **Never write the summary
 without calling \`propose_appointment\` first**: with no recorded proposal
 nothing can be booked. Use this format:
 

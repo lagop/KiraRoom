@@ -5,7 +5,7 @@ import { LLMService } from './services/llm.service';
 import { ConversationService } from './services/conversation.service';
 import { FAQService } from './services/faq.service';
 import { BookingService } from './services/booking.service';
-import { claimsBooking } from './tools/booking-claims';
+import { claimsBooking, looksLikeSummary } from './tools/booking-claims';
 import { recentHistory } from './recent-history';
 import { isAffirmative } from './tools/receptionist-booking';
 import { AnalysisService } from './services/analysis.service';
@@ -160,7 +160,8 @@ export class VirtualReceptionistService {
       // any real data (prices, services, availability, professionals)
       // so it cannot hallucinate.
       let bookedThisTurn = false;
-      const runTool = (name: string, input: unknown) =>
+      let proposedThisTurn = false;
+      const runTool =(name: string, input: unknown) =>
         executeSalonTool(this.salonTools, name, input, {
           prisma: this.prisma,
           tenantId: dto.salonId,
@@ -180,11 +181,21 @@ export class VirtualReceptionistService {
         // Which tool ran and how it ended -- without the payload, which may
         // carry the client's details.
         const r = result as Record<string, unknown>;
+        // Field names and error messages say why a call failed without
+        // exposing the client's details.
+        const detail = Array.isArray(r?.fields)
+          ? ` fields=${(r.fields as string[]).join(',')}`
+          : r?.error && typeof r?.message === 'string'
+            ? ` (${String(r.message).slice(0, 120)})`
+            : '';
         this.logger.log(
-          `tool ${name} -> ${r?.error ? `error=${r.error}` : r?.created !== undefined ? `created=${r.created}` : r?.proposed !== undefined ? `proposed=${r.proposed}` : 'ok'}`,
+          `tool ${name} -> ${r?.error ? `error=${r.error}${detail}` : r?.created !== undefined ? `created=${r.created}` : r?.proposed !== undefined ? `proposed=${r.proposed}` : 'ok'}`,
         );
         if (name === 'create_appointment' && (result as any)?.created === true) {
           bookedThisTurn = true;
+        }
+        if (name === 'propose_appointment' && (result as any)?.proposed === true) {
+          proposedThisTurn = true;
         }
         return result;
       };
@@ -262,6 +273,22 @@ export class VirtualReceptionistService {
               '¿Me confirmas el servicio, el día y la hora para intentarlo de nuevo?',
           };
         }
+      }
+
+      // A summary the client can say yes to must be one propose_appointment
+      // recorded -- that is what create_appointment books. A summary the
+      // model wrote on its own left nothing to book on "sí", and the
+      // proposal made afterwards could differ from what the client saw (it
+      // named another professional). Regenerate once, requiring the tool.
+      if (!bookedThisTurn && !proposedThisTurn && looksLikeSummary(generationResult.text)) {
+        this.logger.warn(
+          `Receptionist showed a summary without proposing it (client ${dto.clientId}); regenerating`,
+        );
+        const retried = await generate(
+          `${userUtterance}\n\n[Nota del sistema: antes de mostrar el resumen llama a propose_appointment con los datos, y muestra exactamente el resumen que devuelva.]`,
+          { type: 'tool', name: 'propose_appointment' },
+        );
+        if (proposedThisTurn) generationResult = retried;
       }
 
       // Add assistant message to conversation

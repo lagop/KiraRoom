@@ -227,7 +227,7 @@ export class AppointmentsService {
           }
           assigned = professionalId;
         } else {
-          assigned = await this.pickFreeProfessional(
+          assigned = await this.findFreeProfessional(
             tenantId, date, dto.serviceId, dto.scheduledTime, widgetProfessionals,
           );
         }
@@ -300,7 +300,7 @@ export class AppointmentsService {
    * no professional is linked to the service at all -- salons that never
    * filled that in -- every active professional is a candidate.
    */
-  private async pickFreeProfessional(
+  async findFreeProfessional(
     tenantId: string,
     date: Date,
     serviceId: string,
@@ -1285,12 +1285,22 @@ export class AppointmentsService {
     // receptionist's check_availability tool does not name one, so it fell
     // through to a window of 09:00-20:00 and offered a Tuesday at 19:30 on a
     // salon whose only professional leaves at 19:00.
-    const anyProfessionalRows =
+    // Only professionals who offer the service count -- the same rule
+    // findFreeProfessional applies when it assigns one. Counting everyone
+    // offered 16:30 for a massage because a hairdresser was free, and the
+    // booking then found nobody to give it to. As there, a service no
+    // professional is linked to falls back to everyone active.
+    const activeRows =
       professionalsToCheck.length === 0
         ? await this.prisma.professional.findMany({
             where: { tenantId, isActive: true },
+            include: { services: { select: { serviceId: true } } },
           })
         : [];
+    const offeringRows = serviceId
+      ? activeRows.filter((p: any) => (p.services ?? []).some((s: any) => s.serviceId === serviceId))
+      : [];
+    const anyProfessionalRows = offeringRows.length > 0 ? offeringRows : activeRows;
 
     // Get the service duration if specified
     let serviceDuration = duration;
@@ -1516,8 +1526,10 @@ export class AppointmentsService {
       this.logger.log(
         `Sending appointment created notifications for appointment ${appointment.id}`,
       );
+      // Ids only. This dumped the whole client row -- email, phone, notes,
+      // allergies and, for clients with an account, the password hash.
       this.logger.debug(
-        `Appointment details: clientId=${appointment.clientId}, client=${JSON.stringify(appointment.client)}`,
+        `Appointment details: clientId=${appointment.clientId}, tenantId=${appointment.tenantId}`,
       );
 
       // Get tenant language for translations
@@ -1581,11 +1593,11 @@ export class AppointmentsService {
           });
           if (sent?.success === false) {
             this.logger.warn(
-              `Confirmation email to client ${appointment.client.email} was not sent: ${sent.error}`,
+              `Confirmation email to client ${appointment.clientId} was not sent: ${sent.error}`,
             );
           } else {
             this.logger.log(
-              `Sent confirmation email to client ${appointment.client.email}`,
+              `Sent confirmation email to client ${appointment.clientId}`,
             );
           }
         } catch (error) {
@@ -1595,14 +1607,15 @@ export class AppointmentsService {
         }
       } else if (appointment.client?.email && !canSendEmail) {
         this.logger.log(
-          `Skipping confirmation email to client ${appointment.client.email} due to preferences`,
+          `Skipping confirmation email to client ${appointment.clientId} due to preferences`,
         );
       }
 
       // Send confirmation SMS to client
       if (appointment.client?.phone && canSendSms) {
         try {
-          await this.smsService.sendAppointmentConfirmation({
+          // Like the email: failure comes back in the result, not as a throw.
+          const sent: any = await this.smsService.sendAppointmentConfirmation({
             clientName,
             clientPhone: appointment.client.phone,
             serviceName,
@@ -1611,9 +1624,13 @@ export class AppointmentsService {
             time: appointment.scheduledTime,
             salonName,
           });
-          this.logger.log(
-            `Sent confirmation SMS to client ${appointment.client.phone}`,
-          );
+          if (sent?.success === false) {
+            this.logger.warn(
+              `Confirmation SMS to client ${appointment.clientId} was not sent: ${sent.error}`,
+            );
+          } else {
+            this.logger.log(`Sent confirmation SMS to client ${appointment.clientId}`);
+          }
         } catch (error) {
           this.logger.error(
             `Failed to send confirmation SMS: ${error.message}`,
@@ -1621,7 +1638,7 @@ export class AppointmentsService {
         }
       } else if (appointment.client?.phone && !canSendSms) {
         this.logger.log(
-          `Skipping confirmation SMS to client ${appointment.client.phone} due to preferences`,
+          `Skipping confirmation SMS to client ${appointment.clientId} due to preferences`,
         );
       }
 
@@ -1638,7 +1655,7 @@ export class AppointmentsService {
             salonName,
           });
           this.logger.log(
-            `Sent confirmation WhatsApp to client ${appointment.client.phone}`,
+            `Sent confirmation WhatsApp to client ${appointment.clientId}`,
           );
         } catch (error) {
           this.logger.error(
@@ -1647,7 +1664,7 @@ export class AppointmentsService {
         }
       } else if (appointment.client?.phone && !canSendWhatsapp) {
         this.logger.log(
-          `Skipping confirmation WhatsApp to client ${appointment.client.phone} due to preferences`,
+          `Skipping confirmation WhatsApp to client ${appointment.clientId} due to preferences`,
         );
       }
 
@@ -1957,7 +1974,7 @@ export class AppointmentsService {
             reason,
           );
           this.logger.log(
-            `Sent cancellation email to client ${appointment.client.email}`,
+            `Sent cancellation email to client ${appointment.clientId}`,
           );
         } catch (error) {
           this.logger.error(
@@ -1966,7 +1983,7 @@ export class AppointmentsService {
         }
       } else if (appointment.client?.email && !canSendEmail) {
         this.logger.log(
-          `Skipping cancellation email to client ${appointment.client.email} due to preferences`,
+          `Skipping cancellation email to client ${appointment.clientId} due to preferences`,
         );
       }
 
@@ -1986,7 +2003,7 @@ export class AppointmentsService {
             reason,
           );
           this.logger.log(
-            `Sent cancellation SMS to client ${appointment.client.phone}`,
+            `Sent cancellation SMS to client ${appointment.clientId}`,
           );
         } catch (error) {
           this.logger.error(
@@ -1995,7 +2012,7 @@ export class AppointmentsService {
         }
       } else if (appointment.client?.phone && !canSendSms) {
         this.logger.log(
-          `Skipping cancellation SMS to client ${appointment.client.phone} due to preferences`,
+          `Skipping cancellation SMS to client ${appointment.clientId} due to preferences`,
         );
       }
 
@@ -2015,7 +2032,7 @@ export class AppointmentsService {
             reason,
           );
           this.logger.log(
-            `Sent cancellation WhatsApp to client ${appointment.client.phone}`,
+            `Sent cancellation WhatsApp to client ${appointment.clientId}`,
           );
         } catch (error) {
           this.logger.error(
@@ -2024,7 +2041,7 @@ export class AppointmentsService {
         }
       } else if (appointment.client?.phone && !canSendWhatsapp) {
         this.logger.log(
-          `Skipping cancellation WhatsApp to client ${appointment.client.phone} due to preferences`,
+          `Skipping cancellation WhatsApp to client ${appointment.clientId} due to preferences`,
         );
       }
 
@@ -2196,7 +2213,7 @@ export class AppointmentsService {
             oldTime,
           );
           this.logger.log(
-            `Sent rescheduled email to client ${appointment.client.email}`,
+            `Sent rescheduled email to client ${appointment.clientId}`,
           );
         } catch (error) {
           this.logger.error(
@@ -2205,7 +2222,7 @@ export class AppointmentsService {
         }
       } else if (appointment.client?.email && !canSendEmail) {
         this.logger.log(
-          `Skipping rescheduled email to client ${appointment.client.email} due to preferences`,
+          `Skipping rescheduled email to client ${appointment.clientId} due to preferences`,
         );
       }
 
@@ -2226,14 +2243,14 @@ export class AppointmentsService {
             oldTime,
           );
           this.logger.log(
-            `Sent rescheduled SMS to client ${appointment.client.phone}`,
+            `Sent rescheduled SMS to client ${appointment.clientId}`,
           );
         } catch (error) {
           this.logger.error(`Failed to send rescheduled SMS: ${error.message}`);
         }
       } else if (appointment.client?.phone && !canSendSms) {
         this.logger.log(
-          `Skipping rescheduled SMS to client ${appointment.client.phone} due to preferences`,
+          `Skipping rescheduled SMS to client ${appointment.clientId} due to preferences`,
         );
       }
 
@@ -2261,7 +2278,7 @@ export class AppointmentsService {
             oldTime,
           );
           this.logger.log(
-            `Sent rescheduled WhatsApp to client ${appointment.client.phone}`,
+            `Sent rescheduled WhatsApp to client ${appointment.clientId}`,
           );
         } catch (error) {
           this.logger.error(
@@ -2270,7 +2287,7 @@ export class AppointmentsService {
         }
       } else if (appointment.client?.phone && !canSendWhatsapp) {
         this.logger.log(
-          `Skipping rescheduled WhatsApp to client ${appointment.client.phone} due to preferences`,
+          `Skipping rescheduled WhatsApp to client ${appointment.clientId} due to preferences`,
         );
       }
 
@@ -2518,7 +2535,7 @@ export class AppointmentsService {
             salonName,
           });
           this.logger.log(
-            `Sent confirmation email to client ${appointment.client.email}`,
+            `Sent confirmation email to client ${appointment.clientId}`,
           );
         } catch (error) {
           this.logger.error(
@@ -2527,14 +2544,15 @@ export class AppointmentsService {
         }
       } else if (appointment.client?.email && !canSendEmail) {
         this.logger.log(
-          `Skipping confirmation email to client ${appointment.client.email} due to preferences`,
+          `Skipping confirmation email to client ${appointment.clientId} due to preferences`,
         );
       }
 
       // Send confirmation SMS to client
       if (appointment.client?.phone && canSendSms) {
         try {
-          await this.smsService.sendAppointmentConfirmation({
+          // Like the email: failure comes back in the result, not as a throw.
+          const sent: any = await this.smsService.sendAppointmentConfirmation({
             clientName,
             clientPhone: appointment.client.phone,
             serviceName,
@@ -2543,9 +2561,13 @@ export class AppointmentsService {
             time: appointment.scheduledTime,
             salonName,
           });
-          this.logger.log(
-            `Sent confirmation SMS to client ${appointment.client.phone}`,
-          );
+          if (sent?.success === false) {
+            this.logger.warn(
+              `Confirmation SMS to client ${appointment.clientId} was not sent: ${sent.error}`,
+            );
+          } else {
+            this.logger.log(`Sent confirmation SMS to client ${appointment.clientId}`);
+          }
         } catch (error) {
           this.logger.error(
             `Failed to send confirmation SMS: ${error.message}`,
@@ -2553,7 +2575,7 @@ export class AppointmentsService {
         }
       } else if (appointment.client?.phone && !canSendSms) {
         this.logger.log(
-          `Skipping confirmation SMS to client ${appointment.client.phone} due to preferences`,
+          `Skipping confirmation SMS to client ${appointment.clientId} due to preferences`,
         );
       }
 
@@ -2577,7 +2599,7 @@ export class AppointmentsService {
             salonName,
           });
           this.logger.log(
-            `Sent confirmation WhatsApp to client ${appointment.client.phone}`,
+            `Sent confirmation WhatsApp to client ${appointment.clientId}`,
           );
         } catch (error) {
           this.logger.error(
@@ -2586,7 +2608,7 @@ export class AppointmentsService {
         }
       } else if (appointment.client?.phone && !canSendWhatsapp) {
         this.logger.log(
-          `Skipping confirmation WhatsApp to client ${appointment.client.phone} due to preferences`,
+          `Skipping confirmation WhatsApp to client ${appointment.clientId} due to preferences`,
         );
       }
 

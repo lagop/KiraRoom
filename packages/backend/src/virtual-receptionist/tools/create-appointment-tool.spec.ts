@@ -13,6 +13,11 @@ import { isAffirmative, MAX_BOOKINGS_PER_CONVERSATION } from "./receptionist-boo
 
 const SERVICE = "33333333-3333-4333-8333-333333333333";
 const PRO = "11111111-1111-4111-8111-111111111111";
+const FREE_PRO = "22222222-2222-4222-8222-222222222222";
+const NAMES: Record<string, { firstName: string; lastName: string }> = {
+  [PRO]: { firstName: "Carmen", lastName: "Sánchez" },
+  [FREE_PRO]: { firstName: "Ana", lastName: "Martínez" },
+};
 
 const DETAILS = {
   serviceId: SERVICE,
@@ -42,10 +47,15 @@ function setup({
     },
     chatMessage: { count: async () => userTurns },
     appointment: { count: async () => recentByEmail },
+    service: {
+      findFirst: async () => ({ name: "Masaje Relajante", duration: 60, price: 55, currency: "EUR" }),
+    },
+    professional: { findFirst: async ({ where }: any) => NAMES[where.id] ?? null },
   };
   const appointmentsService: any = {
     getAvailableSlots: jest.fn(async () => freeTimes.map((time) => ({ time, isAvailable: true }))),
     bookOnline: jest.fn(async (...args: any[]) => { booked.push(args); return book(); }),
+    findFreeProfessional: jest.fn(async () => FREE_PRO),
   };
   const service = new SalonToolsService({} as any, {} as any);
   let lastUserMessage = "Quiero un corte el lunes a las 10";
@@ -127,6 +137,41 @@ describe("propose, then book on a real yes", () => {
     const { run, say } = setup();
     say("sí");
     expect(await run("create_appointment")).toMatchObject({ created: false, error: "nothing_proposed" });
+  });
+});
+
+describe("the professional in the summary is the one booked", () => {
+  it("returns the summary to show, naming the professional", async () => {
+    const { run } = setup();
+    const out: any = await run("propose_appointment", DETAILS);
+    expect(out.summary).toMatchObject({
+      service: "Masaje Relajante",
+      professional: "Carmen Sánchez",
+      date: "2026-10-05",
+      time: "10:00",
+    });
+  });
+
+  it("assigns 'whoever is free' at proposal time, and books that same professional", async () => {
+    // A proposal without a professional used to be resolved only at booking:
+    // the summary said Carmen, the booking went to Ana Martínez.
+    const { run, say, booked } = setup();
+
+    const out: any = await run("propose_appointment", { ...DETAILS, professionalId: undefined });
+    expect(out.summary.professional).toBe("Ana Martínez");
+
+    say("sí");
+    await run("create_appointment");
+    expect(booked[0][1].professionalId).toBe(FREE_PRO);
+  });
+
+  it("refuses a proposal nobody is free for", async () => {
+    const { run, appointmentsService } = setup();
+    appointmentsService.findFreeProfessional.mockRejectedValueOnce(new Error("none"));
+    expect(await run("propose_appointment", { ...DETAILS, professionalId: undefined })).toMatchObject({
+      proposed: false,
+      error: "slot_unavailable",
+    });
   });
 });
 

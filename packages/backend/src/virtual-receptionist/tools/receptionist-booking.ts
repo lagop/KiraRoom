@@ -200,19 +200,65 @@ export async function proposeAppointment(
     };
   }
 
+  // "Whoever is free" is decided now, not at booking, so the summary the
+  // client says yes to names the professional they will get. Deciding it at
+  // booking time booked Ana Martínez after the model had shown Carmen.
+  if (!details.professionalId) {
+    try {
+      details.professionalId = await ctx.appointmentsService!.findFreeProfessional(
+        ctx.tenantId,
+        new Date(details.date),
+        details.serviceId,
+        details.time,
+        [],
+      );
+    } catch {
+      return {
+        proposed: false,
+        error: 'slot_unavailable',
+        message: 'Nobody is free at that time. Check availability again and offer other times.',
+      };
+    }
+  }
+
+  const [service, professional] = await Promise.all([
+    ctx.prisma.service.findFirst({
+      where: { id: details.serviceId, tenantId: ctx.tenantId },
+      select: { name: true, duration: true, price: true, currency: true },
+    }),
+    ctx.prisma.professional.findFirst({
+      where: { id: details.professionalId, tenantId: ctx.tenantId },
+      select: { firstName: true, lastName: true },
+    }),
+  ]);
+  if (!service || !professional) {
+    return {
+      proposed: false,
+      error: 'invalid_input',
+      fields: [!service ? 'serviceId' : 'professionalId'],
+      message: 'Use the ids returned by list_services and list_professionals.',
+    };
+  }
+
   const state = await readState(ctx);
   state.pendingBooking = { ...details, proposedAtUserTurn: await userTurns(ctx) };
   await writeState(ctx, state);
 
   return {
     proposed: true,
+    // Show exactly this. It is what create_appointment will book.
     summary: {
+      service: service.name,
+      durationMinutes: service.duration,
+      price: `${Number(service.price).toFixed(2)} ${service.currency}`,
+      professional: `${professional.firstName} ${professional.lastName}`.trim(),
       date: details.date,
       time: details.time,
       name: `${details.firstName} ${details.lastName}`.trim(),
       email: details.email,
+      phone: details.phone ?? null,
     },
-    next: 'Show the summary and ask the client to confirm. Book with create_appointment only after they reply yes.',
+    next: 'Show exactly this summary and ask the client to confirm. Book with create_appointment only after they reply yes.',
   };
 }
 

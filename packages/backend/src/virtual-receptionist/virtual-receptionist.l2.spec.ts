@@ -456,6 +456,20 @@ describe('VirtualReceptionistService orchestrator (L-2) -- no false confirmation
     });
   });
 
+  it('requires propose_appointment when the model writes a summary on its own', async () => {
+    const summary = '📋 Resumen de tu cita: Masaje, Carmen, viernes 16:30. ¿Es correcto? (Sí / No)';
+    const generateResponse = jest.fn().mockResolvedValue(reply(summary));
+    const { svc, llmService } = buildService({ generateResponse });
+
+    await send(svc, 'Olivia Reguera, oli@example.test');
+
+    expect(llmService.generateResponse).toHaveBeenCalledTimes(2);
+    expect(llmService.generateResponse.mock.calls[1][4].toolChoice).toEqual({
+      type: 'tool',
+      name: 'propose_appointment',
+    });
+  });
+
   it('does not force it for anything but a yes', async () => {
     const generateResponse = jest.fn().mockResolvedValue(reply('Claro, ¿a qué hora?'));
     const { svc, llmService, prismaStub } = buildService({ generateResponse }) as any;
