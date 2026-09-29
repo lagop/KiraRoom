@@ -5,6 +5,8 @@ import { LLMService } from './services/llm.service';
 import { ConversationService } from './services/conversation.service';
 import { FAQService } from './services/faq.service';
 import { BookingService } from './services/booking.service';
+import { claimsBooking } from './tools/booking-claims';
+import { isAffirmative } from './tools/receptionist-booking';
 import { AnalysisService } from './services/analysis.service';
 import { ProfessionalsService } from '../professionals/professionals.service';
 import { SendMessageDto, MessageResponseDto, CreateConversationDto } from '@kira/shared';
@@ -74,14 +76,26 @@ export class VirtualReceptionistService {
 
       switch (analysis.intent) {
         case ChatIntent.BOOK_APPOINTMENT:
-          responseContent = await this.handleBookingIntent(dto, analysis);
+          // No hint. This used to prepend the legacy in-memory BookingService
+          // script ("¿Qué servicio te gustaría reservar?...", its own
+          // summary and "¿Deseas confirmar tu cita?") to the client's
+          // message, a second booking flow competing with the tools. The
+          // model and propose_appointment / create_appointment own it now.
+          responseContent = '';
           break;
 
         case ChatIntent.CANCEL_APPOINTMENT:
         case ChatIntent.RESCHEDULE_APPOINTMENT:
         case ChatIntent.CHECK_AVAILABILITY:
         case ChatIntent.CHECK_APPOINTMENT:
-          responseContent = await this.handleAppointmentManagement(dto, analysis, conversation.id);
+          // No hint. handleAppointmentManagement prepended scripted text to
+          // the client's message as if it were fact: for cancel/reschedule,
+          // an invented phone and email ("123-456-7890", "info@ejemplo.com");
+          // for "my appointment", a lookup by the visitor id that failed and
+          // injected "no podemos verificar tus citas", which the model
+          // relayed as a technical problem in the middle of a booking. The
+          // model answers from the prompt and the tools.
+          responseContent = '';
           break;
 
         case ChatIntent.PRICE_QUERY:
@@ -142,7 +156,8 @@ export class VirtualReceptionistService {
       // The model is the only writer; it must use the tools to fetch
       // any real data (prices, services, availability, professionals)
       // so it cannot hallucinate.
-      const toolExecutor = (name: string, input: unknown) =>
+      let bookedThisTurn = false;
+      const runTool = (name: string, input: unknown) =>
         executeSalonTool(this.salonTools, name, input, {
           prisma: this.prisma,
           tenantId: dto.salonId,
@@ -157,6 +172,19 @@ export class VirtualReceptionistService {
             externalUserId: (conversation as any).context?.externalUserId,
           },
         });
+      const toolExecutor = async (name: string, input: unknown) => {
+        const result = await runTool(name, input);
+        // Which tool ran and how it ended -- without the payload, which may
+        // carry the client's details.
+        const r = result as Record<string, unknown>;
+        this.logger.log(
+          `tool ${name} -> ${r?.error ? `error=${r.error}` : r?.created !== undefined ? `created=${r.created}` : r?.proposed !== undefined ? `proposed=${r.proposed}` : 'ok'}`,
+        );
+        if (name === 'create_appointment' && (result as any)?.created === true) {
+          bookedThisTurn = true;
+        }
+        return result;
+      };
 // P2A-receptionist-tools: the LLM needs to actually see the
       // user's message — previously the orchestrator passed the
       // intent-handler's prompt hint (which is often empty for
@@ -191,24 +219,47 @@ export class VirtualReceptionistService {
         [ChatIntent.LOCATION_INFO]: 'get_salon_info',
         [ChatIntent.CONTACT_INFO]: 'get_salon_info',
       };
-      const forcedTool = INTENT_TOOL[analysis.intent];
+      // A yes to a stored, unbooked proposal books it. create_appointment
+      // takes no parameters, so it can be forced even on providers that
+      // ignore forced tools with required ones; leaving it to the model let
+      // it answer "confirmada" without calling anything.
+      const pending = await this.pendingProposal(conversation.id);
+      const forcedTool =
+        pending && isAffirmative(dto.message) ? 'create_appointment' : INTENT_TOOL[analysis.intent];
       const toolChoice: 'auto' | { type: 'tool'; name: string } =
-        forcedTool && NO_PARAM_TOOLS.has(forcedTool)
+        forcedTool && (NO_PARAM_TOOLS.has(forcedTool) || forcedTool === 'create_appointment')
           ? { type: 'tool', name: forcedTool }
           : 'auto';
 
-      const generationResult = await this.llmService.generateResponse(
-        userUtterance,
-        conversation.messages,
-        dto.salonId,
-        undefined,
-        {
+      const generate = (utterance: string, choice: typeof toolChoice) =>
+        this.llmService.generateResponse(utterance, conversation.messages, dto.salonId, undefined, {
           tools: SALON_TOOLS,
           executeTool: toolExecutor,
           maxToolIterations: 5,
-          toolChoice,
-        },
-      );
+          toolChoice: choice,
+        });
+      let generationResult = await generate(userUtterance, toolChoice);
+
+      // The reply must not announce a booking the tools did not make. One
+      // retry with the facts spelled out; if the model still claims it, the
+      // client gets a plain, true answer instead.
+      if (!bookedThisTurn && claimsBooking(generationResult.text)) {
+        this.logger.warn(
+          `Receptionist claimed a booking without creating one (client ${dto.clientId}); regenerating`,
+        );
+        generationResult = await generate(
+          `${userUtterance}\n\n[Nota del sistema: en este turno NO se ha creado ninguna cita. No digas que está confirmada ni reservada. Si el cliente quiere reservar, usa propose_appointment y, cuando diga que sí, create_appointment.]`,
+          'auto',
+        );
+        if (!bookedThisTurn && claimsBooking(generationResult.text)) {
+          generationResult = {
+            ...generationResult,
+            text:
+              'Todavía no he podido registrar tu cita, así que aún no está reservada. ' +
+              '¿Me confirmas el servicio, el día y la hora para intentarlo de nuevo?',
+          };
+        }
+      }
 
       // Add assistant message to conversation
       await this.conversationService.addMessage(conversation.id, {
@@ -292,6 +343,16 @@ export class VirtualReceptionistService {
         error: err?.message ? err.message.slice(0, 300) : 'unknown error',
       };
     }
+  }
+
+  /** The conversation's proposal from propose_appointment, if not booked yet. */
+  private async pendingProposal(conversationId: string): Promise<boolean> {
+    const row = await this.prisma.chatConversation.findUnique({
+      where: { id: conversationId },
+      select: { context: true },
+    });
+    const pending = (row?.context as any)?.pendingBooking;
+    return !!pending && !pending.bookedAppointmentId;
   }
 
   private async handleBookingIntent(dto: SendMessageDto, analysis: any): Promise<string> {

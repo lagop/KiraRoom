@@ -1399,44 +1399,41 @@ export class AppointmentsService {
         // only "is anybody busy" answered a different question, and answered
         // it wrongly — it offered hours nobody works.
         const slotMinutes = minutesOf(slot.time);
-        const someoneOnShift =
-          anyProfessionalRows.length === 0
-            ? true // No professionals recorded at all: impose no shift limit.
-            : anyProfessionalRows.some((p) => {
-                const window = workingWindowFor(p.workingHours, date);
-                if (window === null) return false;
-                if (!window) return true; // No schedule recorded for them.
-                return (
-                  slotMinutes !== null &&
-                  fitsInWindow(slotMinutes, serviceDuration, window)
-                );
-              });
-
-        if (!someoneOnShift) {
-          isAvailable = false;
-          return {
-            time: slot.time,
-            isAvailable,
-            professionalId: undefined,
-            professionalIds: undefined,
-            serviceId,
-          };
-        }
-
-        isAvailable = !existingAppointments.some((appointment) => {
+        const overlaps = (appointment: { scheduledTime: string; duration: number }) => {
           const [appointmentHour, appointmentMinute] = appointment.scheduledTime
             .split(":")
             .map(Number);
           const [slotHour, slotMinute] = slot.time.split(":").map(Number);
-
           const appointmentStart = appointmentHour * 60 + appointmentMinute;
           const appointmentEnd = appointmentStart + appointment.duration;
           const slotStart = slotHour * 60 + slotMinute;
           const slotEnd = slotStart + serviceDuration;
-
-          // Check if the slot overlaps with any existing appointment
           return !(appointmentEnd <= slotStart || appointmentStart >= slotEnd);
-        });
+        };
+
+        if (anyProfessionalRows.length === 0) {
+          // No professionals recorded at all: impose no shift limit, and the
+          // salon is free when nothing overlaps.
+          isAvailable = !existingAppointments.some(overlaps);
+        } else {
+          // Somebody who is on shift for the whole slot AND has nothing of
+          // their own overlapping it. This used to ask "is anyone on shift"
+          // and then "does ANY appointment overlap" -- so one stylist's 11:00
+          // took 10:30 away from the four who were free.
+          isAvailable = anyProfessionalRows.some((p) => {
+            const window = workingWindowFor(p.workingHours, date);
+            if (window === null) return false;
+            if (
+              window &&
+              !(slotMinutes !== null && fitsInWindow(slotMinutes, serviceDuration, window))
+            ) {
+              return false;
+            }
+            return !existingAppointments.some(
+              (appointment) => appointment.professionalId === p.id && overlaps(appointment),
+            );
+          });
+        }
       }
 
       return {
@@ -1571,7 +1568,9 @@ export class AppointmentsService {
       // Send confirmation email to client
       if (appointment.client?.email && canSendEmail) {
         try {
-          await this.emailService.sendAppointmentConfirmation({
+          // sendEmail reports failure in its result rather than throwing;
+          // this logged "Sent" for emails the provider had refused.
+          const sent: any = await this.emailService.sendAppointmentConfirmation({
             clientName,
             clientEmail: appointment.client.email,
             serviceName,
@@ -1580,9 +1579,15 @@ export class AppointmentsService {
             time: appointment.scheduledTime,
             salonName,
           });
-          this.logger.log(
-            `Sent confirmation email to client ${appointment.client.email}`,
-          );
+          if (sent?.success === false) {
+            this.logger.warn(
+              `Confirmation email to client ${appointment.client.email} was not sent: ${sent.error}`,
+            );
+          } else {
+            this.logger.log(
+              `Sent confirmation email to client ${appointment.client.email}`,
+            );
+          }
         } catch (error) {
           this.logger.error(
             `Failed to send confirmation email: ${error.message}`,

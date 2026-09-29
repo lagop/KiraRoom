@@ -55,6 +55,10 @@ function makePrisma(services: any[], professionals: any[], tenant: any = null) {
         where?.id === (tenant?.id ?? 't-1') ? tenant : null,
       ),
     },
+    // The orchestrator reads the conversation's pending booking proposal.
+    chatConversation: {
+      findUnique: jest.fn().mockResolvedValue({ context: {} }),
+    },
   } as any;
 }
 
@@ -183,7 +187,7 @@ function buildService({
     appointmentsStub as any,
   );
 
-  return { svc, salonTools, llmService, conversationService, channelRegistry };
+  return { svc, salonTools, llmService, conversationService, channelRegistry, prismaStub };
 }
 
 describe('VirtualReceptionistService orchestrator (L-2)', () => {
@@ -384,5 +388,83 @@ describe('VirtualReceptionistService orchestrator (L-2)', () => {
       expect(typeof reply.content).toBe('string');
       expect(reply.content.length).toBeGreaterThan(0);
     });
+  });
+});
+/**
+ * Found in an end-to-end chat on a test salon: the client said "Sí,
+ * perfecto" and the model answered "Tu cita está confirmada" without calling
+ * any tool -- no appointment existed. The orchestrator now checks the reply
+ * against what the booking tool actually did.
+ */
+describe('VirtualReceptionistService orchestrator (L-2) -- no false confirmations', () => {
+  const reply = (text: string) => ({
+    id: 'r',
+    text,
+    provider: LLMProvider.MiniMax,
+    model: 'm',
+    usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+    timestamp: new Date(),
+    latency: 1,
+  });
+  const send = (svc: any, message: string) =>
+    svc.sendMessage({ clientId: 'visitor-1', salonId: TENANT_ID, message, channel: 'web' });
+
+  it('regenerates a reply that claims a booking no tool made', async () => {
+    const generateResponse = jest
+      .fn()
+      .mockResolvedValueOnce(reply('¡Excelente! Tu cita está confirmada.'))
+      .mockResolvedValueOnce(reply('Todavía no está reservada. ¿Te propongo el resumen?'));
+    const { svc, llmService } = buildService({ generateResponse });
+
+    const out: any = await send(svc, 'Sí, perfecto');
+
+    expect(llmService.generateResponse).toHaveBeenCalledTimes(2);
+    expect(llmService.generateResponse.mock.calls[1][0]).toContain('NO se ha creado ninguna cita');
+    expect(out.content).toBe('Todavía no está reservada. ¿Te propongo el resumen?');
+  });
+
+  it('replaces it with a true answer if the model insists', async () => {
+    const generateResponse = jest.fn().mockResolvedValue(reply('Tu cita está confirmada. ¡Te esperamos!'));
+    const { svc } = buildService({ generateResponse });
+
+    const out: any = await send(svc, 'Sí');
+
+    expect(out.content).toMatch(/aún no está reservada/);
+  });
+
+  it('leaves an ordinary reply alone', async () => {
+    const generateResponse = jest.fn().mockResolvedValue(reply('Tenemos huecos a las 10:00 y 11:00.'));
+    const { svc, llmService } = buildService({ generateResponse });
+
+    await send(svc, '¿Qué huecos tenéis?');
+
+    expect(llmService.generateResponse).toHaveBeenCalledTimes(1);
+  });
+
+  it('forces create_appointment when the client says yes to a stored proposal', async () => {
+    const generateResponse = jest.fn().mockResolvedValue(reply('Un momento.'));
+    const { svc, llmService, prismaStub } = buildService({ generateResponse }) as any;
+    prismaStub.chatConversation.findUnique.mockResolvedValue({
+      context: { pendingBooking: { time: '10:00', proposedAtUserTurn: 1 } },
+    });
+
+    await send(svc, 'sí, perfecto');
+
+    expect(llmService.generateResponse.mock.calls[0][4].toolChoice).toEqual({
+      type: 'tool',
+      name: 'create_appointment',
+    });
+  });
+
+  it('does not force it for anything but a yes', async () => {
+    const generateResponse = jest.fn().mockResolvedValue(reply('Claro, ¿a qué hora?'));
+    const { svc, llmService, prismaStub } = buildService({ generateResponse }) as any;
+    prismaStub.chatConversation.findUnique.mockResolvedValue({
+      context: { pendingBooking: { time: '10:00', proposedAtUserTurn: 1 } },
+    });
+
+    await send(svc, 'sí, pero a las 11');
+
+    expect(llmService.generateResponse.mock.calls[0][4].toolChoice).toBe('auto');
   });
 });

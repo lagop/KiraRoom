@@ -555,7 +555,9 @@ natural, no como un formulario.
 ### ETAPA: CONFIRMATION
 Con servicio, fecha, hora, nombre, apellidos y email, llama a
 \`propose_appointment\` con esos datos. Si devuelve \`proposed: true\`,
-presenta el resumen y pide confirmación explícita. Usa este formato:
+presenta el resumen y pide confirmación explícita. **Nunca escribas el
+resumen sin haber llamado antes a \`propose_appointment\`**: sin propuesta
+registrada no se puede reservar. Usa este formato:
 
 📋 *Resumen de tu cita:*
 ✂️ Servicio: [SERVICIO]
@@ -641,7 +643,9 @@ what is missing, naturally, not like a form.
 ### STAGE: CONFIRMATION
 With service, date, time, first name, last name and email, call
 \`propose_appointment\` with them. If it returns \`proposed: true\`, present
-the summary and ask for explicit confirmation. Use this format:
+the summary and ask for explicit confirmation. **Never write the summary
+without calling \`propose_appointment\` first**: with no recorded proposal
+nothing can be booked. Use this format:
 
 📋 *Summary of your appointment:*
 ✂️ Service: [SERVICE]

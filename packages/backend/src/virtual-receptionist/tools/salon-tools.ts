@@ -400,7 +400,10 @@ export class SalonToolsService {
     if (!ctx.appointmentsService) {
       return { error: 'appointments_service_unavailable' };
     }
-    const date = new Date(`${input.date}T00:00:00`);
+    // UTC midnight, like every other caller of getAvailableSlots. Local
+    // midnight on a server west or east of UTC is the previous or next UTC
+    // day, so this offered one day's slots under another day's name.
+    const date = new Date(`${input.date}T00:00:00.000Z`);
     if (Number.isNaN(date.getTime())) {
       return { error: 'invalid_date', date: input.date };
     }
