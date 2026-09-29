@@ -479,7 +479,8 @@ export interface CreateAppointmentDto {
   clientInfo?: {
     firstName: string;
     lastName: string;
-    email: string;
+    /** Online bookings: phone required, email optional. */
+    email?: string;
     phone?: string;
   };
   serviceId: string;

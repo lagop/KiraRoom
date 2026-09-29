@@ -189,8 +189,10 @@ describe("the booking flow ends honestly", () => {
     }
   });
 
-  it("asks for the email: the booking needs it", () => {
-    expect(promptFor({ ...withSlug, language: "es" })).toMatch(/\*\*email\*\* \(obligatorio/);
-    expect(promptFor({ ...withSlug, language: "en" })).toMatch(/\*\*email\*\* \(required/);
+  it("asks for the phone, which the booking needs, and the email only as an option", () => {
+    expect(promptFor({ ...withSlug, language: "es" })).toMatch(/\*\*teléfono\*\* \(obligatorio/);
+    expect(promptFor({ ...withSlug, language: "es" })).toMatch(/El email es opcional/);
+    expect(promptFor({ ...withSlug, language: "en" })).toMatch(/\*\*phone\*\* \(required/);
+    expect(promptFor({ ...withSlug, language: "en" })).toMatch(/The email is optional/);
   });
 });

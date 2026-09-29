@@ -26,6 +26,7 @@ const DETAILS = {
   time: "10:00",
   firstName: "Ana",
   lastName: "López",
+  phone: "600 111 222",
   email: "ana@mail.test",
 };
 
@@ -34,7 +35,8 @@ function setup({
   channel = "web",
   externalUserId = undefined as string | undefined,
   freeTimes = ["10:00"],
-  recentByEmail = 0,
+  // Online bookings in the last 24 hours, as the client rows the limit reads.
+  recentClients = [] as Array<{ email?: string | null; phone?: string | null }>,
   book = async () => ({ id: "apt-1", service: { name: "Corte" }, professional: { firstName: "Ana", lastName: "García" } }) as any,
 } = {}) {
   let context: Record<string, unknown> = {};
@@ -46,7 +48,7 @@ function setup({
       update: async ({ data }: any) => { context = data.context; },
     },
     chatMessage: { count: async () => userTurns },
-    appointment: { count: async () => recentByEmail },
+    appointment: { findMany: async () => recentClients.map((client) => ({ client })) },
     service: {
       findFirst: async () => ({ name: "Masaje Relajante", duration: 60, price: 55, currency: "EUR" }),
       findMany: async () => [{ id: SERVICE, name: "Masaje Relajante" }],
@@ -76,10 +78,11 @@ function setup({
 }
 
 describe("the tools the model sees", () => {
-  it("offers propose_appointment with the email required, and create_appointment with no details", () => {
+  it("offers propose_appointment with the phone required, and create_appointment with no details", () => {
     const propose: any = SALON_TOOLS.find((t) => t.name === "propose_appointment");
     const create: any = SALON_TOOLS.find((t) => t.name === "create_appointment");
-    expect(propose.input_schema.required).toEqual(expect.arrayContaining(["serviceId", "date", "time", "email"]));
+    expect(propose.input_schema.required).toEqual(expect.arrayContaining(["serviceId", "date", "time", "phone"]));
+    expect(propose.input_schema.required).not.toContain("email");
     expect(create.input_schema.properties).toEqual({});
   });
 });
@@ -200,6 +203,13 @@ describe("what a proposal checks", () => {
     expect(out.fields).toEqual(["clientInfo.email"]);
   });
 
+  it("asks for the phone, and not for an email", async () => {
+    const { run } = setup();
+    const noPhone: any = await run("propose_appointment", { ...DETAILS, phone: undefined });
+    expect(noPhone.fields).toEqual(["clientInfo.phone"]);
+    expect(await run("propose_appointment", { ...DETAILS, email: undefined })).toMatchObject({ proposed: true });
+  });
+
   it("refuses a slot that cannot be booked online", async () => {
     const { run, appointmentsService } = setup({ freeTimes: ["11:00"] });
     expect(await run("propose_appointment", DETAILS)).toMatchObject({ proposed: false, error: "slot_unavailable" });
@@ -208,7 +218,7 @@ describe("what a proposal checks", () => {
 
   it("keeps the WhatsApp number when the model does not pass a phone", async () => {
     const { run, say, booked } = setup({ channel: "whatsapp", externalUserId: "34600111222" });
-    await run("propose_appointment", DETAILS);
+    await run("propose_appointment", { ...DETAILS, phone: undefined });
     say("sí");
     await run("create_appointment");
     expect(booked[0][1].clientInfo.phone).toBe("+34600111222");
@@ -233,8 +243,12 @@ describe("limits", () => {
     expect(await run("create_appointment")).toMatchObject({ created: false, error: "too_many_bookings" });
   });
 
-  it("caps chat bookings per email per day", async () => {
-    const { run, say, booked } = setup({ recentByEmail: 3 });
+  it("caps chat bookings per client per day, by phone as well as by email", async () => {
+    // The email is optional now: counting by email alone let a client past
+    // the limit just by leaving it out.
+    const { run, say, booked } = setup({
+      recentClients: [{ phone: "+34600111222" }, { phone: "600 111 222" }, { email: "ana@mail.test" }],
+    });
     await run("propose_appointment", DETAILS);
     say("sí");
     expect(await run("create_appointment")).toMatchObject({ created: false, error: "too_many_bookings" });

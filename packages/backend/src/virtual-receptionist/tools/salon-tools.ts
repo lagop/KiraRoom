@@ -135,7 +135,7 @@ export const SALON_TOOLS = [
     name: 'propose_appointment',
     description:
       'Step 1 of booking. Once you have service, date, time, first name, last ' +
-      'name and email, call this with them. It validates the details, checks ' +
+      'name and phone (email only if they gave one), call this with them. It validates the details, checks ' +
       'the slot can be booked, and records the proposal. Then show the client ' +
       'the summary and ask them to confirm. Ids MUST come from list_services / ' +
       'list_professionals, the time from check_availability. Call it again if ' +
@@ -152,11 +152,11 @@ export const SALON_TOOLS = [
         time: { type: 'string', description: 'HH:MM, a slot check_availability returned.' },
         firstName: { type: 'string' },
         lastName: { type: 'string' },
-        email: { type: 'string', description: 'Required. Ask the client for it.' },
-        phone: { type: 'string' },
+        phone: { type: 'string', description: 'Required: how the salon reaches them about a change. Ask the client for it.' },
+        email: { type: 'string', description: 'Optional. Only if the client gives it.' },
         notes: { type: 'string' },
       },
-      required: ['serviceId', 'date', 'time', 'firstName', 'lastName', 'email'],
+      required: ['serviceId', 'date', 'time', 'firstName', 'lastName', 'phone'],
     },
   },
   {

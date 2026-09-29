@@ -244,7 +244,7 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
         clientInfo: {
           firstName: currentUser ? currentUser.firstName : bookingData.clientName.split(' ')[0],
           lastName: currentUser ? currentUser.lastName : bookingData.clientName.split(' ').slice(1).join(' '),
-          email: currentUser ? currentUser.email : bookingData.clientEmail,
+          email: (currentUser ? currentUser.email : bookingData.clientEmail.trim()) || undefined,
           phone: currentUser ? (currentUser.phone || bookingData.clientPhone) : bookingData.clientPhone,
         },
         serviceId: bookingData.serviceId,
@@ -387,10 +387,28 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
               <p className="text-sm text-green-700 mb-1">
                 <strong>Email:</strong> {currentUser.email}
               </p>
-              {currentUser.phone && (
+              {currentUser.phone ? (
                 <p className="text-sm text-green-700">
                   <strong>Teléfono:</strong> {currentUser.phone}
                 </p>
+              ) : (
+                // Online bookings need a phone: it is how the salon reaches
+                // the client about a last-minute change.
+                <div className="mt-3">
+                  <label htmlFor="clientPhone" className="block text-sm font-medium text-gray-700 mb-1">
+                    Teléfono *
+                  </label>
+                  <input
+                    type="tel"
+                    id="clientPhone"
+                    name="clientPhone"
+                    value={bookingData.clientPhone}
+                    onChange={handleInputChange}
+                    required
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors"
+                    placeholder="+34 600 123 456"
+                  />
+                </div>
               )}
             </div>
           ) : (
@@ -412,7 +430,7 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
               </div>
               <div>
                 <label htmlFor="clientEmail" className="block text-sm font-medium text-gray-700 mb-1">
-                  Email *
+                  Email (opcional)
                 </label>
                 <input
                   type="email"
@@ -420,14 +438,13 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
                   name="clientEmail"
                   value={bookingData.clientEmail}
                   onChange={handleInputChange}
-                  required
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors"
                   placeholder="john@example.com"
                 />
               </div>
               <div>
                 <label htmlFor="clientPhone" className="block text-sm font-medium text-gray-700 mb-1">
-                  Teléfono
+                  Teléfono *
                 </label>
                 <input
                   type="tel"
@@ -435,6 +452,7 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
                   name="clientPhone"
                   value={bookingData.clientPhone}
                   onChange={handleInputChange}
+                  required
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors"
                   placeholder="+34 123 456 789"
                 />

@@ -25,7 +25,8 @@ export class CreateAppointmentDto {
   clientInfo?: {
     firstName: string;
     lastName: string;
-    email: string;
+    /** Email or phone, at least one. Online bookings always carry a phone. */
+    email?: string;
     phone?: string;
   };
 

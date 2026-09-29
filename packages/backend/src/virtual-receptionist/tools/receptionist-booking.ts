@@ -3,6 +3,7 @@ import { plainToInstance } from 'class-transformer';
 import { validateSync, ValidationError } from 'class-validator';
 import { OnlineBookingDto } from '../../appointments/dto/book-appointment.dto';
 import type { SalonToolContext } from './salon-tools';
+import { samePhone } from '../../common/phone';
 
 /**
  * How the virtual receptionist books, in two steps the server enforces.
@@ -21,7 +22,7 @@ import type { SalonToolContext } from './salon-tools';
  * duplicate appointment.
  */
 
-/** Bookings one conversation may make, and one email may make by chat per day. */
+/** Bookings one conversation may make, and one client (phone or email) may make by chat per day. */
 export const MAX_BOOKINGS_PER_CONVERSATION = 2;
 export const MAX_CHAT_BOOKINGS_PER_EMAIL_PER_DAY = 3;
 
@@ -32,7 +33,8 @@ export interface PendingBooking {
   time: string;
   firstName: string;
   lastName: string;
-  email: string;
+  /** Optional: the phone is what is required. */
+  email?: string;
   phone?: string;
   notes?: string;
   /** Client messages in the conversation when this was proposed. */
@@ -99,7 +101,7 @@ function toDto(p: Omit<PendingBooking, 'proposedAtUserTurn' | 'bookedAppointment
     clientInfo: {
       firstName: p.firstName,
       lastName: p.lastName ?? '',
-      email: p.email,
+      email: p.email || undefined,
       phone: p.phone || undefined,
     },
   });
@@ -167,7 +169,7 @@ export async function proposeAppointment(
     time: String(input.time ?? ''),
     firstName: String(input.firstName ?? ''),
     lastName: String(input.lastName ?? ''),
-    email: String(input.email ?? ''),
+    email: input.email ? String(input.email).trim() || undefined : undefined,
     phone: input.phone ? String(input.phone) : channelPhone(ctx),
     notes: input.notes ? String(input.notes) : undefined,
   };
@@ -255,7 +257,7 @@ export async function proposeAppointment(
       date: details.date,
       time: details.time,
       name: `${details.firstName} ${details.lastName}`.trim(),
-      email: details.email,
+      email: details.email ?? null,
       phone: details.phone ?? null,
     },
     next:
@@ -300,15 +302,22 @@ export async function confirmAppointment(ctx: SalonToolContext): Promise<Record<
     return { created: false, error: 'too_many_bookings', message: 'Further bookings must be made with the salon.' };
   }
   const since = new Date(Date.now() - 24 * 3_600_000);
-  const recent = await ctx.prisma.appointment.count({
+  // The same client by phone or by email: the phone is required now and the
+  // email optional, so counting by email alone let a client past the limit
+  // just by leaving it out.
+  const recentRows = await ctx.prisma.appointment.findMany({
     where: {
       tenantId: ctx.tenantId,
       createdAt: { gte: since },
       status: { not: 'cancelled' },
       source: 'online',
-      client: { email: pending.email },
     },
+    select: { client: { select: { email: true, phone: true } } },
   });
+  const recent = recentRows.filter(
+    (r: any) =>
+      (pending.email && r.client?.email === pending.email) || samePhone(r.client?.phone, pending.phone),
+  ).length;
   if (recent >= MAX_CHAT_BOOKINGS_PER_EMAIL_PER_DAY) {
     return { created: false, error: 'too_many_bookings', message: 'Further bookings must be made with the salon.' };
   }
@@ -325,6 +334,7 @@ export async function confirmAppointment(ctx: SalonToolContext): Promise<Record<
       // Only true when the provider accepted the email. Say "te hemos
       // enviado un email" only then.
       confirmationEmailSent: appointment.confirmationEmailSent === true,
+      confirmationSmsSent: appointment.confirmationSmsSent === true,
       service: appointment.service?.name,
       professional: [appointment.professional?.firstName, appointment.professional?.lastName]
         .filter(Boolean)

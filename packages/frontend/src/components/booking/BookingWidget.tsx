@@ -202,7 +202,8 @@ export const BookingWidget: React.FC<BookingWidgetProps> = ({
       case "datetime":
         return !!selectedDate && !!selectedTime;
       case "client":
-        return !!(clientData.name && clientData.email && clientData.phone);
+        // Phone required, email optional: as in every online booking.
+        return !!(clientData.name && clientData.phone);
       default:
         return true;
     }

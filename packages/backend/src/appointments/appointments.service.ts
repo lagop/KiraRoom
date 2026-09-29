@@ -30,6 +30,7 @@ import { NotificationType } from "../notifications/dto";
 import { TranslationsService } from "../translations/translations.service";
 import { ConsentService } from "../consent/consent.service";
 import { salonInstant } from "./salon-time";
+import { normalizePhone, phoneKey } from "../common/phone";
 import type { OnlineBookingDto } from "./dto/book-appointment.dto";
 
 interface AppointmentActivity {
@@ -49,7 +50,8 @@ export interface CreateAppointmentDto {
   clientInfo?: {
     firstName: string;
     lastName: string;
-    email: string;
+    /** Email or phone, at least one; see findOrCreateClient. */
+    email?: string;
     phone?: string;
   };
   serviceId: string;
@@ -241,9 +243,12 @@ export class AppointmentsService {
     );
 
     const notified = await this.afterAppointmentCreated(appointment, dto.source);
-    // Not a column: tells the chat receptionist whether it may say the
-    // confirmation email was sent.
-    return Object.assign(appointment, { confirmationEmailSent: notified?.emailSent === true });
+    // Not columns: tell the chat receptionist whether it may say the
+    // confirmation email or SMS was sent.
+    return Object.assign(appointment, {
+      confirmationEmailSent: notified?.emailSent === true,
+      confirmationSmsSent: notified?.smsSent === true,
+    });
   }
 
   /**
@@ -332,6 +337,77 @@ export class AppointmentsService {
     return appointment;
   }
 
+  /**
+   * The salon's client with this email or, failing that, this phone; else a
+   * new one. Always in THIS salon: searching every salon matched a client of
+   * salon A booking on salon B's site to their salon-A record.
+   *
+   * Online bookings require a phone and make the email optional, so a
+   * returning client may come with either. A detail the record lacks is
+   * filled in; one it has is never overwritten by what a booking form says.
+   */
+  private async findOrCreateClient(
+    tenantId: string,
+    info: { firstName: string; lastName: string; email?: string; phone?: string },
+  ): Promise<string> {
+    const email = info.email?.trim() || undefined;
+    const phone = info.phone?.trim() || undefined;
+    if (!email && !phone) {
+      // An undefined filter is dropped by Prisma: a lookup without either
+      // would match the salon's first client.
+      throw new BadRequestException("Client email or phone is required");
+    }
+
+    let existing = email
+      ? await this.prisma.client.findFirst({ where: { email, tenantId } })
+      : null;
+    if (!existing && phone) {
+      // Stored numbers are in whatever format they were typed ("600 111
+      // 222", "+34600111222"): compare their last nine digits in SQL.
+      const key = phoneKey(phone);
+      const rows = key.length === 9
+        ? await this.prisma.$queryRaw<Array<{ id: string }>>`
+            SELECT id FROM clients
+            WHERE "tenantId" = ${tenantId}
+              AND right(regexp_replace(coalesce(phone, ''), '\\D', '', 'g'), 9) = ${key}
+            ORDER BY "createdAt" ASC
+            LIMIT 1`
+        : [];
+      existing = rows[0] ? await this.prisma.client.findFirst({ where: { id: rows[0].id, tenantId } }) : null;
+    }
+
+    if (existing) {
+      const fill: Record<string, string> = {};
+      if (email && !existing.email) fill.email = email;
+      if (phone && !existing.phone) fill.phone = await this.salonPhone(tenantId, phone);
+      if (Object.keys(fill).length > 0) {
+        await this.prisma.client.update({ where: { id: existing.id }, data: fill });
+      }
+      return existing.id;
+    }
+
+    const created = await this.prisma.client.create({
+      data: {
+        tenantId,
+        firstName: info.firstName,
+        lastName: info.lastName,
+        email: email ?? null,
+        phone: phone ? await this.salonPhone(tenantId, phone) : null,
+        status: "active",
+      },
+    });
+    return created.id;
+  }
+
+  /** A client's phone in international form, using the salon's country. */
+  private async salonPhone(tenantId: string, phone: string): Promise<string> {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { country: true },
+    });
+    return normalizePhone(phone, tenant?.country ?? "ES");
+  }
+
   /** Validate and insert. No side effects beyond creating the client. */
   private async insertAppointment(createAppointmentDto: CreateAppointmentDto, tenantId: string) {
     if (!createAppointmentDto.professionalId) {
@@ -358,37 +434,7 @@ export class AppointmentsService {
 
     // Find or create client if clientInfo provided
     if (!clientId && createAppointmentDto.clientInfo) {
-      if (!createAppointmentDto.clientInfo.email) {
-        // An undefined filter is dropped by Prisma: this would match the
-        // salon's first client.
-        throw new BadRequestException("Client email is required");
-      }
-      // Look the email up in THIS salon. Searching every salon meant a client
-      // of salon A could not book on salon B's site: they were matched to
-      // their salon-A record, the tenant switched to A, and B's professional
-      // was then "not found".
-      const existingClient = await this.prisma.client.findFirst({
-        where: {
-          email: createAppointmentDto.clientInfo.email,
-          tenantId,
-        },
-      });
-
-      if (existingClient) {
-        clientId = existingClient.id;
-      } else {
-        const newClient = await this.prisma.client.create({
-          data: {
-            tenantId: tenantId,
-            firstName: createAppointmentDto.clientInfo.firstName,
-            lastName: createAppointmentDto.clientInfo.lastName,
-            email: createAppointmentDto.clientInfo.email,
-            phone: createAppointmentDto.clientInfo.phone || null,
-            status: "active",
-          },
-        });
-        clientId = newClient.id;
-      }
+      clientId = await this.findOrCreateClient(tenantId, createAppointmentDto.clientInfo);
     }
 
     if (!clientId) {
@@ -465,7 +511,7 @@ export class AppointmentsService {
   private async afterAppointmentCreated(
     appointment: any,
     source?: string,
-  ): Promise<{ emailSent: boolean }> {
+  ): Promise<{ emailSent: boolean; smsSent: boolean }> {
     // Send notifications for appointment creation
     const notified = await this.sendAppointmentCreatedNotifications(appointment);
 
@@ -1529,10 +1575,11 @@ export class AppointmentsService {
    */
   private async sendAppointmentCreatedNotifications(
     appointment: any,
-  ): Promise<{ emailSent: boolean }> {
-    // Whether the client's confirmation email actually went out. The chat
-    // receptionist said "te hemos enviado la confirmación" either way.
+  ): Promise<{ emailSent: boolean; smsSent: boolean }> {
+    // Whether the client's confirmation email and SMS actually went out. The
+    // chat receptionist said "te hemos enviado la confirmación" either way.
     let emailSent = false;
+    let smsSent = false;
     try {
       this.logger.log(
         `Sending appointment created notifications for appointment ${appointment.id}`,
@@ -1641,6 +1688,7 @@ export class AppointmentsService {
               `Confirmation SMS to client ${appointment.clientId} was not sent: ${sent.error}`,
             );
           } else {
+            smsSent = true;
             this.logger.log(`Sent confirmation SMS to client ${appointment.clientId}`);
           }
         } catch (error) {
@@ -1807,7 +1855,7 @@ export class AppointmentsService {
       );
       // Don't throw - notifications are not critical to the appointment creation
     }
-    return { emailSent };
+    return { emailSent, smsSent };
   }
 
   /**

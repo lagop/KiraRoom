@@ -127,7 +127,9 @@ export default function EmbedWidgetPage() {
         notes: notes || undefined,
         source: "widget",
         widgetInstanceId: config.widget.id,
-        clientInfo: { firstName, lastName, email, phone: phone || undefined },
+        // The phone is required (the salon's way to reach the client about a
+        // change); the email is optional.
+        clientInfo: { firstName, lastName, phone, email: email.trim() || undefined },
       };
       const res = await fetch(`${API}/appointments`, {
         method: "POST",
@@ -312,17 +314,17 @@ export default function EmbedWidgetPage() {
             />
             <input
               required
-              type="email"
-              placeholder="Email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              type="tel"
+              placeholder="Teléfono"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
               className="w-full border border-gray-300 rounded-lg px-3 py-2"
             />
             <input
-              type="tel"
-              placeholder="Teléfono (opcional)"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
+              type="email"
+              placeholder="Email (opcional, para recibir la confirmación)"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
               className="w-full border border-gray-300 rounded-lg px-3 py-2"
             />
             <textarea
@@ -363,8 +365,9 @@ export default function EmbedWidgetPage() {
               ¡Reserva registrada!
             </h2>
             <p className="text-sm text-gray-500">
-              Te enviaremos un email de confirmación. Si el salón requiere firma de
-              consentimiento, te llegará un enlace en los próximos minutos.
+              {email.trim()
+                ? "Te enviaremos un email de confirmación. Si el salón requiere firma de consentimiento, te llegará un enlace en los próximos minutos."
+                : "El salón te contactará en tu teléfono si hay algún cambio."}
             </p>
             {bookingId && (
               <p className="text-xs text-gray-400">Ref: {bookingId.slice(0, 8)}</p>
