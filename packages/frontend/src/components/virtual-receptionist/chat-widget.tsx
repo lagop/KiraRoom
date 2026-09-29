@@ -7,14 +7,12 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
-  provider?: string;
 }
 
 interface MessageResponseDto {
   id: string;
   content: string;
   requiresHandoff: boolean;
-  provider?: string;
 }
 
 const VISITOR_KEY = 'kira_chat_visitor';
@@ -121,7 +119,6 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
         role: 'assistant',
         content: response.content,
         timestamp: new Date(),
-        provider: response.provider,
       };
 
       setMessages(prev => [...prev, assistantMessage]);
@@ -230,13 +227,6 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
                     }`}
                   >
                     <p className="text-sm">{message.content}</p>
-                    {message.provider && (
-                      <p className="text-xs opacity-70 mt-1">
-                        {message.provider === 'openai' ? 'OpenAI' :
-                         message.provider === 'anthropic' ? 'Anthropic' :
-                         message.provider === 'google' ? 'Google' : 'LLM'}
-                      </p>
-                    )}
                     <p className="text-xs opacity-60 mt-1">
                       {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </p>
