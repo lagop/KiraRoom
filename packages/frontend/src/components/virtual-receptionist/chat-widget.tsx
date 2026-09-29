@@ -8,7 +8,6 @@ interface ChatMessage {
   content: string;
   timestamp: Date;
   provider?: string;
-  error?: string;
 }
 
 interface MessageResponseDto {
@@ -16,7 +15,6 @@ interface MessageResponseDto {
   content: string;
   requiresHandoff: boolean;
   provider?: string;
-  error?: string;
 }
 
 const VISITOR_KEY = 'kira_chat_visitor';
@@ -124,7 +122,6 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
         content: response.content,
         timestamp: new Date(),
         provider: response.provider,
-        error: response.error,
       };
 
       setMessages(prev => [...prev, assistantMessage]);
@@ -134,19 +131,12 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
       }
     } catch (error) {
       console.error('Error sending message:', error);
-      const apiError = error as { status?: number; message?: string };
-      let detail = '';
-      if (apiError?.status) {
-        detail = apiError.message
-          ? ` (HTTP ${apiError.status}: ${apiError.message})`
-          : ` (HTTP ${apiError.status})`;
-      } else if (apiError?.message) {
-        detail = ` (${apiError.message})`;
-      }
+      // The visitor gets a plain apology; the HTTP status and server
+      // message are for the console above, not for them.
       const errorMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: `Lo sentimos, estamos experimentando problemas. Por favor, inténtalo de nuevo.${detail}`,
+        content: `Lo sentimos, estamos experimentando problemas. Por favor, inténtalo de nuevo.`,
         timestamp: new Date(),
       };
       setMessages(prev => [...prev, errorMessage]);
@@ -240,14 +230,6 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
                     }`}
                   >
                     <p className="text-sm">{message.content}</p>
-                    {message.error && (
-                      <p
-                        className="text-xs mt-1 px-2 py-1 rounded bg-red-50 text-red-700 border border-red-200 break-words"
-                        title="Debug: underlying error returned by the backend"
-                      >
-                        <span className="font-semibold">Debug:</span> {message.error}
-                      </p>
-                    )}
                     {message.provider && (
                       <p className="text-xs opacity-70 mt-1">
                         {message.provider === 'openai' ? 'OpenAI' :

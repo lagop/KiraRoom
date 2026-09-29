@@ -496,6 +496,17 @@ describe('VirtualReceptionistService orchestrator (L-2) -- no false confirmation
     expect(out.content).toBe('Las 16:30 ya no están libres. ¿Te va bien a las 17:30?');
   });
 
+  it("does not show the visitor the provider's error", async () => {
+    // The widget printed it under "Debug:" on the public chat.
+    const generateResponse = jest.fn().mockRejectedValue(new Error('Your credit balance is too low'));
+    const { svc } = buildService({ generateResponse });
+
+    const out: any = await send(svc, 'hola');
+
+    expect(out.error).toBeUndefined();
+    expect(JSON.stringify(out)).not.toMatch(/credit balance/);
+  });
+
   it('does not force it for anything but a yes', async () => {
     const generateResponse = jest.fn().mockResolvedValue(reply('Claro, ¿a qué hora?'));
     const { svc, llmService, prismaStub } = buildService({ generateResponse }) as any;

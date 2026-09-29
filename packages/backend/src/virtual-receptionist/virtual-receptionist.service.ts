@@ -386,10 +386,9 @@ export class VirtualReceptionistService {
         responseTime: Date.now() - startTime,
         requiresHandoff: true,
         intent: ChatIntent.OTHER,
-        // Surface the underlying error so the widget can show what
-        // actually failed (LLM provider, network, DB, etc.). Trim
-        // anything that could leak credentials.
-        error: err?.message ? err.message.slice(0, 300) : 'unknown error',
+        // No error detail: this endpoint is public, and the widget showed
+        // it to any visitor under "Debug:" -- the provider's own message,
+        // e.g. "Your credit balance is too low". It is in the log above.
       };
     }
   }
