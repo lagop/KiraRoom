@@ -258,7 +258,9 @@ export async function proposeAppointment(
       email: details.email,
       phone: details.phone ?? null,
     },
-    next: 'Show exactly this summary and ask the client to confirm. Book with create_appointment only after they reply yes.',
+    next:
+      'Show exactly this summary, with its labels in the language the client is writing in, and ask them to confirm. ' +
+      'Book with create_appointment only after they reply yes.',
   };
 }
 
@@ -277,7 +279,6 @@ export async function confirmAppointment(ctx: SalonToolContext): Promise<Record<
     return {
       created: true,
       alreadyBooked: true,
-      appointmentId: pending.bookedAppointmentId,
       date: pending.date,
       time: pending.time,
     };
@@ -317,9 +318,13 @@ export async function confirmAppointment(ctx: SalonToolContext): Promise<Record<
     state.pendingBooking = { ...pending, bookedAppointmentId: appointment.id };
     state.chatBookings = (state.chatBookings ?? 0) + 1;
     await writeState(ctx, state);
+    // No appointmentId: the model showed the UUID to clients as a
+    // "referencia". The id stays in the conversation state.
     return {
       created: true,
-      appointmentId: appointment.id,
+      // Only true when the provider accepted the email. Say "te hemos
+      // enviado un email" only then.
+      confirmationEmailSent: appointment.confirmationEmailSent === true,
       service: appointment.service?.name,
       professional: [appointment.professional?.firstName, appointment.professional?.lastName]
         .filter(Boolean)

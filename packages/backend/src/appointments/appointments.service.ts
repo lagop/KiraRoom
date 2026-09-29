@@ -240,8 +240,10 @@ export class AppointmentsService {
       { timeout: 15_000 },
     );
 
-    await this.afterAppointmentCreated(appointment, dto.source);
-    return appointment;
+    const notified = await this.afterAppointmentCreated(appointment, dto.source);
+    // Not a column: tells the chat receptionist whether it may say the
+    // confirmation email was sent.
+    return Object.assign(appointment, { confirmationEmailSent: notified?.emailSent === true });
   }
 
   /**
@@ -460,9 +462,12 @@ export class AppointmentsService {
   }
 
   /** Notifications, rebooking cleanup and telemetry for a new appointment. */
-  private async afterAppointmentCreated(appointment: any, source?: string) {
+  private async afterAppointmentCreated(
+    appointment: any,
+    source?: string,
+  ): Promise<{ emailSent: boolean }> {
     // Send notifications for appointment creation
-    await this.sendAppointmentCreatedNotifications(appointment);
+    const notified = await this.sendAppointmentCreatedNotifications(appointment);
 
     // P1.4 — Cancel any pending rebooking reminders for this client/service
     // now that they have a fresh booking.
@@ -491,6 +496,7 @@ export class AppointmentsService {
       appointment.tenantId,
       { source: source ?? 'dashboard' },
     );
+    return notified;
   }
 
   async createByStaff(
@@ -1521,7 +1527,12 @@ export class AppointmentsService {
    * Send notifications when an appointment is created
    * Notifies: Client, Professional, Admin
    */
-  private async sendAppointmentCreatedNotifications(appointment: any) {
+  private async sendAppointmentCreatedNotifications(
+    appointment: any,
+  ): Promise<{ emailSent: boolean }> {
+    // Whether the client's confirmation email actually went out. The chat
+    // receptionist said "te hemos enviado la confirmación" either way.
+    let emailSent = false;
     try {
       this.logger.log(
         `Sending appointment created notifications for appointment ${appointment.id}`,
@@ -1596,6 +1607,7 @@ export class AppointmentsService {
               `Confirmation email to client ${appointment.clientId} was not sent: ${sent.error}`,
             );
           } else {
+            emailSent = true;
             this.logger.log(
               `Sent confirmation email to client ${appointment.clientId}`,
             );
@@ -1795,6 +1807,7 @@ export class AppointmentsService {
       );
       // Don't throw - notifications are not critical to the appointment creation
     }
+    return { emailSent };
   }
 
   /**

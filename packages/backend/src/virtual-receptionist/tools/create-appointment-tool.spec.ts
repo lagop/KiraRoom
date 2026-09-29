@@ -92,7 +92,9 @@ describe("propose, then book on a real yes", () => {
     say("Sí, perfecto");
     const out = await run("create_appointment");
 
-    expect(out).toMatchObject({ created: true, appointmentId: "apt-1", professional: "Ana García" });
+    expect(out).toMatchObject({ created: true, professional: "Ana García", confirmationEmailSent: false });
+    // The model showed the UUID to clients as a "referencia".
+    expect(out).not.toHaveProperty("appointmentId");
     const [tenantId, dto] = booked[0];
     expect(tenantId).toBe("tenant-b");
     expect(dto).toMatchObject({
@@ -133,8 +135,19 @@ describe("propose, then book on a real yes", () => {
     say("sí, gracias");
     const again = await run("create_appointment");
 
-    expect(again).toMatchObject({ created: true, alreadyBooked: true, appointmentId: "apt-1" });
+    expect(again).toMatchObject({ created: true, alreadyBooked: true });
     expect(booked).toHaveLength(1);
+  });
+
+  it("says the confirmation email went out only when it did", async () => {
+    const { run, say } = setup({
+      book: async () => ({ id: "apt-2", confirmationEmailSent: true, service: { name: "Corte" }, professional: { firstName: "Ana", lastName: "García" } }) as any,
+    });
+
+    await run("propose_appointment", DETAILS);
+    say("sí");
+
+    expect(await run("create_appointment")).toMatchObject({ created: true, confirmationEmailSent: true });
   });
 
   it("needs a proposal first", async () => {
