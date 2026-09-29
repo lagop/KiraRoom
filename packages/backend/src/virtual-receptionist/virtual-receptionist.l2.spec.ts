@@ -470,6 +470,32 @@ describe('VirtualReceptionistService orchestrator (L-2) -- no false confirmation
     });
   });
 
+  it('never shows a summary nothing recorded, even if the forced proposal fails', async () => {
+    // The replay: propose_appointment failed (bad serviceId) and the model
+    // showed "Profesional: Por asignar" anyway; the client's yes then had
+    // nothing to book.
+    const summary = '📋 Resumen de tu cita: Masaje, Por asignar, viernes 15:00. ¿Es correcto? (Sí / No)';
+    const generateResponse = jest.fn().mockResolvedValue(reply(summary));
+    const { svc } = buildService({ generateResponse });
+
+    const out: any = await send(svc, 'si');
+
+    expect(out.content).not.toMatch(/Resumen/);
+    expect(out.content).toMatch(/todavía no está hecha/);
+  });
+
+  it('keeps the retry when it explains instead of summarising', async () => {
+    const generateResponse = jest
+      .fn()
+      .mockResolvedValueOnce(reply('📋 Resumen de tu cita: ... ¿Es correcto? (Sí / No)'))
+      .mockResolvedValueOnce(reply('Las 16:30 ya no están libres. ¿Te va bien a las 17:30?'));
+    const { svc } = buildService({ generateResponse });
+
+    const out: any = await send(svc, 'Clara Prueba, clara@example.test');
+
+    expect(out.content).toBe('Las 16:30 ya no están libres. ¿Te va bien a las 17:30?');
+  });
+
   it('does not force it for anything but a yes', async () => {
     const generateResponse = jest.fn().mockResolvedValue(reply('Claro, ¿a qué hora?'));
     const { svc, llmService, prismaStub } = buildService({ generateResponse }) as any;

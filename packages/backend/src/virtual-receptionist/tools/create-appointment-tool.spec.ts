@@ -49,8 +49,12 @@ function setup({
     appointment: { count: async () => recentByEmail },
     service: {
       findFirst: async () => ({ name: "Masaje Relajante", duration: 60, price: 55, currency: "EUR" }),
+      findMany: async () => [{ id: SERVICE, name: "Masaje Relajante" }],
     },
-    professional: { findFirst: async ({ where }: any) => NAMES[where.id] ?? null },
+    professional: {
+      findFirst: async ({ where }: any) => NAMES[where.id] ?? null,
+      findMany: async () => Object.entries(NAMES).map(([id, n]) => ({ id, ...n })),
+    },
   };
   const appointmentsService: any = {
     getAvailableSlots: jest.fn(async () => freeTimes.map((time) => ({ time, isAvailable: true }))),

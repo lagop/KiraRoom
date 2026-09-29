@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AppointmentsService } from '../../appointments/appointments.service';
 import { confirmAppointment, proposeAppointment } from './receptionist-booking';
+import { resolveIds } from './resolve-ids';
 
 /**
  * Tools the Virtual Receptionist exposes to the LLM.
@@ -114,7 +115,7 @@ export const SALON_TOOLS = [
       properties: {
         serviceId: {
           type: 'string',
-          description: 'Service UUID.',
+          description: "Service id from list_services, or the service's exact name.",
         },
         date: {
           type: 'string',
@@ -122,7 +123,7 @@ export const SALON_TOOLS = [
         },
         professionalId: {
           type: 'string',
-          description: 'Optional professional UUID to scope the search.',
+          description: 'Optional professional id or full name to scope the search.',
         },
       },
       required: ['serviceId', 'date'],
@@ -140,10 +141,10 @@ export const SALON_TOOLS = [
     input_schema: {
       type: 'object' as const,
       properties: {
-        serviceId: { type: 'string', description: 'Service UUID.' },
+        serviceId: { type: 'string', description: "Service id from list_services, or the service's exact name." },
         professionalId: {
           type: 'string',
-          description: 'Professional UUID, or omit for whoever is free.',
+          description: 'Professional id or full name, or omit for whoever is free.',
         },
         date: { type: 'string', description: 'YYYY-MM-DD, salon timezone.' },
         time: { type: 'string', description: 'HH:MM, a slot check_availability returned.' },
@@ -502,7 +503,12 @@ export async function executeSalonTool(
   input: unknown,
   ctx: SalonToolContext,
 ): Promise<Record<string, unknown>> {
-  const args = (input ?? {}) as Record<string, unknown>;
+  let args = (input ?? {}) as Record<string, unknown>;
+  if (name === 'get_service' || name === 'check_availability' || name === 'propose_appointment') {
+    const resolved = await resolveIds(ctx, args);
+    if (resolved.error) return resolved.error;
+    args = resolved.args!;
+  }
   switch (name) {
     case 'list_services':
       return service.listServices(ctx, args as any);

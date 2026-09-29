@@ -188,8 +188,15 @@ export class VirtualReceptionistService {
           : r?.error && typeof r?.message === 'string'
             ? ` (${String(r.message).slice(0, 120)})`
             : '';
+        // Which service, professional and day were asked about: ids and a
+        // date, nothing about the client.
+        const a = (input ?? {}) as Record<string, unknown>;
+        const asked = ['serviceId', 'professionalId', 'date', 'time']
+          .filter((k) => typeof a[k] === 'string' && a[k])
+          .map((k) => `${k}=${String(a[k]).slice(0, 40)}`)
+          .join(' ');
         this.logger.log(
-          `tool ${name} -> ${r?.error ? `error=${r.error}${detail}` : r?.created !== undefined ? `created=${r.created}` : r?.proposed !== undefined ? `proposed=${r.proposed}` : 'ok'}`,
+          `tool ${name}${asked ? ` [${asked}]` : ''} -> ${r?.error ? `error=${r.error}${detail}` : r?.created !== undefined ? `created=${r.created}` : r?.proposed !== undefined ? `proposed=${r.proposed}` : 'ok'}`,
         );
         if (name === 'create_appointment' && (result as any)?.created === true) {
           bookedThisTurn = true;
@@ -288,7 +295,19 @@ export class VirtualReceptionistService {
           `${userUtterance}\n\n[Nota del sistema: antes de mostrar el resumen llama a propose_appointment con los datos, y muestra exactamente el resumen que devuelva.]`,
           { type: 'tool', name: 'propose_appointment' },
         );
-        if (proposedThisTurn) generationResult = retried;
+        // If the proposal still failed, the retry usually says why (the
+        // slot is taken, a detail is missing). What must not reach the
+        // client is a summary nothing recorded.
+        if (proposedThisTurn || !looksLikeSummary(retried.text)) {
+          generationResult = retried;
+        } else {
+          generationResult = {
+            ...retried,
+            text:
+              'No he podido preparar la reserva con esos datos, así que todavía no está hecha. ' +
+              '¿Me confirmas el servicio, el día y la hora que prefieres?',
+          };
+        }
       }
 
       // Add assistant message to conversation
