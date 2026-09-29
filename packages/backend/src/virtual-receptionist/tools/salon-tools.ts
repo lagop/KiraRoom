@@ -1,10 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { HttpException } from '@nestjs/common';
-import { plainToInstance } from 'class-transformer';
-import { validateSync } from 'class-validator';
 import { AppointmentsService } from '../../appointments/appointments.service';
-import { OnlineBookingDto } from '../../appointments/dto/book-appointment.dto';
+import { confirmAppointment, proposeAppointment } from './receptionist-booking';
 
 /**
  * Tools the Virtual Receptionist exposes to the LLM.
@@ -23,6 +20,15 @@ export interface SalonToolContext {
   prisma: PrismaService;
   tenantId: string;
   appointmentsService?: AppointmentsService;
+  /** The conversation the tools run in; booking needs it. */
+  conversation?: {
+    id: string;
+    clientId?: string | null;
+    /** The client's message this turn answers. */
+    lastUserMessage: string;
+    channel?: string;
+    externalUserId?: string;
+  };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -123,14 +129,14 @@ export const SALON_TOOLS = [
     },
   },
   {
-    name: 'create_appointment',
+    name: 'propose_appointment',
     description:
-      'Book the appointment. Call it ONLY after the client has answered an ' +
-      'explicit "yes" to the summary of service, professional, date, time, ' +
-      'name and email -- never on your own initiative and never twice for ' +
-      'the same booking. It checks availability again and may refuse; only ' +
-      'if it returns created: true is the appointment booked. Ids MUST come ' +
-      'from list_services / list_professionals, the time from check_availability.',
+      'Step 1 of booking. Once you have service, date, time, first name, last ' +
+      'name and email, call this with them. It validates the details, checks ' +
+      'the slot can be booked, and records the proposal. Then show the client ' +
+      'the summary and ask them to confirm. Ids MUST come from list_services / ' +
+      'list_professionals, the time from check_availability. Call it again if ' +
+      'the client changes anything.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -140,18 +146,26 @@ export const SALON_TOOLS = [
           description: 'Professional UUID, or omit for whoever is free.',
         },
         date: { type: 'string', description: 'YYYY-MM-DD, salon timezone.' },
-        time: { type: 'string', description: 'HH:MM, one of check_availability\'s slots.' },
+        time: { type: 'string', description: 'HH:MM, a slot check_availability returned.' },
         firstName: { type: 'string' },
         lastName: { type: 'string' },
         email: { type: 'string', description: 'Required. Ask the client for it.' },
         phone: { type: 'string' },
         notes: { type: 'string' },
-        clientConfirmed: {
-          type: 'boolean',
-          description: 'true only if the client said yes to the summary in their last message.',
-        },
       },
-      required: ['serviceId', 'date', 'time', 'firstName', 'lastName', 'email', 'clientConfirmed'],
+      required: ['serviceId', 'date', 'time', 'firstName', 'lastName', 'email'],
+    },
+  },
+  {
+    name: 'create_appointment',
+    description:
+      'Step 2 of booking. Books the proposal recorded by propose_appointment -- ' +
+      'it takes no details. Call it when the client has replied yes to the ' +
+      'summary. The server checks that reply itself and refuses otherwise. ' +
+      'Only created: true means the appointment exists.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
     },
   },
   {
@@ -391,22 +405,17 @@ export class SalonToolsService {
       return { error: 'invalid_date', date: input.date };
     }
     try {
-      const all = await ctx.appointmentsService.getAvailableSlots(
+      // Only what a booking will accept: not inside the service's minimum
+      // notice, not beyond its maximum advance, not in the past.
+      const slots = await ctx.appointmentsService.getAvailableSlots(
         ctx.tenantId,
         date,
         input.professionalId,
         input.serviceId,
+        undefined,
+        undefined,
+        { onlineWindow: true },
       );
-      // Only what create_appointment will accept: not inside the service's
-      // minimum notice, not beyond its maximum advance, not in the past.
-      const slots = (
-        await ctx.appointmentsService.restrictToOnlineWindow(
-          ctx.tenantId,
-          input.serviceId,
-          input.date,
-          all,
-        )
-      ).filter((s: any) => s.isAvailable);
       // AppointmentsService returns objects with a `time` field; the
       // chatbot only needs the HH:mm strings, so flatten before
       // returning so the LLM sees a simpler shape.
@@ -422,90 +431,17 @@ export class SalonToolsService {
     }
   }
 
-  /**
-   * Book through AppointmentsService.bookOnline -- the same path as the
-   * public site: validated, inside the booking window, re-checked under the
-   * salon's lock. The salon is the one this receptionist answers for.
-   *
-   * Until this tool existed the receptionist could collect every detail and
-   * then do nothing with them; the flow told it to announce a registration
-   * that had not happened.
-   */
-  async createAppointment(
+  /** Step 1 of booking; see receptionist-booking.ts. */
+  async proposeAppointment(
     ctx: SalonToolContext,
-    input: {
-      serviceId?: string;
-      professionalId?: string;
-      date?: string;
-      time?: string;
-      firstName?: string;
-      lastName?: string;
-      email?: string;
-      phone?: string;
-      notes?: string;
-      clientConfirmed?: boolean;
-    },
+    input: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    if (!ctx.appointmentsService) {
-      return { error: 'appointments_service_unavailable' };
-    }
-    if (input.clientConfirmed !== true) {
-      return {
-        created: false,
-        error: 'not_confirmed',
-        message: 'Show the summary and wait for the client to say yes first.',
-      };
-    }
+    return proposeAppointment(ctx, input);
+  }
 
-    const dto = plainToInstance(OnlineBookingDto, {
-      serviceId: input.serviceId,
-      professionalId: input.professionalId || undefined,
-      scheduledDate: input.date,
-      scheduledTime: input.time,
-      notes: input.notes || undefined,
-      source: 'online',
-      clientInfo: {
-        firstName: input.firstName,
-        lastName: input.lastName ?? '',
-        email: input.email,
-        phone: input.phone || undefined,
-      },
-    });
-    const invalid = validateSync(dto, { whitelist: true });
-    if (invalid.length > 0) {
-      return {
-        created: false,
-        error: 'invalid_input',
-        fields: invalid.map((e) => e.property),
-        message: 'Ask the client for the missing or invalid details, then try again.',
-      };
-    }
-
-    try {
-      const appointment: any = await ctx.appointmentsService.bookOnline(ctx.tenantId, dto);
-      return {
-        created: true,
-        appointmentId: appointment.id,
-        service: appointment.service?.name,
-        professional: [appointment.professional?.firstName, appointment.professional?.lastName]
-          .filter(Boolean)
-          .join(' '),
-        date: input.date,
-        time: input.time,
-      };
-    } catch (err) {
-      // A refusal (slot taken, outside the window, unknown service...) is an
-      // answer for the model to relay, not a crash.
-      const status = err instanceof HttpException ? err.getStatus() : undefined;
-      this.logger.warn(
-        `createAppointment refused tenant=${ctx.tenantId} status=${status}: ${(err as Error).message}`,
-      );
-      return {
-        created: false,
-        error: status === 409 ? 'slot_unavailable' : 'booking_failed',
-        message: (err as Error).message,
-      };
-    }
+  /** Step 2 of booking; see receptionist-booking.ts. */
+  async createAppointment(ctx: SalonToolContext): Promise<Record<string, unknown>> {
+    return confirmAppointment(ctx);
   }
 
   async getSalonInfo(
@@ -573,8 +509,10 @@ export async function executeSalonTool(
       return service.listProfessionals(ctx, args as any);
     case 'check_availability':
       return service.checkAvailability(ctx, args as any);
+    case 'propose_appointment':
+      return service.proposeAppointment(ctx, args);
     case 'create_appointment':
-      return service.createAppointment(ctx, args as any);
+      return service.createAppointment(ctx);
     case 'get_salon_info':
       return service.getSalonInfo(ctx);
     default:

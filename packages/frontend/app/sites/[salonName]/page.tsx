@@ -1100,7 +1100,7 @@ export default function SalonBookingPage({
       {salonData && (
         <ChatWidget
           salonId={salonData.id}
-          clientId={currentUser?.id ?? "anonymous"}
+          clientId={currentUser?.id}
           clientName={
             currentUser
               ? `${currentUser.firstName} ${currentUser.lastName}`

@@ -147,6 +147,15 @@ export class VirtualReceptionistService {
           prisma: this.prisma,
           tenantId: dto.salonId,
           appointmentsService: this.appointmentsService,
+          // Booking is tied to this conversation: the proposal is stored on
+          // it, and the client's reply this turn is what confirms it.
+          conversation: {
+            id: conversation.id,
+            clientId: (conversation as any).clientId ?? dto.clientId,
+            lastUserMessage: dto.message,
+            channel: (conversation as any).channel,
+            externalUserId: (conversation as any).context?.externalUserId,
+          },
         });
 // P2A-receptionist-tools: the LLM needs to actually see the
       // user's message — previously the orchestrator passed the

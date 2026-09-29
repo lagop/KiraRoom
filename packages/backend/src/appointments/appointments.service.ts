@@ -283,28 +283,6 @@ export class AppointmentsService {
     return "ok";
   }
 
-  /**
-   * Slots as a client may book them online: outside the service's booking
-   * window they are marked unavailable. The public site, the widget and the
-   * client portal list slots through GET /appointments/available-slots; it
-   * offered the next two hours, which createOnline then refused.
-   */
-  async restrictToOnlineWindow<T extends { time: string; isAvailable: boolean }>(
-    tenantId: string,
-    serviceId: string | undefined,
-    day: string,
-    slots: T[],
-  ): Promise<T[]> {
-    const window = await this.onlineBookingWindow(tenantId, serviceId);
-    if (!window) return slots.map((s) => ({ ...s, isAvailable: false }));
-    const now = Date.now();
-    return slots.map((s) =>
-      s.isAvailable && this.fitsOnlineWindow(day, s.time, window, now) !== "ok"
-        ? { ...s, isAvailable: false }
-        : s,
-    );
-  }
-
   private async isSlotFree(
     tenantId: string,
     date: Date,
@@ -1257,6 +1235,13 @@ export class AppointmentsService {
     serviceId?: string,
     duration: number = 60,
     professionalIds?: string[],
+    /**
+     * onlineWindow: keep only slots a client may book online -- inside the
+     * service's minAdvanceBooking/maxAdvanceBooking and not in the past.
+     * Applied here, with the tenant and service rows this method already
+     * loads, rather than by a second pass that read them again.
+     */
+    opts: { onlineWindow?: boolean } = {},
   ) {
     // Get the tenant's working hours and timezone
     const tenant = await this.prisma.tenant.findUnique({
@@ -1309,6 +1294,7 @@ export class AppointmentsService {
 
     // Get the service duration if specified
     let serviceDuration = duration;
+    let serviceRow: { isActive: boolean; minAdvanceBooking: number | null; maxAdvanceBooking: number | null } | null = null;
     if (serviceId) {
       const service = await this.prisma.service.findFirst({
         where: { id: serviceId, tenantId },
@@ -1319,6 +1305,7 @@ export class AppointmentsService {
       }
 
       serviceDuration = service.duration;
+      serviceRow = service as any;
     }
 
     // Generate time slots for the day using the tenant's configured
@@ -1465,7 +1452,17 @@ export class AppointmentsService {
       };
     });
 
-    return availableSlots.filter((slot) => slot.isAvailable);
+    const free = availableSlots.filter((slot) => slot.isAvailable);
+    if (!opts.onlineWindow) return free;
+
+    if (serviceRow && serviceRow.isActive === false) return [];
+    const window = {
+      timeZone: (tenant as any).timezone || "Europe/Madrid",
+      minHours: serviceRow?.minAdvanceBooking ?? 0,
+      maxHours: serviceRow ? (serviceRow.maxAdvanceBooking ?? 30) * 24 : Infinity,
+    };
+    const now = Date.now();
+    return free.filter((slot) => this.fitsOnlineWindow(dateString, slot.time, window, now) === "ok");
   }
 
   /**

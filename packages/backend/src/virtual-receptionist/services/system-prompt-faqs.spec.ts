@@ -144,6 +144,7 @@ describe("no tool retrieves FAQs, so the prompt is their only route", () => {
       "get_service",
       "list_professionals",
       "check_availability",
+      "propose_appointment",
       "create_appointment",
       "get_salon_info",
     ]);

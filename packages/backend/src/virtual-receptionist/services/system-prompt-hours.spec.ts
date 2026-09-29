@@ -179,12 +179,13 @@ describe("the booking flow ends honestly", () => {
     }
   });
 
-  it("books through create_appointment, and confirms only on created: true", () => {
+  it("proposes, then books, and confirms only on created: true", () => {
     for (const language of ["es", "en"]) {
       const prompt = promptFor({ ...withSlug, language });
+      expect(prompt).toContain("propose_appointment");
       expect(prompt).toContain("create_appointment");
-      expect(prompt).toContain("clientConfirmed: true");
       expect(prompt).toContain("created: true");
+      expect(prompt).not.toContain("clientConfirmed");
     }
   });
 

@@ -443,7 +443,9 @@ export default function AccountPage({
 
       {/* Virtual Receptionist Widget */}
       <ChatWidget
-        salonId={params.salonName}
+        // The tenant id, not the slug: the receptionist's tools look the
+        // salon up by id, and with the slug they found nothing.
+        salonId={(currentUser as any).tenantId ?? params.salonName}
         clientId={currentUser.id}
         clientName={`${currentUser.firstName} ${currentUser.lastName}`}
         clientEmail={currentUser.email}

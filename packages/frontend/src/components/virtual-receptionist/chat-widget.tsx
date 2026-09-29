@@ -19,6 +19,35 @@ interface MessageResponseDto {
   error?: string;
 }
 
+const VISITOR_KEY = 'kira_chat_visitor';
+
+/**
+ * A stable id for a visitor who is not signed in, kept in this browser.
+ *
+ * The widget used to send clientId "anonymous" for all of them. The backend
+ * could not resume a conversation under that id, so every message started a
+ * new one with no memory -- and the receptionist now collects names and
+ * emails and books across several messages. Each visitor gets their own id.
+ */
+function visitorId(): string {
+  const fresh = () =>
+    `visitor-${
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+    }`;
+  try {
+    const stored = localStorage.getItem(VISITOR_KEY);
+    if (stored) return stored;
+    const id = fresh();
+    localStorage.setItem(VISITOR_KEY, id);
+    return id;
+  } catch {
+    // Storage blocked: an id for this page view is still better than a shared one.
+    return fresh();
+  }
+}
+
 interface ChatWidgetProps {
   salonId?: string;
   clientId?: string;
@@ -31,7 +60,7 @@ interface ChatWidgetProps {
 
 const ChatWidget: React.FC<ChatWidgetProps> = ({ 
   salonId = 'default', 
-  clientId = 'anonymous',
+  clientId,
   clientName,
   clientEmail,
   clientPhone,
@@ -46,6 +75,13 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
   const [showHandoff, setShowHandoff] = useState(false);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  // Signed-in clients use their own id; everyone else a per-browser one.
+  const visitorRef = useRef<string | null>(null);
+  const effectiveClientId = () => {
+    if (clientId && clientId !== 'anonymous') return clientId;
+    if (!visitorRef.current) visitorRef.current = visitorId();
+    return visitorRef.current;
+  };
 
   useEffect(() => {
     scrollToBottom();
@@ -71,7 +107,7 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
 
     try {
       const response: MessageResponseDto = await apiClient.sendVirtualReceptionistMessage({
-        clientId,
+        clientId: effectiveClientId(),
         salonId,
         message: inputValue,
         channel: 'web',
