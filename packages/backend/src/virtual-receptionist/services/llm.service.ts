@@ -94,6 +94,8 @@ const RETRYABLE_ERROR_MESSAGES = [
 
 interface SalonContext {
   name: string;
+  /** Public site slug: /sites/<slug> is where a client can book. */
+  slug?: string;
   assistantName?: string;
   email?: string;
   phone?: string;
@@ -471,6 +473,7 @@ export class LLMService {
 
       return {
         name: tenant.name,
+        slug: tenant.slug,
         email: tenant.email || undefined,
         phone: tenant.phone || undefined,
         whatsapp: tenant.whatsapp || undefined,
@@ -661,6 +664,11 @@ const dynamicContext = getDynamicContext(language, {
       salonHours: formatWorkingHours(workingHours, language),
       cancellationPolicy: context.cancellationPolicy,
       minCancelHours: context.minCancelHours ?? 24,
+      // Stable per salon, so it stays inside the cacheable prefix. Built
+      // like QrController.publicSiteUrl.
+      bookingUrl: context.slug
+        ? `${(process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, "")}/sites/${context.slug}`
+        : undefined,
       // P2A-receptionist-tools: services and professionals are NOT
       // inlined in the system prompt. The model must use the salon
       // tools to look them up — otherwise it answers from stale

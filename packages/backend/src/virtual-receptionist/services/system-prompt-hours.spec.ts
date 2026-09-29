@@ -158,3 +158,29 @@ describe("the booking flow is actually in the prompt", () => {
     expect(a).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
   });
 });
+
+describe("the booking flow ends honestly", () => {
+  // No tool creates an appointment. The flow used to end with "Confirma que
+  // la cita ha sido registrada exitosamente" and a reference number, pushing
+  // the model to tell a client they had an appointment that did not exist.
+  const withSlug = { ...BASE, slug: "salon-prueba", workingHours: WEEK };
+
+  it("gives the client the salon's booking page", () => {
+    const prompt = promptFor({ ...withSlug, language: "es" });
+    expect(prompt).toMatch(/Reserva online:\*\* https?:\/\/\S+\/sites\/salon-prueba/);
+  });
+
+  it("never tells the model to confirm a registration", () => {
+    for (const language of ["es", "en"]) {
+      const prompt = promptFor({ ...withSlug, language });
+      expect(prompt).not.toMatch(/ha sido registrada exitosamente|has been successfully registered/);
+      expect(prompt).not.toContain("{{booking_reference}}");
+      expect(prompt).not.toMatch(/Confirmas esta reserva|Do you confirm this booking/);
+    }
+  });
+
+  it("says plainly that the booking is not made", () => {
+    expect(promptFor({ ...withSlug, language: "es" })).toContain("todavía NO está hecha");
+    expect(promptFor({ ...withSlug, language: "en" })).toContain("is NOT made yet");
+  });
+});

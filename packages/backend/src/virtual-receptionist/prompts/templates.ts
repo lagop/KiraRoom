@@ -191,6 +191,7 @@ export const DYNAMIC_CONTEXT_ES = `
 **Teléfono:** {{SALON_PHONE}}
 **WhatsApp:** {{SALON_WHATSAPP}}
 **Email:** {{SALON_EMAIL}}
+**Reserva online:** {{BOOKING_URL}}
 **Zona horaria:** {{SALON_TIMEZONE}}
 
 **Horarios de atención:**
@@ -300,6 +301,7 @@ export const DYNAMIC_CONTEXT_EN = `
 **Phone:** {{SALON_PHONE}}
 **WhatsApp:** {{SALON_WHATSAPP}}
 **Email:** {{SALON_EMAIL}}
+**Online booking:** {{BOOKING_URL}}
 **Timezone:** {{SALON_TIMEZONE}}
 
 **Opening Hours:**
@@ -557,12 +559,18 @@ Usa este formato:
 👤 Nombre: [NOMBRE]
 📞 Contacto: [TELÉFONO]
 
-¿Confirmas esta reserva? (Sí / No)
+¿Es correcto? (Sí / No)
 
 ### ETAPA: COMPLETED
-Confirma que la cita ha sido registrada exitosamente. Proporciona un 
-número de referencia si está disponible ({{booking_reference}}). 
-Recuerda la política de cancelación brevemente. Ofrece ayuda adicional.
+**Tú no puedes registrar la cita: ninguna de tus herramientas crea una.**
+Cuando el cliente confirme el resumen, dile con claridad que la reserva
+todavía NO está hecha y cómo cerrarla en un momento:
+- En la web del salón: {{BOOKING_URL}} — con el mismo servicio,
+  profesional, fecha y hora del resumen.
+- O llamando al salón: {{SALON_PHONE}}.
+Si te pregunta si ya tiene cita, la respuesta es no hasta que la reserve
+por uno de esos dos medios. Nunca digas "confirmada", "registrada",
+"reservada" ni des un número de referencia. Ofrece ayuda adicional.
 
 ## MANEJO DE EXCEPCIONES
 - Si el cliente quiere cambiar algo ya confirmado: Retrocede a la etapa 
@@ -627,12 +635,18 @@ Use this format:
 👤 Name: [NAME]
 📞 Contact: [PHONE]
 
-Do you confirm this booking? (Yes / No)
+Is this correct? (Yes / No)
 
 ### STAGE: COMPLETED
-Confirm the appointment has been successfully registered. Provide a 
-reference number if available ({{booking_reference}}). 
-Briefly remind the cancellation policy. Offer additional help.
+**You cannot register the appointment: none of your tools creates one.**
+When the client confirms the summary, tell them plainly that the booking
+is NOT made yet, and how to complete it in a moment:
+- On the salon's website: {{BOOKING_URL}} — with the same service,
+  professional, date and time as the summary.
+- Or by calling the salon: {{SALON_PHONE}}.
+If they ask whether they have an appointment, the answer is no until they
+book it through one of those. Never say "confirmed", "registered" or
+"booked", and never give a reference number. Offer further help.
 
 ## EXCEPTION HANDLING
 - If client wants to change something already confirmed: Go back to the 
@@ -707,6 +721,8 @@ export function getDynamicContext(
     salonHours: string;
     cancellationPolicy: string;
     minCancelHours: number;
+    /** The salon's public booking page, where a client completes a booking. */
+    bookingUrl?: string;
     services: Array<{ name: string; category: string; duration: number; price: number; currency: string }>;
     professionals: Array<{ full_name: string; position: string; specialties: string }>;
     faqs: Array<{ question: string; answer: string }>;
@@ -723,7 +739,8 @@ export function getDynamicContext(
     .replace(/{{SALON_TIMEZONE}}/g, context.salonTimezone || 'Europe/Madrid')
     .replace(/{{SALON_HOURS}}/g, context.salonHours || 'Not available')
     .replace(/{{CANCELLATION_POLICY}}/g, context.cancellationPolicy || 'Contact the salon')
-    .replace(/{{MIN_CANCEL_HOURS}}/g, String(context.minCancelHours || 24));
+    .replace(/{{MIN_CANCEL_HOURS}}/g, String(context.minCancelHours || 24))
+    .replace(/{{BOOKING_URL}}/g, context.bookingUrl || 'Not available');
 
   // Add services
   if (context.services && context.services.length > 0) {
