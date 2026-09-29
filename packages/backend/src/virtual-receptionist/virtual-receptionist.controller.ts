@@ -1,6 +1,10 @@
 import { ParseUUIDPipe, Controller, Post, Req, Get, Put, Delete, Body, Param, Query, UseGuards, UsePipes, ValidationPipe, Logger } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { UserRole } from '@prisma/client';
 import { VirtualReceptionistService } from './virtual-receptionist.service';
 import { ConversationService } from './services/conversation.service';
 import { FAQService } from './services/faq.service';
@@ -159,40 +163,52 @@ export class VirtualReceptionistController {
     return this.conversationService.getConversationMessages(id);
   }
 
-  // FAQ Management
+  // FAQ Management. Always the caller's own salon: these took no tenant at
+  // all, so any signed-in user -- a client of another salon included --
+  // could write a FAQ that every salon's receptionist then repeated.
   @Post('faqs')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.owner, UserRole.admin)
   @ApiOperation({ summary: 'Create FAQ item' })
-  async createFAQ(@Body(new ValidationPipe()) faq: CreateFAQItem) {
+  async createFAQ(@CurrentUser() user: any, @Body(new ValidationPipe()) faq: CreateFAQItem) {
     this.logger.log('Creating FAQ item');
-    return this.faqService.createFAQ(faq);
+    return this.faqService.createFAQ(user.tenantId, faq);
   }
 
   @Get('faqs')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.owner, UserRole.admin)
   @ApiOperation({ summary: 'Get FAQ items' })
-  async getFAQs(@Query('salonId') salonId?: string) {
-    this.logger.log(`Getting FAQ items for salon: ${salonId}`);
-    return this.faqService.getFAQs(salonId);
+  async getFAQs(@CurrentUser() user: any) {
+    return this.faqService.getFAQs(user.tenantId);
   }
 
+  // FAQ ids are not UUIDs (see FAQService.generateId), so no ParseUUIDPipe:
+  // it rejected every one of them.
   @Get('faqs/:id')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.owner, UserRole.admin)
   @ApiOperation({ summary: 'Get FAQ item' })
-  async getFAQ(@Param('id', ParseUUIDPipe) id: string) {
-    this.logger.log(`Getting FAQ item: ${id}`);
-    return this.faqService.getFAQ(id);
+  async getFAQ(@CurrentUser() user: any, @Param('id') id: string) {
+    return this.faqService.getFAQ(user.tenantId, id);
   }
 
   @Put('faqs/:id')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.owner, UserRole.admin)
   @ApiOperation({ summary: 'Update FAQ item' })
-  async updateFAQ(@Param('id', ParseUUIDPipe) id: string, @Body(new ValidationPipe()) faq: UpdateFAQItem) {
+  async updateFAQ(@CurrentUser() user: any, @Param('id') id: string, @Body(new ValidationPipe()) faq: UpdateFAQItem) {
     this.logger.log(`Updating FAQ item: ${id}`);
-    return this.faqService.updateFAQ(id, faq);
+    return this.faqService.updateFAQ(user.tenantId, id, faq);
   }
 
   @Delete('faqs/:id')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.owner, UserRole.admin)
   @ApiOperation({ summary: 'Delete FAQ item' })
-  async deleteFAQ(@Param('id', ParseUUIDPipe) id: string) {
+  async deleteFAQ(@CurrentUser() user: any, @Param('id') id: string) {
     this.logger.log(`Deleting FAQ item: ${id}`);
-    return this.faqService.deleteFAQ(id);
+    return this.faqService.deleteFAQ(user.tenantId, id);
   }
 
   // Booking Management
