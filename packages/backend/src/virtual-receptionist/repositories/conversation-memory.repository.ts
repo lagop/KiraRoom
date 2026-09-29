@@ -173,7 +173,10 @@ export class ConversationMemoryRepository {
     return this.prisma.chatConversation.findFirst({
       where: {
         tenantId: resolvedTenantId,
-        status: 'active',
+        // A conversation marked for a human keeps its memory: until someone
+        // at the salon picks it up, the receptionist is still the one
+        // answering, and starting over lost everything the client had said.
+        status: { in: ['active', 'handoff'] },
         lastActivityAt: {
           gte: oneHourAgo,
         },

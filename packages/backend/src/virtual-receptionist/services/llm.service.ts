@@ -2,6 +2,7 @@
 import { ConfigService } from '@nestjs/config';
 import { LLMProviderFactory } from '../factories/llm-provider.factory';
 import { salonWeekFrom } from '../../appointments/working-hours';
+import { salonClock } from '../prompts/clock';
 import { PlatformLlmConfigService } from '../../platform/platform-llm-config.service';
 import { LLMProvider, LLMGenerationConfig, LLMCompletion } from '@kira/shared';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -233,7 +234,14 @@ export class LLMService {
     // rides on the user turn instead: same information for the model, full
     // precision, cacheable prefix. Sent, not persisted, so the stored
     // conversation stays clean.
-    const promptWithClock = `[${new Date().toISOString()}]\n${prompt}`;
+    //
+    // The salon's local date, weekday and next two weeks, not a bare UTC
+    // instant: see salonClock.
+    const promptWithClock = `${salonClock(
+      new Date(),
+      salonContext?.timezone || 'Europe/Madrid',
+      salonContext?.language || 'es',
+    )}\n${prompt}`;
 
     try {
       // Try with retry logic for transient errors

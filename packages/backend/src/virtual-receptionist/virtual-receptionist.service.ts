@@ -6,6 +6,7 @@ import { ConversationService } from './services/conversation.service';
 import { FAQService } from './services/faq.service';
 import { BookingService } from './services/booking.service';
 import { claimsBooking } from './tools/booking-claims';
+import { recentHistory } from './recent-history';
 import { isAffirmative } from './tools/receptionist-booking';
 import { AnalysisService } from './services/analysis.service';
 import { ProfessionalsService } from '../professionals/professionals.service';
@@ -126,10 +127,12 @@ export class VirtualReceptionistService {
           responseContent = await this.handleGeneralQuery(dto, analysis);
       }
 
-      // Check if conversation length requires handoff
-      if (conversation.messages.length >= 20) {
-        requiresHandoff = true;
-      }
+      // No handoff by length. At 20 messages this marked the conversation
+      // "handoff" -- which nobody picks up -- and the lookup only resumes
+      // "active" ones, so the next message started over with no memory: in a
+      // real chat the client gave their phone and got the opening greeting.
+      // A booking easily runs past 20 messages. What the model sees is capped
+      // below instead (recentHistory), which is what bounds the cost.
 
       // P2A-fairuse: evaluate the cap and short-circuit when the tenant
       // has exceeded their monthly AI quota (Esencial default 500). The
@@ -232,7 +235,7 @@ export class VirtualReceptionistService {
           : 'auto';
 
       const generate = (utterance: string, choice: typeof toolChoice) =>
-        this.llmService.generateResponse(utterance, conversation.messages, dto.salonId, undefined, {
+        this.llmService.generateResponse(utterance, recentHistory(conversation.messages), dto.salonId, undefined, {
           tools: SALON_TOOLS,
           executeTool: toolExecutor,
           maxToolIterations: 5,
@@ -807,7 +810,8 @@ export class VirtualReceptionistService {
           : undefined,
       });
       if (suggestions.length > 0) {
-        const greeting = clientName ? `Hola ${clientName.split(' ')[0]}! ` : '¡Hola! ';
+        // No greeting: this is a hint in the middle of a conversation.
+        const greeting = '';
         const list = suggestions
           .map(
             (s, i) =>
@@ -827,8 +831,12 @@ export class VirtualReceptionistService {
     // tools is now responsible for grounding — the FAQ service is
     // still queried by `llm.service` so its knowledge can be used
     // as additional system-prompt context if desired.
-    const personalizedGreeting = clientName ? `¡Hola ${clientName.split(' ')[0]}!` : '¡Hola!';
-    return `${personalizedGreeting} ¿En qué puedo ayudarte hoy?`;
+    //
+    // No hint either. This returned "¡Hola! ¿En qué puedo ayudarte hoy?",
+    // which was prepended to every message without a more specific intent --
+    // a phone number, "vale", a name -- so the model greeted the client again
+    // in the middle of a booking.
+    return '';
   }
 
   /**
