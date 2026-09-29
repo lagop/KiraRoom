@@ -7,119 +7,17 @@ export class FAQService {
   private readonly logger = new Logger(FAQService.name);
   private faqItems: Map<string, FAQItem> = new Map();
 
-  constructor() {
-    this.initializeDefaultFAQs();
-  }
-
   /**
-   * Initialize default FAQ items
+   * A salon starts with no FAQs.
+   *
+   * This used to seed eight invented ones under salonId "default", which
+   * every salon inherited: opening hours of 9:00-18:00 and Saturday
+   * 9:00-14:00, Visa / Mastercard / American Express, "descuentos para
+   * clientes recurrentes", a phone number "(555) 123-4567". Once the FAQs
+   * reached the system prompt, the receptionist told every salon's clients
+   * all of it as fact -- overriding the salon's real hours.
    */
-  private initializeDefaultFAQs(): void {
-    const defaultFAQs: FAQItem[] = [
-      {
-        id: 'faq-1',
-        salonId: 'default',
-        question: '¿Cuáles son sus horarios de atención?',
-        answer: 'Estamos abiertos de lunes a viernes de 9:00 a 18:00, y sábados de 9:00 a 14:00. Los domingos estamos cerrados.',
-        category: 'horarios',
-        keywords: ['horario', 'horarios', 'atencion', 'abierto', 'cerrado'],
-        priority: 1,
-        isActive: true,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      },
-      {
-        id: 'faq-2',
-        salonId: 'default',
-        question: '¿Qué servicios ofrecen?',
-        answer: 'Ofrecemos una amplia variedad de servicios de belleza, incluyendo cortes de cabello, peinados, coloraciones, manicuras, pedicuras, masajes relajantes y faciales. También contamos con tratamientos especializados.',
-        category: 'servicios',
-        keywords: ['servicios', 'ofrecer', 'cortes', 'peinados', 'coloraciones'],
-        priority: 2,
-        isActive: true,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      },
-      {
-        id: 'faq-3',
-        salonId: 'default',
-        question: '¿Qué métodos de pago aceptan?',
-        answer: 'Aceptamos efectivo, tarjetas de crédito y débito (Visa, Mastercard, American Express). También puedes pagar con transferencia bancaria.',
-        category: 'pago',
-        keywords: ['pago', 'metodos', 'tarjeta', 'efectivo', 'transferencia'],
-        priority: 3,
-        isActive: true,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      },
-      {
-        id: 'faq-4',
-        salonId: 'default',
-        question: '¿Cómo puedo reservar una cita?',
-        answer: 'Puedes reservar una cita directamente a través de nuestra página web, por teléfono al (555) 123-4567, o mediante este chat virtual. Te pediremos algunos datos básicos para confirmar tu reservación.',
-        category: 'reservas',
-        keywords: ['reservar', 'cita', 'agendar', 'book', 'appointment'],
-        priority: 4,
-        isActive: true,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      },
-      {
-        id: 'faq-5',
-        salonId: 'default',
-        question: '¿Cuánto tiempo dura un servicio promedio?',
-        answer: 'La duración depende del tipo de servicio. Un corte de cabello promedio dura entre 30 y 45 minutos, mientras que un peinado o coloración puede durar hasta 2 horas. Los masajes duran entre 30 y 90 minutos.',
-        category: 'duracion',
-        keywords: ['tiempo', 'duracion', 'promedio', 'cuanto', 'horas'],
-        priority: 5,
-        isActive: true,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      },
-      {
-        id: 'faq-6',
-        salonId: 'default',
-        question: '¿Tienen descuentos o promociones?',
-        answer: 'Si, ofrecemos descuentos para clientes recurrentes y promociones especiales durante el año. También tenemos paquetes combinados de servicios con descuento.',
-        category: 'descuentos',
-        keywords: ['descuento', 'promociones', 'oferta', 'especial', 'paquetes'],
-        priority: 6,
-        isActive: true,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      },
-      {
-        id: 'faq-7',
-        salonId: 'default',
-        question: '¿Quiénes son sus profesionales?',
-        answer: 'Contamos con una equipe de profesionales altamente capacitados, incluyendo peluqueros, estilistas, manicuristas, pedicuristas y masajistas especializados en diferentes áreas de la belleza.',
-        category: 'profesionales',
-        keywords: ['profesionales', 'equipo', 'especialistas', 'peluqueros', 'estilistas'],
-        priority: 7,
-        isActive: true,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      },
-      {
-        id: 'faq-8',
-        salonId: 'default',
-        question: '¿Con qué profesional puedo reservar?',
-        answer: 'Podrás reservar con cualquier profesional de nuestra equipe. Si tienes una preferencia, por favor menciona el nombre del profesional al momento de reservar.',
-        category: 'profesionales',
-        keywords: ['reservar', 'profesional', 'preferencia', 'nombre'],
-        priority: 8,
-        isActive: true,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      },
-    ];
-
-    defaultFAQs.forEach(faq => {
-      this.faqItems.set(faq.id, faq);
-    });
-
-    this.logger.log(`Initialized ${defaultFAQs.length} default FAQ items`);
-  }
+  constructor() {}
 
   /**
    * Find FAQ match for a given query
@@ -216,18 +114,20 @@ export class FAQService {
    */
   private getFAQsForSalon(salonId: string): FAQItem[] {
     return Array.from(this.faqItems.values())
-      .filter(faq => faq.salonId === salonId || faq.salonId === 'default')
+      .filter(faq => faq.salonId === salonId)
       .filter(faq => faq.isActive);
   }
 
   /**
    * Create FAQ item
    */
-  async createFAQ(data: CreateFAQItem): Promise<FAQItemResponse> {
+  async createFAQ(salonId: string, data: CreateFAQItem): Promise<FAQItemResponse> {
     const newFAQ: FAQItem = {
-      id: this.generateId(),
-      salonId: 'default', // Default for now
       ...data,
+      id: this.generateId(),
+      // The caller's salon, never "default": a FAQ one salon wrote was
+      // served to every salon's clients.
+      salonId,
       isActive: true,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -242,19 +142,15 @@ export class FAQService {
   /**
    * Get all FAQs
    */
-  async getFAQs(salonId?: string): Promise<FAQItemResponse[]> {
-    const faqs = salonId 
-      ? this.getFAQsForSalon(salonId)
-      : Array.from(this.faqItems.values()).filter(faq => faq.isActive);
-    
-    return faqs.map(this.toResponse.bind(this));
+  async getFAQs(salonId: string): Promise<FAQItemResponse[]> {
+    return this.getFAQsForSalon(salonId).map(this.toResponse.bind(this));
   }
 
   /**
    * Get FAQ by ID
    */
-  async getFAQ(id: string): Promise<FAQItemResponse | null> {
-    const faq = this.faqItems.get(id);
+  async getFAQ(salonId: string, id: string): Promise<FAQItemResponse | null> {
+    const faq = this.ownFAQ(salonId, id);
     if (!faq) {
       this.logger.warn(`FAQ not found: ${id}`);
       return null;
@@ -265,8 +161,8 @@ export class FAQService {
   /**
    * Update FAQ item
    */
-  async updateFAQ(id: string, data: UpdateFAQItem): Promise<FAQItemResponse | null> {
-    const faq = this.faqItems.get(id);
+  async updateFAQ(salonId: string, id: string, data: UpdateFAQItem): Promise<FAQItemResponse | null> {
+    const faq = this.ownFAQ(salonId, id);
     
     if (!faq) {
       this.logger.warn(`FAQ not found: ${id}`);
@@ -276,6 +172,8 @@ export class FAQService {
     const updatedFAQ = {
       ...faq,
       ...data,
+      id: faq.id,
+      salonId: faq.salonId,
       updatedAt: new Date(),
     };
 
@@ -288,14 +186,20 @@ export class FAQService {
   /**
    * Delete FAQ item
    */
-  async deleteFAQ(id: string): Promise<boolean> {
-    const deleted = this.faqItems.delete(id);
+  async deleteFAQ(salonId: string, id: string): Promise<boolean> {
+    const deleted = !!this.ownFAQ(salonId, id) && this.faqItems.delete(id);
     if (deleted) {
       this.logger.log(`FAQ deleted: ${id}`);
     } else {
       this.logger.warn(`FAQ not found: ${id}`);
     }
     return deleted;
+  }
+
+  /** The FAQ, if it belongs to this salon. Another salon's id is "not found". */
+  private ownFAQ(salonId: string, id: string): FAQItem | undefined {
+    const faq = this.faqItems.get(id);
+    return faq && faq.salonId === salonId ? faq : undefined;
   }
 
   /**
