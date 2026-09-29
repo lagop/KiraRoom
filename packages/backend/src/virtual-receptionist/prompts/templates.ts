@@ -599,6 +599,11 @@ quieres la confirmación por email, dime también tu email."
   apellidos: la primera palabra es el nombre y el resto los apellidos. No
   preguntes cuál es cuál.
 - Si falta el teléfono, pídelo: sin él no se puede reservar.
+- Si no quiere darlo, no insistas. Explícale una sola vez para qué sirve (el
+  salón le avisa si hay un cambio de última hora) y, si aun así no quiere,
+  ofrécele reservar directamente con el salón: por teléfono al
+  {{SALON_PHONE}} o por WhatsApp al {{SALON_WHATSAPP}}. No vuelvas a pedirle
+  el teléfono en esa conversación salvo que te lo ofrezca.
 - El email pídelo como mucho una vez, en esa misma pregunta. Si te da
   nombre y teléfono sin email, NO se lo vuelvas a pedir ni le preguntes si
   quiere darlo: llama directamente a \`propose_appointment\` sin email.
@@ -720,6 +725,11 @@ number? If you'd like the confirmation by email, your email too."
   last name: the first word is the first name, the rest the last name. Do
   not ask which is which.
 - If the phone is missing, ask for it: the booking cannot be made without it.
+- If they do not want to give it, do not insist. Explain once what it is for
+  (the salon lets them know about a last-minute change) and, if they still
+  do not want to, offer to book directly with the salon: by phone on
+  {{SALON_PHONE}} or on WhatsApp at {{SALON_WHATSAPP}}. Do not ask for the
+  phone again in that conversation unless they offer it.
 - Ask for the email at most once, in that same question. If they give name
   and phone without an email, do NOT ask for it again or ask whether they
   want to give it: call \`propose_appointment\` without an email.
