@@ -17,6 +17,9 @@ import {
   getIntentClassifierPrompt,
 } from '../prompts/templates';
 
+/** Providers whose implementation runs the tool loop. The others ignore `tools`. */
+const TOOL_CAPABLE_PROVIDERS = new Set<LLMProvider>([LLMProvider.ANTHROPIC, LLMProvider.MiniMax]);
+
 /** Monday first: how a salon reads its own week. Data is keyed in English. */
 const WEEK_ORDER = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'];
 
@@ -321,6 +324,22 @@ export class LLMService {
 
       // Try fallback provider if primary fails
       const fallbackProviderType = this.getFallbackProvider();
+      // A request that needs tools is not handed to a provider that cannot
+      // run them. The configured fallback was OpenAI, whose provider has no
+      // tool support: when Anthropic failed, the receptionist kept answering
+      // with no access to services, prices or availability -- from memory --
+      // and could not book. Failing lets the caller give its honest error
+      // message instead.
+      if (
+        fallbackProviderType &&
+        options?.tools?.length &&
+        !TOOL_CAPABLE_PROVIDERS.has(fallbackProviderType)
+      ) {
+        this.logger.warn(
+          `Not falling back to ${fallbackProviderType}: it cannot run the tools this request needs`,
+        );
+        throw error;
+      }
       if (fallbackProviderType && fallbackProviderType !== providerType) {
         this.logger.warn(`Falling back to ${fallbackProviderType} provider`);
         return this.generateResponse(prompt, conversationHistory, salonId, fallbackProviderType, options);
