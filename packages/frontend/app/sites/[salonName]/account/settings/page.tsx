@@ -245,27 +245,25 @@ export default function SettingsPage({ params }: { params: { salonName: string }
     try {
       // Always save notification preferences to backend if user is logged in
       if (currentUser?.id && currentUser?.tenantId) {
-        try {
-          // Ensure we have notification preferences to save
-          const prefsToSave = userSettings.notificationPreferences || {
-            appointment_confirmed: { email: true, sms: true, whatsapp: false, inApp: true },
-            appointment_cancelled: { email: true, sms: true, whatsapp: false, inApp: true },
-            appointment_reminder_24h: { email: true, sms: true, whatsapp: false, inApp: true },
-            appointment_reminder_1h: { email: true, sms: true, whatsapp: false, inApp: true },
-            appointment_completed: { email: true, sms: false, whatsapp: false, inApp: true },
-            review_request: { email: true, sms: false, whatsapp: false, inApp: true },
-            promotion: { email: true, sms: false, whatsapp: false, inApp: true },
-            news: { email: true, sms: false, whatsapp: false, inApp: true },
-            special_offer: { email: true, sms: false, whatsapp: false, inApp: true },
-          };
-          
-          await apiClient.updateClientNotificationPreferences(
-            currentUser.id,
-            prefsToSave
-          );
-        } catch (error) {
-          console.error('Error saving notification preferences to backend:', error);
-        }
+        // Ensure we have notification preferences to save
+        const prefsToSave = userSettings.notificationPreferences || {
+          appointment_confirmed: { email: true, sms: true, whatsapp: false, inApp: true },
+          appointment_cancelled: { email: true, sms: true, whatsapp: false, inApp: true },
+          appointment_reminder_24h: { email: true, sms: true, whatsapp: false, inApp: true },
+          appointment_reminder_1h: { email: true, sms: true, whatsapp: false, inApp: true },
+          appointment_completed: { email: true, sms: false, whatsapp: false, inApp: true },
+          review_request: { email: true, sms: false, whatsapp: false, inApp: true },
+          promotion: { email: true, sms: false, whatsapp: false, inApp: true },
+          news: { email: true, sms: false, whatsapp: false, inApp: true },
+          special_offer: { email: true, sms: false, whatsapp: false, inApp: true },
+        };
+        
+        // A failure propagates to the error toast below. It used to be
+        // logged here and followed by "Configuración guardada".
+        await apiClient.updateClientNotificationPreferences(
+          currentUser.id,
+          prefsToSave
+        );
       }
       
       // Save settings to localStorage as cache (for non-notification settings)

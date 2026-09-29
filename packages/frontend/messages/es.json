@@ -1358,7 +1358,11 @@
     "title": "Comisiones",
     "update": "Actualizar",
     "usd_dollar": "Dolar",
-    "using_demo_data": "Usando datos de demo"
+    "using_demo_data": "Usando datos de demo",
+    "load_failed": "No se pudieron cargar los servicios",
+    "save_failed": "No se pudo guardar el servicio",
+    "delete_failed": "No se pudo eliminar el servicio",
+    "status_failed": "No se pudo cambiar el estado del servicio"
   },
   "nav": {
     "dashboard": "Panel",

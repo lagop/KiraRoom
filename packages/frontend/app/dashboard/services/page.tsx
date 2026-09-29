@@ -10,113 +10,6 @@ import { Plus, Pencil, Trash2, Search, Filter } from "lucide-react";
 import { toast, useToast } from "@/components/ui/use-toast";
 import { useTranslations } from "@/lib/use-translation";
 
-// Mock data for demonstration - in production this would come from API
-const MOCK_SERVICES: Service[] = [
-  {
-    id: "1",
-    createdAt: "2024-01-15T10:00:00Z",
-    updatedAt: "2024-01-15T10:00:00Z",
-    tenantId: "1",
-    name: "Haircut & Styling",
-    description: "Professional haircut and styling service",
-    category: "hair",
-    duration: 60,
-    price: 45.0,
-    currency: "EUR",
-    isActive: true,
-  },
-  {
-    id: "2",
-    createdAt: "2024-01-15T10:00:00Z",
-    updatedAt: "2024-01-15T10:00:00Z",
-    tenantId: "1",
-    name: "Full Body Massage",
-    description: "Relaxing full body massage",
-    category: "massage",
-    duration: 90,
-    price: 85.0,
-    currency: "EUR",
-    isActive: true,
-  },
-  {
-    id: "3",
-    createdAt: "2024-01-15T10:00:00Z",
-    updatedAt: "2024-01-15T10:00:00Z",
-    tenantId: "1",
-    name: "Manicure",
-    description: "Complete manicure service with nail polish",
-    category: "nails",
-    duration: 45,
-    price: 35.0,
-    currency: "EUR",
-    isActive: true,
-  },
-  {
-    id: "4",
-    createdAt: "2024-01-15T10:00:00Z",
-    updatedAt: "2024-01-15T10:00:00Z",
-    tenantId: "1",
-    name: "Facial Treatment",
-    description: "Deep cleansing facial treatment",
-    category: "facial",
-    duration: 60,
-    price: 65.0,
-    currency: "EUR",
-    isActive: true,
-  },
-  {
-    id: "5",
-    createdAt: "2024-01-15T10:00:00Z",
-    updatedAt: "2024-01-15T10:00:00Z",
-    tenantId: "1",
-    name: "Hair Coloring",
-    description: "Full hair coloring service",
-    category: "hair",
-    duration: 120,
-    price: 95.0,
-    currency: "EUR",
-    isActive: true,
-  },
-  {
-    id: "6",
-    createdAt: "2024-01-15T10:00:00Z",
-    updatedAt: "2024-01-15T10:00:00Z",
-    tenantId: "1",
-    name: "Pedicure",
-    description: "Complete pedicure service",
-    category: "nails",
-    duration: 45,
-    price: 40.0,
-    currency: "EUR",
-    isActive: true,
-  },
-  {
-    id: "7",
-    createdAt: "2024-01-15T10:00:00Z",
-    updatedAt: "2024-01-15T10:00:00Z",
-    tenantId: "1",
-    name: "Hot Stone Massage",
-    description: "Therapeutic massage with hot stones",
-    category: "massage",
-    duration: 90,
-    price: 95.0,
-    currency: "EUR",
-    isActive: true,
-  },
-  {
-    id: "8",
-    createdAt: "2024-01-15T10:00:00Z",
-    updatedAt: "2024-01-15T10:00:00Z",
-    tenantId: "1",
-    name: "Body Wrap",
-    description: "Detoxifying body wrap treatment",
-    category: "body",
-    duration: 75,
-    price: 75.0,
-    currency: "EUR",
-    isActive: false,
-  },
-];
 
 export default function ServicesPage() {
   const searchParams = useSearchParams();
@@ -211,20 +104,27 @@ export default function ServicesPage() {
     setFilteredServices(filtered);
   }, [services, searchTerm, categoryFilter]);
 
+  // Every failure says so. This page used to answer a failed request with
+  // mock data or a local "optimistic" edit plus a success toast, so a salon
+  // could create, edit or delete a service, be told it worked, and find it
+  // gone on the next load.
+  const reportFailure = (title: string, error: unknown) => {
+    console.error(title, error);
+    toast({
+      title,
+      description: error instanceof Error ? error.message : undefined,
+      variant: "destructive",
+    });
+  };
+
   const fetchServices = async () => {
     try {
       setIsLoading(true);
       const data = await apiClient.getServices();
       setServices(data);
     } catch (error) {
-      console.error("Failed to fetch services:", error);
-      // Fall back to mock data if API fails
-      setServices(MOCK_SERVICES);
-      toast({
-        title: t("services.using_demo_data"),
-        description: t("services.could_not_connect"),
-        variant: "default",
-      });
+      setServices([]);
+      reportFailure(t("services.load_failed"), error);
     } finally {
       setIsLoading(false);
     }
@@ -279,14 +179,7 @@ export default function ServicesPage() {
                 });
                 fetchServices();
               } catch (error) {
-                console.error("Failed to delete service:", error);
-                // Optimistic UI update for demo
-                setServices(services.filter((s) => s.id !== service.id));
-                toast({
-                  title: t("services.service_deleted"),
-                  description: t("services.service_deleted_success"),
-                  variant: "default",
-                });
+                reportFailure(t("services.delete_failed"), error);
               }
             }}
             className="bg-red-500 text-white px-4 py-2 rounded-md hover:bg-red-600 transition-colors"
@@ -321,7 +214,6 @@ export default function ServicesPage() {
         });
       } else {
         await apiClient.createService({
-          tenantId: "1",
           ...formData,
         });
         toast({
@@ -333,35 +225,7 @@ export default function ServicesPage() {
       setIsDrawerOpen(false);
       fetchServices();
     } catch (error) {
-      console.error("Failed to save service:", error);
-      // Optimistic UI update for demo
-      if (isEditing && selectedService) {
-        setServices(
-          services.map((s) =>
-            s.id === selectedService.id ? { ...s, ...formData } : s,
-          ),
-        );
-        toast({
-          title: t("services.service_updated"),
-          description: t("services.service_updated_success"),
-          variant: "default",
-        });
-      } else {
-        const newService: Service = {
-          id: Date.now().toString(),
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          tenantId: "1",
-          ...formData,
-        };
-        setServices([...services, newService]);
-        toast({
-          title: t("services.service_created"),
-          description: t("services.service_created_success"),
-          variant: "default",
-        });
-      }
-      setIsDrawerOpen(false);
+      reportFailure(t("services.save_failed"), error);
     } finally {
       setIsSubmitting(false);
     }
@@ -381,19 +245,7 @@ export default function ServicesPage() {
       });
       fetchServices();
     } catch (error) {
-      // Optimistic UI update for demo
-      setServices(
-        services.map((s) =>
-          s.id === service.id ? { ...s, isActive: !s.isActive } : s,
-        ),
-      );
-      toast({
-        title: t("services.status_updated"),
-        description: service.isActive
-          ? t("services.service_deactivated")
-          : t("services.service_activated"),
-        variant: "default",
-      });
+      reportFailure(t("services.status_failed"), error);
     }
   };
 

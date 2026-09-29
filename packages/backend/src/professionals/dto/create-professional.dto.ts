@@ -1,12 +1,12 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsString, IsEmail, IsBoolean, IsOptional, IsNotEmpty } from 'class-validator';
 
+/**
+ * No `tenantId` here on purpose: the tenant comes from the caller's token.
+ * The dashboard sent placeholders ('default-tenant', 'default'), which the
+ * tenant scope rejected with a 403. See services/dto/create-service.dto.ts.
+ */
 export class CreateProfessionalDto {
-  @ApiProperty({ description: 'Tenant ID' })
-  @IsString()
-  @IsNotEmpty()
-  tenantId: string;
-
   @ApiProperty({ description: 'First name' })
   @IsString()
   @IsNotEmpty()

@@ -245,7 +245,6 @@ export default function ProfessionalsPage() {
         );
       } else {
         await (apiClient as any).createProfessional({
-          tenantId: "default-tenant",
           firstName: formData.firstName,
           lastName: formData.lastName,
           email: formData.email,

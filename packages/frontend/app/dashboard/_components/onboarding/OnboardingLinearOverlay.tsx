@@ -246,9 +246,7 @@ function ServiceCreateStep({ onDone }: { onDone: () => Promise<unknown> }) {
     }
     setSubmitting(true);
     try {
-      const tenant = await apiClient.getTenant();
       await apiClient.createService({
-        tenantId: (tenant as any)?.id,
         name: name.trim(),
         category: "other",
         duration: durationMinutes,
@@ -406,9 +404,7 @@ function ScheduleSetStep({ onDone }: { onDone: () => Promise<unknown> }) {
 
     setSubmitting(true);
     try {
-      const tenant = await apiClient.getTenant();
       await apiClient.createProfessional({
-        tenantId: (tenant as any)?.id,
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         email: finalEmail,

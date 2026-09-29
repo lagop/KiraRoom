@@ -6,33 +6,35 @@ import { CreateServiceDto, UpdateServiceDto } from './dto';
 export class ServicesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(createServiceDto: CreateServiceDto) {
+  async create(tenantId: string, createServiceDto: CreateServiceDto) {
+    // `??`, not `||`: with `||` an explicit false fell through to the
+    // default, so a service could never be created inactive or offline-only.
     return this.prisma.service.create({
       data: {
-        tenantId: createServiceDto.tenantId,
+        tenantId,
         name: createServiceDto.name,
         description: createServiceDto.description,
         category: createServiceDto.category as any,
         duration: createServiceDto.duration,
         price: createServiceDto.price,
         currency: createServiceDto.currency || 'EUR',
-        isActive: createServiceDto.isActive || true,
-        requiresApproval: createServiceDto.requiresApproval || false,
-        maxAdvanceBooking: createServiceDto.maxAdvanceBooking || 30,
-        minAdvanceBooking: createServiceDto.minAdvanceBooking || 2,
-        bufferTime: createServiceDto.bufferTime || 15,
-        isOnlineBookable: createServiceDto.isOnlineBookable || true,
-        isMobile: createServiceDto.isMobile || false,
-        depositRequired: createServiceDto.depositRequired || false,
+        isActive: createServiceDto.isActive ?? true,
+        requiresApproval: createServiceDto.requiresApproval ?? false,
+        maxAdvanceBooking: createServiceDto.maxAdvanceBooking ?? 30,
+        minAdvanceBooking: createServiceDto.minAdvanceBooking ?? 2,
+        bufferTime: createServiceDto.bufferTime ?? 15,
+        isOnlineBookable: createServiceDto.isOnlineBookable ?? true,
+        isMobile: createServiceDto.isMobile ?? false,
+        depositRequired: createServiceDto.depositRequired ?? false,
         depositAmount: createServiceDto.depositAmount,
         depositPercentage: createServiceDto.depositPercentage,
       },
     });
   }
 
-  async findAll(tenantId?: string) {
+  async findAll(tenantId: string) {
     return this.prisma.service.findMany({
-      where: tenantId ? { tenantId } : {},
+      where: { tenantId },
     });
   }
 

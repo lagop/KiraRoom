@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Put, Delete, Body, Param, Query, Req, UseGuards } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
@@ -7,9 +7,11 @@ import {
 } from "@nestjs/swagger";
 import { Public } from "../auth/decorators/public.decorator";
 import { Roles } from "../auth/decorators/roles.decorator";
+import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { UserRole } from "@prisma/client";
+import { PublicViewerService } from "../common/tenancy/public-viewer.service";
 import { ServicesService } from "./services.service";
 import { CreateServiceDto, UpdateServiceDto } from "./dto";
 import { OnboardingDetectorService } from "../onboarding/onboarding-detector.service";
@@ -22,17 +24,19 @@ export class ServicesController {
   constructor(
     private readonly servicesService: ServicesService,
     private readonly onboardingDetector: OnboardingDetectorService,
+    private readonly publicViewer: PublicViewerService,
   ) {}
 
   @Post()
   @Roles(UserRole.owner, UserRole.admin)
   @ApiOperation({ summary: "Create a new service" })
   @ApiResponse({ status: 201, description: "Service created successfully" })
-  async create(@Body() createServiceDto: CreateServiceDto) {
-    const service = await this.servicesService.create(createServiceDto);
+  async create(@CurrentUser() user: any, @Body() createServiceDto: CreateServiceDto) {
+    // The tenant comes from the caller's token, never from the body.
+    const service = await this.servicesService.create(user.tenantId, createServiceDto);
     // Fire-and-forget: mark onboarding step done.
     void this.onboardingDetector
-      .markStepCompleted(createServiceDto.tenantId, "service_create")
+      .markStepCompleted(user.tenantId, "service_create")
       .catch(() => undefined);
     return service;
   }
@@ -40,8 +44,11 @@ export class ServicesController {
   @Get()
   @Public()
   @ApiOperation({ summary: "Get all services with optional filters" })
-  async findAll(@Query("tenantId") tenantId?: string) {
-    return this.servicesService.findAll(tenantId);
+  async findAll(@Req() req: any, @Query("tenantId") tenantId?: string) {
+    // Never unscoped: see PublicViewerService for why this was a leak. A
+    // salon's catalogue is public, so every viewer gets the same rows.
+    const { tenantId: resolved } = await this.publicViewer.resolve(req, tenantId);
+    return this.servicesService.findAll(resolved);
   }
 
   @Get(":id")

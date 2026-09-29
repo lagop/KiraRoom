@@ -83,7 +83,13 @@ export function isCredentialEndpoint(endpoint: string): boolean {
 export function loginRedirectTarget(
   currentPath: string,
   isSaasUser: boolean,
+  isClient = false,
 ): string | null {
+  // A salon's client signs in with a modal on that salon's site; /login is
+  // the staff dashboard's page. Sending them there on an expired session
+  // took them off the salon's site altogether. The caller signs them out in
+  // place instead.
+  if (isClient) return null;
   const target = isSaasUser ? "/saas/login" : "/login";
   // Tolerate a trailing slash so "/login/" is recognised as the same page.
   const normalized =
@@ -1159,6 +1165,7 @@ export interface ApiClientInterface {
     data: Partial<CreateAppointmentDto>,
   ): Promise<Appointment>;
   cancelAppointment(id: string, reason?: string): Promise<Appointment>;
+  deleteAppointment(id: string): Promise<void>;
   getClients(tenantId?: string): Promise<Client[]>;
   filterClients(filters: {
     gender?: string;
@@ -1205,7 +1212,6 @@ export interface ApiClientInterface {
   getServices(tenantId?: string): Promise<Service[]>;
   getService(id: string): Promise<Service>;
   createService(data: {
-    tenantId: string;
     name: string;
     description?: string;
     category: "hair" | "nails" | "facial" | "massage" | "body" | "other";
@@ -1230,7 +1236,6 @@ export interface ApiClientInterface {
   getProfessionals(tenantId?: string): Promise<Professional[]>;
   getProfessional(id: string): Promise<Professional>;
   createProfessional(data: {
-    tenantId: string;
     firstName: string;
     lastName: string;
     email: string;
@@ -1644,12 +1649,15 @@ class ApiClient implements ApiClientInterface {
       const userJson = typeof window !== "undefined" ? localStorage.getItem("user") : null;
       const user = userJson ? JSON.parse(userJson) : null;
       const isSaasUser = user?.role === "saas_owner";
+      const isClient = user?.role === "client";
       if (typeof window !== "undefined") {
         // Clear SaaS user cookie
         document.cookie = "saas_user=; path=/; max-age=0";
+        // A client is signed out where they are (see loginRedirectTarget).
+        if (isClient) localStorage.removeItem("user");
         // null when we are already on that login page -- navigating there
         // again would reload it and loop. See loginRedirectTarget.
-        const target = loginRedirectTarget(window.location.pathname, isSaasUser);
+        const target = loginRedirectTarget(window.location.pathname, isSaasUser, isClient);
         if (target) window.location.href = target;
       }
       // Throw a recognisable error so callers don't try to parse the
@@ -1660,12 +1668,15 @@ class ApiClient implements ApiClientInterface {
       const userJson = typeof window !== "undefined" ? localStorage.getItem("user") : null;
       const user = userJson ? JSON.parse(userJson) : null;
       const isSaasUser = user?.role === "saas_owner";
+      const isClient = user?.role === "client";
       if (typeof window !== "undefined") {
         // Clear SaaS user cookie
         document.cookie = "saas_user=; path=/; max-age=0";
+        // A client is signed out where they are (see loginRedirectTarget).
+        if (isClient) localStorage.removeItem("user");
         // null when we are already on that login page -- navigating there
         // again would reload it and loop. See loginRedirectTarget.
-        const target = loginRedirectTarget(window.location.pathname, isSaasUser);
+        const target = loginRedirectTarget(window.location.pathname, isSaasUser, isClient);
         if (target) window.location.href = target;
       }
       throw new Error("Unauthorized");
@@ -1875,9 +1886,16 @@ class ApiClient implements ApiClientInterface {
   }
 
   async cancelAppointment(id: string, reason?: string): Promise<Appointment> {
+    // PUT: the backend route is `@Put(":id/cancel")`; POST was a 404.
     return this.request<Appointment>(`/appointments/${id}/cancel`, {
-      method: "POST",
+      method: "PUT",
       body: JSON.stringify({ reason }),
+    });
+  }
+
+  async deleteAppointment(id: string): Promise<void> {
+    return this.request<void>(`/appointments/${id}`, {
+      method: "DELETE",
     });
   }
 
@@ -2126,7 +2144,6 @@ class ApiClient implements ApiClientInterface {
   }
 
   async createService(data: {
-    tenantId: string;
     name: string;
     description?: string;
     category: "hair" | "nails" | "facial" | "massage" | "body" | "other";
@@ -2152,8 +2169,10 @@ class ApiClient implements ApiClientInterface {
       isActive: boolean;
     }>,
   ): Promise<Service> {
+    // PUT: the backend route is `@Put(":id")`; PATCH was a 404, so no
+    // service could be edited or toggled from the dashboard.
     return this.request<Service>(`/services/${id}`, {
-      method: "PATCH",
+      method: "PUT",
       body: JSON.stringify(data),
     });
   }
@@ -2205,7 +2224,6 @@ class ApiClient implements ApiClientInterface {
   }
 
   async createProfessional(data: {
-    tenantId: string;
     firstName: string;
     lastName: string;
     email: string;
@@ -2359,18 +2377,21 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  // Client notification preferences
-  async getClientNotificationPreferences(clientId: string): Promise<any> {
-    return this.request<any>(`/clients/${clientId}/notifications/preferences`);
+  // Client notification preferences. The client is the one in the token;
+  // `clientId` is kept in the signature for the existing callers. These
+  // used to hit /clients/:id/notifications/preferences, which does not
+  // exist, so every load fell back to defaults and every save was lost.
+  async getClientNotificationPreferences(_clientId: string): Promise<any> {
+    return this.request<any>(`/client/notifications/preferences`);
   }
 
   async updateClientNotificationPreferences(
-    clientId: string,
+    _clientId: string,
     preferences: any,
   ): Promise<any> {
-    return this.request<any>(`/clients/${clientId}/notifications/preferences`, {
+    return this.request<any>(`/client/notifications/preferences`, {
       method: "PUT",
-      body: JSON.stringify(preferences),
+      body: JSON.stringify({ preferences }),
     });
   }
 

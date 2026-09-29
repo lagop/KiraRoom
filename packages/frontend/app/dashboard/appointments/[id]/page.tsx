@@ -214,11 +214,18 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
     router.push(`/dashboard/appointments/${params.id}/edit`);
   };
 
-  const handleDelete = () => {
-    // TODO: Implement delete confirmation and API call
-    if (confirm('Are you sure you want to delete this appointment?')) {
-      console.log('Deleting appointment:', params.id);
+  const handleDelete = async () => {
+    if (!confirm('Are you sure you want to delete this appointment?')) return;
+    setUpdating(true);
+    try {
+      await apiClient.deleteAppointment(params.id);
       router.push('/dashboard/appointments');
+    } catch (error) {
+      // Stay on the page: navigating away would read as "deleted".
+      console.error('Error deleting appointment:', error);
+      alert('Failed to delete appointment');
+    } finally {
+      setUpdating(false);
     }
   };
 
@@ -296,7 +303,8 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
           </button>
           <button
             onClick={handleDelete}
-            className="inline-flex items-center px-4 py-2 border border-red-300 text-red-700 rounded-lg hover:bg-red-50 transition-colors"
+            disabled={updating}
+            className="inline-flex items-center px-4 py-2 border border-red-300 text-red-700 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50"
           >
             <Trash2 className="w-4 h-4 mr-2" />
             Delete

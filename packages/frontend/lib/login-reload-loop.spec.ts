@@ -54,6 +54,9 @@ console.log("\n=== loginRedirectTarget: the loop guard ===");
 // The bug itself: a 401 while already on /login must not navigate.
 check("null on /login for a tenant user", loginRedirectTarget("/login", false), null);
 check("null on /saas/login for a saas_owner", loginRedirectTarget("/saas/login", true), null);
+// A salon's client is signed out in place: /login is the staff dashboard's.
+check("null for a client on a salon site", loginRedirectTarget("/sites/salon-ana/account", false, true), null);
+check("still /login for staff elsewhere", loginRedirectTarget("/dashboard", false, false), "/login");
 check("null on /login/ with a trailing slash", loginRedirectTarget("/login/", false), null);
 
 // It must still redirect from everywhere else, or a 401 would leave the user
