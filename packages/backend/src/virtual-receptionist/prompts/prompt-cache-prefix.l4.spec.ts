@@ -128,12 +128,13 @@ describe("cache prefix length against the model minimum", () => {
     expect(realSystemPrompt([])).toContain("ETAPA: CONFIRMATION");
   });
 
-  it("puts a salon without FAQs where only production can tell", () => {
-    // ~3600 estimated at the time of writing: 88% of the minimum. Leaving
-    // this band either way means the answer for small salons has changed.
-    const ratio = ratioToMinimum(realSystemPrompt([]));
-    expect(ratio).toBeGreaterThan(1 - UNDECIDABLE_BAND);
-    expect(ratio).toBeLessThan(1 + UNDECIDABLE_BAND);
+  it("puts a salon without FAQs clearly over the minimum", () => {
+    // It was ~3600 estimated, 88% of the minimum, when this was first pinned.
+    // The booking rules and tool descriptions added since took it past the
+    // undecidable band, so every salon's prefix should now cache. Salons have
+    // no FAQs by default since the invented ones were removed, so this is
+    // the common case. If it drops back into the band, re-check production.
+    expect(ratioToMinimum(realSystemPrompt([]))).toBeGreaterThan(1 + UNDECIDABLE_BAND);
   });
 
   it("puts a salon with a full set of FAQs clearly over the minimum", () => {

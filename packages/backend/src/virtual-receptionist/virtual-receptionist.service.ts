@@ -191,7 +191,7 @@ export class VirtualReceptionistService {
         // Which service, professional and day were asked about: ids and a
         // date, nothing about the client.
         const a = (input ?? {}) as Record<string, unknown>;
-        const asked = ['serviceId', 'professionalId', 'date', 'time']
+        const asked = ['serviceId', 'professionalId', 'date', 'time', 'keyword', 'audience', 'specialty', 'language']
           .filter((k) => typeof a[k] === 'string' && a[k])
           .map((k) => `${k}=${String(a[k]).slice(0, 40)}`)
           .join(' ');
@@ -264,7 +264,17 @@ export class VirtualReceptionistService {
       // The reply must not announce a booking the tools did not make. One
       // retry with the facts spelled out; if the model still claims it, the
       // client gets a plain, true answer instead.
-      if (!bookedThisTurn && claimsBooking(generationResult.text)) {
+      //
+      // A claim about the appointment this conversation already booked is
+      // true: after booking, a second "sí" made the model repeat the
+      // confirmation, and the fallback then told the client it was NOT
+      // booked. It is let through only while every time it names is that
+      // booking's, so "done, the waxing at 10:00 too" is still caught.
+      const booked = await this.bookedProposal(conversation.id);
+      const aboutBooked = (text: string) =>
+        !!booked && (text.match(/\b\d{1,2}[:.]\d{2}\b/g) ?? []).every((t: string) => t.replace('.', ':').padStart(5, '0') === booked.time);
+      const falseClaim = (text: string) => !bookedThisTurn && claimsBooking(text) && !aboutBooked(text);
+      if (falseClaim(generationResult.text)) {
         this.logger.warn(
           `Receptionist claimed a booking without creating one (client ${dto.clientId}); regenerating`,
         );
@@ -272,7 +282,7 @@ export class VirtualReceptionistService {
           `${userUtterance}\n\n[Nota del sistema: en este turno NO se ha creado ninguna cita. No digas que está confirmada ni reservada. Si el cliente quiere reservar, usa propose_appointment y, cuando diga que sí, create_appointment.]`,
           'auto',
         );
-        if (!bookedThisTurn && claimsBooking(generationResult.text)) {
+        if (falseClaim(generationResult.text)) {
           generationResult = {
             ...generationResult,
             text:
@@ -394,6 +404,16 @@ export class VirtualReceptionistService {
   }
 
   /** The conversation's proposal from propose_appointment, if not booked yet. */
+  /** The conversation's latest proposal, if it has been booked. */
+  private async bookedProposal(conversationId: string): Promise<{ time: string } | null> {
+    const row = await this.prisma.chatConversation.findUnique({
+      where: { id: conversationId },
+      select: { context: true },
+    });
+    const pending = (row?.context as any)?.pendingBooking;
+    return pending?.bookedAppointmentId ? { time: String(pending.time) } : null;
+  }
+
   private async pendingProposal(conversationId: string): Promise<boolean> {
     const row = await this.prisma.chatConversation.findUnique({
       where: { id: conversationId },

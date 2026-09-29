@@ -41,7 +41,7 @@ export function salonClock(now: Date, timeZone: string, language: string, days =
 
   return language === 'en'
     ? `[Now at the salon: ${today}, ${time} (${tz}). Today is ${isoDay(now)}. ` +
-        `Next days: ${upcoming.join(', ')}. Use these dates; do not work weekdays out yourself.]`
+        `Next days: ${upcoming.join(', ')}. Use these dates; do not work weekdays out yourself. The list is not a booking limit: for a later date, check_availability says whether it can be booked.]`
     : `[Ahora en el salón: ${today}, ${time} (${tz}). Hoy es ${isoDay(now)}. ` +
-        `Próximos días: ${upcoming.join(', ')}. Usa estas fechas; no calcules tú los días de la semana.]`;
+        `Próximos días: ${upcoming.join(', ')}. Usa estas fechas; no calcules tú los días de la semana. La lista no es un límite de reserva: para una fecha posterior, check_availability dice si se puede reservar.]`;
 }

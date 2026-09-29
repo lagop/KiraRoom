@@ -284,6 +284,17 @@ describe('SalonToolsService (L-4)', () => {
       expect(result.services.map((s: any) => s.id).sort()).toEqual(['s-cut-m', 's-cut-w']);
     });
 
+    it('returns the whole catalogue, with a note, when the keyword matches nothing', async () => {
+      // Asked in English for a "relaxing massage", an empty list made the
+      // model tell the client the salon did no massages.
+      const result = await svc.listServices({ prisma, tenantId: TENANT_ID }, {
+        keyword: 'relaxing massage',
+      });
+      expect(result.services.map((s: any) => s.id)).toContain('s-massage-rel');
+      expect(result.totalMatching).toBe(0);
+      expect(result.note).toMatch(/full catalogue/);
+    });
+
     it('hides inactive services', async () => {
       const result = await svc.listServices({ prisma, tenantId: TENANT_ID }, {});
       expect(result.services.map((s: any) => s.id)).not.toContain('s-inactive');
@@ -323,6 +334,32 @@ describe('SalonToolsService (L-4)', () => {
       expect(result.professionals).toHaveLength(2);
       expect(result.professionals[0].fullName).toBe('Ana García');
       expect(result.professionals[0].isOwner).toBe(true);
+    });
+
+    it('says which services each professional can be booked for', async () => {
+      // The bio is free text and may disagree with the diary; "who does
+      // massages" must follow the services assigned.
+      prisma.professional.findMany.mockResolvedValueOnce([
+        {
+          ...SAMPLE_PROFESSIONALS[0],
+          services: [
+            { service: { name: 'Masaje Relajante', isActive: true } },
+            { service: { name: 'Servicio retirado', isActive: false } },
+          ],
+        },
+      ]);
+      const result = await svc.listProfessionals({ prisma, tenantId: TENANT_ID }, {});
+      expect(result.professionals[0].services).toEqual(['Masaje Relajante']);
+    });
+
+    it('answers "who does X" from the services assigned, not the bio', async () => {
+      // Carmen's bio says massages; only Ana is assigned them.
+      prisma.professional.findMany.mockResolvedValueOnce([
+        { ...SAMPLE_PROFESSIONALS[0], id: 'p-ana', bio: 'Manicura', services: [{ service: { name: 'Masaje Relajante', isActive: true } }] },
+        { ...SAMPLE_PROFESSIONALS[1], id: 'p-carmen', bio: 'Especializada en masajes terapéuticos', services: [] },
+      ]);
+      const result = await svc.listProfessionals({ prisma, tenantId: TENANT_ID }, { specialty: 'masajes' });
+      expect(result.professionals.map((p: any) => p.id)).toEqual(['p-ana']);
     });
 
     it('filters by specialty token (accent-insensitive)', async () => {
@@ -370,6 +407,34 @@ describe('SalonToolsService (L-4)', () => {
         { serviceId: 's-cut-m', date: '2026-09-01' },
       );
       expect(appointments.getAvailableSlots.mock.calls[0][6]).toEqual({ onlineWindow: true });
+    });
+
+    it('says why a day beyond the online booking window has no slots', async () => {
+      const outside = {
+        getAvailableSlots: jest.fn().mockResolvedValue([]),
+        onlineBookingWindow: jest.fn().mockResolvedValue({ timeZone: 'Europe/Madrid', minHours: 2, maxHours: 30 * 24 }),
+        fitsOnlineWindow: jest.fn().mockReturnValue('too-far'),
+      };
+      const result: any = await svc.checkAvailability(
+        { prisma, tenantId: TENANT_ID, appointmentsService: outside as any },
+        { serviceId: 's-massage-rel', date: '2026-12-15' },
+      );
+      expect(result.slots).toEqual([]);
+      expect(result.reason).toBe('beyond_online_window');
+      expect(result.message).toMatch(/up to \d{4}-\d{2}-\d{2}\./);
+    });
+
+    it('adds no reason when the day is simply full or closed', async () => {
+      const full = {
+        getAvailableSlots: jest.fn().mockResolvedValue([]),
+        onlineBookingWindow: jest.fn().mockResolvedValue({ timeZone: 'Europe/Madrid', minHours: 2, maxHours: 720 }),
+        fitsOnlineWindow: jest.fn().mockReturnValue('ok'),
+      };
+      const result: any = await svc.checkAvailability(
+        { prisma, tenantId: TENANT_ID, appointmentsService: full as any },
+        { serviceId: 's-massage-rel', date: '2026-10-04' },
+      );
+      expect(result).toEqual({ date: '2026-10-04', serviceId: 's-massage-rel', slots: [] });
     });
 
     it('returns an error envelope for an unparseable date', async () => {

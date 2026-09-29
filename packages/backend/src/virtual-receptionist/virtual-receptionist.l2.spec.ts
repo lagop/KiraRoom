@@ -432,6 +432,32 @@ describe('VirtualReceptionistService orchestrator (L-2) -- no false confirmation
     expect(out.content).toMatch(/aún no está reservada/);
   });
 
+  it('lets the model repeat the confirmation of the appointment it booked', async () => {
+    // A second "sí" after booking: the fallback used to say it was NOT booked.
+    const generateResponse = jest.fn().mockResolvedValue(reply('¡Tu cita está confirmada! Miércoles 7 a las 15:00.'));
+    const { svc, llmService, prismaStub } = buildService({ generateResponse }) as any;
+    prismaStub.chatConversation.findUnique.mockResolvedValue({
+      context: { pendingBooking: { time: '15:00', proposedAtUserTurn: 1, bookedAppointmentId: 'apt-1' } },
+    });
+
+    const out: any = await send(svc, 'sí');
+
+    expect(llmService.generateResponse).toHaveBeenCalledTimes(1);
+    expect(out.content).toMatch(/confirmada/);
+  });
+
+  it('still catches a claim about another time once something is booked', async () => {
+    const generateResponse = jest.fn().mockResolvedValue(reply('Listo, tu cita está confirmada también a las 10:00.'));
+    const { svc, prismaStub } = buildService({ generateResponse }) as any;
+    prismaStub.chatConversation.findUnique.mockResolvedValue({
+      context: { pendingBooking: { time: '09:00', proposedAtUserTurn: 1, bookedAppointmentId: 'apt-1' } },
+    });
+
+    const out: any = await send(svc, '¿y la depilación a las 10:00?');
+
+    expect(out.content).toMatch(/aún no está reservada/);
+  });
+
   it('leaves an ordinary reply alone', async () => {
     const generateResponse = jest.fn().mockResolvedValue(reply('Tenemos huecos a las 10:00 y 11:00.'));
     const { svc, llmService } = buildService({ generateResponse });
