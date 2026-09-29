@@ -179,8 +179,17 @@ describe("the booking flow ends honestly", () => {
     }
   });
 
-  it("says plainly that the booking is not made", () => {
-    expect(promptFor({ ...withSlug, language: "es" })).toContain("todavía NO está hecha");
-    expect(promptFor({ ...withSlug, language: "en" })).toContain("is NOT made yet");
+  it("books through create_appointment, and confirms only on created: true", () => {
+    for (const language of ["es", "en"]) {
+      const prompt = promptFor({ ...withSlug, language });
+      expect(prompt).toContain("create_appointment");
+      expect(prompt).toContain("clientConfirmed: true");
+      expect(prompt).toContain("created: true");
+    }
+  });
+
+  it("asks for the email: the booking needs it", () => {
+    expect(promptFor({ ...withSlug, language: "es" })).toMatch(/\*\*email\*\* \(obligatorio/);
+    expect(promptFor({ ...withSlug, language: "en" })).toMatch(/\*\*email\*\* \(required/);
   });
 });

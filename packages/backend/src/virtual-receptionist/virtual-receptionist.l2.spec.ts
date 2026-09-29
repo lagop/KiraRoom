@@ -216,9 +216,10 @@ describe('VirtualReceptionistService orchestrator (L-2)', () => {
       expect(salonIdArg).toBe(TENANT_ID);
       expect(options).toBeDefined();
       expect(Array.isArray(options.tools)).toBe(true);
-      expect(options.tools.length).toBe(5);
+      expect(options.tools.length).toBe(6);
       expect(options.tools.map((t: any) => t.name).sort()).toEqual([
         'check_availability',
+        'create_appointment',
         'get_salon_info',
         'get_service',
         'list_professionals',

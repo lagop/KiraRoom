@@ -183,6 +183,24 @@ export class AppointmentsService {
       widgetProfessionals = widget.professionals ?? [];
     }
 
+    return this.bookOnline(tenantId, dto, widgetProfessionals);
+  }
+
+  /**
+   * The online booking itself, for a salon the caller has already
+   * established: createOnline (from the professional or the widget) and the
+   * virtual receptionist (the salon it answers for). Window, availability,
+   * lock and insert; notifications after the lock.
+   *
+   * `allowedProfessionals` limits "any professional" to a widget's list.
+   */
+  async bookOnline(
+    tenantId: string,
+    dto: OnlineBookingDto,
+    allowedProfessionals: string[] = [],
+  ) {
+    const professionalId = dto.professionalId || undefined;
+    const widgetProfessionals = allowedProfessionals;
     const window = await this.onlineBookingWindow(tenantId, dto.serviceId);
     if (!window) throw new NotFoundException("Servicio no encontrado");
 

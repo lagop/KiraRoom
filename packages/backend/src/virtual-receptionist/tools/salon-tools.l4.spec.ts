@@ -61,9 +61,14 @@ function makePrisma(services: any[], professionals: any[], tenant: any = null) {
   } as any;
 }
 
-function makeAppointments(slots: Array<{ time: string }> = []) {
+function makeAppointments(slots: Array<{ time: string; isAvailable?: boolean }> = []) {
   return {
-    getAvailableSlots: jest.fn().mockResolvedValue(slots),
+    getAvailableSlots: jest
+      .fn()
+      .mockResolvedValue(slots.map((s) => ({ isAvailable: true, ...s }))),
+    // The online booking window is AppointmentsService's; pass through here
+    // unless a case overrides it.
+    restrictToOnlineWindow: jest.fn(async (_t: string, _s: string, _d: string, list: any[]) => list),
   } as any;
 }
 
@@ -354,6 +359,23 @@ describe('SalonToolsService (L-4)', () => {
         expect.any(Date),
         undefined,
         's-cut-m',
+      );
+    });
+
+    it('offers only slots inside the online booking window', async () => {
+      // A slot inside the service's minimum notice is one create_appointment
+      // would refuse; the receptionist must not offer it.
+      appointments.restrictToOnlineWindow.mockImplementationOnce(
+        async (_t: string, _s: string, _d: string, list: any[]) =>
+          list.map((slot) => (slot.time === '10:00' ? { ...slot, isAvailable: false } : slot)),
+      );
+      const result: any = await svc.checkAvailability(
+        { prisma, tenantId: TENANT_ID, appointmentsService: appointments },
+        { serviceId: 's-cut-m', date: '2026-09-01' },
+      );
+      expect(result.slots).toEqual(['10:30', '11:00']);
+      expect(appointments.restrictToOnlineWindow).toHaveBeenCalledWith(
+        TENANT_ID, 's-cut-m', '2026-09-01', expect.any(Array),
       );
     });
 
