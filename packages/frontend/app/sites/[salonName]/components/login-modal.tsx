@@ -1,5 +1,6 @@
 "use client";
 
+import { useParams } from "next/navigation";
 import { useState } from "react";
 import { X, LogIn } from "lucide-react";
 import apiClient, { setToken } from "@/lib/api";
@@ -23,6 +24,8 @@ export default function LoginModal({
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
   const t = useTranslations();
+  // This site's salon: a client of two salons must sign into this one.
+  const salonName = useParams<{ salonName: string }>()?.salonName;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,7 +33,7 @@ export default function LoginModal({
     setLoading(true);
 
     try {
-      const response = await apiClient.login(email, password);
+      const response = await apiClient.login(email, password, salonName);
       setToken(response.accessToken);
 
       // Fetch fresh client data from API to ensure we have the latest info

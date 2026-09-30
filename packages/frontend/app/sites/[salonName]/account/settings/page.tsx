@@ -56,6 +56,7 @@ export default function SettingsPage({ params }: { params: { salonName: string }
   });
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [passwordData, setPasswordData] = useState({
+    currentPassword: '',
     newPassword: '',
     confirmPassword: '',
   });
@@ -314,10 +315,10 @@ export default function SettingsPage({ params }: { params: { salonName: string }
       return;
     }
 
-    if (passwordData.newPassword.length < 6) {
+    if (passwordData.newPassword.length < 8) {
       toast({
         title: 'Error',
-        description: 'La contraseña debe tener al menos 6 caracteres',
+        description: 'La contraseña debe tener al menos 8 caracteres',
         variant: 'destructive',
       });
       return;
@@ -325,20 +326,26 @@ export default function SettingsPage({ params }: { params: { salonName: string }
 
     setLoading(true);
     try {
-      // TODO: Implement API endpoint for changing password
-      // For now, just show success message
+      // This used to show the toast below without calling anything.
+      await apiClient.changeMyPassword(
+        passwordData.currentPassword,
+        passwordData.newPassword,
+      );
       toast({
         title: 'Contraseña actualizada',
         description: 'Tu contraseña ha sido cambiada exitosamente',
       });
       setShowPasswordModal(false);
-      setPasswordData({ newPassword: '', confirmPassword: '' });
+      setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
       setHasPasswordMismatch(false);
     } catch (error) {
       console.error('Error changing password:', error);
       toast({
         title: 'Error',
-        description: 'No se pudo cambiar la contraseña',
+        description:
+          error instanceof Error && error.message
+            ? error.message
+            : 'No se pudo cambiar la contraseña',
         variant: 'destructive',
       });
     } finally {
@@ -879,7 +886,7 @@ export default function SettingsPage({ params }: { params: { salonName: string }
               <button
                 onClick={() => {
                   setShowPasswordModal(false);
-                  setPasswordData({ newPassword: '', confirmPassword: '' });
+                  setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
                   setShowPassword(false);
                   setShowConfirmPassword(false);
                   setHasPasswordMismatch(false);
@@ -891,6 +898,22 @@ export default function SettingsPage({ params }: { params: { salonName: string }
             </div>
 
             <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Contraseña actual
+                </label>
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  value={passwordData.currentPassword}
+                  onChange={(e) =>
+                    setPasswordData(prev => ({ ...prev, currentPassword: e.target.value }))
+                  }
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  placeholder="••••••••"
+                />
+              </div>
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Nueva Contraseña
@@ -965,7 +988,7 @@ export default function SettingsPage({ params }: { params: { salonName: string }
               <button
                 onClick={() => {
                   setShowPasswordModal(false);
-                  setPasswordData({ newPassword: '', confirmPassword: '' });
+                  setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
                   setShowPassword(false);
                   setShowConfirmPassword(false);
                   setHasPasswordMismatch(false);
@@ -976,7 +999,7 @@ export default function SettingsPage({ params }: { params: { salonName: string }
               </button>
               <button
                 onClick={handleChangePassword}
-                disabled={loading || !passwordData.newPassword || !passwordData.confirmPassword || passwordData.newPassword !== passwordData.confirmPassword}
+                disabled={loading || !passwordData.currentPassword || !passwordData.newPassword || !passwordData.confirmPassword || passwordData.newPassword !== passwordData.confirmPassword}
                 className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50"
               >
                 {loading ? 'Guardando...' : 'Confirmar'}

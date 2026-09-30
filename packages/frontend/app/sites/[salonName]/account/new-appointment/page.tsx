@@ -19,11 +19,6 @@ interface BookingData {
 interface SalonData {
   id: string;
   name: string;
-  description: string;
-  address: string;
-  phone: string;
-  email: string;
-  logo: string;
 }
 
 interface Professional {
@@ -135,42 +130,19 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
       try {
         setLoading(true);
         
-        // Fetch professionals first to get the tenant ID
-        let professionalsData: Professional[] = [];
-        try {
-          professionalsData = await apiClient.getProfessionalsPublic();
-          setProfessionals(professionalsData);
-        } catch (error) {
-          console.error('Error fetching professionals:', error);
-        }
-        
-        // Use the tenantId from the first professional if available
-        const tenantId = professionalsData.length > 0 ? professionalsData[0].tenantId : null;
-        
-        // Set salon data with the actual tenant ID
-        const mockSalon: SalonData = {
-          id: tenantId || 'default',
-          name: params.salonName.charAt(0).toUpperCase() + params.salonName.slice(1),
-          description: 'Tu salón de belleza de confianza en el corazón de la ciudad.',
-          address: 'Calle Principal 123, Local 4',
-          phone: '+34 123 456 789',
-          email: 'info@kiraroom.com',
-          logo: '/api/placeholder/100/100',
-        };
-        
-        setSalonData(mockSalon);
-        
-        try {
-          const servicesData = await apiClient.getServices();
-          setServices(servicesData);
-        } catch (error) {
-          console.error('Error fetching services:', error);
-          toast({
-            title: 'Error',
-            description: 'No se pudo cargar los servicios',
-            variant: 'destructive',
-          });
-        }
+        // The salon is the one in the URL. This page used to take the
+        // tenant from whichever professional the API listed first -- and
+        // that list was every salon's -- then filled in an invented name,
+        // address, phone and email.
+        const tenant = await apiClient.getPublicTenant(params.salonName);
+        setSalonData({ id: tenant.id, name: tenant.name });
+
+        const [professionalsData, servicesData] = await Promise.all([
+          apiClient.getProfessionalsPublic(tenant.id),
+          apiClient.getServices(tenant.id),
+        ]);
+        setProfessionals(professionalsData as any);
+        setServices(servicesData as any);
       } catch (error) {
         console.error('Error fetching salon data:', error);
         toast({
@@ -195,37 +167,21 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
         return;
       }
 
+      if (!salonData) return;
+
       try {
-        // TODO: Implement API endpoint for available slots
-        // For now, use consistent available slots for all professionals
-        const mockSlots: AvailableTimeSlot[] = [];
-        
-        // Get current date and time for comparison
-        const now = new Date();
-        const today = now.toISOString().split('T')[0];
-        const currentHour = now.getHours();
-        const currentMinute = now.getMinutes();
-        
-        for (let hour = 9; hour <= 19; hour++) {
-          for (let minute = 0; minute < 60; minute += 30) {
-            const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
-            
-            // Check if this slot is in the past (only for today)
-            let isPast = false;
-            if (bookingData.date === today) {
-              if (hour < currentHour || (hour === currentHour && minute <= currentMinute)) {
-                isPast = true;
-              }
-            }
-            
-            mockSlots.push({
-              time: timeStr,
-              available: !isPast, // Mark past slots as unavailable
-            });
-          }
-        }
-        
-        setAvailableSlots(mockSlots);
+        // The server's slots: on the professional's shift, inside opening
+        // hours, not overlapping. This page used to offer every half hour
+        // from 09:00 to 19:30 to anyone, the way the public page once did.
+        const slots = await apiClient.getAvailableSlots(
+          salonData.id,
+          bookingData.professionalId,
+          bookingData.serviceId,
+          bookingData.date,
+        );
+        setAvailableSlots(
+          slots.map((slot) => ({ time: slot.time, available: slot.isAvailable })),
+        );
       } catch (error) {
         console.error('Error fetching available slots:', error);
         toast({
@@ -242,7 +198,7 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
     }, 300);
 
     return () => clearTimeout(timer);
-  }, [bookingData.professionalId, bookingData.serviceId, bookingData.date]);
+  }, [salonData, bookingData.professionalId, bookingData.serviceId, bookingData.date]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
@@ -284,7 +240,6 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
       const selectedService = services.find(s => s.id === bookingData.serviceId);
       
       const appointmentData = {
-        tenantId: salonData?.id || '1',
         // Always send clientInfo - the backend will find or create the client
         clientInfo: {
           firstName: currentUser ? currentUser.firstName : bookingData.clientName.split(' ')[0],
@@ -298,8 +253,6 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
         scheduledTime: bookingData.time,
         notes: '',
       };
-      
-      console.log('Booking data:', appointmentData);
       
       // Call the API to create the appointment
       await apiClient.createAppointment(appointmentData);

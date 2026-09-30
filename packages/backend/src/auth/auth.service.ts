@@ -295,9 +295,13 @@ export class AuthService {
       };
     }
 
-    // If not found as user, try to find as client
+    // If not found as user, try to find as client -- in the salon whose site
+    // this is, when the caller says which (see LoginDto.tenantSlug).
     const client = await this.prisma.client.findFirst({
-      where: { email: loginDto.email },
+      where: {
+        email: loginDto.email,
+        ...(loginDto.tenantSlug ? { tenant: { slug: loginDto.tenantSlug } } : {}),
+      },
     });
 
     if (client && client.passwordHash) {
@@ -572,6 +576,13 @@ export class AuthService {
         state: true,
         phone: true,
         logo: true,
+        // Consumed by /dashboard/settings, which used to show invented
+        // values for all of these and save none of them.
+        email: true,
+        dateFormat: true,
+        timeFormat: true,
+        minCancelHours: true,
+        openingHours: true,
         // Tax identifiers (consumed by /dashboard/settings/fiscal).
         taxId: true,
         taxIdType: true,
@@ -587,9 +598,33 @@ export class AuthService {
   }
 
   async updateTenant(tenantId: string, updateData: any) {
+    const data = { ...updateData };
+    if (updateData.openingHours) {
+      // getAvailableSlots builds every salon's grid from this window; a
+      // reversed or empty one leaves the salon with no bookable slot at all,
+      // silently.
+      if (updateData.openingHours.open >= updateData.openingHours.close) {
+        throw new BadRequestException("La hora de apertura debe ser anterior a la de cierre");
+      }
+      // Merge rather than replace: onboarding stores other keys in the same
+      // JSON, and only { open, close } is edited from settings.
+      const current = await this.prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { openingHours: true },
+      });
+      const existing =
+        current?.openingHours && typeof current.openingHours === "object"
+          ? (current.openingHours as Record<string, unknown>)
+          : {};
+      data.openingHours = {
+        ...existing,
+        open: updateData.openingHours.open,
+        close: updateData.openingHours.close,
+      };
+    }
     return this.prisma.tenant.update({
       where: { id: tenantId },
-      data: updateData,
+      data,
     });
   }
 

@@ -933,7 +933,8 @@
     "vs_last_week": "vs last week",
     "loadError": "Failed to load dashboard data. Please try again later.",
     "zero": "$0",
-    "new_this_month": "New This Month"
+    "new_this_month": "New This Month",
+    "partial_load_warning": "Some data could not be loaded: the figures on this dashboard may be incomplete."
   },
   "appointments": {
     "title": "Appointments",
@@ -1071,7 +1072,8 @@
     "using_professional_default": "Using Professional Default",
     "view_manage_appointment": "View Manage Appointment",
     "view_mode": "View Mode",
-    "view_profile": "View Profile"
+    "view_profile": "View Profile",
+    "load_failed": "Could not load appointments"
   },
   "settings": {
     "title": "Settings",
@@ -1141,7 +1143,12 @@
     "section_hours": "Hours",
     "section_payments": "Payments and billing",
     "section_notifications": "Notifications",
-    "section_account": "Account"
+    "section_account": "Account",
+    "coming_soon": "Coming soon",
+    "load_failed": "Could not load settings",
+    "save_failed": "Could not save settings",
+    "hours_need_both": "Set both the opening and the closing time",
+    "hours_open_before_close": "The opening time must be before the closing time"
   },
   "clients": {
     "title": "Clients",

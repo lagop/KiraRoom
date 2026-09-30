@@ -9,7 +9,8 @@ interface PopulatedAppointment extends Appointment {
   services?: AppointmentService[];
 }
 
-export const fetchCalendarData = async (tenantId: string, date: Date) => {
+// The salon is the caller's, from the token: no tenantId is sent.
+export const fetchCalendarData = async (date: Date) => {
   try {
     // Fetch appointments for the selected date
     const startDate = new Date(date);
@@ -19,13 +20,12 @@ export const fetchCalendarData = async (tenantId: string, date: Date) => {
     endDate.setHours(23, 59, 59, 999);
     
       const appointments = await apiClient.getAppointments({
-        tenantId,
         startDate: startDate.toISOString(),
         endDate: endDate.toISOString(),
       });
       
       // Fetch professionals for the tenant
-      const professionals = await apiClient.getProfessionalsPublic(tenantId);
+      const professionals = await apiClient.getProfessionalsPublic();
     
     return { appointments, professionals };
   } catch (error) {
@@ -175,7 +175,10 @@ export const transformToCalendarFormat = (
   const calendarProfessionals = backendProfessionals.map(professional => ({
     id: professional.id,
     name: `${professional.firstName} ${professional.lastName}`,
-    avatarUrl: professional.profileImage || `https://i.pravatar.cc/150?u=${professional.id}`,
+    // No stock face for a professional without a photo: the avatar falls back
+    // to initials. This used to load a random stranger from i.pravatar.cc,
+    // sending each professional id to that third party.
+    avatarUrl: professional.profileImage || undefined,
   }));
   
   return { appointments: calendarAppointments, professionals: calendarProfessionals };

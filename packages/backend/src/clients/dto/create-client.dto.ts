@@ -8,9 +8,11 @@ import {
 } from 'class-validator';
 
 export class CreateClientDto {
-  @ApiProperty({ description: 'Tenant ID for multi-tenancy' })
+  /** Ignored: the controller sets it from the caller's token. */
+  @ApiProperty({ description: 'Ignored; the tenant comes from the token', required: false })
   @IsString()
-  tenantId: string;
+  @IsOptional()
+  tenantId?: string;
 
   @ApiProperty({ description: 'First name' })
   @IsString()

@@ -78,23 +78,15 @@ function EditProfessionalForm() {
         setIsLoading(true);
         
         // Fetch services
+        // Through the API client. This fetched '/api/services', a Next route
+        // that does not exist: the 404 left the list empty, and a network
+        // error showed six invented services instead.
         try {
-          const servicesResponse = await fetch('/api/services');
-          if (servicesResponse.ok) {
-            const servicesData = await servicesResponse.json();
-            setServices(servicesData.data || servicesData);
-          }
+          const servicesData = await apiClient.getServices();
+          setServices(servicesData as any);
         } catch (err) {
           console.error('Failed to fetch services:', err);
-          // Mock data for demo
-          setServices([
-            { id: '1', name: 'Haircut', category: 'hair' },
-            { id: '2', name: 'Hair Coloring', category: 'hair' },
-            { id: '3', name: 'Manicure', category: 'nails' },
-            { id: '4', name: 'Pedicure', category: 'nails' },
-            { id: '5', name: 'Facial', category: 'facial' },
-            { id: '6', name: 'Massage', category: 'massage' },
-          ]);
+          setServices([]);
         }
 
         // Fetch professional data

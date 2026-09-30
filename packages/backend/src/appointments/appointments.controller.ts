@@ -13,6 +13,8 @@ import {
   AppointmentFiltersDto,
 } from "./appointments.service";
 import { AvailableSlotsDto } from "./dto/available-slots.dto";
+import { OnlineBookingDto, StaffBookingDto } from "./dto/book-appointment.dto";
+import { PublicViewerService } from "../common/tenancy/public-viewer.service";
 import { Public } from "../auth/decorators/public.decorator";
 import { Roles } from "../auth/decorators/roles.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
@@ -33,14 +35,17 @@ interface AuthenticatedRequest extends Request {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @ApiBearerAuth()
 export class AppointmentsController {
-  constructor(private readonly appointmentsService: AppointmentsService) {}
+  constructor(
+    private readonly appointmentsService: AppointmentsService,
+    private readonly publicViewer: PublicViewerService,
+  ) {}
 
   @Post()
   @Public()
   @ApiOperation({ summary: "Create a new appointment (public)" })
   @ApiResponse({ status: 201, description: "Appointment created successfully" })
-  async create(@Body() createAppointmentDto: CreateAppointmentDto) {
-    return this.appointmentsService.create(createAppointmentDto);
+  async create(@Body() dto: OnlineBookingDto) {
+    return this.appointmentsService.createOnline(dto);
   }
 
   @Post("staff")
@@ -52,7 +57,7 @@ export class AppointmentsController {
     description: "Forbidden - insufficient permissions",
   })
   async createByStaff(
-    @Body() createAppointmentDto: CreateAppointmentDto,
+    @Body() createAppointmentDto: StaffBookingDto,
     @Req() req: AuthenticatedRequest,
   ) {
     return this.appointmentsService.createByStaff(
@@ -76,7 +81,7 @@ export class AppointmentsController {
     status: 200,
     description: "Available slots retrieved successfully",
   })
-  async getAvailableSlots(@Query() query: AvailableSlotsDto) {
+  async getAvailableSlots(@Req() req: any, @Query() query: AvailableSlotsDto) {
     const {
       tenantId,
       date,
@@ -89,7 +94,7 @@ export class AppointmentsController {
     const profIds = professionalIds
       ? professionalIds.split(",").filter(Boolean)
       : undefined;
-    return this.appointmentsService.getAvailableSlots(
+    const slots = await this.appointmentsService.getAvailableSlots(
       tenantId,
       new Date(date),
       professionalId,
@@ -97,6 +102,47 @@ export class AppointmentsController {
       duration,
       profIds,
     );
+    // The salon's own staff may book at short notice by hand; everyone else
+    // is offered only what createOnline will accept.
+    const { staff } = await this.publicViewer.resolve(req, tenantId);
+    if (staff) return slots;
+    return this.appointmentsService.restrictToOnlineWindow(
+      tenantId,
+      serviceId,
+      // A string from the query; a Date if the pipe ever converts it.
+      typeof (date as unknown) === "string"
+        ? (date as unknown as string).slice(0, 10)
+        : new Date(date).toISOString().slice(0, 10),
+      slots,
+    );
+  }
+
+  // Literal paths must be declared before ":id". Declared after it,
+  // "pending-payment" matched ":id" first and ParseUUIDPipe answered 400, so
+  // the dashboard's pending-payments list never loaded.
+  @Get("pending-payment")
+  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
+  @ApiOperation({ summary: "Get appointments pending payment" })
+  @ApiQuery({ name: "searchQuery", required: false })
+  @ApiQuery({ name: "dateFrom", required: false })
+  @ApiQuery({ name: "dateTo", required: false })
+  @ApiQuery({ name: "status", required: false })
+  async findPendingPayment(
+    @Req() req: any,
+    @Query() query: any,
+  ) {
+    const { searchQuery, dateFrom, dateTo, status } = query;
+    return this.appointmentsService.findPendingPayment(
+      req.user,
+      { searchQuery, dateFrom, dateTo, status },
+    );
+  }
+
+  @Get("mine")
+  @Roles(UserRole.client)
+  @ApiOperation({ summary: "The calling client's own appointments" })
+  async findMine(@Req() req: any) {
+    return this.appointmentsService.findForClient(req.user);
   }
 
   @Get(":id")
@@ -122,7 +168,8 @@ export class AppointmentsController {
   }
 
   @Put(":id/cancel")
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
+  // A client may cancel their own appointment, with the salon's notice.
+  @Roles(UserRole.owner, UserRole.admin, UserRole.staff, UserRole.client)
   @ApiOperation({ summary: "Cancel an appointment" })
   @ApiResponse({
     status: 200,
@@ -178,24 +225,6 @@ export class AppointmentsController {
   @ApiResponse({ status: 404, description: "Appointment not found" })
   async remove(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
     return this.appointmentsService.remove(req.user, id);
-  }
-
-  @Get("pending-payment")
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  @ApiOperation({ summary: "Get appointments pending payment" })
-  @ApiQuery({ name: "searchQuery", required: false })
-  @ApiQuery({ name: "dateFrom", required: false })
-  @ApiQuery({ name: "dateTo", required: false })
-  @ApiQuery({ name: "status", required: false })
-  async findPendingPayment(
-    @Req() req: any,
-    @Query() query: any,
-  ) {
-    const { searchQuery, dateFrom, dateTo, status } = query;
-    return this.appointmentsService.findPendingPayment(
-      req.user,
-      { searchQuery, dateFrom, dateTo, status },
-    );
   }
 
   @Patch(":id/payment")

@@ -79,12 +79,14 @@ export default function AccountPage({
       const fetchUserData = async () => {
         try {
           setLoading(true);
-          // Fetch appointments by client ID
+          // Client-facing endpoints. This called GET /appointments and
+          // /admin/professionals, both staff-only, so a signed-in client got
+          // a 403 and never saw a single appointment.
           const [appointmentsData, servicesData, professionalsData] =
             await Promise.all([
-              apiClient.getAppointments({ clientId: currentUser.id }),
+              apiClient.getMyAppointments(),
               apiClient.getServices(),
-              apiClient.getProfessionals(),
+              apiClient.getProfessionalsPublic(),
             ]);
 
           setAppointments(appointmentsData);
@@ -125,10 +127,14 @@ export default function AccountPage({
         description: "Tu cita ha sido cancelada exitosamente",
       });
     } catch (error) {
+      // The server says why, e.g. inside the salon's cancellation notice.
       console.error("Error canceling appointment:", error);
       toast({
         title: "Error",
-        description: "No se pudo cancelar la cita",
+        description:
+          error instanceof Error && error.message
+            ? error.message
+            : "No se pudo cancelar la cita",
         variant: "destructive",
       });
     }

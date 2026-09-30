@@ -29,6 +29,8 @@ import { WhatsAppService } from "../notifications/services/whatsapp.service";
 import { NotificationType } from "../notifications/dto";
 import { TranslationsService } from "../translations/translations.service";
 import { ConsentService } from "../consent/consent.service";
+import { salonInstant } from "./salon-time";
+import type { OnlineBookingDto } from "./dto/book-appointment.dto";
 
 interface AppointmentActivity {
   action: string;
@@ -37,7 +39,12 @@ interface AppointmentActivity {
 }
 
 export interface CreateAppointmentDto {
-  tenantId: string;
+  /**
+   * Ignored. The tenant is decided server-side: from the professional for an
+   * online booking, from the token for a staff one. Callers sent placeholders
+   * ('default', '1', a hardcoded salon UUID) and the old code trusted them.
+   */
+  tenantId?: string;
   clientId?: string;
   clientInfo?: {
     firstName: string;
@@ -134,32 +141,244 @@ export class AppointmentsService {
     };
   }
 
-  async create(createAppointmentDto: CreateAppointmentDto) {
+  /**
+   * A booking made from outside the salon: the public site, the widget, the
+   * client portal. The route is @Public(), so nothing the caller sends about
+   * the tenant can be trusted, and nothing stops a direct POST from asking
+   * for 03:00, for yesterday, or for a slot already taken.
+   *
+   * - The salon is the chosen professional's -- or, for the widget's "any
+   *   professional", the widget's.
+   * - The start must be inside the service's booking window
+   *   (minAdvanceBooking hours to maxAdvanceBooking days from now).
+   * - The slot must be one getAvailableSlots offers: on the professional's
+   *   shift, inside opening hours, and not overlapping another booking.
+   * - Check and insert run under a per-salon, per-day advisory lock, so two
+   *   concurrent requests for the same slot cannot both pass the check.
+   *   Notifications are sent after the lock is released.
+   */
+  async createOnline(dto: OnlineBookingDto) {
+    const professionalId = dto.professionalId || undefined;
+    let tenantId: string;
+    let widgetProfessionals: string[] = [];
+
+    if (professionalId) {
+      const professional = await this.prisma.professional.findFirst({
+        where: { id: professionalId, isActive: true },
+        select: { tenantId: true },
+      });
+      if (!professional) throw new NotFoundException("Profesional no encontrado");
+      tenantId = professional.tenantId;
+    } else {
+      // "Any professional" is the widget's option; the widget says which salon.
+      if (!dto.widgetInstanceId) {
+        throw new BadRequestException("Elige un profesional");
+      }
+      const widget = await this.prisma.widgetInstance.findUnique({
+        where: { id: dto.widgetInstanceId },
+        select: { tenantId: true, professionals: true },
+      });
+      if (!widget) throw new NotFoundException("Widget no encontrado");
+      tenantId = widget.tenantId;
+      widgetProfessionals = widget.professionals ?? [];
+    }
+
+    const window = await this.onlineBookingWindow(tenantId, dto.serviceId);
+    if (!window) throw new NotFoundException("Servicio no encontrado");
+
+    const scheduledDay = String(dto.scheduledDate).slice(0, 10);
+    const fit = this.fitsOnlineWindow(scheduledDay, dto.scheduledTime, window);
+    if (fit === "too-soon") {
+      throw new ConflictException("Ese horario ya no se puede reservar online");
+    }
+    if (fit === "too-far") {
+      throw new BadRequestException(
+        `Solo se puede reservar con ${window.maxHours / 24} días de antelación como máximo`,
+      );
+    }
+
+    const date = new Date(scheduledDay);
+    const appointment = await this.prisma.$transaction(
+      async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`booking:${tenantId}:${scheduledDay}`}))`;
+
+        let assigned: string;
+        if (professionalId) {
+          if (!(await this.isSlotFree(tenantId, date, professionalId, dto.serviceId, dto.scheduledTime))) {
+            throw new ConflictException("Ese horario ya no está disponible");
+          }
+          assigned = professionalId;
+        } else {
+          assigned = await this.pickFreeProfessional(
+            tenantId, date, dto.serviceId, dto.scheduledTime, widgetProfessionals,
+          );
+        }
+
+        // Inserted through the normal client: it commits at once, before this
+        // transaction ends and releases the lock, so the next request's check
+        // sees it.
+        return this.insertAppointment({ ...dto, professionalId: assigned }, tenantId);
+      },
+      { timeout: 15_000 },
+    );
+
+    await this.afterAppointmentCreated(appointment, dto.source);
+    return appointment;
+  }
+
+  /**
+   * When a client may book a service online: from minAdvanceBooking hours to
+   * maxAdvanceBooking days from now, in the salon's timezone. Without a
+   * service, only "not in the past". Null when the service is not an active
+   * service of this salon.
+   */
+  async onlineBookingWindow(
+    tenantId: string,
+    serviceId?: string,
+  ): Promise<{ timeZone: string; minHours: number; maxHours: number } | null> {
+    const [tenant, service] = await Promise.all([
+      this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } }),
+      serviceId
+        ? this.prisma.service.findFirst({
+            where: { id: serviceId, tenantId, isActive: true },
+            select: { minAdvanceBooking: true, maxAdvanceBooking: true },
+          })
+        : Promise.resolve(undefined),
+    ]);
+    if (service === null) return null;
+    return {
+      timeZone: tenant?.timezone || "Europe/Madrid",
+      minHours: service?.minAdvanceBooking ?? 0,
+      maxHours: service ? (service.maxAdvanceBooking ?? 30) * 24 : Infinity,
+    };
+  }
+
+  fitsOnlineWindow(
+    day: string,
+    time: string,
+    window: { timeZone: string; minHours: number; maxHours: number },
+    now: number = Date.now(),
+  ): "ok" | "too-soon" | "too-far" {
+    const hoursAhead = (salonInstant(day, time, window.timeZone).getTime() - now) / 3_600_000;
+    if (hoursAhead < window.minHours) return "too-soon";
+    if (hoursAhead > window.maxHours) return "too-far";
+    return "ok";
+  }
+
+  /**
+   * Slots as a client may book them online: outside the service's booking
+   * window they are marked unavailable. The public site, the widget and the
+   * client portal list slots through GET /appointments/available-slots; it
+   * offered the next two hours, which createOnline then refused.
+   */
+  async restrictToOnlineWindow<T extends { time: string; isAvailable: boolean }>(
+    tenantId: string,
+    serviceId: string | undefined,
+    day: string,
+    slots: T[],
+  ): Promise<T[]> {
+    const window = await this.onlineBookingWindow(tenantId, serviceId);
+    if (!window) return slots.map((s) => ({ ...s, isAvailable: false }));
+    const now = Date.now();
+    return slots.map((s) =>
+      s.isAvailable && this.fitsOnlineWindow(day, s.time, window, now) !== "ok"
+        ? { ...s, isAvailable: false }
+        : s,
+    );
+  }
+
+  private async isSlotFree(
+    tenantId: string,
+    date: Date,
+    professionalId: string,
+    serviceId: string,
+    time: string,
+  ): Promise<boolean> {
+    const slots = await this.getAvailableSlots(tenantId, date, professionalId, serviceId);
+    return !!slots.find((s: { time: string; isAvailable: boolean }) => s.time === time)?.isAvailable;
+  }
+
+  /**
+   * The first professional, by name, who offers the service and is free for
+   * the slot. Limited to the widget's professionals when it lists any. When
+   * no professional is linked to the service at all -- salons that never
+   * filled that in -- every active professional is a candidate.
+   */
+  private async pickFreeProfessional(
+    tenantId: string,
+    date: Date,
+    serviceId: string,
+    time: string,
+    allowed: string[],
+  ): Promise<string> {
+    const active = await this.prisma.professional.findMany({
+      where: { tenantId, isActive: true, ...(allowed.length ? { id: { in: allowed } } : {}) },
+      select: { id: true, services: { select: { serviceId: true } } },
+      orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
+    });
+    const offering = active.filter((p) => p.services.some((s) => s.serviceId === serviceId));
+    const candidates = offering.length > 0 ? offering : active;
+    for (const candidate of candidates) {
+      if (await this.isSlotFree(tenantId, date, candidate.id, serviceId, time)) return candidate.id;
+    }
+    throw new ConflictException("Ese horario ya no está disponible");
+  }
+
+  /**
+   * Create an appointment in `tenantId`, which the caller has already
+   * established -- never taken from the DTO.
+   */
+  async create(createAppointmentDto: CreateAppointmentDto, tenantId: string) {
+    const appointment = await this.insertAppointment(createAppointmentDto, tenantId);
+    await this.afterAppointmentCreated(appointment, createAppointmentDto.source);
+    return appointment;
+  }
+
+  /** Validate and insert. No side effects beyond creating the client. */
+  private async insertAppointment(createAppointmentDto: CreateAppointmentDto, tenantId: string) {
+    if (!createAppointmentDto.professionalId) {
+      throw new BadRequestException("Professional ID is required");
+    }
+
+    // Professional and service first: a booking that fails on them must not
+    // leave a new client record behind.
+    const professional = await this.prisma.professional.findFirst({
+      where: { id: createAppointmentDto.professionalId, tenantId: tenantId },
+    });
+    if (!professional) {
+      throw new NotFoundException("Profesional no encontrado");
+    }
+
+    const service = await this.prisma.service.findFirst({
+      where: { id: createAppointmentDto.serviceId, tenantId: tenantId },
+    });
+    if (!service) {
+      throw new NotFoundException("Servicio no encontrado");
+    }
+
     let clientId = createAppointmentDto.clientId;
-    let tenantId = createAppointmentDto.tenantId;
 
     // Find or create client if clientInfo provided
     if (!clientId && createAppointmentDto.clientInfo) {
-      // First, try to find an existing client by email
+      if (!createAppointmentDto.clientInfo.email) {
+        // An undefined filter is dropped by Prisma: this would match the
+        // salon's first client.
+        throw new BadRequestException("Client email is required");
+      }
+      // Look the email up in THIS salon. Searching every salon meant a client
+      // of salon A could not book on salon B's site: they were matched to
+      // their salon-A record, the tenant switched to A, and B's professional
+      // was then "not found".
       const existingClient = await this.prisma.client.findFirst({
         where: {
           email: createAppointmentDto.clientInfo.email,
+          tenantId,
         },
       });
 
       if (existingClient) {
         clientId = existingClient.id;
-        tenantId = existingClient.tenantId;
       } else {
-        // Create a new client if not found - get tenantId from professional
-        const professional = await this.prisma.professional.findFirst({
-          where: { id: createAppointmentDto.professionalId },
-        });
-        if (!professional) {
-          throw new NotFoundException("Profesional no encontrado");
-        }
-        tenantId = professional.tenantId;
-
         const newClient = await this.prisma.client.create({
           data: {
             tenantId: tenantId,
@@ -178,33 +397,12 @@ export class AppointmentsService {
       throw new BadRequestException("Client ID is required");
     }
 
-    // Verify client exists and get tenantId
+    // The client must belong to the same salon as the appointment.
     const client = await this.prisma.client.findFirst({
-      where: { id: clientId },
+      where: { id: clientId, tenantId },
     });
     if (!client) {
       throw new NotFoundException("Cliente no encontrado");
-    }
-
-    // Use the client's tenantId if not provided
-    if (!tenantId || tenantId === "default") {
-      tenantId = client.tenantId;
-    }
-
-    // Verify professional exists
-    const professional = await this.prisma.professional.findFirst({
-      where: { id: createAppointmentDto.professionalId, tenantId: tenantId },
-    });
-    if (!professional) {
-      throw new NotFoundException("Profesional no encontrado");
-    }
-
-    // Verify service exists
-    const service = await this.prisma.service.findFirst({
-      where: { id: createAppointmentDto.serviceId, tenantId: tenantId },
-    });
-    if (!service) {
-      throw new NotFoundException("Servicio no encontrado");
     }
 
     // Calculate end time
@@ -212,6 +410,11 @@ export class AppointmentsService {
       createAppointmentDto.scheduledTime,
       service.duration,
     );
+
+    const tenantRow = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { timezone: true },
+    });
 
     // Convert scheduledDate to Date if it's a string
     const scheduledDate =
@@ -221,7 +424,7 @@ export class AppointmentsService {
 
     // Create appointment
     const dto = createAppointmentDto as any;
-    const appointment = await this.prisma.appointment.create({
+    return this.prisma.appointment.create({
       data: {
         tenantId: tenantId,
         clientId: clientId,
@@ -229,6 +432,13 @@ export class AppointmentsService {
         professionalId: dto.professionalId,
         scheduledDate: scheduledDate,
         scheduledTime: dto.scheduledTime,
+        // The real instant. The reminder jobs select on it, and it was never
+        // written: no appointment ever got a 24-hour or 1-hour reminder.
+        startTime: salonInstant(
+          scheduledDate,
+          dto.scheduledTime,
+          tenantRow?.timezone || "Europe/Madrid",
+        ),
         duration: service.duration,
         endTime: endTime,
         status: AppointmentStatus.pending,
@@ -251,7 +461,10 @@ export class AppointmentsService {
         tenant: true,
       },
     });
+  }
 
+  /** Notifications, rebooking cleanup and telemetry for a new appointment. */
+  private async afterAppointmentCreated(appointment: any, source?: string) {
     // Send notifications for appointment creation
     await this.sendAppointmentCreatedNotifications(appointment);
 
@@ -280,10 +493,8 @@ export class AppointmentsService {
     await this.events.recordOnce(
       PRODUCT_EVENTS.FIRST_BOOKING_RECEIVED,
       appointment.tenantId,
-      { source: createAppointmentDto.source ?? 'dashboard' },
+      { source: source ?? 'dashboard' },
     );
-
-    return appointment;
   }
 
   async createByStaff(
@@ -299,8 +510,8 @@ export class AppointmentsService {
       }
     }
 
-    // Call the regular create method
-    return this.create(createAppointmentDto);
+    // The staff member's own salon, from the token.
+    return this.create(createAppointmentDto, user.tenantId);
   }
 
   async findAll(user: any, filters?: AppointmentFiltersDto) {
@@ -422,6 +633,11 @@ export class AppointmentsService {
       throw new NotFoundException("Cita no encontrada");
     }
 
+    // A client sees only their own appointments.
+    if (user.role === "client" && appointment.clientId !== user.id) {
+      throw new NotFoundException("Cita no encontrada");
+    }
+
     // Validar que STAFF solo pueda ver sus propias citas
     if (user.role === "staff") {
       const professional = await this.prisma.professional.findFirst({
@@ -501,6 +717,25 @@ export class AppointmentsService {
     // Update scheduledTime if provided
     if (updateAppointmentDto.scheduledTime) {
       updateData.scheduledTime = updateAppointmentDto.scheduledTime;
+    }
+
+    // A reschedule moves the instant the reminder jobs select on, and the
+    // reminders already sent were for the old time.
+    if (updateAppointmentDto.scheduledDate || updateAppointmentDto.scheduledTime) {
+      const tenant = (appointment as any).tenant as { timezone?: string } | undefined;
+      const newStart = salonInstant(
+        updateData.scheduledDate ?? appointment.scheduledDate,
+        updateData.scheduledTime ?? appointment.scheduledTime,
+        tenant?.timezone || "Europe/Madrid",
+      );
+      const oldStart = (appointment as any).startTime as Date | null | undefined;
+      // The drawer sends date and time on every full edit, so only a real move
+      // re-arms the reminders: resetting on any edit re-sent ones already sent.
+      if (!oldStart || new Date(oldStart).getTime() !== newStart.getTime()) {
+        updateData.startTime = newStart;
+        updateData.reminder24hSent = false;
+        updateData.reminder1hSent = false;
+      }
     }
 
     // Handle addons update if provided
@@ -656,11 +891,50 @@ export class AppointmentsService {
     }
   }
 
+  /**
+   * The calling client's own appointments, for the salon site's account
+   * page. It used to call GET /appointments, which is staff-only, so a
+   * signed-in client never saw a single appointment.
+   */
+  async findForClient(user: { id: string; tenantId: string }) {
+    return this.prisma.appointment.findMany({
+      where: { clientId: user.id, tenantId: user.tenantId },
+      include: {
+        service: true,
+        professional: {
+          select: { id: true, firstName: true, lastName: true, profileImage: true },
+        },
+      },
+      orderBy: [{ scheduledDate: "desc" }, { scheduledTime: "desc" }],
+    });
+  }
+
   async cancel(user: any, id: string, reason?: string) {
     const appointment = await this.findOne(user, id);
 
     if (appointment.status === AppointmentStatus.cancelled) {
       throw new BadRequestException("La cita ya está cancelada");
+    }
+
+    // A client cancelling their own appointment is held to the salon's
+    // minimum notice -- the same rule the virtual receptionist quotes. Staff
+    // are not: the salon may always cancel.
+    if (user.role === "client") {
+      const tenant = (appointment as any).tenant as
+        | { minCancelHours?: number; timezone?: string }
+        | undefined;
+      const minHours = tenant?.minCancelHours ?? 24;
+      const startsAt = salonInstant(
+        appointment.scheduledDate as any,
+        appointment.scheduledTime,
+        tenant?.timezone || "Europe/Madrid",
+      );
+      const hoursAway = (startsAt.getTime() - Date.now()) / 3_600_000;
+      if (hoursAway < minHours) {
+        throw new BadRequestException(
+          `Esta cita solo se puede cancelar con ${minHours} horas de antelación. Contacta con el salón.`,
+        );
+      }
     }
 
     const cancelledAppointment = await this.prisma.appointment.update({

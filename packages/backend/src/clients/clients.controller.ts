@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, Req, ForbiddenException } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, UseGuards, Req, ForbiddenException, HttpCode, HttpStatus } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
@@ -11,7 +11,7 @@ import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { UserRole } from "@prisma/client";
 import { ClientsService, ClientFilters } from "./clients.service";
-import { CreateClientDto, UpdateClientDto } from "./dto";
+import { CreateClientDto, UpdateClientDto, UpdateMyProfileDto, ChangeMyPasswordDto } from "./dto";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { User } from "@prisma/client";
 import { ProfessionalsService } from "../professionals/professionals.service";
@@ -30,8 +30,10 @@ export class ClientsController {
   @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
   @ApiOperation({ summary: "Create a new client" })
   @ApiResponse({ status: 201, description: "Client created successfully" })
-  async create(@Body() createClientDto: CreateClientDto) {
-    return this.clientsService.create(createClientDto);
+  async create(@CurrentUser() user: any, @Body() createClientDto: CreateClientDto) {
+    // The tenant comes from the caller's token, never from the body: the
+    // dashboard fell back to 'default-tenant' when localStorage had no user.
+    return this.clientsService.create({ ...createClientDto, tenantId: user.tenantId });
   }
 
   @Get()
@@ -98,6 +100,21 @@ export class ClientsController {
       throw new ForbiddenException("A client may only read their own record");
     }
     return this.clientsService.findOne(user.tenantId, id);
+  }
+
+  @Patch("me")
+  @Roles(UserRole.client)
+  @ApiOperation({ summary: "A client updates their own profile" })
+  async updateMe(@CurrentUser() user: any, @Body() dto: UpdateMyProfileDto) {
+    return this.clientsService.updateSelf(user.tenantId, user.id, dto);
+  }
+
+  @Post("me/password")
+  @Roles(UserRole.client)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: "A client changes their own password" })
+  async changeMyPassword(@CurrentUser() user: any, @Body() dto: ChangeMyPasswordDto) {
+    await this.clientsService.changeOwnPassword(user.tenantId, user.id, dto);
   }
 
   @Put(":id")

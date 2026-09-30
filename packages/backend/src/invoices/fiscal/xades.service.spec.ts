@@ -1,37 +1,64 @@
-import * as fs from "fs";
+import { generateKeyPairSync } from "crypto";
 import * as forge from "node-forge";
 import { EncryptionService } from "../../common/encryption/encryption.service";
 import { XadesService } from "./xades.service";
 
 /**
- * Provides the test PKCS#12 fixture encrypted with the same key the
- * production EncryptionService will use in CI.
+ * A throwaway self-signed certificate, built fresh for every run.
+ *
+ * These tests used to read tests/setup/test-cert.p12, which was gitignored
+ * and never committed, so the whole suite was skipped and the fiscal
+ * signature had no coverage at all. Node generates the key (fast, native);
+ * node-forge wraps it in an X.509 certificate and a PKCS#12, as a salon's
+ * real FNMT certificate would arrive.
  */
-function makeEncryption(): { enc: EncryptionService; p12Base64: string; pass: string } {
+function makeTestPkcs12(passphrase: string): string {
+  const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const key = forge.pki.privateKeyFromPem(privateKey.export({ type: "pkcs1", format: "pem" }).toString());
+  const cert = forge.pki.createCertificate();
+  cert.publicKey = forge.pki.publicKeyFromPem(publicKey.export({ type: "spki", format: "pem" }).toString());
+  cert.serialNumber = "01";
+  cert.validity.notBefore = new Date(Date.now() - 60_000);
+  cert.validity.notAfter = new Date(Date.now() + 365 * 24 * 3600 * 1000);
+  const subject = [{ name: "commonName", value: "Kira Room Test AEAT" }];
+  cert.setSubject(subject);
+  cert.setIssuer(subject);
+  cert.sign(key, forge.md.sha256.create());
+  const asn1 = forge.pkcs12.toPkcs12Asn1(key, [cert], passphrase, { algorithm: "3des" });
+  return forge.asn1.toDer(asn1).getBytes();
+}
+
+/** The test PKCS#12, encrypted the way production stores it. */
+function makeEncryption(): {
+  enc: EncryptionService;
+  p12Base64: string;
+  pass: string;
+  unprotectedP12Base64: string;
+} {
   // Hardcoded 32-byte (AES-256) key for deterministic test isolation.
   const key = Buffer.alloc(32, 7).toString("base64");
   const enc = new EncryptionService({
     get: (k: string) => (k === "META_TOKEN_ENCRYPTION_KEY" ? key : null),
   } as any);
-  const p12 = fs.readFileSync("tests/setup/test-cert.p12");
-  const pass = fs.readFileSync("tests/setup/test-cert.password", "utf-8").trim();
-  return { enc, p12Base64: p12.toString("base64"), pass };
+  const pass = "test-passphrase";
+  return {
+    enc,
+    p12Base64: Buffer.from(makeTestPkcs12(pass), "binary").toString("base64"),
+    pass,
+    unprotectedP12Base64: Buffer.from(makeTestPkcs12(""), "binary").toString("base64"),
+  };
 }
 
-// TODO(spike): re-enable when tests/setup/test-cert.p12 is checked in.
-// The PKCS#12 cert + passphrase fixture is gitignored (was historically
-// generated locally per dev machine and never committed). Generating a
-// throwaway cert at test time is on the backlog; until then, skip the
-// real-crypto tests so CI is green and the rest of the test suite runs.
-describe.skip("XadesService (real PKCS#12 + xml-crypto)", () => {
+describe("XadesService (real PKCS#12 + xml-crypto)", () => {
   let xades: XadesService;
   let enc: EncryptionService;
   let p12Base64: string;
   let passphrase: string;
+  let unprotectedP12Base64: string;
 
   beforeAll(() => {
     xades = new XadesService();
-    ({ enc, p12Base64, pass: passphrase } = makeEncryption());
+    ({ enc, p12Base64, pass: passphrase, unprotectedP12Base64 } = makeEncryption());
   });
 
   it("parses the test PKCS#12 and exposes the certificate fingerprint", () => {
@@ -129,7 +156,7 @@ describe.skip("XadesService (real PKCS#12 + xml-crypto)", () => {
   });
 
   it("does NOT throw when pkcs12PassphraseCipher is omitted (empty passphrase)", () => {
-    const p12Raw = Buffer.from(p12Base64, "base64").toString("binary");
+    const p12Raw = Buffer.from(unprotectedP12Base64, "base64").toString("binary");
     const cipher = enc.encrypt(p12Raw);
     const r = xades.sign({
       xml: "<Factura />",

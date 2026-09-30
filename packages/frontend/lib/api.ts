@@ -473,7 +473,8 @@ export interface CreateClientDto {
 }
 
 export interface CreateAppointmentDto {
-  tenantId: string;
+  /** Ignored by the backend, which decides the salon itself. */
+  tenantId?: string;
   clientId?: string;
   clientInfo?: {
     firstName: string;
@@ -1120,7 +1121,7 @@ export interface AccountingSyncLog {
 
 export interface ApiClientInterface {
   request<T>(endpoint: string, options?: RequestInit): Promise<T>;
-  login(email: string, password: string): Promise<LoginResponse>;
+  login(email: string, password: string, tenantSlug?: string): Promise<LoginResponse>;
   register(data: {
     email: string;
     password: string;
@@ -1345,10 +1346,7 @@ export interface ApiClientInterface {
     };
   }>;
   getPayment(id: string): Promise<Payment>;
-  getTodayPayments(): Promise<{
-    payments: any[];
-    totals: { cash: number; card: number };
-  }>;
+  getTodayPayments(): Promise<any[]>;
   deletePayment(id: string): Promise<void>;
   createPayment(data: CreatePaymentDto): Promise<Payment>;
   updatePaymentStatus(id: string, status: string): Promise<Payment>;
@@ -1699,12 +1697,16 @@ class ApiClient implements ApiClientInterface {
   }
 
   // Auth
-  async login(email: string, password: string): Promise<LoginResponse> {
+  /**
+   * `tenantSlug`: pass it when a client signs in on a salon's site, so a
+   * client of two salons lands in this one.
+   */
+  async login(email: string, password: string, tenantSlug?: string): Promise<LoginResponse> {
     const response = await this.request<{ user: any; tokens: any }>(
       "/auth/login",
       {
         method: "POST",
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, ...(tenantSlug && { tenantSlug }) }),
       },
     );
 
@@ -1827,6 +1829,11 @@ class ApiClient implements ApiClientInterface {
   }
 
   // Appointments
+  /** The signed-in client's own appointments (GET /appointments is staff-only). */
+  async getMyAppointments(): Promise<Appointment[]> {
+    return this.request<Appointment[]>("/appointments/mine");
+  }
+
   async getAppointments(filters?: {
     tenantId?: string;
     professionalId?: string;
@@ -2395,10 +2402,19 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  async updateMyProfile(clientId: string, data: any): Promise<any> {
-    return this.request<any>(`/clients/${clientId}`, {
+  // The client in the token; `clientId` stays for existing callers. This
+  // used to PATCH /clients/:id, which does not exist.
+  async updateMyProfile(_clientId: string, data: any): Promise<any> {
+    return this.request<any>(`/clients/me`, {
       method: "PATCH",
       body: JSON.stringify(data),
+    });
+  }
+
+  async changeMyPassword(currentPassword: string, newPassword: string): Promise<void> {
+    return this.request<void>(`/clients/me/password`, {
+      method: "POST",
+      body: JSON.stringify({ currentPassword, newPassword }),
     });
   }
 
@@ -2522,14 +2538,18 @@ class ApiClient implements ApiClientInterface {
   }
 
   // Get today's payments for POS
-  async getTodayPayments(): Promise<{
-    payments: any[];
-    totals: { cash: number; card: number };
+  // An array: PaymentsService.getTodayPayments returns the rows themselves.
+  // This was typed as { payments, totals }, which nothing returns.
+  /** Signed ICS feed tokens for the caller's salon (owner/admin). */
+  async getIcsTokens(): Promise<{
+    salon: { slug: string; token: string };
+    professionals: Array<{ id: string; name: string; token: string }>;
   }> {
-    return this.request<{
-      payments: any[];
-      totals: { cash: number; card: number };
-    }>("/payments/today");
+    return this.request("/ics/tokens");
+  }
+
+  async getTodayPayments(): Promise<any[]> {
+    return this.request<any[]>("/payments/today");
   }
 
   // Delete/cancel a payment (admin only)
@@ -3567,6 +3587,11 @@ class ApiClient implements ApiClientInterface {
     taxId?: string | null;
     taxIdType?: "nif" | "cif" | "nie" | "passport" | "other" | null;
     legalName?: string | null;
+    email?: string | null;
+    dateFormat?: string;
+    timeFormat?: string;
+    minCancelHours?: number;
+    openingHours?: Record<string, unknown> | null;
   }> {
     return this.request("/auth/tenant");
   }
@@ -3585,6 +3610,10 @@ class ApiClient implements ApiClientInterface {
     state?: string;
     phone?: string;
     logo?: string;
+    email?: string;
+    minCancelHours?: number;
+    /** Merged server-side into the tenant's openingHours JSON. */
+    openingHours?: { open: string; close: string };
   }): Promise<{
     id: string;
     name: string;

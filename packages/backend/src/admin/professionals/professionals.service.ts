@@ -20,33 +20,16 @@ export class AdminProfessionalsService {
     const { serviceIds, ...professionalData } = createProfessionalDto;
 
     try {
-      // Check if tenant exists, if not use first available tenant or create a new one
-      let tenant = await this.prisma.tenant.findFirst({
+      // The controller sets tenantId from the caller's token. This used to
+      // fall back, for an unknown tenant, to the FIRST tenant in the database
+      // -- or to creating a "Default Tenant" -- and put the professional
+      // there: a write into another salon. Now an unknown tenant is an error.
+      const tenant = await this.prisma.tenant.findFirst({
         where: { id: professionalData.tenantId },
+        select: { id: true },
       });
-
       if (!tenant) {
-        // Try to find any existing tenant
-        tenant = await this.prisma.tenant.findFirst();
-
-        if (!tenant) {
-          // Create a new tenant if none exists
-          tenant = await this.prisma.tenant.create({
-            data: {
-              name: "Default Tenant",
-              slug: "default-tenant",
-              email: "admin@default.com",
-              phone: "+1234567890",
-              currency: "EUR",
-              plan: "basic",
-              subscriptionStatus: "active",
-              currentPeriodStart: new Date(),
-              currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
-            },
-          });
-        }
-
-        professionalData.tenantId = tenant.id;
+        throw new NotFoundException("Salon not found");
       }
 
       const professional = await this.prisma.professional.create({

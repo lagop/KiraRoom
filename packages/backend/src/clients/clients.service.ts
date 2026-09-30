@@ -2,9 +2,12 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ConflictException,
 } from "@nestjs/common";
+import * as bcrypt from "bcryptjs";
+import { hashPassword } from "../saas/saas.helpers";
 import { PrismaService } from "../common/prisma/prisma.service";
-import { CreateClientDto, UpdateClientDto } from "./dto";
+import { CreateClientDto, UpdateClientDto, UpdateMyProfileDto, ChangeMyPasswordDto } from "./dto";
 import { validateNif } from "../common/validation/nif.validator";
 
 export interface ClientFilters {
@@ -240,6 +243,62 @@ export class ClientsService {
 
     return this.prisma.client.delete({
       where: { id, tenantId },
+    });
+  }
+
+  /**
+   * A client editing their own profile from the salon site. The account
+   * page used to PATCH /clients/:id, a route that does not exist and whose
+   * PUT twin excludes the client role, so every save failed.
+   */
+  async updateSelf(tenantId: string, clientId: string, dto: UpdateMyProfileDto) {
+    try {
+      return await this.prisma.client.update({
+        where: { id: clientId, tenantId },
+        data: dto,
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          phone: true,
+          preferredLanguage: true,
+        },
+      });
+    } catch (error: any) {
+      if (error?.code === "P2002") {
+        // @@unique([tenantId, email])
+        throw new ConflictException("Ese email ya está en uso en este salón");
+      }
+      if (error?.code === "P2025") {
+        throw new NotFoundException("Cliente no encontrado");
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * A client changing their own password. It needs the current one: a
+   * borrowed session must not be enough to lock the owner out. The account
+   * page used to say "Contraseña actualizada" without calling anything.
+   */
+  async changeOwnPassword(tenantId: string, clientId: string, dto: ChangeMyPasswordDto) {
+    const client = await this.prisma.client.findFirst({
+      where: { id: clientId, tenantId },
+      select: { passwordHash: true },
+    });
+    if (!client?.passwordHash) {
+      throw new BadRequestException("Esta cuenta no tiene contraseña");
+    }
+    const matches = await bcrypt.compare(dto.currentPassword, client.passwordHash);
+    if (!matches) {
+      // 400, not 401: the web client treats any 401 as an expired session
+      // and logs out, which would punish a typo by ending the session.
+      throw new BadRequestException("La contraseña actual no es correcta");
+    }
+    await this.prisma.client.update({
+      where: { id: clientId, tenantId },
+      data: { passwordHash: await hashPassword(dto.newPassword) },
     });
   }
 }

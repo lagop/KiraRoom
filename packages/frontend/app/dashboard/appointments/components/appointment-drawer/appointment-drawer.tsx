@@ -38,7 +38,6 @@ import { Button } from "@/src/components/ui/Button";
 //import apiClient from '@/lib/api';
 import apiClient from "@/lib/api"
 import { useTranslations } from "@/lib/use-translation";
-import { getCurrentUser } from "@/lib/utils";
 import { ServiceTimeline } from "@/components/Calendar/ServiceTimeline";
 import { AppointmentScheduler } from "@/lib/appointment-scheduler";
 import {
@@ -68,10 +67,6 @@ import {
   sumServiceDurations,
   transformAddons,
 } from "../appointment-drawer.utils";
-import {
-  generateFallbackSuggestions as buildFallbackSuggestions,
-  type FallbackSuggestion,
-} from "../appointment-suggestions";
 // Phase 1+2+5 refactor — primitives, data hooks, and section components.
 // See .kilo/plans/appointment-drawer-refactor.md.
 import { AppointmentStatusBadge } from "./primitives/AppointmentStatusBadge";
@@ -144,8 +139,6 @@ const {
   suggestionsError,
   availabilityWarnings,
   generate: generateAppointmentSuggestions,
-  generateMock: generateMockSuggestions,
-  generateFallback: generateFallbackSuggestions,
   clearSuggestions,
 } = useAppointmentSuggestions();
 
@@ -188,8 +181,7 @@ const getProfessionalForService = (serviceId: string) => {
       : null;
   };
 
-  // Phase 3 refactor — generateAppointmentSuggestions /
-  // generateMockSuggestions / generateFallbackSuggestions all live in
+  // Phase 3 refactor — generateAppointmentSuggestions lives in
   // useAppointmentSuggestions. See
   // ./appointment-drawer/hooks/useAppointmentSuggestions.ts. Call sites
   // (line 1758) pass the current form/catalog inputs explicitly.
@@ -355,7 +347,6 @@ useEffect(() => {
       const totalDuration = getTotalDuration(selectedServices, services, newAppointment.serviceId);
 
       const appointmentData = {
-        tenantId: "default", // Will be set by backend from the user's token
         clientId: newAppointment.clientId,
         serviceId: serviceId,
         professionalId: selectedProfessionalId,
@@ -375,12 +366,10 @@ useEffect(() => {
           }),
       };
 
-      // Check if current user is staff and use appropriate endpoint
-      const currentUser = getCurrentUser();
-      const appointment =
-        currentUser?.role === "staff"
-          ? await apiClient.createAppointmentByStaff(appointmentData)
-          : await apiClient.createAppointment(appointmentData);
+      // Every dashboard role books through /appointments/staff: the salon
+      // comes from the token, and the salon may book outside the online grid.
+      // The public POST /appointments is for clients and checks the slot.
+      const appointment = await apiClient.createAppointmentByStaff(appointmentData);
 
       // If multiple services, create them via bulk API
       if (hasMultipleServices) {
@@ -607,7 +596,11 @@ useEffect(() => {
         alert(t("appointments.drawer.provideValidDateAndTime"));
         return;
       }
-      updateData.scheduledDate = date.toISOString();
+      // The calendar day as the salon sees it. toISOString() sent a UTC
+      // instant built from the browser's clock, so west of UTC -- or for an
+      // early slot east of it -- the stored day, and the reminders with it,
+      // landed a day off.
+      updateData.scheduledDate = dateValue;
       updateData.scheduledTime = timeValue;
 
       if (

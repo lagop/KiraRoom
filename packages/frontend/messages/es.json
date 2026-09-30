@@ -933,7 +933,8 @@
     "vs_last_week": "vs semana pasada",
     "loadError": "Error al cargar los datos del panel. Inténtalo de nuevo más tarde.",
     "zero": "$0",
-    "new_this_month": "New This Month"
+    "new_this_month": "New This Month",
+    "partial_load_warning": "Algunos datos no se pudieron cargar: las cifras de este panel pueden estar incompletas."
   },
   "appointments": {
     "title": "Citas",
@@ -1071,7 +1072,8 @@
     "using_professional_default": "Usando la tasa por defecto del profesional",
     "view_manage_appointment": "Ver / gestionar cita",
     "view_mode": "Modo vista",
-    "view_profile": "Ver perfil"
+    "view_profile": "Ver perfil",
+    "load_failed": "No se pudieron cargar las citas"
   },
   "settings": {
     "title": "Ajustes",
@@ -1141,7 +1143,12 @@
     "section_hours": "Horario",
     "section_payments": "Pagos y facturación",
     "section_notifications": "Notificaciones",
-    "section_account": "Cuenta"
+    "section_account": "Cuenta",
+    "coming_soon": "Próximamente",
+    "load_failed": "No se pudo cargar la configuración",
+    "save_failed": "No se pudo guardar la configuración",
+    "hours_need_both": "Indica tanto la hora de apertura como la de cierre",
+    "hours_open_before_close": "La hora de apertura debe ser anterior a la de cierre"
   },
   "clients": {
     "title": "Clientas",

@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { Calendar, Settings, CreditCard, LogOut, User, ChevronDown } from 'lucide-react';
+import { Calendar, Settings, LogOut, User, ChevronDown } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import apiClient, { removeToken } from '@/lib/api';
 import { ClientNotificationBell } from './components/client-notification-bell';
@@ -164,17 +164,6 @@ export default function AccountLayout({
                 >
                   <Calendar className="w-5 h-5" />
                   <span>Nueva Cita</span>
-                </Link>
-                <Link
-                  href={`/sites/${params.salonName}/account/payment-methods`}
-                  className={`flex items-center space-x-3 px-4 py-2 rounded-lg transition-colors ${
-                    pathname === `/sites/${params.salonName}/account/payment-methods`
-                      ? 'bg-purple-50 text-purple-700'
-                      : 'text-gray-600 hover:bg-gray-50'
-                  }`}
-                >
-                  <CreditCard className="w-5 h-5" />
-                  <span>Métodos de Pago</span>
                 </Link>
                 <Link
                   href={`/sites/${params.salonName}/account/settings`}

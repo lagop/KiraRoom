@@ -23,7 +23,6 @@ interface ServiceOption {
 interface EditAppointmentPopoverProps {
   appointmentId: string;
   professionals: Professional[];
-  tenantId?: string;
   onClose: () => void;
   onSuccess: () => void;
 }
@@ -31,7 +30,6 @@ interface EditAppointmentPopoverProps {
 export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
   appointmentId,
   professionals,
-  tenantId = "default",
   onClose,
   onSuccess,
 }) => {

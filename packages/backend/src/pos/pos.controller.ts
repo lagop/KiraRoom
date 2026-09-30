@@ -95,6 +95,15 @@ export class PosController {
     return this.productService.getProducts(tenantId, { category, search, lowStock: lowStock === 'true' });
   }
 
+  // Before 'products/:id': declared after it, 'categories' matched ':id'
+  // first and ParseUUIDPipe answered 400.
+  @Get('products/categories')
+  @ApiOperation({ summary: 'Get product categories' })
+  async getProductCategories(@Req() req: any) {
+    const tenantId = req.user.tenantId;
+    return this.productService.getCategories(tenantId);
+  }
+
   @Get('products/:id')
   @ApiOperation({ summary: 'Get a single product' })
   async getProduct(@Param('id', ParseUUIDPipe) id: string) {
@@ -124,13 +133,6 @@ export class PosController {
   @ApiOperation({ summary: 'Delete a product' })
   async deleteProduct(@Param('id', ParseUUIDPipe) id: string) {
     return this.productService.deleteProduct(id);
-  }
-
-  @Get('products/categories')
-  @ApiOperation({ summary: 'Get product categories' })
-  async getProductCategories(@Req() req: any) {
-    const tenantId = req.user.tenantId;
-    return this.productService.getCategories(tenantId);
   }
 
   @Post('products/categories')

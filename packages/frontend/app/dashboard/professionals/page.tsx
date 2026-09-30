@@ -93,16 +93,10 @@ export default function ProfessionalsPage() {
       const data = await apiClient.getServices();
       setServices(data);
     } catch (err) {
+      // No invented catalogue: its ids do not exist, so assigning one to a
+      // professional failed on save.
       console.error("Failed to fetch services:", err);
-      // Mock data for demo
-      setServices([
-        { id: "1", name: "Haircut", category: "hair" },
-        { id: "2", name: "Hair Coloring", category: "hair" },
-        { id: "3", name: "Manicure", category: "nails" },
-        { id: "4", name: "Pedicure", category: "nails" },
-        { id: "5", name: "Facial", category: "facial" },
-        { id: "6", name: "Massage", category: "massage" },
-      ]);
+      setServices([]);
     }
   };
 
@@ -141,70 +135,12 @@ export default function ProfessionalsPage() {
       setProfessionals(professionalsWithServices);
       setError(null);
     } catch (err) {
+      // No invented team. This used to show mock professionals (Maria
+      // Garcia, John Smith) and clear the error, so a failed load looked like
+      // a salon with two staff members nobody had hired.
       console.error("fetchProfessionals error:", err);
-      // Mock data for demo mode when API fails
-      const mockProfessionals: Professional[] = [
-        {
-          id: "1",
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          tenantId: "default",
-          firstName: "Maria",
-          lastName: "Garcia",
-          email: "maria@example.com",
-          phone: "+1 234 567 8901",
-          profileImage: "",
-          bio: "Expert in coloring and styling with 10+ years experience",
-          specialties: ["Hair Stylist"],
-          position: "Senior Stylist",
-          commissionRate: 40,
-          hireDate: "2020-03-15",
-          isActive: true,
-          services: [
-            {
-              serviceId: "1",
-              service: { id: "1", name: "Haircut", category: "hair" },
-            },
-            {
-              serviceId: "2",
-              service: { id: "2", name: "Hair Coloring", category: "hair" },
-            },
-          ],
-        },
-        {
-          id: "2",
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          tenantId: "default",
-          firstName: "John",
-          lastName: "Smith",
-          email: "john@example.com",
-          phone: "+1 234 567 8902",
-          profileImage: "",
-          bio: "Specializing in manicures, pedicures, and nail art",
-          specialties: ["Nail Technician"],
-          position: "Nail Technician",
-          commissionRate: 35,
-          hireDate: "2021-06-20",
-          isActive: true,
-          services: [
-            {
-              serviceId: "3",
-              service: { id: "3", name: "Manicure", category: "nails" },
-            },
-            {
-              serviceId: "4",
-              service: { id: "4", name: "Pedicure", category: "nails" },
-            },
-          ],
-        },
-      ];
-      console.log(
-        "Using mock professionals with services:",
-        mockProfessionals[0].services,
-      );
-      setProfessionals(mockProfessionals);
-      setError(null);
+      setProfessionals([]);
+      setError(err instanceof Error ? err.message : "Failed to load professionals");
     } finally {
       setLoading(false);
     }

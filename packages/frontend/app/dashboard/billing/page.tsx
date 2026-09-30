@@ -146,12 +146,23 @@ export default function BillingPage() {
   const load = async () => {
     setLoading(true);
     setError(null);
+    // Each request still falls back so the rest of the page renders, but a
+    // failure is reported: silently, a failed subscription load read as "no
+    // plan" and the add-on catalogue as the Esencial one -- a paying salon
+    // could be invited to buy what it already has.
+    const failed: string[] = [];
+    const soft = <T,>(name: string, request: Promise<T>, fallback: T) =>
+      request.catch((err) => {
+        console.error(`Billing: ${name} failed to load:`, err);
+        failed.push(name);
+        return fallback;
+      });
     try {
       const [s, p, wd, i] = await Promise.all([
-        apiClient.getCurrentSubscription().catch(() => null),
-        apiClient.getSubscriptionPlans().catch(() => []),
-        apiClient.request("/web-domain").catch(() => null),
-        apiClient.getSubscriptionInvoices(12).catch(() => []),
+        soft("subscription", apiClient.getCurrentSubscription(), null as any),
+        soft("plans", apiClient.getSubscriptionPlans(), [] as any[]),
+        soft("webDomain", apiClient.request("/web-domain"), null as any),
+        soft("invoices", apiClient.getSubscriptionInvoices(12), [] as any[]),
       ]);
       setSub(s);
       setPlans((p as any) || []);
@@ -159,17 +170,19 @@ export default function BillingPage() {
       setInvoices((i as SubscriptionInvoice[]) || []);
 
       // P2A-receptionist-v2 -- fetch add-ons + AI counter + bundles
-      const plan = (s as any)?.plan ?? "esencial";
+      // No catalogue for a plan we could not read.
+      const plan = failed.includes("subscription") ? null : ((s as any)?.plan ?? "esencial");
       const [catalog, installed, ai, wallet] = await Promise.all([
-        apiClient.getAvailableAddOns(plan).catch(() => []),
-        apiClient.getTenantAddOns().catch(() => []),
-        apiClient.getAiUsage().catch(() => null),
-        apiClient.getMessageBundlesBalance().catch(() => null),
+        plan ? soft("addOns", apiClient.getAvailableAddOns(plan), [] as any[]) : Promise.resolve([] as any[]),
+        soft("installedAddOns", apiClient.getTenantAddOns(), [] as any[]),
+        soft("aiUsage", apiClient.getAiUsage(), null as any),
+        soft("bundles", apiClient.getMessageBundlesBalance(), null as any),
       ]);
       setAddOns(catalog);
       setInstalledAddOns(installed);
       setAiUsage(ai);
       setBundles(wallet);
+      if (failed.length > 0) setError(t("billing.loadError"));
     } catch (e: any) {
       setError(e?.message || t("billing.loadError"));
     } finally {

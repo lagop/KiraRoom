@@ -1,7 +1,35 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
-import { IsString, IsOptional, IsIn, IsUrl } from "class-validator";
+import { IsString, IsOptional, IsIn, IsUrl, IsEmail, IsInt, Min, Max, Matches, ValidateNested } from "class-validator";
+import { Type } from "class-transformer";
+
+/** The salon-wide window getAvailableSlots reads. HH:MM, 24-hour. */
+export class OpeningHoursDto {
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  open: string;
+
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  close: string;
+}
 
 export class UpdateTenantDto {
+  @ApiPropertyOptional({ description: "Public contact email" })
+  @IsEmail()
+  @IsOptional()
+  email?: string;
+
+  @ApiPropertyOptional({ description: "Minimum notice to cancel, in hours" })
+  @IsInt()
+  @Min(0)
+  @Max(720)
+  @IsOptional()
+  minCancelHours?: number;
+
+  @ApiPropertyOptional({ description: "Salon opening window, merged into openingHours" })
+  @ValidateNested()
+  @Type(() => OpeningHoursDto)
+  @IsOptional()
+  openingHours?: OpeningHoursDto;
+
   @ApiPropertyOptional({ description: "Tenant name" })
   @IsString()
   @IsOptional()

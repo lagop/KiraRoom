@@ -51,6 +51,14 @@ export class InvoicesController {
     return this.invoices.list(this.requireTenantId(req), q);
   }
 
+  // Before ":id": declared after it, "certificates" matched ":id" first and
+  // ParseUUIDPipe answered 400, so the fiscal certificates list never loaded.
+  @Get("certificates")
+  @Roles(UserRole.owner)
+  listCertificates(@Req() req: AuthedRequest) {
+    return this.certs.listActiveCertificates(this.requireTenantId(req));
+  }
+
   @Get(":id")
   @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
   findOne(@Req() req: AuthedRequest, @Param("id", ParseUUIDPipe) id: string) {
@@ -288,12 +296,6 @@ fiscalQrUrl: invoice.fiscalQrUrl,
   }
 
   // ---- Certificates ----
-
-  @Get("certificates")
-  @Roles(UserRole.owner)
-  listCertificates(@Req() req: AuthedRequest) {
-    return this.certs.listActiveCertificates(this.requireTenantId(req));
-  }
 
   @Post("certificates")
   @Roles(UserRole.owner)
