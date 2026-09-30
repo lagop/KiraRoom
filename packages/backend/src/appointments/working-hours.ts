@@ -107,3 +107,58 @@ export function fitsInWindow(
     slotMinutes + durationMinutes <= window.endMinutes
   );
 }
+
+/** A salon's open window on one weekday. */
+export interface SalonDayWindow {
+  openTime: string;
+  closeTime: string;
+}
+
+/**
+ * The salon's opening hours for a week, derived from its professionals'
+ * schedules.
+ *
+ * A client asking "when are you open?" means the salon, not one stylist, so a
+ * weekday runs from the earliest any professional starts to the latest any of
+ * them finishes. Days nobody works are absent from the result, which the
+ * caller renders as closed.
+ *
+ * This exists because the receptionist's prompt used to carry a hardcoded
+ * Monday-to-Friday 09:00-18:00 plus Saturday 09:00-14:00 for every salon,
+ * contradicting the very schedules `check_availability` reads. The model was
+ * handed one version of reality and its tools another.
+ *
+ * Returns `{}` when no professional has a schedule recorded, so the caller can
+ * say the hours are unknown rather than invent them.
+ */
+export function salonWeekFrom(
+  professionals: ReadonlyArray<{ workingHours?: unknown }>,
+): Record<string, SalonDayWindow> {
+  const week: Record<string, SalonDayWindow> = {};
+
+  for (const professional of professionals) {
+    for (const entry of parseWorkingHours(professional.workingHours)) {
+      const day = entry.day.toLowerCase();
+      if (!WEEKDAY_NAMES.includes(day)) continue;
+
+      const open = minutesOf(entry.openTime);
+      const close = minutesOf(entry.closeTime);
+      if (open === null || close === null || close <= open) continue;
+
+      const current = week[day];
+      if (!current) {
+        week[day] = { openTime: entry.openTime, closeTime: entry.closeTime };
+        continue;
+      }
+      // Widen the window: earliest open, latest close.
+      if (open < (minutesOf(current.openTime) ?? Infinity)) {
+        current.openTime = entry.openTime;
+      }
+      if (close > (minutesOf(current.closeTime) ?? -Infinity)) {
+        current.closeTime = entry.closeTime;
+      }
+    }
+  }
+
+  return week;
+}

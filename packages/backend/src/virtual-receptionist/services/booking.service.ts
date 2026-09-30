@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { BookingRequest, BookingResponse, BookingContext } from '@kira/shared';
+import { BookingContext } from '@kira/shared';
 import { ProfessionalsService } from '../../professionals/professionals.service';
 
 export enum BookingStage {
@@ -19,49 +19,6 @@ export class BookingService {
   private bookingContexts: Map<string, BookingContext> = new Map();
 
   constructor(private readonly professionalsService: ProfessionalsService) {}
-
-  /**
-   * Process booking request
-   */
-  async processBooking(request: BookingRequest): Promise<BookingResponse> {
-    this.logger.log(`Processing booking request from ${request.clientInfo.name}`);
-
-    try {
-      // In a real implementation, this would:
-      // 1. Check service availability
-      // 2. Create appointment record in database
-      // 3. Send confirmation notification
-      // 4. Return booking details
-
-      const availability = await this.checkAvailability(request);
-      
-      if (!availability.available) {
-        return {
-          success: false,
-          message: availability.message || 'No hay disponibilidad para la fecha y hora solicitadas.',
-        };
-      }
-
-      // Mock booking creation
-      const bookingId = this.generateId();
-      
-      this.logger.log(`Booking confirmed: ${bookingId}`);
-
-      return {
-        success: true,
-        appointmentId: bookingId,
-        message: '¡Cita reservada con éxito!',
-        confirmationUrl: `/confirmacion/${bookingId}`,
-        nextStep: BookingStage.COMPLETED,
-      };
-    } catch (error) {
-      this.logger.error('Error processing booking:', error);
-      return {
-        success: false,
-        message: 'Ocurrió un error al procesar tu solicitud. Por favor, inténtalo de nuevo.',
-      };
-    }
-  }
 
   /**
    * Check availability for a specific time slot

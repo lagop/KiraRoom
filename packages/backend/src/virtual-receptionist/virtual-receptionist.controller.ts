@@ -18,7 +18,6 @@ import {
   UpdateConversationDto,
   CreateFAQItem,
   UpdateFAQItem,
-  BookingRequest,
   CreateVirtualReceptionistConfig,
   UpdateVirtualReceptionistConfig,
   CreateLLMProviderConfig,
@@ -212,12 +211,10 @@ export class VirtualReceptionistController {
   }
 
   // Booking Management
-  @Post('booking')
-  @ApiOperation({ summary: 'Process booking request' })
-  async processBooking(@Body(new ValidationPipe()) request: BookingRequest) {
-    this.logger.log('Processing booking request');
-    return this.bookingService.processBooking(request);
-  }
+  //
+  // POST /virtual-receptionist/booking used to be here: it invented an id
+  // and answered "¡Cita reservada con éxito!" without creating anything.
+  // Nothing called it. Bookings go through POST /appointments.
 
   @Get('booking/availability')
   @ApiOperation({ summary: 'Check appointment availability' })

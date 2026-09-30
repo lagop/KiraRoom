@@ -1,5 +1,7 @@
 import { getDynamicContext, getSystemPrompt } from "./templates";
 import { SALON_TOOLS } from "../tools/salon-tools";
+import { ConfigService } from "@nestjs/config";
+import { LLMService } from "../services/llm.service";
 
 /**
  * L4: the system prompt must be byte-stable for a given salon.
@@ -73,50 +75,73 @@ describe("system prompt cache prefix", () => {
  * is why production showed cache_read_input_tokens at 0 for every call while
  * the prompt was stable and `cache_control` was set correctly.
  *
- * The prefix is tools + system, in that order. Measured on the real prompt:
- * ~620 tokens of tool schemas plus ~1360 of system prompt, about 1970 — under
- * half the minimum. And it cannot grow into the limit on its own, because
- * buildSystemPrompt deliberately keeps services and professionals out, so the
- * prompt is the same size for every salon whatever its data.
+ * The prefix is tools + system, in that order. These cases measure the system
+ * prompt LLMService.buildSystemPrompt actually sends. An earlier version
+ * rebuilt it from getSystemPrompt + getDynamicContext, and when the booking
+ * flow was appended to the real prompt that copy did not follow: it kept
+ * reporting ~1970 tokens while the real prefix was nearer 3600.
  *
- * This case exists to notice if that ever changes. If it fails because the
- * prompt grew, that is good news, not a regression: check whether
- * cache_read_input_tokens has started moving in production, and correct the
- * cost model, which currently has to assume no caching at all.
+ * The size is not the same for every salon either: the FAQs are in the
+ * prompt, up to 20 entries of 200 + 200 characters. Both ends are pinned
+ * below. They are tripwires, not goals: when one fails, the prompt has moved
+ * relative to the line — re-read per-tenant cache_read_input_tokens in
+ * production and correct the cost model, which currently has to assume no
+ * caching at all.
  */
 describe("cache prefix length against the model minimum", () => {
   // Haiku 4.5. Sonnet and Opus cache from 1024. Haiku 3.5 was 2048, which is
   // the figure to not confuse this with.
   const HAIKU_4_5_MINIMUM_TOKENS = 4096;
 
-  // Deliberately rough: the point is the order of magnitude, not a precise
-  // count, and the gap is a factor of two. Spanish prose runs ~3.6 chars per
-  // token; the tool schemas are English JSON and tokenise closer to ~4.2.
+  // Deliberately rough. Spanish prose runs ~3.6 chars per token; the tool
+  // schemas are English JSON and tokenise closer to ~4.2. Within about 15% of
+  // the line this estimate cannot decide which side a prompt is on.
   const SPANISH_CHARS_PER_TOKEN = 3.6;
   const JSON_CHARS_PER_TOKEN = 4.2;
+  const UNDECIDABLE_BAND = 0.15;
 
-  function estimatedPrefixTokens(): number {
-
-    // What buildSystemPrompt actually sends: services and professionals empty.
-    const system =
-      getSystemPrompt("es", "Salón Prueba", "Kira") +
-      getDynamicContext("es", { ...salonContext, services: [], professionals: [] });
-
-    return Math.round(
-      JSON.stringify(SALON_TOOLS).length / JSON_CHARS_PER_TOKEN +
-        system.length / SPANISH_CHARS_PER_TOKEN,
-    );
+  function realSystemPrompt(faqs: Array<{ question: string; answer: string }>): string {
+    const configService = { get: (): undefined => undefined } as unknown as ConfigService;
+    const stub = {} as any;
+    const service = new LLMService(stub, configService, stub, stub, stub, stub, stub);
+    return (service as any).buildSystemPrompt({
+      id: "tenant-1",
+      name: "Salón Prueba",
+      assistantName: "Kira",
+      timezone: "Europe/Madrid",
+      language: "es",
+      minCancelHours: 24,
+      workingHours: { monday: { start: "09:00", end: "19:00" } },
+      faqs,
+    });
   }
 
-  it("is still below the minimum, so caching is inert", () => {
-    expect(estimatedPrefixTokens()).toBeLessThan(HAIKU_4_5_MINIMUM_TOKENS);
+  function ratioToMinimum(system: string): number {
+    const tokens =
+      JSON.stringify(SALON_TOOLS).length / JSON_CHARS_PER_TOKEN +
+      system.length / SPANISH_CHARS_PER_TOKEN;
+    return tokens / HAIKU_4_5_MINIMUM_TOKENS;
+  }
+
+  it("measures the prompt that is really sent, booking flow included", () => {
+    // Guards against the measurement drifting from production again.
+    expect(realSystemPrompt([])).toContain("ETAPA: CONFIRMATION");
   });
 
-  it("is not so close to the minimum that the estimate decides it", () => {
-    // If the prefix ever lands within 15% of the line, the char-per-token
-    // estimate is no longer good enough to tell — go and read
-    // cache_read_input_tokens from a real pair of requests instead.
-    const ratio = estimatedPrefixTokens() / HAIKU_4_5_MINIMUM_TOKENS;
-    expect(ratio).toBeLessThan(0.85);
+  it("puts a salon without FAQs where only production can tell", () => {
+    // ~3600 estimated at the time of writing: 88% of the minimum. Leaving
+    // this band either way means the answer for small salons has changed.
+    const ratio = ratioToMinimum(realSystemPrompt([]));
+    expect(ratio).toBeGreaterThan(1 - UNDECIDABLE_BAND);
+    expect(ratio).toBeLessThan(1 + UNDECIDABLE_BAND);
+  });
+
+  it("puts a salon with a full set of FAQs clearly over the minimum", () => {
+    // 20 entries at the 200-character caps buildSystemPrompt applies.
+    const full = Array.from({ length: 20 }, (_, i) => ({
+      question: `${i} ${"q".repeat(198)}`,
+      answer: `${i} ${"a".repeat(198)}`,
+    }));
+    expect(ratioToMinimum(realSystemPrompt(full))).toBeGreaterThan(1 + UNDECIDABLE_BAND);
   });
 });
