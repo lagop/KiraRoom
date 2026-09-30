@@ -71,6 +71,12 @@ export class AnthropicProvider {
     const tools = options?.tools;
     const executeTool = options?.executeTool;
     const maxIter = options?.maxToolIterations ?? 5;
+    // The caller's choice applies to the first request only. It used to be
+    // dropped here -- always `auto` -- so every tool the receptionist forced
+    // (create_appointment on a yes, propose_appointment before a summary) was
+    // left to the model, which often answered without calling it. Forcing the
+    // follow-up requests too would keep calling the tool until maxIter.
+    const firstToolChoice = this.toToolChoice(options?.toolChoice ?? 'auto');
 
     try {
       const messages = this.buildConversationHistory(
@@ -143,7 +149,7 @@ export class AnthropicProvider {
           ? { top_p: topP }
           : { temperature }),
         ...(tools && tools.length > 0
-          ? { tools: tools as any, tool_choice: { type: 'auto' as const } }
+          ? { tools: tools as any, tool_choice: firstToolChoice }
           : {}),
       });
       usage.add(response.usage);
@@ -337,5 +343,13 @@ export class AnthropicProvider {
     messages.push({ role: 'user', content: currentUserMessage });
 
     return messages;
+  }
+
+  private toToolChoice(
+    choice: 'auto' | 'any' | { type: 'tool'; name: string },
+  ): { type: 'auto' } | { type: 'any' } | { type: 'tool'; name: string } {
+    if (choice === 'any') return { type: 'any' };
+    if (choice === 'auto') return { type: 'auto' };
+    return { type: 'tool', name: choice.name };
   }
 }

@@ -111,7 +111,14 @@ export class ConversationMemoryRepository {
         handoffUserId: data.handoffUserId,
         handoffAt: data.handoffAt,
         lastActivityAt: data.lastActivityAt || new Date(),
-        context: data.context || {},
+        context: {
+          ...((data.context as Record<string, unknown>) || {}),
+          // Not a client of the salon: remember who this is so the next
+          // message finds the conversation (see findActiveConversationByClientId).
+          ...(!validClientId && data.clientId && data.clientId !== 'anonymous'
+            ? { visitorKey: data.clientId }
+            : {}),
+        } as any,
       },
     });
   }
@@ -135,21 +142,50 @@ export class ConversationMemoryRepository {
   }
 
   /**
-   * Find active conversation for client
+   * The visitor's active conversation (last activity within the hour).
+   *
+   * A conversation's clientId is a foreign key to Client, so it is left null
+   * for anyone who is not a client of the salon -- every anonymous visitor.
+   * Looking those up by `clientId` never matched, and each message opened a
+   * new conversation with no memory of the previous one. Their key is now
+   * kept in context.visitorKey and matched there. "anonymous" is not a key:
+   * it was shared by every visitor, so it never resumes a conversation.
+   *
+   * The salon may arrive as its slug (the client portal sends one); the
+   * conversation is stored under the tenant's id.
    */
   async findActiveConversationByClientId(clientId: string, tenantId: string): Promise<ChatConversation | null> {
+    if (!clientId || clientId === 'anonymous') return null;
+
+    let resolvedTenantId = tenantId;
+    if (!tenantId || !this.isValidUUID(tenantId)) {
+      const tenant = await this.prisma.tenant.findFirst({
+        where: { slug: tenantId?.toLowerCase() },
+        select: { id: true },
+      });
+      if (!tenant) return null;
+      resolvedTenantId = tenant.id;
+    }
+
     const oneHourAgo = new Date();
     oneHourAgo.setHours(oneHourAgo.getHours() - 1);
 
     return this.prisma.chatConversation.findFirst({
       where: {
-        clientId,
-        tenantId,
-        status: 'active',
+        tenantId: resolvedTenantId,
+        // A conversation marked for a human keeps its memory: until someone
+        // at the salon picks it up, the receptionist is still the one
+        // answering, and starting over lost everything the client had said.
+        status: { in: ['active', 'handoff'] },
         lastActivityAt: {
           gte: oneHourAgo,
         },
+        OR: [
+          ...(this.isValidUUID(clientId) ? [{ clientId }] : []),
+          { context: { path: ['visitorKey'], equals: clientId } },
+        ],
       },
+      orderBy: { lastActivityAt: 'desc' },
       include: {
         messages: true,
         intentHistory: true,

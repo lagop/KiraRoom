@@ -55,6 +55,10 @@ function makePrisma(services: any[], professionals: any[], tenant: any = null) {
         where?.id === (tenant?.id ?? 't-1') ? tenant : null,
       ),
     },
+    // The orchestrator reads the conversation's pending booking proposal.
+    chatConversation: {
+      findUnique: jest.fn().mockResolvedValue({ context: {} }),
+    },
   } as any;
 }
 
@@ -183,7 +187,7 @@ function buildService({
     appointmentsStub as any,
   );
 
-  return { svc, salonTools, llmService, conversationService, channelRegistry };
+  return { svc, salonTools, llmService, conversationService, channelRegistry, prismaStub };
 }
 
 describe('VirtualReceptionistService orchestrator (L-2)', () => {
@@ -216,13 +220,15 @@ describe('VirtualReceptionistService orchestrator (L-2)', () => {
       expect(salonIdArg).toBe(TENANT_ID);
       expect(options).toBeDefined();
       expect(Array.isArray(options.tools)).toBe(true);
-      expect(options.tools.length).toBe(5);
+      expect(options.tools.length).toBe(7);
       expect(options.tools.map((t: any) => t.name).sort()).toEqual([
         'check_availability',
+        'create_appointment',
         'get_salon_info',
         'get_service',
         'list_professionals',
         'list_services',
+        'propose_appointment',
       ]);
       expect(typeof options.executeTool).toBe('function');
       expect(options.maxToolIterations).toBe(5);
@@ -382,5 +388,160 @@ describe('VirtualReceptionistService orchestrator (L-2)', () => {
       expect(typeof reply.content).toBe('string');
       expect(reply.content.length).toBeGreaterThan(0);
     });
+  });
+});
+/**
+ * Found in an end-to-end chat on a test salon: the client said "Sí,
+ * perfecto" and the model answered "Tu cita está confirmada" without calling
+ * any tool -- no appointment existed. The orchestrator now checks the reply
+ * against what the booking tool actually did.
+ */
+describe('VirtualReceptionistService orchestrator (L-2) -- no false confirmations', () => {
+  const reply = (text: string) => ({
+    id: 'r',
+    text,
+    provider: LLMProvider.MiniMax,
+    model: 'm',
+    usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+    timestamp: new Date(),
+    latency: 1,
+  });
+  const send = (svc: any, message: string) =>
+    svc.sendMessage({ clientId: 'visitor-1', salonId: TENANT_ID, message, channel: 'web' });
+
+  it('regenerates a reply that claims a booking no tool made', async () => {
+    const generateResponse = jest
+      .fn()
+      .mockResolvedValueOnce(reply('¡Excelente! Tu cita está confirmada.'))
+      .mockResolvedValueOnce(reply('Todavía no está reservada. ¿Te propongo el resumen?'));
+    const { svc, llmService } = buildService({ generateResponse });
+
+    const out: any = await send(svc, 'Sí, perfecto');
+
+    expect(llmService.generateResponse).toHaveBeenCalledTimes(2);
+    expect(llmService.generateResponse.mock.calls[1][0]).toContain('NO se ha creado ninguna cita');
+    expect(out.content).toBe('Todavía no está reservada. ¿Te propongo el resumen?');
+  });
+
+  it('replaces it with a true answer if the model insists', async () => {
+    const generateResponse = jest.fn().mockResolvedValue(reply('Tu cita está confirmada. ¡Te esperamos!'));
+    const { svc } = buildService({ generateResponse });
+
+    const out: any = await send(svc, 'Sí');
+
+    expect(out.content).toMatch(/aún no está reservada/);
+  });
+
+  it('lets the model repeat the confirmation of the appointment it booked', async () => {
+    // A second "sí" after booking: the fallback used to say it was NOT booked.
+    const generateResponse = jest.fn().mockResolvedValue(reply('¡Tu cita está confirmada! Miércoles 7 a las 15:00.'));
+    const { svc, llmService, prismaStub } = buildService({ generateResponse }) as any;
+    prismaStub.chatConversation.findUnique.mockResolvedValue({
+      context: { pendingBooking: { time: '15:00', proposedAtUserTurn: 1, bookedAppointmentId: 'apt-1' } },
+    });
+
+    const out: any = await send(svc, 'sí');
+
+    expect(llmService.generateResponse).toHaveBeenCalledTimes(1);
+    expect(out.content).toMatch(/confirmada/);
+  });
+
+  it('still catches a claim about another time once something is booked', async () => {
+    const generateResponse = jest.fn().mockResolvedValue(reply('Listo, tu cita está confirmada también a las 10:00.'));
+    const { svc, prismaStub } = buildService({ generateResponse }) as any;
+    prismaStub.chatConversation.findUnique.mockResolvedValue({
+      context: { pendingBooking: { time: '09:00', proposedAtUserTurn: 1, bookedAppointmentId: 'apt-1' } },
+    });
+
+    const out: any = await send(svc, '¿y la depilación a las 10:00?');
+
+    expect(out.content).toMatch(/aún no está reservada/);
+  });
+
+  it('leaves an ordinary reply alone', async () => {
+    const generateResponse = jest.fn().mockResolvedValue(reply('Tenemos huecos a las 10:00 y 11:00.'));
+    const { svc, llmService } = buildService({ generateResponse });
+
+    await send(svc, '¿Qué huecos tenéis?');
+
+    expect(llmService.generateResponse).toHaveBeenCalledTimes(1);
+  });
+
+  it('forces create_appointment when the client says yes to a stored proposal', async () => {
+    const generateResponse = jest.fn().mockResolvedValue(reply('Un momento.'));
+    const { svc, llmService, prismaStub } = buildService({ generateResponse }) as any;
+    prismaStub.chatConversation.findUnique.mockResolvedValue({
+      context: { pendingBooking: { time: '10:00', proposedAtUserTurn: 1 } },
+    });
+
+    await send(svc, 'sí, perfecto');
+
+    expect(llmService.generateResponse.mock.calls[0][4].toolChoice).toEqual({
+      type: 'tool',
+      name: 'create_appointment',
+    });
+  });
+
+  it('requires propose_appointment when the model writes a summary on its own', async () => {
+    const summary = '📋 Resumen de tu cita: Masaje, Carmen, viernes 16:30. ¿Es correcto? (Sí / No)';
+    const generateResponse = jest.fn().mockResolvedValue(reply(summary));
+    const { svc, llmService } = buildService({ generateResponse });
+
+    await send(svc, 'Olivia Reguera, oli@example.test');
+
+    expect(llmService.generateResponse).toHaveBeenCalledTimes(2);
+    expect(llmService.generateResponse.mock.calls[1][4].toolChoice).toEqual({
+      type: 'tool',
+      name: 'propose_appointment',
+    });
+  });
+
+  it('never shows a summary nothing recorded, even if the forced proposal fails', async () => {
+    // The replay: propose_appointment failed (bad serviceId) and the model
+    // showed "Profesional: Por asignar" anyway; the client's yes then had
+    // nothing to book.
+    const summary = '📋 Resumen de tu cita: Masaje, Por asignar, viernes 15:00. ¿Es correcto? (Sí / No)';
+    const generateResponse = jest.fn().mockResolvedValue(reply(summary));
+    const { svc } = buildService({ generateResponse });
+
+    const out: any = await send(svc, 'si');
+
+    expect(out.content).not.toMatch(/Resumen/);
+    expect(out.content).toMatch(/todavía no está hecha/);
+  });
+
+  it('keeps the retry when it explains instead of summarising', async () => {
+    const generateResponse = jest
+      .fn()
+      .mockResolvedValueOnce(reply('📋 Resumen de tu cita: ... ¿Es correcto? (Sí / No)'))
+      .mockResolvedValueOnce(reply('Las 16:30 ya no están libres. ¿Te va bien a las 17:30?'));
+    const { svc } = buildService({ generateResponse });
+
+    const out: any = await send(svc, 'Clara Prueba, clara@example.test');
+
+    expect(out.content).toBe('Las 16:30 ya no están libres. ¿Te va bien a las 17:30?');
+  });
+
+  it("does not show the visitor the provider's error", async () => {
+    // The widget printed it under "Debug:" on the public chat.
+    const generateResponse = jest.fn().mockRejectedValue(new Error('Your credit balance is too low'));
+    const { svc } = buildService({ generateResponse });
+
+    const out: any = await send(svc, 'hola');
+
+    expect(out.error).toBeUndefined();
+    expect(JSON.stringify(out)).not.toMatch(/credit balance/);
+  });
+
+  it('does not force it for anything but a yes', async () => {
+    const generateResponse = jest.fn().mockResolvedValue(reply('Claro, ¿a qué hora?'));
+    const { svc, llmService, prismaStub } = buildService({ generateResponse }) as any;
+    prismaStub.chatConversation.findUnique.mockResolvedValue({
+      context: { pendingBooking: { time: '10:00', proposedAtUserTurn: 1 } },
+    });
+
+    await send(svc, 'sí, pero a las 11');
+
+    expect(llmService.generateResponse.mock.calls[0][4].toolChoice).toBe('auto');
   });
 });

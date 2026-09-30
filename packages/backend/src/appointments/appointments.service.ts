@@ -30,6 +30,7 @@ import { NotificationType } from "../notifications/dto";
 import { TranslationsService } from "../translations/translations.service";
 import { ConsentService } from "../consent/consent.service";
 import { salonInstant } from "./salon-time";
+import { normalizePhone, phoneKey } from "../common/phone";
 import type { OnlineBookingDto } from "./dto/book-appointment.dto";
 
 interface AppointmentActivity {
@@ -49,7 +50,8 @@ export interface CreateAppointmentDto {
   clientInfo?: {
     firstName: string;
     lastName: string;
-    email: string;
+    /** Email or phone, at least one; see findOrCreateClient. */
+    email?: string;
     phone?: string;
   };
   serviceId: string;
@@ -183,6 +185,24 @@ export class AppointmentsService {
       widgetProfessionals = widget.professionals ?? [];
     }
 
+    return this.bookOnline(tenantId, dto, widgetProfessionals);
+  }
+
+  /**
+   * The online booking itself, for a salon the caller has already
+   * established: createOnline (from the professional or the widget) and the
+   * virtual receptionist (the salon it answers for). Window, availability,
+   * lock and insert; notifications after the lock.
+   *
+   * `allowedProfessionals` limits "any professional" to a widget's list.
+   */
+  async bookOnline(
+    tenantId: string,
+    dto: OnlineBookingDto,
+    allowedProfessionals: string[] = [],
+  ) {
+    const professionalId = dto.professionalId || undefined;
+    const widgetProfessionals = allowedProfessionals;
     const window = await this.onlineBookingWindow(tenantId, dto.serviceId);
     if (!window) throw new NotFoundException("Servicio no encontrado");
 
@@ -209,7 +229,7 @@ export class AppointmentsService {
           }
           assigned = professionalId;
         } else {
-          assigned = await this.pickFreeProfessional(
+          assigned = await this.findFreeProfessional(
             tenantId, date, dto.serviceId, dto.scheduledTime, widgetProfessionals,
           );
         }
@@ -222,8 +242,13 @@ export class AppointmentsService {
       { timeout: 15_000 },
     );
 
-    await this.afterAppointmentCreated(appointment, dto.source);
-    return appointment;
+    const notified = await this.afterAppointmentCreated(appointment, dto.source);
+    // Not columns: tell the chat receptionist whether it may say the
+    // confirmation email or SMS was sent.
+    return Object.assign(appointment, {
+      confirmationEmailSent: notified?.emailSent === true,
+      confirmationSmsSent: notified?.smsSent === true,
+    });
   }
 
   /**
@@ -265,28 +290,6 @@ export class AppointmentsService {
     return "ok";
   }
 
-  /**
-   * Slots as a client may book them online: outside the service's booking
-   * window they are marked unavailable. The public site, the widget and the
-   * client portal list slots through GET /appointments/available-slots; it
-   * offered the next two hours, which createOnline then refused.
-   */
-  async restrictToOnlineWindow<T extends { time: string; isAvailable: boolean }>(
-    tenantId: string,
-    serviceId: string | undefined,
-    day: string,
-    slots: T[],
-  ): Promise<T[]> {
-    const window = await this.onlineBookingWindow(tenantId, serviceId);
-    if (!window) return slots.map((s) => ({ ...s, isAvailable: false }));
-    const now = Date.now();
-    return slots.map((s) =>
-      s.isAvailable && this.fitsOnlineWindow(day, s.time, window, now) !== "ok"
-        ? { ...s, isAvailable: false }
-        : s,
-    );
-  }
-
   private async isSlotFree(
     tenantId: string,
     date: Date,
@@ -304,7 +307,7 @@ export class AppointmentsService {
    * no professional is linked to the service at all -- salons that never
    * filled that in -- every active professional is a candidate.
    */
-  private async pickFreeProfessional(
+  async findFreeProfessional(
     tenantId: string,
     date: Date,
     serviceId: string,
@@ -334,6 +337,77 @@ export class AppointmentsService {
     return appointment;
   }
 
+  /**
+   * The salon's client with this email or, failing that, this phone; else a
+   * new one. Always in THIS salon: searching every salon matched a client of
+   * salon A booking on salon B's site to their salon-A record.
+   *
+   * Online bookings require a phone and make the email optional, so a
+   * returning client may come with either. A detail the record lacks is
+   * filled in; one it has is never overwritten by what a booking form says.
+   */
+  private async findOrCreateClient(
+    tenantId: string,
+    info: { firstName: string; lastName: string; email?: string; phone?: string },
+  ): Promise<string> {
+    const email = info.email?.trim() || undefined;
+    const phone = info.phone?.trim() || undefined;
+    if (!email && !phone) {
+      // An undefined filter is dropped by Prisma: a lookup without either
+      // would match the salon's first client.
+      throw new BadRequestException("Client email or phone is required");
+    }
+
+    let existing = email
+      ? await this.prisma.client.findFirst({ where: { email, tenantId } })
+      : null;
+    if (!existing && phone) {
+      // Stored numbers are in whatever format they were typed ("600 111
+      // 222", "+34600111222"): compare their last nine digits in SQL.
+      const key = phoneKey(phone);
+      const rows = key.length === 9
+        ? await this.prisma.$queryRaw<Array<{ id: string }>>`
+            SELECT id FROM clients
+            WHERE "tenantId" = ${tenantId}
+              AND right(regexp_replace(coalesce(phone, ''), '\\D', '', 'g'), 9) = ${key}
+            ORDER BY "createdAt" ASC
+            LIMIT 1`
+        : [];
+      existing = rows[0] ? await this.prisma.client.findFirst({ where: { id: rows[0].id, tenantId } }) : null;
+    }
+
+    if (existing) {
+      const fill: Record<string, string> = {};
+      if (email && !existing.email) fill.email = email;
+      if (phone && !existing.phone) fill.phone = await this.salonPhone(tenantId, phone);
+      if (Object.keys(fill).length > 0) {
+        await this.prisma.client.update({ where: { id: existing.id }, data: fill });
+      }
+      return existing.id;
+    }
+
+    const created = await this.prisma.client.create({
+      data: {
+        tenantId,
+        firstName: info.firstName,
+        lastName: info.lastName,
+        email: email ?? null,
+        phone: phone ? await this.salonPhone(tenantId, phone) : null,
+        status: "active",
+      },
+    });
+    return created.id;
+  }
+
+  /** A client's phone in international form, using the salon's country. */
+  private async salonPhone(tenantId: string, phone: string): Promise<string> {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { country: true },
+    });
+    return normalizePhone(phone, tenant?.country ?? "ES");
+  }
+
   /** Validate and insert. No side effects beyond creating the client. */
   private async insertAppointment(createAppointmentDto: CreateAppointmentDto, tenantId: string) {
     if (!createAppointmentDto.professionalId) {
@@ -360,37 +434,7 @@ export class AppointmentsService {
 
     // Find or create client if clientInfo provided
     if (!clientId && createAppointmentDto.clientInfo) {
-      if (!createAppointmentDto.clientInfo.email) {
-        // An undefined filter is dropped by Prisma: this would match the
-        // salon's first client.
-        throw new BadRequestException("Client email is required");
-      }
-      // Look the email up in THIS salon. Searching every salon meant a client
-      // of salon A could not book on salon B's site: they were matched to
-      // their salon-A record, the tenant switched to A, and B's professional
-      // was then "not found".
-      const existingClient = await this.prisma.client.findFirst({
-        where: {
-          email: createAppointmentDto.clientInfo.email,
-          tenantId,
-        },
-      });
-
-      if (existingClient) {
-        clientId = existingClient.id;
-      } else {
-        const newClient = await this.prisma.client.create({
-          data: {
-            tenantId: tenantId,
-            firstName: createAppointmentDto.clientInfo.firstName,
-            lastName: createAppointmentDto.clientInfo.lastName,
-            email: createAppointmentDto.clientInfo.email,
-            phone: createAppointmentDto.clientInfo.phone || null,
-            status: "active",
-          },
-        });
-        clientId = newClient.id;
-      }
+      clientId = await this.findOrCreateClient(tenantId, createAppointmentDto.clientInfo);
     }
 
     if (!clientId) {
@@ -464,9 +508,12 @@ export class AppointmentsService {
   }
 
   /** Notifications, rebooking cleanup and telemetry for a new appointment. */
-  private async afterAppointmentCreated(appointment: any, source?: string) {
+  private async afterAppointmentCreated(
+    appointment: any,
+    source?: string,
+  ): Promise<{ emailSent: boolean; smsSent: boolean }> {
     // Send notifications for appointment creation
-    await this.sendAppointmentCreatedNotifications(appointment);
+    const notified = await this.sendAppointmentCreatedNotifications(appointment);
 
     // P1.4 — Cancel any pending rebooking reminders for this client/service
     // now that they have a fresh booking.
@@ -495,6 +542,7 @@ export class AppointmentsService {
       appointment.tenantId,
       { source: source ?? 'dashboard' },
     );
+    return notified;
   }
 
   async createByStaff(
@@ -1239,6 +1287,13 @@ export class AppointmentsService {
     serviceId?: string,
     duration: number = 60,
     professionalIds?: string[],
+    /**
+     * onlineWindow: keep only slots a client may book online -- inside the
+     * service's minAdvanceBooking/maxAdvanceBooking and not in the past.
+     * Applied here, with the tenant and service rows this method already
+     * loads, rather than by a second pass that read them again.
+     */
+    opts: { onlineWindow?: boolean } = {},
   ) {
     // Get the tenant's working hours and timezone
     const tenant = await this.prisma.tenant.findUnique({
@@ -1282,15 +1337,26 @@ export class AppointmentsService {
     // receptionist's check_availability tool does not name one, so it fell
     // through to a window of 09:00-20:00 and offered a Tuesday at 19:30 on a
     // salon whose only professional leaves at 19:00.
-    const anyProfessionalRows =
+    // Only professionals who offer the service count -- the same rule
+    // findFreeProfessional applies when it assigns one. Counting everyone
+    // offered 16:30 for a massage because a hairdresser was free, and the
+    // booking then found nobody to give it to. As there, a service no
+    // professional is linked to falls back to everyone active.
+    const activeRows =
       professionalsToCheck.length === 0
         ? await this.prisma.professional.findMany({
             where: { tenantId, isActive: true },
+            include: { services: { select: { serviceId: true } } },
           })
         : [];
+    const offeringRows = serviceId
+      ? activeRows.filter((p: any) => (p.services ?? []).some((s: any) => s.serviceId === serviceId))
+      : [];
+    const anyProfessionalRows = offeringRows.length > 0 ? offeringRows : activeRows;
 
     // Get the service duration if specified
     let serviceDuration = duration;
+    let serviceRow: { isActive: boolean; minAdvanceBooking: number | null; maxAdvanceBooking: number | null } | null = null;
     if (serviceId) {
       const service = await this.prisma.service.findFirst({
         where: { id: serviceId, tenantId },
@@ -1301,6 +1367,7 @@ export class AppointmentsService {
       }
 
       serviceDuration = service.duration;
+      serviceRow = service as any;
     }
 
     // Generate time slots for the day using the tenant's configured
@@ -1394,44 +1461,41 @@ export class AppointmentsService {
         // only "is anybody busy" answered a different question, and answered
         // it wrongly — it offered hours nobody works.
         const slotMinutes = minutesOf(slot.time);
-        const someoneOnShift =
-          anyProfessionalRows.length === 0
-            ? true // No professionals recorded at all: impose no shift limit.
-            : anyProfessionalRows.some((p) => {
-                const window = workingWindowFor(p.workingHours, date);
-                if (window === null) return false;
-                if (!window) return true; // No schedule recorded for them.
-                return (
-                  slotMinutes !== null &&
-                  fitsInWindow(slotMinutes, serviceDuration, window)
-                );
-              });
-
-        if (!someoneOnShift) {
-          isAvailable = false;
-          return {
-            time: slot.time,
-            isAvailable,
-            professionalId: undefined,
-            professionalIds: undefined,
-            serviceId,
-          };
-        }
-
-        isAvailable = !existingAppointments.some((appointment) => {
+        const overlaps = (appointment: { scheduledTime: string; duration: number }) => {
           const [appointmentHour, appointmentMinute] = appointment.scheduledTime
             .split(":")
             .map(Number);
           const [slotHour, slotMinute] = slot.time.split(":").map(Number);
-
           const appointmentStart = appointmentHour * 60 + appointmentMinute;
           const appointmentEnd = appointmentStart + appointment.duration;
           const slotStart = slotHour * 60 + slotMinute;
           const slotEnd = slotStart + serviceDuration;
-
-          // Check if the slot overlaps with any existing appointment
           return !(appointmentEnd <= slotStart || appointmentStart >= slotEnd);
-        });
+        };
+
+        if (anyProfessionalRows.length === 0) {
+          // No professionals recorded at all: impose no shift limit, and the
+          // salon is free when nothing overlaps.
+          isAvailable = !existingAppointments.some(overlaps);
+        } else {
+          // Somebody who is on shift for the whole slot AND has nothing of
+          // their own overlapping it. This used to ask "is anyone on shift"
+          // and then "does ANY appointment overlap" -- so one stylist's 11:00
+          // took 10:30 away from the four who were free.
+          isAvailable = anyProfessionalRows.some((p) => {
+            const window = workingWindowFor(p.workingHours, date);
+            if (window === null) return false;
+            if (
+              window &&
+              !(slotMinutes !== null && fitsInWindow(slotMinutes, serviceDuration, window))
+            ) {
+              return false;
+            }
+            return !existingAppointments.some(
+              (appointment) => appointment.professionalId === p.id && overlaps(appointment),
+            );
+          });
+        }
       }
 
       return {
@@ -1447,7 +1511,17 @@ export class AppointmentsService {
       };
     });
 
-    return availableSlots.filter((slot) => slot.isAvailable);
+    const free = availableSlots.filter((slot) => slot.isAvailable);
+    if (!opts.onlineWindow) return free;
+
+    if (serviceRow && serviceRow.isActive === false) return [];
+    const window = {
+      timeZone: (tenant as any).timezone || "Europe/Madrid",
+      minHours: serviceRow?.minAdvanceBooking ?? 0,
+      maxHours: serviceRow ? (serviceRow.maxAdvanceBooking ?? 30) * 24 : Infinity,
+    };
+    const now = Date.now();
+    return free.filter((slot) => this.fitsOnlineWindow(dateString, slot.time, window, now) === "ok");
   }
 
   /**
@@ -1499,13 +1573,21 @@ export class AppointmentsService {
    * Send notifications when an appointment is created
    * Notifies: Client, Professional, Admin
    */
-  private async sendAppointmentCreatedNotifications(appointment: any) {
+  private async sendAppointmentCreatedNotifications(
+    appointment: any,
+  ): Promise<{ emailSent: boolean; smsSent: boolean }> {
+    // Whether the client's confirmation email and SMS actually went out. The
+    // chat receptionist said "te hemos enviado la confirmación" either way.
+    let emailSent = false;
+    let smsSent = false;
     try {
       this.logger.log(
         `Sending appointment created notifications for appointment ${appointment.id}`,
       );
+      // Ids only. This dumped the whole client row -- email, phone, notes,
+      // allergies and, for clients with an account, the password hash.
       this.logger.debug(
-        `Appointment details: clientId=${appointment.clientId}, client=${JSON.stringify(appointment.client)}`,
+        `Appointment details: clientId=${appointment.clientId}, tenantId=${appointment.tenantId}`,
       );
 
       // Get tenant language for translations
@@ -1556,7 +1638,9 @@ export class AppointmentsService {
       // Send confirmation email to client
       if (appointment.client?.email && canSendEmail) {
         try {
-          await this.emailService.sendAppointmentConfirmation({
+          // sendEmail reports failure in its result rather than throwing;
+          // this logged "Sent" for emails the provider had refused.
+          const sent: any = await this.emailService.sendAppointmentConfirmation({
             clientName,
             clientEmail: appointment.client.email,
             serviceName,
@@ -1565,9 +1649,16 @@ export class AppointmentsService {
             time: appointment.scheduledTime,
             salonName,
           });
-          this.logger.log(
-            `Sent confirmation email to client ${appointment.client.email}`,
-          );
+          if (sent?.success === false) {
+            this.logger.warn(
+              `Confirmation email to client ${appointment.clientId} was not sent: ${sent.error}`,
+            );
+          } else {
+            emailSent = true;
+            this.logger.log(
+              `Sent confirmation email to client ${appointment.clientId}`,
+            );
+          }
         } catch (error) {
           this.logger.error(
             `Failed to send confirmation email: ${error.message}`,
@@ -1575,14 +1666,15 @@ export class AppointmentsService {
         }
       } else if (appointment.client?.email && !canSendEmail) {
         this.logger.log(
-          `Skipping confirmation email to client ${appointment.client.email} due to preferences`,
+          `Skipping confirmation email to client ${appointment.clientId} due to preferences`,
         );
       }
 
       // Send confirmation SMS to client
       if (appointment.client?.phone && canSendSms) {
         try {
-          await this.smsService.sendAppointmentConfirmation({
+          // Like the email: failure comes back in the result, not as a throw.
+          const sent: any = await this.smsService.sendAppointmentConfirmation({
             clientName,
             clientPhone: appointment.client.phone,
             serviceName,
@@ -1591,9 +1683,14 @@ export class AppointmentsService {
             time: appointment.scheduledTime,
             salonName,
           });
-          this.logger.log(
-            `Sent confirmation SMS to client ${appointment.client.phone}`,
-          );
+          if (sent?.success === false) {
+            this.logger.warn(
+              `Confirmation SMS to client ${appointment.clientId} was not sent: ${sent.error}`,
+            );
+          } else {
+            smsSent = true;
+            this.logger.log(`Sent confirmation SMS to client ${appointment.clientId}`);
+          }
         } catch (error) {
           this.logger.error(
             `Failed to send confirmation SMS: ${error.message}`,
@@ -1601,7 +1698,7 @@ export class AppointmentsService {
         }
       } else if (appointment.client?.phone && !canSendSms) {
         this.logger.log(
-          `Skipping confirmation SMS to client ${appointment.client.phone} due to preferences`,
+          `Skipping confirmation SMS to client ${appointment.clientId} due to preferences`,
         );
       }
 
@@ -1618,7 +1715,7 @@ export class AppointmentsService {
             salonName,
           });
           this.logger.log(
-            `Sent confirmation WhatsApp to client ${appointment.client.phone}`,
+            `Sent confirmation WhatsApp to client ${appointment.clientId}`,
           );
         } catch (error) {
           this.logger.error(
@@ -1627,7 +1724,7 @@ export class AppointmentsService {
         }
       } else if (appointment.client?.phone && !canSendWhatsapp) {
         this.logger.log(
-          `Skipping confirmation WhatsApp to client ${appointment.client.phone} due to preferences`,
+          `Skipping confirmation WhatsApp to client ${appointment.clientId} due to preferences`,
         );
       }
 
@@ -1758,6 +1855,7 @@ export class AppointmentsService {
       );
       // Don't throw - notifications are not critical to the appointment creation
     }
+    return { emailSent, smsSent };
   }
 
   /**
@@ -1937,7 +2035,7 @@ export class AppointmentsService {
             reason,
           );
           this.logger.log(
-            `Sent cancellation email to client ${appointment.client.email}`,
+            `Sent cancellation email to client ${appointment.clientId}`,
           );
         } catch (error) {
           this.logger.error(
@@ -1946,7 +2044,7 @@ export class AppointmentsService {
         }
       } else if (appointment.client?.email && !canSendEmail) {
         this.logger.log(
-          `Skipping cancellation email to client ${appointment.client.email} due to preferences`,
+          `Skipping cancellation email to client ${appointment.clientId} due to preferences`,
         );
       }
 
@@ -1966,7 +2064,7 @@ export class AppointmentsService {
             reason,
           );
           this.logger.log(
-            `Sent cancellation SMS to client ${appointment.client.phone}`,
+            `Sent cancellation SMS to client ${appointment.clientId}`,
           );
         } catch (error) {
           this.logger.error(
@@ -1975,7 +2073,7 @@ export class AppointmentsService {
         }
       } else if (appointment.client?.phone && !canSendSms) {
         this.logger.log(
-          `Skipping cancellation SMS to client ${appointment.client.phone} due to preferences`,
+          `Skipping cancellation SMS to client ${appointment.clientId} due to preferences`,
         );
       }
 
@@ -1995,7 +2093,7 @@ export class AppointmentsService {
             reason,
           );
           this.logger.log(
-            `Sent cancellation WhatsApp to client ${appointment.client.phone}`,
+            `Sent cancellation WhatsApp to client ${appointment.clientId}`,
           );
         } catch (error) {
           this.logger.error(
@@ -2004,7 +2102,7 @@ export class AppointmentsService {
         }
       } else if (appointment.client?.phone && !canSendWhatsapp) {
         this.logger.log(
-          `Skipping cancellation WhatsApp to client ${appointment.client.phone} due to preferences`,
+          `Skipping cancellation WhatsApp to client ${appointment.clientId} due to preferences`,
         );
       }
 
@@ -2176,7 +2274,7 @@ export class AppointmentsService {
             oldTime,
           );
           this.logger.log(
-            `Sent rescheduled email to client ${appointment.client.email}`,
+            `Sent rescheduled email to client ${appointment.clientId}`,
           );
         } catch (error) {
           this.logger.error(
@@ -2185,7 +2283,7 @@ export class AppointmentsService {
         }
       } else if (appointment.client?.email && !canSendEmail) {
         this.logger.log(
-          `Skipping rescheduled email to client ${appointment.client.email} due to preferences`,
+          `Skipping rescheduled email to client ${appointment.clientId} due to preferences`,
         );
       }
 
@@ -2206,14 +2304,14 @@ export class AppointmentsService {
             oldTime,
           );
           this.logger.log(
-            `Sent rescheduled SMS to client ${appointment.client.phone}`,
+            `Sent rescheduled SMS to client ${appointment.clientId}`,
           );
         } catch (error) {
           this.logger.error(`Failed to send rescheduled SMS: ${error.message}`);
         }
       } else if (appointment.client?.phone && !canSendSms) {
         this.logger.log(
-          `Skipping rescheduled SMS to client ${appointment.client.phone} due to preferences`,
+          `Skipping rescheduled SMS to client ${appointment.clientId} due to preferences`,
         );
       }
 
@@ -2241,7 +2339,7 @@ export class AppointmentsService {
             oldTime,
           );
           this.logger.log(
-            `Sent rescheduled WhatsApp to client ${appointment.client.phone}`,
+            `Sent rescheduled WhatsApp to client ${appointment.clientId}`,
           );
         } catch (error) {
           this.logger.error(
@@ -2250,7 +2348,7 @@ export class AppointmentsService {
         }
       } else if (appointment.client?.phone && !canSendWhatsapp) {
         this.logger.log(
-          `Skipping rescheduled WhatsApp to client ${appointment.client.phone} due to preferences`,
+          `Skipping rescheduled WhatsApp to client ${appointment.clientId} due to preferences`,
         );
       }
 
@@ -2498,7 +2596,7 @@ export class AppointmentsService {
             salonName,
           });
           this.logger.log(
-            `Sent confirmation email to client ${appointment.client.email}`,
+            `Sent confirmation email to client ${appointment.clientId}`,
           );
         } catch (error) {
           this.logger.error(
@@ -2507,14 +2605,15 @@ export class AppointmentsService {
         }
       } else if (appointment.client?.email && !canSendEmail) {
         this.logger.log(
-          `Skipping confirmation email to client ${appointment.client.email} due to preferences`,
+          `Skipping confirmation email to client ${appointment.clientId} due to preferences`,
         );
       }
 
       // Send confirmation SMS to client
       if (appointment.client?.phone && canSendSms) {
         try {
-          await this.smsService.sendAppointmentConfirmation({
+          // Like the email: failure comes back in the result, not as a throw.
+          const sent: any = await this.smsService.sendAppointmentConfirmation({
             clientName,
             clientPhone: appointment.client.phone,
             serviceName,
@@ -2523,9 +2622,13 @@ export class AppointmentsService {
             time: appointment.scheduledTime,
             salonName,
           });
-          this.logger.log(
-            `Sent confirmation SMS to client ${appointment.client.phone}`,
-          );
+          if (sent?.success === false) {
+            this.logger.warn(
+              `Confirmation SMS to client ${appointment.clientId} was not sent: ${sent.error}`,
+            );
+          } else {
+            this.logger.log(`Sent confirmation SMS to client ${appointment.clientId}`);
+          }
         } catch (error) {
           this.logger.error(
             `Failed to send confirmation SMS: ${error.message}`,
@@ -2533,7 +2636,7 @@ export class AppointmentsService {
         }
       } else if (appointment.client?.phone && !canSendSms) {
         this.logger.log(
-          `Skipping confirmation SMS to client ${appointment.client.phone} due to preferences`,
+          `Skipping confirmation SMS to client ${appointment.clientId} due to preferences`,
         );
       }
 
@@ -2557,7 +2660,7 @@ export class AppointmentsService {
             salonName,
           });
           this.logger.log(
-            `Sent confirmation WhatsApp to client ${appointment.client.phone}`,
+            `Sent confirmation WhatsApp to client ${appointment.clientId}`,
           );
         } catch (error) {
           this.logger.error(
@@ -2566,7 +2669,7 @@ export class AppointmentsService {
         }
       } else if (appointment.client?.phone && !canSendWhatsapp) {
         this.logger.log(
-          `Skipping confirmation WhatsApp to client ${appointment.client.phone} due to preferences`,
+          `Skipping confirmation WhatsApp to client ${appointment.clientId} due to preferences`,
         );
       }
 

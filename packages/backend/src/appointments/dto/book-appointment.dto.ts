@@ -15,6 +15,7 @@ import {
   ValidateIf,
   ValidateNested,
 } from "class-validator";
+import { PHONE_PATTERN } from "../../common/phone";
 
 /**
  * Request bodies for POST /appointments (public) and POST /appointments/staff.
@@ -30,7 +31,7 @@ import {
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 
-export class BookingClientInfoDto {
+class ClientNameDto {
   @ApiProperty()
   @IsString()
   @MinLength(1)
@@ -41,16 +42,43 @@ export class BookingClientInfoDto {
   @IsString()
   @MaxLength(100)
   lastName!: string;
+}
 
-  @ApiProperty()
+// The two classes below share only the name on purpose: class-validator
+// merges an ancestor's rules, and an inherited ValidateIf would switch off
+// the online form's "phone is required".
+
+/** The dashboard: email or phone, one of them identifies the client. */
+export class BookingClientInfoDto extends ClientNameDto {
+  @ApiPropertyOptional()
+  @ValidateIf((o) => !!o.email || !o.phone)
   @IsEmail()
-  email!: string;
+  email?: string;
 
   @ApiPropertyOptional()
-  @IsString()
+  @ValidateIf((o) => !!o.phone || !o.email)
+  @Matches(PHONE_PATTERN, { message: "phone must be a phone number" })
   @MaxLength(30)
-  @IsOptional()
   phone?: string;
+}
+
+/**
+ * Who books online, on the site or through the chat: a phone is required --
+ * it is how the salon reaches them about a last-minute change -- and the
+ * email is optional. Asking for an email in the chat was friction, and typed
+ * addresses came out incomplete ("irene.ensayo@").
+ */
+export class OnlineClientInfoDto extends ClientNameDto {
+  @ApiProperty()
+  @IsDefined({ message: "phone is required" })
+  @Matches(PHONE_PATTERN, { message: "phone must be a phone number" })
+  @MaxLength(30)
+  phone!: string;
+
+  @ApiPropertyOptional()
+  @ValidateIf((o) => o.email !== undefined && o.email !== null && o.email !== "")
+  @IsEmail()
+  email?: string;
 }
 
 class BookingSlotDto {
@@ -91,11 +119,11 @@ export class OnlineBookingDto extends BookingSlotDto {
   professionalId?: string;
 
   /** Who is booking. No clientId here: an anonymous caller cannot book as an existing client. */
-  @ApiProperty({ type: BookingClientInfoDto })
+  @ApiProperty({ type: OnlineClientInfoDto })
   @IsDefined()
   @ValidateNested()
-  @Type(() => BookingClientInfoDto)
-  clientInfo!: BookingClientInfoDto;
+  @Type(() => OnlineClientInfoDto)
+  clientInfo!: OnlineClientInfoDto;
 
   @ApiPropertyOptional({ enum: ["online", "widget"] })
   @IsIn(["online", "widget"])

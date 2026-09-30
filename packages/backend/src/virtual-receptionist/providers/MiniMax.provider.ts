@@ -216,8 +216,13 @@ export class MiniMaxProvider {
           ...(useTopP
             ? { top_p: config.topP }
             : {}),
+          // The caller's choice applies to the first request only. Forced
+          // here as well, the model could never answer in text: a forced
+          // create_appointment was called again every round until maxIter,
+          // and the client got the generic fallback instead of the
+          // confirmation.
           ...(tools && tools.length > 0
-            ? { tools: tools as any, tool_choice: this.buildToolChoice(toolChoice) }
+            ? { tools: tools as any, tool_choice: { type: 'auto' as const } }
             : {}),
         });
         usage.add(response.usage);

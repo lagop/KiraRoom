@@ -3,6 +3,7 @@ import { plainToInstance } from "class-transformer";
 import { validateSync } from "class-validator";
 import { AppointmentsService } from "./appointments.service";
 import { OnlineBookingDto, StaffBookingDto } from "./dto/book-appointment.dto";
+import { phoneKey } from "../common/phone";
 
 /**
  * Who decides an appointment's salon, and whether its slot is real.
@@ -27,7 +28,7 @@ function day(offset: number): string {
 }
 
 function build({
-  existingClients = [] as Array<{ id: string; email: string; tenantId: string }>,
+  existingClients = [] as Array<{ id: string; email?: string | null; phone?: string | null; tenantId: string }>,
   freeTimes = { [PRO.id]: ["10:00"], [PRO_2.id]: ["10:00"] } as Record<string, string[]>,
   offering = [PRO.id, PRO_2.id],
   widgetProfessionals = [] as string[],
@@ -41,7 +42,14 @@ function build({
     $transaction: jest.fn(async (fn: any) =>
       fn({ $executeRaw: async (_s: TemplateStringsArray, key: string) => { locks.push(key); return 0; } }),
     ),
-    tenant: { findUnique: async () => ({ timezone: "Europe/Madrid" }) },
+    tenant: { findUnique: async () => ({ timezone: "Europe/Madrid", country: "ES" }) },
+    // findOrCreateClient's phone lookup: tenant and last nine digits.
+    $queryRaw: jest.fn(async (_s: TemplateStringsArray, tenantId: string, key: string) =>
+      existingClients
+        .filter((c) => c.tenantId === tenantId && phoneKey(c.phone) === key)
+        .slice(0, 1)
+        .map((c) => ({ id: c.id })),
+    ),
     widgetInstance: {
       findUnique: async ({ where }: any) =>
         where.id === WIDGET_ID ? { tenantId: "tenant-b", professionals: widgetProfessionals } : null,
@@ -80,6 +88,11 @@ function build({
         existingClients.push(row);
         return row;
       }),
+      update: jest.fn(async ({ where, data }: any) => {
+        const row = existingClients.find((c) => c.id === where.id)!;
+        Object.assign(row, data);
+        return row;
+      }),
     },
     appointment: {
       create: jest.fn(async ({ data }: any) => {
@@ -104,7 +117,7 @@ const BOOKING = {
   serviceId: SERVICE_ID,
   scheduledDate: day(3),
   scheduledTime: "10:00",
-  clientInfo: { firstName: "Ana", lastName: "López", email: "ana@mail.test" },
+  clientInfo: { firstName: "Ana", lastName: "López", email: "ana@mail.test", phone: "600 111 222" },
 };
 
 describe("online booking: who and where", () => {
@@ -156,7 +169,42 @@ describe("online booking: who and where", () => {
     expect(created[0]).toMatchObject({ tenantId: "tenant-b", clientId: "client-new" });
   });
 
-  it("never matches a client on a missing email", async () => {
+  it("finds a returning client by phone when they give no email", async () => {
+    // The phone is required online and the email optional; the same number
+    // typed another way is the same client.
+    const { service, created, prisma } = build({
+      existingClients: [{ id: "ana-at-b", email: null, phone: "+34 600-111-222", tenantId: "tenant-b" }],
+    });
+
+    await service.createOnline({ ...BOOKING, clientInfo: { firstName: "Ana", lastName: "López", phone: "600111222" } } as any);
+
+    expect(created[0].clientId).toBe("ana-at-b");
+    expect(prisma.client.create).not.toHaveBeenCalled();
+  });
+
+  it("fills in the email of a client found by phone, and never overwrites one", async () => {
+    const { service, prisma } = build({
+      existingClients: [
+        { id: "no-email", email: null, phone: "600111222", tenantId: "tenant-b" },
+        { id: "has-email", email: "old@mail.test", phone: "611222333", tenantId: "tenant-b" },
+      ],
+    });
+
+    await service.createOnline(BOOKING as any);
+    await service.createOnline({ ...BOOKING, clientInfo: { firstName: "B", lastName: "C", email: "new@mail.test", phone: "611 222 333" } } as any);
+
+    expect(prisma.client.update.mock.calls).toEqual([[{ where: { id: "no-email" }, data: { email: "ana@mail.test" } }]]);
+  });
+
+  it("stores a new client's phone in international form", async () => {
+    const { service, prisma } = build();
+
+    await service.createOnline({ ...BOOKING, clientInfo: { firstName: "Ana", lastName: "López", phone: "600 111 222" } } as any);
+
+    expect(prisma.client.create.mock.calls[0][0].data).toMatchObject({ phone: "+34600111222", email: null });
+  });
+
+  it("never matches a client on neither email nor phone", async () => {
     // Prisma drops an undefined filter: this matched the salon's first client.
     const { service, created } = build({
       existingClients: [{ id: "someone", email: "x@mail.test", tenantId: "tenant-b" }],
@@ -276,12 +324,26 @@ describe("request validation", () => {
     expect(errors(OnlineBookingDto, { ...BOOKING, professionalId: "", widgetInstanceId: WIDGET_ID, source: "widget" })).toEqual([]);
   });
 
-  it("rejects a public booking without an email, a real date or a real time", () => {
-    expect(errors(OnlineBookingDto, { ...BOOKING, clientInfo: { firstName: "A", lastName: "B" } })).toEqual(["clientInfo"]);
+  it("accepts a public booking without an email: the phone is what is required", () => {
+    expect(errors(OnlineBookingDto, { ...BOOKING, clientInfo: { firstName: "A", lastName: "B", phone: "600111222" } })).toEqual([]);
+    expect(errors(OnlineBookingDto, { ...BOOKING, clientInfo: { firstName: "A", lastName: "B", phone: "600111222", email: "" } })).toEqual([]);
+  });
+
+  it("rejects a public booking without a phone, a real date or a real time", () => {
+    expect(errors(OnlineBookingDto, { ...BOOKING, clientInfo: { firstName: "A", lastName: "B", email: "a@mail.test" } })).toEqual(["clientInfo"]);
+    expect(errors(OnlineBookingDto, { ...BOOKING, clientInfo: { firstName: "A", lastName: "B", phone: "12345" } })).toEqual(["clientInfo"]);
+    expect(errors(OnlineBookingDto, { ...BOOKING, clientInfo: { firstName: "A", lastName: "B", phone: "600111222", email: "a@" } })).toEqual(["clientInfo"]);
     expect(errors(OnlineBookingDto, { ...BOOKING, clientInfo: undefined })).toEqual(["clientInfo"]);
     expect(errors(OnlineBookingDto, { ...BOOKING, scheduledDate: "tomorrow" })).toEqual(["scheduledDate"]);
     expect(errors(OnlineBookingDto, { ...BOOKING, scheduledTime: "25:00" })).toEqual(["scheduledTime"]);
     expect(errors(OnlineBookingDto, { ...BOOKING, serviceId: undefined })).toEqual(["serviceId"]);
+  });
+
+  it("takes an email or a phone from staff", () => {
+    const staff = (clientInfo: object) => errors(StaffBookingDto, { ...BOOKING, clientInfo });
+    expect(staff({ firstName: "A", lastName: "B", email: "a@mail.test" })).toEqual([]);
+    expect(staff({ firstName: "A", lastName: "B", phone: "600111222" })).toEqual([]);
+    expect(staff({ firstName: "A", lastName: "B" })).toEqual(["clientInfo"]);
   });
 
   it("requires a client id or client details from staff", () => {

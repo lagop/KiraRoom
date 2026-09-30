@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AppointmentsService } from '../../appointments/appointments.service';
+import { confirmAppointment, proposeAppointment } from './receptionist-booking';
+import { resolveIds } from './resolve-ids';
 
 /**
  * Tools the Virtual Receptionist exposes to the LLM.
@@ -19,6 +21,15 @@ export interface SalonToolContext {
   prisma: PrismaService;
   tenantId: string;
   appointmentsService?: AppointmentsService;
+  /** The conversation the tools run in; booking needs it. */
+  conversation?: {
+    id: string;
+    clientId?: string | null;
+    /** The client's message this turn answers. */
+    lastUserMessage: string;
+    channel?: string;
+    externalUserId?: string;
+  };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -77,7 +88,9 @@ export const SALON_TOOLS = [
     name: 'list_professionals',
     description:
       'List the salon\'s active professionals. Use when the user asks who works ' +
-      'at the salon, their specialties, languages, or experience.',
+      'at the salon, their specialties, languages, or experience. `services` is ' +
+      'what each one can be booked for: to answer "who does X", use it, not the ' +
+      'bio or specialties.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -104,7 +117,7 @@ export const SALON_TOOLS = [
       properties: {
         serviceId: {
           type: 'string',
-          description: 'Service UUID.',
+          description: "Service id from list_services, or the service's exact name.",
         },
         date: {
           type: 'string',
@@ -112,10 +125,50 @@ export const SALON_TOOLS = [
         },
         professionalId: {
           type: 'string',
-          description: 'Optional professional UUID to scope the search.',
+          description: 'Optional professional id or full name to scope the search.',
         },
       },
       required: ['serviceId', 'date'],
+    },
+  },
+  {
+    name: 'propose_appointment',
+    description:
+      'Step 1 of booking. Once you have service, date, time, first name, last ' +
+      'name and phone (email only if they gave one), call this with them. It validates the details, checks ' +
+      'the slot can be booked, and records the proposal. Then show the client ' +
+      'the summary and ask them to confirm. Ids MUST come from list_services / ' +
+      'list_professionals, the time from check_availability. Call it again if ' +
+      'the client changes anything.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        serviceId: { type: 'string', description: "Service id from list_services, or the service's exact name." },
+        professionalId: {
+          type: 'string',
+          description: 'Professional id or full name, or omit for whoever is free.',
+        },
+        date: { type: 'string', description: 'YYYY-MM-DD, salon timezone.' },
+        time: { type: 'string', description: 'HH:MM, a slot check_availability returned.' },
+        firstName: { type: 'string' },
+        lastName: { type: 'string' },
+        phone: { type: 'string', description: 'Required: how the salon reaches them about a change. Ask the client for it.' },
+        email: { type: 'string', description: 'Optional. Only if the client gives it.' },
+        notes: { type: 'string' },
+      },
+      required: ['serviceId', 'date', 'time', 'firstName', 'lastName', 'phone'],
+    },
+  },
+  {
+    name: 'create_appointment',
+    description:
+      'Step 2 of booking. Books the proposal recorded by propose_appointment -- ' +
+      'it takes no details. Call it when the client has replied yes to the ' +
+      'summary. The server checks that reply itself and refuses otherwise. ' +
+      'Only created: true means the appointment exists.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
     },
   },
   {
@@ -220,6 +273,33 @@ export class SalonToolsService {
       return true;
     });
 
+    // A keyword that matches nothing is not "the salon has none". Asked in
+    // English for a "relaxing massage", the search found no Spanish name
+    // containing it and the model told the client the salon did no
+    // massages. Return the whole catalogue and say the keyword missed.
+    if (keyword && filtered.length === 0) {
+      const all = services.filter((s) => {
+        if (!input.audience) return true;
+        const svcAudience = detectAudienceFromService(s.name, s.description);
+        return !svcAudience || svcAudience === input.audience;
+      });
+      return {
+        services: all.slice(0, limit).map((s) => ({
+          id: s.id,
+          name: s.name,
+          description: s.description,
+          category: s.category,
+          durationMinutes: s.duration,
+          price: Number(s.price).toFixed(2),
+          currency: s.currency,
+        })),
+        totalMatching: 0,
+        note:
+          `No service name or description contains "${input.keyword}". This is the full catalogue: ` +
+          'look for what the client means in it (names may be in another language) before saying the salon does not offer it.',
+      };
+    }
+
     return {
       services: filtered.slice(0, limit).map((s) => ({
         id: s.id,
@@ -289,6 +369,7 @@ export class SalonToolsService {
       yearsExperience: number | null;
       languages: unknown;
       bio: string | null;
+      services: string[];
     }>;
     totalMatching: number;
   }> {
@@ -306,17 +387,37 @@ export class SalonToolsService {
         yearsExperience: true,
         languages: true,
         isOwner: true,
+        services: { select: { service: { select: { name: true, isActive: true } } } },
       },
     });
 
-    const specialty = input.specialty ? normalize(input.specialty) : null;
+    // "masajes" must find "Masaje Relajante": compare without a plural ending.
+    const specialty = input.specialty ? normalize(input.specialty).trim().replace(/(es|s)$/, '') : null;
     const language = input.language ? normalize(input.language) : null;
+
+    // The services a professional is assigned decide who does what; the bio
+    // and specialties are free text and can disagree. Asked who does
+    // massages, the text search found Carmen -- whose bio mentions them --
+    // while only Ana is assigned massages and is who a booking gets. So
+    // when the assigned services answer the question, they are the answer.
+    const assigned = (p: any): string =>
+      normalize(
+        ((p.services ?? []) as any[])
+          .filter((ps) => ps.service?.isActive)
+          .map((ps) => ps.service.name)
+          .join(' | '),
+      );
+    const byService = specialty ? professionals.filter((p) => assigned(p).includes(specialty)) : [];
 
     const filtered = professionals.filter((p) => {
       if (specialty) {
-        const specs = (p.specialties as string[]) ?? [];
-        const haystack = normalize([p.position ?? '', p.bio ?? '', ...specs].join(' '));
-        if (!haystack.includes(specialty)) return false;
+        if (byService.length > 0) {
+          if (!byService.includes(p)) return false;
+        } else {
+          const specs = (p.specialties as string[]) ?? [];
+          const haystack = normalize([p.position ?? '', p.bio ?? '', ...specs].join(' '));
+          if (!haystack.includes(specialty)) return false;
+        }
       }
       if (language) {
         const langs = ((p.languages as string[]) ?? []).map(normalize);
@@ -335,6 +436,13 @@ export class SalonToolsService {
         yearsExperience: p.yearsExperience,
         languages: p.languages,
         bio: p.bio,
+        // What the diary will book them for. The bio and specialties are free
+        // text and can say otherwise: in the test salon Carmen's bio mentions
+        // massages, but only Ana is assigned them, and the model told a client
+        // Carmen does the massages.
+        services: ((p as any).services ?? [])
+          .filter((ps: any) => ps.service?.isActive)
+          .map((ps: any) => ps.service.name),
       })),
       totalMatching: filtered.length,
     };
@@ -344,22 +452,30 @@ export class SalonToolsService {
     ctx: SalonToolContext,
     input: { serviceId: string; date: string; professionalId?: string },
   ): Promise<
-    | { date: string; serviceId: string; slots: Array<{ time: string }> }
+    | { date: string; serviceId: string; slots: Array<{ time: string }>; reason?: string; message?: string }
     | { error: string; date?: string; message?: string }
   > {
     if (!ctx.appointmentsService) {
       return { error: 'appointments_service_unavailable' };
     }
-    const date = new Date(`${input.date}T00:00:00`);
+    // UTC midnight, like every other caller of getAvailableSlots. Local
+    // midnight on a server west or east of UTC is the previous or next UTC
+    // day, so this offered one day's slots under another day's name.
+    const date = new Date(`${input.date}T00:00:00.000Z`);
     if (Number.isNaN(date.getTime())) {
       return { error: 'invalid_date', date: input.date };
     }
     try {
+      // Only what a booking will accept: not inside the service's minimum
+      // notice, not beyond its maximum advance, not in the past.
       const slots = await ctx.appointmentsService.getAvailableSlots(
         ctx.tenantId,
         date,
         input.professionalId,
         input.serviceId,
+        undefined,
+        undefined,
+        { onlineWindow: true },
       );
       // AppointmentsService returns objects with a `time` field; the
       // chatbot only needs the HH:mm strings, so flatten before
@@ -367,6 +483,10 @@ export class SalonToolsService {
       const flat = (slots ?? []).map((s: any) =>
         typeof s === 'string' ? s : s?.time,
       ).filter((t: unknown): t is string => typeof t === 'string');
+      if (flat.length === 0) {
+        const why = await this.whyNoSlots(ctx, input.serviceId, input.date);
+        if (why) return { date: input.date, serviceId: input.serviceId, slots: [], ...why };
+      }
       return { date: input.date, serviceId: input.serviceId, slots: flat as any };
     } catch (err) {
       this.logger.warn(
@@ -374,6 +494,52 @@ export class SalonToolsService {
       );
       return { error: 'availability_check_failed', message: (err as Error).message };
     }
+  }
+
+  /**
+   * Why a day has no slots, when the reason is the online booking window.
+   * An empty list alone left the model guessing: asked for 15 December, it
+   * said its calendar "only reaches 13 October" -- the two-week date list in
+   * the prompt -- and suggested booking a nearer date and changing it later.
+   */
+  private async whyNoSlots(
+    ctx: SalonToolContext,
+    serviceId: string,
+    date: string,
+  ): Promise<{ reason: string; message: string } | null> {
+    const appointments = ctx.appointmentsService as any;
+    if (typeof appointments?.onlineBookingWindow !== 'function') return null;
+    const window = await appointments.onlineBookingWindow(ctx.tenantId, serviceId);
+    if (!window) return null;
+    if (appointments.fitsOnlineWindow(date, '00:00', window) === 'too-far') {
+      const last = new Intl.DateTimeFormat('en-CA', { timeZone: window.timeZone }).format(
+        new Date(Date.now() + window.maxHours * 3_600_000),
+      );
+      return {
+        reason: 'beyond_online_window',
+        message: `This service can be booked online up to ${last}. For a later date the client must contact the salon.`,
+      };
+    }
+    if (appointments.fitsOnlineWindow(date, '23:59', window) === 'too-soon') {
+      return {
+        reason: 'too_soon',
+        message: `This service needs at least ${window.minHours} hours' notice to book online. Offer a later day, or the salon's phone.`,
+      };
+    }
+    return null;
+  }
+
+  /** Step 1 of booking; see receptionist-booking.ts. */
+  async proposeAppointment(
+    ctx: SalonToolContext,
+    input: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    return proposeAppointment(ctx, input);
+  }
+
+  /** Step 2 of booking; see receptionist-booking.ts. */
+  async createAppointment(ctx: SalonToolContext): Promise<Record<string, unknown>> {
+    return confirmAppointment(ctx);
   }
 
   async getSalonInfo(
@@ -431,7 +597,12 @@ export async function executeSalonTool(
   input: unknown,
   ctx: SalonToolContext,
 ): Promise<Record<string, unknown>> {
-  const args = (input ?? {}) as Record<string, unknown>;
+  let args = (input ?? {}) as Record<string, unknown>;
+  if (name === 'get_service' || name === 'check_availability' || name === 'propose_appointment') {
+    const resolved = await resolveIds(ctx, args);
+    if (resolved.error) return resolved.error;
+    args = resolved.args!;
+  }
   switch (name) {
     case 'list_services':
       return service.listServices(ctx, args as any);
@@ -441,6 +612,10 @@ export async function executeSalonTool(
       return service.listProfessionals(ctx, args as any);
     case 'check_availability':
       return service.checkAvailability(ctx, args as any);
+    case 'propose_appointment':
+      return service.proposeAppointment(ctx, args);
+    case 'create_appointment':
+      return service.createAppointment(ctx);
     case 'get_salon_info':
       return service.getSalonInfo(ctx);
     default:

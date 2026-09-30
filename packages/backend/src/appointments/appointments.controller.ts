@@ -94,26 +94,17 @@ export class AppointmentsController {
     const profIds = professionalIds
       ? professionalIds.split(",").filter(Boolean)
       : undefined;
-    const slots = await this.appointmentsService.getAvailableSlots(
+    // The salon's own staff may book at short notice by hand; everyone else
+    // is offered only what an online booking will accept.
+    const { staff } = await this.publicViewer.resolve(req, tenantId);
+    return this.appointmentsService.getAvailableSlots(
       tenantId,
       new Date(date),
       professionalId,
       serviceId,
       duration,
       profIds,
-    );
-    // The salon's own staff may book at short notice by hand; everyone else
-    // is offered only what createOnline will accept.
-    const { staff } = await this.publicViewer.resolve(req, tenantId);
-    if (staff) return slots;
-    return this.appointmentsService.restrictToOnlineWindow(
-      tenantId,
-      serviceId,
-      // A string from the query; a Date if the pipe ever converts it.
-      typeof (date as unknown) === "string"
-        ? (date as unknown as string).slice(0, 10)
-        : new Date(date).toISOString().slice(0, 10),
-      slots,
+      { onlineWindow: !staff },
     );
   }
 

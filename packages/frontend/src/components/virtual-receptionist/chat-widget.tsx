@@ -1,22 +1,88 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, X, Minimize, Maximize, MessageCircle, Phone } from 'lucide-react';
 import apiClient from '@/lib/api';
+import { ChatInline, parseChatMarkdown } from '@/lib/chat-markdown';
+
+function Inline({ parts }: { parts: ChatInline[] }) {
+  return (
+    <>
+      {parts.map((p, i) => (p.bold ? <strong key={i}>{p.text}</strong> : <React.Fragment key={i}>{p.text}</React.Fragment>))}
+    </>
+  );
+}
+
+/** The receptionist's reply with its bold, line breaks and lists; see chat-markdown. */
+function AssistantText({ text }: { text: string }) {
+  return (
+    <div className="text-sm space-y-2 break-words">
+      {parseChatMarkdown(text).map((block, i) => {
+        if (block.type === 'list') {
+          const List = block.ordered ? 'ol' : 'ul';
+          return (
+            <List key={i} start={block.ordered ? block.start : undefined} className={`${block.ordered ? 'list-decimal' : 'list-disc'} pl-5 space-y-0.5`}>
+              {block.items.map((item, j) => (
+                <li key={j}>
+                  <Inline parts={item} />
+                </li>
+              ))}
+            </List>
+          );
+        }
+        return (
+          <p key={i}>
+            {block.lines.map((line, j) => (
+              <React.Fragment key={j}>
+                {j > 0 && <br />}
+                <Inline parts={line} />
+              </React.Fragment>
+            ))}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
 
 interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
-  provider?: string;
-  error?: string;
 }
 
 interface MessageResponseDto {
   id: string;
   content: string;
   requiresHandoff: boolean;
-  provider?: string;
-  error?: string;
+}
+
+const VISITOR_KEY = 'kira_chat_visitor';
+
+/**
+ * A stable id for a visitor who is not signed in, kept in this browser.
+ *
+ * The widget used to send clientId "anonymous" for all of them. The backend
+ * could not resume a conversation under that id, so every message started a
+ * new one with no memory -- and the receptionist now collects names and
+ * emails and books across several messages. Each visitor gets their own id.
+ */
+function visitorId(): string {
+  const fresh = () =>
+    `visitor-${
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+    }`;
+  try {
+    const stored = localStorage.getItem(VISITOR_KEY);
+    if (stored) return stored;
+    const id = fresh();
+    localStorage.setItem(VISITOR_KEY, id);
+    return id;
+  } catch {
+    // Storage blocked: an id for this page view is still better than a shared one.
+    return fresh();
+  }
 }
 
 interface ChatWidgetProps {
@@ -31,7 +97,7 @@ interface ChatWidgetProps {
 
 const ChatWidget: React.FC<ChatWidgetProps> = ({ 
   salonId = 'default', 
-  clientId = 'anonymous',
+  clientId,
   clientName,
   clientEmail,
   clientPhone,
@@ -46,6 +112,13 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
   const [showHandoff, setShowHandoff] = useState(false);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  // Signed-in clients use their own id; everyone else a per-browser one.
+  const visitorRef = useRef<string | null>(null);
+  const effectiveClientId = () => {
+    if (clientId && clientId !== 'anonymous') return clientId;
+    if (!visitorRef.current) visitorRef.current = visitorId();
+    return visitorRef.current;
+  };
 
   useEffect(() => {
     scrollToBottom();
@@ -71,7 +144,7 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
 
     try {
       const response: MessageResponseDto = await apiClient.sendVirtualReceptionistMessage({
-        clientId,
+        clientId: effectiveClientId(),
         salonId,
         message: inputValue,
         channel: 'web',
@@ -87,8 +160,6 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
         role: 'assistant',
         content: response.content,
         timestamp: new Date(),
-        provider: response.provider,
-        error: response.error,
       };
 
       setMessages(prev => [...prev, assistantMessage]);
@@ -98,19 +169,12 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
       }
     } catch (error) {
       console.error('Error sending message:', error);
-      const apiError = error as { status?: number; message?: string };
-      let detail = '';
-      if (apiError?.status) {
-        detail = apiError.message
-          ? ` (HTTP ${apiError.status}: ${apiError.message})`
-          : ` (HTTP ${apiError.status})`;
-      } else if (apiError?.message) {
-        detail = ` (${apiError.message})`;
-      }
+      // The visitor gets a plain apology; the HTTP status and server
+      // message are for the console above, not for them.
       const errorMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: `Lo sentimos, estamos experimentando problemas. Por favor, inténtalo de nuevo.${detail}`,
+        content: `Lo sentimos, estamos experimentando problemas. Por favor, inténtalo de nuevo.`,
         timestamp: new Date(),
       };
       setMessages(prev => [...prev, errorMessage]);
@@ -203,21 +267,10 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
                         : 'bg-white text-gray-800 rounded-bl-none shadow-sm'
                     }`}
                   >
-                    <p className="text-sm">{message.content}</p>
-                    {message.error && (
-                      <p
-                        className="text-xs mt-1 px-2 py-1 rounded bg-red-50 text-red-700 border border-red-200 break-words"
-                        title="Debug: underlying error returned by the backend"
-                      >
-                        <span className="font-semibold">Debug:</span> {message.error}
-                      </p>
-                    )}
-                    {message.provider && (
-                      <p className="text-xs opacity-70 mt-1">
-                        {message.provider === 'openai' ? 'OpenAI' :
-                         message.provider === 'anthropic' ? 'Anthropic' :
-                         message.provider === 'google' ? 'Google' : 'LLM'}
-                      </p>
+                    {message.role === 'assistant' ? (
+                      <AssistantText text={message.content} />
+                    ) : (
+                      <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
                     )}
                     <p className="text-xs opacity-60 mt-1">
                       {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
