@@ -341,16 +341,24 @@ export default function SalonBookingPage({
 
       await apiClient.createAppointment({
         tenantId: salonData.id,
-        ...(currentUser?.id
-          ? { clientId: currentUser.id }
+        // Signed in or not, the booking carries the client's details: the
+        // public endpoint takes no clientId (an anonymous caller must not
+        // book as someone else) and finds the client by email or phone in
+        // this salon. Sending only clientId made every signed-in booking fail
+        // with "clientInfo should not be null or undefined".
+        clientInfo: currentUser
+          ? {
+              firstName: currentUser.firstName,
+              lastName: currentUser.lastName ?? "",
+              email: currentUser.email || undefined,
+              phone: currentUser.phone || bookingData.clientPhone,
+            }
           : {
-              clientInfo: {
-                firstName,
-                lastName: restOfName.join(" "),
-                email: bookingData.clientEmail.trim() || undefined,
-                phone: bookingData.clientPhone,
-              },
-            }),
+              firstName,
+              lastName: restOfName.join(" "),
+              email: bookingData.clientEmail.trim() || undefined,
+              phone: bookingData.clientPhone,
+            },
         serviceId: bookingData.serviceId,
         professionalId: bookingData.professionalId,
         // The DTO's names, not the form's: it wants scheduledDate and
@@ -623,11 +631,32 @@ export default function SalonBookingPage({
                       <p className="text-sm text-green-700 mb-1">
                         <strong>{t("common.email")}:</strong> {currentUser.email}
                       </p>
-                      {currentUser.phone && (
+                      {currentUser.phone ? (
                         <p className="text-sm text-green-700">
                           <strong>{t("common.phone")}:</strong> {currentUser.phone}
-                      </p>
-                    )}
+                        </p>
+                      ) : (
+                        // Online bookings need a phone: it is how the salon
+                        // reaches the client about a last-minute change.
+                        <div className="mt-3">
+                          <label
+                            htmlFor="clientPhone"
+                            className="block text-sm font-medium text-gray-700 mb-1"
+                          >
+                            {t("bookingPublic.phone")} *
+                          </label>
+                          <input
+                            type="tel"
+                            id="clientPhone"
+                            name="clientPhone"
+                            value={bookingData.clientPhone}
+                            onChange={handleInputChange}
+                            required
+                            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors"
+                            placeholder="+34 123 456 789"
+                          />
+                        </div>
+                      )}
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
