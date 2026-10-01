@@ -5,11 +5,13 @@ import { WhatsAppService } from "./whatsapp.service";
 import { MetaCloudApiClient } from "./meta-cloud-api.client";
 import { TelegramChannelProvider } from "../virtual-receptionist/channels/telegram-channel.provider";
 import { MessageBundlesModule } from "../message-bundles/message-bundles.module";
+import { VirtualReceptionistModule } from "../virtual-receptionist/virtual-receptionist.module";
+import { WhatsAppReceptionistService } from "./whatsapp-receptionist.service";
 
 @Module({
-  imports: [MessageBundlesModule],
+  imports: [MessageBundlesModule, VirtualReceptionistModule],
   controllers: [WhatsAppController, MetaWebhookController, ChannelsWebhookController],
-  providers: [WhatsAppService, MetaCloudApiClient, TelegramChannelProvider],
+  providers: [WhatsAppService, MetaCloudApiClient, TelegramChannelProvider, WhatsAppReceptionistService],
   exports: [WhatsAppService],
 })
 export class WhatsAppModule {}

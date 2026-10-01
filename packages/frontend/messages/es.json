@@ -3,7 +3,7 @@
     "badge": "Plataforma disponible en español e inglés",
     "hero": {
       "title": "Gestiona tu peluquería o centro de belleza sin fricción",
-      "subtitle": "Agenda online, recordatorios automáticos, recepcionista IA en tu web, fidelización, wallet y mucho más. 14 días gratis, sin tarjeta.",
+      "subtitle": "Agenda online, recordatorios automáticos, recepcionista IA en tu web y en WhatsApp, fidelización, wallet y mucho más. 14 días gratis, sin tarjeta.",
       "ctaPrimary": "Empieza 14 días gratis",
       "ctaSecondary": "Ver demo de reservas",
       "ctaLogin": "Ya tengo cuenta"
@@ -20,7 +20,7 @@
       },
       "ai": {
         "title": "Recepcionista IA",
-        "desc": "Kira atiende a tus clientas en tu web y reserva la cita por ti."
+        "desc": "Kira atiende a tus clientas en tu web y por WhatsApp, y reserva la cita por ti."
       },
       "loyalty": {
         "title": "Fidelización",
@@ -315,7 +315,7 @@
       "webTitle": "Web (en la app)",
       "webDescription": "Chat web dentro de la app. Siempre activo.",
       "whatsappTitle": "WhatsApp",
-      "whatsappDescription": "El recepcionista aún no responde por WhatsApp. Te avisaremos cuando esté disponible.",
+      "whatsappDescription": "Conecta tu número de WhatsApp Business y el recepcionista atenderá y reservará por WhatsApp, con las mismas reglas que en la web.",
       "alwaysOn": "Siempre activo",
       "metaTitle": "Facebook Messenger + Instagram",
       "metaDescription": "Messenger y los DMs de Instagram comparten una sola conexión Meta (pageId + accessToken). El salón debe tener una Facebook Page.",
@@ -383,7 +383,8 @@
       "metricsInbound": "entrantes",
       "metricsOut": "enviados",
       "metricsBlocked": "bloqueados",
-      "webOnlyNotice": "Hoy el recepcionista responde solo en el chat de tu web. Puedes dejar conectados Messenger, Instagram y Telegram, pero todavía no contesta por esos canales ni por WhatsApp."
+      "webOnlyNotice": "El recepcionista responde en el chat de tu web y, si conectas WhatsApp Business, también por WhatsApp desde tu número. En Messenger, Instagram y Telegram todavía no contesta.",
+      "whatsappConnectedDescription": "El recepcionista responde por WhatsApp desde tu número de WhatsApp Business."
     },
     "currentPlan": "Plan actual",
     "currentPlanLabel": "Tu plan actual",

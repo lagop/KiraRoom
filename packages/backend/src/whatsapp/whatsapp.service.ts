@@ -5,6 +5,7 @@ import { ConfigService } from "@nestjs/config";
 import { createHmac, timingSafeEqual } from "crypto";
 import { WhatsAppRecipientStatus, WhatsAppCampaignStatus } from "@prisma/client";
 import { MessageBundlesService } from "../message-bundles/message-bundles.service";
+import { WhatsAppReceptionistService } from "./whatsapp-receptionist.service";
 
 interface BucketState {
   capacity: number;
@@ -25,6 +26,7 @@ export class WhatsAppService {
     private meta: MetaCloudApiClient,
     private config: ConfigService,
     private readonly messageBundles: MessageBundlesService,
+    private readonly receptionist: WhatsAppReceptionistService,
   ) {}
 
   // --- WABA OAuth connect -------------------------------------------------
@@ -226,17 +228,30 @@ export class WhatsAppService {
 
   private async handleChange(tenantId: string, change: any): Promise<void> {
     const value = change.value ?? {};
-    // Inbound messages (opt-out STOP)
+    // Inbound messages: opt-out words, and everything else to the receptionist.
     const messages = value.messages ?? [];
+    const names = new Map<string, string>(
+      (value.contacts ?? []).map((c: any) => [c?.wa_id, c?.profile?.name] as [string, string]),
+    );
     for (const m of messages) {
       const body = (m.text?.body ?? "").toString().trim().toLowerCase();
       const from = m.from;
       if (!from) continue;
-      const isStop =
-        body === "stop" ||
-        body === "unsubscribe" ||
-        body === "cancelar" ||
-        body === "baja";
+      // "cancelar" used to opt the person out of campaigns. With the
+      // receptionist answering, it is far more likely to be about an
+      // appointment, so only the explicit words unsubscribe.
+      const isStop = body === "stop" || body === "unsubscribe" || body === "baja";
+      if (!isStop) {
+        // Not awaited: the webhook answers Meta at once; see WhatsAppReceptionistService.
+        void this.receptionist.enqueue(tenantId, {
+          id: m.id,
+          from,
+          type: m.type,
+          text: m.text?.body,
+          profileName: names.get(from),
+        });
+        continue;
+      }
       if (isStop) {
         const client = await this.prisma.client.findFirst({
           where: { tenantId, phone: { contains: from } },

@@ -95,6 +95,8 @@ export default function ChannelsSettingsPage() {
   const [config, setConfig] = useState<ChannelsConfig>(EMPTY_CONFIG);
   const [wizard, setWizard] = useState<WizardKind>(null);
   const [state, setState] = useState<LoadState>({ kind: "loading" });
+  // WhatsApp Business connected (Ajustes > WhatsApp): the receptionist answers there.
+  const [whatsappConnected, setWhatsappConnected] = useState(false);
   // H-4: per-channel volume counters. Polled every 30s so the tile
   // stays roughly fresh without a websocket.
   const [metrics, setMetrics] = useState<{
@@ -121,10 +123,12 @@ export default function ChannelsSettingsPage() {
   const load = useCallback(async () => {
     setState({ kind: "loading" });
     try {
-      const [data, tenant] = await Promise.all([
+      const [data, tenant, whatsapp] = await Promise.all([
         apiClient.getChannelsConfig(),
         apiClient.getTenant().catch(() => null),
+        apiClient.getWhatsAppConnection().catch(() => null),
       ]);
+      setWhatsappConnected(!!whatsapp);
       const plan = (tenant?.plan as string | undefined) ?? null;
       setConfig(data ?? EMPTY_CONFIG);
       setState({ kind: "ready", plan });
@@ -243,10 +247,23 @@ export default function ChannelsSettingsPage() {
           <ChannelCard
             icon={<MessageSquare className="w-5 h-5" />}
             title={t("billing.channels.whatsappTitle")}
-            description={t("billing.channels.whatsappDescription")}
-            status="pending"
-            on={false}
+            description={t(
+              whatsappConnected
+                ? "billing.channels.whatsappConnectedDescription"
+                : "billing.channels.whatsappDescription",
+            )}
+            status={whatsappConnected ? "connected" : "disconnected"}
+            on={whatsappConnected}
             disabled
+            action={
+              <a
+                href="/dashboard/settings/whatsapp"
+                className="px-3 py-1.5 text-xs rounded-md border border-emerald-300 text-emerald-700 hover:bg-emerald-50 inline-flex items-center gap-1"
+              >
+                {whatsappConnected ? t("billing.channels.manage") : t("billing.channels.connect")}
+                <ChevronRight className="w-3 h-3" />
+              </a>
+            }
           />
 
           {/* META (FB + IG) */}

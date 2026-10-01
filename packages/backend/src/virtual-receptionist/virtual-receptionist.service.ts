@@ -214,9 +214,15 @@ export class VirtualReceptionistService {
       // sees when there is prior context. For first turns the LLM
       // was responding to "" with a generic greeting. Combine both
       // here so the model always sees what the user actually asked.
-      const userUtterance = responseContent
-        ? `${responseContent}\n\nUsuario: ${dto.message}`
-        : dto.message;
+      // On WhatsApp the sender's number is their phone, and the booking tool
+      // already uses it (channelPhone): the model must not ask for it again.
+      const channelNote =
+        String(dto.channel) === 'whatsapp' && dto.metadata?.clientPhone
+          ? `[Nota del sistema: el cliente escribe por WhatsApp desde el ${dto.metadata.clientPhone}. Ese es su teléfono: no se lo pidas. Para reservar, pídele solo el nombre y los apellidos.]\n\n`
+          : '';
+      const userUtterance =
+        channelNote +
+        (responseContent ? `${responseContent}\n\nUsuario: ${dto.message}` : dto.message);
 
       // P2A-receptionist-tools: MiniMax-M3 partially honors
       // `tool_choice: { type: 'tool', name: '...' }` — but only for
@@ -440,7 +446,7 @@ export class VirtualReceptionistService {
   private async handleComplaintOrFeedback(dto: SendMessageDto, analysis: any): Promise<string> {
     this.logger.log(`Handling complaint/feedback for client ${dto.clientId}`);
     
-    return 'Lo sentimos por la inconveniencia. Un miembro de nuestro equipo se pondrÃ¡ en contacto contigo pronto.';
+    return 'Lo sentimos por la inconveniencia. Un miembro de nuestro equipo se pondrá en contacto contigo pronto.';
   }
 
   private async handleGeneralQuery(dto: SendMessageDto, analysis: any): Promise<string> {
@@ -511,7 +517,7 @@ export class VirtualReceptionistService {
       isActive: true,
       provider: 'openai',
       model: 'gpt-4',
-      greetingMessage: 'Â¡Hola! Â¿En quÃ© puedo ayudarte hoy?',
+      greetingMessage: '¡Hola! ¿En qué puedo ayudarte hoy?',
       fallbackMessage: 'Lo sentimos, estamos experimentando problemas.',
       responseDelay: 1000,
       workingHours: {
