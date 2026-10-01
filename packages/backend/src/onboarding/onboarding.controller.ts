@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, Post, Req, UseGuards } from "@nestjs/comm
 import { Request } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { OnboardingService } from "./onboarding.service";
+import { Roles, SALON_TEAM, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 
 interface AuthedRequest extends Request {
   user: { tenantId?: string };
@@ -13,24 +14,28 @@ export class OnboardingController {
   constructor(private readonly onboarding: OnboardingService) {}
 
   @Get("state")
+  @Roles(...SALON_TEAM)
   async getState(@Req() req: AuthedRequest) {
     const tenantId = this.requireTenantId(req);
     return this.onboarding.getState(tenantId);
   }
 
   @Post("step/:key/skip")
+  @Roles(...SALON_MANAGERS)
   async skipStep(@Req() req: AuthedRequest, @Param("key") key: string) {
     const tenantId = this.requireTenantId(req);
     return this.onboarding.skipStep(tenantId, key);
   }
 
   @Post("checklist/dismiss")
+  @Roles(...SALON_MANAGERS)
   async dismiss(@Req() req: AuthedRequest) {
     const tenantId = this.requireTenantId(req);
     return this.onboarding.dismissChecklist(tenantId);
   }
 
   @Post("checklist/restore")
+  @Roles(...SALON_MANAGERS)
   async restore(@Req() req: AuthedRequest) {
     const tenantId = this.requireTenantId(req);
     return this.onboarding.restoreChecklist(tenantId);
@@ -39,12 +44,14 @@ export class OnboardingController {
   // ==================== Sprint 2 / 2.1 — owner wizard ====================
 
   @Get("wizard")
+  @Roles(...SALON_MANAGERS)
   async getWizard(@Req() req: AuthedRequest) {
     const tenantId = this.requireTenantId(req);
     return this.onboarding.getWizard(tenantId);
   }
 
   @Post("wizard")
+  @Roles(...SALON_MANAGERS)
   async submitWizard(
     @Req() req: AuthedRequest,
     @Body() body: {

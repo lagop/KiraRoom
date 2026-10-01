@@ -9,6 +9,7 @@ import type { Request, Response } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { Public } from "../auth/decorators/public.decorator";
 import { WidgetService } from "./widget.service";
+import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 
 interface AuthedRequest extends Request {
   user: { id: string; tenantId: string; role: string };
@@ -39,6 +40,7 @@ export class WidgetController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: "List widget instances for current tenant" })
+  @Roles(...SALON_MANAGERS)
   async list(@Req() req: AuthedRequest) {
     return this.widgetService.list(req.user.tenantId);
   }
@@ -47,6 +49,7 @@ export class WidgetController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: "Create a widget instance (token returned once)" })
+  @Roles(...SALON_MANAGERS)
   async create(@Req() req: AuthedRequest, @Body() body: CreateWidgetDto) {
     if (!body?.name) throw new BadRequestException("name is required");
     const created = await this.widgetService.create(req.user.tenantId, body);
@@ -66,6 +69,7 @@ export class WidgetController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: "Update whitelist / theme for a widget instance" })
+  @Roles(...SALON_MANAGERS)
   async update(
     @Req() req: AuthedRequest,
     @Param("id", ParseUUIDPipe) id: string,
@@ -78,6 +82,7 @@ export class WidgetController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: "Revoke a widget instance" })
+  @Roles(...SALON_MANAGERS)
   async revoke(@Req() req: AuthedRequest, @Param("id", ParseUUIDPipe) id: string) {
     return this.widgetService.revoke(req.user.tenantId, id);
   }

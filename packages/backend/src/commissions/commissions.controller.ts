@@ -2,7 +2,7 @@ import { Controller, Get, Post, Body, Param, Query, UseGuards } from "@nestjs/co
 import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
-import { Roles } from "../auth/decorators/roles.decorator";
+import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { UserRole } from "@prisma/client";
 import {
@@ -46,6 +46,7 @@ export class CommissionsController {
    * Calculate commission for a specific appointment
    */
   @Post("calculate/:appointmentId")
+  @Roles(...SALON_MANAGERS)
   async calculateCommission(
     @CurrentUser() user: any,
     @Param("appointmentId") appointmentId: string,
@@ -61,6 +62,7 @@ export class CommissionsController {
    * Calculate pending commissions for a professional
    */
   @Get("pending/:professionalId")
+  @Roles(...SALON_MANAGERS)
   async getPendingCommissions(
     @CurrentUser() user: any,
     @Param("professionalId") professionalId: string,
@@ -75,6 +77,7 @@ export class CommissionsController {
    * Get commission summary for a professional
    */
   @Get("summary/:professionalId")
+  @Roles(...SALON_MANAGERS)
   async getCommissionSummary(
     @CurrentUser() user: any,
     @Param("professionalId") professionalId: string,
@@ -98,6 +101,7 @@ export class CommissionsController {
    * Pay commissions for a professional
    */
   @Post("pay/:professionalId")
+  @Roles(...SALON_MANAGERS)
   async payCommission(
     @CurrentUser() user: any,
     @Param("professionalId") professionalId: string,

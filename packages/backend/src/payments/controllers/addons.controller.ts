@@ -12,6 +12,7 @@ import {
   TenantAddOnResponseDto,
   TenantAddOnResponseSchema,
 } from '../dto/addon.dto';
+import { SaasOwner } from "../../saas/decorators/saas-owner.decorator";
 
 /**
  * SaaS-admin-only add-ons API. Mounted under `/saas/add-ons`.
@@ -40,6 +41,7 @@ export class AddOnsAdminController {
   }
 
   @Get()
+  @SaasOwner()
   async listCatalog(
     @Query('plan') plan: string | undefined,
     @CurrentUser() user: any,
@@ -58,6 +60,7 @@ export class AddOnsAdminController {
    * "X / 500 conversaciones" gauge for the Esencial segment.
    */
   @Get('tenants/:id/ai-usage')
+  @SaasOwner()
   async aiUsage(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: any,
@@ -113,6 +116,7 @@ export class AddOnsAdminController {
   }
 
   @Get('tenants/:tenantId')
+  @SaasOwner()
   async tenantAddOns(
     @Param('tenantId') tenantId: string,
     @CurrentUser() user: any,
@@ -147,6 +151,7 @@ export class AddOnsAdminController {
   }
 
   @Post('tenants/:tenantId')
+  @SaasOwner()
   async grant(
     @Param('tenantId') tenantId: string,
     @Body() body: GrantAddOnDto,
@@ -169,6 +174,7 @@ export class AddOnsAdminController {
   }
 
   @Delete('tenants/:tenantId/:key')
+  @SaasOwner()
   async revoke(
     @Param('tenantId') tenantId: string,
     @Param('key') key: string,

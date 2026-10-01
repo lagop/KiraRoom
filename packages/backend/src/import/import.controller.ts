@@ -4,6 +4,7 @@ import { Throttle } from "@nestjs/throttler";
 import type { Request, Response } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { ImportService } from "./import.service";
+import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 
 interface AuthedRequest extends Request {
   user: { id: string; tenantId: string; role: string };
@@ -23,6 +24,7 @@ export class ImportController {
 
   @Post("clients/dry-run")
   @ApiTags("import")
+  @Roles(...SALON_MANAGERS)
   async dryRun(@Req() req: AuthedRequest, @Body() body: CsvBody) {
     if (!body?.csv) throw new BadRequestException("csv body required");
     return this.importService.dryRunClients(
@@ -33,6 +35,7 @@ export class ImportController {
   }
 
   @Post("clients/commit")
+  @Roles(...SALON_MANAGERS)
   async commit(@Req() req: AuthedRequest, @Body() body: CsvBody) {
     if (!body?.csv) throw new BadRequestException("csv body required");
     return this.importService.commitClients(
@@ -43,12 +46,14 @@ export class ImportController {
   }
 
   @Get("jobs")
+  @Roles(...SALON_MANAGERS)
   async jobs(@Req() req: AuthedRequest) {
     return this.importService.listJobs(req.user.tenantId);
   }
 
   @Get("template/clients")
   @Throttle({ default: { ttl: 60_000, limit: 60 } })
+  @Roles(...SALON_MANAGERS)
   async templateClients(@Res() res: Response) {
     const csv = this.importService.getClientTemplate();
     res.setHeader("Content-Type", "text/csv; charset=utf-8");

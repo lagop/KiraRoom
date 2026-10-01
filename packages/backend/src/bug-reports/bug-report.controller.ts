@@ -4,6 +4,7 @@ import {
   ApiOperation,
   ApiResponse } from "@nestjs/swagger";
 import { BugReportService } from "./bug-report.service";
+import { SignedIn } from "../auth/decorators/signed-in.decorator";
 
 interface BugReportDto {
   subject: string;
@@ -53,6 +54,7 @@ export class BugReportController {
     summary:
       "Submit a bug report. Anonymous-friendly. The report is emailed to the founder and persisted for the SaaS admin dashboard." })
   @ApiResponse({ status: 202, description: "Bug report accepted" })
+  @SignedIn()
   async submit(
     @Body() dto: BugReportDto,
     @Req() req?: any,

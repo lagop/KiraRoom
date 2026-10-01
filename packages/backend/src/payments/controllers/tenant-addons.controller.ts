@@ -5,6 +5,8 @@ import { MessageBundlesService } from '../../message-bundles/message-bundles.ser
 import { SubscriptionsService } from '../services/subscriptions.service';
 import { StripeService } from '../services/stripe.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { Roles, SALON_MANAGERS } from "../../auth/decorators/roles.decorator";
+import { SaasOwner } from "../../saas/decorators/saas-owner.decorator";
 
 /**
  * Tenant-scoped add-on surface. Distinct from the saas-admin
@@ -29,6 +31,7 @@ export class TenantAddOnsController {
    * (message_bundles) are always shown.
    */
   @Get('add-ons/available')
+  @Roles(...SALON_MANAGERS)
   async available(@Req() req: any) {
     const tenantId = this.tenantId(req);
     const plan = await this.tenantPlan(tenantId);
@@ -37,6 +40,7 @@ export class TenantAddOnsController {
 
   /** Currently-installed add-ons for this tenant. */
   @Get('tenants/current/add-ons')
+  @Roles(...SALON_MANAGERS)
   async installed(@Req() req: any) {
     const tenantId = this.tenantId(req);
     // Return the rows joined with their add-on catalogue row so the
@@ -65,6 +69,7 @@ export class TenantAddOnsController {
    * round-trip can be wired in here without an API change).
    */
   @Post('add-ons/:key/checkout')
+  @Roles(...SALON_MANAGERS)
   async checkout(
     @Param('key') key: string,
     @Body() body: { returnTo?: string } | undefined,
@@ -107,6 +112,7 @@ export class TenantAddOnsController {
   }
 
   @Delete('tenants/current/add-ons/:key')
+  @Roles(...SALON_MANAGERS)
   async cancel(
     @Param('key') key: string,
     @Req() req: any,
@@ -118,6 +124,7 @@ export class TenantAddOnsController {
 
   /** Read the current message bundles balance for this tenant. */
   @Get('message-bundles/tenants/current/balance')
+  @Roles(...SALON_MANAGERS)
   async balance(@Req() req: any) {
     const tenantId = this.tenantId(req);
     return this.bundles.getBalance(tenantId);
@@ -125,6 +132,7 @@ export class TenantAddOnsController {
 
   /** SaaS-admin manual top-up (used in dev / promo flows). */
   @Post('message-bundles/tenants/current/topup')
+  @SaasOwner()
   async topup(
     @Req() req: any,
     @Param('key') _key: string,

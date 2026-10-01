@@ -10,6 +10,7 @@ import {
   MarkAllReadDto,
   BulkNotificationDto,
 } from './dto';
+import { Roles, SALON_TEAM, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 
 @ApiTags('notifications')
 @ApiBearerAuth()
@@ -27,6 +28,7 @@ export class NotificationsController {
 
   @Get()
   @ApiOperation({ summary: 'Get all notifications for the current user' })
+  @Roles(...SALON_TEAM)
   async findAllForUser(
     @CurrentUser() user: any,
     @Query() filter: NotificationFilterDto,
@@ -36,6 +38,7 @@ export class NotificationsController {
 
   @Get('unread-count')
   @ApiOperation({ summary: 'Get unread notifications count for the current user' })
+  @Roles(...SALON_TEAM)
   async getUnreadCountForUser(@CurrentUser() user: any) {
     const count = await this.notificationsService.getUnreadCountForUser(user.id);
     return { count };
@@ -43,6 +46,7 @@ export class NotificationsController {
 
   @Put(':id/read')
   @ApiOperation({ summary: 'Mark a notification as read' })
+  @Roles(...SALON_TEAM)
   async markAsReadForUser(
     @CurrentUser() user: any,
     @Param('id', ParseUUIDPipe) id: string,
@@ -52,6 +56,7 @@ export class NotificationsController {
 
   @Put('read-all')
   @ApiOperation({ summary: 'Mark all notifications as read for the current user' })
+  @Roles(...SALON_TEAM)
   async markAllAsReadForUser(
     @CurrentUser() user: any,
     @Body() dto: MarkAllReadDto,
@@ -61,6 +66,7 @@ export class NotificationsController {
 
   @Delete(':id')
   @ApiOperation({ summary: 'Archive a notification' })
+  @Roles(...SALON_TEAM)
   async archiveForUser(
     @CurrentUser() user: any,
     @Param('id', ParseUUIDPipe) id: string,
@@ -74,12 +80,14 @@ export class NotificationsController {
 
   @Get('preferences')
   @ApiOperation({ summary: 'Get notification preferences for the current user' })
+  @Roles(...SALON_TEAM)
   async getPreferencesForUser(@CurrentUser() user: any) {
     return this.notificationsService.getPreferencesForUser(user.id);
   }
 
   @Put('preferences')
   @ApiOperation({ summary: 'Update notification preferences for the current user' })
+  @Roles(...SALON_TEAM)
   async updatePreferencesForUser(
     @CurrentUser() user: any,
     @Body() dto: NotificationPreferenceDto,
@@ -97,6 +105,7 @@ export class NotificationsController {
 
   @Post('bulk')
   @ApiOperation({ summary: 'Send bulk notifications to clients' })
+  @Roles(...SALON_MANAGERS)
   async sendBulkToClients(@Body() dto: BulkNotificationDto) {
     return this.notificationsService.sendBulkToClients(dto);
   }
@@ -107,6 +116,7 @@ export class NotificationsController {
 
   @Get('queue/stats')
   @ApiOperation({ summary: 'Get notification queue statistics' })
+  @Roles(...SALON_MANAGERS)
   async getQueueStats() {
     return this.notificationQueue.getQueueStats();
   }

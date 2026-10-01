@@ -15,6 +15,7 @@ import { JwtAuthGuard } from "./guards/jwt-auth.guard";
 import { RolesGuard } from "./guards/roles.guard";
 import { UserRole } from "@prisma/client";
 import { IMPERSONATION_AUDIENCE, IMPERSONATION_DEFAULT_REASON } from "../saas/saas.constants";
+import { SignedIn } from "./decorators/signed-in.decorator";
 
 @ApiTags("Authentication")
 @Controller("auth")
@@ -85,6 +86,7 @@ export class AuthController {
   @ApiBearerAuth()
   @ApiOperation({ summary: "Logout and invalidate tokens" })
   @ApiResponse({ status: 200, description: "Successfully logged out" })
+  @SignedIn()
   async logout(@CurrentUser("id") userId: string) {
     await this.authService.logout(userId);
     return { message: "Successfully logged out" };
@@ -95,6 +97,7 @@ export class AuthController {
   @ApiBearerAuth()
   @ApiOperation({ summary: "Get current user profile" })
   @ApiResponse({ status: 200, description: "Current user profile" })
+  @SignedIn()
   async getProfile(@CurrentUser() user: any) {
     return user;
   }
@@ -104,6 +107,7 @@ export class AuthController {
   @ApiBearerAuth()
   @ApiOperation({ summary: "Get current tenant information" })
   @ApiResponse({ status: 200, description: "Current tenant information" })
+  @SignedIn()
   async getTenant(@CurrentUser() user: any) {
     return this.authService.getTenant(user.tenantId);
   }

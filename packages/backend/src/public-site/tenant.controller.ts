@@ -4,6 +4,10 @@ import { PrismaService } from "../common/prisma/prisma.service";
 import { Public } from "../auth/decorators/public.decorator";
 
 @ApiTags("public")
+// Public: the salon's own site resolves it before anyone signs in. It used
+// to rely on a path prefix list in JwtAuthGuard; RolesGuard needs the
+// decorator.
+@Public()
 @Controller("public-site")
 export class PublicTenantController {
   constructor(private readonly prisma: PrismaService) {}

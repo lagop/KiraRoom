@@ -5,7 +5,7 @@ import { createHmac, randomBytes } from "crypto";
 import type { Request, Response } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
-import { Roles } from "../auth/decorators/roles.decorator";
+import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 import { FeatureGuard } from "../common/guards/feature.guard";
 import { Feature } from "../common/decorators/feature.decorator";
 import { Public } from "../auth/decorators/public.decorator";
@@ -27,6 +27,7 @@ export class WhatsAppController {
   ) {}
 
   @Get("connect/start")
+  @Roles(...SALON_MANAGERS)
   start(@Req() req: AuthedRequest, @Res() res: Response) {
     const state = this.signState(req.user.tenantId);
     const url = this.whatsapp.buildConnectUrl(state);
@@ -42,6 +43,7 @@ export class WhatsAppController {
   }
 
   @Post("connect/manual")
+  @Roles(...SALON_MANAGERS)
   async manual(
     @Req() req: AuthedRequest,
     @Body() body: {
@@ -56,16 +58,19 @@ export class WhatsAppController {
   }
 
   @Get("connection")
+  @Roles(...SALON_MANAGERS)
   async getConnection(@Req() req: AuthedRequest) {
     return this.whatsapp.getConnection(req.user.tenantId);
   }
 
   @Delete("connection")
+  @Roles(...SALON_MANAGERS)
   async disconnect(@Req() req: AuthedRequest) {
     return this.whatsapp.disconnect(req.user.tenantId);
   }
 
   @Get("templates")
+  @Roles(...SALON_MANAGERS)
   async templates(@Req() req: AuthedRequest) {
     return this.whatsapp.listTemplates(req.user.tenantId);
   }
@@ -139,6 +144,7 @@ export class MetaWebhookController {
   ) {}
 
   @Get()
+  @Public() // Meta checks hub.verify_token in verifyChallenge
   verify(
     @Query("hub.mode") mode: string,
     @Query("hub.verify_token") token: string,

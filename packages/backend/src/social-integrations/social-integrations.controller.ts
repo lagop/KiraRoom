@@ -2,6 +2,7 @@ import { Controller, Get, Post, Put, Delete, Param, Query, Body, UseGuards } fro
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SocialIntegrationsService } from './social-integrations.service';
 import { SocialPlatform } from '@prisma/client';
+import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 
 class UpdateConnectionSettingsDto {
   isActive?: boolean;
@@ -47,11 +48,13 @@ export class SocialIntegrationsController {
   // ============================================
 
   @Get('connections')
+  @Roles(...SALON_MANAGERS)
   async getConnections(@Query('tenantId') tenantId: string) {
     return this.socialIntegrationsService.getConnections(tenantId);
   }
 
   @Get('connections/:platform')
+  @Roles(...SALON_MANAGERS)
   async getConnection(
     @Query('tenantId') tenantId: string,
     @Param('platform') platform: SocialPlatform,
@@ -60,6 +63,7 @@ export class SocialIntegrationsController {
   }
 
   @Get('oauth-url/:platform')
+  @Roles(...SALON_MANAGERS)
   async getOAuthUrl(
     @Query('tenantId') tenantId: string,
     @Param('platform') platform: SocialPlatform,
@@ -69,6 +73,7 @@ export class SocialIntegrationsController {
   }
 
   @Post('oauth-callback/:platform')
+  @Roles(...SALON_MANAGERS)
   async handleOAuthCallback(
     @Query('tenantId') tenantId: string,
     @Param('platform') platform: SocialPlatform,
@@ -78,6 +83,7 @@ export class SocialIntegrationsController {
   }
 
   @Post('disconnect/:platform')
+  @Roles(...SALON_MANAGERS)
   async disconnect(
     @Query('tenantId') tenantId: string,
     @Param('platform') platform: SocialPlatform,
@@ -86,6 +92,7 @@ export class SocialIntegrationsController {
   }
 
   @Put('connections/:platform')
+  @Roles(...SALON_MANAGERS)
   async updateSettings(
     @Query('tenantId') tenantId: string,
     @Param('platform') platform: SocialPlatform,
@@ -99,11 +106,13 @@ export class SocialIntegrationsController {
   // ============================================
 
   @Get('google-business')
+  @Roles(...SALON_MANAGERS)
   async getGoogleBusinessProfile(@Query('tenantId') tenantId: string) {
     return this.socialIntegrationsService.getGoogleBusinessProfile(tenantId);
   }
 
   @Put('google-business')
+  @Roles(...SALON_MANAGERS)
   async updateGoogleBusinessProfile(
     @Query('tenantId') tenantId: string,
     @Body() data: UpdateGoogleProfileDto,
@@ -112,16 +121,19 @@ export class SocialIntegrationsController {
   }
 
   @Post('google-business/sync')
+  @Roles(...SALON_MANAGERS)
   async syncGoogleBusinessProfile(@Query('tenantId') tenantId: string) {
     return this.socialIntegrationsService.syncGoogleBusinessProfile(tenantId);
   }
 
   @Get('google-business/reviews')
+  @Roles(...SALON_MANAGERS)
   async getGoogleReviews(@Query('tenantId') tenantId: string) {
     return this.socialIntegrationsService.getGoogleReviews(tenantId);
   }
 
   @Post('google-business/reviews/:reviewId/reply')
+  @Roles(...SALON_MANAGERS)
   async replyToReview(
     @Query('tenantId') tenantId: string,
     @Param('reviewId') reviewId: string,
@@ -139,6 +151,7 @@ export class SocialIntegrationsController {
   // ============================================
 
   @Get('posts')
+  @Roles(...SALON_MANAGERS)
   async getPosts(
     @Query('tenantId') tenantId: string,
     @Query('status') status?: string,
@@ -147,6 +160,7 @@ export class SocialIntegrationsController {
   }
 
   @Post('posts')
+  @Roles(...SALON_MANAGERS)
   async createPost(
     @Query('tenantId') tenantId: string,
     @Body() data: CreatePostDto,
@@ -157,6 +171,7 @@ export class SocialIntegrationsController {
   }
 
   @Put('posts/:postId')
+  @Roles(...SALON_MANAGERS)
   async updatePost(
     @Query('tenantId') tenantId: string,
     @Param('postId') postId: string,
@@ -168,6 +183,7 @@ export class SocialIntegrationsController {
   }
 
   @Delete('posts/:postId')
+  @Roles(...SALON_MANAGERS)
   async deletePost(
     @Query('tenantId') tenantId: string,
     @Param('postId') postId: string,
@@ -176,6 +192,7 @@ export class SocialIntegrationsController {
   }
 
   @Post('posts/:postId/publish')
+  @Roles(...SALON_MANAGERS)
   async publishPost(
     @Query('tenantId') tenantId: string,
     @Param('postId') postId: string,
@@ -184,6 +201,7 @@ export class SocialIntegrationsController {
   }
 
   @Get('analytics')
+  @Roles(...SALON_MANAGERS)
   async getAnalytics(@Query('tenantId') tenantId: string) {
     return this.socialIntegrationsService.getAnalytics(tenantId);
   }

@@ -2,7 +2,7 @@ import { Body, Controller, Get, Post, Req, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
-import { Roles } from "../auth/decorators/roles.decorator";
+import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 import { UserRole } from "@prisma/client";
 import { WebDomainService } from "./web-domain.service";
 
@@ -15,12 +15,14 @@ export class WebDomainController {
 
   @Get()
   @ApiOperation({ summary: "Estado del add-on web_domain del tenant" })
+  @Roles(...SALON_MANAGERS)
   status(@Req() req: any) {
     return this.service.getStatus(req.user.tenantId);
   }
 
   @Post("check-availability")
   @ApiOperation({ summary: "Comprueba disponibilidad de un dominio (mock)" })
+  @Roles(...SALON_MANAGERS)
   check(@Body() body: { domain: string }) {
     return this.service.checkAvailability(body.domain);
   }

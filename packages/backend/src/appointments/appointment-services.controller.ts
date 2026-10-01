@@ -19,6 +19,7 @@ import {
   AppointmentServiceStatus,
 } from './dto/appointment-services.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { Roles, SALON_TEAM } from "../auth/decorators/roles.decorator";
 
 @ApiTags('Appointment Services')
 @ApiBearerAuth()
@@ -31,6 +32,7 @@ export class AppointmentServicesController {
   @ApiOperation({ summary: 'Create a new appointment service' })
   @ApiResponse({ status: 201, description: 'Appointment service created successfully' })
   @ApiResponse({ status: 404, description: 'Appointment or Service not found' })
+  @Roles(...SALON_TEAM)
   create(@Body() createDto: CreateAppointmentServiceDto) {
     return this.appointmentServicesService.create(createDto);
   }
@@ -38,6 +40,7 @@ export class AppointmentServicesController {
   @Get()
   @ApiOperation({ summary: 'Get all appointment services with optional filters' })
   @ApiResponse({ status: 200, description: 'List of appointment services' })
+  @Roles(...SALON_TEAM)
   findAll(@Query() filters: AppointmentServiceFiltersDto) {
     return this.appointmentServicesService.findAll(filters);
   }
@@ -45,6 +48,7 @@ export class AppointmentServicesController {
   @Get('appointment/:appointmentId')
   @ApiOperation({ summary: 'Get all services for a specific appointment' })
   @ApiResponse({ status: 200, description: 'List of appointment services for the appointment' })
+  @Roles(...SALON_TEAM)
   findByAppointment(@Param('appointmentId', ParseUUIDPipe) appointmentId: string) {
     return this.appointmentServicesService.findByAppointment(appointmentId);
   }
@@ -53,6 +57,7 @@ export class AppointmentServicesController {
   @ApiOperation({ summary: 'Get a specific appointment service by ID' })
   @ApiResponse({ status: 200, description: 'Appointment service details' })
   @ApiResponse({ status: 404, description: 'Appointment service not found' })
+  @Roles(...SALON_TEAM)
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.appointmentServicesService.findOne(id);
   }
@@ -61,6 +66,7 @@ export class AppointmentServicesController {
   @ApiOperation({ summary: 'Update an appointment service' })
   @ApiResponse({ status: 200, description: 'Appointment service updated successfully' })
   @ApiResponse({ status: 404, description: 'Appointment service not found' })
+  @Roles(...SALON_TEAM)
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() updateDto: UpdateAppointmentServiceDto,
@@ -72,6 +78,7 @@ export class AppointmentServicesController {
   @ApiOperation({ summary: 'Delete an appointment service' })
   @ApiResponse({ status: 200, description: 'Appointment service deleted successfully' })
   @ApiResponse({ status: 404, description: 'Appointment service not found' })
+  @Roles(...SALON_TEAM)
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.appointmentServicesService.remove(id);
   }
@@ -80,6 +87,7 @@ export class AppointmentServicesController {
   @ApiOperation({ summary: 'Start an appointment service (mark as active)' })
   @ApiResponse({ status: 200, description: 'Service started' })
   @ApiResponse({ status: 404, description: 'Appointment service not found' })
+  @Roles(...SALON_TEAM)
   startService(@Param('id', ParseUUIDPipe) id: string) {
     return this.appointmentServicesService.startService(id);
   }
@@ -88,6 +96,7 @@ export class AppointmentServicesController {
   @ApiOperation({ summary: 'Complete an appointment service' })
   @ApiResponse({ status: 200, description: 'Service completed' })
   @ApiResponse({ status: 404, description: 'Appointment service not found' })
+  @Roles(...SALON_TEAM)
   completeService(@Param('id', ParseUUIDPipe) id: string) {
     return this.appointmentServicesService.completeService(id);
   }
@@ -96,6 +105,7 @@ export class AppointmentServicesController {
   @ApiOperation({ summary: 'Cancel an appointment service' })
   @ApiResponse({ status: 200, description: 'Service cancelled' })
   @ApiResponse({ status: 404, description: 'Appointment service not found' })
+  @Roles(...SALON_TEAM)
   cancelService(@Param('id', ParseUUIDPipe) id: string) {
     return this.appointmentServicesService.cancelService(id);
   }
@@ -104,6 +114,7 @@ export class AppointmentServicesController {
   @ApiOperation({ summary: 'Create multiple appointment services for an appointment' })
   @ApiResponse({ status: 201, description: 'Appointment services created successfully' })
   @ApiResponse({ status: 404, description: 'Appointment not found' })
+  @Roles(...SALON_TEAM)
   bulkCreate(
     @Param('appointmentId', ParseUUIDPipe) appointmentId: string,
     @Body() services: CreateAppointmentServiceDto[],
@@ -114,6 +125,7 @@ export class AppointmentServicesController {
   @Get('processing/:appointmentId')
   @ApiOperation({ summary: 'Get services with processing time for an appointment' })
   @ApiResponse({ status: 200, description: 'List of services with processing time' })
+  @Roles(...SALON_TEAM)
   getServicesWithProcessingTime(
     @Param('appointmentId', ParseUUIDPipe) appointmentId: string,
   ) {
@@ -124,6 +136,7 @@ export class AppointmentServicesController {
   @ApiOperation({ summary: 'Create processing time block for a service' })
   @ApiResponse({ status: 201, description: 'Processing block created' })
   @ApiResponse({ status: 400, description: 'Service does not have processing time' })
+  @Roles(...SALON_TEAM)
   createProcessingBlock(
     @Param('id', ParseUUIDPipe) id: string,
     @Body('processingDuration') processingDuration?: number,
@@ -136,6 +149,7 @@ export class AppointmentServicesController {
   @ApiResponse({ status: 200, description: 'Services reordered successfully' })
   @ApiResponse({ status: 404, description: 'Appointment not found' })
   @ApiResponse({ status: 400, description: 'Invalid reorder request' })
+  @Roles(...SALON_TEAM)
   reorderServices(
     @Param('appointmentId', ParseUUIDPipe) appointmentId: string,
     @Body() serviceOrders: Array<{ serviceId: string; order: number }>,
@@ -148,6 +162,7 @@ export class AppointmentServicesController {
   @ApiResponse({ status: 200, description: 'Timing updated successfully' })
   @ApiResponse({ status: 404, description: 'Appointment service not found' })
   @ApiResponse({ status: 400, description: 'Invalid timing values' })
+  @Roles(...SALON_TEAM)
   updateTiming(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: { scheduledStart: string; scheduledEnd: string },
@@ -163,6 +178,7 @@ export class AppointmentServicesController {
   @ApiOperation({ summary: 'Toggle parallel/serial mode for a service' })
   @ApiResponse({ status: 200, description: 'Mode toggled successfully' })
   @ApiResponse({ status: 404, description: 'Appointment service not found' })
+  @Roles(...SALON_TEAM)
   toggleMode(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: { isParallel: boolean },

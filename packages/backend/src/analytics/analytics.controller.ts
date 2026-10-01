@@ -6,7 +6,7 @@ import {
   ApiQuery } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
-import { Roles } from "../auth/decorators/roles.decorator";
+import { Roles, SALON_TEAM, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 import { UserRole } from "@prisma/client";
 import { AnalyticsService } from "./analytics.service";
 import {
@@ -73,6 +73,7 @@ export class AnalyticsController {
 
   @Get("features")
   @ApiOperation({ summary: "Get analytics feature flags for current user" })
+  @Roles(...SALON_TEAM)
   async getFeatureFlags(@Req() req: AuthenticatedRequest) {
     const plan = this.getPlan(req);
     return this.analyticsFlagsService.getFeatureFlags(plan);
@@ -81,6 +82,7 @@ export class AnalyticsController {
   @Get("overview")
   @ApiOperation({ summary: "Get analytics overview for dashboard" })
   @ApiQuery({ name: "months", required: false, type: Number })
+  @Roles(...SALON_TEAM)
   async getOverview(
     @Req() req: AuthenticatedRequest,
     @Query("months") months?: string,
@@ -109,6 +111,7 @@ export class AnalyticsController {
   @ApiOperation({ summary: "Get revenue report for date range" })
   @ApiQuery({ name: "startDate", required: true })
   @ApiQuery({ name: "endDate", required: true })
+  @Roles(...SALON_MANAGERS)
   async getRevenueReport(
     @Req() req: AuthenticatedRequest,
     @Query("startDate") startDate: string,
@@ -122,6 +125,7 @@ export class AnalyticsController {
   @ApiOperation({ summary: "Get appointments report for date range" })
   @ApiQuery({ name: "startDate", required: true })
   @ApiQuery({ name: "endDate", required: true })
+  @Roles(...SALON_MANAGERS)
   async getAppointmentsReport(
     @Req() req: AuthenticatedRequest,
     @Query("startDate") startDate: string,
@@ -139,6 +143,7 @@ export class AnalyticsController {
   @ApiOperation({ summary: "Get appointment status evolution over time" })
   @ApiQuery({ name: "status", required: true, type: String })
   @ApiQuery({ name: "months", required: false, type: Number })
+  @Roles(...SALON_MANAGERS)
   async getAppointmentStatusEvolution(
     @Req() req: AuthenticatedRequest,
     @Query("status") status: string,
@@ -158,6 +163,7 @@ export class AnalyticsController {
     summary:
       "Get all appointment statuses evolution over time (stacked chart data)" })
   @ApiQuery({ name: "months", required: false, type: Number })
+  @Roles(...SALON_MANAGERS)
   async getAppointmentStatusesEvolution(
     @Req() req: AuthenticatedRequest,
     @Query("months") months?: string,
@@ -178,6 +184,7 @@ export class AnalyticsController {
   @Get("appointment-status-by-days")
   @ApiOperation({ summary: "Get appointment status by number of days" })
   @ApiQuery({ name: "days", required: false, type: Number })
+  @Roles(...SALON_TEAM)
   async getAppointmentStatusByDays(
     @Req() req: AuthenticatedRequest,
     @Query("days") days?: string,
@@ -204,6 +211,7 @@ export class AnalyticsController {
     name: "type",
     required: false,
     enum: ["revenue", "appointments", "both"] })
+  @Roles(...SALON_MANAGERS)
   async getDetailedReport(
     @Req() req: AuthenticatedRequest,
     @Query("startDate") startDate: string,
@@ -242,6 +250,7 @@ export class AnalyticsController {
   @ApiOperation({
     summary: "Get performance metrics per professional (paid feature)" })
   @ApiQuery({ name: "range", required: false, type: String })
+  @Roles(...SALON_MANAGERS)
   async getProfessionalPerformance(
     @Req() req: AuthenticatedRequest,
     @Query("range") range?: string,
@@ -346,6 +355,7 @@ export class AnalyticsController {
   @ApiOperation({
     summary: "Get client insights and retention metrics (paid feature)" })
   @ApiQuery({ name: "months", required: false, type: Number })
+  @Roles(...SALON_MANAGERS)
   async getClientInsights(
     @Req() req: AuthenticatedRequest,
     @Query("months") months?: string,

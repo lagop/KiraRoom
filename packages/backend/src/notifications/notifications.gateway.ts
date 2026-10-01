@@ -9,13 +9,16 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { Logger, Inject, forwardRef } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { verify } from 'jsonwebtoken';
 import { NotificationsService } from './notifications.service';
+import { PrismaService } from '../common/prisma/prisma.service';
 
-interface AuthPayload {
+/** Who a socket belongs to, taken from its access token. */
+export interface SocketIdentity {
   userId?: string;
   clientId?: string;
   tenantId: string;
-  token?: string;
 }
 
 interface SocketWithAuth extends Socket {
@@ -44,52 +47,74 @@ export class NotificationsGateway
   constructor(
     @Inject(forwardRef(() => NotificationsService))
     private readonly notificationsService: NotificationsService,
+    private readonly config: ConfigService,
+    private readonly prisma: PrismaService,
   ) {}
 
+  /**
+   * Only a valid access token gets a socket, and the rooms it joins come
+   * from that token.
+   *
+   * The handshake used to carry tenantId, userId and clientId as plain
+   * fields and the gateway trusted them, so anyone who knew a salon's id
+   * (it is public) or a user's id received their notifications, with no
+   * token at all.
+   */
   async handleConnection(client: SocketWithAuth) {
-    try {
-      // Extract auth data from handshake
-      const { userId, clientId, tenantId, token } =
-        client.handshake.auth as AuthPayload;
-
-      if (!tenantId) {
-        this.logger.warn(
-          `Client ${client.id} disconnected: missing tenantId`,
-        );
-        client.disconnect();
-        return;
-      }
-
-      // Store user/client info in socket data
-      client.data = {
-        userId,
-        clientId,
-        tenantId,
-      };
-
-      // Join tenant-specific room
-      client.join(`tenant:${tenantId}`);
-
-      // Join user-specific or client-specific room
-      if (userId) {
-        client.join(`user:${userId}`);
-        this.logger.log(
-          `User ${userId} connected to tenant ${tenantId} (socket: ${client.id})`,
-        );
-      } else if (clientId) {
-        client.join(`client:${clientId}`);
-        this.logger.log(
-          `Client ${clientId} connected to tenant ${tenantId} (socket: ${client.id})`,
-        );
-      } else {
-        this.logger.log(
-          `Anonymous connection to tenant ${tenantId} (socket: ${client.id})`,
-        );
-      }
-    } catch (error) {
-      this.logger.error(`Connection error: ${error.message}`);
-      client.disconnect();
+    const identity = await this.identify(client);
+    if (!identity) {
+      client.disconnect(true);
+      return;
     }
+    client.data = identity;
+    if (identity.clientId) {
+      client.join(`client:${identity.clientId}`);
+    } else {
+      client.join(`user:${identity.userId}`);
+      client.join(`tenant:${identity.tenantId}`);
+    }
+  }
+
+  /** The token's owner, if the token is valid and the account still active. */
+  async identify(client: Pick<Socket, 'handshake' | 'id'>): Promise<SocketIdentity | null> {
+    const fromAuth = (client.handshake.auth as { token?: unknown } | undefined)?.token;
+    const header = client.handshake.headers?.authorization;
+    const raw =
+      typeof fromAuth === 'string'
+        ? fromAuth
+        : typeof header === 'string'
+          ? header
+          : '';
+    const token = raw.replace(/^Bearer\s+/i, '');
+    const secret = this.config.get<string>('JWT_SECRET');
+    if (!token || !secret) {
+      this.logger.warn(`Socket ${client.id} refused: no token`);
+      return null;
+    }
+
+    let payload: { sub?: string; role?: string };
+    try {
+      payload = verify(token, secret) as { sub?: string; role?: string };
+    } catch {
+      this.logger.warn(`Socket ${client.id} refused: invalid token`);
+      return null;
+    }
+    if (!payload.sub) return null;
+
+    if (payload.role === 'client') {
+      const found = await this.prisma.client.findUnique({
+        where: { id: payload.sub },
+        select: { id: true, tenantId: true, status: true },
+      });
+      if (!found || found.status === 'blocked') return null;
+      return { clientId: found.id, tenantId: found.tenantId };
+    }
+    const user = await this.prisma.user.findUnique({
+      where: { id: payload.sub },
+      select: { id: true, tenantId: true, isActive: true },
+    });
+    if (!user || !user.isActive || !user.tenantId) return null;
+    return { userId: user.id, tenantId: user.tenantId };
   }
 
   async handleDisconnect(client: SocketWithAuth) {
