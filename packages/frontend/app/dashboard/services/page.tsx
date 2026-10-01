@@ -1,4 +1,5 @@
 "use client";
+import { ImportLink } from "@/components/import-link";
 
 import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
@@ -275,6 +276,7 @@ function ServicesPageContent() {
           <p className="text-gray-600 mt-1">{t("services.description")}</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
+          <ImportLink kind="services" />
           <Button onClick={handleCreateNew} className="flex items-center gap-2">
             <Plus className="h-4 w-4" />
             {t("services.add_service")}

@@ -5,13 +5,25 @@ import type { Request, Response } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { ImportService } from "./import.service";
 import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
+import { IsOptional, IsString, MaxLength } from "class-validator";
 
 interface AuthedRequest extends Request {
   user: { id: string; tenantId: string; role: string };
 }
 
+/**
+ * The global ValidationPipe runs with whitelist: true, which strips every
+ * property without a validation decorator. This class had none, so "csv"
+ * never reached the handler and every import answered "csv body required".
+ */
 class CsvBody {
-  csv: string;
+  @IsString()
+  @MaxLength(5_000_000)
+  csv!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
   filename?: string;
 }
 
@@ -45,6 +57,18 @@ export class ImportController {
     );
   }
 
+  @Post("services/dry-run")
+  @Roles(...SALON_MANAGERS)
+  async dryRunServices(@Req() req: AuthedRequest, @Body() body: CsvBody) {
+    return this.importService.dryRunServices(req.user.tenantId, body.csv, body.filename || "upload.csv");
+  }
+
+  @Post("services/commit")
+  @Roles(...SALON_MANAGERS)
+  async commitServices(@Req() req: AuthedRequest, @Body() body: CsvBody) {
+    return this.importService.commitServices(req.user.tenantId, body.csv, body.filename || "upload.csv");
+  }
+
   @Get("jobs")
   @Roles(...SALON_MANAGERS)
   async jobs(@Req() req: AuthedRequest) {
@@ -62,5 +86,13 @@ export class ImportController {
       "attachment; filename=clients-template.csv",
     );
     return res.send(csv);
+  }
+
+  @Get("template/services")
+  @Roles(...SALON_MANAGERS)
+  async templateServices(@Res() res: Response) {
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", "attachment; filename=servicios-plantilla.csv");
+    return res.send(this.importService.getServiceTemplate());
   }
 }

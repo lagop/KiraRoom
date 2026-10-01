@@ -213,10 +213,10 @@ export interface WidgetInstance {
 
 export interface ImportPreviewRow {
   rowIndex: number;
-  data: Record<string, string>;
+  data: Record<string, any>;
   errors: Array<{ col: string; msg: string }>;
-  status: "ok" | "duplicate" | "invalid";
-  existingClientId?: string;
+  status: "ok" | "duplicate" | "invalid" | "update";
+  existingId?: string;
 }
 export interface ImportPreviewResult {
   jobId: string;
@@ -225,6 +225,7 @@ export interface ImportPreviewResult {
   stats: {
     totalRows: number;
     okCount: number;
+    updateCount?: number;
     duplicateCount: number;
     invalidCount: number;
   };
@@ -234,6 +235,8 @@ export interface ImportCommitResult {
   jobId: string;
   totalRows: number;
   successRows: number;
+  createdRows?: number;
+  updatedRows?: number;
   errorRows: number;
   skippedRows: number;
 }
@@ -4152,6 +4155,12 @@ class ApiClient implements ApiClientInterface {
   }
   async listImportJobs(): Promise<ImportJob[]> {
     return this.request(`/import/jobs`);
+  }
+  async dryRunImportServices(csv: string, filename: string): Promise<ImportPreviewResult> {
+    return this.request(`/import/services/dry-run`, { method: "POST", body: JSON.stringify({ csv, filename }) });
+  }
+  async commitImportServices(csv: string, filename: string): Promise<ImportCommitResult> {
+    return this.request(`/import/services/commit`, { method: "POST", body: JSON.stringify({ csv, filename }) });
   }
   getImportTemplateUrl(): string {
     return `${API_BASE_URL}/import/template/clients`;
