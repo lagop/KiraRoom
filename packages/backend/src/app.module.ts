@@ -129,11 +129,13 @@ import { PublicModule } from "./public-site/public.module";
     // Plan / feature gating (global â€“ must come before feature-using modules)
     FeatureFlagModule,
 
-    // Rate limiting
+    // Rate limiting, per client address (ThrottlerBehindProxyGuard). The
+    // default is generous: a salon with several people behind one router
+    // browses the panel from one address. Sensitive routes set their own.
     ThrottlerModule.forRoot([
       {
-        ttl: 60000,
-        limit: 100,
+        ttl: 60_000,
+        limit: 300,
       },
     ]),
 

@@ -25,6 +25,7 @@ import {
 } from '@kira/shared';
 import { FeatureGuard } from '../common/guards/feature.guard';
 import { Feature } from '../common/decorators/feature.decorator';
+import { Throttle } from "@nestjs/throttler";
 
 @ApiTags('virtual-receptionist')
 @ApiBearerAuth()
@@ -148,6 +149,7 @@ export class VirtualReceptionistController {
 
   // Chat Messaging
   @Post('messages')
+  @Throttle({ default: { ttl: 60_000, limit: 20 } }) // each message is a paid model call
   @Public()
   @ApiOperation({ summary: 'Send message to virtual receptionist' })
   async sendMessage(@Body(new ValidationPipe()) message: SendMessageDto) {

@@ -10,6 +10,7 @@ import { RebookingDispatcherService } from "./rebooking-dispatcher.service";
 import { UpdateRebookingConfigDto } from "./dto/rebooking.dto";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { createHmac, timingSafeEqual } from "crypto";
+import { Throttle } from "@nestjs/throttler";
 
 interface AuthedRequest extends Request {
   user: { tenantId?: string };
@@ -83,6 +84,7 @@ export class RebookingController {
    */
   @Public()
   @Post("public/opt-out")
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
   async publicOptOut(@Query("token") token: string, @Query("client") clientId: string) {
     if (!token || !clientId) {
       throw new BadRequestException("token and client query params required");
