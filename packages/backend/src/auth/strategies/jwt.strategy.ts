@@ -11,6 +11,7 @@ export interface JwtPayload {
   role: string;
   tenantId: string;
   plan?: string;     // subscription plan
+  tv?: number;       // session version; absent on tokens minted before it existed (= 0)
   iat?: number;
   exp?: number;
   // Impersonation claims (only set on tokens minted via /auth/impersonate).
@@ -44,11 +45,15 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
           lastName: true,
           tenantId: true,
           status: true,
+          tokenVersion: true,
         },
       });
 
       if (!client || client.status === 'blocked') {
         throw new UnauthorizedException('Invalid token or client blocked');
+      }
+      if ((payload.tv ?? 0) !== client.tokenVersion) {
+        throw new UnauthorizedException('Session ended');
       }
 
       // Bind the per-request tenant context so the Prisma tenant-scope
@@ -76,6 +81,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
           role: true,
           tenantId: true,
           isActive: true,
+          tokenVersion: true,
           tenant: {
             select: {
               plan: true,
@@ -87,6 +93,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
       if (!user || !user.isActive) {
         throw new UnauthorizedException('Invalid token or user inactive');
+      }
+      // Logged out, or the password changed, since this token was issued.
+      if ((payload.tv ?? 0) !== user.tokenVersion) {
+        throw new UnauthorizedException('Session ended');
       }
 
       // Bind the per-request tenant context (saas_owner is bound in

@@ -352,7 +352,7 @@ export class AuthService {
           where: { id: payload.sub },
         });
 
-        if (!client) {
+        if (!client || (payload.tv ?? 0) !== client.tokenVersion) {
           throw new UnauthorizedException("Invalid refresh token");
         }
 
@@ -370,7 +370,9 @@ export class AuthService {
           include: { professional: true },
         });
 
-        if (!user || !user.isActive) {
+        // A token minted before a logout or password change carries an
+        // older tv and stops refreshing.
+        if (!user || !user.isActive || (payload.tv ?? 0) !== user.tokenVersion) {
           throw new UnauthorizedException("Invalid refresh token");
         }
 
@@ -412,15 +414,19 @@ export class AuthService {
     }
   }
 
-  async logout(userId: string): Promise<void> {
-    // In a production system, you would blacklist the tokens here
-    // For now, we'll just clear any session data if needed
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        // Add token blacklist logic here if needed
-      },
-    });
+  /**
+   * Ends every session of this account. It used to update the user with an
+   * empty change -- revoking nothing, so a stolen token stayed valid until
+   * it expired -- and failed outright for a client, whose id is not a user.
+   * Bumping tokenVersion makes every token issued so far (access and
+   * refresh, on every device) stop working.
+   */
+  async logout(id: string, role?: string): Promise<void> {
+    if (role === "client") {
+      await this.prisma.client.update({ where: { id }, data: { tokenVersion: { increment: 1 } } });
+      return;
+    }
+    await this.prisma.user.update({ where: { id }, data: { tokenVersion: { increment: 1 } } });
   }
 
   /**
@@ -640,11 +646,19 @@ export class AuthService {
       impersonatedTenantId?: string;
     },
   ): Promise<TokenResponse> {
+    // The account's session version, so logout and a password change can
+    // end every token issued before them (see logout and JwtStrategy).
+    const owner =
+      role === "client"
+        ? await this.prisma.client.findUnique({ where: { id: userId }, select: { tokenVersion: true } })
+        : await this.prisma.user.findUnique({ where: { id: userId }, select: { tokenVersion: true } });
+
     const payload: Record<string, unknown> = {
       sub: userId,
       email,
       role,
       tenantId,
+      tv: owner?.tokenVersion ?? 0,
       ...(professionalId && { professionalId }),
       ...(extraClaims?.impersonatedBy && {
         impersonatedBy: extraClaims.impersonatedBy,

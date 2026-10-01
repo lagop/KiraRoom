@@ -333,8 +333,12 @@ model User {
   twoFactorSecret          String?
   loginAttempts            Int                     @default(0)
   lockedUntil              DateTime?
+  /// sha256 of the reset link's token; the token itself is never stored.
   passwordResetToken       String?
   passwordResetExpires     DateTime?
+  /// Bumped on logout and password change; tokens carry it as `tv` and
+  /// stop working once it moves on.
+  tokenVersion             Int                     @default(0)
   emailVerificationToken   String?
   emailVerificationExpires DateTime?
   preferences              Json                    @default("{}")
@@ -393,6 +397,10 @@ model Client {
   notes                    String?
   tags                     Json                     @default("[]")
   passwordHash             String?
+  /// Same as User: sha256 of the reset token, its expiry, and the session version.
+  passwordResetToken       String?
+  passwordResetExpires     DateTime?
+  tokenVersion             Int                      @default(0)
   appointments             Appointment[]
   chatConversations        ChatConversation[]
   clientProfiles           ClientProfile[]

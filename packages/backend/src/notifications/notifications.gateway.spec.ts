@@ -32,7 +32,7 @@ function socket(auth: any = {}, headers: any = {}) {
 describe("NotificationsGateway", () => {
   it("refuses a socket without a token, whatever tenant it names", async () => {
     const s = socket({ tenantId: "t1", userId: "u1" });
-    await gateway({ user: { id: "u1", tenantId: "t1", isActive: true } }).handleConnection(s as any);
+    await gateway({ user: { id: "u1", tenantId: "t1", isActive: true, tokenVersion: 0 } }).handleConnection(s as any);
     expect(s.disconnect).toHaveBeenCalled();
     expect(s.rooms).toEqual([]);
   });
@@ -40,14 +40,14 @@ describe("NotificationsGateway", () => {
   it("refuses a token signed with another key", async () => {
     const token = sign({ sub: "u1", role: "owner" }, "another-secret-of-sufficient-length");
     const s = socket({ token });
-    await gateway({ user: { id: "u1", tenantId: "t1", isActive: true } }).handleConnection(s as any);
+    await gateway({ user: { id: "u1", tenantId: "t1", isActive: true, tokenVersion: 0 } }).handleConnection(s as any);
     expect(s.disconnect).toHaveBeenCalled();
   });
 
   it("takes the rooms from the token, not from what the socket claims", async () => {
     const token = sign({ sub: "u1", role: "owner", tenantId: "t1" }, SECRET);
     const s = socket({ token, tenantId: "someone-else", userId: "u9" });
-    await gateway({ user: { id: "u1", tenantId: "t1", isActive: true } }).handleConnection(s as any);
+    await gateway({ user: { id: "u1", tenantId: "t1", isActive: true, tokenVersion: 0 } }).handleConnection(s as any);
     expect(s.disconnect).not.toHaveBeenCalled();
     expect(s.rooms.sort()).toEqual(["tenant:t1", "user:u1"]);
   });
@@ -55,14 +55,14 @@ describe("NotificationsGateway", () => {
   it("accepts the token in the Authorization header too", async () => {
     const token = sign({ sub: "u1", role: "staff" }, SECRET);
     const s = socket({}, { authorization: `Bearer ${token}` });
-    await gateway({ user: { id: "u1", tenantId: "t1", isActive: true } }).handleConnection(s as any);
+    await gateway({ user: { id: "u1", tenantId: "t1", isActive: true, tokenVersion: 0 } }).handleConnection(s as any);
     expect(s.rooms).toContain("user:u1");
   });
 
   it("puts a client in their own room only, never the salon's", async () => {
     const token = sign({ sub: "c1", role: "client" }, SECRET);
     const s = socket({ token });
-    await gateway({ client: { id: "c1", tenantId: "t1", status: "active" } }).handleConnection(s as any);
+    await gateway({ client: { id: "c1", tenantId: "t1", status: "active", tokenVersion: 0 } }).handleConnection(s as any);
     expect(s.rooms).toEqual(["client:c1"]);
   });
 
@@ -74,7 +74,7 @@ describe("NotificationsGateway", () => {
 
     const clientToken = sign({ sub: "c1", role: "client" }, SECRET);
     const c = socket({ token: clientToken });
-    await gateway({ client: { id: "c1", tenantId: "t1", status: "blocked" } }).handleConnection(c as any);
+    await gateway({ client: { id: "c1", tenantId: "t1", status: "blocked", tokenVersion: 0 } }).handleConnection(c as any);
     expect(c.disconnect).toHaveBeenCalled();
   });
 });

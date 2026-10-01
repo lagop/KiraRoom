@@ -132,9 +132,17 @@ export default function LoginModal({
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                {t("login.password")}
-              </label>
+              <div className="flex items-baseline justify-between mb-1">
+                <label className="block text-sm font-medium text-gray-700">
+                  {t("login.password")}
+                </label>
+                <a
+                  href={salonName ? `/forgot-password?salon=${encodeURIComponent(salonName)}` : "/forgot-password"}
+                  className="text-xs text-purple-600 hover:underline"
+                >
+                  {t("login.forgot_password")}
+                </a>
+              </div>
               <input
                 type="password"
                 value={password}

@@ -1918,5 +1918,24 @@
     "approval_yes_label": "Approve",
     "approval_no_label": "Reject",
     "free_input_intro": "Your next question will be sent as-is. The Copilot will answer it by reading your data in real time."
+  },
+  "password_reset": {
+    "title": "Reset your password",
+    "intro": "Enter your account's email and we'll send you a link to choose a new password.",
+    "send": "Send link",
+    "sending": "Sending...",
+    "sent": "If an account uses that email, we've sent it a link. It expires in an hour; check your spam folder too.",
+    "new_title": "Choose a new password",
+    "new_password": "New password",
+    "confirm": "Repeat the password",
+    "save": "Save password",
+    "saving": "Saving...",
+    "mismatch": "The passwords don't match.",
+    "too_short": "The password must be at least 8 characters.",
+    "done": "Password changed. Your open sessions were signed out; you can log in now.",
+    "missing_token": "This link isn't valid. Ask for a new one.",
+    "request_new": "Ask for a new link",
+    "back_to_login": "Back to log in",
+    "error": "That didn't work. Please try again."
   }
 }
