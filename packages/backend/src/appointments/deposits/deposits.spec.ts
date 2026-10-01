@@ -141,6 +141,13 @@ describe("startDeposit", () => {
     expect(updates).toEqual([]);
   });
 
+  it("books without a deposit until the Connect webhook is configured", async () => {
+    // Nothing would mark it paid, and the cron would free a paid slot.
+    const { deposits, sessions } = build({ env: { STRIPE_CONNECT_WEBHOOK_SECRET: undefined } });
+    expect(await deposits.startDeposit("apt-1")).toBeNull();
+    expect(sessions.create).not.toHaveBeenCalled();
+  });
+
   it("books without a deposit when KiraRoom has no Stripe key", async () => {
     const { deposits } = build({ env: { STRIPE_SECRET_KEY: undefined } });
     expect(await deposits.startDeposit("apt-1")).toBeNull();

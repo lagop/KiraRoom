@@ -144,6 +144,12 @@ export class DepositsService {
     if (amountCents <= 0 || !tenant.stripeConnectAccountId || !tenant.stripeConnectChargesEnabled || !this.stripe) {
       return null;
     }
+    // Without the Connect webhook nothing would ever mark it paid, and the
+    // cron would release a slot the client has paid for.
+    if (!this.config.get<string>("STRIPE_CONNECT_WEBHOOK_SECRET")) {
+      this.logger.warn("STRIPE_CONNECT_WEBHOOK_SECRET is not set: booking without a deposit");
+      return null;
+    }
 
     const expiresAt = new Date(Date.now() + DEPOSIT_HOLD_MS);
     const site = `${this.frontendUrl()}${returnPath || `/sites/${tenant.slug}`}`;
