@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import apiClient, { ApiError, removeToken } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
+import { ToastAction } from "@/components/ui/toast";
 import { useTenantTranslations } from "@/lib/use-translation";
 import LoginModal from "./components/login-modal";
 import { ChatWidget } from "@/src/components/virtual-receptionist";
@@ -85,6 +86,8 @@ interface UserData {
   phone?: string;
   role: string;
 }
+
+const DEPOSIT_CHECKOUT_KEY = "kira-deposit-checkout";
 
 export default function SalonBookingPage({
   params,
@@ -170,6 +173,44 @@ export default function SalonBookingPage({
       description: "You have been successfully logged out.",
     });
   };
+
+  // Back from paying (or not) the deposit on Stripe.
+  useEffect(() => {
+    const deposit = new URLSearchParams(window.location.search).get("deposit");
+    if (deposit === "paid") {
+      toast({
+        title: "Reserva confirmada",
+        description: "Hemos recibido la señal. Tu cita queda confirmada.",
+      });
+    } else if (deposit === "cancelled") {
+      // The Stripe page stays valid until the hold runs out.
+      let pending: { checkoutUrl: string; expiresAt: string } | null = null;
+      try {
+        pending = JSON.parse(sessionStorage.getItem(DEPOSIT_CHECKOUT_KEY) || "null");
+      } catch {}
+      const payable = pending && new Date(pending.expiresAt).getTime() > Date.now();
+      toast({
+        title: "Reserva sin confirmar",
+        description: payable
+          ? "Falta pagar la señal. Te guardamos el hueco hasta entonces; si no la pagas, se libera en unos minutos."
+          : "No se ha pagado la señal, así que la cita no está confirmada.",
+        variant: "destructive",
+        duration: payable ? 60_000 : undefined,
+        action: payable ? (
+          <ToastAction altText="Pagar la señal" onClick={() => (window.location.href = pending!.checkoutUrl)}>
+            Pagar la señal
+          </ToastAction>
+        ) : undefined,
+      });
+    }
+    if (deposit === "paid") {
+      try {
+        sessionStorage.removeItem(DEPOSIT_CHECKOUT_KEY);
+      } catch {}
+    }
+    if (deposit) window.history.replaceState(null, "", window.location.pathname);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Set default date to today + 1 day
   useEffect(() => {
@@ -339,8 +380,10 @@ export default function SalonBookingPage({
 
       const [firstName, ...restOfName] = bookingData.clientName.trim().split(" ");
 
-      await apiClient.createAppointment({
+      const booking = await apiClient.createAppointment({
         tenantId: salonData.id,
+        // Back here from Stripe when the service asks for a deposit.
+        returnPath: `/sites/${params.salonName}`,
         // Signed in or not, the booking carries the client's details: the
         // public endpoint takes no clientId (an anonymous caller must not
         // book as someone else) and finds the client by email or phone in
@@ -367,6 +410,17 @@ export default function SalonBookingPage({
         scheduledDate: bookingData.date,
         scheduledTime: bookingData.time,
       });
+
+      // The service asks for a deposit: the slot is held while the client
+      // pays on Stripe, which sends them back here with ?deposit=...
+      if (booking.deposit?.checkoutUrl) {
+        try {
+          // To offer the payment again if the client backs out of Stripe.
+          sessionStorage.setItem(DEPOSIT_CHECKOUT_KEY, JSON.stringify(booking.deposit));
+        } catch {}
+        window.location.href = booking.deposit.checkoutUrl;
+        return;
+      }
 
       // Only now. The confirmation has to mean the appointment exists.
       toast({

@@ -656,7 +656,11 @@ cliente cambia algo, vuelve a llamar a \`propose_appointment\`.
 Cuando el cliente responda que sí al resumen, llama a \`create_appointment\`
 (no lleva datos: reserva lo propuesto). El servidor comprueba él mismo que el
 cliente ha dicho que sí.
-- Si devuelve \`created: true\`: confírmale la cita con servicio,
+- Si devuelve \`created: true\` con \`depositRequired: true\`: la cita queda
+  reservada pero pendiente de la señal. Dile el importe (\`depositAmount\`,
+  en euros) y dale el enlace de pago \`depositPaymentUrl\` tal cual; si no
+  paga en 30 minutos, el hueco se libera. No digas que está confirmada.
+- Si devuelve \`created: true\` sin señal: confírmale la cita con servicio,
   profesional, fecha y hora, y recuérdale la política de cancelación. Di que
   le hemos enviado la confirmación por email o por SMS solo si
   \`confirmationEmailSent\` o \`confirmationSmsSent\` es \`true\`; si no, no
@@ -785,7 +789,12 @@ client changes anything, call \`propose_appointment\` again.
 When the client replies yes to the summary, call \`create_appointment\` (it
 takes no details: it books what was proposed). The server itself checks
 that the client said yes.
-- If it returns \`created: true\`: confirm the appointment with service,
+- If it returns \`created: true\` with \`depositRequired: true\`: the slot
+  is held pending the deposit. Tell them the amount (\`depositAmount\`, in
+  euros) and give them the payment link \`depositPaymentUrl\` exactly as
+  is; if they do not pay within 30 minutes the slot is released. Do not say
+  it is confirmed.
+- If it returns \`created: true\` with no deposit: confirm the appointment with service,
   professional, date and time, and remind them of the cancellation policy.
   Say we have sent the confirmation by email or SMS only if
   \`confirmationEmailSent\` or \`confirmationSmsSent\` is \`true\`; otherwise

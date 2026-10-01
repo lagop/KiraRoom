@@ -491,6 +491,13 @@ export interface CreateAppointmentDto {
   depositRequired?: boolean;
   depositAmount?: number;
   commissionRate?: number;
+  /** Online bookings: where Stripe sends the client back after the deposit. */
+  returnPath?: string;
+}
+
+/** An online booking; `deposit` when the service asks for one, to pay on Stripe. */
+export interface OnlineBooking extends Appointment {
+  deposit?: { amount: number; checkoutUrl: string; expiresAt: string };
 }
 
 // Notification types
@@ -602,6 +609,13 @@ export interface PaymentSummary {
   totalTransactions: number;
   pendingAmount: number;
   refundedAmount: number;
+}
+
+/** The salon's own Stripe account, connected to charge deposits. */
+export interface StripeConnectStatus {
+  connected: boolean;
+  chargesEnabled: boolean;
+  detailsSubmitted: boolean;
 }
 
 export interface StripeSettings {
@@ -1167,7 +1181,7 @@ export interface ApiClientInterface {
   }): Promise<Appointment[]>;
   getAppointment(id: string): Promise<Appointment>;
   getAppointmentActivity(id: string): Promise<any[]>;
-  createAppointment(data: CreateAppointmentDto): Promise<Appointment>;
+  createAppointment(data: CreateAppointmentDto): Promise<OnlineBooking>;
   updateAppointment(
     id: string,
     data: Partial<CreateAppointmentDto>,
@@ -1377,6 +1391,8 @@ export interface ApiClientInterface {
     settings: Partial<StripeSettings>,
   ): Promise<{ success: boolean; stripeMode: string }>;
   getStripePublishableKey(): Promise<{ publishableKey: string | null }>;
+  getStripeConnectStatus(): Promise<StripeConnectStatus>;
+  startStripeConnectOnboarding(): Promise<{ url: string }>;
 
   // Subscriptions
   getCurrentSubscription(): Promise<Subscription | null>;
@@ -1889,8 +1905,8 @@ class ApiClient implements ApiClientInterface {
     return this.request<any[]>(`/appointments/${id}/activity`);
   }
 
-  async createAppointment(data: CreateAppointmentDto): Promise<Appointment> {
-    return this.request<Appointment>("/appointments", {
+  async createAppointment(data: CreateAppointmentDto): Promise<OnlineBooking> {
+    return this.request<OnlineBooking>("/appointments", {
       method: "POST",
       body: JSON.stringify(data),
     });
@@ -3014,6 +3030,14 @@ class ApiClient implements ApiClientInterface {
   }
 
   // Stripe Settings
+  async getStripeConnectStatus(): Promise<StripeConnectStatus> {
+    return this.request<StripeConnectStatus>("/payments/connect/status");
+  }
+
+  async startStripeConnectOnboarding(): Promise<{ url: string }> {
+    return this.request<{ url: string }>("/payments/connect/onboard", { method: "POST" });
+  }
+
   async getStripeSettings(): Promise<StripeSettings> {
     return this.request<StripeSettings>("/payments/stripe/settings");
   }
