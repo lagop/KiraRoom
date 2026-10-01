@@ -69,6 +69,18 @@ export class WhatsAppController {
     return this.whatsapp.disconnect(req.user.tenantId);
   }
 
+  @Get("templates/standard")
+  @Roles(...SALON_MANAGERS)
+  async standardTemplateStatus(@Req() req: AuthedRequest) {
+    return this.whatsapp.standardTemplateStatus(req.user.tenantId);
+  }
+
+  @Post("templates/standard")
+  @Roles(...SALON_MANAGERS)
+  async submitStandardTemplates(@Req() req: AuthedRequest) {
+    return this.whatsapp.submitStandardTemplates(req.user.tenantId);
+  }
+
   @Get("templates")
   @Roles(...SALON_MANAGERS)
   async templates(@Req() req: AuthedRequest) {

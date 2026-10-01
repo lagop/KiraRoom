@@ -6,6 +6,7 @@ import { createHmac, timingSafeEqual } from "crypto";
 import { WhatsAppRecipientStatus, WhatsAppCampaignStatus } from "@prisma/client";
 import { MessageBundlesService } from "../message-bundles/message-bundles.service";
 import { WhatsAppReceptionistService } from "./whatsapp-receptionist.service";
+import { WhatsAppTemplateService } from "./whatsapp-template.service";
 
 interface BucketState {
   capacity: number;
@@ -27,6 +28,7 @@ export class WhatsAppService {
     private config: ConfigService,
     private readonly messageBundles: MessageBundlesService,
     private readonly receptionist: WhatsAppReceptionistService,
+    private readonly templates: WhatsAppTemplateService,
   ) {}
 
   // --- WABA OAuth connect -------------------------------------------------
@@ -114,7 +116,21 @@ export class WhatsAppService {
       },
     });
     this.phoneNumberIndex.set(conn.phoneNumberId, tenantId);
+    // Ask Meta to review the reminder template now: approval takes from
+    // minutes to a day, and reminders need it. Not awaited.
+    void this.templates
+      .submitStandardTemplates(tenantId)
+      .catch((err) => this.logger.warn(`Template submission for tenant ${tenantId} failed: ${(err as Error).message}`));
     return conn;
+  }
+
+  /** Resubmits the standard templates (e.g. after one was rejected and fixed). */
+  submitStandardTemplates(tenantId: string) {
+    return this.templates.submitStandardTemplates(tenantId);
+  }
+
+  standardTemplateStatus(tenantId: string) {
+    return this.templates.standardStatus(tenantId);
   }
 
   async getConnection(tenantId: string) {
