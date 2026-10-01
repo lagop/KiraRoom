@@ -1,7 +1,7 @@
 import { ParseUUIDPipe, Controller, Post, Req, Get, Put, Delete, Body, Param, Query, UseGuards, UsePipes, ValidationPipe, Logger } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { Roles, SALON_MANAGERS, SALON_TEAM } from "../auth/decorators/roles.decorator";
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { UserRole } from '@prisma/client';
@@ -10,7 +10,6 @@ import { ConversationService } from './services/conversation.service';
 import { FAQService } from './services/faq.service';
 import { BookingService } from './services/booking.service';
 import { LLMService } from './services/llm.service';
-import { WhatsAppService, TwilioWhatsAppWebhookEvent } from '../notifications/services/whatsapp.service';
 import {
   SendMessageDto,
   MessageResponseDto,
@@ -25,6 +24,7 @@ import {
 } from '@kira/shared';
 import { FeatureGuard } from '../common/guards/feature.guard';
 import { Feature } from '../common/decorators/feature.decorator';
+import { SaasOwner } from "../saas/decorators/saas-owner.decorator";
 
 @ApiTags('virtual-receptionist')
 @ApiBearerAuth()
@@ -40,12 +40,12 @@ export class VirtualReceptionistController {
     private readonly faqService: FAQService,
     private readonly bookingService: BookingService,
     private readonly llmService: LLMService,
-    private readonly whatsAppService: WhatsAppService,
   ) {}
 
   // Virtual Receptionist Configuration
   @Post('config')
   @ApiOperation({ summary: 'Create virtual receptionist configuration' })
+  @Roles(...SALON_MANAGERS)
   async createConfig(@Body(new ValidationPipe()) config: CreateVirtualReceptionistConfig) {
     this.logger.log('Creating virtual receptionist configuration');
     return this.virtualReceptionistService.createConfig(config);
@@ -53,6 +53,7 @@ export class VirtualReceptionistController {
 
   @Get('config/:salonId')
   @ApiOperation({ summary: 'Get virtual receptionist configuration for salon' })
+  @Roles(...SALON_MANAGERS)
   async getConfig(@Param('salonId') salonId: string) {
     this.logger.log(`Getting virtual receptionist configuration for salon: ${salonId}`);
     return this.virtualReceptionistService.getConfig(salonId);
@@ -60,6 +61,7 @@ export class VirtualReceptionistController {
 
   @Put('config/:salonId')
   @ApiOperation({ summary: 'Update virtual receptionist configuration' })
+  @Roles(...SALON_MANAGERS)
   async updateConfig(
     @Param('salonId') salonId: string,
     @Body(new ValidationPipe()) config: UpdateVirtualReceptionistConfig,
@@ -71,6 +73,7 @@ export class VirtualReceptionistController {
   // LLM Provider Configuration
   @Post('llm-config')
   @ApiOperation({ summary: 'Create LLM provider configuration' })
+  @SaasOwner()
   async createLLMConfig(@Body(new ValidationPipe()) config: CreateLLMProviderConfig) {
     this.logger.log('Creating LLM provider configuration');
     return this.llmService.createProviderConfig(config);
@@ -78,6 +81,7 @@ export class VirtualReceptionistController {
 
   @Get('llm-config')
   @ApiOperation({ summary: 'Get all LLM provider configurations' })
+  @SaasOwner()
   async getLLMConfigs() {
     this.logger.log('Getting all LLM provider configurations');
     return this.llmService.getProviderConfigs();
@@ -85,6 +89,7 @@ export class VirtualReceptionistController {
 
   @Get('llm-config/:id')
   @ApiOperation({ summary: 'Get LLM provider configuration' })
+  @SaasOwner()
   async getLLMConfig(@Param('id', ParseUUIDPipe) id: string) {
     this.logger.log(`Getting LLM provider configuration: ${id}`);
     return this.llmService.getProviderConfig(id);
@@ -92,6 +97,7 @@ export class VirtualReceptionistController {
 
   @Put('llm-config/:id')
   @ApiOperation({ summary: 'Update LLM provider configuration' })
+  @SaasOwner()
   async updateLLMConfig(
     @Param('id', ParseUUIDPipe) id: string,
     @Body(new ValidationPipe()) config: UpdateLLMProviderConfig,
@@ -102,6 +108,7 @@ export class VirtualReceptionistController {
 
   @Delete('llm-config/:id')
   @ApiOperation({ summary: 'Delete LLM provider configuration' })
+  @SaasOwner()
   async deleteLLMConfig(@Param('id', ParseUUIDPipe) id: string) {
     this.logger.log(`Deleting LLM provider configuration: ${id}`);
     return this.llmService.deleteProviderConfig(id);
@@ -110,6 +117,7 @@ export class VirtualReceptionistController {
   // Conversation Management
   @Post('conversations')
   @ApiOperation({ summary: 'Create new conversation' })
+  @Roles(...SALON_MANAGERS)
   async createConversation(@Body(new ValidationPipe()) data: CreateConversationDto) {
     this.logger.log(`Creating new conversation: ${data.clientId} - ${data.salonId}`);
     return this.conversationService.createConversation(data);
@@ -117,6 +125,7 @@ export class VirtualReceptionistController {
 
   @Get('conversations/:id')
   @ApiOperation({ summary: 'Get conversation by ID' })
+  @Roles(...SALON_MANAGERS)
   async getConversation(@Param('id', ParseUUIDPipe) id: string) {
     this.logger.log(`Getting conversation: ${id}`);
     return this.conversationService.getConversation(id);
@@ -124,6 +133,7 @@ export class VirtualReceptionistController {
 
   @Get('conversations')
   @ApiOperation({ summary: 'Get conversations' })
+  @Roles(...SALON_MANAGERS)
   async getConversations(@Query('salonId') salonId?: string) {
     this.logger.log(`Getting conversations for salon: ${salonId}`);
     return this.conversationService.getConversations(salonId);
@@ -131,6 +141,7 @@ export class VirtualReceptionistController {
 
   @Put('conversations/:id')
   @ApiOperation({ summary: 'Update conversation' })
+  @Roles(...SALON_MANAGERS)
   async updateConversation(
     @Param('id', ParseUUIDPipe) id: string,
     @Body(new ValidationPipe()) data: UpdateConversationDto,
@@ -141,6 +152,7 @@ export class VirtualReceptionistController {
 
   @Delete('conversations/:id')
   @ApiOperation({ summary: 'Delete conversation' })
+  @Roles(...SALON_MANAGERS)
   async deleteConversation(@Param('id', ParseUUIDPipe) id: string) {
     this.logger.log(`Deleting conversation: ${id}`);
     return this.conversationService.deleteConversation(id);
@@ -157,6 +169,7 @@ export class VirtualReceptionistController {
 
   @Get('conversations/:id/messages')
   @ApiOperation({ summary: 'Get conversation messages' })
+  @Roles(...SALON_MANAGERS)
   async getConversationMessages(@Param('id', ParseUUIDPipe) id: string) {
     this.logger.log(`Getting messages for conversation: ${id}`);
     return this.conversationService.getConversationMessages(id);
@@ -218,6 +231,7 @@ export class VirtualReceptionistController {
 
   @Get('booking/availability')
   @ApiOperation({ summary: 'Check appointment availability' })
+  @Roles(...SALON_TEAM)
   async checkAvailability(@Query() query: any) {
     this.logger.log('Checking appointment availability');
     return this.bookingService.checkAvailability(query);
@@ -226,6 +240,7 @@ export class VirtualReceptionistController {
   // LLM Provider Management
   @Post('llm/test')
   @ApiOperation({ summary: 'Test LLM provider connection' })
+  @SaasOwner()
   async testLLMProvider(@Body() data: { provider: string; apiKey: string; model?: string }) {
     this.logger.log(`Testing LLM provider: ${data.provider}`);
     return this.llmService.testProvider(data);
@@ -233,46 +248,22 @@ export class VirtualReceptionistController {
 
   @Get('llm/models')
   @ApiOperation({ summary: 'Get available LLM models' })
+  @SaasOwner()
   async getAvailableModels() {
     this.logger.log('Getting available LLM models');
     return this.llmService.getAvailableModels();
   }
 
-  // WhatsApp Webhook
-  @Post('whatsapp/webhook')
-  @Public()
-  @ApiOperation({ summary: 'Handle incoming WhatsApp messages' })
-  async handleWhatsAppWebhook(@Body() payload: any) {
-    this.logger.log('Received WhatsApp webhook event');
-    
-    try {
-      // Process incoming WhatsApp message
-      await this.whatsAppService.handleIncomingMessage(payload);
-      
-      // Extract message details from Twilio webhook
-      const from = payload.From;
-      const body = payload.Body;
-      
-      if (!from || !body) {
-        this.logger.warn('Invalid WhatsApp webhook payload - missing from or body');
-        return { success: false, error: 'Invalid payload' };
-      }
-      
-      // For now, we'll just echo the message back as a placeholder
-      // In a real implementation, you would process this through the virtual receptionist
-      await this.whatsAppService.sendTextMessage(from, `You said: ${body}`);
-      
-      return { success: true };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.logger.error(`Failed to handle WhatsApp webhook: ${errorMessage}`);
-      return { success: false, error: errorMessage };
-    }
-  }
+  // POST /virtual-receptionist/whatsapp/webhook used to be here: public,
+  // with no Twilio signature check, it answered "You said: ..." to any
+  // number -- once Twilio is configured, anyone could have sent WhatsApp
+  // messages paid by KiraRoom. Inbound WhatsApp arrives through
+  // /webhooks/meta/whatsapp, which verifies the signature.
 
   // Statistics and Analytics
   @Get('stats')
   @ApiOperation({ summary: 'Get virtual receptionist statistics' })
+  @Roles(...SALON_MANAGERS)
   async getStatistics() {
     this.logger.log('Getting virtual receptionist statistics');
     return this.virtualReceptionistService.getStatistics();
@@ -284,6 +275,7 @@ export class VirtualReceptionistController {
   // progress bar.
   @Get('ai-usage')
   @ApiOperation({ summary: 'Get current AI conversation usage for this month' })
+  @Roles(...SALON_MANAGERS)
   async getAiUsage(@Req() req: any) {
     const tenantId = req?.user?.tenantId;
     if (!tenantId) {

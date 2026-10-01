@@ -16,7 +16,7 @@
 import type { Response } from "express";
 import { Request } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
-import { Roles } from "../auth/decorators/roles.decorator";
+import { Roles, SALON_TEAM } from "../auth/decorators/roles.decorator";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { UserRole, InvoiceSource, FiscalMode } from "@prisma/client";
 import { InvoiceService } from "./invoices.service";
@@ -148,6 +148,7 @@ export class InvoicesController {
 
   @Get(":id/pdf")
   @Header("Content-Type", "application/pdf")
+  @Roles(...SALON_TEAM)
   async pdfStream(
     @Req() req: AuthedRequest,
     @Param("id", ParseUUIDPipe) id: string,
@@ -197,6 +198,7 @@ fiscalQrUrl: invoice.fiscalQrUrl,
 
   @Get(":id/xml")
   @Header("Content-Type", "application/xml")
+  @Roles(...SALON_TEAM)
   async xml(
     @Req() req: AuthedRequest,
     @Param("id", ParseUUIDPipe) id: string,

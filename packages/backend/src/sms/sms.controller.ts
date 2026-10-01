@@ -2,7 +2,7 @@ import { Body, Controller, Get, Post, Req, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
-import { Roles } from "../auth/decorators/roles.decorator";
+import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 import { FeatureGuard } from "../common/guards/feature.guard";
 import { Feature } from "../common/decorators/feature.decorator";
 import { SmsService } from "../notifications/services/sms.service";
@@ -19,6 +19,7 @@ export class SmsController {
    * (you can read whether SMS is configured regardless of plan).
    */
   @Get("status")
+  @Roles(...SALON_MANAGERS)
   status() {
     return { configured: this.sms.isConfigured() };
   }

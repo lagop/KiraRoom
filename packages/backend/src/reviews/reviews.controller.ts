@@ -5,6 +5,7 @@ import type { Request, Response } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { Public } from "../auth/decorators/public.decorator";
 import { ReviewsService } from "./reviews.service";
+import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 
 interface AuthedRequest extends Request {
   user: { id: string; tenantId: string; role: string };
@@ -18,6 +19,7 @@ export class ReviewsController {
   constructor(private readonly service: ReviewsService) {}
 
   @Get()
+  @Roles(...SALON_MANAGERS)
   list(
     @Req() req: AuthedRequest,
     @Query("rating") rating?: string,
@@ -32,6 +34,7 @@ export class ReviewsController {
   }
 
   @Post(":id/moderate")
+  @Roles(...SALON_MANAGERS)
   moderate(
     @Req() req: AuthedRequest,
     @Param("id", ParseUUIDPipe) id: string,
@@ -102,6 +105,7 @@ export class ReviewsAnalyticsController {
   constructor(private readonly service: ReviewsService) {}
 
   @Get()
+  @Roles(...SALON_MANAGERS)
   async analytics(
     @Req() req: AuthedRequest,
     @Query("from") from?: string,

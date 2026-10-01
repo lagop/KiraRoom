@@ -1,6 +1,7 @@
 ﻿import { Controller, Get, Query, UseGuards } from "@nestjs/common";
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { UpsellService } from './upsell.service';
+import { Roles, SALON_TEAM } from "../auth/decorators/roles.decorator";
 
 @Controller('upsell')
 @UseGuards(JwtAuthGuard)
@@ -13,6 +14,7 @@ export class UpsellController {
    * lets the dashboard preview the same data.
    */
   @Get('suggest')
+  @Roles(...SALON_TEAM)
   async suggest(
     @Query('tenantId') tenantId: string,
     @Query('clientId') clientId?: string,

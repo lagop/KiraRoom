@@ -2,6 +2,7 @@
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { MessageBundlesService } from './message-bundles.service';
+import { SaasOwner } from "../saas/decorators/saas-owner.decorator";
 
 @Controller('message-bundles')
 @UseGuards(JwtAuthGuard)
@@ -19,6 +20,7 @@ export class MessageBundlesController {
    * call this before dispatching a campaign to know whether to skip.
    */
   @Get('tenants/:tenantId/balance')
+  @SaasOwner()
   balance(
     @Param('tenantId') tenantId: string,
     @CurrentUser() user: any,
@@ -36,6 +38,7 @@ export class MessageBundlesController {
    * webhook -> `creditTopUp({ source: 'stripe' })`.
    */
   @Post('tenants/:tenantId/topup')
+  @SaasOwner()
   topUp(
     @Param('tenantId') tenantId: string,
     @Body() body: { credits: number },

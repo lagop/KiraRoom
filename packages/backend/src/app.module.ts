@@ -73,6 +73,7 @@ import { ServicesService } from "./services/services.service";
 import { ThrottlerBehindProxyGuard } from "./common/guards/throttler-behind-proxy.guard";
 import { JwtStrategy } from "./auth/strategies/jwt.strategy";
 import { JwtAuthGuard } from "./auth/guards/jwt-auth.guard";
+import { RolesGuard } from "./auth/guards/roles.guard";
 import { BugReportModule } from "./bug-reports/bug-report.module";
 import { InvitesModule } from "./saas/invites/invites.module";
 import { PublicModule } from "./public-site/public.module";
@@ -228,7 +229,7 @@ import { PublicModule } from "./public-site/public.module";
     // (invite flow + accept-invite wizard + trial state machine)
     InvitesModule,
 
-    // Public site resolution — `/public-site/tenant/:slug` (no auth, path-bypass)
+    // Public site resolution — `/public-site/tenant/:slug` (@Public)
     PublicModule,
   ],
   controllers: [
@@ -248,6 +249,11 @@ import { PublicModule } from "./public-site/public.module";
     {
       provide: APP_GUARD,
       useClass: JwtAuthGuard,
+    },
+    // After JwtAuthGuard, so it sees the user. Deny by default: see RolesGuard.
+    {
+      provide: APP_GUARD,
+      useClass: RolesGuard,
     },
     AppService,
     AuthService,

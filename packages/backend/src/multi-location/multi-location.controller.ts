@@ -2,7 +2,7 @@ import { ParseUUIDPipe, Body, Controller, Delete, Get, Param, Patch, Post, Req, 
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
-import { Roles } from "../auth/decorators/roles.decorator";
+import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 import { UserRole } from "@prisma/client";
 import { FeatureGuard } from "../common/guards/feature.guard";
 import { Feature } from "../common/decorators/feature.decorator";
@@ -22,12 +22,14 @@ export class MultiLocationController {
 
   @Get()
   @ApiOperation({ summary: "Listar locales del tenant" })
+  @Roles(...SALON_MANAGERS)
   list(@Req() req: any) {
     return this.service.list(req.user.tenantId);
   }
 
   @Get(":id")
   @ApiOperation({ summary: "Obtener un local" })
+  @Roles(...SALON_MANAGERS)
   get(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
     return this.service.get(req.user.tenantId, id);
   }
@@ -59,6 +61,7 @@ export class MultiLocationController {
 
   @Get(":id/stats")
   @ApiOperation({ summary: "KPIs del local (ultimos 30 dias)" })
+  @Roles(...SALON_MANAGERS)
   stats(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
     return this.service.getStats(req.user.tenantId, id);
   }
@@ -74,6 +77,7 @@ export class ConsolidatedReportsController {
   @Get("consolidated")
   @Feature("consolidated_reports")
   @ApiOperation({ summary: "KPIs agregados de todos los locales" })
+  @Roles(...SALON_MANAGERS)
   consolidated(@Req() req: any) {
     return this.service.getConsolidated(req.user.tenantId);
   }

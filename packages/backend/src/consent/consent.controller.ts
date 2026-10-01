@@ -5,6 +5,7 @@ import type { Request } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { Public } from "../auth/decorators/public.decorator";
 import { ConsentService } from "./consent.service";
+import { Roles, SALON_TEAM, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 
 interface AuthedRequest extends Request {
   user: { id: string; tenantId: string; role: string };
@@ -18,16 +19,19 @@ export class ConsentFormsController {
   constructor(private readonly service: ConsentService) {}
 
   @Get()
+  @Roles(...SALON_TEAM)
   list(@Req() req: AuthedRequest) {
     return this.service.listForms(req.user.tenantId);
   }
 
   @Post()
+  @Roles(...SALON_MANAGERS)
   create(@Req() req: AuthedRequest, @Body() body: any) {
     return this.service.createForm(req.user.tenantId, body);
   }
 
   @Patch(":id")
+  @Roles(...SALON_MANAGERS)
   update(
     @Req() req: AuthedRequest,
     @Param("id", ParseUUIDPipe) id: string,
@@ -37,6 +41,7 @@ export class ConsentFormsController {
   }
 
   @Delete(":id")
+  @Roles(...SALON_MANAGERS)
   remove(@Req() req: AuthedRequest, @Param("id", ParseUUIDPipe) id: string) {
     return this.service.deleteForm(req.user.tenantId, id);
   }
@@ -50,6 +55,7 @@ export class ConsentController {
   @Get("required")
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
+  @Roles(...SALON_TEAM)
   required(
     @Req() req: AuthedRequest,
     @Query("serviceId") serviceId?: string,
@@ -84,6 +90,7 @@ export class ConsentController {
   @Post(":id/revoke")
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
+  @Roles(...SALON_MANAGERS)
   revoke(
     @Req() req: AuthedRequest,
     @Param("id", ParseUUIDPipe) id: string,
