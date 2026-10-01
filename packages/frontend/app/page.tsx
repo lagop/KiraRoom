@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { getToken } from "@/lib/api";
-import { Check, Globe, Sparkles, Zap, Calendar, MessageSquare, Users, BarChart3, Loader2 } from "lucide-react";
+import { Check, Sparkles, Zap, Calendar, MessageSquare, Users, BarChart3, Loader2 } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
 import type { SubscriptionPlan } from "@/lib/api";
 
@@ -211,25 +211,6 @@ export default function LandingPage() {
               </div>
             ))
           )}
-        </div>
-        <div className="mt-8 rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h3 className="text-base font-semibold">
-                <Globe className="mr-1.5 inline h-4 w-4" />
-                {t("landing.addon.title")}
-              </h3>
-              <p className="mt-1 text-sm text-gray-600">
-                {t("landing.addon.desc")}
-              </p>
-            </div>
-            <Link
-              href="/signup"
-              className="rounded-md border border-gray-200 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
-            >
-              {t("landing.pricing.learnMore")}
-            </Link>
-          </div>
         </div>
       </section>
 

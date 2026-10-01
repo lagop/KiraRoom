@@ -202,6 +202,12 @@ export default function ChannelsSettingsPage() {
         <p className="text-gray-500 mt-1 text-sm">
           {t("billing.channels.subtitle")}
         </p>
+        {/* The receptionist answers on the web chat only: messages from
+            WhatsApp, Messenger, Instagram and Telegram are received and
+            logged, not answered. Say so instead of showing them as live. */}
+        <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          {t("billing.channels.webOnlyNotice")}
+        </p>
       </header>
 
       {state.kind === "loading" ? (
@@ -238,8 +244,8 @@ export default function ChannelsSettingsPage() {
             icon={<MessageSquare className="w-5 h-5" />}
             title={t("billing.channels.whatsappTitle")}
             description={t("billing.channels.whatsappDescription")}
-            status="connected"
-            on={true}
+            status="pending"
+            on={false}
             disabled
           />
 

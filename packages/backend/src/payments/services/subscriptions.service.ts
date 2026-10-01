@@ -191,12 +191,15 @@ export class SubscriptionsService {
       features: [
         'Clientas y citas ilimitadas',
         'Hasta 4 profesionales',
-        // Fiscal Spain is the entry hook, not an upgrade driver: it is the
-        // reason a salon switches at all, and it is available on every plan.
-        'Facturacion Verifactu y TicketBAI',
-        'Recepcionista IA basica (500 conv./mes)',
+        // What the plan does today, nothing more. Verifactu/TicketBAI, WhatsApp
+        // reminders and the multichannel receptionist were listed here and are
+        // not built (fiscal sending is a stub, WhatsApp free text fails outside
+        // Meta's 24 h window, Messenger/Instagram/Telegram only get logged).
+        // Put them back when they work.
+        'Facturas con IVA o IGIC',
+        'Recepcionista IA en tu web (500 mensajes/mes)',
         'Agenda online',
-        'Recordatorios WhatsApp',
+        'Recordatorios automáticos por email',
         'Soporte por email',
       ],
       maxClients: null,                  // unlimited (was 150 in rev3)
@@ -214,11 +217,11 @@ export class SubscriptionsService {
         'Clientas y citas ilimitadas',
         'Hasta 10 profesionales',
         'Email marketing',
-        'Recepcionista IA avanzada (volumen ilimitado)',
-        'Multicanal: Messenger, Instagram y Telegram',
-        'Loyalty, promociones y gift cards',
+        'Recepcionista IA en tu web, sin límite de mensajes',
+        'Recordatorios por SMS',
+        'Fidelización, promociones y tarjetas regalo',
         'Wallet y comisiones',
-        'Analitica avanzada',
+        'Analítica avanzada',
         'Turnos y horarios',
         'Soporte prioritario',
       ],
@@ -240,7 +243,7 @@ export class SubscriptionsService {
         'Informes consolidados',
         'Panel centralizado',
         'Account manager',
-        'Recepcionista IA avanzada (volumen ilimitado)',
+        'Recepcionista IA en tu web, sin límite de mensajes',
         'Todo lo de Pro',
       ],
       maxClients: null,                  // unlimited

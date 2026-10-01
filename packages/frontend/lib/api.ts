@@ -1056,6 +1056,8 @@ export interface Invoice {
 
 export interface FiscalSettings {
   fiscalMode: "none" | "verifactu" | "ticketbai" | "sii_only";
+  /** False while sending invoices to the AEAT is not available (production). */
+  submissionAvailable?: boolean;
   fiscalSettings: {
     enabled?: boolean;
     syncOnIssue?: boolean;

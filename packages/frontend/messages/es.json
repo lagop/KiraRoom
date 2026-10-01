@@ -3,7 +3,7 @@
     "badge": "Plataforma disponible en español e inglés",
     "hero": {
       "title": "Gestiona tu peluquería o centro de belleza sin fricción",
-      "subtitle": "Agenda online, recordatorios por WhatsApp, recepcionista IA, fidelización, wallet y mucho más. 14 días gratis, sin tarjeta.",
+      "subtitle": "Agenda online, recordatorios automáticos, recepcionista IA en tu web, fidelización, wallet y mucho más. 14 días gratis, sin tarjeta.",
       "ctaPrimary": "Empieza 14 días gratis",
       "ctaSecondary": "Ver demo de reservas",
       "ctaLogin": "Ya tengo cuenta"
@@ -15,12 +15,12 @@
         "desc": "Reservas 24/7 desde cualquier dispositivo."
       },
       "whatsapp": {
-        "title": "Recordatorios WhatsApp",
-        "desc": "Reduce no-shows con recordatorios automáticos."
+        "title": "Recordatorios automáticos",
+        "desc": "Reduce las ausencias con avisos por email y SMS antes de cada cita."
       },
       "ai": {
         "title": "Recepcionista IA",
-        "desc": "Kira responde a tus clientas por WhatsApp y web."
+        "desc": "Kira atiende a tus clientas en tu web y reserva la cita por ti."
       },
       "loyalty": {
         "title": "Fidelización",
@@ -154,7 +154,8 @@
       "deactivate": "Desactivar",
       "saved": "Configuración guardada",
       "taxRegime": "Régimen fiscal del territorio",
-      "taxRegimeHint": "IVA en península y Baleares, IGIC en Canarias, IPSI en Ceuta y Melilla. Al cambiarlo se ajusta el tipo por defecto."
+      "taxRegimeHint": "IVA en península y Baleares, IGIC en Canarias, IPSI en Ceuta y Melilla. Al cambiarlo se ajusta el tipo por defecto.",
+      "submissionUnavailable": "El envío de facturas a la AEAT (Verifactu, TicketBAI o SII) todavía no está disponible. Puedes emitir facturas desde KiraRoom, pero no se envían a Hacienda."
     },
     "errors": {
       "invalidLines": "Cada línea debe tener descripción, una cantidad mayor que cero y valores válidos.",
@@ -314,7 +315,7 @@
       "webTitle": "Web (en la app)",
       "webDescription": "Chat web dentro de la app. Siempre activo.",
       "whatsappTitle": "WhatsApp",
-      "whatsappDescription": "Mensajes enviados por el flujo de WhatsApp ya conectado. Siempre activo.",
+      "whatsappDescription": "El recepcionista aún no responde por WhatsApp. Te avisaremos cuando esté disponible.",
       "alwaysOn": "Siempre activo",
       "metaTitle": "Facebook Messenger + Instagram",
       "metaDescription": "Messenger y los DMs de Instagram comparten una sola conexión Meta (pageId + accessToken). El salón debe tener una Facebook Page.",
@@ -381,7 +382,8 @@
       "metricsTitle": "Volumen por canal (proceso local)",
       "metricsInbound": "entrantes",
       "metricsOut": "enviados",
-      "metricsBlocked": "bloqueados"
+      "metricsBlocked": "bloqueados",
+      "webOnlyNotice": "Hoy el recepcionista responde solo en el chat de tu web. Puedes dejar conectados Messenger, Instagram y Telegram, pero todavía no contesta por esos canales ni por WhatsApp."
     },
     "currentPlan": "Plan actual",
     "currentPlanLabel": "Tu plan actual",
