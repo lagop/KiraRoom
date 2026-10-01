@@ -8,11 +8,11 @@
 #
 # Builder stage: install all workspace deps, build @kira/shared, generate
 # Prisma client, build the backend.
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /repo
 
-# The node:20-alpine base image defaults NODE_ENV=production, which makes
+# The node:22-alpine base image defaults NODE_ENV=production, which makes
 # `npm ci` skip devDependencies. That excludes `prisma` (the CLI) from
 # the installed packages, so the entrypoint's `npx prisma migrate deploy`
 # would fall back to npx fetching a fresh prisma@<latest> (currently 7.x)
@@ -42,7 +42,7 @@ COPY packages/backend/docker-entrypoint.sh /repo/packages/backend/docker-entrypo
 RUN cd /repo/packages/backend && npx prisma generate && npm run build
 
 # Production stage.
-FROM node:20-alpine AS production
+FROM node:22-alpine AS production
 
 # OpenSSL: Prisma engines need libssl at runtime.
 RUN apk add --no-cache openssl

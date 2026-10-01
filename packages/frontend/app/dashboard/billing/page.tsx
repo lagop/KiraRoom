@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import apiClient from "../../../lib/api";
 import type { SubscriptionInvoice } from "../../../lib/api";
@@ -12,7 +12,7 @@ import { PlanId } from "@/lib/plans";
 import { Check, Globe, Loader2, Sparkles, X } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
 
-export default function BillingPage() {
+function BillingPageContent() {
   const t = useTranslations();
   const ctx = useTenantContext();
   const router = useRouter();
@@ -1080,5 +1080,15 @@ function BundlesBalanceCard({
         </p>
       )}
     </div>
+  );
+}
+
+// useSearchParams() needs a Suspense boundary for the page to prerender
+// (required since Next.js 14.1; 14.0 let it through).
+export default function BillingPage() {
+  return (
+    <Suspense fallback={null}>
+      <BillingPageContent />
+    </Suspense>
   );
 }

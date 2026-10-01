@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import apiClient from "@/lib/api";
 import type { Service } from "@/lib/api";
@@ -11,7 +11,7 @@ import { toast, useToast } from "@/components/ui/use-toast";
 import { useTranslations } from "@/lib/use-translation";
 
 
-export default function ServicesPage() {
+function ServicesPageContent() {
   const searchParams = useSearchParams();
   const { toast } = useToast();
   const t = useTranslations();
@@ -588,5 +588,15 @@ export default function ServicesPage() {
         </div>
       )}
     </div>
+  );
+}
+
+// useSearchParams() needs a Suspense boundary for the page to prerender
+// (required since Next.js 14.1; 14.0 let it through).
+export default function ServicesPage() {
+  return (
+    <Suspense fallback={null}>
+      <ServicesPageContent />
+    </Suspense>
   );
 }
