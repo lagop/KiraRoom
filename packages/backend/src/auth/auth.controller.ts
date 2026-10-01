@@ -1,3 +1,4 @@
+import { Throttle } from "@nestjs/throttler";
 import { Controller, Post, Body, UseGuards, HttpCode, HttpStatus, Get, Patch, Query } from "@nestjs/common";
 import {
   ApiTags,
@@ -15,7 +16,6 @@ import { JwtAuthGuard } from "./guards/jwt-auth.guard";
 import { RolesGuard } from "./guards/roles.guard";
 import { UserRole } from "@prisma/client";
 import { IMPERSONATION_AUDIENCE, IMPERSONATION_DEFAULT_REASON } from "../saas/saas.constants";
-import { Throttle } from "@nestjs/throttler";
 
 @ApiTags("Authentication")
 @Controller("auth")

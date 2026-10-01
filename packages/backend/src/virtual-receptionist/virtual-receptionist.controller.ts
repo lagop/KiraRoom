@@ -1,3 +1,4 @@
+import { Throttle } from "@nestjs/throttler";
 import { ParseUUIDPipe, Controller, Post, Req, Get, Put, Delete, Body, Param, Query, UseGuards, UsePipes, ValidationPipe, Logger } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
@@ -25,7 +26,6 @@ import {
 } from '@kira/shared';
 import { FeatureGuard } from '../common/guards/feature.guard';
 import { Feature } from '../common/decorators/feature.decorator';
-import { Throttle } from "@nestjs/throttler";
 
 @ApiTags('virtual-receptionist')
 @ApiBearerAuth()
