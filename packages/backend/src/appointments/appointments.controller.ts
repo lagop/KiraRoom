@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, UseGuards, Req } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, UseGuards, UseInterceptors, Req } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
@@ -15,6 +15,7 @@ import {
 import { AvailableSlotsDto } from "./dto/available-slots.dto";
 import { OnlineBookingDto, StaffBookingDto } from "./dto/book-appointment.dto";
 import { PublicViewerService } from "../common/tenancy/public-viewer.service";
+import { ScrubSecretsInterceptor, publicBooking } from "./appointment-response";
 import { Public } from "../auth/decorators/public.decorator";
 import { Roles } from "../auth/decorators/roles.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
@@ -33,6 +34,8 @@ interface AuthenticatedRequest extends Request {
 @ApiTags("appointments")
 @Controller("appointments")
 @UseGuards(JwtAuthGuard, RolesGuard)
+// No response from here carries secrets: see appointment-response.ts.
+@UseInterceptors(ScrubSecretsInterceptor)
 @ApiBearerAuth()
 export class AppointmentsController {
   constructor(
@@ -45,7 +48,9 @@ export class AppointmentsController {
   @ApiOperation({ summary: "Create a new appointment (public)" })
   @ApiResponse({ status: 201, description: "Appointment created successfully" })
   async create(@Body() dto: OnlineBookingDto) {
-    return this.appointmentsService.createOnline(dto);
+    // Public: whoever booked gets the booking back, not the client record it
+    // attached to nor the salon's row.
+    return publicBooking(await this.appointmentsService.createOnline(dto));
   }
 
   @Post("staff")
