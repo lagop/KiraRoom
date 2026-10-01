@@ -517,10 +517,11 @@ export class SaasService {
       // Per-plan counts of *active* (non-trialing, non-cancelled) tenants
       // are used to derive MRR. Trialing tenants contribute 0; cancelled
       // and past-due are excluded from MRR.
-      this.prisma.tenant.groupBy({
-        by: ["plan"],
+      // Every paying tenant with its location count: Empresa is billed per
+      // location, so a per-plan count undercounts it.
+      this.prisma.tenant.findMany({
         where: { subscriptionStatus: "active", ...TENANT_ACTIVE_WHERE },
-        _count: true,
+        select: { plan: true, maxLocations: true },
       }),
       this.prisma.tenant.groupBy({
         by: ["subscriptionStatus"],
@@ -554,12 +555,15 @@ export class SaasService {
     const statusCount = (s: string) =>
       subscriptionStatusBreakdown.find((r) => r.subscriptionStatus === s)?._count ?? 0;
 
-    // Real MRR: Σ (active tenants on plan P) × PLAN_PRICES[P].
-    // Unknown plans contribute 0 so a new plan enum value doesn't crash analytics.
-    const mrr = activePlanBreakdown.reduce((sum, row) => {
-      const price = PLAN_PRICES[row.plan as keyof typeof PLAN_PRICES] ?? 0;
-      return sum + row._count * price;
-    }, 0);
+    // MRR in euros: each active tenant's plan price, times its locations
+    // on Empresa. Legacy plan names count as the plan they map to; unknown
+    // plans contribute 0 so a new enum value doesn't crash analytics.
+    // (The console divided this by 100, as if it were cents, and showed
+    // 0,49 € per Esencial salon.) Add-ons are not included yet.
+    const mrr = activePlanBreakdown.reduce(
+      (sum, t) => sum + monthlyPlanRevenue(t.plan, t.maxLocations),
+      0,
+    );
 
     return {
       totalTenants: tenants,
@@ -874,4 +878,18 @@ export class SaasService {
       },
     };
   }
+}
+
+const LEGACY_PLAN: Record<string, keyof typeof PLAN_PRICES> = {
+  basic: "esencial",
+  professional: "pro",
+  advanced: "empresa",
+  enterprise: "empresa",
+};
+
+/** What a tenant on this plan pays per month, in euros, before VAT. */
+export function monthlyPlanRevenue(plan: string, locations: number | null | undefined): number {
+  const id = (LEGACY_PLAN[plan] ?? plan) as keyof typeof PLAN_PRICES;
+  const price = PLAN_PRICES[id] ?? 0;
+  return id === "empresa" ? price * Math.max(1, locations ?? 1) : price;
 }

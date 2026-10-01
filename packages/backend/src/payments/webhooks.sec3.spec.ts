@@ -153,7 +153,11 @@ describe('WebhooksController SEC-3 (signature enforcement)', () => {
     });
   });
 
-  it('returns signature_verification_failed when SDK throws (keeps Stripe retrying)', async () => {
+  // It used to answer 200 { status: 'signature_verification_failed' }:
+  // Stripe treats any 2xx as delivered, so a real event signed with a
+  // different secret was acknowledged and lost. Now it is a 400 and Stripe
+  // shows the failure and retries.
+  it('refuses an event whose signature does not verify (400)', async () => {
     await withCleanEnv(async () => {
       process.env.NODE_ENV = 'production';
       const constructEvent = jest.fn().mockImplementation(() => {
@@ -164,10 +168,9 @@ describe('WebhooksController SEC-3 (signature enforcement)', () => {
         stripe: { webhooks: { constructEvent } },
       });
       const req = { rawBody: Buffer.from('{}') } as any;
-      const result = await c.handleStripeWebhook('bad-sig', { type: 'ping' }, req);
-      expect(result).toEqual(
-        expect.objectContaining({ status: 'signature_verification_failed' }),
-      );
+      await expect(
+        c.handleStripeWebhook('bad-sig', { type: 'ping' }, req),
+      ).rejects.toMatchObject({ status: 400 });
       expect(c.processStripeEvent).not.toHaveBeenCalled();
     });
   });
