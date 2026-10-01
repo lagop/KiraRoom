@@ -187,11 +187,20 @@ export default function FiscalSettingsPage() {
                   "sii_only",
                 ] as const
               ).map((m) => (
-                <option key={m} value={m}>
+                <option
+                  key={m}
+                  value={m}
+                  disabled={m !== "none" && settings.data?.submissionAvailable === false}
+                >
                   {t(`invoices.fiscalMode.${m}`)}
                 </option>
               ))}
             </select>
+            {settings.data?.submissionAvailable === false && (
+              <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                {t("invoices.fiscalSettings.submissionUnavailable")}
+              </p>
+            )}
           </div>
 
           <div className="grid grid-cols-1 gap-5 md:grid-cols-2">

@@ -3,7 +3,7 @@
     "badge": "Available in Spanish and English",
     "hero": {
       "title": "Run your salon or beauty business without friction",
-      "subtitle": "Online booking, WhatsApp reminders, AI receptionist, loyalty, wallet and more. 14-day free trial, no card required.",
+      "subtitle": "Online booking, automatic reminders, an AI receptionist on your website, loyalty, wallet and more. 14-day free trial, no card required.",
       "ctaPrimary": "Start your 14-day trial",
       "ctaSecondary": "See booking demo",
       "ctaLogin": "I already have an account"
@@ -15,12 +15,12 @@
         "desc": "Bookings 24/7 from any device."
       },
       "whatsapp": {
-        "title": "WhatsApp reminders",
-        "desc": "Cut no-shows with automatic reminders."
+        "title": "Automatic reminders",
+        "desc": "Cut no-shows with email and SMS reminders before each appointment."
       },
       "ai": {
         "title": "AI receptionist",
-        "desc": "Kira replies to your clients on WhatsApp and web."
+        "desc": "Kira answers your clients on your website and books the appointment for you."
       },
       "loyalty": {
         "title": "Loyalty",
@@ -154,7 +154,8 @@
       "deactivate": "Deactivate",
       "saved": "Settings saved",
       "taxRegime": "Territory tax regime",
-      "taxRegimeHint": "VAT in mainland Spain and the Balearics, IGIC in the Canary Islands, IPSI in Ceuta and Melilla. Changing it adjusts the default rate."
+      "taxRegimeHint": "VAT in mainland Spain and the Balearics, IGIC in the Canary Islands, IPSI in Ceuta and Melilla. Changing it adjusts the default rate.",
+      "submissionUnavailable": "Sending invoices to the tax agency (Verifactu, TicketBAI or SII) is not available yet. You can issue invoices in KiraRoom, but they are not sent."
     },
     "errors": {
       "invalidLines": "Each line must have a description, a quantity greater than zero, and valid values.",
@@ -314,7 +315,7 @@
       "webTitle": "Web (in-app)",
       "webDescription": "In-app web chat. Always on.",
       "whatsappTitle": "WhatsApp",
-      "whatsappDescription": "Messages routed through the already-connected WhatsApp pipeline. Always on.",
+      "whatsappDescription": "The receptionist does not answer on WhatsApp yet. We'll let you know when it does.",
       "alwaysOn": "Always on",
       "metaTitle": "Facebook Messenger + Instagram",
       "metaDescription": "Messenger and Instagram DMs share a single Meta connection (pageId + accessToken). The salon must have a Facebook Page.",
@@ -381,7 +382,8 @@
       "metricsTitle": "Volume per channel (process-local)",
       "metricsInbound": "inbound",
       "metricsOut": "sent",
-      "metricsBlocked": "blocked"
+      "metricsBlocked": "blocked",
+      "webOnlyNotice": "Today the receptionist answers only in your website chat. You can leave Messenger, Instagram and Telegram connected, but it does not reply on those channels or on WhatsApp yet."
     },
     "currentPlan": "Current plan",
     "currentPlanLabel": "Your current plan",

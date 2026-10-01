@@ -1,5 +1,6 @@
 ﻿import {
   BadRequestException,
+  ConflictException,
   Body,
   Controller,
   Get,
@@ -13,6 +14,7 @@
   Res,
   UseGuards,
 } from "@nestjs/common";
+import { fiscalSubmissionAvailable, FISCAL_SUBMISSION_UNAVAILABLE } from "./fiscal/fiscal-availability";
 import type { Response } from "express";
 import { Request } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
@@ -224,7 +226,8 @@ fiscalQrUrl: invoice.fiscalQrUrl,
       where: { id: this.requireTenantId(req) },
       select: { fiscalMode: true, fiscalSettings: true },
     });
-    return tenant;
+    // The settings page uses this to say that nothing is sent to the AEAT yet.
+    return { ...tenant, submissionAvailable: fiscalSubmissionAvailable() };
   }
 
   @Patch("settings/fiscal")
@@ -234,6 +237,9 @@ fiscalQrUrl: invoice.fiscalQrUrl,
     @Body() dto: UpdateTenantFiscalSettingsDto,
   ) {
     const tenantId = this.requireTenantId(req);
+    if (dto.fiscalMode && dto.fiscalMode !== FiscalMode.none && !fiscalSubmissionAvailable()) {
+      throw new ConflictException(FISCAL_SUBMISSION_UNAVAILABLE);
+    }
     const current = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
       select: { fiscalSettings: true },

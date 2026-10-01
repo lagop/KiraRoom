@@ -1,4 +1,5 @@
 import { Injectable, Logger, Optional } from "@nestjs/common";
+import { fiscalSubmissionAvailable } from "./fiscal-availability";
 import { PrismaService } from "../../common/prisma/prisma.service";
 import { VerifactuService } from "./verifactu.service";
 import { TicketBaiService } from "./ticketbai.service";
@@ -105,6 +106,11 @@ export class FiscalService {
     if (!invoice) return;
     const mode: FiscalMode = invoice.tenant.fiscalMode;
     if (mode === FiscalMode.none) return;
+    // The transports are stubs that answer "accepted": see fiscal-availability.
+    if (!fiscalSubmissionAvailable()) {
+      this.logger.warn(`Invoice ${invoiceId} not sent (${mode}): fiscal submission is not available yet`);
+      return;
+    }
     if (invoice.fiscalStatus === InvoiceFiscalStatus.accepted) return;
 
     await this.prisma.invoice.update({
