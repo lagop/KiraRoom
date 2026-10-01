@@ -130,6 +130,20 @@ export class MetaCloudApiClient {
     });
   }
 
+  /** Submits a message template for Meta's review on the salon's WhatsApp Business account. */
+  async createTemplate(
+    accessToken: string,
+    wabaId: string,
+    payload: Record<string, unknown>,
+  ): Promise<{ id?: string; status?: string; error?: { code: number; message: string } }> {
+    const resp = await fetch(`${this.baseUrl()}/${wabaId}/message_templates`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return (await resp.json()) as any;
+  }
+
   async listTemplates(
     accessToken: string,
     wabaId: string,

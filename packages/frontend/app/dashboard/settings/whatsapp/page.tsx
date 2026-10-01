@@ -24,13 +24,29 @@ export default function WhatsAppSettingsPage() {
     displayName: "",
   });
   const [busy, setBusy] = useState(false);
+  const [templates, setTemplates] = useState<Array<{ name: string; status: string }>>([]);
 
   async function load() {
     setLoading(true);
     try {
-      setConn(await apiClient.getWhatsAppConnection());
+      const c = await apiClient.getWhatsAppConnection();
+      setConn(c);
+      if (c) setTemplates(await apiClient.getWhatsAppStandardTemplates().catch(() => []));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function submitTemplates() {
+    setBusy(true);
+    try {
+      await apiClient.submitWhatsAppStandardTemplates();
+      setTemplates(await apiClient.getWhatsAppStandardTemplates().catch(() => []));
+      toast({ title: "Plantillas enviadas a Meta para su revisión" });
+    } catch (err: any) {
+      toast({ title: "No se pudieron enviar las plantillas", description: err?.message, variant: "destructive" });
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -85,8 +101,8 @@ export default function WhatsAppSettingsPage() {
       <div>
         <h1 className="text-2xl font-bold text-gray-900">WhatsApp Business</h1>
         <p className="text-gray-500 mt-1">
-          Conecta tu WABA para enviar campañas masivas. Cada tenant trae su
-          propio número (cumplimiento Meta).
+          Conecta tu número de WhatsApp Business: el recepcionista atenderá
+          por WhatsApp y los recordatorios de cita saldrán desde tu número.
         </p>
       </div>
 
@@ -135,6 +151,41 @@ export default function WhatsAppSettingsPage() {
               </div>
             )}
           </dl>
+          <div className="border-t border-gray-100 pt-3">
+            <div className="text-sm font-medium text-gray-900">Plantilla de recordatorio</div>
+            <p className="text-xs text-gray-500 mt-1">
+              WhatsApp solo entrega recordatorios con una plantilla aprobada por Meta. La
+              enviamos a revisión al conectar; suele aprobarse en unas horas. Mientras
+              tanto, los recordatorios salen por email o SMS.
+            </p>
+            <ul className="mt-2 space-y-1 text-sm">
+              {templates.map((t) => (
+                <li key={t.name} className="flex items-center justify-between">
+                  <span className="font-mono text-xs">{t.name}</span>
+                  <span
+                    className={`text-xs px-2 py-0.5 rounded ${
+                      t.status === "APPROVED"
+                        ? "bg-green-100 text-green-700"
+                        : t.status === "REJECTED"
+                          ? "bg-red-100 text-red-700"
+                          : "bg-amber-100 text-amber-700"
+                    }`}
+                  >
+                    {{ APPROVED: "Aprobada", REJECTED: "Rechazada", PENDING: "En revisión", NOT_SUBMITTED: "Sin enviar" }[t.status] ?? t.status}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            {templates.some((t) => t.status !== "APPROVED" && t.status !== "PENDING") && (
+              <button
+                onClick={submitTemplates}
+                disabled={busy}
+                className="mt-2 text-xs px-3 py-1.5 rounded border border-gray-300 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Enviar a revisión
+              </button>
+            )}
+          </div>
           <button
             onClick={disconnect}
             className="text-red-600 hover:bg-red-50 px-3 py-1.5 rounded inline-flex items-center gap-2 text-sm"

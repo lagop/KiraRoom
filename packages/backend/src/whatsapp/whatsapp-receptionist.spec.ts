@@ -108,7 +108,7 @@ describe("WhatsApp webhook routing", () => {
       client: { findFirst: jest.fn(async () => null) },
       whatsAppCampaignRecipient: { findFirst: jest.fn(async () => null) },
     };
-    const s = new WhatsAppService(prisma, {} as any, {} as any, {} as any, receptionist);
+    const s = new WhatsAppService(prisma, {} as any, {} as any, {} as any, receptionist, {} as any);
     return { s, receptionist, prisma };
   }
   const change = (body: string) => ({

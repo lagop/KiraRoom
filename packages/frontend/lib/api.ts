@@ -4252,6 +4252,13 @@ class ApiClient implements ApiClientInterface {
   async disconnectWhatsApp(): Promise<{ disconnected: boolean }> {
     return this.request(`/whatsapp/connection`, { method: "DELETE" });
   }
+  /** Review status of the reminder template KiraRoom submits to Meta. */
+  async getWhatsAppStandardTemplates(): Promise<Array<{ name: string; status: string }>> {
+    return this.request(`/whatsapp/templates/standard`);
+  }
+  async submitWhatsAppStandardTemplates(): Promise<Record<string, string>> {
+    return this.request(`/whatsapp/templates/standard`, { method: "POST" });
+  }
   async listWhatsAppTemplates(): Promise<Array<{ name: string; status: string; language?: string }>> {
     return this.request(`/whatsapp/templates`);
   }

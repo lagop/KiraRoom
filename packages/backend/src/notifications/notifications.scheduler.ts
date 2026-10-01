@@ -6,6 +6,7 @@ import { SmsService } from './services/sms.service';
 import { WhatsAppService } from './services/whatsapp.service';
 import { NotificationsService } from './notifications.service';
 import { NotificationType } from './dto';
+import { WhatsAppTemplateService } from '../whatsapp/whatsapp-template.service';
 
 @Injectable()
 export class NotificationsScheduler {
@@ -17,7 +18,39 @@ export class NotificationsScheduler {
     private readonly smsService: SmsService,
     private readonly whatsappService: WhatsAppService,
     private readonly notificationsService: NotificationsService,
+    private readonly whatsappTemplates: WhatsAppTemplateService,
   ) {}
+
+  /**
+   * A WhatsApp reminder. From the salon's own WhatsApp Business number with
+   * the approved template when it can (a free-text message a day before the
+   * appointment is outside WhatsApp's 24-hour window and is refused); the
+   * platform's Twilio sender otherwise, as before.
+   */
+  private async sendWhatsAppReminder(appointment: any, hoursBefore: number): Promise<void> {
+    const viaSalon = await this.whatsappTemplates.sendAppointmentReminder(appointment.tenantId, {
+      phone: appointment.client.phone,
+      clientName: appointment.client.firstName,
+      salonName: appointment.tenant.name,
+      serviceName: appointment.service.name,
+      date: appointment.scheduledDate,
+      time: appointment.scheduledTime,
+      country: appointment.tenant.country ?? undefined,
+    });
+    if (viaSalon.sent) return;
+    if (viaSalon.reason !== 'not_connected') {
+      this.logger.log(`WhatsApp template not used for appointment ${appointment.id}: ${viaSalon.reason}`);
+    }
+    await this.whatsappService.sendAppointmentReminder({
+      clientName: appointment.client.firstName,
+      clientPhone: appointment.client.phone,
+      serviceName: appointment.service.name,
+      professionalName: `${appointment.professional.firstName} ${appointment.professional.lastName}`,
+      date: appointment.scheduledDate.toISOString().split('T')[0],
+      time: appointment.scheduledTime,
+      salonName: appointment.tenant.name,
+    }, hoursBefore);
+  }
 
   /**
    * 24-Hour Reminder Cron Job
@@ -133,15 +166,7 @@ export class NotificationsScheduler {
             );
           if (appointment.client.phone && canSendWhatsapp) {
             try {
-              await this.whatsappService.sendAppointmentReminder({
-                clientName: appointment.client.firstName,
-                clientPhone: appointment.client.phone,
-                serviceName: appointment.service.name,
-                professionalName: `${appointment.professional.firstName} ${appointment.professional.lastName}`,
-                date: appointment.scheduledDate.toISOString().split('T')[0],
-                time: appointment.scheduledTime,
-                salonName: appointment.tenant.name,
-              }, 24);
+              await this.sendWhatsAppReminder(appointment, 24);
             } catch (whatsappError) {
               this.logger.error(`Failed to send 24h WhatsApp reminder for appointment ${appointment.id}: ${whatsappError.message}`);
             }
@@ -256,15 +281,7 @@ export class NotificationsScheduler {
             );
           if (appointment.client.phone && canSendWhatsapp) {
             try {
-              await this.whatsappService.sendAppointmentReminder({
-                clientName: appointment.client.firstName,
-                clientPhone: appointment.client.phone,
-                serviceName: appointment.service.name,
-                professionalName: `${appointment.professional.firstName} ${appointment.professional.lastName}`,
-                date: appointment.scheduledDate.toISOString().split('T')[0],
-                time: appointment.scheduledTime,
-                salonName: appointment.tenant.name,
-              }, 1);
+              await this.sendWhatsAppReminder(appointment, 1);
             } catch (whatsappError) {
               this.logger.error(`Failed to send 1h WhatsApp reminder for appointment ${appointment.id}: ${whatsappError.message}`);
             }
