@@ -16,7 +16,7 @@
 | Deploy method | Hostinger hPanel → VPS → Docker Manager → Compose URL |
 | Compose source | `https://raw.githubusercontent.com/lagop/KiraRoom/main/docker-compose.prod.yml` |
 | Env vars the operator sets | `ops/deploy/.env.production.hostinger` -- they reach a container **only** if that service forwards them in the compose |
-| Database backup retention | 30 days hot |
+| Database backups | Daily, encrypted (age); 14 days on the server, 35 days + monthly for 400 days off-site once `BACKUP_REMOTE` is set |
 | WAL archive retention | 30 days |
 | Sentry-compatible error tracking | GlitchTip self-hosted at `https://glitchtip.kiraroom.net` |
 | Status page | TBD (free tier: Instatus or BetterStack) |
@@ -225,7 +225,7 @@ of quoting (ssh, then the remote shell) is enough for a `# Operational runbook
 | Deploy method | Hostinger hPanel → VPS → Docker Manager → Compose URL |
 | Compose source | `https://raw.githubusercontent.com/lagop/KiraRoom/main/docker-compose.prod.yml` |
 | Env vars the operator sets | `ops/deploy/.env.production.hostinger` -- they reach a container **only** if that service forwards them in the compose |
-| Database backup retention | 30 days hot |
+| Database backups | Daily, encrypted (age); 14 days on the server, 35 days + monthly for 400 days off-site once `BACKUP_REMOTE` is set |
 | WAL archive retention | 30 days |
 | Sentry-compatible error tracking | GlitchTip self-hosted at `https://glitchtip.kiraroom.net` |
 | Status page | TBD (free tier: Instatus or BetterStack) |
@@ -660,45 +660,96 @@ unit test runner.
 
 ### Backups: how they run
 
-The `postgres-backup` service in `docker-compose.prod.yml` dumps the whole
-database once a day at 03:15 UTC with `pg_dump -Fc`, into the
-`postgres_backups` volume, and prunes dumps older than
-`BACKUP_RETENTION_DAYS` (default 14).
+The `postgres-backup` service (`ops/backup/backup.sh`, image
+`kiraroom-backup:local`, built by `ops/deploy/build-images.sh`) runs once a
+day at 03:15 UTC:
+
+1. `pg_dump -Fc` of the whole database, checked with `pg_restore --list`;
+2. encrypted with [age](https://age-encryption.org) to `BACKUP_AGE_RECIPIENT`,
+   a **public** key: the server can encrypt but not decrypt;
+3. kept in the `postgres_backups` volume for `BACKUP_RETENTION_DAYS` (14);
+4. copied with rclone to `BACKUP_REMOTE` (any S3-compatible bucket: Backblaze
+   B2, Cloudflare R2, Hetzner, Wasabi...), where every daily copy is kept 35
+   days and the copy from the 1st of each month 400 days.
+
+Without `BACKUP_AGE_RECIPIENT` or `BACKUP_REMOTE` the service still dumps
+locally and logs a WARNING on every run. It never copies an unencrypted dump
+off the server.
+
+#### Setting it up (once)
+
+1. On **your own machine**, not the server, create the key pair:
+   ```bash
+   docker run --rm --entrypoint age-keygen kiraroom-backup:local > kiraroom-backup.key
+   # or, with age installed: age-keygen -o kiraroom-backup.key
+   ```
+   Keep `kiraroom-backup.key` offline (password manager plus a second copy).
+   **Without it no backup can be read.** Its `# public key: age1...` line is
+   the recipient.
+2. Create a bucket and an access key limited to that bucket. If the provider
+   offers object lock or versioning, turn it on: a stolen server key then
+   cannot erase the history.
+3. In the server's `.env`:
+   ```bash
+   BACKUP_AGE_RECIPIENT=age1...            # public key from step 1
+   BACKUP_REMOTE=offsite:<bucket>/kiraroom
+   BACKUP_S3_PROVIDER=Cloudflare            # or Backblaze, Wasabi, Other...
+   BACKUP_S3_ENDPOINT=https://<account>.r2.cloudflarestorage.com
+   BACKUP_S3_REGION=auto
+   BACKUP_S3_ACCESS_KEY_ID=...
+   BACKUP_S3_SECRET_ACCESS_KEY=...
+   BACKUP_PING_URL=                         # optional: healthchecks.io-style URL hit after each success
+   ```
+4. Deploy, then run one backup and check it arrived:
+   ```bash
+   docker exec kiraroom-postgres-backup-prod kiraroom-backup once
+   docker exec kiraroom-postgres-backup-prod sh -c 'rclone ls "$BACKUP_REMOTE"'
+   ```
+
+#### Restoring from the off-site backup
+
+Works from any machine with Docker, the key file and the bucket credentials;
+the server does not need to exist.
 
 ```bash
-# List what exists
-docker exec kiraroom-postgres-backup-prod ls -lh /backups
+# 1. Fetch and decrypt the copy you want
+rclone copy offsite:<bucket>/kiraroom/kiraroom-<stamp>.dump.age .
+age -d -i kiraroom-backup.key -o kiraroom.dump kiraroom-<stamp>.dump.age
 
-# Force a dump now (does not disturb the schedule)
-docker exec kiraroom-postgres-backup-prod sh -c \
-  'PGPASSWORD=$POSTGRES_PASSWORD pg_dump -h postgres -U kiraroom -d kiraroom -Fc -f /backups/manual-$(date -u +%Y%m%dT%H%M%SZ).dump'
+# 2. Restore into an EMPTY database (DESTRUCTIVE on a non-empty one)
+pg_restore -h <host> -U kiraroom -d kiraroom --no-owner kiraroom.dump
 
-# Restore a whole database (DESTRUCTIVE -- confirm the target first)
-docker exec kiraroom-postgres-backup-prod sh -c \
-  'PGPASSWORD=$POSTGRES_PASSWORD pg_restore -h postgres -U kiraroom -d kiraroom --clean --if-exists /backups/<file>.dump'
-
-# Restore ONE table (the reason for -Fc)
-docker exec kiraroom-postgres-backup-prod sh -c \
-  'PGPASSWORD=$POSTGRES_PASSWORD pg_restore -h postgres -U kiraroom -d kiraroom -t clients /backups/<file>.dump'
+# One table only (the reason for -Fc)
+pg_restore -h <host> -U kiraroom -d kiraroom --no-owner -t clients kiraroom.dump
 ```
 
-**Still pending:** the dumps live on the same VPS volume as the database, so
-they survive an accidental delete but not a host loss. Off-site copies and
-WAL archiving (`docs/wal-archiving.md`) for point-in-time recovery are the
-next step, and are what the quarterly restore drill below should exercise.
+Local copies, on the server:
+
+```bash
+docker exec kiraroom-postgres-backup-prod ls -lh /backups
+# Decrypt a local copy inside the container; the key goes in through stdin
+# and is never written to the server.
+docker exec -i kiraroom-postgres-backup-prod \
+  age -d -i - -o /tmp/r.dump /backups/<file>.dump.age < kiraroom-backup.key
+```
+
+Point-in-time recovery (WAL archiving, `docs/wal-archiving.md`) is still
+pending: with daily dumps, up to 24 hours of data can be lost.
 
 ### Failure: Backup fails to run
 
 1. Read the service log: `docker logs kiraroom-postgres-backup-prod --tail 50`.
-   A failed dump logs `[backup] FAILED for <stamp>` and leaves no `.partial`
-   file behind.
+   Every failure logs `[backup] FAILED: <step>` (pg_dump, the
+   pg_restore check, encryption or upload) and leaves no `.partial` file.
 2. If nothing is logged at all, the container is not running:
    `docker ps -a | grep postgres-backup`, then `docker compose up -d postgres-backup`.
-3. Most common real cause: disk full on the VPS. Check with `df -h`, then
-   prune manually: `docker exec kiraroom-postgres-backup-prod sh -c 'find /backups -name "kiraroom-*.dump" -mtime +7 -delete'`.
-4. Second most common: `POSTGRES_PASSWORD` rotated in the backend env but not
-   redeployed to this service. Both read the same variable, so redeploy the
-   whole compose file rather than a single container.
+3. `FAILED: upload`: check the bucket credentials and endpoint with
+   `docker exec kiraroom-postgres-backup-prod sh -c 'rclone lsd "$BACKUP_REMOTE"'`.
+   The local copy was still made.
+4. Disk full on the VPS: `df -h`, then prune manually:
+   `docker exec kiraroom-postgres-backup-prod sh -c 'find /backups -name "kiraroom-*.dump*" -mtime +7 -delete'`.
+5. `POSTGRES_PASSWORD` rotated in the backend env but not redeployed to this
+   service: both read the same variable, so redeploy the whole compose file.
 
 ### Failure: TLS certificate expires
 

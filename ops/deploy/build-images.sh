@@ -58,6 +58,12 @@ if [[ "${NGINX:-0}" == "1" ]]; then
     .
 fi
 
+echo "==> Building kiraroom-backup:local (pg_dump + age + rclone, see ops/backup)"
+docker build \
+  --pull \
+  -t kiraroom-backup:local \
+  ops/backup
+
 echo ""
 echo "==> Local images built. Recreating the stack..."
 docker compose -p kiraroom \
