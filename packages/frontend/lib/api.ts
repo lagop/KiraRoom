@@ -617,6 +617,8 @@ export interface SubscriptionPlan {
   id: string;
   name: string;
   price: number;
+  /** Set on plans charged per location (Empresa); same unit as price. */
+  pricePerLocation?: number | null;
   interval: "month" | "year";
   features: string[];
   limits: {
