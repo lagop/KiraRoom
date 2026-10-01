@@ -303,7 +303,11 @@
     "submitting": "Creando cuenta...",
     "errorGeneric": "No se pudo crear la cuenta.",
     "loginLink": "Ya tengo cuenta",
-    "loginCta": "Iniciar sesión"
+    "loginCta": "Iniciar sesión",
+    "termsPrefix": "Acepto los",
+    "termsLink": "términos del servicio",
+    "termsAnd": "y la",
+    "privacyLink": "política de privacidad"
   },
   "billing": {
     "title": "Facturación y plan",

@@ -303,7 +303,11 @@
     "submitting": "Creating account...",
     "errorGeneric": "Could not create account.",
     "loginLink": "I already have an account",
-    "loginCta": "Log in"
+    "loginCta": "Log in",
+    "termsPrefix": "I accept the",
+    "termsLink": "terms of service",
+    "termsAnd": "and the",
+    "privacyLink": "privacy policy"
   },
   "billing": {
     "title": "Billing and plan",

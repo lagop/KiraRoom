@@ -134,7 +134,19 @@ export default function SignupPage() {
               onChange={(e) => setAcceptTerms(e.target.checked)}
               className="mt-0.5 h-3.5 w-3.5 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
             />
-            <span>{t("signup.terms")}</span>
+            {/* The box used to accept texts it did not link to (LSSI art. 10
+                asks that they be readable before accepting). */}
+            <span>
+              {t("signup.termsPrefix")}{" "}
+              <a href="/legal/terms" target="_blank" rel="noopener noreferrer" className="text-violet-700 underline">
+                {t("signup.termsLink")}
+              </a>{" "}
+              {t("signup.termsAnd")}{" "}
+              <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="text-violet-700 underline">
+                {t("signup.privacyLink")}
+              </a>
+              .
+            </span>
           </label>
 
           {error && (
