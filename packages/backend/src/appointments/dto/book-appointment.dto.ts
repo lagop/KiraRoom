@@ -134,6 +134,16 @@ export class OnlineBookingDto extends BookingSlotDto {
   @IsUUID()
   @IsOptional()
   widgetInstanceId?: string;
+
+  /**
+   * Where the client returns after paying a deposit: the salon's site or
+   * the embedded widget they booked from. Only those paths, so it cannot be
+   * turned into an open redirect.
+   */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Matches(/^\/(sites|embed)\/[A-Za-z0-9_-]+(\/[A-Za-z0-9_-]+)*$/)
+  returnPath?: string;
 }
 
 /** POST /appointments/staff: the dashboard. */

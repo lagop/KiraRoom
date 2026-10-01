@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { CreditCard, Save, Eye, EyeOff, CheckCircle, AlertCircle, Key, ToggleLeft, ToggleRight } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import apiClient, { StripeSettings } from '@/lib/api';
+import { StripeConnectCard } from './connect-card';
 
 export default function StripeSettingsPage() {
   const { toast } = useToast();
@@ -95,6 +96,8 @@ export default function StripeSettingsPage() {
           <p className="text-sm text-gray-500">Configura las claves de API de Stripe para pagos</p>
         </div>
       </div>
+
+      <StripeConnectCard />
 
       {/* Mode Toggle */}
       <div className="bg-white rounded-xl border border-gray-200 p-6">

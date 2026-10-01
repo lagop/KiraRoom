@@ -6,7 +6,9 @@ import {
   ForbiddenException,
   Logger,
   Optional,
+  ServiceUnavailableException,
 } from "@nestjs/common";
+import { DepositsService } from "./deposits/deposits.service";
 import { PrismaService } from "../common/prisma/prisma.service";
 import {
   workingWindowFor,
@@ -124,6 +126,7 @@ export class AppointmentsService {
     @Optional() private clientCadenceService?: ClientCadenceService,
     @Optional() private invoiceService?: InvoiceService,
     @Optional() private readonly waitListService?: WaitListService,
+    @Optional() private readonly deposits?: DepositsService,
   ) {}
 
   /**
@@ -242,6 +245,13 @@ export class AppointmentsService {
       { timeout: 15_000 },
     );
 
+    // A service with a deposit: hold the slot and send the client to pay.
+    // The confirmation goes out once paid (onDepositPaid), not now.
+    const deposit = await this.holdForDeposit(appointment.id, dto.returnPath);
+    if (deposit) {
+      return Object.assign(appointment, { deposit, confirmationEmailSent: false, confirmationSmsSent: false });
+    }
+
     const notified = await this.afterAppointmentCreated(appointment, dto.source);
     // Not columns: tell the chat receptionist whether it may say the
     // confirmation email or SMS was sent.
@@ -249,6 +259,34 @@ export class AppointmentsService {
       confirmationEmailSent: notified?.emailSent === true,
       confirmationSmsSent: notified?.smsSent === true,
     });
+  }
+
+  /**
+   * The deposit checkout for a booking just inserted, or null when none
+   * applies. If Stripe fails the booking is cancelled -- a slot held for a
+   * payment the client cannot make would block it for nothing.
+   */
+  private async holdForDeposit(appointmentId: string, returnPath?: string) {
+    if (!this.deposits) return null;
+    try {
+      return await this.deposits.startDeposit(appointmentId, returnPath);
+    } catch (err) {
+      await this.prisma.appointment.update({
+        where: { id: appointmentId },
+        data: { status: AppointmentStatus.cancelled, cancellationReason: "No se pudo iniciar el pago de la señal" },
+      });
+      this.logger.error(`Deposit checkout failed for appointment ${appointmentId}: ${(err as Error).message}`);
+      throw new ServiceUnavailableException("No se ha podido iniciar el pago de la señal. Inténtalo de nuevo.");
+    }
+  }
+
+  /** A deposit has just been paid: the booking is confirmed; send its notifications. */
+  async onDepositPaid(appointmentId: string): Promise<void> {
+    const appointment = await this.prisma.appointment.findUnique({
+      where: { id: appointmentId },
+      include: { client: true, professional: true, service: true, tenant: true },
+    });
+    if (appointment) await this.afterAppointmentCreated(appointment, appointment.source as any);
   }
 
   /**
