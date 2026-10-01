@@ -96,6 +96,40 @@ export class MetaCloudApiClient {
     return (await resp.json()) as MetaCloudApiResponse;
   }
 
+  /**
+   * A free-text reply. Meta only allows it inside the 24-hour customer
+   * service window opened by the person's last message, which is always the
+   * case for the receptionist's answers.
+   */
+  async sendText(
+    accessToken: string,
+    phoneNumberId: string,
+    to: string,
+    body: string,
+  ): Promise<MetaCloudApiResponse> {
+    const resp = await fetch(`${this.baseUrl()}/${phoneNumberId}/messages`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to,
+        type: "text",
+        text: { preview_url: false, body: body.slice(0, 4096) },
+      }),
+    });
+    return (await resp.json()) as MetaCloudApiResponse;
+  }
+
+  /** Shows the two blue ticks on the person's message while the reply is prepared. */
+  async markRead(accessToken: string, phoneNumberId: string, messageId: string): Promise<void> {
+    await fetch(`${this.baseUrl()}/${phoneNumberId}/messages`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ messaging_product: "whatsapp", status: "read", message_id: messageId }),
+    });
+  }
+
   async listTemplates(
     accessToken: string,
     wabaId: string,

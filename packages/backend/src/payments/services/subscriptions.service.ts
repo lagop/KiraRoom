@@ -197,7 +197,7 @@ export class SubscriptionsService {
         // Meta's 24 h window, Messenger/Instagram/Telegram only get logged).
         // Put them back when they work.
         'Facturas con IVA o IGIC',
-        'Recepcionista IA en tu web (500 mensajes/mes)',
+        'Recepcionista IA en tu web y en WhatsApp (500 mensajes/mes)',
         'Agenda online',
         'Recordatorios automáticos por email',
         'Soporte por email',
@@ -217,7 +217,7 @@ export class SubscriptionsService {
         'Clientas y citas ilimitadas',
         'Hasta 10 profesionales',
         'Email marketing',
-        'Recepcionista IA en tu web, sin límite de mensajes',
+        'Recepcionista IA en tu web y en WhatsApp, sin límite de mensajes',
         'Recordatorios por SMS',
         'Fidelización, promociones y tarjetas regalo',
         'Wallet y comisiones',
@@ -243,7 +243,7 @@ export class SubscriptionsService {
         'Informes consolidados',
         'Panel centralizado',
         'Account manager',
-        'Recepcionista IA en tu web, sin límite de mensajes',
+        'Recepcionista IA en tu web y en WhatsApp, sin límite de mensajes',
         'Todo lo de Pro',
       ],
       maxClients: null,                  // unlimited
