@@ -1125,6 +1125,8 @@ export interface AccountingSyncLog {
 export interface ApiClientInterface {
   request<T>(endpoint: string, options?: RequestInit): Promise<T>;
   login(email: string, password: string, tenantSlug?: string): Promise<LoginResponse>;
+  forgotPassword(email: string, tenantSlug?: string): Promise<{ message: string }>;
+  resetPassword(token: string, password: string): Promise<{ message: string }>;
   register(data: {
     email: string;
     password: string;
@@ -1723,6 +1725,22 @@ class ApiClient implements ApiClientInterface {
       refreshToken: response.tokens.refreshToken,
       user: response.user,
     };
+  }
+
+  /** Emails a reset link if the address has an account (same answer either way). */
+  async forgotPassword(email: string, tenantSlug?: string): Promise<{ message: string }> {
+    return this.request("/auth/forgot-password", {
+      method: "POST",
+      body: JSON.stringify({ email, ...(tenantSlug && { tenantSlug }) }),
+    });
+  }
+
+  /** Sets a new password with the token from the reset email. */
+  async resetPassword(token: string, password: string): Promise<{ message: string }> {
+    return this.request("/auth/reset-password", {
+      method: "POST",
+      body: JSON.stringify({ token, password }),
+    });
   }
 
   /**

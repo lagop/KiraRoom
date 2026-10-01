@@ -1736,4 +1736,63 @@ This email was sent to request your feedback on your recent appointment.
 
     return this.sendEmail({ to: data.to, subject, html, text, listUnsubscribe: true });
   }
+
+  /**
+   * The password-reset link. Transactional: no unsubscribe header, and sent
+   * even to an address that bounced before (the person is asking for it).
+   */
+  async sendPasswordReset(data: {
+    to: string;
+    name?: string | null;
+    salon?: string | null;
+    resetUrl: string;
+  }): Promise<{ success: boolean; id?: string; error?: string }> {
+    const greeting = data.name ? `Hola ${this.escapeHtml(data.name)},` : "Hola,";
+    const where = data.salon
+      ? `tu cuenta de cliente en <strong>${this.escapeHtml(data.salon)}</strong>`
+      : "tu cuenta de KiraRoom";
+    const subject = "Restablece tu contraseña de KiraRoom";
+    const html = `
+<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:12px;padding:32px;">
+        <tr><td>
+          <div style="font-size:24px;font-weight:700;margin-bottom:24px;">KiraRoom</div>
+          <p style="font-size:16px;line-height:1.6;margin:0 0 16px 0;">${greeting}</p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 24px 0;">
+            Alguien ha pedido restablecer la contraseña de ${where}.
+            Si has sido tú, elige una nueva con este enlace. Caduca en una hora y solo sirve una vez.
+          </p>
+          <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 24px 0;">
+            <tr><td style="background:#4f46e5;border-radius:8px;">
+              <a href="${data.resetUrl}" style="display:inline-block;padding:14px 28px;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;">Elegir una contraseña nueva</a>
+            </td></tr>
+          </table>
+          <p style="font-size:14px;line-height:1.6;margin:0 0 16px 0;color:#475569;">
+            Si no lo has pedido tú, ignora este correo: tu contraseña no cambia.
+          </p>
+          <p style="font-size:12px;color:#64748b;word-break:break-all;background:#f1f5f9;padding:12px;border-radius:6px;margin:0;">
+            ${data.resetUrl}
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`.trim();
+    const text = [
+      data.name ? `Hola ${data.name},` : "Hola,",
+      "",
+      `Alguien ha pedido restablecer la contraseña de ${data.salon ? `tu cuenta de cliente en ${data.salon}` : "tu cuenta de KiraRoom"}.`,
+      "Si has sido tú, elige una nueva aquí (caduca en una hora y solo sirve una vez):",
+      data.resetUrl,
+      "",
+      "Si no lo has pedido tú, ignora este correo: tu contraseña no cambia.",
+    ].join("\n");
+    return this.sendEmail({ to: data.to, subject, html, text });
+  }
 }

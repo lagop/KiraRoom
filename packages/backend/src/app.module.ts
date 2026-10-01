@@ -73,6 +73,7 @@ import { ServicesService } from "./services/services.service";
 import { ThrottlerBehindProxyGuard } from "./common/guards/throttler-behind-proxy.guard";
 import { JwtStrategy } from "./auth/strategies/jwt.strategy";
 import { JwtAuthGuard } from "./auth/guards/jwt-auth.guard";
+import { PasswordResetService } from "./auth/password-reset.service";
 import { RolesGuard } from "./auth/guards/roles.guard";
 import { BugReportModule } from "./bug-reports/bug-report.module";
 import { InvitesModule } from "./saas/invites/invites.module";
@@ -259,6 +260,7 @@ import { PublicModule } from "./public-site/public.module";
     },
     AppService,
     AuthService,
+    PasswordResetService,
     AuditLogService,
     ClientsService,
     AppointmentServicesService,

@@ -92,9 +92,9 @@ export class NotificationsGateway
       return null;
     }
 
-    let payload: { sub?: string; role?: string };
+    let payload: { sub?: string; role?: string; tv?: number };
     try {
-      payload = verify(token, secret) as { sub?: string; role?: string };
+      payload = verify(token, secret) as { sub?: string; role?: string; tv?: number };
     } catch {
       this.logger.warn(`Socket ${client.id} refused: invalid token`);
       return null;
@@ -104,16 +104,19 @@ export class NotificationsGateway
     if (payload.role === 'client') {
       const found = await this.prisma.client.findUnique({
         where: { id: payload.sub },
-        select: { id: true, tenantId: true, status: true },
+        select: { id: true, tenantId: true, status: true, tokenVersion: true },
       });
       if (!found || found.status === 'blocked') return null;
+      if ((payload.tv ?? 0) !== found.tokenVersion) return null;
       return { clientId: found.id, tenantId: found.tenantId };
     }
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
-      select: { id: true, tenantId: true, isActive: true },
+      select: { id: true, tenantId: true, isActive: true, tokenVersion: true },
     });
     if (!user || !user.isActive || !user.tenantId) return null;
+    // Same rule as JwtStrategy: a logged-out session gets no socket.
+    if ((payload.tv ?? 0) !== user.tokenVersion) return null;
     return { userId: user.id, tenantId: user.tenantId };
   }
 

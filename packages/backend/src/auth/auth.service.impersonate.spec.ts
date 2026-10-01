@@ -64,6 +64,8 @@ describe("AuthService.impersonate — JWT payload validation", () => {
           isActive: true,
           professional: null,
         }),
+        // generateTokens reads the session version (tv claim).
+        findUnique: jest.fn().mockResolvedValue({ tokenVersion: 0 }),
       },
       auditLog: { create: jest.fn().mockResolvedValue({ id: "audit-id" }) },
       // shimmed: Prisma's $transaction supports both the array form

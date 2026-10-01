@@ -1,4 +1,6 @@
 import { Throttle } from "@nestjs/throttler";
+import { PasswordResetService } from "./password-reset.service";
+import { ForgotPasswordDto, ResetPasswordDto } from "./dto/password-reset.dto";
 import { Controller, Post, Body, UseGuards, HttpCode, HttpStatus, Get, Patch, Query } from "@nestjs/common";
 import {
   ApiTags,
@@ -21,7 +23,34 @@ import { SignedIn } from "./decorators/signed-in.decorator";
 @ApiTags("Authentication")
 @Controller("auth")
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly passwordReset: PasswordResetService,
+  ) {}
+
+  /**
+   * Emails a reset link if an account uses this address. Always the same
+   * answer, so the endpoint does not tell who has an account.
+   */
+  @Public()
+  @Post("forgot-password")
+  @Throttle({ default: { ttl: 900_000, limit: 5 } }) // 5 per 15 min per address
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Email a password reset link" })
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    await this.passwordReset.request(dto.email, dto.tenantSlug);
+    return { message: "Si hay una cuenta con ese email, te hemos enviado un enlace para restablecer la contraseña." };
+  }
+
+  @Public()
+  @Post("reset-password")
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Set a new password with the emailed token" })
+  async resetPassword(@Body() dto: ResetPasswordDto) {
+    await this.passwordReset.reset(dto.token, dto.password);
+    return { message: "Contraseña cambiada. Ya puedes iniciar sesión." };
+  }
 
   @Public()
   @Get("verify-email")
@@ -93,8 +122,8 @@ export class AuthController {
   @ApiOperation({ summary: "Logout and invalidate tokens" })
   @ApiResponse({ status: 200, description: "Successfully logged out" })
   @SignedIn()
-  async logout(@CurrentUser("id") userId: string) {
-    await this.authService.logout(userId);
+  async logout(@CurrentUser() user: { id: string; role: string }) {
+    await this.authService.logout(user.id, user.role);
     return { message: "Successfully logged out" };
   }
 

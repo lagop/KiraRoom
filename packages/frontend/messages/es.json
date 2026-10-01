@@ -1918,5 +1918,24 @@
     "approval_yes_label": "Aprobar",
     "approval_no_label": "Rechazar",
     "free_input_intro": "Tu próxima pregunta la enviaré tal cual. El copiloto la responderá leyendo tus datos en tiempo real."
+  },
+  "password_reset": {
+    "title": "Recupera tu contraseña",
+    "intro": "Escribe el email de tu cuenta y te enviaremos un enlace para elegir una contraseña nueva.",
+    "send": "Enviar enlace",
+    "sending": "Enviando...",
+    "sent": "Si hay una cuenta con ese email, te hemos enviado un enlace. Caduca en una hora; revisa también la carpeta de spam.",
+    "new_title": "Elige una contraseña nueva",
+    "new_password": "Contraseña nueva",
+    "confirm": "Repite la contraseña",
+    "save": "Guardar contraseña",
+    "saving": "Guardando...",
+    "mismatch": "Las contraseñas no coinciden.",
+    "too_short": "La contraseña debe tener al menos 8 caracteres.",
+    "done": "Contraseña cambiada. Se han cerrado tus sesiones abiertas; ya puedes iniciar sesión.",
+    "missing_token": "Este enlace no es válido. Pide uno nuevo.",
+    "request_new": "Pedir un enlace nuevo",
+    "back_to_login": "Volver a iniciar sesión",
+    "error": "No se ha podido completar. Inténtalo de nuevo."
   }
 }
