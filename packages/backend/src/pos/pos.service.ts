@@ -1,6 +1,5 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { StripeService } from '../payments/services/stripe.service';
 import { WalletService } from '../payments/services/wallet.service';
 
 export interface CartItem {
@@ -31,7 +30,6 @@ export interface CreatePosOrderDto {
 export class PosService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly stripeService: StripeService,
     private readonly walletService: WalletService,
   ) {}
 
@@ -198,21 +196,12 @@ export class PosService {
     const paymentRecords = [];
     
     for (const payment of payments) {
-      let stripePaymentId: string | undefined;
-      
-      // Process card payments through Stripe
-      if (payment.method === 'card') {
-        try {
-          const paymentIntent = await this.stripeService.createPaymentIntent(
-            tenantId,
-            payment.amount,
-            finalClientId,
-          );
-          stripePaymentId = paymentIntent.id;
-        } catch (error) {
-          console.error('Stripe payment intent creation failed:', error);
-        }
-      }
+      // "Card" at the till is the salon's own card terminal: the money is
+      // already taken when the sale is recorded. It used to create a Stripe
+      // PaymentIntent for 100 times the amount (cents passed to a method that
+      // multiplied by 100), with the platform's Stripe account when the salon
+      // had none, which nobody ever confirmed: the sale stayed "pending" and
+      // out of the day's card total.
 
       // Process wallet payments
       if (payment.method === 'wallet' && finalClientId) {
@@ -227,9 +216,8 @@ export class PosService {
           amount: payment.amount,
           currency: 'EUR',
           type: 'service',
-          status: payment.method === 'card' ? 'pending' : 'paid',
+          status: 'paid',
           method: payment.method as any,
-          stripePaymentId,
           description: `POS Sale: ${items.map(i => i.name).join(', ')}`,
         },
       });
@@ -260,20 +248,7 @@ export class PosService {
 
     // Convert price to cents (same as checkout)
     const amount = Math.round(Number(service.price) * 100);
-    let stripePaymentId: string | undefined;
-
-    if (paymentMethod === 'card') {
-      try {
-        const paymentIntent = await this.stripeService.createPaymentIntent(
-          tenantId,
-          amount,
-          clientId,
-        );
-        stripePaymentId = paymentIntent.id;
-      } catch (error) {
-        console.error('Stripe payment intent creation failed:', error);
-      }
-    }
+    // Card means the salon's terminal; see processCheckout.
 
     const payment = await this.prisma.payment.create({
       data: {
@@ -282,9 +257,8 @@ export class PosService {
         amount,
         currency: service.currency || 'EUR',
         type: 'service',
-        status: paymentMethod === 'cash' ? 'paid' : 'pending',
+        status: 'paid',
         method: paymentMethod as any,
-        stripePaymentId,
         description: `Quick Sale: ${service.name}`,
       },
     });

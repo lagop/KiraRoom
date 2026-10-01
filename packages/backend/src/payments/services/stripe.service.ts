@@ -30,8 +30,11 @@ export class StripeService implements OnModuleInit {
   }
 
   /**
-   * Get Stripe instance for a specific tenant
-   * Priority: 1. Tenant-specific keys from database, 2. Default env keys
+   * The salon's own Stripe account, from the keys it saved in its settings.
+   *
+   * It used to fall back to the platform's STRIPE_SECRET_KEY when the salon
+   * had none, so a salon's client paid KiraRoom's account. A salon payment
+   * now needs the salon's account; without one, Stripe is not enabled.
    */
   async getStripeForTenant(tenantId: string): Promise<{ stripe: Stripe; isEnabled: boolean }> {
     // Check cache first
@@ -68,26 +71,13 @@ export class StripeService implements OnModuleInit {
         }
       }
 
-      // Fall back to default if no tenant-specific config
-      if (!stripe && this.isEnabled) {
-        stripe = this.defaultStripe;
-        isEnabled = true;
-      }
-
-      // Cache the result
-      this.tenantStripes.set(tenantId, stripe || this.defaultStripe);
+      this.tenantStripes.set(tenantId, stripe);
       this.tenantEnabled.set(tenantId, isEnabled);
 
-      return {
-        stripe: stripe || this.defaultStripe,
-        isEnabled,
-      };
+      return { stripe, isEnabled };
     } catch (error) {
       console.error(`[StripeService] Error getting Stripe for tenant ${tenantId}:`, error);
-      return {
-        stripe: this.defaultStripe,
-        isEnabled: this.isEnabled,
-      };
+      return { stripe: undefined as unknown as Stripe, isEnabled: false };
     }
   }
 
@@ -134,9 +124,10 @@ export class StripeService implements OnModuleInit {
     return this.isEnabled;
   }
 
+  /** amountCents: in cents, like Payment.amount. */
   async createPaymentIntent(
     tenantId: string,
-    amount: number,
+    amountCents: number,
     clientId?: string,
     appointmentId?: string,
     isDeposit: boolean = false,
@@ -156,7 +147,7 @@ export class StripeService implements OnModuleInit {
     if (isDeposit) metadata.isDeposit = 'true';
 
     return stripe.paymentIntents.create({
-      amount: Math.round(amount * 100),
+      amount: Math.round(amountCents),
       currency: this.configService.get<string>('STRIPE_CURRENCY', 'eur'),
       metadata,
       automatic_payment_methods: {
