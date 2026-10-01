@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { usePathname } from "next/navigation";
 import {
   useOnboardingState,
   useDismissOnboardingChecklist,
@@ -12,12 +13,17 @@ import { useTranslations } from "@/lib/use-translation";
 
 /**
  * Persistent right-side drawer showing optional checklist items.
- * Collapsed by default; expand to see items.
+ *
+ * Open on the dashboard home only. It used to open on every page, where
+ * this 320 px panel covered buttons -- the import screen's "Siguiente",
+ * the till's cart -- until it was closed. Elsewhere it starts as the small
+ * pill and opens on demand.
  */
 export function OnboardingChecklist() {
   const t = useTranslations();
   const { data, isLoading } = useOnboardingState({ refetchInterval: 30_000 });
-  const [open, setOpen] = useState(true);
+  const pathname = usePathname();
+  const [open, setOpen] = useState(pathname === "/dashboard");
   const dismiss = useDismissOnboardingChecklist();
   const skip = useSkipOnboardingStep();
 

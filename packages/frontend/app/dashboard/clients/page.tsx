@@ -1,4 +1,5 @@
 "use client";
+import { ImportLink } from "@/components/import-link";
 
 import { useState, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
@@ -474,6 +475,7 @@ export default function ClientsPage() {
 
         {/* Add Client Drawer */}
         <div className="flex flex-wrap items-center gap-3">
+        <ImportLink kind="clients" />
         <Drawer open={isAddDrawerOpen} onOpenChange={setIsAddDrawerOpen}>
           <DrawerTrigger asChild>
             <Button>
