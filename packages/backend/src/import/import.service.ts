@@ -292,7 +292,7 @@ export class ImportService {
       throw new BadRequestException("El archivo está vacío");
     }
     // Strip a UTF-8 BOM (Excel adds one); the delimiter (, or ;) is detected.
-    const result = Papa.parse<Record<string, string>>(csvText.replace(/^﻿/, "").trim(), {
+    const result = Papa.parse<Record<string, string>>(csvText.replace(/^\uFEFF/, "").trim(), {
       header: true,
       skipEmptyLines: "greedy",
       transformHeader: (h: string) => h.trim(),
