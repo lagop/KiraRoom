@@ -2133,6 +2133,7 @@ enum ImportType {
   clients
   services
   professionals
+  appointments
 }
 
 enum ImportStatus {

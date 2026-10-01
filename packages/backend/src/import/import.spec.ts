@@ -35,7 +35,7 @@ describe("client import", () => {
   it("reads a Spanish export: headers, local phones, dates, optional email", async () => {
     const service = new ImportService(prisma());
     const out: any = await service.dryRunClients("t1", EXCEL, "export.csv");
-    expect(out.stats).toEqual({ totalRows: 4, okCount: 2, updateCount: 0, duplicateCount: 1, invalidCount: 1 });
+    expect(out.stats).toEqual({ totalRows: 4, okCount: 2, updateCount: 0, duplicateCount: 1, invalidCount: 1, skipCount: 0 });
     expect(out.preview[0].data).toMatchObject({
       firstName: "Lucía",
       lastName: "Pérez Gil",

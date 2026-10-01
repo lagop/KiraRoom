@@ -5,7 +5,7 @@ import type { Request, Response } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { ImportService } from "./import.service";
 import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
-import { IsOptional, IsString, MaxLength } from "class-validator";
+import { IsBoolean, IsOptional, IsString, MaxLength } from "class-validator";
 
 interface AuthedRequest extends Request {
   user: { id: string; tenantId: string; role: string };
@@ -25,6 +25,13 @@ class CsvBody {
   @IsString()
   @MaxLength(255)
   filename?: string;
+}
+
+class AppointmentsCsvBody extends CsvBody {
+  /** false when the previous program still sends its own reminders. */
+  @IsOptional()
+  @IsBoolean()
+  sendReminders?: boolean;
 }
 
 @ApiTags("import")
@@ -67,6 +74,22 @@ export class ImportController {
   @Roles(...SALON_MANAGERS)
   async commitServices(@Req() req: AuthedRequest, @Body() body: CsvBody) {
     return this.importService.commitServices(req.user.tenantId, body.csv, body.filename || "upload.csv");
+  }
+
+  @Post("appointments/dry-run")
+  @Roles(...SALON_MANAGERS)
+  async dryRunAppointments(@Req() req: AuthedRequest, @Body() body: AppointmentsCsvBody) {
+    return this.importService.dryRunAppointments(req.user.tenantId, body.csv, body.filename || "upload.csv", {
+      sendReminders: body.sendReminders,
+    });
+  }
+
+  @Post("appointments/commit")
+  @Roles(...SALON_MANAGERS)
+  async commitAppointments(@Req() req: AuthedRequest, @Body() body: AppointmentsCsvBody) {
+    return this.importService.commitAppointments(req.user.tenantId, body.csv, body.filename || "upload.csv", {
+      sendReminders: body.sendReminders,
+    });
   }
 
   @Get("jobs")

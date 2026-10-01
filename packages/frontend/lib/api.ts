@@ -215,8 +215,10 @@ export interface ImportPreviewRow {
   rowIndex: number;
   data: Record<string, any>;
   errors: Array<{ col: string; msg: string }>;
-  status: "ok" | "duplicate" | "invalid" | "update";
+  /** skip: left out on purpose (an appointment already past or cancelled). */
+  status: "ok" | "duplicate" | "invalid" | "update" | "skip";
   existingId?: string;
+  note?: string;
 }
 export interface ImportPreviewResult {
   jobId: string;
@@ -228,8 +230,11 @@ export interface ImportPreviewResult {
     updateCount?: number;
     duplicateCount: number;
     invalidCount: number;
+    skipCount?: number;
   };
   errors: Array<{ row: number; fields: Array<{ col: string; msg: string }> }>;
+  /** Appointments: clients that will be (or were) created. */
+  newClients?: number;
 }
 export interface ImportCommitResult {
   jobId: string;
@@ -239,6 +244,7 @@ export interface ImportCommitResult {
   updatedRows?: number;
   errorRows: number;
   skippedRows: number;
+  newClients?: number;
 }
 export interface ImportJob {
   id: string;
@@ -4161,6 +4167,18 @@ class ApiClient implements ApiClientInterface {
   }
   async commitImportServices(csv: string, filename: string): Promise<ImportCommitResult> {
     return this.request(`/import/services/commit`, { method: "POST", body: JSON.stringify({ csv, filename }) });
+  }
+  async dryRunImportAppointments(csv: string, filename: string, sendReminders: boolean): Promise<ImportPreviewResult> {
+    return this.request(`/import/appointments/dry-run`, {
+      method: "POST",
+      body: JSON.stringify({ csv, filename, sendReminders }),
+    });
+  }
+  async commitImportAppointments(csv: string, filename: string, sendReminders: boolean): Promise<ImportCommitResult> {
+    return this.request(`/import/appointments/commit`, {
+      method: "POST",
+      body: JSON.stringify({ csv, filename, sendReminders }),
+    });
   }
   getImportTemplateUrl(): string {
     return `${API_BASE_URL}/import/template/clients`;

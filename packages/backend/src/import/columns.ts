@@ -195,3 +195,141 @@ export function categoryFor(text: string): ServiceRow["category"] {
   for (const [category, re] of CATEGORY_WORDS) if (re.test(t)) return category;
   return "other";
 }
+
+// ---- Appointments -----------------------------------------------------------
+
+const APPOINTMENT_ALIASES: Record<string, string[]> = {
+  date: ["date", "fecha", "dia", "day", "fechacita", "fechadelacita", "appointmentdate", "fechayhora", "fechahora", "datetime", "startdate"],
+  time: ["time", "hora", "horainicio", "horadeinicio", "inicio", "horacita", "starttime", "start", "desde"],
+  fullName: ["cliente", "client", "customer", "nombrecliente", "nombredelcliente", "clientname", "customername", "nombrecompleto", "fullname"],
+  firstName: ["nombre", "firstname"],
+  lastName: ["apellidos", "apellido", "lastname", "surname"],
+  phone: CLIENT_ALIASES.phone,
+  email: CLIENT_ALIASES.email,
+  service: ["servicio", "service", "servicios", "services", "tratamiento", "nombredelservicio", "servicename"],
+  professional: ["profesional", "professional", "empleado", "empleada", "employee", "staff", "estilista", "trabajador", "trabajadora", "recurso", "resource", "atendidopor", "staffmember", "peluquero", "peluquera"],
+  duration: SERVICE_ALIASES.duration,
+  price: SERVICE_ALIASES.price,
+  notes: CLIENT_ALIASES.notes,
+  status: ["estado", "status"],
+};
+
+export interface AppointmentRow {
+  date?: string; // yyyy-mm-dd
+  time?: string; // HH:MM
+  clientName: string;
+  firstName: string;
+  lastName: string;
+  phone?: string;
+  email?: string;
+  service: string;
+  professional: string;
+  duration?: number;
+  price?: number;
+  notes?: string;
+  /** The other program marked it cancelled or a no-show. */
+  cancelled: boolean;
+}
+
+export function readAppointmentRows(
+  rows: Record<string, unknown>[],
+  country = "ES",
+): { row: AppointmentRow; raw: { date: string; time: string; duration: string; price: string } }[] {
+  const cols = mapColumns(Object.keys(rows[0] ?? {}), APPOINTMENT_ALIASES);
+  // "Nombre" with no "Apellidos" next to it is the client's full name.
+  const fullNameCol = cols.fullName ?? (!cols.lastName ? cols.firstName : undefined);
+  return rows.map((r) => {
+    let firstName = cell(r, cols.firstName);
+    let lastName = cell(r, cols.lastName);
+    if (fullNameCol) {
+      const parts = cell(r, fullNameCol).split(/\s+/).filter(Boolean);
+      firstName = parts.shift() ?? "";
+      lastName = parts.join(" ");
+    }
+    // "05/10/2026 10:30" in one column, or date and time apart.
+    const rawDate = cell(r, cols.date);
+    const [datePart, ...rest] = rawDate.split(/[\sT]+/);
+    const rawTime = cell(r, cols.time) || rest.join(" ");
+    const rawPhone = cell(r, cols.phone);
+    const rawDuration = cell(r, cols.duration);
+    const rawPrice = cell(r, cols.price);
+    return {
+      row: {
+        date: parseDate(datePart ?? ""),
+        time: parseTime(rawTime),
+        clientName: [firstName, lastName].filter(Boolean).join(" "),
+        firstName,
+        lastName,
+        phone: rawPhone ? normalizePhone(rawPhone, country) : undefined,
+        email: cell(r, cols.email).toLowerCase() || undefined,
+        service: cell(r, cols.service),
+        professional: cell(r, cols.professional),
+        duration: parseDuration(rawDuration),
+        price: parsePrice(rawPrice),
+        notes: cell(r, cols.notes) || undefined,
+        cancelled: /cancel|anulad|no.?show|no.?present|no.?vino|ausente/i.test(cell(r, cols.status)),
+      },
+      raw: { date: rawDate, time: rawTime, duration: rawDuration, price: rawPrice },
+    };
+  });
+}
+
+/** "10:30", "10.30", "10h30", "10:30:00", "9:00 AM", "10 h" -> "HH:MM". */
+export function parseTime(value: string): string | undefined {
+  const v = value.trim().toLowerCase();
+  if (!v) return undefined;
+  const m = v.match(/^(\d{1,2})(?:\s*[:.h]\s*(\d{2}))?(?::\d{2})?\s*(am|pm|a\.\s?m\.|p\.\s?m\.)?\s*h?$/);
+  if (!m) return undefined;
+  let h = Number(m[1]);
+  const min = Number(m[2] ?? 0);
+  const ampm = m[3]?.replace(/[.\s]/g, "");
+  if (ampm === "pm" && h < 12) h += 12;
+  if (ampm === "am" && h === 12) h = 0;
+  if (h > 23 || min > 59) return undefined;
+  return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+}
+
+/** Lower case, no accents, single spaces: how names are compared. */
+export function nameKey(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9ñ ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * The one item whose name matches: exactly, or else as the only one that
+ * contains the text or is contained in it, or else the only one with all its
+ * words. Null when none or ambiguous.
+ */
+export function matchByName<T>(text: string, items: T[], names: (item: T) => string[]): T | null {
+  const found = nameCandidates(text, items, names);
+  return found.length === 1 ? found[0] : null;
+}
+
+/** The items of the first rule that matches any (see matchByName); several = ambiguous. */
+export function nameCandidates<T>(text: string, items: T[], names: (item: T) => string[]): T[] {
+  const key = nameKey(text);
+  if (!key) return [];
+  const exact = items.filter((i) => names(i).some((n) => nameKey(n) === key));
+  if (exact.length > 0) return exact;
+  const partial = items.filter((i) =>
+    names(i).some((n) => {
+      const k = nameKey(n);
+      return k.length >= 3 && key.length >= 3 && (k.includes(key) || key.includes(k));
+    }),
+  );
+  if (partial.length > 0) return partial;
+  // Every word, in any order: "Corte mujer" is "Corte de cabello mujer".
+  const words = key.split(" ").filter((w) => w.length >= 3);
+  if (words.length === 0) return [];
+  return items.filter((i) =>
+    names(i).some((n) => {
+      const other = nameKey(n).split(" ");
+      return words.every((w) => other.includes(w));
+    }),
+  );
+}
