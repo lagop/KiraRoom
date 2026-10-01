@@ -112,7 +112,7 @@ export default function SaasAnalyticsPage() {
     },
     {
       title: "Monthly Recurring Revenue",
-      value: `€${(analytics.mrr / 100).toFixed(2)}`,
+      value: `€${analytics.mrr.toFixed(2)}`,
       icon: DollarSign,
       change: growth?.summary.revenueChangePercent || 0,
       changeLabel: "vs last month",
@@ -194,7 +194,7 @@ export default function SaasAnalyticsPage() {
             <div className="flex justify-between items-center">
               <span className="text-gray-600">Monthly Recurring</span>
               <span className="font-semibold text-gray-900">
-                €{(analytics.mrr / 100).toFixed(2)}
+                €{analytics.mrr.toFixed(2)}
               </span>
             </div>
             <div className="flex justify-between items-center">
@@ -202,7 +202,7 @@ export default function SaasAnalyticsPage() {
               <span className="font-semibold text-gray-900">
                 €
                 {analytics.totalTenants
-                  ? ((analytics.mrr / 100) / analytics.totalTenants).toFixed(2)
+                  ? (analytics.mrr / analytics.totalTenants).toFixed(2)
                   : "0.00"}
               </span>
             </div>

@@ -458,9 +458,12 @@ export class SubscriptionsService {
       payment_method_types: ['card'],
       line_items: [
         {
+          // product_data, not product: `product` takes the id of an existing
+          // Stripe product, so Stripe rejected every checkout built with
+          // an inline { name } there.
           price_data: {
             currency: 'eur',
-            product: {
+            product_data: {
               name:
                 planId === 'empresa'
                   ? `KiraRoom - Empresa (${quantity} locales)`
@@ -474,10 +477,22 @@ export class SubscriptionsService {
           quantity,
         },
       ],
+      client_reference_id: tenantId,
       metadata: {
         tenantId,
         plan: planId,
         locationCount: String(quantity),
+      },
+      // The subscription carries the same metadata: its lifecycle events
+      // (renewals, failures, cancellation) arrive without the session, and
+      // without tenantId the webhook ignored every one of them.
+      subscription_data: {
+        metadata: {
+          kind: 'plan',
+          tenantId,
+          plan: planId,
+          locationCount: String(quantity),
+        },
       },
       success_url: `${this.configService.get('FRONTEND_URL', 'http://localhost:3000')}/dashboard/billing?subscription=success`,
       cancel_url: `${this.configService.get('FRONTEND_URL', 'http://localhost:3000')}/dashboard/billing?subscription=cancelled`,
@@ -695,6 +710,14 @@ export class SubscriptionsService {
     const targetQuantity =
       planId === 'empresa' ? Math.max(1, locationCount ?? 1) : 1;
 
+    // A subscription item's price_data needs the id of an existing product
+    // (unlike Checkout, it has no product_data), so the inline { name } it
+    // used to send made every plan change fail.
+    const product = await this.stripe.products.create({
+      name: `KiraRoom - ${planDetails.name}`,
+      metadata: { plan: planId },
+    });
+
     const updatedSubscription = await this.stripe.subscriptions.update(
       tenant.stripeSubscriptionId,
       {
@@ -705,16 +728,17 @@ export class SubscriptionsService {
               currency: 'eur',
               unit_amount: planDetails.price,
               recurring: { interval: 'month' },
-              product: {
-                name:
-                  planId === 'empresa'
-                    ? `KiraRoom - Empresa (${targetQuantity} locales)`
-                    : `KiraRoom - ${planDetails.name} Plan`,
-              },
-            } as any,
+              product: product.id,
+            },
             quantity: targetQuantity,
           },
         ],
+        metadata: {
+          kind: 'plan',
+          tenantId,
+          plan: planId,
+          locationCount: String(targetQuantity),
+        },
         proration_behavior: 'create_prorations',
       }
     );
@@ -771,6 +795,7 @@ export class SubscriptionsService {
             quantity: newCount,
           },
         ],
+        metadata: { ...subscription.metadata, locationCount: String(newCount) },
         proration_behavior: 'create_prorations',
       }
     );

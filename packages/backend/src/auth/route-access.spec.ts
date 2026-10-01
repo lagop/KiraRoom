@@ -15,12 +15,11 @@ import { SAAS_OWNER_KEY } from "../saas/decorators/saas-owner.decorator";
  */
 
 /**
- * Webhooks that today require a session, which their senders never have.
- * They become @Public() once their signatures are verified (Stripe already
- * is; Resend is not). Until then they stay closed, as they are now.
+ * A webhook that today requires a session, which their senders never have.
+ * Resend becomes @Public() once its signature is verified. Until then it
+ * stays closed, as it is now.
  */
 const PENDING = new Set([
-  "payments/webhooks.controller.ts#handleStripeWebhook",
   "email-campaigns/resend-webhooks.controller.ts#handleResendWebhook",
 ]);
 

@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Headers, RawBodyRequest, Req, HttpCode, HttpException, HttpStatus, Logger } from "@nestjs/common";
+import { BadRequestException, Controller, Post, Body, Headers, RawBodyRequest, Req, HttpCode, HttpException, HttpStatus, Logger } from "@nestjs/common";
 import { Request } from 'express';
 import { ConfigService } from '@nestjs/config';
 import Stripe from 'stripe';
@@ -7,6 +7,8 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { EmailService } from '../notifications/services/email.service';
 import { AddOnsService } from './services/addons.service';
 import { MessageBundlesService } from '../message-bundles/message-bundles.service';
+import { Public } from '../auth/decorators/public.decorator';
+import { activationFromCheckout, activationFromSubscription, PlanActivation } from './plan-activation';
 
 @Controller('webhooks')
 export class WebhooksController {
@@ -30,7 +32,11 @@ export class WebhooksController {
     this.webhookSecret = this.configService.get<string>('STRIPE_WEBHOOK_SECRET', '');
   }
 
+  // Public: Stripe never has a session. It required one, so every event got
+  // a 401 and no payment ever activated an account. The signature checked
+  // below is what authenticates the caller.
   @Post('stripe')
+  @Public()
   @HttpCode(HttpStatus.OK)
   async handleStripeWebhook(
     @Headers('stripe-signature') signature: string,
@@ -94,8 +100,11 @@ export class WebhooksController {
         this.webhookSecret,
       );
     } catch (err) {
-      console.error('[WebhooksController] Webhook signature verification failed:', err);
-      return { received: true, status: 'signature_verification_failed' };
+      // 400, not 200: a forged event is refused, and a real one signed with
+      // another secret shows up as failing in the Stripe dashboard, which
+      // retries it, instead of being acknowledged and lost.
+      this.logger.warn(`Stripe webhook signature verification failed: ${(err as Error).message}`);
+      throw new BadRequestException('Invalid Stripe signature');
     }
 
     // Process the event
@@ -106,6 +115,9 @@ export class WebhooksController {
     console.log(`[WebhooksController] Processing Stripe event: ${event.type}`);
 
     switch (event.type) {
+      case 'checkout.session.completed':
+        await this.activatePlan(activationFromCheckout(event.data.object as Stripe.Checkout.Session));
+        break;
       case 'payment_intent.succeeded':
         await this.handlePaymentIntentSucceeded(event.data.object as Stripe.PaymentIntent);
         break;
@@ -293,10 +305,12 @@ export class WebhooksController {
       return;
     }
 
-    if (event === 'created') {
-      this.logger.log(
-        `[WebhooksController] Activating subscription for tenant: ${tenantId}`,
-      );
+    // A paid subscription activates the plan. 'created' used to only log,
+    // so an account that paid stayed in trial and the trial-expiry job
+    // cancelled it when the 14 days ran out.
+    const activation = activationFromSubscription(subscription);
+    if (activation) {
+      await this.activatePlan(activation);
       return;
     }
 
@@ -344,6 +358,42 @@ export class WebhooksController {
         `Failed to apply subscription update for tenant ${tenantId}: ${(err as Error).message}`,
       );
     }
+  }
+
+  /**
+   * Moves a tenant onto the plan it paid for: status active, the plan and
+   * number of locations from the checkout, and the Stripe ids that later
+   * events (invoice.paid / payment_failed) look it up by. Idempotent:
+   * checkout.session.completed and customer.subscription.created both
+   * arrive for the same purchase.
+   */
+  private async activatePlan(activation: PlanActivation | null) {
+    if (!activation) return;
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: activation.tenantId },
+      select: { id: true, subscriptionStatus: true },
+    });
+    if (!tenant) {
+      this.logger.warn(`Plan activation for unknown tenant ${activation.tenantId}`);
+      return;
+    }
+    await this.prisma.tenant.update({
+      where: { id: tenant.id },
+      data: {
+        subscriptionStatus: 'active',
+        ...(activation.plan ? { plan: activation.plan as any } : {}),
+        ...(activation.locations ? { maxLocations: activation.locations } : {}),
+        ...(activation.customerId ? { stripeCustomerId: activation.customerId } : {}),
+        ...(activation.subscriptionId ? { stripeSubscriptionId: activation.subscriptionId } : {}),
+        paymentFailedAt: null,
+        gracePeriodEndsAt: null,
+        readOnlyUntil: null,
+        cancelledAt: null,
+      },
+    });
+    this.logger.log(
+      `Tenant ${tenant.id}: ${tenant.subscriptionStatus} -> active on plan ${activation.plan ?? '(unchanged)'}`,
+    );
   }
 
   private async handleInvoicePaid(invoice: Stripe.Invoice) {

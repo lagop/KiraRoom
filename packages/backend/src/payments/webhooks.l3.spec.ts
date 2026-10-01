@@ -93,7 +93,8 @@ describe('WebhooksController L-3 (addon metadata routing)', () => {
     c.rebookingService = { rebookForRescheduled: jest.fn() } as any;
     c.rebookingCadenceService = {} as any;
     c.messageBundles = { consumeCredit: jest.fn() } as any;
-    c.prisma = {} as any;
+    // The plan path now activates the tenant (see stripe-billing.spec).
+    c.prisma = { tenant: { findUnique: jest.fn(async () => null), update: jest.fn() } } as any;
 
     // Bypass signature verification by calling the private router
     // directly with a mocked event.

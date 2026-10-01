@@ -102,7 +102,7 @@ export default function SaasOverviewPage() {
     },
     {
       title: t("saas.platform_revenue"),
-      value: `€${((analytics?.mrr || 0) / 100).toFixed(2)}`,
+      value: `€${(analytics?.mrr || 0).toFixed(2)}`,
       icon: DollarSign,
       change: "MRR",
       changeType: "positive" as const,
@@ -171,7 +171,7 @@ export default function SaasOverviewPage() {
             <div className="flex justify-between items-center">
               <span className="text-gray-600">MRR</span>
               <span className="font-semibold text-gray-900">
-                €{((analytics?.mrr || 0) / 100).toFixed(2)}
+                €{(analytics?.mrr || 0).toFixed(2)}
               </span>
             </div>
             <div className="flex justify-between items-center">
@@ -179,7 +179,7 @@ export default function SaasOverviewPage() {
               <span className="font-semibold text-gray-900">
                 €
                 {analytics?.totalTenants
-                  ? ((analytics.mrr / 100) / analytics.totalTenants).toFixed(2)
+                  ? (analytics.mrr / analytics.totalTenants).toFixed(2)
                   : "0.00"}
               </span>
             </div>
