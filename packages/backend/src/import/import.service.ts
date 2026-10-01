@@ -2,12 +2,23 @@ import { Injectable, BadRequestException, Logger } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 // @ts-ignore - papaparse lacks bundled types in some setups
 import * as Papa from "papaparse";
-import { ImportStatus, ImportType, Prisma } from "@prisma/client";
+import {
+  AppointmentSource,
+  AppointmentStatus,
+  ImportStatus,
+  ImportType,
+  PaymentStatus,
+  Prisma,
+} from "@prisma/client";
 import { phoneKey } from "../common/phone";
+import { salonInstant } from "../appointments/salon-time";
 import {
   ClientRow,
   ServiceRow,
   clientRowErrors,
+  nameCandidates,
+  nameKey,
+  readAppointmentRows,
   readClientRows,
   readServiceRows,
   serviceRowErrors,
@@ -15,12 +26,46 @@ import {
 
 type RowErrors = { col: string; msg: string }[];
 
+/** One appointment row as the preview shows it: what it matched. */
+export interface AppointmentPreview {
+  date?: string;
+  time?: string;
+  clientName: string;
+  service: string;
+  professional: string;
+}
+
 export interface PreviewRow {
   rowIndex: number;
-  data: ClientRow | ServiceRow;
+  data: ClientRow | ServiceRow | AppointmentPreview;
   errors: RowErrors;
-  status: "ok" | "duplicate" | "invalid" | "update";
+  /** skip: left out on purpose (an appointment already past or cancelled). */
+  status: "ok" | "duplicate" | "invalid" | "update" | "skip";
   existingId?: string;
+  note?: string;
+}
+
+export interface AppointmentImportOptions {
+  /** false: mark the reminders as sent (the old program may still send its own). */
+  sendReminders?: boolean;
+}
+
+/** An appointment's identity for "already in the agenda". */
+function slotKey(professionalId: string, date: Date | string, time: string, client: string): string {
+  const day = typeof date === "string" ? date.slice(0, 10) : date.toISOString().slice(0, 10);
+  return `${professionalId}|${day}|${time}|${client}`;
+}
+
+function ambiguous(text: string, names: string[]): string {
+  const shown = names.slice(0, 3).join(", ") + (names.length > 3 ? "…" : "");
+  return `"${text}" puede ser varios (${shown}): pon el nombre completo en el archivo`;
+}
+
+/** "10:30" + 45 -> "11:15" (wraps past midnight). */
+function addMinutes(time: string, minutes: number): string {
+  const [h, m] = time.split(":").map(Number);
+  const total = (h * 60 + m + minutes) % (24 * 60);
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
 
 /**
@@ -60,7 +105,7 @@ export class ImportService {
     let created = 0;
     let updated = 0;
     let skipped = 0;
-    const tally: Record<PreviewRow["status"], number> = { ok: 0, update: 0, duplicate: 0, invalid: 0 };
+    const tally: Record<PreviewRow["status"], number> = { ok: 0, update: 0, duplicate: 0, invalid: 0, skip: 0 };
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
@@ -156,7 +201,7 @@ export class ImportService {
     let created = 0;
     let updated = 0;
     let skipped = 0;
-    const tally: Record<PreviewRow["status"], number> = { ok: 0, update: 0, duplicate: 0, invalid: 0 };
+    const tally: Record<PreviewRow["status"], number> = { ok: 0, update: 0, duplicate: 0, invalid: 0, skip: 0 };
 
     for (let i = 0; i < rows.length; i++) {
       const { row, raw } = rows[i];
@@ -208,6 +253,239 @@ export class ImportService {
     });
   }
 
+  // ---- Appointments -------------------------------------------------------
+
+  async dryRunAppointments(tenantId: string, csvText: string, filename: string, options: AppointmentImportOptions = {}) {
+    return this.importAppointments(tenantId, csvText, filename, true, options);
+  }
+
+  async commitAppointments(tenantId: string, csvText: string, filename: string, options: AppointmentImportOptions = {}) {
+    return this.importAppointments(tenantId, csvText, filename, false, options);
+  }
+
+  /**
+   * The salon's upcoming appointments from its previous program, so the
+   * switch does not mean typing the agenda in again. Only future ones: the
+   * past are history, not bookings. Each row is matched to a service and a
+   * professional of the salon by name and to a client by email, phone or
+   * name (a new client is created when none matches).
+   *
+   * Written straight to the database, not through the booking flow: the
+   * clients already have these appointments, so no confirmation goes out,
+   * and the agenda is copied as it was, without availability checks.
+   * Reminders are sent as for any appointment unless the salon turns them off
+   * (its old program may still be sending them).
+   */
+  private async importAppointments(
+    tenantId: string,
+    csvText: string,
+    filename: string,
+    dryRun: boolean,
+    options: AppointmentImportOptions,
+  ) {
+    const rows = readAppointmentRows(this.parseCsv(csvText), await this.tenantCountry(tenantId));
+    const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } });
+    const timeZone = tenant?.timezone || "Europe/Madrid";
+    const [services, professionals, clients, booked] = await Promise.all([
+      this.prisma.service.findMany({
+        where: { tenantId, isActive: true },
+        select: { id: true, name: true, duration: true, price: true, currency: true },
+      }),
+      this.prisma.professional.findMany({
+        where: { tenantId, isActive: true },
+        select: { id: true, firstName: true, lastName: true },
+      }),
+      this.prisma.client.findMany({
+        where: { tenantId },
+        select: { id: true, email: true, phone: true, firstName: true, lastName: true },
+      }),
+      // What is already in the agenda, so importing the same file twice adds nothing.
+      this.prisma.appointment.findMany({
+        where: {
+          tenantId,
+          scheduledDate: { gte: new Date(Date.now() - 86_400_000) },
+          status: { not: AppointmentStatus.cancelled },
+        },
+        select: { clientId: true, professionalId: true, scheduledDate: true, scheduledTime: true },
+      }),
+    ]);
+    const contacts = new Map<string, string>();
+    for (const c of clients) {
+      if (c.email) contacts.set(`e:${c.email.toLowerCase()}`, c.id);
+      if (c.phone && phoneKey(c.phone)) contacts.set(`p:${phoneKey(c.phone)}`, c.id);
+    }
+    const byName = new Map<string, string[]>();
+    for (const c of clients) {
+      const key = nameKey(`${c.firstName} ${c.lastName ?? ""}`);
+      byName.set(key, [...(byName.get(key) ?? []), c.id]);
+    }
+    const taken = new Set(booked.map((a) => slotKey(a.professionalId, a.scheduledDate, a.scheduledTime, a.clientId)));
+    // The same appointment twice in the file, by the client's name.
+    const inFile = new Set<string>();
+    // Clients this file creates, so their other appointments reuse them.
+    const createdClients = new Map<string, string>();
+
+    const preview: PreviewRow[] = [];
+    const errors: { row: number; fields: RowErrors }[] = [];
+    let created = 0;
+    let skipped = 0;
+    let newClients = 0;
+    const tally: Record<PreviewRow["status"], number> = { ok: 0, update: 0, duplicate: 0, invalid: 0, skip: 0 };
+    const now = Date.now();
+
+    for (let i = 0; i < rows.length; i++) {
+      const { row, raw } = rows[i];
+      const rowIndex = i + 2;
+      const rowErrors: RowErrors = [];
+      if (!row.date) rowErrors.push({ col: "fecha", msg: raw.date ? "Fecha no reconocida" : "Falta la fecha" });
+      if (!row.time) rowErrors.push({ col: "hora", msg: raw.time ? "Hora no reconocida" : "Falta la hora" });
+      if (!row.firstName) rowErrors.push({ col: "cliente", msg: "Falta el nombre del cliente" });
+
+      const serviceMatches = row.service ? nameCandidates(row.service, services, (s) => [s.name]) : [];
+      const service = serviceMatches.length === 1 ? serviceMatches[0] : null;
+      if (!row.service) rowErrors.push({ col: "servicio", msg: "Falta el servicio" });
+      else if (serviceMatches.length > 1) {
+        rowErrors.push({ col: "servicio", msg: ambiguous(row.service, serviceMatches.map((s) => s.name)) });
+      } else if (!service) {
+        rowErrors.push({ col: "servicio", msg: `"${row.service}" no coincide con ningún servicio tuyo (impórtalos o créalos primero)` });
+      }
+
+      // With a single professional, a file with no such column is unambiguous.
+      const fullName = (p: { firstName: string; lastName: string }) => `${p.firstName} ${p.lastName}`.trim();
+      const proMatches = row.professional
+        ? nameCandidates(row.professional, professionals, (p) => [fullName(p), p.firstName])
+        : professionals.length === 1
+          ? professionals
+          : [];
+      const professional = proMatches.length === 1 ? proMatches[0] : null;
+      if (proMatches.length > 1) {
+        rowErrors.push({ col: "profesional", msg: ambiguous(row.professional, proMatches.map(fullName)) });
+      } else if (!professional) {
+        rowErrors.push({
+          col: "profesional",
+          msg: row.professional ? `"${row.professional}" no coincide con ningún profesional` : "Falta el profesional",
+        });
+      }
+      if (raw.duration && (!row.duration || row.duration < 5 || row.duration > 600)) {
+        rowErrors.push({ col: "duración", msg: "Duración no reconocida (minutos)" });
+      }
+
+      // The client: by email or phone, then by name if only one has it.
+      const keys = [row.email ? `e:${row.email}` : null, row.phone ? `p:${phoneKey(row.phone)}` : null].filter(
+        Boolean,
+      ) as string[];
+      const sameName = byName.get(nameKey(row.clientName)) ?? [];
+      const nameId = createdClients.get(nameKey(row.clientName)) ?? (sameName.length === 1 ? sameName[0] : undefined);
+      const clientId = keys.map((k) => contacts.get(k) ?? createdClients.get(k)).find(Boolean) ?? nameId;
+
+      let status: PreviewRow["status"];
+      let note: string | undefined;
+      const startsAt = row.date && row.time ? salonInstant(row.date, row.time, timeZone) : null;
+      const key = professional && row.date && row.time && clientId ? slotKey(professional.id, row.date, row.time, clientId) : null;
+      const fileKey =
+        professional && row.date && row.time ? slotKey(professional.id, row.date, row.time, nameKey(row.clientName)) : null;
+      if (row.cancelled) {
+        status = "skip";
+        note = "Cancelada en el otro programa";
+      } else if (startsAt && startsAt.getTime() < now) {
+        status = "skip";
+        note = "Ya ha pasado";
+      } else if (rowErrors.length > 0) {
+        status = "invalid";
+      } else if ((key && taken.has(key)) || (fileKey && inFile.has(fileKey))) {
+        status = "duplicate";
+      } else {
+        status = "ok";
+        if (!clientId) note = "Cliente nuevo";
+      }
+      if (key) taken.add(key);
+      if (fileKey) inFile.add(fileKey);
+      if (status === "ok" && !clientId) {
+        newClients++;
+        // The dry run creates nothing, but the client's next rows are not new.
+        if (dryRun) createdClients.set(nameKey(row.clientName), "(nuevo)");
+      }
+      if (status === "invalid") errors.push({ row: rowIndex, fields: rowErrors });
+      tally[status]++;
+      if (preview.length < 50) {
+        preview.push({
+          rowIndex,
+          data: {
+            date: row.date,
+            time: row.time,
+            clientName: row.clientName,
+            service: service?.name ?? row.service,
+            professional: professional ? `${professional.firstName} ${professional.lastName}`.trim() : row.professional,
+          },
+          errors: status === "invalid" ? rowErrors : [],
+          status,
+          note,
+        });
+      }
+
+      if (dryRun || status !== "ok") {
+        if (!dryRun && (status === "skip" || status === "duplicate")) skipped++;
+        continue;
+      }
+      try {
+        let id = clientId;
+        if (!id) {
+          const client = await this.prisma.client.create({
+            data: {
+              tenantId,
+              firstName: row.firstName,
+              lastName: row.lastName,
+              email: row.email ?? null,
+              phone: row.phone ?? null,
+              status: "active",
+              source: "import",
+            } as any,
+            select: { id: true },
+          });
+          id = client.id;
+          createdClients.set(nameKey(row.clientName), id);
+          keys.forEach((k) => createdClients.set(k, id!));
+        }
+        const duration = row.duration ?? service!.duration;
+        const price = row.price ?? Number(service!.price);
+        const remindersOff = options.sendReminders === false;
+        await this.prisma.appointment.create({
+          data: {
+            tenantId,
+            clientId: id,
+            serviceId: service!.id,
+            professionalId: professional!.id,
+            scheduledDate: new Date(row.date!),
+            scheduledTime: row.time!,
+            startTime: startsAt,
+            duration,
+            endTime: addMinutes(row.time!, duration),
+            status: AppointmentStatus.confirmed,
+            price: new Prisma.Decimal(price),
+            totalAmount: Math.round(price * 100), // cents, as insertAppointment stores it
+            currency: service!.currency,
+            paymentStatus: PaymentStatus.pending,
+            notes: row.notes ?? null,
+            internalNotes: `Importada de ${filename}`,
+            source: AppointmentSource.staff,
+            reminder24hSent: remindersOff,
+            reminder1hSent: remindersOff,
+          },
+        });
+        created++;
+      } catch (err: any) {
+        errors.push({ row: rowIndex, fields: [{ col: "base de datos", msg: err.message ?? "error" }] });
+      }
+    }
+
+    const result = await this.finish(tenantId, ImportType.appointments, filename, dryRun, rows.length, preview, errors, tally, {
+      created,
+      updated: 0,
+      skipped,
+    });
+    return { ...result, newClients };
+  }
+
   // ---- Shared -------------------------------------------------------------
 
   private async finish(
@@ -229,7 +507,7 @@ export class ImportService {
         status: ImportStatus.completed,
         filename,
         totalRows,
-        successRows: dryRun ? totalRows - invalidCount : counts.created + counts.updated,
+        successRows: dryRun ? tally.ok + tally.update : counts.created + counts.updated,
         errorRows: invalidCount,
         errors: errors as any,
         dryRun,
@@ -246,6 +524,7 @@ export class ImportService {
         updateCount: tally.update,
         duplicateCount: tally.duplicate,
         invalidCount,
+        skipCount: tally.skip,
       },
       errors,
       // Commit results (zero on a dry run).

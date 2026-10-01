@@ -2,6 +2,7 @@
 
 import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
+import { ImportLink } from "@/components/import-link";
 import {
   Search,
   Plus,
@@ -749,6 +750,7 @@ function AppointmentsPageContent() {
               {t("appointments.calendar")}
             </button>
           </div>
+          <ImportLink kind="appointments" />
           <button
             onClick={() => {
               setSelectedAppointmentId(null);
