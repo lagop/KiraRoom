@@ -21,6 +21,7 @@ import { Roles } from "../auth/decorators/roles.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { UserRole } from "@prisma/client";
+import { Throttle } from "@nestjs/throttler";
 
 interface AuthenticatedRequest extends Request {
   user: {
@@ -44,6 +45,7 @@ export class AppointmentsController {
   ) {}
 
   @Post()
+  @Throttle({ default: { ttl: 60_000, limit: 5 } }) // public booking: a person books once
   @Public()
   @ApiOperation({ summary: "Create a new appointment (public)" })
   @ApiResponse({ status: 201, description: "Appointment created successfully" })
@@ -80,6 +82,7 @@ export class AppointmentsController {
 
   // IMPORTANT: Specific routes must come BEFORE parameterized routes
   @Get("available-slots")
+  @Throttle({ default: { ttl: 60_000, limit: 60 } })
   @Public()
   @ApiOperation({ summary: "Get available slots for appointments" })
   @ApiResponse({

@@ -5,6 +5,7 @@ import { json, urlencoded } from "express";
 import * as Sentry from "@sentry/node";
 import { Logger as PinoLogger } from "nestjs-pino";
 import { AppModule } from "./app.module";
+import { applyHttpHardening, swaggerEnabled } from "./common/http-hardening";
 import {
   validateJwtSecretOrExit,
   validateJwtRefreshSecretOrExit,
@@ -134,6 +135,8 @@ async function bootstrap(): Promise<void> {
     Sentry.setupExpressErrorHandler(app);
   }
 
+  applyHttpHardening(app);
+
   app.use(
     json({
       verify: (req: any, _res, buf) => {
@@ -163,40 +166,44 @@ async function bootstrap(): Promise<void> {
 
   app.setGlobalPrefix('api/v1');
 
-  const config = new DocumentBuilder()
-    .setTitle('Kira Room API')
-    .setDescription('Beauty Salon Management System API')
-    .setVersion('1.0')
-    .addBearerAuth()
-    .addTag('auth', 'Authentication endpoints')
-    .addTag('salons', 'Salon management')
-    .addTag('appointments', 'Appointment management')
-    .addTag('clients', 'Client management')
-    .addTag('services', 'Service management')
-    .addTag('professionals', 'Professional management')
-    .addTag('virtual-receptionist', 'Virtual receptionist and chat functionality')
-    .addTag('widget', 'Booking widget (P0)')
-    .addTag('widget-public', 'Public widget embed endpoints (P0)')
-    .addTag('qr', 'QR code generator (P0)')
-    .addTag('import', 'CSV bulk import (P0)')
-    .addTag('ics-feeds', 'Calendar feed endpoints (P0)')
-    .addTag('consent-forms', 'Consent form management (P0)')
-    .addTag('consent', 'Public consent signing (P0)')
-    .addTag('reviews', 'Reviews management (P0)')
-    .addTag('reviews-public', 'Public review endpoint (P0)')
-    .addTag('reviews-analytics', 'Reviews analytics (P0)')
-    .addTag('whatsapp', 'WhatsApp Cloud API connection + campaigns (P0)')
-    .addTag('whatsapp-webhooks', 'Meta WhatsApp webhook receiver (P0)')
-    .build();
+  if (swaggerEnabled()) {
+    const config = new DocumentBuilder()
+      .setTitle('Kira Room API')
+      .setDescription('Beauty Salon Management System API')
+      .setVersion('1.0')
+      .addBearerAuth()
+      .addTag('auth', 'Authentication endpoints')
+      .addTag('salons', 'Salon management')
+      .addTag('appointments', 'Appointment management')
+      .addTag('clients', 'Client management')
+      .addTag('services', 'Service management')
+      .addTag('professionals', 'Professional management')
+      .addTag('virtual-receptionist', 'Virtual receptionist and chat functionality')
+      .addTag('widget', 'Booking widget (P0)')
+      .addTag('widget-public', 'Public widget embed endpoints (P0)')
+      .addTag('qr', 'QR code generator (P0)')
+      .addTag('import', 'CSV bulk import (P0)')
+      .addTag('ics-feeds', 'Calendar feed endpoints (P0)')
+      .addTag('consent-forms', 'Consent form management (P0)')
+      .addTag('consent', 'Public consent signing (P0)')
+      .addTag('reviews', 'Reviews management (P0)')
+      .addTag('reviews-public', 'Public review endpoint (P0)')
+      .addTag('reviews-analytics', 'Reviews analytics (P0)')
+      .addTag('whatsapp', 'WhatsApp Cloud API connection + campaigns (P0)')
+      .addTag('whatsapp-webhooks', 'Meta WhatsApp webhook receiver (P0)')
+      .build();
 
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api/docs', app, document);
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('api/docs', app, document);
+  }
 
   const port = process.env.PORT || 3001;
   await app.listen(port);
 
   logger.log(`Kira Room Backend running on port ${port}`);
-  logger.log(`API Documentation: http://localhost:${port}/api/docs`);
+  if (swaggerEnabled()) {
+    logger.log(`API Documentation: http://localhost:${port}/api/docs`);
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────

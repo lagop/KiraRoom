@@ -13,6 +13,7 @@ import { SaasOwner } from "../decorators/saas-owner.decorator";
 import { AcceptInviteDto } from "./dto/accept-invite.dto";
 import { CreateInviteDto } from "./dto/create-invite.dto";
 import { InvitesService, type InviteAcceptanceContext, type InviteView } from "./invites.service";
+import { Throttle } from "@nestjs/throttler";
 
 /**
  * Public endpoints for the invite-acceptance wizard at
@@ -26,6 +27,7 @@ export class PublicInvitesController {
 
   @Public()
   @Get(":token")
+  @Throttle({ default: { ttl: 60_000, limit: 30 } })
   @ApiOperation({
     summary: "Resolve a tenant-invite token (public; no auth required)",
   })
@@ -37,6 +39,7 @@ export class PublicInvitesController {
 
   @Public()
   @Post(":token/accept")
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: "Accept an invite — creates the tenant + first owner user",

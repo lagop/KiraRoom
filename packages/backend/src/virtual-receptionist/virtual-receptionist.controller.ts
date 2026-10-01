@@ -1,3 +1,4 @@
+import { Throttle } from "@nestjs/throttler";
 import { ParseUUIDPipe, Controller, Post, Req, Get, Put, Delete, Body, Param, Query, UseGuards, UsePipes, ValidationPipe, Logger } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
@@ -160,6 +161,7 @@ export class VirtualReceptionistController {
 
   // Chat Messaging
   @Post('messages')
+  @Throttle({ default: { ttl: 60_000, limit: 20 } }) // each message is a paid model call
   @Public()
   @ApiOperation({ summary: 'Send message to virtual receptionist' })
   async sendMessage(@Body(new ValidationPipe()) message: SendMessageDto) {

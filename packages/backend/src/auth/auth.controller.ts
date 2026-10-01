@@ -1,3 +1,4 @@
+import { Throttle } from "@nestjs/throttler";
 import { Controller, Post, Body, UseGuards, HttpCode, HttpStatus, Get, Patch, Query } from "@nestjs/common";
 import {
   ApiTags,
@@ -24,6 +25,7 @@ export class AuthController {
 
   @Public()
   @Get("verify-email")
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
   @ApiOperation({ summary: "Confirm an email address from the welcome email link" })
   @ApiResponse({ status: 200, description: "Verification outcome" })
   async verifyEmail(@Query("token") token?: string) {
@@ -36,6 +38,7 @@ export class AuthController {
 
   @Public()
   @Post("register")
+  @Throttle({ default: { ttl: 3_600_000, limit: 5 } }) // 5 sign-ups an hour per address
   @ApiOperation({ summary: "Register a new tenant with owner account" })
   @ApiResponse({ status: 201, description: "Successfully registered" })
   @ApiResponse({ status: 409, description: "Email already registered" })
@@ -46,6 +49,7 @@ export class AuthController {
 
   @Public()
   @Post("login")
+  @Throttle({ default: { ttl: 60_000, limit: 10 } }) // with the per-account lockout
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: "Login and get access/refresh tokens" })
   @ApiResponse({ status: 200, description: "Successfully logged in" })
@@ -56,6 +60,7 @@ export class AuthController {
 
   @Public()
   @Post("impersonate")
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
@@ -72,6 +77,7 @@ export class AuthController {
 
   @Public()
   @Post("refresh")
+  @Throttle({ default: { ttl: 60_000, limit: 30 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: "Refresh access token using refresh token" })
   @ApiResponse({ status: 200, description: "Successfully refreshed token" })
