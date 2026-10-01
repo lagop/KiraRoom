@@ -89,6 +89,18 @@ function makePrismaMock() {
     invoice: { create: invoiceCreate, update: async () => ({}), findMany: async () => [], findUnique: async () => null, findFirst: async () => null },
     order: { findUnique: async () => null },
     appointment: { findUnique: async () => null },
+    verifactuRecord: { count: async () => 0, findFirst: async () => null },
+  };
+  // Invoice number and invoice are created in one transaction.
+  prisma.$transaction = async (fn: any) => fn(prisma);
+
+  // allocateNumber's INSERT ... ON CONFLICT ... RETURNING: values are tenantId, series, year.
+  prisma.$queryRaw = async (_sql: TemplateStringsArray, tenantId: string, series: string, year: number) => {
+    const key = `${tenantId}|${series}|${year}`;
+    const cur = sequences.get(key) ?? { tenantId, series, year, lastNumber: 0 };
+    cur.lastNumber += 1;
+    sequences.set(key, cur);
+    return [{ lastNumber: cur.lastNumber }];
   };
 
   return {

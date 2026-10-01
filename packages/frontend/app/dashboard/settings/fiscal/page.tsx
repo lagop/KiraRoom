@@ -6,8 +6,9 @@ import {
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
-import apiClient, { FiscalSettings } from "@/lib/api";
-import { Loader2, Save, Upload, ShieldOff } from "lucide-react";
+import apiClient, { FiscalSettings, VerifactuStatus } from "@/lib/api";
+import { VerifactuCard } from "@/components/verifactu/verifactu-card";
+import { Loader2, Save, ShieldOff } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
 import {
   TAX_REGIMES,
@@ -25,6 +26,10 @@ export default function FiscalSettingsPage() {
     queryKey: ["invoices", "fiscal-settings"],
     queryFn: () => apiClient.getFiscalSettings(),
   });
+  const verifactu = useQuery<VerifactuStatus>({
+    queryKey: ["verifactu", "status"],
+    queryFn: () => apiClient.getVerifactuStatus(),
+  });
   const certs = useQuery({
     queryKey: ["invoices", "certificates"],
     queryFn: () => apiClient.listFiscalCertificates(),
@@ -33,7 +38,10 @@ export default function FiscalSettingsPage() {
   const save = useMutation({
     mutationFn: (patch: Parameters<typeof apiClient.updateFiscalSettings>[0]) =>
       apiClient.updateFiscalSettings(patch),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["invoices", "fiscal-settings"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["invoices", "fiscal-settings"] });
+      qc.invalidateQueries({ queryKey: ["verifactu"] });
+    },
   });
 
   const deactivateCert = useMutation({
@@ -190,15 +198,24 @@ export default function FiscalSettingsPage() {
                 <option
                   key={m}
                   value={m}
-                  disabled={m !== "none" && settings.data?.submissionAvailable === false}
+                  disabled={
+                    m === "verifactu"
+                      ? !verifactu.data?.available
+                      : m !== "none" && settings.data?.submissionAvailable === false
+                  }
                 >
                   {t(`invoices.fiscalMode.${m}`)}
                 </option>
               ))}
             </select>
-            {settings.data?.submissionAvailable === false && (
+            {settings.data?.submissionAvailable === false && !verifactu.data?.available && (
               <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
                 {t("invoices.fiscalSettings.submissionUnavailable")}
+              </p>
+            )}
+            {verifactu.data?.available && (
+              <p className="mt-2 text-xs text-gray-500">
+                TicketBAI (País Vasco) y SII todavía no están disponibles.
               </p>
             )}
           </div>
@@ -334,12 +351,17 @@ export default function FiscalSettingsPage() {
             {t("invoices.actions.save")}
           </button>
         </div>
+        {save.isError && (
+          <p className="mt-2 text-right text-sm text-red-600">{(save.error as Error).message}</p>
+        )}
         {save.isSuccess && (
           <p className="mt-2 text-right text-xs text-green-600">
             {t("invoices.fiscalSettings.saved")}
           </p>
         )}
       </div>
+
+      <VerifactuCard />
 
       <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
         <h2 className="text-base font-semibold text-gray-900">
@@ -379,12 +401,6 @@ export default function FiscalSettingsPage() {
         ) : (
           <p className="mt-3 text-sm text-gray-500">—</p>
         )}
-        <p className="mt-4 rounded-md bg-amber-50 p-3 text-xs text-amber-800">
-          {t("invoices.fiscalSettings.uploadCert")}: use the API endpoint{" "}
-          <code>POST /invoices/certificates</code> with the encrypted PEM and
-          fingerprint. The UI upload flow is intentionally a future iteration
-          so we can review the encryption pipeline first.
-        </p>
       </div>
     </div>
   );

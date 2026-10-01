@@ -1,7 +1,6 @@
 import { Injectable, Logger, Optional } from "@nestjs/common";
 import { fiscalSubmissionAvailable } from "./fiscal-availability";
 import { PrismaService } from "../../common/prisma/prisma.service";
-import { VerifactuService } from "./verifactu.service";
 import { TicketBaiService } from "./ticketbai.service";
 import { SiiService } from "./sii.service";
 import { FiscalRetryQueue } from "./fiscal-retry.queue";
@@ -10,42 +9,6 @@ import { createHash } from "crypto";
 
 export interface FiscalDispatchInput {
   invoiceId: string;
-}
-
-/**
- * Builds the canonical AEAT `<Huella>` per RD 1007/2023 + Verifactu spec.
- * Order is strict; do not reorder. The first record in the chain uses an
- * empty `huellaAnterior` so the join character is omitted.
- *
- * Input fields:
- *  - NIF emisor
- *  - NumSerieFactura (= series + number without separator)
- *  - FechaExpedicionFactura (YYYY-MM-DD)
- *  - TipoFactura (F1, R1, etc â€” let AEAT assign)
- *  - CuotaRepercutida (sum of tax)
- *  - ImporteTotal
- *  - HuellaAnterior (hex from previous dispatch)
- */
-export function buildVerifactuHuella(input: {
-  tenantNif: string;
-  invoiceNumber: string;
-  issueDate: string;
-  totalTaxCents: number;
-  totalCents: number;
-  previousHash: string | null;
-}): string {
-  const orden = [
-    input.previousHash ?? "",
-    input.tenantNif,
-    input.invoiceNumber,
-    input.issueDate,
-    input.totalTaxCents.toFixed(2),
-    input.totalCents.toFixed(2),
-    // Addicional fields omitted for MVP: tipoFactura, cuotaTotal,
-    // huellas anteriores adicionales, datos derechos emittedos â€” los
-    // incorporamos en F+1 si el integrador AEAT los requiere.
-  ].join("|");
-  return createHash("sha256").update(orden).digest("hex");
 }
 
 /**
@@ -84,7 +47,6 @@ export class FiscalService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly verifactu: VerifactuService,
     private readonly ticketBai: TicketBaiService,
     private readonly sii: SiiService,
     @Optional() private readonly retryQueue?: FiscalRetryQueue,
@@ -106,6 +68,9 @@ export class FiscalService {
     if (!invoice) return;
     const mode: FiscalMode = invoice.tenant.fiscalMode;
     if (mode === FiscalMode.none) return;
+    // VERI*FACTU records are generated with the invoice and sent by
+    // VerifactuDispatcher (verifactu/), never through here.
+    if (mode === FiscalMode.verifactu) return;
     // The transports are stubs that answer "accepted": see fiscal-availability.
     if (!fiscalSubmissionAvailable()) {
       this.logger.warn(`Invoice ${invoiceId} not sent (${mode}): fiscal submission is not available yet`);
@@ -119,9 +84,6 @@ export class FiscalService {
     });
 
     switch (mode) {
-      case FiscalMode.verifactu:
-        await this.dispatchVerifactu(invoice);
-        break;
       case FiscalMode.ticketbai:
         await this.dispatchTicketBai(invoice);
         break;
@@ -150,8 +112,9 @@ export class FiscalService {
     });
     if (!invoice) return false;
     const mode: FiscalMode = invoice.tenant.fiscalMode;
-    if (mode === FiscalMode.none) {
-      // No-op — local cancel already handled by InvoiceService.cancel.
+    if (mode === FiscalMode.none || mode === FiscalMode.verifactu) {
+      // none: local cancel only. verifactu: InvoiceService generates the
+      // anulación record in the chain.
       return true;
     }
     const settings = (invoice.tenant.fiscalSettings as Record<string, unknown>) ?? {};
@@ -171,31 +134,6 @@ export class FiscalService {
 
     let xml: string;
     try {
-      if (mode === FiscalMode.verifactu) {
-        xml = this.verifactu.buildAnulateXml({
-          tenantNif,
-          invoiceNumber,
-          issueDate,
-          huettaAnterior: previousHash,
-        });
-        const signed = await this.verifactu.signWithTenantCert(invoiceId, xml);
-        await this.prisma.invoice.update({
-          where: { id: invoiceId },
-          data: { fiscalXml: signed.signedXml, fiscalStatus: "pending" },
-        });
-        const result = await this.verifactu.dispatch({
-          invoiceId,
-          xml: signed.signedXml,
-          tenantNif,
-          nif: invoice.recipientTaxId ?? "",
-          invoiceNumber,
-          issueDate,
-          totalCents: invoice.totalCents,
-        });
-        await this.handleDispatchResult(invoice, result, _reason);
-        return result.status !== "error";
-      }
-
       if (mode === FiscalMode.ticketbai) {
         const settingsProv = settings as Record<string, unknown>;
         const diputacion =
@@ -206,7 +144,7 @@ export class FiscalService {
           issueDate,
           huettaAnterior: previousHash,
         });
-        const signed = await this.verifactu.signWithTenantCert(invoiceId, xml);
+        const signed = await this.ticketBai.signWithTenantCert(invoiceId, xml);
         await this.prisma.invoice.update({
           where: { id: invoiceId },
           data: { fiscalXml: signed.signedXml, fiscalStatus: "pending" },
@@ -331,83 +269,6 @@ export class FiscalService {
         fiscalError: result.error ?? null,
       },
     });
-  }
-
-  private async dispatchVerifactu(invoice: any) {
-    const settings = (invoice.tenant.fiscalSettings as Record<string, unknown>) ?? {};
-    const tenantNif = (settings.tenantNif as string) ?? invoice.issuerTaxIdAtIssue ?? "";
-    const chain = await this.prisma.fiscalChainState.findUnique({
-      where: {
-        tenantId_fiscalMode: {
-          tenantId: invoice.tenantId,
-          fiscalMode: FiscalMode.verifactu,
-        },
-      },
-    });
-    const previousHash = chain?.lastHash ?? null;
-    const issueDate = invoice.issueDate.toISOString().slice(0, 10);
-    const invoiceNumber = `${invoice.series}${invoice.number}`;
-    const taxBreakdown = (invoice.taxBreakdown as Array<{ taxCents: number }>) ?? [];
-    const totalTaxCents = taxBreakdown.reduce((s, t) => s + t.taxCents, 0);
-
-    const huella = buildVerifactuHuella({
-      tenantNif,
-      invoiceNumber,
-      issueDate,
-      totalTaxCents,
-      totalCents: invoice.totalCents,
-      previousHash,
-    });
-
-    const xml = this.verifactu.buildInvoiceXml({
-      invoiceId: invoice.id,
-      tenantNif,
-      nif: invoice.recipientTaxId ?? "",
-      invoiceNumber,
-      issueDate,
-      totalCents: invoice.totalCents,
-      subtotalCents: invoice.subtotalCents,
-      taxBreakdown: (invoice.taxBreakdown as any[]) ?? [],
-      huettaAnterior: previousHash,
-    });
-
-    const result = await this.verifactu.dispatch({
-      invoiceId: invoice.id,
-      xml,
-      tenantNif,
-      nif: invoice.recipientTaxId ?? "",
-      invoiceNumber,
-      issueDate,
-      totalCents: invoice.totalCents,
-    });
-
-    if (result.status === "accepted") {
-      await this.prisma.fiscalChainState.upsert({
-        where: {
-          tenantId_fiscalMode: {
-            tenantId: invoice.tenantId,
-            fiscalMode: FiscalMode.verifactu,
-          },
-        },
-        create: {
-          tenantId: invoice.tenantId,
-          fiscalMode: FiscalMode.verifactu,
-          lastHash: huella,
-          lastNumber: invoiceNumber,
-          lastSubmittedAt: new Date(),
-        },
-        update: {
-          lastHash: huella,
-          lastNumber: invoiceNumber,
-          lastSubmittedAt: new Date(),
-        },
-      });
-      return;
-    }
-
-    if (this.isRetryableError(result.error)) {
-      await this.enqueueRetry(invoice, result.error);
-    }
   }
 
   private async dispatchTicketBai(invoice: any) {

@@ -129,13 +129,12 @@ export class InvoicePdfService {
     lines: InvoiceLine[];
     taxBreakdown: Array<{ rate: number; baseCents: number; taxCents: number }>;
   }): Promise<Buffer> {
-    const qrPng = input.invoice.fiscalQrUrl
-      ? await QRCode.toBuffer(input.invoice.fiscalQrUrl, {
-          errorCorrectionLevel: "M",
-          width: 200,
-          margin: 1,
-        })
+    // Drawn as vector squares: the old code embedded the PNG declared as a
+    // JPEG (DCTDecode), so no reader could decode it, and it sat at the bottom.
+    const qr = input.invoice.fiscalQrUrl
+      ? createQr(input.invoice.fiscalQrUrl, { errorCorrectionLevel: "M" }).modules
       : null;
+    const money = (cents: number) => `${(cents / 100).toFixed(2)} ${input.invoice.currency}`;
     const lines = [
       `Factura ${input.invoice.series}${input.invoice.number}`,
       `Fecha: ${input.invoice.issueDate}`,
@@ -149,113 +148,95 @@ export class InvoicePdfService {
       "Detalle:",
       ...input.lines.map(
         (l) =>
-          `  - ${l.description} x${l.quantity} @ ${(l.unitPriceCents * (1 - (l.discountPct ?? 0) / 100)) / 100} = ${l.totalCents / 100} (${l.taxRate}% IVA)`,
+          `  - ${l.description} x${l.quantity}: ${money(l.totalCents)} (${l.taxRate}% incl.)`,
       ),
       "",
-      `Subtotal: ${input.invoice.subtotalCents / 100}`,
-      `TOTAL:    ${input.invoice.totalCents / 100} ${input.invoice.currency}`,
+      // Base and tax per rate: every invoice must show them (RD 1619/2012 art. 6-7).
+      ...input.taxBreakdown.map(
+        (t) => `Base al ${t.rate}%: ${money(t.baseCents)}  Cuota: ${money(t.taxCents)}`,
+      ),
+      `TOTAL: ${money(input.invoice.totalCents)}`,
       "",
       input.invoice.fiscalReference
-        ? `Referencia fiscal: ${input.invoice.fiscalReference}`
+        ? `CSV de la AEAT: ${input.invoice.fiscalReference}`
         : "",
-      qrPng ? "[QR embebido en la esquina inferior derecha]" : "",
     ].filter(Boolean);
-    return buildPdf(lines, qrPng);
+    return buildPdf(lines, qr ? { size: qr.size, dark: (r: number, c: number) => !!qr.get(r, c) } : null);
   }
 }
 
+/** qrcode's matrix API (present at runtime, missing from its type declarations). */
+const createQr = (
+  QRCode as unknown as {
+    create(text: string, options: { errorCorrectionLevel: "M" }): { modules: { size: number; get(row: number, col: number): number } };
+  }
+).create;
+
+/** A QR code's module matrix. */
+interface QrMatrix {
+  size: number;
+  dark: (row: number, col: number) => boolean;
+}
+
+/** 35 mm, within the 30-40 mm the QR spec asks for (1 mm = 72/25.4 pt). */
+const QR_SIDE_PT = (35 * 72) / 25.4;
+
 /**
- * Hand-rolled minimal PDF 1.4 writer. Reused from the pre-Phase-2 service.
- * Kept as the fallback for environments without a Chrome binary.
+ * Hand-rolled minimal PDF 1.4 writer, for environments without a Chrome
+ * binary (production today). Text in Courier (WinAnsi, so Spanish accents
+ * print) and, for VERI*FACTU invoices, the QR at the top of the page:
+ * "QR tributario:" above it, "VERI*FACTU" below, then the invoice.
  */
-function buildPdf(textLines: string[], qrPng: Buffer | null): Buffer {
-  const objects: string[] = [];
-  const xref: number[] = [];
-  let buffer = Buffer.from("%PDF-1.4\n%\xff\xff\xff\xff\n", "binary");
+function buildPdf(textLines: string[], qr: QrMatrix | null): Buffer {
+  const left = 50;
+  const ops: string[] = [];
+  let y = 800;
+  const text = (line: string, x: number, at: number) => {
+    const safe = line.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+    ops.push("BT", "/F1 11 Tf", `${x} ${at.toFixed(2)} Td`, `(${safe}) Tj`, "ET");
+  };
 
-  function addObject(content: string): number {
-    const id = objects.length + 1;
-    xref.push(buffer.length);
-    const obj = `${id} 0 obj\n${content}\nendobj\n`;
-    buffer = Buffer.concat([buffer, Buffer.from(obj, "binary")]);
-    objects.push(obj);
-    return id;
-  }
-
-  const catalogId = addObject("<< /Type /Catalog /Pages 2 0 R >>");
-  const pagesId = addObject("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
-  const fontId = addObject(
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>",
-  );
-  const imageId = qrPng
-    ? addObject(
-        `<< /Type /XObject /Subtype /Image /Width 200 /Height 200 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${qrPng.length} >>\nstream\n` +
-          "" +
-          "\nendstream",
-      )
-    : -1;
-  const pageResources = imageId > 0
-    ? `/Font ${fontId} 0 R /XObject << /Im1 ${imageId} 0 R >>`
-    : `/Font ${fontId} 0 R`;
-  const pageId = addObject(
-    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 5 0 R /Resources << ${pageResources} >> >>`,
-  );
-  const contentLines: string[] = ["BT", "/F1 11 Tf", "50 780 Td", "14 TL"];
-  for (const line of textLines) {
-    const safe = line
-      .replace(/\\/g, "\\\\")
-      .replace(/\(/g, "\\(")
-      .replace(/\)/g, "\\)");
-    contentLines.push(`(${safe}) Tj`, "T*");
-  }
-  contentLines.push("ET");
-  if (imageId > 0) {
-    contentLines.push(
-      "q",
-      "200 0 0 200 380 40 cm",
-      "/Im1 Do",
-      "Q",
-    );
-  }
-  const contentBody = contentLines.join("\n");
-  const contentStream = `${contentBody}\n`;
-  const contentId = addObject(
-    `<< /Length ${contentStream.length} >>\nstream\n${contentStream}endstream`,
-  );
-  if (qrPng && imageId > 0) {
-    const placeholderLen = objects[imageId - 1].length;
-    const newObj = `<< /Type /XObject /Subtype /Image /Width 200 /Height 200 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${qrPng.length} >>\nstream\n`;
-    const headerBytes = Buffer.from(newObj, "binary");
-    const trailing = Buffer.from("\nendstream\nendobj\n", "binary");
-    const replacement = Buffer.concat([headerBytes, qrPng, trailing]);
-    const oldStart = xref[imageId - 1];
-    const oldEnd = oldStart + placeholderLen;
-    buffer = Buffer.concat([
-      buffer.subarray(0, oldStart),
-      replacement,
-      buffer.subarray(oldEnd),
-    ]);
-    const delta = replacement.length - placeholderLen;
-    for (let i = imageId; i < xref.length; i++) {
-      xref[i] += delta;
+  if (qr) {
+    text("QR tributario:", left, y);
+    // At least 2 mm of blank space around the code (QR spec §4): ~5 mm here.
+    const top = y - 14;
+    const module = QR_SIDE_PT / qr.size;
+    ops.push("0 g");
+    for (let r = 0; r < qr.size; r++) {
+      for (let c = 0; c < qr.size; c++) {
+        if (!qr.dark(r, c)) continue;
+        const x = left + c * module;
+        const yy = top - (r + 1) * module;
+        ops.push(`${x.toFixed(3)} ${yy.toFixed(3)} ${module.toFixed(3)} ${module.toFixed(3)} re`);
+      }
     }
+    ops.push("f");
+    y = top - QR_SIDE_PT - 16;
+    text("VERI*FACTU", left, y);
+    y -= 28;
   }
-  let xrefStart = buffer.length;
-  let xrefBody = `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
-  for (const off of xref) {
-    xrefBody += `${off.toString().padStart(10, "0")} 00000 n \n`;
+  for (const line of textLines) {
+    text(line, left, y);
+    y -= 14;
   }
-  buffer = Buffer.concat([
-    buffer,
-    Buffer.from(xrefBody, "binary"),
-    Buffer.from(
-      `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF\n`,
-      "binary",
-    ),
-  ]);
-  void catalogId;
-  void pagesId;
-  void pageId;
-  void contentId;
-  return buffer;
+
+  const content = ops.join("\n") + "\n";
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 5 0 R /Resources << /Font << /F1 4 0 R >> >> >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>",
+    `<< /Length ${Buffer.byteLength(content, "latin1")} >>\nstream\n${content}endstream`,
+  ];
+  let body = "%PDF-1.4\n%\xff\xff\xff\xff\n";
+  const offsets: number[] = [];
+  objects.forEach((obj, i) => {
+    offsets.push(Buffer.byteLength(body, "latin1"));
+    body += `${i + 1} 0 obj\n${obj}\nendobj\n`;
+  });
+  const xrefStart = Buffer.byteLength(body, "latin1");
+  body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const off of offsets) body += `${String(off).padStart(10, "0")} 00000 n \n`;
+  body += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF\n`;
+  return Buffer.from(body, "latin1");
 }
