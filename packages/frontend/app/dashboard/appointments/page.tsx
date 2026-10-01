@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   Search,
@@ -142,7 +142,7 @@ const getTotalPrice = (appointment: Appointment) => {
   return (Number(appointment.price) || 0).toFixed(2);
 };
 
-export default function AppointmentsPage() {
+function AppointmentsPageContent() {
   const searchParams = useSearchParams();
   const t = useTranslations();
   const today = new Date().toISOString().split("T")[0];
@@ -1416,5 +1416,15 @@ export default function AppointmentsPage() {
         refreshKey={drawerRefreshKey}
       />
     </div>
+  );
+}
+
+// useSearchParams() needs a Suspense boundary for the page to prerender
+// (required since Next.js 14.1; 14.0 let it through).
+export default function AppointmentsPage() {
+  return (
+    <Suspense fallback={null}>
+      <AppointmentsPageContent />
+    </Suspense>
   );
 }

@@ -1,7 +1,7 @@
 # Production Dockerfile for Kira Room Frontend.
 #
 # Build context is the monorepo root (set in .github/workflows/ci.yml).
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /repo
 
@@ -57,7 +57,7 @@ RUN cd /repo/packages/frontend && \
     npm run build
 
 # Production stage: only .next + node_modules (for `next start`).
-FROM node:20-alpine AS production
+FROM node:22-alpine AS production
 
 RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
 

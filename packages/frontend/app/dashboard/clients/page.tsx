@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   Search,
@@ -66,7 +66,7 @@ interface ClientFormData {
   taxIdType?: "nif" | "cif" | "nie" | "passport" | "other";
 }
 
-export default function ClientsPage() {
+function ClientsPageContent() {
   const searchParams = useSearchParams();
   const t = useTranslations();
   const [searchQuery, setSearchQuery] = useState("");
@@ -1459,5 +1459,15 @@ export default function ClientsPage() {
         </DrawerContent>
       </Drawer>
     </div>
+  );
+}
+
+// useSearchParams() needs a Suspense boundary for the page to prerender
+// (required since Next.js 14.1; 14.0 let it through).
+export default function ClientsPage() {
+  return (
+    <Suspense fallback={null}>
+      <ClientsPageContent />
+    </Suspense>
   );
 }
