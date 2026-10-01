@@ -55,7 +55,9 @@
       "subtitle": "Sin costes de alta. Cancela cuando quieras. 14 días de prueba Pro incluidos.",
       "popular": "Popular",
       "perMonth": "/mes",
-      "minLocations": "min. 2 locales",
+      "price": "{amount} €",
+      "perLocation": "por local",
+      "loadError": "No hemos podido cargar los precios. Prueba a recargar la página.",
       "learnMore": "Más info",
       "planCta": "Elegir plan"
     },

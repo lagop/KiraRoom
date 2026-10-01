@@ -55,7 +55,9 @@
       "subtitle": "No setup fees. Cancel anytime. 14-day Pro trial included.",
       "popular": "Popular",
       "perMonth": "/mo",
-      "minLocations": "min. 2 locations",
+      "price": "€{amount}",
+      "perLocation": "per location",
+      "loadError": "We couldn't load the prices. Try reloading the page.",
       "learnMore": "Learn more",
       "planCta": "Choose plan"
     },

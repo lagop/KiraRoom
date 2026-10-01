@@ -448,14 +448,14 @@ export default function BillingPage() {
                   )}
                 </div>
                 <p className="mt-1 text-2xl font-bold text-gray-900">
-                  €{p.price / 100}
+                  {t("landing.pricing.price", { amount: p.price / 100 })}
                   <span className="ml-1 text-sm font-normal text-gray-500">
                     {t("landing.pricing.perMonth")}
                   </span>
                 </p>
-                {p.id === "empresa" && (
+                {p.pricePerLocation && (
                   <p className="text-xs text-gray-500">
-                    {t("landing.pricing.minLocations")}
+                    {t("landing.pricing.perLocation")}
                   </p>
                 )}
                 <ul className="mt-3 space-y-1.5 text-sm text-gray-600">

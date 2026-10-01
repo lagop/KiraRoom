@@ -22,7 +22,8 @@ const STEPS = [1, 2, 3];
 export default function LandingPage() {
   const router = useRouter();
   const t = useTranslations();
-  const [plans, setPlans] = useState<SubscriptionPlan[] | null>(null);
+  // null while loading; "error" if the catalogue could not be fetched.
+  const [plans, setPlans] = useState<SubscriptionPlan[] | null | "error">(null);
 
   // Redirect already-authenticated users to the dashboard so they don't
   // see the marketing landing after logging in.
@@ -35,12 +36,16 @@ export default function LandingPage() {
   useEffect(() => {
     let cancelled = false;
     fetch((process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1") + "/payments/subscription/plans")
-      .then((r) => (r.ok ? r.json() : []))
+      .then((r) => {
+        if (!r.ok) throw new Error(`plans: ${r.status}`);
+        return r.json();
+      })
       .then((data) => {
-        if (!cancelled) setPlans(Array.isArray(data) ? data : []);
+        if (!cancelled) setPlans(Array.isArray(data) && data.length > 0 ? data : "error");
       })
       .catch(() => {
-        if (!cancelled) setPlans([]);
+        // An empty grid read as "no plans"; say the prices did not load.
+        if (!cancelled) setPlans("error");
       });
     return () => {
       cancelled = true;
@@ -158,6 +163,10 @@ export default function LandingPage() {
             <div className="col-span-full flex items-center justify-center py-8 text-gray-500">
               <Loader2 className="h-4 w-4 animate-spin" />
             </div>
+          ) : plans === "error" ? (
+            <p className="col-span-full py-8 text-center text-sm text-gray-500">
+              {t("landing.pricing.loadError")}
+            </p>
           ) : (
             plans.map((p) => (
               <div
@@ -175,14 +184,14 @@ export default function LandingPage() {
                   )}
                 </div>
                 <p className="mt-2 text-2xl font-bold">
-                  &euro;{(p.price / 100).toFixed(0)}
+                  {t("landing.pricing.price", { amount: (p.price / 100).toFixed(0) })}
                   <span className="ml-1 text-sm font-normal text-gray-500">
                     {t("landing.pricing.perMonth")}
                   </span>
                 </p>
-                {p.id === "empresa" && (
+                {p.pricePerLocation && (
                   <p className="text-xs text-gray-500">
-                    {t("landing.pricing.minLocations")}
+                    {t("landing.pricing.perLocation")}
                   </p>
                 )}
                 <ul className="mt-4 space-y-1.5 text-sm text-gray-600">

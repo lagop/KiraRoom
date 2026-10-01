@@ -14,6 +14,7 @@ import {
 } from "./dto/stripe-settings.dto";
 import { FeatureGuard } from "../common/guards/feature.guard";
 import { Feature } from "../common/decorators/feature.decorator";
+import { Public } from "../auth/decorators/public.decorator";
 
 @ApiTags("Payments")
 @Controller("payments")
@@ -343,7 +344,10 @@ export class PaymentsController {
   }
 
   @Get("subscription/plans")
-  @Roles("owner")
+  // Public: the catalogue (names, prices, features) is what the landing page
+  // shows before anyone signs up. It was owner-only, so the "Precios"
+  // section asked for it without a session, got a 401 and showed nothing.
+  @Public()
   @ApiOperation({ summary: "Get available subscription plans (rev 3, no parked features)" })
   async getPlans() {
     return this.subscriptionsService.getPublicPlans();
