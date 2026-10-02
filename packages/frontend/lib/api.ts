@@ -2736,57 +2736,107 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  // Loyalty Programs API
-  async createLoyaltyProgram(data: any): Promise<any> {
-    return this.request<any>("/loyalty/programs", {
+  // Loyalty programme (one per salon; the tenant comes from the session)
+  async getLoyaltyProgram(): Promise<{ program: LoyaltyProgram | null }> {
+    return this.request("/loyalty/program");
+  }
+
+  async saveLoyaltyProgram(data: Partial<LoyaltyProgramSettings>): Promise<{ program: LoyaltyProgram }> {
+    return this.request("/loyalty/program", { method: "PUT", body: JSON.stringify(data) });
+  }
+
+  async createLoyaltyReward(data: LoyaltyRewardInput): Promise<LoyaltyReward> {
+    return this.request("/loyalty/rewards", { method: "POST", body: JSON.stringify(data) });
+  }
+
+  async updateLoyaltyReward(id: string, data: Partial<LoyaltyRewardInput>): Promise<LoyaltyReward> {
+    return this.request(`/loyalty/rewards/${id}`, { method: "PUT", body: JSON.stringify(data) });
+  }
+
+  async deleteLoyaltyReward(id: string): Promise<{ ok: boolean; deactivated: boolean }> {
+    return this.request(`/loyalty/rewards/${id}`, { method: "DELETE" });
+  }
+
+  async createLoyaltyTier(data: { name: string; minPoints: number; pointsMultiplier: number }): Promise<LoyaltyTier> {
+    return this.request("/loyalty/tiers", { method: "POST", body: JSON.stringify(data) });
+  }
+
+  async deleteLoyaltyTier(id: string): Promise<{ ok: boolean }> {
+    return this.request(`/loyalty/tiers/${id}`, { method: "DELETE" });
+  }
+
+  async getLoyaltyMembers(search?: string): Promise<LoyaltyMemberRow[]> {
+    const q = search ? `?search=${encodeURIComponent(search)}` : "";
+    return this.request(`/loyalty/members${q}`);
+  }
+
+  async enrollLoyaltyMember(clientId: string): Promise<any> {
+    return this.request("/loyalty/members", { method: "POST", body: JSON.stringify({ clientId }) });
+  }
+
+  async adjustLoyaltyPoints(memberId: string, points: number, reason: string): Promise<any> {
+    return this.request(`/loyalty/members/${memberId}/adjust`, {
       method: "POST",
-      body: JSON.stringify(data),
+      body: JSON.stringify({ points, reason }),
     });
   }
 
-  async getLoyaltyPrograms(tenantId: string): Promise<any[]> {
-    return this.request<any[]>(`/loyalty/programs/${tenantId}`);
+  async getClientLoyalty(clientId: string): Promise<ClientLoyaltySummary> {
+    return this.request(`/loyalty/clients/${clientId}`);
   }
 
-  async getLoyaltyProgram(id: string): Promise<any> {
-    return this.request<any>(`/loyalty/programs/detail/${id}`);
+  /** The signed-in client's own balance (client portal). */
+  async getMyLoyalty(): Promise<MyLoyalty> {
+    return this.request("/loyalty/me");
   }
 
-  async updateLoyaltyProgram(id: string, data: any): Promise<any> {
-    return this.request<any>(`/loyalty/programs/${id}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    });
+  async joinMyLoyalty(): Promise<MyLoyalty> {
+    return this.request("/loyalty/me/join", { method: "POST" });
   }
 
-  async deleteLoyaltyProgram(id: string): Promise<any> {
-    return this.request<any>(`/loyalty/programs/${id}`, {
-      method: "DELETE",
-    });
+  // Wait-list
+  async getWaitList(status?: string): Promise<WaitListEntry[]> {
+    const q = status ? `?status=${encodeURIComponent(status)}` : "";
+    return this.request(`/wait-list${q}`);
   }
 
-  async createLoyaltyTier(data: any): Promise<any> {
-    return this.request<any>("/loyalty/tiers", {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
+  async addToWaitList(data: {
+    clientId: string;
+    serviceId: string;
+    professionalId?: string;
+    earliestDate?: string;
+    latestDate?: string;
+    notes?: string;
+  }): Promise<WaitListEntry> {
+    return this.request("/wait-list", { method: "POST", body: JSON.stringify(data) });
   }
 
-  async deleteLoyaltyTier(id: string): Promise<any> {
-    return this.request<any>(`/loyalty/tiers/${id}`, {
-      method: "DELETE",
-    });
+  async updateWaitListEntry(id: string, data: { status?: string; notes?: string }): Promise<WaitListEntry> {
+    return this.request(`/wait-list/${id}`, { method: "PATCH", body: JSON.stringify(data) });
   }
 
-  async createLoyaltyReward(data: any): Promise<any> {
-    return this.request<any>("/loyalty/rewards", {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
+  async removeWaitListEntry(id: string): Promise<{ ok: boolean }> {
+    return this.request(`/wait-list/${id}`, { method: "DELETE" });
   }
 
-  async getLoyaltyRewards(programId: string): Promise<any[]> {
-    return this.request<any[]>(`/loyalty/rewards/${programId}`);
+  /** "Avisar": really sends the notice and says, channel by channel, what happened. */
+  async notifyWaitListEntry(
+    id: string,
+    slot: { date?: string; time?: string; professionalId?: string } = {},
+  ): Promise<WaitListNotifyResult> {
+    return this.request(`/wait-list/${id}/notify`, { method: "POST", body: JSON.stringify(slot) });
+  }
+
+  async getWaitListSettings(): Promise<{ autoNotify: boolean }> {
+    return this.request("/wait-list/settings");
+  }
+
+  async saveWaitListSettings(autoNotify: boolean): Promise<{ autoNotify: boolean }> {
+    return this.request("/wait-list/settings", { method: "PUT", body: JSON.stringify({ autoNotify }) });
+  }
+
+  async getWaitListChannels(): Promise<{ email: boolean; sms: boolean; whatsapp: boolean; whatsappReason: string | null }> {
+    return this.request("/wait-list/channels");
   }
 
   // Gift Cards API (plan-gated by `gift_cards`; see docs/billing-plans-rev3.md Â§18.1)
@@ -2859,45 +2909,6 @@ class ApiClient implements ApiClientInterface {
   async deleteGiftCard(id: string): Promise<any> {
     return this.request<any>(`/gift-cards/${id}`, {
       method: "DELETE",
-    });
-  }
-
-  async deleteLoyaltyReward(id: string): Promise<any> {
-    return this.request<any>(`/loyalty/rewards/${id}`, {
-      method: "DELETE",
-    });
-  }
-
-  async addLoyaltyMember(clientId: string, programId: string): Promise<any> {
-    return this.request<any>("/loyalty/members", {
-      method: "POST",
-      body: JSON.stringify({ clientId, programId }),
-    });
-  }
-
-  async getLoyaltyMembers(programId: string): Promise<any[]> {
-    return this.request<any[]>(`/loyalty/members/${programId}`);
-  }
-
-  async awardLoyaltyPoints(
-    memberId: string,
-    points: number,
-    description: string,
-  ): Promise<any> {
-    return this.request<any>("/loyalty/points/award", {
-      method: "POST",
-      body: JSON.stringify({ memberId, points, description }),
-    });
-  }
-
-  async redeemLoyaltyPoints(
-    memberId: string,
-    points: number,
-    rewardId: string,
-  ): Promise<any> {
-    return this.request<any>("/loyalty/points/redeem", {
-      method: "POST",
-      body: JSON.stringify({ memberId, points, rewardId }),
     });
   }
 
@@ -4878,9 +4889,134 @@ export interface AssistantUsage {
   overCostCap: boolean;
 }
 
+// ---------------------------------------------------------------- loyalty
 
+export interface LoyaltyProgramSettings {
+  name: string;
+  description: string | null;
+  isActive: boolean;
+  earnMode: "per_euro" | "per_visit";
+  pointsPerEuro: number;
+  pointsPerVisit: number;
+  minPointsRedemption: number;
+  welcomePoints: number;
+  autoEnroll: boolean;
+  allowSelfEnroll: boolean;
+}
 
+export interface LoyaltyTier {
+  id: string;
+  name: string;
+  minPoints: number;
+  pointsMultiplier: number;
+}
 
+export interface LoyaltyRewardInput {
+  name: string;
+  description?: string;
+  type: "discount" | "free_service" | "product" | "voucher";
+  pointsCost: number;
+  discountPercent?: number;
+  /** Cents. */
+  discountAmount?: number;
+  freeServiceId?: string;
+  isActive?: boolean;
+}
 
+export interface LoyaltyReward extends LoyaltyRewardInput {
+  id: string;
+  isActive: boolean;
+  currentRedemptions: number;
+  redeemable?: boolean;
+}
 
+export interface LoyaltyProgram extends LoyaltyProgramSettings {
+  id: string;
+  tiers: LoyaltyTier[];
+  rewards: LoyaltyReward[];
+  _count: { members: number };
+}
 
+export interface LoyaltyMemberRow {
+  id: string;
+  currentPoints: number;
+  lifetimePoints: number;
+  totalSpent: number;
+  status: string;
+  enrolledVia: string | null;
+  joinedAt: string;
+  client: { id: string; firstName: string; lastName: string; email: string | null; phone: string | null };
+  tier: { name: string } | null;
+}
+
+export interface LoyaltyTransactionRow {
+  id: string;
+  createdAt: string;
+  type: string;
+  points: number;
+  description: string | null;
+}
+
+export interface ClientLoyaltySummary {
+  program: (LoyaltyProgramSettings & { id: string }) | null;
+  member: (LoyaltyMemberRow & { tier: { name: string } | null }) | null;
+  rewards: LoyaltyReward[];
+  history: LoyaltyTransactionRow[];
+}
+
+export type MyLoyalty =
+  | { enabled: false }
+  | {
+      enabled: true;
+      program: {
+        name: string;
+        description: string | null;
+        earnMode: "per_euro" | "per_visit";
+        pointsPerEuro: number;
+        pointsPerVisit: number;
+        minPointsRedemption: number;
+        welcomePoints: number;
+        allowSelfEnroll: boolean;
+      };
+      member: { currentPoints: number; lifetimePoints: number; joinedAt: string; tier: string | null } | null;
+      rewards: Array<{ id: string; name: string; description: string | null; type: string; pointsCost: number }>;
+      history: LoyaltyTransactionRow[];
+    };
+
+// -------------------------------------------------------------- wait-list
+
+export interface WaitListChannelOutcome {
+  channel: "email" | "whatsapp" | "sms" | "inApp";
+  status: "sent" | "skipped" | "failed";
+  reason?: string;
+}
+
+export interface WaitListEntry {
+  id: string;
+  clientId: string;
+  serviceId: string;
+  professionalId: string | null;
+  serviceName: string | null;
+  professionalName: string | null;
+  earliestDate: string | null;
+  latestDate: string | null;
+  status: "waiting" | "notified" | "cancelled" | "fulfilled";
+  notifiedAt: string | null;
+  notifyCount: number;
+  notes: string | null;
+  createdAt: string;
+  lastNotification: {
+    at: string;
+    auto: boolean;
+    channels: WaitListChannelOutcome[];
+    slot: { date: string | null; time: string | null; professionalId: string | null };
+  } | null;
+  client: { firstName: string; lastName: string; email: string | null; phone: string | null };
+}
+
+export interface WaitListNotifyResult {
+  notified: boolean;
+  channels: WaitListChannelOutcome[];
+  bookingUrl: string;
+  summary: string;
+}

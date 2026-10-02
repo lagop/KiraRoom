@@ -31,7 +31,28 @@ export const APPOINTMENT_REMINDER: TemplateDefinition = {
   example: ["Ana", "Salón Lucía", "Corte y peinado", "jueves 9 de octubre", "10:30"],
 };
 
-export const STANDARD_TEMPLATES: TemplateDefinition[] = [APPOINTMENT_REMINDER];
+/**
+ * The wait-list notice: the client asked to be told when a slot opens, so
+ * it is a utility message about their own request. Meta refuses a body that
+ * starts or ends with a variable, hence the closing sentence.
+ */
+export const WAITLIST_SLOT_AVAILABLE: TemplateDefinition = {
+  name: "kiraroom_hueco_libre",
+  language: "es",
+  category: "UTILITY",
+  body:
+    "Hola {{1}}, se ha liberado un hueco en {{2}} para {{3}}: {{4}}. " +
+    "Puedes reservarlo aquí: {{5}} . Se asigna a quien reserve primero.",
+  example: [
+    "Ana",
+    "Salón Lucía",
+    "Corte y peinado",
+    "jueves 9 de octubre a las 10:30",
+    "https://app.kiraroom.net/sites/salon-lucia",
+  ],
+};
+
+export const STANDARD_TEMPLATES: TemplateDefinition[] = [APPOINTMENT_REMINDER, WAITLIST_SLOT_AVAILABLE];
 
 /** The body as Meta's template-creation API expects it. */
 export function templateCreationPayload(t: TemplateDefinition) {

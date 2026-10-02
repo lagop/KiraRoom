@@ -152,11 +152,11 @@ export default function WhatsAppSettingsPage() {
             )}
           </dl>
           <div className="border-t border-gray-100 pt-3">
-            <div className="text-sm font-medium text-gray-900">Plantilla de recordatorio</div>
+            <div className="text-sm font-medium text-gray-900">Plantillas de mensaje</div>
             <p className="text-xs text-gray-500 mt-1">
-              WhatsApp solo entrega recordatorios con una plantilla aprobada por Meta. La
-              enviamos a revisión al conectar; suele aprobarse en unas horas. Mientras
-              tanto, los recordatorios salen por email o SMS.
+              WhatsApp solo entrega recordatorios y avisos de la lista de espera con una
+              plantilla aprobada por Meta. Las enviamos a revisión al conectar; suelen
+              aprobarse en unas horas. Mientras tanto, esos mensajes salen por email o SMS.
             </p>
             <ul className="mt-2 space-y-1 text-sm">
               {templates.map((t) => (

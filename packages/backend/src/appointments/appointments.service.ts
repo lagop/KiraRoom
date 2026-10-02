@@ -22,6 +22,7 @@ import {
 import { NotificationsService } from "../notifications/notifications.service";
 import { ClientCadenceService } from "../rebooking/client-cadence.service";
 import { WaitListService } from "../wait-list/wait-list.service";
+import { LoyaltyService } from "../loyalty/loyalty.service";
 import { InvoiceService } from "../invoices/invoices.service";
 import { EmailService } from "../notifications/services/email.service";
 import { SmsService } from "../notifications/services/sms.service";
@@ -124,7 +125,37 @@ export class AppointmentsService {
     @Optional() private clientCadenceService?: ClientCadenceService,
     @Optional() private invoiceService?: InvoiceService,
     @Optional() private readonly waitListService?: WaitListService,
+    @Optional() private readonly loyaltyService?: LoyaltyService,
   ) {}
+
+  /**
+   * Loyalty points follow the appointment: completed and paid earns,
+   * cancelled or refunded gives them back. Both calls are idempotent and
+   * do nothing until their condition holds, so this runs after any status
+   * or payment change. A failure never fails the appointment change; the
+   * hourly loyalty sweep catches up.
+   */
+  private async loyaltyAfterStatus(tenantId: string, appointmentId: string) {
+    if (!this.loyaltyService) return;
+    try {
+      const apt = await this.prisma.appointment.findFirst({
+        where: { id: appointmentId, tenantId },
+        select: { status: true, paymentStatus: true },
+      });
+      if (!apt) return;
+      if (apt.status === AppointmentStatus.cancelled || apt.paymentStatus === PaymentStatus.refunded) {
+        await this.loyaltyService.reverseAppointment(
+          tenantId,
+          appointmentId,
+          apt.status === AppointmentStatus.cancelled ? "Cita cancelada" : "Devolución del pago de la cita",
+        );
+      } else {
+        await this.loyaltyService.settleAppointment(tenantId, appointmentId);
+      }
+    } catch (err) {
+      this.logger.warn(`loyalty for appointment ${appointmentId} failed: ${(err as Error).message}`);
+    }
+  }
 
   /**
    * Enrich appointment data with computed totalAmount (in cents) and amountDue.
@@ -907,6 +938,10 @@ export class AppointmentsService {
         await this.sendAppointmentConfirmedNotifications(updatedAppointment);
       }
 
+      if (updateAppointmentDto.status && updateAppointmentDto.status !== oldStatus) {
+        await this.loyaltyAfterStatus(updatedAppointment.tenantId, id);
+      }
+
       return this.enrichAppointment(updatedAppointment);
     } catch (error) {
       console.error("Error updating appointment:", error);
@@ -1011,29 +1046,32 @@ export class AppointmentsService {
       reason,
     );
 
-    // P2A-receptionist-v2 H-1: free the slot by notifying any
-    // wait-listed clients whose window covers the freed time.
-    // Fire-and-forget; the wait-list service persists the notification
-    // marker so a future re-cancel doesn't spam the same waiter.
+    // The freed slot goes to the wait-list. This used to mark every
+    // matching client "notified" without sending anything; now they are
+    // really told (when the salon switched automatic notices on), or the
+    // team is told who is waiting. Fire-and-forget: a slow email or SMS
+    // provider must not hold up the cancellation.
     if (
+      this.waitListService &&
       cancelledAppointment.serviceId &&
       cancelledAppointment.professionalId
     ) {
-      void this.waitListService?.notifyMatchesForCancelledSlot({
+      this.waitListService
+        .onAppointmentCancelled({
           tenantId: cancelledAppointment.tenantId,
           serviceId: cancelledAppointment.serviceId,
           professionalId: cancelledAppointment.professionalId,
-          windowStart: cancelledAppointment.scheduledDate,
-          windowEnd: new Date(
-            (cancelledAppointment.scheduledDate?.getTime?.() ?? Date.now()) +
-              24 * 60 * 60 * 1000,
-          ),
-        })?.catch((err) =>
+          date: cancelledAppointment.scheduledDate,
+          time: cancelledAppointment.scheduledTime,
+        })
+        .catch((err) =>
           this.logger.warn(
             `wait-list notification failed for cancelled appointment ${cancelledAppointment.id}: ${err.message}`,
           ),
         );
     }
+
+    await this.loyaltyAfterStatus(cancelledAppointment.tenantId, id);
 
     return this.enrichAppointment(cancelledAppointment);
   }
@@ -1089,6 +1127,9 @@ export class AppointmentsService {
           );
         });
     }
+
+    // Points, if it is also paid (otherwise when the payment comes in).
+    await this.loyaltyAfterStatus(completedAppointment.tenantId, id);
 
     return this.enrichAppointment(completedAppointment);
   }
@@ -1245,6 +1286,9 @@ export class AppointmentsService {
         tenant: true,
       },
     });
+
+    // Paid: points once the visit is also completed. Refunded: back they go.
+    await this.loyaltyAfterStatus(updatedAppointment.tenantId, id);
 
     return this.enrichAppointment(updatedAppointment);
   }

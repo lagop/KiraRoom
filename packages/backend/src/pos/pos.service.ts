@@ -1,6 +1,8 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger, Optional } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { WalletService } from '../payments/services/wallet.service';
+import { LoyaltyService } from '../loyalty/loyalty.service';
 
 export interface CartItem {
   serviceId?: string;
@@ -24,13 +26,20 @@ export interface CreatePosOrderDto {
     amount: number;
   }[];
   notes?: string;
+  /** Appointments this ticket pays for (the till's "charge appointment" flow). */
+  appointmentIds?: string[];
+  /** A loyalty reward the client spends points on: comes off the total. */
+  loyaltyRewardId?: string;
 }
 
 @Injectable()
 export class PosService {
+  private readonly logger = new Logger(PosService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly walletService: WalletService,
+    @Optional() private readonly loyalty?: LoyaltyService,
   ) {}
 
   /**
@@ -153,16 +162,23 @@ export class PosService {
    * Process a POS checkout/sale
    */
   async processCheckout(dto: CreatePosOrderDto) {
-    const { tenantId, clientId, clientInfo, items, payments, notes } = dto;
+    const { tenantId, clientId, clientInfo, items } = dto;
+    const payments = dto.payments ?? [];
+    // One id for the whole ticket, stamped on each of its payments, so the
+    // loyalty points it earns or spends can be found again on a refund.
+    const saleId = randomUUID();
 
     // Calculate totals (amounts are in cents)
     const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
-    const total = subtotal;
 
-    // Verify payment amounts match total
-    const paymentTotal = payments.reduce((sum, p) => sum + p.amount, 0);
-    if (paymentTotal < total) {
-      throw new BadRequestException('Payment amount is less than order total');
+    const appointmentIds = [...new Set(dto.appointmentIds ?? [])];
+    if (appointmentIds.length > 0) {
+      const found = await this.prisma.appointment.count({
+        where: { id: { in: appointmentIds }, tenantId },
+      });
+      if (found !== appointmentIds.length) {
+        throw new NotFoundException('Appointment not found');
+      }
     }
 
     let finalClientId = clientId;
@@ -192,45 +208,108 @@ export class PosService {
       }
     }
 
+    // Points spent on a reward come off the ticket before it is paid.
+    let loyaltyDiscount = 0;
+    let pointsSpent = 0;
+    let rewardName: string | undefined;
+    if (dto.loyaltyRewardId) {
+      if (!this.loyalty) throw new BadRequestException('Loyalty is not available');
+      const redeemed = await this.loyalty.redeemAtSale(tenantId, {
+        clientId: finalClientId,
+        rewardId: dto.loyaltyRewardId,
+        saleId,
+        items: items.map((i) => ({ serviceId: i.serviceId, price: i.price, quantity: i.quantity })),
+        subtotalCents: subtotal,
+        appointmentId: appointmentIds[0] ?? null,
+      });
+      loyaltyDiscount = redeemed.discountCents;
+      pointsSpent = redeemed.pointsSpent;
+      rewardName = redeemed.rewardName;
+    }
+    const total = subtotal - loyaltyDiscount;
+
+    // Verify payment amounts match total
+    const paymentTotal = payments.reduce((sum, p) => sum + p.amount, 0);
+    if (paymentTotal < total) {
+      if (pointsSpent) await this.loyalty?.cancelSaleRedemption(tenantId, saleId, 'Venta no completada');
+      throw new BadRequestException('Payment amount is less than order total');
+    }
+
     // Process payments
     const paymentRecords = [];
-    
-    for (const payment of payments) {
-      // "Card" at the till is the salon's own card terminal: the money is
-      // already taken when the sale is recorded. It used to create a Stripe
-      // PaymentIntent for 100 times the amount (cents passed to a method that
-      // multiplied by 100), with the platform's Stripe account when the salon
-      // had none, which nobody ever confirmed: the sale stayed "pending" and
-      // out of the day's card total.
+    try {
+      for (const payment of payments) {
+        // "Card" at the till is the salon's own card terminal: the money is
+        // already taken when the sale is recorded. It used to create a Stripe
+        // PaymentIntent for 100 times the amount (cents passed to a method that
+        // multiplied by 100), with the platform's Stripe account when the salon
+        // had none, which nobody ever confirmed: the sale stayed "pending" and
+        // out of the day's card total.
 
-      // Process wallet payments
-      if (payment.method === 'wallet' && finalClientId) {
-        await this.walletService.deductFunds(tenantId, finalClientId, payment.amount, 'POS Payment');
+        // Process wallet payments
+        if (payment.method === 'wallet' && finalClientId) {
+          await this.walletService.deductFunds(tenantId, finalClientId, payment.amount, 'POS Payment');
+        }
+
+        // Create payment record
+        const paymentRecord = await this.prisma.payment.create({
+          data: {
+            tenantId,
+            clientId: finalClientId,
+            amount: payment.amount,
+            currency: 'EUR',
+            type: 'service',
+            status: 'paid',
+            method: payment.method as any,
+            description: `POS Sale: ${items.map(i => i.name).join(', ')}`,
+            metadata: {
+              posSaleId: saleId,
+              ...(appointmentIds.length ? { appointmentIds } : {}),
+              ...(loyaltyDiscount ? { loyaltyDiscount, loyaltyRewardId: dto.loyaltyRewardId } : {}),
+            },
+          },
+        });
+        paymentRecords.push(paymentRecord);
       }
+    } catch (err) {
+      // Nothing was sold: give the points back.
+      if (pointsSpent) await this.loyalty?.cancelSaleRedemption(tenantId, saleId, 'Venta no completada');
+      throw err;
+    }
 
-      // Create payment record
-      const paymentRecord = await this.prisma.payment.create({
-        data: {
-          tenantId,
-          clientId: finalClientId,
-          amount: payment.amount,
-          currency: 'EUR',
-          type: 'service',
-          status: 'paid',
-          method: payment.method as any,
-          description: `POS Sale: ${items.map(i => i.name).join(', ')}`,
-        },
-      });
-      paymentRecords.push(paymentRecord);
+    // Points for the sale. An appointment's ticket earns through the
+    // appointment instead (once it is completed and paid), never both.
+    let pointsEarned = 0;
+    if (this.loyalty) {
+      try {
+        if (appointmentIds.length > 0) {
+          for (const id of appointmentIds) {
+            const r = await this.loyalty.settleAppointment(tenantId, id);
+            pointsEarned += r?.awarded ?? 0;
+          }
+        } else {
+          pointsEarned = await this.loyalty.earnForSale(tenantId, {
+            clientId: finalClientId,
+            saleId,
+            basisCents: total,
+            isVisit: items.some((i) => !!i.serviceId),
+          });
+        }
+      } catch (err) {
+        // The sale stands; the hourly sweep retries appointments.
+        this.logger.warn(`loyalty points for sale ${saleId} failed: ${(err as Error).message}`);
+      }
     }
 
     return {
       orderId: `POS-${Date.now()}`,
+      saleId,
       clientId: finalClientId,
       items,
       subtotal,
       total,
       payments: paymentRecords,
+      loyalty: { pointsEarned, pointsSpent, discount: loyaltyDiscount, rewardName },
       status: 'completed',
       createdAt: new Date().toISOString(),
     };
@@ -248,6 +327,7 @@ export class PosService {
 
     // Convert price to cents (same as checkout)
     const amount = Math.round(Number(service.price) * 100);
+    const saleId = randomUUID();
     // Card means the salon's terminal; see processCheckout.
 
     const payment = await this.prisma.payment.create({
@@ -260,8 +340,17 @@ export class PosService {
         status: 'paid',
         method: paymentMethod as any,
         description: `Quick Sale: ${service.name}`,
+        metadata: { posSaleId: saleId },
       },
     });
+
+    let pointsEarned = 0;
+    try {
+      pointsEarned =
+        (await this.loyalty?.earnForSale(tenantId, { clientId, saleId, basisCents: amount, isVisit: true })) ?? 0;
+    } catch (err) {
+      this.logger.warn(`loyalty points for quick sale ${saleId} failed: ${(err as Error).message}`);
+    }
 
     return {
       id: payment.id,
@@ -269,6 +358,7 @@ export class PosService {
       amount,
       paymentMethod,
       status: payment.status,
+      loyalty: { pointsEarned },
     };
   }
 

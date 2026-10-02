@@ -1,5 +1,10 @@
 import { WhatsAppTemplateService } from "./whatsapp-template.service";
-import { APPOINTMENT_REMINDER, spanishDate, templateCreationPayload } from "./whatsapp-templates";
+import {
+  APPOINTMENT_REMINDER,
+  WAITLIST_SLOT_AVAILABLE,
+  spanishDate,
+  templateCreationPayload,
+} from "./whatsapp-templates";
 import { NotificationsScheduler } from "../notifications/notifications.scheduler";
 
 /**
@@ -73,11 +78,18 @@ describe("WhatsAppTemplateService", () => {
 
   it("submits the standard templates and treats an existing one as fine", async () => {
     const created = setup();
-    expect(await created.service.submitStandardTemplates("t1")).toEqual({ [APPOINTMENT_REMINDER.name]: "PENDING" });
+    expect(await created.service.submitStandardTemplates("t1")).toEqual({
+      [APPOINTMENT_REMINDER.name]: "PENDING",
+      [WAITLIST_SLOT_AVAILABLE.name]: "PENDING",
+    });
     expect(created.meta.createTemplate.mock.calls[0][2]).toEqual(templateCreationPayload(APPOINTMENT_REMINDER));
+    expect(created.meta.createTemplate.mock.calls[1][2]).toEqual(templateCreationPayload(WAITLIST_SLOT_AVAILABLE));
 
     const exists = setup({ create: { error: { code: 100, message: "Message template already exists" } } });
-    expect(await exists.service.submitStandardTemplates("t1")).toEqual({ [APPOINTMENT_REMINDER.name]: "EXISTS" });
+    expect(await exists.service.submitStandardTemplates("t1")).toEqual({
+      [APPOINTMENT_REMINDER.name]: "EXISTS",
+      [WAITLIST_SLOT_AVAILABLE.name]: "EXISTS",
+    });
   });
 });
 
@@ -86,6 +98,12 @@ describe("reminder template", () => {
     const vars = APPOINTMENT_REMINDER.body.match(/\{\{\d+\}\}/g) ?? [];
     expect(vars).toHaveLength(APPOINTMENT_REMINDER.example.length);
     expect(APPOINTMENT_REMINDER.category).toBe("UTILITY");
+  });
+
+  it("the wait-list notice too, and it neither starts nor ends with a variable", () => {
+    const vars = WAITLIST_SLOT_AVAILABLE.body.match(/\{\{\d+\}\}/g) ?? [];
+    expect(vars).toHaveLength(WAITLIST_SLOT_AVAILABLE.example.length);
+    expect(WAITLIST_SLOT_AVAILABLE.body.trim()).not.toMatch(/^\{\{|\}\}$/);
   });
 
   it("writes dates the Spanish way", () => {

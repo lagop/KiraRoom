@@ -5,9 +5,10 @@ import { ProductService } from './product.service';
 import { PrismaModule } from '../common/prisma/prisma.module';
 import { WalletService } from '../payments/services/wallet.service';
 import { StripeService } from '../payments/services/stripe.service';
+import { LoyaltyModule } from '../loyalty/loyalty.module';
 
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, LoyaltyModule],
   controllers: [PosController],
   // ProductService still uses StripeService (product payments); PosService no
   // longer does. Removing it from here took the API down on 2026-10-01.

@@ -136,6 +136,24 @@ export default function SalonBookingPage({
     }
   }, []);
 
+  // Links from a wait-list notice (and rebooking reminders) carry the
+  // service, professional and day of the freed slot: start the form there.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const q = new URLSearchParams(window.location.search);
+    const serviceId = q.get("serviceId") || "";
+    const professionalId = q.get("professionalId") || "";
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(q.get("date") || "") ? (q.get("date") as string) : "";
+    if (serviceId || professionalId || date) {
+      setBookingData((prev) => ({
+        ...prev,
+        serviceId: serviceId || prev.serviceId,
+        professionalId: professionalId || prev.professionalId,
+        date: date || prev.date,
+      }));
+    }
+  }, []);
+
   const handleLoginSuccess = (user: UserData) => {
     setCurrentUser(user);
     // Auto-fill booking data with user information
@@ -177,7 +195,8 @@ export default function SalonBookingPage({
     tomorrow.setDate(tomorrow.getDate() + 1);
     setBookingData((prev) => ({
       ...prev,
-      date: tomorrow.toISOString().split("T")[0],
+      // A date from the link (see above) wins.
+      date: prev.date || tomorrow.toISOString().split("T")[0],
     }));
   }, []);
 

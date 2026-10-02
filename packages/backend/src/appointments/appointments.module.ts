@@ -10,9 +10,12 @@ import { ConsentModule } from "../consent/consent.module";
 import { RebookingModule } from "../rebooking/rebooking.module";
 import { InvoicesModule } from "../invoices/invoices.module";
 import { WaitListModule } from "../wait-list/wait-list.module";
+import { LoyaltyModule } from "../loyalty/loyalty.module";
 
 @Module({
   imports: [
+    // Completing, paying or cancelling an appointment moves loyalty points.
+    LoyaltyModule,
     PublicViewerModule,
     NotificationsModule,
     TranslationsModule,

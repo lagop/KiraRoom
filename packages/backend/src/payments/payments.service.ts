@@ -2,12 +2,41 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  Logger,
+  Optional,
 } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
+import { LoyaltyService } from "../loyalty/loyalty.service";
 
 @Injectable()
 export class PaymentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(PaymentsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly loyalty?: LoyaltyService,
+  ) {}
+
+  /**
+   * Loyalty follows the money: a paid appointment earns, a refund takes the
+   * points back. Never allowed to fail the payment itself; the loyalty
+   * sweep retries what is missed here.
+   */
+  private async loyaltyAfter(
+    tenantId: string,
+    payment: { id: string; amount: number; status: string; appointmentId?: string | null; metadata?: unknown },
+  ) {
+    if (!this.loyalty) return;
+    try {
+      if (payment.status === "paid" && payment.appointmentId) {
+        await this.loyalty.settleAppointment(tenantId, payment.appointmentId);
+      } else if (payment.status === "refunded") {
+        await this.loyalty.onPaymentRefunded(tenantId, payment);
+      }
+    } catch (err) {
+      this.logger.warn(`loyalty after payment ${payment.id} failed: ${(err as Error).message}`);
+    }
+  }
 
   async getPayments(
     tenantId: string,
@@ -230,6 +259,8 @@ export class PaymentsService {
       });
     }
 
+    await this.loyaltyAfter(tenantId, payment);
+
     return payment;
   }
 
@@ -260,6 +291,8 @@ export class PaymentsService {
         data: { status: "completed" },
       });
     }
+
+    if (status !== payment.status) await this.loyaltyAfter(tenantId, updatedPayment);
 
     return updatedPayment;
   }
@@ -328,6 +361,8 @@ export class PaymentsService {
         data: { status: "cancelled" },
       });
     }
+
+    await this.loyaltyAfter(tenantId, updatedPayment);
 
     return updatedPayment;
   }
@@ -478,6 +513,8 @@ export class PaymentsService {
         data: { status: "completed" },
       });
     }
+
+    await this.loyaltyAfter(tenantId, updatedPayment);
 
     return updatedPayment;
   }
