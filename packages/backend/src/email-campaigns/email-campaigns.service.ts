@@ -6,6 +6,7 @@ import {
 } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { EmailService } from "../notifications/services/email.service";
+import { clientsWhoRefusedMarketing } from "../consent/marketing-consent";
 import {
   CreateCampaignDto,
   UpdateCampaignDto,
@@ -188,8 +189,25 @@ export class EmailCampaignsService {
     // Send emails to all recipients
     let sentCount = 0;
     let failedCount = 0;
+    let skippedCount = 0;
+
+    // Checked at send time, not only when recipients were added: a client
+    // can say no in their account in between.
+    const refused = await clientsWhoRefusedMarketing(
+      this.prisma,
+      tenantId,
+      campaign.recipients.map((r) => r.clientId).filter((id): id is string => !!id),
+    );
 
     for (const recipient of campaign.recipients) {
+      if (recipient.clientId && refused.has(recipient.clientId)) {
+        await this.prisma.emailCampaignRecipient.update({
+          where: { id: recipient.id },
+          data: { status: "unsubscribed", unsubscribedAt: new Date() },
+        });
+        skippedCount++;
+        continue;
+      }
       try {
         await this.emailService.sendEmail({
           to: recipient.email,
@@ -232,7 +250,7 @@ export class EmailCampaignsService {
       },
     });
 
-    return { success: true, sentCount, failedCount };
+    return { success: true, sentCount, failedCount, skippedCount };
   }
 
   async addRecipients(
@@ -250,19 +268,22 @@ export class EmailCampaignsService {
       throw new BadRequestException("Cannot add recipients to sent campaigns");
     }
 
-    // Get client emails
-    const clients = await this.prisma.client.findMany({
-      where: {
-        id: { in: clientIds },
-        tenantId,
-      },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-      },
-    });
+    // Get client emails. Those who said no to promotions are left out.
+    const refused = await clientsWhoRefusedMarketing(this.prisma, tenantId, clientIds);
+    const clients = (
+      await this.prisma.client.findMany({
+        where: {
+          id: { in: clientIds },
+          tenantId,
+        },
+        select: {
+          id: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+        },
+      })
+    ).filter((c) => !refused.has(c.id));
 
     // Create recipients
     const recipients = await Promise.all(
@@ -438,20 +459,23 @@ export class EmailCampaignsService {
   // ============ BROADCAST TO ALL CLIENTS ============
 
   async broadcastToAllClients(tenantId: string, dto: SendCampaignDto) {
-    // Get all active clients with email
-    const clients = await this.prisma.client.findMany({
-      where: {
-        tenantId,
-        status: "active",
-        email: { not: null },
-      },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-      },
-    });
+    // Get all active clients with email, except who said no to promotions
+    const refused = await clientsWhoRefusedMarketing(this.prisma, tenantId);
+    const clients = (
+      await this.prisma.client.findMany({
+        where: {
+          tenantId,
+          status: "active",
+          email: { not: null },
+        },
+        select: {
+          id: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+        },
+      })
+    ).filter((c) => !refused.has(c.id));
 
     if (clients.length === 0) {
       throw new BadRequestException("No clients with email addresses found");

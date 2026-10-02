@@ -435,8 +435,11 @@
       "error": "Could not process the add-on operation.",
       "alreadyInstalled": "The '{key}' add-on is already active on your account.",
       "notInCatalog": "The '{key}' add-on is not available for your current plan.",
-      "purchaseSuccess": "Done: the '{key}' add-on is now active. You can configure the channels in Settings.",
-      "purchaseCancelled": "You cancelled the '{key}' add-on purchase."
+      "purchaseSuccess": "Done: the '{key}' add-on is now active. It is billed prorated on your next invoice.",
+      "purchaseCancelled": "You cancelled the '{key}' add-on purchase.",
+      "purchasePending": "Stripe has not confirmed the '{key}' add-on yet. Reload the page in a few seconds.",
+      "comingSoon": "Coming soon",
+      "comingSoonNotice": "'{key}' is coming soon; it cannot be bought yet."
     },
     "aiUsage": {
       "title": "AI receptionist usage",

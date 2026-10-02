@@ -68,12 +68,41 @@ describe("updateSelf", () => {
   });
 
   it("reports an email already used in the salon as a conflict", async () => {
+    const passwordHash = await bcrypt.hash("pw-12345678", 4);
     const prisma: any = {
-      client: { update: async () => { throw Object.assign(new Error("dup"), { code: "P2002" }); } },
+      client: {
+        findFirst: async () => ({ email: "old@y.z", passwordHash }),
+        update: async () => { throw Object.assign(new Error("dup"), { code: "P2002" }); },
+      },
     };
-    await expect(new ClientsService(prisma).updateSelf("t1", "c1", { email: "x@y.z" })).rejects.toThrow(
-      ConflictException,
+    await expect(
+      new ClientsService(prisma).updateSelf("t1", "c1", { email: "x@y.z", currentPassword: "pw-12345678" }),
+    ).rejects.toThrow(ConflictException);
+  });
+
+  // The email is what the client signs in with and where a reset link goes:
+  // a borrowed session must not be enough to move the account elsewhere.
+  it("refuses an email change without the current password", async () => {
+    const { service, updates } = await setup();
+    await expect(service.updateSelf("t1", "c1", { email: "new@y.z" })).rejects.toThrow(
+      BadRequestException,
     );
+    await expect(
+      service.updateSelf("t1", "c1", { email: "new@y.z", currentPassword: "wrong" }),
+    ).rejects.toThrow(BadRequestException);
+    expect(updates).toHaveLength(0);
+  });
+
+  it("changes the email with the right password, and never stores the password field", async () => {
+    const { service, updates } = await setup();
+    await service.updateSelf("t1", "c1", { email: " new@y.z ", currentPassword: "old-password-1" });
+    expect(updates[0].data).toEqual({ email: "new@y.z" });
+  });
+
+  it("stores an emptied phone as no phone", async () => {
+    const { service, updates } = await setup();
+    await service.updateSelf("t1", "c1", { phone: "" });
+    expect(updates[0].data).toEqual({ phone: null });
   });
 
   it("does not let a client touch fields the salon owns", () => {

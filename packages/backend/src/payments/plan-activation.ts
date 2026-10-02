@@ -25,6 +25,22 @@ function id(value: string | { id: string } | null | undefined): string | undefin
   return typeof value === 'string' ? value : value.id;
 }
 
+/** An add-on billed as an item of the plan subscription (see AddOnsService.purchase). */
+export function isAddOnItem(item: Stripe.SubscriptionItem | undefined | null): boolean {
+  return item?.metadata?.kind === 'addon';
+}
+
+/**
+ * The item that bills the plan. Add-ons are items of the same subscription
+ * now, so `items.data[0]` is no longer necessarily the plan: reading the
+ * locations, or changing the plan, off an add-on item would bill the wrong
+ * thing.
+ */
+export function planItemOf(subscription: Stripe.Subscription): Stripe.SubscriptionItem | undefined {
+  const items = subscription.items?.data ?? [];
+  return items.find((item) => !isAddOnItem(item));
+}
+
 /** A completed subscription checkout (createCheckoutSession sets the metadata). */
 export function activationFromCheckout(session: Stripe.Checkout.Session): PlanActivation | null {
   if (session.mode !== 'subscription') return null;
@@ -54,7 +70,7 @@ export function activationFromSubscription(subscription: Stripe.Subscription): P
     tenantId,
     plan: plan(subscription.metadata?.plan),
     // The item's quantity is what Stripe bills; metadata can lag behind it.
-    locations: locations(subscription.items?.data?.[0]?.quantity ?? subscription.metadata?.locationCount),
+    locations: locations(planItemOf(subscription)?.quantity ?? subscription.metadata?.locationCount),
     customerId: id(subscription.customer as any),
     subscriptionId: subscription.id,
   };

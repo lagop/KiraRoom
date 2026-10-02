@@ -72,6 +72,7 @@ describe('AddOnsService', () => {
         findFirst: jest.fn().mockResolvedValue(null),
       },
       tenantAddOn: {
+        findUnique: jest.fn().mockResolvedValue(null),
         upsert: jest.fn().mockResolvedValue({ id: 'row-1' }),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },

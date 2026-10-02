@@ -368,52 +368,6 @@ export class StripeService implements OnModuleInit {
   }
 
   /**
-   * P2A-receptionist-v2 H-5: open a Stripe Checkout session for an
-   * add-on purchase. The UI calls this endpoint, then redirects to
-   * `url`. The webhook `customer.subscription.created|updated` with
-   * `metadata.kind === 'addon'` provisions the tenant_add_ons row.
-   *
-   * Metered add-ons (message_bundles) are NOT purchaseable through
-   * this path — they go through a separate top-up flow. The caller
-   * (tenant-addons.controller) branches on `addOn.metered`.
-   */
-  async createAddOnCheckout(args: {
-    tenantId: string;
-    addOnKey: string;
-    addOnName: string;
-    stripePriceId: string;
-    successUrl: string;
-    cancelUrl: string;
-  }): Promise<{ url: string; sessionId: string }> {
-    const { stripe, isEnabled } = await this.getStripeForTenant(args.tenantId);
-    if (!isEnabled) {
-      throw new Error('Stripe is not enabled for this tenant');
-    }
-    const session = await stripe.checkout.sessions.create({
-      mode: 'subscription',
-      line_items: [{ price: args.stripePriceId, quantity: 1 }],
-      success_url: args.successUrl,
-      cancel_url: args.cancelUrl,
-      allow_promotion_codes: true,
-      metadata: {
-        kind: 'addon',
-        tenantId: args.tenantId,
-        addOnKey: args.addOnKey,
-        addOnName: args.addOnName,
-      },
-      subscription_data: {
-        metadata: {
-          kind: 'addon',
-          tenantId: args.tenantId,
-          addOnKey: args.addOnKey,
-          addOnName: args.addOnName,
-        },
-      },
-    });
-    return { url: session.url ?? '', sessionId: session.id };
-  }
-
-  /**
    * Clear tenant cache (useful after updating tenant config)
    */
   clearTenantCache(tenantId: string): void {

@@ -1,292 +1,224 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Settings, User, Mail, Phone, Bell, Shield, LogOut, Save, X, Eye, EyeOff } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Settings, User, Bell, Shield, LogOut, Save, X, Eye, EyeOff, Mail } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
-import apiClient, { removeToken, NotificationPreferences, NotificationChannel } from '@/lib/api';
+import apiClient, { removeToken, MarketingConsentState } from '@/lib/api';
+import {
+  channelEnabled,
+  emailChangeNeedsPassword,
+  NOTIFICATION_TYPES,
+  NotificationChannel,
+  NotificationPrefs,
+  profileChanges,
+  ProfileFields,
+  samePrefs,
+  setChannel,
+} from '@/lib/account-settings';
 
-interface UserData {
-  id: string;
-  firstName: string;
-  lastName: string;
-  email: string;
-  phone?: string;
-  role: string;
-  tenantId?: string;
+/**
+ * The client's account settings on the salon site.
+ *
+ * Everything here is read from and written to the server, and "guardado"
+ * is said only after the server answered. The page used to keep the
+ * language, the time format and "ofertas por email" in localStorage, show a
+ * block of channel toggles that were never sent, and read the profile from
+ * an owner-only route (so it always showed what the browser kept since
+ * sign-in).
+ */
+
+const CHANNELS: ReadonlyArray<{ key: NotificationChannel; title: string; desc: string; short: string }> = [
+  { key: 'inApp', title: 'Notificaciones en la app', desc: 'Avisos dentro de tu cuenta en esta web', short: 'En la app' },
+  { key: 'email', title: 'Notificaciones por email', desc: 'Confirmaciones y recordatorios por email', short: 'Email' },
+  { key: 'sms', title: 'Notificaciones por SMS', desc: 'Recordatorios de citas por SMS', short: 'SMS' },
+  { key: 'whatsapp', title: 'Notificaciones por WhatsApp', desc: 'Confirmaciones y recordatorios por WhatsApp', short: 'WhatsApp' },
+];
+
+type MarketingChoice = 'granted' | 'refused' | null;
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
 }
 
-interface UserSettings {
-  notifications: {
-    email: boolean;
-    sms: boolean;
-    push: boolean;
-    whatsapp: boolean;
-  };
-  preferences: {
-    language: string;
-    timeFormat: string;
-    emailUpdates: boolean;
-  };
-  notificationPreferences?: NotificationPreferences;
-  showAdvancedNotifications?: boolean;
+function formatDate(iso: string | null): string {
+  if (!iso) return '';
+  try {
+    return new Date(iso).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
+  } catch {
+    return '';
+  }
 }
 
 export default function SettingsPage({ params }: { params: { salonName: string } }) {
   const { toast } = useToast();
-  const [loading, setLoading] = useState(false);
-  const [currentUser, setCurrentUser] = useState<UserData | null>(null);
-  const [userSettings, setUserSettings] = useState<UserSettings>({
-    notifications: {
-      email: true,
-      sms: false,
-      push: true,
-      whatsapp: false,
-    },
-    preferences: {
-      language: 'es',
-      timeFormat: '24h',
-      emailUpdates: true,
-    },
-  });
-  const [formData, setFormData] = useState({
-    firstName: '',
-    lastName: '',
-    email: '',
-    phone: '',
-  });
+  const [signedIn, setSignedIn] = useState(false);
+  const [loadingData, setLoadingData] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
+
+  // What the server has. The form is compared with it to know what changed.
+  const [savedProfile, setSavedProfile] = useState<ProfileFields | null>(null);
+  const [formData, setFormData] = useState<ProfileFields>({ firstName: '', lastName: '', email: '', phone: '' });
+  const [emailPassword, setEmailPassword] = useState('');
+
+  const [savedPrefs, setSavedPrefs] = useState<NotificationPrefs | null>(null);
+  const [prefs, setPrefs] = useState<NotificationPrefs>({});
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  const [savedLanguage, setSavedLanguage] = useState<string | null>(null);
+  const [language, setLanguage] = useState('es');
+
+  const [marketing, setMarketing] = useState<MarketingConsentState | null>(null);
+  const [marketingChoice, setMarketingChoice] = useState<MarketingChoice>(null);
+
   const [showPasswordModal, setShowPasswordModal] = useState(false);
-  const [passwordData, setPasswordData] = useState({
-    currentPassword: '',
-    newPassword: '',
-    confirmPassword: '',
-  });
+  const [passwordData, setPasswordData] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [hasPasswordMismatch, setHasPasswordMismatch] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
 
-  // Check if user is already logged in and fetch fresh data from API
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const userStr = localStorage.getItem('user');
-      if (userStr) {
-        const userData = JSON.parse(userStr);
-        
-        // Fetch fresh client data from API to ensure we have the latest info
-        if (userData.id && userData.role === 'client') {
-          apiClient.getClient(userData.id)
-            .then((freshClientData) => {
-              // Update localStorage with fresh data from the database
-              const updatedUser = {
-                ...userData,
-                firstName: freshClientData.firstName,
-                lastName: freshClientData.lastName,
-                email: freshClientData.email,
-                phone: freshClientData.phone,
-                // Ensure tenantId is always present
-                tenantId: freshClientData.tenantId || userData.tenantId,
-              };
-              localStorage.setItem('user', JSON.stringify(updatedUser));
-              setCurrentUser(updatedUser);
-              setFormData({
-                firstName: freshClientData.firstName,
-                lastName: freshClientData.lastName,
-                email: freshClientData.email || '',
-                phone: freshClientData.phone || '',
-              });
-            })
-            .catch((error) => {
-              console.error('Failed to fetch fresh client data:', error);
-              // Fall back to localStorage data if API fails
-              setCurrentUser(userData);
-              setFormData({
-                firstName: userData.firstName,
-                lastName: userData.lastName,
-                email: userData.email,
-                phone: userData.phone || '',
-              });
-            });
-        } else {
-          setCurrentUser(userData);
-          setFormData({
-            firstName: userData.firstName,
-            lastName: userData.lastName,
-            email: userData.email,
-            phone: userData.phone || '',
-          });
-        }
-      }
-    }
-  }, [params.salonName]);
-
-  // Fetch user settings
-  useEffect(() => {
-    if (currentUser) {
-      const fetchUserSettings = async () => {
-        try {
-          setLoading(true);
-          
-          // Try to load notification preferences from backend first
-          let notificationPreferences: NotificationPreferences | undefined;
-          try {
-            const prefsResponse = await apiClient.getClientNotificationPreferences(currentUser.id);
-            // Backend returns { clientId, tenantId, preferences } - extract preferences
-            notificationPreferences = (prefsResponse as any).preferences || prefsResponse;
-          } catch (error) {
-            console.log('No backend preferences found, using defaults');
-          }
-          
-          // Use backend preferences as base, then apply localStorage overrides for non-preference settings
-          // This ensures we always have the latest preferences from the database
-          const defaultSettings: UserSettings = {
-            notifications: {
-              email: notificationPreferences ? Object.values(notificationPreferences).some(p => p && typeof p === 'object' && p.email === true) : true,
-              sms: notificationPreferences ? Object.values(notificationPreferences).some(p => p && typeof p === 'object' && p.sms === true) : false,
-              push: notificationPreferences ? Object.values(notificationPreferences).some(p => p && typeof p === 'object' && p.inApp === true) : true,
-              whatsapp: notificationPreferences ? Object.values(notificationPreferences).some(p => p && typeof p === 'object' && p.whatsapp === true) : false,
-            },
-            preferences: {
-              language: 'es',
-              timeFormat: '24h',
-              emailUpdates: true,
-            },
-            notificationPreferences: notificationPreferences || {
-              appointment_confirmed: { email: true, sms: true, whatsapp: false, inApp: true },
-              appointment_cancelled: { email: true, sms: true, whatsapp: false, inApp: true },
-              appointment_reminder_24h: { email: true, sms: true, whatsapp: false, inApp: true },
-              appointment_reminder_1h: { email: true, sms: true, whatsapp: false, inApp: true },
-              appointment_completed: { email: true, sms: false, whatsapp: false, inApp: true },
-              review_request: { email: true, sms: false, whatsapp: false, inApp: true },
-              promotion: { email: true, sms: false, whatsapp: false, inApp: true },
-              news: { email: true, sms: false, whatsapp: false, inApp: true },
-              special_offer: { email: true, sms: false, whatsapp: false, inApp: true },
-            },
-          };
-          
-          // Only load other settings from localStorage (not notification preferences)
-          if (typeof window !== 'undefined') {
-            const savedSettings = localStorage.getItem('userSettings');
-            if (savedSettings) {
-              const parsedSettings = JSON.parse(savedSettings);
-              setUserSettings({
-                ...defaultSettings,
-                preferences: parsedSettings.preferences || defaultSettings.preferences,
-              });
-            } else {
-              setUserSettings(defaultSettings);
-            }
-          } else {
-            setUserSettings(defaultSettings);
-          }
-        } catch (error) {
-          console.error('Error fetching user settings:', error);
-          toast({
-            title: 'Error',
-            description: 'No se pudo cargar la configuración',
-            variant: 'destructive',
-          });
-        } finally {
-          setLoading(false);
-        }
+  const load = useCallback(async () => {
+    setLoadingData(true);
+    setLoadError(null);
+    try {
+      const [profile, prefsResponse, consent] = await Promise.all([
+        apiClient.getMyProfile(),
+        apiClient.getClientNotificationPreferences(''),
+        apiClient.getMyMarketingConsent(),
+      ]);
+      const fields: ProfileFields = {
+        firstName: profile.firstName ?? '',
+        lastName: profile.lastName ?? '',
+        email: profile.email ?? '',
+        phone: profile.phone ?? '',
       };
-
-      fetchUserSettings();
+      setSavedProfile(fields);
+      setFormData(fields);
+      setSavedLanguage(profile.preferredLanguage || 'es');
+      setLanguage(profile.preferredLanguage || 'es');
+      // { clientId, tenantId, preferences } when stored; { preferences } (the defaults) otherwise.
+      const serverPrefs = ((prefsResponse as any)?.preferences ?? {}) as NotificationPrefs;
+      setSavedPrefs(serverPrefs);
+      setPrefs(serverPrefs);
+      setMarketing(consent);
+      setMarketingChoice(consent.status === 'none' ? null : consent.status);
+      // The header reads the signed-in user from here: keep it current.
+      try {
+        const cached = JSON.parse(localStorage.getItem('user') || '{}');
+        localStorage.setItem('user', JSON.stringify({ ...cached, ...fields, tenantId: profile.tenantId }));
+      } catch {
+        /* the cache is a convenience */
+      }
+    } catch (error) {
+      console.error('Error loading account settings:', error);
+      // No defaults in its place: saving them would overwrite real settings.
+      setLoadError(errorMessage(error, 'No se pudo cargar tu configuración'));
+    } finally {
+      setLoadingData(false);
     }
-  }, [currentUser]);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!localStorage.getItem('user')) return;
+    // Settings this page used to keep in the browser only.
+    localStorage.removeItem('userSettings');
+    setSignedIn(true);
+    load();
+  }, [load, params.salonName]);
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
-
-    try {
-      if (!currentUser?.id) {
-        throw new Error('No user ID found');
-      }
-      
-      // Update client profile in the database via API (including language preference)
-      const updatedClient = await apiClient.updateMyProfile(currentUser.id, {
-        firstName: formData.firstName,
-        lastName: formData.lastName,
-        email: formData.email,
-        phone: formData.phone,
-        preferredLanguage: userSettings.preferences.language,
-      });
-      
-      // Update localStorage with fresh data from the database
-      if (typeof window !== 'undefined' && currentUser) {
-        const updatedUser: UserData = {
-          ...currentUser,
-          firstName: updatedClient.firstName,
-          lastName: updatedClient.lastName,
-          email: updatedClient.email,
-          phone: updatedClient.phone,
-        };
-        localStorage.setItem('user', JSON.stringify(updatedUser));
-        setCurrentUser(updatedUser);
-      }
-
+    if (!savedProfile) return;
+    const changes = profileChanges(savedProfile, formData);
+    if (Object.keys(changes).length === 0) {
+      toast({ title: 'Sin cambios', description: 'No hay nada nuevo que guardar' });
+      return;
+    }
+    const needsPassword = emailChangeNeedsPassword(savedProfile, formData);
+    if (needsPassword && !emailPassword) {
       toast({
-        title: 'Perfil actualizado',
-        description: 'Tu información personal ha sido guardada',
+        title: 'Falta tu contraseña',
+        description: 'Para cambiar el email con el que entras escribe tu contraseña actual',
+        variant: 'destructive',
       });
+      return;
+    }
+    setSavingProfile(true);
+    try {
+      const updated = await apiClient.updateMyProfile('', {
+        ...changes,
+        ...(needsPassword ? { currentPassword: emailPassword } : {}),
+      });
+      const fields: ProfileFields = {
+        firstName: updated.firstName ?? '',
+        lastName: updated.lastName ?? '',
+        email: updated.email ?? '',
+        phone: updated.phone ?? '',
+      };
+      setSavedProfile(fields);
+      setFormData(fields);
+      setEmailPassword('');
+      try {
+        const cached = JSON.parse(localStorage.getItem('user') || '{}');
+        localStorage.setItem('user', JSON.stringify({ ...cached, ...fields }));
+      } catch {
+        /* the cache is a convenience */
+      }
+      toast({ title: 'Perfil guardado', description: 'Tus datos se han actualizado' });
     } catch (error) {
       console.error('Error updating profile:', error);
       toast({
-        title: 'Error',
-        description: 'No se pudo actualizar el perfil',
+        title: 'No se guardó el perfil',
+        description: errorMessage(error, 'No se pudo actualizar el perfil'),
         variant: 'destructive',
       });
     } finally {
-      setLoading(false);
+      setSavingProfile(false);
     }
   };
 
   const handleSaveSettings = async () => {
-    setLoading(true);
-
+    if (!savedPrefs || savedLanguage === null) return;
+    setSavingSettings(true);
+    const done: string[] = [];
     try {
-      // Always save notification preferences to backend if user is logged in
-      if (currentUser?.id && currentUser?.tenantId) {
-        // Ensure we have notification preferences to save
-        const prefsToSave = userSettings.notificationPreferences || {
-          appointment_confirmed: { email: true, sms: true, whatsapp: false, inApp: true },
-          appointment_cancelled: { email: true, sms: true, whatsapp: false, inApp: true },
-          appointment_reminder_24h: { email: true, sms: true, whatsapp: false, inApp: true },
-          appointment_reminder_1h: { email: true, sms: true, whatsapp: false, inApp: true },
-          appointment_completed: { email: true, sms: false, whatsapp: false, inApp: true },
-          review_request: { email: true, sms: false, whatsapp: false, inApp: true },
-          promotion: { email: true, sms: false, whatsapp: false, inApp: true },
-          news: { email: true, sms: false, whatsapp: false, inApp: true },
-          special_offer: { email: true, sms: false, whatsapp: false, inApp: true },
-        };
-        
-        // A failure propagates to the error toast below. It used to be
-        // logged here and followed by "Configuración guardada".
-        await apiClient.updateClientNotificationPreferences(
-          currentUser.id,
-          prefsToSave
-        );
+      if (!samePrefs(savedPrefs, prefs)) {
+        const response = await apiClient.updateClientNotificationPreferences('', prefs);
+        const stored = ((response as any)?.preferences ?? prefs) as NotificationPrefs;
+        setSavedPrefs(stored);
+        setPrefs(stored);
+        done.push('notificaciones');
       }
-      
-      // Save settings to localStorage as cache (for non-notification settings)
-      if (typeof window !== 'undefined') {
-        const settingsToSave = {
-          preferences: userSettings.preferences,
-        };
-        localStorage.setItem('userSettings', JSON.stringify(settingsToSave));
+      if (language !== savedLanguage) {
+        const updated = await apiClient.updateMyProfile('', { preferredLanguage: language });
+        setSavedLanguage(updated.preferredLanguage ?? language);
+        done.push('idioma');
       }
-      toast({
-        title: 'Configuración guardada',
-        description: 'Tu configuración ha sido actualizada',
-      });
+      if (marketingChoice && marketingChoice !== marketing?.status) {
+        const state = await apiClient.setMyMarketingConsent(marketingChoice === 'granted');
+        setMarketing(state);
+        setMarketingChoice(state.status === 'none' ? null : state.status);
+        done.push('comunicaciones comerciales');
+      }
+      toast(
+        done.length > 0
+          ? { title: 'Configuración guardada', description: `Guardado: ${done.join(', ')}` }
+          : { title: 'Sin cambios', description: 'No hay nada nuevo que guardar' },
+      );
     } catch (error) {
       console.error('Error saving settings:', error);
       toast({
-        title: 'Error',
-        description: 'No se pudo guardar la configuración',
+        title: 'No se guardó todo',
+        description:
+          (done.length > 0 ? `Guardado: ${done.join(', ')}. ` : '') +
+          errorMessage(error, 'No se pudo guardar la configuración'),
         variant: 'destructive',
       });
     } finally {
-      setLoading(false);
+      setSavingSettings(false);
     }
   };
 
@@ -300,62 +232,52 @@ export default function SettingsPage({ params }: { params: { salonName: string }
     if (typeof window !== 'undefined') {
       localStorage.removeItem('user');
     }
-    setCurrentUser(null);
     window.location.href = `/${params.salonName}`;
+  };
+
+  const closePasswordModal = () => {
+    setShowPasswordModal(false);
+    setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
+    setShowPassword(false);
+    setShowConfirmPassword(false);
+    setHasPasswordMismatch(false);
   };
 
   const handleChangePassword = async () => {
     if (passwordData.newPassword !== passwordData.confirmPassword) {
       setHasPasswordMismatch(true);
-      toast({
-        title: 'Error',
-        description: 'Las contraseñas no coinciden',
-        variant: 'destructive',
-      });
+      toast({ title: 'Error', description: 'Las contraseñas no coinciden', variant: 'destructive' });
       return;
     }
-
     if (passwordData.newPassword.length < 8) {
-      toast({
-        title: 'Error',
-        description: 'La contraseña debe tener al menos 8 caracteres',
-        variant: 'destructive',
-      });
+      toast({ title: 'Error', description: 'La contraseña debe tener al menos 8 caracteres', variant: 'destructive' });
       return;
     }
-
-    setLoading(true);
+    setChangingPassword(true);
     try {
-      // This used to show the toast below without calling anything.
-      await apiClient.changeMyPassword(
-        passwordData.currentPassword,
-        passwordData.newPassword,
-      );
-      toast({
-        title: 'Contraseña actualizada',
-        description: 'Tu contraseña ha sido cambiada exitosamente',
-      });
-      setShowPasswordModal(false);
-      setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
-      setHasPasswordMismatch(false);
+      await apiClient.changeMyPassword(passwordData.currentPassword, passwordData.newPassword);
+      toast({ title: 'Contraseña actualizada', description: 'Tu contraseña ha sido cambiada' });
+      closePasswordModal();
     } catch (error) {
       console.error('Error changing password:', error);
       toast({
         title: 'Error',
-        description:
-          error instanceof Error && error.message
-            ? error.message
-            : 'No se pudo cambiar la contraseña',
+        description: errorMessage(error, 'No se pudo cambiar la contraseña'),
         variant: 'destructive',
       });
     } finally {
-      setLoading(false);
+      setChangingPassword(false);
     }
   };
 
-  if (!currentUser) {
+  if (!signedIn) {
     return null;
   }
+
+  const emailChanging = !!savedProfile && emailChangeNeedsPassword(savedProfile, formData);
+  const settingsReady = !!savedPrefs && savedLanguage !== null && !!marketing;
+  const inputClass =
+    'w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500';
 
   return (
     <>
@@ -367,574 +289,322 @@ export default function SettingsPage({ params }: { params: { salonName: string }
           </h1>
         </div>
 
-        <div className="space-y-8">
-          {/* Profile Settings */}
-          <section>
-            <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center space-x-2">
-              <User className="w-5 h-5 text-purple-600" />
-              <span>Información Personal</span>
-            </h2>
+        {loadingData && <p className="text-sm text-gray-600">Cargando tu configuración…</p>}
 
-            <form onSubmit={handleSaveProfile} className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {loadError && !loadingData && (
+          <div className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+            <p className="font-medium">No se pudo cargar tu configuración.</p>
+            <p className="mt-1">{loadError}</p>
+            <button
+              type="button"
+              onClick={load}
+              className="mt-3 px-3 py-1 text-sm bg-red-600 text-white rounded hover:bg-red-700"
+            >
+              Reintentar
+            </button>
+          </div>
+        )}
+
+        {!loadingData && !loadError && (
+          <div className="space-y-8">
+            {/* Profile */}
+            <section>
+              <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center space-x-2">
+                <User className="w-5 h-5 text-purple-600" />
+                <span>Información personal</span>
+              </h2>
+
+              <form onSubmit={handleSaveProfile} className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Nombre</label>
+                    <input
+                      type="text"
+                      value={formData.firstName}
+                      onChange={(e) => setFormData((prev) => ({ ...prev, firstName: e.target.value }))}
+                      className={inputClass}
+                      maxLength={100}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Apellidos</label>
+                    <input
+                      type="text"
+                      value={formData.lastName}
+                      onChange={(e) => setFormData((prev) => ({ ...prev, lastName: e.target.value }))}
+                      className={inputClass}
+                      maxLength={100}
+                    />
+                  </div>
+                </div>
+
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Nombre
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
                   <input
-                    type="text"
-                    value={formData.firstName}
-                    onChange={(e) => setFormData(prev => ({ ...prev, firstName: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    type="email"
+                    value={formData.email}
+                    onChange={(e) => setFormData((prev) => ({ ...prev, email: e.target.value }))}
+                    className={inputClass}
                     required
+                  />
+                  <p className="mt-1 text-xs text-gray-500">Es el email con el que entras en tu cuenta.</p>
+                </div>
+
+                {emailChanging && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Tu contraseña actual (para cambiar el email)
+                    </label>
+                    <input
+                      type="password"
+                      autoComplete="current-password"
+                      value={emailPassword}
+                      onChange={(e) => setEmailPassword(e.target.value)}
+                      className={inputClass}
+                      required
+                    />
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Teléfono</label>
+                  <input
+                    type="tel"
+                    value={formData.phone}
+                    onChange={(e) => setFormData((prev) => ({ ...prev, phone: e.target.value }))}
+                    className={inputClass}
+                    maxLength={30}
+                    placeholder="+34 600 000 000"
                   />
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Apellido
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.lastName}
-                    onChange={(e) => setFormData(prev => ({ ...prev, lastName: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    required
-                  />
+                <div className="flex justify-end pt-4">
+                  <button
+                    type="submit"
+                    disabled={savingProfile}
+                    className="flex items-center space-x-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50"
+                  >
+                    <Save className="w-4 h-4" />
+                    <span>{savingProfile ? 'Guardando...' : 'Guardar perfil'}</span>
+                  </button>
                 </div>
-              </div>
+              </form>
+            </section>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Email
-                </label>
-                <input
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                  required
-                />
-              </div>
+            {/* Notification channels */}
+            <section>
+              <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center space-x-2">
+                <Bell className="w-5 h-5 text-purple-600" />
+                <span>Notificaciones</span>
+              </h2>
+              <p className="text-sm text-gray-600 mb-4">
+                Elige por dónde quieres recibir los avisos del salón sobre tus citas.
+              </p>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Teléfono
-                </label>
-                <input
-                  type="tel"
-                  value={formData.phone}
-                  onChange={(e) => setFormData(prev => ({ ...prev, phone: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                  placeholder="+34 123 456 789"
-                />
-              </div>
-
-              <div className="flex justify-end pt-4">
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="flex items-center space-x-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50"
-                >
-                  <Save className="w-4 h-4" />
-                  <span>{loading ? 'Guardando...' : 'Guardar'}</span>
-                </button>
-              </div>
-            </form>
-          </section>
-
-          {/* Notification Settings */}
-          <section>
-            <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center space-x-2">
-              <Bell className="w-5 h-5 text-purple-600" />
-              <span>Notificaciones</span>
-            </h2>
-
-            <div className="space-y-4">
-              <div className="flex justify-between items-center p-3 border border-gray-200 rounded-lg">
-                <div>
-                  <h3 className="font-medium text-gray-900">Notificaciones por Email</h3>
-                  <p className="text-sm text-gray-600">Recibe confirmaciones y recordatorios por email</p>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={userSettings.notifications.email}
-                  onChange={(e) => setUserSettings(prev => ({
-                    ...prev,
-                    notifications: {
-                      ...prev.notifications,
-                      email: e.target.checked,
-                    },
-                  }))}
-                  className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"
-                />
-              </div>
-
-              <div className="flex justify-between items-center p-3 border border-gray-200 rounded-lg">
-                <div>
-                  <h3 className="font-medium text-gray-900">Notificaciones por SMS</h3>
-                  <p className="text-sm text-gray-600">Recibe recordatorios de citas por SMS</p>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={userSettings.notifications.sms}
-                  onChange={(e) => setUserSettings(prev => ({
-                    ...prev,
-                    notifications: {
-                      ...prev.notifications,
-                      sms: e.target.checked,
-                    },
-                  }))}
-                  className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"
-                />
-              </div>
-
-              <div className="flex justify-between items-center p-3 border border-gray-200 rounded-lg">
-                <div>
-                  <h3 className="font-medium text-gray-900">Notificaciones Push</h3>
-                  <p className="text-sm text-gray-600">Recibe notificaciones push en tu dispositivo</p>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={userSettings.notifications.push}
-                  onChange={(e) => setUserSettings(prev => ({
-                    ...prev,
-                    notifications: {
-                      ...prev.notifications,
-                      push: e.target.checked,
-                    },
-                  }))}
-                  className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"
-                />
-              </div>
-
-              <div className="flex justify-between items-center p-3 border border-gray-200 rounded-lg">
-                <div>
-                  <h3 className="font-medium text-gray-900">Notificaciones por WhatsApp</h3>
-                  <p className="text-sm text-gray-600">Recibe confirmaciones y recordatorios por WhatsApp</p>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={userSettings.notifications.whatsapp}
-                  onChange={(e) => setUserSettings(prev => ({
-                    ...prev,
-                    notifications: {
-                      ...prev.notifications,
-                      whatsapp: e.target.checked,
-                    },
-                  }))}
-                  className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"
-                />
-              </div>
-            </div>
-          </section>
-
-          {/* Simple Channel-based Notification Settings */}
-          <section>
-            <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center space-x-2">
-              <Bell className="w-5 h-5 text-purple-600" />
-              <span>Canales de Notificación</span>
-            </h2>
-            <p className="text-sm text-gray-600 mb-4">
-              Activa o desactiva los canales por los que quieres recibir notificaciones. Esto cambiará la configuración detallada automáticamente.
-            </p>
-
-            <div className="space-y-4">
-              <div className="flex justify-between items-center p-3 border border-gray-200 rounded-lg">
-                <div>
-                  <h3 className="font-medium text-gray-900">Notificaciones en la App</h3>
-                  <p className="text-sm text-gray-600">Recibe notificaciones dentro de la aplicación</p>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={userSettings.notifications.push}
-                  onChange={(e) => {
-                    const enabled = e.target.checked;
-                    // Update simple toggle
-                    setUserSettings(prev => ({
-                      ...prev,
-                      notifications: { ...prev.notifications, push: enabled },
-                    }));
-                    // Update all notification types for inApp channel
-                    const notificationTypes = [
-                      'appointment_confirmed', 'appointment_cancelled', 
-                      'appointment_reminder_24h', 'appointment_reminder_1h',
-                      'appointment_completed', 'review_request', 
-                      'promotion', 'news', 'special_offer'
-                    ];
-                    setUserSettings(prev => {
-                      const updatedPrefs = { ...prev.notificationPreferences };
-                      notificationTypes.forEach(type => {
-                        updatedPrefs[type] = {
-                          ...(updatedPrefs[type] || { inApp: true, email: true, sms: true, whatsapp: true }),
-                          inApp: enabled,
-                        };
-                      });
-                      return { ...prev, notificationPreferences: updatedPrefs };
-                    });
-                  }}
-                  className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"
-                />
-              </div>
-
-              <div className="flex justify-between items-center p-3 border border-gray-200 rounded-lg">
-                <div>
-                  <h3 className="font-medium text-gray-900">Notificaciones por Email</h3>
-                  <p className="text-sm text-gray-600">Recibe confirmaciones y recordatorios por email</p>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={userSettings.notifications.email}
-                  onChange={(e) => {
-                    const enabled = e.target.checked;
-                    // Update simple toggle
-                    setUserSettings(prev => ({
-                      ...prev,
-                      notifications: { ...prev.notifications, email: enabled },
-                    }));
-                    // Update all notification types for email channel
-                    const notificationTypes = [
-                      'appointment_confirmed', 'appointment_cancelled', 
-                      'appointment_reminder_24h', 'appointment_reminder_1h',
-                      'appointment_completed', 'review_request', 
-                      'promotion', 'news', 'special_offer'
-                    ];
-                    setUserSettings(prev => {
-                      const updatedPrefs = { ...prev.notificationPreferences };
-                      notificationTypes.forEach(type => {
-                        updatedPrefs[type] = {
-                          ...(updatedPrefs[type] || { inApp: true, email: true, sms: true, whatsapp: true }),
-                          email: enabled,
-                        };
-                      });
-                      return { ...prev, notificationPreferences: updatedPrefs };
-                    });
-                  }}
-                  className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"
-                />
-              </div>
-
-              <div className="flex justify-between items-center p-3 border border-gray-200 rounded-lg">
-                <div>
-                  <h3 className="font-medium text-gray-900">Notificaciones por SMS</h3>
-                  <p className="text-sm text-gray-600">Recibe recordatorios de citas por SMS</p>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={userSettings.notifications.sms}
-                  onChange={(e) => {
-                    const enabled = e.target.checked;
-                    // Update simple toggle
-                    setUserSettings(prev => ({
-                      ...prev,
-                      notifications: { ...prev.notifications, sms: enabled },
-                    }));
-                    // Update all notification types for sms channel
-                    const notificationTypes = [
-                      'appointment_confirmed', 'appointment_cancelled', 
-                      'appointment_reminder_24h', 'appointment_reminder_1h',
-                      'appointment_completed', 'review_request', 
-                      'promotion', 'news', 'special_offer'
-                    ];
-                    setUserSettings(prev => {
-                      const updatedPrefs = { ...prev.notificationPreferences };
-                      notificationTypes.forEach(type => {
-                        updatedPrefs[type] = {
-                          ...(updatedPrefs[type] || { inApp: true, email: true, sms: true, whatsapp: true }),
-                          sms: enabled,
-                        };
-                      });
-                      return { ...prev, notificationPreferences: updatedPrefs };
-                    });
-                  }}
-                  className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"
-                />
-              </div>
-
-              <div className="flex justify-between items-center p-3 border border-gray-200 rounded-lg">
-                <div>
-                  <h3 className="font-medium text-gray-900">Notificaciones por WhatsApp</h3>
-                  <p className="text-sm text-gray-600">Recibe confirmaciones y recordatorios por WhatsApp</p>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={userSettings.notifications.whatsapp}
-                  onChange={(e) => {
-                    const enabled = e.target.checked;
-                    // Update simple toggle
-                    setUserSettings(prev => ({
-                      ...prev,
-                      notifications: { ...prev.notifications, whatsapp: enabled },
-                    }));
-                    // Update all notification types for whatsapp channel
-                    const notificationTypes = [
-                      'appointment_confirmed', 'appointment_cancelled', 
-                      'appointment_reminder_24h', 'appointment_reminder_1h',
-                      'appointment_completed', 'review_request', 
-                      'promotion', 'news', 'special_offer'
-                    ];
-                    setUserSettings(prev => {
-                      const updatedPrefs = { ...prev.notificationPreferences };
-                      notificationTypes.forEach(type => {
-                        updatedPrefs[type] = {
-                          ...(updatedPrefs[type] || { inApp: true, email: true, sms: true, whatsapp: true }),
-                          whatsapp: enabled,
-                        };
-                      });
-                      return { ...prev, notificationPreferences: updatedPrefs };
-                    });
-                  }}
-                  className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"
-                />
-              </div>
-            </div>
-
-            {/* Collapsible Advanced Settings */}
-            <div className="mt-6">
-              <button
-                type="button"
-                onClick={() => setUserSettings(prev => ({ ...prev, showAdvancedNotifications: !prev.showAdvancedNotifications }))}
-                className="flex items-center space-x-2 text-purple-600 hover:text-purple-800 text-sm font-medium"
-              >
-                <span>{userSettings.showAdvancedNotifications ? '▼' : '▶'}</span>
-                <span>Configuración avanzada</span>
-              </button>
-              
-              {userSettings.showAdvancedNotifications && (
-                <div className="mt-4 space-y-4">
-                  <p className="text-sm text-gray-600">
-                    Personaliza cada tipo de notificación individualmente
-                  </p>
-                  
-                  {[
-                    { key: 'appointment_confirmed', label: 'Cita Confirmada' },
-                    { key: 'appointment_cancelled', label: 'Cita Cancelada' },
-                    { key: 'appointment_reminder_24h', label: 'Recordatorio 24h antes' },
-                    { key: 'appointment_reminder_1h', label: 'Recordatorio 1h antes' },
-                    { key: 'appointment_completed', label: 'Cita Completada' },
-                    { key: 'review_request', label: 'Solicitud de Valoración' },
-                    { key: 'promotion', label: 'Promociones' },
-                    { key: 'news', label: 'Novedades' },
-                    { key: 'special_offer', label: 'Ofertas Especiales' },
-                  ].map((notificationType) => (
-                    <div key={notificationType.key} className="border border-gray-200 rounded-lg p-4">
-                      <h3 className="font-medium text-gray-900 mb-3">{notificationType.label}</h3>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                        {(['inApp', 'email', 'sms', 'whatsapp'] as const).map((channel) => (
-                          <label
-                            key={channel}
-                            className="flex items-center space-x-2 cursor-pointer"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={userSettings.notificationPreferences?.[notificationType.key]?.[channel] ?? true}
-                              onChange={(e) => {
-                                const currentPrefs = userSettings.notificationPreferences || {};
-                                const typePrefs = currentPrefs[notificationType.key] || { inApp: true, email: true, sms: true, whatsapp: true };
-                                setUserSettings(prev => ({
-                                  ...prev,
-                                  notificationPreferences: {
-                                    ...prev.notificationPreferences,
-                                    [notificationType.key]: {
-                                      ...typePrefs,
-                                      [channel]: e.target.checked,
-                                    },
-                                  },
-                                }));
-                              }}
-                              className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"
-                            />
-                            <span className="text-sm text-gray-700 capitalize">
-                              {channel === 'inApp' ? 'En app' : channel}
-                            </span>
-                          </label>
-                        ))}
-                      </div>
+              <div className="space-y-4">
+                {CHANNELS.map((channel) => (
+                  <label
+                    key={channel.key}
+                    className="flex justify-between items-center p-3 border border-gray-200 rounded-lg cursor-pointer"
+                  >
+                    <div>
+                      <h3 className="font-medium text-gray-900">{channel.title}</h3>
+                      <p className="text-sm text-gray-600">{channel.desc}</p>
                     </div>
-                  ))}
+                    <input
+                      type="checkbox"
+                      checked={channelEnabled(prefs, channel.key)}
+                      onChange={(e) => setPrefs((prev) => setChannel(prev, channel.key, e.target.checked))}
+                      className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                    />
+                  </label>
+                ))}
+              </div>
+
+              <div className="mt-6">
+                <button
+                  type="button"
+                  onClick={() => setShowAdvanced((v) => !v)}
+                  className="flex items-center space-x-2 text-purple-600 hover:text-purple-800 text-sm font-medium"
+                >
+                  <span>{showAdvanced ? '▼' : '▶'}</span>
+                  <span>Configuración avanzada</span>
+                </button>
+
+                {showAdvanced && (
+                  <div className="mt-4 space-y-4">
+                    <p className="text-sm text-gray-600">Personaliza cada tipo de aviso</p>
+                    {NOTIFICATION_TYPES.map((type) => (
+                      <div key={type.key} className="border border-gray-200 rounded-lg p-4">
+                        <h3 className="font-medium text-gray-900 mb-3">{type.label}</h3>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                          {CHANNELS.map((channel) => (
+                            <label key={channel.key} className="flex items-center space-x-2 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={prefs[type.key]?.[channel.key] === true}
+                                onChange={(e) =>
+                                  setPrefs((prev) => ({
+                                    ...prev,
+                                    [type.key]: { ...(prev[type.key] ?? {}), [channel.key]: e.target.checked },
+                                  }))
+                                }
+                                className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                              />
+                              <span className="text-sm text-gray-700">{channel.short}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </section>
+
+            {/* Commercial communications: a recorded consent, not a checkbox kept in the browser */}
+            <section>
+              <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center space-x-2">
+                <Mail className="w-5 h-5 text-purple-600" />
+                <span>Promociones y novedades</span>
+              </h2>
+              {marketing && (
+                <div className="space-y-3">
+                  <p className="text-sm text-gray-700">{marketing.text}</p>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:gap-6">
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="marketing"
+                        checked={marketingChoice === 'granted'}
+                        onChange={() => setMarketingChoice('granted')}
+                        className="border-gray-300 text-purple-600 focus:ring-purple-500"
+                      />
+                      <span className="text-sm text-gray-800">Sí, quiero recibirlas</span>
+                    </label>
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="marketing"
+                        checked={marketingChoice === 'refused'}
+                        onChange={() => setMarketingChoice('refused')}
+                        className="border-gray-300 text-purple-600 focus:ring-purple-500"
+                      />
+                      <span className="text-sm text-gray-800">No, no quiero recibirlas</span>
+                    </label>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    {marketing.status === 'granted' &&
+                      `Aceptaste el ${formatDate(marketing.decidedAt)}. Puedes retirarlo cuando quieras.`}
+                    {marketing.status === 'refused' &&
+                      `Indicaste el ${formatDate(marketing.decidedAt)} que no quieres recibirlas; el salón no te las enviará.`}
+                    {marketing.status === 'none' &&
+                      'Aún no lo has indicado. Como cliente, el salón puede enviarte ofertas por email hasta que digas que no.'}
+                  </p>
                 </div>
               )}
-            </div>
-          </section>
+            </section>
 
-          {/* Preferences */}
-          <section>
-            <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center space-x-2">
-              <Settings className="w-5 h-5 text-purple-600" />
-              <span>Preferencias</span>
-            </h2>
-
-            <div className="space-y-4">
+            {/* Preferences */}
+            <section>
+              <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center space-x-2">
+                <Settings className="w-5 h-5 text-purple-600" />
+                <span>Preferencias</span>
+              </h2>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Idioma
-                </label>
-                <select
-                  value={userSettings.preferences.language}
-                  onChange={(e) => setUserSettings(prev => ({
-                    ...prev,
-                    preferences: {
-                      ...prev.preferences,
-                      language: e.target.value,
-                    },
-                  }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                >
+                <label className="block text-sm font-medium text-gray-700 mb-1">Idioma de los avisos</label>
+                <select value={language} onChange={(e) => setLanguage(e.target.value)} className={inputClass}>
                   <option value="es">Español</option>
                   <option value="en">English</option>
                 </select>
               </div>
+            </section>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Formato de Hora
-                </label>
-                <select
-                  value={userSettings.preferences.timeFormat}
-                  onChange={(e) => setUserSettings(prev => ({
-                    ...prev,
-                    preferences: {
-                      ...prev.preferences,
-                      timeFormat: e.target.value,
-                    },
-                  }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                >
-                  <option value="24h">24 Horas</option>
-                </select>
-              </div>
-
-              <div className="flex items-center space-x-2">
-                <input
-                  type="checkbox"
-                  checked={userSettings.preferences.emailUpdates}
-                  onChange={(e) => setUserSettings(prev => ({
-                    ...prev,
-                    preferences: {
-                      ...prev.preferences,
-                      emailUpdates: e.target.checked,
-                    },
-                  }))}
-                  className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"
-                />
-                <label className="text-sm text-gray-700">
-                  Recibe actualizaciones y ofertas especiales por email
-                </label>
-              </div>
+            <div className="flex justify-end">
+              <button
+                onClick={handleSaveSettings}
+                disabled={savingSettings || !settingsReady}
+                className="flex items-center space-x-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50"
+              >
+                <Save className="w-4 h-4" />
+                <span>{savingSettings ? 'Guardando...' : 'Guardar configuración'}</span>
+              </button>
             </div>
-          </section>
 
-          {/* Security */}
-          <section>
-            <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center space-x-2">
-              <Shield className="w-5 h-5 text-purple-600" />
-              <span>Seguridad</span>
-            </h2>
-
-            <div className="space-y-4">
+            {/* Security */}
+            <section>
+              <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center space-x-2">
+                <Shield className="w-5 h-5 text-purple-600" />
+                <span>Seguridad</span>
+              </h2>
               <div className="p-3 border border-gray-200 rounded-lg">
-                <h3 className="font-medium text-gray-900 mb-1">Cambiar Contraseña</h3>
+                <h3 className="font-medium text-gray-900 mb-1">Cambiar contraseña</h3>
                 <p className="text-sm text-gray-600 mb-2">Actualiza tu contraseña regularmente para mantener la seguridad</p>
-                <button 
+                <button
                   onClick={() => setShowPasswordModal(true)}
                   className="px-3 py-1 text-sm bg-purple-600 text-white rounded hover:bg-purple-700 transition-colors"
                 >
-                  Cambiar Contraseña
+                  Cambiar contraseña
                 </button>
               </div>
-            </div>
-          </section>
+            </section>
 
-          {/* Danger Zone */}
-          <section>
-            <h2 className="text-xl font-semibold text-red-600 mb-4">Zona de Riesgo</h2>
-
-            <div className="space-y-4">
+            {/* Session */}
+            <section>
+              <h2 className="text-xl font-semibold text-red-600 mb-4">Sesión</h2>
               <div className="p-3 border border-red-200 bg-red-50 rounded-lg">
-                <h3 className="font-medium text-red-900 mb-1">Cerrar Sesión</h3>
-                <p className="text-sm text-red-700 mb-2">Terminará la sesión actual y redirigirá al inicio de sesión</p>
+                <h3 className="font-medium text-red-900 mb-1">Cerrar sesión</h3>
+                <p className="text-sm text-red-700 mb-2">Terminará la sesión actual y volverás a la web del salón</p>
                 <button
                   onClick={handleLogout}
                   className="px-3 py-1 text-sm bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
                 >
                   <LogOut className="w-4 h-4 inline mr-1" />
-                  Cerrar Sesión
+                  Cerrar sesión
                 </button>
               </div>
-            </div>
-          </section>
-
-          <div className="flex justify-end pt-8">
-            <button
-              onClick={handleSaveSettings}
-              disabled={loading}
-              className="flex items-center space-x-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50"
-            >
-              <Save className="w-4 h-4" />
-              <span>{loading ? 'Guardando...' : 'Guardar Configuración'}</span>
-            </button>
+            </section>
           </div>
-        </div>
+        )}
       </div>
 
-      {/* Password Change Modal */}
       {showPasswordModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-md mx-4">
             <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold text-gray-900">Cambiar Contraseña</h2>
-              <button
-                onClick={() => {
-                  setShowPasswordModal(false);
-                  setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
-                  setShowPassword(false);
-                  setShowConfirmPassword(false);
-                  setHasPasswordMismatch(false);
-                }}
-                className="text-gray-400 hover:text-gray-600"
-              >
+              <h2 className="text-xl font-semibold text-gray-900">Cambiar contraseña</h2>
+              <button onClick={closePasswordModal} className="text-gray-400 hover:text-gray-600">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Contraseña actual
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Contraseña actual</label>
                 <input
                   type="password"
                   autoComplete="current-password"
                   value={passwordData.currentPassword}
-                  onChange={(e) =>
-                    setPasswordData(prev => ({ ...prev, currentPassword: e.target.value }))
-                  }
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  onChange={(e) => setPasswordData((prev) => ({ ...prev, currentPassword: e.target.value }))}
+                  className={inputClass}
                   placeholder="••••••••"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Nueva Contraseña
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nueva contraseña</label>
                 <div className="relative">
                   <input
                     type={showPassword ? 'text' : 'password'}
+                    autoComplete="new-password"
                     value={passwordData.newPassword}
                     onChange={(e) => {
                       const newValue = e.target.value;
-                      setPasswordData(prev => ({ ...prev, newPassword: newValue }));
-                      // Clear mismatch error when passwords match
-                      if (hasPasswordMismatch && passwordData.confirmPassword && newValue === passwordData.confirmPassword) {
-                        setHasPasswordMismatch(false);
-                      }
+                      setPasswordData((prev) => ({ ...prev, newPassword: newValue }));
+                      if (hasPasswordMismatch && newValue === passwordData.confirmPassword) setHasPasswordMismatch(false);
                     }}
-                    className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 pr-10 ${
-                      hasPasswordMismatch && passwordData.newPassword !== passwordData.confirmPassword
-                        ? 'border-red-500 focus:ring-red-500'
-                        : 'border-gray-300 focus:ring-purple-500'
-                    }`}
+                    className={`${inputClass} pr-10`}
                     placeholder="••••••••"
                   />
                   <button
@@ -948,26 +618,18 @@ export default function SettingsPage({ params }: { params: { salonName: string }
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Confirmar Contraseña
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Confirmar contraseña</label>
                 <div className="relative">
                   <input
                     type={showConfirmPassword ? 'text' : 'password'}
+                    autoComplete="new-password"
                     value={passwordData.confirmPassword}
                     onChange={(e) => {
                       const newValue = e.target.value;
-                      setPasswordData(prev => ({ ...prev, confirmPassword: newValue }));
-                      // Clear mismatch error when passwords match
-                      if (hasPasswordMismatch && passwordData.newPassword && newValue === passwordData.newPassword) {
-                        setHasPasswordMismatch(false);
-                      }
+                      setPasswordData((prev) => ({ ...prev, confirmPassword: newValue }));
+                      if (hasPasswordMismatch && newValue === passwordData.newPassword) setHasPasswordMismatch(false);
                     }}
-                    className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 pr-10 ${
-                      hasPasswordMismatch && passwordData.newPassword !== passwordData.confirmPassword
-                        ? 'border-red-500 focus:ring-red-500'
-                        : 'border-gray-300 focus:ring-purple-500'
-                    }`}
+                    className={`${inputClass} pr-10`}
                     placeholder="••••••••"
                   />
                   <button
@@ -986,23 +648,23 @@ export default function SettingsPage({ params }: { params: { salonName: string }
 
             <div className="flex justify-end space-x-3 mt-6">
               <button
-                onClick={() => {
-                  setShowPasswordModal(false);
-                  setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
-                  setShowPassword(false);
-                  setShowConfirmPassword(false);
-                  setHasPasswordMismatch(false);
-                }}
+                onClick={closePasswordModal}
                 className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
               >
                 Cancelar
               </button>
               <button
                 onClick={handleChangePassword}
-                disabled={loading || !passwordData.currentPassword || !passwordData.newPassword || !passwordData.confirmPassword || passwordData.newPassword !== passwordData.confirmPassword}
+                disabled={
+                  changingPassword ||
+                  !passwordData.currentPassword ||
+                  !passwordData.newPassword ||
+                  !passwordData.confirmPassword ||
+                  passwordData.newPassword !== passwordData.confirmPassword
+                }
                 className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50"
               >
-                {loading ? 'Guardando...' : 'Confirmar'}
+                {changingPassword ? 'Guardando...' : 'Confirmar'}
               </button>
             </div>
           </div>

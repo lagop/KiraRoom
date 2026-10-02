@@ -816,7 +816,27 @@ export interface CatalogAddOn {
   unlocks: string[];
   metered: boolean;
   isActive: boolean;
+  /** False = "Próximamente": shown, not sold. */
+  purchasable: boolean;
   sortOrder: number;
+}
+
+/** The salon site's account page: the signed-in client's own profile. */
+export interface MyClientProfile {
+  id: string;
+  tenantId: string;
+  firstName: string;
+  lastName: string;
+  email: string | null;
+  phone: string | null;
+  preferredLanguage: string;
+}
+
+/** A client's recorded choice about promotions by email (a signed Consent). */
+export interface MarketingConsentState {
+  status: "granted" | "refused" | "none";
+  decidedAt: string | null;
+  text: string;
 }
 
 /** P2A-receptionist-v2 â€” tenant add-on entitlement. */
@@ -1323,6 +1343,9 @@ export interface ApiClientInterface {
     preferences: any,
   ): Promise<any>;
   updateMyProfile(clientId: string, data: any): Promise<any>;
+  getMyProfile(): Promise<MyClientProfile>;
+  getMyMarketingConsent(): Promise<MarketingConsentState>;
+  setMyMarketingConsent(accepts: boolean): Promise<MarketingConsentState>;
   getClientNotifications(
     clientId: string,
     params?: {
@@ -1401,7 +1424,7 @@ export interface ApiClientInterface {
   // (Phase 8 surfaces these in the billing dashboard).
   getAvailableAddOns(plan?: string): Promise<CatalogAddOn[]>;
   getTenantAddOns(): Promise<TenantAddOnView[]>;
-  requestAddOnCheckout(addOnKey: string): Promise<{ url?: string; checkoutUrl?: string }>;
+  purchaseAddOn(addOnKey: string): Promise<{ status: string; currentPeriodEnd: string | null }>;
   cancelTenantAddOn(addOnKey: string): Promise<{ ok: boolean }>;
 
   // P2A-receptionist-v2 â€” AI usage counter for the billing dashboard.
@@ -2443,6 +2466,23 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
+  // The account page read /admin/clients/:id, which a client may not read,
+  // and fell back to what the browser kept since sign-in.
+  async getMyProfile(): Promise<MyClientProfile> {
+    return this.request<MyClientProfile>(`/clients/me`);
+  }
+
+  async getMyMarketingConsent(): Promise<MarketingConsentState> {
+    return this.request<MarketingConsentState>(`/consent/me/marketing`);
+  }
+
+  async setMyMarketingConsent(accepts: boolean): Promise<MarketingConsentState> {
+    return this.request<MarketingConsentState>(`/consent/me/marketing`, {
+      method: "PUT",
+      body: JSON.stringify({ accepts }),
+    });
+  }
+
   async changeMyPassword(currentPassword: string, newPassword: string): Promise<void> {
     return this.request<void>(`/clients/me/password`, {
       method: "POST",
@@ -3107,14 +3147,16 @@ class ApiClient implements ApiClientInterface {
     return res.data ?? [];
   }
 
-  async requestAddOnCheckout(
+  // Adds the add-on to the salon's plan subscription (prorated) and answers
+  // the row as Stripe left it. It used to open a Checkout that needed a
+  // Stripe price no add-on had.
+  async purchaseAddOn(
     addOnKey: string,
-    opts: { returnTo?: string } = {},
-  ): Promise<{ url?: string; checkoutUrl?: string }> {
-    return this.request(`/payments/add-ons/${addOnKey}/checkout`, {
-      method: "POST",
-      body: JSON.stringify(opts),
-    });
+  ): Promise<{ status: string; currentPeriodEnd: string | null }> {
+    return this.request(
+      `/payments/tenants/current/add-ons/${encodeURIComponent(addOnKey)}`,
+      { method: "POST" },
+    );
   }
 
   async cancelTenantAddOn(addOnKey: string): Promise<{ ok: boolean }> {
