@@ -16,6 +16,7 @@ export const AddOnResponseSchema = z.object({
   metered: z.boolean(),
   stripePriceId: z.string().nullable(),
   isActive: z.boolean(),
+  purchasable: z.boolean(),
   sortOrder: z.number().int(),
 });
 

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { clientsWhoRefusedMarketing } from "../consent/marketing-consent";
 import { EmailService } from '../notifications/services/email.service';
 import { CampaignType } from './dto';
 
@@ -323,8 +324,11 @@ export class EmailCampaignsScheduler {
       },
     });
 
-    // Filter out clients who received a re-engagement email recently
+    // Filter out clients who received a re-engagement email recently, and
+    // those who said no to promotions in their account.
+    const refused = await clientsWhoRefusedMarketing(this.prisma, campaign.tenantId);
     const eligibleClients = clients.filter(client => {
+      if (refused.has(client.id)) return false;
       if (!client.lastReengagementSent) return true;
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
       return client.lastReengagementSent < thirtyDaysAgo;
@@ -335,7 +339,9 @@ export class EmailCampaignsScheduler {
     let sent = 0;
     let errors = 0;
 
-    for (const client of clients) {
+    // It looped over `clients`: the filter above was computed and ignored,
+    // so the 30-day pause never applied.
+    for (const client of eligibleClients) {
       try {
         // Build personalized email content
         const personalization = this.buildReengagementEmailContent(campaign, client);

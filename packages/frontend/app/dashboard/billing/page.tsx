@@ -93,7 +93,17 @@ function BillingPageContent() {
       cleanupQueryParams(["buy"]);
       return;
     }
-    if (!addOns.some((row) => row?.key === buyKey)) {
+    const wanted = addOns.find((row) => row?.key === buyKey);
+    if (wanted && !wanted.purchasable) {
+      // Listed as "Próximamente": nothing to buy yet.
+      setFlowBanner({
+        kind: "info",
+        message: t("billing.addons.comingSoonNotice", { key: wanted.name ?? buyKey }),
+      });
+      cleanupQueryParams(["buy"]);
+      return;
+    }
+    if (!wanted) {
       // The add-on isn't in the catalog for this tenant's plan
       // (Pro/Empresa where it's redundant). Surface a hint and let
       // the user browse plans instead.
@@ -263,26 +273,33 @@ function BillingPageContent() {
     setError(null);
     try {
       if (action === "purchase") {
-        // The backend creates a Stripe Checkout session and returns
-        // `{ url }`. Redirect the browser so the user lands on
-        // Stripe's hosted page; the success/cancel URLs bounce back
-        // here and the effect above handles the return.
-        const res = (await apiClient.requestAddOnCheckout(key, {
-          returnTo: pendingReturnTo ?? undefined,
-        })) as {
-          url?: string;
-          checkoutUrl?: string;
-        };
-        const url = res?.checkoutUrl || res?.url;
-        if (url) {
-          window.location.href = url;
-          // Do not call setConfirmAddOn(null) — the page is navigating
-          // away. The component will unmount on the redirect.
-          return;
-        }
-        // Fallback (dev mode / no Stripe configured): refresh the
-        // installed list so the UI reflects the manual grant.
+        // The add-on is added to the plan subscription (prorated on the
+        // next invoice) and the answer is the row as Stripe left it: the
+        // banner says "activo" only when it is.
+        const row = await apiClient.purchaseAddOn(key);
         await load();
+        if (row?.status === "active") {
+          setFlowBanner({
+            kind: "success",
+            message: t("billing.addons.purchaseSuccess", { key }),
+          });
+          if (
+            pendingReturnTo &&
+            pendingReturnTo.startsWith("/") &&
+            !pendingReturnTo.startsWith("//")
+          ) {
+            const target = pendingReturnTo;
+            setPendingReturnTo(null);
+            setTimeout(() => {
+              window.location.href = target;
+            }, 1200);
+          }
+        } else {
+          setFlowBanner({
+            kind: "warning",
+            message: t("billing.addons.purchasePending", { key }),
+          });
+        }
       } else {
         await apiClient.cancelTenantAddOn(key);
         await load();
@@ -963,6 +980,11 @@ function AddOnGrid({
                   {t("billing.addons.activeBadge")}
                 </span>
               )}
+              {!a.metered && !a.purchasable && !isActive && (
+                <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
+                  {t("billing.addons.comingSoon")}
+                </span>
+              )}
               {a.metered && !isActive && (
                 <span className="shrink-0 rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700">
                   {t("billing.addons.meteredBadge")}
@@ -998,6 +1020,13 @@ function AddOnGrid({
                   {working === a.key
                     ? t("billing.addons.working")
                     : t("billing.addons.cancel")}
+                </button>
+              ) : a.metered ? null : !a.purchasable ? (
+                <button
+                  disabled
+                  className="w-full cursor-not-allowed rounded-md border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-500"
+                >
+                  {t("billing.addons.comingSoon")}
                 </button>
               ) : (
                 <button

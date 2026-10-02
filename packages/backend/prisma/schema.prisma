@@ -185,6 +185,9 @@ model AddOn {
   metered           Boolean  @default(false)
   stripePriceId     String?
   isActive          Boolean  @default(true)
+  /// Whether a salon can buy it today. False ("Próximamente") for an add-on
+  /// whose feature does not work yet: it is listed, never charged.
+  purchasable       Boolean  @default(false)
   sortOrder         Int      @default(0)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -199,6 +202,13 @@ model TenantAddOn {
   tenantId                 String
   addOnId                  String
   stripeSubscriptionItemId String?
+  /// The subscription the item lives on (the salon's plan subscription for
+  /// purchases since 2026-10). Lets the webhook tell an item that was
+  /// removed from that subscription from one billed elsewhere.
+  stripeSubscriptionId     String?
+  /// What the Stripe item bills per month, in cents. The catalogue price
+  /// can change later; MRR counts what this salon actually pays.
+  monthlyPriceCents        Int?
   status                   String    @default("active")
   startedAt                DateTime  @default(now())
   currentPeriodEnd         DateTime?
@@ -2177,11 +2187,17 @@ model ConsentForm {
   serviceIds  String[]  @default([])
   isActive    Boolean   @default(true)
   version     Int       @default(1)
+  /// "service": a treatment consent the salon writes and a booking may
+  /// require. "marketing": the system form behind a client's choice about
+  /// commercial communications (see consent/marketing-consent.ts); never
+  /// required for a booking and not editable from the salon's form list.
+  purpose     String    @default("service")
   tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   consents    Consent[]
 
   @@index([tenantId])
   @@index([tenantId, serviceIds])
+  @@index([tenantId, purpose])
   @@map("consent_forms")
 }
 

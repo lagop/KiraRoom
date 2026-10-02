@@ -247,15 +247,72 @@ export class ClientsService {
   }
 
   /**
+   * What the account page shows a client about themselves. It read
+   * /admin/clients/:id, which is owner/admin only, so it always failed and
+   * the page showed whatever the browser had kept since sign-in.
+   */
+  async getSelf(tenantId: string, clientId: string) {
+    const client = await this.prisma.client.findFirst({
+      where: { id: clientId, tenantId },
+      select: {
+        id: true,
+        tenantId: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        phone: true,
+        preferredLanguage: true,
+      },
+    });
+    if (!client) throw new NotFoundException("Cliente no encontrado");
+    return client;
+  }
+
+  /**
    * A client editing their own profile from the salon site. The account
    * page used to PATCH /clients/:id, a route that does not exist and whose
    * PUT twin excludes the client role, so every save failed.
    */
   async updateSelf(tenantId: string, clientId: string, dto: UpdateMyProfileDto) {
+    const { currentPassword, ...fields } = dto;
+    const data: Record<string, string | null> = {};
+    for (const [key, value] of Object.entries(fields)) {
+      if (value === undefined) continue;
+      data[key] = typeof value === "string" ? value.trim() : value;
+    }
+    // An emptied phone is "no phone", not an empty string the SMS sender
+    // would try.
+    if (data.phone === "") data.phone = null;
+    if (data.firstName === "") {
+      throw new BadRequestException("El nombre no puede quedar vacío");
+    }
+
+    if (data.email !== undefined) {
+      const current = await this.prisma.client.findFirst({
+        where: { id: clientId, tenantId },
+        select: { email: true, passwordHash: true },
+      });
+      if (!current) throw new NotFoundException("Cliente no encontrado");
+      if (data.email === current.email) {
+        delete data.email;
+      } else {
+        // Changing the sign-in address takes the password, like changing
+        // the password does (see changeOwnPassword).
+        if (!current.passwordHash || !currentPassword) {
+          throw new BadRequestException(
+            "Para cambiar el email escribe tu contraseña actual",
+          );
+        }
+        if (!(await bcrypt.compare(currentPassword, current.passwordHash))) {
+          throw new BadRequestException("La contraseña actual no es correcta");
+        }
+      }
+    }
+
     try {
       return await this.prisma.client.update({
         where: { id: clientId, tenantId },
-        data: dto,
+        data,
         select: {
           id: true,
           firstName: true,

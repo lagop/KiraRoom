@@ -27,6 +27,8 @@ const { items } = addons;
             </div>
           </div>
           <p class="addon-card__tagline">{a.tagline}</p>
+          {/* Not sold yet: the panel shows it as "Próximamente" too. */}
+          {a.soon && <p class="addon-card__soon">Próximamente</p>}
         </article>
       ))}
     </div>
@@ -92,6 +94,15 @@ const { items } = addons;
     font-size: 1.1rem;
     margin: 0;
     flex: 1;
+  }
+  .addon-card__soon {
+    display: inline-block;
+    margin: 12px 0 0;
+    padding: 2px 10px;
+    border-radius: 999px;
+    background: var(--color-brand-soft);
+    font-size: 13px;
+    font-weight: 600;
   }
   .addon-card__price {
     display: flex;

@@ -40,7 +40,7 @@ export default function LoginModal({
       let userData: any = response.user;
       if (response.user.id && response.user.role === "client") {
         try {
-          const freshClientData = await apiClient.getClient(response.user.id);
+          const freshClientData = await apiClient.getMyProfile();
           userData = {
             ...response.user,
             firstName: freshClientData.firstName,

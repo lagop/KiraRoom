@@ -435,8 +435,11 @@
       "error": "No se pudo procesar la operación sobre el add-on.",
       "alreadyInstalled": "El add-on '{key}' ya está activo en tu cuenta.",
       "notInCatalog": "El add-on '{key}' no está disponible para tu plan actual.",
-      "purchaseSuccess": "Listo: el add-on '{key}' ya está activo. Ya puedes configurar los canales en Ajustes.",
-      "purchaseCancelled": "Has cancelado la compra del add-on '{key}'."
+      "purchaseSuccess": "Listo: el add-on '{key}' ya está activo. Se cobra prorrateado en tu próxima factura.",
+      "purchaseCancelled": "Has cancelado la compra del add-on '{key}'.",
+      "purchasePending": "Stripe aún no ha confirmado el add-on '{key}'. Recarga la página en unos segundos.",
+      "comingSoon": "Próximamente",
+      "comingSoonNotice": "'{key}' estará disponible próximamente; todavía no se puede contratar."
     },
     "aiUsage": {
       "title": "Uso del recepcionista IA",
