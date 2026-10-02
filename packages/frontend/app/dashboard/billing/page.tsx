@@ -9,7 +9,7 @@ import { UsageMeters } from "@/components/billing/UsageMeters";
 import { TrialBanner } from "@/components/billing/TrialBanner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { PlanId } from "@/lib/plans";
-import { Check, Globe, Loader2, Sparkles, X } from "lucide-react";
+import { Check, Loader2, Sparkles, X } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
 
 function BillingPageContent() {
@@ -22,8 +22,6 @@ function BillingPageContent() {
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [webDomain, setWebDomain] = useState<any | null>(null);
-  const [showDomain, setShowDomain] = useState(false);
   const [invoices, setInvoices] = useState<SubscriptionInvoice[] | null>(null);
   const dateLocale = t("billing.invoices.dateFmt") || "es-ES";
 
@@ -93,7 +91,17 @@ function BillingPageContent() {
       cleanupQueryParams(["buy"]);
       return;
     }
-    if (!addOns.some((row) => row?.key === buyKey)) {
+    const wanted = addOns.find((row) => row?.key === buyKey);
+    if (wanted && !wanted.purchasable) {
+      // Listed as "Próximamente": nothing to buy yet.
+      setFlowBanner({
+        kind: "info",
+        message: t("billing.addons.comingSoonNotice", { key: wanted.name ?? buyKey }),
+      });
+      cleanupQueryParams(["buy"]);
+      return;
+    }
+    if (!wanted) {
       // The add-on isn't in the catalog for this tenant's plan
       // (Pro/Empresa where it's redundant). Surface a hint and let
       // the user browse plans instead.
@@ -158,15 +166,17 @@ function BillingPageContent() {
         return fallback;
       });
     try {
-      const [s, p, wd, i] = await Promise.all([
+      // The "Web con dominio propio + SEO" add-on card was here, selling a
+      // domain purchase that only flipped a flag. Connecting a salon's own
+      // domain now lives in Ajustes > Web y dominio, and is not sold until
+      // it is served over HTTPS (see docs/custom-domains.md).
+      const [s, p, i] = await Promise.all([
         soft("subscription", apiClient.getCurrentSubscription(), null as any),
         soft("plans", apiClient.getSubscriptionPlans(), [] as any[]),
-        soft("webDomain", apiClient.request("/web-domain"), null as any),
         soft("invoices", apiClient.getSubscriptionInvoices(12), [] as any[]),
       ]);
       setSub(s);
       setPlans((p as any) || []);
-      setWebDomain(wd);
       setInvoices((i as SubscriptionInvoice[]) || []);
 
       // P2A-receptionist-v2 -- fetch add-ons + AI counter + bundles
@@ -263,26 +273,33 @@ function BillingPageContent() {
     setError(null);
     try {
       if (action === "purchase") {
-        // The backend creates a Stripe Checkout session and returns
-        // `{ url }`. Redirect the browser so the user lands on
-        // Stripe's hosted page; the success/cancel URLs bounce back
-        // here and the effect above handles the return.
-        const res = (await apiClient.requestAddOnCheckout(key, {
-          returnTo: pendingReturnTo ?? undefined,
-        })) as {
-          url?: string;
-          checkoutUrl?: string;
-        };
-        const url = res?.checkoutUrl || res?.url;
-        if (url) {
-          window.location.href = url;
-          // Do not call setConfirmAddOn(null) — the page is navigating
-          // away. The component will unmount on the redirect.
-          return;
-        }
-        // Fallback (dev mode / no Stripe configured): refresh the
-        // installed list so the UI reflects the manual grant.
+        // The add-on is added to the plan subscription (prorated on the
+        // next invoice) and the answer is the row as Stripe left it: the
+        // banner says "activo" only when it is.
+        const row = await apiClient.purchaseAddOn(key);
         await load();
+        if (row?.status === "active") {
+          setFlowBanner({
+            kind: "success",
+            message: t("billing.addons.purchaseSuccess", { key }),
+          });
+          if (
+            pendingReturnTo &&
+            pendingReturnTo.startsWith("/") &&
+            !pendingReturnTo.startsWith("//")
+          ) {
+            const target = pendingReturnTo;
+            setPendingReturnTo(null);
+            setTimeout(() => {
+              window.location.href = target;
+            }, 1200);
+          }
+        } else {
+          setFlowBanner({
+            kind: "warning",
+            message: t("billing.addons.purchasePending", { key }),
+          });
+        }
       } else {
         await apiClient.cancelTenantAddOn(key);
         await load();
@@ -483,42 +500,6 @@ function BillingPageContent() {
         </div>
       </section>
 
-      <section>
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-700">
-          {t("billing.addons")}
-        </h2>
-        <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h3 className="text-base font-semibold text-gray-900">
-                {t("billing.webDomain.title")}
-              </h3>
-              <p className="mt-1 text-sm text-gray-600">
-                {t("billing.webDomain.desc")}
-              </p>
-              {webDomain?.enabled && webDomain?.domain && (
-                <p className="mt-2 text-xs text-emerald-700">
-                  {t("billing.webDomain.active", { domain: webDomain.domain })}
-                </p>
-              )}
-            </div>
-            {webDomain?.enabled ? (
-              <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
-                {t("billing.webDomain.activeShort")}
-              </span>
-            ) : (
-              <button
-                onClick={() => setShowDomain(true)}
-                className="inline-flex items-center gap-1.5 rounded-md bg-violet-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-violet-700"
-              >
-                <Globe className="h-4 w-4" />
-                {t("billing.webDomain.addDomain")}
-              </button>
-            )}
-          </div>
-        </div>
-      </section>
-
       <InvoicesList invoices={invoices ?? []} t={t} dateLocale={dateLocale} />
 
       {/* P2A-receptionist-v2 -- AI usage counter */}
@@ -580,18 +561,6 @@ function BillingPageContent() {
         </div>
       </section>
 
-      {showDomain && (
-        <DomainDialog
-          onClose={() => setShowDomain(false)}
-          onDone={() => {
-            setShowDomain(false);
-            load();
-          }}
-          t={t}
-          dateLocale={dateLocale}
-        />
-      )}
-
       {error && (
         <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
           {error}
@@ -642,117 +611,6 @@ function StatusBadge({
     >
       {t(`billing.status.${status}`) || status}
     </span>
-  );
-}
-
-function DomainDialog({
-  onClose,
-  onDone,
-  t,
-  dateLocale,
-}: {
-  onClose: () => void;
-  onDone: () => void;
-  t: (key: string, params?: Record<string, any>) => string;
-  dateLocale: string;
-}) {
-  const [domain, setDomain] = useState("");
-  const [checking, setChecking] = useState(false);
-  const [availability, setAvailability] = useState<any | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const check = async () => {
-    setChecking(true);
-    setError(null);
-    try {
-      const res = (await apiClient.request("/web-domain/check-availability", {
-        method: "POST",
-        body: JSON.stringify({ domain }),
-      })) as any;
-      setAvailability(res);
-    } catch (e: any) {
-      setError(e?.message || t("common.error"));
-    } finally {
-      setChecking(false);
-    }
-  };
-
-  const purchase = async () => {
-    setSubmitting(true);
-    setError(null);
-    try {
-      const res = (await apiClient.request("/web-domain/purchase", {
-        method: "POST",
-        body: JSON.stringify({ domain }),
-      })) as any;
-      if (res?.checkoutRequired) {
-        alert(t("billing.webDomain.dialog.checkoutRequired"));
-      } else {
-        onDone();
-      }
-    } catch (e: any) {
-      setError(e?.message || t("common.error"));
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
-        <h3 className="text-lg font-semibold text-gray-900">
-          {t("billing.webDomain.dialog.title")}
-        </h3>
-        <p className="mt-1 text-sm text-gray-500">
-          {t("billing.webDomain.dialog.desc")}
-        </p>
-        <input
-          value={domain}
-          onChange={(e) => setDomain(e.target.value)}
-          placeholder={t("billing.webDomain.dialog.placeholder")}
-          className="mt-3 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
-        />
-        {availability && (
-          <p
-            className={
-              "mt-2 text-xs " + (availability.available ? "text-emerald-700" : "text-red-600")
-            }
-          >
-            {availability.available
-              ? t("billing.webDomain.availableFmt", { domain: availability.domain })
-              : t("billing.webDomain.domainNotAvailable", { domain: availability.domain })}
-          </p>
-        )}
-        {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
-        <div className="mt-4 flex items-center justify-end gap-2">
-          <button
-            onClick={onClose}
-            className="rounded-md border border-gray-200 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
-          >
-            {t("billing.webDomain.dialog.cancel")}
-          </button>
-          <button
-            onClick={check}
-            disabled={!domain || checking}
-            className="rounded-md border border-violet-200 px-3 py-1.5 text-sm text-violet-700 hover:bg-violet-50 disabled:opacity-50"
-          >
-            {checking
-              ? t("billing.webDomain.dialog.checking")
-              : t("billing.webDomain.dialog.check")}
-          </button>
-          <button
-            onClick={purchase}
-            disabled={!availability?.available || submitting}
-            className="rounded-md bg-violet-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50"
-          >
-            {submitting
-              ? t("billing.webDomain.dialog.processing")
-              : t("billing.webDomain.dialog.continue")}
-          </button>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -963,6 +821,11 @@ function AddOnGrid({
                   {t("billing.addons.activeBadge")}
                 </span>
               )}
+              {!a.metered && !a.purchasable && !isActive && (
+                <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
+                  {t("billing.addons.comingSoon")}
+                </span>
+              )}
               {a.metered && !isActive && (
                 <span className="shrink-0 rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700">
                   {t("billing.addons.meteredBadge")}
@@ -998,6 +861,13 @@ function AddOnGrid({
                   {working === a.key
                     ? t("billing.addons.working")
                     : t("billing.addons.cancel")}
+                </button>
+              ) : a.metered ? null : !a.purchasable ? (
+                <button
+                  disabled
+                  className="w-full cursor-not-allowed rounded-md border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-500"
+                >
+                  {t("billing.addons.comingSoon")}
                 </button>
               ) : (
                 <button

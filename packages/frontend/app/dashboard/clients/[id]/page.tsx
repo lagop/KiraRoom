@@ -12,6 +12,7 @@ import apiClient, {
 } from "@/lib/api";
 import { Loader2, RefreshCcw, BellOff, BellRing } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
+import { ClientLoyaltyCard } from "@/components/loyalty/client-loyalty-card";
 
 export default function ClientDetailPage({
   params,
@@ -57,6 +58,8 @@ export default function ClientDetailPage({
           ← Volver
         </a>
       </header>
+
+      <ClientLoyaltyCard clientId={id} />
 
       <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">

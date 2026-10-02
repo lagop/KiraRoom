@@ -3,14 +3,21 @@ import { PrismaService } from "../common/prisma/prisma.service";
 import { normalizePhone } from "../common/phone";
 import { MetaCloudApiClient } from "./meta-cloud-api.client";
 import {
+  APPOINTMENT_CANCELLED,
+  APPOINTMENT_CONFIRMED,
   APPOINTMENT_REMINDER,
+  APPOINTMENT_RESCHEDULED,
+  REVIEW_REQUEST,
   STANDARD_TEMPLATES,
+  TemplateDefinition,
+  WAITLIST_SLOT_AVAILABLE,
   bodyParameters,
   spanishDate,
   templateCreationPayload,
 } from "./whatsapp-templates";
 
 const STATUS_TTL_MS = 30 * 60 * 1000;
+const RESUBMIT_EVERY_MS = 6 * 60 * 60 * 1000;
 
 export interface ReminderResult {
   sent: boolean;
@@ -19,15 +26,37 @@ export interface ReminderResult {
   reason?: string;
 }
 
+export type AppointmentNoticeKind = "reminder" | "confirmed" | "cancelled" | "rescheduled";
+
+const TEMPLATE_FOR: Record<AppointmentNoticeKind, TemplateDefinition> = {
+  reminder: APPOINTMENT_REMINDER,
+  confirmed: APPOINTMENT_CONFIRMED,
+  cancelled: APPOINTMENT_CANCELLED,
+  rescheduled: APPOINTMENT_RESCHEDULED,
+};
+
+export interface AppointmentNoticeArgs {
+  phone: string;
+  clientName: string;
+  salonName: string;
+  serviceName: string;
+  /** The appointment's date (for a change, the new one), stored at UTC midnight. */
+  date: Date;
+  time: string;
+  country?: string;
+}
+
 /**
  * Submits KiraRoom's standard templates to a salon's WhatsApp Business
- * account and sends appointment reminders with them, from the salon's own
- * number. See whatsapp-templates.ts for why templates are needed.
+ * account and sends appointment reminders, confirmations, cancellations and
+ * changes with them, from the salon's own number. See whatsapp-templates.ts
+ * for why templates are needed.
  */
 @Injectable()
 export class WhatsAppTemplateService {
   private readonly logger = new Logger(WhatsAppTemplateService.name);
   private readonly statusCache = new Map<string, { at: number; statuses: Record<string, string> }>();
+  private readonly lastAutoSubmit = new Map<string, number>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -81,33 +110,106 @@ export class WhatsAppTemplateService {
    * Sends the reminder template if the salon has WhatsApp connected and Meta
    * approved it. Otherwise says why, so the caller can use another channel.
    */
-  async sendAppointmentReminder(
+  sendAppointmentReminder(tenantId: string, args: AppointmentNoticeArgs): Promise<ReminderResult> {
+    return this.sendAppointmentNotice(tenantId, "reminder", args);
+  }
+
+  /**
+   * Sends the template for this kind of notice (reminder, confirmation,
+   * cancellation, change) if the salon has WhatsApp connected and Meta
+   * approved it. Otherwise says why, so the caller can fall back.
+   */
+  sendAppointmentNotice(
     tenantId: string,
-    args: { phone: string; clientName: string; salonName: string; serviceName: string; date: Date; time: string; country?: string },
+    kind: AppointmentNoticeKind,
+    args: AppointmentNoticeArgs,
+  ): Promise<ReminderResult> {
+    return this.sendTemplate(tenantId, TEMPLATE_FOR[kind], args.phone, args.country, [
+      args.clientName?.trim() || "de nuevo",
+      args.salonName,
+      args.serviceName,
+      spanishDate(args.date),
+      args.time,
+    ]);
+  }
+
+  /** Tells a wait-listed client that a slot opened, with the link to book it. */
+  async sendWaitlistSlot(
+    tenantId: string,
+    args: { phone: string; clientName: string; salonName: string; serviceName: string; slotText: string; bookingUrl: string; country?: string },
+  ): Promise<ReminderResult> {
+    return this.sendTemplate(tenantId, WAITLIST_SLOT_AVAILABLE, args.phone, args.country, [
+      args.clientName || "",
+      args.salonName,
+      args.serviceName,
+      args.slotText,
+      args.bookingUrl,
+    ]);
+  }
+
+  /** Is the salon's number connected and this template approved? Without sending. */
+  async canSend(tenantId: string, template: TemplateDefinition): Promise<{ ok: boolean; reason?: string }> {
+    const conn = await this.connection(tenantId);
+    if (!conn?.isActive || !conn.phoneNumberId) return { ok: false, reason: "not_connected" };
+    const status = (await this.statuses(tenantId))[`${template.name}:${template.language}`];
+    if (status !== "APPROVED") return { ok: false, reason: `template_${(status ?? "missing").toLowerCase()}` };
+    return { ok: true };
+  }
+
+  /** The post-visit review request, with the link to the review page. Same rules as the reminder. */
+  async sendReviewRequest(
+    tenantId: string,
+    args: { phone: string; clientName: string; salonName: string; serviceName: string; link: string; country?: string },
+  ): Promise<ReminderResult> {
+    return this.sendTemplate(tenantId, REVIEW_REQUEST, args.phone, args.country, [
+      args.clientName || "",
+      args.salonName,
+      args.serviceName,
+      args.link,
+    ]);
+  }
+
+  /**
+   * Salons connected before a template existed only had the older ones
+   * submitted: when a template is missing from their account, the standard
+   * set is submitted again in the background (at most every 6 hours), and
+   * this message uses the caller's fallback.
+   */
+  private async sendTemplate(
+    tenantId: string,
+    template: TemplateDefinition,
+    phone: string,
+    country: string | undefined,
+    values: string[],
   ): Promise<ReminderResult> {
     const conn = await this.connection(tenantId);
     if (!conn?.isActive || !conn.phoneNumberId) return { sent: false, reason: "not_connected" };
-    const key = `${APPOINTMENT_REMINDER.name}:${APPOINTMENT_REMINDER.language}`;
-    const status = (await this.statuses(tenantId))[key];
-    if (status !== "APPROVED") return { sent: false, reason: `template_${(status ?? "missing").toLowerCase()}` };
+    const status = (await this.statuses(tenantId))[`${template.name}:${template.language}`];
+    if (status !== "APPROVED") {
+      if (!status) this.autoSubmit(tenantId);
+      return { sent: false, reason: `template_${(status ?? "missing").toLowerCase()}` };
+    }
 
-    const to = normalizePhone(args.phone, args.country ?? "ES").replace(/\D/g, "");
+    const to = normalizePhone(phone, country ?? "ES").replace(/\D/g, "");
     const res = await this.meta.sendTemplate(
       this.meta.decryptToken(conn.accessTokenEnc),
       conn.phoneNumberId,
       to,
-      APPOINTMENT_REMINDER.name,
-      APPOINTMENT_REMINDER.language,
-      bodyParameters([
-        args.clientName || "",
-        args.salonName,
-        args.serviceName,
-        spanishDate(args.date),
-        args.time,
-      ]),
+      template.name,
+      template.language,
+      bodyParameters(values),
     );
     if (res?.error) return { sent: false, reason: `meta_${res.error.code}` };
     return { sent: true, messageId: res?.messages?.[0]?.id };
+  }
+
+  private autoSubmit(tenantId: string): void {
+    const last = this.lastAutoSubmit.get(tenantId) ?? 0;
+    if (Date.now() - last < RESUBMIT_EVERY_MS) return;
+    this.lastAutoSubmit.set(tenantId, Date.now());
+    void this.submitStandardTemplates(tenantId).catch((err) =>
+      this.logger.warn(`Template submission for tenant ${tenantId} failed: ${(err as Error).message}`),
+    );
   }
 
   private connection(tenantId: string) {

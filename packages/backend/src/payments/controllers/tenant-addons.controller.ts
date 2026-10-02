@@ -1,9 +1,8 @@
-import { Controller, Get, Post, Delete, Param, Body, Req, UseGuards, ForbiddenException, NotFoundException, BadRequestException } from "@nestjs/common";
+import { Controller, Get, Post, Delete, Param, Req, UseGuards, ForbiddenException } from "@nestjs/common";
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { AddOnsService } from '../services/addons.service';
 import { MessageBundlesService } from '../../message-bundles/message-bundles.service';
 import { SubscriptionsService } from '../services/subscriptions.service';
-import { StripeService } from '../services/stripe.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { Roles, SALON_MANAGERS } from "../../auth/decorators/roles.decorator";
 import { SaasOwner } from "../../saas/decorators/saas-owner.decorator";
@@ -21,7 +20,6 @@ export class TenantAddOnsController {
     private readonly addons: AddOnsService,
     private readonly prisma: PrismaService,
     private readonly subs: SubscriptionsService,
-    private readonly stripe: StripeService,
     private readonly bundles: MessageBundlesService,
   ) {}
 
@@ -64,53 +62,26 @@ export class TenantAddOnsController {
   }
 
   /**
-   * Initiate the purchase. Today this returns a `{ ok: true }` and
-   * flips the tenant to a manual grant (a future Stripe Checkout
-   * round-trip can be wired in here without an API change).
+   * Buy an add-on: it becomes an item of the salon's plan subscription,
+   * charged prorated from today (AddOnsService.purchase). Refused with the
+   * reason for an add-on marked "Próximamente", one the plan already
+   * includes, or a salon without a paid subscription. Answers the row as
+   * Stripe left it, so the page shows "Activo" only when it is.
    */
-  @Post('add-ons/:key/checkout')
+  @Post('tenants/current/add-ons/:key')
   @Roles(...SALON_MANAGERS)
-  async checkout(
-    @Param('key') key: string,
-    @Body() body: { returnTo?: string } | undefined,
-    @Req() req: any,
-  ): Promise<{ url: string }> {
+  async purchase(@Param('key') key: string, @Req() req: any) {
     const tenantId = this.tenantId(req);
-    const addOn = await this.addons.getByKey(key);
-    if (!addOn) throw new NotFoundException('Unknown add-on');
-    if (addOn.metered) {
-      throw new ForbiddenException(
-        'Metered add-ons (e.g. message_bundles) are topped up from the message_bundles section, not here.',
-      );
-    }
-    if (!addOn.stripePriceId) {
-      throw new ForbiddenException(
-        `Add-on ${addOn.key} has no Stripe price configured yet. Contact support.`,
-      );
-    }
-    // H-4: allow the wizard to redirect the user back to itself after
-    // a successful purchase. We strictly validate the path so this
-    // can never become an open redirect.
-    const returnTo = this.sanitizeReturnTo(body?.returnTo);
-    const frontendUrl =
-      process.env.FRONTEND_URL || 'http://localhost:3000';
-    const baseUrl = `${frontendUrl}/dashboard/billing`;
-    const successUrl = returnTo
-      ? `${baseUrl}?addOn=${addOn.key}&status=success&returnTo=${encodeURIComponent(returnTo)}`
-      : `${baseUrl}?addOn=${addOn.key}&status=success`;
-    const cancelUrl = returnTo
-      ? `${baseUrl}?addOn=${addOn.key}&status=cancelled&returnTo=${encodeURIComponent(returnTo)}`
-      : `${baseUrl}?addOn=${addOn.key}&status=cancelled`;
-    const session = await this.stripe.createAddOnCheckout({
-      tenantId,
-      addOnKey: addOn.key,
-      addOnName: addOn.name,
-      stripePriceId: addOn.stripePriceId,
-      successUrl,
-      cancelUrl });
-    return { url: session.url };
+    const row = await this.addons.purchase(tenantId, key);
+    return {
+      ...row,
+      startedAt: row.startedAt?.toISOString?.() ?? row.startedAt,
+      currentPeriodEnd: row.currentPeriodEnd?.toISOString?.() ?? null,
+      cancelledAt: row.cancelledAt?.toISOString?.() ?? null,
+    };
   }
 
+  /** Stop an add-on: removed from the Stripe subscription, then ended here. */
   @Delete('tenants/current/add-ons/:key')
   @Roles(...SALON_MANAGERS)
   async cancel(
@@ -118,8 +89,7 @@ export class TenantAddOnsController {
     @Req() req: any,
   ) {
     const tenantId = this.tenantId(req);
-    const ok = await this.addons.cancelFromStripe({ tenantId, addOnKey: key });
-    return { ok };
+    return this.addons.cancelForTenant(tenantId, key);
   }
 
   /** Read the current message bundles balance for this tenant. */
@@ -177,32 +147,5 @@ export class TenantAddOnsController {
       !!t.trialEnd &&
       new Date(t.trialEnd).getTime() > Date.now();
     return this.subs.effectivePlan(t.plan, inTrial);
-  }
-
-  /**
-   * H-4: validate the optional `returnTo` path supplied by the wizard.
-   * Only accepts same-origin absolute paths starting with `/dashboard/`
-   * (no external URLs, no protocols, no hash/JS). Anything else is
-   * dropped silently — defense against open-redirect via a tampered
-   * Stripe success URL.
-   */
-  private sanitizeReturnTo(raw: string | undefined): string | null {
-    if (!raw || typeof raw !== 'string') return null;
-    if (raw.length > 256) return null;
-    if (!raw.startsWith('/')) return null;
-    if (raw.startsWith('//')) return null;
-    if (/[\r\n]/.test(raw)) return null;
-    // Block javascript: and data: URI smuggling via fragments.
-    if (/javascript:/i.test(raw) || /data:/i.test(raw)) return null;
-    // Only allow known app routes. This is the smallest allow-list
-    // that covers every existing entry point the wizard sends users to.
-    const allowed = [
-      '/dashboard',
-      '/dashboard/settings',
-      '/dashboard/settings/channels',
-      '/dashboard/billing',
-    ];
-    if (!allowed.some((p) => raw === p || raw.startsWith(p + '/'))) return null;
-    return raw;
   }
 }

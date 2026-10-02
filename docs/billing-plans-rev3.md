@@ -78,7 +78,7 @@ Checkout, excepto `message_bundles` (metered, top-up programÃ¡tico).
 | `loyalty_giftcards`     |               12 | `loyalty` + `promotions` + `gift_cards` | esencial     | Programa de puntos, promos y gift cards (3 en 1)                                   |
 | `email_marketing`       |               12 | `email_marketing`                   | esencial        | CampaÃ±as segmentadas por audiencia                                                  |
 | **`multichannel` (H-4)**|           **19**| **`multichannel`**                 | **esencial**    | **Messenger + Instagram + Telegram. Detalles en Â§17**                              |
-| `google_reviews_auto`   |               19 | (sin unlocks; funciÃ³n independiente)| esencial        | Automatiza invitaciones a dejar reseÃ±a en Google Business Profile                   |
+| `google_reviews_auto`   |               19 | `google_reviews_auto`               | esencial        | Peticiones de reseña tras la cita (email/WhatsApp/SMS) + enlace a la ficha de Google. No usa la API de Google |
 | `web_domain`            |               15 | (sin unlocks; funciÃ³n independiente)| esencial        | Dominio propio (citas.tunegocio.com) con SSL + SEO                                  |
 | `deposits_antinoshow`   |                5 | (sin unlocks; funciÃ³n independiente)| esencial        | SeÃ±al al reservar para reducir no-shows                                             |
 | `message_bundles`       |  metered (top-up) | (sin unlocks; consumo de crÃ©ditos)  | todos           | CrÃ©ditos para WhatsApp masivo / SMS marketing. No aparece en la lista; se top-up desde "Bonos" |
@@ -97,18 +97,21 @@ Checkout, excepto `message_bundles` (metered, top-up programÃ¡tico).
   el plan del tenant, el catÃ¡logo lo oculta. Implementado en
   `AddOnsService.isRelevantForPlan()` y reflejado en
   `upsellableAddOnsForPlan()`.
-- **Stripe price id:** los 6 add-ons no-metered tienen su `price_` id
-  almacenado en la columna `add_ons.stripePriceId`. Se rellena
-  manualmente en el dashboard de Stripe al crear el producto (ver
-  `docs/h4-multichannel-setup.md` Â§2.1).
+- **Cobro (2026-10):** un add-on es un item mas de la suscripcion del plan
+  en Stripe, con `price_data` (precio de `add_ons.monthlyPriceCents`) y un
+  producto fijo `kiraroom_addon_<key>`; se prorratea al anadirlo o quitarlo.
+  No hace falta crear precios a mano: `add_ons.stripePriceId` ya no se usa.
+  El webhook `customer.subscription.updated` activa o desactiva cada add-on
+  segun los items (`metadata.kind = addon`). Solo se venden los que tienen
+  `add_ons.purchasable = true`; los demas salen como "Proximamente".
+  Requiere una suscripcion de pago activa (no en prueba).
 
 ### 4.1 API de add-ons (tenant-facing)
 
-- `GET  /payments/add-ons/available` â€” catalogo filtrado por plan
-- `GET  /payments/tenants/current/add-ons` â€” add-ons instalados
-- `POST /payments/add-ons/:key/checkout` â€” crea Stripe Checkout session,
-  soporta `body.returnTo` (allow-list de paths same-origin)
-- `DELETE /payments/tenants/current/add-ons/:key` â€” cancela
+- `GET  /payments/add-ons/available` - catalogo filtrado por plan (con `purchasable`)
+- `GET  /payments/tenants/current/add-ons` - add-ons instalados
+- `POST /payments/tenants/current/add-ons/:key` - lo anade a la suscripcion (prorrateado)
+- `DELETE /payments/tenants/current/add-ons/:key` - lo quita de Stripe y lo cancela
 
 ### 4.2 Email de bienvenida
 

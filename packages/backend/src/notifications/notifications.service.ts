@@ -75,6 +75,13 @@ const DEFAULT_PREFERENCES: Record<
   },
   schedule_change: { inApp: true, email: true, sms: false, whatsapp: false },
   new_message: { inApp: true, email: false, sms: false, whatsapp: false },
+  // The client asked to be told: every channel is on unless they turn it off.
+  waitlist_slot_available: {
+    inApp: true,
+    email: true,
+    sms: true,
+    whatsapp: true,
+  },
 };
 
 @Injectable()

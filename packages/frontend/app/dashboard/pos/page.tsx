@@ -5,6 +5,7 @@ import apiClient from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
 import { useToast, toast } from "@/components/ui/use-toast";
 import AppointmentSelector from "./components/appointment-selector";
+import type { ClientLoyaltySummary } from "@/lib/api";
 
 interface Service {
   id: string;
@@ -109,6 +110,38 @@ export default function POSPage() {
   const [isAdmin, setIsAdmin] = useState(false);
   const { toast } = useToast();
   
+  // Loyalty: the selected client's rewards, and the one being redeemed.
+  const [loyalty, setLoyalty] = useState<ClientLoyaltySummary | null>(null);
+  const [rewardId, setRewardId] = useState<string>("");
+
+  useEffect(() => {
+    setRewardId("");
+    setLoyalty(null);
+    if (!selectedClient?.id) return;
+    apiClient
+      .getClientLoyalty(selectedClient.id)
+      .then(setLoyalty)
+      .catch(() => setLoyalty(null)); // no plan / no programme: nothing to show
+  }, [selectedClient?.id]);
+
+  // Same rule as the server (LoyaltyService.discountFor), in euros, so the
+  // amount charged is what the client really pays.
+  const loyaltyDiscount = (): number => {
+    const reward = loyalty?.rewards.find((r) => r.id === rewardId);
+    if (!reward) return 0;
+    const subtotal = calculateTotal();
+    let d = 0;
+    if (reward.type === "discount") {
+      if (reward.discountPercent) d = Math.round(subtotal * reward.discountPercent) / 100;
+      else if (reward.discountAmount) d = reward.discountAmount / 100;
+    } else if (reward.type === "free_service") {
+      const item = cart.find((i) => i.service.id === reward.freeServiceId);
+      d = item ? item.service.price : 0;
+    }
+    return Math.max(0, Math.min(d, subtotal));
+  };
+  const amountDue = () => Math.max(0, calculateTotal() - loyaltyDiscount());
+
   // Appointment payment integration
   const [showAppointmentSelector, setShowAppointmentSelector] = useState(false);
   const [selectedAppointments, setSelectedAppointments] = useState<any[]>([]);
@@ -368,21 +401,26 @@ export default function POSPage() {
         payments: [
           {
             method: selectedPaymentMethod,
-            amount: Math.round(calculateTotal() * 100),
+            amount: Math.round(amountDue() * 100),
           },
         ],
+        ...(rewardId ? { loyaltyRewardId: rewardId } : {}),
       };
 
       console.log("Starting POS checkout with data:", checkoutData);
 
-      const result = await apiClient.posCheckout(checkoutData);
+      const result: any = await apiClient.posCheckout(checkoutData);
 
       console.log("POS checkout result:", result);
 
       // Show success message
+      const pts = result?.loyalty;
       toast({
         title: t("pos.sale_completed"),
-        description: t("pos.payment_completed"),
+        description:
+          t("pos.payment_completed") +
+          (pts?.pointsSpent ? ` · Canjeados ${pts.pointsSpent} puntos` : "") +
+          (pts?.pointsEarned ? ` · +${pts.pointsEarned} puntos` : ""),
       });
 
       // Clear cart and reset
@@ -532,10 +570,11 @@ export default function POSPage() {
         clientId: selectedAppointments[0].client.id,
         appointmentIds: selectedAppointments.map((apt: any) => apt.id),
         items,
+        ...(rewardId ? { loyaltyRewardId: rewardId } : {}),
         payments: [
           {
             method: selectedPaymentMethod,
-            amount: totalAmountCents,
+            amount: Math.max(0, totalAmountCents - Math.round(loyaltyDiscount() * 100)),
             type: "appointment" as const,
             isDeposit: false,
           },
@@ -862,11 +901,44 @@ export default function POSPage() {
                 )}
               </div>
 
+              {/* Loyalty reward */}
+              {loyalty?.member && (
+                <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-sm">
+                  <div className="mb-1">
+                    Puntos: <strong>{loyalty.member.currentPoints}</strong>
+                  </div>
+                  {loyalty.rewards.some((r) => r.redeemable) ? (
+                    <select
+                      value={rewardId}
+                      onChange={(e) => setRewardId(e.target.value)}
+                      className="w-full rounded border px-2 py-1"
+                    >
+                      <option value="">No canjear puntos</option>
+                      {loyalty.rewards
+                        .filter((r) => r.redeemable)
+                        .map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.name} ({r.pointsCost} puntos)
+                          </option>
+                        ))}
+                    </select>
+                  ) : (
+                    <div className="text-xs text-gray-600">Aún no le llega para ninguna recompensa.</div>
+                  )}
+                </div>
+              )}
+
               {/* Total */}
               <div className="border-t pt-4">
+                {rewardId && (
+                  <div className="flex justify-between text-sm text-amber-700">
+                    <span>Descuento por puntos</span>
+                    <span>-{formatCurrency(loyaltyDiscount())}</span>
+                  </div>
+                )}
                 <div className="flex justify-between text-lg font-bold">
                   <span>{t("pos.total")}</span>
-                  <span>{formatCurrency(calculateTotal())}</span>
+                  <span>{formatCurrency(amountDue())}</span>
                 </div>
               </div>
 

@@ -521,7 +521,18 @@ export class SaasService {
       // location, so a per-plan count undercounts it.
       this.prisma.tenant.findMany({
         where: { subscriptionStatus: "active", ...TENANT_ACTIVE_WHERE },
-        select: { plan: true, maxLocations: true },
+        select: {
+          plan: true,
+          maxLocations: true,
+          // Paid add-ons only: a manual grant (no Stripe item) bills nothing.
+          tenantAddOns: {
+            where: { status: "active", stripeSubscriptionItemId: { not: null } },
+            select: {
+              monthlyPriceCents: true,
+              addOn: { select: { monthlyPriceCents: true, metered: true } },
+            },
+          },
+        },
       }),
       this.prisma.tenant.groupBy({
         by: ["subscriptionStatus"],
@@ -559,9 +570,17 @@ export class SaasService {
     // on Empresa. Legacy plan names count as the plan they map to; unknown
     // plans contribute 0 so a new enum value doesn't crash analytics.
     // (The console divided this by 100, as if it were cents, and showed
-    // 0,49 € per Esencial salon.) Add-ons are not included yet.
+    // 0,49 € per Esencial salon.) Plus the add-ons each one pays for.
     const mrr = activePlanBreakdown.reduce(
-      (sum, t) => sum + monthlyPlanRevenue(t.plan, t.maxLocations),
+      (sum, t) =>
+        sum +
+        monthlyPlanRevenue(
+          t.plan,
+          t.maxLocations,
+          (t.tenantAddOns ?? [])
+            .filter((a) => !a.addOn?.metered)
+            .map((a) => a.monthlyPriceCents ?? a.addOn?.monthlyPriceCents ?? 0),
+        ),
       0,
     );
 
@@ -887,9 +906,24 @@ const LEGACY_PLAN: Record<string, keyof typeof PLAN_PRICES> = {
   enterprise: "empresa",
 };
 
-/** What a tenant on this plan pays per month, in euros, before VAT. */
-export function monthlyPlanRevenue(plan: string, locations: number | null | undefined): number {
+/**
+ * What a tenant on this plan pays per month, in euros, before VAT: the plan
+ * (per location on Empresa) plus its paid add-ons, given as the monthly
+ * cents each Stripe item bills. Add-ons were left out, so MRR undercounted
+ * every salon that bought one.
+ */
+export function monthlyPlanRevenue(
+  plan: string,
+  locations: number | null | undefined,
+  addOnMonthlyCents: ReadonlyArray<number | null | undefined> = [],
+): number {
   const id = (LEGACY_PLAN[plan] ?? plan) as keyof typeof PLAN_PRICES;
   const price = PLAN_PRICES[id] ?? 0;
-  return id === "empresa" ? price * Math.max(1, locations ?? 1) : price;
+  const planRevenue = id === "empresa" ? price * Math.max(1, locations ?? 1) : price;
+  const addOnCents = addOnMonthlyCents.reduce<number>(
+    (sum, cents) => sum + (Number.isFinite(cents) && (cents as number) > 0 ? (cents as number) : 0),
+    0,
+  );
+  // Summed in cents: 12.90 + 24 in floating-point euros drifts.
+  return Math.round(planRevenue * 100 + addOnCents) / 100;
 }

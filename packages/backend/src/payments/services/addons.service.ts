@@ -1,5 +1,12 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import type Stripe from 'stripe';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { FeatureFlagService } from '../../common/feature-flags/feature-flag.service';
 import { FeatureKey, SubscriptionsService, PlanId } from './subscriptions.service';
@@ -29,6 +36,18 @@ import { EmailService } from '../../notifications/services/email.service';
  * retire that path. Until then, both sources are read by
  * `feature-flag.service.ts` (union).
  */
+/**
+ * Catalogue rows that exist but must not be offered or bought.
+ *
+ * `web_domain` ("Web con dominio propio + SEO", 15 €/mes) was on sale while
+ * nothing behind it worked: the purchase flipped a flag and no domain ever
+ * served a page. A salon can now connect its own domain for free from
+ * Ajustes, but the page is served on that domain only once the operator has
+ * set up certificates for customer domains (docs/custom-domains.md). Until
+ * then it is not sold. Remove it from this set when it is.
+ */
+export const WITHHELD_ADDON_KEYS: ReadonlySet<string> = new Set(['web_domain']);
+
 @Injectable()
 export class AddOnsService {
   private readonly logger = new Logger(AddOnsService.name);
@@ -49,7 +68,9 @@ export class AddOnsService {
       where: { isActive: true },
       orderBy: [{ sortOrder: 'asc' }, { key: 'asc' }],
     });
-    const entries: CatalogEntry[] = all.map((row) => ({
+    const entries: CatalogEntry[] = all
+      .filter((row) => !WITHHELD_ADDON_KEYS.has(row.key))
+      .map((row) => ({
       id: row.id,
       key: row.key,
       name: row.name,
@@ -62,6 +83,7 @@ export class AddOnsService {
       metered: row.metered,
       stripePriceId: row.stripePriceId,
       isActive: row.isActive,
+      purchasable: row.purchasable === true,
       sortOrder: row.sortOrder,
     }));
     return planFilter
@@ -123,6 +145,8 @@ export class AddOnsService {
     tenantId: string;
     addOnKey: string;
     stripeSubscriptionItemId: string;
+    stripeSubscriptionId?: string | null;
+    monthlyPriceCents?: number | null;
     status: 'active' | 'past_due' | 'cancelled' | 'expired';
     currentPeriodEnd?: Date | null;
   }): Promise<TenantAddOnRow | null> {
@@ -139,6 +163,24 @@ export class AddOnsService {
       return null;
     }
 
+    // Read before the upsert: the welcome email below fires on the edge
+    // into 'active', which the upserted row alone cannot show (it was
+    // compared with itself, so the email never went out).
+    const before = await this.prisma.tenantAddOn.findUnique({
+      where: { tenantId_addOnId: { tenantId: args.tenantId, addOnId: addOn.id } },
+      select: { status: true },
+    });
+    const billing = {
+      stripeSubscriptionItemId: args.stripeSubscriptionItemId,
+      ...(args.stripeSubscriptionId !== undefined
+        ? { stripeSubscriptionId: args.stripeSubscriptionId }
+        : {}),
+      ...(args.monthlyPriceCents !== undefined
+        ? { monthlyPriceCents: args.monthlyPriceCents }
+        : {}),
+      status: args.status,
+      currentPeriodEnd: args.currentPeriodEnd ?? null,
+    };
     const result = await this.prisma.tenantAddOn.upsert({
       where: {
         tenantId_addOnId: {
@@ -149,14 +191,12 @@ export class AddOnsService {
       create: {
         tenantId: args.tenantId,
         addOnId: addOn.id,
-        stripeSubscriptionItemId: args.stripeSubscriptionItemId,
-        status: args.status,
-        currentPeriodEnd: args.currentPeriodEnd ?? null,
+        ...billing,
       },
       update: {
-        stripeSubscriptionItemId: args.stripeSubscriptionItemId,
-        status: args.status,
-        currentPeriodEnd: args.currentPeriodEnd ?? null,
+        ...billing,
+        // A re-purchase after a cancellation is active again.
+        ...(args.status === 'active' ? { cancelledAt: null } : {}),
       },
     });
     this.logger.log(
@@ -170,13 +210,14 @@ export class AddOnsService {
 
     // H-4: send a one-time welcome email when the multichannel
     // add-on transitions to active. We only fire on the active
-    // edge: an existing 'past_due' or 'cancelled' row that becomes
-    // 'active' (re-activation) is not a new purchase, so we suppress.
-    const wasActiveBefore = result.status === args.status && result.status === 'active';
+    // edge of a purchase: no row before, or a cancelled one bought again.
+    // A 'past_due' row that becomes 'active' is a recovered payment, and
+    // an 'active' one is a repeated webhook: neither is a new purchase.
+    const isPurchase = !before || before.status === 'cancelled';
     if (
       args.status === 'active' &&
       addOn.key === 'multichannel' &&
-      !wasActiveBefore
+      isPurchase
     ) {
       await this.sendMultichannelWelcomeEmail(args.tenantId);
     }
@@ -312,6 +353,176 @@ export class AddOnsService {
     return this.toTenantAddOnRow(row);
   }
 
+  // ────────── Purchase from the salon's billing page ──────────
+
+  /**
+   * Buys an add-on: one more item, priced from the catalogue, on the
+   * salon's plan subscription (SubscriptionsService.addAddOnItem), billed
+   * prorated from today. The row is written from what Stripe answers, and
+   * the customer.subscription.updated webhook keeps it in sync after that.
+   *
+   * It used to need a `price_` id typed into the catalogue by hand, which
+   * no add-on had, so every purchase was refused; and the Checkout it
+   * opened was on the salon's own Stripe account instead of KiraRoom's.
+   */
+  async purchase(tenantId: string, addOnKey: string): Promise<TenantAddOnRow> {
+    const addOn = await this.prisma.addOn.findUnique({ where: { key: addOnKey } });
+    if (!addOn || !addOn.isActive) {
+      throw new NotFoundException('Ese complemento no existe');
+    }
+    if (addOn.metered) {
+      throw new BadRequestException(
+        'Los bonos de mensajes se recargan desde su sección, no se contratan aquí.',
+      );
+    }
+    if (!addOn.purchasable || WITHHELD_ADDON_KEYS.has(addOn.key)) {
+      // Listed as "Próximamente": what it unlocks does not work yet.
+      throw new ConflictException(
+        `«${addOn.name}» estará disponible próximamente; todavía no se puede contratar.`,
+      );
+    }
+    if (!addOn.monthlyPriceCents || addOn.monthlyPriceCents <= 0) {
+      throw new ConflictException(`«${addOn.name}» no tiene precio en el catálogo.`);
+    }
+
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { plan: true, subscriptionStatus: true, stripeSubscriptionId: true },
+    });
+    if (!tenant) throw new NotFoundException('Salón no encontrado');
+    if (tenant.subscriptionStatus !== 'active' || !tenant.stripeSubscriptionId) {
+      // There is no subscription to add it to: in trial, or not paying.
+      throw new BadRequestException(
+        'Los complementos se añaden a tu suscripción. Activa tu plan de pago primero.',
+      );
+    }
+    const plan = this.subs.normalizePlan(tenant.plan);
+    if (!this.isRelevantForPlan(this.toRow(addOn), plan)) {
+      throw new BadRequestException(`Tu plan ya incluye «${addOn.name}».`);
+    }
+
+    const existing = await this.prisma.tenantAddOn.findUnique({
+      where: { tenantId_addOnId: { tenantId, addOnId: addOn.id } },
+    });
+    if (existing?.status === 'active') {
+      throw new ConflictException(`«${addOn.name}» ya está activo.`);
+    }
+
+    const subscription = await this.subs.addAddOnItem({
+      tenantId,
+      subscriptionId: tenant.stripeSubscriptionId,
+      addOnKey: addOn.key,
+      addOnName: addOn.name,
+      monthlyPriceCents: addOn.monthlyPriceCents,
+      currency: addOn.currency,
+    });
+    await this.syncFromSubscription(subscription);
+
+    const row = await this.prisma.tenantAddOn.findUnique({
+      where: { tenantId_addOnId: { tenantId, addOnId: addOn.id } },
+    });
+    if (!row) {
+      // Stripe has the item but it did not come back on the subscription.
+      // The webhook will write the row; say so instead of claiming success.
+      throw new ConflictException(
+        'Stripe aún no ha confirmado el complemento. Recarga la página en unos segundos.',
+      );
+    }
+    return this.toTenantAddOnRow(row);
+  }
+
+  /**
+   * Stops an add-on. A paid one leaves the Stripe subscription first (with
+   * a prorated credit) and is only marked cancelled once Stripe accepted
+   * that: it used to be marked cancelled here while Stripe kept billing it.
+   * A manual grant has nothing billed and is just ended.
+   */
+  async cancelForTenant(tenantId: string, addOnKey: string): Promise<{ ok: boolean }> {
+    const addOn = await this.prisma.addOn.findUnique({ where: { key: addOnKey } });
+    if (!addOn) throw new NotFoundException('Ese complemento no existe');
+    const row = await this.prisma.tenantAddOn.findUnique({
+      where: { tenantId_addOnId: { tenantId, addOnId: addOn.id } },
+    });
+    if (!row || row.status === 'cancelled' || row.status === 'expired') {
+      throw new NotFoundException(`«${addOn.name}» no está activo.`);
+    }
+    if (row.stripeSubscriptionItemId) {
+      const subscription = await this.subs.removeAddOnItem({
+        tenantId,
+        itemId: row.stripeSubscriptionItemId,
+      });
+      if (subscription.metadata?.kind !== 'addon') {
+        await this.syncFromSubscription(subscription);
+      }
+    }
+    await this.cancelFromStripe({ tenantId, addOnKey });
+    return { ok: true };
+  }
+
+  /**
+   * Brings tenant_add_ons in line with the add-on items of a plan
+   * subscription, as Stripe reports it (webhook or API answer):
+   *
+   *   - each item with metadata.kind='addon' is provisioned with the
+   *     subscription's status (active, or past_due while a payment fails);
+   *   - a row that was billed on this subscription and whose item is gone,
+   *     or the whole subscription ended, is cancelled.
+   *
+   * Idempotent: Stripe delivers the same event more than once.
+   */
+  async syncFromSubscription(subscription: Stripe.Subscription): Promise<void> {
+    const tenantId = subscription.metadata?.tenantId;
+    if (!tenantId) return;
+    const ended =
+      subscription.status === 'canceled' || subscription.status === 'incomplete_expired';
+    const status = addOnStatusFromStripe(subscription.status);
+    const currentPeriodEnd =
+      subscription.current_period_end && subscription.current_period_end > 0
+        ? new Date(subscription.current_period_end * 1000)
+        : null;
+
+    const live = new Set<string>();
+    if (!ended) {
+      for (const item of subscription.items?.data ?? []) {
+        if (item.metadata?.kind !== 'addon') continue;
+        const key = item.metadata?.addOnKey;
+        if (!key) continue;
+        // An item stamped for another salon is not this one's to activate.
+        if (item.metadata?.tenantId && item.metadata.tenantId !== tenantId) continue;
+        live.add(item.id);
+        await this.provisionFromStripe({
+          tenantId,
+          addOnKey: key,
+          stripeSubscriptionItemId: item.id,
+          stripeSubscriptionId: subscription.id,
+          monthlyPriceCents: item.price?.unit_amount ?? null,
+          status,
+          currentPeriodEnd,
+        });
+      }
+    }
+
+    const billedHere = await this.prisma.tenantAddOn.findMany({
+      where: {
+        tenantId,
+        stripeSubscriptionId: subscription.id,
+        status: { not: 'cancelled' },
+      },
+      select: { id: true, stripeSubscriptionItemId: true, addOn: { select: { key: true } } },
+    });
+    for (const row of billedHere) {
+      if (row.stripeSubscriptionItemId && live.has(row.stripeSubscriptionItemId)) continue;
+      await this.prisma.tenantAddOn.update({
+        where: { id: row.id },
+        data: { status: 'cancelled', cancelledAt: new Date() },
+      });
+      this.logger.log(`add-on cancel tenant=${tenantId} key=${row.addOn?.key} (left subscription)`);
+      this.metrics
+        .counter(COUNTERS.ADDON_CANCELLED, 'Add-on cancelled (Stripe or manual)')
+        .inc({ key: row.addOn?.key ?? 'unknown' });
+    }
+  }
+
   // ────────── Catalog gating ──────────
 
   /**
@@ -347,6 +558,7 @@ export class AddOnsService {
       metered: row.metered,
       stripePriceId: row.stripePriceId,
       isActive: row.isActive,
+      purchasable: row.purchasable === true,
       sortOrder: row.sortOrder,
     };
   }
@@ -365,6 +577,33 @@ export class AddOnsService {
   }
 }
 
+/**
+ * Map a Stripe subscription status onto the lifecycle we model in
+ * `tenant_add_ons.status`. Stripe statuses not enumerated here fall
+ * through to 'past_due' which keeps the entitlement gated (fail
+ * safe) without losing the row -- the next webhook normally clarifies
+ * within minutes.
+ */
+export function addOnStatusFromStripe(
+  status: Stripe.Subscription.Status,
+): 'active' | 'past_due' | 'cancelled' | 'expired' {
+  switch (status) {
+    case 'active':
+    case 'trialing':
+      return 'active';
+    case 'past_due':
+    case 'unpaid':
+    case 'incomplete':
+    case 'incomplete_expired':
+    case 'paused':
+      return 'past_due';
+    case 'canceled':
+      return 'cancelled';
+    default:
+      return 'past_due';
+  }
+}
+
 export interface CatalogEntry {
   id: string;
   key: string;
@@ -376,6 +615,8 @@ export interface CatalogEntry {
   metered: boolean;
   stripePriceId: string | null;
   isActive: boolean;
+  /** False = "Próximamente": listed, never charged. */
+  purchasable: boolean;
   sortOrder: number;
 }
 

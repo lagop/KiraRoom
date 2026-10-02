@@ -5,7 +5,7 @@ import Stripe from 'stripe';
 import { PaymentsService } from './payments.service';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { EmailService } from '../notifications/services/email.service';
-import { AddOnsService } from './services/addons.service';
+import { AddOnsService, addOnStatusFromStripe } from './services/addons.service';
 import { MessageBundlesService } from '../message-bundles/message-bundles.service';
 import { Public } from '../auth/decorators/public.decorator';
 import { activationFromCheckout, activationFromSubscription, PlanActivation } from './plan-activation';
@@ -227,11 +227,15 @@ export class WebhooksController {
    *
    *   - `metadata.kind === 'addon'`      -> P2A-receptionist-v2: provision
    *                                       or cancel the tenant_add_on row.
-   *   - anything else (incl. undefined)  -> legacy plan subscription
-   *                                       status reconciliation.
-   *
-   * This split lets us reuse the same Stripe event for both the plan
-   * and add-ons without two Stripe products.
+   *                                       (Add-ons bought before they
+   *                                       became items of the plan
+   *                                       subscription.)
+   *   - anything else (incl. undefined)  -> plan subscription status
+   *                                       reconciliation, then its add-on
+   *                                       items: one added activates that
+   *                                       add-on, one removed (or the
+   *                                       subscription ending) deactivates
+   *                                       it.
    */
   private async handleSubscriptionLifecycle(
     subscription: Stripe.Subscription,
@@ -243,6 +247,7 @@ export class WebhooksController {
       return;
     }
     await this.handlePlanSubscription(subscription, event);
+    await this.addonsService.syncFromSubscription(subscription);
   }
 
   /**
@@ -280,7 +285,9 @@ export class WebhooksController {
       tenantId,
       addOnKey,
       stripeSubscriptionItemId: item?.id ?? subscription.id,
-      status: mapStripeStatus(subscription.status),
+      stripeSubscriptionId: subscription.id,
+      monthlyPriceCents: item?.price?.unit_amount ?? null,
+      status: addOnStatusFromStripe(subscription.status),
       // current_period_end lives on the subscription, not the item.
       // Stripe sends a Unix timestamp here (seconds).
       currentPeriodEnd:
@@ -580,32 +587,5 @@ export class WebhooksController {
         `Failed to send payment-failed email for invoice ${invoice.id}: ${(err as Error).message}`,
       );
     }
-  }
-}
-
-/**
- * Map a Stripe subscription status onto the lifecycle we model in
- * `tenant_add_ons.status`. Stripe statuses not enumerated here fall
- * through to 'past_due' which keeps the entitlement gated (fail
- * safe) without losing the row -- the next webhook normally clarifies
- * within minutes.
- */
-function mapStripeStatus(
-  status: Stripe.Subscription.Status,
-): 'active' | 'past_due' | 'cancelled' | 'expired' {
-  switch (status) {
-    case 'active':
-    case 'trialing':
-      return 'active';
-    case 'past_due':
-    case 'unpaid':
-    case 'incomplete':
-    case 'incomplete_expired':
-    case 'paused':
-      return 'past_due';
-    case 'canceled':
-      return 'cancelled';
-    default:
-      return 'past_due';
   }
 }

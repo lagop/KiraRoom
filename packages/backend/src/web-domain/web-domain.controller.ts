@@ -1,46 +1,53 @@
-import { Body, Controller, Get, Post, Req, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Post, Put, Req } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
-import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
-import { RolesGuard } from "../auth/guards/roles.guard";
+import { Throttle } from "@nestjs/throttler";
+import { IsString, MaxLength } from "class-validator";
 import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
-import { UserRole } from "@prisma/client";
 import { WebDomainService } from "./web-domain.service";
 
+export class SetWebDomainDto {
+  @IsString()
+  @MaxLength(300)
+  domain!: string;
+}
+
+/**
+ * The salon's own domain for its public page. Bring-your-own only: there is
+ * no availability check or purchase any more (both were simulated).
+ */
 @ApiTags("web-domain")
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller("web-domain")
 export class WebDomainController {
   constructor(private readonly service: WebDomainService) {}
 
   @Get()
-  @ApiOperation({ summary: "Estado del add-on web_domain del tenant" })
   @Roles(...SALON_MANAGERS)
+  @ApiOperation({ summary: "Public page URL and custom-domain state, with the DNS records to create" })
   status(@Req() req: any) {
     return this.service.getStatus(req.user.tenantId);
   }
 
-  @Post("check-availability")
-  @ApiOperation({ summary: "Comprueba disponibilidad de un dominio (mock)" })
+  @Put()
   @Roles(...SALON_MANAGERS)
-  check(@Body() body: { domain: string }) {
-    return this.service.checkAvailability(body.domain);
+  @ApiOperation({ summary: "Set the salon's own domain (starts unverified)" })
+  setDomain(@Req() req: any, @Body() body: SetWebDomainDto) {
+    return this.service.setDomain(req.user.tenantId, body.domain);
   }
 
-  @Post("purchase")
-  @Roles(UserRole.owner)
-  @ApiOperation({ summary: "Inicia la compra del add-on web_domain" })
-  purchase(@Req() req: any, @Body() body: { domain: string }) {
-    return this.service.purchase(req.user.tenantId, body.domain);
+  // Each click runs three DNS lookups against the resolver.
+  @Post("verify")
+  @Roles(...SALON_MANAGERS)
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  @ApiOperation({ summary: "Check the DNS records now" })
+  verify(@Req() req: any) {
+    return this.service.verify(req.user.tenantId);
   }
 
-  @Post("configure")
-  @Roles(UserRole.owner, UserRole.admin)
-  @ApiOperation({ summary: "Configura dominio, SEO, sitemap del add-on" })
-  configure(
-    @Req() req: any,
-    @Body() body: { domain?: string; seoTitle?: string; seoDescription?: string },
-  ) {
-    return this.service.configure(req.user.tenantId, body);
+  @Delete()
+  @Roles(...SALON_MANAGERS)
+  @ApiOperation({ summary: "Disconnect the salon's domain" })
+  remove(@Req() req: any) {
+    return this.service.removeDomain(req.user.tenantId);
   }
 }

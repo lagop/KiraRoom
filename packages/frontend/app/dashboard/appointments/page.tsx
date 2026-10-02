@@ -21,6 +21,7 @@ import apiClient, { Appointment as ApiAppointment } from "../../../lib/api";
 import { useTranslations } from "@/lib/use-translation";
 import { Calendar as CalendarComponent } from "../../../components/Calendar/Calendar";
 import { AppointmentDrawer } from "./components/appointment-drawer";
+import { drawerTargetFromQuery } from "./components/appointment-drawer.utils";
 
 type AppointmentStatus =
   | "confirmed"
@@ -176,12 +177,15 @@ function AppointmentsPageContent() {
   const [isSearchingClient, setIsSearchingClient] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
 
-  // Check for ?new=true query parameter to open new appointment drawer
+  // ?new=true opens the drawer for a new appointment; ?appointment=<id>
+  // (&edit=1) opens an existing one -- the detail page's "Editar" lands here.
+  const [drawerStartsInEdit, setDrawerStartsInEdit] = useState(false);
   useEffect(() => {
-    if (searchParams?.get("new") === "true") {
-      setSelectedAppointmentId(null);
-      setDrawerOpen(true);
-    }
+    const target = drawerTargetFromQuery(searchParams);
+    if (!target) return;
+    setSelectedAppointmentId(target.mode === "existing" ? target.appointmentId : null);
+    setDrawerStartsInEdit(target.mode === "existing" && target.edit);
+    setDrawerOpen(true);
   }, [searchParams]);
 
   const fetchAppointments = async () => {
@@ -1413,9 +1417,13 @@ function AppointmentsPageContent() {
       <AppointmentDrawer
         appointmentId={selectedAppointmentId}
         open={drawerOpen}
-        onOpenChange={setDrawerOpen}
+        onOpenChange={(open) => {
+          setDrawerOpen(open);
+          if (!open) setDrawerStartsInEdit(false);
+        }}
         onAppointmentUpdated={fetchAppointments}
         refreshKey={drawerRefreshKey}
+        startInEditMode={drawerStartsInEdit}
       />
     </div>
   );

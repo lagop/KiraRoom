@@ -1,8 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { clientsWhoRefusedMarketing } from "../consent/marketing-consent";
 import { EmailService } from '../notifications/services/email.service';
 import { CampaignType } from './dto';
+import { EmailCampaignsService } from './email-campaigns.service';
+import { EmailSuppressionService } from './email-suppression.service';
 
 @Injectable()
 export class EmailCampaignsScheduler {
@@ -11,138 +14,49 @@ export class EmailCampaignsScheduler {
   constructor(
     private readonly prisma: PrismaService,
     private readonly emailService: EmailService,
+    private readonly campaigns: EmailCampaignsService,
+    private readonly suppressions: EmailSuppressionService,
   ) {}
 
   /**
    * Scheduled Campaigns Cron Job
-   * Runs every 5 minutes to process campaigns scheduled for future delivery
-   * Uses Resend's scheduling feature to schedule emails directly with the provider
+   * Runs every 5 minutes and sends the campaigns whose time has come.
+   *
+   * There used to be a second job that handed campaigns due in the next ten
+   * minutes to Resend's batch API with a `send_at` field. The batch API has
+   * no scheduling and the field name was wrong anyway, so those emails went
+   * out up to ten minutes early, their Resend ids were thrown away (no
+   * delivery, open or bounce could ever be matched back), and this job then
+   * found no pending recipients and marked the campaign sent with zero
+   * emails. One path now: up to five minutes late, fully tracked.
    */
   @Cron(CronExpression.EVERY_5_MINUTES)
   async processScheduledCampaigns() {
-    this.logger.log('Processing scheduled email campaigns...');
-
     try {
-      // Find campaigns that are scheduled but not yet sent
-      const now = new Date();
-      
-      const scheduledCampaigns = await this.prisma.emailCampaign.findMany({
-        where: {
-          status: 'scheduled',
-          scheduledAt: {
-            lte: now, // Scheduled time has passed
-          },
-        },
-        include: {
-          recipients: {
-            where: {
-              status: 'pending', // Only pending recipients
-            },
-          },
-        },
+      const due = await this.prisma.emailCampaign.findMany({
+        where: { status: 'scheduled', scheduledAt: { lte: new Date() } },
+        select: { id: true, tenantId: true },
       });
+      if (due.length === 0) return;
+      if (!this.emailService.isConfigured()) {
+        // Left scheduled, not failed: they go out once RESEND_API_KEY is set.
+        this.logger.warn(`${due.length} scheduled campaign(s) due but email sending is not configured`);
+        return;
+      }
 
-      this.logger.log(`Found ${scheduledCampaigns.length} scheduled campaigns ready to send`);
-
-      let sentCount = 0;
-      let errorCount = 0;
-
-      for (const campaign of scheduledCampaigns) {
+      for (const campaign of due) {
         try {
-          await this.sendCampaign(campaign);
-          sentCount++;
+          await this.campaigns.deliverCampaign(campaign.tenantId, campaign.id, ['scheduled']);
         } catch (error) {
-          errorCount++;
           this.logger.error(`Failed to send scheduled campaign ${campaign.id}: ${error.message}`);
-          
-          // Update campaign status to failed
-          await this.prisma.emailCampaign.update({
-            where: { id: campaign.id },
+          await this.prisma.emailCampaign.updateMany({
+            where: { id: campaign.id, status: 'sending' },
             data: { status: 'failed' },
           });
         }
       }
-
-      this.logger.log(`Scheduled campaigns job completed: ${sentCount} sent, ${errorCount} errors`);
     } catch (error) {
       this.logger.error(`Scheduled campaigns job failed: ${error.message}`);
-    }
-  }
-
-  /**
-   * Alternative: Schedule emails directly with Resend using their batch API
-   * This approach schedules emails at the provider level
-   */
-  @Cron(CronExpression.EVERY_10_MINUTES)
-  async scheduleWithResend() {
-    this.logger.log('Scheduling campaigns with Resend batch API...');
-
-    try {
-      const now = new Date();
-      const tenMinutesFromNow = new Date(now.getTime() + 10 * 60 * 1000);
-
-      // Find campaigns that are scheduled and have recipients pending
-      const campaignsToSchedule = await this.prisma.emailCampaign.findMany({
-        where: {
-          status: 'scheduled',
-          scheduledAt: {
-            gt: now, // Scheduled for future
-            lte: tenMinutesFromNow, // Within next 10 minutes
-          },
-        },
-        include: {
-          recipients: {
-            where: {
-              status: 'pending',
-            },
-          },
-        },
-      });
-
-      for (const campaign of campaignsToSchedule) {
-        if (campaign.recipients.length === 0) continue;
-
-        try {
-          // Get the scheduled time
-          const scheduledTime = campaign.scheduledAt;
-          if (!scheduledTime) continue;
-
-          // Prepare batch emails with scheduling
-          const emails = campaign.recipients.map((recipient) => ({
-            from: campaign.fromName 
-              ? `${campaign.fromName} <${process.env.EMAIL_FROM || 'noreply@yourdomain.com'}>`
-              : process.env.EMAIL_FROM || 'noreply@yourdomain.com',
-            to: [recipient.email], // Resend batch expects array
-            subject: campaign.subject,
-            html: campaign.content,
-            reply_to: campaign.replyTo,
-            // Resend expects ISO 8601 format
-            send_at: scheduledTime.toISOString(),
-          }));
-
-          // Send batch to Resend
-          const result = await this.emailService.sendBatchEmails(emails);
-
-          if (result.success) {
-            // Update all recipients to scheduled status
-            await this.prisma.emailCampaignRecipient.updateMany({
-              where: {
-                campaignId: campaign.id,
-                status: 'pending',
-              },
-              data: {
-                status: 'scheduled',
-              },
-            });
-
-            this.logger.log(`Scheduled ${emails.length} emails for campaign ${campaign.id}`);
-          }
-        } catch (error) {
-          this.logger.error(`Failed to schedule campaign ${campaign.id} with Resend: ${error.message}`);
-        }
-      }
-    } catch (error) {
-      this.logger.error(`Resend scheduling job failed: ${error.message}`);
     }
   }
 
@@ -169,88 +83,6 @@ export class EmailCampaignsScheduler {
     } catch (error) {
       this.logger.error(`Campaign cleanup job failed: ${error.message}`);
     }
-  }
-
-  /**
-   * Helper method to send a campaign
-   */
-  private async sendCampaign(campaign: any) {
-    const recipients = campaign.recipients;
-    
-    if (recipients.length === 0) {
-      this.logger.warn(`Campaign ${campaign.id} has no pending recipients`);
-      
-      // If no recipients, mark as sent anyway
-      await this.prisma.emailCampaign.update({
-        where: { id: campaign.id },
-        data: { 
-          status: 'sent',
-          sentAt: new Date(),
-        },
-      });
-      return;
-    }
-
-    let sentCount = 0;
-    let failedCount = 0;
-
-    // Send emails to all recipients
-    for (const recipient of recipients) {
-      try {
-        const result = await this.emailService.sendEmail({
-          to: recipient.email,
-          subject: campaign.subject,
-          html: campaign.content,
-          replyTo: campaign.replyTo,
-        });
-
-        if (result.success) {
-          await this.prisma.emailCampaignRecipient.update({
-            where: { id: recipient.id },
-            data: {
-              status: 'sent',
-              sentAt: new Date(),
-              messageId: result.id,
-            },
-          });
-          sentCount++;
-        } else {
-          await this.prisma.emailCampaignRecipient.update({
-            where: { id: recipient.id },
-            data: {
-              status: 'bounced',
-              bouncedAt: new Date(),
-              errorMessage: result.error,
-            },
-          });
-          failedCount++;
-        }
-      } catch (error) {
-        await this.prisma.emailCampaignRecipient.update({
-          where: { id: recipient.id },
-          data: {
-            status: 'bounced',
-            bouncedAt: new Date(),
-            errorMessage: error.message,
-          },
-        });
-        failedCount++;
-      }
-    }
-
-    // Update campaign status and statistics
-    await this.prisma.emailCampaign.update({
-      where: { id: campaign.id },
-      data: {
-        status: 'sent',
-        sentAt: new Date(),
-        emailsSent: { increment: sentCount + failedCount },
-        emailsDelivered: { increment: sentCount },
-        bounces: { increment: failedCount },
-      },
-    });
-
-    this.logger.log(`Campaign ${campaign.id} sent: ${sentCount} delivered, ${failedCount} bounced`);
   }
 
   /**
@@ -323,19 +155,31 @@ export class EmailCampaignsScheduler {
       },
     });
 
-    // Filter out clients who received a re-engagement email recently
-    const eligibleClients = clients.filter(client => {
-      if (!client.lastReengagementSent) return true;
-      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      return client.lastReengagementSent < thirtyDaysAgo;
-    });
+    // Not the ones emailed in the last 30 days, not the clients who said no to
+    // promotions in their account, and not the addresses that hard-bounced or
+    // complained. (The loop below used to walk `clients` instead of this
+    // list, so the 30-day rule was computed and ignored.)
+    const refused = await clientsWhoRefusedMarketing(this.prisma, campaign.tenantId);
+    const suppressed = await this.suppressions.suppressedAmong(
+      campaign.tenantId,
+      clients.map((c) => c.email),
+    );
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const eligibleClients = clients.filter(
+      (client) =>
+        !refused.has(client.id) &&
+        !suppressed.has(String(client.email).toLowerCase()) &&
+        (!client.lastReengagementSent || client.lastReengagementSent < thirtyDaysAgo),
+    );
 
-    this.logger.log(`Found ${clients.length} inactive clients for campaign ${campaign.id}`);
+    this.logger.log(
+      `Campaign ${campaign.id}: ${clients.length} inactive clients, ${eligibleClients.length} eligible`,
+    );
 
     let sent = 0;
     let errors = 0;
 
-    for (const client of clients) {
+    for (const client of eligibleClients) {
       try {
         // Build personalized email content
         const personalization = this.buildReengagementEmailContent(campaign, client);
@@ -355,12 +199,14 @@ export class EmailCampaignsScheduler {
             data: { lastReengagementSent: new Date() },
           });
 
-          // Create recipient record
+          // The recipient row carries Resend's id, which is how delivery,
+          // opens, clicks and bounces find their way back to this campaign.
           await this.prisma.emailCampaignRecipient.create({
             data: {
               campaignId: campaign.id,
               clientId: client.id,
               email: client.email,
+              name: `${client.firstName} ${client.lastName}`,
               status: 'sent',
               sentAt: new Date(),
               messageId: result.id,
@@ -378,15 +224,18 @@ export class EmailCampaignsScheduler {
       }
     }
 
-    // Update campaign statistics
-    await this.prisma.emailCampaign.update({
-      where: { id: campaign.id },
-      data: {
-        emailsSent: { increment: sent },
-        emailsDelivered: { increment: sent },
-        bounces: { increment: errors },
-      },
-    });
+    // Only what is known now: how many Resend accepted. Delivered and
+    // bounced come from the webhook; a send that failed here never left, so
+    // it is neither.
+    if (sent > 0) {
+      await this.prisma.emailCampaign.update({
+        where: { id: campaign.id },
+        data: {
+          totalRecipients: { increment: sent },
+          emailsSent: { increment: sent },
+        },
+      });
+    }
 
     return { sent, errors };
   }
@@ -397,21 +246,21 @@ export class EmailCampaignsScheduler {
   private buildReengagementEmailContent(campaign: any, client: any) {
     const clientName = `${client.firstName} ${client.lastName}`;
     const salonName = campaign.tenant?.name || 'our salon';
-    
+
     let subject = campaign.subject;
     let html = campaign.content;
 
     // Replace placeholders
     subject = subject.replace(/{{clientName}}/g, clientName);
     subject = subject.replace(/{{salonName}}/g, salonName);
-    
+
     html = html.replace(/{{clientName}}/g, clientName);
     html = html.replace(/{{salonName}}/g, salonName);
 
     // If there's a linked promotion, add discount code
     if (campaign.linkedPromotion) {
       const discountCode = campaign.linkedPromotion.code;
-      const discountValue = campaign.linkedPromotion.type === 'PERCENTAGE' 
+      const discountValue = campaign.linkedPromotion.type === 'PERCENTAGE'
         ? `${campaign.linkedPromotion.value}%`
         : `€${campaign.linkedPromotion.value}`;
 

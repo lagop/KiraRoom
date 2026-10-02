@@ -22,10 +22,15 @@ import {
 import { NotificationsService } from "../notifications/notifications.service";
 import { ClientCadenceService } from "../rebooking/client-cadence.service";
 import { WaitListService } from "../wait-list/wait-list.service";
+import { LoyaltyService } from "../loyalty/loyalty.service";
 import { InvoiceService } from "../invoices/invoices.service";
 import { EmailService } from "../notifications/services/email.service";
 import { SmsService } from "../notifications/services/sms.service";
 import { WhatsAppService } from "../notifications/services/whatsapp.service";
+import {
+  AppointmentNoticeKind,
+  WhatsAppTemplateService,
+} from "../whatsapp/whatsapp-template.service";
 import { NotificationType } from "../notifications/dto";
 import { TranslationsService } from "../translations/translations.service";
 import { ConsentService } from "../consent/consent.service";
@@ -124,7 +129,68 @@ export class AppointmentsService {
     @Optional() private clientCadenceService?: ClientCadenceService,
     @Optional() private invoiceService?: InvoiceService,
     @Optional() private readonly waitListService?: WaitListService,
+    @Optional() private readonly loyaltyService?: LoyaltyService,
+    @Optional() private readonly whatsappTemplates?: WhatsAppTemplateService,
   ) {}
+
+  /**
+   * Loyalty points follow the appointment: completed and paid earns,
+   * cancelled or refunded gives them back. Both calls are idempotent and
+   * do nothing until their condition holds, so this runs after any status
+   * or payment change. A failure never fails the appointment change; the
+   * hourly loyalty sweep catches up.
+   */
+  private async loyaltyAfterStatus(tenantId: string, appointmentId: string) {
+    if (!this.loyaltyService) return;
+    try {
+      const apt = await this.prisma.appointment.findFirst({
+        where: { id: appointmentId, tenantId },
+        select: { status: true, paymentStatus: true },
+      });
+      if (!apt) return;
+      if (apt.status === AppointmentStatus.cancelled || apt.paymentStatus === PaymentStatus.refunded) {
+        await this.loyaltyService.reverseAppointment(
+          tenantId,
+          appointmentId,
+          apt.status === AppointmentStatus.cancelled ? "Cita cancelada" : "Devolución del pago de la cita",
+        );
+      } else {
+        await this.loyaltyService.settleAppointment(tenantId, appointmentId);
+      }
+    } catch (err) {
+      this.logger.warn(`loyalty for appointment ${appointmentId} failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * A WhatsApp notice from the salon's own WhatsApp Business number, with
+   * the Meta-approved template for it. A confirmation, cancellation or change
+   * usually reaches a client who has not written in the last 24 hours, and
+   * WhatsApp refuses free text outside that window. Returns false when the
+   * salon has no WhatsApp connected or the template is not approved yet, so
+   * the caller falls back to the platform sender as before.
+   */
+  private async sendWhatsAppViaSalon(kind: AppointmentNoticeKind, appointment: any): Promise<boolean> {
+    if (!this.whatsappTemplates || !appointment?.client?.phone) return false;
+    try {
+      const result = await this.whatsappTemplates.sendAppointmentNotice(appointment.tenantId, kind, {
+        phone: appointment.client.phone,
+        clientName: appointment.client.firstName,
+        salonName: appointment.tenant?.name || "tu salón",
+        serviceName: appointment.service?.name || "tu servicio",
+        date: new Date(appointment.scheduledDate),
+        time: appointment.scheduledTime,
+        country: appointment.tenant?.country ?? undefined,
+      });
+      if (!result.sent && result.reason !== "not_connected") {
+        this.logger.log(`WhatsApp ${kind} template not used for appointment ${appointment.id}: ${result.reason}`);
+      }
+      return result.sent;
+    } catch (error) {
+      this.logger.warn(`WhatsApp ${kind} template for appointment ${appointment.id} failed: ${(error as Error).message}`);
+      return false;
+    }
+  }
 
   /**
    * Enrich appointment data with computed totalAmount (in cents) and amountDue.
@@ -786,6 +852,15 @@ export class AppointmentsService {
       }
     }
 
+    // The review request is timed from completionTime; completing through a
+    // plain edit never set it, so those visits were never asked about.
+    if (
+      updateAppointmentDto.status === AppointmentStatus.completed &&
+      appointment.status !== AppointmentStatus.completed
+    ) {
+      updateData.completionTime = new Date();
+    }
+
     // Handle addons update if provided
     if (updateAppointmentDto.addons && updateAppointmentDto.addons.length > 0) {
       updateData.addons = {
@@ -907,6 +982,10 @@ export class AppointmentsService {
         await this.sendAppointmentConfirmedNotifications(updatedAppointment);
       }
 
+      if (updateAppointmentDto.status && updateAppointmentDto.status !== oldStatus) {
+        await this.loyaltyAfterStatus(updatedAppointment.tenantId, id);
+      }
+
       return this.enrichAppointment(updatedAppointment);
     } catch (error) {
       console.error("Error updating appointment:", error);
@@ -1011,29 +1090,32 @@ export class AppointmentsService {
       reason,
     );
 
-    // P2A-receptionist-v2 H-1: free the slot by notifying any
-    // wait-listed clients whose window covers the freed time.
-    // Fire-and-forget; the wait-list service persists the notification
-    // marker so a future re-cancel doesn't spam the same waiter.
+    // The freed slot goes to the wait-list. This used to mark every
+    // matching client "notified" without sending anything; now they are
+    // really told (when the salon switched automatic notices on), or the
+    // team is told who is waiting. Fire-and-forget: a slow email or SMS
+    // provider must not hold up the cancellation.
     if (
+      this.waitListService &&
       cancelledAppointment.serviceId &&
       cancelledAppointment.professionalId
     ) {
-      void this.waitListService?.notifyMatchesForCancelledSlot({
+      this.waitListService
+        .onAppointmentCancelled({
           tenantId: cancelledAppointment.tenantId,
           serviceId: cancelledAppointment.serviceId,
           professionalId: cancelledAppointment.professionalId,
-          windowStart: cancelledAppointment.scheduledDate,
-          windowEnd: new Date(
-            (cancelledAppointment.scheduledDate?.getTime?.() ?? Date.now()) +
-              24 * 60 * 60 * 1000,
-          ),
-        })?.catch((err) =>
+          date: cancelledAppointment.scheduledDate,
+          time: cancelledAppointment.scheduledTime,
+        })
+        .catch((err) =>
           this.logger.warn(
             `wait-list notification failed for cancelled appointment ${cancelledAppointment.id}: ${err.message}`,
           ),
         );
     }
+
+    await this.loyaltyAfterStatus(cancelledAppointment.tenantId, id);
 
     return this.enrichAppointment(cancelledAppointment);
   }
@@ -1050,6 +1132,11 @@ export class AppointmentsService {
       data: {
         status: AppointmentStatus.completed,
         notes: notes || appointment.notes,
+        // The review request is timed from this; it was never set here.
+        completionTime:
+          appointment.status === AppointmentStatus.completed
+            ? (appointment as any).completionTime ?? new Date()
+            : new Date(),
         updatedAt: new Date(),
       },
       include: {
@@ -1089,6 +1176,9 @@ export class AppointmentsService {
           );
         });
     }
+
+    // Points, if it is also paid (otherwise when the payment comes in).
+    await this.loyaltyAfterStatus(completedAppointment.tenantId, id);
 
     return this.enrichAppointment(completedAppointment);
   }
@@ -1245,6 +1335,9 @@ export class AppointmentsService {
         tenant: true,
       },
     });
+
+    // Paid: points once the visit is also completed. Refunded: back they go.
+    await this.loyaltyAfterStatus(updatedAppointment.tenantId, id);
 
     return this.enrichAppointment(updatedAppointment);
   }
@@ -1702,18 +1795,20 @@ export class AppointmentsService {
         );
       }
 
-      // Send confirmation WhatsApp to client
+      // Send confirmation WhatsApp to client: the salon's template first.
       if (appointment.client?.phone && canSendWhatsapp) {
         try {
-          await this.whatsappService.sendAppointmentConfirmation({
-            clientName,
-            clientPhone: appointment.client.phone,
-            serviceName,
-            professionalName,
-            date: dateStr,
-            time: appointment.scheduledTime,
-            salonName,
-          });
+          if (!(await this.sendWhatsAppViaSalon("confirmed", appointment))) {
+            await this.whatsappService.sendAppointmentConfirmation({
+              clientName,
+              clientPhone: appointment.client.phone,
+              serviceName,
+              professionalName,
+              date: dateStr,
+              time: appointment.scheduledTime,
+              salonName,
+            });
+          }
           this.logger.log(
             `Sent confirmation WhatsApp to client ${appointment.clientId}`,
           );
@@ -2080,18 +2175,22 @@ export class AppointmentsService {
       // Send cancellation WhatsApp to client
       if (appointment.client?.phone && canSendWhatsapp) {
         try {
-          await this.whatsappService.sendAppointmentCancellation(
-            {
-              clientName,
-              clientPhone: appointment.client.phone,
-              serviceName,
-              professionalName,
-              date: dateStr,
-              time: appointment.scheduledTime,
-              salonName,
-            },
-            reason,
-          );
+          // The salon's template first (the free text is refused outside
+          // WhatsApp's 24-hour window).
+          if (!(await this.sendWhatsAppViaSalon("cancelled", appointment))) {
+            await this.whatsappService.sendAppointmentCancellation(
+              {
+                clientName,
+                clientPhone: appointment.client.phone,
+                serviceName,
+                professionalName,
+                date: dateStr,
+                time: appointment.scheduledTime,
+                salonName,
+              },
+              reason,
+            );
+          }
           this.logger.log(
             `Sent cancellation WhatsApp to client ${appointment.clientId}`,
           );
@@ -2325,19 +2424,23 @@ export class AppointmentsService {
         ));
       if (appointment.client?.phone && canSendWhatsapp) {
         try {
-          await this.whatsappService.sendAppointmentRescheduled(
-            {
-              clientName,
-              clientPhone: appointment.client.phone,
-              serviceName,
-              professionalName,
-              date: newDateStr,
-              time: appointment.scheduledTime,
-              salonName,
-            },
-            oldDateStr,
-            oldTime,
-          );
+          // The salon's template first (the free text is refused outside
+          // WhatsApp's 24-hour window).
+          if (!(await this.sendWhatsAppViaSalon("rescheduled", appointment))) {
+            await this.whatsappService.sendAppointmentRescheduled(
+              {
+                clientName,
+                clientPhone: appointment.client.phone,
+                serviceName,
+                professionalName,
+                date: newDateStr,
+                time: appointment.scheduledTime,
+                salonName,
+              },
+              oldDateStr,
+              oldTime,
+            );
+          }
           this.logger.log(
             `Sent rescheduled WhatsApp to client ${appointment.clientId}`,
           );
@@ -2650,15 +2753,19 @@ export class AppointmentsService {
         ));
       if (appointment.client?.phone && canSendWhatsapp) {
         try {
-          await this.whatsappService.sendAppointmentConfirmation({
-            clientName,
-            clientPhone: appointment.client.phone,
-            serviceName,
-            professionalName,
-            date: dateStr,
-            time: appointment.scheduledTime,
-            salonName,
-          });
+          // The salon's template first (the free text is refused outside
+          // WhatsApp's 24-hour window).
+          if (!(await this.sendWhatsAppViaSalon("confirmed", appointment))) {
+            await this.whatsappService.sendAppointmentConfirmation({
+              clientName,
+              clientPhone: appointment.client.phone,
+              serviceName,
+              professionalName,
+              date: dateStr,
+              time: appointment.scheduledTime,
+              salonName,
+            });
+          }
           this.logger.log(
             `Sent confirmation WhatsApp to client ${appointment.clientId}`,
           );

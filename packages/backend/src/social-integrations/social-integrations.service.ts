@@ -1,6 +1,22 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, NotImplementedException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { SocialPlatform, SocialConnectionStatus } from '@prisma/client';
+
+/**
+ * Why each Google / social capability is off. These endpoints used to answer
+ * with invented data: "Sample Salon" with a random rating on every "sync",
+ * `mock_token_...` connections, posts "published" to example.com, replies to
+ * Google reviews saved locally as if Google had them. Nothing behind them
+ * talks to Google, Facebook or Instagram, so they now say so instead.
+ */
+export const UNAVAILABLE = {
+  googleBusinessApi:
+    'La conexión con Google Business Profile (leer y responder reseñas de Google, sincronizar la ficha) no está disponible: necesita que Google apruebe el acceso a su API. Mientras tanto, las clientas dejan su reseña en Google desde el enlace de tu ficha (Reseñas > Configuración).',
+  oauth: (platform: string) =>
+    `La conexión con ${platform} todavía no está disponible.`,
+  publish:
+    'Publicar en redes sociales todavía no está disponible: la publicación queda guardada como borrador.',
+} as const;
 
 @Injectable()
 export class SocialIntegrationsService {
@@ -10,9 +26,6 @@ export class SocialIntegrationsService {
   // Social Connections Management
   // ============================================
 
-  /**
-   * Get all social connections for a tenant
-   */
   async getConnections(tenantId: string) {
     return this.prisma.socialConnection.findMany({
       where: { tenantId },
@@ -20,9 +33,6 @@ export class SocialIntegrationsService {
     });
   }
 
-  /**
-   * Get a specific social connection
-   */
   async getConnection(tenantId: string, platform: SocialPlatform) {
     const connection = await this.prisma.socialConnection.findUnique({
       where: {
@@ -38,61 +48,24 @@ export class SocialIntegrationsService {
   }
 
   /**
-   * Create OAuth URL for connecting a social platform
+   * No OAuth flow is implemented for any platform: the URL used to be built
+   * with `client_id=undefined`, and the callback stored a mock token.
    */
-  async getOAuthUrl(tenantId: string, platform: SocialPlatform): Promise<string> {
-    // This would integrate with actual OAuth flows
-    // For now, return placeholder URLs that would be configured with actual OAuth credentials
-    const baseUrls: Record<SocialPlatform, string> = {
-      GOOGLE: `https://accounts.google.com/o/oauth2/v2/auth?client_id=${process.env.GOOGLE_CLIENT_ID}&redirect_uri=${process.env.GOOGLE_REDIRECT_URI}&response_type=code&scope=openid%20email%20profile%20https://www.googleapis.com/auth/business.manage`,
-      FACEBOOK: `https://www.facebook.com/v18.0/dialog/oauth?client_id=${process.env.FACEBOOK_APP_ID}&redirect_uri=${process.env.FACEBOOK_REDIRECT_URI}&scope=pages_manage_posts,pages_read_engagement`,
-      INSTAGRAM: `https://api.instagram.com/oauth/authorize?client_id=${process.env.INSTAGRAM_APP_ID}&redirect_uri=${process.env.INSTAGRAM_REDIRECT_URI}&scope=user_profile,user_media`,
-      TWITTER: '',
-      TIKTOK: '',
-    };
-
-    return baseUrls[platform] || '';
+  async getOAuthUrl(_tenantId: string, platform: SocialPlatform): Promise<string> {
+    throw new NotImplementedException(
+      platform === SocialPlatform.GOOGLE ? UNAVAILABLE.googleBusinessApi : UNAVAILABLE.oauth(platform),
+    );
   }
 
-  /**
-   * Handle OAuth callback and create/update connection
-   */
-  async handleOAuthCallback(
-    tenantId: string,
-    platform: SocialPlatform,
-    code: string,
-  ) {
-    // In production, this would exchange the code for tokens
-    // For now, we'll create a mock connection
-    const connection = await this.prisma.socialConnection.upsert({
-      where: {
-        tenantId_platform: { tenantId, platform },
-      },
-      update: {
-        status: SocialConnectionStatus.CONNECTED,
-        accessToken: `mock_token_${Date.now()}`,
-        tokenExpiry: new Date(Date.now() + 3600000), // 1 hour
-        lastSyncAt: new Date(),
-        syncError: null,
-      },
-      create: {
-        tenantId,
-        platform,
-        status: SocialConnectionStatus.CONNECTED,
-        accessToken: `mock_token_${Date.now()}`,
-        tokenExpiry: new Date(Date.now() + 3600000),
-        accountName: `${platform} Account`,
-      },
-    });
-
-    return connection;
+  async handleOAuthCallback(_tenantId: string, platform: SocialPlatform, _code: string): Promise<never> {
+    throw new NotImplementedException(
+      platform === SocialPlatform.GOOGLE ? UNAVAILABLE.googleBusinessApi : UNAVAILABLE.oauth(platform),
+    );
   }
 
-  /**
-   * Disconnect a social platform
-   */
   async disconnect(tenantId: string, platform: SocialPlatform) {
-    const connection = await this.prisma.socialConnection.update({
+    await this.getConnection(tenantId, platform);
+    return this.prisma.socialConnection.update({
       where: {
         tenantId_platform: { tenantId, platform },
       },
@@ -103,13 +76,8 @@ export class SocialIntegrationsService {
         tokenExpiry: null,
       },
     });
-
-    return connection;
   }
 
-  /**
-   * Update connection settings
-   */
   async updateSettings(
     tenantId: string,
     platform: SocialPlatform,
@@ -119,14 +87,13 @@ export class SocialIntegrationsService {
       notifyReviews?: boolean;
     },
   ) {
-    const connection = await this.prisma.socialConnection.update({
+    await this.getConnection(tenantId, platform);
+    return this.prisma.socialConnection.update({
       where: {
         tenantId_platform: { tenantId, platform },
       },
       data: settings,
     });
-
-    return connection;
   }
 
   // ============================================
@@ -134,104 +101,57 @@ export class SocialIntegrationsService {
   // ============================================
 
   /**
-   * Get Google Business Profile for a tenant
+   * What KiraRoom knows about the salon's Google profile: only what the salon
+   * entered (its review link). `api.available` is false because there is no
+   * Business Profile API integration; the synced fields stay empty.
    */
   async getGoogleBusinessProfile(tenantId: string) {
-    let profile = await this.prisma.googleBusinessProfile.findUnique({
+    const profile = await this.prisma.googleBusinessProfile.findUnique({
       where: { tenantId },
-      include: { reviews: { orderBy: { createdAt: 'desc' }, take: 10 } },
     });
-
-    if (!profile) {
-      // Create a placeholder profile
-      profile = await this.prisma.googleBusinessProfile.create({
-        data: { tenantId },
-        include: { reviews: true },
-      });
-    }
-
-    return profile;
+    return {
+      profile,
+      api: { available: false, reason: UNAVAILABLE.googleBusinessApi },
+    };
   }
 
   /**
-   * Update Google Business Profile settings
+   * Only the review-request switch is stored. "Reserve with Google" and
+   * real-time availability on Google were toggles that switched nothing on.
    */
   async updateGoogleBusinessProfile(
     tenantId: string,
-    data: {
-      enableOnlineBooking?: boolean;
-      enableReviewRequests?: boolean;
-      showRealTimeAvailability?: boolean;
-    },
+    data: { enableReviewRequests?: boolean },
   ) {
+    const update =
+      data.enableReviewRequests === undefined ? {} : { enableReviewRequests: data.enableReviewRequests };
     const profile = await this.prisma.googleBusinessProfile.upsert({
       where: { tenantId },
-      update: data,
-      create: { tenantId, ...data },
+      update,
+      create: { tenantId, ...update },
     });
-
-    return profile;
+    return {
+      profile,
+      api: { available: false, reason: UNAVAILABLE.googleBusinessApi },
+    };
   }
 
-  /**
-   * Sync Google Business Profile data
-   * In production, this would call the Google My Business API
-   */
-  async syncGoogleBusinessProfile(tenantId: string) {
-    // Mock sync - in production would call Google API
-    const profile = await this.prisma.googleBusinessProfile.update({
-      where: { tenantId },
-      data: {
-        lastSyncAt: new Date(),
-        // Mock data
-        businessName: 'Sample Salon',
-        totalReviews: Math.floor(Math.random() * 100),
-        averageRating: 4.0 + Math.random() * 1,
-        profileComplete: true,
-      },
-    });
-
-    return profile;
+  async syncGoogleBusinessProfile(_tenantId: string): Promise<never> {
+    throw new NotImplementedException(UNAVAILABLE.googleBusinessApi);
   }
 
-  /**
-   * Get Google reviews
-   */
-  async getGoogleReviews(tenantId: string) {
-    const profile = await this.prisma.googleBusinessProfile.findUnique({
-      where: { tenantId },
-      include: { reviews: { orderBy: { createdAt: 'desc' } } },
-    });
-
-    if (!profile) {
-      throw new NotFoundException('Google Business Profile not found');
-    }
-
-    return profile.reviews;
+  async getGoogleReviews(_tenantId: string): Promise<never> {
+    throw new NotImplementedException(UNAVAILABLE.googleBusinessApi);
   }
 
-  /**
-   * Reply to a Google review
-   */
-  async replyToGoogleReview(tenantId: string, reviewId: string, replyComment: string) {
-    const review = await this.prisma.googleReview.update({
-      where: { id: reviewId },
-      data: {
-        replyComment,
-        replyAt: new Date(),
-      },
-    });
-
-    return review;
+  async replyToGoogleReview(_tenantId: string, _reviewId: string, _replyComment: string): Promise<never> {
+    throw new NotImplementedException(UNAVAILABLE.googleBusinessApi);
   }
 
   // ============================================
   // Social Posts
   // ============================================
 
-  /**
-   * Get all social posts for a tenant
-   */
   async getPosts(tenantId: string, status?: string) {
     return this.prisma.socialPost.findMany({
       where: {
@@ -242,9 +162,6 @@ export class SocialIntegrationsService {
     });
   }
 
-  /**
-   * Create a social post
-   */
   async createPost(
     tenantId: string,
     data: {
@@ -255,7 +172,8 @@ export class SocialIntegrationsService {
       scheduledAt?: Date;
     },
   ) {
-    const post = await this.prisma.socialPost.create({
+    // Always a draft: nothing would publish a "scheduled" post.
+    return this.prisma.socialPost.create({
       data: {
         tenantId,
         content: data.content,
@@ -263,16 +181,11 @@ export class SocialIntegrationsService {
         linkUrl: data.linkUrl,
         platforms: data.platforms || [],
         scheduledAt: data.scheduledAt,
-        status: data.scheduledAt ? 'scheduled' : 'draft',
+        status: 'draft',
       },
     });
-
-    return post;
   }
 
-  /**
-   * Update a social post
-   */
   async updatePost(
     tenantId: string,
     postId: string,
@@ -284,21 +197,15 @@ export class SocialIntegrationsService {
       scheduledAt?: Date;
     },
   ) {
-    const post = await this.prisma.socialPost.update({
+    await this.findPost(tenantId, postId);
+    return this.prisma.socialPost.update({
       where: { id: postId },
-      data: {
-        ...data,
-        ...(data.scheduledAt ? { status: 'scheduled' } : {}),
-      },
+      data,
     });
-
-    return post;
   }
 
-  /**
-   * Delete a social post
-   */
   async deletePost(tenantId: string, postId: string) {
+    await this.findPost(tenantId, postId);
     await this.prisma.socialPost.delete({
       where: { id: postId },
     });
@@ -306,27 +213,11 @@ export class SocialIntegrationsService {
     return { success: true };
   }
 
-  /**
-   * Publish a social post
-   * In production, this would actually post to the social platforms
-   */
-  async publishPost(tenantId: string, postId: string) {
-    const post = await this.prisma.socialPost.update({
-      where: { id: postId },
-      data: {
-        status: 'published',
-        publishedAt: new Date(),
-        platformPostId: `mock_post_${Date.now()}`,
-        platformUrl: 'https://example.com/post',
-      },
-    });
-
-    return post;
+  async publishPost(tenantId: string, postId: string): Promise<never> {
+    await this.findPost(tenantId, postId);
+    throw new NotImplementedException(UNAVAILABLE.publish);
   }
 
-  /**
-   * Get social analytics
-   */
   async getAnalytics(tenantId: string) {
     const posts = await this.prisma.socialPost.findMany({
       where: { tenantId, status: 'published' },
@@ -344,9 +235,19 @@ export class SocialIntegrationsService {
       totalComments,
       totalShares,
       totalClicks,
-      engagementRate: totalPosts > 0 
+      engagementRate: totalPosts > 0
         ? ((totalLikes + totalComments + totalShares) / totalPosts).toFixed(2)
         : 0,
     };
+  }
+
+  /** Posts were updated and deleted by id alone, from any salon. */
+  private async findPost(tenantId: string, postId: string) {
+    const post = await this.prisma.socialPost.findFirst({
+      where: { id: postId, tenantId },
+      select: { id: true },
+    });
+    if (!post) throw new NotFoundException('Publicación no encontrada');
+    return post;
   }
 }

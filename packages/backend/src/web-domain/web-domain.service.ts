@@ -1,166 +1,261 @@
-import { Injectable, Logger, BadRequestException, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { Cron, CronExpression } from "@nestjs/schedule";
+import { randomBytes } from "node:crypto";
 import { PrismaService } from "../common/prisma/prisma.service";
-import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
-import Stripe from "stripe";
+import { runUnscoped } from "../common/tenancy/tenant.context";
+import {
+  DnsLookup,
+  checkDomainDns,
+  isPlatformDomain,
+  normalizeDomain,
+  txtRecordName,
+  txtRecordValue,
+} from "./custom-domain";
 
-const DOMAIN_RE_PRIMITIVE = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z]{2,})+$/i;
+export interface DnsRecordInstruction {
+  type: "CNAME" | "A" | "TXT";
+  name: string;
+  value: string;
+}
 
+export interface WebDomainStatus {
+  /** The salon's public page on the platform host. Always works. */
+  publicUrl: string;
+  /** Host a salon's domain must point at. */
+  target: string;
+  /**
+   * Whether the platform serves custom domains over HTTPS yet. False until
+   * the operator sets up certificates for arbitrary hosts (see
+   * docs/custom-domains.md) and sets CUSTOM_DOMAINS_TLS_READY=1.
+   */
+  servingEnabled: boolean;
+  domain: null | {
+    name: string;
+    verified: boolean;
+    verifiedAt: Date | null;
+    lastCheckedAt: Date | null;
+    lastCheckError: string | null;
+    /** Verified AND the platform can serve it: the page answers there. */
+    active: boolean;
+    records: DnsRecordInstruction[];
+    /** For a root domain (no CNAME possible): A records to these addresses. */
+    targetIps: string[];
+  };
+}
+
+/**
+ * A salon's own domain for its public page.
+ *
+ * This module used to simulate a domain shop: "check availability" decided
+ * by suffix (.test was taken, anything else free), and "purchase" switched a
+ * flag on with no registrar, no payment and no DNS. Nothing ever served a
+ * salon's page on any domain.
+ *
+ * Now the salon brings a domain it already owns. We tell it which two DNS
+ * records to create, check them with real lookups, and once both are right
+ * the frontend's middleware serves the salon's page for that Host. We do not
+ * sell or register domains.
+ *
+ * The one piece that is not code: HTTPS for arbitrary hosts. Traefik only
+ * has certificates for the hosts in its labels; see docs/custom-domains.md.
+ * Until the operator sets that up and flips CUSTOM_DOMAINS_TLS_READY, a
+ * verified domain is reported as verified but not active.
+ */
 @Injectable()
 export class WebDomainService {
   private readonly logger = new Logger(WebDomainService.name);
-  private stripe: Stripe | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly flags: FeatureFlagService,
     private readonly config: ConfigService,
-  ) {
-    const key = this.config.get<string>("STRIPE_SECRET_KEY");
-    if (key && key.startsWith("sk_")) {
-      this.stripe = new Stripe(key, { apiVersion: "2024-12-18.acacia" as any });
-    }
-  }
+    private readonly dns: DnsLookup,
+  ) {}
 
-  isValidDomain(domain: string): boolean {
-    if (!domain || domain.length > 253) return false;
-    return DOMAIN_RE_PRIMITIVE.test(domain.trim().toLowerCase());
-  }
-
-  /**
-   * Mocked availability check. In production this would call a registrar
-   * API (e.g. Resell.biz, Namecheap, Cloudflare). We keep the surface so
-   * the UI can be built end-to-end before the integration is wired.
-   */
-  async checkAvailability(domain: string): Promise<{
-    domain: string;
-    available: boolean;
-    via: "mock";
-  }> {
-    const normalized = domain.trim().toLowerCase();
-    if (!this.isValidDomain(normalized)) {
-      throw new BadRequestException("Dominio no valido");
-    }
-    const takenSuffixes = [".test", ".example", ".invalid"];
-    const taken = takenSuffixes.some((s) => normalized.endsWith(s));
-    return { domain: normalized, available: !taken, via: "mock" };
-  }
-
-  async getStatus(tenantId: string) {
-    const tenant = await this.prisma.tenant.findUnique({
-      where: { id: tenantId },
-      select: { addons: true },
-    });
-    const addons = (tenant?.addons as Record<string, any>) || {};
-    return {
-      enabled: !!addons.web_domain?.enabled,
-      activatedAt: addons.web_domain?.activatedAt ?? null,
-      expiresAt: addons.web_domain?.expiresAt ?? null,
-      domain: addons.web_domain?.domain ?? null,
-    };
+  /** Public base URL of the app, without trailing slash. */
+  appBaseUrl(): string {
+    const base =
+      this.config.get<string>("APP_BASE_URL") ||
+      this.config.get<string>("FRONTEND_URL") ||
+      "https://app.kiraroom.net";
+    return base.replace(/\/+$/, "");
   }
 
   /**
-   * Open a Stripe checkout for the web_domain add-on. The webhook
-   * (customer.subscription.created with metadata.addon='web_domain') flips
-   * Tenant.addons.web_domain.enabled=true. Until Stripe is wired, we flip
-   * the flag locally so the dev experience works.
+   * Where salons point their domain. Defaults to the app's own host, which
+   * already resolves to the VPS; CUSTOM_DOMAIN_TARGET lets the operator use
+   * a dedicated name (e.g. sites.kiraroom.net) for the TLS front.
    */
-  async purchase(tenantId: string, domain: string) {
-    const normalized = domain.trim().toLowerCase();
-    if (!this.isValidDomain(normalized)) {
-      throw new BadRequestException("Dominio no valido");
+  target(): string {
+    const explicit = this.config.get<string>("CUSTOM_DOMAIN_TARGET");
+    if (explicit && explicit.trim()) return explicit.trim().toLowerCase().replace(/\.$/, "");
+    try {
+      return new URL(this.appBaseUrl()).hostname;
+    } catch {
+      return "app.kiraroom.net";
     }
-    const now = new Date();
-    const expires = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
-
-    if (this.stripe) {
-      const tenant = await this.prisma.tenant.findUnique({
-        where: { id: tenantId },
-      });
-      if (!tenant) throw new NotFoundException("Tenant no encontrado");
-      let customerId = tenant.stripeCustomerId;
-      if (!customerId) {
-        const customer = await this.stripe.customers.create({
-          metadata: { tenantId },
-          email: tenant.email ?? undefined,
-          name: tenant.name,
-        });
-        customerId = customer.id;
-        await this.prisma.tenant.update({
-          where: { id: tenantId },
-          data: { stripeCustomerId: customerId },
-        });
-      }
-      // Minimal: caller will be redirected to billing. The price/terms are
-      // out of scope for engineering (per plan section 4.8).
-      return { checkoutRequired: true, domain: normalized };
-    }
-
-    // No Stripe: activate immediately for development.
-    await this.activateLocally(tenantId, normalized, now, expires);
-    return {
-      checkoutRequired: false,
-      domain: normalized,
-      activatedAt: now,
-      expiresAt: expires,
-    };
   }
 
-  async activateLocally(
-    tenantId: string,
-    domain: string,
-    activatedAt: Date,
-    expiresAt: Date,
-  ) {
+  servingEnabled(): boolean {
+    const raw = (this.config.get<string>("CUSTOM_DOMAINS_TLS_READY") ?? "").trim().toLowerCase();
+    return raw === "1" || raw === "true";
+  }
+
+  async getStatus(tenantId: string): Promise<WebDomainStatus> {
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
-      select: { addons: true },
+      select: { slug: true },
     });
-    if (!tenant) throw new NotFoundException("Tenant no encontrado");
-    const addons = (tenant.addons as Record<string, any>) || {};
-    addons.web_domain = {
-      enabled: true,
-      activatedAt,
-      expiresAt,
+    if (!tenant) throw new NotFoundException("Salón no encontrado");
+    const row = await this.prisma.customDomain.findFirst({ where: { tenantId } });
+    const target = this.target();
+    const servingEnabled = this.servingEnabled();
+
+    let domain: WebDomainStatus["domain"] = null;
+    if (row) {
+      const targetIps = await this.dns.resolve4(target).catch(() => [] as string[]);
+      domain = {
+        name: row.domain,
+        verified: row.verifiedAt !== null,
+        verifiedAt: row.verifiedAt,
+        lastCheckedAt: row.lastCheckedAt,
+        lastCheckError: row.lastCheckError,
+        active: row.verifiedAt !== null && servingEnabled,
+        records: [
+          { type: "CNAME", name: row.domain, value: target },
+          { type: "TXT", name: txtRecordName(row.domain), value: txtRecordValue(row.verificationToken) },
+        ],
+        targetIps,
+      };
+    }
+
+    return {
+      publicUrl: `${this.appBaseUrl()}/sites/${encodeURIComponent(tenant.slug)}`,
+      target,
+      servingEnabled,
       domain,
     };
-    await this.prisma.tenant.update({
-      where: { id: tenantId },
-      data: { addons: addons as any },
-    });
   }
 
   /**
-   * Configure the CNAME / SEO / sitemap for an active add-on. The custom
-   * domain resolver itself lives in the public site (sites/[salonName]).
+   * Record the domain the salon wants and hand out a fresh ownership token.
+   * Saving the same domain again keeps the token and the verification, so a
+   * double click does not invalidate a TXT record already published.
    */
-  async configure(
-    tenantId: string,
-    payload: { domain?: string; seoTitle?: string; seoDescription?: string },
-  ) {
-    const status = await this.getStatus(tenantId);
-    if (!status.enabled) {
-      throw new BadRequestException("El add-on web_domain no esta activo");
+  async setDomain(tenantId: string, input: unknown): Promise<WebDomainStatus> {
+    const domain = normalizeDomain(input);
+    if (!domain) {
+      throw new BadRequestException(
+        "Escribe solo el dominio, por ejemplo reservas.misalon.com (sin https:// ni rutas).",
+      );
     }
-    if (payload.domain) {
-      if (!this.isValidDomain(payload.domain)) {
-        throw new BadRequestException("Dominio no valido");
+    if (isPlatformDomain(domain, this.target())) {
+      throw new BadRequestException("Ese dominio es de la plataforma. Usa un dominio tuyo.");
+    }
+
+    const existing = await this.prisma.customDomain.findFirst({ where: { tenantId } });
+    if (existing && existing.domain === domain) return this.getStatus(tenantId);
+
+    const fresh = {
+      domain,
+      verificationToken: randomBytes(16).toString("hex"),
+      verifiedAt: null,
+      lastCheckedAt: null,
+      lastCheckError: null,
+    };
+    await this.prisma.customDomain.upsert({
+      where: { tenantId },
+      create: { tenantId, ...fresh },
+      update: fresh,
+    });
+    return this.getStatus(tenantId);
+  }
+
+  async removeDomain(tenantId: string): Promise<WebDomainStatus> {
+    await this.prisma.customDomain.deleteMany({ where: { tenantId } });
+    return this.getStatus(tenantId);
+  }
+
+  /** "Comprobar ahora" in the panel: real DNS lookups. */
+  async verify(tenantId: string): Promise<WebDomainStatus> {
+    const row = await this.prisma.customDomain.findFirst({ where: { tenantId } });
+    if (!row) throw new BadRequestException("Primero indica tu dominio.");
+    await this.check(row, { manual: true });
+    return this.getStatus(tenantId);
+  }
+
+  /**
+   * Re-check every verified domain once a day. A domain that changes hands
+   * or is repointed elsewhere must stop serving this salon's page; the new
+   * owner might point it at us for a different salon.
+   *
+   * One failed lookup could be a resolver hiccup, so a domain is
+   * un-verified only when two consecutive daily checks fail.
+   */
+  @Cron(CronExpression.EVERY_DAY_AT_4AM)
+  async recheckVerified(): Promise<void> {
+    const rows = await runUnscoped(() =>
+      this.prisma.customDomain.findMany({ where: { verifiedAt: { not: null } } }),
+    );
+    for (const row of rows) {
+      try {
+        await this.check(row, { manual: false });
+      } catch (err) {
+        this.logger.warn(`Custom domain recheck failed for ${row.domain}: ${(err as Error).message}`);
       }
     }
-    const tenant = await this.prisma.tenant.findUnique({
-      where: { id: tenantId },
-      select: { addons: true },
-    });
-    const addons = (tenant?.addons as Record<string, any>) || {};
-    addons.web_domain = {
-      ...(addons.web_domain || {}),
-      ...payload,
-    };
-    await this.prisma.tenant.update({
-      where: { id: tenantId },
-      data: { addons: addons as any },
-    });
-    return { ok: true, config: addons.web_domain };
+  }
+
+  private async check(
+    row: {
+      id: string;
+      tenantId: string;
+      domain: string;
+      verificationToken: string;
+      verifiedAt: Date | null;
+      lastCheckError: string | null;
+    },
+    { manual }: { manual: boolean },
+  ): Promise<void> {
+    const now = new Date();
+    const result = await checkDomainDns(this.dns, row.domain, row.verificationToken, this.target());
+
+    if (result.ok) {
+      // Cross-tenant on purpose: whoever proves ownership now takes the
+      // domain from any other salon that had verified it before.
+      await runUnscoped(() =>
+        this.prisma.$transaction([
+          this.prisma.customDomain.updateMany({
+            where: { domain: row.domain, id: { not: row.id }, verifiedAt: { not: null } },
+            data: {
+              verifiedAt: null,
+              lastCheckedAt: now,
+              lastCheckError: "Otro salón ha demostrado ser el titular de este dominio.",
+            },
+          }),
+          this.prisma.customDomain.update({
+            where: { id: row.id },
+            data: { verifiedAt: row.verifiedAt ?? now, lastCheckedAt: now, lastCheckError: null },
+          }),
+        ]),
+      );
+      return;
+    }
+
+    const failedBefore = row.lastCheckError !== null;
+    const unverify = row.verifiedAt !== null && !manual && failedBefore;
+    await runUnscoped(() =>
+      this.prisma.customDomain.update({
+        where: { id: row.id },
+        data: {
+          lastCheckedAt: now,
+          lastCheckError: result.error ?? "La comprobación DNS falló.",
+          ...(unverify ? { verifiedAt: null } : {}),
+        },
+      }),
+    );
+    if (unverify) {
+      this.logger.warn(`Custom domain ${row.domain} un-verified after two failed checks: ${result.error}`);
+    }
   }
 }

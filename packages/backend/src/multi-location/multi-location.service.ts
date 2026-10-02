@@ -6,31 +6,22 @@ import {
 } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
-import { SubscriptionsService } from "../payments/services/subscriptions.service";
-
-export interface CreateLocationDto {
-  name: string;
-  slug?: string;
-  street?: string;
-  city?: string;
-  state?: string;
-  postalCode?: string;
-  country?: string;
-  timezone?: string;
-  phone?: string;
-  email?: string;
-}
-
-export interface UpdateLocationDto extends Partial<CreateLocationDto> {
-  isActive?: boolean;
-}
+import { buildConsolidatedReport, ConsolidatedReport } from "./consolidated-report";
+import { CreateLocationDto, UpdateLocationDto } from "./location.dto";
+import {
+  AnalyticsAppointment,
+  SalonPeriod,
+  addDays,
+  rangePeriod,
+  salonToday,
+  scheduledDateRange,
+} from "../analytics/analytics-metrics";
 
 @Injectable()
 export class MultiLocationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly flags: FeatureFlagService,
-    private readonly subscriptions: SubscriptionsService,
   ) {}
 
   private slugify(input: string): string {
@@ -106,68 +97,131 @@ export class MultiLocationService {
   }
 
   async update(tenantId: string, id: string, dto: UpdateLocationDto) {
-    await this.get(tenantId, id);
+    const loc = await this.get(tenantId, id);
+    if (dto.isActive === false && loc.isActive) {
+      await this.assertNotLastActive(tenantId);
+    }
     return this.prisma.location.update({
       where: { id },
       data: { ...dto, slug: dto.slug ? this.slugify(dto.slug) : undefined },
     });
   }
 
-  async remove(tenantId: string, id: string) {
-    const loc = await this.get(tenantId, id);
-    const tenant = await this.prisma.tenant.findUnique({
-      where: { id: tenantId },
-      select: { plan: true },
-    });
+  /**
+   * The Empresa plan works from one location ("activable desde 1 local",
+   * minLocations: 1 in the plan catalogue). This used to refuse to leave
+   * fewer than 2 active locations -- a leftover of the rev3 rule -- so an
+   * Empresa salon with two locations could not close one. The only real
+   * limit is not switching off the last one.
+   */
+  private async assertNotLastActive(tenantId: string) {
     const activeCount = await this.prisma.location.count({
       where: { tenantId, isActive: true },
     });
-    if (
-      this.subscriptions.normalizePlan(tenant?.plan || "esencial") ===
-        "empresa" &&
-      loc.isActive &&
-      activeCount <= 2
-    ) {
+    if (activeCount <= 1) {
       throw new BadRequestException(
-        "El plan Empresa requiere al menos 2 locales activos. Cambia a Pro si quieres operar un solo local.",
+        "No puedes desactivar tu único local activo. Crea o reactiva otro antes.",
       );
     }
+  }
+
+  async remove(tenantId: string, id: string) {
+    const loc = await this.get(tenantId, id);
+    if (loc.isActive) await this.assertNotLastActive(tenantId);
     return this.prisma.location.update({
       where: { id },
       data: { isActive: false },
     });
   }
 
-  async getStats(tenantId: string, id: string) {
-    await this.get(tenantId, id);
-    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const [apptCount, revenue, pros, clients] = await Promise.all([
-      this.prisma.appointment.count({
-        where: { locationId: id, scheduledDate: { gte: since } },
+  /**
+   * Loads everything the report needs for `period` and builds it. `extra`
+   * adds a location that is not active (the KPIs of a closed location) to
+   * the rows.
+   */
+  private async buildReport(
+    tenantId: string,
+    period: SalonPeriod,
+    extra?: { id: string; name: string },
+  ): Promise<ConsolidatedReport> {
+    const [active, appointments, professionals, links] = await Promise.all([
+      this.prisma.location.findMany({
+        where: { tenantId, isActive: true },
+        orderBy: { createdAt: "asc" },
+        select: { id: true, name: true },
       }),
-      this.prisma.payment.aggregate({
-        _sum: { amount: true },
-        where: {
-          tenantId,
-          status: "paid",
-          createdAt: { gte: since },
-          appointment: { locationId: id },
+      this.prisma.appointment.findMany({
+        where: { tenantId, scheduledDate: scheduledDateRange(period) },
+        select: {
+          status: true,
+          paymentStatus: true,
+          amountPaid: true,
+          totalAmount: true,
+          price: true,
+          scheduledDate: true,
+          duration: true,
+          clientId: true,
+          professionalId: true,
+          serviceId: true,
+          locationId: true,
+          service: { select: { name: true } },
         },
       }),
-      this.prisma.professionalLocation.count({ where: { locationId: id } }),
-      this.prisma.client.count({ where: { tenantId } }),
+      this.prisma.professional.findMany({
+        where: { tenantId, isActive: true },
+        select: { id: true, workingHours: true },
+      }),
+      this.prisma.professionalLocation.findMany({
+        where: { location: { tenantId } },
+        select: { professionalId: true, locationId: true, isPrimary: true },
+      }),
     ]);
+    const locations =
+      extra && !active.some((l) => l.id === extra.id) ? [...active, extra] : active;
+    return buildConsolidatedReport({
+      period,
+      locations,
+      appointments: appointments as unknown as AnalyticsAppointment[],
+      professionals,
+      links,
+    });
+  }
+
+  private async todayOf(tenantId: string): Promise<string> {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { timezone: true },
+    });
+    return salonToday(tenant?.timezone || "Europe/Madrid");
+  }
+
+  /** One location's KPIs over the last 30 salon days. Money in cents. */
+  async getStats(tenantId: string, id: string) {
+    const loc = await this.get(tenantId, id);
+    const today = await this.todayOf(tenantId);
+    const period = { start: addDays(today, -29), end: today };
+    const report = await this.buildReport(tenantId, period, { id: loc.id, name: loc.name });
+    const row = report.perLocation.find((r) => r.locationId === id)!;
     return {
       locationId: id,
       windowDays: 30,
-      appointmentCount: apptCount,
-      revenue: Number((revenue as any)._sum?.amount ?? 0),
-      activeProfessionals: pros,
-      totalClients: clients,
+      period,
+      currencyUnit: "cents" as const,
+      appointmentCount: row.appointments,
+      revenue: row.revenue,
+      occupancy: row.occupancy,
+      activeProfessionals: row.professionals,
+      totalClients: row.clients,
     };
   }
 
-  async getConsolidated(tenantId: string) {
+  /**
+   * Revenue, appointments, occupancy and top services per active location
+   * for a named range of the salon's calendar ("this_month", "last_month",
+   * "last_30_days", "3_months"...). See consolidated-report.ts for how
+   * appointments are attributed to locations.
+   */
+  async getConsolidated(tenantId: string, range?: string) {
     const enabled = await this.flags.isEnabled(
       tenantId,
       "consolidated_reports",
@@ -177,55 +231,18 @@ export class MultiLocationService {
         "Los informes consolidados están disponibles solo en el plan Empresa.",
       );
     }
-    const activeLocations = await this.prisma.location.findMany({
+    const activeCount = await this.prisma.location.count({
       where: { tenantId, isActive: true },
-      orderBy: { createdAt: "asc" },
     });
-    if (activeLocations.length < 2) {
+    if (activeCount === 0) {
       throw new BadRequestException(
-        "Necesitas al menos 2 locales activos para generar un informe consolidado.",
+        "No tienes locales activos. Crea uno en Multi-local para ver el informe.",
       );
     }
-    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const perLocation: Array<{
-      locationId: string;
-      name: string;
-      appointmentCount: number;
-      revenue: number;
-    }> = [];
-    let totalAppointments = 0;
-    let totalRevenue = 0;
-    for (const loc of activeLocations) {
-      const [apptCount, revenueAgg] = await Promise.all([
-        this.prisma.appointment.count({
-          where: { locationId: loc.id, scheduledDate: { gte: since } },
-        }),
-        this.prisma.payment.aggregate({
-          _sum: { amount: true },
-          where: {
-            tenantId,
-            status: "paid",
-            createdAt: { gte: since },
-            appointment: { locationId: loc.id },
-          },
-        }),
-      ]);
-      const revenue = Number((revenueAgg as any)._sum?.amount ?? 0);
-      totalAppointments += apptCount;
-      totalRevenue += revenue;
-      perLocation.push({
-        locationId: loc.id,
-        name: loc.name,
-        appointmentCount: apptCount,
-        revenue,
-      });
-    }
-    return {
-      windowDays: 30,
-      activeLocations: activeLocations.length,
-      totalAppointments,
-      totalRevenue,
-      perLocation,
-    };
+    const today = await this.todayOf(tenantId);
+    const rangeKey = range || "this_month";
+    const period = rangePeriod(rangeKey, today, 12);
+    const report = await this.buildReport(tenantId, period);
+    return { range: rangeKey, ...report };
   }
 }

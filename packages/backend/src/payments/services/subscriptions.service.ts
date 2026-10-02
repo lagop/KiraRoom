@@ -2,6 +2,7 @@
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import Stripe from 'stripe';
+import { isAddOnItem, planItemOf } from '../plan-activation';
 
 // Public plan ids (rev 3). Legacy aliases are accepted and mapped in helpers
 // below so existing tenants + Stripe webhooks keep working.
@@ -191,11 +192,10 @@ export class SubscriptionsService {
       features: [
         'Clientas y citas ilimitadas',
         'Hasta 4 profesionales',
-        // What the plan does today, nothing more. Verifactu/TicketBAI, WhatsApp
-        // reminders and the multichannel receptionist were listed here and are
-        // not built (fiscal sending is a stub, WhatsApp free text fails outside
-        // Meta's 24 h window, Messenger/Instagram/Telegram only get logged).
-        // Put them back when they work.
+        // What the plan does today, nothing more. Verifactu/TicketBAI and
+        // WhatsApp reminders were listed here when they did not work. The
+        // multichannel receptionist (Messenger/Instagram/Telegram) is not part
+        // of Esencial: it is the Multicanal add-on.
         'Facturas con IVA o IGIC',
         'Recepcionista IA en tu web y en WhatsApp (500 mensajes/mes)',
         'Agenda online',
@@ -217,7 +217,10 @@ export class SubscriptionsService {
         'Clientas y citas ilimitadas',
         'Hasta 10 profesionales',
         'Email marketing',
-        'Recepcionista IA en tu web y en WhatsApp, sin límite de mensajes',
+        // Messenger, Instagram and Telegram answer since the multichannel
+        // receptionist was built (Messenger/Instagram need KiraRoom's Meta app
+        // approved by Meta for pages_messaging / instagram_manage_messages).
+        'Recepcionista IA en tu web, WhatsApp, Messenger, Instagram y Telegram, sin límite de mensajes',
         'Recordatorios por SMS',
         'Fidelización, promociones y tarjetas regalo',
         'Wallet y comisiones',
@@ -243,7 +246,10 @@ export class SubscriptionsService {
         'Informes consolidados',
         'Panel centralizado',
         'Account manager',
-        'Recepcionista IA en tu web y en WhatsApp, sin límite de mensajes',
+        // Messenger, Instagram and Telegram answer since the multichannel
+        // receptionist was built (Messenger/Instagram need KiraRoom's Meta app
+        // approved by Meta for pages_messaging / instagram_manage_messages).
+        'Recepcionista IA en tu web, WhatsApp, Messenger, Instagram y Telegram, sin límite de mensajes',
         'Todo lo de Pro',
       ],
       maxClients: null,                  // unlimited
@@ -360,7 +366,8 @@ export class SubscriptionsService {
       'email_marketing',
       'multichannel',
       'google_reviews_auto',
-      'web_domain',
+      // 'web_domain' is not sold until custom domains are served over
+      // HTTPS (see WITHHELD_ADDON_KEYS in addons.service.ts).
       'deposits_antinoshow',
     ];
     // Filter out add-ons whose unlocks are already covered by the plan.
@@ -721,12 +728,22 @@ export class SubscriptionsService {
       metadata: { plan: planId },
     });
 
+    const planItem = planItemOf(subscription);
+    if (!planItem) {
+      throw new NotFoundException('The subscription has no plan item');
+    }
+    // An add-on the new plan already includes (ai_expansion on Pro) would
+    // keep billing for nothing: it leaves the subscription in the same
+    // update, and the subscription.updated webhook deactivates it.
+    const redundant = await this.addOnItemsCoveredByPlan(subscription, planId);
+
     const updatedSubscription = await this.stripe.subscriptions.update(
       tenant.stripeSubscriptionId,
       {
         items: [
+          ...redundant.map((item) => ({ id: item.id, deleted: true })),
           {
-            id: subscription.items.data[0].id,
+            id: planItem.id,
             price_data: {
               currency: 'eur',
               unit_amount: planDetails.price,
@@ -753,12 +770,24 @@ export class SubscriptionsService {
         maxLocations: planId === 'empresa' ? targetQuantity : 1,
       },
     });
+    if (redundant.length > 0) {
+      // Stripe already stopped billing them; the webhook says the same.
+      await this.prisma.tenantAddOn.updateMany({
+        where: {
+          tenantId,
+          stripeSubscriptionItemId: { in: redundant.map((item) => item.id) },
+          status: { not: 'cancelled' },
+        },
+        data: { status: 'cancelled', cancelledAt: new Date() },
+      });
+    }
 
     return {
       subscriptionId: updatedSubscription.id,
       status: updatedSubscription.status,
       newPlan: planId,
       locationCount: targetQuantity,
+      removedAddOns: redundant.map((item) => item.metadata?.addOnKey),
     };
   }
 
@@ -789,12 +818,19 @@ export class SubscriptionsService {
       tenant.stripeSubscriptionId
     );
 
+    const planItem = planItemOf(subscription);
+    if (!planItem) {
+      throw new NotFoundException('The subscription has no plan item');
+    }
+
     const updated = await this.stripe.subscriptions.update(
       tenant.stripeSubscriptionId,
       {
         items: [
           {
-            id: subscription.items.data[0].id,
+            // Not items.data[0]: that can be an add-on, whose quantity
+            // would have become the number of locations.
+            id: planItem.id,
             quantity: newCount,
           },
         ],
@@ -812,6 +848,142 @@ export class SubscriptionsService {
       subscriptionId: updated.id,
       locationCount: newCount,
     };
+  }
+
+  // ============ ADD-ONS ON THE PLAN SUBSCRIPTION ============
+  //
+  // An add-on is one more item of the salon's plan subscription, priced
+  // with price_data like the plan itself (#102): one invoice, one card,
+  // prorated when it is added or removed mid-period. The item carries
+  // metadata.kind = 'addon' and the add-on key, which is what the
+  // customer.subscription.updated webhook activates or deactivates from
+  // (AddOnsService.syncFromSubscription).
+
+  /** The platform Stripe account, or a 503 explaining it is missing. */
+  private requireStripe(): Stripe {
+    if (!this.isEnabled) {
+      throw new ServiceUnavailableException(
+        'Los pagos con Stripe no están configurados en este entorno.',
+      );
+    }
+    return this.stripe;
+  }
+
+  /**
+   * Adds the add-on to the subscription and returns the subscription as
+   * Stripe has it afterwards. Idempotent: an item for the same add-on that
+   * is already there is not added twice (a double click would bill twice).
+   */
+  async addAddOnItem(args: {
+    tenantId: string;
+    subscriptionId: string;
+    addOnKey: string;
+    addOnName: string;
+    monthlyPriceCents: number;
+    currency: string;
+  }): Promise<Stripe.Subscription> {
+    const stripe = this.requireStripe();
+    const subscription = await stripe.subscriptions.retrieve(args.subscriptionId);
+    if (subscription.metadata?.tenantId && subscription.metadata.tenantId !== args.tenantId) {
+      throw new BadRequestException('The subscription belongs to another salon');
+    }
+    const already = (subscription.items?.data ?? []).some(
+      (item) => isAddOnItem(item) && item.metadata?.addOnKey === args.addOnKey,
+    );
+    if (already) return subscription;
+
+    const product = await this.addOnProduct(args.addOnKey, args.addOnName);
+    await stripe.subscriptionItems.create({
+      subscription: args.subscriptionId,
+      // A subscription item's price_data takes an existing product id (no
+      // product_data, unlike Checkout).
+      price_data: {
+        currency: (args.currency || 'EUR').toLowerCase(),
+        product,
+        unit_amount: args.monthlyPriceCents,
+        recurring: { interval: 'month' },
+      },
+      quantity: 1,
+      metadata: { kind: 'addon', addOnKey: args.addOnKey, tenantId: args.tenantId },
+      proration_behavior: 'create_prorations',
+    });
+    return stripe.subscriptions.retrieve(args.subscriptionId);
+  }
+
+  /**
+   * Stops billing an add-on item. On the plan subscription the item is
+   * removed (prorated credit for the unused days). An add-on bought before
+   * this change has a subscription of its own; that one is cancelled, after
+   * checking it is this salon's add-on subscription and not something else.
+   * Returns the subscription as Stripe has it afterwards.
+   */
+  async removeAddOnItem(args: {
+    tenantId: string;
+    itemId: string;
+  }): Promise<Stripe.Subscription> {
+    const stripe = this.requireStripe();
+    const item = await stripe.subscriptionItems.retrieve(args.itemId);
+    const subscriptionId =
+      typeof item.subscription === 'string' ? item.subscription : (item.subscription as any)?.id;
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+    if (subscription.metadata?.tenantId !== args.tenantId) {
+      throw new BadRequestException('The add-on belongs to another salon');
+    }
+    if (subscription.metadata?.kind === 'addon') {
+      return stripe.subscriptions.cancel(subscription.id, { prorate: true });
+    }
+    if (!isAddOnItem(item)) {
+      // Never the plan item: that would leave the salon without a plan.
+      throw new BadRequestException('That item is not an add-on');
+    }
+    await stripe.subscriptionItems.del(args.itemId, {
+      proration_behavior: 'create_prorations',
+    });
+    return stripe.subscriptions.retrieve(subscription.id);
+  }
+
+  /**
+   * One Stripe product per add-on, with a fixed id, instead of a new
+   * product per purchase (changePlan creates one per change).
+   */
+  private async addOnProduct(addOnKey: string, addOnName: string): Promise<string> {
+    const id = `kiraroom_addon_${addOnKey}`;
+    try {
+      const existing = await this.stripe.products.retrieve(id);
+      if (existing?.id) return existing.id;
+    } catch (err: any) {
+      if (err?.statusCode !== 404 && err?.code !== 'resource_missing') throw err;
+    }
+    const created = await this.stripe.products.create({
+      id,
+      name: `KiraRoom - ${addOnName}`,
+      metadata: { kind: 'addon', addOnKey },
+    });
+    return created.id;
+  }
+
+  /** Add-on items of the subscription whose every unlock the plan includes. */
+  private async addOnItemsCoveredByPlan(
+    subscription: Stripe.Subscription,
+    planId: PlanId,
+  ): Promise<Stripe.SubscriptionItem[]> {
+    const items = (subscription.items?.data ?? []).filter(isAddOnItem);
+    if (items.length === 0) return [];
+    const keys = items.map((item) => String(item.metadata?.addOnKey ?? ''));
+    const rows = await this.prisma.addOn.findMany({
+      where: { key: { in: keys } },
+      select: { key: true, unlocks: true },
+    });
+    const planFeatures = this.plans[planId]?.featureKeys ?? [];
+    const covered = new Set(
+      rows
+        .filter((row) => {
+          const unlocks = Array.isArray(row.unlocks) ? (row.unlocks as string[]) : [];
+          return unlocks.length > 0 && unlocks.every((k) => (planFeatures as string[]).includes(k));
+        })
+        .map((row) => row.key),
+    );
+    return items.filter((item) => covered.has(String(item.metadata?.addOnKey)));
   }
 
   /**

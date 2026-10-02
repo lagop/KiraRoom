@@ -1,0 +1,4 @@
+# False positives of the generic-api-key rule: notification type ids
+# (appointment_reminder_24h / _1h) in the client account settings page.
+5bfdc96acb54c0acd9c60b2e0bc092a49814b51b:packages/frontend/lib/account-settings.ts:generic-api-key:17
+5bfdc96acb54c0acd9c60b2e0bc092a49814b51b:packages/frontend/lib/account-settings.ts:generic-api-key:18
