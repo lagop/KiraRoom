@@ -1,4 +1,12 @@
-import { Controller, Get, Query, UseGuards, Req, ForbiddenException } from "@nestjs/common";
+import {
+  BadRequestException,
+  Controller,
+  ForbiddenException,
+  Get,
+  Query,
+  Req,
+  UseGuards,
+} from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
@@ -7,7 +15,6 @@ import {
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { Roles, SALON_TEAM, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
-import { UserRole } from "@prisma/client";
 import { AnalyticsService } from "./analytics.service";
 import {
   AnalyticsFlagsService,
@@ -16,6 +23,7 @@ import { ProfessionalsService } from "../professionals/professionals.service";
 import { Request } from "express";
 import { FeatureGuard } from "../common/guards/feature.guard";
 import { Feature } from "../common/decorators/feature.decorator";
+import { SalonPeriod, explicitPeriod, rangePeriod } from "./analytics-metrics";
 
 interface AuthenticatedRequest extends Request {
   user: {
@@ -41,6 +49,24 @@ export class AnalyticsController {
 
   private getPlan(request: AuthenticatedRequest): SubscriptionPlan {
     return (request.user.plan as SubscriptionPlan) || "basic";
+  }
+
+  private months(request: AuthenticatedRequest, months: string | undefined, fallback = 6): number {
+    const requested = months ? parseInt(months, 10) : fallback;
+    return this.analyticsFlagsService.clampMonths(
+      this.getPlan(request),
+      Number.isFinite(requested) && requested > 0 ? requested : fallback,
+    );
+  }
+
+  private datesOrThrow(startDate?: string, endDate?: string): SalonPeriod {
+    const period = explicitPeriod(startDate, endDate);
+    if (!period) {
+      throw new BadRequestException(
+        "startDate y endDate deben ser fechas con formato AAAA-MM-DD.",
+      );
+    }
+    return period;
   }
 
   private checkAdvancedAccess(
@@ -87,22 +113,11 @@ export class AnalyticsController {
     @Req() req: AuthenticatedRequest,
     @Query("months") months?: string,
   ) {
-    const tenantId = req.user.tenantId;
-    const plan = this.getPlan(req);
-    const requestedMonths = months ? parseInt(months, 10) : 6;
-
-    // Clamp months to plan limit
-    const monthsNum = this.analyticsFlagsService.clampMonths(
-      plan,
-      requestedMonths,
-    );
-
     // Aplicar filtro por profesional para Staff
     const professionalId = await this.getProfessionalIdForStaff(req);
-
     return this.analyticsService.getOverview(
-      tenantId,
-      monthsNum,
+      req.user.tenantId,
+      this.months(req, months),
       professionalId,
     );
   }
@@ -117,8 +132,10 @@ export class AnalyticsController {
     @Query("startDate") startDate: string,
     @Query("endDate") endDate: string,
   ) {
-    const tenantId = req.user.tenantId;
-    return this.analyticsService.getRevenueReport(tenantId, startDate, endDate);
+    return this.analyticsService.getRevenueReport(
+      req.user.tenantId,
+      this.datesOrThrow(startDate, endDate),
+    );
   }
 
   @Get("appointments")
@@ -131,11 +148,9 @@ export class AnalyticsController {
     @Query("startDate") startDate: string,
     @Query("endDate") endDate: string,
   ) {
-    const tenantId = req.user.tenantId;
     return this.analyticsService.getAppointmentsReport(
-      tenantId,
-      startDate,
-      endDate,
+      req.user.tenantId,
+      this.datesOrThrow(startDate, endDate),
     );
   }
 
@@ -149,12 +164,10 @@ export class AnalyticsController {
     @Query("status") status: string,
     @Query("months") months?: string,
   ) {
-    const tenantId = req.user.tenantId;
-    const monthsNum = months ? parseInt(months, 10) : 6;
     return this.analyticsService.getAppointmentStatusEvolution(
-      tenantId,
+      req.user.tenantId,
       status,
-      monthsNum,
+      this.months(req, months),
     );
   }
 
@@ -168,16 +181,9 @@ export class AnalyticsController {
     @Req() req: AuthenticatedRequest,
     @Query("months") months?: string,
   ) {
-    const tenantId = req.user.tenantId;
-    const plan = this.getPlan(req);
-    const requestedMonths = months ? parseInt(months, 10) : 6;
-    const monthsNum = this.analyticsFlagsService.clampMonths(
-      plan,
-      requestedMonths,
-    );
     return this.analyticsService.getAppointmentStatusesEvolution(
-      tenantId,
-      monthsNum,
+      req.user.tenantId,
+      this.months(req, months),
     );
   }
 
@@ -189,16 +195,9 @@ export class AnalyticsController {
     @Req() req: AuthenticatedRequest,
     @Query("days") days?: string,
   ) {
-    const tenantId = req.user.tenantId;
-    const daysNum = days ? parseInt(days, 10) : 7;
-    const endDate = new Date();
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - daysNum);
-
-    return this.analyticsService.getAppointmentStatus(
-      tenantId,
-      startDate,
-      endDate,
+    return this.analyticsService.getAppointmentStatusByDays(
+      req.user.tenantId,
+      days ? parseInt(days, 10) : 7,
     );
   }
 
@@ -222,23 +221,19 @@ export class AnalyticsController {
     this.checkAdvancedAccess(req, "Detailed reports");
 
     const tenantId = req.user.tenantId;
+    const period = this.datesOrThrow(startDate, endDate);
     const reportType = type || "both";
 
     const result: any = {};
 
     if (reportType === "revenue" || reportType === "both") {
-      result.revenue = await this.analyticsService.getRevenueReport(
-        tenantId,
-        startDate,
-        endDate,
-      );
+      result.revenue = await this.analyticsService.getRevenueReport(tenantId, period);
     }
 
     if (reportType === "appointments" || reportType === "both") {
       result.appointments = await this.analyticsService.getAppointmentsReport(
         tenantId,
-        startDate,
-        endDate,
+        period,
       );
     }
 
@@ -259,95 +254,12 @@ export class AnalyticsController {
     this.checkAdvancedAccess(req, "Professional performance");
 
     const tenantId = req.user.tenantId;
-    const plan = this.getPlan(req);
+    const maxMonths = this.analyticsFlagsService.getMaxMonths(this.getPlan(req));
+    // "Today", "this week"... are the salon's, not the server's (UTC).
+    const { today } = await this.analyticsService.todayFor(tenantId);
+    const period = rangePeriod(range ?? "3_months", today, maxMonths);
 
-    // Parse time range
-    const { startDate, endDate } = this.parseTimeRange(range, plan);
-
-    return this.analyticsService.getTopProfessionals(
-      tenantId,
-      startDate,
-      endDate,
-      10,
-    );
-  }
-
-  /**
-   * Parse time range string into dates
-   */
-  private parseTimeRange(
-    range: string | undefined,
-    plan: SubscriptionPlan,
-  ): { startDate: Date; endDate: Date } {
-    const now = new Date();
-    const today = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate(),
-      23,
-      59,
-      59,
-    );
-    let startDate: Date;
-    let endDate: Date = today;
-
-    switch (range) {
-      case "today":
-        startDate = new Date(
-          now.getFullYear(),
-          now.getMonth(),
-          now.getDate(),
-          0,
-          0,
-          0,
-        );
-        break;
-      case "this_week":
-        // Start of week (Monday)
-        const dayOfWeek = now.getDay();
-        const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-        startDate = new Date(now);
-        startDate.setDate(now.getDate() + mondayOffset);
-        startDate.setHours(0, 0, 0, 0);
-        break;
-      case "last_week":
-        const lastWeekDay = now.getDay();
-        const lastMondayOffset = lastWeekDay === 0 ? -13 : -6 - lastWeekDay;
-        startDate = new Date(now);
-        startDate.setDate(now.getDate() + lastMondayOffset);
-        startDate.setHours(0, 0, 0, 0);
-        endDate = new Date(startDate);
-        endDate.setDate(startDate.getDate() + 6);
-        endDate.setHours(23, 59, 59, 999);
-        break;
-      case "this_month":
-        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-        break;
-      case "last_month":
-        startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-        endDate = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
-        break;
-      case "3_months":
-        startDate = new Date(now.getFullYear(), now.getMonth() - 3, 1);
-        break;
-      case "6_months":
-        startDate = new Date(now.getFullYear(), now.getMonth() - 6, 1);
-        break;
-      case "1_year":
-      case "12_months":
-        startDate = new Date(now.getFullYear() - 1, now.getMonth(), 1);
-        break;
-      default:
-        // Default to 3 months or max allowed by plan
-        const maxMonths = this.analyticsFlagsService.getMaxMonths(plan);
-        startDate = new Date(
-          now.getFullYear(),
-          now.getMonth() - Math.min(maxMonths, 3),
-          1,
-        );
-    }
-
-    return { startDate, endDate };
+    return this.analyticsService.getTopProfessionals(tenantId, period, 10);
   }
 
   @Get("client-insights")
@@ -363,44 +275,9 @@ export class AnalyticsController {
     // Check advanced access
     this.checkAdvancedAccess(req, "Client insights");
 
-    const tenantId = req.user.tenantId;
-    const plan = this.getPlan(req);
-    const requestedMonths = months ? parseInt(months, 10) : 6;
-    const monthsNum = this.analyticsFlagsService.clampMonths(
-      plan,
-      requestedMonths,
+    return this.analyticsService.getClientInsights(
+      req.user.tenantId,
+      this.months(req, months),
     );
-
-    const now = new Date();
-    const startDate = new Date(
-      now.getFullYear(),
-      now.getMonth() - monthsNum,
-      1,
-    );
-
-    // Get client retention data
-    const newClients = await this.analyticsService.getNewClientsCount(
-      tenantId,
-      startDate,
-      now,
-    );
-    const totalAppointments = await this.analyticsService.getAppointmentCount(
-      tenantId,
-      startDate,
-      now,
-    );
-
-    // Calculate returning clients (simplified - actual implementation would track client appointment history)
-    const returningClients = Math.floor(totalAppointments * 0.4); // Placeholder calculation
-
-    return {
-      newClients,
-      returningClients,
-      totalAppointments,
-      retentionRate:
-        totalAppointments > 0
-          ? Math.round((returningClients / totalAppointments) * 100)
-          : 0,
-      period: `${monthsNum} months` };
   }
 }

@@ -160,7 +160,7 @@ export default function DashboardPage() {
           value={formatMoney(data.stats.totalRevenue)}
           icon={DollarSign}
           changePercent={data.stats.revenueChange}
-          changeLabel="vs. last month"
+          changeLabel="vs. same days last month"
           iconClassName="bg-emerald-50 text-emerald-600"
         />
         <DeltaStatCard
@@ -168,7 +168,7 @@ export default function DashboardPage() {
           value={data.stats.totalAppointments}
           icon={Calendar}
           changePercent={data.stats.appointmentsChange}
-          changeLabel="vs. last month"
+          changeLabel="vs. same days last month"
           iconClassName="bg-indigo-50 text-indigo-600"
         />
         <DeltaStatCard
@@ -176,7 +176,7 @@ export default function DashboardPage() {
           value={data.stats.newClients}
           icon={UserCheck}
           changePercent={data.stats.clientsChange}
-          changeLabel="vs. last month"
+          changeLabel="vs. same days last month"
           iconClassName="bg-violet-50 text-violet-600"
         />
         <DeltaStatCard
@@ -184,7 +184,7 @@ export default function DashboardPage() {
           value={formatMoney(data.stats.avgOrderValue)}
           icon={TrendingUp}
           changePercent={data.stats.orderValueChange}
-          changeLabel="vs. last month"
+          changeLabel="vs. same days last month"
           iconClassName="bg-amber-50 text-amber-600"
         />
       </div>

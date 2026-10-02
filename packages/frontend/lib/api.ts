@@ -2924,6 +2924,13 @@ class ApiClient implements ApiClientInterface {
     return this.request<any>(`/analytics/client-insights?months=${months}`);
   }
 
+  /** Per-location KPIs (plan Empresa). Money in cents. */
+  async getConsolidatedReport(range: string = "this_month"): Promise<any> {
+    return this.request<any>(
+      `/multi-location/consolidated?range=${encodeURIComponent(range)}`,
+    );
+  }
+
   // Promotions
   async getPromotions(): Promise<any[]> {
     return this.request<any[]>("/promotions");

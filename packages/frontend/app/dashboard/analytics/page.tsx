@@ -13,6 +13,8 @@ import {
   Loader2,
   Crown,
   Star,
+  Info,
+  Gauge,
 } from "lucide-react";
 import apiClient from "../../../lib/api";
 import { useTranslations } from "@/lib/use-translation";
@@ -20,6 +22,12 @@ import Link from "next/link";
 import { PlanGate } from "@/components/billing/PlanGate";
 import { UpgradeCTA } from "@/components/billing/UpgradeCTA";
 import { useFeatureAccess } from "@/hooks/useFeatureAccess";
+import {
+  formatCents,
+  formatPeriod,
+  formatRate,
+  weekOverWeekChange,
+} from "@/lib/analytics-format";
 
 interface DashboardStats {
   totalRevenue: number;
@@ -71,10 +79,11 @@ interface ProfessionalPerformance {
 
 interface ClientInsights {
   newClients: number;
+  clientsServed: number;
   returningClients: number;
   totalAppointments: number;
   retentionRate: number;
-  period: string;
+  period: { start: string; end: string };
 }
 
 interface AnalyticsFeatureFlags {
@@ -85,7 +94,17 @@ interface AnalyticsFeatureFlags {
   maxMonths: number;
 }
 
+interface Occupancy {
+  bookedMinutes: number;
+  availableMinutes: number;
+  rate: number | null;
+  professionalsWithSchedule: number;
+}
+
+// Money from the analytics API is in cents (see lib/analytics-format.ts).
 interface AnalyticsData {
+  period?: { start: string; end: string };
+  occupancy?: Occupancy;
   stats: DashboardStats;
   revenueData: RevenueDataPoint[];
   servicePopularity: ServicePopularity[];
@@ -256,6 +275,18 @@ export default function AnalyticsPage() {
     Cancelled: "#ef4444",
     "No Show": "#6b7280",
   };
+  // The donuts show every status, not only the three of the evolution chart.
+  const donutColors: Record<string, string> = {
+    ...statusColors,
+    Confirmed: "#3b82f6",
+    Pending: "#eab308",
+    "In Progress": "#8b5cf6",
+  };
+  const weekTrend = weekOverWeekChange(
+    totalAppointments7Days,
+    totalAppointments14Days,
+  );
+  const occupancy = data?.occupancy;
 
   const getStatusLabel = (status: string) => {
     switch (status) {
@@ -265,6 +296,12 @@ export default function AnalyticsPage() {
         return t("analytics.cancelled");
       case "No Show":
         return t("analytics.no_show");
+      case "Confirmed":
+        return t("analytics.status_confirmed");
+      case "Pending":
+        return t("analytics.status_pending");
+      case "In Progress":
+        return t("analytics.status_in_progress");
       default:
         return status;
     }
@@ -411,6 +448,11 @@ export default function AnalyticsPage() {
           <p className="text-gray-500 mt-1" suppressHydrationWarning>
             {t("analytics.description")}
           </p>
+          {data?.period && (
+            <p className="text-xs text-gray-400 mt-1">
+              {t("analytics.period_label")}: {formatPeriod(data.period)}
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-3">
           {!isAdvanced && (
@@ -508,16 +550,18 @@ export default function AnalyticsPage() {
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
               title={t("analytics.total_revenue")}
-              value={`€${stats.totalRevenue.toLocaleString()}`}
+              value={formatCents(stats.totalRevenue)}
+              hint={t("analytics.revenue_hint")}
               icon={DollarSign}
-              change={`${stats.revenueChange >= 0 ? "+" : ""}${stats.revenueChange}% ${t("analytics.from_last_month")}`}
+              change={`${stats.revenueChange >= 0 ? "+" : ""}${stats.revenueChange}% ${t("analytics.vs_previous_period")}`}
               changeType={stats.revenueChange >= 0 ? "positive" : "negative"}
             />
             <StatCard
               title={t("analytics.total_appointments")}
               value={stats.totalAppointments.toString()}
+              hint={t("analytics.appointments_hint")}
               icon={Calendar}
-              change={`${stats.appointmentsChange >= 0 ? "+" : ""}${stats.appointmentsChange}% ${t("analytics.from_last_month")}`}
+              change={`${stats.appointmentsChange >= 0 ? "+" : ""}${stats.appointmentsChange}% ${t("analytics.vs_previous_period")}`}
               changeType={
                 stats.appointmentsChange >= 0 ? "positive" : "negative"
               }
@@ -525,15 +569,17 @@ export default function AnalyticsPage() {
             <StatCard
               title={t("analytics.new_clients")}
               value={stats.newClients.toString()}
+              hint={t("analytics.new_clients_hint")}
               icon={Users}
-              change={`${stats.clientsChange >= 0 ? "+" : ""}${stats.clientsChange}% ${t("analytics.from_last_month")}`}
+              change={`${stats.clientsChange >= 0 ? "+" : ""}${stats.clientsChange}% ${t("analytics.vs_previous_period")}`}
               changeType={stats.clientsChange >= 0 ? "positive" : "negative"}
             />
             <StatCard
               title={t("analytics.avg_order_value")}
-              value={`€${stats.avgOrderValue.toFixed(2)}`}
+              value={formatCents(stats.avgOrderValue)}
+              hint={t("analytics.avg_ticket_hint")}
               icon={TrendingUp}
-              change={`${stats.orderValueChange >= 0 ? "+" : ""}${stats.orderValueChange}% ${t("analytics.from_last_month")}`}
+              change={`${stats.orderValueChange >= 0 ? "+" : ""}${stats.orderValueChange}% ${t("analytics.vs_previous_period")}`}
               changeType={stats.orderValueChange >= 0 ? "positive" : "negative"}
             />
           </div>
@@ -570,7 +616,7 @@ export default function AnalyticsPage() {
                       </div>
                     </div>
                     <span className="w-20 text-sm font-medium text-gray-900 text-right">
-                      €{data.revenue.toLocaleString()}
+                      {formatCents(data.revenue)}
                     </span>
                   </div>
                 ))}
@@ -606,7 +652,7 @@ export default function AnalyticsPage() {
                 ))}
                 {servicePopularity.length === 0 && (
                   <p className="text-gray-500 text-center py-4">
-                    No service data available
+                    {t("analytics.no_data_available")}
                   </p>
                 )}
               </div>
@@ -823,7 +869,7 @@ export default function AnalyticsPage() {
                               251.2 - (cumulativePercentage / 100) * 251.2;
                             const strokeDasharray = (percentage / 100) * 251.2;
                             const color =
-                              statusColors[status.name] || "#6b7280";
+                              donutColors[status.name] || "#6b7280";
 
                             return (
                               <circle
@@ -858,7 +904,7 @@ export default function AnalyticsPage() {
                                   (status.count / totalAppointments7Days) * 100,
                                 )
                               : 0;
-                          const color = statusColors[status.name] || "#6b7280";
+                          const color = donutColors[status.name] || "#6b7280";
                           return (
                             <div
                               key={index}
@@ -869,7 +915,7 @@ export default function AnalyticsPage() {
                                 style={{ backgroundColor: color }}
                               />
                               <span className="text-gray-600">
-                                {status.name}: {percentage}%
+                                {getStatusLabel(status.name)}: {percentage}%
                               </span>
                             </div>
                           );
@@ -911,7 +957,7 @@ export default function AnalyticsPage() {
                               251.2 - (cumulativePercentage / 100) * 251.2;
                             const strokeDasharray = (percentage / 100) * 251.2;
                             const color =
-                              statusColors[status.name] || "#6b7280";
+                              donutColors[status.name] || "#6b7280";
 
                             return (
                               <circle
@@ -947,7 +993,7 @@ export default function AnalyticsPage() {
                                     100,
                                 )
                               : 0;
-                          const color = statusColors[status.name] || "#6b7280";
+                          const color = donutColors[status.name] || "#6b7280";
                           return (
                             <div
                               key={index}
@@ -958,7 +1004,7 @@ export default function AnalyticsPage() {
                                 style={{ backgroundColor: color }}
                               />
                               <span className="text-gray-600">
-                                {status.name}: {percentage}%
+                                {getStatusLabel(status.name)}: {percentage}%
                               </span>
                             </div>
                           );
@@ -1067,28 +1113,49 @@ export default function AnalyticsPage() {
                     </p>
                   </div>
                   <div className="flex items-center">
-                    {totalAppointments7Days > 0 &&
-                    totalAppointments14Days > 0 ? (
-                      totalAppointments7Days >= totalAppointments14Days / 2 ? (
-                        <ArrowUpRight className="w-5 h-5 text-green-600 mr-1" />
-                      ) : (
-                        <ArrowDownRight className="w-5 h-5 text-red-600 mr-1" />
-                      )
-                    ) : null}
-                    <span
-                      className={`text-lg font-bold ${totalAppointments7Days >= totalAppointments14Days / 2 ? "text-green-600" : "text-red-600"}`}
-                    >
-                      {totalAppointments14Days > 0
-                        ? Math.round(
-                            (totalAppointments7Days /
-                              (totalAppointments14Days / 2)) *
-                              100 -
-                              100,
-                          )
-                        : 0}
-                      %
-                    </span>
+                    {weekTrend === null ? (
+                      <span className="text-lg font-bold text-gray-500">—</span>
+                    ) : (
+                      <>
+                        {weekTrend >= 0 ? (
+                          <ArrowUpRight className="w-5 h-5 text-green-600 mr-1" />
+                        ) : (
+                          <ArrowDownRight className="w-5 h-5 text-red-600 mr-1" />
+                        )}
+                        <span
+                          className={`text-lg font-bold ${weekTrend >= 0 ? "text-green-600" : "text-red-600"}`}
+                        >
+                          {weekTrend > 0 ? "+" : ""}
+                          {weekTrend}%
+                        </span>
+                      </>
+                    )}
                   </div>
+                </div>
+
+                {/* Insight 5: Occupancy (working hours vs booked minutes) */}
+                <div
+                  className="flex items-center justify-between p-4 bg-sky-50 rounded-lg"
+                  title={t("analytics.occupancy_hint")}
+                >
+                  <div>
+                    <p className="text-sm font-medium text-gray-700 flex items-center gap-1">
+                      <Gauge className="w-4 h-4 text-sky-600" />
+                      {t("analytics.occupancy")}
+                      <Info
+                        className="w-3.5 h-3.5 text-gray-400"
+                        aria-label={t("analytics.occupancy_hint")}
+                      />
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      {occupancy && occupancy.rate === null
+                        ? t("analytics.occupancy_no_schedule")
+                        : formatPeriod(data?.period)}
+                    </p>
+                  </div>
+                  <span className="text-lg font-bold text-sky-700">
+                    {formatRate(occupancy?.rate)}
+                  </span>
                 </div>
               </div>
             </div>
@@ -1148,7 +1215,7 @@ export default function AnalyticsPage() {
                         </div>
                       </div>
                       <span className="w-24 text-sm font-medium text-gray-900 text-right">
-                        €{professional.revenue.toLocaleString()}
+                        {formatCents(professional.revenue)}
                       </span>
                     </div>
                   ))}
@@ -1198,7 +1265,13 @@ export default function AnalyticsPage() {
                 </p>
               </div>
 
-              <div className="bg-blue-50 rounded-lg p-6">
+              {/* Recurring = served in the period (≥1 completed appointment)
+                  and came back within it or had come before. Computed by
+                  the API from appointment history (clientRetention). */}
+              <div
+                className="bg-blue-50 rounded-lg p-6"
+                title={t("analytics.returning_hint")}
+              >
                 <div className="flex items-center justify-between mb-2">
                   <Star className="w-5 h-5 text-blue-600" />
                   <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full">
@@ -1207,33 +1280,56 @@ export default function AnalyticsPage() {
                 </div>
                 <p className="text-3xl font-bold text-gray-900">
                   {clientInsights.returningClients}
+                  <span className="text-base font-normal text-gray-500">
+                    {" "}
+                    / {clientInsights.clientsServed}
+                  </span>
                 </p>
-                <p className="text-sm text-gray-600">
+                <p className="text-sm text-gray-600 flex items-center gap-1">
                   {t("analytics.returning_clients")}
+                  <Info className="w-3.5 h-3.5 text-gray-400" />
+                </p>
+                <p className="text-xs text-gray-500 mt-2">
+                  {t("analytics.returning_hint")}
                 </p>
               </div>
 
-              <div className="bg-green-50 rounded-lg p-6">
+              <div
+                className="bg-green-50 rounded-lg p-6"
+                title={t("analytics.clients_served_hint")}
+              >
                 <div className="flex items-center justify-between mb-2">
                   <Calendar className="w-5 h-5 text-green-600" />
                 </div>
                 <p className="text-3xl font-bold text-gray-900">
-                  {clientInsights.totalAppointments}
+                  {clientInsights.clientsServed}
                 </p>
-                <p className="text-sm text-gray-600">
-                  {t("analytics.total_appointments")}
+                <p className="text-sm text-gray-600 flex items-center gap-1">
+                  {t("analytics.clients_served")}
+                  <Info className="w-3.5 h-3.5 text-gray-400" />
+                </p>
+                <p className="text-xs text-gray-500 mt-2">
+                  {clientInsights.totalAppointments}{" "}
+                  {t("analytics.appointments").toLowerCase()}
                 </p>
               </div>
 
-              <div className="bg-purple-50 rounded-lg p-6">
+              <div
+                className="bg-purple-50 rounded-lg p-6"
+                title={t("analytics.retention_hint")}
+              >
                 <div className="flex items-center justify-between mb-2">
                   <TrendingUp className="w-5 h-5 text-purple-600" />
                 </div>
                 <p className="text-3xl font-bold text-gray-900">
                   {clientInsights.retentionRate}%
                 </p>
-                <p className="text-sm text-gray-600">
+                <p className="text-sm text-gray-600 flex items-center gap-1">
                   {t("analytics.retention_rate")}
+                  <Info className="w-3.5 h-3.5 text-gray-400" />
+                </p>
+                <p className="text-xs text-gray-500 mt-2">
+                  {t("analytics.retention_hint")}
                 </p>
               </div>
             </div>
@@ -1259,17 +1355,23 @@ function StatCard({
   icon: Icon,
   change,
   changeType,
+  hint,
 }: {
   title: string;
   value: string;
   icon: any;
   change: string;
   changeType: "positive" | "negative";
+  /** What the figure counts, shown as a tooltip. */
+  hint?: string;
 }) {
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-6">
+    <div className="bg-white rounded-xl border border-gray-200 p-6" title={hint}>
       <div className="flex items-center justify-between mb-4">
-        <span className="text-sm font-medium text-gray-500">{title}</span>
+        <span className="text-sm font-medium text-gray-500 flex items-center gap-1">
+          {title}
+          {hint && <Info className="w-3.5 h-3.5 text-gray-400" aria-label={hint} />}
+        </span>
         <Icon
           className={`w-5 h-5 ${changeType === "positive" ? "text-green-500" : "text-red-500"}`}
         />
@@ -1343,8 +1445,7 @@ function ProfessionalCard({
             {professional.firstName} {professional.lastName}
           </p>
           <p className="text-xs text-gray-500">
-            {professional.appointments} appointment
-            {professional.appointments !== 1 ? "s" : ""}
+            {professional.appointments} {t("analytics.appointments").toLowerCase()}
           </p>
         </div>
       </div>
@@ -1360,7 +1461,7 @@ function ProfessionalCard({
         </div>
         <div className="bg-green-50 rounded-lg p-3 text-center">
           <p className="text-2xl font-bold text-green-600">
-            €{professional.revenue.toLocaleString()}
+            {formatCents(professional.revenue)}
           </p>
           <p className="text-xs text-green-700">{t("analytics.revenue")}</p>
         </div>

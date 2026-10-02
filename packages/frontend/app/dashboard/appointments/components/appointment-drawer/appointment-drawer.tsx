@@ -98,6 +98,7 @@ export function AppointmentDrawer({
   onOpenChange,
   onAppointmentUpdated,
   refreshKey,
+  startInEditMode = false,
 }: AppointmentDrawerProps) {
   const t = useTranslations();
 
@@ -549,6 +550,26 @@ useEffect(() => {
       console.error("Cannot enter edit mode: appointment is null");
     }
   };
+
+  // "Editar" on the appointment's detail page opens the drawer straight in
+  // edit mode, once per opening, as soon as that appointment has loaded.
+  const autoEditedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!open) {
+      autoEditedFor.current = null;
+      return;
+    }
+    if (
+      startInEditMode &&
+      appointment &&
+      appointment.id === appointmentId &&
+      autoEditedFor.current !== appointmentId
+    ) {
+      autoEditedFor.current = appointmentId;
+      handleEditClick();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, startInEditMode, appointment, appointmentId]);
 
   const handleUpdate = async () => {
     if (!appointment || !editedAppointment) return;
