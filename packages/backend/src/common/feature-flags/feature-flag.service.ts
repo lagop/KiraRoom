@@ -205,7 +205,8 @@ export class FeatureFlagService {
    * Helper for the orchestrator / UI: returns whether multi-location
    * features are *actually usable* (plan includes the key AND tenant
    * has >= 2 locations). The plan key is a precondition; the location
-   * count is a runtime check.
+   * count is a runtime check. This is about there being several locations
+   * to compare, not a plan minimum: Empresa works from one location.
    */
   async isMultiLocationActive(tenantId: string): Promise<boolean> {
     const { unlocked, ctx } = await this.evaluate(tenantId, 'multi_location');
