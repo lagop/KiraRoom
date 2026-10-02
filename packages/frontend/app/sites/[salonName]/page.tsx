@@ -19,6 +19,7 @@ import apiClient, { ApiError, removeToken } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { useTenantTranslations } from "@/lib/use-translation";
 import LoginModal from "./components/login-modal";
+import PublicReviewsSection from "./components/public-reviews";
 import { ChatWidget } from "@/src/components/virtual-receptionist";
 
 interface BookingData {
@@ -1078,6 +1079,8 @@ export default function SalonBookingPage({
               </div>
             </div>
           )}
+
+          {salonData?.id && <PublicReviewsSection tenantId={salonData.id} />}
         </div>
       </div>
 

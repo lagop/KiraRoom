@@ -786,6 +786,15 @@ export class AppointmentsService {
       }
     }
 
+    // The review request is timed from completionTime; completing through a
+    // plain edit never set it, so those visits were never asked about.
+    if (
+      updateAppointmentDto.status === AppointmentStatus.completed &&
+      appointment.status !== AppointmentStatus.completed
+    ) {
+      updateData.completionTime = new Date();
+    }
+
     // Handle addons update if provided
     if (updateAppointmentDto.addons && updateAppointmentDto.addons.length > 0) {
       updateData.addons = {
@@ -1050,6 +1059,11 @@ export class AppointmentsService {
       data: {
         status: AppointmentStatus.completed,
         notes: notes || appointment.notes,
+        // The review request is timed from this; it was never set here.
+        completionTime:
+          appointment.status === AppointmentStatus.completed
+            ? (appointment as any).completionTime ?? new Date()
+            : new Date(),
         updatedAt: new Date(),
       },
       include: {

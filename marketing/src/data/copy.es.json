@@ -160,9 +160,9 @@
     },
     {
       "key": "google_reviews_auto",
-      "name": "Reseñas Google auto",
+      "name": "Reseñas tras la cita",
       "price": 19,
-      "tagline": "Invitación automática post-servicio"
+      "tagline": "Pide opinión después de cada cita y ofrece dejarla en Google"
     },
     {
       "key": "web_domain",

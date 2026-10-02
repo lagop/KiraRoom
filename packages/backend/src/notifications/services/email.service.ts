@@ -1466,118 +1466,78 @@ This email was sent to ${data.clientEmail}
   }
 
   /**
-   * Send review request email after appointment completion
+   * The post-visit review request (google_reviews_auto add-on).
+   *
+   * This used to be in English with a "Leave a Review" button pointing at
+   * "#": the client got an email with nowhere to go. It now links to the
+   * salon's review page and carries a one-click way to stop these emails,
+   * because a review request is not something the client asked for.
    */
   async sendReviewRequest(data: {
     to: string;
     clientName: string;
     serviceName: string;
-    professionalName: string;
     salonName: string;
-    appointmentId: string;
+    reviewUrl: string;
+    optOutUrl: string;
   }): Promise<{ success: boolean; id?: string; error?: string; skipped?: boolean }> {
-    const salonName =
-      this.configService.get<string>("SALON_NAME") || data.salonName;
-    const subject = `How was your experience? - ${data.serviceName}`;
+    if (await this.shouldSkipBouncedUser(data.to)) {
+      return { success: false, skipped: true, error: "email_bounced" };
+    }
+    const salon = this.escapeHtml(data.salonName);
+    const greeting = data.clientName
+      ? `Hola ${this.escapeHtml(data.clientName)},`
+      : "Hola,";
+    const subject = `¿Qué tal tu visita a ${data.salonName}?`;
 
-    const html = this.generateReviewRequestHtml({ ...data, salonName });
-    const text = this.generateReviewRequestText({ ...data, salonName });
-
-    return this.sendEmail({
-      to: data.to,
-      subject,
-      html,
-      text,
-    });
-  }
-
-  private generateReviewRequestHtml(data: {
-    clientName: string;
-    serviceName: string;
-    professionalName: string;
-    salonName: string;
-    appointmentId: string;
-  }): string {
-    return `
+    const html = `
 <!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>How was your experience?</title>
-</head>
-<body style="margin: 0; padding: 0; background-color: #f4f4f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; padding: 20px;">
-    <!-- Header -->
-    <tr>
-      <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 12px 12px 0 0;">
-        <h1 style="color: #ffffff; margin: 0; font-size: 28px; font-weight: 600;">${data.salonName}</h1>
-        <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 16px;">How was your experience?</p>
-      </td>
-    </tr>
-    
-    <!-- Main Content -->
-    <tr>
-      <td style="background-color: #ffffff; padding: 40px 30px; border: 1px solid #e5e7eb; border-top: none;">
-        <p style="margin: 0 0 20px 0; color: #374151; font-size: 16px; line-height: 1.6;">
-          Hi <strong>${data.clientName}</strong>,
-        </p>
-        <p style="margin: 0 0 30px 0; color: #374151; font-size: 16px; line-height: 1.6;">
-          We hope you enjoyed your recent <strong>${data.serviceName}</strong> appointment with <strong>${data.professionalName}</strong>. Your feedback helps us improve and helps others find great services!
-        </p>
-        
-        <!-- Review Button -->
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-          <tr>
-            <td style="text-align: center; padding: 20px 0;">
-              <a href="#" style="display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #ffffff; padding: 16px 40px; text-decoration: none; border-radius: 8px; font-size: 16px; font-weight: 600;">
-                Leave a Review
-              </a>
-            </td>
-          </tr>
-        </table>
-        
-        <p style="margin: 30px 0 0 0; color: #6b7280; font-size: 14px; line-height: 1.6; text-align: center;">
-          Thank you for choosing ${data.salonName}! We look forward to seeing you again soon.
-        </p>
-      </td>
-    </tr>
-    
-    <!-- Footer -->
-    <tr>
-      <td style="background-color: #f9fafb; padding: 30px; border-radius: 0 0 12px 12px; border: 1px solid #e5e7eb; border-top: none;">
-        <p style="margin: 0; text-align: center; color: #9ca3af; font-size: 12px;">
-          This email was sent to request your feedback on your recent appointment.
-        </p>
-      </td>
-    </tr>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:12px;padding:32px;">
+        <tr><td>
+          <div style="font-size:22px;font-weight:700;margin-bottom:16px;">${salon}</div>
+          <p style="font-size:16px;line-height:1.6;margin:0 0 16px 0;">${greeting}</p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 24px 0;">
+            Gracias por tu visita (${this.escapeHtml(data.serviceName)}). ¿Nos cuentas qué tal fue?
+            Te llevará un minuto y nos ayuda mucho a mejorar.
+          </p>
+          <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 24px 0;">
+            <tr><td style="background:#7c3aed;border-radius:8px;">
+              <a href="${this.escapeHtml(data.reviewUrl)}" style="display:inline-block;padding:14px 28px;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;">Valorar mi visita</a>
+            </td></tr>
+          </table>
+          <p style="font-size:13px;color:#64748b;line-height:1.6;margin:0 0 8px 0;">El enlace caduca en 14 días.</p>
+          <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">
+          <p style="font-size:12px;color:#94a3b8;line-height:1.5;margin:0;">
+            Te escribimos de parte de ${salon} porque acabas de visitarle.
+            <a href="${this.escapeHtml(data.optOutUrl)}" style="color:#94a3b8;">No quiero recibir más peticiones de opinión</a>.
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
   </table>
 </body>
-</html>
-    `.trim();
-  }
+</html>`.trim();
 
-  private generateReviewRequestText(data: {
-    clientName: string;
-    serviceName: string;
-    professionalName: string;
-    salonName: string;
-    appointmentId: string;
-  }): string {
-    return `
-${data.salonName}
-How was your experience?
+    const text = [
+      data.clientName ? `Hola ${data.clientName},` : "Hola,",
+      ``,
+      `Gracias por tu visita a ${data.salonName} (${data.serviceName}). ¿Nos cuentas qué tal fue? Te llevará un minuto:`,
+      data.reviewUrl,
+      ``,
+      `El enlace caduca en 14 días.`,
+      ``,
+      `Si no quieres recibir más peticiones de opinión: ${data.optOutUrl}`,
+    ].join("\n");
 
-Hi ${data.clientName},
-
-We hope you enjoyed your recent ${data.serviceName} appointment with ${data.professionalName}. Your feedback helps us improve and helps others find great services!
-
-Please take a moment to leave a review about your experience.
-
-Thank you for choosing ${data.salonName}! We look forward to seeing you again soon.
-
-This email was sent to request your feedback on your recent appointment.
-    `.trim();
+    // No List-Unsubscribe header: the generic one points at the staff
+    // dashboard, which a client cannot use. The opt-out link in the body
+    // is the client's way out.
+    return this.sendEmail({ to: data.to, subject, html, text });
   }
   // ==================== Activation lifecycle (A3 / A4) ====================
   //

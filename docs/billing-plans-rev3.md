@@ -78,7 +78,7 @@ Checkout, excepto `message_bundles` (metered, top-up programÃ¡tico).
 | `loyalty_giftcards`     |               12 | `loyalty` + `promotions` + `gift_cards` | esencial     | Programa de puntos, promos y gift cards (3 en 1)                                   |
 | `email_marketing`       |               12 | `email_marketing`                   | esencial        | CampaÃ±as segmentadas por audiencia                                                  |
 | **`multichannel` (H-4)**|           **19**| **`multichannel`**                 | **esencial**    | **Messenger + Instagram + Telegram. Detalles en Â§17**                              |
-| `google_reviews_auto`   |               19 | (sin unlocks; funciÃ³n independiente)| esencial        | Automatiza invitaciones a dejar reseÃ±a en Google Business Profile                   |
+| `google_reviews_auto`   |               19 | `google_reviews_auto`               | esencial        | Peticiones de reseña tras la cita (email/WhatsApp/SMS) + enlace a la ficha de Google. No usa la API de Google |
 | `web_domain`            |               15 | (sin unlocks; funciÃ³n independiente)| esencial        | Dominio propio (citas.tunegocio.com) con SSL + SEO                                  |
 | `deposits_antinoshow`   |                5 | (sin unlocks; funciÃ³n independiente)| esencial        | SeÃ±al al reservar para reducir no-shows                                             |
 | `message_bundles`       |  metered (top-up) | (sin unlocks; consumo de crÃ©ditos)  | todos           | CrÃ©ditos para WhatsApp masivo / SMS marketing. No aparece en la lista; se top-up desde "Bonos" |

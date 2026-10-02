@@ -4,7 +4,9 @@ import { normalizePhone } from "../common/phone";
 import { MetaCloudApiClient } from "./meta-cloud-api.client";
 import {
   APPOINTMENT_REMINDER,
+  REVIEW_REQUEST,
   STANDARD_TEMPLATES,
+  TemplateDefinition,
   bodyParameters,
   spanishDate,
   templateCreationPayload,
@@ -85,26 +87,49 @@ export class WhatsAppTemplateService {
     tenantId: string,
     args: { phone: string; clientName: string; salonName: string; serviceName: string; date: Date; time: string; country?: string },
   ): Promise<ReminderResult> {
+    return this.sendTemplate(tenantId, APPOINTMENT_REMINDER, args.phone, args.country, [
+      args.clientName || "",
+      args.salonName,
+      args.serviceName,
+      spanishDate(args.date),
+      args.time,
+    ]);
+  }
+
+  /** The post-visit review request, with the link to the review page. Same rules as the reminder. */
+  async sendReviewRequest(
+    tenantId: string,
+    args: { phone: string; clientName: string; salonName: string; serviceName: string; link: string; country?: string },
+  ): Promise<ReminderResult> {
+    return this.sendTemplate(tenantId, REVIEW_REQUEST, args.phone, args.country, [
+      args.clientName || "",
+      args.salonName,
+      args.serviceName,
+      args.link,
+    ]);
+  }
+
+  private async sendTemplate(
+    tenantId: string,
+    template: TemplateDefinition,
+    phone: string,
+    country: string | undefined,
+    values: string[],
+  ): Promise<ReminderResult> {
     const conn = await this.connection(tenantId);
     if (!conn?.isActive || !conn.phoneNumberId) return { sent: false, reason: "not_connected" };
-    const key = `${APPOINTMENT_REMINDER.name}:${APPOINTMENT_REMINDER.language}`;
+    const key = `${template.name}:${template.language}`;
     const status = (await this.statuses(tenantId))[key];
     if (status !== "APPROVED") return { sent: false, reason: `template_${(status ?? "missing").toLowerCase()}` };
 
-    const to = normalizePhone(args.phone, args.country ?? "ES").replace(/\D/g, "");
+    const to = normalizePhone(phone, country ?? "ES").replace(/\D/g, "");
     const res = await this.meta.sendTemplate(
       this.meta.decryptToken(conn.accessTokenEnc),
       conn.phoneNumberId,
       to,
-      APPOINTMENT_REMINDER.name,
-      APPOINTMENT_REMINDER.language,
-      bodyParameters([
-        args.clientName || "",
-        args.salonName,
-        args.serviceName,
-        spanishDate(args.date),
-        args.time,
-      ]),
+      template.name,
+      template.language,
+      bodyParameters(values),
     );
     if (res?.error) return { sent: false, reason: `meta_${res.error.code}` };
     return { sent: true, messageId: res?.messages?.[0]?.id };

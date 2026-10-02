@@ -31,7 +31,24 @@ export const APPOINTMENT_REMINDER: TemplateDefinition = {
   example: ["Ana", "Salón Lucía", "Corte y peinado", "jueves 9 de octubre", "10:30"],
 };
 
-export const STANDARD_TEMPLATES: TemplateDefinition[] = [APPOINTMENT_REMINDER];
+/**
+ * The review request sent a few hours after a completed appointment (the
+ * google_reviews_auto add-on). It is about that specific visit, which is what
+ * keeps it a utility message; if Meta files it as marketing instead it still
+ * works once approved, only at the marketing price. A template body may not
+ * end with a variable, hence the closing sentence after the link.
+ */
+export const REVIEW_REQUEST: TemplateDefinition = {
+  name: "kiraroom_opinion_cita",
+  language: "es",
+  category: "UTILITY",
+  body:
+    "Hola {{1}}, gracias por tu visita a {{2}} ({{3}}). ¿Nos cuentas qué tal fue? " +
+    "Puedes valorarla en un minuto aquí: {{4}} . ¡Gracias por ayudarnos a mejorar!",
+  example: ["Ana", "Salón Lucía", "Corte y peinado", "https://app.kiraroom.net/public/r/abc123"],
+};
+
+export const STANDARD_TEMPLATES: TemplateDefinition[] = [APPOINTMENT_REMINDER, REVIEW_REQUEST];
 
 /** The body as Meta's template-creation API expects it. */
 export function templateCreationPayload(t: TemplateDefinition) {
