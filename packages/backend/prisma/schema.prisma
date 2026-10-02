@@ -2064,6 +2064,12 @@ model GoogleBusinessProfile {
   locationId   String?
   locationName String?
 
+  /// Where a client writes a Google review of the salon. Either the Place ID
+  /// (the link is built from it) or a "write a review" URL the salon copied
+  /// from its Google profile. Entered by the salon; needs no Google API.
+  placeId        String?
+  writeReviewUrl String?
+
   /// Google-specific
   ranking         Int? /// Google ranking
   totalReviews    Int     @default(0)
@@ -2315,6 +2321,7 @@ model Consent {
 
 enum ReviewSource {
   email_link
+  sms_link
   whatsapp_link
   qr
   in_person
@@ -2345,6 +2352,12 @@ model Review {
   googleSyncError      String?
   reviewToken          String?      @unique
   reviewTokenExpiresAt DateTime?
+  /// When the client sent the rating (createdAt is when it was requested).
+  submittedAt          DateTime?
+  /// When the client opened the salon's Google review page from the thank-you
+  /// screen. Whether they then posted on Google is not knowable without the
+  /// Business Profile API, so nothing claims they did.
+  googleLinkClickedAt  DateTime?
   tenant               Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, createdAt])

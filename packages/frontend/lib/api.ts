@@ -303,9 +303,15 @@ export interface Review {
   rating: number;
   comment?: string | null;
   source: string;
-  status: string;
-  publishedToGoogle: boolean;
+  /** pending = requested, not answered yet; moderation = answered, awaiting the salon. */
+  status: "pending" | "moderation" | "published" | "rejected";
   createdAt: string;
+  submittedAt?: string | null;
+  /** The client opened the salon's Google review page. Not proof she posted there. */
+  googleLinkClickedAt?: string | null;
+  clientName?: string | null;
+  professionalName?: string | null;
+  serviceName?: string | null;
 }
 export interface ReviewAnalytics {
   averageRating: number;
@@ -316,6 +322,26 @@ export interface ReviewAnalytics {
     averageRating: number;
     count: number;
   }>;
+  requestsSent: number;
+  responseRate: number;
+  pendingModeration: number;
+  googleClicks: number;
+}
+export interface ReviewSettings {
+  googlePlaceId: string | null;
+  googleWriteReviewUrl: string | null;
+  googleReviewLink: string | null;
+  autoRequestsEnabled: boolean;
+  /** The google_reviews_auto add-on (or a plan with it) is active. */
+  addOnActive: boolean;
+  channels: {
+    email: boolean;
+    sms: boolean;
+    /** "not_connected", "NOT_SUBMITTED", or Meta's template status (APPROVED, PENDING...). */
+    whatsapp: string;
+  };
+  googleApi: { available: boolean };
+  policy: { delayHours: number; clientCooldownDays: number; tokenTtlDays: number };
 }
 
 export interface WhatsAppConnection {
@@ -921,37 +947,18 @@ export interface SocialConnection {
   updatedAt: string;
 }
 
+/** Only what the salon entered: nothing is synced from Google. */
 export interface GoogleBusinessProfile {
   id: string;
   tenantId: string;
-  businessName: string | null;
-  businessAddress: string | null;
-  businessPhone: string | null;
-  businessWebsite: string | null;
-  businessEmail: string | null;
-  locationId: string | null;
-  locationName: string | null;
-  ranking: number | null;
-  totalReviews: number;
-  averageRating: number;
-  profileComplete: boolean;
-  enableOnlineBooking: boolean;
+  placeId: string | null;
+  writeReviewUrl: string | null;
   enableReviewRequests: boolean;
-  showRealTimeAvailability: boolean;
-  lastSyncAt: string | null;
 }
 
-export interface GoogleReview {
-  id: string;
-  reviewId: string;
-  reviewerName: string | null;
-  reviewerPhoto: string | null;
-  rating: number;
-  comment: string | null;
-  replyComment: string | null;
-  replyAt: string | null;
-  googleCreatedAt: string | null;
-  createdAt: string;
+export interface GoogleBusinessProfileState {
+  profile: GoogleBusinessProfile | null;
+  api: { available: false; reason: string };
 }
 
 export interface SocialPost {
@@ -3587,51 +3594,24 @@ class ApiClient implements ApiClientInterface {
     );
   }
 
-  // Google Business Profile
-  async getGoogleBusinessProfile(): Promise<GoogleBusinessProfile> {
-    return this.request<GoogleBusinessProfile>(
+  // Google Business Profile. Syncing the profile and reading or replying to
+  // Google reviews need Google's approval of its Business Profile API, which
+  // KiraRoom does not have: the backend answers 501 for those, so there are
+  // no client methods for them. The review link lives in getReviewSettings.
+  async getGoogleBusinessProfile(): Promise<GoogleBusinessProfileState> {
+    return this.request<GoogleBusinessProfileState>(
       "/social-integrations/google-business",
     );
   }
 
   async updateGoogleBusinessProfile(data: {
-    enableOnlineBooking?: boolean;
     enableReviewRequests?: boolean;
-    showRealTimeAvailability?: boolean;
-  }): Promise<GoogleBusinessProfile> {
-    return this.request<GoogleBusinessProfile>(
+  }): Promise<GoogleBusinessProfileState> {
+    return this.request<GoogleBusinessProfileState>(
       "/social-integrations/google-business",
       {
         method: "PUT",
         body: JSON.stringify(data),
-      },
-    );
-  }
-
-  async syncGoogleBusinessProfile(): Promise<GoogleBusinessProfile> {
-    return this.request<GoogleBusinessProfile>(
-      "/social-integrations/google-business/sync",
-      {
-        method: "POST",
-      },
-    );
-  }
-
-  async getGoogleReviews(): Promise<GoogleReview[]> {
-    return this.request<GoogleReview[]>(
-      "/social-integrations/google-business/reviews",
-    );
-  }
-
-  async replyToGoogleReview(
-    reviewId: string,
-    replyComment: string,
-  ): Promise<GoogleReview> {
-    return this.request<GoogleReview>(
-      `/social-integrations/google-business/reviews/${reviewId}/reply`,
-      {
-        method: "POST",
-        body: JSON.stringify({ replyComment }),
       },
     );
   }
@@ -4333,6 +4313,19 @@ class ApiClient implements ApiClientInterface {
     return this.request(`/reviews/${id}/moderate`, {
       method: "POST",
       body: JSON.stringify({ action }),
+    });
+  }
+  async getReviewSettings(): Promise<ReviewSettings> {
+    return this.request(`/reviews/settings`);
+  }
+  async updateReviewSettings(data: {
+    googlePlaceId?: string | null;
+    googleWriteReviewUrl?: string | null;
+    autoRequestsEnabled?: boolean;
+  }): Promise<ReviewSettings> {
+    return this.request(`/reviews/settings`, {
+      method: "PUT",
+      body: JSON.stringify(data),
     });
   }
   async getReviewAnalytics(from?: string, to?: string): Promise<ReviewAnalytics> {

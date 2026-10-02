@@ -1,7 +1,33 @@
-import { ParseUUIDPipe, Controller, Get, Post, Body, Param, Query, Req, UseGuards, Res, BadRequestException, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Put,
+  Query,
+  Req,
+  UseGuards,
+} from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
-import type { Request, Response } from "express";
+import type { Request } from "express";
+import { ReviewStatus } from "@prisma/client";
+import {
+  IsBoolean,
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+  ValidateIf,
+} from "class-validator";
+import { Type } from "class-transformer";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { Public } from "../auth/decorators/public.decorator";
 import { ReviewsService } from "./reviews.service";
@@ -10,6 +36,45 @@ import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 interface AuthedRequest extends Request {
   user: { id: string; tenantId: string; role: string };
 }
+
+export class ModerateReviewDto {
+  @IsIn(["approve", "reject"])
+  action!: "approve" | "reject";
+}
+
+export class UpdateReviewSettingsDto {
+  /** Empty string or null clears it. */
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  @MaxLength(300)
+  googlePlaceId?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  @MaxLength(500)
+  googleWriteReviewUrl?: string | null;
+
+  @IsOptional()
+  @IsBoolean()
+  autoRequestsEnabled?: boolean;
+}
+
+export class SubmitReviewDto {
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  rating!: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  comment?: string;
+}
+
+const STATUSES = Object.values(ReviewStatus) as string[];
 
 @ApiTags("reviews")
 @ApiBearerAuth()
@@ -24,27 +89,45 @@ export class ReviewsController {
     @Req() req: AuthedRequest,
     @Query("rating") rating?: string,
     @Query("professionalId") professionalId?: string,
-    @Query("status") status?: any,
+    @Query("status") status?: string,
   ) {
+    if (status && !STATUSES.includes(status)) throw new BadRequestException("status no válido");
+    const stars = rating ? Number(rating) : undefined;
     return this.service.listForTenant(req.user.tenantId, {
-      rating: rating ? Number(rating) : undefined,
-      professionalId,
-      status,
+      rating: stars && stars >= 1 && stars <= 5 ? stars : undefined,
+      professionalId: professionalId || undefined,
+      status: (status as ReviewStatus) || undefined,
     });
+  }
+
+  @Get("settings")
+  @Roles(...SALON_MANAGERS)
+  settings(@Req() req: AuthedRequest) {
+    return this.service.getSettings(req.user.tenantId);
+  }
+
+  @Put("settings")
+  @Roles(...SALON_MANAGERS)
+  updateSettings(@Req() req: AuthedRequest, @Body() body: UpdateReviewSettingsDto) {
+    return this.service.updateSettings(req.user.tenantId, body);
   }
 
   @Post(":id/moderate")
   @Roles(...SALON_MANAGERS)
   moderate(
     @Req() req: AuthedRequest,
-    @Param("id", ParseUUIDPipe) id: string,
-    @Body() body: { action: "approve" | "reject" },
+    @Param("id") id: string,
+    @Body() body: ModerateReviewDto,
   ) {
-    if (!body?.action) throw new BadRequestException("action required");
     return this.service.moderate(req.user.tenantId, id, body.action);
   }
 }
 
+/**
+ * The page a client reaches from the review request. The token in the link
+ * is the only credential: it identifies one request, and expires 14 days
+ * after it was sent.
+ */
 @ApiTags("reviews-public")
 @Controller("public/r")
 export class ReviewsPublicController {
@@ -53,47 +136,45 @@ export class ReviewsPublicController {
   @Get(":token")
   @Public()
   @Throttle({ default: { ttl: 60_000, limit: 60 } })
-  async getByToken(@Param("token") token: string, @Res() res: Response) {
-    const review = await this.service["prisma"].review.findUnique({
-      where: { reviewToken: token },
-    });
-    if (!review) throw new NotFoundException("Review link invalid");
-    if (review.reviewTokenExpiresAt && review.reviewTokenExpiresAt < new Date()) {
-      throw new BadRequestException("Token expired");
-    }
-    const tenant = await this.service["prisma"].tenant.findUnique({
-      where: { id: review.tenantId },
-      select: { id: true, name: true, slug: true, logo: true },
-    });
-    const appointment = review.appointmentId
-      ? await this.service["prisma"].appointment
-          .findUnique({
-            where: { id: review.appointmentId },
-            include: {
-              professional: { select: { firstName: true, lastName: true } },
-              service: { select: { name: true } },
-            },
-          })
-          .catch(() => null)
-      : null;
-    const googleLink = await this.service.buildGoogleReviewLink(review.tenantId);
-    return res.json({
-      tenant,
-      professional: appointment?.professional,
-      service: appointment?.service,
-      googleReviewLink: googleLink,
-    });
+  get(@Param("token") token: string) {
+    return this.service.getPublic(token);
   }
 
   @Post(":token")
   @Public()
-  @Throttle({ default: { ttl: 60_000, limit: 3 } })
-  publish(@Param("token") token: string, @Body() body: any) {
-    return this.service.publish(token, {
-      rating: body.rating,
-      comment: body.comment,
-      publishToGoogle: body.publishToGoogle,
-    });
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
+  submit(@Param("token") token: string, @Body() body: SubmitReviewDto) {
+    return this.service.submit(token, body);
+  }
+
+  @Post(":token/google-click")
+  @Public()
+  @HttpCode(200)
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  googleClick(@Param("token") token: string) {
+    return this.service.recordGoogleClick(token);
+  }
+
+  @Post(":token/opt-out")
+  @Public()
+  @HttpCode(200)
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  optOut(@Param("token") token: string) {
+    return this.service.optOut(token);
+  }
+}
+
+/** Approved reviews shown on the salon's booking page. */
+@ApiTags("reviews-public")
+@Controller("public/reviews")
+export class ReviewsPublicListController {
+  constructor(private readonly service: ReviewsService) {}
+
+  @Get("tenant/:tenantId")
+  @Public()
+  @Throttle({ default: { ttl: 60_000, limit: 60 } })
+  forTenant(@Param("tenantId", ParseUUIDPipe) tenantId: string) {
+    return this.service.publicForTenant(tenantId);
   }
 }
 
@@ -111,10 +192,11 @@ export class ReviewsAnalyticsController {
     @Query("from") from?: string,
     @Query("to") to?: string,
   ) {
-    return this.service.analytics(
-      req.user.tenantId,
-      from ? new Date(from) : undefined,
-      to ? new Date(to) : undefined,
-    );
+    const parse = (v?: string) => {
+      if (!v) return undefined;
+      const d = new Date(v);
+      return Number.isNaN(d.getTime()) ? undefined : d;
+    };
+    return this.service.analytics(req.user.tenantId, parse(from), parse(to));
   }
 }

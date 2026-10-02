@@ -4,6 +4,7 @@ import { normalizePhone } from "../common/phone";
 import { MetaCloudApiClient } from "./meta-cloud-api.client";
 import {
   APPOINTMENT_REMINDER,
+  REVIEW_REQUEST,
   STANDARD_TEMPLATES,
   TemplateDefinition,
   WAITLIST_SLOT_AVAILABLE,
@@ -87,7 +88,7 @@ export class WhatsAppTemplateService {
     tenantId: string,
     args: { phone: string; clientName: string; salonName: string; serviceName: string; date: Date; time: string; country?: string },
   ): Promise<ReminderResult> {
-    return this.sendStandard(tenantId, APPOINTMENT_REMINDER, args.phone, args.country, [
+    return this.sendTemplate(tenantId, APPOINTMENT_REMINDER, args.phone, args.country, [
       args.clientName || "",
       args.salonName,
       args.serviceName,
@@ -101,7 +102,7 @@ export class WhatsAppTemplateService {
     tenantId: string,
     args: { phone: string; clientName: string; salonName: string; serviceName: string; slotText: string; bookingUrl: string; country?: string },
   ): Promise<ReminderResult> {
-    return this.sendStandard(tenantId, WAITLIST_SLOT_AVAILABLE, args.phone, args.country, [
+    return this.sendTemplate(tenantId, WAITLIST_SLOT_AVAILABLE, args.phone, args.country, [
       args.clientName || "",
       args.salonName,
       args.serviceName,
@@ -119,7 +120,20 @@ export class WhatsAppTemplateService {
     return { ok: true };
   }
 
-  private async sendStandard(
+  /** The post-visit review request, with the link to the review page. Same rules as the reminder. */
+  async sendReviewRequest(
+    tenantId: string,
+    args: { phone: string; clientName: string; salonName: string; serviceName: string; link: string; country?: string },
+  ): Promise<ReminderResult> {
+    return this.sendTemplate(tenantId, REVIEW_REQUEST, args.phone, args.country, [
+      args.clientName || "",
+      args.salonName,
+      args.serviceName,
+      args.link,
+    ]);
+  }
+
+  private async sendTemplate(
     tenantId: string,
     template: TemplateDefinition,
     phone: string,

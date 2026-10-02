@@ -1,6 +1,7 @@
 import { WhatsAppTemplateService } from "./whatsapp-template.service";
 import {
   APPOINTMENT_REMINDER,
+  REVIEW_REQUEST,
   WAITLIST_SLOT_AVAILABLE,
   spanishDate,
   templateCreationPayload,
@@ -81,23 +82,28 @@ describe("WhatsAppTemplateService", () => {
     expect(await created.service.submitStandardTemplates("t1")).toEqual({
       [APPOINTMENT_REMINDER.name]: "PENDING",
       [WAITLIST_SLOT_AVAILABLE.name]: "PENDING",
+      [REVIEW_REQUEST.name]: "PENDING",
     });
     expect(created.meta.createTemplate.mock.calls[0][2]).toEqual(templateCreationPayload(APPOINTMENT_REMINDER));
     expect(created.meta.createTemplate.mock.calls[1][2]).toEqual(templateCreationPayload(WAITLIST_SLOT_AVAILABLE));
+    expect(created.meta.createTemplate.mock.calls[2][2]).toEqual(templateCreationPayload(REVIEW_REQUEST));
 
     const exists = setup({ create: { error: { code: 100, message: "Message template already exists" } } });
     expect(await exists.service.submitStandardTemplates("t1")).toEqual({
       [APPOINTMENT_REMINDER.name]: "EXISTS",
       [WAITLIST_SLOT_AVAILABLE.name]: "EXISTS",
+      [REVIEW_REQUEST.name]: "EXISTS",
     });
   });
 });
 
 describe("reminder template", () => {
-  it("has one sample value per variable, as Meta's review requires", () => {
-    const vars = APPOINTMENT_REMINDER.body.match(/\{\{\d+\}\}/g) ?? [];
-    expect(vars).toHaveLength(APPOINTMENT_REMINDER.example.length);
-    expect(APPOINTMENT_REMINDER.category).toBe("UTILITY");
+  it.each([APPOINTMENT_REMINDER, WAITLIST_SLOT_AVAILABLE, REVIEW_REQUEST])("$name has one sample value per variable, as Meta's review requires", (t) => {
+    const vars = t.body.match(/\{\{\d+\}\}/g) ?? [];
+    expect(vars).toHaveLength(t.example.length);
+    expect(t.category).toBe("UTILITY");
+    // Meta refuses a body that starts or ends with a variable.
+    expect(t.body.trim()).not.toMatch(/^\{\{|\}\}$/);
   });
 
   it("the wait-list notice too, and it neither starts nor ends with a variable", () => {
@@ -108,6 +114,43 @@ describe("reminder template", () => {
 
   it("writes dates the Spanish way", () => {
     expect(spanishDate(new Date("2026-10-08T00:00:00.000Z"))).toBe("jueves, 8 de octubre");
+  });
+});
+
+describe("review request template", () => {
+  it("goes out with the link as the last variable", async () => {
+    const { service, meta } = setup({
+      templates: [{ name: REVIEW_REQUEST.name, language: "es", status: "APPROVED" }],
+    });
+    const out = await service.sendReviewRequest("t1", {
+      phone: "600 111 222",
+      clientName: "Ana",
+      salonName: "Salón Lucía",
+      serviceName: "Corte",
+      link: "https://app.example.test/public/r/tok",
+    });
+    expect(out.sent).toBe(true);
+    const [, , to, name, , components] = meta.sendTemplate.mock.calls[0];
+    expect([to, name]).toEqual(["34600111222", REVIEW_REQUEST.name]);
+    expect(components[0].parameters.map((p: any) => p.text)).toEqual([
+      "Ana",
+      "Salón Lucía",
+      "Corte",
+      "https://app.example.test/public/r/tok",
+    ]);
+  });
+
+  it("is not sent until Meta approves it, even if the reminder is approved", async () => {
+    const { service, meta } = setup();
+    const out = await service.sendReviewRequest("t1", {
+      phone: "600111222",
+      clientName: "Ana",
+      salonName: "S",
+      serviceName: "Corte",
+      link: "https://x.test/r",
+    });
+    expect(out).toEqual({ sent: false, reason: "template_missing" });
+    expect(meta.sendTemplate).not.toHaveBeenCalled();
   });
 });
 

@@ -92,7 +92,7 @@ function humanizeFeature(feature: FeatureKey): string {
     // @kira/shared -- exactly the drift that unification is for.
     virtual_receptionist_advanced: "Recepcionista IA avanzada",
     multichannel: "Messenger, Instagram y Telegram",
-    google_reviews_auto: "Reseñas automáticas en Google",
+    google_reviews_auto: "Peticiones de reseña tras la cita",
     copilot_read: "Kira Copilot para el equipo",
     copilot_write: "Kira Copilot con acciones",
     loyalty: "Programa de fidelidad",

@@ -333,93 +333,9 @@ export class NotificationsScheduler {
     }
   }
 
-  /**
-   * Review Request Cron Job
-   * Runs hourly to send review requests for completed appointments
-   */
-  @Cron(CronExpression.EVERY_HOUR)
-  async sendReviewRequests() {
-    this.logger.log('Running review request job...');
-
-    try {
-      // Find appointments completed in the last 2 hours
-      const now = new Date();
-      const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
-
-      const appointments = await this.prisma.appointment.findMany({
-        where: {
-          status: 'completed',
-          completionTime: { gte: twoHoursAgo, lt: now },
-          reviewRequestSent: false,
-        },
-        include: {
-          client: true,
-          service: true,
-          professional: true,
-          tenant: true,
-        },
-      });
-
-      this.logger.log(`Found ${appointments.length} completed appointments for review requests`);
-
-      let sentCount = 0;
-      let errorCount = 0;
-
-      for (const appointment of appointments) {
-        try {
-          // Only send review request if client has email
-          if (!appointment.client.email) {
-            this.logger.debug(`Skipping review request for appointment ${appointment.id}: client has no email`);
-            continue;
-          }
-
-          // Create in-app notification
-          await this.notificationsService.create({
-            tenantId: appointment.tenantId,
-            clientId: appointment.clientId,
-            type: NotificationType.REVIEW_REQUEST,
-            title: '¿Cómo fue tu experiencia?',
-            message: `Cuéntanos cómo fue tu cita de ${appointment.service.name}. Tu opinión nos importa.`,
-            data: {
-              appointmentId: appointment.id,
-              serviceName: appointment.service.name,
-              professionalId: appointment.professionalId,
-              professionalName: `${appointment.professional.firstName} ${appointment.professional.lastName}`,
-            },
-          });
-
-          // Send email review request
-          try {
-            await this.emailService.sendReviewRequest({
-              to: appointment.client.email,
-              clientName: `${appointment.client.firstName} ${appointment.client.lastName}`,
-              serviceName: appointment.service.name,
-              professionalName: `${appointment.professional.firstName} ${appointment.professional.lastName}`,
-              salonName: appointment.tenant.name,
-              appointmentId: appointment.id,
-            });
-          } catch (emailError) {
-            this.logger.error(`Failed to send review request email for appointment ${appointment.id}: ${emailError.message}`);
-          }
-
-          // Mark review request as sent
-          await this.prisma.appointment.update({
-            where: { id: appointment.id },
-            data: { reviewRequestSent: true },
-          });
-
-          sentCount++;
-        } catch (error) {
-          this.logger.error(`Failed to send review request for appointment ${appointment.id}: ${error.message}`);
-          errorCount++;
-        }
-      }
-
-      this.logger.log(`Review request job completed: ${sentCount} sent, ${errorCount} errors`);
-    } catch (error) {
-      this.logger.error(`Review request job failed: ${error.message}`);
-    }
-  }
+  // Review requests are sent by ReviewsService.dispatchReviewRequests. A
+  // second job here raced it for the same appointments and sent an English
+  // email whose button linked to "#".
 
   /**
    * Helper method to format tenant address
