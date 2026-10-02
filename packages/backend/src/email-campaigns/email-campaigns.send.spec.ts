@@ -32,6 +32,8 @@ describe("EmailCampaignsService.deliverCampaign", () => {
         update: jest.fn().mockResolvedValue({}),
       },
       emailCampaignRecipient: { update: jest.fn().mockResolvedValue({}) },
+      // Nobody here said no to promotions (marketing-consent.spec covers that).
+      consent: { findMany: jest.fn().mockResolvedValue([]) },
     };
     const email: any = {
       isConfigured: () => opts.configured ?? true,
@@ -52,7 +54,7 @@ describe("EmailCampaignsService.deliverCampaign", () => {
     const { service, prisma, email } = setup({ suppressed: ["rebotada@example.test"] });
     const result = await service.sendCampaignNow("t1", "c1");
 
-    expect(result).toEqual({ success: true, sentCount: 1, failedCount: 1, suppressedCount: 1 });
+    expect(result).toEqual({ success: true, sentCount: 1, failedCount: 1, suppressedCount: 1, skippedCount: 0 });
     expect(email.sendEmail).toHaveBeenCalledTimes(2);
     expect(email.sendEmail).not.toHaveBeenCalledWith(expect.objectContaining({ to: "Rebotada@Example.test" }));
 

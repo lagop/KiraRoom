@@ -144,25 +144,34 @@ describe("marketing consent from the client's account", () => {
       accepts: false,
     });
     const recipientUpdates: any[] = [];
+    const recipients = [
+      { id: "r1", clientId: "c1", email: "ana@example.test" },
+      { id: "r2", clientId: "c2", email: "eva@example.test" },
+    ];
     const prisma: any = {
       consent: consentPrisma.consent,
       emailCampaign: {
-        findFirst: async () => ({
+        findFirst: async () => ({ id: "camp", tenantId: "t1", status: "draft" }),
+        updateMany: async () => ({ count: 1 }),
+        findFirstOrThrow: async () => ({
           id: "camp",
-          status: "draft",
+          tenantId: "t1",
           subject: "Ofertas",
           content: "<p>hola</p>",
-          recipients: [
-            { id: "r1", clientId: "c1", email: "ana@example.test" },
-            { id: "r2", clientId: "c2", email: "eva@example.test" },
-          ],
+          replyTo: null,
+          recipients,
         }),
         update: async () => ({}),
       },
       emailCampaignRecipient: { update: async (args: any) => recipientUpdates.push(args) },
     };
-    const email = { sendEmail: jest.fn().mockResolvedValue({ success: true }) };
-    const campaigns = new EmailCampaignsService(prisma, email as any);
+    const email = {
+      isConfigured: () => true,
+      sendEmail: jest.fn().mockResolvedValue({ success: true, id: "re_1" }),
+    };
+    const suppressions: any = { suppressedAmong: async () => new Set<string>() };
+    const config: any = { get: () => undefined };
+    const campaigns = new EmailCampaignsService(prisma, email as any, suppressions, config);
 
     const result: any = await campaigns.sendCampaignNow("t1", "camp");
 
