@@ -6,6 +6,7 @@ import apiClient, { AccountingStatus, AccountingSyncLog } from "@/lib/api";
 import { getCurrentUser } from "@/lib/utils";
 import { useTranslations } from "@/lib/use-translation";
 import { Download, KeyRound, Loader2, Send, Unplug } from "lucide-react";
+import { Modelo303Card } from "@/components/tax/modelo-303-card";
 import { Modelo420Card } from "@/components/tax/modelo-420-card";
 
 /**
@@ -392,6 +393,7 @@ export default function AccountingSettingsPage() {
         {exportError && <p className="mt-2 text-xs text-red-600">{exportError}</p>}
       </section>
 
+      <Modelo303Card />
       <Modelo420Card />
     </div>
   );

@@ -7,6 +7,7 @@ import {
   TAX_REGIME_LABELS,
   TAX_REGIME_TERRITORIES,
 } from "@kira/shared";
+import { aggregateModelo303 } from "./modelo-303";
 import { aggregateModelo420 } from "./modelo-420";
 
 /**
@@ -16,19 +17,11 @@ import { aggregateModelo420 } from "./modelo-420";
  * admin can review it in the dashboard. Auto-submission to AEAT is
  * NOT enabled in v1 — that's a separate feature gated on legal review.
  *
- * Modelo 303 (IVA trimestral) aggregates `Invoice` rows where
+ * Modelo 303 (IVA) and Modelo 420 (IGIC) aggregate `Invoice` rows where
  *   status ∈ {issued, paid, refunded}
  *   and `issueDate` ∈ [quarter start, quarter end]
- * and groups them by `taxBreakdown[].rate`. The output matches the
- * Casilla layout:
- *   Casilla 01 — Base imponible 21%
- *   Casilla 03 — Cuota devengada 21% (IVA repercutido)
- *   Casilla 04 — Base imponible 10%
- *   Casilla 06 — Cuota devengada 10%
- *   Casilla 07 — Base imponible 4%
- *   Casilla 09 — Cuota devengada 4%
- *   Casilla 36 — Total cuota devengada (sum of all tax buckets)
- *   Casilla 67 — Resultado (= devengada - deducida)
+ * by `taxBreakdown[].rate`, into the box layout of each tax agency's own
+ * instructions: see modelo-303.ts (AEAT) and modelo-420.ts (ATC).
  *
  * Modelo 130 (IRPF estimación directa) is a single declaration per
  * quarter. We compute it from invoice totals (this is a *rough* first
@@ -91,6 +84,7 @@ export class TaxReportsService {
       },
       select: {
         id: true,
+        series: true,
         totalCents: true,
         taxBreakdown: true,
       },
@@ -102,7 +96,9 @@ export class TaxReportsService {
     let totals: Record<string, number>;
     switch (type) {
       case TaxReportType.modelo_303:
-        totals = this.aggregateModelo303(invoices);
+        // Box layout from the AEAT's 2026 instructions and diseño de
+        // registro (see modelo-303.ts).
+        totals = aggregateModelo303(invoices);
         break;
       case TaxReportType.modelo_130:
         totals = this.aggregateModelo130(invoices);
@@ -153,10 +149,11 @@ export class TaxReportsService {
    * regime.
    *
    * Without this, a Canarian salon asking for a Modelo 303 got a report full
-   * of zeros and no error. `aggregateModelo303` buckets invoices by rate and
-   * then reads only the buckets for 21, 10 and 4 — the IVA rates. A tenant
-   * billing IGIC at 7 % matches none of them, so every box came out 0 and the
-   * report was saved as a valid draft. A tax return that is silently wrong is
+   * of zeros and no error: the old 303 aggregator read only the buckets for
+   * 21, 10 and 4 — the IVA rates — so IGIC at 7 % matched none of them, every
+   * box came out 0 and the report was saved as a valid draft. (The current
+   * aggregator refuses rates it has no row for, but the regime is the reason
+   * to refuse, so it is checked first.) A tax return that is silently wrong is
    * worse than a missing feature: someone might file it.
    *
    * Modelo 130 (IRPF) is not an indirect-tax return, so it applies under any
@@ -191,46 +188,6 @@ export class TaxReportsService {
           `because it only aggregates the rates of another regime.`,
       );
     }
-  }
-
-  /**
-   * Aggregate invoices into the Modelo 303 layout. Returns the
-   * Casillas object that the AEAT form expects.
-   */
-  private aggregateModelo303(
-    invoices: Array<Pick<Invoice, "totalCents" | "taxBreakdown">>,
-  ): Record<string, number> {
-    const buckets = new Map<number, { base: number; tax: number }>();
-    for (const inv of invoices) {
-      const breakdown = (inv.taxBreakdown as Array<{
-        rate: number;
-        baseCents: number;
-        taxCents: number;
-      }>) ?? [];
-      for (const b of breakdown) {
-        const rate = Math.round(b.rate);
-        const cur = buckets.get(rate) ?? { base: 0, tax: 0 };
-        cur.base += b.baseCents;
-        cur.tax += b.taxCents;
-        buckets.set(rate, cur);
-      }
-    }
-    const b21 = buckets.get(21) ?? { base: 0, tax: 0 };
-    const b10 = buckets.get(10) ?? { base: 0, tax: 0 };
-    const b4 = buckets.get(4) ?? { base: 0, tax: 0 };
-    const totalDevengada =
-      b21.tax + b10.tax + b4.tax;
-    // For MVP, deducida = 0 (we don't track input VAT yet).
-    return {
-      "01": b21.base,
-      "03": b21.tax,
-      "04": b10.base,
-      "06": b10.tax,
-      "07": b4.base,
-      "09": b4.tax,
-      "36": totalDevengada,
-      "67": totalDevengada, // devengada - 0 (deducible)
-    };
   }
 
   /**
