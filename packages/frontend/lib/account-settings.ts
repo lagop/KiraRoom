@@ -14,8 +14,8 @@ export type NotificationPrefs = Record<string, ChannelPrefs>;
 export const NOTIFICATION_TYPES: ReadonlyArray<{ key: string; label: string }> = [
   { key: "appointment_confirmed", label: "Cita confirmada" },
   { key: "appointment_cancelled", label: "Cita cancelada" },
-  { key: "appointment_reminder_24h", label: "Recordatorio 24 h antes" },
-  { key: "appointment_reminder_1h", label: "Recordatorio 1 h antes" },
+  { key: "appointment_reminder_24h", label: "Recordatorio 24 h antes" }, // gitleaks:allow (a notification type, not a key)
+  { key: "appointment_reminder_1h", label: "Recordatorio 1 h antes" }, // gitleaks:allow
   { key: "appointment_completed", label: "Cita completada" },
   { key: "review_request", label: "Solicitud de valoración" },
   { key: "promotion", label: "Promociones" },
