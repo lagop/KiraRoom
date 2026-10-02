@@ -1583,7 +1583,8 @@
     "tooltip_clicks": "Clicks",
     "tooltip_opened": "Aperturas",
     "tooltip_recipients": "Destinatarios",
-    "tooltip_sent": "Enviados"
+    "tooltip_sent": "Enviados",
+    "unsubscribe_note": "Al final de cada email se añade automáticamente un enlace para darse de baja, como exige la ley (LSSI). Quien se da de baja deja de recibir tus campañas."
   },
   "loyalty": {
     "active": "Activa",

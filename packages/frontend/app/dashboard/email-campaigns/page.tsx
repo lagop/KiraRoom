@@ -148,7 +148,7 @@ export default function EmailCampaignsPage() {
     if (result.failedCount > 0) parts.push(`${result.failedCount} fallidos`);
     if (result.suppressedCount > 0)
       parts.push(
-        `${result.suppressedCount} omitidos (rebote permanente o queja de spam)`,
+        `${result.suppressedCount} omitidos (se dieron de baja, rebote permanente o queja de spam)`,
       );
     if (result.skippedCount)
       parts.push(`${result.skippedCount} no quieren recibir promociones`);
@@ -663,7 +663,7 @@ export default function EmailCampaignsPage() {
           {tracking.suppressedAddresses === 1
             ? "1 dirección ya no recibe tus campañas"
             : `${tracking.suppressedAddresses} direcciones ya no reciben tus campañas`}{" "}
-          (rebote permanente o la marcaron como spam).
+          (se dieron de baja, rebote permanente o la marcaron como spam).
         </p>
       )}
 
@@ -981,6 +981,7 @@ export default function EmailCampaignsPage() {
                   required
                   placeholder={t("email_campaigns.html_placeholder")}
                 />
+                <p className="mt-1 text-xs text-gray-500">{t("email_campaigns.unsubscribe_note")}</p>
               </div>
 
               <div className="flex justify-end space-x-3 pt-4">
@@ -1507,6 +1508,7 @@ export default function EmailCampaignsPage() {
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 font-mono text-sm"
                   required
                 />
+                <p className="mt-1 text-xs text-gray-500">{t("email_campaigns.unsubscribe_note")}</p>
               </div>
 
               <div className="grid grid-cols-2 gap-4">

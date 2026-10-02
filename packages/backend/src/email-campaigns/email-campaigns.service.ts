@@ -9,6 +9,7 @@ import { PrismaService } from "../common/prisma/prisma.service";
 import { EmailService } from "../notifications/services/email.service";
 import { clientsWhoRefusedMarketing } from "../consent/marketing-consent";
 import { EmailSuppressionService } from "./email-suppression.service";
+import { EmailUnsubscribeService } from "./email-unsubscribe.service";
 import {
   CreateCampaignDto,
   UpdateCampaignDto,
@@ -27,6 +28,7 @@ export class EmailCampaignsService {
     private readonly emailService: EmailService,
     private readonly suppressions: EmailSuppressionService,
     private readonly config: ConfigService,
+    private readonly unsubscribes: EmailUnsubscribeService,
   ) {}
 
   // ============ CAMPAIGNS ============
@@ -202,7 +204,8 @@ export class EmailCampaignsService {
    * later through the Resend webhook (ResendEventsService), keyed by the id
    * Resend returned here -- which is why that id is stored, not a made-up
    * one. Addresses on the salon's suppression list (hard bounce, spam
-   * complaint) are skipped.
+   * complaint, unsubscribed) are skipped, and every email carries its own
+   * unsubscribe link, in the footer and in the List-Unsubscribe header.
    */
   async deliverCampaign(tenantId: string, campaignId: string, fromStatuses: string[]) {
     const claimed = await this.prisma.emailCampaign.updateMany({
@@ -215,8 +218,12 @@ export class EmailCampaignsService {
 
     const campaign = await this.prisma.emailCampaign.findFirstOrThrow({
       where: { id: campaignId, tenantId },
-      include: { recipients: { where: { status: "pending" } } },
+      include: {
+        recipients: { where: { status: "pending" } },
+        tenant: { select: { name: true } },
+      },
     });
+    const salonName = campaign.tenant?.name ?? "el salón";
     const suppressed = await this.suppressions.suppressedAmong(
       tenantId,
       campaign.recipients.map((r) => r.email),
@@ -249,18 +256,20 @@ export class EmailCampaignsService {
           where: { id: recipient.id },
           data: {
             status: "suppressed",
-            errorMessage: "Dirección dada de baja: rebote permanente o queja de spam",
+            errorMessage: "Dirección dada de baja: baja voluntaria, rebote permanente o queja de spam",
           },
         });
         suppressedCount++;
         continue;
       }
 
+      const unsubscribe = this.unsubscribes.link({ kind: "r", id: recipient.id });
       const result = await this.emailService.sendEmail({
         to: recipient.email,
         subject: campaign.subject,
-        html: campaign.content,
+        html: this.unsubscribes.withFooter(campaign.content, salonName, unsubscribe.pageUrl),
         replyTo: campaign.replyTo ?? undefined,
+        headers: unsubscribe.headers,
       });
 
       if (result.success) {

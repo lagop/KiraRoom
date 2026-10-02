@@ -1,5 +1,6 @@
 import { BadRequestException } from "@nestjs/common";
 import { EmailCampaignsService } from "./email-campaigns.service";
+import { EmailUnsubscribeService } from "./email-unsubscribe.service";
 
 /**
  * Sending a campaign.
@@ -27,6 +28,7 @@ describe("EmailCampaignsService.deliverCampaign", () => {
           content: "<p>Hola</p>",
           replyTo: null,
           recipients,
+          tenant: { name: "Salón Lucía" },
         }),
         updateMany: jest.fn().mockResolvedValue({ count: opts.claim ?? 1 }),
         update: jest.fn().mockResolvedValue({}),
@@ -45,9 +47,12 @@ describe("EmailCampaignsService.deliverCampaign", () => {
       suppressedAmong: jest.fn().mockResolvedValue(new Set(opts.suppressed ?? [])),
     };
     const config: any = { get: jest.fn() };
-    const service = new EmailCampaignsService(prisma, email, suppressions, config);
+    // The real link builder: only its config is used to sign and build URLs.
+    const env: Record<string, string> = { JWT_SECRET: "test-secret", APP_BASE_URL: "https://app.test" };
+    const unsubscribes = new EmailUnsubscribeService({} as any, { get: (k: string) => env[k] } as any, {} as any, {} as any);
+    const service = new EmailCampaignsService(prisma, email, suppressions, config, unsubscribes);
     (service as any).logger = { log: jest.fn() };
-    return { service, prisma, email };
+    return { service, prisma, email, unsubscribes };
   }
 
   it("stores Resend's id, skips suppressed addresses and records failures as failures", async () => {
@@ -87,5 +92,21 @@ describe("EmailCampaignsService.deliverCampaign", () => {
     await expect(service.sendCampaignNow("t1", "c1")).rejects.toThrow(/no está configurado/);
     expect(prisma.emailCampaign.updateMany).not.toHaveBeenCalled();
     expect(email.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("gives every email its own unsubscribe link, in the footer and the List-Unsubscribe header", async () => {
+    // LSSI art. 21.2: each commercial email must offer a simple way to object.
+    const { service, email, unsubscribes } = setup();
+    await service.sendCampaignNow("t1", "c1");
+    const sent = email.sendEmail.mock.calls.map((c: any[]) => c[0]);
+    expect(sent.length).toBe(3);
+    for (const [i, msg] of sent.entries()) {
+      const id = ["r1", "r2", "r3"][i];
+      const pageUrl = "https://app.test/public/baja/" + unsubscribes.tokenFor({ kind: "r", id });
+      expect(msg.html).toContain("date de baja aquí");
+      expect(msg.html).toContain(pageUrl);
+      expect(msg.html).toContain("cliente de Salón Lucía");
+      expect(msg.headers["List-Unsubscribe"]).toBe("<" + pageUrl + ">");
+    }
   });
 });

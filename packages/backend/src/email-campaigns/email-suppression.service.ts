@@ -1,7 +1,8 @@
 import { Injectable } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 
-export type SuppressionReason = "hard_bounce" | "complaint";
+/** "unsubscribed": the client used the unsubscribe link (EmailUnsubscribeService). */
+export type SuppressionReason = "hard_bounce" | "complaint" | "unsubscribed";
 
 /**
  * The salon's do-not-email list for marketing.
@@ -9,7 +10,8 @@ export type SuppressionReason = "hard_bounce" | "complaint";
  * Sending again to an address that hard-bounced or complained is what gets
  * a sending domain throttled or blocked, and every salon sends from the same
  * KiraRoom domain -- so one salon's dead list would hurt all of them. The
- * Resend webhook fills this table; every campaign send reads it first.
+ * Resend webhook and the unsubscribe link fill this table; every campaign
+ * send reads it first.
  */
 @Injectable()
 export class EmailSuppressionService {

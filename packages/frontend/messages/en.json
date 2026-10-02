@@ -1583,7 +1583,8 @@
     "tooltip_clicks": "Tooltip Clicks",
     "tooltip_opened": "Tooltip Opened",
     "tooltip_recipients": "Tooltip Recipients",
-    "tooltip_sent": "Tooltip Sent"
+    "tooltip_sent": "Tooltip Sent",
+    "unsubscribe_note": "An unsubscribe link is added automatically at the end of every email, as Spanish law (LSSI) requires. Whoever unsubscribes stops receiving your campaigns."
   },
   "loyalty": {
     "active": "Active",
