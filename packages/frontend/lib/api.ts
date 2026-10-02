@@ -1179,37 +1179,44 @@ export interface FiscalCertificate {
 }
 
 // P2B â€” Accounting integrations
-export type AccountingProvider = "holded" | "sage" | "a3" | "ncs";
+/**
+ * Only Holded has a direct sync (the salon pastes its Holded API key). Sage,
+ * A3 and NCS have no API we can use: their users download the libro de
+ * facturas emitidas (downloadAccountingInvoiceBook) for their gestoría.
+ */
+export type AccountingProvider = "holded";
 
-export interface AccountingSettings {
-  provider: AccountingProvider | null;
-  enabled: boolean;
+export type InvoiceAccountingStatus = "not_synced" | "pending" | "synced" | "error";
+
+export interface AccountingStatus {
   syncOnIssue: boolean;
-}
-
-export interface AccountingConnectionInfo {
-  accountingSettings: AccountingSettings;
-  accountingConnection: {
-    id: string;
+  connection: {
     provider: AccountingProvider;
     isActive: boolean;
+    connectedAt: string;
     lastSyncAt: string | null;
     lastError: string | null;
-    externalCompanyId: string | null;
-    expiresAt: string | null;
   } | null;
+  /** Issued invoices by accounting status. */
+  invoices: Record<InvoiceAccountingStatus, number>;
+}
+
+export interface AccountingPushResult {
+  attempted: number;
+  synced: number;
+  errors: number;
+  skipped: number;
+  remaining: number;
 }
 
 export interface AccountingSyncLog {
   id: string;
-  tenantId: string;
   invoiceId: string;
-  provider: AccountingProvider;
+  provider: string;
   action: string;
   status: string;
   externalId: string | null;
   errorMessage: string | null;
-  payload: Record<string, unknown> | null;
   createdAt: string;
 }
 
@@ -1669,25 +1676,19 @@ export interface ApiClientInterface {
   deactivateFiscalCertificate(id: string): Promise<{ count: number }>;
 
   // P2B â€” Accounting integrations
-  getAccountingSettings(): Promise<AccountingConnectionInfo>;
-  updateAccountingSettings(patch: {
-    provider?: AccountingProvider | null;
-    enabled?: boolean;
-    syncOnIssue?: boolean;
-  }): Promise<{ accountingSettings: AccountingSettings }>;
-  startAccountingOAuth(
-    provider: AccountingProvider,
-  ): Promise<{ url: string; state: string }>;
+  getAccountingSettings(): Promise<AccountingStatus>;
+  updateAccountingSettings(patch: { syncOnIssue?: boolean }): Promise<AccountingStatus>;
+  connectHolded(apiKey: string): Promise<AccountingStatus>;
   disconnectAccounting(): Promise<{ ok: boolean }>;
+  pushPendingToHolded(from?: string): Promise<AccountingPushResult>;
   syncAccountingInvoice(
     invoiceId: string,
   ): Promise<{ status: string; externalId?: string; error?: string }>;
-  retryAccountingQueue(limit?: number): Promise<{
-    attempted: number;
-    synced: number;
-    skipped: number;
-    errors: number;
-  }>;
+  downloadAccountingInvoiceBook(
+    from: string,
+    to: string,
+    format: "csv" | "xlsx",
+  ): Promise<{ blob: Blob; filename: string }>;
   listAccountingLogs(limit?: number): Promise<AccountingSyncLog[]>;
   publicRebookingOptOut(
     token: string,
@@ -4570,26 +4571,29 @@ class ApiClient implements ApiClientInterface {
   }
 
   // ---- P2B Accounting ----
-  async getAccountingSettings(): Promise<AccountingConnectionInfo> {
+  async getAccountingSettings(): Promise<AccountingStatus> {
     return this.request(`/accounting/settings`);
   }
-  async updateAccountingSettings(patch: {
-    provider?: AccountingProvider | null;
-    enabled?: boolean;
-    syncOnIssue?: boolean;
-  }): Promise<{ accountingSettings: AccountingSettings }> {
+  async updateAccountingSettings(patch: { syncOnIssue?: boolean }): Promise<AccountingStatus> {
     return this.request(`/accounting/settings`, {
       method: "PATCH",
       body: JSON.stringify(patch),
     });
   }
-  async startAccountingOAuth(
-    provider: AccountingProvider,
-  ): Promise<{ url: string; state: string }> {
-    return this.request(`/accounting/connect/${provider}`);
+  async connectHolded(apiKey: string): Promise<AccountingStatus> {
+    return this.request(`/accounting/holded/connect`, {
+      method: "POST",
+      body: JSON.stringify({ apiKey }),
+    });
   }
   async disconnectAccounting(): Promise<{ ok: boolean }> {
     return this.request(`/accounting/disconnect`, { method: "POST" });
+  }
+  async pushPendingToHolded(from?: string): Promise<AccountingPushResult> {
+    return this.request(`/accounting/holded/push`, {
+      method: "POST",
+      body: JSON.stringify(from ? { from } : {}),
+    });
   }
   async syncAccountingInvoice(invoiceId: string): Promise<{
     status: string;
@@ -4601,13 +4605,35 @@ class ApiClient implements ApiClientInterface {
       body: JSON.stringify({ invoiceId }),
     });
   }
-  async retryAccountingQueue(
-    limit = 50,
-  ): Promise<{ attempted: number; synced: number; skipped: number; errors: number }> {
-    return this.request(`/accounting/retry-queue`, {
-      method: "POST",
-      body: JSON.stringify({ limit }),
-    });
+  /**
+   * A file download needs the bearer token, so it cannot be a plain link:
+   * fetch it, refreshing the session once on a 401 like request() does.
+   */
+  async downloadAccountingInvoiceBook(
+    from: string,
+    to: string,
+    format: "csv" | "xlsx",
+  ): Promise<{ blob: Blob; filename: string }> {
+    const qs = new URLSearchParams({ from, to, format });
+    const url = `${API_BASE_URL}/accounting/export/facturas-emitidas?${qs}`;
+    const get = () => {
+      const token = getToken();
+      return fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    };
+    let res = await get();
+    if (res.status === 401 && (await this.refreshAccessToken())) res = await get();
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const raw = (body as { message?: unknown }).message;
+      throw new ApiError(
+        Array.isArray(raw) ? raw.join(". ") : String(raw || `Error ${res.status}`),
+        res.status,
+      );
+    }
+    const disposition = res.headers.get("Content-Disposition") ?? "";
+    const filename =
+      /filename="([^"]+)"/.exec(disposition)?.[1] ?? `facturas-emitidas_${from}_${to}.${format}`;
+    return { blob: await res.blob(), filename };
   }
   async listAccountingLogs(limit = 100): Promise<AccountingSyncLog[]> {
     return this.request(`/accounting/log?limit=${limit}`);
