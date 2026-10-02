@@ -111,6 +111,7 @@ model Tenant {
   /// Email Campaigns
   emailCampaigns                EmailCampaign[]
   emailCampaignTemplates        EmailCampaignTemplate[]
+  emailSuppressions             EmailSuppression[]
   /// Social Integrations
   socialConnections             SocialConnection[]
   googleBusinessProfile         GoogleBusinessProfile?
@@ -1794,6 +1795,8 @@ model EmailCampaign {
   emailsOpened    Int @default(0)
   clicks          Int @default(0)
   bounces         Int @default(0)
+  /// Recipients who marked the email as spam (Resend `email.complained`).
+  complaints      Int @default(0)
   unsubscribes    Int @default(0)
 
   /// Settings
@@ -1824,12 +1827,13 @@ model EmailCampaignRecipient {
   name  String?
 
   /// Delivery status
-  status         String    @default("pending") /// pending, sent, delivered, opened, clicked, bounced, unsubscribed
+  status         String    @default("pending") /// pending, sent, delivered, opened, clicked, bounced, complained, failed, suppressed, unsubscribed
   sentAt         DateTime?
   deliveredAt    DateTime?
   openedAt       DateTime?
   clickedAt      DateTime?
   bouncedAt      DateTime?
+  complainedAt   DateTime?
   unsubscribedAt DateTime?
 
   /// Tracking
@@ -1843,6 +1847,8 @@ model EmailCampaignRecipient {
   @@index([campaignId])
   @@index([clientId])
   @@index([email])
+  /// Resend webhooks find the recipient by the id Resend returned on send.
+  @@index([messageId])
   @@map("email_campaign_recipients")
 }
 
@@ -1876,8 +1882,11 @@ model EmailCampaignAnalytics {
   campaignId String
 
   /// Event details
-  eventType String /// sent, delivered, opened, clicked, bounced, unsubscribed
+  eventType String /// sent, delivered, opened, clicked, bounced, complained, failed, unsubscribed
   timestamp DateTime @default(now())
+  /// svix-id of the Resend webhook delivery. Unique so a redelivered event
+  /// is recognised and not counted twice.
+  eventId   String?  @unique
 
   /// Recipient info
   email     String
@@ -1896,6 +1905,25 @@ model EmailCampaignAnalytics {
   @@index([timestamp])
   @@index([email])
   @@map("email_campaign_analytics")
+}
+
+/// Addresses a salon's marketing emails must no longer go to: a permanent
+/// bounce (the mailbox does not exist) or a spam complaint. Written by the
+/// Resend webhook, read before every campaign send. Per tenant because a
+/// complaint is about that salon's emails.
+model EmailSuppression {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  tenantId  String
+  /// Lower-cased.
+  email     String
+  reason    String /// hard_bounce | complaint
+  detail    String?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, email])
+  @@map("email_suppressions")
 }
 
 // ====================================

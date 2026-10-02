@@ -15,13 +15,10 @@ import { SAAS_OWNER_KEY } from "../saas/decorators/saas-owner.decorator";
  */
 
 /**
- * A webhook that today requires a session, which their senders never have.
- * Resend becomes @Public() once its signature is verified. Until then it
- * stays closed, as it is now.
+ * Routes allowed to declare nothing. Empty: the last one, the Resend
+ * webhook, became @Public() once its Svix signature was verified.
  */
-const PENDING = new Set([
-  "email-campaigns/resend-webhooks.controller.ts#handleResendWebhook",
-]);
+const PENDING = new Set<string>([]);
 
 const KEYS = [IS_PUBLIC_KEY, ROLES_KEY, SIGNED_IN_KEY, SAAS_OWNER_KEY];
 
