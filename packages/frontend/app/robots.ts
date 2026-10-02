@@ -24,6 +24,7 @@ export default function robots(): MetadataRoute.Robots {
           "/test-chat",
           "/example-booking",
           "/public/r/",
+          "/public/baja/",
           "/sites/*/account",
           // The same private area on a salon's own domain.
           "/account",

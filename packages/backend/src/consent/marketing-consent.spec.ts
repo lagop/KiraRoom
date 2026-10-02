@@ -171,7 +171,8 @@ describe("marketing consent from the client's account", () => {
     };
     const suppressions: any = { suppressedAmong: async () => new Set<string>() };
     const config: any = { get: () => undefined };
-    const campaigns = new EmailCampaignsService(prisma, email as any, suppressions, config);
+    const unsubscribes: any = { link: () => ({ pageUrl: "https://app.test/public/baja/x", headers: {} }), withFooter: (html: string) => html };
+    const campaigns = new EmailCampaignsService(prisma, email as any, suppressions, config, unsubscribes);
 
     const result: any = await campaigns.sendCampaignNow("t1", "camp");
 

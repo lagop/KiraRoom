@@ -6,6 +6,7 @@ import { EmailService } from '../notifications/services/email.service';
 import { CampaignType } from './dto';
 import { EmailCampaignsService } from './email-campaigns.service';
 import { EmailSuppressionService } from './email-suppression.service';
+import { EmailUnsubscribeService } from './email-unsubscribe.service';
 
 @Injectable()
 export class EmailCampaignsScheduler {
@@ -16,6 +17,7 @@ export class EmailCampaignsScheduler {
     private readonly emailService: EmailService,
     private readonly campaigns: EmailCampaignsService,
     private readonly suppressions: EmailSuppressionService,
+    private readonly unsubscribes: EmailUnsubscribeService,
   ) {}
 
   /**
@@ -184,12 +186,18 @@ export class EmailCampaignsScheduler {
         // Build personalized email content
         const personalization = this.buildReengagementEmailContent(campaign, client);
 
-        // Send the email
+        // Send the email, with the client's unsubscribe link (LSSI art. 21.2)
+        const unsubscribe = this.unsubscribes.link({ kind: 'c', id: client.id });
         const result = await this.emailService.sendEmail({
           to: client.email,
           subject: personalization.subject,
-          html: personalization.html,
+          html: this.unsubscribes.withFooter(
+            personalization.html,
+            campaign.tenant?.name || 'el salón',
+            unsubscribe.pageUrl,
+          ),
           replyTo: campaign.replyTo,
+          headers: unsubscribe.headers,
         });
 
         if (result.success) {

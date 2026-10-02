@@ -2008,7 +2008,7 @@ model EmailSuppression {
   tenantId  String
   /// Lower-cased.
   email     String
-  reason    String /// hard_bounce | complaint
+  reason    String /// hard_bounce | complaint | unsubscribed
   detail    String?
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
