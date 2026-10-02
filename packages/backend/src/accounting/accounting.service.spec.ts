@@ -1,429 +1,345 @@
 /**
- * AccountingService + adapter unit tests covering:
- *  - OAuth URL contains expected scopes/redirect_uri
- *  - Holded adapter: payload shape + idempotency (same externalRef → same id)
- *  - Sage adapter: payload shape (items + tax_rate)
- *  - syncInvoice when no connection → skipped, no error
- *  - syncInvoice when syncOnIssue=false in tenant settings → skipped
- *  - syncInvoice when already synced (externalId set) → skipped
- *  - syncInvoice on happy path → status=synced + externalId persisted + log written
- *  - retryQueue walks pending invoices
+ * AccountingService: what happens to an invoice around the Holded push.
+ *
+ * Why these tests exist: the old service "synced" every invoice to a stub
+ * that made ids up, so a salon was told its books were in Holded when
+ * nothing had been sent. These pin the honest behaviour:
+ *   - the key is checked against Holded before it is stored, and stored
+ *     encrypted;
+ *   - the id persisted is the one Holded returned;
+ *   - failures are recorded on the invoice and in the log, transient ones are
+ *     retried with backoff and eventually given up, permanent ones are not
+ *     retried;
+ *   - everything the panel can trigger is scoped to the caller's salon.
+ * The adapter is mocked here; its HTTP contract is in holded.adapter.spec.
  */
 
-import { ConfigService } from "@nestjs/config";
-import { AccountingService } from "./accounting.service";
-import { HoldedAdapter, ProviderHttpError } from "./providers/holded.adapter";
-import { SageAdapter } from "./providers/sage.adapter";
-import { EncryptionService } from "../common/encryption/encryption.service";
 import { AccountingProvider } from "@prisma/client";
+import { AccountingService, MAX_AUTO_ATTEMPTS } from "./accounting.service";
+import { HoldedApiError, HoldedSetupError } from "./providers/holded.adapter";
+import { EncryptionService } from "../common/encryption/encryption.service";
 
-function makeEncryptionMock(): EncryptionService {
-  // Real AES roundtrip; deterministic because key is fixed (32 bytes of base64).
-  const fakeConfig = {
+function makeEncryption(): EncryptionService {
+  return new EncryptionService({
     get: (key: string) =>
-      key === "META_TOKEN_ENCRYPTION_KEY"
-        ? Buffer.alloc(32, 7).toString("base64")
-        : null,
-  } as any;
-  return new EncryptionService(fakeConfig);
-}
-
-function makeHoldedAdapter() {
-  return new HoldedAdapter({
-    get: () => null,
+      key === "META_TOKEN_ENCRYPTION_KEY" ? Buffer.alloc(32, 7).toString("base64") : null,
   } as any);
 }
 
-function makeSageAdapter() {
-  return new SageAdapter({
-    get: () => null,
-  } as any);
-}
-
-function makePrismaMock() {
-  const m: any = {};
-  m.tenant = {
-    id: "tenant-1",
-    accountingSettings: { enabled: true, syncOnIssue: true },
-  };
-  const tenant = m.tenant;
-  m.connection = {
-    id: "conn-1",
-    tenantId: "tenant-1",
-    provider: AccountingProvider.holded,
-    encryptedAccessToken: "",
-    encryptedRefreshToken: "",
-    expiresAt: new Date(Date.now() + 3600_000),
-    externalCompanyId: "comp-1",
-    isActive: true,
-    lastError: null,
-  };
-  const connection = m.connection;
+function setup(opts: { connected?: boolean; syncOnIssue?: boolean } = {}) {
+  const enc = makeEncryption();
   const invoices = new Map<string, any>();
   const connections = new Map<string, any>();
-  connections.set("tenant-1", connection);
   const logs: any[] = [];
-
-  return {
-    tenant,
-    connection,
-    invoices,
-    connections,
-    logs,
-    prisma: {
-      invoice: {
-        findUnique: jest.fn(async (args: any) => {
-          const inv = invoices.get(args.where.id);
-          if (!inv) return null;
-          // Honor `include.tenant` by injecting the live tenant reference so
-          // tests can mutate `m.tenant.accountingSettings` and observe it.
-          if (args?.include?.tenant) {
-            return { ...inv, tenant: { accountingSettings: m.tenant.accountingSettings } };
-          }
-          return inv;
-        }),
-        update: jest.fn(async (args: any) => {
-          const cur = invoices.get(args.where.id);
-          Object.assign(cur, args.data);
-          return cur;
-        }),
-        findMany: jest.fn(async () =>
-          [...invoices.values()].filter(
-            (i) => i.accountingStatus === "pending" && !i.accountingExternalId,
-          ),
-        ),
-      },
-      accountingConnection: {
-        findUnique: jest.fn(async (args: any) =>
-          connections.get(args.where.tenantId) ?? null,
-        ),
-        update: jest.fn(async (args: any) => {
-          // Support both `{ where: { tenantId } }` and the unique-constraint
-          // selector that Prisma may translate the call into.
-          const key = args?.where?.tenantId ?? args?.where?.tenantId_tenantId;
-          let cur = connections.get(key);
-          if (!cur && args?.where?.id) cur = connections.get("tenant-1");
-          if (!cur) {
-            // Fall back: any connection in the map (single-tenant tests).
-            cur = connections.values().next().value;
-          }
-          Object.assign(cur, args.data);
-          return cur;
-        }),
-        create: jest.fn(async (args: any) => {
-          const row = { id: "conn-new", ...args.data };
-          connections.set(args.data.tenantId, row);
-          return row;
-        }),
-        delete: jest.fn(async (args: any) => {
-          const cur = connections.get("tenant-1");
-          if (cur && cur.id === args.where.id) connections.delete("tenant-1");
-          return { id: args.where.id };
-        }),
-      },
-      accountingSyncLog: {
-        create: jest.fn(async (args: any) => {
-          logs.push(args.data);
-          return args.data;
-        }),
-        findMany: jest.fn(async () => logs),
-      },
-      tenant: {
-        findUnique: jest.fn(async () => tenant),
-      },
-    } as any,
+  const tenantSettings: Record<string, any> = {
+    "tenant-1": { syncOnIssue: opts.syncOnIssue ?? true },
   };
-}
-
-function seedInvoice(m: any, overrides: any = {}) {
-  const inv = {
-    id: "inv-1",
-    tenantId: "tenant-1",
-    series: "A",
-    number: "000001",
-    issueDate: new Date("2026-07-01T10:00:00Z"),
-    recipientName: "Cliente X",
-    recipientTaxId: "12345678A",
-    subtotalCents: 10000,
-    totalCents: 12100,
-    currency: "EUR",
-    fiscalStatus: "not_required",
-    accountingStatus: "not_synced",
-    accountingExternalId: null,
-    accountingError: null,
-    lines: [
-      {
-        id: "l1",
-        invoiceId: "inv-1",
-        description: "Corte",
-        quantity: 5 as any,
-        unitPriceCents: 2000,
-        taxRate: 21 as any,
-        taxCents: 2100,
-        totalCents: 12100,
-        discountPct: 0 as any,
-        productId: null,
-        serviceId: null,
-        appointmentId: null,
-      },
-    ],
-    ...overrides,
-  };
-  m.invoices.set(inv.id, inv);
-  return inv;
-}
-
-// Module-level helper so all `describe` blocks can use it.
-function build() {
-  const m = makePrismaMock();
-  const enc = makeEncryptionMock();
-  m.connection.encryptedAccessToken = enc.encrypt("holded-access-token-xyz");
-  m.connection.encryptedRefreshToken = enc.encrypt("holded-refresh-token-xyz");
-  const svc = new AccountingService(
-    m.prisma,
-    enc,
-    makeHoldedAdapter(),
-    makeSageAdapter(),
-  );
-  return { m, svc, enc };
-}
-
-describe("HoldedAdapter", () => {
-  it("builds an Auth URL with the expected scopes and redirect", () => {
-    const a = makeHoldedAdapter();
-    const url = a.getAuthUrl("state-123");
-    expect(url).toContain("https://app.holded.com/oauth/authorize");
-    expect(url).toContain("client_id=dev-client-id");
-    expect(url).toContain("state=state-123");
-    expect(url).toContain("scope=invoicing%3Awrite+contacts%3Aread");
-  });
-
-  it("upsertSalesInvoice includes customId equal to externalRef (idempotency key)", async () => {
-    const a = makeHoldedAdapter();
-    const result = await a.upsertSalesInvoice({
-      externalRef: "t-1-A000001",
-      issueDate: "2026-07-01",
-      customerName: "Cliente",
-      customerTaxId: "X",
-      currency: "EUR",
-      lines: [
-        {
-          description: "Corte",
-          quantity: 1,
-          unitPriceCents: 10000,
-          taxRate: 21,
-        },
-      ],
+  if (opts.connected !== false) {
+    connections.set("tenant-1", {
+      id: "conn-1",
+      tenantId: "tenant-1",
+      provider: AccountingProvider.holded,
+      encryptedAccessToken: enc.encrypt("salon-holded-key"),
+      isActive: true,
+      createdAt: new Date("2026-09-01T00:00:00Z"),
+      lastError: null,
     });
-    expect(result.externalId).toMatch(/^inv-[0-9a-f]+$/);
-    expect(result.externalUrl).toContain(result.externalId);
+  }
 
-    // Idempotency: re-running with the same externalRef returns the same id.
-    const again = await a.upsertSalesInvoice({
-      externalRef: "t-1-A000001",
-      issueDate: "2026-07-01",
-      customerName: "Cliente",
-      currency: "EUR",
-      lines: [
-        {
-          description: "Corte",
-          quantity: 1,
-          unitPriceCents: 10000,
-          taxRate: 21,
-        },
-      ],
-    });
-    expect(again.externalId).toBe(result.externalId);
-  });
-});
-
-describe("SageAdapter", () => {
-  it("builds an Auth URL with sage-specific scopes", () => {
-    const a = makeSageAdapter();
-    const url = a.getAuthUrl("state-xyz");
-    expect(url).toContain("https://www.sageone.es/oauth/authorize");
-    expect(url).toContain("scope=sales_invoices%3Awrite+contacts%3Aread");
-  });
-
-  it("upsertSalesInvoice uses items + tax_rate (Sage shape)", async () => {
-    const a = makeSageAdapter();
-    const spy = jest.spyOn(a as any, "_postToSage");
-    await a.upsertSalesInvoice({
-      externalRef: "t-1-A000002",
-      issueDate: "2026-07-01",
-      customerName: "Cliente",
-      currency: "EUR",
-      lines: [
-        {
-          description: "Coloración",
-          quantity: 1,
-          unitPriceCents: 5000,
-          taxRate: 10,
-        },
-      ],
-    });
-    expect(spy).toHaveBeenCalledWith(
-      "/sales_invoices",
-      expect.objectContaining({
-        document_type: "sales_invoice",
-        external_ref: "t-1-A000002",
-        document_number: "t-1-A000002",
-        items: [
-          expect.objectContaining({
-            tax_rate: 10,
-            unit_price: 50,
-          }),
-        ],
+  const prisma: any = {
+    invoice: {
+      findFirst: jest.fn(async ({ where }: any) => {
+        const inv = invoices.get(where.id);
+        if (!inv || (where.tenantId && inv.tenantId !== where.tenantId)) return null;
+        return {
+          ...inv,
+          tenant: { accountingSettings: tenantSettings[inv.tenantId], fiscalSettings: { taxRegime: "iva" } },
+        };
       }),
-    );
+      update: jest.fn(async ({ where, data }: any) => Object.assign(invoices.get(where.id), data)),
+      findMany: jest.fn(async ({ where }: any) =>
+        [...invoices.values()].filter(
+          (i) =>
+            (!where.accountingStatus || i.accountingStatus === where.accountingStatus) &&
+            (!where.tenantId || i.tenantId === where.tenantId) &&
+            !i.accountingExternalId,
+        ),
+      ),
+      count: jest.fn(async () => 0),
+      groupBy: jest.fn(async () => []),
+    },
+    accountingConnection: {
+      findUnique: jest.fn(async ({ where }: any) => connections.get(where.tenantId) ?? null),
+      update: jest.fn(async ({ where, data }: any) => {
+        const c = [...connections.values()].find((x) => x.id === where.id);
+        return Object.assign(c, data);
+      }),
+      upsert: jest.fn(async ({ where, create, update }: any) => {
+        const existing = connections.get(where.tenantId);
+        const row = existing
+          ? Object.assign(existing, update)
+          : { id: "conn-new", createdAt: new Date(), ...create };
+        connections.set(where.tenantId, row);
+        return row;
+      }),
+      delete: jest.fn(async ({ where }: any) => {
+        for (const [k, v] of connections) if (v.id === where.id) connections.delete(k);
+      }),
+    },
+    accountingSyncLog: {
+      create: jest.fn(async ({ data }: any) => {
+        logs.push({ createdAt: new Date(), ...data });
+      }),
+      findMany: jest.fn(async ({ where }: any) =>
+        logs
+          .filter(
+            (l) =>
+              l.invoiceId === where.invoiceId &&
+              l.status === where.status &&
+              l.createdAt >= where.createdAt.gte,
+          )
+          .sort((a, b) => b.createdAt - a.createdAt),
+      ),
+    },
+    tenant: {
+      findUnique: jest.fn(async () => ({ accountingSettings: tenantSettings["tenant-1"] })),
+      update: jest.fn(async ({ data }: any) => {
+        tenantSettings["tenant-1"] = data.accountingSettings;
+      }),
+    },
+  };
+
+  const holded = {
+    verifyKey: jest.fn(async () => undefined),
+    pushInvoice: jest.fn(async () => ({ externalId: "65f0aa", alreadyInHolded: false })),
+  };
+  const svc = new AccountingService(prisma, enc, holded as any);
+
+  const seed = (overrides: any = {}) => {
+    const inv = {
+      id: "inv-1",
+      tenantId: "tenant-1",
+      series: "A",
+      number: "000007",
+      issueDate: new Date("2026-09-15T10:00:00Z"),
+      recipientName: "Lucía Ejemplo",
+      recipientTaxId: "12345678Z",
+      totalCents: 4235,
+      currency: "EUR",
+      status: "issued",
+      notes: null,
+      accountingStatus: "not_synced",
+      accountingExternalId: null,
+      accountingError: null,
+      lines: [
+        { description: "Corte", quantity: "1", unitPriceCents: 3500, discountPct: "0", taxRate: "21" },
+      ],
+      ...overrides,
+    };
+    invoices.set(inv.id, inv);
+    return inv;
+  };
+
+  return { svc, prisma, holded, enc, invoices, connections, logs, seed, tenantSettings };
+}
+
+describe("AccountingService.connectHolded", () => {
+  it("verifies the key with Holded and stores it encrypted", async () => {
+    const t = setup({ connected: false });
+    await t.svc.connectHolded("tenant-1", "  pasted-key-1234  ");
+    expect(t.holded.verifyKey).toHaveBeenCalledWith("pasted-key-1234");
+    const conn = t.connections.get("tenant-1");
+    expect(conn.provider).toBe("holded");
+    expect(conn.encryptedAccessToken).not.toContain("pasted-key");
+    expect(t.enc.decrypt(conn.encryptedAccessToken)).toBe("pasted-key-1234");
   });
 
-  it("upsertSalesInvoice is idempotent on external_ref", async () => {
-    const a = makeSageAdapter();
-    const r1 = await a.upsertSalesInvoice({
-      externalRef: "t-1-A000003",
-      issueDate: "2026-07-01",
-      customerName: "Cliente",
-      currency: "EUR",
-      lines: [{ description: "X", quantity: 1, unitPriceCents: 1000, taxRate: 21 }],
-    });
-    const r2 = await a.upsertSalesInvoice({
-      externalRef: "t-1-A000003",
-      issueDate: "2026-07-01",
-      customerName: "Cliente",
-      currency: "EUR",
-      lines: [{ description: "X", quantity: 1, unitPriceCents: 1000, taxRate: 21 }],
-    });
-    expect(r2.externalId).toBe(r1.externalId);
+  it("does not store a key Holded rejects", async () => {
+    const t = setup({ connected: false });
+    t.holded.verifyKey.mockRejectedValueOnce(new HoldedApiError(401, "Invalid API key"));
+    await expect(t.svc.connectHolded("tenant-1", "wrong-key-123")).rejects.toThrow(/no reconoce esta clave/);
+    expect(t.connections.size).toBe(0);
+  });
+
+  it("names the missing permissions on a 403", async () => {
+    const t = setup({ connected: false });
+    t.holded.verifyKey.mockRejectedValueOnce(new HoldedApiError(403, "Forbidden"));
+    await expect(t.svc.connectHolded("tenant-1", "scoped-key-123")).rejects.toThrow(/faltan permisos/);
   });
 });
 
 describe("AccountingService.syncInvoice", () => {
-  it("skips when no active connection", async () => {
-    const { m, svc } = build();
-    seedInvoice(m);
-    m.connections.delete("tenant-1");
-    const r = await svc.syncInvoice("inv-1");
-    expect(r.status).toBe("skipped");
-    expect(r.error).toBe("no_connection");
-    expect(m.logs).toHaveLength(0);
+  it("stores the id Holded returned and logs it", async () => {
+    const t = setup();
+    t.seed();
+    const r = await t.svc.syncInvoice("inv-1");
+    expect(r).toEqual({ status: "synced", externalId: "65f0aa" });
+    const inv = t.invoices.get("inv-1");
+    expect(inv.accountingExternalId).toBe("65f0aa");
+    expect(inv.accountingStatus).toBe("synced");
+    const [key, input, opts] = t.holded.pushInvoice.mock.calls[0] as any[];
+    expect(key).toBe("salon-holded-key");
+    expect(input).toMatchObject({
+      documentNumber: "A000007",
+      issueDate: "2026-09-15",
+      customerTaxId: "12345678Z",
+      regime: "iva",
+      lines: [{ description: "Corte", quantity: 1, unitPriceCents: 3500, discountPct: 0, taxRate: 21 }],
+    });
+    expect(opts).toEqual({ checkExisting: false });
+    expect(t.logs.at(-1)).toMatchObject({ status: "ok", externalId: "65f0aa", invoiceId: "inv-1" });
   });
 
-  it("skips when tenant has syncOnIssue=false", async () => {
-    const { m, svc } = build();
-    m.tenant.accountingSettings = { syncOnIssue: false };
-    seedInvoice(m);
-    const r = await svc.syncInvoice("inv-1");
-    expect(r.status).toBe("skipped");
-    expect(r.error).toBe("sync_disabled_by_tenant");
+  it("skips without calling Holded when the salon has no connection", async () => {
+    const t = setup({ connected: false });
+    t.seed();
+    expect(await t.svc.syncInvoice("inv-1")).toMatchObject({ status: "skipped", error: "no_connection" });
+    expect(t.holded.pushInvoice).not.toHaveBeenCalled();
+    expect(t.invoices.get("inv-1").accountingStatus).toBe("not_synced");
   });
 
-  it("skips when invoice already has accountingExternalId (idempotent)", async () => {
-    const { m, svc } = build();
-    seedInvoice(m, { accountingExternalId: "holded-existing-id" });
-    const r = await svc.syncInvoice("inv-1");
-    expect(r.status).toBe("skipped");
-    expect(r.externalId).toBe("holded-existing-id");
-    expect(m.logs.some((l) => l.status === "skipped")).toBe(true);
+  it("respects syncOnIssue=false on issue, but a manual send still goes", async () => {
+    const t = setup({ syncOnIssue: false });
+    t.seed();
+    expect(await t.svc.syncInvoice("inv-1")).toMatchObject({ status: "skipped" });
+    expect(t.holded.pushInvoice).not.toHaveBeenCalled();
+    expect(await t.svc.syncInvoice("inv-1", { trigger: "manual", tenantId: "tenant-1" })).toMatchObject({
+      status: "synced",
+    });
   });
 
-  it("happy path: syncs to Holded, persists externalId + log", async () => {
-    const { m, svc } = build();
-    seedInvoice(m);
-    const r = await svc.syncInvoice("inv-1");
-    expect(r.status).toBe("synced");
-    expect(r.externalId).toMatch(/^inv-[0-9a-f]+$/);
-    expect(m.invoices.get("inv-1").accountingExternalId).toBe(r.externalId);
-    expect(m.invoices.get("inv-1").accountingStatus).toBe("synced");
-    expect(m.connection.lastSyncAt).toBeInstanceOf(Date);
-    expect(m.logs.some((l) => l.status === "ok" && l.action === "sync")).toBe(
-      true,
-    );
+  it("never syncs another salon's invoice from the panel", async () => {
+    const t = setup();
+    t.seed();
+    expect(await t.svc.syncInvoice("inv-1", { trigger: "manual", tenantId: "tenant-2" })).toMatchObject({
+      status: "skipped",
+      error: "invoice_not_found",
+    });
+    expect(t.holded.pushInvoice).not.toHaveBeenCalled();
   });
 
-  it("returns skipped for a non-existent invoice", async () => {
-    const { svc } = build();
-    const r = await svc.syncInvoice("ghost");
-    expect(r.status).toBe("skipped");
-    expect(r.error).toBe("invoice_not_found");
+  it("does not send drafts or cancelled invoices", async () => {
+    const t = setup();
+    t.seed({ status: "cancelled" });
+    expect(await t.svc.syncInvoice("inv-1")).toMatchObject({ status: "skipped", error: "not_issued" });
   });
 
-  it("marks accountingStatus=error on validation (4xx) failure", async () => {
-    const { m, enc } = build();
-    seedInvoice(m);
-    const fakeAdapter = {
-      provider: AccountingProvider.holded,
-      getAuthUrl: () => "x",
-      exchangeCode: async () => ({ accessToken: "x" }),
-      refresh: async () => ({ accessToken: "x" }),
-      upsertSalesInvoice: async () => {
-        throw new ProviderHttpError(400, "bad");
-      },
-      ping: async () => true,
-    };
-    const svc2 = new AccountingService(
-      m.prisma,
-      enc,
-      fakeAdapter as any,
-      makeSageAdapter(),
-    );
-    const r = await svc2.syncInvoice("inv-1");
+  it("leaves a transient failure pending, to be retried", async () => {
+    const t = setup();
+    t.seed();
+    t.holded.pushInvoice.mockRejectedValueOnce(new HoldedApiError(503, "Service Unavailable"));
+    const r = await t.svc.syncInvoice("inv-1");
+    expect(r.status).toBe("pending");
+    expect(t.invoices.get("inv-1").accountingStatus).toBe("pending");
+    expect(t.invoices.get("inv-1").accountingExternalId).toBeNull();
+    expect(t.logs.at(-1)).toMatchObject({ status: "error", payload: { retry: true, httpStatus: 503 } });
+  });
+
+  it("marks a validation error as error with Holded's message, no retry", async () => {
+    const t = setup();
+    t.seed();
+    t.holded.pushInvoice.mockRejectedValueOnce(new HoldedApiError(422, "contact_id is invalid"));
+    const r = await t.svc.syncInvoice("inv-1");
     expect(r.status).toBe("error");
-    expect(m.invoices.get("inv-1").accountingStatus).toBe("error");
-    expect(m.invoices.get("inv-1").accountingError).toContain("Provider HTTP 400");
+    expect(t.invoices.get("inv-1").accountingError).toContain("contact_id is invalid");
+    expect(t.logs.at(-1).payload).toMatchObject({ retry: false, httpStatus: 422 });
+  });
+
+  it("records a revoked key on the connection so the panel can ask to reconnect", async () => {
+    const t = setup();
+    t.seed();
+    t.holded.pushInvoice.mockRejectedValueOnce(new HoldedApiError(401, "Invalid API key"));
+    await t.svc.syncInvoice("inv-1");
+    expect(t.invoices.get("inv-1").accountingStatus).toBe("error");
+    expect(t.connections.get("tenant-1").lastError).toMatch(/Vuelve a conectar Holded/);
+  });
+
+  it("explains a missing tax as an error the salon must fix", async () => {
+    const t = setup();
+    t.seed();
+    t.holded.pushInvoice.mockRejectedValueOnce(new HoldedSetupError("Tu cuenta de Holded no tiene un impuesto…"));
+    expect((await t.svc.syncInvoice("inv-1")).status).toBe("error");
+  });
+
+  it("does not send rectificativas as ordinary invoices", async () => {
+    const t = setup();
+    t.seed({ series: "R", totalCents: -1210 });
+    expect((await t.svc.syncInvoice("inv-1")).status).toBe("error");
+    expect(t.holded.pushInvoice).not.toHaveBeenCalled();
+    expect(t.invoices.get("inv-1").accountingError).toMatch(/rectificativas/);
+  });
+
+  it("asks the adapter to look for a duplicate when an earlier attempt failed", async () => {
+    const t = setup();
+    t.seed({ accountingStatus: "pending" });
+    await t.svc.syncInvoice("inv-1", { trigger: "retry" });
+    expect((t.holded.pushInvoice.mock.calls[0] as any[])[2]).toEqual({ checkExisting: true });
+  });
+
+  it("is a no-op for an invoice already in Holded", async () => {
+    const t = setup();
+    t.seed({ accountingExternalId: "65f0aa", accountingStatus: "synced" });
+    expect(await t.svc.syncInvoice("inv-1")).toEqual({ status: "skipped", externalId: "65f0aa" });
+    expect(t.holded.pushInvoice).not.toHaveBeenCalled();
   });
 });
 
-describe("AccountingService.retryQueue", () => {
-  it("walks all pending invoices and returns a summary", async () => {
-    const { m, svc } = build();
-    seedInvoice(m, { id: "inv-a", accountingStatus: "pending" });
-    seedInvoice(m, { id: "inv-b", accountingStatus: "pending" });
-    const r = await svc.retryQueue(10);
-    expect(r.attempted).toBe(2);
-    expect(r.synced).toBe(2);
-    expect(m.invoices.get("inv-a").accountingStatus).toBe("synced");
-    expect(m.invoices.get("inv-b").accountingStatus).toBe("synced");
+describe("AccountingService.retryDue", () => {
+  const now = new Date("2026-09-20T12:00:00Z");
+
+  it("waits out the backoff after a failure", async () => {
+    const t = setup();
+    t.seed({ accountingStatus: "pending" });
+    t.logs.push({ invoiceId: "inv-1", action: "sync", status: "error", createdAt: new Date(now.getTime() - 60_000) });
+    const r = await t.svc.retryDue(now);
+    expect(r).toMatchObject({ retried: 0, notDue: 1 });
+    expect(t.holded.pushInvoice).not.toHaveBeenCalled();
+  });
+
+  it("retries once the backoff has passed", async () => {
+    const t = setup();
+    t.seed({ accountingStatus: "pending" });
+    t.logs.push({ invoiceId: "inv-1", action: "sync", status: "error", createdAt: new Date(now.getTime() - 11 * 60_000) });
+    const r = await t.svc.retryDue(now);
+    expect(r).toMatchObject({ retried: 1, synced: 1 });
+    expect(t.invoices.get("inv-1").accountingExternalId).toBe("65f0aa");
+  });
+
+  it(`gives up into 'error' after ${MAX_AUTO_ATTEMPTS} failures`, async () => {
+    const t = setup();
+    t.seed({ accountingStatus: "pending" });
+    for (let i = 0; i < MAX_AUTO_ATTEMPTS; i++) {
+      t.logs.push({ invoiceId: "inv-1", action: "sync", status: "error", createdAt: new Date(now.getTime() - (i + 1) * 3600_000) });
+    }
+    const r = await t.svc.retryDue(now);
+    expect(r.gaveUp).toBe(1);
+    expect(t.invoices.get("inv-1").accountingStatus).toBe("error");
+    expect(t.holded.pushInvoice).not.toHaveBeenCalled();
+  });
+
+  it("only picks invoices of salons still connected", async () => {
+    const t = setup();
+    await t.svc.retryDue(now);
+    const where = (t.prisma.invoice.findMany.mock.calls[0] as any[])[0].where;
+    expect(where.tenant).toEqual({
+      accountingConnection: { is: { isActive: true, provider: "holded" } },
+    });
   });
 });
 
-describe("AccountingService.disconnect", () => {
-  it("removes the connection and writes an unlink log", async () => {
-    const m = makePrismaMock();
-    const enc = makeEncryptionMock();
-    const svc = new AccountingService(
-      m.prisma,
-      enc,
-      makeHoldedAdapter(),
-      makeSageAdapter(),
-    );
-    await svc.disconnect("tenant-1");
-    expect(m.connections.has("tenant-1")).toBe(false);
-    expect(m.logs.some((l) => l.action === "unlink")).toBe(true);
+describe("AccountingService.pushPending", () => {
+  it("refuses without a Holded connection", async () => {
+    const t = setup({ connected: false });
+    await expect(t.svc.pushPending("tenant-1")).rejects.toThrow(/Conecta Holded/);
   });
-});
 
-describe("AccountingService.buildAuthUrl", () => {
-  it("produces an HMAC-signed state", () => {
-    const m = makePrismaMock();
-    const enc = makeEncryptionMock();
-    const svc = new AccountingService(
-      m.prisma,
-      enc,
-      makeHoldedAdapter(),
-      makeSageAdapter(),
-    );
-    const { url, state } = svc.buildAuthUrl(
-      AccountingProvider.holded,
-      "tenant-1",
-      "secret-x",
-    );
-    expect(url).toContain("https://app.holded.com/oauth/authorize");
-    const [payloadB64, sig] = state.split(".");
-    const expected = enc.hmac(
-      Buffer.from(payloadB64, "base64url").toString(),
-      "secret-x",
-    );
-    expect(sig).toBe(expected);
+  it("sends the salon's unsynced invoices and reports the counts", async () => {
+    const t = setup();
+    t.seed({ accountingStatus: "error" });
+    const r = await t.svc.pushPending("tenant-1", "2026-01-01");
+    expect(r).toMatchObject({ attempted: 1, synced: 1, errors: 0 });
+    const where = (t.prisma.invoice.findMany.mock.calls[0] as any[])[0].where;
+    expect(where.tenantId).toBe("tenant-1");
+    expect(where.issueDate).toEqual({ gte: new Date("2026-01-01T00:00:00.000Z") });
   });
 });

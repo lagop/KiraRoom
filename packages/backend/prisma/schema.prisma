@@ -2748,7 +2748,8 @@ model AccountingConnection {
   id                    String              @id @default(uuid())
   tenantId              String              @unique
   provider              AccountingProvider
-  /// OAuth tokens cifrados en reposo (EncryptionService)
+  /// Holded: la clave API del salón, cifrada en reposo (EncryptionService).
+  /// Sage/A3/NCS no tienen sync directa (exportación del libro de facturas).
   encryptedAccessToken  String              @db.Text
   encryptedRefreshToken String?             @db.Text
   expiresAt             DateTime?

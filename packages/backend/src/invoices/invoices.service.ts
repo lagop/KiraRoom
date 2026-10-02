@@ -109,8 +109,9 @@ export class InvoiceService {
       });
     }
 
-    // Fire accounting sync if a connection is active. Runs after fiscal so
-    // we don't push unauthenticated invoices to Holded/Sage.
+    // Push to Holded if the salon connected it (a no-op otherwise). Started
+    // after the fiscal dispatch; failures are recorded on the invoice and
+    // retried by AccountingScheduler, never thrown back here.
     if (this.accounting) {
       void this.accounting.syncInvoice(invoice.id).catch((err) => {
         this.logger.warn(
