@@ -1,22 +1,24 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { randomBytes } from "crypto";
 import { PrismaService } from '../../common/prisma/prisma.service';
-import {
-  UpdateChannelsConfigDto,
-  ChannelsConfigView,
-} from '@kira/shared';
+import { ChannelsConfigView } from '@kira/shared';
+
+/** The switches the settings page can change directly. */
+export interface ChannelsSwitches {
+  enabled?: boolean;
+  enabledChannels?: string[];
+}
 
 /**
  * P2A-receptionist-v2 H-4: read / update the tenant's multichannel
  * configuration stored on `Tenant.features.multichannel.*` (JSON).
  *
- * The shape is the same one the channel-registry reads at runtime, so
- * saving here is the only thing the wizard needs to do.
+ * Only the on/off switches are written here. Credentials are set by
+ * ChannelConnectionsService (Facebook Login, Telegram's getMe/setWebhook)
+ * and stored encrypted; this endpoint used to merge whatever the request
+ * body held into the JSON, tokens included, in clear text.
  *
- * Secrets (`pageAccessToken`, `botToken`) are never echoed back through
- * the GET endpoint; only `hasAccessToken` / `hasBotToken` flags are
- * returned so the UI can show the "connected" badge without leaking
- * the credentials.
+ * Secrets are never returned: the view says whether each channel is
+ * connected and to which Page / Instagram account / bot.
  */
 @Injectable()
 export class ChannelsConfigService {
@@ -24,10 +26,6 @@ export class ChannelsConfigService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  /**
-   * Read the current multichannel config for a tenant. Returns a
-   * normalised view with secrets redacted.
-   */
   async getConfig(tenantId: string): Promise<ChannelsConfigView> {
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
@@ -39,19 +37,7 @@ export class ChannelsConfigService {
     return this.toView((tenant.features as any) ?? {});
   }
 
-  /**
-   * Merge `dto` into `Tenant.features.multichannel` and persist.
-   *
-   * When the user removes a token (sends the channel config without a
-   * `pageAccessToken` / `botToken`), the previous value is preserved
-   * unless the caller explicitly passes `meta: null` (which we treat
-   * as "reset"). This avoids accidentally wiping a token on a
-   * partial save.
-   */
-  async updateConfig(
-    tenantId: string,
-    dto: UpdateChannelsConfigDto,
-  ): Promise<ChannelsConfigView> {
+  async updateConfig(tenantId: string, dto: ChannelsSwitches): Promise<ChannelsConfigView> {
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
       select: { features: true },
@@ -60,42 +46,17 @@ export class ChannelsConfigService {
       throw new Error(`Tenant ${tenantId} not found`);
     }
     const currentFeatures = (tenant.features as any) ?? {};
-    const currentMc = currentFeatures.multichannel ?? {};
-    const next = { ...currentMc, ...dto };
+    const next = { ...(currentFeatures.multichannel ?? {}) };
 
-    // If `enabledChannels` is provided, ensure `web` is always present
-    // (it's the always-on channel).
     if (dto.enabledChannels !== undefined) {
+      // `web` is the always-on channel.
       const set = new Set(dto.enabledChannels);
       set.add('web');
       next.enabledChannels = Array.from(set);
     }
+    next.enabled = dto.enabled ?? next.enabled ?? true;
 
-    // Sensible default: when the user saves for the first time and
-    // doesn't set `enabled`, mark multichannel as enabled.
-    if (dto.enabled === undefined) {
-      next.enabled = true;
-    }
-
-    // Mint a webhook secret for Telegram, distinct from the bot token.
-    //
-    // The webhook used to authenticate inbound updates by comparing the
-    // header against the bot token itself, so anyone who saw that header --
-    // in a log, a proxy, an error report -- held full control of the bot.
-    // Telegram's `secret_token` is meant to be a separate value; this is it.
-    // Minted once and preserved across saves, so re-saving the wizard does
-    // not silently invalidate a webhook already registered with Telegram.
-    if (next.telegram?.botToken && !next.telegram.webhookSecret) {
-      next.telegram = {
-        ...next.telegram,
-        webhookSecret: randomBytes(32).toString("hex"),
-      };
-    }
-
-    const nextFeatures = {
-      ...currentFeatures,
-      multichannel: next,
-    };
+    const nextFeatures = { ...currentFeatures, multichannel: next };
     await this.prisma.tenant.update({
       where: { id: tenantId },
       data: { features: nextFeatures as any },
@@ -106,9 +67,6 @@ export class ChannelsConfigService {
     return this.toView(nextFeatures);
   }
 
-  /**
-   * Convert raw `Tenant.features` to the redacted view shape.
-   */
   private toView(features: Record<string, any>): ChannelsConfigView {
     const mc = features.multichannel ?? {};
     const enabledChannels: string[] = Array.isArray(mc.enabledChannels)
@@ -116,30 +74,34 @@ export class ChannelsConfigService {
       : ['web', 'whatsapp'];
     const meta = mc.meta;
     const telegram = mc.telegram;
+    const pendingValid =
+      !!mc.metaPending && new Date(mc.metaPending.expiresAt).getTime() > Date.now();
 
     return {
       enabled: mc.enabled !== false,
       enabledChannels,
       meta: meta
         ? {
-            configured: !!meta.pageId,
+            configured: !!meta.pageId && !!(meta.pageAccessTokenEnc || meta.pageAccessToken),
             pageId: meta.pageId,
+            pageName: meta.pageName,
             instagramBusinessAccountId: meta.instagramBusinessAccountId,
-            linkedChats: Array.isArray(meta.linkedChats) ? meta.linkedChats : [],
-            webhookSecret: meta.webhookSecret,
-            hasAccessToken: !!meta.pageAccessToken,
+            instagramUsername: meta.instagramUsername,
+            hasAccessToken: !!(meta.pageAccessTokenEnc || meta.pageAccessToken),
+            // Pages saved by the first version (token pasted in a form) were
+            // never subscribed to the webhook: they must be connected again.
+            needsReconnect: !meta.pageAccessTokenEnc,
           }
         : null,
+      metaPagesPending: pendingValid,
       telegram: telegram
         ? {
-            configured: !!telegram.botToken,
-            // Bot username is unknown until first webhook — best effort.
+            configured: !!(telegram.botTokenEnc || telegram.botToken),
             botUsername: telegram.botUsername,
-            linkedChats: Array.isArray(telegram.linkedChats)
-              ? telegram.linkedChats
-              : [],
-            hasBotToken: !!telegram.botToken,
-            webhookSecret: telegram.webhookSecret,
+            hasBotToken: !!(telegram.botTokenEnc || telegram.botToken),
+            // Bots configured by the first version never had their webhook
+            // registered: they must be connected again.
+            needsReconnect: !telegram.botTokenEnc,
           }
         : null,
     };

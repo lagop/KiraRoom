@@ -201,35 +201,6 @@ export class WhatsAppService {
     }
   }
 
-  /**
-   * P2A-receptionist-v2 H-4: entry point for Meta Cloud messaging
-   * events (Messenger + Instagram DMs) and Telegram. Routes to the
-   * ChannelRegistry via the channel dispatcher and writes the inbound
-   * text to the conversation log.
-   */
-  async processInbound(args: {
-    tenantId: string;
-    channel: 'facebook' | 'instagram' | 'whatsapp' | 'telegram';
-    externalUserId: string;
-    text: string;
-    messageId?: string;
-  }): Promise<{ handled: boolean }> {
-    try {
-      // The dispatcher is wired into the registry by the controller
-      // layer; here we just enqueue the inbound into the orchestrator
-      // pipeline. (Full orchestration wiring lives in
-      // virtual-receptionist.service.ts once H-4's routing is on.)
-      this.logger.log(
-        `inbound ${args.channel} from ${args.externalUserId} (tenant ${args.tenantId}): "${args.text.slice(0, 80)}"`,
-      );
-      return { handled: true };
-    } catch (err) {
-      const e = err as Error;
-      this.logger.error(`processInbound failed: ${e.message}`);
-      return { handled: false };
-    }
-  }
-
   private async lookupTenantByPhone(phoneNumberId: string): Promise<string | null> {
     if (Date.now() - this.phoneIndexLoadedAt > 5 * 60 * 1000) {
       const rows = await this.prisma.whatsAppConnection.findMany({

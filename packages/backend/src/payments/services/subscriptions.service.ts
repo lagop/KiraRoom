@@ -192,11 +192,10 @@ export class SubscriptionsService {
       features: [
         'Clientas y citas ilimitadas',
         'Hasta 4 profesionales',
-        // What the plan does today, nothing more. Verifactu/TicketBAI, WhatsApp
-        // reminders and the multichannel receptionist were listed here and are
-        // not built (fiscal sending is a stub, WhatsApp free text fails outside
-        // Meta's 24 h window, Messenger/Instagram/Telegram only get logged).
-        // Put them back when they work.
+        // What the plan does today, nothing more. Verifactu/TicketBAI and
+        // WhatsApp reminders were listed here when they did not work. The
+        // multichannel receptionist (Messenger/Instagram/Telegram) is not part
+        // of Esencial: it is the Multicanal add-on.
         'Facturas con IVA o IGIC',
         'Recepcionista IA en tu web y en WhatsApp (500 mensajes/mes)',
         'Agenda online',
@@ -218,7 +217,10 @@ export class SubscriptionsService {
         'Clientas y citas ilimitadas',
         'Hasta 10 profesionales',
         'Email marketing',
-        'Recepcionista IA en tu web y en WhatsApp, sin límite de mensajes',
+        // Messenger, Instagram and Telegram answer since the multichannel
+        // receptionist was built (Messenger/Instagram need KiraRoom's Meta app
+        // approved by Meta for pages_messaging / instagram_manage_messages).
+        'Recepcionista IA en tu web, WhatsApp, Messenger, Instagram y Telegram, sin límite de mensajes',
         'Recordatorios por SMS',
         'Fidelización, promociones y tarjetas regalo',
         'Wallet y comisiones',
@@ -244,7 +246,10 @@ export class SubscriptionsService {
         'Informes consolidados',
         'Panel centralizado',
         'Account manager',
-        'Recepcionista IA en tu web y en WhatsApp, sin límite de mensajes',
+        // Messenger, Instagram and Telegram answer since the multichannel
+        // receptionist was built (Messenger/Instagram need KiraRoom's Meta app
+        // approved by Meta for pages_messaging / instagram_manage_messages).
+        'Recepcionista IA en tu web, WhatsApp, Messenger, Instagram y Telegram, sin límite de mensajes',
         'Todo lo de Pro',
       ],
       maxClients: null,                  // unlimited

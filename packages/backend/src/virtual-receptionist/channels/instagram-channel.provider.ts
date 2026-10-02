@@ -1,28 +1,34 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ChatChannel } from '@prisma/client';
-import { PrismaService } from '../../common/prisma/prisma.service';
 import {
   ChannelProvider,
   NormalizedInbound,
   OutboundContext,
   SendResult,
 } from './channel-provider.interface';
+import { ChannelCredentialsService } from './channel-credentials.service';
+import { MetaGraphClient } from './meta-graph.client';
+import { CHANNEL_TEXT_LIMIT, splitForChannel, toPlainChatText } from './chat-text';
 
 /**
- * P2A-receptionist-v2 H-4: Instagram Direct Messages provider.
+ * Instagram Direct: answers to people who write to the Instagram
+ * professional account linked to the salon's Facebook Page.
  *
- * The Meta Graph API is shared with Facebook Messenger
- * (`graph.facebook.com/v21.0/me/messages`); the only difference is
- * the `recipient.id` (IGSID vs PSID). On the inbound side the
- * webhook payload sets `metadata.platform === 'instagram'`.
+ * Messenger Platform for Instagram: POST /me/messages with the Page's access
+ * token and the person's Instagram-scoped id. Instagram refuses texts of
+ * 1000 characters or more, so long answers go out in several messages.
  */
 @Injectable()
 export class InstagramChannelProvider implements ChannelProvider {
   readonly channel: ChatChannel = 'instagram';
   private readonly logger = new Logger(InstagramChannelProvider.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly credentials: ChannelCredentialsService,
+    private readonly graph: MetaGraphClient,
+  ) {}
 
+  /** Signatures are checked by the webhook controller (X-Hub-Signature-256). */
   verifyWebhook(_req: any): boolean {
     return true;
   }
@@ -30,7 +36,7 @@ export class InstagramChannelProvider implements ChannelProvider {
   async parseInbound(req: any): Promise<NormalizedInbound | null> {
     const entry = req?.body?.entry?.[0];
     const event = entry?.messaging?.[0];
-    if (!event || !event.message?.text) return null;
+    if (!event || !event.message?.text || event.message?.is_echo) return null;
     return {
       externalUserId: event.sender.id,
       providerConversationId: event.sender.id,
@@ -46,44 +52,22 @@ export class InstagramChannelProvider implements ChannelProvider {
     text: string;
     ctx: OutboundContext;
   }): Promise<SendResult> {
-    const accessToken = await this.resolveAccessToken(args.ctx.tenantId);
-    const url = `https://graph.facebook.com/v21.0/me/messages`;
-    const payload = {
-      recipient: { id: args.externalUserId },
-      message: { text: args.text },
-      messaging_type: 'RESPONSE',
-    };
-    const response = await fetch(`${url}?access_token=${accessToken}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const json: any = await response.json();
-    if (!response.ok) {
-      const err = new Error(
-        `Instagram DM send failed: ${json?.error?.message ?? response.statusText}`,
-      );
-      this.logger.error(err.message);
-      throw err;
-    }
-    this.logger.log(
-      `Instagram DM send -> ${args.externalUserId} (message_id=${json.message_id})`,
-    );
-    return { messageId: json.message_id, raw: json };
-  }
-
-  private async resolveAccessToken(tenantId: string): Promise<string> {
-    const tenant = await this.prisma.tenant.findUnique({
-      where: { id: tenantId },
-      select: { features: true },
-    });
-    const f = (tenant?.features as any) ?? {};
-    const token = f?.multichannel?.meta?.pageAccessToken;
-    if (!token) {
+    const creds = await this.credentials.meta(args.ctx.tenantId);
+    if (!creds?.instagramId) {
       throw new Error(
-        `Instagram (Meta) token missing for tenant ${tenantId}; complete the channel connection.`,
+        `Instagram is not connected for tenant ${args.ctx.tenantId}; link an Instagram professional account to the Page.`,
       );
     }
-    return String(token);
+    let first: string | undefined;
+    for (const part of splitForChannel(toPlainChatText(args.text), CHANNEL_TEXT_LIMIT.instagram)) {
+      const res = await this.graph.sendInstagramText(creds.pageToken, args.externalUserId, part);
+      if (!res.ok) {
+        const err = new Error(`Instagram DM send failed: ${res.error?.message}`);
+        this.logger.error(err.message);
+        throw err;
+      }
+      first ??= res.data?.message_id;
+    }
+    return { messageId: first ?? '' };
   }
 }
