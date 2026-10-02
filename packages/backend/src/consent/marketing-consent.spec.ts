@@ -3,7 +3,7 @@ import { plainToInstance } from "class-transformer";
 import { validateSync } from "class-validator";
 import { ConsentService } from "./consent.service";
 import { MarketingChoiceDto } from "./consent.controller";
-import { clientsWhoRefusedMarketing, MARKETING_PURPOSE } from "./marketing-consent";
+import { clientsWhoRefusedMarketing, MARKETING_PURPOSE, SYSTEM_CONSENT_PURPOSES } from "./marketing-consent";
 import { EmailCampaignsService } from "../email-campaigns/email-campaigns.service";
 
 /**
@@ -118,7 +118,7 @@ describe("marketing consent from the client's account", () => {
     const { prisma, forms } = makePrisma();
     const service = new ConsentService(prisma, encryption);
     await service.getRequiredForms("t1", "svc-1");
-    expect(prisma.consentForm.findMany.mock.calls[0][0].where.purpose).toEqual({ not: MARKETING_PURPOSE });
+    expect(prisma.consentForm.findMany.mock.calls[0][0].where.purpose).toEqual({ notIn: SYSTEM_CONSENT_PURPOSES });
 
     const form = await service.ensureMarketingForm("t1");
     expect(forms).toHaveLength(1);

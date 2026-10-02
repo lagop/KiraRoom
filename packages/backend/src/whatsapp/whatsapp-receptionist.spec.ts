@@ -106,10 +106,13 @@ describe("WhatsApp webhook routing", () => {
     const receptionist: any = { enqueue: jest.fn(async () => undefined) };
     const prisma: any = {
       client: { findFirst: jest.fn(async () => null) },
-      whatsAppCampaignRecipient: { findFirst: jest.fn(async () => null) },
+      whatsAppCampaignRecipient: { findFirst: jest.fn(async () => null), updateMany: jest.fn(async () => ({ count: 1 })) },
+      // The client file says "600 111 222"; Meta sends "34600111222".
+      $queryRaw: jest.fn(async () => [{ id: "c1" }]),
     };
-    const s = new WhatsAppService(prisma, {} as any, {} as any, {} as any, receptionist, {} as any);
-    return { s, receptionist, prisma };
+    const consent: any = { recordMarketingChoice: jest.fn(async () => ({ status: "refused" })) };
+    const s = new WhatsAppService(prisma, {} as any, {} as any, consent, receptionist, {} as any);
+    return { s, receptionist, prisma, consent };
   }
   const change = (body: string) => ({
     value: {
@@ -126,10 +129,23 @@ describe("WhatsApp webhook routing", () => {
     expect(receptionist.enqueue.mock.calls[0][1]).toMatchObject({ from: "34600111222", profileName: "Ana" });
   });
 
-  it("keeps BAJA / STOP as the opt-out words", async () => {
-    const { s, receptionist, prisma } = service();
+  it("keeps BAJA / STOP as the opt-out words: WhatsApp promotions are withdrawn", async () => {
+    const { s, receptionist, prisma, consent } = service();
     await (s as any).handleChange("t1", change("BAJA"));
     expect(receptionist.enqueue).not.toHaveBeenCalled();
-    expect(prisma.client.findFirst).toHaveBeenCalled();
+    // Matched on the last nine digits, not by substring.
+    const sql = prisma.$queryRaw.mock.calls[0];
+    expect(sql.slice(1)).toEqual(["t1", "600111222"]);
+    expect(consent.recordMarketingChoice).toHaveBeenCalledWith({
+      tenantId: "t1",
+      clientId: "c1",
+      accepts: false,
+      channel: "whatsapp",
+    });
+    // Only messages still waiting are stopped; sent ones keep their status.
+    expect(prisma.whatsAppCampaignRecipient.updateMany).toHaveBeenCalledWith({
+      where: { clientId: "c1", status: "pending" },
+      data: { status: "opted_out" },
+    });
   });
 });

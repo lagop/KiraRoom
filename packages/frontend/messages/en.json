@@ -466,7 +466,7 @@
       "creditsRemaining": "credits remaining",
       "consumedFmt": "Consumed {used} of {purchased} purchased",
       "lastTopupFmt": "Last top-up: {date}",
-      "desc": "Appointment reminders (utility) remain free. Bundles are spent when you send WhatsApp marketing or SMS campaigns."
+      "desc": "Appointment reminders remain free. Bundles are spent when you send SMS campaigns. Meta bills WhatsApp campaigns directly to your salon's WhatsApp Business account."
     },
     "invoices": {
       "title": "Invoices",

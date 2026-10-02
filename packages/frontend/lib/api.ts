@@ -384,18 +384,48 @@ export interface WhatsAppConnection {
   tokenExpiresAt?: string | null;
   isActive: boolean;
 }
+export type WhatsAppCampaignStatus = "draft" | "scheduled" | "sending" | "completed" | "failed" | "cancelled";
+
+/** A WhatsApp promotion: the salon's text, reviewed by Meta as a template. */
 export interface WhatsAppCampaign {
   id: string;
   tenantId: string;
   name: string;
+  /** {{nombre}} is the client's first name. */
+  body: string;
   templateId: string;
-  status: string;
+  /** Meta's review: draft (not submitted), PENDING, APPROVED, REJECTED... */
+  templateStatus: string;
+  templateReason: string | null;
+  status: WhatsAppCampaignStatus;
+  segmentFilter: { inactiveDays?: number };
+  scheduledAt: string | null;
+  submittedAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  lastError: string | null;
+  createdAt: string;
   totalRecipients: number;
   sent: number;
   delivered: number;
   read: number;
   failed: number;
   optedOut: number;
+  /** Recipients by status (detail only): pending, sent, delivered, read, failed, opted_out. */
+  byStatus?: Record<string, number>;
+}
+
+export interface WhatsAppCampaignInput {
+  name: string;
+  body: string;
+  inactiveDays?: number | null;
+  scheduledAt?: string | null;
+}
+
+export interface WhatsAppAudiencePreview {
+  eligible: number;
+  withoutConsent: number;
+  withoutPhone: number;
 }
 
 // Types matching our backend Prisma schema
@@ -1431,6 +1461,8 @@ export interface ApiClientInterface {
   getMyProfile(): Promise<MyClientProfile>;
   getMyMarketingConsent(): Promise<MarketingConsentState>;
   setMyMarketingConsent(accepts: boolean): Promise<MarketingConsentState>;
+  getMyWhatsAppMarketingConsent(): Promise<MarketingConsentState>;
+  setMyWhatsAppMarketingConsent(accepts: boolean): Promise<MarketingConsentState>;
   getClientNotifications(
     clientId: string,
     params?: {
@@ -2580,6 +2612,37 @@ class ApiClient implements ApiClientInterface {
     return this.request<MarketingConsentState>(`/consent/me/marketing`, {
       method: "PUT",
       body: JSON.stringify({ accepts }),
+    });
+  }
+
+  /** The signed-in client's choice about promotions by WhatsApp. */
+  async getMyWhatsAppMarketingConsent(): Promise<MarketingConsentState> {
+    return this.request<MarketingConsentState>(`/consent/me/whatsapp-marketing`);
+  }
+
+  async setMyWhatsAppMarketingConsent(accepts: boolean): Promise<MarketingConsentState> {
+    return this.request<MarketingConsentState>(`/consent/me/whatsapp-marketing`, {
+      method: "PUT",
+      body: JSON.stringify({ accepts }),
+    });
+  }
+
+  /** Both marketing choices of a client, for the client file. */
+  async getClientMarketingConsent(
+    clientId: string,
+  ): Promise<{ email: MarketingConsentState; whatsapp: MarketingConsentState }> {
+    return this.request(`/consent/clients/${clientId}/marketing`);
+  }
+
+  /** The salon records a WhatsApp choice the client made in person. */
+  async setClientWhatsAppMarketingConsent(
+    clientId: string,
+    accepts: boolean,
+    confirmedInPerson = false,
+  ): Promise<MarketingConsentState> {
+    return this.request<MarketingConsentState>(`/consent/clients/${clientId}/whatsapp-marketing`, {
+      method: "PUT",
+      body: JSON.stringify({ accepts, confirmedInPerson }),
     });
   }
 
@@ -4428,21 +4491,31 @@ class ApiClient implements ApiClientInterface {
   async listWhatsAppTemplates(): Promise<Array<{ name: string; status: string; language?: string }>> {
     return this.request(`/whatsapp/templates`);
   }
-  async createWhatsAppCampaign(input: {
-    name: string;
-    templateId: string;
-    templateVars?: Record<string, string>;
-    segmentFilter?: Record<string, unknown>;
-    audience: string[];
-    scheduledAt?: string;
-  }): Promise<WhatsAppCampaign> {
-    return this.request(`/whatsapp/campaigns`, {
-      method: "POST",
-      body: JSON.stringify(input),
-    });
+  async listWhatsAppCampaigns(): Promise<WhatsAppCampaign[]> {
+    return this.request(`/whatsapp/campaigns`);
   }
-  async sendWhatsAppCampaign(id: string): Promise<{ enqueued: number }> {
-    return this.request(`/whatsapp/campaigns/${id}/send`, { method: "POST" });
+  async getWhatsAppCampaign(id: string): Promise<WhatsAppCampaign> {
+    return this.request(`/whatsapp/campaigns/${id}`);
+  }
+  async getWhatsAppCampaignAudience(inactiveDays?: number | null): Promise<WhatsAppAudiencePreview> {
+    const q = inactiveDays ? `?inactiveDays=${inactiveDays}` : "";
+    return this.request(`/whatsapp/campaigns/audience${q}`);
+  }
+  async createWhatsAppCampaign(input: WhatsAppCampaignInput): Promise<WhatsAppCampaign> {
+    return this.request(`/whatsapp/campaigns`, { method: "POST", body: JSON.stringify(input) });
+  }
+  async updateWhatsAppCampaign(id: string, input: Partial<WhatsAppCampaignInput>): Promise<WhatsAppCampaign> {
+    return this.request(`/whatsapp/campaigns/${id}`, { method: "PATCH", body: JSON.stringify(input) });
+  }
+  /** Sends the text to Meta for review and schedules the campaign. */
+  async submitWhatsAppCampaign(id: string): Promise<WhatsAppCampaign> {
+    return this.request(`/whatsapp/campaigns/${id}/submit`, { method: "POST" });
+  }
+  async cancelWhatsAppCampaign(id: string): Promise<WhatsAppCampaign> {
+    return this.request(`/whatsapp/campaigns/${id}/cancel`, { method: "POST" });
+  }
+  async deleteWhatsAppCampaign(id: string): Promise<{ deleted: boolean }> {
+    return this.request(`/whatsapp/campaigns/${id}`, { method: "DELETE" });
   }
 
   // ---- P1 Onboarding wizard ----

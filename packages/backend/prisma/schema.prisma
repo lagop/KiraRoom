@@ -2447,7 +2447,16 @@ model WhatsAppCampaign {
   updatedAt       DateTime                    @updatedAt
   tenantId        String
   name            String
+  /// The Meta template's name on the salon's WhatsApp Business account (one per campaign).
   templateId      String
+  /// The message as the salon wrote it; {{1}} is the client's first name.
+  body            String                      @default("")
+  /// Meta's review of the template: draft (not submitted), PENDING, APPROVED, REJECTED, PAUSED, DISABLED.
+  templateStatus  String                      @default("draft")
+  templateReason  String?
+  submittedAt     DateTime?
+  createdById     String?
+  lastError       String?
   templateVars    Json                        @default("{}")
   segmentFilter   Json                        @default("{}")
   audience        Json                        @default("[]")
@@ -2483,8 +2492,12 @@ model WhatsAppCampaignRecipient {
   readAt        DateTime?
   campaign      WhatsAppCampaign        @relation(fields: [campaignId], references: [id], onDelete: Cascade)
 
+  /// A client gets a campaign once, however often the audience is resolved.
+  @@unique([campaignId, clientId])
   @@index([campaignId])
   @@index([status])
+  /// Meta's delivery statuses find the recipient by the message id.
+  @@index([messageId])
   @@map("whatsapp_campaign_recipients")
 }
 

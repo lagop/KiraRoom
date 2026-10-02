@@ -203,6 +203,56 @@ export class WhatsAppTemplateService {
     return { sent: true, messageId: res?.messages?.[0]?.id };
   }
 
+  /**
+   * Sends a template the caller knows is approved (a campaign's, checked by
+   * name with Meta just before), skipping the cached status of the standard
+   * set. Says why when it could not be sent.
+   */
+  async sendApprovedTemplate(
+    tenantId: string,
+    template: { name: string; language: string },
+    phone: string,
+    country: string | undefined,
+    values: string[],
+  ): Promise<ReminderResult> {
+    const conn = await this.connection(tenantId);
+    if (!conn?.isActive || !conn.phoneNumberId) return { sent: false, reason: "not_connected" };
+    const to = normalizePhone(phone, country ?? "ES").replace(/D/g, "");
+    const res = await this.meta.sendTemplate(
+      this.meta.decryptToken(conn.accessTokenEnc),
+      conn.phoneNumberId,
+      to,
+      template.name,
+      template.language,
+      values.length > 0 ? bodyParameters(values) : [],
+    );
+    if (res?.error) return { sent: false, reason: `meta_${res.error.code}` };
+    return { sent: true, messageId: res?.messages?.[0]?.id };
+  }
+
+  /** Meta's review of one template on the salon's account, read now (not cached). */
+  async templateReview(
+    tenantId: string,
+    name: string,
+  ): Promise<{ status: string; reason?: string } | null> {
+    const conn = await this.connection(tenantId);
+    if (!conn?.wabaId) return null;
+    const found = await this.meta.findTemplate(this.meta.decryptToken(conn.accessTokenEnc), conn.wabaId, name);
+    return found ? { status: found.status, reason: found.rejected_reason } : null;
+  }
+
+  /** Asks Meta to review a template; answers Meta's status or its error message. */
+  async createTemplate(
+    tenantId: string,
+    payload: Record<string, unknown>,
+  ): Promise<{ status: string } | { error: string }> {
+    const conn = await this.connection(tenantId);
+    if (!conn?.isActive || !conn.wabaId) return { error: "not_connected" };
+    const res = await this.meta.createTemplate(this.meta.decryptToken(conn.accessTokenEnc), conn.wabaId, payload);
+    if (res?.error) return { error: res.error.message || `Meta ${res.error.code}` };
+    return { status: res?.status ?? "PENDING" };
+  }
+
   private autoSubmit(tenantId: string): void {
     const last = this.lastAutoSubmit.get(tenantId) ?? 0;
     if (Date.now() - last < RESUBMIT_EVERY_MS) return;
