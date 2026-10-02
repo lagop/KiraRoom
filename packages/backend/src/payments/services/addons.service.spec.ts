@@ -106,6 +106,20 @@ describe('AddOnsService', () => {
     ]);
   });
 
+  // "Web con dominio propio + SEO" was sold at 15 EUR/month while buying it
+  // only flipped a flag. It stays out of every catalogue until customer
+  // domains are served over HTTPS (docs/custom-domains.md).
+  it('listCatalog no ofrece web_domain (no esta a la venta)', async () => {
+    const { svc } = makeSvc({
+      catalog: {
+        web_domain: { id: 'a3', unlocks: [] },
+        email_marketing: { id: 'a2', unlocks: ['email_marketing'] },
+      },
+    });
+    expect((await svc.listCatalog()).map((o) => o.key)).toEqual(['email_marketing']);
+    expect((await svc.listCatalog('esencial' as any)).map((o) => o.key)).not.toContain('web_domain');
+  });
+
   it('isRelevantForPlan filtra los add-ons redundantes en Pro', () => {
     // Plans that already include the feature -> add-on is irrelevant.
     const { svc } = makeSvc({

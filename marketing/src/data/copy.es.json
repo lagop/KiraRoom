@@ -165,12 +165,6 @@
       "tagline": "Invitación automática post-servicio"
     },
     {
-      "key": "web_domain",
-      "name": "Dominio personalizado",
-      "price": 15,
-      "tagline": "Tu salón en citastusalon.com con SSL"
-    },
-    {
       "key": "deposits_antinoshow",
       "name": "Depósitos anti-plantón",
       "price": 5,

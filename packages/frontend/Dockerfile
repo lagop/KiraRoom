@@ -30,6 +30,9 @@ ARG NEXT_PUBLIC_API_URL=https://api.kiraroom.net/api/v1
 ARG NEXT_PUBLIC_WS_URL=wss://api.kiraroom.net
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 ENV NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL}
+# Canonical URLs, sitemap and robots.txt of salons' public pages.
+ARG NEXT_PUBLIC_APP_URL=https://app.kiraroom.net
+ENV NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL}
 
 # No SWC download should happen here. The Linux SWC binaries are declared as
 # optionalDependencies of @kira/frontend and are in the lockfile, so `npm ci`

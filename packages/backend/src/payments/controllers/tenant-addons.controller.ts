@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Delete, Param, Body, Req, UseGuards, ForbiddenException, NotFoundException, BadRequestException } from "@nestjs/common";
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
-import { AddOnsService } from '../services/addons.service';
+import { AddOnsService, WITHHELD_ADDON_KEYS } from '../services/addons.service';
 import { MessageBundlesService } from '../../message-bundles/message-bundles.service';
 import { SubscriptionsService } from '../services/subscriptions.service';
 import { StripeService } from '../services/stripe.service';
@@ -78,6 +78,9 @@ export class TenantAddOnsController {
     const tenantId = this.tenantId(req);
     const addOn = await this.addons.getByKey(key);
     if (!addOn) throw new NotFoundException('Unknown add-on');
+    if (WITHHELD_ADDON_KEYS.has(addOn.key)) {
+      throw new ForbiddenException('Este complemento no está a la venta todavía.');
+    }
     if (addOn.metered) {
       throw new ForbiddenException(
         'Metered add-ons (e.g. message_bundles) are topped up from the message_bundles section, not here.',

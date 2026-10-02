@@ -111,6 +111,10 @@ describe('P2A-receptionist-v2: PLAN_MATRIX', () => {
     // filter removes the add-on from the catalog.
     expect(pro).not.toContain('multichannel');
 
+    // Not sold until custom domains are served over HTTPS.
+    expect(esencial).not.toContain('web_domain');
+    expect(pro).not.toContain('web_domain');
+
     const empresa = subs.upsellableAddOnsForPlan('empresa');
     expect(empresa).not.toContain('ai_expansion');
     expect(empresa).not.toContain('multichannel');

@@ -61,10 +61,6 @@
       "learnMore": "Más info",
       "planCta": "Elegir plan"
     },
-    "addon": {
-      "title": "Add-on: Web con dominio propio + SEO",
-      "desc": "Conecta tu propio dominio a tu sitio público de reservas con SEO meta, sitemap y SSL."
-    },
     "footer": "Hecho para negocios de belleza y bienestar."
   },
   "invoices": {
@@ -469,29 +465,6 @@
       "statusUncollectible": "Incobrable",
       "dateFmt": "es-ES",
       "recibo": "Recibo"
-    },
-    "webDomain": {
-      "title": "Web con dominio propio + SEO",
-      "desc": "Conecta tu propio dominio a tu sitio público de reservas, con SEO meta, sitemap y certificado SSL.",
-      "active": "Activo: {domain}",
-      "add": "Añadir dominio",
-      "dialog": {
-        "title": "Web con dominio propio",
-        "desc": "Indica el dominio que quieres conectar (compromiso anual, fuera de alcance de este formulario).",
-        "placeholder": "tusalon.com",
-        "checking": "Comprobando...",
-        "check": "Comprobar",
-        "available": "Disponible: {domain}",
-        "unavailable": "No disponible: {domain}",
-        "continue": "Continuar",
-        "processing": "Procesando...",
-        "checkoutRequired": "Tu compra requiere checkout de Stripe (configuración comercial pendiente).",
-        "cancel": "Cancelar"
-      },
-      "activeShort": "Activo",
-      "domainNotAvailable": "No disponible: {domain}",
-      "availableFmt": "Disponible: {domain}",
-      "addDomain": "Añadir dominio"
     },
     "trial": {
       "daysRemaining": "Te quedan {days} {plural} de prueba Pro.",
