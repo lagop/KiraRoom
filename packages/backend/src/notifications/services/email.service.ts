@@ -440,9 +440,9 @@ export class EmailService {
   //   - routes through the standard `sendEmail` so the redactor in
   //     `logger.config.ts` strips query-string PII from pino logs.
   //
-  // Bounce handling: the Resend webhook at
-  // `notifications/webhooks.controller.ts:handleEmailBounced` stamps
-  // `User.emailBouncedAt`; future transactional sends check it and
+  // Bounce handling: the Resend webhook (`email-campaigns/
+  // resend-events.service.ts`) stamps `User.emailBouncedAt` on a permanent
+  // bounce; future transactional sends check it and
   // short-circuit. See `shouldSkipBouncedUser` below.
 
   /**

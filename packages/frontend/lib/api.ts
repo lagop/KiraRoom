@@ -732,12 +732,34 @@ export interface EmailCampaign {
   emailsOpened: number;
   clicks: number;
   bounces: number;
+  /** Recipients who marked it as spam (from Resend's webhook). */
+  complaints: number;
   unsubscribes: number;
   fromName?: string;
   replyTo?: string;
   _count?: {
     recipients: number;
   };
+}
+
+/**
+ * Whether the server can send campaigns and receive Resend's delivery
+ * events. Without the webhook, opens, clicks and bounces cannot be known.
+ */
+export interface EmailCampaignTrackingStatus {
+  sendingConfigured: boolean;
+  trackingConfigured: boolean;
+  /** Addresses this salon no longer emails (hard bounce or spam complaint). */
+  suppressedAddresses: number;
+}
+
+export interface SendEmailCampaignResult {
+  success: boolean;
+  sentCount: number;
+  failedCount: number;
+  suppressedCount: number;
+  /** Clients who said no to promotions in their account. */
+  skippedCount?: number;
 }
 
 export interface EmailCampaignTemplate {
@@ -759,10 +781,12 @@ export interface EmailCampaignAnalytics {
   totalDelivered: number;
   totalOpened: number;
   totalClicks: number;
+  totalBounces: number;
+  totalComplaints: number;
   openRate: number;
   clickRate: number;
   bounceRate: number;
-  unsubscribeRate: number;
+  complaintRate: number;
   recentEvents: any[];
 }
 
@@ -1495,9 +1519,10 @@ export interface ApiClientInterface {
     id: string,
     scheduledAt: string,
   ): Promise<EmailCampaign>;
-  sendEmailCampaignNow(id: string): Promise<any>;
+  sendEmailCampaignNow(id: string): Promise<SendEmailCampaignResult>;
   addRecipientsToCampaign(id: string, clientIds: string[]): Promise<any>;
   getEmailCampaignAnalytics(id: string): Promise<EmailCampaignAnalytics>;
+  getEmailCampaignTrackingStatus(): Promise<EmailCampaignTrackingStatus>;
   getEmailCampaignTemplates(): Promise<EmailCampaignTemplate[]>;
   getEmailCampaignTemplate(id: string): Promise<EmailCampaignTemplate>;
   createEmailCampaignTemplate(
@@ -3394,10 +3419,16 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  async sendEmailCampaignNow(id: string): Promise<any> {
-    return this.request<any>(`/email-campaigns/${id}/send`, {
+  async sendEmailCampaignNow(id: string): Promise<SendEmailCampaignResult> {
+    return this.request<SendEmailCampaignResult>(`/email-campaigns/${id}/send`, {
       method: "POST",
     });
+  }
+
+  async getEmailCampaignTrackingStatus(): Promise<EmailCampaignTrackingStatus> {
+    return this.request<EmailCampaignTrackingStatus>(
+      "/email-campaigns/tracking-status",
+    );
   }
 
   async addRecipientsToCampaign(id: string, clientIds: string[]): Promise<any> {
