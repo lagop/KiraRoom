@@ -384,6 +384,17 @@ export interface WhatsAppConnection {
   tokenExpiresAt?: string | null;
   isActive: boolean;
 }
+/** A quarterly tax return draft (Modelo 303 / 420 / 130): box -> value. */
+export interface TaxReportDraft {
+  id: string;
+  type: "modelo_303" | "modelo_420" | "modelo_130";
+  year: number;
+  quarter: number;
+  /** Amounts in cents; the tipo boxes of the 420 (02, 05...) are percentages. */
+  totalsJson: Record<string, number>;
+  status: string;
+}
+
 export type WhatsAppCampaignStatus = "draft" | "scheduled" | "sending" | "completed" | "failed" | "cancelled";
 
 /** A WhatsApp promotion: the salon's text, reviewed by Meta as a template. */
@@ -4643,6 +4654,15 @@ class ApiClient implements ApiClientInterface {
   }
 
   // ---- P2A Fiscal settings ----
+  /** The quarterly return of the salon's tax regime (modelo_303, modelo_420 or null). */
+  async getQuarterlyReturnType(): Promise<{ regime: string; type: string | null }> {
+    return this.request(`/tax-reports/quarterly-type`);
+  }
+  /** Generates (or regenerates) the draft for a quarter. */
+  async generateTaxReport(type: string, year: number, quarter: number): Promise<TaxReportDraft> {
+    return this.request(`/tax-reports/${type}/${year}/${quarter}/generate`, { method: "POST" });
+  }
+
   async getFiscalSettings(): Promise<FiscalSettings> {
     return this.request(`/invoices/settings/fiscal`);
   }

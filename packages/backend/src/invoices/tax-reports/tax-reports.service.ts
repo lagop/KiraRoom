@@ -7,9 +7,10 @@ import {
   TAX_REGIME_LABELS,
   TAX_REGIME_TERRITORIES,
 } from "@kira/shared";
+import { aggregateModelo420 } from "./modelo-420";
 
 /**
- * Spanish quarterly tax declarations (Modelo 303 + Modelo 130).
+ * Spanish quarterly tax declarations (Modelo 303, Modelo 420 + Modelo 130).
  *
  * MVP scope: generate the **draft** declaration JSON so the SaaS
  * admin can review it in the dashboard. Auto-submission to AEAT is
@@ -107,16 +108,10 @@ export class TaxReportsService {
         totals = this.aggregateModelo130(invoices);
         break;
       case TaxReportType.modelo_420:
-        // Deliberately not implemented rather than approximated. The box
-        // numbers of the Modelo 420 come from the Agencia Tributaria Canaria,
-        // and guessing them would produce exactly the class of silently wrong
-        // return that assertReportMatchesRegime exists to prevent.
-        throw new BadRequestException(
-          "Modelo 420 (IGIC) is not generated yet: its box layout has to come " +
-            "from the Agencia Tributaria Canaria, not from an approximation of " +
-            "the Modelo 303. Export the quarter's invoices and hand them to " +
-            "your asesoría meanwhile.",
-        );
+        // Box layout from the Agencia Tributaria Canaria's own instructions
+        // (see modelo-420.ts); it used to be refused rather than guessed.
+        totals = aggregateModelo420(invoices);
+        break;
       default: {
         const exhaustive: never = type;
         throw new BadRequestException(`Unsupported tax report type: ${exhaustive}`);
@@ -260,6 +255,19 @@ export class TaxReportsService {
       "03": retenciones,
       "18": rendimiento - retenciones, // cuota diferencial
     };
+  }
+
+  /**
+   * Which quarterly return the tenant files, from its tax regime: modelo_303
+   * (IVA), modelo_420 (IGIC) or null (IPSI: filed with the city council).
+   */
+  async quarterlyReturnFor(tenantId: string): Promise<{ regime: string; type: string | null }> {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { fiscalSettings: true },
+    });
+    const regime = taxRegimeOf(tenant?.fiscalSettings);
+    return { regime, type: TAX_REGIME_QUARTERLY_REPORT[regime] };
   }
 
   /**
