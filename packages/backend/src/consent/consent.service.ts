@@ -3,9 +3,10 @@ import { PrismaService } from "../common/prisma/prisma.service";
 import { EncryptionService } from "../common/encryption/encryption.service";
 import {
   MARKETING_FIELD_ID,
-  MARKETING_FIELDS,
-  MARKETING_FORM_NAME,
-  MARKETING_PURPOSE,
+  MarketingChannel,
+  SYSTEM_CONSENT_PURPOSES,
+  marketingFormFor,
+  purposeOf,
   MarketingConsentState,
   marketingStateOf,
 } from "./marketing-consent";
@@ -45,7 +46,7 @@ export class ConsentService {
   async listForms(tenantId: string) {
     return this.prisma.consentForm.findMany({
       // The marketing form is the system's, not one of the salon's forms.
-      where: { tenantId, purpose: { not: MARKETING_PURPOSE } },
+      where: { tenantId, purpose: { notIn: SYSTEM_CONSENT_PURPOSES } },
       orderBy: [{ isActive: "desc" }, { createdAt: "desc" }],
     });
   }
@@ -81,7 +82,7 @@ export class ConsentService {
       where: { id, tenantId },
     });
     if (!existing) throw new NotFoundException("Consent form not found");
-    if (existing.purpose === MARKETING_PURPOSE) {
+    if (SYSTEM_CONSENT_PURPOSES.includes(existing.purpose)) {
       throw new BadRequestException("The marketing consent form is managed by the system");
     }
     if (!existing.isActive) {
@@ -114,7 +115,7 @@ export class ConsentService {
       where: { id, tenantId },
     });
     if (!existing) throw new NotFoundException("Consent form not found");
-    if (existing.purpose === MARKETING_PURPOSE) {
+    if (SYSTEM_CONSENT_PURPOSES.includes(existing.purpose)) {
       throw new BadRequestException("The marketing consent form is managed by the system");
     }
     await this.prisma.consentForm.delete({ where: { id } });
@@ -128,7 +129,7 @@ export class ConsentService {
         isActive: true,
         // Never the marketing form: saying no to promotions must not
         // block a booking.
-        purpose: { not: MARKETING_PURPOSE },
+        purpose: { notIn: SYSTEM_CONSENT_PURPOSES },
         ...(serviceId ? { serviceIds: { has: serviceId } } : {}),
       },
     });
@@ -154,7 +155,7 @@ export class ConsentService {
     if (!form.isActive) {
       throw new BadRequestException("Form version is no longer active");
     }
-    if (form.purpose === MARKETING_PURPOSE) {
+    if (SYSTEM_CONSENT_PURPOSES.includes(form.purpose)) {
       // This route is public and takes the client id from the body; the
       // marketing choice is only recorded by the signed-in client.
       throw new BadRequestException("Marketing consent is given from the client's account");
@@ -214,57 +215,71 @@ export class ConsentService {
   // ────────── Commercial communications (see marketing-consent.ts) ──────────
 
   /** The salon's system form for the marketing choice, created on first use. */
-  async ensureMarketingForm(tenantId: string) {
+  async ensureMarketingForm(tenantId: string, channel: MarketingChannel = "email") {
+    const purpose = purposeOf(channel);
+    const { name, fields } = marketingFormFor(channel);
     const existing = await this.prisma.consentForm.findFirst({
-      where: { tenantId, purpose: MARKETING_PURPOSE, isActive: true },
+      where: { tenantId, purpose, isActive: true },
       orderBy: { version: "desc" },
     });
     if (existing) return existing;
     return this.prisma.consentForm.create({
       data: {
         tenantId,
-        name: MARKETING_FORM_NAME,
+        name,
         description:
           "Elección de cada cliente sobre las comunicaciones comerciales. La gestiona el sistema.",
-        fields: MARKETING_FIELDS as any,
+        fields: fields as any,
         serviceIds: [],
-        purpose: MARKETING_PURPOSE,
+        purpose,
         version: 1,
       },
     });
   }
 
   /** The client's current choice, with the wording it was given for. */
-  async getMarketingConsent(tenantId: string, clientId: string): Promise<MarketingConsentState> {
+  async getMarketingConsent(
+    tenantId: string,
+    clientId: string,
+    channel: MarketingChannel = "email",
+  ): Promise<MarketingConsentState> {
     const current = await this.prisma.consent.findFirst({
-      where: { tenantId, clientId, revokedAt: null, form: { purpose: MARKETING_PURPOSE } },
+      where: { tenantId, clientId, revokedAt: null, form: { purpose: purposeOf(channel) } },
       orderBy: { signedAt: "desc" },
       select: { responses: true, signedAt: true, formSnapshot: true },
     });
-    return marketingStateOf(current);
+    return marketingStateOf(current, channel);
   }
 
   /**
    * Records the client's choice. The previous record is revoked (kept, with
    * the reason) and a new one is signed with the client's name, the wording
    * shown and the hashed IP. Repeating the current choice records nothing.
+   *
+   * `recordedBy` is set when the salon records a choice the client made in
+   * person (a staff user id): it is kept in the record's responses, so the
+   * record says it was not the client who clicked.
    */
   async recordMarketingChoice(input: {
     tenantId: string;
     clientId: string;
     accepts: boolean;
     ip?: string;
+    channel?: MarketingChannel;
+    recordedBy?: string;
   }): Promise<MarketingConsentState> {
+    const channel = input.channel ?? "email";
+    const purpose = purposeOf(channel);
     const client = await this.prisma.client.findFirst({
       where: { id: input.clientId, tenantId: input.tenantId },
       select: { firstName: true, lastName: true },
     });
     if (!client) throw new NotFoundException("Client not found");
 
-    const current = await this.getMarketingConsent(input.tenantId, input.clientId);
+    const current = await this.getMarketingConsent(input.tenantId, input.clientId, channel);
     if (current.status === (input.accepts ? "granted" : "refused")) return current;
 
-    const form = await this.ensureMarketingForm(input.tenantId);
+    const form = await this.ensureMarketingForm(input.tenantId, channel);
     const now = new Date();
     const created = await this.prisma.$transaction(async (tx) => {
       await tx.consent.updateMany({
@@ -272,11 +287,17 @@ export class ConsentService {
           tenantId: input.tenantId,
           clientId: input.clientId,
           revokedAt: null,
-          form: { purpose: MARKETING_PURPOSE },
+          form: { purpose },
         },
         data: {
           revokedAt: now,
-          revokeReason: input.accepts ? "superseded_by_client" : "withdrawn_by_client",
+          revokeReason: input.recordedBy
+            ? input.accepts
+              ? "superseded_by_salon"
+              : "withdrawn_by_salon"
+            : input.accepts
+              ? "superseded_by_client"
+              : "withdrawn_by_client",
         },
       });
       return tx.consent.create({
@@ -286,7 +307,10 @@ export class ConsentService {
           formId: form.id,
           formVersion: form.version,
           formSnapshot: form.fields as any,
-          responses: { [MARKETING_FIELD_ID]: input.accepts } as any,
+          responses: {
+            [MARKETING_FIELD_ID]: input.accepts,
+            ...(input.recordedBy ? { source: "salon", recordedBy: input.recordedBy } : {}),
+          } as any,
           signatureName:
             `${client.firstName ?? ""} ${client.lastName ?? ""}`.trim() || "Cliente",
           signatureIpHash: this.encryption.hashIp(input.ip ?? ""),
@@ -296,8 +320,9 @@ export class ConsentService {
       });
     });
     this.logger.log(
-      `marketing consent ${input.accepts ? "granted" : "refused"} tenant=${input.tenantId} client=${input.clientId}`,
+      `${channel} marketing consent ${input.accepts ? "granted" : "refused"} tenant=${input.tenantId} client=${input.clientId}` +
+        (input.recordedBy ? ` (recorded by ${input.recordedBy})` : ""),
     );
-    return marketingStateOf(created);
+    return marketingStateOf(created, channel);
   }
 }

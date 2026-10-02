@@ -3,8 +3,9 @@ import { PrismaService } from "../common/prisma/prisma.service";
 import { MetaCloudApiClient } from "./meta-cloud-api.client";
 import { ConfigService } from "@nestjs/config";
 import { createHmac, timingSafeEqual } from "crypto";
-import { WhatsAppRecipientStatus, WhatsAppCampaignStatus } from "@prisma/client";
-import { MessageBundlesService } from "../message-bundles/message-bundles.service";
+import { WhatsAppRecipientStatus } from "@prisma/client";
+import { ConsentService } from "../consent/consent.service";
+import { phoneKey } from "../common/phone";
 import { WhatsAppReceptionistService } from "./whatsapp-receptionist.service";
 import { WhatsAppTemplateService } from "./whatsapp-template.service";
 
@@ -26,7 +27,7 @@ export class WhatsAppService {
     private prisma: PrismaService,
     private meta: MetaCloudApiClient,
     private config: ConfigService,
-    private readonly messageBundles: MessageBundlesService,
+    private readonly consent: ConsentService,
     private readonly receptionist: WhatsAppReceptionistService,
     private readonly templates: WhatsAppTemplateService,
   ) {}
@@ -239,23 +240,7 @@ export class WhatsAppService {
         });
         continue;
       }
-      if (isStop) {
-        const client = await this.prisma.client.findFirst({
-          where: { tenantId, phone: { contains: from } },
-        });
-        if (client) {
-          await this.prisma.whatsAppCampaignRecipient.updateMany({
-            where: { clientId: client.id },
-            data: { status: WhatsAppRecipientStatus.opted_out },
-          });
-          const comm = (client.communicationPreferences as any) ?? {};
-          comm.whatsapp = false;
-          await this.prisma.client.update({
-            where: { id: client.id },
-            data: { communicationPreferences: comm as any },
-          });
-        }
-      }
+      if (isStop) await this.optOut(tenantId, from);
     }
     // Message status updates
     const statuses = value.statuses ?? [];
@@ -301,108 +286,32 @@ export class WhatsAppService {
     }
   }
 
-  // --- Campaigns + dispatcher --------------------------------------------
-
-  async createCampaign(
-    tenantId: string,
-    input: {
-      name: string;
-      templateId: string;
-      templateVars: Record<string, string>;
-      segmentFilter: Record<string, any>;
-      audience: string[];
-      scheduledAt?: Date;
-    },
-  ) {
-    return this.prisma.whatsAppCampaign.create({
-      data: {
-        tenantId,
-        name: input.name,
-        templateId: input.templateId,
-        templateVars: input.templateVars as any,
-        segmentFilter: input.segmentFilter as any,
-        audience: input.audience as any,
-        status: input.scheduledAt ? WhatsAppCampaignStatus.scheduled : WhatsAppCampaignStatus.draft,
-        scheduledAt: input.scheduledAt ?? null,
-        totalRecipients: input.audience.length,
-      },
-    });
-  }
-
-  async sendCampaign(campaignId: string): Promise<{ enqueued: number }> {
-    const campaign = await this.prisma.whatsAppCampaign.findUnique({
-      where: { id: campaignId },
-      include: { tenant: true },
-    });
-    if (!campaign) throw new NotFoundException("Campaign not found");
-    if (!campaign.tenant) throw new NotFoundException("Tenant missing");
-    const clientIds: string[] = Array.isArray(campaign.audience)
-      ? (campaign.audience as any)
-      : [];
-    const clients = await this.prisma.client.findMany({
-      where: { id: { in: clientIds }, tenantId: campaign.tenantId },
-    });
-    const recipients: any[] = [];
-    // P2A-receptionist-v2 H-3: charge a message-bundle credit per
-    // recipient. If the wallet is empty we skip that recipient so
-    // the campaign goes out only to whoever is covered. The Stripe
-    // subscription_item id (when present) is plumbed through H-5 once
-    // we wire real Stripe Checkouts for add-ons; for now we pass null.
-    const stripeItem: string | null = null;
-    for (const c of clients) {
-      if (!c.phone) continue;
-      const comm = (c.communicationPreferences as any) ?? {};
-      if (comm.whatsapp === false) continue;
-      const decision = await this.messageBundles
-        .consumeCredit({
-          tenantId: campaign.tenantId,
-          channel: "whatsapp_marketing",
-          stripeSubscriptionItemId: stripeItem,
-        })
-        .catch(() => ({ ok: true, remaining: -1, reason: "no_addon" as const }));
-      if (!decision.ok) {
-        this.logger.warn(
-          `whatsapp sendCampaign: skipping client ${c.id} on campaign ${campaign.id} (no message-bundle credits)`,
-        );
-        continue;
+  /**
+   * BAJA / STOP from a number: the clients with that number stop getting
+   * WhatsApp promotions (consent withdrawn, as the client's own act) and any
+   * campaign message still waiting for them is not sent. Matched on the last
+   * nine digits: Meta sends "34600111222", the client file may say
+   * "600 111 222" (the old lookup by substring never matched those).
+   */
+  private async optOut(tenantId: string, from: string): Promise<void> {
+    const key = phoneKey(from);
+    if (key.length !== 9) return;
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM clients
+      WHERE "tenantId" = ${tenantId}
+        AND right(regexp_replace(coalesce(phone, ''), '\\D', '', 'g'), 9) = ${key}`;
+    for (const { id } of rows) {
+      try {
+        await this.consent.recordMarketingChoice({ tenantId, clientId: id, accepts: false, channel: "whatsapp" });
+      } catch (err) {
+        this.logger.warn(`WhatsApp opt-out of client ${id} not recorded: ${(err as Error).message}`);
       }
-      recipients.push({
-        campaignId: campaign.id,
-        clientId: c.id,
-        phone: c.phone,
-        status: WhatsAppRecipientStatus.pending,
+      await this.prisma.whatsAppCampaignRecipient.updateMany({
+        where: { clientId: id, status: WhatsAppRecipientStatus.pending },
+        data: { status: WhatsAppRecipientStatus.opted_out },
       });
     }
-    if (recipients.length > 0) {
-      await this.prisma.whatsAppCampaignRecipient.createMany({ data: recipients });
-    }
-    await this.prisma.whatsAppCampaign.update({
-      where: { id: campaign.id },
-      data: {
-        status: WhatsAppCampaignStatus.sending,
-        startedAt: new Date(),
-      },
-    });
-    return { enqueued: recipients.length };
-  }
-
-  async report(campaignId: string) {
-    const campaign = await this.prisma.whatsAppCampaign.findUnique({
-      where: { id: campaignId },
-      include: { recipients: true },
-    });
-    if (!campaign) throw new NotFoundException("Campaign not found");
-    const counts: Record<string, number> = {};
-    for (const r of campaign.recipients) {
-      counts[r.status] = (counts[r.status] ?? 0) + 1;
-    }
-    return {
-      id: campaign.id,
-      name: campaign.name,
-      status: campaign.status,
-      totalRecipients: campaign.recipients.length,
-      byStatus: counts,
-    };
+    this.logger.log(`WhatsApp opt-out for tenant ${tenantId}: ${rows.length} client(s)`);
   }
 
   // --- Token bucket rate-limit -------------------------------------------

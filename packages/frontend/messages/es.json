@@ -466,7 +466,7 @@
       "creditsRemaining": "creditos disponibles",
       "consumedFmt": "Consumidos {used} de {purchased} comprados",
       "lastTopupFmt": "Última recarga: {date}",
-      "desc": "Los recordatorios (utility) siguen incluidos sin coste. Los bonos se consumen al enviar campanas de WhatsApp marketing o SMS."
+      "desc": "Los recordatorios siguen incluidos sin coste. Los bonos se consumen al enviar campañas por SMS. Las campañas de WhatsApp las cobra Meta directamente a la cuenta de WhatsApp Business de tu salón."
     },
     "invoices": {
       "title": "Facturas",

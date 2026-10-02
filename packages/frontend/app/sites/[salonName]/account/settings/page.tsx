@@ -71,6 +71,8 @@ export default function SettingsPage({ params }: { params: { salonName: string }
 
   const [marketing, setMarketing] = useState<MarketingConsentState | null>(null);
   const [marketingChoice, setMarketingChoice] = useState<MarketingChoice>(null);
+  const [whatsappMarketing, setWhatsappMarketing] = useState<MarketingConsentState | null>(null);
+  const [whatsappChoice, setWhatsappChoice] = useState<MarketingChoice>(null);
 
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [passwordData, setPasswordData] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
@@ -83,10 +85,11 @@ export default function SettingsPage({ params }: { params: { salonName: string }
     setLoadingData(true);
     setLoadError(null);
     try {
-      const [profile, prefsResponse, consent] = await Promise.all([
+      const [profile, prefsResponse, consent, whatsappConsent] = await Promise.all([
         apiClient.getMyProfile(),
         apiClient.getClientNotificationPreferences(''),
         apiClient.getMyMarketingConsent(),
+        apiClient.getMyWhatsAppMarketingConsent(),
       ]);
       const fields: ProfileFields = {
         firstName: profile.firstName ?? '',
@@ -104,6 +107,8 @@ export default function SettingsPage({ params }: { params: { salonName: string }
       setPrefs(serverPrefs);
       setMarketing(consent);
       setMarketingChoice(consent.status === 'none' ? null : consent.status);
+      setWhatsappMarketing(whatsappConsent);
+      setWhatsappChoice(whatsappConsent.status === 'none' ? null : whatsappConsent.status);
       // The header reads the signed-in user from here: keep it current.
       try {
         const cached = JSON.parse(localStorage.getItem('user') || '{}');
@@ -203,6 +208,12 @@ export default function SettingsPage({ params }: { params: { salonName: string }
         setMarketingChoice(state.status === 'none' ? null : state.status);
         done.push('comunicaciones comerciales');
       }
+      if (whatsappChoice && whatsappChoice !== whatsappMarketing?.status) {
+        const state = await apiClient.setMyWhatsAppMarketingConsent(whatsappChoice === 'granted');
+        setWhatsappMarketing(state);
+        setWhatsappChoice(state.status === 'none' ? null : state.status);
+        done.push('promociones por WhatsApp');
+      }
       toast(
         done.length > 0
           ? { title: 'Configuración guardada', description: `Guardado: ${done.join(', ')}` }
@@ -275,7 +286,7 @@ export default function SettingsPage({ params }: { params: { salonName: string }
   }
 
   const emailChanging = !!savedProfile && emailChangeNeedsPassword(savedProfile, formData);
-  const settingsReady = !!savedPrefs && savedLanguage !== null && !!marketing;
+  const settingsReady = !!savedPrefs && savedLanguage !== null && !!marketing && !!whatsappMarketing;
   const inputClass =
     'w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500';
 
@@ -501,6 +512,41 @@ export default function SettingsPage({ params }: { params: { salonName: string }
                       `Indicaste el ${formatDate(marketing.decidedAt)} que no quieres recibirlas; el salón no te las enviará.`}
                     {marketing.status === 'none' &&
                       'Aún no lo has indicado. Como cliente, el salón puede enviarte ofertas por email hasta que digas que no.'}
+                  </p>
+                </div>
+              )}
+              {whatsappMarketing && (
+                <div className="mt-6 space-y-3 border-t border-gray-100 pt-4">
+                  <p className="text-sm text-gray-700">{whatsappMarketing.text}</p>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:gap-6">
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="whatsapp-marketing"
+                        checked={whatsappChoice === 'granted'}
+                        onChange={() => setWhatsappChoice('granted')}
+                        className="border-gray-300 text-purple-600 focus:ring-purple-500"
+                      />
+                      <span className="text-sm text-gray-800">Sí, por WhatsApp también</span>
+                    </label>
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="whatsapp-marketing"
+                        checked={whatsappChoice === 'refused'}
+                        onChange={() => setWhatsappChoice('refused')}
+                        className="border-gray-300 text-purple-600 focus:ring-purple-500"
+                      />
+                      <span className="text-sm text-gray-800">No por WhatsApp</span>
+                    </label>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    {whatsappMarketing.status === 'granted' &&
+                      `Aceptaste el ${formatDate(whatsappMarketing.decidedAt)}. Puedes darte de baja respondiendo BAJA a cualquier promoción.`}
+                    {whatsappMarketing.status === 'refused' &&
+                      `Indicaste el ${formatDate(whatsappMarketing.decidedAt)} que no quieres recibirlas por WhatsApp.`}
+                    {whatsappMarketing.status === 'none' &&
+                      'Aún no lo has indicado. Por WhatsApp solo te enviaremos promociones si lo aceptas.'}
                   </p>
                 </div>
               )}
