@@ -6,6 +6,7 @@ import apiClient from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { useTenantTranslations } from "@/lib/use-translation";
 import { ChatWidget } from "@/src/components/virtual-receptionist";
+import { MyLoyaltyCard } from "@/components/loyalty/my-loyalty-card";
 
 interface UserData {
   id: string;
@@ -210,6 +211,9 @@ export default function AccountPage({
 
   return (
     <>
+      {/* Loyalty balance (nothing when the salon has no programme) */}
+      <MyLoyaltyCard />
+
       {/* Upcoming Appointments */}
       <div className="bg-white rounded-2xl shadow-lg p-8 mb-8">
         <div className="flex justify-between items-center mb-6">

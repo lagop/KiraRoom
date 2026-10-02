@@ -5,6 +5,8 @@ import { MetaCloudApiClient } from "./meta-cloud-api.client";
 import {
   APPOINTMENT_REMINDER,
   STANDARD_TEMPLATES,
+  TemplateDefinition,
+  WAITLIST_SLOT_AVAILABLE,
   bodyParameters,
   spanishDate,
   templateCreationPayload,
@@ -85,26 +87,59 @@ export class WhatsAppTemplateService {
     tenantId: string,
     args: { phone: string; clientName: string; salonName: string; serviceName: string; date: Date; time: string; country?: string },
   ): Promise<ReminderResult> {
+    return this.sendStandard(tenantId, APPOINTMENT_REMINDER, args.phone, args.country, [
+      args.clientName || "",
+      args.salonName,
+      args.serviceName,
+      spanishDate(args.date),
+      args.time,
+    ]);
+  }
+
+  /** Tells a wait-listed client that a slot opened, with the link to book it. */
+  async sendWaitlistSlot(
+    tenantId: string,
+    args: { phone: string; clientName: string; salonName: string; serviceName: string; slotText: string; bookingUrl: string; country?: string },
+  ): Promise<ReminderResult> {
+    return this.sendStandard(tenantId, WAITLIST_SLOT_AVAILABLE, args.phone, args.country, [
+      args.clientName || "",
+      args.salonName,
+      args.serviceName,
+      args.slotText,
+      args.bookingUrl,
+    ]);
+  }
+
+  /** Is the salon's number connected and this template approved? Without sending. */
+  async canSend(tenantId: string, template: TemplateDefinition): Promise<{ ok: boolean; reason?: string }> {
+    const conn = await this.connection(tenantId);
+    if (!conn?.isActive || !conn.phoneNumberId) return { ok: false, reason: "not_connected" };
+    const status = (await this.statuses(tenantId))[`${template.name}:${template.language}`];
+    if (status !== "APPROVED") return { ok: false, reason: `template_${(status ?? "missing").toLowerCase()}` };
+    return { ok: true };
+  }
+
+  private async sendStandard(
+    tenantId: string,
+    template: TemplateDefinition,
+    phone: string,
+    country: string | undefined,
+    values: string[],
+  ): Promise<ReminderResult> {
     const conn = await this.connection(tenantId);
     if (!conn?.isActive || !conn.phoneNumberId) return { sent: false, reason: "not_connected" };
-    const key = `${APPOINTMENT_REMINDER.name}:${APPOINTMENT_REMINDER.language}`;
+    const key = `${template.name}:${template.language}`;
     const status = (await this.statuses(tenantId))[key];
     if (status !== "APPROVED") return { sent: false, reason: `template_${(status ?? "missing").toLowerCase()}` };
 
-    const to = normalizePhone(args.phone, args.country ?? "ES").replace(/\D/g, "");
+    const to = normalizePhone(phone, country ?? "ES").replace(/\D/g, "");
     const res = await this.meta.sendTemplate(
       this.meta.decryptToken(conn.accessTokenEnc),
       conn.phoneNumberId,
       to,
-      APPOINTMENT_REMINDER.name,
-      APPOINTMENT_REMINDER.language,
-      bodyParameters([
-        args.clientName || "",
-        args.salonName,
-        args.serviceName,
-        spanishDate(args.date),
-        args.time,
-      ]),
+      template.name,
+      template.language,
+      bodyParameters(values),
     );
     if (res?.error) return { sent: false, reason: `meta_${res.error.code}` };
     return { sent: true, messageId: res?.messages?.[0]?.id };

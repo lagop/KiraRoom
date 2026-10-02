@@ -140,6 +140,9 @@ model Tenant {
 
   // P2A-receptionist-advanced -- virtual wait-list for fully-booked slots.
   waitListEntries WaitList[]
+  /// When an appointment is cancelled, notify the matching wait-list clients
+  /// straight away instead of leaving it to the "Avisar" button.
+  waitListAutoNotify Boolean @default(false)
 
   /// P1.3 Ã¢â‚¬â€ Onboarding wizard state (one row per tenant)
   onboardingState      OnboardingState?
@@ -1088,6 +1091,9 @@ enum NotificationType {
   new_appointment_assigned
   schedule_change
   new_message
+
+  /// Wait-list: a slot the client was waiting for has opened
+  waitlist_slot_available
 }
 
 // ============================================
@@ -1305,6 +1311,15 @@ model LoyaltyProgram {
 
   /// Points earning rules
   pointsPerEuro Int @default(1) /// Points earned per EUR spent
+  /// "per_euro": pointsPerEuro for each euro paid. "per_visit": pointsPerVisit
+  /// for each paid visit, whatever it cost (stamp-card style).
+  earnMode       String @default("per_euro")
+  pointsPerVisit Int    @default(1)
+
+  /// Enrolment: autoEnroll signs a client up on their first paid visit;
+  /// allowSelfEnroll lets a client join from the client portal.
+  autoEnroll      Boolean @default(false)
+  allowSelfEnroll Boolean @default(true)
 
   /// Points redemption
   pointsValueInCents  Int @default(1) /// 1 point = 1 cent
@@ -1318,9 +1333,10 @@ model LoyaltyProgram {
 
   /// Relations
   tenant  Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  tiers   LoyaltyTier[]
-  rewards LoyaltyReward[]
-  members LoyaltyMember[]
+  tiers        LoyaltyTier[]
+  rewards      LoyaltyReward[]
+  members      LoyaltyMember[]
+  transactions LoyaltyTransaction[]
 
   @@map("loyalty_programs")
 }
@@ -1371,10 +1387,13 @@ model LoyaltyMember {
   status         LoyaltyMemberStatus @default(active)
   joinedAt       DateTime            @default(now())
   lastActivityAt DateTime?
+  /// How the client joined: "staff", "auto" (first paid visit) or "portal".
+  enrolledVia    String?
 
   /// Relations
   redemptions      LoyaltyRedemption[]
   expirationPoints LoyaltyPointsExpiration[]
+  transactions     LoyaltyTransaction[]
 
   @@unique([clientId, programId])
   @@map("loyalty_members")
@@ -1434,10 +1453,45 @@ model LoyaltyRedemption {
   /// Reference
   appointmentId String?
   paymentId     String?
+  /// The till sale the reward was applied to (Payment.metadata.posSaleId).
+  posSaleId     String?
 
   @@index([memberId])
   @@index([rewardId])
   @@map("loyalty_redemptions")
+}
+
+/// Every change to a member's points, so a balance can be explained and,
+/// above all, so the same visit or sale never earns twice: the unique key
+/// (member, type, source, sourceId) turns a repeated hook, a retried request
+/// or the safety-net sweep into a no-op. Manual adjustments have no sourceId
+/// and Postgres lets NULLs repeat, so those are never deduplicated.
+model LoyaltyTransaction {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  tenantId  String
+  programId String
+  program   LoyaltyProgram @relation(fields: [programId], references: [id], onDelete: Cascade)
+  memberId  String
+  member    LoyaltyMember  @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  /// earn | redeem | reversal | redeem_reversal | welcome | adjust
+  type        String
+  /// Signed: positive adds to the balance, negative takes from it.
+  points      Int
+  /// appointment | pos_sale | payment | enrollment | manual
+  source      String
+  sourceId    String?
+  description String?
+  /// e.g. { basisCents } so a partial refund can reverse its share.
+  metadata    Json     @default("{}")
+  createdById String?
+
+  @@unique([memberId, type, source, sourceId])
+  @@index([tenantId, createdAt])
+  @@index([memberId, createdAt])
+  @@index([tenantId, source, sourceId])
+  @@map("loyalty_transactions")
 }
 
 model LoyaltyPointsExpiration {
@@ -2490,6 +2544,11 @@ model WaitList {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   notifiedAt     DateTime?
+  // What the last "Avisar" did, channel by channel (sent / skipped and why),
+  // plus the slot offered and who sent it. notifyCount counts the times at
+  // least one channel actually delivered.
+  lastNotification Json?
+  notifyCount    Int       @default(0)
   notes          String?
   tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   client         Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
