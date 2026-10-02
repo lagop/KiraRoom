@@ -11,6 +11,7 @@ import {
   BarChart2,
   Settings,
   Store,
+  Globe,
   Repeat,
   FileText,
   Bug,
@@ -571,6 +572,20 @@ export function DashboardSidebar({
                   >
                     <Store className="w-4 h-4 mr-3" />
                     <span suppressHydrationWarning>Datos del salón</span>
+                  </Link>
+                </li>
+                <li>
+                  <Link
+                    href="/dashboard/settings/domain"
+                    className={`flex items-center pl-9 pr-3 py-2 rounded-l-lg w-full transition-all duration-200 ${
+                      pathname.startsWith("/dashboard/settings/domain")
+                        ? "bg-white text-violet-950 rounded-r-none"
+                        : "text-white hover:text-violet-950 hover:bg-violet-200 hover:-translate-x-3 hover:rounded-lg rounded-r-none"
+                    }`}
+                    title="Web y dominio"
+                  >
+                    <Globe className="w-4 h-4 mr-3" />
+                    <span suppressHydrationWarning>Web y dominio</span>
                   </Link>
                 </li>
                 <li>

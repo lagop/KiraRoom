@@ -61,10 +61,6 @@
       "learnMore": "Learn more",
       "planCta": "Choose plan"
     },
-    "addon": {
-      "title": "Add-on: Custom domain + SEO",
-      "desc": "Connect your own domain to your public booking site with SEO meta, sitemap and SSL."
-    },
     "footer": "Built for beauty and wellness businesses."
   },
   "invoices": {
@@ -488,29 +484,6 @@
       "statusUncollectible": "Uncollectible",
       "dateFmt": "en-US",
       "recibo": "Recibo"
-    },
-    "webDomain": {
-      "title": "Custom domain + SEO",
-      "desc": "Connect your own domain to your public booking site, with SEO meta, sitemap and SSL certificate.",
-      "active": "Active: {domain}",
-      "add": "Add domain",
-      "dialog": {
-        "title": "Custom domain",
-        "desc": "Enter the domain you want to connect (annual commitment, out of scope for this form).",
-        "placeholder": "yoursalon.com",
-        "checking": "Checking...",
-        "check": "Check",
-        "available": "Available: {domain}",
-        "unavailable": "Unavailable: {domain}",
-        "continue": "Continue",
-        "processing": "Processing...",
-        "checkoutRequired": "Your purchase requires Stripe checkout (commercial configuration pending).",
-        "cancel": "Cancel"
-      },
-      "activeShort": "Active",
-      "domainNotAvailable": "Unavailable: {domain}",
-      "availableFmt": "Available: {domain}",
-      "addDomain": "Add domain"
     },
     "trial": {
       "daysRemaining": "You have {days} {plural} of Pro trial left.",

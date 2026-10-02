@@ -127,6 +127,8 @@ model Tenant {
   consents                      Consent[]
   reviews                       Review[]
   whatsappConnection            WhatsAppConnection?
+  /// The salon's own domain for its public page (see CustomDomain).
+  customDomain                  CustomDomain?
   whatsappCampaigns             WhatsAppCampaign[]
   invites                       TenantInvite[]
 
@@ -223,6 +225,31 @@ model TenantAddOn {
   @@unique([tenantId, addOnId])
   @@index([tenantId])
   @@map("tenant_add_ons")
+}
+
+/// A salon's own domain (e.g. reservas.misalon.com) pointing at its public
+/// page. One per tenant. `domain` is deliberately NOT unique: a salon could
+/// otherwise squat a domain it does not own just by typing it first. What
+/// decides who gets a domain is the DNS proof (TXT record with this row's
+/// token), and verifying one row un-verifies any other row for the same
+/// domain, so at most one verified row per domain exists.
+model CustomDomain {
+  id                String    @id @default(uuid())
+  tenantId          String    @unique
+  /// Lower-case host name, no scheme, no trailing dot.
+  domain            String
+  /// Published by the salon in a TXT record to prove it controls the domain.
+  verificationToken String
+  verifiedAt        DateTime?
+  lastCheckedAt     DateTime?
+  /// Why the last DNS check failed, in Spanish for the panel. Null when it passed.
+  lastCheckError    String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([domain])
+  @@map("custom_domains")
 }
 
 model MessageCreditWallet {

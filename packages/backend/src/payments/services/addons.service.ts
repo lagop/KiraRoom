@@ -36,6 +36,18 @@ import { EmailService } from '../../notifications/services/email.service';
  * retire that path. Until then, both sources are read by
  * `feature-flag.service.ts` (union).
  */
+/**
+ * Catalogue rows that exist but must not be offered or bought.
+ *
+ * `web_domain` ("Web con dominio propio + SEO", 15 €/mes) was on sale while
+ * nothing behind it worked: the purchase flipped a flag and no domain ever
+ * served a page. A salon can now connect its own domain for free from
+ * Ajustes, but the page is served on that domain only once the operator has
+ * set up certificates for customer domains (docs/custom-domains.md). Until
+ * then it is not sold. Remove it from this set when it is.
+ */
+export const WITHHELD_ADDON_KEYS: ReadonlySet<string> = new Set(['web_domain']);
+
 @Injectable()
 export class AddOnsService {
   private readonly logger = new Logger(AddOnsService.name);
@@ -56,7 +68,9 @@ export class AddOnsService {
       where: { isActive: true },
       orderBy: [{ sortOrder: 'asc' }, { key: 'asc' }],
     });
-    const entries: CatalogEntry[] = all.map((row) => ({
+    const entries: CatalogEntry[] = all
+      .filter((row) => !WITHHELD_ADDON_KEYS.has(row.key))
+      .map((row) => ({
       id: row.id,
       key: row.key,
       name: row.name,
@@ -361,7 +375,7 @@ export class AddOnsService {
         'Los bonos de mensajes se recargan desde su sección, no se contratan aquí.',
       );
     }
-    if (!addOn.purchasable) {
+    if (!addOn.purchasable || WITHHELD_ADDON_KEYS.has(addOn.key)) {
       // Listed as "Próximamente": what it unlocks does not work yet.
       throw new ConflictException(
         `«${addOn.name}» estará disponible próximamente; todavía no se puede contratar.`,

@@ -366,7 +366,8 @@ export class SubscriptionsService {
       'email_marketing',
       'multichannel',
       'google_reviews_auto',
-      'web_domain',
+      // 'web_domain' is not sold until custom domains are served over
+      // HTTPS (see WITHHELD_ADDON_KEYS in addons.service.ts).
       'deposits_antinoshow',
     ];
     // Filter out add-ons whose unlocks are already covered by the plan.

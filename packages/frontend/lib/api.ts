@@ -1220,6 +1220,24 @@ export interface AccountingSyncLog {
   createdAt: string;
 }
 
+/** GET /web-domain: the public page and the salon's own domain, if any. */
+export interface WebDomainStatus {
+  publicUrl: string;
+  target: string;
+  /** False until the operator serves customer domains over HTTPS. */
+  servingEnabled: boolean;
+  domain: null | {
+    name: string;
+    verified: boolean;
+    verifiedAt: string | null;
+    lastCheckedAt: string | null;
+    lastCheckError: string | null;
+    active: boolean;
+    records: Array<{ type: "CNAME" | "A" | "TXT"; name: string; value: string }>;
+    targetIps: string[];
+  };
+}
+
 export interface ApiClientInterface {
   request<T>(endpoint: string, options?: RequestInit): Promise<T>;
   login(email: string, password: string, tenantSlug?: string): Promise<LoginResponse>;
@@ -2328,6 +2346,26 @@ class ApiClient implements ApiClientInterface {
     description: string | null;
   }> {
     return this.request(`/public-site/tenant/${encodeURIComponent(slug)}`);
+  }
+
+  // The salon's own domain (bring-your-own; nothing is bought here).
+  async getWebDomain(): Promise<WebDomainStatus> {
+    return this.request<WebDomainStatus>("/web-domain");
+  }
+
+  async setWebDomain(domain: string): Promise<WebDomainStatus> {
+    return this.request<WebDomainStatus>("/web-domain", {
+      method: "PUT",
+      body: JSON.stringify({ domain }),
+    });
+  }
+
+  async verifyWebDomain(): Promise<WebDomainStatus> {
+    return this.request<WebDomainStatus>("/web-domain/verify", { method: "POST" });
+  }
+
+  async removeWebDomain(): Promise<WebDomainStatus> {
+    return this.request<WebDomainStatus>("/web-domain", { method: "DELETE" });
   }
 
   // Professionals - Admin routes
