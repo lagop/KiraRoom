@@ -10,9 +10,13 @@ import { ConsentModule } from "../consent/consent.module";
 import { RebookingModule } from "../rebooking/rebooking.module";
 import { InvoicesModule } from "../invoices/invoices.module";
 import { WaitListModule } from "../wait-list/wait-list.module";
+import { WhatsAppMessagingModule } from "../whatsapp/whatsapp-messaging.module";
 
 @Module({
   imports: [
+    // Confirmations, cancellations and changes through the salon's
+    // WhatsApp Business number (approved templates).
+    WhatsAppMessagingModule,
     PublicViewerModule,
     NotificationsModule,
     TranslationsModule,

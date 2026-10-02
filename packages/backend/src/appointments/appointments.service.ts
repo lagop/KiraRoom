@@ -26,6 +26,10 @@ import { InvoiceService } from "../invoices/invoices.service";
 import { EmailService } from "../notifications/services/email.service";
 import { SmsService } from "../notifications/services/sms.service";
 import { WhatsAppService } from "../notifications/services/whatsapp.service";
+import {
+  AppointmentNoticeKind,
+  WhatsAppTemplateService,
+} from "../whatsapp/whatsapp-template.service";
 import { NotificationType } from "../notifications/dto";
 import { TranslationsService } from "../translations/translations.service";
 import { ConsentService } from "../consent/consent.service";
@@ -124,7 +128,38 @@ export class AppointmentsService {
     @Optional() private clientCadenceService?: ClientCadenceService,
     @Optional() private invoiceService?: InvoiceService,
     @Optional() private readonly waitListService?: WaitListService,
+    @Optional() private readonly whatsappTemplates?: WhatsAppTemplateService,
   ) {}
+
+  /**
+   * A WhatsApp notice from the salon's own WhatsApp Business number, with
+   * the Meta-approved template for it. A confirmation, cancellation or change
+   * usually reaches a client who has not written in the last 24 hours, and
+   * WhatsApp refuses free text outside that window. Returns false when the
+   * salon has no WhatsApp connected or the template is not approved yet, so
+   * the caller falls back to the platform sender as before.
+   */
+  private async sendWhatsAppViaSalon(kind: AppointmentNoticeKind, appointment: any): Promise<boolean> {
+    if (!this.whatsappTemplates || !appointment?.client?.phone) return false;
+    try {
+      const result = await this.whatsappTemplates.sendAppointmentNotice(appointment.tenantId, kind, {
+        phone: appointment.client.phone,
+        clientName: appointment.client.firstName,
+        salonName: appointment.tenant?.name || "tu salón",
+        serviceName: appointment.service?.name || "tu servicio",
+        date: new Date(appointment.scheduledDate),
+        time: appointment.scheduledTime,
+        country: appointment.tenant?.country ?? undefined,
+      });
+      if (!result.sent && result.reason !== "not_connected") {
+        this.logger.log(`WhatsApp ${kind} template not used for appointment ${appointment.id}: ${result.reason}`);
+      }
+      return result.sent;
+    } catch (error) {
+      this.logger.warn(`WhatsApp ${kind} template for appointment ${appointment.id} failed: ${(error as Error).message}`);
+      return false;
+    }
+  }
 
   /**
    * Enrich appointment data with computed totalAmount (in cents) and amountDue.
@@ -1702,18 +1737,20 @@ export class AppointmentsService {
         );
       }
 
-      // Send confirmation WhatsApp to client
+      // Send confirmation WhatsApp to client: the salon's template first.
       if (appointment.client?.phone && canSendWhatsapp) {
         try {
-          await this.whatsappService.sendAppointmentConfirmation({
-            clientName,
-            clientPhone: appointment.client.phone,
-            serviceName,
-            professionalName,
-            date: dateStr,
-            time: appointment.scheduledTime,
-            salonName,
-          });
+          if (!(await this.sendWhatsAppViaSalon("confirmed", appointment))) {
+            await this.whatsappService.sendAppointmentConfirmation({
+              clientName,
+              clientPhone: appointment.client.phone,
+              serviceName,
+              professionalName,
+              date: dateStr,
+              time: appointment.scheduledTime,
+              salonName,
+            });
+          }
           this.logger.log(
             `Sent confirmation WhatsApp to client ${appointment.clientId}`,
           );
@@ -2080,18 +2117,22 @@ export class AppointmentsService {
       // Send cancellation WhatsApp to client
       if (appointment.client?.phone && canSendWhatsapp) {
         try {
-          await this.whatsappService.sendAppointmentCancellation(
-            {
-              clientName,
-              clientPhone: appointment.client.phone,
-              serviceName,
-              professionalName,
-              date: dateStr,
-              time: appointment.scheduledTime,
-              salonName,
-            },
-            reason,
-          );
+          // The salon's template first (the free text is refused outside
+          // WhatsApp's 24-hour window).
+          if (!(await this.sendWhatsAppViaSalon("cancelled", appointment))) {
+            await this.whatsappService.sendAppointmentCancellation(
+              {
+                clientName,
+                clientPhone: appointment.client.phone,
+                serviceName,
+                professionalName,
+                date: dateStr,
+                time: appointment.scheduledTime,
+                salonName,
+              },
+              reason,
+            );
+          }
           this.logger.log(
             `Sent cancellation WhatsApp to client ${appointment.clientId}`,
           );
@@ -2325,19 +2366,23 @@ export class AppointmentsService {
         ));
       if (appointment.client?.phone && canSendWhatsapp) {
         try {
-          await this.whatsappService.sendAppointmentRescheduled(
-            {
-              clientName,
-              clientPhone: appointment.client.phone,
-              serviceName,
-              professionalName,
-              date: newDateStr,
-              time: appointment.scheduledTime,
-              salonName,
-            },
-            oldDateStr,
-            oldTime,
-          );
+          // The salon's template first (the free text is refused outside
+          // WhatsApp's 24-hour window).
+          if (!(await this.sendWhatsAppViaSalon("rescheduled", appointment))) {
+            await this.whatsappService.sendAppointmentRescheduled(
+              {
+                clientName,
+                clientPhone: appointment.client.phone,
+                serviceName,
+                professionalName,
+                date: newDateStr,
+                time: appointment.scheduledTime,
+                salonName,
+              },
+              oldDateStr,
+              oldTime,
+            );
+          }
           this.logger.log(
             `Sent rescheduled WhatsApp to client ${appointment.clientId}`,
           );
@@ -2650,15 +2695,19 @@ export class AppointmentsService {
         ));
       if (appointment.client?.phone && canSendWhatsapp) {
         try {
-          await this.whatsappService.sendAppointmentConfirmation({
-            clientName,
-            clientPhone: appointment.client.phone,
-            serviceName,
-            professionalName,
-            date: dateStr,
-            time: appointment.scheduledTime,
-            salonName,
-          });
+          // The salon's template first (the free text is refused outside
+          // WhatsApp's 24-hour window).
+          if (!(await this.sendWhatsAppViaSalon("confirmed", appointment))) {
+            await this.whatsappService.sendAppointmentConfirmation({
+              clientName,
+              clientPhone: appointment.client.phone,
+              serviceName,
+              professionalName,
+              date: dateStr,
+              time: appointment.scheduledTime,
+              salonName,
+            });
+          }
           this.logger.log(
             `Sent confirmation WhatsApp to client ${appointment.clientId}`,
           );

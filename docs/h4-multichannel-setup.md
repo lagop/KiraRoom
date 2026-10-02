@@ -10,12 +10,16 @@ and the SaaS admin.
 - `GET/PUT /virtual-receptionist/channels/config` (under `FeatureGuard`
   with `@Feature('multichannel')`) reads / writes the config and redacts
   secrets on read.
-- Public webhooks `POST /api/v1/channels/webhooks/{meta,telegram}` receive
-  inbound messages from Meta + Telegram. The handler looks up the tenant
-  by pageId / chat_id, then **re-checks the `multichannel` feature** —
+- Public webhooks `POST /api/v1/channels/webhooks/meta` and
+  `.../telegram/:tenantId` receive inbound messages from Meta + Telegram.
+  The handler verifies the signature, looks up the tenant by Page id /
+  Instagram account id / URL, then **re-checks the `multichannel` feature** —
   if the tenant is not entitled, the message is silently dropped and
   logged at WARN. The drop is fail-closed: any error in the feature check
   also drops the message.
+- Accepted messages go to `ChannelReceptionistService` (per-sender queue,
+  dedup by message id, 30 messages/sender/hour), which calls the same
+  `VirtualReceptionistService.sendMessage` as the web chat.
 - The orchestrator uses `ChannelRegistry.send(tenantId, channel, ...)`
   to dispatch outbound replies. Each provider (`FacebookMessengerProvider`,
   `InstagramChannelProvider`, `TelegramChannelProvider`) is responsible
@@ -60,106 +64,78 @@ The `AddOnsService.provisionFromStripe` reads `metadata.kind === 'addon'`
 plus `metadata.add_on_key === 'multichannel'` to know which row to write.
 No additional wiring needed for the multichannel add-on specifically.
 
-## 3. Meta — App Review for `pages_messaging`
+## 3. Meta — Messenger + Instagram (one-time platform setup)
 
-### 3.1 One-time Meta App setup
+Salons do not paste tokens. In `/dashboard/settings/channels` they click
+**Conectar con Facebook**, sign in with Facebook Login (KiraRoom's Meta app),
+pick their Page, and the backend:
 
-1. Go to [developers.facebook.com](https://developers.facebook.com) → **My
-   Apps** → **Create App** → type **Business**.
-2. Add products: **Messenger** + **Instagram** (use the same Facebook
-   App for both; the wizard handles both with one token).
-3. In **Messenger → Settings**, link the Facebook Page that will receive
-   the messages.
-4. In **Instagram → API setup with Instagram Business**, link the
-   Instagram Business account (must be a Business / Professional account,
-   not Personal — see wizard step 2).
-5. Generate a **Page access token** (long-lived):
-   - User Token → Page Token → "Add permanent permissions":
-     `pages_messaging`, `pages_manage_metadata`, `instagram_basic`,
-     `instagram_manage_messages`.
+1. exchanges the code for a long-lived user token and lists the Pages
+   (`GET /me/accounts`, Page tokens obtained this way do not expire);
+2. subscribes the Page to the app webhook
+   (`POST /{page-id}/subscribed_apps?subscribed_fields=messages`);
+3. stores the Page token encrypted (`multichannel.meta.pageAccessTokenEnc`)
+   and the linked Instagram professional account id, if any.
 
-### 3.2 App Review
+### 3.1 Meta app (KiraRoom's, once)
 
-The default token only works for the App admin + Developer + Tester
-roles. For real salon tenants, the App needs **`pages_messaging`**
-approved by Meta.
+1. developers.facebook.com → the KiraRoom app (the same one as WhatsApp).
+2. Add products **Messenger** and **Instagram** (Messenger API for Instagram).
+3. Facebook Login → Settings → Valid OAuth Redirect URIs:
+   `https://api.kiraroom.net/api/v1/channels/meta/callback`
+   (`API_BASE_URL` + `/api/v1/channels/meta/callback`).
+4. Webhooks: object **Page** and object **Instagram**, callback URL
+   `https://api.kiraroom.net/api/v1/channels/webhooks/meta`, verify token =
+   `META_WEBHOOK_VERIFY_TOKEN`, field `messages`. Deliveries are signed with
+   `META_APP_SECRET` (X-Hub-Signature-256); unsigned ones are refused.
+5. Env: `META_APP_ID`, `META_APP_SECRET`, `META_WEBHOOK_VERIFY_TOKEN`,
+   `API_BASE_URL`, `OAUTH_STATE_SECRET`. Without `META_APP_ID`/`SECRET` or
+   `API_BASE_URL` the settings page says Messenger/Instagram are not
+   available yet.
 
-1. Submit the App for review: **App Review → Permissions and Features →
-   Request advanced access for `pages_messaging`**.
-2. Provide a screencast walkthrough showing the salon owner
-   - pasting their `pageId` + token in `/dashboard/settings/channels`
-   - sending a test message from a non-admin Facebook account
-   - receiving an AI reply
-3. **Common rejection reasons and fixes:**
-   - "We couldn't verify the feature works end-to-end" → include a
-     live screencast with a real second account, not just curl.
-   - "Screenshots don't show the user role" → put the test account
-     in the role header on every screen.
-   - "Privacy policy missing" → point to your app's privacy URL
-     (KiraRoom's privacy page is fine).
-4. Average review time: **3-7 business days**. Plan ahead.
-5. Once approved, all salons can paste their own `pageId` + long-lived
-   token in the wizard without further per-tenant review.
+### 3.2 App Review (required before real salons can connect)
 
-### 3.3 Webhook configuration in Meta
-
-1. In the App Dashboard → **Messenger → Settings → Webhooks**.
-2. **Callback URL**: `https://<your-api-host>/api/v1/channels/webhooks/meta`
-   (the wizard shows this exact URL on the page).
-3. **Verify token**: any random string the tenant pastes in the wizard
-   (stored as `multichannel.meta.webhookSecret`). The backend reads it
-   and includes it in the `X-Hub-Signature-256` check.
-4. **Webhook fields** to subscribe:
-   - `messages` (text inbound)
-   - `messaging_postbacks` (button responses, future-proofing)
-   - `message_deliveries` (delivery receipts, no-op)
-   - `message_reads` (read receipts, no-op)
+Until Meta grants **advanced access** to `pages_show_list`,
+`pages_messaging`, `pages_manage_metadata`, `instagram_basic` and
+`instagram_manage_messages`, only people with a role in the app (admins,
+developers, testers) can complete Facebook Login. Submit the app with a
+screencast: owner connects the Page in the channels page, a second account
+writes to the Page, the receptionist answers. Business Verification of the
+company that owns the app is also required. Typical review time: days.
 
 ## 4. Telegram — BotFather flow
 
-1. Open Telegram, search for `@BotFather`, send `/start`.
-2. Send `/newbot`, follow prompts:
-   - Bot name: e.g. `Mi Salón Recepcionista`.
-   - Username: must end in `bot`, e.g. `mi_salon_recepcionista_bot`
-     (globally unique; 5-32 chars, alphanumeric + underscores).
-3. BotFather replies with the **bot token** in the format
-   `1234567890:ABCDEFGHIJKLMNOPQRSTUVWXyz12345`.
-4. Tenant pastes the token in `/dashboard/settings/channels → Telegram`.
-5. Backend validates it (`^\d{6,12}:[A-Za-z0-9_-]{30,}$`), persists to
-   `multichannel.telegram.botToken` (encrypted at rest by the DB column
-   policy; never echoed back through the GET endpoint).
-6. Optionally register the webhook via `@BotFather /setwebhook`:
-   - URL: `https://<your-api-host>/api/v1/channels/webhooks/telegram`
-   - The bot token is used as the secret token (`X-Telegram-Bot-Api-Secret-Token`).
+1. The salon creates a bot with `@BotFather` (`/newbot`) and copies the token.
+2. It pastes the token in `/dashboard/settings/channels → Telegram`.
+3. The backend calls `getMe` (rejects unknown tokens), then `setWebhook` with
+   `url = API_BASE_URL/api/v1/channels/webhooks/telegram/<tenantId>`,
+   a fresh random `secret_token` and `allowed_updates=["message"]`, and stores
+   the token encrypted (`multichannel.telegram.botTokenEnc`).
+4. Every update must carry `X-Telegram-Bot-Api-Secret-Token` equal to that
+   secret; anything else gets 401. Only private chats are answered.
 
-> **Don't skip this**: if you forget `/setwebhook`, Telegram uses long
-> polling instead and you'll see `409 Conflict: terminated by other
-> getUpdates` in the logs.
+Bots or Pages saved by the first version (clear-text tokens, no webhook) are
+shown as "vuelve a conectarla" in the settings page.
 
 ## 5. Operational runbook
 
 ### 5.1 "My tenant's Telegram messages are not received"
 
-1. Check the bot token is valid: `curl https://api.telegram.org/bot<TOKEN>/getMe`
-   → expect `{"ok":true, ...}`.
-2. Check the webhook is set: `curl https://api.telegram.org/bot<TOKEN>/getWebhookInfo`
-   → expect `"url": "https://.../api/v1/channels/webhooks/telegram"`.
-3. Check the tenant's `multichannel.telegram.linkedChats` array in the
-   DB. The very first message from a chat ID is what writes it
-   (see Paso 7 of the H-4 plan: `linkedChats` runtime population).
-4. Check the backend logs for `Telegram webhook: tenant <id> lacks the
-   'multichannel' feature` — if present, the tenant's plan has been
-   downgraded or the add-on was cancelled.
+1. `curl https://api.telegram.org/bot<TOKEN>/getWebhookInfo` → `url` must be
+   `.../channels/webhooks/telegram/<tenantId>`; `last_error_message` tells
+   why deliveries fail (401 = secret mismatch: reconnect the bot).
+2. Logs: `Telegram webhook: tenant <id> lacks the 'multichannel' feature`
+   means the plan was downgraded or the add-on cancelled.
 
 ### 5.2 "My tenant's Meta messages are not received"
 
-1. Check the webhook is healthy in the Meta App dashboard
-   (Webhooks → Active fields, Recent deliveries).
-2. If Meta reports redeliveries with HTTP 403, the `FeatureGuard` is
-   rejecting the request → check the tenant's entitlement.
-3. If Meta reports `400 invalid_page_id` → the pageId pasted in the
-   wizard is wrong; ask the tenant to re-paste from
-   developers.facebook.com → their App → Messenger → Settings.
+1. Meta App dashboard → Webhooks → recent deliveries. 401 = signature
+   (check `META_APP_SECRET`).
+2. Logs: `Meta webhook: facebook account <id> is not connected to any salon`
+   → the Page in the webhook is not the one stored for the salon; reconnect.
+3. For Instagram: the account must be professional, linked to the Page, and
+   "Allow access to messages" must be on (Instagram → Settings → Messages).
+
 
 ### 5.3 "Tenant paid for the add-on but the wizard still shows the lock"
 

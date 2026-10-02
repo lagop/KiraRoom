@@ -12,6 +12,14 @@ import {
 import apiClient, { WhatsAppConnection } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 
+/** KiraRoom's standard templates (backend whatsapp-templates.ts), by name. */
+const TEMPLATE_LABELS: Record<string, string> = {
+  kiraroom_recordatorio_cita: "Recordatorio de cita",
+  kiraroom_cita_confirmada: "Cita confirmada",
+  kiraroom_cita_cancelada: "Cita cancelada",
+  kiraroom_cita_cambiada: "Cambio de cita",
+};
+
 export default function WhatsAppSettingsPage() {
   const { toast } = useToast();
   const [conn, setConn] = useState<WhatsAppConnection | null>(null);
@@ -152,16 +160,20 @@ export default function WhatsAppSettingsPage() {
             )}
           </dl>
           <div className="border-t border-gray-100 pt-3">
-            <div className="text-sm font-medium text-gray-900">Plantilla de recordatorio</div>
+            <div className="text-sm font-medium text-gray-900">Plantillas de mensajes de cita</div>
             <p className="text-xs text-gray-500 mt-1">
-              WhatsApp solo entrega recordatorios con una plantilla aprobada por Meta. La
-              enviamos a revisión al conectar; suele aprobarse en unas horas. Mientras
-              tanto, los recordatorios salen por email o SMS.
+              A quien no te ha escrito en las últimas 24 horas, WhatsApp solo le entrega
+              mensajes con una plantilla aprobada por Meta: recordatorios, confirmaciones,
+              cancelaciones y cambios de cita. Las enviamos a revisión al conectar; suelen
+              aprobarse en unas horas. Mientras una no esté aprobada, ese aviso sale por el
+              canal de siempre (email, SMS o el WhatsApp de la plataforma).
             </p>
             <ul className="mt-2 space-y-1 text-sm">
               {templates.map((t) => (
                 <li key={t.name} className="flex items-center justify-between">
-                  <span className="font-mono text-xs">{t.name}</span>
+                  <span className="text-xs">
+                    {TEMPLATE_LABELS[t.name] ?? <span className="font-mono">{t.name}</span>}
+                  </span>
                   <span
                     className={`text-xs px-2 py-0.5 rounded ${
                       t.status === "APPROVED"

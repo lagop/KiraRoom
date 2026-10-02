@@ -65,7 +65,6 @@ const NOT_BACKEND_CONFIG: Record<string, string> = {
 
   // Documented but read by no backend source file. Left documented
   // because the deploy references them, but they are not forwarded.
-  API_BASE_URL: 'documented for the operator; no backend source reads it',
   GOOGLE_AI_API_KEY: 'no backend source reads this name',
 };
 

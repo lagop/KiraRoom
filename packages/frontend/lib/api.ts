@@ -318,6 +318,35 @@ export interface ReviewAnalytics {
   }>;
 }
 
+/** GET /virtual-receptionist/channels/config. Never carries a token. */
+export interface ChannelsConfig {
+  enabled: boolean;
+  enabledChannels: string[];
+  meta: {
+    configured: boolean;
+    pageId?: string;
+    pageName?: string;
+    instagramBusinessAccountId?: string;
+    instagramUsername?: string;
+    hasAccessToken: boolean;
+    needsReconnect: boolean;
+  } | null;
+  metaPagesPending: boolean;
+  telegram: {
+    configured: boolean;
+    botUsername?: string;
+    hasBotToken: boolean;
+    needsReconnect: boolean;
+  } | null;
+  /** What the server can offer, and why not (e.g. "meta_app_not_configured"). */
+  availability?: {
+    meta: boolean;
+    metaReason?: string;
+    telegram: boolean;
+    telegramReason?: string;
+  };
+}
+
 export interface WhatsAppConnection {
   id: string;
   tenantId: string;
@@ -3669,32 +3698,14 @@ class ApiClient implements ApiClientInterface {
    * `hasAccessToken` / `hasBotToken` flags so the UI can render the
    * connected badge without leaking credentials.
    */
-  async getChannelsConfig(): Promise<{
-    enabled: boolean;
-    enabledChannels: string[];
-    meta: {
-      configured: boolean;
-      pageId?: string;
-      instagramBusinessAccountId?: string;
-      linkedChats: string[];
-      webhookSecret?: string;
-      hasAccessToken: boolean;
-    } | null;
-    telegram: {
-      configured: boolean;
-      botUsername?: string;
-      linkedChats: string[];
-      hasBotToken: boolean;
-    } | null;
-  } | null> {
+  async getChannelsConfig(): Promise<ChannelsConfig | null> {
     return this.request("/virtual-receptionist/channels/config");
   }
 
   /**
-   * Update the multichannel config for the active tenant.
-   * The endpoint performs a partial merge â€” fields you don't pass are
-   * preserved. To remove a channel entirely, omit it from
-   * `enabledChannels` and the registry will fall back to Web.
+   * Turn channels on or off. Credentials are not sent here: the Facebook
+   * Page is connected through Facebook Login and the Telegram bot through
+   * connectTelegramBot().
    */
   async updateChannelsConfig(data: {
     enabled?: boolean;
@@ -3705,39 +3716,44 @@ class ApiClient implements ApiClientInterface {
       | "instagram"
       | "telegram"
     )[];
-    meta?: {
-      pageId?: string;
-      pageAccessToken?: string;
-      instagramBusinessAccountId?: string;
-      linkedChats?: string[];
-      webhookSecret?: string;
-    };
-    telegram?: {
-      botToken?: string;
-      linkedChats?: string[];
-    };
-  }): Promise<{
-    enabled: boolean;
-    enabledChannels: string[];
-    meta: {
-      configured: boolean;
-      pageId?: string;
-      instagramBusinessAccountId?: string;
-      linkedChats: string[];
-      webhookSecret?: string;
-      hasAccessToken: boolean;
-    } | null;
-    telegram: {
-      configured: boolean;
-      botUsername?: string;
-      linkedChats: string[];
-      hasBotToken: boolean;
-    } | null;
-  }> {
+  }): Promise<ChannelsConfig> {
     return this.request("/virtual-receptionist/channels/config", {
       method: "PUT",
       body: JSON.stringify(data),
     });
+  }
+
+  /** Facebook Login URL to connect a Page (Messenger + its Instagram). */
+  async getMetaChannelConnectUrl(): Promise<{ url: string }> {
+    return this.request("/virtual-receptionist/channels/meta/connect");
+  }
+
+  /** Pages to choose from when Facebook Login returned more than one. */
+  async getMetaChannelPages(): Promise<Array<{ id: string; name: string; instagramUsername?: string }>> {
+    return this.request("/virtual-receptionist/channels/meta/pages");
+  }
+
+  async selectMetaChannelPage(pageId: string): Promise<{ connected: boolean }> {
+    return this.request("/virtual-receptionist/channels/meta/select", {
+      method: "POST",
+      body: JSON.stringify({ pageId }),
+    });
+  }
+
+  async disconnectMetaChannel(): Promise<{ disconnected: boolean }> {
+    return this.request("/virtual-receptionist/channels/meta", { method: "DELETE" });
+  }
+
+  /** Checks the @BotFather token with Telegram and registers the webhook. */
+  async connectTelegramBot(botToken: string): Promise<{ connected: boolean; botUsername?: string }> {
+    return this.request("/virtual-receptionist/channels/telegram", {
+      method: "POST",
+      body: JSON.stringify({ botToken }),
+    });
+  }
+
+  async disconnectTelegramBot(): Promise<{ disconnected: boolean }> {
+    return this.request("/virtual-receptionist/channels/telegram", { method: "DELETE" });
   }
 
   /**
