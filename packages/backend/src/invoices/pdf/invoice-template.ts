@@ -109,8 +109,11 @@ export function buildInvoiceHtml(data: InvoiceTemplateData): string {
     ? `<img class="logo" src="${escapeHtml(data.tenant.logo)}" alt="${escapeHtml(data.tenant.name)}" />`
     : `<div class="logo-text">${escapeHtml(data.tenant.name)}</div>`;
 
-  const qrImg = data.qrPngDataUrl
-    ? `<img class="qr" src="${data.qrPngDataUrl}" alt="QR fiscal" />`
+  // VERI*FACTU (Orden HAC/1177/2024 arts. 20-21, QR spec v0.5.0): at the
+  // start of the invoice, 30-40 mm, "QR tributario:" above and the
+  // "VERI*FACTU" legend below, in type no smaller than the rest.
+  const qrBlock = data.qrPngDataUrl
+    ? `<div class="qr-block"><div>QR tributario:</div><img class="qr" src="${data.qrPngDataUrl}" alt="QR tributario" /><div>VERI*FACTU</div></div>`
     : "";
 
   return `<!doctype html>
@@ -159,11 +162,12 @@ export function buildInvoiceHtml(data: InvoiceTemplateData): string {
       font-size: 8pt; color: #6b7280; max-width: 60%;
     }
     footer .fiscal code { font-size: 8pt; background: #f3f4f6; padding: 1px 4px; border-radius: 3px; }
-    footer .qr-wrap { width: 110px; height: 110px; }
-    footer .qr { width: 110px; height: 110px; }
+    .qr-block { text-align: center; margin: 0 auto 18px auto; font-size: 11pt; }
+    .qr-block .qr { width: 35mm; height: 35mm; margin: 2mm; display: block; margin-left: auto; margin-right: auto; }
   </style>
 </head>
 <body>
+  ${qrBlock}
   <header>
     <div class="logo-wrap">${logoHtml}</div>
     <div class="meta">
@@ -223,7 +227,6 @@ export function buildInvoiceHtml(data: InvoiceTemplateData): string {
       ${data.invoice.fiscalHash ? `<div>Huella SHA-256: <code>${escapeHtml(data.invoice.fiscalHash)}</code></div>` : ""}
       <div style="margin-top:6px">Documento emitido por KiraRoom SaaS.</div>
     </div>
-    <div class="qr-wrap">${qrImg}</div>
   </footer>
 </body>
 </html>`;

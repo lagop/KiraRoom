@@ -1184,6 +1184,33 @@ export interface Invoice {
   lines?: InvoiceLine[];
 }
 
+/** The salon's VERI*FACTU queue (GET /verifactu/status). */
+export interface VerifactuStatus {
+  available: boolean;
+  environment: "test" | "production";
+  active: boolean;
+  pending: number;
+  accepted: number;
+  acceptedWithErrors: number;
+  rejected: number;
+  incidentSince: string | null;
+  lastError: string | null;
+  nextSendAt: string | null;
+  certificate: { alias: string; subject: string | null; notAfter: string | null; certificateType: string } | null;
+  platformCertificate: boolean;
+}
+
+/** Public data of the software's declaración responsable (GET /verifactu/declaracion). */
+export interface VerifactuDeclaration {
+  system: { name: string; id: string; version: string; onlyVerifactu: boolean; multipleTaxpayers: boolean };
+  producer: { name: string; nif: string } | null;
+  address: string | null;
+  contactEmail: string | null;
+  signedOn: string | null;
+  signedAt: string | null;
+  environment: "test" | "production";
+}
+
 export interface FiscalSettings {
   fiscalMode: "none" | "verifactu" | "ticketbai" | "sii_only";
   /** False while sending invoices to the AEAT is not available (production). */
@@ -1725,15 +1752,13 @@ export interface ApiClientInterface {
   listFiscalCertificates(): Promise<FiscalCertificate[]>;
   uploadFiscalCertificate(input: {
     alias: string;
-    provider: "p12" | "cloud_dnie";
-    encryptedPem: string;
-    passphraseCipher?: string;
-    fingerprint: string;
-    issuer?: string;
-    subject?: string;
-    notBefore?: string;
-    notAfter?: string;
-  }): Promise<FiscalCertificate>;
+    /** The .p12 / .pfx file, base64. */
+    pkcs12Base64: string;
+    passphrase: string;
+    certificateType?: "personal" | "seal";
+  }): Promise<{ id: string; subject: string; notAfter: string; nifMatchesSalon: boolean | null }>;
+  getVerifactuStatus(): Promise<VerifactuStatus>;
+  getVerifactuDeclaration(): Promise<VerifactuDeclaration>;
   deactivateFiscalCertificate(id: string): Promise<{ count: number }>;
 
   // P2B â€” Accounting integrations
@@ -4688,11 +4713,22 @@ class ApiClient implements ApiClientInterface {
   async listFiscalCertificates(): Promise<FiscalCertificate[]> {
     return this.request(`/invoices/certificates`);
   }
-  async uploadFiscalCertificate(input: any): Promise<FiscalCertificate> {
-    return this.request<FiscalCertificate>(`/invoices/certificates`, {
+  async uploadFiscalCertificate(input: {
+    alias: string;
+    pkcs12Base64: string;
+    passphrase: string;
+    certificateType?: "personal" | "seal";
+  }): Promise<{ id: string; subject: string; notAfter: string; nifMatchesSalon: boolean | null }> {
+    return this.request(`/invoices/certificates`, {
       method: "POST",
       body: JSON.stringify(input),
     });
+  }
+  async getVerifactuStatus(): Promise<VerifactuStatus> {
+    return this.request<VerifactuStatus>(`/verifactu/status`);
+  }
+  async getVerifactuDeclaration(): Promise<VerifactuDeclaration> {
+    return this.request<VerifactuDeclaration>(`/verifactu/declaracion`);
   }
   async deactivateFiscalCertificate(id: string): Promise<{ count: number }> {
     return this.request<{ count: number }>(

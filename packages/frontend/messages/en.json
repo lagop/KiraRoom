@@ -77,10 +77,10 @@
     },
     "fiscalStatus": {
       "not_required": "No fiscal regime",
-      "pending": "Pending submission",
-      "accepted": "Accepted by AEAT/deputation",
-      "rejected": "Rejected",
-      "error": "Submission error"
+      "pending": "Waiting to be sent to the AEAT",
+      "accepted": "Sent to the AEAT",
+      "rejected": "Rejected by the AEAT",
+      "error": "Sending error"
     },
     "fiscalMode": {
       "none": "No fiscal regime",

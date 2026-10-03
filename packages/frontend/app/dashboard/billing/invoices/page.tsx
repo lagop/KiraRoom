@@ -164,7 +164,10 @@ function InvoiceRow({
       <td className="px-4 py-3">
         <StatusBadge kind="fiscal" value={invoice.fiscalStatus} />
         {invoice.fiscalError && (
-          <div className="mt-1 max-w-xs truncate text-xs text-red-600" title={invoice.fiscalError}>
+          <div
+            className={`mt-1 max-w-xs truncate text-xs ${invoice.fiscalStatus === "accepted" ? "text-amber-700" : "text-red-600"}`}
+            title={invoice.fiscalError}
+          >
             {invoice.fiscalError}
           </div>
         )}
@@ -180,7 +183,7 @@ function InvoiceRow({
           >
             <FileDown className="h-4 w-4" />
           </a>
-          {invoice.fiscalXml && (
+          {(invoice.fiscalXml || invoice.fiscalHash) && (
             <a
               href={apiClient.getInvoiceXmlUrl(invoice.id)}
               target="_blank"
@@ -191,8 +194,9 @@ function InvoiceRow({
               <FileCode className="h-4 w-4" />
             </a>
           )}
+          {/* Pending, rejected, or accepted with warnings: resend (corrected). */}
           {invoice.fiscalStatus !== "not_required" &&
-            invoice.fiscalStatus !== "accepted" && (
+            (invoice.fiscalStatus !== "accepted" || !!invoice.fiscalError) && (
               <button
                 type="button"
                 onClick={onResend}
@@ -238,7 +242,8 @@ function StatusBadge({
     rejected: "bg-red-100 text-red-700",
     error: "bg-red-100 text-red-700",
   };
-  const key = `${kind === "status" ? "filters" : "fiscalStatus"}.${value}`;
+  // Under "invoices.": without the prefix the badge printed the raw key.
+  const key = `invoices.${kind === "status" ? "filters" : "fiscalStatus"}.${value}`;
   return (
     <span
       className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${

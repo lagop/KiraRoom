@@ -164,6 +164,9 @@ model Tenant {
   fiscalCertificates   FiscalCertificate[]
   fiscalSequences      FiscalSequence[]
   fiscalChainStates    FiscalChainState[]
+  verifactuChain       VerifactuChain?
+  verifactuRecords     VerifactuRecord[]
+  verifactuSubmissions VerifactuSubmission[]
   /// P2B Ã¢â‚¬â€ Accounting integrations (Holded / Sage)
   accountingConnection AccountingConnection?
   taxReports           TaxReport[]
@@ -2714,6 +2717,8 @@ model Invoice {
   /// flows we keep this even if Tenant.taxId later changes.
   issuerTaxIdAtIssue   String?
   issuerNameAtIssue    String?
+  /// Rectificativas: the invoice this one corrects (FacturasRectificadas).
+  rectifiesInvoiceId   String?
 
   /// Metadata
   sourceType InvoiceSource
@@ -2761,6 +2766,12 @@ model FiscalCertificate {
   /// Material sensible Ã¢â‚¬â€ cifrado en reposo con EncryptionService
   encryptedPem     String             @db.Text
   passphraseCipher String?            @db.Text
+  /// The key and certificate as PEM, encrypted: what mutual TLS with the AEAT
+  /// uses. Converted at upload, because Node's OpenSSL 3 cannot open the
+  /// legacy PKCS#12 encryption many Spanish certificates still use.
+  encryptedKeyPair String?            @db.Text
+  /// "seal" (certificado de sello) goes to www10; anything else to www1.
+  certificateType  String             @default("personal")
   fingerprint      String
   issuer           String?
   subject          String?
@@ -3226,4 +3237,109 @@ model TenantLlmUsage {
   @@unique([tenantId, period, provider, model])
   @@index([period])
   @@map("tenant_llm_usage")
+}
+
+// ---- VERI*FACTU (RD 1007/2023, Orden HAC/1177/2024) -------------------------
+
+/// One record chain per salon (each salon is its own taxpayer), plus the
+/// state of its submission queue.
+model VerifactuChain {
+  tenantId           String    @id
+  /// NumeroInstalacion: never reused for this taxpayer.
+  installationNumber String
+  lastSequence       Int       @default(0)
+  lastHash           String?
+  lastNif            String?
+  lastNumSerie       String?
+  lastFecha          String?
+  /// The instant of the last record: generation times never go backwards.
+  lastGeneratedAt    DateTime?
+  /// Flow control: no submission before this (TiempoEsperaEnvio).
+  nextSendAt         DateTime  @default(now())
+  waitSeconds        Int       @default(60)
+  /// Set while the AEAT cannot be reached; records sent late carry Incidencia=S.
+  incidentSince      DateTime?
+  failedAttempts     Int       @default(0)
+  lastError          String?   @db.Text
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  tenant             Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([nextSendAt])
+  @@map("verifactu_chains")
+}
+
+enum VerifactuRecordKind {
+  alta
+  anulacion
+}
+
+enum VerifactuRecordStatus {
+  pending
+  accepted
+  accepted_with_errors
+  rejected
+}
+
+/// A billing record, generated when the invoice is issued or voided. The
+/// fields the fingerprint covers cannot change once written (a database
+/// trigger refuses it) and records cannot be deleted; only the submission
+/// result columns are updated.
+model VerifactuRecord {
+  id               String                @id @default(uuid())
+  tenantId         String
+  sequence         Int
+  kind             VerifactuRecordKind
+  invoiceId        String?
+  nif              String
+  numSerie         String
+  /// dd-mm-yyyy
+  fecha            String
+  tipoFactura      String?
+  cuotaTotal       String?
+  importeTotal     String?
+  previousHash     String?
+  /// FechaHoraHusoGenRegistro
+  generatedAt      String
+  hash             String
+  /// The RegistroAlta / RegistroAnulacion element, as sent.
+  xml              String                @db.Text
+  subsanacion      Boolean               @default(false)
+  /// Result of the submission
+  status           VerifactuRecordStatus @default(pending)
+  attempts         Int                   @default(0)
+  submissionId     String?
+  sentAt           DateTime?
+  csv              String?
+  errorCode        Int?
+  errorDescription String?               @db.Text
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  tenant           Tenant                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, sequence])
+  @@index([tenantId, status, sequence])
+  @@index([invoiceId])
+  @@map("verifactu_records")
+}
+
+/// Every submission to the AEAT, with its answer, for the audit trail.
+model VerifactuSubmission {
+  id          String   @id @default(uuid())
+  tenantId    String
+  endpoint    String
+  recordCount Int
+  incidencia  Boolean  @default(false)
+  httpStatus  Int?
+  estadoEnvio String?
+  csv         String?
+  waitSeconds Int?
+  faultCode   Int?
+  error       String?  @db.Text
+  response    String?  @db.Text
+  createdAt   DateTime @default(now())
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, createdAt])
+  @@map("verifactu_submissions")
 }
