@@ -326,12 +326,14 @@ export class VirtualReceptionistService {
         }
       }
 
-      // Add assistant message to conversation
+      // Add assistant message to conversation. The time it took is kept so
+      // the panel's average response time is measured, not assumed.
       await this.conversationService.addMessage(conversation.id, {
         role: 'assistant',
         content: generationResult.text,
         timestamp: new Date(),
         provider: generationResult.provider,
+        responseTime: Date.now() - startTime,
       });
 
       // Update conversation handoff status
@@ -504,76 +506,6 @@ export class VirtualReceptionistService {
     // a phone number, "vale", a name -- so the model greeted the client again
     // in the middle of a booking.
     return '';
-  }
-
-  /**
-   * Get virtual receptionist configuration for a salon
-   */
-  async getConfig(salonId: string): Promise<any> {
-    // This should fetch configuration from database or configuration service
-    return {
-      id: 'default-config',
-      salonId,
-      isActive: true,
-      provider: 'openai',
-      model: 'gpt-4',
-      greetingMessage: '¡Hola! ¿En qué puedo ayudarte hoy?',
-      fallbackMessage: 'Lo sentimos, estamos experimentando problemas.',
-      responseDelay: 1000,
-      workingHours: {
-        monday: { start: '09:00', end: '18:00' },
-        tuesday: { start: '09:00', end: '18:00' },
-        wednesday: { start: '09:00', end: '18:00' },
-        thursday: { start: '09:00', end: '18:00' },
-        friday: { start: '09:00', end: '18:00' },
-        saturday: { start: '09:00', end: '14:00' },
-        sunday: { start: 'closed', end: 'closed' },
-      },
-      excludedKeywords: [],
-      faqTopics: ['services', 'hours', 'location', 'prices'],
-      maxConversationLength: 20,
-      allowAppointmentBooking: true,
-      appointmentTimeSlots: ['09:00', '10:00', '11:00', '14:00', '15:00', '16:00'],
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-  }
-
-  /**
-   * Create virtual receptionist configuration
-   */
-  async createConfig(config: any): Promise<any> {
-    this.logger.log(`Creating virtual receptionist configuration for salon ${config.salonId}`);
-    return config;
-  }
-
-  /**
-   * Update virtual receptionist configuration
-   */
-  async updateConfig(salonId: string, config: any): Promise<any> {
-    this.logger.log(`Updating virtual receptionist configuration for salon ${salonId}`);
-    return config;
-  }
-
-  /**
-   * Get virtual receptionist statistics
-   */
-  async getStatistics(): Promise<any> {
-    const conversations = await this.conversationService.getConversationCount();
-    const messages = await this.conversationService.getMessageCount();
-    const bookings = await this.bookingService.getBookingCount();
-
-    return {
-      conversations: conversations.total,
-      activeConversations: conversations.active,
-      messages: messages.total,
-      userMessages: messages.user,
-      assistantMessages: messages.assistant,
-      bookings,
-      avgResponseTime: 1500,
-      handoffRate: 15.2,
-      faqHitRate: 35.8,
-    };
   }
 
   /**

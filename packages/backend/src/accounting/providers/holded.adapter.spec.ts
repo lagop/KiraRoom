@@ -10,7 +10,13 @@
  */
 
 import { FetchLike, HoldedApiError, HoldedClient } from "./holded.client";
-import { HoldedAdapter, HoldedInvoiceInput, HoldedSetupError, pickSalesTaxId } from "./holded.adapter";
+import {
+  HoldedAdapter,
+  HoldedCancelRefused,
+  HoldedInvoiceInput,
+  HoldedSetupError,
+  pickSalesTaxId,
+} from "./holded.adapter";
 
 type Route = { status?: number; body?: unknown; headers?: Record<string, string> };
 
@@ -286,5 +292,62 @@ describe("HoldedAdapter.verifyKey", () => {
     const err = await new TestAdapter(fetchImpl).verifyKey("bad").catch((e) => e);
     expect(err).toBeInstanceOf(HoldedApiError);
     expect(err.credentialProblem).toBe(true);
+  });
+});
+
+/**
+ * A cancellation in KiraRoom of an invoice already in Holded left it there as
+ * a live sale. Holded's v2 reference documents POST /invoices/{id}/cancel
+ * (200; 422 when the state does not allow it) and GET /invoices/{id} with a
+ * `status` that can be "cancelled".
+ */
+describe("HoldedAdapter.cancelInvoice", () => {
+  const ID = "65f0aa0000000000000000aa";
+
+  it("POSTs Holded's cancel action on the linked invoice", async () => {
+    const { fetchImpl, calls } = mockFetch({ [`POST /api/v2/invoices/${ID}/cancel`]: { status: 200, body: {} } });
+    expect(await new TestAdapter(fetchImpl).cancelInvoice("k", ID)).toBe("cancelled");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].body).toBeUndefined();
+    expect(calls[0].headers.Authorization).toBe("Bearer k");
+  });
+
+  it("counts an invoice already cancelled in Holded as done (idempotent)", async () => {
+    const { fetchImpl } = mockFetch({
+      [`POST /api/v2/invoices/${ID}/cancel`]: { status: 422, body: { detail: "Invoice cannot be cancelled" } },
+      [`GET /api/v2/invoices/${ID}`]: { body: { id: ID, status: "cancelled", draft: false } },
+    });
+    expect(await new TestAdapter(fetchImpl).cancelInvoice("k", ID)).toBe("already_cancelled");
+  });
+
+  it("reports a refusal it cannot resolve (e.g. already paid in Holded)", async () => {
+    const { fetchImpl } = mockFetch({
+      [`POST /api/v2/invoices/${ID}/cancel`]: { status: 422, body: { detail: "Invoice is paid" } },
+      [`GET /api/v2/invoices/${ID}`]: { body: { id: ID, status: "completed", draft: false } },
+    });
+    const err = await new TestAdapter(fetchImpl).cancelInvoice("k", ID).catch((e) => e);
+    expect(err).toBeInstanceOf(HoldedCancelRefused);
+    expect(err.message).toBe("Invoice is paid");
+  });
+
+  it("treats an invoice deleted in Holded as nothing left to cancel", async () => {
+    const { fetchImpl } = mockFetch({ [`POST /api/v2/invoices/${ID}/cancel`]: { status: 404, body: { detail: "Not found" } } });
+    expect(await new TestAdapter(fetchImpl).cancelInvoice("k", ID)).toBe("not_in_holded");
+  });
+
+  it("lets transient failures through, for the caller to retry", async () => {
+    const { fetchImpl } = mockFetch({ [`POST /api/v2/invoices/${ID}/cancel`]: { status: 503 } });
+    const err = await new TestAdapter(fetchImpl).cancelInvoice("k", ID).catch((e) => e);
+    expect(err).toBeInstanceOf(HoldedApiError);
+    expect(err.transient).toBe(true);
+  });
+
+  it("finds a never-linked invoice by its exact number only", async () => {
+    const { fetchImpl } = mockFetch({
+      "GET /api/v2/invoices/find-by-number": {
+        body: { items: [{ id: "x1", document_number: "A0000420" }, { id: "x2", document_number: "A000042" }] },
+      },
+    });
+    expect(await new TestAdapter(fetchImpl).findInvoiceId("k", "A000042")).toBe("x2");
   });
 });

@@ -14,7 +14,10 @@ function repo(clientExists = false) {
   const created: any[] = [];
   const finds: any[] = [];
   const prisma: any = {
-    tenant: { findFirst: async () => ({ id: TENANT }) },
+    tenant: {
+      findFirst: async () => ({ id: TENANT }),
+      findUnique: async ({ where }: any) => (where.id === TENANT ? { id: TENANT } : null),
+    },
     client: { findUnique: async () => (clientExists ? { id: CLIENT } : null) },
     chatConversation: {
       create: async ({ data }: any) => { created.push(data); return { id: "c1", ...data }; },

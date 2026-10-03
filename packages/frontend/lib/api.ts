@@ -211,6 +211,9 @@ export interface WidgetInstance {
   createdAt?: string;
 }
 
+/** An import file: CSV text, or an .xlsx as base64 (the backend reads its first sheet). */
+export type ImportUpload = { csv: string } | { xlsx: string };
+
 export interface ImportPreviewRow {
   rowIndex: number;
   data: Record<string, any>;
@@ -922,7 +925,21 @@ export interface ClientWallet {
   tenantId: string;
   balance: number;
   currency: string;
-  loyaltyPoints: number;
+  // No loyaltyPoints: the wallet column stopped moving in #120. Points are
+  // in getClientLoyalty().
+}
+
+/** GET /virtual-receptionist/stats: the salon's own conversations. */
+export interface ReceptionistStats {
+  days: number;
+  since: string;
+  conversations: number;
+  byChannel: Record<"web" | "whatsapp" | "facebook" | "instagram" | "telegram", number>;
+  messages: { fromClients: number; fromReceptionist: number };
+  bookings: number;
+  handedOff: number;
+  /** Null until replies have recorded their time. */
+  avgResponseMs: number | null;
 }
 
 /** P2A-receptionist-v2 â€” add-on catalog entry (Phase 8 UI). */
@@ -3941,23 +3958,12 @@ class ApiClient implements ApiClientInterface {
   }
 
   /**
-   * H-4: per-channel volume counters for the wizard's small
-   * dashboard tile. Returned shape:
-   *   {
-   *     inbound: { web, whatsapp, facebook, instagram, telegram },
-   *     outbound: { facebook: { ok, skipped, error }, ... },
-   *     gateBlocked: { facebook: { no_feature, lookup_error }, ... }
-   *   }
+   * The receptionist's activity in the salon over the last `days`, counted
+   * from the salon's own conversations. Replaces /channels/metrics, which
+   * summed every salon's messages since the last server restart.
    */
-  async getChannelsMetrics(): Promise<{
-    inbound: Record<string, number>;
-    outbound: Record<string, { ok: number; skipped: number; error: number }>;
-    gateBlocked: Record<
-      string,
-      { no_feature: number; lookup_error: number }
-    >;
-  }> {
-    return this.request("/virtual-receptionist/channels/metrics");
+  async getReceptionistStats(days = 30): Promise<ReceptionistStats> {
+    return this.request(`/virtual-receptionist/stats?days=${days}`);
   }
 
   // Admin Settings
@@ -4346,38 +4352,38 @@ class ApiClient implements ApiClientInterface {
     return this.request(`/widget/instances/${id}`, { method: "DELETE" });
   }
 
-  // Import CSV (clients)
-  async dryRunImportClients(csv: string, filename: string): Promise<ImportPreviewResult> {
+  // Import (CSV or .xlsx)
+  async dryRunImportClients(file: ImportUpload, filename: string): Promise<ImportPreviewResult> {
     return this.request(`/import/clients/dry-run`, {
       method: "POST",
-      body: JSON.stringify({ csv, filename }),
+      body: JSON.stringify({ ...file, filename }),
     });
   }
-  async commitImportClients(csv: string, filename: string): Promise<ImportCommitResult> {
+  async commitImportClients(file: ImportUpload, filename: string): Promise<ImportCommitResult> {
     return this.request(`/import/clients/commit`, {
       method: "POST",
-      body: JSON.stringify({ csv, filename }),
+      body: JSON.stringify({ ...file, filename }),
     });
   }
   async listImportJobs(): Promise<ImportJob[]> {
     return this.request(`/import/jobs`);
   }
-  async dryRunImportServices(csv: string, filename: string): Promise<ImportPreviewResult> {
-    return this.request(`/import/services/dry-run`, { method: "POST", body: JSON.stringify({ csv, filename }) });
+  async dryRunImportServices(file: ImportUpload, filename: string): Promise<ImportPreviewResult> {
+    return this.request(`/import/services/dry-run`, { method: "POST", body: JSON.stringify({ ...file, filename }) });
   }
-  async commitImportServices(csv: string, filename: string): Promise<ImportCommitResult> {
-    return this.request(`/import/services/commit`, { method: "POST", body: JSON.stringify({ csv, filename }) });
+  async commitImportServices(file: ImportUpload, filename: string): Promise<ImportCommitResult> {
+    return this.request(`/import/services/commit`, { method: "POST", body: JSON.stringify({ ...file, filename }) });
   }
-  async dryRunImportAppointments(csv: string, filename: string, sendReminders: boolean): Promise<ImportPreviewResult> {
+  async dryRunImportAppointments(file: ImportUpload, filename: string, sendReminders: boolean): Promise<ImportPreviewResult> {
     return this.request(`/import/appointments/dry-run`, {
       method: "POST",
-      body: JSON.stringify({ csv, filename, sendReminders }),
+      body: JSON.stringify({ ...file, filename, sendReminders }),
     });
   }
-  async commitImportAppointments(csv: string, filename: string, sendReminders: boolean): Promise<ImportCommitResult> {
+  async commitImportAppointments(file: ImportUpload, filename: string, sendReminders: boolean): Promise<ImportCommitResult> {
     return this.request(`/import/appointments/commit`, {
       method: "POST",
-      body: JSON.stringify({ csv, filename, sendReminders }),
+      body: JSON.stringify({ ...file, filename, sendReminders }),
     });
   }
   getImportTemplateUrl(): string {

@@ -11,6 +11,7 @@ import { FAQService } from './services/faq.service';
 import { FAQCacheService } from './services/faq-cache.service';
 import { AiConversationCounterService } from './services/ai-conversation-counter.service';
 import { BookingService } from './services/booking.service';
+import { ReceptionistStatsService } from './services/receptionist-stats.service';
 import { AnalysisService } from './services/analysis.service';
 import { LLMProviderFactory } from './factories/llm-provider.factory';
 import { OpenAIProvider } from './providers/openai.provider';
@@ -60,6 +61,7 @@ import { PlatformModule } from '../platform/platform.module';
     FAQCacheService,
     AiConversationCounterService,
     BookingService,
+    ReceptionistStatsService,
     AnalysisService,
     LLMProviderFactory,
     OpenAIProvider,

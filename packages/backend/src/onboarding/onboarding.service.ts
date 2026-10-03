@@ -2,6 +2,8 @@ import { Injectable, Logger, NotFoundException, BadRequestException } from "@nes
 import { PrismaService } from "../common/prisma/prisma.service";
 import { OnboardingDetectorService } from "./onboarding-detector.service";
 import { OnboardingGroup } from "@prisma/client";
+import { salonInstant } from "../appointments/salon-time";
+import { appointmentLocationId } from "../multi-location/appointment-location";
 
 interface StepStatusRecord {
   status: "pending" | "done" | "skipped" | "dismissed";
@@ -203,6 +205,16 @@ export class OnboardingService {
     if (!tenant) {
       throw new NotFoundException("Tenant not found");
     }
+    // Checked before writing anything, so a bad date does not leave the
+    // other steps half saved. (The body is a plain type: no ValidationPipe.)
+    const ap0 = payload.firstAppointment;
+    if (
+      ap0 &&
+      (!/^\d{4}-\d{2}-\d{2}$/.test(String(ap0.date ?? "").slice(0, 10)) ||
+        !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(ap0.time ?? "")))
+    ) {
+      throw new BadRequestException("Fecha u hora de la primera cita no válidas");
+    }
 
     let completed = 0;
     let appointmentSkipped: "no_staff" | "no_service" | null = null;
@@ -294,20 +306,25 @@ export class OnboardingService {
           });
         }
 
-        // Compose the start date from date + time. The DB also wants
-        // scheduledDate (DateTime), scheduledTime ("HH:mm"), duration
-        // (Int minutes), endTime ("HH:mm") — derived from the inputs.
-        const startAt = new Date(`${ap.date}T${ap.time}:00`);
-        const           endAt = new Date(
-          startAt.getTime() + service.duration * 60_000,
-        );
-        const pad = (n: number) => String(n).padStart(2, "0");
-        const endTimeStr = `${pad(endAt.getHours())}:${pad(endAt.getMinutes())}`;
-
+        // Stored like every other booking (AppointmentsService.insertAppointment):
+        // scheduledDate is the calendar day at UTC midnight plus the wall-clock
+        // scheduledTime, and startTime is the real instant in the SALON's
+        // timezone. This used to parse "date T time" in the server's own
+        // timezone (UTC in production), so the reminders went out an hour or
+        // two off and day-range queries could miss the appointment.
         const tenant = await this.prisma.tenant.findUnique({
           where: { id: tenantId },
-          select: { currency: true },
+          select: { currency: true, timezone: true },
         });
+        const day = ap.date.slice(0, 10);
+        const startAt = salonInstant(day, ap.time, tenant?.timezone || "Europe/Madrid");
+        const [h, m] = ap.time.split(":").map(Number);
+        const endMinutes = (h * 60 + m + service.duration) % (24 * 60);
+        const pad = (n: number) => String(n).padStart(2, "0");
+        const endTimeStr = `${pad(Math.floor(endMinutes / 60))}:${pad(endMinutes % 60)}`;
+        // Service.price is in euros; appointment amounts are in cents, as in
+        // every other booking path (the analytics read them as cents).
+        const totalCents = Math.round(Number(service.price) * 100);
 
         await this.prisma.appointment.create({
           data: {
@@ -315,7 +332,7 @@ export class OnboardingService {
             clientId: client.id,
             serviceId: service.id,
             professionalId: professional.id,
-            scheduledDate: startAt,
+            scheduledDate: new Date(day),
             scheduledTime: ap.time,
             duration: service.duration,
             endTime: endTimeStr,
@@ -324,8 +341,9 @@ export class OnboardingService {
             paymentStatus: "pending",
             price: service.price,
             currency: tenant?.currency || "EUR",
-            totalAmount: service.price,
-            amountDue: service.price,
+            totalAmount: totalCents,
+            amountDue: totalCents,
+            locationId: await appointmentLocationId(this.prisma, tenantId, professional.id),
             notes: "Created from onboarding wizard",
           },
         });

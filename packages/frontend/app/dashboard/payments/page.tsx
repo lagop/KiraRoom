@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import apiClient from "@/lib/api";
+import { useState, useEffect, useRef } from "react";
+import Link from "next/link";
+import apiClient, { ClientLoyaltySummary } from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
 
 // Type definitions for payments
@@ -988,6 +989,10 @@ function WalletPanel() {
   const [selectedClient, setSelectedClient] = useState<string | null>(null);
   const [wallet, setWallet] = useState<any>(null);
   const [transactions, setTransactions] = useState<any[]>([]);
+  // Points live in the loyalty ledger (Fidelización), not in the wallet:
+  // ClientWallet.loyaltyPoints stopped moving in #120 and showed 0 here.
+  const [loyalty, setLoyalty] = useState<ClientLoyaltySummary | null>(null);
+  const selectedRef = useRef<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -1010,6 +1015,15 @@ function WalletPanel() {
   const loadWallet = async (clientId: string) => {
     try {
       setSelectedClient(clientId);
+      selectedRef.current = clientId;
+      setLoyalty(null);
+      apiClient
+        .getClientLoyalty(clientId)
+        // A late answer for a client no longer selected must not show here.
+        .then((l) => {
+          if (selectedRef.current === clientId) setLoyalty(l);
+        })
+        .catch(() => setLoyalty(null)); // no plan / no programme: nothing to show
       const walletData = await apiClient.getClientWallet(clientId);
       setWallet(walletData);
       // Would load transactions here too
@@ -1035,26 +1049,6 @@ function WalletPanel() {
     } catch (error) {
       console.error("Failed to deposit:", error);
       alert(t("payments.deposit_failed"));
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleAddPoints = async (points: number) => {
-    if (!selectedClient) return;
-    try {
-      setActionLoading(true);
-      await (apiClient as any).request(
-        `/payments/wallet/${selectedClient}/points/earn`,
-        {
-          method: "POST",
-          body: JSON.stringify({ points }),
-        },
-      );
-      loadWallet(selectedClient);
-    } catch (error) {
-      console.error("Failed to add points:", error);
-      alert(t("payments.add_points_failed"));
     } finally {
       setActionLoading(false);
     }
@@ -1111,12 +1105,26 @@ function WalletPanel() {
                   </span>
                 </div>
                 <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                  <span className="text-gray-600">
-                    {t("payments.loyalty_points")}
-                  </span>
-                  <span className="text-2xl font-bold text-blue-600">
-                    {wallet.loyaltyPoints}
-                  </span>
+                  <div>
+                    <span className="text-gray-600">
+                      {t("payments.loyalty_points")}
+                    </span>
+                    <Link
+                      href="/dashboard/loyalty"
+                      className="block text-xs text-blue-600 hover:underline"
+                    >
+                      {t("payments.manage_in_loyalty")}
+                    </Link>
+                  </div>
+                  {loyalty?.member ? (
+                    <span className="text-2xl font-bold text-blue-600">
+                      {loyalty.member.currentPoints}
+                    </span>
+                  ) : (
+                    <span className="text-sm text-gray-500">
+                      {t("payments.not_in_loyalty")}
+                    </span>
+                  )}
                 </div>
 
                 {/* Quick Actions */}
@@ -1152,44 +1160,6 @@ function WalletPanel() {
                       className="px-3 py-2 bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50"
                     >
                       {t("payments.withdraw_funds")}
-                    </button>
-                    <button
-                      onClick={() => {
-                        const points = prompt(
-                          t("payments.enter_points_to_add"),
-                        );
-                        if (points && !isNaN(parseInt(points))) {
-                          handleAddPoints(parseInt(points));
-                        }
-                      }}
-                      disabled={actionLoading}
-                      className="px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
-                    >
-                      {t("payments.add_points")}
-                    </button>
-                    <button
-                      onClick={() => {
-                        const points = prompt(
-                          t("payments.enter_points_to_redeem"),
-                        );
-                        if (points && !isNaN(parseInt(points))) {
-                          (apiClient as any)
-                            .request(
-                              `/payments/wallet/${selectedClient}/points/redeem`,
-                              {
-                                method: "POST",
-                                body: JSON.stringify({
-                                  points: parseInt(points),
-                                }),
-                              },
-                            )
-                            .then(() => loadWallet(selectedClient!));
-                        }
-                      }}
-                      disabled={actionLoading}
-                      className="px-3 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50"
-                    >
-                      {t("payments.redeem_points")}
                     </button>
                   </div>
                 </div>

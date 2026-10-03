@@ -193,7 +193,6 @@ export class WalletService {
         balance: 0,
         totalEarned: 0,
         totalSpent: 0,
-        loyaltyPoints: 0,
         transactionCount: 0,
       };
     }
@@ -206,84 +205,12 @@ export class WalletService {
       balance: wallet.balance,
       totalEarned: wallet.totalEarned,
       totalSpent: wallet.totalSpent,
-      loyaltyPoints: wallet.loyaltyPoints,
       transactionCount,
     };
   }
 
-  async addLoyaltyPoints(
-    tenantId: string,
-    clientId: string,
-    points: number,
-    description?: string,
-    referenceType?: string,
-    referenceId?: string,
-  ) {
-    const wallet = await this.getOrCreateWallet(tenantId, clientId);
-
-    // Create wallet transaction for points
-    const transaction = await this.prisma.walletTransaction.create({
-      data: {
-        walletId: wallet.id,
-        type: 'credit' as any,
-        amount: 0,
-        points,
-        balanceAfter: wallet.loyaltyPoints + points,
-        description: description || 'Loyalty points earned',
-        referenceType,
-        referenceId,
-      },
-    });
-
-    // Update wallet points
-    const updatedWallet = await this.prisma.clientWallet.update({
-      where: { id: wallet.id },
-      data: {
-        loyaltyPoints: { increment: points },
-        totalEarned: { increment: points },
-      },
-    });
-
-    return { wallet: updatedWallet, transaction };
-  }
-
-  async redeemLoyaltyPoints(
-    tenantId: string,
-    clientId: string,
-    points: number,
-    description?: string,
-    referenceType?: string,
-    referenceId?: string,
-  ) {
-    const wallet = await this.getOrCreateWallet(tenantId, clientId);
-
-    if (wallet.loyaltyPoints < points) {
-      throw new Error('Insufficient loyalty points');
-    }
-
-    // Create wallet transaction for points redemption
-    const transaction = await this.prisma.walletTransaction.create({
-      data: {
-        walletId: wallet.id,
-        type: 'debit' as any,
-        amount: 0,
-        points,
-        balanceAfter: wallet.loyaltyPoints - points,
-        description: description || 'Loyalty points redeemed',
-        referenceType,
-        referenceId,
-      },
-    });
-
-    // Update wallet points
-    const updatedWallet = await this.prisma.clientWallet.update({
-      where: { id: wallet.id },
-      data: {
-        loyaltyPoints: { decrement: points },
-        totalSpent: { increment: points },
-      },
-    });
-
-    return { wallet: updatedWallet, transaction };
-  }
+  // addLoyaltyPoints / redeemLoyaltyPoints moved ClientWallet.loyaltyPoints
+  // (and added points to totalEarned/totalSpent, which are euros). Loyalty
+  // is the LoyaltyTransaction ledger since #120 (LoyaltyService); the column
+  // stays in the schema but nothing writes or shows it any more.
 }

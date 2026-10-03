@@ -44,6 +44,11 @@ export interface HoldedPushResult {
  */
 export class HoldedSetupError extends Error {}
 
+/** Holded would not cancel the invoice (its state there does not allow it). */
+export class HoldedCancelRefused extends Error {}
+
+export type HoldedCancelOutcome = "cancelled" | "already_cancelled" | "not_in_holded";
+
 const TAX_CACHE_TTL_MS = 60 * 60_000;
 
 /**
@@ -138,6 +143,41 @@ export class HoldedAdapter {
     };
     const created = await client.createInvoice(body);
     return { externalId: created.id, alreadyInHolded: false };
+  }
+
+  /**
+   * Mirrors a KiraRoom cancellation on the Holded invoice with Holded's own
+   * "cancel" action, which leaves the document in place, marked cancelled.
+   * Not a credit note: KiraRoom's cancellation is an anulación of the
+   * invoice, not a refund, and the Holded copy is usually still a draft,
+   * which there is nothing to rectify against. Not a delete either: that
+   * would erase the salon's record in Holded.
+   *
+   * Idempotent: when Holded refuses (422) because the invoice is already
+   * cancelled -- an earlier attempt that timed out, or the salon did it by
+   * hand -- that counts as done. Any other refusal (e.g. already paid in
+   * Holded) is HoldedCancelRefused: only the salon can decide there.
+   */
+  async cancelInvoice(apiKey: string, externalId: string): Promise<HoldedCancelOutcome> {
+    const client = this.client(apiKey);
+    try {
+      await client.cancelInvoice(externalId);
+      return "cancelled";
+    } catch (err) {
+      if (!(err instanceof HoldedApiError)) throw err;
+      // Deleted in Holded: nothing left there to cancel.
+      if (err.status === 404) return "not_in_holded";
+      if (err.status !== 422) throw err;
+      const state = await client.getInvoice(externalId);
+      if (state.status === "cancelled") return "already_cancelled";
+      throw new HoldedCancelRefused(err.detail);
+    }
+  }
+
+  /** The Holded id of the invoice with exactly this number, if it is there. */
+  async findInvoiceId(apiKey: string, documentNumber: string): Promise<string | null> {
+    const matches = await this.client(apiKey).findInvoicesByNumber(documentNumber);
+    return matches.find((m) => m.document_number === documentNumber)?.id ?? null;
   }
 
   private async taxes(apiKey: string, client: HoldedClient): Promise<HoldedTax[]> {
