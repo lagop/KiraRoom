@@ -131,39 +131,8 @@ export class ConversationService {
     return conversation.messages.map(this.convertMessageToSharedType);
   }
 
-  /**
-   * Get conversation count
-   */
-  async getConversationCount(): Promise<{ total: number; active: number }> {
-    const stats = await this.memoryRepository.getConversationStatistics('');
-    return {
-      total: stats.total,
-      active: stats.active,
-    };
-  }
-
-  /**
-   * Get message count
-   */
-  async getMessageCount(): Promise<{ total: number; user: number; assistant: number }> {
-    // This would require a separate query, but for now we'll approximate
-    const conversations = await this.memoryRepository.getConversationsByTenantId('');
-    let total = 0;
-    let user = 0;
-    let assistant = 0;
-
-    conversations.forEach(conversation => {
-      if ('messages' in conversation && Array.isArray(conversation.messages)) {
-        conversation.messages.forEach(message => {
-          total++;
-          if (message.role === 'user') user++;
-          if (message.role === 'assistant') assistant++;
-        });
-      }
-    });
-
-    return { total, user, assistant };
-  }
+  // getConversationCount / getMessageCount fed the old /stats with counts
+  // for tenant '' (always zero). ReceptionistStatsService does it per salon.
 
   /**
    * Get active conversation for client

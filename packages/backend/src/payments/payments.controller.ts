@@ -418,39 +418,11 @@ export class PaymentsController {
     return this.walletService.getWalletStats(req.user.tenantId, clientId);
   }
 
-  @Post("wallet/:clientId/points/earn")
-  @Roles("owner", "admin")
-  @Feature("loyalty" as any)
-  @ApiOperation({ summary: "Award loyalty points to client" })
-  async earnPoints(
-    @Req() req: any,
-    @Param("clientId") clientId: string,
-    @Body() body: { points: number; description?: string },
-  ) {
-    return this.walletService.addLoyaltyPoints(
-      req.user.tenantId,
-      clientId,
-      body.points,
-      body.description,
-    );
-  }
-
-  @Post("wallet/:clientId/points/redeem")
-  @Roles("owner", "admin")
-  @Feature("loyalty" as any)
-  @ApiOperation({ summary: "Redeem loyalty points" })
-  async redeemPoints(
-    @Req() req: any,
-    @Param("clientId") clientId: string,
-    @Body() body: { points: number; description?: string },
-  ) {
-    return this.walletService.redeemLoyaltyPoints(
-      req.user.tenantId,
-      clientId,
-      body.points,
-      body.description,
-    );
-  }
+  // POST wallet/:clientId/points/earn and /redeem used to be here. They
+  // moved ClientWallet.loyaltyPoints, which nothing has read since loyalty
+  // moved to the LoyaltyTransaction ledger (#120): points "added" here never
+  // reached the client's real balance, and the Pagos page kept showing 0.
+  // Points are adjusted in Fidelización (/loyalty/members/:id/adjust).
 
   @Post("appointments/:appointmentId/deposit")
   @Roles("owner", "admin", "staff")
