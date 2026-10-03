@@ -6,10 +6,11 @@ import { TaxReportsService } from "./tax-reports.service";
  * A quarterly return that does not match the tenant's tax regime must be
  * refused, not approximated.
  *
- * `aggregateModelo303` buckets invoices by rate and then reads only the
+ * The old 303 aggregator bucketed invoices by rate and then read only the
  * buckets for 21, 10 and 4 — the IVA rates. A Canarian salon bills IGIC at
  * 7 %, which matches none of them, so every box came out 0 and the report was
- * saved as a valid `draft` with no error. A tax return that is silently wrong
+ * saved as a valid `draft` with no error. (modelo-303.ts now refuses a rate
+ * it has no row for, but the regime is checked first, before any invoice.) A tax return that is silently wrong
  * is worse than a missing feature, because someone might file it.
  *
  * The Modelo 420 was refused until its box layout came from the Agencia

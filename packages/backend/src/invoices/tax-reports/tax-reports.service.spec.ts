@@ -1,5 +1,6 @@
 /**
- * Tests for the Modelo 303 + 130 draft generator.
+ * Tests for the Modelo 303 + 130 draft generator (the 303 box layout itself
+ * is pinned in modelo-303.spec.ts).
  *
  * Uses an in-memory Prisma mock so no DB is needed. The cron submission
  * path (TaxReportsDispatchService) is intentionally NOT in v1 — see the
@@ -75,9 +76,10 @@ function makePrisma() {
   return { prisma, invoices, stored, upsertCalls, fiscalSettings };
 }
 
-const sampleInvoice = (cents: number, breakdown: any[]): any => ({
+const sampleInvoice = (cents: number, breakdown: any[], series = "A"): any => ({
   id: `inv-${Math.random().toString(36).slice(2, 8)}`,
   tenantId: "tenant-1",
+  series,
   status: "issued",
   issueDate: new Date("2026-04-15"),
   totalCents: cents,
@@ -85,7 +87,10 @@ const sampleInvoice = (cents: number, breakdown: any[]): any => ({
 });
 
 describe("TaxReportsService.generate — Modelo 303", () => {
-  it("aggregates by tax rate and computes the 7+2 Casillas", async () => {
+  // Box numbers from the AEAT's 2026 instructions (see modelo-303.ts):
+  // 4 % -> 01-03, 10 % -> 04-06, 21 % -> 07-09, 27 devengado, 45 a deducir,
+  // 46 = 27 - 45, 71 resultado de la liquidación.
+  it("puts each rate in its AEAT row and computes 27, 46 and 71", async () => {
     const m = makePrisma();
     m.invoices.push(
       sampleInvoice(12100, [{ rate: 21, baseCents: 10000, taxCents: 2100 }]),
@@ -95,20 +100,25 @@ describe("TaxReportsService.generate — Modelo 303", () => {
     const svc = new TaxReportsService(m.prisma);
     const r = await svc.generate("tenant-1", "modelo_303" as any, 2026, 2);
     expect(r.status).toBe("draft");
-    expect(r.totalsJson["01"]).toBe(20000); // 21% base
-    expect(r.totalsJson["03"]).toBe(4200); // 21% tax
+    expect(r.totalsJson["07"]).toBe(20000); // 21% base
+    expect(r.totalsJson["08"]).toBe(21); // 21% tipo
+    expect(r.totalsJson["09"]).toBe(4200); // 21% cuota
     expect(r.totalsJson["04"]).toBe(10000); // 10% base
-    expect(r.totalsJson["06"]).toBe(1000); // 10% tax
-    expect(r.totalsJson["36"]).toBe(5200); // devengada total
-    expect(r.totalsJson["67"]).toBe(5200); // devengada - deducida(0)
+    expect(r.totalsJson["06"]).toBe(1000); // 10% cuota
+    expect(r.totalsJson["01"]).toBe(0); // 4% base
+    expect(r.totalsJson["27"]).toBe(5200); // total cuota devengada
+    expect(r.totalsJson["45"]).toBe(0); // total a deducir: no purchases in KiraRoom
+    expect(r.totalsJson["46"]).toBe(5200); // 27 - 45
+    expect(r.totalsJson["71"]).toBe(5200); // resultado de la liquidación
   });
 
   it("returns zeroes when no invoices in the period", async () => {
     const m = makePrisma();
     const svc = new TaxReportsService(m.prisma);
     const r = await svc.generate("tenant-1", "modelo_303" as any, 2026, 4);
-    expect(r.totalsJson["36"]).toBe(0);
-    expect(r.totalsJson["67"]).toBe(0);
+    expect(r.totalsJson["27"]).toBe(0);
+    expect(r.totalsJson["46"]).toBe(0);
+    expect(r.totalsJson["71"]).toBe(0);
   });
 
   it("rejects an invalid quarter", async () => {
@@ -135,17 +145,39 @@ describe("TaxReportsService.generate — Modelo 303", () => {
     expect(m.upsertCalls.length).toBe(2);
   });
 
-  it("groups 4% rates separately (not lumped with 21% or 10%)", async () => {
+  it("puts 4 % in 01-03 (not lumped with 21 % or 10 %)", async () => {
     const m = makePrisma();
     m.invoices.push(
       sampleInvoice(1040, [{ rate: 4, baseCents: 1000, taxCents: 40 }]),
     );
     const svc = new TaxReportsService(m.prisma);
     const r = await svc.generate("tenant-1", "modelo_303" as any, 2026, 2);
-    expect(r.totalsJson["07"]).toBe(1000);
-    expect(r.totalsJson["09"]).toBe(40);
-    expect(r.totalsJson["01"]).toBe(0);
+    expect(r.totalsJson["01"]).toBe(1000);
+    expect(r.totalsJson["03"]).toBe(40);
+    expect(r.totalsJson["07"]).toBe(0);
     expect(r.totalsJson["04"]).toBe(0);
+  });
+
+  it("puts a rectifying invoice (series R) in 14-15, not in its rate's row", async () => {
+    const m = makePrisma();
+    m.invoices.push(
+      sampleInvoice(12100, [{ rate: 21, baseCents: 10000, taxCents: 2100 }]),
+      sampleInvoice(-2420, [{ rate: 21, baseCents: -2000, taxCents: -420 }], "R"),
+    );
+    const svc = new TaxReportsService(m.prisma);
+    const r = await svc.generate("tenant-1", "modelo_303" as any, 2026, 2);
+    expect(r.totalsJson["07"]).toBe(10000);
+    expect(r.totalsJson["14"]).toBe(-2000);
+    expect(r.totalsJson["15"]).toBe(-420);
+    expect(r.totalsJson["27"]).toBe(1680);
+  });
+
+  it("refuses a rate the 303 has no row for instead of dropping it", async () => {
+    const m = makePrisma();
+    m.invoices.push(sampleInvoice(1050, [{ rate: 5, baseCents: 1000, taxCents: 50 }]));
+    const svc = new TaxReportsService(m.prisma);
+    await expect(svc.generate("tenant-1", "modelo_303" as any, 2026, 2)).rejects.toThrow(/5 %/);
+    expect(m.upsertCalls.length).toBe(0);
   });
 });
 
