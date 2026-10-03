@@ -165,6 +165,10 @@ describe("xlsx import", () => {
 });
 
 describe("xlsx request body", () => {
+  // Both tests load the controller module (Nest decorators, ExcelJS): slow
+  // to compile on a busy machine, well past Jest's default 5 s.
+  jest.setTimeout(60_000);
+
   it("reaches the handler through the global ValidationPipe, as base64", async () => {
     const pipe = new ValidationPipe({ transform: true, whitelist: true });
     const { ImportController } = await import("./import.controller");
