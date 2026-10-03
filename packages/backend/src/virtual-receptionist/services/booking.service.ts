@@ -252,12 +252,4 @@ Teléfono: ${context.phoneNumber}
   private generateId(): string {
     return Date.now().toString() + '-' + Math.random().toString(36).substr(2, 9);
   }
-
-  /**
-   * Get booking count
-   */
-  async getBookingCount(): Promise<number> {
-    // In a real implementation, this would query the database
-    return 0;
-  }
 }

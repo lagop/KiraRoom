@@ -922,7 +922,21 @@ export interface ClientWallet {
   tenantId: string;
   balance: number;
   currency: string;
-  loyaltyPoints: number;
+  // No loyaltyPoints: the wallet column stopped moving in #120. Points are
+  // in getClientLoyalty().
+}
+
+/** GET /virtual-receptionist/stats: the salon's own conversations. */
+export interface ReceptionistStats {
+  days: number;
+  since: string;
+  conversations: number;
+  byChannel: Record<"web" | "whatsapp" | "facebook" | "instagram" | "telegram", number>;
+  messages: { fromClients: number; fromReceptionist: number };
+  bookings: number;
+  handedOff: number;
+  /** Null until replies have recorded their time. */
+  avgResponseMs: number | null;
 }
 
 /** P2A-receptionist-v2 â€” add-on catalog entry (Phase 8 UI). */
@@ -3941,23 +3955,12 @@ class ApiClient implements ApiClientInterface {
   }
 
   /**
-   * H-4: per-channel volume counters for the wizard's small
-   * dashboard tile. Returned shape:
-   *   {
-   *     inbound: { web, whatsapp, facebook, instagram, telegram },
-   *     outbound: { facebook: { ok, skipped, error }, ... },
-   *     gateBlocked: { facebook: { no_feature, lookup_error }, ... }
-   *   }
+   * The receptionist's activity in the salon over the last `days`, counted
+   * from the salon's own conversations. Replaces /channels/metrics, which
+   * summed every salon's messages since the last server restart.
    */
-  async getChannelsMetrics(): Promise<{
-    inbound: Record<string, number>;
-    outbound: Record<string, { ok: number; skipped: number; error: number }>;
-    gateBlocked: Record<
-      string,
-      { no_feature: number; lookup_error: number }
-    >;
-  }> {
-    return this.request("/virtual-receptionist/channels/metrics");
+  async getReceptionistStats(days = 30): Promise<ReceptionistStats> {
+    return this.request(`/virtual-receptionist/stats?days=${days}`);
   }
 
   // Admin Settings

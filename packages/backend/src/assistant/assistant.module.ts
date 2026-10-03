@@ -4,6 +4,7 @@ import { PrismaModule } from '../common/prisma/prisma.module';
 import { VirtualReceptionistModule } from '../virtual-receptionist/virtual-receptionist.module';
 import { PlatformModule } from '../platform/platform.module';
 import { FeatureFlagModule } from '../common/feature-flags/feature-flag.module';
+import { WaitListModule } from '../wait-list/wait-list.module';
 import { AssistantController } from './assistant.controller';
 import { AssistantService } from './assistant.service';
 import { AssistantGateway } from './assistant.gateway';
@@ -22,7 +23,9 @@ import { AssistantSoftLaunchGuard } from './assistant-soft-launch.guard';
  * and its own conversation tables.
  */
 @Module({
-  imports: [ConfigModule, PrismaModule, VirtualReceptionistModule, PlatformModule, FeatureFlagModule],
+  // WaitListModule: close_waitlist_slot sends the notices through the
+  // wait-list's own "Avisar" path.
+  imports: [ConfigModule, PrismaModule, VirtualReceptionistModule, PlatformModule, FeatureFlagModule, WaitListModule],
   controllers: [AssistantController],
   providers: [
     AssistantService,

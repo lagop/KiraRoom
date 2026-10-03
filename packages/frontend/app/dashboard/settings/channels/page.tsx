@@ -4,7 +4,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useTranslations } from "@/lib/use-translation";
-import apiClient, { ChannelsConfig } from "@/lib/api";
+import apiClient, { ChannelsConfig, ReceptionistStats } from "@/lib/api";
 import {
   AlertCircle,
   ArrowRight,
@@ -209,6 +209,8 @@ function ChannelsSettingsContent() {
         </p>
       </header>
 
+      <ReceptionistActivityCard />
+
       {resultKey && (
         <div
           className={
@@ -382,8 +384,6 @@ function ChannelsSettingsContent() {
               ) : null
             }
           />
-
-          <ChannelsMetricsCard />
 
           {error && (
             <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700 inline-flex items-start gap-2">
@@ -803,72 +803,80 @@ function LockedCard({
 }
 
 /**
- * H-4: small live-counter tile. Reads the JSON breakdown from
- * `GET /virtual-receptionist/channels/metrics`. Polled every 30s.
+ * What the receptionist did for this salon, counted from the salon's own
+ * conversations (`GET /virtual-receptionist/stats`). This tile used to show
+ * process-wide counters -- every salon's messages since the last server
+ * restart -- as the salon's volume per channel.
+ *
+ * Shown in every state of the page (also when Multicanal is locked): web and
+ * WhatsApp are in every plan with the receptionist. Hidden when the request
+ * fails (no receptionist in the plan).
  */
-function ChannelsMetricsCard() {
+function ReceptionistActivityCard() {
   const t = useTranslations();
-  const [metrics, setMetrics] = useState<{
-    inbound: Record<string, number>;
-    outbound: Record<string, { ok: number; skipped: number; error: number }>;
-    gateBlocked: Record<string, { no_feature: number; lookup_error: number }>;
-  } | null>(null);
+  const [stats, setStats] = useState<ReceptionistStats | null>(null);
   useEffect(() => {
     let cancelled = false;
-    const fetchOnce = async () => {
-      try {
-        const m = await apiClient.getChannelsMetrics();
-        if (!cancelled) setMetrics(m);
-      } catch {
-        /* best-effort */
-      }
-    };
-    fetchOnce();
-    const id = setInterval(fetchOnce, 30_000);
+    apiClient
+      .getReceptionistStats(30)
+      .then((s) => {
+        if (!cancelled) setStats(s);
+      })
+      .catch(() => {
+        /* not in the plan, or offline: no tile */
+      });
     return () => {
       cancelled = true;
-      clearInterval(id);
     };
   }, []);
-  if (!metrics) return null;
-  const channels: { key: string; label: string }[] = [
+  if (!stats) return null;
+
+  const channels: { key: keyof ReceptionistStats["byChannel"]; label: string }[] = [
+    { key: "web", label: "Web" },
+    { key: "whatsapp", label: "WhatsApp" },
     { key: "facebook", label: "Messenger" },
     { key: "instagram", label: "Instagram" },
     { key: "telegram", label: "Telegram" },
   ];
+  const avg =
+    stats.avgResponseMs === null
+      ? t("billing.channels.activityNotMeasured")
+      : `${(stats.avgResponseMs / 1000).toFixed(1)} s`;
+  const tiles: { label: string; value: string | number }[] = [
+    { label: t("billing.channels.activityConversations"), value: stats.conversations },
+    { label: t("billing.channels.activityClientMessages"), value: stats.messages.fromClients },
+    { label: t("billing.channels.activityBookings"), value: stats.bookings },
+    { label: t("billing.channels.activityHandedOff"), value: stats.handedOff },
+    { label: t("billing.channels.activityAvgResponse"), value: avg },
+  ];
+
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-4 text-sm">
-      <p className="font-medium text-gray-700 flex items-center gap-2">
-        {t("billing.channels.metricsTitle")}
+      <p className="font-medium text-gray-700">
+        {t("billing.channels.activityTitle", { days: stats.days })}
       </p>
-      <div className="mt-3 grid grid-cols-3 gap-3 text-center">
-        {channels.map(({ key, label }) => {
-          const inb = metrics.inbound[key] ?? 0;
-          const out = metrics.outbound[key] ?? { ok: 0, skipped: 0, error: 0 };
-          const blocked = metrics.gateBlocked[key] ?? { no_feature: 0, lookup_error: 0 };
-          return (
-            <div key={key} className="rounded border border-gray-100 bg-gray-50 p-2">
-              <p className="text-xs font-medium text-gray-500">{label}</p>
-              <p className="mt-1 text-2xl font-semibold text-gray-900">{inb}</p>
-              <p className="text-[10px] uppercase tracking-wide text-gray-400">
-                {t("billing.channels.metricsInbound")}
-              </p>
-              <div className="mt-2 text-[11px] text-gray-500 flex justify-around">
-                <span>
-                  <span className="text-emerald-600 font-semibold">{out.ok}</span>{" "}
-                  {t("billing.channels.metricsOut")}
-                </span>
-                <span>
-                  <span className="text-red-600 font-semibold">
-                    {out.error + blocked.no_feature + blocked.lookup_error}
-                  </span>{" "}
-                  {t("billing.channels.metricsBlocked")}
-                </span>
+      {stats.conversations === 0 ? (
+        <p className="mt-2 text-gray-500">{t("billing.channels.activityEmpty")}</p>
+      ) : (
+        <>
+          <div className="mt-3 grid grid-cols-2 sm:grid-cols-5 gap-3 text-center">
+            {tiles.map(({ label, value }) => (
+              <div key={label} className="rounded border border-gray-100 bg-gray-50 p-2">
+                <p className="text-xl font-semibold text-gray-900">{value}</p>
+                <p className="mt-1 text-[11px] text-gray-500">{label}</p>
               </div>
-            </div>
-          );
-        })}
-      </div>
+            ))}
+          </div>
+          <p className="mt-3 text-xs text-gray-500">
+            {t("billing.channels.activityByChannel")}:{" "}
+            {channels
+              .filter(({ key }) => stats.byChannel[key] > 0)
+              .map(({ key, label }) => `${label} ${stats.byChannel[key]}`)
+              .join(" · ")}
+          </p>
+        </>
+      )}
     </div>
   );
 }
+
