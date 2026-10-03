@@ -11,6 +11,7 @@ import { EncryptionService } from "../common/encryption/encryption.service";
 import {
   HoldedAdapter,
   HoldedApiError,
+  HoldedCancelRefused,
   HoldedInvoiceInput,
   HoldedSetupError,
 } from "./providers/holded.adapter";
@@ -38,6 +39,23 @@ const SYNCABLE_STATUSES: InvoiceStatus[] = [
  */
 export const RETRY_DELAYS_MS = [10 * 60_000, 30 * 60_000, 2 * 3600_000, 6 * 3600_000, 12 * 3600_000];
 export const MAX_AUTO_ATTEMPTS = RETRY_DELAYS_MS.length;
+
+/** What the sync log says when a cancellation could not be mirrored. */
+export const CANCEL_NOT_REFLECTED = "No reflejado en Holded: anúlala allí.";
+
+/**
+ * Whether cancelling this invoice in KiraRoom has to be mirrored in Holded:
+ * it is there (linked), or a push was attempted and may have reached Holded
+ * before failing. InvoicesService sets accountingCancelStatus = pending in
+ * the same update that cancels the invoice, so a crash in between cannot
+ * lose it.
+ */
+export function cancelNeedsMirror(invoice: {
+  accountingExternalId: string | null;
+  accountingStatus: string;
+}): boolean {
+  return !!invoice.accountingExternalId || invoice.accountingStatus === "pending" || invoice.accountingStatus === "error";
+}
 
 /** Per manual "send pending" click: Holded allows 60 requests/min on small plans. */
 const MANUAL_BATCH = 20;
@@ -342,6 +360,147 @@ export class AccountingService {
   }
 
   /**
+   * Mirrors in Holded the cancellation of an invoice that is (or may be)
+   * there: InvoicesService.cancel/anulate mark it `accountingCancelStatus =
+   * pending` and call this; the cron retries it. Never throws for a Holded
+   * failure. Outcomes land on accountingCancelStatus and in the sync log
+   * (action "cancel"):
+   *   - cancelled: Holded cancelled it (or it already was, or it is gone);
+   *   - pending:   Holded unreachable, retried with the same backoff as
+   *                invoice pushes;
+   *   - failed:    Holded refused (e.g. already paid there), the key does
+   *                not work, or it never answered: the log tells the salon
+   *                to cancel it in Holded by hand.
+   */
+  async reflectCancellation(
+    invoiceId: string,
+    opts: { trigger?: "cancel" | "retry" } = {},
+  ): Promise<SyncResult> {
+    if (this.inFlight.has(invoiceId)) return { status: "skipped", error: "in_progress" };
+    this.inFlight.add(invoiceId);
+    try {
+      return await this.reflectCancellationUnlocked(invoiceId, opts.trigger ?? "cancel");
+    } finally {
+      this.inFlight.delete(invoiceId);
+    }
+  }
+
+  private async reflectCancellationUnlocked(
+    invoiceId: string,
+    trigger: "cancel" | "retry",
+  ): Promise<SyncResult> {
+    const invoice = await this.prisma.invoice.findFirst({
+      where: { id: invoiceId },
+      select: {
+        id: true,
+        tenantId: true,
+        status: true,
+        series: true,
+        number: true,
+        accountingStatus: true,
+        accountingExternalId: true,
+        accountingCancelStatus: true,
+      },
+    });
+    if (!invoice || invoice.status !== InvoiceStatus.cancelled) {
+      return { status: "skipped", error: "not_cancelled" };
+    }
+    if (invoice.accountingCancelStatus !== "pending") {
+      return { status: "skipped", error: "nothing_to_reflect" };
+    }
+
+    const conn = await this.prisma.accountingConnection.findUnique({
+      where: { tenantId: invoice.tenantId },
+    });
+    const log = (status: "ok" | "error", extra: { externalId?: string; errorMessage?: string; payload?: Prisma.InputJsonValue }) =>
+      this.writeLog({
+        tenantId: invoice.tenantId,
+        invoiceId,
+        connectionId: conn?.id ?? null,
+        provider: conn?.provider ?? AccountingProvider.holded,
+        action: "cancel",
+        status,
+        ...extra,
+      });
+    const settle = async (
+      cancelStatus: "pending" | "cancelled" | "failed",
+      message: string | null,
+      payload: Record<string, unknown>,
+    ): Promise<SyncResult> => {
+      await this.prisma.invoice.update({
+        where: { id: invoice.id },
+        data: { accountingCancelStatus: cancelStatus },
+      });
+      if (cancelStatus === "cancelled") {
+        await log("ok", { externalId: invoice.accountingExternalId ?? undefined, payload: { ...payload, trigger } as Prisma.InputJsonValue });
+        return { status: "synced", externalId: invoice.accountingExternalId ?? undefined };
+      }
+      await log("error", {
+        externalId: invoice.accountingExternalId ?? undefined,
+        errorMessage: message ?? undefined,
+        payload: { ...payload, retry: cancelStatus === "pending", trigger } as Prisma.InputJsonValue,
+      });
+      return { status: cancelStatus === "pending" ? "pending" : "error", error: message ?? undefined };
+    };
+
+    if (!conn || !conn.isActive || conn.provider !== AccountingProvider.holded) {
+      if (!invoice.accountingExternalId) {
+        // Never reached Holded as far as we know, and there is no Holded
+        // to ask any more: nothing to mirror.
+        await this.prisma.invoice.update({ where: { id: invoice.id }, data: { accountingCancelStatus: null } });
+        return { status: "skipped", error: "no_connection" };
+      }
+      return settle("failed", `${CANCEL_NOT_REFLECTED} (Holded ya no está conectado.)`, { reason: "no_connection" });
+    }
+
+    let apiKey: string;
+    try {
+      apiKey = this.encryption.decrypt(conn.encryptedAccessToken);
+    } catch {
+      return settle("failed", `${CANCEL_NOT_REFLECTED} (No se pudo leer la clave de Holded guardada.)`, {});
+    }
+
+    try {
+      let externalId = invoice.accountingExternalId;
+      if (!externalId) {
+        // A push that failed may still have created it (a timeout after
+        // Holded answered): look the number up before deciding it is not there.
+        externalId = await this.holded.findInvoiceId(apiKey, `${invoice.series}${invoice.number}`);
+        if (!externalId) {
+          await this.prisma.invoice.update({
+            where: { id: invoice.id },
+            data: { accountingCancelStatus: null, accountingStatus: "not_synced", accountingError: null },
+          });
+          return { status: "skipped", error: "not_in_holded" };
+        }
+        await this.prisma.invoice.update({
+          where: { id: invoice.id },
+          data: { accountingExternalId: externalId, accountingStatus: "synced", accountingError: null },
+        });
+        invoice.accountingExternalId = externalId;
+      }
+      const outcome = await this.holded.cancelInvoice(apiKey, externalId);
+      return settle("cancelled", null, { outcome });
+    } catch (err) {
+      this.logger.warn(`reflectCancellation(${invoiceId}) failed: ${(err as Error).message}`);
+      if (err instanceof HoldedCancelRefused) {
+        return settle("failed", `${CANCEL_NOT_REFLECTED} (Holded no la deja cancelar: ${err.message})`, { httpStatus: 422 });
+      }
+      if (err instanceof HoldedApiError) {
+        if (err.transient) {
+          return settle("pending", `Holded no está disponible ahora (${err.status || "sin respuesta"}). Se reintentará la anulación.`, {
+            httpStatus: err.status,
+          });
+        }
+        const why = err.credentialProblem ? "Holded ha rechazado la clave API." : `Holded respondió: ${err.detail}`;
+        return settle("failed", `${CANCEL_NOT_REFLECTED} (${why})`, { httpStatus: err.status });
+      }
+      // Our own failure (database, bug): worth another go.
+      return settle("pending", `Error interno al anular en Holded: ${(err as Error).message}`, {});
+    }
+  }
+
+  /**
    * The panel's "Enviar pendientes" button: this salon's invoices that are
    * not in Holded yet. Without `from`, the ones that failed plus everything
    * issued since Holded was connected; with `from`, every invoice issued
@@ -387,28 +546,28 @@ export class AccountingService {
    * tenants with backoff, and gives up into `error` after MAX_AUTO_ATTEMPTS.
    */
   async retryDue(now = new Date(), limit = 50) {
+    // A salon that disconnected keeps its pending invoices; they must not
+    // hold the queue's first slots forever.
+    const connected = {
+      accountingConnection: { is: { isActive: true, provider: AccountingProvider.holded } },
+    };
     const due = await this.prisma.invoice.findMany({
       where: {
         accountingStatus: "pending",
         accountingExternalId: null,
-        // A salon that disconnected keeps its pending invoices; they must not
-        // hold the queue's first slots forever.
-        tenant: {
-          accountingConnection: { is: { isActive: true, provider: AccountingProvider.holded } },
-        },
+        // A cancelled invoice is never pushed (syncInvoice skips it without
+        // touching the row), so it would sit first in this queue for ever;
+        // its cancellation is handled below.
+        status: { in: SYNCABLE_STATUSES },
+        tenant: connected,
       },
       select: { id: true },
       orderBy: { updatedAt: "asc" },
       take: limit,
     });
-    const out = { retried: 0, synced: 0, gaveUp: 0, notDue: 0 };
-    const since = new Date(now.getTime() - 48 * 3600_000);
+    const out = { retried: 0, synced: 0, gaveUp: 0, notDue: 0, cancelsRetried: 0, cancelsGaveUp: 0 };
     for (const inv of due) {
-      const failures = await this.prisma.accountingSyncLog.findMany({
-        where: { invoiceId: inv.id, action: "sync", status: "error", createdAt: { gte: since } },
-        orderBy: { createdAt: "desc" },
-        select: { createdAt: true },
-      });
+      const failures = await this.recentFailures(inv.id, "sync", now);
       if (failures.length >= MAX_AUTO_ATTEMPTS) {
         await this.prisma.invoice.update({
           where: { id: inv.id },
@@ -420,9 +579,7 @@ export class AccountingService {
         out.gaveUp++;
         continue;
       }
-      const last = failures[0]?.createdAt;
-      const delay = RETRY_DELAYS_MS[Math.max(0, failures.length - 1)];
-      if (last && now.getTime() - last.getTime() < delay) {
+      if (!this.isDue(failures, now)) {
         out.notDue++;
         continue;
       }
@@ -430,7 +587,58 @@ export class AccountingService {
       const r = await this.syncInvoice(inv.id, { trigger: "retry" });
       if (r.status === "synced") out.synced++;
     }
+
+    // Cancellations still to mirror in Holded, same backoff.
+    const cancels = await this.prisma.invoice.findMany({
+      where: { accountingCancelStatus: "pending", status: InvoiceStatus.cancelled, tenant: connected },
+      select: { id: true, tenantId: true, accountingExternalId: true },
+      orderBy: { updatedAt: "asc" },
+      take: limit,
+    });
+    for (const inv of cancels) {
+      const failures = await this.recentFailures(inv.id, "cancel", now);
+      if (failures.length >= MAX_AUTO_ATTEMPTS) {
+        await this.prisma.invoice.update({
+          where: { id: inv.id },
+          data: { accountingCancelStatus: "failed" },
+        });
+        await this.writeLog({
+          tenantId: inv.tenantId,
+          invoiceId: inv.id,
+          connectionId: null,
+          provider: AccountingProvider.holded,
+          action: "cancel",
+          status: "error",
+          externalId: inv.accountingExternalId ?? undefined,
+          errorMessage: `${CANCEL_NOT_REFLECTED} (Holded no respondió tras ${failures.length} intentos.)`,
+          payload: { retry: false, trigger: "retry", gaveUp: true },
+        });
+        out.cancelsGaveUp++;
+        continue;
+      }
+      if (!this.isDue(failures, now)) {
+        out.notDue++;
+        continue;
+      }
+      out.cancelsRetried++;
+      await this.reflectCancellation(inv.id, { trigger: "retry" });
+    }
     return out;
+  }
+
+  /** This invoice's failed attempts of `action` in the last 48 hours, newest first. */
+  private recentFailures(invoiceId: string, action: "sync" | "cancel", now: Date) {
+    return this.prisma.accountingSyncLog.findMany({
+      where: { invoiceId, action, status: "error", createdAt: { gte: new Date(now.getTime() - 48 * 3600_000) } },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
+    });
+  }
+
+  private isDue(failures: { createdAt: Date }[], now: Date): boolean {
+    const last = failures[0]?.createdAt;
+    const delay = RETRY_DELAYS_MS[Math.max(0, failures.length - 1)];
+    return !last || now.getTime() - last.getTime() >= delay;
   }
 
   async recentLogs(tenantId: string, limit = 100) {

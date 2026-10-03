@@ -35,6 +35,7 @@ import { NotificationType } from "../notifications/dto";
 import { TranslationsService } from "../translations/translations.service";
 import { ConsentService } from "../consent/consent.service";
 import { salonInstant } from "./salon-time";
+import { appointmentLocationId } from "../multi-location/appointment-location";
 import { normalizePhone, phoneKey } from "../common/phone";
 import type { OnlineBookingDto } from "./dto/book-appointment.dto";
 
@@ -525,6 +526,8 @@ export class AppointmentsService {
       where: { id: tenantId },
       select: { timezone: true },
     });
+    // Which of the salon's locations: the consolidated report reads it.
+    const locationId = await appointmentLocationId(this.prisma, tenantId, professional.id);
 
     // Convert scheduledDate to Date if it's a string
     const scheduledDate =
@@ -559,6 +562,7 @@ export class AppointmentsService {
         notes: dto.notes || null,
         source: (dto.source as AppointmentSource) || AppointmentSource.online,
         widgetInstanceId: dto.widgetInstanceId || null,
+        locationId,
         // Commission rate can be set by admin/owner
         ...(dto.commissionRate !== undefined && {
           commissionRate: dto.commissionRate,

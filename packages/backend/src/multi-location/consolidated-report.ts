@@ -2,12 +2,14 @@
  * The consolidated multi-location report, as a pure function of the rows the
  * service loads.
  *
- * Nothing in the booking flow writes `appointments.locationId` yet, so the
- * report used to sum payments "where appointment.locationId = X" and show
- * every location at 0 €. An appointment's location is therefore taken from
- * the appointment when it has one, and otherwise from where its professional
- * works: their only active location, or their primary one when they are
- * assigned to several. Appointments that still have no location (a
+ * The report used to sum payments "where appointment.locationId = X" while
+ * no booking wrote that column, and showed every location at 0 €. Bookings
+ * now store it (see appointment-location.ts) and a migration filled it in
+ * for professionals with a single location, but older rows of professionals
+ * with several still have none. An appointment's location is therefore
+ * taken from the appointment when it has one, and otherwise from where its
+ * professional works: their only active location, or their primary one when
+ * they are assigned to several. Appointments that still have no location (a
  * professional assigned nowhere, or to several with none primary) are
  * reported apart as "sin local asignado" instead of being dropped, so the
  * per-location rows always add up to the salon's total.

@@ -21,7 +21,13 @@
  *                  GET  /api/v2/invoices/find-by-number?document_number=<n>
  *                       -> { items: [{ id, document_number, ... }], has_more, cursor }
  *                  (scopes sales:invoices.write / sales:invoices.read)
- *   - Errors:      JSON problem details { type, title, status, detail }.
+ *                  GET  /api/v2/invoices/{invoiceId}       -> { id, status, draft, ... }
+ *                       (status enum: failed completed pending partial cancelled)
+ *                  POST /api/v2/invoices/{invoiceId}/cancel -> 200, no body needed;
+ *                       422 when the invoice's state does not allow it ("p. ej.
+ *                       ya cobrada o anulada"). Scope sales:invoices.write.
+ *                       (read 2026-10-03)
+ *   - Errors:     JSON problem details { type, title, status, detail }.
  *                  429 carries Retry-After (seconds).
  *
  * This file is the only place that knows URLs and field names, so if Holded
@@ -64,6 +70,13 @@ export interface HoldedContact {
 export interface HoldedInvoiceMatch {
   id: string;
   document_number?: string | null;
+}
+
+export interface HoldedInvoiceState {
+  id: string;
+  /** failed | completed | pending | partial | cancelled */
+  status?: string | null;
+  draft?: boolean | null;
 }
 
 export interface HoldedCreateContactBody {
@@ -180,6 +193,14 @@ export class HoldedClient {
 
   async createInvoice(body: HoldedCreateInvoiceBody): Promise<{ id: string }> {
     return this.requireId(await this.request<{ id?: string }>("POST", "/api/v2/invoices", body));
+  }
+
+  async getInvoice(invoiceId: string): Promise<HoldedInvoiceState> {
+    return this.request<HoldedInvoiceState>("GET", `/api/v2/invoices/${encodeURIComponent(invoiceId)}`);
+  }
+
+  async cancelInvoice(invoiceId: string): Promise<void> {
+    await this.request("POST", `/api/v2/invoices/${encodeURIComponent(invoiceId)}/cancel`);
   }
 
   private requireId(res: { id?: string }): { id: string } {

@@ -34,6 +34,7 @@ function build({
   widgetProfessionals = [] as string[],
   minAdvanceBooking = 2,
   maxAdvanceBooking = 30,
+  locationLinks = [] as Array<{ professionalId: string; locationId: string; isPrimary: boolean }>,
 } = {}) {
   const clientLookups: any[] = [];
   const created: any[] = [];
@@ -63,6 +64,14 @@ function build({
         [PRO, PRO_2]
           .filter((p) => !where.id?.in || where.id.in.includes(p.id))
           .map((p) => ({ id: p.id, services: offering.includes(p.id) ? [{ serviceId: SERVICE_ID }] : [] })),
+    },
+    // Where each professional works (active locations of the salon only).
+    professionalLocation: {
+      findMany: jest.fn(async ({ where }: any) =>
+        where.location?.tenantId === "tenant-b"
+          ? locationLinks.filter((l) => l.professionalId === where.professionalId)
+          : [],
+      ),
     },
     service: {
       findFirst: jest.fn(async ({ where }: any) =>
@@ -349,5 +358,52 @@ describe("request validation", () => {
   it("requires a client id or client details from staff", () => {
     expect(errors(StaffBookingDto, { ...BOOKING, clientInfo: undefined })).toEqual(["clientId"]);
     expect(errors(StaffBookingDto, { ...BOOKING, clientInfo: undefined, clientId: PRO.id })).toEqual([]);
+  });
+});
+
+/**
+ * appointments.locationId was never written by any booking, so the
+ * multi-location report attributed every appointment by where its
+ * professional works today. Every booking path (online, staff, receptionist)
+ * goes through insertAppointment, which now stores it.
+ */
+describe("the appointment's location", () => {
+  const LOC_A = "55555555-5555-4555-8555-555555555555";
+  const LOC_B = "66666666-6666-4666-8666-666666666666";
+
+  it("is the professional's only location", async () => {
+    const { service, created } = build({ locationLinks: [{ professionalId: PRO.id, locationId: LOC_A, isPrimary: false }] });
+    await service.createOnline(BOOKING as any);
+    expect(created[0].locationId).toBe(LOC_A);
+  });
+
+  it("is the primary one when the professional works at several, also for staff bookings", async () => {
+    const { service, created } = build({
+      existingClients: [{ id: "c1", email: "x@mail.test", tenantId: "tenant-b" }],
+      locationLinks: [
+        { professionalId: PRO.id, locationId: LOC_A, isPrimary: false },
+        { professionalId: PRO.id, locationId: LOC_B, isPrimary: true },
+      ],
+    });
+    await service.createByStaff(
+      { ...BOOKING, clientInfo: undefined, clientId: "c1" } as any,
+      { id: "u1", role: "owner", tenantId: "tenant-b" },
+    );
+    expect(created[0].locationId).toBe(LOC_B);
+  });
+
+  it("stays empty when it is ambiguous or the salon has no locations", async () => {
+    const several = build({
+      locationLinks: [
+        { professionalId: PRO.id, locationId: LOC_A, isPrimary: false },
+        { professionalId: PRO.id, locationId: LOC_B, isPrimary: false },
+      ],
+    });
+    await several.service.createOnline(BOOKING as any);
+    expect(several.created[0].locationId).toBeNull();
+
+    const none = build();
+    await none.service.createOnline(BOOKING as any);
+    expect(none.created[0].locationId).toBeNull();
   });
 });

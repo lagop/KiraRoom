@@ -24,11 +24,13 @@ function prisma({
     { id: "p-ana", firstName: "Ana", lastName: "Martínez" },
   ],
   booked = [] as any[],
+  locationLinks = [] as any[],
 } = {}) {
   let n = 0;
   let clientsMade = 0;
   return {
     tenant: { findUnique: jest.fn(async () => ({ country: "ES", timezone: "Europe/Madrid" })) },
+    professionalLocation: { findMany: jest.fn(async () => locationLinks) },
     service: {
       findMany: jest.fn(async () => [
         { id: "s-corte", name: "Corte mujer", duration: 45, price: 25, currency: "EUR" },
@@ -176,6 +178,26 @@ describe("appointment import", () => {
     const data = p.appointment.create.mock.calls[0][0].data;
     expect(data).toMatchObject({ duration: 60, endTime: "11:00", totalAmount: 3000 });
     expect(Number(data.price)).toBe(30);
+  });
+
+  it("stores each appointment's location: the professional's, when it is unambiguous", async () => {
+    // No booking wrote appointments.locationId; the multi-location report needs it.
+    const p = prisma({
+      locationLinks: [
+        { professionalId: "p-carmen", locationId: "loc-centro", isPrimary: false },
+        { professionalId: "p-ana", locationId: "loc-centro", isPrimary: false },
+        { professionalId: "p-ana", locationId: "loc-norte", isPrimary: false },
+      ],
+    });
+    await new ImportService(p).commitAppointments(
+      "t1",
+      HEADER + `${day(2)};10:00;Eva Sanz;600000001;Corte mujer;Carmen;\n` + `${day(2)};11:00;Eva Sanz;600000001;Corte mujer;Ana;\n`,
+      "agenda.csv",
+    );
+    const [carmen, ana] = p.appointment.create.mock.calls.map((c: any) => c[0].data);
+    expect(carmen.locationId).toBe("loc-centro");
+    expect(ana.locationId).toBeNull(); // two locations, none primary
+    expect(p.professionalLocation.findMany.mock.calls[0][0].where).toEqual({ location: { tenantId: "t1", isActive: true } });
   });
 
   it("sendReminders reaches the handler through the global ValidationPipe", async () => {
