@@ -184,7 +184,7 @@
     "syncOnIssue": "Enviar cada factura a Holded al emitirla",
     "syncOnIssueHelp": "Si lo desactivas, las facturas se quedan pendientes hasta que pulses \"Enviar pendientes\".",
     "howItWorks": "Las facturas llegan a Holded como borrador, con el mismo número que en KiraRoom. No las aprobamos nosotros: KiraRoom ya las emitió (y, con VERI*FACTU activo, ya las comunicó a Hacienda). Si tu Holded también tiene VERI*FACTU, apruébalas solo si tu gestoría te lo indica, para no declararlas dos veces.",
-    "limitsNote": "Si anulas una factura que ya está en Holded, anúlala también allí. Las rectificativas no se envían solas: van en el libro de facturas. Holded limita las llamadas a su API según tu plan (por ejemplo, 500 al mes en Plus) y cada factura usa 2 o 3.",
+    "limitsNote": "Si anulas una factura que ya está en Holded, la cancelamos también allí; si Holded no lo permite (por ejemplo, porque ya está cobrada), lo verás en el registro como «No reflejado en Holded» y tendrás que anularla tú allí. Las rectificativas no se envían solas: van en el libro de facturas. Holded limita las llamadas a su API según tu plan (por ejemplo, 500 al mes en Plus) y cada factura usa 2 o 3.",
     "statSynced": "En Holded",
     "statPending": "Reintentando",
     "statError": "Con error",

@@ -2708,6 +2708,9 @@ model Invoice {
   accountingExternalId String?
   accountingSyncedAt   DateTime?
   accountingError      String?                 @db.Text
+  /// A cancellation in KiraRoom of an invoice already in Holded, mirrored
+  /// there (POST /invoices/{id}/cancel). Null: nothing to mirror.
+  accountingCancelStatus InvoiceAccountingCancelStatus?
   /// P2A Ã¢â‚¬â€ Fiscal retry chain tracking
   fiscalRetryCount     Int                     @default(0)
   /// Snapshot of issuer NIF at the time of issuance (immutable). For refund
@@ -2820,6 +2823,14 @@ enum InvoiceAccountingStatus {
   pending
   synced
   error
+}
+
+/// pending: to cancel in Holded (retried); cancelled: cancelled there;
+/// failed: Holded refused or never answered -- the salon cancels it there.
+enum InvoiceAccountingCancelStatus {
+  pending
+  cancelled
+  failed
 }
 
 enum FiscalMode {

@@ -184,7 +184,7 @@
     "syncOnIssue": "Send each invoice to Holded when it is issued",
     "syncOnIssueHelp": "If off, invoices wait until you press \"Send pending\".",
     "howItWorks": "Invoices arrive in Holded as drafts, with the same number as in KiraRoom. We do not approve them: KiraRoom already issued them (and, with VERI*FACTU on, already reported them to the tax agency). If your Holded also has VERI*FACTU, only approve them if your accountant tells you to, so they are not reported twice.",
-    "limitsNote": "If you cancel an invoice that is already in Holded, cancel it there too. Corrective invoices are not sent automatically: they are in the invoice book. Holded limits API calls by plan (e.g. 500 a month on Plus) and each invoice uses 2 or 3.",
+    "limitsNote": "If you cancel an invoice that is already in Holded, we cancel it there too; if Holded does not allow it (for example, it is already paid), the log shows it as not reflected in Holded and you need to cancel it there yourself. Corrective invoices are not sent automatically: they are in the invoice book. Holded limits API calls by plan (e.g. 500 a month on Plus) and each invoice uses 2 or 3.",
     "statSynced": "In Holded",
     "statPending": "Retrying",
     "statError": "With errors",

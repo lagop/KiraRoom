@@ -3,8 +3,8 @@ import { Cron, CronExpression } from "@nestjs/schedule";
 import { AccountingService } from "./accounting.service";
 
 /**
- * Retries invoices whose push to Holded failed for a transient reason
- * (Holded down, timeout, rate limit). The backoff and the give-up rule live
+ * Retries invoices whose push to Holded -- or whose cancellation there --
+ * failed for a transient reason (Holded down, timeout, rate limit). The backoff and the give-up rule live
  * in AccountingService.retryDue; this only sets the pace.
  *
  * Before this existed the "retry queue" was a button that drained every
@@ -25,9 +25,10 @@ export class AccountingScheduler {
     this.running = true;
     try {
       const r = await this.accounting.retryDue();
-      if (r.retried || r.gaveUp) {
+      if (r.retried || r.gaveUp || r.cancelsRetried || r.cancelsGaveUp) {
         this.logger.log(
-          `Holded retries: ${r.retried} retried, ${r.synced} synced, ${r.gaveUp} gave up, ${r.notDue} not due`,
+          `Holded retries: ${r.retried} retried, ${r.synced} synced, ${r.gaveUp} gave up, ` +
+            `${r.cancelsRetried} cancellations retried, ${r.cancelsGaveUp} gave up, ${r.notDue} not due`,
         );
       }
     } catch (err) {

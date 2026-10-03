@@ -3,7 +3,7 @@
 import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Download, Upload, Check, AlertTriangle, FileText } from "lucide-react";
-import apiClient, { ImportPreviewRow, ImportPreviewResult, ImportCommitResult } from "@/lib/api";
+import apiClient, { ImportPreviewRow, ImportPreviewResult, ImportCommitResult, ImportUpload } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 
 type Step = "download" | "upload" | "preview" | "done";
@@ -58,13 +58,13 @@ const COPY: Record<Kind, { title: string; intro: string; columns: string }> = {
   clients: {
     title: "Importar clientes",
     intro:
-      "Sube la exportación de tu programa anterior (Booksy, Treatwell, Fresha…) o un Excel guardado como CSV. Reconocemos columnas como Nombre, Apellidos, Teléfono o Móvil, Email y Fecha de nacimiento. No se duplican las clientas que ya tienes: comparamos el email y el teléfono.",
+      "Sube la exportación de tu programa anterior (Booksy, Treatwell, Fresha…) o un Excel (.xlsx). Reconocemos columnas como Nombre, Apellidos, Teléfono o Móvil, Email y Fecha de nacimiento. No se duplican las clientas que ya tienes: comparamos el email y el teléfono.",
     columns: "Nombre (o Cliente / Nombre completo), Apellidos, Teléfono o Móvil, Email, Fecha de nacimiento, Notas. Hace falta un teléfono o un email.",
   },
   services: {
     title: "Importar servicios",
     intro:
-      "Sube tu lista de servicios como CSV. Si un servicio ya existe con el mismo nombre, actualizamos su duración y su precio.",
+      "Sube tu lista de servicios como CSV o Excel (.xlsx). Si un servicio ya existe con el mismo nombre, actualizamos su duración y su precio.",
     columns: "Servicio, Duración (\"45 min\", \"1 h\", \"1:30\"), Precio (\"25\" o \"25,50 €\"), Categoría y Descripción (opcionales).",
   },
   appointments: {
@@ -83,6 +83,24 @@ async function readCsv(file: File): Promise<string> {
   return utf8.includes("�") ? new TextDecoder("windows-1252").decode(buffer) : utf8;
 }
 
+/** .xlsx goes to the server as is (base64 in the JSON body); it reads the first sheet. */
+function isXlsx(file: File): boolean {
+  return /\.xlsx$/i.test(file.name);
+}
+
+/** Base64 grows the file by a third and the API takes 5 MB bodies. */
+const MAX_XLSX_BYTES = 3_500_000;
+
+async function readBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  // In chunks: String.fromCharCode(...bytes) overflows the stack on big files.
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...Array.from(bytes.subarray(i, i + 0x8000)));
+  }
+  return btoa(binary);
+}
+
 function ImportPageContent() {
   const { toast } = useToast();
   const params = useSearchParams();
@@ -91,7 +109,7 @@ function ImportPageContent() {
   const [sendReminders, setSendReminders] = useState(true);
   const [step, setStep] = useState<Step>("download");
   const [file, setFile] = useState<File | null>(null);
-  const [csv, setCsv] = useState<string>("");
+  const [upload, setUpload] = useState<ImportUpload | null>(null);
   const [preview, setPreview] = useState<ImportPreviewResult | null>(null);
   const [commit, setCommit] = useState<ImportCommitResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -100,7 +118,7 @@ function ImportPageContent() {
     setKind(next);
     setStep("download");
     setFile(null);
-    setCsv("");
+    setUpload(null);
     setPreview(null);
     setCommit(null);
   }
@@ -117,21 +135,38 @@ function ImportPageContent() {
   }
 
   async function handleFile(f: File) {
+    if (/\.(xls|ods|numbers)$/i.test(f.name)) {
+      // Read as text these would be garbage: say what to do instead.
+      toast({
+        title: "Formato no admitido",
+        description: "Abre el archivo y guárdalo como Excel (.xlsx) o como CSV.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (isXlsx(f) && f.size > MAX_XLSX_BYTES) {
+      toast({
+        title: "El archivo es demasiado grande",
+        description: "Divídelo en varios Excel o guárdalo como CSV.",
+        variant: "destructive",
+      });
+      return;
+    }
     setFile(f);
-    setCsv(await readCsv(f));
+    setUpload(isXlsx(f) ? { xlsx: await readBase64(f) } : { csv: await readCsv(f) });
   }
 
   async function runDryRun() {
-    if (!csv) return;
+    if (!upload) return;
     setBusy(true);
     try {
       const name = file?.name ?? "upload.csv";
       setPreview(
         kind === "clients"
-          ? await apiClient.dryRunImportClients(csv, name)
+          ? await apiClient.dryRunImportClients(upload, name)
           : kind === "services"
-            ? await apiClient.dryRunImportServices(csv, name)
-            : await apiClient.dryRunImportAppointments(csv, name, sendReminders),
+            ? await apiClient.dryRunImportServices(upload, name)
+            : await apiClient.dryRunImportAppointments(upload, name, sendReminders),
       );
       setStep("preview");
     } catch (err: any) {
@@ -142,16 +177,16 @@ function ImportPageContent() {
   }
 
   async function runCommit() {
-    if (!csv) return;
+    if (!upload) return;
     setBusy(true);
     try {
       const name = file?.name ?? "upload.csv";
       setCommit(
         kind === "clients"
-          ? await apiClient.commitImportClients(csv, name)
+          ? await apiClient.commitImportClients(upload, name)
           : kind === "services"
-            ? await apiClient.commitImportServices(csv, name)
-            : await apiClient.commitImportAppointments(csv, name, sendReminders),
+            ? await apiClient.commitImportServices(upload, name)
+            : await apiClient.commitImportAppointments(upload, name, sendReminders),
       );
       setStep("done");
       toast({ title: "Importación completada" });
@@ -196,7 +231,7 @@ function ImportPageContent() {
           <p className="text-sm text-gray-500">
             Si vienes de otro programa, exporta tus{" "}
             {kind === "clients" ? "clientas" : kind === "services" ? "servicios" : "citas pendientes (la agenda)"} a CSV o
-            Excel (guárdalo como CSV) y súbelo tal cual. Si empiezas de cero, usa la plantilla.
+            Excel (.xlsx) y súbelo tal cual (del Excel leemos la primera hoja). Si empiezas de cero, usa la plantilla.
           </p>
           {kind === "appointments" && (
             <label className="flex items-start gap-2 text-sm text-gray-700">
@@ -236,9 +271,9 @@ function ImportPageContent() {
           <label className="block border-2 border-dashed border-gray-300 rounded-lg p-6 text-center cursor-pointer hover:border-purple-400">
             <input
               type="file"
-              accept=".csv,text/csv"
+              accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               className="sr-only"
-              aria-label="Archivo CSV"
+              aria-label="Archivo CSV o Excel"
               onChange={(e) => {
                 const f = e.target.files?.[0];
                 if (f) handleFile(f);
@@ -251,7 +286,7 @@ function ImportPageContent() {
                 <div className="text-xs text-gray-500">{(file.size / 1024).toFixed(1)} KB</div>
               </div>
             ) : (
-              <div className="text-gray-500">Haz clic para elegir el archivo CSV</div>
+              <div className="text-gray-500">Haz clic para elegir el archivo CSV o Excel (.xlsx)</div>
             )}
           </label>
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -260,7 +295,7 @@ function ImportPageContent() {
             </button>
             <button
               onClick={runDryRun}
-              disabled={!csv || busy}
+              disabled={!upload || busy}
               className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 disabled:opacity-50"
             >
               {busy ? "Leyendo…" : "Previsualizar"}

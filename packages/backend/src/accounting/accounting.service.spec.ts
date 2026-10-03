@@ -15,8 +15,8 @@
  */
 
 import { AccountingProvider } from "@prisma/client";
-import { AccountingService, MAX_AUTO_ATTEMPTS } from "./accounting.service";
-import { HoldedApiError, HoldedSetupError } from "./providers/holded.adapter";
+import { AccountingService, MAX_AUTO_ATTEMPTS, cancelNeedsMirror } from "./accounting.service";
+import { HoldedApiError, HoldedCancelRefused, HoldedSetupError } from "./providers/holded.adapter";
 import { EncryptionService } from "../common/encryption/encryption.service";
 
 function makeEncryption(): EncryptionService {
@@ -61,8 +61,12 @@ function setup(opts: { connected?: boolean; syncOnIssue?: boolean } = {}) {
         [...invoices.values()].filter(
           (i) =>
             (!where.accountingStatus || i.accountingStatus === where.accountingStatus) &&
+            (!where.accountingCancelStatus || i.accountingCancelStatus === where.accountingCancelStatus) &&
             (!where.tenantId || i.tenantId === where.tenantId) &&
-            !i.accountingExternalId,
+            (!where.status?.in || where.status.in.includes(i.status)) &&
+            (typeof where.status !== "string" || i.status === where.status) &&
+            // The cancellation queue is of invoices already in Holded.
+            (where.accountingCancelStatus ? true : !i.accountingExternalId),
         ),
       ),
       count: jest.fn(async () => 0),
@@ -95,6 +99,7 @@ function setup(opts: { connected?: boolean; syncOnIssue?: boolean } = {}) {
           .filter(
             (l) =>
               l.invoiceId === where.invoiceId &&
+              (!where.action || l.action === where.action) &&
               l.status === where.status &&
               l.createdAt >= where.createdAt.gte,
           )
@@ -112,6 +117,8 @@ function setup(opts: { connected?: boolean; syncOnIssue?: boolean } = {}) {
   const holded = {
     verifyKey: jest.fn(async () => undefined),
     pushInvoice: jest.fn(async () => ({ externalId: "65f0aa", alreadyInHolded: false })),
+    cancelInvoice: jest.fn(async (): Promise<string> => "cancelled"),
+    findInvoiceId: jest.fn(async (): Promise<string | null> => null),
   };
   const svc = new AccountingService(prisma, enc, holded as any);
 
@@ -131,6 +138,7 @@ function setup(opts: { connected?: boolean; syncOnIssue?: boolean } = {}) {
       accountingStatus: "not_synced",
       accountingExternalId: null,
       accountingError: null,
+      accountingCancelStatus: null,
       lines: [
         { description: "Corte", quantity: "1", unitPriceCents: 3500, discountPct: "0", taxRate: "21" },
       ],
@@ -324,6 +332,114 @@ describe("AccountingService.retryDue", () => {
     expect(where.tenant).toEqual({
       accountingConnection: { is: { isActive: true, provider: "holded" } },
     });
+  });
+
+  it("does not let a cancelled invoice whose push was pending block the queue", async () => {
+    const t = setup();
+    t.seed({ status: "cancelled", accountingStatus: "pending" });
+    const r = await t.svc.retryDue(now);
+    expect(r).toMatchObject({ retried: 0, notDue: 0 });
+    expect(t.holded.pushInvoice).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Cancelling an invoice in KiraRoom left its copy in Holded as a live sale.
+ * It is now cancelled there with Holded's own cancel action, idempotently and
+ * with the same retries as the push; when Holded will not (e.g. already
+ * paid there) the sync log says plainly that the salon has to do it.
+ */
+describe("AccountingService.reflectCancellation", () => {
+  const now = new Date("2026-09-20T12:00:00Z");
+  const synced = { status: "cancelled", accountingStatus: "synced", accountingExternalId: "65f0aa", accountingCancelStatus: "pending" };
+
+  it("cancels the invoice in Holded and logs it", async () => {
+    const t = setup();
+    t.seed(synced);
+    expect(await t.svc.reflectCancellation("inv-1")).toEqual({ status: "synced", externalId: "65f0aa" });
+    expect(t.holded.cancelInvoice).toHaveBeenCalledWith("salon-holded-key", "65f0aa");
+    expect(t.invoices.get("inv-1").accountingCancelStatus).toBe("cancelled");
+    expect(t.logs.at(-1)).toMatchObject({ action: "cancel", status: "ok", externalId: "65f0aa", payload: { outcome: "cancelled" } });
+  });
+
+  it("does nothing twice: an invoice already mirrored, or not marked, is not sent again", async () => {
+    const t = setup();
+    t.seed({ ...synced, accountingCancelStatus: "cancelled" });
+    expect((await t.svc.reflectCancellation("inv-1")).status).toBe("skipped");
+    t.seed({ ...synced, accountingCancelStatus: null });
+    expect((await t.svc.reflectCancellation("inv-1")).status).toBe("skipped");
+    t.seed({ ...synced, status: "issued" });
+    expect((await t.svc.reflectCancellation("inv-1")).status).toBe("skipped");
+    expect(t.holded.cancelInvoice).not.toHaveBeenCalled();
+  });
+
+  it("says 'no reflejado en Holded: anúlala allí' when Holded refuses", async () => {
+    const t = setup();
+    t.seed(synced);
+    t.holded.cancelInvoice.mockRejectedValueOnce(new HoldedCancelRefused("Invoice is paid"));
+    expect((await t.svc.reflectCancellation("inv-1")).status).toBe("error");
+    expect(t.invoices.get("inv-1").accountingCancelStatus).toBe("failed");
+    expect(t.logs.at(-1)).toMatchObject({ action: "cancel", status: "error", payload: { retry: false } });
+    expect(t.logs.at(-1).errorMessage).toMatch(/^No reflejado en Holded: anúlala allí\..*Invoice is paid/);
+  });
+
+  it("leaves a transient failure pending and retries it with backoff, then gives up into 'failed'", async () => {
+    const t = setup();
+    t.seed(synced);
+    t.holded.cancelInvoice.mockRejectedValueOnce(new HoldedApiError(503, "Service Unavailable"));
+    expect((await t.svc.reflectCancellation("inv-1")).status).toBe("pending");
+    expect(t.invoices.get("inv-1").accountingCancelStatus).toBe("pending");
+    expect(t.logs.at(-1)).toMatchObject({ action: "cancel", status: "error", payload: { retry: true, httpStatus: 503 } });
+
+    // Not due a minute later; due after the first delay.
+    t.logs.at(-1).createdAt = new Date(now.getTime() - 60_000);
+    expect(await t.svc.retryDue(now)).toMatchObject({ cancelsRetried: 0, notDue: 1 });
+    t.logs.at(-1).createdAt = new Date(now.getTime() - 11 * 60_000);
+    expect(await t.svc.retryDue(now)).toMatchObject({ cancelsRetried: 1 });
+    expect(t.invoices.get("inv-1").accountingCancelStatus).toBe("cancelled");
+
+    const u = setup();
+    u.seed(synced);
+    for (let i = 0; i < MAX_AUTO_ATTEMPTS; i++) {
+      u.logs.push({ invoiceId: "inv-1", action: "cancel", status: "error", createdAt: new Date(now.getTime() - (i + 1) * 3600_000) });
+    }
+    expect(await u.svc.retryDue(now)).toMatchObject({ cancelsGaveUp: 1 });
+    expect(u.invoices.get("inv-1").accountingCancelStatus).toBe("failed");
+    expect(u.logs.at(-1).errorMessage).toMatch(/No reflejado en Holded: anúlala allí/);
+    expect(u.holded.cancelInvoice).not.toHaveBeenCalled();
+  });
+
+  it("looks up an invoice whose push failed: cancels it if it reached Holded, forgets it otherwise", async () => {
+    const t = setup();
+    t.seed({ status: "cancelled", accountingStatus: "pending", accountingCancelStatus: "pending" });
+    t.holded.findInvoiceId.mockResolvedValueOnce("65f0bb");
+    expect((await t.svc.reflectCancellation("inv-1")).status).toBe("synced");
+    expect(t.holded.findInvoiceId).toHaveBeenCalledWith("salon-holded-key", "A000007");
+    expect(t.holded.cancelInvoice).toHaveBeenCalledWith("salon-holded-key", "65f0bb");
+    expect(t.invoices.get("inv-1")).toMatchObject({ accountingExternalId: "65f0bb", accountingCancelStatus: "cancelled" });
+
+    const u = setup();
+    u.seed({ status: "cancelled", accountingStatus: "error", accountingCancelStatus: "pending" });
+    expect((await u.svc.reflectCancellation("inv-1")).status).toBe("skipped");
+    expect(u.holded.cancelInvoice).not.toHaveBeenCalled();
+    expect(u.invoices.get("inv-1")).toMatchObject({ accountingStatus: "not_synced", accountingCancelStatus: null });
+  });
+
+  it("tells the salon to cancel it in Holded when Holded is no longer connected", async () => {
+    const t = setup({ connected: false });
+    t.seed(synced);
+    expect((await t.svc.reflectCancellation("inv-1")).status).toBe("error");
+    expect(t.invoices.get("inv-1").accountingCancelStatus).toBe("failed");
+    expect(t.logs.at(-1).errorMessage).toMatch(/No reflejado en Holded: anúlala allí/);
+  });
+});
+
+describe("cancelNeedsMirror", () => {
+  it("is true for an invoice in Holded or whose push may have reached it", () => {
+    expect(cancelNeedsMirror({ accountingExternalId: "x", accountingStatus: "synced" })).toBe(true);
+    expect(cancelNeedsMirror({ accountingExternalId: null, accountingStatus: "pending" })).toBe(true);
+    expect(cancelNeedsMirror({ accountingExternalId: null, accountingStatus: "error" })).toBe(true);
+    expect(cancelNeedsMirror({ accountingExternalId: null, accountingStatus: "not_synced" })).toBe(false);
   });
 });
 
