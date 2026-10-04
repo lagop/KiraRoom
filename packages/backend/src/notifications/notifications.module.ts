@@ -14,6 +14,7 @@ import { NotificationQueue } from "./queue/notification.queue";
 import { PrismaModule } from "../common/prisma/prisma.module";
 import { TranslationsModule } from "../translations/translations.module";
 import { MessageBundlesModule } from "../message-bundles/message-bundles.module";
+import { WhatsAppMessagingModule } from "../whatsapp/whatsapp-messaging.module";
 
 @Module({
   imports: [
@@ -22,6 +23,8 @@ import { MessageBundlesModule } from "../message-bundles/message-bundles.module"
     ScheduleModule.forRoot(),
     TranslationsModule,
     MessageBundlesModule,
+    // Reminders through the salon's WhatsApp Business number (templates).
+    WhatsAppMessagingModule,
   ],
   controllers: [
     NotificationsController,

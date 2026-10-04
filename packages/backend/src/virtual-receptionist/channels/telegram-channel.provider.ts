@@ -7,26 +7,37 @@ import {
   OutboundContext,
   SendResult,
 } from './channel-provider.interface';
+import { ChannelCredentialsService } from './channel-credentials.service';
+import { TelegramBotClient } from './telegram-bot.client';
+import { CHANNEL_TEXT_LIMIT, splitForChannel, toPlainChatText } from './chat-text';
 
 /**
- * P2A-receptionist-v2 H-4: Telegram Bot provider. Independent of Meta
- * (no Facebook Page required). Webhook signature uses
- * `X-Telegram-Bot-Api-Secret-Token` (HMAC of the request body with the
- * tenant's bot token). Send API is the standard Bot API.
+ * Telegram: answers through the salon's own bot (created with @BotFather).
+ *
+ * Inbound updates reach /channels/webhooks/telegram/:tenantId, where the
+ * X-Telegram-Bot-Api-Secret-Token header is compared with the secret
+ * KiraRoom registered in setWebhook. Replies go through sendMessage with the
+ * bot token, which is stored encrypted; it used to be expected in the
+ * outbound context, where nothing ever put it, so no reply was ever sent.
  */
 @Injectable()
 export class TelegramChannelProvider implements ChannelProvider {
   readonly channel: ChatChannel = 'telegram';
   private readonly logger = new Logger(TelegramChannelProvider.name);
 
-  constructor() {}
+  constructor(
+    private readonly credentials: ChannelCredentialsService,
+    private readonly bot: TelegramBotClient,
+  ) {}
 
+  /**
+   * Constant-time comparison of the header with the expected secret, which
+   * the caller passes as `req.expectedSecret`.
+   */
   verifyWebhook(req: any): boolean {
     const secret = req?.headers?.['x-telegram-bot-api-secret-token'];
-    const expected = this.resolveBotTokenForRequest(req);
+    const expected = req?.expectedSecret;
     if (!expected || !secret) return false;
-    // Telegram's check is constant-time compare against the configured
-    // secret. We use timingSafeEqual for the comparison.
     const a = Buffer.from(String(secret));
     const b = Buffer.from(String(expected));
     if (a.length !== b.length) return false;
@@ -34,10 +45,8 @@ export class TelegramChannelProvider implements ChannelProvider {
   }
 
   async parseInbound(req: any): Promise<NormalizedInbound | null> {
-    // Telegram sends two shapes:
-    //  - full update:   { update_id, message: {...} }
-    //  - wrapped:        { update: { ... } }
-    // We accept both.
+    // Telegram sends { update_id, message: {...} }; a wrapped
+    // { update: { message } } shape is accepted too.
     const body = req?.body ?? {};
     const message = body?.message ?? body?.update?.message;
     if (!message || !message.text) return null;
@@ -56,39 +65,20 @@ export class TelegramChannelProvider implements ChannelProvider {
   }
 
   async send(args: { externalUserId: string; text: string; ctx: OutboundContext }): Promise<SendResult> {
-    const token = this.resolveBotTokenForRequest({ ctx: args.ctx });
-    if (!token) {
+    const creds = await this.credentials.telegram(args.ctx.tenantId);
+    if (!creds) {
       throw new Error('Telegram bot token is not configured for this tenant');
     }
-    const url = `https://api.telegram.org/bot${token}/sendMessage`;
-    const payload = {
-      chat_id: Number(args.externalUserId),
-      text: args.text,
-    };
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const json: any = await response.json();
-    if (!response.ok) {
-      const err = new Error(
-        `Telegram send failed: ${json?.description ?? response.statusText}`,
-      );
-      this.logger.error(err.message);
-      throw err;
+    let first: string | undefined;
+    for (const part of splitForChannel(toPlainChatText(args.text), CHANNEL_TEXT_LIMIT.telegram)) {
+      const res = await this.bot.sendMessage(creds.botToken, Number(args.externalUserId), part);
+      if (!res.ok) {
+        const err = new Error(`Telegram send failed: ${res.description ?? 'unknown error'}`);
+        this.logger.error(err.message);
+        throw err;
+      }
+      first ??= res.result?.message_id !== undefined ? String(res.result.message_id) : undefined;
     }
-    return { messageId: String(json.result?.message_id), raw: json };
-  }
-
-  /**
-   * The dispatcher passes the tenant's bot token via the outbound
-   * ctx metadata. The webhook controller puts the verified token in
-   * the request headers; this resolver is consistent for both paths.
-   */
-  private resolveBotTokenForRequest(req: any): string | undefined {
-    const fromCtx = req?.ctx?.metadata?.telegramBotToken;
-    if (fromCtx) return String(fromCtx);
-    return undefined;
+    return { messageId: first ?? '' };
   }
 }

@@ -86,6 +86,14 @@ export class ClientsController {
     return this.clientsService.findAllWithFilters(user.tenantId, filters);
   }
 
+  // Before ":id", which would capture it (see route-order.spec).
+  @Get("me")
+  @Roles(UserRole.client)
+  @ApiOperation({ summary: "A client reads their own profile" })
+  async getMe(@CurrentUser() user: any) {
+    return this.clientsService.getSelf(user.tenantId, user.id);
+  }
+
   @Get(":id")
   // Was @Public(): an unauthenticated GET that returned any client by
   // UUID, taxId included, with no tenant check. No frontend caller used

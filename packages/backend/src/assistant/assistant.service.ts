@@ -87,7 +87,7 @@ const TOOL_PREVIEW: Record<string, (input: any) => string> = {
   },
   close_waitlist_slot: (i) => {
     const n = i?.topN ?? 5;
-    return `Notificar a las ${n} primeras clientas en lista de espera que coincidan con el hueco.`;
+    return `Avisar por email, WhatsApp o SMS a los ${n} primeros clientes de la lista de espera que encajen con el hueco (solo cuenta como avisado si le llega).`;
   },
 };
 

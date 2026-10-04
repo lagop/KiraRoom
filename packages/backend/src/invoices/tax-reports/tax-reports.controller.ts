@@ -32,6 +32,13 @@ export class TaxReportsController {
     return this.reports.generate(this.tenantId(req), t, year, quarter);
   }
 
+  /** The quarterly return of the salon's tax regime (303, 420 or none). */
+  @Get("quarterly-type")
+  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
+  quarterlyType(@Req() req: AuthedRequest) {
+    return this.reports.quarterlyReturnFor(this.tenantId(req));
+  }
+
   @Get(":type/:year/:quarter")
   @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
   async findOne(

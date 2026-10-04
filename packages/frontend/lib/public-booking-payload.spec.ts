@@ -40,7 +40,7 @@ function check(label: string, actual: unknown, expected: unknown): void {
 
 const ROOT = path.join(__dirname, "..");
 const SCREENS = [
-  "app/sites/[salonName]/page.tsx",
+  "app/sites/[salonName]/salon-booking-page.tsx",
   "app/sites/[salonName]/account/new-appointment/page.tsx",
 ];
 

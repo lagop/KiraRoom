@@ -1,148 +1,139 @@
-import { ParseUUIDPipe, Controller, Get, Post, Put, Delete, Body, Param, UseGuards } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Put,
+  Query,
+  Req,
+  UseGuards,
+} from "@nestjs/common";
+import { UserRole } from "@prisma/client";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
-import { Roles } from "../auth/decorators/roles.decorator";
-import { UserRole } from "@prisma/client";
-import {
-  LoyaltyService,
-  CreateLoyaltyProgramDto,
-  CreateLoyaltyTierDto,
-  CreateLoyaltyRewardDto,
-} from "./loyalty.service";
+import { Roles, SALON_MANAGERS, SALON_TEAM } from "../auth/decorators/roles.decorator";
 import { FeatureGuard } from "../common/guards/feature.guard";
 import { Feature } from "../common/decorators/feature.decorator";
+import { LoyaltyService } from "./loyalty.service";
+import {
+  AdjustPointsDto,
+  EnrollMemberDto,
+  LoyaltyProgramSettingsDto,
+  LoyaltyRewardDto,
+  LoyaltyTierDto,
+  UpdateLoyaltyRewardDto,
+} from "./loyalty.dto";
 
+/**
+ * The salon's side of the loyalty programme. The tenant always comes from
+ * the session: these routes used to take it, and any program or member id,
+ * from the URL.
+ */
 @Controller("loyalty")
 @UseGuards(JwtAuthGuard, RolesGuard, FeatureGuard)
 @Feature("loyalty")
 export class LoyaltyController {
-  constructor(private readonly loyaltyService: LoyaltyService) {}
+  constructor(private readonly loyalty: LoyaltyService) {}
 
-  // Programs
-  @Post("programs")
-  @Roles(UserRole.owner, UserRole.admin)
-  async createProgram(@Body() dto: CreateLoyaltyProgramDto) {
-    return this.loyaltyService.createProgram(dto);
+  @Get("program")
+  @Roles(...SALON_TEAM)
+  async getProgram(@Req() req: any) {
+    return { program: await this.loyalty.getProgram(req.user.tenantId) };
   }
 
-  @Get("programs/:tenantId")
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  async getPrograms(@Param("tenantId") tenantId: string) {
-    return this.loyaltyService.getPrograms(tenantId);
+  @Put("program")
+  @Roles(...SALON_MANAGERS)
+  async saveProgram(@Req() req: any, @Body() dto: LoyaltyProgramSettingsDto) {
+    return { program: await this.loyalty.saveProgram(req.user.tenantId, dto) };
   }
 
-  @Get("programs/detail/:id")
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  async getProgram(@Param("id", ParseUUIDPipe) id: string) {
-    return this.loyaltyService.getProgram(id);
-  }
-
-  @Put("programs/:id")
-  @Roles(UserRole.owner, UserRole.admin)
-  async updateProgram(
-    @Param("id", ParseUUIDPipe) id: string,
-    @Body() dto: Partial<CreateLoyaltyProgramDto>,
-  ) {
-    return this.loyaltyService.updateProgram(id, dto);
-  }
-
-  @Delete("programs/:id")
-  @Roles(UserRole.owner, UserRole.admin)
-  async deleteProgram(@Param("id", ParseUUIDPipe) id: string) {
-    return this.loyaltyService.deleteProgram(id);
-  }
-
-  // Tiers
-  @Post("tiers")
-  @Roles(UserRole.owner, UserRole.admin)
-  async createTier(@Body() dto: CreateLoyaltyTierDto) {
-    return this.loyaltyService.createTier(dto);
-  }
-
-  @Delete("tiers/:id")
-  @Roles(UserRole.owner, UserRole.admin)
-  async deleteTier(@Param("id", ParseUUIDPipe) id: string) {
-    return this.loyaltyService.deleteTier(id);
-  }
-
-  // Rewards
   @Post("rewards")
-  @Roles(UserRole.owner, UserRole.admin)
-  async createReward(@Body() dto: CreateLoyaltyRewardDto) {
-    return this.loyaltyService.createReward(dto);
-  }
-
-  @Get("rewards/:programId")
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  async getRewards(@Param("programId") programId: string) {
-    return this.loyaltyService.getRewards(programId);
+  @Roles(...SALON_MANAGERS)
+  createReward(@Req() req: any, @Body() dto: LoyaltyRewardDto) {
+    return this.loyalty.createReward(req.user.tenantId, dto);
   }
 
   @Put("rewards/:id")
-  @Roles(UserRole.owner, UserRole.admin)
-  async updateReward(
+  @Roles(...SALON_MANAGERS)
+  updateReward(
+    @Req() req: any,
     @Param("id", ParseUUIDPipe) id: string,
-    @Body() dto: Partial<CreateLoyaltyRewardDto>,
+    @Body() dto: UpdateLoyaltyRewardDto,
   ) {
-    return this.loyaltyService.updateReward(id, dto);
+    return this.loyalty.updateReward(req.user.tenantId, id, dto);
   }
 
   @Delete("rewards/:id")
-  @Roles(UserRole.owner, UserRole.admin)
-  async deleteReward(@Param("id", ParseUUIDPipe) id: string) {
-    return this.loyaltyService.deleteReward(id);
+  @Roles(...SALON_MANAGERS)
+  deleteReward(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
+    return this.loyalty.deleteReward(req.user.tenantId, id);
   }
 
-  // Members
+  @Post("tiers")
+  @Roles(...SALON_MANAGERS)
+  createTier(@Req() req: any, @Body() dto: LoyaltyTierDto) {
+    return this.loyalty.createTier(req.user.tenantId, dto);
+  }
+
+  @Delete("tiers/:id")
+  @Roles(...SALON_MANAGERS)
+  deleteTier(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
+    return this.loyalty.deleteTier(req.user.tenantId, id);
+  }
+
+  @Get("members")
+  @Roles(...SALON_TEAM)
+  listMembers(@Req() req: any, @Query("search") search?: string) {
+    return this.loyalty.listMembers(req.user.tenantId, search);
+  }
+
+  /** Signing a client up at the desk or from their file. */
   @Post("members")
-  @Roles(UserRole.owner, UserRole.admin)
-  async addMember(@Body() dto: { clientId: string; programId: string }) {
-    return this.loyaltyService.addMember(dto.clientId, dto.programId);
+  @Roles(...SALON_TEAM)
+  enroll(@Req() req: any, @Body() dto: EnrollMemberDto) {
+    return this.loyalty.enroll(req.user.tenantId, dto.clientId, "staff", req.user.id);
   }
 
-  @Get("members/:programId")
-  @Roles(UserRole.owner, UserRole.admin)
-  async getMembers(@Param("programId") programId: string) {
-    return this.loyaltyService.getMembers(programId);
-  }
-
-  @Get("client/:clientId")
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  async getClientLoyalty(@Param("clientId") clientId: string) {
-    return this.loyaltyService.getClientLoyalty(clientId);
-  }
-
-  // Points
-  @Post("points/award")
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  async awardPoints(
-    @Body() dto: { memberId: string; points: number; description: string },
+  @Post("members/:id/adjust")
+  @Roles(...SALON_MANAGERS)
+  adjust(
+    @Req() req: any,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() dto: AdjustPointsDto,
   ) {
-    return this.loyaltyService.awardPoints(
-      dto.memberId,
-      dto.points,
-      dto.description,
-    );
+    return this.loyalty.adjust(req.user.tenantId, id, dto, req.user.id);
   }
 
-  @Post("points/redeem")
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  async redeemPoints(
-    @Body() dto: { memberId: string; points: number; rewardId: string },
-  ) {
-    return this.loyaltyService.redeemPoints(
-      dto.memberId,
-      dto.points,
-      dto.rewardId,
-    );
+  /** The client's balance, rewards and history: client file and till. */
+  @Get("clients/:clientId")
+  @Roles(...SALON_TEAM)
+  clientSummary(@Req() req: any, @Param("clientId", ParseUUIDPipe) clientId: string) {
+    return this.loyalty.clientSummary(req.user.tenantId, clientId);
+  }
+}
+
+/**
+ * The client's side, from the client portal. Not behind @Feature: a salon
+ * without the programme answers { enabled: false } instead of a 403 the
+ * portal would have to interpret.
+ */
+@Controller("loyalty/me")
+@UseGuards(JwtAuthGuard, RolesGuard)
+export class LoyaltyPortalController {
+  constructor(private readonly loyalty: LoyaltyService) {}
+
+  @Get()
+  @Roles(UserRole.client)
+  mine(@Req() req: any) {
+    return this.loyalty.portalView(req.user.tenantId, req.user.id);
   }
 
-  @Get("points/:clientId/:programId")
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  async getClientPoints(
-    @Param("clientId") clientId: string,
-    @Param("programId") programId: string,
-  ) {
-    return this.loyaltyService.getClientPoints(clientId, programId);
+  @Post("join")
+  @Roles(UserRole.client)
+  join(@Req() req: any) {
+    return this.loyalty.portalJoin(req.user.tenantId, req.user.id);
   }
 }

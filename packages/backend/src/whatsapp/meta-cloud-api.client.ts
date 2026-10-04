@@ -96,14 +96,78 @@ export class MetaCloudApiClient {
     return (await resp.json()) as MetaCloudApiResponse;
   }
 
+  /**
+   * A free-text reply. Meta only allows it inside the 24-hour customer
+   * service window opened by the person's last message, which is always the
+   * case for the receptionist's answers.
+   */
+  async sendText(
+    accessToken: string,
+    phoneNumberId: string,
+    to: string,
+    body: string,
+  ): Promise<MetaCloudApiResponse> {
+    const resp = await fetch(`${this.baseUrl()}/${phoneNumberId}/messages`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to,
+        type: "text",
+        text: { preview_url: false, body: body.slice(0, 4096) },
+      }),
+    });
+    return (await resp.json()) as MetaCloudApiResponse;
+  }
+
+  /** Shows the two blue ticks on the person's message while the reply is prepared. */
+  async markRead(accessToken: string, phoneNumberId: string, messageId: string): Promise<void> {
+    await fetch(`${this.baseUrl()}/${phoneNumberId}/messages`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ messaging_product: "whatsapp", status: "read", message_id: messageId }),
+    });
+  }
+
+  /** Submits a message template for Meta's review on the salon's WhatsApp Business account. */
+  async createTemplate(
+    accessToken: string,
+    wabaId: string,
+    payload: Record<string, unknown>,
+  ): Promise<{ id?: string; status?: string; error?: { code: number; message: string } }> {
+    const resp = await fetch(`${this.baseUrl()}/${wabaId}/message_templates`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return (await resp.json()) as any;
+  }
+
   async listTemplates(
     accessToken: string,
     wabaId: string,
   ): Promise<{ data: any[] }> {
-    const url = `${this.baseUrl()}/${wabaId}/message_templates?fields=name,status,language,components`;
+    // Every WhatsApp campaign adds a template, so a salon soon has more than
+    // the default page of 25: the standard ones must not fall off the list.
+    const url = `${this.baseUrl()}/${wabaId}/message_templates?fields=name,status,language,components&limit=500`;
     const resp = await fetch(url, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     return (await resp.json()) as any;
+  }
+
+  /** One template by name, with Meta's review status and rejection reason. */
+  async findTemplate(
+    accessToken: string,
+    wabaId: string,
+    name: string,
+  ): Promise<{ name: string; status: string; rejected_reason?: string; language?: string } | null> {
+    const url =
+      `${this.baseUrl()}/${wabaId}/message_templates?fields=name,status,rejected_reason,language&name=${encodeURIComponent(name)}`;
+    const resp = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    const body = (await resp.json()) as any;
+    if (body?.error) throw new Error(body.error.message ?? "Meta error");
+    return (body?.data ?? []).find((t: any) => t?.name === name) ?? null;
   }
 }

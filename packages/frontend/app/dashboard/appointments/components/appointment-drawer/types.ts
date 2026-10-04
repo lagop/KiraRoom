@@ -161,6 +161,8 @@ export interface AppointmentDrawerProps {
   onOpenChange: (open: boolean) => void;
   onAppointmentUpdated?: () => void;
   refreshKey?: number;
+  /** Enter edit mode as soon as the appointment has loaded ("Editar" from its detail page). */
+  startInEditMode?: boolean;
 }
 
 /**

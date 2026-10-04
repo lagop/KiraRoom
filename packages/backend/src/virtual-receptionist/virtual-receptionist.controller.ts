@@ -11,6 +11,7 @@ import { ConversationService } from './services/conversation.service';
 import { FAQService } from './services/faq.service';
 import { BookingService } from './services/booking.service';
 import { LLMService } from './services/llm.service';
+import { ReceptionistStatsService } from './services/receptionist-stats.service';
 import {
   SendMessageDto,
   MessageResponseDto,
@@ -18,8 +19,6 @@ import {
   UpdateConversationDto,
   CreateFAQItem,
   UpdateFAQItem,
-  CreateVirtualReceptionistConfig,
-  UpdateVirtualReceptionistConfig,
   CreateLLMProviderConfig,
   UpdateLLMProviderConfig,
 } from '@kira/shared';
@@ -41,35 +40,16 @@ export class VirtualReceptionistController {
     private readonly faqService: FAQService,
     private readonly bookingService: BookingService,
     private readonly llmService: LLMService,
+    private readonly statsService: ReceptionistStatsService,
   ) {}
 
-  // Virtual Receptionist Configuration
-  @Post('config')
-  @ApiOperation({ summary: 'Create virtual receptionist configuration' })
-  @Roles(...SALON_MANAGERS)
-  async createConfig(@Body(new ValidationPipe()) config: CreateVirtualReceptionistConfig) {
-    this.logger.log('Creating virtual receptionist configuration');
-    return this.virtualReceptionistService.createConfig(config);
-  }
-
-  @Get('config/:salonId')
-  @ApiOperation({ summary: 'Get virtual receptionist configuration for salon' })
-  @Roles(...SALON_MANAGERS)
-  async getConfig(@Param('salonId') salonId: string) {
-    this.logger.log(`Getting virtual receptionist configuration for salon: ${salonId}`);
-    return this.virtualReceptionistService.getConfig(salonId);
-  }
-
-  @Put('config/:salonId')
-  @ApiOperation({ summary: 'Update virtual receptionist configuration' })
-  @Roles(...SALON_MANAGERS)
-  async updateConfig(
-    @Param('salonId') salonId: string,
-    @Body(new ValidationPipe()) config: UpdateVirtualReceptionistConfig,
-  ) {
-    this.logger.log(`Updating virtual receptionist configuration for salon: ${salonId}`);
-    return this.virtualReceptionistService.updateConfig(salonId, config);
-  }
+  // POST/GET/PUT /virtual-receptionist/config[/:salonId] used to be here.
+  // GET answered the same fixed settings for any salon (provider "openai",
+  // model "gpt-4", 09:00-18:00 hours, a greeting nobody sent) and POST/PUT
+  // echoed the body back without saving it. The receptionist actually runs
+  // on the platform's LLM setting (SaaS owner), the salon's own hours,
+  // services and FAQs, and the channel switches in
+  // /virtual-receptionist/channels/config -- all saved and read for real.
 
   // LLM Provider Configuration
   @Post('llm-config')
@@ -262,13 +242,12 @@ export class VirtualReceptionistController {
   // messages paid by KiraRoom. Inbound WhatsApp arrives through
   // /webhooks/meta/whatsapp, which verifies the signature.
 
-  // Statistics and Analytics
+  // Statistics: the caller's salon only, from its own conversations.
   @Get('stats')
-  @ApiOperation({ summary: 'Get virtual receptionist statistics' })
+  @ApiOperation({ summary: 'Get virtual receptionist statistics for the last N days' })
   @Roles(...SALON_MANAGERS)
-  async getStatistics() {
-    this.logger.log('Getting virtual receptionist statistics');
-    return this.virtualReceptionistService.getStatistics();
+  async getStatistics(@Req() req: any, @Query('days') days?: string) {
+    return this.statsService.forTenant(req.user.tenantId, days ? Number(days) : 30);
   }
 
   // P2A-receptionist-v2 -- AI usage counter for the billing dashboard.

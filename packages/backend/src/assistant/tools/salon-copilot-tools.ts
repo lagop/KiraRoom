@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { WaitListService, NotifyResult } from '../../wait-list/wait-list.service';
 
 /**
  * P2A-staff-copilot: tools the in-app copilot exposes to the LLM.
@@ -268,9 +269,11 @@ export const COPILOT_TOOLS = [
   {
     name: 'close_waitlist_slot',
     description:
-      "When an appointment is cancelled, ask the wait-list who wants the freed " +
-      "slot. Picks the top N waiting clients matching the service + window, marks " +
-      "them 'notified', and returns the list (the actual send is via send_message). " +
+      "When an appointment is cancelled, tell the wait-list about the freed " +
+      "slot. Picks the top N waiting clients matching the service + window and " +
+      "sends each one the wait-list notice (email, the salon's WhatsApp or SMS, " +
+      "with a booking link). A client counts as notified only when a channel " +
+      "delivered; the result says, per client, what went out or why nothing did. " +
       "Manager / receptionist only.",
     input_schema: {
       type: 'object' as const,
@@ -279,6 +282,7 @@ export const COPILOT_TOOLS = [
         professionalId: { type: 'string', description: 'Optional. Restrict to clients for this professional.' },
         windowStart: { type: 'string', description: 'ISO date YYYY-MM-DD' },
         windowEnd: { type: 'string', description: 'ISO date YYYY-MM-DD' },
+        time: { type: 'string', description: 'Optional. Start time of the freed slot, HH:MM.' },
         topN: { type: 'number', description: 'How many clients to notify. Default 5.' },
       },
       required: ['serviceId', 'windowStart', 'windowEnd'],
@@ -294,7 +298,13 @@ export const COPILOT_TOOLS = [
 export class SalonCopilotToolsService {
   private readonly logger = new Logger(SalonCopilotToolsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    // Optional only for the specs that build the service by hand; Nest
+    // resolves it from WaitListModule (no @Optional: a missing provider
+    // must fail the boot, not silently skip the notices).
+    private readonly waitList?: WaitListService,
+  ) {}
 
   async execute(
     name: string,
@@ -1260,10 +1270,17 @@ private async rescheduleAppointment(
   }
 
   /**
-   * Sprint 15: pick the top N wait-list clients that match a freed
-   * slot, mark them 'notified'. The orchestrator then dispatches the
-   * actual WhatsApp send via `send_message`. Manager / receptionist
-   * only.
+   * Sprint 15: pick the top N wait-list clients that match a freed slot
+   * and notify them. Manager / receptionist only.
+   *
+   * This used to mark them 'notified' and send nothing: the description
+   * said "the actual send is via send_message", which nothing chained, so
+   * the staff approved "Notificar a las 5 primeras clientas" and the
+   * clients were never told -- and, being 'notified', dropped out of the
+   * next freed slot. Now each one goes through WaitListService.notify, the
+   * same path as the panel's "Avisar": email, the salon's WhatsApp or SMS,
+   * marked notified only when a channel delivered, and the answer says per
+   * client what went out or why nothing did.
    */
   private async closeWaitlistSlot(
     args: Record<string, unknown>,
@@ -1281,6 +1298,11 @@ private async rescheduleAppointment(
     if (!serviceId) return { error: 'missing_serviceId' };
     if (!windowStart || !/^\d{4}-\d{2}-\d{2}$/.test(windowStart)) return { error: 'invalid_windowStart' };
     if (!windowEnd || !/^\d{4}-\d{2}-\d{2}$/.test(windowEnd)) return { error: 'invalid_windowEnd' };
+    const time = args.time as string | undefined;
+    if (time !== undefined && !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return { error: 'invalid_time' };
+    if (!this.waitList) {
+      return { error: 'unavailable', message: 'El aviso a la lista de espera no está disponible ahora mismo. No se ha avisado a nadie.' };
+    }
 
     const start = new Date(`${windowStart}T00:00:00`);
     const end = new Date(`${windowEnd}T23:59:59`);
@@ -1306,24 +1328,65 @@ private async rescheduleAppointment(
     });
 
     if (candidates.length === 0) {
-      return { ok: true, notified: 0, clients: [] };
+      return {
+        ok: true,
+        notified: 0,
+        clients: [],
+        message: 'No hay nadie en la lista de espera para ese servicio y esas fechas. No se ha avisado a nadie.',
+      };
     }
 
-    await this.prisma.waitList.updateMany({
-      where: { id: { in: candidates.map((c) => c.id) } },
-      data: { status: 'notified', notifiedAt: new Date() },
-    });
-
-    return {
-      ok: true,
-      notified: candidates.length,
-      clients: candidates.map((c) => ({
-        waitListId: c.id,
-        clientId: c.client.id,
-        firstName: c.client.firstName,
-        hasPhone: Boolean(c.client.phone),
-      })),
+    // One day: the slot's date goes in the notice. A range: the notice says
+    // there are free slots, without a date it cannot vouch for.
+    const slot = {
+      date: windowStart === windowEnd ? windowStart : undefined,
+      time: windowStart === windowEnd ? time : undefined,
+      professionalId: professionalId ?? undefined,
     };
+
+    const clients: Array<{
+      waitListId: string;
+      clientId: string;
+      firstName: string;
+      notified: boolean;
+      summary: string;
+      channels?: NotifyResult['channels'];
+    }> = [];
+    for (const c of candidates) {
+      try {
+        const res = await this.waitList.notify(ctx.tenantId, c.id, slot, ctx.userId);
+        clients.push({
+          waitListId: c.id,
+          clientId: c.client.id,
+          firstName: c.client.firstName,
+          notified: res.notified,
+          summary: res.summary,
+          channels: res.channels,
+        });
+      } catch (err) {
+        // Not in the plan, entry closed meanwhile... nothing was sent.
+        clients.push({
+          waitListId: c.id,
+          clientId: c.client.id,
+          firstName: c.client.firstName,
+          notified: false,
+          summary: `No se ha podido avisar: ${(err as Error).message}`,
+        });
+      }
+    }
+
+    const notified = clients.filter((c) => c.notified).length;
+    const lines = clients.map((c) => `${c.firstName}: ${c.summary}`).join('\n');
+    const head =
+      notified === clients.length
+        ? `Avisados ${notified} de ${clients.length} clientes de la lista de espera.`
+        : notified === 0
+          ? `No se ha podido avisar a ninguno de los ${clients.length} clientes; siguen en espera.`
+          : `Avisados ${notified} de ${clients.length} clientes; los demás siguen en espera.`;
+    const result = { notified, notNotified: clients.length - notified, clients, message: `${head}\n${lines}` };
+    // Nothing delivered: an error, so the approval card does not show it
+    // as done.
+    return notified === 0 ? { error: 'not_delivered', ...result } : { ok: true, ...result };
   }
 }
 

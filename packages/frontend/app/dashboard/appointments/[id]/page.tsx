@@ -18,6 +18,7 @@ import {
   Trash2
 } from 'lucide-react';
 import apiClient, { Appointment as ApiAppointment } from '../../../../lib/api';
+import { appointmentEditHref } from '../components/appointment-drawer.utils';
 
 type AppointmentStatus = 'confirmed' | 'pending' | 'in_progress' | 'completed' | 'cancelled';
 
@@ -211,7 +212,8 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
   };
 
   const handleEdit = () => {
-    router.push(`/dashboard/appointments/${params.id}/edit`);
+    // Appointments are edited in the agenda's drawer; there is no /edit page.
+    router.push(appointmentEditHref(params.id));
   };
 
   const handleDelete = async () => {

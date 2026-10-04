@@ -16,11 +16,14 @@ import { TrialExpiryScheduler } from "./trial-expiry.scheduler";
 import { GracePeriodScheduler } from "./grace-period.scheduler";
 import { NotificationsModule } from "../notifications/notifications.module";
 import { ProfessionalsModule } from "../professionals/professionals.module";
+import { LoyaltyModule } from "../loyalty/loyalty.module";
 
 @Module({
   imports: [
     PrismaModule,
     ProfessionalsModule,
+    // Payments and refunds move loyalty points (PaymentsService.loyaltyAfter).
+    LoyaltyModule,
     NotificationsModule,
     forwardRef(() => MessageBundlesModule),
     ScheduleModule.forRoot(),

@@ -259,7 +259,7 @@ describe("bookOnline with a deposit", () => {
     const updates: any[] = [];
     const prisma: any = { appointment: { update: async (args: any) => updates.push(args) } };
     const stub = {} as any;
-    const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub, undefined, undefined, undefined, deposits);
+    const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub, undefined, undefined, undefined, undefined, undefined, deposits);
     return { svc, updates };
   }
 

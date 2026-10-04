@@ -211,12 +211,17 @@ export interface WidgetInstance {
   createdAt?: string;
 }
 
+/** An import file: CSV text, or an .xlsx as base64 (the backend reads its first sheet). */
+export type ImportUpload = { csv: string } | { xlsx: string };
+
 export interface ImportPreviewRow {
   rowIndex: number;
-  data: Record<string, string>;
+  data: Record<string, any>;
   errors: Array<{ col: string; msg: string }>;
-  status: "ok" | "duplicate" | "invalid";
-  existingClientId?: string;
+  /** skip: left out on purpose (an appointment already past or cancelled). */
+  status: "ok" | "duplicate" | "invalid" | "update" | "skip";
+  existingId?: string;
+  note?: string;
 }
 export interface ImportPreviewResult {
   jobId: string;
@@ -225,17 +230,24 @@ export interface ImportPreviewResult {
   stats: {
     totalRows: number;
     okCount: number;
+    updateCount?: number;
     duplicateCount: number;
     invalidCount: number;
+    skipCount?: number;
   };
   errors: Array<{ row: number; fields: Array<{ col: string; msg: string }> }>;
+  /** Appointments: clients that will be (or were) created. */
+  newClients?: number;
 }
 export interface ImportCommitResult {
   jobId: string;
   totalRows: number;
   successRows: number;
+  createdRows?: number;
+  updatedRows?: number;
   errorRows: number;
   skippedRows: number;
+  newClients?: number;
 }
 export interface ImportJob {
   id: string;
@@ -294,9 +306,15 @@ export interface Review {
   rating: number;
   comment?: string | null;
   source: string;
-  status: string;
-  publishedToGoogle: boolean;
+  /** pending = requested, not answered yet; moderation = answered, awaiting the salon. */
+  status: "pending" | "moderation" | "published" | "rejected";
   createdAt: string;
+  submittedAt?: string | null;
+  /** The client opened the salon's Google review page. Not proof she posted there. */
+  googleLinkClickedAt?: string | null;
+  clientName?: string | null;
+  professionalName?: string | null;
+  serviceName?: string | null;
 }
 export interface ReviewAnalytics {
   averageRating: number;
@@ -307,6 +325,55 @@ export interface ReviewAnalytics {
     averageRating: number;
     count: number;
   }>;
+  requestsSent: number;
+  responseRate: number;
+  pendingModeration: number;
+  googleClicks: number;
+}
+export interface ReviewSettings {
+  googlePlaceId: string | null;
+  googleWriteReviewUrl: string | null;
+  googleReviewLink: string | null;
+  autoRequestsEnabled: boolean;
+  /** The google_reviews_auto add-on (or a plan with it) is active. */
+  addOnActive: boolean;
+  channels: {
+    email: boolean;
+    sms: boolean;
+    /** "not_connected", "NOT_SUBMITTED", or Meta's template status (APPROVED, PENDING...). */
+    whatsapp: string;
+  };
+  googleApi: { available: boolean };
+  policy: { delayHours: number; clientCooldownDays: number; tokenTtlDays: number };
+}
+
+/** GET /virtual-receptionist/channels/config. Never carries a token. */
+export interface ChannelsConfig {
+  enabled: boolean;
+  enabledChannels: string[];
+  meta: {
+    configured: boolean;
+    pageId?: string;
+    pageName?: string;
+    instagramBusinessAccountId?: string;
+    instagramUsername?: string;
+    hasAccessToken: boolean;
+    needsReconnect: boolean;
+  } | null;
+  metaPagesPending: boolean;
+  telegram: {
+    configured: boolean;
+    botUsername?: string;
+    hasBotToken: boolean;
+    needsReconnect: boolean;
+  } | null;
+  /** What the server can offer, and why not (e.g. "meta_app_not_configured"). */
+  availability?: {
+    meta: boolean;
+    metaReason?: string;
+    telegram: boolean;
+    telegramReason?: string;
+  };
 }
 
 export interface WhatsAppConnection {
@@ -320,18 +387,59 @@ export interface WhatsAppConnection {
   tokenExpiresAt?: string | null;
   isActive: boolean;
 }
+/** A quarterly tax return draft (Modelo 303 / 420 / 130): box -> value. */
+export interface TaxReportDraft {
+  id: string;
+  type: "modelo_303" | "modelo_420" | "modelo_130";
+  year: number;
+  quarter: number;
+  /** Amounts in cents; the tipo boxes of the 420 (02, 05...) are percentages. */
+  totalsJson: Record<string, number>;
+  status: string;
+}
+
+export type WhatsAppCampaignStatus = "draft" | "scheduled" | "sending" | "completed" | "failed" | "cancelled";
+
+/** A WhatsApp promotion: the salon's text, reviewed by Meta as a template. */
 export interface WhatsAppCampaign {
   id: string;
   tenantId: string;
   name: string;
+  /** {{nombre}} is the client's first name. */
+  body: string;
   templateId: string;
-  status: string;
+  /** Meta's review: draft (not submitted), PENDING, APPROVED, REJECTED... */
+  templateStatus: string;
+  templateReason: string | null;
+  status: WhatsAppCampaignStatus;
+  segmentFilter: { inactiveDays?: number };
+  scheduledAt: string | null;
+  submittedAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  lastError: string | null;
+  createdAt: string;
   totalRecipients: number;
   sent: number;
   delivered: number;
   read: number;
   failed: number;
   optedOut: number;
+  /** Recipients by status (detail only): pending, sent, delivered, read, failed, opted_out. */
+  byStatus?: Record<string, number>;
+}
+
+export interface WhatsAppCampaignInput {
+  name: string;
+  body: string;
+  inactiveDays?: number | null;
+  scheduledAt?: string | null;
+}
+
+export interface WhatsAppAudiencePreview {
+  eligible: number;
+  withoutConsent: number;
+  withoutPhone: number;
 }
 
 // Types matching our backend Prisma schema
@@ -737,12 +845,34 @@ export interface EmailCampaign {
   emailsOpened: number;
   clicks: number;
   bounces: number;
+  /** Recipients who marked it as spam (from Resend's webhook). */
+  complaints: number;
   unsubscribes: number;
   fromName?: string;
   replyTo?: string;
   _count?: {
     recipients: number;
   };
+}
+
+/**
+ * Whether the server can send campaigns and receive Resend's delivery
+ * events. Without the webhook, opens, clicks and bounces cannot be known.
+ */
+export interface EmailCampaignTrackingStatus {
+  sendingConfigured: boolean;
+  trackingConfigured: boolean;
+  /** Addresses this salon no longer emails (hard bounce or spam complaint). */
+  suppressedAddresses: number;
+}
+
+export interface SendEmailCampaignResult {
+  success: boolean;
+  sentCount: number;
+  failedCount: number;
+  suppressedCount: number;
+  /** Clients who said no to promotions in their account. */
+  skippedCount?: number;
 }
 
 export interface EmailCampaignTemplate {
@@ -764,10 +894,12 @@ export interface EmailCampaignAnalytics {
   totalDelivered: number;
   totalOpened: number;
   totalClicks: number;
+  totalBounces: number;
+  totalComplaints: number;
   openRate: number;
   clickRate: number;
   bounceRate: number;
-  unsubscribeRate: number;
+  complaintRate: number;
   recentEvents: any[];
 }
 
@@ -807,7 +939,21 @@ export interface ClientWallet {
   tenantId: string;
   balance: number;
   currency: string;
-  loyaltyPoints: number;
+  // No loyaltyPoints: the wallet column stopped moving in #120. Points are
+  // in getClientLoyalty().
+}
+
+/** GET /virtual-receptionist/stats: the salon's own conversations. */
+export interface ReceptionistStats {
+  days: number;
+  since: string;
+  conversations: number;
+  byChannel: Record<"web" | "whatsapp" | "facebook" | "instagram" | "telegram", number>;
+  messages: { fromClients: number; fromReceptionist: number };
+  bookings: number;
+  handedOff: number;
+  /** Null until replies have recorded their time. */
+  avgResponseMs: number | null;
 }
 
 /** P2A-receptionist-v2 â€” add-on catalog entry (Phase 8 UI). */
@@ -821,7 +967,27 @@ export interface CatalogAddOn {
   unlocks: string[];
   metered: boolean;
   isActive: boolean;
+  /** False = "Próximamente": shown, not sold. */
+  purchasable: boolean;
   sortOrder: number;
+}
+
+/** The salon site's account page: the signed-in client's own profile. */
+export interface MyClientProfile {
+  id: string;
+  tenantId: string;
+  firstName: string;
+  lastName: string;
+  email: string | null;
+  phone: string | null;
+  preferredLanguage: string;
+}
+
+/** A client's recorded choice about promotions by email (a signed Consent). */
+export interface MarketingConsentState {
+  status: "granted" | "refused" | "none";
+  decidedAt: string | null;
+  text: string;
 }
 
 /** P2A-receptionist-v2 â€” tenant add-on entitlement. */
@@ -882,37 +1048,18 @@ export interface SocialConnection {
   updatedAt: string;
 }
 
+/** Only what the salon entered: nothing is synced from Google. */
 export interface GoogleBusinessProfile {
   id: string;
   tenantId: string;
-  businessName: string | null;
-  businessAddress: string | null;
-  businessPhone: string | null;
-  businessWebsite: string | null;
-  businessEmail: string | null;
-  locationId: string | null;
-  locationName: string | null;
-  ranking: number | null;
-  totalReviews: number;
-  averageRating: number;
-  profileComplete: boolean;
-  enableOnlineBooking: boolean;
+  placeId: string | null;
+  writeReviewUrl: string | null;
   enableReviewRequests: boolean;
-  showRealTimeAvailability: boolean;
-  lastSyncAt: string | null;
 }
 
-export interface GoogleReview {
-  id: string;
-  reviewId: string;
-  reviewerName: string | null;
-  reviewerPhoto: string | null;
-  rating: number;
-  comment: string | null;
-  replyComment: string | null;
-  replyAt: string | null;
-  googleCreatedAt: string | null;
-  createdAt: string;
+export interface GoogleBusinessProfileState {
+  profile: GoogleBusinessProfile | null;
+  api: { available: false; reason: string };
 }
 
 export interface SocialPost {
@@ -1104,38 +1251,63 @@ export interface FiscalCertificate {
 }
 
 // P2B â€” Accounting integrations
-export type AccountingProvider = "holded" | "sage" | "a3" | "ncs";
+/**
+ * Only Holded has a direct sync (the salon pastes its Holded API key). Sage,
+ * A3 and NCS have no API we can use: their users download the libro de
+ * facturas emitidas (downloadAccountingInvoiceBook) for their gestoría.
+ */
+export type AccountingProvider = "holded";
 
-export interface AccountingSettings {
-  provider: AccountingProvider | null;
-  enabled: boolean;
+export type InvoiceAccountingStatus = "not_synced" | "pending" | "synced" | "error";
+
+export interface AccountingStatus {
   syncOnIssue: boolean;
-}
-
-export interface AccountingConnectionInfo {
-  accountingSettings: AccountingSettings;
-  accountingConnection: {
-    id: string;
+  connection: {
     provider: AccountingProvider;
     isActive: boolean;
+    connectedAt: string;
     lastSyncAt: string | null;
     lastError: string | null;
-    externalCompanyId: string | null;
-    expiresAt: string | null;
   } | null;
+  /** Issued invoices by accounting status. */
+  invoices: Record<InvoiceAccountingStatus, number>;
+}
+
+export interface AccountingPushResult {
+  attempted: number;
+  synced: number;
+  errors: number;
+  skipped: number;
+  remaining: number;
 }
 
 export interface AccountingSyncLog {
   id: string;
-  tenantId: string;
   invoiceId: string;
-  provider: AccountingProvider;
+  provider: string;
   action: string;
   status: string;
   externalId: string | null;
   errorMessage: string | null;
-  payload: Record<string, unknown> | null;
   createdAt: string;
+}
+
+/** GET /web-domain: the public page and the salon's own domain, if any. */
+export interface WebDomainStatus {
+  publicUrl: string;
+  target: string;
+  /** False until the operator serves customer domains over HTTPS. */
+  servingEnabled: boolean;
+  domain: null | {
+    name: string;
+    verified: boolean;
+    verifiedAt: string | null;
+    lastCheckedAt: string | null;
+    lastCheckError: string | null;
+    active: boolean;
+    records: Array<{ type: "CNAME" | "A" | "TXT"; name: string; value: string }>;
+    targetIps: string[];
+  };
 }
 
 export interface ApiClientInterface {
@@ -1328,6 +1500,11 @@ export interface ApiClientInterface {
     preferences: any,
   ): Promise<any>;
   updateMyProfile(clientId: string, data: any): Promise<any>;
+  getMyProfile(): Promise<MyClientProfile>;
+  getMyMarketingConsent(): Promise<MarketingConsentState>;
+  setMyMarketingConsent(accepts: boolean): Promise<MarketingConsentState>;
+  getMyWhatsAppMarketingConsent(): Promise<MarketingConsentState>;
+  setMyWhatsAppMarketingConsent(accepts: boolean): Promise<MarketingConsentState>;
   getClientNotifications(
     clientId: string,
     params?: {
@@ -1408,7 +1585,7 @@ export interface ApiClientInterface {
   // (Phase 8 surfaces these in the billing dashboard).
   getAvailableAddOns(plan?: string): Promise<CatalogAddOn[]>;
   getTenantAddOns(): Promise<TenantAddOnView[]>;
-  requestAddOnCheckout(addOnKey: string): Promise<{ url?: string; checkoutUrl?: string }>;
+  purchaseAddOn(addOnKey: string): Promise<{ status: string; currentPeriodEnd: string | null }>;
   cancelTenantAddOn(addOnKey: string): Promise<{ ok: boolean }>;
 
   // P2A-receptionist-v2 â€” AI usage counter for the billing dashboard.
@@ -1479,9 +1656,10 @@ export interface ApiClientInterface {
     id: string,
     scheduledAt: string,
   ): Promise<EmailCampaign>;
-  sendEmailCampaignNow(id: string): Promise<any>;
+  sendEmailCampaignNow(id: string): Promise<SendEmailCampaignResult>;
   addRecipientsToCampaign(id: string, clientIds: string[]): Promise<any>;
   getEmailCampaignAnalytics(id: string): Promise<EmailCampaignAnalytics>;
+  getEmailCampaignTrackingStatus(): Promise<EmailCampaignTrackingStatus>;
   getEmailCampaignTemplates(): Promise<EmailCampaignTemplate[]>;
   getEmailCampaignTemplate(id: string): Promise<EmailCampaignTemplate>;
   createEmailCampaignTemplate(
@@ -1592,25 +1770,19 @@ export interface ApiClientInterface {
   deactivateFiscalCertificate(id: string): Promise<{ count: number }>;
 
   // P2B â€” Accounting integrations
-  getAccountingSettings(): Promise<AccountingConnectionInfo>;
-  updateAccountingSettings(patch: {
-    provider?: AccountingProvider | null;
-    enabled?: boolean;
-    syncOnIssue?: boolean;
-  }): Promise<{ accountingSettings: AccountingSettings }>;
-  startAccountingOAuth(
-    provider: AccountingProvider,
-  ): Promise<{ url: string; state: string }>;
+  getAccountingSettings(): Promise<AccountingStatus>;
+  updateAccountingSettings(patch: { syncOnIssue?: boolean }): Promise<AccountingStatus>;
+  connectHolded(apiKey: string): Promise<AccountingStatus>;
   disconnectAccounting(): Promise<{ ok: boolean }>;
+  pushPendingToHolded(from?: string): Promise<AccountingPushResult>;
   syncAccountingInvoice(
     invoiceId: string,
   ): Promise<{ status: string; externalId?: string; error?: string }>;
-  retryAccountingQueue(limit?: number): Promise<{
-    attempted: number;
-    synced: number;
-    skipped: number;
-    errors: number;
-  }>;
+  downloadAccountingInvoiceBook(
+    from: string,
+    to: string,
+    format: "csv" | "xlsx",
+  ): Promise<{ blob: Blob; filename: string }>;
   listAccountingLogs(limit?: number): Promise<AccountingSyncLog[]>;
   publicRebookingOptOut(
     token: string,
@@ -2252,6 +2424,26 @@ class ApiClient implements ApiClientInterface {
     return this.request(`/public-site/tenant/${encodeURIComponent(slug)}`);
   }
 
+  // The salon's own domain (bring-your-own; nothing is bought here).
+  async getWebDomain(): Promise<WebDomainStatus> {
+    return this.request<WebDomainStatus>("/web-domain");
+  }
+
+  async setWebDomain(domain: string): Promise<WebDomainStatus> {
+    return this.request<WebDomainStatus>("/web-domain", {
+      method: "PUT",
+      body: JSON.stringify({ domain }),
+    });
+  }
+
+  async verifyWebDomain(): Promise<WebDomainStatus> {
+    return this.request<WebDomainStatus>("/web-domain/verify", { method: "POST" });
+  }
+
+  async removeWebDomain(): Promise<WebDomainStatus> {
+    return this.request<WebDomainStatus>("/web-domain", { method: "DELETE" });
+  }
+
   // Professionals - Admin routes
   async getProfessionals(tenantId?: string): Promise<Professional[]> {
     const params = tenantId ? `?tenantId=${tenantId}` : "";
@@ -2447,6 +2639,54 @@ class ApiClient implements ApiClientInterface {
     return this.request<any>(`/clients/me`, {
       method: "PATCH",
       body: JSON.stringify(data),
+    });
+  }
+
+  // The account page read /admin/clients/:id, which a client may not read,
+  // and fell back to what the browser kept since sign-in.
+  async getMyProfile(): Promise<MyClientProfile> {
+    return this.request<MyClientProfile>(`/clients/me`);
+  }
+
+  async getMyMarketingConsent(): Promise<MarketingConsentState> {
+    return this.request<MarketingConsentState>(`/consent/me/marketing`);
+  }
+
+  async setMyMarketingConsent(accepts: boolean): Promise<MarketingConsentState> {
+    return this.request<MarketingConsentState>(`/consent/me/marketing`, {
+      method: "PUT",
+      body: JSON.stringify({ accepts }),
+    });
+  }
+
+  /** The signed-in client's choice about promotions by WhatsApp. */
+  async getMyWhatsAppMarketingConsent(): Promise<MarketingConsentState> {
+    return this.request<MarketingConsentState>(`/consent/me/whatsapp-marketing`);
+  }
+
+  async setMyWhatsAppMarketingConsent(accepts: boolean): Promise<MarketingConsentState> {
+    return this.request<MarketingConsentState>(`/consent/me/whatsapp-marketing`, {
+      method: "PUT",
+      body: JSON.stringify({ accepts }),
+    });
+  }
+
+  /** Both marketing choices of a client, for the client file. */
+  async getClientMarketingConsent(
+    clientId: string,
+  ): Promise<{ email: MarketingConsentState; whatsapp: MarketingConsentState }> {
+    return this.request(`/consent/clients/${clientId}/marketing`);
+  }
+
+  /** The salon records a WhatsApp choice the client made in person. */
+  async setClientWhatsAppMarketingConsent(
+    clientId: string,
+    accepts: boolean,
+    confirmedInPerson = false,
+  ): Promise<MarketingConsentState> {
+    return this.request<MarketingConsentState>(`/consent/clients/${clientId}/whatsapp-marketing`, {
+      method: "PUT",
+      body: JSON.stringify({ accepts, confirmedInPerson }),
     });
   }
 
@@ -2678,57 +2918,107 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  // Loyalty Programs API
-  async createLoyaltyProgram(data: any): Promise<any> {
-    return this.request<any>("/loyalty/programs", {
+  // Loyalty programme (one per salon; the tenant comes from the session)
+  async getLoyaltyProgram(): Promise<{ program: LoyaltyProgram | null }> {
+    return this.request("/loyalty/program");
+  }
+
+  async saveLoyaltyProgram(data: Partial<LoyaltyProgramSettings>): Promise<{ program: LoyaltyProgram }> {
+    return this.request("/loyalty/program", { method: "PUT", body: JSON.stringify(data) });
+  }
+
+  async createLoyaltyReward(data: LoyaltyRewardInput): Promise<LoyaltyReward> {
+    return this.request("/loyalty/rewards", { method: "POST", body: JSON.stringify(data) });
+  }
+
+  async updateLoyaltyReward(id: string, data: Partial<LoyaltyRewardInput>): Promise<LoyaltyReward> {
+    return this.request(`/loyalty/rewards/${id}`, { method: "PUT", body: JSON.stringify(data) });
+  }
+
+  async deleteLoyaltyReward(id: string): Promise<{ ok: boolean; deactivated: boolean }> {
+    return this.request(`/loyalty/rewards/${id}`, { method: "DELETE" });
+  }
+
+  async createLoyaltyTier(data: { name: string; minPoints: number; pointsMultiplier: number }): Promise<LoyaltyTier> {
+    return this.request("/loyalty/tiers", { method: "POST", body: JSON.stringify(data) });
+  }
+
+  async deleteLoyaltyTier(id: string): Promise<{ ok: boolean }> {
+    return this.request(`/loyalty/tiers/${id}`, { method: "DELETE" });
+  }
+
+  async getLoyaltyMembers(search?: string): Promise<LoyaltyMemberRow[]> {
+    const q = search ? `?search=${encodeURIComponent(search)}` : "";
+    return this.request(`/loyalty/members${q}`);
+  }
+
+  async enrollLoyaltyMember(clientId: string): Promise<any> {
+    return this.request("/loyalty/members", { method: "POST", body: JSON.stringify({ clientId }) });
+  }
+
+  async adjustLoyaltyPoints(memberId: string, points: number, reason: string): Promise<any> {
+    return this.request(`/loyalty/members/${memberId}/adjust`, {
       method: "POST",
-      body: JSON.stringify(data),
+      body: JSON.stringify({ points, reason }),
     });
   }
 
-  async getLoyaltyPrograms(tenantId: string): Promise<any[]> {
-    return this.request<any[]>(`/loyalty/programs/${tenantId}`);
+  async getClientLoyalty(clientId: string): Promise<ClientLoyaltySummary> {
+    return this.request(`/loyalty/clients/${clientId}`);
   }
 
-  async getLoyaltyProgram(id: string): Promise<any> {
-    return this.request<any>(`/loyalty/programs/detail/${id}`);
+  /** The signed-in client's own balance (client portal). */
+  async getMyLoyalty(): Promise<MyLoyalty> {
+    return this.request("/loyalty/me");
   }
 
-  async updateLoyaltyProgram(id: string, data: any): Promise<any> {
-    return this.request<any>(`/loyalty/programs/${id}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    });
+  async joinMyLoyalty(): Promise<MyLoyalty> {
+    return this.request("/loyalty/me/join", { method: "POST" });
   }
 
-  async deleteLoyaltyProgram(id: string): Promise<any> {
-    return this.request<any>(`/loyalty/programs/${id}`, {
-      method: "DELETE",
-    });
+  // Wait-list
+  async getWaitList(status?: string): Promise<WaitListEntry[]> {
+    const q = status ? `?status=${encodeURIComponent(status)}` : "";
+    return this.request(`/wait-list${q}`);
   }
 
-  async createLoyaltyTier(data: any): Promise<any> {
-    return this.request<any>("/loyalty/tiers", {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
+  async addToWaitList(data: {
+    clientId: string;
+    serviceId: string;
+    professionalId?: string;
+    earliestDate?: string;
+    latestDate?: string;
+    notes?: string;
+  }): Promise<WaitListEntry> {
+    return this.request("/wait-list", { method: "POST", body: JSON.stringify(data) });
   }
 
-  async deleteLoyaltyTier(id: string): Promise<any> {
-    return this.request<any>(`/loyalty/tiers/${id}`, {
-      method: "DELETE",
-    });
+  async updateWaitListEntry(id: string, data: { status?: string; notes?: string }): Promise<WaitListEntry> {
+    return this.request(`/wait-list/${id}`, { method: "PATCH", body: JSON.stringify(data) });
   }
 
-  async createLoyaltyReward(data: any): Promise<any> {
-    return this.request<any>("/loyalty/rewards", {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
+  async removeWaitListEntry(id: string): Promise<{ ok: boolean }> {
+    return this.request(`/wait-list/${id}`, { method: "DELETE" });
   }
 
-  async getLoyaltyRewards(programId: string): Promise<any[]> {
-    return this.request<any[]>(`/loyalty/rewards/${programId}`);
+  /** "Avisar": really sends the notice and says, channel by channel, what happened. */
+  async notifyWaitListEntry(
+    id: string,
+    slot: { date?: string; time?: string; professionalId?: string } = {},
+  ): Promise<WaitListNotifyResult> {
+    return this.request(`/wait-list/${id}/notify`, { method: "POST", body: JSON.stringify(slot) });
+  }
+
+  async getWaitListSettings(): Promise<{ autoNotify: boolean }> {
+    return this.request("/wait-list/settings");
+  }
+
+  async saveWaitListSettings(autoNotify: boolean): Promise<{ autoNotify: boolean }> {
+    return this.request("/wait-list/settings", { method: "PUT", body: JSON.stringify({ autoNotify }) });
+  }
+
+  async getWaitListChannels(): Promise<{ email: boolean; sms: boolean; whatsapp: boolean; whatsappReason: string | null }> {
+    return this.request("/wait-list/channels");
   }
 
   // Gift Cards API (plan-gated by `gift_cards`; see docs/billing-plans-rev3.md Â§18.1)
@@ -2801,45 +3091,6 @@ class ApiClient implements ApiClientInterface {
   async deleteGiftCard(id: string): Promise<any> {
     return this.request<any>(`/gift-cards/${id}`, {
       method: "DELETE",
-    });
-  }
-
-  async deleteLoyaltyReward(id: string): Promise<any> {
-    return this.request<any>(`/loyalty/rewards/${id}`, {
-      method: "DELETE",
-    });
-  }
-
-  async addLoyaltyMember(clientId: string, programId: string): Promise<any> {
-    return this.request<any>("/loyalty/members", {
-      method: "POST",
-      body: JSON.stringify({ clientId, programId }),
-    });
-  }
-
-  async getLoyaltyMembers(programId: string): Promise<any[]> {
-    return this.request<any[]>(`/loyalty/members/${programId}`);
-  }
-
-  async awardLoyaltyPoints(
-    memberId: string,
-    points: number,
-    description: string,
-  ): Promise<any> {
-    return this.request<any>("/loyalty/points/award", {
-      method: "POST",
-      body: JSON.stringify({ memberId, points, description }),
-    });
-  }
-
-  async redeemLoyaltyPoints(
-    memberId: string,
-    points: number,
-    rewardId: string,
-  ): Promise<any> {
-    return this.request<any>("/loyalty/points/redeem", {
-      method: "POST",
-      body: JSON.stringify({ memberId, points, rewardId }),
     });
   }
 
@@ -2929,6 +3180,13 @@ class ApiClient implements ApiClientInterface {
 
   async getClientInsights(months: number = 6): Promise<any> {
     return this.request<any>(`/analytics/client-insights?months=${months}`);
+  }
+
+  /** Per-location KPIs (plan Empresa). Money in cents. */
+  async getConsolidatedReport(range: string = "this_month"): Promise<any> {
+    return this.request<any>(
+      `/multi-location/consolidated?range=${encodeURIComponent(range)}`,
+    );
   }
 
   // Promotions
@@ -3122,14 +3380,16 @@ class ApiClient implements ApiClientInterface {
     return res.data ?? [];
   }
 
-  async requestAddOnCheckout(
+  // Adds the add-on to the salon's plan subscription (prorated) and answers
+  // the row as Stripe left it. It used to open a Checkout that needed a
+  // Stripe price no add-on had.
+  async purchaseAddOn(
     addOnKey: string,
-    opts: { returnTo?: string } = {},
-  ): Promise<{ url?: string; checkoutUrl?: string }> {
-    return this.request(`/payments/add-ons/${addOnKey}/checkout`, {
-      method: "POST",
-      body: JSON.stringify(opts),
-    });
+  ): Promise<{ status: string; currentPeriodEnd: string | null }> {
+    return this.request(
+      `/payments/tenants/current/add-ons/${encodeURIComponent(addOnKey)}`,
+      { method: "POST" },
+    );
   }
 
   async cancelTenantAddOn(addOnKey: string): Promise<{ ok: boolean }> {
@@ -3360,10 +3620,16 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  async sendEmailCampaignNow(id: string): Promise<any> {
-    return this.request<any>(`/email-campaigns/${id}/send`, {
+  async sendEmailCampaignNow(id: string): Promise<SendEmailCampaignResult> {
+    return this.request<SendEmailCampaignResult>(`/email-campaigns/${id}/send`, {
       method: "POST",
     });
+  }
+
+  async getEmailCampaignTrackingStatus(): Promise<EmailCampaignTrackingStatus> {
+    return this.request<EmailCampaignTrackingStatus>(
+      "/email-campaigns/tracking-status",
+    );
   }
 
   async addRecipientsToCampaign(id: string, clientIds: string[]): Promise<any> {
@@ -3511,51 +3777,24 @@ class ApiClient implements ApiClientInterface {
     );
   }
 
-  // Google Business Profile
-  async getGoogleBusinessProfile(): Promise<GoogleBusinessProfile> {
-    return this.request<GoogleBusinessProfile>(
+  // Google Business Profile. Syncing the profile and reading or replying to
+  // Google reviews need Google's approval of its Business Profile API, which
+  // KiraRoom does not have: the backend answers 501 for those, so there are
+  // no client methods for them. The review link lives in getReviewSettings.
+  async getGoogleBusinessProfile(): Promise<GoogleBusinessProfileState> {
+    return this.request<GoogleBusinessProfileState>(
       "/social-integrations/google-business",
     );
   }
 
   async updateGoogleBusinessProfile(data: {
-    enableOnlineBooking?: boolean;
     enableReviewRequests?: boolean;
-    showRealTimeAvailability?: boolean;
-  }): Promise<GoogleBusinessProfile> {
-    return this.request<GoogleBusinessProfile>(
+  }): Promise<GoogleBusinessProfileState> {
+    return this.request<GoogleBusinessProfileState>(
       "/social-integrations/google-business",
       {
         method: "PUT",
         body: JSON.stringify(data),
-      },
-    );
-  }
-
-  async syncGoogleBusinessProfile(): Promise<GoogleBusinessProfile> {
-    return this.request<GoogleBusinessProfile>(
-      "/social-integrations/google-business/sync",
-      {
-        method: "POST",
-      },
-    );
-  }
-
-  async getGoogleReviews(): Promise<GoogleReview[]> {
-    return this.request<GoogleReview[]>(
-      "/social-integrations/google-business/reviews",
-    );
-  }
-
-  async replyToGoogleReview(
-    reviewId: string,
-    replyComment: string,
-  ): Promise<GoogleReview> {
-    return this.request<GoogleReview>(
-      `/social-integrations/google-business/reviews/${reviewId}/reply`,
-      {
-        method: "POST",
-        body: JSON.stringify({ replyComment }),
       },
     );
   }
@@ -3684,32 +3923,14 @@ class ApiClient implements ApiClientInterface {
    * `hasAccessToken` / `hasBotToken` flags so the UI can render the
    * connected badge without leaking credentials.
    */
-  async getChannelsConfig(): Promise<{
-    enabled: boolean;
-    enabledChannels: string[];
-    meta: {
-      configured: boolean;
-      pageId?: string;
-      instagramBusinessAccountId?: string;
-      linkedChats: string[];
-      webhookSecret?: string;
-      hasAccessToken: boolean;
-    } | null;
-    telegram: {
-      configured: boolean;
-      botUsername?: string;
-      linkedChats: string[];
-      hasBotToken: boolean;
-    } | null;
-  } | null> {
+  async getChannelsConfig(): Promise<ChannelsConfig | null> {
     return this.request("/virtual-receptionist/channels/config");
   }
 
   /**
-   * Update the multichannel config for the active tenant.
-   * The endpoint performs a partial merge â€” fields you don't pass are
-   * preserved. To remove a channel entirely, omit it from
-   * `enabledChannels` and the registry will fall back to Web.
+   * Turn channels on or off. Credentials are not sent here: the Facebook
+   * Page is connected through Facebook Login and the Telegram bot through
+   * connectTelegramBot().
    */
   async updateChannelsConfig(data: {
     enabled?: boolean;
@@ -3720,59 +3941,53 @@ class ApiClient implements ApiClientInterface {
       | "instagram"
       | "telegram"
     )[];
-    meta?: {
-      pageId?: string;
-      pageAccessToken?: string;
-      instagramBusinessAccountId?: string;
-      linkedChats?: string[];
-      webhookSecret?: string;
-    };
-    telegram?: {
-      botToken?: string;
-      linkedChats?: string[];
-    };
-  }): Promise<{
-    enabled: boolean;
-    enabledChannels: string[];
-    meta: {
-      configured: boolean;
-      pageId?: string;
-      instagramBusinessAccountId?: string;
-      linkedChats: string[];
-      webhookSecret?: string;
-      hasAccessToken: boolean;
-    } | null;
-    telegram: {
-      configured: boolean;
-      botUsername?: string;
-      linkedChats: string[];
-      hasBotToken: boolean;
-    } | null;
-  }> {
+  }): Promise<ChannelsConfig> {
     return this.request("/virtual-receptionist/channels/config", {
       method: "PUT",
       body: JSON.stringify(data),
     });
   }
 
+  /** Facebook Login URL to connect a Page (Messenger + its Instagram). */
+  async getMetaChannelConnectUrl(): Promise<{ url: string }> {
+    return this.request("/virtual-receptionist/channels/meta/connect");
+  }
+
+  /** Pages to choose from when Facebook Login returned more than one. */
+  async getMetaChannelPages(): Promise<Array<{ id: string; name: string; instagramUsername?: string }>> {
+    return this.request("/virtual-receptionist/channels/meta/pages");
+  }
+
+  async selectMetaChannelPage(pageId: string): Promise<{ connected: boolean }> {
+    return this.request("/virtual-receptionist/channels/meta/select", {
+      method: "POST",
+      body: JSON.stringify({ pageId }),
+    });
+  }
+
+  async disconnectMetaChannel(): Promise<{ disconnected: boolean }> {
+    return this.request("/virtual-receptionist/channels/meta", { method: "DELETE" });
+  }
+
+  /** Checks the @BotFather token with Telegram and registers the webhook. */
+  async connectTelegramBot(botToken: string): Promise<{ connected: boolean; botUsername?: string }> {
+    return this.request("/virtual-receptionist/channels/telegram", {
+      method: "POST",
+      body: JSON.stringify({ botToken }),
+    });
+  }
+
+  async disconnectTelegramBot(): Promise<{ disconnected: boolean }> {
+    return this.request("/virtual-receptionist/channels/telegram", { method: "DELETE" });
+  }
+
   /**
-   * H-4: per-channel volume counters for the wizard's small
-   * dashboard tile. Returned shape:
-   *   {
-   *     inbound: { web, whatsapp, facebook, instagram, telegram },
-   *     outbound: { facebook: { ok, skipped, error }, ... },
-   *     gateBlocked: { facebook: { no_feature, lookup_error }, ... }
-   *   }
+   * The receptionist's activity in the salon over the last `days`, counted
+   * from the salon's own conversations. Replaces /channels/metrics, which
+   * summed every salon's messages since the last server restart.
    */
-  async getChannelsMetrics(): Promise<{
-    inbound: Record<string, number>;
-    outbound: Record<string, { ok: number; skipped: number; error: number }>;
-    gateBlocked: Record<
-      string,
-      { no_feature: number; lookup_error: number }
-    >;
-  }> {
-    return this.request("/virtual-receptionist/channels/metrics");
+  async getReceptionistStats(days = 30): Promise<ReceptionistStats> {
+    return this.request(`/virtual-receptionist/stats?days=${days}`);
   }
 
   // Admin Settings
@@ -4161,21 +4376,39 @@ class ApiClient implements ApiClientInterface {
     return this.request(`/widget/instances/${id}`, { method: "DELETE" });
   }
 
-  // Import CSV (clients)
-  async dryRunImportClients(csv: string, filename: string): Promise<ImportPreviewResult> {
+  // Import (CSV or .xlsx)
+  async dryRunImportClients(file: ImportUpload, filename: string): Promise<ImportPreviewResult> {
     return this.request(`/import/clients/dry-run`, {
       method: "POST",
-      body: JSON.stringify({ csv, filename }),
+      body: JSON.stringify({ ...file, filename }),
     });
   }
-  async commitImportClients(csv: string, filename: string): Promise<ImportCommitResult> {
+  async commitImportClients(file: ImportUpload, filename: string): Promise<ImportCommitResult> {
     return this.request(`/import/clients/commit`, {
       method: "POST",
-      body: JSON.stringify({ csv, filename }),
+      body: JSON.stringify({ ...file, filename }),
     });
   }
   async listImportJobs(): Promise<ImportJob[]> {
     return this.request(`/import/jobs`);
+  }
+  async dryRunImportServices(file: ImportUpload, filename: string): Promise<ImportPreviewResult> {
+    return this.request(`/import/services/dry-run`, { method: "POST", body: JSON.stringify({ ...file, filename }) });
+  }
+  async commitImportServices(file: ImportUpload, filename: string): Promise<ImportCommitResult> {
+    return this.request(`/import/services/commit`, { method: "POST", body: JSON.stringify({ ...file, filename }) });
+  }
+  async dryRunImportAppointments(file: ImportUpload, filename: string, sendReminders: boolean): Promise<ImportPreviewResult> {
+    return this.request(`/import/appointments/dry-run`, {
+      method: "POST",
+      body: JSON.stringify({ ...file, filename, sendReminders }),
+    });
+  }
+  async commitImportAppointments(file: ImportUpload, filename: string, sendReminders: boolean): Promise<ImportCommitResult> {
+    return this.request(`/import/appointments/commit`, {
+      method: "POST",
+      body: JSON.stringify({ ...file, filename, sendReminders }),
+    });
   }
   getImportTemplateUrl(): string {
     return `${API_BASE_URL}/import/template/clients`;
@@ -4241,6 +4474,19 @@ class ApiClient implements ApiClientInterface {
       body: JSON.stringify({ action }),
     });
   }
+  async getReviewSettings(): Promise<ReviewSettings> {
+    return this.request(`/reviews/settings`);
+  }
+  async updateReviewSettings(data: {
+    googlePlaceId?: string | null;
+    googleWriteReviewUrl?: string | null;
+    autoRequestsEnabled?: boolean;
+  }): Promise<ReviewSettings> {
+    return this.request(`/reviews/settings`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
   async getReviewAnalytics(from?: string, to?: string): Promise<ReviewAnalytics> {
     const params = new URLSearchParams();
     if (from) params.append("from", from);
@@ -4276,24 +4522,41 @@ class ApiClient implements ApiClientInterface {
   async disconnectWhatsApp(): Promise<{ disconnected: boolean }> {
     return this.request(`/whatsapp/connection`, { method: "DELETE" });
   }
+  /** Review status of the reminder template KiraRoom submits to Meta. */
+  async getWhatsAppStandardTemplates(): Promise<Array<{ name: string; status: string }>> {
+    return this.request(`/whatsapp/templates/standard`);
+  }
+  async submitWhatsAppStandardTemplates(): Promise<Record<string, string>> {
+    return this.request(`/whatsapp/templates/standard`, { method: "POST" });
+  }
   async listWhatsAppTemplates(): Promise<Array<{ name: string; status: string; language?: string }>> {
     return this.request(`/whatsapp/templates`);
   }
-  async createWhatsAppCampaign(input: {
-    name: string;
-    templateId: string;
-    templateVars?: Record<string, string>;
-    segmentFilter?: Record<string, unknown>;
-    audience: string[];
-    scheduledAt?: string;
-  }): Promise<WhatsAppCampaign> {
-    return this.request(`/whatsapp/campaigns`, {
-      method: "POST",
-      body: JSON.stringify(input),
-    });
+  async listWhatsAppCampaigns(): Promise<WhatsAppCampaign[]> {
+    return this.request(`/whatsapp/campaigns`);
   }
-  async sendWhatsAppCampaign(id: string): Promise<{ enqueued: number }> {
-    return this.request(`/whatsapp/campaigns/${id}/send`, { method: "POST" });
+  async getWhatsAppCampaign(id: string): Promise<WhatsAppCampaign> {
+    return this.request(`/whatsapp/campaigns/${id}`);
+  }
+  async getWhatsAppCampaignAudience(inactiveDays?: number | null): Promise<WhatsAppAudiencePreview> {
+    const q = inactiveDays ? `?inactiveDays=${inactiveDays}` : "";
+    return this.request(`/whatsapp/campaigns/audience${q}`);
+  }
+  async createWhatsAppCampaign(input: WhatsAppCampaignInput): Promise<WhatsAppCampaign> {
+    return this.request(`/whatsapp/campaigns`, { method: "POST", body: JSON.stringify(input) });
+  }
+  async updateWhatsAppCampaign(id: string, input: Partial<WhatsAppCampaignInput>): Promise<WhatsAppCampaign> {
+    return this.request(`/whatsapp/campaigns/${id}`, { method: "PATCH", body: JSON.stringify(input) });
+  }
+  /** Sends the text to Meta for review and schedules the campaign. */
+  async submitWhatsAppCampaign(id: string): Promise<WhatsAppCampaign> {
+    return this.request(`/whatsapp/campaigns/${id}/submit`, { method: "POST" });
+  }
+  async cancelWhatsAppCampaign(id: string): Promise<WhatsAppCampaign> {
+    return this.request(`/whatsapp/campaigns/${id}/cancel`, { method: "POST" });
+  }
+  async deleteWhatsAppCampaign(id: string): Promise<{ deleted: boolean }> {
+    return this.request(`/whatsapp/campaigns/${id}`, { method: "DELETE" });
   }
 
   // ---- P1 Onboarding wizard ----
@@ -4421,6 +4684,15 @@ class ApiClient implements ApiClientInterface {
   }
 
   // ---- P2A Fiscal settings ----
+  /** The quarterly return of the salon's tax regime (modelo_303, modelo_420 or null). */
+  async getQuarterlyReturnType(): Promise<{ regime: string; type: string | null }> {
+    return this.request(`/tax-reports/quarterly-type`);
+  }
+  /** Generates (or regenerates) the draft for a quarter. */
+  async generateTaxReport(type: string, year: number, quarter: number): Promise<TaxReportDraft> {
+    return this.request(`/tax-reports/${type}/${year}/${quarter}/generate`, { method: "POST" });
+  }
+
   async getFiscalSettings(): Promise<FiscalSettings> {
     return this.request(`/invoices/settings/fiscal`);
   }
@@ -4460,26 +4732,29 @@ class ApiClient implements ApiClientInterface {
   }
 
   // ---- P2B Accounting ----
-  async getAccountingSettings(): Promise<AccountingConnectionInfo> {
+  async getAccountingSettings(): Promise<AccountingStatus> {
     return this.request(`/accounting/settings`);
   }
-  async updateAccountingSettings(patch: {
-    provider?: AccountingProvider | null;
-    enabled?: boolean;
-    syncOnIssue?: boolean;
-  }): Promise<{ accountingSettings: AccountingSettings }> {
+  async updateAccountingSettings(patch: { syncOnIssue?: boolean }): Promise<AccountingStatus> {
     return this.request(`/accounting/settings`, {
       method: "PATCH",
       body: JSON.stringify(patch),
     });
   }
-  async startAccountingOAuth(
-    provider: AccountingProvider,
-  ): Promise<{ url: string; state: string }> {
-    return this.request(`/accounting/connect/${provider}`);
+  async connectHolded(apiKey: string): Promise<AccountingStatus> {
+    return this.request(`/accounting/holded/connect`, {
+      method: "POST",
+      body: JSON.stringify({ apiKey }),
+    });
   }
   async disconnectAccounting(): Promise<{ ok: boolean }> {
     return this.request(`/accounting/disconnect`, { method: "POST" });
+  }
+  async pushPendingToHolded(from?: string): Promise<AccountingPushResult> {
+    return this.request(`/accounting/holded/push`, {
+      method: "POST",
+      body: JSON.stringify(from ? { from } : {}),
+    });
   }
   async syncAccountingInvoice(invoiceId: string): Promise<{
     status: string;
@@ -4491,13 +4766,35 @@ class ApiClient implements ApiClientInterface {
       body: JSON.stringify({ invoiceId }),
     });
   }
-  async retryAccountingQueue(
-    limit = 50,
-  ): Promise<{ attempted: number; synced: number; skipped: number; errors: number }> {
-    return this.request(`/accounting/retry-queue`, {
-      method: "POST",
-      body: JSON.stringify({ limit }),
-    });
+  /**
+   * A file download needs the bearer token, so it cannot be a plain link:
+   * fetch it, refreshing the session once on a 401 like request() does.
+   */
+  async downloadAccountingInvoiceBook(
+    from: string,
+    to: string,
+    format: "csv" | "xlsx",
+  ): Promise<{ blob: Blob; filename: string }> {
+    const qs = new URLSearchParams({ from, to, format });
+    const url = `${API_BASE_URL}/accounting/export/facturas-emitidas?${qs}`;
+    const get = () => {
+      const token = getToken();
+      return fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    };
+    let res = await get();
+    if (res.status === 401 && (await this.refreshAccessToken())) res = await get();
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const raw = (body as { message?: unknown }).message;
+      throw new ApiError(
+        Array.isArray(raw) ? raw.join(". ") : String(raw || `Error ${res.status}`),
+        res.status,
+      );
+    }
+    const disposition = res.headers.get("Content-Disposition") ?? "";
+    const filename =
+      /filename="([^"]+)"/.exec(disposition)?.[1] ?? `facturas-emitidas_${from}_${to}.${format}`;
+    return { blob: await res.blob(), filename };
   }
   async listAccountingLogs(limit = 100): Promise<AccountingSyncLog[]> {
     return this.request(`/accounting/log?limit=${limit}`);
@@ -4788,9 +5085,134 @@ export interface AssistantUsage {
   overCostCap: boolean;
 }
 
+// ---------------------------------------------------------------- loyalty
 
+export interface LoyaltyProgramSettings {
+  name: string;
+  description: string | null;
+  isActive: boolean;
+  earnMode: "per_euro" | "per_visit";
+  pointsPerEuro: number;
+  pointsPerVisit: number;
+  minPointsRedemption: number;
+  welcomePoints: number;
+  autoEnroll: boolean;
+  allowSelfEnroll: boolean;
+}
 
+export interface LoyaltyTier {
+  id: string;
+  name: string;
+  minPoints: number;
+  pointsMultiplier: number;
+}
 
+export interface LoyaltyRewardInput {
+  name: string;
+  description?: string;
+  type: "discount" | "free_service" | "product" | "voucher";
+  pointsCost: number;
+  discountPercent?: number;
+  /** Cents. */
+  discountAmount?: number;
+  freeServiceId?: string;
+  isActive?: boolean;
+}
 
+export interface LoyaltyReward extends LoyaltyRewardInput {
+  id: string;
+  isActive: boolean;
+  currentRedemptions: number;
+  redeemable?: boolean;
+}
 
+export interface LoyaltyProgram extends LoyaltyProgramSettings {
+  id: string;
+  tiers: LoyaltyTier[];
+  rewards: LoyaltyReward[];
+  _count: { members: number };
+}
 
+export interface LoyaltyMemberRow {
+  id: string;
+  currentPoints: number;
+  lifetimePoints: number;
+  totalSpent: number;
+  status: string;
+  enrolledVia: string | null;
+  joinedAt: string;
+  client: { id: string; firstName: string; lastName: string; email: string | null; phone: string | null };
+  tier: { name: string } | null;
+}
+
+export interface LoyaltyTransactionRow {
+  id: string;
+  createdAt: string;
+  type: string;
+  points: number;
+  description: string | null;
+}
+
+export interface ClientLoyaltySummary {
+  program: (LoyaltyProgramSettings & { id: string }) | null;
+  member: (LoyaltyMemberRow & { tier: { name: string } | null }) | null;
+  rewards: LoyaltyReward[];
+  history: LoyaltyTransactionRow[];
+}
+
+export type MyLoyalty =
+  | { enabled: false }
+  | {
+      enabled: true;
+      program: {
+        name: string;
+        description: string | null;
+        earnMode: "per_euro" | "per_visit";
+        pointsPerEuro: number;
+        pointsPerVisit: number;
+        minPointsRedemption: number;
+        welcomePoints: number;
+        allowSelfEnroll: boolean;
+      };
+      member: { currentPoints: number; lifetimePoints: number; joinedAt: string; tier: string | null } | null;
+      rewards: Array<{ id: string; name: string; description: string | null; type: string; pointsCost: number }>;
+      history: LoyaltyTransactionRow[];
+    };
+
+// -------------------------------------------------------------- wait-list
+
+export interface WaitListChannelOutcome {
+  channel: "email" | "whatsapp" | "sms" | "inApp";
+  status: "sent" | "skipped" | "failed";
+  reason?: string;
+}
+
+export interface WaitListEntry {
+  id: string;
+  clientId: string;
+  serviceId: string;
+  professionalId: string | null;
+  serviceName: string | null;
+  professionalName: string | null;
+  earliestDate: string | null;
+  latestDate: string | null;
+  status: "waiting" | "notified" | "cancelled" | "fulfilled";
+  notifiedAt: string | null;
+  notifyCount: number;
+  notes: string | null;
+  createdAt: string;
+  lastNotification: {
+    at: string;
+    auto: boolean;
+    channels: WaitListChannelOutcome[];
+    slot: { date: string | null; time: string | null; professionalId: string | null };
+  } | null;
+  client: { firstName: string; lastName: string; email: string | null; phone: string | null };
+}
+
+export interface WaitListNotifyResult {
+  notified: boolean;
+  channels: WaitListChannelOutcome[];
+  bookingUrl: string;
+  summary: string;
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import apiClient from "@/lib/api";
 import { Card } from "@/src/components/ui/Card";
@@ -43,7 +43,7 @@ interface Professional {
   }[];
 }
 
-export default function ProfessionalsPage() {
+function ProfessionalsPageContent() {
   const searchParams = useSearchParams();
   const { toast } = useToast();
   const t = useTranslations();
@@ -835,5 +835,15 @@ export default function ProfessionalsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+// useSearchParams() needs a Suspense boundary for the page to prerender
+// (required since Next.js 14.1; 14.0 let it through).
+export default function ProfessionalsPage() {
+  return (
+    <Suspense fallback={null}>
+      <ProfessionalsPageContent />
+    </Suspense>
   );
 }

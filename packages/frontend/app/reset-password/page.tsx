@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { AlertCircle, CheckCircle2 } from "lucide-react";
 import apiClient from "@/lib/api";
@@ -10,7 +10,7 @@ import { useTranslations } from "@/lib/use-translation";
  * Sets a new password with the token from the reset email
  * (/reset-password?token=...). A successful change signs out every session.
  */
-export default function ResetPasswordPage() {
+function ResetPasswordPageContent() {
   const t = useTranslations();
   const searchParams = useSearchParams();
   const token = searchParams?.get("token") || "";
@@ -119,5 +119,15 @@ export default function ResetPasswordPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+// useSearchParams() needs a Suspense boundary for the page to prerender
+// (required since Next.js 14.1; 14.0 let it through).
+export default function ResetPasswordPage() {
+  return (
+    <Suspense fallback={null}>
+      <ResetPasswordPageContent />
+    </Suspense>
   );
 }

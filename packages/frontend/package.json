@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "type-check": "tsc --noEmit",
-    "test": "ts-node --project tsconfig.test.json --transpile-only app/dashboard/appointments/components/appointment-drawer.utils.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/login-reload-loop.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/spanish-accents.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/signup-session.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/salon-timezone.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/no-simulated-writes.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/chat-markdown.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/public-booking-payload.spec.ts",
+    "test": "ts-node --project tsconfig.test.json --transpile-only app/dashboard/appointments/components/appointment-drawer.utils.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/login-reload-loop.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/spanish-accents.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/signup-session.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/salon-timezone.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/no-simulated-writes.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/chat-markdown.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/public-booking-payload.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/analytics-format.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/account-settings.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/salon-seo.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/whatsapp-campaign.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/modelo-420.spec.ts && ts-node --project tsconfig.test.json --transpile-only lib/modelo-303.spec.ts",
     "test:utils": "ts-node --project tsconfig.test.json --transpile-only app/dashboard/appointments/components/appointment-drawer.utils.spec.ts",
     "test:login-loop": "ts-node --project tsconfig.test.json --transpile-only lib/login-reload-loop.spec.ts",
     "test:accents": "ts-node --project tsconfig.test.json --transpile-only lib/spanish-accents.spec.ts",
@@ -45,7 +45,8 @@
     "cmdk": "^0.2.0",
     "date-fns": "^2.30.0",
     "lucide-react": "^0.294.0",
-    "next": "14.0.0",
+    "next": "14.2.35",
+    "next-intl": "3.5.0",
     "react": "^18.2.0",
     "react-day-picker": "^8.9.1",
     "react-dom": "^18.2.0",
@@ -54,8 +55,7 @@
     "socket.io-client": "^4.8.3",
     "tailwind-merge": "^3.0.0",
     "tailwindcss-animate": "^1.0.7",
-    "zod": "^3.22.0",
-    "next-intl": "3.5.0"
+    "zod": "^3.22.0"
   },
   "devDependencies": {
     "@types/node": "^20.9.0",
@@ -63,7 +63,7 @@
     "@types/react-dom": "^18.2.15",
     "autoprefixer": "^10.4.16",
     "eslint": "^8.53.0",
-    "eslint-config-next": "14.0.0",
+    "eslint-config-next": "14.2.35",
     "postcss": "^8.4.31",
     "tailwindcss": "^3.3.5",
     "typescript": "^5.2.2"

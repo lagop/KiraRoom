@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
+import { ImportLink } from "@/components/import-link";
 import {
   Search,
   Plus,
@@ -20,6 +21,7 @@ import apiClient, { Appointment as ApiAppointment } from "../../../lib/api";
 import { useTranslations } from "@/lib/use-translation";
 import { Calendar as CalendarComponent } from "../../../components/Calendar/Calendar";
 import { AppointmentDrawer } from "./components/appointment-drawer";
+import { drawerTargetFromQuery } from "./components/appointment-drawer.utils";
 
 type AppointmentStatus =
   | "confirmed"
@@ -142,7 +144,7 @@ const getTotalPrice = (appointment: Appointment) => {
   return (Number(appointment.price) || 0).toFixed(2);
 };
 
-export default function AppointmentsPage() {
+function AppointmentsPageContent() {
   const searchParams = useSearchParams();
   const t = useTranslations();
   const today = new Date().toISOString().split("T")[0];
@@ -175,12 +177,15 @@ export default function AppointmentsPage() {
   const [isSearchingClient, setIsSearchingClient] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
 
-  // Check for ?new=true query parameter to open new appointment drawer
+  // ?new=true opens the drawer for a new appointment; ?appointment=<id>
+  // (&edit=1) opens an existing one -- the detail page's "Editar" lands here.
+  const [drawerStartsInEdit, setDrawerStartsInEdit] = useState(false);
   useEffect(() => {
-    if (searchParams?.get("new") === "true") {
-      setSelectedAppointmentId(null);
-      setDrawerOpen(true);
-    }
+    const target = drawerTargetFromQuery(searchParams);
+    if (!target) return;
+    setSelectedAppointmentId(target.mode === "existing" ? target.appointmentId : null);
+    setDrawerStartsInEdit(target.mode === "existing" && target.edit);
+    setDrawerOpen(true);
   }, [searchParams]);
 
   const fetchAppointments = async () => {
@@ -749,6 +754,7 @@ export default function AppointmentsPage() {
               {t("appointments.calendar")}
             </button>
           </div>
+          <ImportLink kind="appointments" />
           <button
             onClick={() => {
               setSelectedAppointmentId(null);
@@ -1411,10 +1417,24 @@ export default function AppointmentsPage() {
       <AppointmentDrawer
         appointmentId={selectedAppointmentId}
         open={drawerOpen}
-        onOpenChange={setDrawerOpen}
+        onOpenChange={(open) => {
+          setDrawerOpen(open);
+          if (!open) setDrawerStartsInEdit(false);
+        }}
         onAppointmentUpdated={fetchAppointments}
         refreshKey={drawerRefreshKey}
+        startInEditMode={drawerStartsInEdit}
       />
     </div>
+  );
+}
+
+// useSearchParams() needs a Suspense boundary for the page to prerender
+// (required since Next.js 14.1; 14.0 let it through).
+export default function AppointmentsPage() {
+  return (
+    <Suspense fallback={null}>
+      <AppointmentsPageContent />
+    </Suspense>
   );
 }

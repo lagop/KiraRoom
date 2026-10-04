@@ -11,6 +11,7 @@ import {
   BarChart2,
   Settings,
   Store,
+  Globe,
   Repeat,
   FileText,
   Bug,
@@ -31,6 +32,7 @@ import {
   MessageCircle,
   Sliders,
   X,
+  Hourglass,
 } from "lucide-react";
 import apiClient, { removeToken } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
@@ -339,6 +341,23 @@ export function DashboardSidebar({
               </Link>
             </li>
           )}
+          {/* Wait-list - the whole team */}
+          <li>
+            <Link
+              href="/dashboard/wait-list"
+              className={`flex items-center rounded-l-lg w-full transition-all duration-200 ${
+                effectiveCollapsed ? "justify-center py-2" : "py-2 px-3"
+              } ${
+                pathname.startsWith("/dashboard/wait-list")
+                  ? "bg-white text-violet-950 rounded-r-none"
+                  : "text-white hover:text-violet-950 hover:bg-violet-200 hover:-translate-x-3 hover:rounded-lg rounded-r-none"
+              }`}
+              title={effectiveCollapsed ? "Lista de espera" : undefined}
+            >
+              <Hourglass className={`w-4 h-4 ${effectiveCollapsed ? "" : "mr-3"}`} />
+              {!collapsed && <span>Lista de espera</span>}
+            </Link>
+          </li>
           {/* Email Campaigns - Admin/Owner only */}
           {isAdminOrOwner && (
             <li>
@@ -553,6 +572,20 @@ export function DashboardSidebar({
                   >
                     <Store className="w-4 h-4 mr-3" />
                     <span suppressHydrationWarning>Datos del salón</span>
+                  </Link>
+                </li>
+                <li>
+                  <Link
+                    href="/dashboard/settings/domain"
+                    className={`flex items-center pl-9 pr-3 py-2 rounded-l-lg w-full transition-all duration-200 ${
+                      pathname.startsWith("/dashboard/settings/domain")
+                        ? "bg-white text-violet-950 rounded-r-none"
+                        : "text-white hover:text-violet-950 hover:bg-violet-200 hover:-translate-x-3 hover:rounded-lg rounded-r-none"
+                    }`}
+                    title="Web y dominio"
+                  >
+                    <Globe className="w-4 h-4 mr-3" />
+                    <span suppressHydrationWarning>Web y dominio</span>
                   </Link>
                 </li>
                 <li>

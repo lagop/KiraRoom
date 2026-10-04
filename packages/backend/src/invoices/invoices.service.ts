@@ -8,7 +8,7 @@ import {
 import { PrismaService } from "../common/prisma/prisma.service";
 import { InvoiceCalculator } from "./invoice-calculator.service";
 import { FiscalService } from "./fiscal/fiscal.service";
-import { AccountingService } from "../accounting/accounting.service";
+import { AccountingService, cancelNeedsMirror } from "../accounting/accounting.service";
 import { FiscalMode, InvoiceSource, InvoiceStatus } from "@prisma/client";
 
 interface CreateInvoiceInput {
@@ -109,8 +109,9 @@ export class InvoiceService {
       });
     }
 
-    // Fire accounting sync if a connection is active. Runs after fiscal so
-    // we don't push unauthenticated invoices to Holded/Sage.
+    // Push to Holded if the salon connected it (a no-op otherwise). Started
+    // after the fiscal dispatch; failures are recorded on the invoice and
+    // retried by AccountingScheduler, never thrown back here.
     if (this.accounting) {
       void this.accounting.syncInvoice(invoice.id).catch((err) => {
         this.logger.warn(
@@ -198,12 +199,31 @@ export class InvoiceService {
     if (invoice.status === InvoiceStatus.cancelled) {
       throw new BadRequestException("Invoice already cancelled");
     }
-    return this.prisma.invoice.update({
+    const updated = await this.prisma.invoice.update({
       where: { id },
       data: {
         status: InvoiceStatus.cancelled,
         notes: [invoice.notes, `CANCELLED: ${reason}`].filter(Boolean).join("\n"),
+        ...this.holdedCancelMark(invoice),
       },
+    });
+    this.mirrorCancellation(id);
+    return updated;
+  }
+
+  /**
+   * An invoice already sent to Holded stayed there as a live sale after it
+   * was cancelled here. Marked in the same update that cancels it, so the
+   * mirroring cannot be lost; AccountingService does it (and retries it).
+   */
+  private holdedCancelMark(invoice: { accountingExternalId: string | null; accountingStatus: string }) {
+    return cancelNeedsMirror(invoice) ? { accountingCancelStatus: "pending" as const } : {};
+  }
+
+  private mirrorCancellation(id: string): void {
+    if (!this.accounting) return;
+    void this.accounting.reflectCancellation(id).catch((err) => {
+      this.logger.warn(`Background Holded cancellation failed for ${id}: ${(err as Error).message}`);
     });
   }
 
@@ -238,8 +258,10 @@ export class InvoiceService {
         ]
           .filter(Boolean)
           .join("\n"),
+        ...this.holdedCancelMark(invoice),
       },
     });
+    this.mirrorCancellation(id);
     return { ...updated, fiscalAnulated };
   }
 

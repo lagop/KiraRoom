@@ -4,8 +4,12 @@ import {
   NotFoundException,
   BadRequestException,
 } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { EmailService } from "../notifications/services/email.service";
+import { clientsWhoRefusedMarketing } from "../consent/marketing-consent";
+import { EmailSuppressionService } from "./email-suppression.service";
+import { EmailUnsubscribeService } from "./email-unsubscribe.service";
 import {
   CreateCampaignDto,
   UpdateCampaignDto,
@@ -22,6 +26,9 @@ export class EmailCampaignsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly emailService: EmailService,
+    private readonly suppressions: EmailSuppressionService,
+    private readonly config: ConfigService,
+    private readonly unsubscribes: EmailUnsubscribeService,
   ) {}
 
   // ============ CAMPAIGNS ============
@@ -168,9 +175,6 @@ export class EmailCampaignsService {
   async sendCampaignNow(tenantId: string, campaignId: string) {
     const campaign = await this.prisma.emailCampaign.findFirst({
       where: { id: campaignId, tenantId },
-      include: {
-        recipients: true,
-      },
     });
     if (!campaign) {
       throw new NotFoundException("Campaign not found");
@@ -178,61 +182,137 @@ export class EmailCampaignsService {
     if (campaign.status !== "draft" && campaign.status !== "scheduled") {
       throw new BadRequestException("Campaign cannot be sent");
     }
+    if (!this.emailService.isConfigured()) {
+      // Before, every send "failed" silently and the campaign still ended
+      // up as sent. Say it instead, and leave the campaign as it was.
+      throw new BadRequestException(
+        "El envío de emails no está configurado en el servidor (falta RESEND_API_KEY).",
+      );
+    }
+    return this.deliverCampaign(tenantId, campaignId, ["draft", "scheduled"]);
+  }
 
-    // Update status to sending
-    await this.prisma.emailCampaign.update({
-      where: { id: campaignId },
+  /**
+   * Sends a campaign to its pending recipients. Shared by "send now" and
+   * the scheduler.
+   *
+   * Claims the campaign first (status -> sending, only from `fromStatuses`)
+   * so a second click or an overlapping scheduler run cannot send it twice.
+   *
+   * What it counts is only what it knows: an email Resend accepted is
+   * "sent". Whether it was delivered, opened, clicked or bounced arrives
+   * later through the Resend webhook (ResendEventsService), keyed by the id
+   * Resend returned here -- which is why that id is stored, not a made-up
+   * one. Addresses on the salon's suppression list (hard bounce, spam
+   * complaint, unsubscribed) are skipped, and every email carries its own
+   * unsubscribe link, in the footer and in the List-Unsubscribe header.
+   */
+  async deliverCampaign(tenantId: string, campaignId: string, fromStatuses: string[]) {
+    const claimed = await this.prisma.emailCampaign.updateMany({
+      where: { id: campaignId, tenantId, status: { in: fromStatuses as any } },
       data: { status: "sending" },
     });
+    if (claimed.count === 0) {
+      throw new BadRequestException("Campaign cannot be sent");
+    }
 
-    // Send emails to all recipients
+    const campaign = await this.prisma.emailCampaign.findFirstOrThrow({
+      where: { id: campaignId, tenantId },
+      include: {
+        recipients: { where: { status: "pending" } },
+        tenant: { select: { name: true } },
+      },
+    });
+    const salonName = campaign.tenant?.name ?? "el salón";
+    const suppressed = await this.suppressions.suppressedAmong(
+      tenantId,
+      campaign.recipients.map((r) => r.email),
+    );
+
     let sentCount = 0;
     let failedCount = 0;
+    let skippedCount = 0;
+    let suppressedCount = 0;
+
+    // Checked at send time, not only when recipients were added: a client
+    // can say no in their account in between.
+    const refused = await clientsWhoRefusedMarketing(
+      this.prisma,
+      tenantId,
+      campaign.recipients.map((r) => r.clientId).filter((id): id is string => !!id),
+    );
 
     for (const recipient of campaign.recipients) {
-      try {
-        await this.emailService.sendEmail({
-          to: recipient.email,
-          subject: campaign.subject,
-          html: campaign.content,
-          replyTo: campaign.replyTo,
+      if (recipient.clientId && refused.has(recipient.clientId)) {
+        await this.prisma.emailCampaignRecipient.update({
+          where: { id: recipient.id },
+          data: { status: "unsubscribed", unsubscribedAt: new Date() },
         });
-
+        skippedCount++;
+        continue;
+      }
+      if (suppressed.has(recipient.email.toLowerCase())) {
         await this.prisma.emailCampaignRecipient.update({
           where: { id: recipient.id },
           data: {
-            status: "sent",
-            sentAt: new Date(),
-            messageId: `campaign_${campaignId}_${recipient.id}`,
+            status: "suppressed",
+            errorMessage: "Dirección dada de baja: baja voluntaria, rebote permanente o queja de spam",
           },
+        });
+        suppressedCount++;
+        continue;
+      }
+
+      const unsubscribe = this.unsubscribes.link({ kind: "r", id: recipient.id });
+      const result = await this.emailService.sendEmail({
+        to: recipient.email,
+        subject: campaign.subject,
+        html: this.unsubscribes.withFooter(campaign.content, salonName, unsubscribe.pageUrl),
+        replyTo: campaign.replyTo ?? undefined,
+        headers: unsubscribe.headers,
+      });
+
+      if (result.success) {
+        await this.prisma.emailCampaignRecipient.update({
+          where: { id: recipient.id },
+          data: { status: "sent", sentAt: new Date(), messageId: result.id ?? null },
         });
         sentCount++;
-      } catch (error) {
+      } else {
+        // Refused before leaving (bad address, provider error): a failure,
+        // not a bounce -- the panel's bounces are the receiving server's.
         await this.prisma.emailCampaignRecipient.update({
           where: { id: recipient.id },
-          data: {
-            status: "bounced",
-            bouncedAt: new Date(),
-            errorMessage: error.message,
-          },
+          data: { status: "failed", errorMessage: result.error?.slice(0, 500) ?? "Error" },
         });
         failedCount++;
       }
     }
 
-    // Update campaign status and stats
+    // Increment, never overwrite: delivery events for the first emails may
+    // already be arriving while the loop runs.
     await this.prisma.emailCampaign.update({
       where: { id: campaignId },
       data: {
         status: "sent",
         sentAt: new Date(),
-        emailsSent: sentCount,
-        emailsDelivered: sentCount - failedCount,
-        bounces: failedCount,
+        emailsSent: { increment: sentCount },
       },
     });
 
-    return { success: true, sentCount, failedCount };
+    this.logger.log(
+      `Campaign ${campaignId}: ${sentCount} sent, ${failedCount} failed, ${suppressedCount} suppressed, ${skippedCount} refused marketing`,
+    );
+    return { success: true, sentCount, failedCount, suppressedCount, skippedCount };
+  }
+
+  /** What the panel needs to say honestly which numbers it can show. */
+  async getTrackingStatus(tenantId: string) {
+    return {
+      sendingConfigured: this.emailService.isConfigured(),
+      trackingConfigured: !!this.config.get<string>("RESEND_WEBHOOK_SECRET"),
+      suppressedAddresses: await this.suppressions.count(tenantId),
+    };
   }
 
   async addRecipients(
@@ -250,19 +330,23 @@ export class EmailCampaignsService {
       throw new BadRequestException("Cannot add recipients to sent campaigns");
     }
 
-    // Get client emails
-    const clients = await this.prisma.client.findMany({
-      where: {
-        id: { in: clientIds },
-        tenantId,
-      },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-      },
-    });
+    // Get client emails. Those who said no to promotions are left out.
+    const refused = await clientsWhoRefusedMarketing(this.prisma, tenantId, clientIds);
+    const clients = (
+      await this.prisma.client.findMany({
+        where: {
+          id: { in: clientIds },
+          tenantId,
+          email: { not: null },
+        },
+        select: {
+          id: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+        },
+      })
+    ).filter((c) => !refused.has(c.id));
 
     // Create recipients
     const recipients = await Promise.all(
@@ -396,62 +480,59 @@ export class EmailCampaignsService {
       throw new NotFoundException("Campaign not found");
     }
 
-    const analytics = await this.prisma.emailCampaignAnalytics.findMany({
+    const recentEvents = await this.prisma.emailCampaignAnalytics.findMany({
       where: { campaignId },
       orderBy: { timestamp: "desc" },
+      take: 50,
     });
 
-    // Calculate metrics
-    const opened = analytics.filter((a) => a.eventType === "opened").length;
-    const clicked = analytics.filter((a) => a.eventType === "clicked").length;
-    const bounced = analytics.filter((a) => a.eventType === "bounced").length;
-    const unsubscribed = analytics.filter(
-      (a) => a.eventType === "unsubscribed",
-    ).length;
-
+    // The counters are per recipient (ResendEventsService counts a
+    // recipient's first open/click/bounce only), so they divide cleanly.
+    // There is no unsubscribe rate: campaigns have no unsubscribe link that
+    // records anything, so that number would always be an invented 0.
+    const pct = (part: number, whole: number) => (whole > 0 ? (part / whole) * 100 : 0);
     return {
       campaign,
       totalSent: campaign.emailsSent,
       totalDelivered: campaign.emailsDelivered,
       totalOpened: campaign.emailsOpened,
       totalClicks: campaign.clicks,
-      openRate:
-        campaign.emailsDelivered > 0
-          ? (campaign.emailsOpened / campaign.emailsDelivered) * 100
-          : 0,
-      clickRate:
-        campaign.emailsOpened > 0
-          ? (campaign.clicks / campaign.emailsOpened) * 100
-          : 0,
-      bounceRate:
-        campaign.emailsSent > 0
-          ? (campaign.bounces / campaign.emailsSent) * 100
-          : 0,
-      unsubscribeRate:
-        campaign.emailsSent > 0
-          ? (unsubscribed / campaign.emailsSent) * 100
-          : 0,
-      recentEvents: analytics.slice(0, 50),
+      totalBounces: campaign.bounces,
+      totalComplaints: campaign.complaints,
+      openRate: pct(campaign.emailsOpened, campaign.emailsDelivered),
+      clickRate: pct(campaign.clicks, campaign.emailsDelivered),
+      bounceRate: pct(campaign.bounces, campaign.emailsSent),
+      complaintRate: pct(campaign.complaints, campaign.emailsSent),
+      recentEvents,
     };
   }
 
   // ============ BROADCAST TO ALL CLIENTS ============
 
   async broadcastToAllClients(tenantId: string, dto: SendCampaignDto) {
-    // Get all active clients with email
-    const clients = await this.prisma.client.findMany({
-      where: {
-        tenantId,
-        status: "active",
-        email: { not: null },
-      },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-      },
-    });
+    if (dto.sendNow && !this.emailService.isConfigured()) {
+      throw new BadRequestException(
+        "El envío de emails no está configurado en el servidor (falta RESEND_API_KEY).",
+      );
+    }
+
+    // Get all active clients with email, except who said no to promotions
+    const refused = await clientsWhoRefusedMarketing(this.prisma, tenantId);
+    const clients = (
+      await this.prisma.client.findMany({
+        where: {
+          tenantId,
+          status: "active",
+          email: { not: null },
+        },
+        select: {
+          id: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+        },
+      })
+    ).filter((c) => !refused.has(c.id));
 
     if (clients.length === 0) {
       throw new BadRequestException("No clients with email addresses found");
@@ -466,7 +547,10 @@ export class EmailCampaignsService {
         previewText: dto.previewText,
         content: dto.content,
         campaignType: dto.campaignType,
-        status: dto.sendNow ? "sending" : "draft",
+        // Created as a draft either way: sendCampaignNow claims it from
+        // draft. Creating it as "sending" made that call refuse it, so a
+        // broadcast with sendNow never sent anything.
+        status: "draft",
         fromName: dto.fromName,
         replyTo: dto.replyTo,
         totalRecipients: clients.length,

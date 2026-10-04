@@ -1,16 +1,14 @@
-import { ParseUUIDPipe, Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from "@nestjs/common";
-import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
+import { BadRequestException, ParseUUIDPipe, Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuards } from "@nestjs/common";
+import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from "@nestjs/swagger";
+import { RANGE_KEYS } from "../analytics/analytics-metrics";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 import { UserRole } from "@prisma/client";
 import { FeatureGuard } from "../common/guards/feature.guard";
 import { Feature } from "../common/decorators/feature.decorator";
-import {
-  CreateLocationDto,
-  MultiLocationService,
-  UpdateLocationDto,
-} from "./multi-location.service";
+import { MultiLocationService } from "./multi-location.service";
+import { CreateLocationDto, UpdateLocationDto } from "./location.dto";
 
 @ApiTags("multi-location")
 @Controller("locations")
@@ -77,8 +75,17 @@ export class ConsolidatedReportsController {
   @Get("consolidated")
   @Feature("consolidated_reports")
   @ApiOperation({ summary: "KPIs agregados de todos los locales" })
+  @ApiQuery({
+    name: "range",
+    required: false,
+    enum: RANGE_KEYS,
+    description: "Periodo en el calendario del salón (por defecto this_month)",
+  })
   @Roles(...SALON_MANAGERS)
-  consolidated(@Req() req: any) {
-    return this.service.getConsolidated(req.user.tenantId);
+  consolidated(@Req() req: any, @Query("range") range?: string) {
+    if (range && !(RANGE_KEYS as readonly string[]).includes(range)) {
+      throw new BadRequestException(`range debe ser uno de: ${RANGE_KEYS.join(", ")}`);
+    }
+    return this.service.getConsolidated(req.user.tenantId, range);
   }
 }

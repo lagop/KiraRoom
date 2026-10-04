@@ -101,6 +101,11 @@ export function ApprovalChip({
               ? 'No se pudo ejecutar la acción.'
               : 'Acción cancelada.'}
           </div>
+          {/* What really happened, when the tool says it in words (e.g. the
+              wait-list notice: who got it and why the others did not). */}
+          {typeof (resolved.result as any)?.message === 'string' && (
+            <p className="mt-1 whitespace-pre-line text-xs">{(resolved.result as any).message}</p>
+          )}
           {resolved.result != null && (
             <button
               onClick={() => setExpanded((v) => !v)}
@@ -161,6 +166,8 @@ function actionLabel(toolName: string, state: 'pending' | 'done'): string {
       return state === 'pending' ? 'Pendiente: enviar WhatsApp' : 'WhatsApp enviado';
     case 'reschedule_appointment':
       return state === 'pending' ? 'Pendiente: mover cita' : 'Cita movida';
+    case 'close_waitlist_slot':
+      return state === 'pending' ? 'Pendiente: avisar a la lista de espera' : 'Aviso a la lista de espera enviado';
     default:
       return state === 'pending' ? 'Acción pendiente' : 'Acción completada';
   }

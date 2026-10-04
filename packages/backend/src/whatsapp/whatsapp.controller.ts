@@ -69,47 +69,25 @@ export class WhatsAppController {
     return this.whatsapp.disconnect(req.user.tenantId);
   }
 
+  @Get("templates/standard")
+  @Roles(...SALON_MANAGERS)
+  async standardTemplateStatus(@Req() req: AuthedRequest) {
+    return this.whatsapp.standardTemplateStatus(req.user.tenantId);
+  }
+
+  @Post("templates/standard")
+  @Roles(...SALON_MANAGERS)
+  async submitStandardTemplates(@Req() req: AuthedRequest) {
+    return this.whatsapp.submitStandardTemplates(req.user.tenantId);
+  }
+
   @Get("templates")
   @Roles(...SALON_MANAGERS)
   async templates(@Req() req: AuthedRequest) {
     return this.whatsapp.listTemplates(req.user.tenantId);
   }
 
-  @Post("campaigns")
-  @Roles("owner", "admin")
-  @Feature("whatsapp_notifications")
-  async createCampaign(
-    @Req() req: AuthedRequest,
-    @Body() body: {
-      name: string;
-      templateId: string;
-      templateVars?: Record<string, string>;
-      segmentFilter?: Record<string, any>;
-      audience: string[];
-      scheduledAt?: string;
-    },
-  ) {
-    return this.whatsapp.createCampaign(req.user.tenantId, {
-      ...body,
-      templateVars: body.templateVars ?? {},
-      segmentFilter: body.segmentFilter ?? {},
-      scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : undefined,
-    });
-  }
-
-  @Post("campaigns/:id/send")
-  @Roles("owner", "admin")
-  @Feature("whatsapp_notifications")
-  async sendCampaign(@Param("id", ParseUUIDPipe) id: string) {
-    return this.whatsapp.sendCampaign(id);
-  }
-
-  @Get("campaigns/:id/report")
-  @Roles("owner", "admin", "staff")
-  @Feature("whatsapp_notifications")
-  report(@Param("id", ParseUUIDPipe) id: string) {
-    return this.whatsapp.report(id);
-  }
+  // Campaigns: WhatsAppCampaignsController (campaigns/), scoped to the salon.
 
   private signState(tenantId: string): string {
     const nonce = randomBytes(8).toString("hex");

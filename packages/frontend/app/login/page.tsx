@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import apiClient, { setToken, setRefreshToken } from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
 import { LanguageSwitcher } from "@/app/dashboard/components/language-switcher";
 import { AlertCircle } from "lucide-react";
 
-export default function LoginPage() {
+function LoginPageContent() {
   const t = useTranslations();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -229,5 +229,15 @@ export default function LoginPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+// useSearchParams() needs a Suspense boundary for the page to prerender
+// (required since Next.js 14.1; 14.0 let it through).
+export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginPageContent />
+    </Suspense>
   );
 }

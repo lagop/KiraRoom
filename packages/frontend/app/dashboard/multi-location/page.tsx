@@ -5,6 +5,8 @@ import apiClient from "../../../lib/api";
 import { Plus, MapPin, Phone, Mail, Trash2, Edit2, BarChart3 } from "lucide-react";
 import { PlanGate } from "@/components/billing/PlanGate";
 import { useTranslations } from "@/lib/use-translation";
+import { formatCents, formatRate } from "@/lib/analytics-format";
+import { ConsolidatedReport } from "./consolidated-report";
 
 interface Location {
   id: string;
@@ -22,12 +24,12 @@ interface LocationStats {
   locationId: string;
   windowDays: number;
   appointmentCount: number;
+  /** Cents. */
   revenue: number;
+  occupancy?: { rate: number | null };
   activeProfessionals: number;
   totalClients: number;
 }
-
-const NUMBER_FMT = "es-ES";
 
 export default function MultiLocationPage() {
   const t = useTranslations();
@@ -53,6 +55,8 @@ export default function MultiLocationPage() {
   if (locations === null) {
     return <div className="p-8 text-gray-500">{t("multiLocation.loading")}</div>;
   }
+
+  const activeCount = locations.filter((l) => l.isActive).length;
 
   return (
     <div className="space-y-6 p-6">
@@ -134,6 +138,20 @@ export default function MultiLocationPage() {
           </div>
         )}
       </PlanGate>
+
+      {/* Per-location comparison: only meaningful with several active
+          locations (Empresa itself works from one). */}
+      {activeCount >= 2 ? (
+        <PlanGate feature="consolidated_reports">
+          <ConsolidatedReport t={t} />
+        </PlanGate>
+      ) : (
+        activeCount === 1 && (
+          <p className="text-sm text-gray-500">
+            {t("multiLocation.consolidated.needsTwo")}
+          </p>
+        )
+      )}
     </div>
   );
 }
@@ -222,7 +240,7 @@ function LocationCard({
           <div>
             <p className="text-gray-500">{t("multiLocation.stats.revenue30d")}</p>
             <p className="font-semibold text-gray-900">
-              €{stats.revenue.toLocaleString(NUMBER_FMT)}
+              {formatCents(stats.revenue)}
             </p>
           </div>
           <div>
@@ -234,6 +252,14 @@ function LocationCard({
           <div>
             <p className="text-gray-500">{t("multiLocation.stats.clients")}</p>
             <p className="font-semibold text-gray-900">{stats.totalClients}</p>
+          </div>
+          <div>
+            <p className="text-gray-500">{t("multiLocation.consolidated.occupancy30d")}</p>
+            <p className="font-semibold text-gray-900">
+              {stats.occupancy?.rate == null
+                ? t("multiLocation.consolidated.noSchedule")
+                : formatRate(stats.occupancy.rate)}
+            </p>
           </div>
         </div>
       )}

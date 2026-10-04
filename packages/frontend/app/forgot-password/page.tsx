@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { AlertCircle, CheckCircle2 } from "lucide-react";
 import apiClient from "@/lib/api";
@@ -11,7 +11,7 @@ import { useTranslations } from "@/lib/use-translation";
  * address has an account, so the page never says which. From a salon's site
  * the link carries ?salon=<slug>, limiting the reset to that salon's account.
  */
-export default function ForgotPasswordPage() {
+function ForgotPasswordPageContent() {
   const t = useTranslations();
   const searchParams = useSearchParams();
   const salon = searchParams?.get("salon") || undefined;
@@ -86,5 +86,15 @@ export default function ForgotPasswordPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+// useSearchParams() needs a Suspense boundary for the page to prerender
+// (required since Next.js 14.1; 14.0 let it through).
+export default function ForgotPasswordPage() {
+  return (
+    <Suspense fallback={null}>
+      <ForgotPasswordPageContent />
+    </Suspense>
   );
 }

@@ -130,7 +130,7 @@ check(
 
 console.log("\n=== the public booking page really posts ===");
 
-const booking = files.find(([f]) => f === "sites/[salonName]/page.tsx");
+const booking = files.find(([f]) => f === "sites/[salonName]/salon-booking-page.tsx");
 check("the page is still where expected", Boolean(booking), true);
 
 if (booking) {

@@ -33,6 +33,9 @@ export enum NotificationType {
   NEW_APPOINTMENT_ASSIGNED = 'new_appointment_assigned',
   SCHEDULE_CHANGE = 'schedule_change',
   NEW_MESSAGE = 'new_message',
+
+  // Wait-list
+  WAITLIST_SLOT_AVAILABLE = 'waitlist_slot_available',
 }
 
 export class CreateNotificationDto {
