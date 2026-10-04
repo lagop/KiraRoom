@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ChatConversation, ChatMessage, IntentHistoryItem, ClientProfile, Tenant } from '@prisma/client';
 
@@ -7,79 +7,32 @@ export class ConversationMemoryRepository {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Get or create a default tenant
+   * The salon a conversation belongs to: its id, or its exact slug (the
+   * salon site and the embed send one or the other). Nothing else.
+   *
+   * It used to fall back to a salon whose name *contained* the text, then to
+   * the first salon in the database, and when there was none it created a
+   * sample "Kira Room" salon. The chat endpoint is public, so any visitor
+   * sending a wrong or empty salon got another salon's receptionist: its
+   * services and prices, bookings in its agenda, and its AI allowance spent.
    */
-  async getOrCreateDefaultTenant(): Promise<Tenant> {
-    let tenant = await this.prisma.tenant.findFirst();
-    
-    if (!tenant) {
-      tenant = await this.prisma.tenant.create({
-        data: {
-          name: 'Kira Room',
-          slug: 'kira-room',
-          description: 'Premium beauty and wellness salon',
-          email: 'info@kira-room.com',
-          phone: '+34 600 123 456',
-          whatsapp: '+34 600 123 456',
-          street: 'Calle Gran Vía 42',
-          city: 'Madrid',
-          state: 'Community of Madrid',
-          postalCode: '28013',
-          country: 'ES',
-          timezone: 'Europe/Madrid',
-          currency: 'EUR',
-          language: 'es',
-          dateFormat: 'DD/MM/YYYY',
-          timeFormat: '24h',
-          plan: 'professional',
-          subscriptionStatus: 'active',
-          currentPeriodStart: new Date(),
-          currentPeriodEnd: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 1 year
-          features: {
-            onlineBooking: true,
-            smsNotifications: true,
-            emailMarketing: true,
-            loyaltyProgram: true,
-            multiStaff: true,
-            inventory: true,
-            reports: true,
-          },
-        },
-      });
+  private async resolveTenantId(raw: string | undefined): Promise<string> {
+    const value = (raw ?? "").trim();
+    if (value) {
+      const tenant = this.isValidUUID(value)
+        ? await this.prisma.tenant.findUnique({ where: { id: value }, select: { id: true } })
+        : await this.prisma.tenant.findFirst({ where: { slug: value.toLowerCase() }, select: { id: true } });
+      if (tenant) return tenant.id;
     }
-    
-    return tenant;
+    throw new NotFoundException("Salón no encontrado");
   }
 
   /**
    * Create a new chat conversation
    */
   async createConversation(data: Partial<ChatConversation>): Promise<ChatConversation> {
-    // Ensure we have a valid tenant
-    let tenantId = data.tenantId;
-
-    // If tenantId is provided but might be invalid (e.g., salon name instead of UUID),
-    // or if no tenantId is provided, use default tenant
-    if (!tenantId || !this.isValidUUID(tenantId)) {
-      // First, check if it's a salon slug (like "kiraroom")
-      let tenant = await this.prisma.tenant.findFirst({
-        where: {
-          OR: [
-            { slug: tenantId?.toLowerCase() },
-            { name: { contains: tenantId || '', mode: 'insensitive' } }
-          ]
-        }
-      });
-
-      // If not found, use default tenant
-      if (!tenant) {
-        tenant = await this.getOrCreateDefaultTenant();
-      }
-
-      tenantId = tenant.id;
-    }
-
-    // Also validate salonId - if it's not a valid UUID, don't use it (or use default)
+    const tenantId = await this.resolveTenantId(data.tenantId);
+    // salonId is the same salon (multi-location salons share the tenant).
     const validSalonId = data.salonId && this.isValidUUID(data.salonId) ? data.salonId : tenantId;
 
     // ChatConversation.clientId has a FK to Client. The chat widget

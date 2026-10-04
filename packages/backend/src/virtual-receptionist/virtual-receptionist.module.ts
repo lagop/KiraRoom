@@ -11,6 +11,7 @@ import { FAQService } from './services/faq.service';
 import { FAQCacheService } from './services/faq-cache.service';
 import { AiConversationCounterService } from './services/ai-conversation-counter.service';
 import { BookingService } from './services/booking.service';
+import { ReceptionistStatsService } from './services/receptionist-stats.service';
 import { AnalysisService } from './services/analysis.service';
 import { LLMProviderFactory } from './factories/llm-provider.factory';
 import { OpenAIProvider } from './providers/openai.provider';
@@ -32,7 +33,12 @@ import { InstagramChannelProvider } from './channels/instagram-channel.provider'
 import { TelegramChannelProvider } from './channels/telegram-channel.provider';
 import { ChannelRegistry } from './channels/channel.registry';
 import { ChannelsConfigService } from './services/channels-config.service';
-import { ChannelsConfigController } from './controllers/channels-config.controller';
+import { ChannelsConfigController, ChannelsMetaCallbackController } from './controllers/channels-config.controller';
+import { ChannelConnectionsService } from './services/channel-connections.service';
+import { ChannelCredentialsService } from './channels/channel-credentials.service';
+import { ChannelReceptionistService } from './channels/channel-receptionist.service';
+import { MetaGraphClient } from './channels/meta-graph.client';
+import { TelegramBotClient } from './channels/telegram-bot.client';
 import { PlatformModule } from '../platform/platform.module';
 
 @Module({
@@ -46,7 +52,7 @@ import { PlatformModule } from '../platform/platform.module';
     AppointmentsModule,
     PlatformModule,
   ],
-  controllers: [VirtualReceptionistController, ChannelsConfigController],
+  controllers: [VirtualReceptionistController, ChannelsConfigController, ChannelsMetaCallbackController],
   providers: [
     VirtualReceptionistService,
     LLMService,
@@ -55,6 +61,7 @@ import { PlatformModule } from '../platform/platform.module';
     FAQCacheService,
     AiConversationCounterService,
     BookingService,
+    ReceptionistStatsService,
     AnalysisService,
     LLMProviderFactory,
     OpenAIProvider,
@@ -69,9 +76,16 @@ import { PlatformModule } from '../platform/platform.module';
     TelegramChannelProvider,
     ChannelRegistry,
     ChannelsConfigService,
+    ChannelConnectionsService,
+    ChannelCredentialsService,
+    ChannelReceptionistService,
+    MetaGraphClient,
+    TelegramBotClient,
     SalonToolsService,
   ],
   exports: [
+    ChannelReceptionistService,
+    ChannelCredentialsService,
     VirtualReceptionistService,
     LLMService,
     ConversationService,

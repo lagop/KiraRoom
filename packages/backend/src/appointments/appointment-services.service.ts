@@ -1,12 +1,16 @@
-import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { LoyaltyService } from '../loyalty/loyalty.service';
 import { CreateAppointmentServiceDto, UpdateAppointmentServiceDto, AppointmentServiceFiltersDto, AppointmentServiceType, AppointmentServiceStatus } from './dto/appointment-services.dto';
 
 @Injectable()
 export class AppointmentServicesService {
   private readonly logger = new Logger(AppointmentServicesService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    @Optional() private readonly loyalty?: LoyaltyService,
+  ) {}
 
   async create(createDto: CreateAppointmentServiceDto) {
     // Verify appointment exists
@@ -254,7 +258,7 @@ export class AppointmentServicesService {
 
     if (pendingServices === 0) {
       // All services completed, update appointment
-      await this.prisma.appointment.update({
+      const done = await this.prisma.appointment.update({
         where: { id: appointmentId },
         data: {
           status: 'completed',
@@ -262,6 +266,10 @@ export class AppointmentServicesService {
         },
       });
       this.logger.log(`All services completed for appointment ${appointmentId}, marking appointment as completed`);
+      // Loyalty points, if it is also paid. Never fails the status change.
+      await this.loyalty?.settleAppointment(done.tenantId, appointmentId).catch((err) =>
+        this.logger.warn(`loyalty for appointment ${appointmentId} failed: ${(err as Error).message}`),
+      );
     }
   }
 

@@ -24,7 +24,11 @@ function controller(tenant: any = { id: "t1", subscriptionStatus: "trialing" }) 
       update: jest.fn(async () => ({})),
     },
   };
-  c.addonsService = { provisionFromStripe: jest.fn(), cancelFromStripe: jest.fn() };
+  c.addonsService = {
+    provisionFromStripe: jest.fn(),
+    cancelFromStripe: jest.fn(),
+    syncFromSubscription: jest.fn(),
+  };
   return c;
 }
 

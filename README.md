@@ -16,7 +16,7 @@ a team-side AI assistant (Kira Copilot) for salon staff.
 - **Loyalty + Gift Cards + Promotions** — retention toolkit
 - **WhatsApp + SMS + Email campaigns** — multi-channel client outreach
 - **Rebooking + No-show tracking** — keeps the chair full
-- **Reviews** — Google Reviews auto-pull + manual moderation
+- **Reviews** — post-visit review requests (email / WhatsApp / SMS), moderation, approved reviews on the booking page and a one-click link to the salon's Google review page (no Google API: Google reviews are not read or answered from KiraRoom)
 - **Multi-location** — multi-salon chains with consolidated reporting
 - **Multi-language / multi-currency** — ES + EN out of the box
 

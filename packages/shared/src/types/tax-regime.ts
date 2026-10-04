@@ -16,7 +16,7 @@
  *
  * A Canarian salon could already set 7 % — the rate is per tenant and per
  * product — so its invoices came out right. What did not was everything
- * around them: the interface called it IVA, and `aggregateModelo303` reads
+ * around them: the interface called it IVA, and `aggregateModelo303` read
  * only the buckets for 21, 10 and 4, so a tenant billing at 7 % got a report
  * with zeros in every box and no error. A silently wrong tax return is worse
  * than a missing feature, because someone might file it.

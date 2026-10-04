@@ -2,16 +2,18 @@ import { test, expect } from "@playwright/test";
 import { loginAs, seedTenant, uniqueSlug, TEST_API_URL } from "./fixtures/auth";
 
 /**
- * Add-on web_domain (plan rev 3 section 4.8).
+ * The salon's own domain (bring-your-own, verified by DNS).
  *
- * Verifies:
- *  - The status endpoint starts disabled.
- *  - Availability check returns the mock response.
- *  - Purchase (with no Stripe) activates the add-on locally.
- *  - isEnabled('web_domain') flips to true after activation.
+ * The old flow "checked availability" by suffix and "purchased" a domain by
+ * flipping a flag. Now:
+ *  - the status lists the public page URL and no domain at first;
+ *  - saving a domain returns it unverified, with the CNAME and TXT records;
+ *  - verifying a domain nobody pointed at us fails with a reason;
+ *  - invalid and platform domains are refused;
+ *  - the old purchase endpoints are gone.
  */
-test.describe("Add-on web_domain", () => {
-  test("starts disabled and can be activated via the service", async ({ page }) => {
+test.describe("Dominio propio", () => {
+  test("connect a domain and get the DNS records", async ({ page }) => {
     const seed = await seedTenant({
       name: "Domain E2E",
       slug: uniqueSlug("domain"),
@@ -20,34 +22,30 @@ test.describe("Add-on web_domain", () => {
     });
     await loginAs(page, seed.ownerEmail, seed.ownerPassword);
 
-    const status = await page.request.get(`${TEST_API_URL}/web-domain`);
-    expect(status.ok()).toBeTruthy();
-    const s0 = await status.json();
-    expect(s0.enabled).toBe(false);
+    const s0 = await (await page.request.get(`${TEST_API_URL}/web-domain`)).json();
+    expect(s0.domain).toBeNull();
+    expect(s0.publicUrl).toContain("/sites/");
 
-    const avail = await page.request.post(
-      `${TEST_API_URL}/web-domain/check-availability`,
-      { data: { domain: "salon-demo.com" } },
-    );
-    expect(avail.ok()).toBeTruthy();
-    const a = await avail.json();
-    expect(a.domain).toBe("salon-demo.com");
-    expect(typeof a.available).toBe("boolean");
+    const saved = await page.request.put(`${TEST_API_URL}/web-domain`, {
+      data: { domain: "https://Reservas.Salon-Demo.example/" },
+    });
+    expect(saved.ok()).toBeTruthy();
+    const s1 = await saved.json();
+    expect(s1.domain.name).toBe("reservas.salon-demo.example");
+    expect(s1.domain.verified).toBe(false);
+    expect(s1.domain.records.map((r: any) => r.type)).toEqual(["CNAME", "TXT"]);
 
-    const purchase = await page.request.post(
-      `${TEST_API_URL}/web-domain/purchase`,
-      { data: { domain: "salon-demo.com" } },
-    );
-    expect(purchase.ok()).toBeTruthy();
+    const verified = await (await page.request.post(`${TEST_API_URL}/web-domain/verify`)).json();
+    expect(verified.domain.verified).toBe(false);
+    expect(verified.domain.lastCheckError).toBeTruthy();
 
-    const s1 = await (
-      await page.request.get(`${TEST_API_URL}/web-domain`)
-    ).json();
-    expect(s1.enabled).toBe(true);
-    expect(s1.domain).toBe("salon-demo.com");
+    const purchase = await page.request.post(`${TEST_API_URL}/web-domain/purchase`, {
+      data: { domain: "salon-demo.com" },
+    });
+    expect(purchase.status()).toBe(404);
   });
 
-  test("rejects invalid domains", async ({ page }) => {
+  test("rejects invalid and platform domains", async ({ page }) => {
     const seed = await seedTenant({
       name: "Bad Domain E2E",
       slug: uniqueSlug("baddomain"),
@@ -55,10 +53,9 @@ test.describe("Add-on web_domain", () => {
       status: "active",
     });
     await loginAs(page, seed.ownerEmail, seed.ownerPassword);
-    const res = await page.request.post(
-      `${TEST_API_URL}/web-domain/check-availability`,
-      { data: { domain: "not a domain" } },
-    );
-    expect([400, 422]).toContain(res.status());
+    for (const domain of ["not a domain", "app.kiraroom.net"]) {
+      const res = await page.request.put(`${TEST_API_URL}/web-domain`, { data: { domain } });
+      expect(res.status()).toBe(400);
+    }
   });
 });

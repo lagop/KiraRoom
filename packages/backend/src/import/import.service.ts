@@ -23,6 +23,11 @@ import {
   readServiceRows,
   serviceRowErrors,
 } from "./columns";
+import { readXlsxRows, SpreadsheetError } from "./spreadsheet";
+import { appointmentLocations } from "../multi-location/appointment-location";
+
+/** The uploaded file: CSV text, or the bytes of an .xlsx (its first sheet is read). */
+export type ImportFile = string | { xlsx: Buffer };
 
 type RowErrors = { col: string; msg: string }[];
 
@@ -69,9 +74,10 @@ function addMinutes(time: string, minutes: number): string {
 }
 
 /**
- * Imports clients and services from a CSV: KiraRoom's template or another
- * program's export (see columns.ts). Every import can be previewed first
- * (dry run) and leaves an ImportJob row.
+ * Imports clients, services and appointments from a CSV or an .xlsx (see
+ * spreadsheet.ts): KiraRoom's template or another program's export (see
+ * columns.ts). Every import can be previewed first (dry run) and leaves an
+ * ImportJob row.
  *
  * Clients are matched against the salon's existing ones and against earlier
  * rows of the same file by email or by phone (last nine digits), so an
@@ -86,16 +92,16 @@ export class ImportService {
 
   // ---- Clients ------------------------------------------------------------
 
-  async dryRunClients(tenantId: string, csvText: string, filename: string) {
-    return this.importClients(tenantId, csvText, filename, true);
+  async dryRunClients(tenantId: string, file: ImportFile, filename: string) {
+    return this.importClients(tenantId, file, filename, true);
   }
 
-  async commitClients(tenantId: string, csvText: string, filename: string) {
-    return this.importClients(tenantId, csvText, filename, false);
+  async commitClients(tenantId: string, file: ImportFile, filename: string) {
+    return this.importClients(tenantId, file, filename, false);
   }
 
-  private async importClients(tenantId: string, csvText: string, filename: string, dryRun: boolean) {
-    const raw = this.parseCsv(csvText);
+  private async importClients(tenantId: string, file: ImportFile, filename: string, dryRun: boolean) {
+    const raw = await this.readRows(file);
     const country = await this.tenantCountry(tenantId);
     const rows = readClientRows(raw, country);
     const known = await this.clientIndex(tenantId);
@@ -183,16 +189,16 @@ export class ImportService {
 
   // ---- Services -----------------------------------------------------------
 
-  async dryRunServices(tenantId: string, csvText: string, filename: string) {
-    return this.importServices(tenantId, csvText, filename, true);
+  async dryRunServices(tenantId: string, file: ImportFile, filename: string) {
+    return this.importServices(tenantId, file, filename, true);
   }
 
-  async commitServices(tenantId: string, csvText: string, filename: string) {
-    return this.importServices(tenantId, csvText, filename, false);
+  async commitServices(tenantId: string, file: ImportFile, filename: string) {
+    return this.importServices(tenantId, file, filename, false);
   }
 
-  private async importServices(tenantId: string, csvText: string, filename: string, dryRun: boolean) {
-    const rows = readServiceRows(this.parseCsv(csvText));
+  private async importServices(tenantId: string, file: ImportFile, filename: string, dryRun: boolean) {
+    const rows = readServiceRows(await this.readRows(file));
     const existing = await this.prisma.service.findMany({ where: { tenantId }, select: { id: true, name: true } });
     const byName = new Map(existing.map((s) => [s.name.trim().toLowerCase(), s.id]));
     const seen = new Set<string>();
@@ -255,12 +261,12 @@ export class ImportService {
 
   // ---- Appointments -------------------------------------------------------
 
-  async dryRunAppointments(tenantId: string, csvText: string, filename: string, options: AppointmentImportOptions = {}) {
-    return this.importAppointments(tenantId, csvText, filename, true, options);
+  async dryRunAppointments(tenantId: string, file: ImportFile, filename: string, options: AppointmentImportOptions = {}) {
+    return this.importAppointments(tenantId, file, filename, true, options);
   }
 
-  async commitAppointments(tenantId: string, csvText: string, filename: string, options: AppointmentImportOptions = {}) {
-    return this.importAppointments(tenantId, csvText, filename, false, options);
+  async commitAppointments(tenantId: string, file: ImportFile, filename: string, options: AppointmentImportOptions = {}) {
+    return this.importAppointments(tenantId, file, filename, false, options);
   }
 
   /**
@@ -278,15 +284,15 @@ export class ImportService {
    */
   private async importAppointments(
     tenantId: string,
-    csvText: string,
+    file: ImportFile,
     filename: string,
     dryRun: boolean,
     options: AppointmentImportOptions,
   ) {
-    const rows = readAppointmentRows(this.parseCsv(csvText), await this.tenantCountry(tenantId));
+    const rows = readAppointmentRows(await this.readRows(file), await this.tenantCountry(tenantId));
     const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } });
     const timeZone = tenant?.timezone || "Europe/Madrid";
-    const [services, professionals, clients, booked] = await Promise.all([
+    const [services, professionals, clients, booked, locations] = await Promise.all([
       this.prisma.service.findMany({
         where: { tenantId, isActive: true },
         select: { id: true, name: true, duration: true, price: true, currency: true },
@@ -308,6 +314,8 @@ export class ImportService {
         },
         select: { clientId: true, professionalId: true, scheduledDate: true, scheduledTime: true },
       }),
+      // Each professional's location, written on the appointment (multi-location report).
+      dryRun ? Promise.resolve(new Map<string, string>()) : appointmentLocations(this.prisma, tenantId),
     ]);
     const contacts = new Map<string, string>();
     for (const c of clients) {
@@ -455,6 +463,7 @@ export class ImportService {
             clientId: id,
             serviceId: service!.id,
             professionalId: professional!.id,
+            locationId: locations.get(professional!.id) ?? null,
             scheduledDate: new Date(row.date!),
             scheduledTime: row.time!,
             startTime: startsAt,
@@ -564,6 +573,20 @@ export class ImportService {
   private async tenantCountry(tenantId: string): Promise<string> {
     const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { country: true } });
     return (tenant?.country || "ES").toUpperCase();
+  }
+
+  /** The file's rows, header text -> cell text, whether it came as CSV or .xlsx. */
+  private async readRows(file: ImportFile): Promise<Record<string, string>[]> {
+    if (typeof file === "string") return this.parseCsv(file);
+    let rows: Record<string, string>[];
+    try {
+      rows = await readXlsxRows(file.xlsx);
+    } catch (err) {
+      if (err instanceof SpreadsheetError) throw new BadRequestException(err.message);
+      throw err;
+    }
+    if (rows.length === 0) throw new BadRequestException("El archivo está vacío");
+    return rows;
   }
 
   private parseCsv(csvText: string): Record<string, string>[] {

@@ -148,10 +148,26 @@ export class MetaCloudApiClient {
     accessToken: string,
     wabaId: string,
   ): Promise<{ data: any[] }> {
-    const url = `${this.baseUrl()}/${wabaId}/message_templates?fields=name,status,language,components`;
+    // Every WhatsApp campaign adds a template, so a salon soon has more than
+    // the default page of 25: the standard ones must not fall off the list.
+    const url = `${this.baseUrl()}/${wabaId}/message_templates?fields=name,status,language,components&limit=500`;
     const resp = await fetch(url, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     return (await resp.json()) as any;
+  }
+
+  /** One template by name, with Meta's review status and rejection reason. */
+  async findTemplate(
+    accessToken: string,
+    wabaId: string,
+    name: string,
+  ): Promise<{ name: string; status: string; rejected_reason?: string; language?: string } | null> {
+    const url =
+      `${this.baseUrl()}/${wabaId}/message_templates?fields=name,status,rejected_reason,language&name=${encodeURIComponent(name)}`;
+    const resp = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    const body = (await resp.json()) as any;
+    if (body?.error) throw new Error(body.error.message ?? "Meta error");
+    return (body?.data ?? []).find((t: any) => t?.name === name) ?? null;
   }
 }

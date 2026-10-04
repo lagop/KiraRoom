@@ -160,15 +160,9 @@
     },
     {
       "key": "google_reviews_auto",
-      "name": "Reseñas Google auto",
+      "name": "Reseñas tras la cita",
       "price": 19,
-      "tagline": "Invitación automática post-servicio"
-    },
-    {
-      "key": "web_domain",
-      "name": "Dominio personalizado",
-      "price": 15,
-      "tagline": "Tu salón en citastusalon.com con SSL"
+      "tagline": "Pide opinión después de cada cita y ofrece dejarla en Google"
     },
     {
       "key": "deposits_antinoshow",

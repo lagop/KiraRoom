@@ -35,6 +35,17 @@ export class UpdateMyProfileDto {
   @IsIn(["es", "en"])
   @IsOptional()
   preferredLanguage?: string;
+
+  /**
+   * Required when `email` changes. The email is what the client signs in
+   * with (and where a password reset goes), so a borrowed session must not
+   * be enough to move the account to another address.
+   */
+  @ApiPropertyOptional()
+  @IsString()
+  @MaxLength(128)
+  @IsOptional()
+  currentPassword?: string;
 }
 
 export class ChangeMyPasswordDto {

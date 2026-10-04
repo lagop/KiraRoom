@@ -313,3 +313,28 @@ export function sumServiceDurations(
     return sum + (Number(service?.duration) || defaultDuration);
   }, 0);
 }
+
+/**
+ * Where "Editar" on the appointment detail page goes. It used to push
+ * `/dashboard/appointments/:id/edit`, a page that does not exist (404):
+ * appointments are edited in the agenda's drawer, which the agenda opens
+ * from these query params.
+ */
+export function appointmentEditHref(appointmentId: string): string {
+  return `/dashboard/appointments?appointment=${encodeURIComponent(appointmentId)}&edit=1`;
+}
+
+export type DrawerTarget =
+  | { mode: "new" }
+  | { mode: "existing"; appointmentId: string; edit: boolean };
+
+/** What the agenda's drawer should open from its URL, or null for nothing. */
+export function drawerTargetFromQuery(
+  params: { get(name: string): string | null } | null | undefined,
+): DrawerTarget | null {
+  if (!params) return null;
+  const id = params.get("appointment");
+  if (id) return { mode: "existing", appointmentId: id, edit: params.get("edit") === "1" };
+  if (params.get("new") === "true") return { mode: "new" };
+  return null;
+}

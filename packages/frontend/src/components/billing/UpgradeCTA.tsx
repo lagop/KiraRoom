@@ -62,7 +62,8 @@ export function UpgradeCTA({
       <p className="mt-1 text-sm text-gray-600">{headline}.</p>
       <p className="mt-1 text-xs text-gray-500">
         Desde <span className="font-semibold">€{price}/mes</span>{" "}
-        {requiredPlan === "empresa" && "(mín. 2 locales)"}
+        {/* Empresa is priced per location and works from one. */}
+        {requiredPlan === "empresa" && "por local"}
       </p>
       <Link
         href={href}
@@ -91,7 +92,7 @@ function humanizeFeature(feature: FeatureKey): string {
     // @kira/shared -- exactly the drift that unification is for.
     virtual_receptionist_advanced: "Recepcionista IA avanzada",
     multichannel: "Messenger, Instagram y Telegram",
-    google_reviews_auto: "Reseñas automáticas en Google",
+    google_reviews_auto: "Peticiones de reseña tras la cita",
     copilot_read: "Kira Copilot para el equipo",
     copilot_write: "Kira Copilot con acciones",
     loyalty: "Programa de fidelidad",

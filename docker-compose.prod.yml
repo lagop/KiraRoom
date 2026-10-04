@@ -237,6 +237,7 @@ services:
 
       # Notifications
       RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_WEBHOOK_SECRET: ${RESEND_WEBHOOK_SECRET:-}
       EMAIL_FROM: ${EMAIL_FROM:-}
       TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
       TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
@@ -257,6 +258,10 @@ services:
       SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-}
       SENTRY_RELEASE: ${IMAGE_TAG:-}
       METRICS_SCRAPE_TOKEN: ${METRICS_SCRAPE_TOKEN:-}
+
+      # Salons' own domains (docs/custom-domains.md)
+      CUSTOM_DOMAIN_TARGET: ${CUSTOM_DOMAIN_TARGET:-}
+      CUSTOM_DOMAINS_TLS_READY: ${CUSTOM_DOMAINS_TLS_READY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -289,6 +294,10 @@ services:
     container_name: kiraroom-frontend-prod
     environment:
       NODE_ENV: production
+      # Server-side renders (salon pages, sitemap, custom-domain lookups)
+      # call the backend on the Docker network instead of going out
+      # through Traefik and back in.
+      INTERNAL_API_URL: http://backend:3001/api/v1
     restart: unless-stopped
     networks:
       kiraroom-network:

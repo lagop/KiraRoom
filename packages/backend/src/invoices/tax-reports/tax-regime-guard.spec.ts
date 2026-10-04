@@ -6,15 +6,16 @@ import { TaxReportsService } from "./tax-reports.service";
  * A quarterly return that does not match the tenant's tax regime must be
  * refused, not approximated.
  *
- * `aggregateModelo303` buckets invoices by rate and then reads only the
+ * The old 303 aggregator bucketed invoices by rate and then read only the
  * buckets for 21, 10 and 4 — the IVA rates. A Canarian salon bills IGIC at
  * 7 %, which matches none of them, so every box came out 0 and the report was
- * saved as a valid `draft` with no error. A tax return that is silently wrong
+ * saved as a valid `draft` with no error. (modelo-303.ts now refuses a rate
+ * it has no row for, but the regime is checked first, before any invoice.) A tax return that is silently wrong
  * is worse than a missing feature, because someone might file it.
  *
- * The Modelo 420 itself is refused too, for the same reason: its box layout
- * comes from the Agencia Tributaria Canaria, and approximating it from the 303
- * would recreate the bug this guard exists to stop.
+ * The Modelo 420 was refused until its box layout came from the Agencia
+ * Tributaria Canaria's own instructions (modelo-420.ts); it is now generated
+ * for IGIC tenants, and only for them.
  */
 
 function serviceFor(fiscalSettings: unknown): {
@@ -85,14 +86,15 @@ describe("tax regime guard on quarterly returns", () => {
     expect(prisma.taxReport.upsert).toHaveBeenCalled();
   });
 
-  it("refuses the Modelo 420 as not implemented, rather than guessing its boxes", async () => {
+  it("generates the Modelo 420 for a tenant under IGIC", async () => {
     const { service, prisma } = serviceFor({ taxRegime: "igic" });
 
-    await expect(
-      service.generate("t1", TaxReportType.modelo_420, 2026, 3),
-    ).rejects.toThrow(/Agencia Tributaria Canaria/);
+    await service.generate("t1", TaxReportType.modelo_420, 2026, 3);
 
-    expect(prisma.taxReport.upsert).not.toHaveBeenCalled();
+    expect(prisma.taxReport.upsert).toHaveBeenCalled();
+    const totals = prisma.taxReport.upsert.mock.calls[0][0].create.totalsJson;
+    expect(totals["25"]).toBe(0);
+    expect(totals["45"]).toBe(0);
   });
 
   it("refuses a Modelo 420 for a tenant under IVA, on regime grounds", async () => {

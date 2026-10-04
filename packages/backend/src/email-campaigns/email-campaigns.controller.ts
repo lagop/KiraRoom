@@ -53,6 +53,15 @@ export class EmailCampaignsController {
     );
   }
 
+  // Declared before ":id", which would otherwise take "tracking-status"
+  // and fail its UUID check.
+  @Get("tracking-status")
+  @ApiOperation({ summary: "Whether sending and delivery tracking are configured" })
+  @Roles(...SALON_MANAGERS)
+  async getTrackingStatus(@CurrentUser() user: User) {
+    return this.campaignsService.getTrackingStatus(user.tenantId);
+  }
+
   @Get(":id")
   @ApiOperation({ summary: "Get campaign by ID" })
   @ApiResponse({ status: 200, description: "Campaign details" })

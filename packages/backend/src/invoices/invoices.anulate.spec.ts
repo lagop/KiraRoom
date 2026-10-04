@@ -132,6 +132,35 @@ describe("InvoiceService.anulate (no-fiscal path)", () => {
   });
 });
 
+/**
+ * An invoice already in Holded stayed there as a live sale after being
+ * cancelled here. The cancellation now marks it for mirroring in the same
+ * update (so it cannot be lost) and hands it to AccountingService.
+ */
+describe("InvoiceService cancel/anulate and Holded", () => {
+  function build() {
+    const m = makePrismaMock();
+    const accounting = { reflectCancellation: jest.fn(async () => ({ status: "synced" })) };
+    const svc = new InvoiceService(m.prisma, new InvoiceCalculator(), /* fiscal */ null as any, accounting as any);
+    return { m, svc, accounting };
+  }
+
+  it.each(["cancel", "anulate"] as const)("%s marks an invoice that is in Holded and mirrors it", async (action) => {
+    const { m, svc, accounting } = build();
+    seedInvoice(m, { accountingStatus: "synced", accountingExternalId: "65f0aa" });
+    await svc[action]("tenant-1", "inv-1", "Error en el importe");
+    expect(m.invoices.get("inv-1")).toMatchObject({ status: "cancelled", accountingCancelStatus: "pending" });
+    expect(accounting.reflectCancellation).toHaveBeenCalledWith("inv-1");
+  });
+
+  it("does not mark an invoice that never went to Holded", async () => {
+    const { m, svc } = build();
+    seedInvoice(m, { accountingStatus: "not_synced", accountingExternalId: null });
+    await svc.cancel("tenant-1", "inv-1", "x");
+    expect(m.invoices.get("inv-1").accountingCancelStatus).toBeUndefined();
+  });
+});
+
 describe("InvoiceService.emitRectification", () => {
   it("creates a new invoice with series='R' referencing the original", async () => {
     const m = makePrismaMock();

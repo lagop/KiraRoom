@@ -9,8 +9,12 @@
  * 4000-line `appointment-drawer.tsx` monolith.
  */
 
+import * as fs from "fs";
+import * as path from "path";
 import {
   addMinutesToTime,
+  appointmentEditHref,
+  drawerTargetFromQuery,
   calculateTotalDuration,
   formatDateString,
   formatDateTimeString,
@@ -256,6 +260,31 @@ check("custom default", sumServiceDurations(
   120,
 ), 120);
 check("empty selection", sumServiceDurations([], [{ id: "s1", duration: 30 }]), 0);
+
+// ----- appointmentEditHref / drawerTargetFromQuery -----
+// "Editar" on the appointment page pushed /dashboard/appointments/:id/edit,
+// which does not exist. It now opens the agenda's drawer in edit mode.
+
+console.log("\n[appointmentEditHref]");
+const editHref = appointmentEditHref("apt-1");
+check("points at the agenda, not a /edit page", editHref, "/dashboard/appointments?appointment=apt-1&edit=1");
+const editParams = new URLSearchParams(editHref.split("?")[1]);
+check("the agenda reads it back as 'edit this appointment'", drawerTargetFromQuery(editParams), {
+  mode: "existing",
+  appointmentId: "apt-1",
+  edit: true,
+});
+check("?appointment= alone opens it in view mode", drawerTargetFromQuery(new URLSearchParams("appointment=apt-2")), {
+  mode: "existing",
+  appointmentId: "apt-2",
+  edit: false,
+});
+check("?new=true still opens a new appointment", drawerTargetFromQuery(new URLSearchParams("new=true")), { mode: "new" });
+check("no params, nothing to open", drawerTargetFromQuery(new URLSearchParams("")), null);
+checkTrue(
+  "no link to the non-existent /edit page is left in the detail page",
+  !fs.readFileSync(path.join(__dirname, "..", "[id]", "page.tsx"), "utf8").includes("/edit`"),
+);
 
 // ----- Summary -----
 

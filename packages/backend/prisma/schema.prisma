@@ -111,6 +111,7 @@ model Tenant {
   /// Email Campaigns
   emailCampaigns                EmailCampaign[]
   emailCampaignTemplates        EmailCampaignTemplate[]
+  emailSuppressions             EmailSuppression[]
   /// Social Integrations
   socialConnections             SocialConnection[]
   googleBusinessProfile         GoogleBusinessProfile?
@@ -126,6 +127,8 @@ model Tenant {
   consents                      Consent[]
   reviews                       Review[]
   whatsappConnection            WhatsAppConnection?
+  /// The salon's own domain for its public page (see CustomDomain).
+  customDomain                  CustomDomain?
   whatsappCampaigns             WhatsAppCampaign[]
   invites                       TenantInvite[]
 
@@ -140,6 +143,9 @@ model Tenant {
 
   // P2A-receptionist-advanced -- virtual wait-list for fully-booked slots.
   waitListEntries WaitList[]
+  /// When an appointment is cancelled, notify the matching wait-list clients
+  /// straight away instead of leaving it to the "Avisar" button.
+  waitListAutoNotify Boolean @default(false)
 
   /// P1.3 Ã¢â‚¬â€ Onboarding wizard state (one row per tenant)
   onboardingState      OnboardingState?
@@ -188,6 +194,9 @@ model AddOn {
   metered           Boolean  @default(false)
   stripePriceId     String?
   isActive          Boolean  @default(true)
+  /// Whether a salon can buy it today. False ("Próximamente") for an add-on
+  /// whose feature does not work yet: it is listed, never charged.
+  purchasable       Boolean  @default(false)
   sortOrder         Int      @default(0)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -202,6 +211,13 @@ model TenantAddOn {
   tenantId                 String
   addOnId                  String
   stripeSubscriptionItemId String?
+  /// The subscription the item lives on (the salon's plan subscription for
+  /// purchases since 2026-10). Lets the webhook tell an item that was
+  /// removed from that subscription from one billed elsewhere.
+  stripeSubscriptionId     String?
+  /// What the Stripe item bills per month, in cents. The catalogue price
+  /// can change later; MRR counts what this salon actually pays.
+  monthlyPriceCents        Int?
   status                   String    @default("active")
   startedAt                DateTime  @default(now())
   currentPeriodEnd         DateTime?
@@ -212,6 +228,31 @@ model TenantAddOn {
   @@unique([tenantId, addOnId])
   @@index([tenantId])
   @@map("tenant_add_ons")
+}
+
+/// A salon's own domain (e.g. reservas.misalon.com) pointing at its public
+/// page. One per tenant. `domain` is deliberately NOT unique: a salon could
+/// otherwise squat a domain it does not own just by typing it first. What
+/// decides who gets a domain is the DNS proof (TXT record with this row's
+/// token), and verifying one row un-verifies any other row for the same
+/// domain, so at most one verified row per domain exists.
+model CustomDomain {
+  id                String    @id @default(uuid())
+  tenantId          String    @unique
+  /// Lower-case host name, no scheme, no trailing dot.
+  domain            String
+  /// Published by the salon in a TXT record to prove it controls the domain.
+  verificationToken String
+  verifiedAt        DateTime?
+  lastCheckedAt     DateTime?
+  /// Why the last DNS check failed, in Spanish for the panel. Null when it passed.
+  lastCheckError    String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([domain])
+  @@map("custom_domains")
 }
 
 model MessageCreditWallet {
@@ -1091,6 +1132,9 @@ enum NotificationType {
   new_appointment_assigned
   schedule_change
   new_message
+
+  /// Wait-list: a slot the client was waiting for has opened
+  waitlist_slot_available
 }
 
 // ============================================
@@ -1308,6 +1352,15 @@ model LoyaltyProgram {
 
   /// Points earning rules
   pointsPerEuro Int @default(1) /// Points earned per EUR spent
+  /// "per_euro": pointsPerEuro for each euro paid. "per_visit": pointsPerVisit
+  /// for each paid visit, whatever it cost (stamp-card style).
+  earnMode       String @default("per_euro")
+  pointsPerVisit Int    @default(1)
+
+  /// Enrolment: autoEnroll signs a client up on their first paid visit;
+  /// allowSelfEnroll lets a client join from the client portal.
+  autoEnroll      Boolean @default(false)
+  allowSelfEnroll Boolean @default(true)
 
   /// Points redemption
   pointsValueInCents  Int @default(1) /// 1 point = 1 cent
@@ -1321,9 +1374,10 @@ model LoyaltyProgram {
 
   /// Relations
   tenant  Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  tiers   LoyaltyTier[]
-  rewards LoyaltyReward[]
-  members LoyaltyMember[]
+  tiers        LoyaltyTier[]
+  rewards      LoyaltyReward[]
+  members      LoyaltyMember[]
+  transactions LoyaltyTransaction[]
 
   @@map("loyalty_programs")
 }
@@ -1374,10 +1428,13 @@ model LoyaltyMember {
   status         LoyaltyMemberStatus @default(active)
   joinedAt       DateTime            @default(now())
   lastActivityAt DateTime?
+  /// How the client joined: "staff", "auto" (first paid visit) or "portal".
+  enrolledVia    String?
 
   /// Relations
   redemptions      LoyaltyRedemption[]
   expirationPoints LoyaltyPointsExpiration[]
+  transactions     LoyaltyTransaction[]
 
   @@unique([clientId, programId])
   @@map("loyalty_members")
@@ -1437,10 +1494,45 @@ model LoyaltyRedemption {
   /// Reference
   appointmentId String?
   paymentId     String?
+  /// The till sale the reward was applied to (Payment.metadata.posSaleId).
+  posSaleId     String?
 
   @@index([memberId])
   @@index([rewardId])
   @@map("loyalty_redemptions")
+}
+
+/// Every change to a member's points, so a balance can be explained and,
+/// above all, so the same visit or sale never earns twice: the unique key
+/// (member, type, source, sourceId) turns a repeated hook, a retried request
+/// or the safety-net sweep into a no-op. Manual adjustments have no sourceId
+/// and Postgres lets NULLs repeat, so those are never deduplicated.
+model LoyaltyTransaction {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  tenantId  String
+  programId String
+  program   LoyaltyProgram @relation(fields: [programId], references: [id], onDelete: Cascade)
+  memberId  String
+  member    LoyaltyMember  @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  /// earn | redeem | reversal | redeem_reversal | welcome | adjust
+  type        String
+  /// Signed: positive adds to the balance, negative takes from it.
+  points      Int
+  /// appointment | pos_sale | payment | enrollment | manual
+  source      String
+  sourceId    String?
+  description String?
+  /// e.g. { basisCents } so a partial refund can reverse its share.
+  metadata    Json     @default("{}")
+  createdById String?
+
+  @@unique([memberId, type, source, sourceId])
+  @@index([tenantId, createdAt])
+  @@index([memberId, createdAt])
+  @@index([tenantId, source, sourceId])
+  @@map("loyalty_transactions")
 }
 
 model LoyaltyPointsExpiration {
@@ -1797,6 +1889,8 @@ model EmailCampaign {
   emailsOpened    Int @default(0)
   clicks          Int @default(0)
   bounces         Int @default(0)
+  /// Recipients who marked the email as spam (Resend `email.complained`).
+  complaints      Int @default(0)
   unsubscribes    Int @default(0)
 
   /// Settings
@@ -1827,12 +1921,13 @@ model EmailCampaignRecipient {
   name  String?
 
   /// Delivery status
-  status         String    @default("pending") /// pending, sent, delivered, opened, clicked, bounced, unsubscribed
+  status         String    @default("pending") /// pending, sent, delivered, opened, clicked, bounced, complained, failed, suppressed, unsubscribed
   sentAt         DateTime?
   deliveredAt    DateTime?
   openedAt       DateTime?
   clickedAt      DateTime?
   bouncedAt      DateTime?
+  complainedAt   DateTime?
   unsubscribedAt DateTime?
 
   /// Tracking
@@ -1846,6 +1941,8 @@ model EmailCampaignRecipient {
   @@index([campaignId])
   @@index([clientId])
   @@index([email])
+  /// Resend webhooks find the recipient by the id Resend returned on send.
+  @@index([messageId])
   @@map("email_campaign_recipients")
 }
 
@@ -1879,8 +1976,11 @@ model EmailCampaignAnalytics {
   campaignId String
 
   /// Event details
-  eventType String /// sent, delivered, opened, clicked, bounced, unsubscribed
+  eventType String /// sent, delivered, opened, clicked, bounced, complained, failed, unsubscribed
   timestamp DateTime @default(now())
+  /// svix-id of the Resend webhook delivery. Unique so a redelivered event
+  /// is recognised and not counted twice.
+  eventId   String?  @unique
 
   /// Recipient info
   email     String
@@ -1899,6 +1999,25 @@ model EmailCampaignAnalytics {
   @@index([timestamp])
   @@index([email])
   @@map("email_campaign_analytics")
+}
+
+/// Addresses a salon's marketing emails must no longer go to: a permanent
+/// bounce (the mailbox does not exist) or a spam complaint. Written by the
+/// Resend webhook, read before every campaign send. Per tenant because a
+/// complaint is about that salon's emails.
+model EmailSuppression {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  tenantId  String
+  /// Lower-cased.
+  email     String
+  reason    String /// hard_bounce | complaint | unsubscribed
+  detail    String?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, email])
+  @@map("email_suppressions")
 }
 
 // ====================================
@@ -1974,6 +2093,12 @@ model GoogleBusinessProfile {
   /// Location
   locationId   String?
   locationName String?
+
+  /// Where a client writes a Google review of the salon. Either the Place ID
+  /// (the link is built from it) or a "write a review" URL the salon copied
+  /// from its Google profile. Entered by the salon; needs no Google API.
+  placeId        String?
+  writeReviewUrl String?
 
   /// Google-specific
   ranking         Int? /// Google ranking
@@ -2180,11 +2305,17 @@ model ConsentForm {
   serviceIds  String[]  @default([])
   isActive    Boolean   @default(true)
   version     Int       @default(1)
+  /// "service": a treatment consent the salon writes and a booking may
+  /// require. "marketing": the system form behind a client's choice about
+  /// commercial communications (see consent/marketing-consent.ts); never
+  /// required for a booking and not editable from the salon's form list.
+  purpose     String    @default("service")
   tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   consents    Consent[]
 
   @@index([tenantId])
   @@index([tenantId, serviceIds])
+  @@index([tenantId, purpose])
   @@map("consent_forms")
 }
 
@@ -2220,6 +2351,7 @@ model Consent {
 
 enum ReviewSource {
   email_link
+  sms_link
   whatsapp_link
   qr
   in_person
@@ -2250,6 +2382,12 @@ model Review {
   googleSyncError      String?
   reviewToken          String?      @unique
   reviewTokenExpiresAt DateTime?
+  /// When the client sent the rating (createdAt is when it was requested).
+  submittedAt          DateTime?
+  /// When the client opened the salon's Google review page from the thank-you
+  /// screen. Whether they then posted on Google is not knowable without the
+  /// Business Profile API, so nothing claims they did.
+  googleLinkClickedAt  DateTime?
   tenant               Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, createdAt])
@@ -2312,7 +2450,16 @@ model WhatsAppCampaign {
   updatedAt       DateTime                    @updatedAt
   tenantId        String
   name            String
+  /// The Meta template's name on the salon's WhatsApp Business account (one per campaign).
   templateId      String
+  /// The message as the salon wrote it; {{1}} is the client's first name.
+  body            String                      @default("")
+  /// Meta's review of the template: draft (not submitted), PENDING, APPROVED, REJECTED, PAUSED, DISABLED.
+  templateStatus  String                      @default("draft")
+  templateReason  String?
+  submittedAt     DateTime?
+  createdById     String?
+  lastError       String?
   templateVars    Json                        @default("{}")
   segmentFilter   Json                        @default("{}")
   audience        Json                        @default("[]")
@@ -2348,8 +2495,12 @@ model WhatsAppCampaignRecipient {
   readAt        DateTime?
   campaign      WhatsAppCampaign        @relation(fields: [campaignId], references: [id], onDelete: Cascade)
 
+  /// A client gets a campaign once, however often the audience is resolved.
+  @@unique([campaignId, clientId])
   @@index([campaignId])
   @@index([status])
+  /// Meta's delivery statuses find the recipient by the message id.
+  @@index([messageId])
   @@map("whatsapp_campaign_recipients")
 }
 
@@ -2493,6 +2644,11 @@ model WaitList {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   notifiedAt     DateTime?
+  // What the last "Avisar" did, channel by channel (sent / skipped and why),
+  // plus the slot offered and who sent it. notifyCount counts the times at
+  // least one channel actually delivered.
+  lastNotification Json?
+  notifyCount    Int       @default(0)
   notes          String?
   tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   client         Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
@@ -2555,6 +2711,9 @@ model Invoice {
   accountingExternalId String?
   accountingSyncedAt   DateTime?
   accountingError      String?                 @db.Text
+  /// A cancellation in KiraRoom of an invoice already in Holded, mirrored
+  /// there (POST /invoices/{id}/cancel). Null: nothing to mirror.
+  accountingCancelStatus InvoiceAccountingCancelStatus?
   /// P2A Ã¢â‚¬â€ Fiscal retry chain tracking
   fiscalRetryCount     Int                     @default(0)
   /// Snapshot of issuer NIF at the time of issuance (immutable). For refund
@@ -2677,6 +2836,14 @@ enum InvoiceAccountingStatus {
   error
 }
 
+/// pending: to cancel in Holded (retried); cancelled: cancelled there;
+/// failed: Holded refused or never answered -- the salon cancels it there.
+enum InvoiceAccountingCancelStatus {
+  pending
+  cancelled
+  failed
+}
+
 enum FiscalMode {
   none
   verifactu
@@ -2759,7 +2926,8 @@ model AccountingConnection {
   id                    String              @id @default(uuid())
   tenantId              String              @unique
   provider              AccountingProvider
-  /// OAuth tokens cifrados en reposo (EncryptionService)
+  /// Holded: la clave API del salón, cifrada en reposo (EncryptionService).
+  /// Sage/A3/NCS no tienen sync directa (exportación del libro de facturas).
   encryptedAccessToken  String              @db.Text
   encryptedRefreshToken String?             @db.Text
   expiresAt             DateTime?

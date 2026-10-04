@@ -185,29 +185,122 @@ describe('SalonCopilotToolsService (L-4) — sprint 15 write tools', () => {
       expect((res as any).error).toBe('forbidden');
     });
 
-    it('notifies the top-N waiting clients and marks them notified', async () => {
-      const wls = [
-        { id: 'w-1', tenantId: TENANT_ID, serviceId: 's-1', status: 'waiting', client: { id: 'c-1', firstName: 'Carmen', phone: '+34000000001' } },
-        { id: 'w-2', tenantId: TENANT_ID, serviceId: 's-1', status: 'waiting', client: { id: 'c-2', firstName: 'Lucía', phone: '+34000000002' } },
-        { id: 'w-3', tenantId: TENANT_ID, serviceId: 's-1', status: 'waiting', client: { id: 'c-3', firstName: 'Pablo', phone: null } },
-      ];
+    /*
+     * The tool used to flip the entries to 'notified' and send nothing.
+     * It now sends through WaitListService.notify (the panel's "Avisar"),
+     * which marks an entry notified only when a channel delivered; the
+     * tool itself never writes the status.
+     */
+    const waitingThree = () => [
+      { id: 'w-1', tenantId: TENANT_ID, serviceId: 's-1', status: 'waiting', client: { id: 'c-1', firstName: 'Carmen', phone: '+34000000001' } },
+      { id: 'w-2', tenantId: TENANT_ID, serviceId: 's-1', status: 'waiting', client: { id: 'c-2', firstName: 'Lucía', phone: null } },
+      { id: 'w-3', tenantId: TENANT_ID, serviceId: 's-1', status: 'waiting', client: { id: 'c-3', firstName: 'Pablo', phone: '+34000000003' } },
+    ];
+    const sent = (summary: string) => ({
+      notified: true,
+      channels: [{ channel: 'email', status: 'sent' }],
+      bookingUrl: 'http://localhost:3000/sites/salon',
+      summary,
+    });
+    const notSent = (summary: string) => ({
+      notified: false,
+      channels: [{ channel: 'email', status: 'skipped', reason: 'no hay proveedor de email configurado' }],
+      bookingUrl: 'http://localhost:3000/sites/salon',
+      summary,
+    });
+
+    it('sends the notice to the top-N through WaitListService and reports per client', async () => {
+      const wls = waitingThree();
       const prisma = makePrisma({ waitList: wls });
-      const svc = new SalonCopilotToolsService(prisma);
-      const res = await svc.execute(
+      const waitList = {
+        notify: jest
+          .fn()
+          .mockResolvedValueOnce(sent('Avisado por email'))
+          .mockResolvedValueOnce(notSent('No se ha podido avisar: email, no hay proveedor de email configurado')),
+      };
+      const svc = new SalonCopilotToolsService(prisma, waitList as any);
+      const res: any = await svc.execute(
         'close_waitlist_slot',
-        { serviceId: 's-1', windowStart: '2026-09-04', windowEnd: '2026-09-05', topN: 2 },
+        { serviceId: 's-1', windowStart: '2026-09-04', windowEnd: '2026-09-04', time: '10:30', topN: 2 },
         { ...ctxFor('receptionist'), prisma },
       );
-      expect(res).toMatchObject({
-        ok: true,
-        notified: 2,
-      });
-      const notifiedClients = (res as any).clients as Array<{ firstName: string; hasPhone: boolean }>;
-      expect(notifiedClients).toHaveLength(2);
-      expect(notifiedClients[0].firstName).toBe('Carmen');
-      // Only 2 marked notified (topN); the 3rd stays 'waiting'.
-      expect(wls.filter((w) => w.status === 'notified')).toHaveLength(2);
-      expect(wls.filter((w) => w.status === 'waiting')).toHaveLength(1);
+
+      expect(waitList.notify).toHaveBeenCalledTimes(2);
+      expect(waitList.notify).toHaveBeenCalledWith(
+        TENANT_ID,
+        'w-1',
+        { date: '2026-09-04', time: '10:30', professionalId: undefined },
+        STAFF_USER_ID,
+      );
+      expect(res).toMatchObject({ ok: true, notified: 1, notNotified: 1 });
+      expect(res.clients.map((c: any) => [c.firstName, c.notified])).toEqual([
+        ['Carmen', true],
+        ['Lucía', false],
+      ]);
+      expect(res.message).toContain('Avisados 1 de 2');
+      expect(res.message).toContain('Lucía: No se ha podido avisar');
+      // The tool no longer writes the status itself.
+      expect(prisma.waitList.updateMany).not.toHaveBeenCalled();
+      expect(wls.every((w) => w.status === 'waiting')).toBe(true);
+    });
+
+    it('answers with an error when nobody could be notified, and why', async () => {
+      const prisma = makePrisma({ waitList: waitingThree() });
+      const waitList = {
+        notify: jest.fn().mockResolvedValue(notSent('No se ha podido avisar: email, no hay proveedor de email configurado')),
+      };
+      const svc = new SalonCopilotToolsService(prisma, waitList as any);
+      const res: any = await svc.execute(
+        'close_waitlist_slot',
+        { serviceId: 's-1', windowStart: '2026-09-04', windowEnd: '2026-09-06' },
+        { ...ctxFor('manager'), prisma },
+      );
+      expect(res.error).toBe('not_delivered');
+      expect(res.notified).toBe(0);
+      expect(res.message).toContain('No se ha podido avisar a ninguno de los 3 clientes');
+      // A range: no date in the notice.
+      expect(waitList.notify.mock.calls[0][2]).toEqual({ date: undefined, time: undefined, professionalId: undefined });
+    });
+
+    it('reports a client the notice could not reach because notify threw', async () => {
+      const prisma = makePrisma({ waitList: waitingThree().slice(0, 1) });
+      const waitList = {
+        notify: jest.fn().mockRejectedValue(new Error('La lista de espera no está incluida en tu plan.')),
+      };
+      const svc = new SalonCopilotToolsService(prisma, waitList as any);
+      const res: any = await svc.execute(
+        'close_waitlist_slot',
+        { serviceId: 's-1', windowStart: '2026-09-04', windowEnd: '2026-09-04' },
+        { ...ctxFor('owner'), prisma },
+      );
+      expect(res.error).toBe('not_delivered');
+      expect(res.clients[0]).toMatchObject({ firstName: 'Carmen', notified: false });
+      expect(res.clients[0].summary).toContain('no está incluida en tu plan');
+    });
+
+    it('says so when nobody is waiting', async () => {
+      const prisma = makePrisma({ waitList: [] });
+      const waitList = { notify: jest.fn() };
+      const svc = new SalonCopilotToolsService(prisma, waitList as any);
+      const res: any = await svc.execute(
+        'close_waitlist_slot',
+        { serviceId: 's-1', windowStart: '2026-09-04', windowEnd: '2026-09-04' },
+        { ...ctxFor('receptionist'), prisma },
+      );
+      expect(res).toMatchObject({ ok: true, notified: 0 });
+      expect(res.message).toContain('No se ha avisado a nadie');
+      expect(waitList.notify).not.toHaveBeenCalled();
+    });
+
+    it('rejects an invalid time', async () => {
+      const prisma = makePrisma({});
+      const svc = new SalonCopilotToolsService(prisma, { notify: jest.fn() } as any);
+      const res = await svc.execute(
+        'close_waitlist_slot',
+        { serviceId: 's-1', windowStart: '2026-09-04', windowEnd: '2026-09-04', time: '25:00' },
+        { ...ctxFor('receptionist'), prisma },
+      );
+      expect((res as any).error).toBe('invalid_time');
     });
 
     it('rejects invalid date formats', async () => {

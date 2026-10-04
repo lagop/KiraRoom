@@ -26,6 +26,8 @@ import {
 import {
   apiClient,
   EmailCampaign,
+  EmailCampaignTrackingStatus,
+  SendEmailCampaignResult,
   CampaignStatus,
   CampaignType,
   Client,
@@ -121,9 +123,49 @@ export default function EmailCampaignsPage() {
   const [promotions, setPromotions] = useState<Promotion[]>([]);
   const [loadingPromotions, setLoadingPromotions] = useState(false);
 
+  // Opens, clicks and bounces only exist if Resend's webhook reaches the
+  // server. Without it they would read 0 forever, which looks like a real
+  // result; the cards show "—" and a banner says what is missing.
+  const [tracking, setTracking] = useState<EmailCampaignTrackingStatus | null>(
+    null,
+  );
+  useEffect(() => {
+    apiClient
+      .getEmailCampaignTrackingStatus()
+      .then(setTracking)
+      .catch(() => setTracking(null));
+  }, []);
+  const trackingOff = tracking !== null && !tracking.trackingConfigured;
+  const tracked = (value: number) => (trackingOff ? "—" : value);
+
   useEffect(() => {
     fetchCampaigns();
   }, [filter]);
+
+  /** Says what the send really did, from the server's counts. */
+  const toastSendResult = (result: SendEmailCampaignResult) => {
+    const parts = [`${result.sentCount} enviados`];
+    if (result.failedCount > 0) parts.push(`${result.failedCount} fallidos`);
+    if (result.suppressedCount > 0)
+      parts.push(
+        `${result.suppressedCount} omitidos (se dieron de baja, rebote permanente o queja de spam)`,
+      );
+    if (result.skippedCount)
+      parts.push(`${result.skippedCount} no quieren recibir promociones`);
+    toast({
+      title: "Campaña enviada",
+      description: parts.join(", "),
+      variant: result.sentCount === 0 ? "destructive" : "default",
+    });
+  };
+
+  const toastSendError = (error: unknown) => {
+    toast({
+      title: "No se pudo enviar la campaña",
+      description: error instanceof Error ? error.message : undefined,
+      variant: "destructive",
+    });
+  };
 
   const fetchCampaigns = async () => {
     try {
@@ -186,10 +228,12 @@ export default function EmailCampaignsPage() {
   const handleSendNow = async (id: string) => {
     if (!confirm("¿Quieres enviar esta campaña ahora?")) return;
     try {
-      await apiClient.sendEmailCampaignNow(id);
+      const result = await apiClient.sendEmailCampaignNow(id);
       fetchCampaigns();
+      toastSendResult(result);
     } catch (error) {
       console.error("Error sending campaign:", error);
+      toastSendError(error);
     }
   };
 
@@ -534,17 +578,15 @@ export default function EmailCampaignsPage() {
         clientsWithEmail.map((c: Client) => c.id),
       );
 
-      // Then send immediately
-      await apiClient.sendEmailCampaignNow(campaignId);
+      // Then send immediately. The toast reports what the server did, not
+      // how many clients were selected: suppressed or failed addresses are
+      // not "sent".
+      const result = await apiClient.sendEmailCampaignNow(campaignId);
       fetchCampaigns();
-      toast({
-        title: t("email_campaigns.campaign_sent_to_clients", {
-          count: clientsWithEmail.length,
-        }),
-        variant: "default",
-      });
+      toastSendResult(result);
     } catch (error) {
       console.error("Error sending to all:", error);
+      toastSendError(error);
     }
   };
 
@@ -602,6 +644,28 @@ export default function EmailCampaignsPage() {
           </button>
         </div>
       </div>
+
+      {tracking && !tracking.sendingConfigured && (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+          El envío de emails no está activado en el servidor: las campañas no
+          se pueden enviar todavía.
+        </div>
+      )}
+      {trackingOff && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+          Las aperturas, los clics y los rebotes aún no se registran: falta
+          conectar el aviso de entregas del proveedor de email. Hasta entonces
+          solo se cuentan los emails enviados.
+        </div>
+      )}
+      {tracking && tracking.suppressedAddresses > 0 && (
+        <p className="text-sm text-gray-600">
+          {tracking.suppressedAddresses === 1
+            ? "1 dirección ya no recibe tus campañas"
+            : `${tracking.suppressedAddresses} direcciones ya no reciben tus campañas`}{" "}
+          (se dieron de baja, rebote permanente o la marcaron como spam).
+        </p>
+      )}
 
       {/* Filters */}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
@@ -693,7 +757,7 @@ export default function EmailCampaignsPage() {
                     </span>
                   </div>
                   <p className="text-sm font-semibold">
-                    {campaign.emailsOpened}
+                    {tracked(campaign.emailsOpened)}
                   </p>
                 </div>
                 <div className="text-center">
@@ -702,7 +766,9 @@ export default function EmailCampaignsPage() {
                       <MousePointer className="w-4 h-4 text-purple-400" />
                     </span>
                   </div>
-                  <p className="text-sm font-semibold">{campaign.clicks}</p>
+                  <p className="text-sm font-semibold">
+                    {tracked(campaign.clicks)}
+                  </p>
                 </div>
                 <div className="text-center">
                   <div className="flex items-center justify-center">
@@ -710,7 +776,9 @@ export default function EmailCampaignsPage() {
                       <XCircle className="w-4 h-4 text-red-400" />
                     </span>
                   </div>
-                  <p className="text-sm font-semibold">{campaign.bounces}</p>
+                  <p className="text-sm font-semibold">
+                    {tracked(campaign.bounces)}
+                  </p>
                 </div>
               </div>
 
@@ -913,6 +981,7 @@ export default function EmailCampaignsPage() {
                   required
                   placeholder={t("email_campaigns.html_placeholder")}
                 />
+                <p className="mt-1 text-xs text-gray-500">{t("email_campaigns.unsubscribe_note")}</p>
               </div>
 
               <div className="flex justify-end space-x-3 pt-4">
@@ -1439,6 +1508,7 @@ export default function EmailCampaignsPage() {
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 font-mono text-sm"
                   required
                 />
+                <p className="mt-1 text-xs text-gray-500">{t("email_campaigns.unsubscribe_note")}</p>
               </div>
 
               <div className="grid grid-cols-2 gap-4">

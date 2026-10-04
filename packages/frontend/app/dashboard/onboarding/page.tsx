@@ -444,7 +444,8 @@ export default function OwnerOnboardingWizardPage() {
             />
           </label>
           <label className="block">
-            <span className="block text-xs text-slate-600 mb-1">Hora</span>
+            {/* The server stores it as the salon's wall-clock time, not the browser's. */}
+            <span className="block text-xs text-slate-600 mb-1">Hora (del salón, {data.timezone})</span>
             <input
               type="time"
               value={apTime}

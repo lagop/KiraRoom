@@ -76,6 +76,8 @@ describe('WebhooksController L-3 (addon metadata routing)', () => {
         row.status = 'cancelled';
         return true;
       }),
+      // Plan subscriptions reconcile their add-on items here.
+      syncFromSubscription: jest.fn().mockResolvedValue(undefined),
     } as any;
 
     const c = Object.create(WebhooksController.prototype);
@@ -147,5 +149,7 @@ describe('WebhooksController L-3 (addon metadata routing)', () => {
     });
     await c.handleEvent(event);
     expect(addonsService.provisionFromStripe).not.toHaveBeenCalled();
+    // ...and its add-on items (none here) are reconciled from it.
+    expect(addonsService.syncFromSubscription).toHaveBeenCalledTimes(1);
   });
 });
