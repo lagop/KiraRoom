@@ -8,6 +8,7 @@ import apiClient, { decodeJwtToken, getToken, removeToken, removeRefreshToken } 
 import { ShieldAlert } from "lucide-react";
 import { OnboardingHost } from "./_components/onboarding/OnboardingHost";
 import CookieBanner from "../components/cookie-banner";
+import { VerifactuBanner } from "@/components/verifactu/verifactu-banner";
 
 /**
  * Decode the current access token's impersonation claims and update
@@ -199,7 +200,10 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         />
 
         {/* Page content */}
-        <main className="flex-1 p-6 bg-white shadow-sm min-w-0 overflow-x-hidden">{children}</main>
+        <main className="flex-1 p-6 bg-white shadow-sm min-w-0 overflow-x-hidden">
+          <VerifactuBanner />
+          {children}
+        </main>
       </div>
       {/* P1 — Onboarding wizard surfaces */}
       <OnboardingHost />

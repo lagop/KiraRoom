@@ -9,7 +9,11 @@ import { PrismaService } from "../common/prisma/prisma.service";
 import { InvoiceCalculator } from "./invoice-calculator.service";
 import { FiscalService } from "./fiscal/fiscal.service";
 import { AccountingService, cancelNeedsMirror } from "../accounting/accounting.service";
-import { FiscalMode, InvoiceSource, InvoiceStatus } from "@prisma/client";
+import { FiscalMode, InvoiceSource, InvoiceStatus, Prisma } from "@prisma/client";
+import { ISSUE_TRANSACTION, VerifactuRecordsService } from "./fiscal/verifactu/verifactu-records.service";
+import { VerifactuDispatcher } from "./fiscal/verifactu/verifactu-dispatcher.service";
+import { verifactuAvailable } from "./fiscal/verifactu/config";
+import { salonYear } from "./fiscal/verifactu/format";
 
 interface CreateInvoiceInput {
   tenantId: string;
@@ -30,6 +34,8 @@ interface CreateInvoiceInput {
     serviceId?: string;
   }>;
   notes?: string;
+  /** Rectificativas: the invoice this one corrects. */
+  rectifiesInvoiceId?: string;
 }
 
 @Injectable()
@@ -41,7 +47,14 @@ export class InvoiceService {
     private readonly calculator: InvoiceCalculator,
     private readonly fiscal: FiscalService,
     @Optional() private readonly accounting?: AccountingService,
+    @Optional() private readonly verifactu?: VerifactuRecordsService,
+    @Optional() private readonly verifactuDispatcher?: VerifactuDispatcher,
   ) {}
+
+  /** Whether this salon's invoices go through the VERI*FACTU record chain. */
+  private recordsVerifactu(fiscalMode: FiscalMode): boolean {
+    return fiscalMode === FiscalMode.verifactu && !!this.verifactu && verifactuAvailable();
+  }
 
   async create(input: CreateInvoiceInput): Promise<{ id: string }> {
     if (!input.lines?.length) {
@@ -50,7 +63,7 @@ export class InvoiceService {
     const computation = this.calculator.compute(input.lines);
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: input.tenantId },
-      select: { fiscalMode: true, fiscalSettings: true },
+      select: { fiscalMode: true, fiscalSettings: true, timezone: true },
     });
     if (!tenant) {
       throw new NotFoundException("Tenant not found");
@@ -58,11 +71,16 @@ export class InvoiceService {
     const settings = (tenant.fiscalSettings as Record<string, unknown>) ?? {};
     const series = input.series ?? (settings.defaultSeries as string) ?? "A";
     const issueDate = input.issueDate ?? new Date();
-    const year = issueDate.getFullYear();
-    const number = await this.allocateNumber(input.tenantId, series, year);
+    // The salon's calendar year: at 00:30 on 1 January in Madrid it is still December in UTC.
+    const year = salonYear(issueDate, tenant.timezone || "Europe/Madrid");
     const fiscalMode = tenant.fiscalMode;
+    const withRecords = this.recordsVerifactu(fiscalMode);
 
-    const invoice = await this.prisma.invoice.create({
+    // Number, invoice and VERI*FACTU record together: an invoice that cannot
+    // be recorded is not issued, and its number is not used up either.
+    const invoice = await this.prisma.$transaction(async (tx) => {
+      const number = await this.allocateNumber(input.tenantId, series, year, tx);
+      const created = await tx.invoice.create({
       data: {
         tenantId: input.tenantId,
         series,
@@ -83,6 +101,7 @@ export class InvoiceService {
           fiscalMode === FiscalMode.none ? "not_required" : "pending",
         sourceType: InvoiceSource.manual,
         notes: input.notes,
+        rectifiesInvoiceId: input.rectifiesInvoiceId,
         lines: {
           create: computation.lines.map((l) => ({
             description: l.description,
@@ -98,10 +117,13 @@ export class InvoiceService {
         },
       },
     });
+      if (withRecords) await this.verifactu!.recordInvoice(tx, created.id);
+      return created;
+    }, ISSUE_TRANSACTION);
 
-    // Fire fiscal dispatch in the background. Failures don't roll back the
-    // invoice — the operator can retry via /invoices/:id/resend-fiscal.
-    if (fiscalMode !== FiscalMode.none) {
+    // TicketBAI / SII (not available yet): background dispatch as before.
+    // VERI*FACTU records are sent by VerifactuDispatcher.
+    if (fiscalMode !== FiscalMode.none && !withRecords) {
       void this.fiscal.dispatchInvoice(invoice.id).catch((err) => {
         this.logger.warn(
           `Background fiscal dispatch failed for ${invoice.id}: ${(err as Error).message}`,
@@ -132,31 +154,21 @@ export class InvoiceService {
     tenantId: string,
     series: string,
     year: number,
+    db: Prisma.TransactionClient = this.prisma,
   ): Promise<string> {
-    // First call creates the row at 0; subsequent calls increment.
-    await this.prisma.fiscalSequence.upsert({
-      where: {
-        tenantId_series_year: { tenantId, series, year },
-      },
-      create: {
-        tenantId,
-        series,
-        year,
-        lastNumber: 0,
-      },
-      update: {},
-    });
+    // One statement creates the counter or increments it. Prisma's upsert
+    // reads, then inserts: two first invoices of a year at once both tried
+    // to insert, and one failed on the unique index. Inside the invoice's
+    // transaction the row stays locked until it commits, so an invoice that
+    // fails does not leave a gap in the numbering.
+    const [row] = await db.$queryRaw<Array<{ lastNumber: number }>>`
+      INSERT INTO "fiscal_sequences" ("id", "tenantId", "series", "year", "lastNumber")
+      VALUES (gen_random_uuid()::text, ${tenantId}, ${series}, ${year}, 1)
+      ON CONFLICT ("tenantId", "series", "year")
+      DO UPDATE SET "lastNumber" = "fiscal_sequences"."lastNumber" + 1
+      RETURNING "lastNumber"`;
 
-    // Increment and read the new value atomically. We use update + select
-    // returning rather than $transaction to keep this readable; under
-    // heavy contention the worst case is a duplicate number, which the
-    // unique index on Invoice(tenantId, series, number) will reject.
-    const updated = await this.prisma.fiscalSequence.update({
-      where: { tenantId_series_year: { tenantId, series, year } },
-      data: { lastNumber: { increment: 1 } },
-    });
-
-    return String(updated.lastNumber).padStart(6, "0");
+    return String(row.lastNumber).padStart(6, "0");
   }
 
   async findOne(tenantId: string, id: string) {
@@ -199,6 +211,10 @@ export class InvoiceService {
     if (invoice.status === InvoiceStatus.cancelled) {
       throw new BadRequestException("Invoice already cancelled");
     }
+    // Recorded in VERI*FACTU: cancelling it means annulling it at the AEAT too.
+    if (await this.prisma.verifactuRecord.count({ where: { invoiceId: id } })) {
+      return this.anulate(tenantId, id, reason);
+    }
     const updated = await this.prisma.invoice.update({
       where: { id },
       data: {
@@ -238,6 +254,26 @@ export class InvoiceService {
     }
 
     let fiscalAnulated = false;
+    const recorded = this.verifactu && (await this.prisma.verifactuRecord.count({ where: { invoiceId: id } })) > 0;
+    if (recorded) {
+      // The anulación record and the cancellation, together; Holded is told
+      // afterwards, like any other cancellation.
+      const anulated = await this.prisma.$transaction(async (tx) => {
+        await this.verifactu!.recordAnulacion(tx, id);
+        const updated = await tx.invoice.update({
+          where: { id },
+          data: {
+            status: InvoiceStatus.cancelled,
+            fiscalStatus: "pending",
+            notes: [invoice.notes, `ANULADA: ${reason}`].filter(Boolean).join("\n"),
+            ...this.holdedCancelMark(invoice),
+          },
+        });
+        return { ...updated, fiscalAnulated: true };
+      }, ISSUE_TRANSACTION);
+      this.mirrorCancellation(id);
+      return anulated;
+    }
     if (this.fiscal) {
       try {
         fiscalAnulated = await this.fiscal.anulateInvoice(id, reason);
@@ -292,6 +328,7 @@ export class InvoiceService {
       recipientTaxId: original.recipientTaxId ?? undefined,
       lines,
       notes: `Rectificación de ${original.series}${original.number}: ${reason}`,
+      rectifiesInvoiceId: original.id,
     });
   }
 
@@ -299,6 +336,20 @@ export class InvoiceService {
     const invoice = await this.findOne(tenantId, id);
     if (invoice.fiscalStatus === "not_required") {
       throw new BadRequestException("Invoice has no fiscal mode configured");
+    }
+    const last = await this.prisma.verifactuRecord.findFirst({ where: { invoiceId: id }, orderBy: { sequence: "desc" } });
+    if (last && this.verifactu) {
+      if (last.status === "rejected" || last.status === "accepted_with_errors") {
+        // A new, corrected record; the rejected one stays as it was.
+        await this.verifactu.recordSubsanacion(tenantId, id);
+      }
+      // Waiting records go with the next submission; after a failure, try now.
+      await this.prisma.verifactuChain.updateMany({
+        where: { tenantId, failedAttempts: { gt: 0 } },
+        data: { nextSendAt: new Date() },
+      });
+      void this.verifactuDispatcher?.tick();
+      return this.findOne(tenantId, id);
     }
     await this.prisma.invoice.update({
       where: { id },
