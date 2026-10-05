@@ -76,6 +76,14 @@ export default function EmbedWidgetPage() {
   const [submitting, setSubmitting] = useState(false);
   const [bookingId, setBookingId] = useState<string | null>(null);
   const [bookingError, setBookingError] = useState<string | null>(null);
+  // The service asks for a deposit: the booking is held until it is paid.
+  const [deposit, setDeposit] = useState<{ amount: number; checkoutUrl: string } | null>(null);
+  // Back from Stripe (in the tab the payment opened in).
+  const [depositReturn, setDepositReturn] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDepositReturn(new URLSearchParams(window.location.search).get("deposit"));
+  }, []);
 
   useEffect(() => {
     if (!token) return;
@@ -127,6 +135,7 @@ export default function EmbedWidgetPage() {
         notes: notes || undefined,
         source: "widget",
         widgetInstanceId: config.widget.id,
+        returnPath: `/embed/${token}`,
         // The phone is required (the salon's way to reach the client about a
         // change); the email is optional.
         clientInfo: { firstName, lastName, phone, email: email.trim() || undefined },
@@ -142,6 +151,7 @@ export default function EmbedWidgetPage() {
       }
       const appt = await res.json();
       setBookingId(appt.id);
+      if (appt.deposit?.checkoutUrl) setDeposit(appt.deposit);
       setStep("done");
     } catch (err: any) {
       setBookingError(err.message ?? "Error");
@@ -190,7 +200,7 @@ export default function EmbedWidgetPage() {
       </header>
 
       <main className="max-w-3xl mx-auto p-6">
-        {step === "select" && (
+        {step === "select" && !depositReturn && (
           <div className="space-y-6">
             <div>
               <h2 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
@@ -358,7 +368,45 @@ export default function EmbedWidgetPage() {
           </form>
         )}
 
-        {step === "done" && (
+        {depositReturn && (
+          <div className="text-center space-y-3 py-12">
+            {depositReturn === "paid" ? (
+              <Check className="w-12 h-12 text-green-600 mx-auto" />
+            ) : (
+              <AlertCircle className="w-12 h-12 text-yellow-500 mx-auto" />
+            )}
+            <h2 className="text-xl font-semibold text-gray-900">
+              {depositReturn === "paid" ? "¡Señal pagada, cita confirmada!" : "La señal no se ha pagado"}
+            </h2>
+            <p className="text-sm text-gray-500">
+              {depositReturn === "paid"
+                ? "Ya puedes cerrar esta pestaña."
+                : "La cita no está confirmada. Si no pagas la señal, el hueco se libera en unos minutos."}
+            </p>
+          </div>
+        )}
+
+        {step === "done" && deposit && (
+          <div className="text-center space-y-3 py-12">
+            <AlertCircle className="w-12 h-12 text-yellow-500 mx-auto" />
+            <h2 className="text-xl font-semibold text-gray-900">Falta pagar la señal</h2>
+            <p className="text-sm text-gray-500">
+              Este servicio pide una señal de{" "}
+              {deposit.amount.toLocaleString("es-ES", { style: "currency", currency: "EUR" })}. Te
+              guardamos el hueco 30 minutos; la cita queda confirmada al pagarla.
+            </p>
+            <a
+              href={deposit.checkoutUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-block bg-purple-600 text-white px-5 py-2 rounded-lg hover:bg-purple-700"
+            >
+              Pagar la señal
+            </a>
+          </div>
+        )}
+
+        {step === "done" && !deposit && (
           <div className="text-center space-y-3 py-12">
             <Check className="w-12 h-12 text-green-600 mx-auto" />
             <h2 className="text-xl font-semibold text-gray-900">

@@ -12,6 +12,8 @@ export interface Toast {
   open?: boolean
   onOpenChange?: (open: boolean) => void
   action?: React.ReactNode
+  /** Milliseconds on screen (Radix's default is 5000). */
+  duration?: number
 }
 
 const TOAST_LIMIT = 1

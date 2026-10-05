@@ -47,6 +47,11 @@ model Tenant {
   trialEnd               DateTime?
   stripeCustomerId       String?
   stripeSubscriptionId   String?
+  /// The salon's own Stripe account, linked through Stripe Connect. Deposits
+  /// are charged on it (direct charges): the money is the salon's and
+  /// KiraRoom never holds its keys.
+  stripeConnectAccountId      String?
+  stripeConnectChargesEnabled Boolean @default(false)
   /// Plan rev3: cancellation lifecycle + add-ons + multi-location
   cancelledAt            DateTime?
   readOnlyUntil          DateTime?
@@ -617,6 +622,10 @@ model Appointment {
   depositAmount          Decimal?
   depositPaid            Boolean             @default(false)
   depositPaymentIntentId String?
+  /// Stripe Checkout session for the deposit, and when the held slot is
+  /// released if it has not been paid.
+  depositCheckoutSessionId String?
+  depositExpiresAt         DateTime?
   /// Multi-location (plan Empresa)
   locationId             String?
   salonLocation          Location?           @relation(fields: [locationId], references: [id], onDelete: SetNull)
@@ -650,6 +659,7 @@ model Appointment {
   @@index([tenantId, clientId])
   @@index([status])
   @@index([paymentStatus])
+  @@index([depositExpiresAt])
   @@map("appointments")
 }
 
