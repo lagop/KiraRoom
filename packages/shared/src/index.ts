@@ -6,3 +6,4 @@ export * from './types/timezone';
 export * from './types/virtual-receptionist';
 export * from './dto';
 export * from './utils/constants';
+export * from './utils/salon-subdomain';

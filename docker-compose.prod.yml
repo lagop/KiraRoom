@@ -249,6 +249,16 @@ services:
       # Salons' own domains (docs/custom-domains.md)
       CUSTOM_DOMAIN_TARGET: ${CUSTOM_DOMAIN_TARGET:-}
       CUSTOM_DOMAINS_TLS_READY: ${CUSTOM_DOMAINS_TLS_READY:-}
+      # Every salon at <slug>.<base> (docs/custom-domains.md).
+      SALON_SUBDOMAIN_BASE: ${SALON_SUBDOMAIN_BASE:-}
+      SALON_SUBDOMAINS_READY: ${SALON_SUBDOMAINS_READY:-}
+      # Traefik's HTTP provider polls /internal/traefik/dynamic with this
+      # token to get routers and certificates for salons' hosts.
+      TRAEFIK_PROVIDER_TOKEN: ${TRAEFIK_PROVIDER_TOKEN:-}
+      TRAEFIK_CERTRESOLVER: ${TRAEFIK_CERTRESOLVER:-mytlschallenge}
+      TRAEFIK_DNS_CERTRESOLVER: ${TRAEFIK_DNS_CERTRESOLVER:-}
+      TRAEFIK_ENTRYPOINT_HTTPS: ${TRAEFIK_ENTRYPOINT_HTTPS:-websecure}
+      TRAEFIK_MAJOR_VERSION: ${TRAEFIK_MAJOR_VERSION:-3}
     depends_on:
       postgres:
         condition: service_healthy
@@ -285,6 +295,10 @@ services:
       # call the backend on the Docker network instead of going out
       # through Traefik and back in.
       INTERNAL_API_URL: http://backend:3001/api/v1
+      # Salons' free subdomains: the middleware serves <slug>.<base> and,
+      # once READY, sends /sites/<slug> there (docs/custom-domains.md).
+      SALON_SUBDOMAIN_BASE: ${SALON_SUBDOMAIN_BASE:-}
+      SALON_SUBDOMAINS_READY: ${SALON_SUBDOMAINS_READY:-}
     restart: unless-stopped
     networks:
       kiraroom-network:
@@ -359,7 +373,9 @@ services:
       - "traefik.http.routers.kiraroom-redirect.entrypoints=${TRAEFIK_ENTRYPOINT_HTTPS:-websecure}"
       - "traefik.http.routers.kiraroom-redirect.tls=true"
       - "traefik.http.routers.kiraroom-redirect.tls.certresolver=${TRAEFIK_CERTRESOLVER:-mytlschallenge}"
-      - "traefik.http.routers.kiraroom-redirect.priority=1"
+      # Above the salons' wildcard router (priority 2, served by the HTTP
+      # provider), so www.kiraroom.net stays here; still below app/api.
+      - "traefik.http.routers.kiraroom-redirect.priority=10"
       - "traefik.http.services.kiraroom-redirect.loadbalancer.server.port=80"
 
 volumes:

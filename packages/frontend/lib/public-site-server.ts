@@ -39,6 +39,7 @@ export interface SitemapSalon {
   slug: string;
   updatedAt: string;
   customDomain: string | null;
+  subdomainHost?: string | null;
 }
 
 /** Salons to list in sitemap.xml; empty when the API cannot be reached. */

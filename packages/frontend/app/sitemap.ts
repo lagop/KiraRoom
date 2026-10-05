@@ -4,7 +4,7 @@ import { fetchSitemapSalons } from "@/lib/public-site-server";
 
 /**
  * sitemap.xml: every active salon's public page, at its canonical URL (its
- * own domain once that is live).
+ * own domain, or its subdomain, once that is live).
  *
  * Rendered per request rather than at build time: the build has no API to
  * ask, and a sitemap frozen empty at build would hide every salon until the
@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic";
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const salons = await fetchSitemapSalons();
   return salons.map((s) => ({
-    url: canonicalUrl({ slug: s.slug, customDomain: s.customDomain }, appBaseUrl()),
+    url: canonicalUrl({ slug: s.slug, customDomain: s.customDomain, subdomainHost: s.subdomainHost }, appBaseUrl()),
     lastModified: new Date(s.updatedAt),
     changeFrequency: "weekly",
     priority: 0.8,

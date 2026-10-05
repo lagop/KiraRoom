@@ -6,7 +6,12 @@
  * rewrites the path under /sites/<slug>, so the visitor stays on their URL
  * and sees the salon's page. These are the decisions it makes, kept pure so
  * lib/custom-domain-host.spec.ts can check them without a server.
+ *
+ * Every salon also has a free subdomain, <slug>.<SALON_SUBDOMAIN_BASE>
+ * (salon-lucia.kiraroom.net). That host names the salon itself, so it needs
+ * no lookup; see salonSlugForSubdomain and subdomainRedirectFor.
  */
+import { isSalonSubdomainSlug, normaliseSubdomainBase, slugFromSalonSubdomain } from "@kira/shared";
 
 /** Host header without port, lower-case, no trailing dot. */
 export function bareHost(hostHeader: string | null | undefined): string {
@@ -71,4 +76,39 @@ export function rewritePathFor(pathname: string, slug: string): string | null {
   if (pathname === own || pathname.startsWith(`${own}/`)) return null;
   if (pathname === "/" || pathname === "") return own;
   return `${own}${pathname}`;
+}
+
+/** The salon a <slug>.<base> host names, or null. */
+export function salonSlugForSubdomain(host: string, base: string | undefined): string | null {
+  return slugFromSalonSubdomain(host, base);
+}
+
+/**
+ * Once subdomains are live, the public page on the app host moves to the
+ * salon's subdomain: app.kiraroom.net/sites/salon-lucia ->
+ * https://salon-lucia.kiraroom.net/ (permanent, so search engines move the
+ * page too). Only the public page: the client area keeps its URL, because a
+ * signed-in client's session lives in the browser storage of the host they
+ * signed in on, and moving them would sign them out. Ids (/sites/<uuid>)
+ * and slugs that cannot be a subdomain stay where they are.
+ */
+export function subdomainRedirectFor(
+  host: string,
+  pathname: string,
+  appHosts: string[],
+  base: string | undefined,
+  ready: boolean,
+): string | null {
+  const b = normaliseSubdomainBase(base);
+  if (!ready || !b || !appHosts.includes(host)) return null;
+  const match = /^\/sites\/([^/]+)\/?$/.exec(pathname);
+  if (!match) return null;
+  let slug: string;
+  try {
+    slug = decodeURIComponent(match[1]).toLowerCase();
+  } catch {
+    return null;
+  }
+  if (!isSalonSubdomainSlug(slug)) return null;
+  return `https://${slug}.${b}/`;
 }

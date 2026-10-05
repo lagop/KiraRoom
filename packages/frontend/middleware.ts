@@ -5,6 +5,8 @@ import {
   isPlatformHost,
   platformHostsFrom,
   rewritePathFor,
+  salonSlugForSubdomain,
+  subdomainRedirectFor,
 } from "./lib/custom-domain-host";
 
 // All authentication for `/saas/*` is enforced server-side by the NestJS
@@ -16,13 +18,18 @@ import {
 // route does not exist -- it answers 404. The sign-up page is `/signup`, and
 // it was not listed at all.
 //
-// The middleware now also serves salons' own domains (see
-// lib/custom-domain-host.ts), which is why the matcher covers every page.
+// The middleware now also serves salons' own domains and their free
+// subdomains (see lib/custom-domain-host.ts), which is why the matcher covers
+// every page.
 
 const PLATFORM_HOSTS = platformHostsFrom(
   process.env.NEXT_PUBLIC_PLATFORM_HOSTS,
   process.env.NEXT_PUBLIC_APP_URL,
 );
+
+/** Salons' free subdomains: <slug>.<base>; read at runtime (compose env). */
+const SUBDOMAIN_BASE = process.env.SALON_SUBDOMAIN_BASE;
+const SUBDOMAINS_READY = ["1", "true"].includes((process.env.SALON_SUBDOMAINS_READY ?? "").trim().toLowerCase());
 
 const API_URL = (
   process.env.INTERNAL_API_URL ||
@@ -75,6 +82,27 @@ async function slugForHost(host: string): Promise<string | null> {
 
 export async function middleware(request: NextRequest) {
   const host = bareHost(request.headers.get("host"));
+
+  // salon-lucia.kiraroom.net: the host names the salon.
+  const subdomainSlug = salonSlugForSubdomain(host, SUBDOMAIN_BASE);
+  if (subdomainSlug) {
+    const target = rewritePathFor(request.nextUrl.pathname, encodeURIComponent(subdomainSlug));
+    if (!target) return NextResponse.next();
+    const url = request.nextUrl.clone();
+    url.pathname = target;
+    return NextResponse.rewrite(url);
+  }
+
+  // app.kiraroom.net/sites/salon-lucia -> the salon's subdomain, once live.
+  if (request.method === "GET" || request.method === "HEAD") {
+    const moved = subdomainRedirectFor(host, request.nextUrl.pathname, PLATFORM_HOSTS, SUBDOMAIN_BASE, SUBDOMAINS_READY);
+    if (moved) {
+      const url = new URL(moved);
+      url.search = request.nextUrl.search;
+      return NextResponse.redirect(url, 308);
+    }
+  }
+
   if (!isPlatformHost(host, PLATFORM_HOSTS)) {
     const slug = await slugForHost(host);
     if (slug) {

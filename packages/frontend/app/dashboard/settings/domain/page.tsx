@@ -113,6 +113,12 @@ export default function DomainSettingsPage() {
                 <ExternalLink className="w-4 h-4" />
               </a>
             </div>
+            {status.subdomain && !status.subdomain.active && (
+              <p className="text-xs text-gray-500 mt-2">
+                Muy pronto tendrás también una dirección más corta, sin coste:{" "}
+                <span className="font-mono">{status.subdomain.host}</span>
+              </p>
+            )}
           </section>
 
           <section className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
