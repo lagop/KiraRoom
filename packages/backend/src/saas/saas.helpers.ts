@@ -12,6 +12,7 @@ import {
   TRIAL_DAYS,
 } from "./saas.constants";
 import type { Tenant } from "@prisma/client";
+import { RESERVED_SUBDOMAINS } from "@kira/shared";
 
 /** Read an "active" (non-soft-deleted) tenant by id. */
 export async function getActiveTenant(
@@ -27,12 +28,21 @@ export async function getActiveTenant(
   return tenant;
 }
 
+/**
+ * The salon's slug: its web address (/sites/<slug>) and its free subdomain
+ * (<slug>.kiraroom.net). Accents are folded first -- "Salón Lucía" used to
+ * become "sal-n-luc-a" -- and it is capped at 63 characters, the longest a
+ * DNS label (a subdomain) can be.
+ */
 export function slugify(name: string): string {
   return name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/(^-|-$)/g, "")
-    .slice(0, 120);
+    .slice(0, 63)
+    .replace(/-+$/, "");
 }
 
 export async function assertTenantSlugAvailable(
@@ -40,6 +50,12 @@ export async function assertTenantSlugAvailable(
   slug: string,
   errMessage: string = "Salon slug already exists, please choose another",
 ): Promise<void> {
+  // A reserved name would be the salon's subdomain (app.kiraroom.net...).
+  if (RESERVED_SUBDOMAINS.has(slug)) {
+    throw new BadRequestException(
+      "Ese nombre no se puede usar como dirección del salón. Añade algo más, por ejemplo la ciudad.",
+    );
+  }
   const existing = await prisma.tenant.findUnique({ where: { slug } });
   if (existing) {
     throw new BadRequestException(errMessage);

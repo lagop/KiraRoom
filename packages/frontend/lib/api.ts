@@ -1280,7 +1280,10 @@ export interface AccountingSyncLog {
 
 /** GET /web-domain: the public page and the salon's own domain, if any. */
 export interface WebDomainStatus {
+  /** The free subdomain once live, otherwise the page on the app host. */
   publicUrl: string;
+  /** salon-lucia.kiraroom.net; active once the wildcard certificate is in place. */
+  subdomain?: null | { host: string; active: boolean };
   target: string;
   /** False until the operator serves customer domains over HTTPS. */
   servingEnabled: boolean;

@@ -63,6 +63,8 @@ export interface PublicSalonPage {
   openingHours: Record<string, { openTime: string; closeTime: string }>;
   /** Set only once the salon's own domain serves the page over HTTPS. */
   customDomain: string | null;
+  /** salon-lucia.kiraroom.net, set only once subdomains serve over HTTPS. */
+  subdomainHost?: string | null;
 }
 
 /** Public base URL of the app (where /sites/<slug> lives). */
@@ -72,11 +74,16 @@ export function appBaseUrl(): string {
 
 /**
  * The one URL search engines should index for this salon. Its own domain
- * when that is live; otherwise the slug URL, also when the visitor came in
- * through the salon's id (/sites/<uuid>), so the two are not indexed twice.
+ * when that is live; then its free subdomain when those are live; otherwise
+ * the slug URL, also when the visitor came in through the salon's id
+ * (/sites/<uuid>), so the two are not indexed twice.
  */
-export function canonicalUrl(page: Pick<PublicSalonPage, "slug" | "customDomain">, base = appBaseUrl()): string {
+export function canonicalUrl(
+  page: Pick<PublicSalonPage, "slug" | "customDomain" | "subdomainHost">,
+  base = appBaseUrl(),
+): string {
   if (page.customDomain) return `https://${page.customDomain}/`;
+  if (page.subdomainHost) return `https://${page.subdomainHost}/`;
   return `${base}/sites/${encodeURIComponent(page.slug)}`;
 }
 

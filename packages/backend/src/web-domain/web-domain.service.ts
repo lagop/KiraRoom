@@ -12,6 +12,8 @@ import {
   txtRecordName,
   txtRecordValue,
 } from "./custom-domain";
+import { normaliseSubdomainBase, salonSubdomainHost } from "@kira/shared";
+import { traefikDynamicConfig } from "./traefik-provider";
 
 export interface DnsRecordInstruction {
   type: "CNAME" | "A" | "TXT";
@@ -20,8 +22,17 @@ export interface DnsRecordInstruction {
 }
 
 export interface WebDomainStatus {
-  /** The salon's public page on the platform host. Always works. */
+  /**
+   * The salon's public page: its free subdomain once those are served over
+   * HTTPS, otherwise the page on the platform host. Always works.
+   */
   publicUrl: string;
+  /**
+   * The free address every salon gets (salon-lucia.kiraroom.net). null when
+   * subdomains are not configured or the slug cannot be one; active only
+   * once the wildcard certificate is in place (SALON_SUBDOMAINS_READY).
+   */
+  subdomain: null | { host: string; active: boolean };
   /** Host a salon's domain must point at. */
   target: string;
   /**
@@ -96,6 +107,48 @@ export class WebDomainService {
     }
   }
 
+  /** "kiraroom.net" when salons get <slug>.kiraroom.net; "" when not configured. */
+  subdomainBase(): string {
+    return normaliseSubdomainBase(this.config.get<string>("SALON_SUBDOMAIN_BASE"));
+  }
+
+  /** Whether the wildcard certificate is in place and subdomains are live. */
+  subdomainsReady(): boolean {
+    const raw = (this.config.get<string>("SALON_SUBDOMAINS_READY") ?? "").trim().toLowerCase();
+    return (raw === "1" || raw === "true") && !!this.subdomainBase();
+  }
+
+  /** The salon's subdomain, only when it actually serves the page. */
+  liveSubdomain(slug: string): string | null {
+    return this.subdomainsReady() ? salonSubdomainHost(slug, this.subdomainBase()) : null;
+  }
+
+  /**
+   * Traefik's dynamic configuration (see traefik-provider.ts): a router per
+   * verified domain of a live salon, plus the wildcard router for salons'
+   * subdomains once a DNS-challenge resolver is configured.
+   */
+  async traefikConfig() {
+    const rows = await runUnscoped(() =>
+      this.prisma.customDomain.findMany({
+        where: { verifiedAt: { not: null }, tenant: { deletedAt: null } },
+        select: { domain: true },
+      }),
+    );
+    const major = Number(this.config.get<string>("TRAEFIK_MAJOR_VERSION") ?? "3");
+    return traefikDynamicConfig(
+      rows.map((r) => r.domain),
+      {
+        service: this.config.get<string>("TRAEFIK_FRONTEND_SERVICE") || "kiraroom-app@docker",
+        entryPoint: this.config.get<string>("TRAEFIK_ENTRYPOINT_HTTPS") || "websecure",
+        certResolver: this.config.get<string>("TRAEFIK_CERTRESOLVER") || "mytlschallenge",
+        dnsCertResolver: (this.config.get<string>("TRAEFIK_DNS_CERTRESOLVER") ?? "").trim(),
+        subdomainBase: this.subdomainBase(),
+        traefikMajor: Number.isFinite(major) && major > 0 ? major : 3,
+      },
+    );
+  }
+
   servingEnabled(): boolean {
     const raw = (this.config.get<string>("CUSTOM_DOMAINS_TLS_READY") ?? "").trim().toLowerCase();
     return raw === "1" || raw === "true";
@@ -129,8 +182,13 @@ export class WebDomainService {
       };
     }
 
+    const subdomainHost = salonSubdomainHost(tenant.slug, this.subdomainBase());
+    const subdomainActive = !!subdomainHost && this.subdomainsReady();
     return {
-      publicUrl: `${this.appBaseUrl()}/sites/${encodeURIComponent(tenant.slug)}`,
+      publicUrl: subdomainActive
+        ? `https://${subdomainHost}`
+        : `${this.appBaseUrl()}/sites/${encodeURIComponent(tenant.slug)}`,
+      subdomain: subdomainHost ? { host: subdomainHost, active: subdomainActive } : null,
       target,
       servingEnabled,
       domain,

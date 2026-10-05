@@ -35,7 +35,7 @@ function selectKeys(select: any, prefix = ""): string[] {
   );
 }
 
-function makeService({ tlsReady = false, tenant = {} as any } = {}) {
+function makeService({ tlsReady = false, subdomains = false, tenant = {} as any } = {}) {
   const prisma = {
     tenant: {
       findFirst: jest.fn(async () =>
@@ -102,7 +102,10 @@ function makeService({ tlsReady = false, tenant = {} as any } = {}) {
       ),
     },
   };
-  const webDomain = { servingEnabled: () => tlsReady };
+  const webDomain = {
+    servingEnabled: () => tlsReady,
+    liveSubdomain: (slug: string) => (subdomains ? `${slug}.kiraroom.net` : null),
+  };
   return { svc: new PublicSiteService(prisma as any, webDomain as any), prisma };
 }
 
@@ -159,6 +162,15 @@ describe("PublicSiteService.getPage", () => {
     );
     const pending = { customDomain: { domain: "reservas.salonluna.es", verifiedAt: null } };
     expect((await makeService({ tenant: pending, tlsReady: true }).svc.getPage("x")).customDomain).toBeNull();
+  });
+  it("gives the salon's subdomain only once subdomains are live", async () => {
+    // The free address (salon-luna.kiraroom.net) becomes the canonical URL
+    // only when the wildcard certificate serves it; WebDomainService decides.
+    expect((await makeService().svc.getPage("x")).subdomainHost).toBeNull();
+    const page = await makeService({ subdomains: true }).svc.getPage("x");
+    expect(page.subdomainHost).toBe(`${page.slug}.kiraroom.net`);
+    const sitemap = await makeService({ subdomains: true }).svc.listForSitemap();
+    expect(sitemap.every((r) => r.subdomainHost === `${r.slug}.kiraroom.net`)).toBe(true);
   });
 });
 

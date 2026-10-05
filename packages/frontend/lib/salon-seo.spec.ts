@@ -25,7 +25,14 @@ import {
   shareImage,
   type PublicSalonPage,
 } from "./salon-seo";
-import { bareHost, isPlatformHost, platformHostsFrom, rewritePathFor } from "./custom-domain-host";
+import {
+  bareHost,
+  isPlatformHost,
+  platformHostsFrom,
+  rewritePathFor,
+  salonSlugForSubdomain,
+  subdomainRedirectFor,
+} from "./custom-domain-host";
 
 let pass = 0;
 let fail = 0;
@@ -143,6 +150,38 @@ check(
   rewritePathFor("/sites/otro-salon", "salon-luna"),
   "/sites/salon-luna/sites/otro-salon",
 );
+
+console.log("\n=== salon subdomains ===");
+check(
+  "canonical: own domain, then subdomain, then slug URL",
+  [
+    canonicalUrl({ ...PAGE, customDomain: "reservas.salonluna.es", subdomainHost: "salon-luna.kiraroom.net" }, "https://app.kiraroom.net"),
+    canonicalUrl({ ...PAGE, subdomainHost: "salon-luna.kiraroom.net" }, "https://app.kiraroom.net"),
+    canonicalUrl({ ...PAGE, subdomainHost: null }, "https://app.kiraroom.net"),
+  ].join(" | "),
+  "https://reservas.salonluna.es/ | https://salon-luna.kiraroom.net/ | https://app.kiraroom.net/sites/salon-luna",
+);
+check("salon-luna.kiraroom.net names the salon", salonSlugForSubdomain("salon-luna.kiraroom.net", "kiraroom.net"), "salon-luna");
+check("app.kiraroom.net is not a salon", salonSlugForSubdomain("app.kiraroom.net", "kiraroom.net"), null);
+check("no base, no subdomains", salonSlugForSubdomain("salon-luna.kiraroom.net", undefined), null);
+check(
+  "once ready, the public page moves to the subdomain",
+  subdomainRedirectFor("app.kiraroom.net", "/sites/salon-luna", platform, "kiraroom.net", true),
+  "https://salon-luna.kiraroom.net/",
+);
+check("not before the certificate is in place", subdomainRedirectFor("app.kiraroom.net", "/sites/salon-luna", platform, "kiraroom.net", false), null);
+check(
+  "the client area keeps its URL (its session lives on this host)",
+  subdomainRedirectFor("app.kiraroom.net", "/sites/salon-luna/account", platform, "kiraroom.net", true),
+  null,
+);
+check(
+  "an id URL stays",
+  subdomainRedirectFor("app.kiraroom.net", "/sites/3f2a9c1e-77b1-4c2d-9e10-aa55cc66dd77", platform, "kiraroom.net", true),
+  null,
+);
+check("a reserved slug stays", subdomainRedirectFor("app.kiraroom.net", "/sites/admin", platform, "kiraroom.net", true), null);
+check("only from the app host", subdomainRedirectFor("reservas.salonluna.es", "/sites/salon-luna", platform, "kiraroom.net", true), null);
 
 console.log("\n=== Summary ===");
 console.log(`Pass: ${pass}, Fail: ${fail}`);

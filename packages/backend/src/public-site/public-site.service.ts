@@ -124,6 +124,8 @@ export class PublicSiteService {
       professionals: professionals.map(({ workingHours: _wh, ...p }) => p),
       openingHours,
       customDomain: this.liveDomain(tenant.customDomain),
+      // salon-lucia.kiraroom.net, once subdomains serve over HTTPS.
+      subdomainHost: this.webDomain.liveSubdomain(tenant.slug),
     };
   }
 
@@ -148,6 +150,7 @@ export class PublicSiteService {
       slug: r.slug,
       updatedAt: r.updatedAt,
       customDomain: this.liveDomain(r.customDomain),
+      subdomainHost: this.webDomain.liveSubdomain(r.slug),
     }));
   }
 
