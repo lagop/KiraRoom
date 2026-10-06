@@ -38,7 +38,10 @@ type Router = {
 /** Priority of the wildcard router: below the app/api routers (their rule length) and below the apex redirector. */
 export const SUBDOMAIN_ROUTER_PRIORITY = 2;
 
-export function traefikDynamicConfig(domains: string[], s: TraefikProviderSettings) {
+export function traefikDynamicConfig(
+  domains: string[],
+  s: TraefikProviderSettings,
+): { http?: { routers: Record<string, Router> } } {
   const routers: Record<string, Router> = {};
 
   for (const domain of [...new Set(domains)].sort()) {
@@ -70,5 +73,7 @@ export function traefikDynamicConfig(domains: string[], s: TraefikProviderSettin
     };
   }
 
-  return { http: { routers } };
+  // Traefik rejects an empty "routers" ("routers cannot be a standalone
+  // element"); an empty configuration is valid.
+  return Object.keys(routers).length ? { http: { routers } } : {};
 }

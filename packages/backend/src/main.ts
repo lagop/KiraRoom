@@ -16,7 +16,9 @@ import {
   parseAllowedOrigins,
   buildCorsOptions,
   corsRejectionHandler,
+  salonOriginAllowed,
 } from "./common/cors";
+import { WebDomainService } from "./web-domain/web-domain.service";
 
 const SENTRY_DSN = process.env.SENTRY_DSN || process.env.GLITCHTIP_DSN;
 const SENTRY_TRACES_SAMPLE_RATE = Number(
@@ -159,7 +161,16 @@ async function bootstrap(): Promise<void> {
     }),
   );
 
-  app.enableCors(buildCorsOptions(parseAllowedOrigins(), logger));
+  // Salons' pages on <slug>.kiraroom.net and on their verified domains
+  // call the API for slots and bookings.
+  const webDomains = app.get(WebDomainService);
+  app.enableCors(
+    buildCorsOptions(parseAllowedOrigins(), logger, (origin) =>
+      salonOriginAllowed(origin, webDomains.subdomainBase(), (host) =>
+        webDomains.isVerifiedDomain(host),
+      ),
+    ),
+  );
   // After enableCors, so it can translate that middleware's rejection
   // into a 403. Left to Express it answers 500 -- see common/cors.ts.
   app.use(corsRejectionHandler);

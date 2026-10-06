@@ -73,9 +73,13 @@ export interface WebDomainStatus {
  * Until the operator sets that up and flips CUSTOM_DOMAINS_TLS_READY, a
  * verified domain is reported as verified but not active.
  */
+/** How long the verified-domain list behind CORS is reused. */
+const VERIFIED_HOSTS_TTL_MS = 60_000;
+
 @Injectable()
 export class WebDomainService {
   private readonly logger = new Logger(WebDomainService.name);
+  private verifiedHosts: { hosts: Set<string>; at: number } | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -147,6 +151,25 @@ export class WebDomainService {
         traefikMajor: Number.isFinite(major) && major > 0 ? major : 3,
       },
     );
+  }
+
+  /**
+   * Whether `host` is a verified domain of a live salon, for CORS: the
+   * salon's page on its own domain calls the API from the browser. Cached
+   * for a minute, since every preflight from an unknown origin asks.
+   */
+  async isVerifiedDomain(host: string): Promise<boolean> {
+    const now = Date.now();
+    if (!this.verifiedHosts || now - this.verifiedHosts.at > VERIFIED_HOSTS_TTL_MS) {
+      const rows = await runUnscoped(() =>
+        this.prisma.customDomain.findMany({
+          where: { verifiedAt: { not: null }, tenant: { deletedAt: null } },
+          select: { domain: true },
+        }),
+      );
+      this.verifiedHosts = { hosts: new Set(rows.map((r) => r.domain.toLowerCase())), at: now };
+    }
+    return this.verifiedHosts.hosts.has(host.toLowerCase());
   }
 
   servingEnabled(): boolean {

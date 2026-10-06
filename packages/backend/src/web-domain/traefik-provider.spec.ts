@@ -20,10 +20,10 @@ const settings = {
 
 describe("traefikDynamicConfig", () => {
   it("routes each verified domain to the frontend with its own certificate", () => {
-    const { http } = traefikDynamicConfig(["reservas.salonluna.es", "reservas.salonluna.es", "citas.otro.com"], {
+    const http = traefikDynamicConfig(["reservas.salonluna.es", "reservas.salonluna.es", "citas.otro.com"], {
       ...settings,
       dnsCertResolver: "",
-    });
+    }).http!;
     expect(Object.keys(http.routers).sort()).toEqual([
       "kiraroom-domain-citas_otro_com",
       "kiraroom-domain-reservas_salonluna_es",
@@ -37,10 +37,12 @@ describe("traefikDynamicConfig", () => {
   });
 
   it("adds the wildcard router only with a DNS resolver and a base", () => {
-    expect(traefikDynamicConfig([], { ...settings, dnsCertResolver: "" }).http.routers).toEqual({});
-    expect(traefikDynamicConfig([], { ...settings, subdomainBase: "" }).http.routers).toEqual({});
+    // Nothing to route: an empty configuration, since Traefik rejects an
+    // empty "routers" ("routers cannot be a standalone element").
+    expect(traefikDynamicConfig([], { ...settings, dnsCertResolver: "" })).toEqual({});
+    expect(traefikDynamicConfig([], { ...settings, subdomainBase: "" })).toEqual({});
 
-    const router = traefikDynamicConfig([], settings).http.routers["kiraroom-salon-subdomains"];
+    const router = traefikDynamicConfig([], settings).http!.routers["kiraroom-salon-subdomains"];
     expect(router.rule).toBe("HostRegexp(`^[a-z0-9-]+\\.kiraroom\\.net$`)");
     expect(router.priority).toBe(SUBDOMAIN_ROUTER_PRIORITY);
     expect(router.tls).toEqual({
@@ -50,7 +52,7 @@ describe("traefikDynamicConfig", () => {
   });
 
   it("writes the Traefik v2 syntax when asked", () => {
-    const router = traefikDynamicConfig([], { ...settings, traefikMajor: 2 }).http.routers["kiraroom-salon-subdomains"];
+    const router = traefikDynamicConfig([], { ...settings, traefikMajor: 2 }).http!.routers["kiraroom-salon-subdomains"];
     expect(router.rule).toBe("HostRegexp(`{salon:[a-z0-9-]+}.kiraroom.net`)");
   });
 
