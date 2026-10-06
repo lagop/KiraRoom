@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import type { ErrorRequestHandler, Request, Response, NextFunction } from 'express';
 import type { CorsOptions } from '@nestjs/common/interfaces/external/cors-options.interface';
+import { slugFromSalonSubdomain } from '@kira/shared';
 
 /**
  * CORS allow-list, and the 403 that a rejection should produce.
@@ -54,9 +55,34 @@ export function parseAllowedOrigins(
     .filter(Boolean);
 }
 
+/**
+ * Origins that serve a salon's page and so call this API from the browser:
+ * its free subdomain (https://salon-lucia.kiraroom.net) and its own verified
+ * domain (https://reservas.misalon.com). Without them the page loads but
+ * the booking form cannot fetch slots or book. Only https, no port.
+ */
+export async function salonOriginAllowed(
+  origin: string,
+  subdomainBase: string | undefined,
+  isVerifiedDomain: (host: string) => Promise<boolean>,
+): Promise<boolean> {
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'https:' || url.port) return false;
+  const host = url.hostname.toLowerCase();
+  if (slugFromSalonSubdomain(host, subdomainBase)) return true;
+  return isVerifiedDomain(host);
+}
+
 export function buildCorsOptions(
   allowedOrigins: string[],
   logger: Pick<Logger, 'warn'>,
+  /** Origins decided at request time (salons' subdomains and domains). */
+  extraAllowed?: (origin: string) => Promise<boolean>,
 ): CorsOptions {
   const allowsAny = allowedOrigins.includes('*');
   if (allowsAny) {
@@ -78,8 +104,15 @@ export function buildCorsOptions(
       if (allowsAny) return cb(null, true);
       if (allowedOrigins.includes(origin)) return cb(null, true);
 
-      logger.warn(`CORS blocked origin: ${origin}`);
-      return cb(new CorsOriginNotAllowedError(origin), false);
+      const reject = () => {
+        logger.warn(`CORS blocked origin: ${origin}`);
+        cb(new CorsOriginNotAllowedError(origin), false);
+      };
+      if (!extraAllowed) return reject();
+      extraAllowed(origin).then(
+        (ok) => (ok ? cb(null, true) : reject()),
+        () => reject(),
+      );
     },
     credentials: true,
   };
