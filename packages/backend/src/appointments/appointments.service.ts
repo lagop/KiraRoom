@@ -37,6 +37,7 @@ import { ConsentService } from "../consent/consent.service";
 import { salonInstant } from "./salon-time";
 import { appointmentLocationId } from "../multi-location/appointment-location";
 import { normalizePhone, phoneKey } from "../common/phone";
+import { isReadOnlyStatus } from "../common/guards/read-only-tenant.guard";
 import type { OnlineBookingDto } from "./dto/book-appointment.dto";
 
 interface AppointmentActivity {
@@ -479,6 +480,20 @@ export class AppointmentsService {
   private async insertAppointment(createAppointmentDto: CreateAppointmentDto, tenantId: string) {
     if (!createAppointmentDto.professionalId) {
       throw new BadRequestException("Professional ID is required");
+    }
+
+    // A salon without an active plan (trial ended, cancelled, suspended) is
+    // read-only: no new appointments from its page, its widget or the
+    // receptionist either. ReadOnlyTenantGuard covers the team's own routes.
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { subscriptionStatus: true },
+    });
+    if (isReadOnlyStatus(tenant?.subscriptionStatus)) {
+      throw new ForbiddenException({
+        code: "SALON_NOT_ACCEPTING_BOOKINGS",
+        message: "Este salón no acepta reservas en este momento.",
+      });
     }
 
     // Professional and service first: a booking that fails on them must not

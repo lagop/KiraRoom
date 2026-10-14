@@ -459,12 +459,12 @@
       "comingSoonNotice": "'{key}' is coming soon; it cannot be bought yet."
     },
     "aiUsage": {
-      "title": "AI receptionist usage",
+      "title": "AI receptionist messages",
       "unlimitedTitle": "Unlimited AI usage",
       "unlimitedDesc": "Your plan does not cap AI conversations per month.",
       "unlimitedBadge": "Unlimited",
       "resetsAt": "Resets on {date}",
-      "legend": "{pct}% of the monthly cap used"
+      "legend": "{pct}% of this month’s AI messages. At the limit the receptionist hands conversations to your team; you can add 1,000 messages for €19/month in the add-ons."
     },
     "bundles": {
       "title": "Message bundles",

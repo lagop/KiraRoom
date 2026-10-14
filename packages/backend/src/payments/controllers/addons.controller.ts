@@ -13,6 +13,7 @@ import {
   TenantAddOnResponseSchema,
 } from '../dto/addon.dto';
 import { SaasOwner } from "../../saas/decorators/saas-owner.decorator";
+import { AI_PACK_ADDON_KEYS } from '@kira/shared';
 
 /**
  * SaaS-admin-only add-ons API. Mounted under `/saas/add-ons`.
@@ -56,8 +57,8 @@ export class AddOnsAdminController {
    * currently exposes two relevant fields on `Tenant`:
    *   - aiConversationsUsed  (current month count)
    *   - aiConversationsResetAt
-   * Combined with the cap (resolved here from the plan) this gives a
-   * "X / 500 conversaciones" gauge for the Esencial segment.
+   * Combined with the cap (resolved here from the plan, the trial and the
+   * AI packs) this gives an "X / cap" gauge of the month's AI messages.
    */
   @Get('tenants/:id/ai-usage')
   @SaasOwner()
@@ -78,6 +79,7 @@ export class AddOnsAdminController {
         plan: true,
         subscriptionStatus: true,
         trialEnd: true,
+        maxLocations: true,
         aiConversationsUsed: true,
         aiConversationsResetAt: true,
         tenantAddOns: {
@@ -93,14 +95,8 @@ export class AddOnsAdminController {
       ctx.subscriptionStatus === 'trialing' &&
       !!ctx.trialEnd &&
       ctx.trialEnd.getTime() > Date.now();
-    const plan = this.subs.effectivePlan(ctx.plan, inTrial);
-    const aiConversationsPerMonth = (this.subs.plans as any)[plan]
-      ?.aiConversationsPerMonth as number | null | undefined;
-    const hasAiExpansion = (ctx.tenantAddOns ?? []).some((a) => {
-      const unlocks = a.addOn?.unlocks;
-      return Array.isArray(unlocks) && unlocks.includes('virtual_receptionist_advanced');
-    });
-    const cap = this.subs.resolveEffectiveAiCap(plan, hasAiExpansion);
+    const packs = (ctx.tenantAddOns ?? []).filter((a) => AI_PACK_ADDON_KEYS.has(a.addOn?.key ?? '')).length;
+    const cap = this.subs.aiCap(ctx.plan, { inTrial, locations: ctx.maxLocations, packs });
     const addonsUnlocked: string[] = [];
     for (const row of ctx.tenantAddOns ?? []) {
       const u = row.addOn?.unlocks;
@@ -109,7 +105,7 @@ export class AddOnsAdminController {
     return {
       tenantId: id,
       used: ctx.aiConversationsUsed ?? 0,
-      cap: cap ?? aiConversationsPerMonth ?? null,
+      cap,
       resetsAt: ctx.aiConversationsResetAt?.toISOString() ?? null,
       addonsUnlocked,
     };

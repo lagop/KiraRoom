@@ -15,6 +15,7 @@ import {
 import { FeatureGuard } from "../common/guards/feature.guard";
 import { Feature } from "../common/decorators/feature.decorator";
 import { Public } from "../auth/decorators/public.decorator";
+import { AllowWhenReadOnly } from "../common/decorators/allow-when-read-only.decorator";
 
 @ApiTags("Payments")
 @Controller("payments")
@@ -245,6 +246,7 @@ export class PaymentsController {
   }
 
   @Post("subscription/checkout")
+  @AllowWhenReadOnly()
   @Roles("owner")
   @ApiOperation({ summary: "Create subscription checkout session" })
   async createCheckout(@Req() req: any, @Body() body: { plan: string }) {
@@ -255,6 +257,7 @@ export class PaymentsController {
   }
 
   @Post("subscription/change-plan")
+  @AllowWhenReadOnly()
   @Roles("owner")
   @ApiOperation({ summary: "Change subscription plan" })
   async changePlan(@Req() req: any, @Body() body: { plan: string }) {
@@ -262,6 +265,7 @@ export class PaymentsController {
   }
 
   @Post("subscription/cancel")
+  @AllowWhenReadOnly()
   @Roles("owner")
   @ApiOperation({ summary: "Cancel subscription" })
   async cancelSubscription(
@@ -275,6 +279,7 @@ export class PaymentsController {
   }
 
   @Post("subscription/reactivate")
+  @AllowWhenReadOnly()
   @Roles("owner")
   @ApiOperation({
     summary:
@@ -285,6 +290,7 @@ export class PaymentsController {
   }
 
   @Post("subscription/billing-portal")
+  @AllowWhenReadOnly()
   @Roles("owner")
   @ApiOperation({ summary: "Open a Stripe Customer Portal session so the tenant owner can manage card, billing address and invoices" })
   async createBillingPortalSession(@Req() req: any) {
@@ -292,6 +298,7 @@ export class PaymentsController {
     return this.subscriptionsService.createBillingPortalSession(req.user.tenantId, returnUrl);
   }
   @Post("subscription/update-locations")
+  @AllowWhenReadOnly()
   @Roles("owner")
   @ApiOperation({
     summary: "Update the number of locations (only valid for plan=empresa)",

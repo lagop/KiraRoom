@@ -22,7 +22,7 @@ describe('AiConversationCounterService L-2 coverage (Redis + failure path)', () 
     } as any;
     const config = { get: () => undefined } as any;
     const subs = {
-      resolveEffectiveAiCap: jest.fn().mockReturnValue(opts.cap),
+      aiCap: jest.fn().mockReturnValue(opts.cap),
     } as any;
     const svc = new AiConversationCounterService(prisma, config, subs, {
       counter: () => ({ inc: jest.fn() }),

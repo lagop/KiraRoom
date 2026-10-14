@@ -63,6 +63,13 @@ model Tenant {
   /// P2A-ia-fairuse - virtual receptionist usage counter (Esencial cap)
   aiConversationsUsed    Int                @default(0)
   aiConversationsResetAt DateTime?
+  /// AI messages on `aiMessagesDay` (YYYY-MM-DD, UTC), for the daily cap
+  /// that stops an attack or a runaway loop the same day.
+  aiMessagesToday        Int                @default(0)
+  aiMessagesDay          String?
+  /// Day (YYYY-MM-DD, UTC) the salon was last told it hit an AI cap, so
+  /// it hears once a day, not on every refused message.
+  aiCapNotifiedOn        String?
   /// Saas-owner-configurable: how the assistant reacts to cap overflows
   /// degrade (default) -> FAQ cache only, no LLM.
   /// notify           -> LLM still runs, warn tenant next login.

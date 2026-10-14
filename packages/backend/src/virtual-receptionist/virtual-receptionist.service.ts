@@ -509,15 +509,12 @@ export class VirtualReceptionistService {
   }
 
   /**
-   * P2A-receptionist-v2 -- read the effective IA cap for a tenant
-   * (plan + addons). Returns null = unlimited. Used by the billing
-   * dashboard's AI usage meter.
+   * The month's AI message cap for a tenant (trial, plan, AI packs), for
+   * the billing dashboard's usage meter. The same number the receptionist
+   * is gated on: AiConversationCounterService decides it.
    */
   async resolveEffectiveCap(tenantId: string): Promise<number | null> {
-    const ctx = await this.featureFlags.getContext(tenantId);
-    if (!ctx) return null;
-    const hasAiExpansion = ctx.addonsUnlocked.includes('virtual_receptionist_advanced' as any);
-    return this.subscriptions.resolveEffectiveAiCap(ctx.plan, hasAiExpansion);
+    return this.aiCounter.getEffectiveCap(tenantId);
   }
 
   /** Current month's AI conversation count for the tenant. */
@@ -578,9 +575,11 @@ export class VirtualReceptionistService {
     const greeting = clientName
       ? `Hola ${clientName.split(' ')[0]}, `
       : '';
+    // Said to the salon's client, who has no plan and no limit: the salon
+    // is told about the cap separately (AiConversationCounterService).
     const text =
       greeting +
-      'ahora mismo estoy en el limite mensual de conversaciones de IA de tu plan; te paso con un humano del salón para que te atienda sin demora.';
+      'ahora mismo no puedo atenderte por aquí. Le paso tu mensaje al equipo del salón para que te responda lo antes posible.';
     const conversation = await this.conversationService.findOrCreateConversation(dto);
     await this.conversationService.addMessage(conversation.id, {
       role: 'assistant',

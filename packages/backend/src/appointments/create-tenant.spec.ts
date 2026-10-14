@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from "@nestjs/common";
 import { plainToInstance } from "class-transformer";
 import { validateSync } from "class-validator";
 import { AppointmentsService } from "./appointments.service";
@@ -35,6 +35,7 @@ function build({
   minAdvanceBooking = 2,
   maxAdvanceBooking = 30,
   locationLinks = [] as Array<{ professionalId: string; locationId: string; isPrimary: boolean }>,
+  subscriptionStatus = "active",
 } = {}) {
   const clientLookups: any[] = [];
   const created: any[] = [];
@@ -43,7 +44,7 @@ function build({
     $transaction: jest.fn(async (fn: any) =>
       fn({ $executeRaw: async (_s: TemplateStringsArray, key: string) => { locks.push(key); return 0; } }),
     ),
-    tenant: { findUnique: async () => ({ timezone: "Europe/Madrid", country: "ES" }) },
+    tenant: { findUnique: async () => ({ timezone: "Europe/Madrid", country: "ES", subscriptionStatus }) },
     // findOrCreateClient's phone lookup: tenant and last nine digits.
     $queryRaw: jest.fn(async (_s: TemplateStringsArray, tenantId: string, key: string) =>
       existingClients
@@ -231,6 +232,23 @@ describe("online booking: who and where", () => {
 
     await expect(service.createOnline(BOOKING as any)).rejects.toThrow(NotFoundException);
     expect(prisma.client.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("online booking: a salon without an active plan", () => {
+  it.each(["cancelled", "suspended"])("refuses a booking when the subscription is %s", async (subscriptionStatus) => {
+    const { service, created } = build({ subscriptionStatus });
+
+    await expect(service.createOnline(BOOKING as any)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(created).toHaveLength(0);
+  });
+
+  it("still books during the trial and on an active plan", async () => {
+    for (const subscriptionStatus of ["trialing", "active", "past_due"]) {
+      const { service, created } = build({ subscriptionStatus });
+      await service.createOnline(BOOKING as any);
+      expect(created).toHaveLength(1);
+    }
   });
 });
 

@@ -37,7 +37,7 @@ describe('P2A-receptionist-v2: PLAN_MATRIX', () => {
     expect(subs.plans.pro.id).toBe('pro');
     expect(subs.plans.pro.maxProfessionals).toBe(10);
     expect(subs.plans.pro.maxClients).toBeNull();
-    expect(subs.plans.pro.aiConversationsPerMonth).toBeNull(); // ilimitado
+    expect(subs.plans.pro.aiConversationsPerMonth).toBe(2000);
     expect(PLAN_MATRIX.pro).toEqual(
       expect.arrayContaining([
         'whatsapp_notifications',
@@ -59,7 +59,7 @@ describe('P2A-receptionist-v2: PLAN_MATRIX', () => {
   it('empresa incluye todo de pro + multichannel + multi_location + consolidated_reports', () => {
     expect(subs.plans.empresa.id).toBe('empresa');
     expect(subs.plans.empresa.minLocations).toBe(1); // 2 -> 1 en v2
-    expect(subs.plans.empresa.aiConversationsPerMonth).toBeNull();
+    expect(subs.plans.empresa.aiConversationsPerMonth).toBe(3000); // por local
     expect(PLAN_MATRIX.empresa).toEqual(
       expect.arrayContaining([
         'whatsapp_notifications',
@@ -86,17 +86,23 @@ describe('P2A-receptionist-v2: PLAN_MATRIX', () => {
     expect(PLAN_MATRIX.esencial).not.toContain('copilot_write');
   });
 
-  it('resolveEffectiveAiCap aplica el add-on ai_expansion sobre cualquier plan', async () => {
-    expect(subs.resolveEffectiveAiCap('esencial', false)).toBe(500);
-    expect(subs.resolveEffectiveAiCap('esencial', true)).toBeNull();
-    expect(subs.resolveEffectiveAiCap('pro', false)).toBeNull();
-    expect(subs.resolveEffectiveAiCap('pro', true)).toBeNull();
-    expect(subs.resolveEffectiveAiCap('empresa', false)).toBeNull();
+  it('aiCap: every plan has a cap, Empresa per location, the trial 500, +1,000 per AI pack', async () => {
+    expect(subs.aiCap('esencial', { inTrial: false })).toBe(500);
+    expect(subs.aiCap('pro', { inTrial: false })).toBe(2000);
+    expect(subs.aiCap('empresa', { inTrial: false, locations: 3 })).toBe(9000);
+    expect(subs.aiCap('empresa', { inTrial: false, locations: 0 })).toBe(3000);
+    // The trial unlocks Pro's features, not Pro's AI allowance.
+    expect(subs.aiCap('esencial', { inTrial: true })).toBe(500);
+    expect(subs.aiCap('esencial', { inTrial: false, packs: 1 })).toBe(1500);
+    expect(subs.aiCap('pro', { inTrial: false, packs: 2 })).toBe(4000);
+    // Legacy plan names read as their rev-3 plan.
+    expect(subs.aiCap('professional', { inTrial: false })).toBe(2000);
   });
 
   it('upsellableAddOnsForPlan filtra los redundantes en Pro/Empresa', () => {
     const esencial = subs.upsellableAddOnsForPlan('esencial');
-    expect(esencial).toContain('ai_expansion');
+    expect(esencial).toContain('ai_messages_1000');
+    expect(esencial).not.toContain('ai_expansion'); // retired
     expect(esencial).toContain('loyalty_giftcards');
     expect(esencial).toContain('email_marketing');
     // H-4: multichannel is included for Esencial (sold as add-on so the
@@ -104,7 +110,7 @@ describe('P2A-receptionist-v2: PLAN_MATRIX', () => {
     expect(esencial).toContain('multichannel');
 
     const pro = subs.upsellableAddOnsForPlan('pro');
-    expect(pro).not.toContain('ai_expansion'); // redundante en Pro
+    expect(pro).toContain('ai_messages_1000'); // adds messages on any plan
     expect(pro).toContain('loyalty_giftcards');
     expect(pro).toContain('email_marketing');
     // H-4: Pro already grants `multichannel` in PLAN_MATRIX, so the
@@ -116,7 +122,7 @@ describe('P2A-receptionist-v2: PLAN_MATRIX', () => {
     expect(pro).not.toContain('web_domain');
 
     const empresa = subs.upsellableAddOnsForPlan('empresa');
-    expect(empresa).not.toContain('ai_expansion');
+    expect(empresa).toContain('ai_messages_1000');
     expect(empresa).not.toContain('multichannel');
   });
 });
