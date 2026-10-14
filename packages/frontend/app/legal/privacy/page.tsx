@@ -1,262 +1,155 @@
+import { Identification, LAST_UPDATED, LEGAL_ENTITY, Pending, ProcessorList, Section } from "../legal-entity";
+
+/**
+ * Privacy policy (RGPD art. 13).
+ *
+ * Rewritten on 1 October 2026 to say what the service does. The previous
+ * text named no company, used the .com domain, stated that no data left the
+ * EEA (the receptionist chat is processed in the US), and promised
+ * encryption at rest, backups kept a year, signed audit logs and a rate
+ * limit that did not exist. Keep it to facts; review with a lawyer.
+ */
 export default function PrivacyPage() {
+  const email = LEGAL_ENTITY.email;
   return (
     <main style={{ maxWidth: 760, margin: "0 auto", padding: "32px 16px", lineHeight: 1.6 }}>
-      <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 8 }}>
-        Política de Privacidad
-      </h1>
-      <p style={{ color: "#64748b", marginBottom: 16 }}>
-        Última actualización: 17 de julio de 2026
-      </p>
-      {/* SOURCE OF TRUTH — keep in sync with docs/privacy.md until the
-          Sprint 2 legal-sync generator lands. */}
-      <p style={{ fontSize: 12, color: "#94a3b8", marginBottom: 24, fontStyle: "italic" }}>
-        Modelo adaptado de las plantillas y orientaciones publicadas por
-        la Agencia Española de Protección de Datos (AEPD) en{" "}
-        <a
-          href="https://www.aepd.es/es/areas-de-actuacion/internet-y-redes-sociales/modelos-de-politica-de-privacidad"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          aepd.es
-        </a>{" "}
-        y de la Guía del RGPD de la AEPD para PYMEs. Esta política cumple
-        el deber de información del <strong>Art. 13 del RGPD</strong> y
-        se completa con la <a href="/legal/terms">Términos del Servicio</a>{" "}
-        y la información sobre cookies que se muestra en el banner de
-        consentimiento.
-      </p>
+      <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 8 }}>Política de Privacidad</h1>
+      <p style={{ color: "#64748b", marginBottom: 24 }}>Última actualización: {LAST_UPDATED}</p>
 
-      <Section title="1. Responsable del tratamiento">
-        <p>
-          <strong>KiraRoom SaaS</strong> (en adelante, "KiraRoom"),
-          con sede en España, es el responsable del tratamiento de los
-          datos personales recabados a través de la plataforma{" "}
-          <code>app.kiraroom.com</code>.
-        </p>
-        <p>
-          Para cualquier consulta relativa al tratamiento de datos, puede
-          escribir a <code>privacy@kiraroom.com</code>.
-        </p>
-      </Section>
-
-      <Section title="2. Datos que recabamos">
-        <p>Para prestar el servicio de gestión de citas y facturación, recabamos:</p>
+      <Section title="1. Quién trata los datos">
+        <Identification />
+        <p>Según de quién sean los datos, KiraRoom actúa en dos papeles distintos:</p>
         <ul>
           <li>
-            <strong>Datos de la cuenta del salón</strong>: nombre del
-            negocio, dirección fiscal, NIF/CIF, email del propietario,
-            contraseña (almacenada con hash + sal), teléfono de contacto.
+            <strong>Responsable del tratamiento</strong> de los datos de los salones que contratan el
+            servicio y de sus usuarios (dueños, administradores y personal): cuenta, facturación de la
+            suscripción y uso del servicio.
           </li>
           <li>
-            <strong>Datos de clientes finales</strong>: nombre, apellidos,
-            email, teléfono, NIF (opcional), historial de citas y compras,
-            consentimientos firmados (RGPD + LSSI).
-          </li>
-          <li>
-            <strong>Datos de facturación</strong>: importes, fechas, NIF
-            del receptor, número de serie de facturas. Conservados durante
-            <strong>4 años</strong> conforme al Art. 66 del Reglamento
-            General Tributario.
-          </li>
-          <li>
-            <strong>Datos fiscales remitidos a la AEAT</strong>: facturas
-            enviadas al sistema Verifactu o TicketBAI con su NIF, importe y
-            hash de firma. Conservados mientras esté vigente la
-            obligación fiscal.
+            <strong>Encargado del tratamiento</strong> de los datos de los clientes de cada salón. El
+            responsable es el salón: decide qué datos guarda y para qué, y es quien atiende a sus clientes.
+            KiraRoom los trata solo para prestarle el servicio, según el contrato de encargo del apartado 11
+            de los <a href="/legal/terms">Términos del Servicio</a>.
           </li>
         </ul>
       </Section>
 
-      <Section title="3. Finalidad del tratamiento">
-        <p>Tratamos los datos personales con las siguientes finalidades:</p>
+      <Section title="2. Qué datos tratamos">
+        <ul>
+          <li>
+            <strong>Cuenta del salón</strong>: nombre del negocio, dirección, NIF, nombre, email y teléfono de
+            sus usuarios, y la contraseña, guardada solo como hash (bcrypt).
+          </li>
+          <li>
+            <strong>Clientes del salón</strong>: nombre, teléfono, email (opcional), historial de citas,
+            compras y pagos, consentimientos firmados, y las notas que el salón escriba. Si el salón anota
+            alergias u otros datos de salud, son categorías especiales de datos (art. 9 RGPD) y es el salón
+            quien debe contar con la base que lo permita.
+          </li>
+          <li>
+            <strong>Conversaciones con el recepcionista virtual</strong>: los mensajes que una persona
+            escribe en el chat de la web del salón, y los datos que da para reservar (nombre, teléfono,
+            email).
+          </li>
+          <li>
+            <strong>Facturación</strong>: facturas que el salón emite con KiraRoom (importes, fechas, NIF del
+            destinatario) y facturas de la suscripción a KiraRoom.
+          </li>
+          <li>
+            <strong>Datos técnicos</strong>: dirección IP y registros de acceso, para la seguridad del
+            servicio.
+          </li>
+        </ul>
+      </Section>
+
+      <Section title="3. Para qué">
         <ol>
-          <li>Prestar el servicio SaaS contratado (gestión de citas, profesionales, servicios).</li>
-          <li>Emitir facturas y remitirlas a la AEAT o a las diputaciones forales.</li>
-          <li>Sincronizar asientos contables con Holded o Sage Despachos (sólo si el cliente activa la integración).</li>
-          <li>Detectar y prevenir fraude o abuso del servicio.</li>
-          <li>Cumplir obligaciones legales (Art. 66 RGGI, Art. 24 LOPDGDD, LSSI).</li>
-          <li>Enviar comunicaciones operativas del servicio (no marketing sin consentimiento).</li>
+          <li>Prestar el servicio contratado: agenda, reservas online, clientes, cobros, facturas, recordatorios y recepcionista virtual.</li>
+          <li>Cobrar la suscripción y emitir sus facturas.</li>
+          <li>Mantener la seguridad del servicio y prevenir abusos.</li>
+          <li>Cumplir obligaciones legales, como la conservación de facturas.</li>
+          <li>Enviar avisos del servicio. No enviamos publicidad sin consentimiento.</li>
         </ol>
       </Section>
 
-      <Section title="4. Base jurídica del tratamiento">
-        <p>Tratamos los datos personales al amparo de:</p>
+      <Section title="4. Base jurídica">
         <ul>
-          <li>
-            <strong>Ejecución del contrato</strong> (Art. 6.1.b RGPD): prestar
-            el servicio contratado.
-          </li>
-          <li>
-            <strong>Cumplimiento de obligaciones legales</strong> (Art. 6.1.c
-            RGPD): facturación, conservación de facturas, llevanza de
-            libros contables.
-          </li>
-          <li>
-            <strong>Interés legítimo</strong> (Art. 6.1.f RGPD): detección
-            de fraude, seguridad del servicio.
-          </li>
+          <li><strong>Ejecución del contrato</strong> (art. 6.1.b RGPD): prestar el servicio contratado.</li>
+          <li><strong>Obligación legal</strong> (art. 6.1.c RGPD): facturación y conservación de facturas.</li>
+          <li><strong>Interés legítimo</strong> (art. 6.1.f RGPD): seguridad del servicio y prevención del fraude.</li>
+          <li><strong>Consentimiento</strong> (art. 6.1.a RGPD): almacenamiento no necesario en el navegador (preferencias y analítica), cuando se pide.</li>
         </ul>
       </Section>
 
-      <Section title="5. Destinatarios de los datos">
-        <p>Sus datos pueden ser comunicados a:</p>
-        <ul>
-          <li>
-            <strong>AEAT (Agencia Tributaria)</strong> y diputaciones
-            forales del País Vasco (Diputación de Bizkaia, Gipuzkoa y
-            Álava) para el cumplimiento de obligaciones fiscales
-            (Verifactu, TicketBAI, SII).
-          </li>
-          <li>
-            <strong>Holded, Sage Despachos, A3 (Wolters Kluwer), NCS</strong>{" "}
-            si el cliente activa la integración contable correspondiente.
-          </li>
-          <li>
-            <strong>Resend</strong> (transaccional de email) y{" "}
-            <strong>GlitchTip</strong> (monitorización de errores) —
-            ambos con servidores en la UE.
-          </li>
-        </ul>
+      <Section title="5. Quién más trata los datos">
         <p>
-          KiraRoom no vende datos personales. No se realizan transferencias
-          internacionales fuera del EEE.
+          Estos proveedores tratan datos por cuenta de KiraRoom, cada uno solo para su función y con un
+          contrato que los obliga a protegerlos:
+        </p>
+        <ProcessorList />
+        <p>
+          Algunos están en Estados Unidos, así que hay <strong>transferencias internacionales</strong>. Se
+          hacen con las cláusulas contractuales tipo aprobadas por la Comisión Europea (art. 46 RGPD).
+          KiraRoom no vende datos personales.
         </p>
       </Section>
 
-      <Section title="6. Conservación de los datos">
+      <Section title="6. Cuánto tiempo">
         <ul>
-          <li>Datos de cuenta del salón: mientras dure la relación contractual + 5 años (prescripción de acciones contractuales, Art. 1964 CC).</li>
-          <li>Datos de clientes finales: mientras el salón mantenga la cuenta + 2 años desde la última interacción.</li>
-          <li>Facturas y datos fiscales: <strong>4 años</strong> (Art. 66 RGGI).</li>
-          <li>Datos de facturación remitidos a la AEAT: mientras esté vigente la obligación fiscal.</li>
+          <li>Cuenta del salón: mientras dure el contrato y, después, el plazo de prescripción de las acciones derivadas de él.</li>
+          <li>Datos de clientes del salón: mientras el salón mantenga la cuenta o hasta que pida suprimirlos. Al terminar el contrato se devuelven o suprimen como dice el contrato de encargo.</li>
+          <li>Facturas: el plazo que exige la normativa fiscal (en general, 4 años).</li>
+          <li>Copias de seguridad: se renuevan a diario y se conservan como máximo 400 días.</li>
         </ul>
       </Section>
 
-      <Section title="7. Sus derechos (RGPD Arts. 15-22)">
-        <p>Como titular de los datos, usted puede ejercer en cualquier momento:</p>
-        <ul>
-          <li>
-            <strong>Acceso</strong> (Art. 15): confirmación de si
-            tratamos sus datos y obtención de una copia. Ejercitable vía{" "}
-            <code>POST /api/v1/saas/tenants/:id/export</code>{" "}
-            (gestionado por el propietario del salón).
-          </li>
-          <li>
-            <strong>Rectificación</strong> (Art. 16): corrección de
-            datos inexactos.
-          </li>
-          <li>
-            <strong>Supresión / Derecho al olvido</strong> (Art. 17):
-            eliminación de sus datos, salvo excepciones legales (facturas).
-            Ejercitable vía{" "}
-            <code>POST /api/v1/saas/tenants/:id/anonymize</code>.
-          </li>
-          <li>
-            <strong>Limitación</strong> (Art. 18): tratamiento limitado
-            mientras se verifica la exactitud.
-          </li>
-          <li>
-            <strong>Portabilidad</strong> (Art. 20): exportación de sus
-            datos en formato estructurado (JSON + CSV).
-          </li>
-          <li>
-            <strong>Oposición</strong> (Art. 21): oposición al
-            tratamiento basado en interés legítimo.
-          </li>
-          <li>
-            <strong>Reclamación ante la AEPD</strong> (Art. 77): si
-            considera que hemos vulnerado sus derechos.
-          </li>
-        </ul>
+      <Section title="7. Sus derechos">
         <p>
-          Para ejercer estos derechos:{" "}
-          <code>privacy@kiraroom.com</code>. Responderemos en un
-          plazo máximo de <strong>30 días</strong>.
+          Puede pedir el acceso, la rectificación, la supresión, la limitación, la portabilidad y oponerse al
+          tratamiento (arts. 15 a 22 RGPD) escribiendo a <Pending value={email} label="email de contacto" />.
+          Responderemos en el plazo de un mes.
+        </p>
+        <p>
+          Si es cliente de un salón, el responsable de sus datos es ese salón: diríjase a él. Si nos escribe a
+          nosotros, se lo trasladaremos y le ayudaremos a responder.
+        </p>
+        <p>
+          Si cree que no se han respetado sus derechos, puede reclamar ante la Agencia Española de Protección
+          de Datos (<a href="https://www.aepd.es" target="_blank" rel="noopener noreferrer">aepd.es</a>).
         </p>
       </Section>
 
-      <Section title="8. Cookies">
+      <Section title="8. Cookies y almacenamiento en el navegador">
         <p>
-          Este sitio utiliza cookies propias y de terceros conforme al{" "}
-          <strong>Art. 22.2 de la Ley 34/2002 de Servicios de la Sociedad
-          de la Información y de Comercio Electrónico (LSSI)</strong> y
-          al RGPD. Al visitar el sitio por primera vez se muestra un
-          banner de consentimiento que permite aceptar todas las
-          cookies, rechazar las no esenciales, o configurar las
-          preferencias por categoría. Una vez expresado el
-          consentimiento, el botón flotante "🍪 Configurar cookies"
-          (esquina inferior derecha) permite modificar o retirar el
-          consentimiento en cualquier momento.
+          KiraRoom guarda en el navegador lo necesario para funcionar: la sesión iniciada, el idioma y las
+          preferencias de consentimiento. Para eso no hace falta consentimiento (art. 22.2 LSSI).
         </p>
-        <p>Las categorías de cookies utilizadas son:</p>
-        <ul>
-          <li>
-            <strong>Necesarias</strong> (siempre activas, no requieren
-            consentimiento): sesión, autenticación, token CSRF,
-            equilibrio de carga.
-          </li>
-          <li>
-            <strong>Preferencias</strong> (opt-in): idioma, tema visual,
-            último salón visitado.
-          </li>
-          <li>
-            <strong>Analítica</strong> (opt-in): páginas vistas y
-            reporte de errores enviado a GlitchTip (autoalojado en la
-            UE).
-          </li>
-          <li>
-            <strong>Marketing</strong> (opt-in, actualmente no
-            utilizada): píxeles de adquisición de Meta / Google Ads si
-            en el futuro se activan campañas de pago.
-          </li>
-        </ul>
         <p>
-          El consentimiento se almacena localmente en su navegador bajo
-          la clave <code>kira-cookie-consent-v2</code>. Puede retirarlo
-          en cualquier momento desde el botón "🍪 Configurar cookies"
-          del pie de página.
+          Dentro del panel, un aviso permite aceptar o rechazar el almacenamiento de preferencias y de
+          analítica, y cambiar la decisión después. Hoy no se usan cookies de publicidad ni de terceros con
+          fines de marketing.
         </p>
       </Section>
 
-      <Section title="9. Medidas de seguridad">
-        <p>
-          Aplicamos las medidas del Art. 32 RGPD:
-        </p>
+      <Section title="9. Seguridad">
+        <p>Medidas aplicadas (art. 32 RGPD):</p>
         <ul>
-          <li>Cifrado AES-256-GCM para datos personales en reposo.</li>
-          <li>Tokens JWT firmados con HS256 (recomendamos HS256 con rotación de claves).</li>
-          <li>Hash + sal con bcrypt en contraseñas.</li>
-          <li>Backups diarios cifrados con retención 30 días hot + 1 año frío.</li>
-          <li>Limitación de tasa (100 req/min/IP) para prevenir abuso.</li>
-          <li>Logs de auditoría firmados (inmutables) para todas las acciones SaaS-owner.</li>
-          <li>WAF/CORS restrictivo en producción.</li>
+          <li>Conexiones cifradas (HTTPS con HSTS).</li>
+          <li>Contraseñas guardadas solo como hash con bcrypt; enlaces de recuperación de un solo uso que caducan en una hora.</li>
+          <li>Claves y tokens de terceros (canales, certificados) cifrados con AES-256-GCM.</li>
+          <li>Cada salón solo accede a sus propios datos, y cada usuario según su rol.</li>
+          <li>Límites de peticiones frente a abusos.</li>
+          <li>Copias de seguridad diarias de la base de datos.</li>
+          <li>Registro de las acciones del equipo de la plataforma sobre cuentas de salones.</li>
         </ul>
       </Section>
 
-      <Section title="10. Cambios a esta política">
+      <Section title="10. Cambios">
         <p>
-          Cualquier cambio material se notificará por email al propietario
-          del salón con al menos <strong>30 días</strong> de antelación y
-          se publicará una nueva versión en esta URL.
+          Si cambiamos esta política de forma relevante, lo avisaremos por email a los salones con antelación
+          y publicaremos la nueva versión en esta página.
         </p>
       </Section>
     </main>
-  );
-}
-
-function Section({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section style={{ marginBottom: 24 }}>
-      <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>
-        {title}
-      </h2>
-      <div>{children}</div>
-    </section>
   );
 }
