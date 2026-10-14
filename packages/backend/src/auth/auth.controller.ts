@@ -19,6 +19,7 @@ import { RolesGuard } from "./guards/roles.guard";
 import { UserRole } from "@prisma/client";
 import { IMPERSONATION_AUDIENCE, IMPERSONATION_DEFAULT_REASON } from "../saas/saas.constants";
 import { SignedIn } from "./decorators/signed-in.decorator";
+import { AllowWhenReadOnly } from "../common/decorators/allow-when-read-only.decorator";
 
 @ApiTags("Authentication")
 @Controller("auth")
@@ -106,6 +107,7 @@ export class AuthController {
 
   @Public()
   @Post("refresh")
+  @AllowWhenReadOnly()
   @Throttle({ default: { ttl: 60_000, limit: 30 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: "Refresh access token using refresh token" })
@@ -117,6 +119,7 @@ export class AuthController {
 
   @UseGuards(JwtAuthGuard)
   @Post("logout")
+  @AllowWhenReadOnly()
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
   @ApiOperation({ summary: "Logout and invalidate tokens" })

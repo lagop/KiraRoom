@@ -11,6 +11,7 @@ import {
   BulkNotificationDto,
 } from './dto';
 import { Roles, SALON_TEAM, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
+import { AllowWhenReadOnly } from "../common/decorators/allow-when-read-only.decorator";
 
 @ApiTags('notifications')
 @ApiBearerAuth()
@@ -45,6 +46,7 @@ export class NotificationsController {
   }
 
   @Put(':id/read')
+  @AllowWhenReadOnly()
   @ApiOperation({ summary: 'Mark a notification as read' })
   @Roles(...SALON_TEAM)
   async markAsReadForUser(
@@ -55,6 +57,7 @@ export class NotificationsController {
   }
 
   @Put('read-all')
+  @AllowWhenReadOnly()
   @ApiOperation({ summary: 'Mark all notifications as read for the current user' })
   @Roles(...SALON_TEAM)
   async markAllAsReadForUser(

@@ -11,6 +11,7 @@ import {
 } from "./dto";
 import { Professional } from "@prisma/client";
 import * as bcrypt from "bcryptjs";
+import { assertProfessionalSlot } from "../../professionals/professional-limit";
 
 @Injectable()
 export class AdminProfessionalsService {
@@ -18,6 +19,8 @@ export class AdminProfessionalsService {
 
   async create(createProfessionalDto: CreateProfessionalDto) {
     const { serviceIds, ...professionalData } = createProfessionalDto;
+    // Outside the try: its catch turns every error into a 400.
+    await assertProfessionalSlot(this.prisma, professionalData.tenantId);
 
     try {
       // The controller sets tenantId from the caller's token. This used to
@@ -168,6 +171,13 @@ export class AdminProfessionalsService {
 
   async update(tenantId: string, id: string, updateProfessionalDto: UpdateProfessionalDto) {
     const { serviceIds, ...professionalData } = updateProfessionalDto;
+    if (professionalData.isActive === true) {
+      const current = await this.prisma.professional.findFirst({
+        where: { id, tenantId },
+        select: { isActive: true },
+      });
+      if (current && !current.isActive) await assertProfessionalSlot(this.prisma, tenantId);
+    }
 
     try {
       // First, update the professional data

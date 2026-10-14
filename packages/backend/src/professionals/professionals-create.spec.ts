@@ -13,6 +13,9 @@ function setup() {
   const calls: any[] = [];
   const detected: string[] = [];
   const prisma = {
+    // No salon found: the plan's professional limit is not checked here
+    // (see professional-limit.spec).
+    tenant: { findUnique: async () => null },
     professional: {
       create: async (args: any) => {
         calls.push(args);

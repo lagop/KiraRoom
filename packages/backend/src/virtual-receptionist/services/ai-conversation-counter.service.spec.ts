@@ -34,6 +34,7 @@ describe('AiConversationCounterService.evaluate()', () => {
     const config = { get: () => undefined } as any;
     const subs = {
       resolveEffectiveAiCap: jest.fn().mockReturnValue(opts.cap),
+      effectivePlan: (plan: string, inTrial: boolean) => (inTrial ? "pro" : plan),
     } as any;
     const svc = new AiConversationCounterService(prisma, config, subs, { counter: () => ({ inc: () => undefined }) } as any);
     // Force Redis as unavailable so tests don't try to connect.
@@ -94,5 +95,32 @@ describe('AiConversationCounterService.evaluate()', () => {
     const { svc, prisma } = makeSvc({ used: 5, cap: null, plan: 'pro' });
     await svc.increment('tenant-1');
     expect(prisma.tenant.update).not.toHaveBeenCalled();
+  });
+});
+
+// The trial is the whole of Pro. Every self-signup is stored as
+// `esencial`, and the cap read that stored plan: trials were capped at 500.
+describe('AiConversationCounterService.getEffectiveCap() during the trial', () => {
+  function capFor(tenant: { plan: string; subscriptionStatus: string; trialEnd: Date | null }) {
+    const prisma = {
+      tenant: { findUnique: jest.fn().mockResolvedValue({ ...tenant, tenantAddOns: [] }) },
+    } as any;
+    const subs = {
+      effectivePlan: (plan: string, inTrial: boolean) => (inTrial ? 'pro' : plan),
+      resolveEffectiveAiCap: (plan: string) => (plan === 'esencial' ? 500 : null),
+    } as any;
+    const svc = new AiConversationCounterService(prisma, { get: () => undefined } as any, subs, { counter: () => ({ inc: () => undefined }) } as any);
+    (svc as any).redisAvailable = false;
+    return svc.getEffectiveCap('tenant-1');
+  }
+  const DAY = 86_400_000;
+
+  it('is unlimited while the trial runs', async () => {
+    await expect(capFor({ plan: 'esencial', subscriptionStatus: 'trialing', trialEnd: new Date(Date.now() + 3 * DAY) })).resolves.toBeNull();
+  });
+
+  it("is the stored plan's once the trial has ended", async () => {
+    await expect(capFor({ plan: 'esencial', subscriptionStatus: 'trialing', trialEnd: new Date(Date.now() - DAY) })).resolves.toBe(500);
+    await expect(capFor({ plan: 'esencial', subscriptionStatus: 'active', trialEnd: null })).resolves.toBe(500);
   });
 });

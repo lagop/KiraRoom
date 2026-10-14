@@ -75,6 +75,7 @@ import { JwtStrategy } from "./auth/strategies/jwt.strategy";
 import { JwtAuthGuard } from "./auth/guards/jwt-auth.guard";
 import { PasswordResetService } from "./auth/password-reset.service";
 import { RolesGuard } from "./auth/guards/roles.guard";
+import { ReadOnlyTenantGuard } from "./common/guards/read-only-tenant.guard";
 import { BugReportModule } from "./bug-reports/bug-report.module";
 import { InvitesModule } from "./saas/invites/invites.module";
 import { PublicModule } from "./public-site/public.module";
@@ -257,6 +258,11 @@ import { PublicModule } from "./public-site/public.module";
     {
       provide: APP_GUARD,
       useClass: RolesGuard,
+    },
+    // After RolesGuard: a salon without an active plan only reads.
+    {
+      provide: APP_GUARD,
+      useClass: ReadOnlyTenantGuard,
     },
     AppService,
     AuthService,

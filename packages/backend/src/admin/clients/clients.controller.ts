@@ -7,6 +7,7 @@ import { Roles } from '../../auth/decorators/roles.decorator';
 import { RolesGuard } from '../../auth/guards/roles.guard';
 import { UserRole } from '@prisma/client';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
+import { AllowWhenReadOnly } from "../../common/decorators/allow-when-read-only.decorator";
 
 @ApiTags('Admin - Clients')
 @ApiBearerAuth()
@@ -75,6 +76,7 @@ export class AdminClientsController {
   }
 
   @Delete(':id')
+  @AllowWhenReadOnly()
   @ApiOperation({ summary: 'Delete client by ID' })
   @ApiResponse({ status: 200, description: 'Client deleted successfully' })
   @ApiResponse({ status: 404, description: 'Client not found' })

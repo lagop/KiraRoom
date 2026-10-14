@@ -92,6 +92,8 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
       where: { id: tenantId },
       select: {
         plan: true,
+        subscriptionStatus: true,
+        trialEnd: true,
         tenantAddOns: {
           where: { status: 'active' },
           select: { addOn: { select: { key: true } } },
@@ -102,7 +104,16 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
     const hasAiExpansion = ctx.tenantAddOns.some(
       (a) => a.addOn?.key === 'ai_expansion',
     );
-    return this.subs.resolveEffectiveAiCap(ctx.plan, hasAiExpansion);
+    // The trial is the whole of Pro, AI included: every self-signup is
+    // stored as `esencial`, so the stored plan alone capped trials at 500.
+    const inTrial =
+      ctx.subscriptionStatus === 'trialing' &&
+      !!ctx.trialEnd &&
+      ctx.trialEnd.getTime() > Date.now();
+    return this.subs.resolveEffectiveAiCap(
+      this.subs.effectivePlan(ctx.plan, inTrial),
+      hasAiExpansion,
+    );
   }
 
   /** Returns the configured fair-use action for the tenant. */

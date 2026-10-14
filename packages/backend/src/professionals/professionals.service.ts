@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { CreateProfessionalDto, UpdateProfessionalDto } from "./dto";
+import { assertProfessionalSlot } from "./professional-limit";
 
 /**
  * What anyone may see about a professional: what the salon's public site
@@ -31,6 +32,7 @@ export class ProfessionalsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(tenantId: string, createProfessionalDto: CreateProfessionalDto) {
+    if (createProfessionalDto.isActive ?? true) await assertProfessionalSlot(this.prisma, tenantId);
     return this.prisma.professional.create({
       data: {
         tenantId,
@@ -156,6 +158,9 @@ export class ProfessionalsService {
 
     if (!professional) {
       throw new NotFoundException(`Professional with ID ${id} not found`);
+    }
+    if (updateProfessionalDto.isActive === true && !professional.isActive) {
+      await assertProfessionalSlot(this.prisma, professional.tenantId);
     }
 
     return this.prisma.professional.update({

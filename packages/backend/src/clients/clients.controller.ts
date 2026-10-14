@@ -15,6 +15,7 @@ import { CreateClientDto, UpdateClientDto, UpdateMyProfileDto, ChangeMyPasswordD
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { User } from "@prisma/client";
 import { ProfessionalsService } from "../professionals/professionals.service";
+import { AllowWhenReadOnly } from "../common/decorators/allow-when-read-only.decorator";
 
 @ApiTags("clients")
 @Controller("clients")
@@ -139,6 +140,7 @@ export class ClientsController {
   }
 
   @Delete(":id")
+  @AllowWhenReadOnly()
   @Roles(UserRole.owner, UserRole.admin)
   @ApiOperation({ summary: "Delete a client" })
   @ApiResponse({ status: 200, description: "Client deleted successfully" })
