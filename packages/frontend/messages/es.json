@@ -77,10 +77,10 @@
     },
     "fiscalStatus": {
       "not_required": "Sin fiscalidad",
-      "pending": "Pendiente de envio",
-      "accepted": "Aceptada por AEAT/diputación",
-      "rejected": "Rechazada",
-      "error": "Error de envio"
+      "pending": "Pendiente de envío a la AEAT",
+      "accepted": "Enviada a la AEAT",
+      "rejected": "Rechazada por la AEAT",
+      "error": "Error de envío"
     },
     "fiscalMode": {
       "none": "Sin régimen fiscal",
@@ -133,7 +133,7 @@
       "subtitle": "Configura el régimen fiscal de tu salón.",
       "taxIdLabel": "NIF / CIF / NIE del emisor",
       "taxIdHint": "Validado: NIF (8 digitos + letra) - NIE (X/Y/Z + 7 digitos + letra) - CIF (letra + 7 digitos)",
-      "legalName": "Razon social",
+      "legalName": "Razón social",
       "mode": "Régimen",
       "defaultSeries": "Serie por defecto",
       "defaultTaxRate": "Tipo de {tax} por defecto",

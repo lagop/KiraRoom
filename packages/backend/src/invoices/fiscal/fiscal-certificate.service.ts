@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { PrismaService } from "../../common/prisma/prisma.service";
 import { EncryptionService } from "../../common/encryption/encryption.service";
 import { createHash } from "crypto";
+import { openPkcs12 } from "./verifactu/certificate";
 
 /**
  * Helpers around the FiscalCertificate table: storing the encrypted
@@ -61,27 +62,48 @@ export class FiscalCertificateService {
     provider: "p12" | "cloud_dnie";
     pkcs12Base64: string;
     passphrase: string;
-    notBefore?: Date;
-    notAfter?: Date;
-  }): Promise<{ id: string; fingerprint: string }> {
-    // Convert base64 → raw DER bytes; we persist the DER binary so
-    // XadesService.parsePkcs12 doesn't need to do it on every read.
+    certificateType?: "personal" | "seal";
+  }): Promise<{
+    id: string;
+    fingerprint: string;
+    subject: string;
+    notAfter: Date;
+    /** Whether the certificate's NIF is the salon's (a representative's is not). */
+    nifMatchesSalon: boolean | null;
+  }> {
+    // Opened with its password here: a wrong password or a bundle without
+    // its private key is refused now, not at the first submission.
+    const opened = openPkcs12(input.pkcs12Base64, input.passphrase);
+    // Raw DER kept as well: the XAdES signer (TicketBAI) reads it.
     const rawDer = Buffer.from(input.pkcs12Base64, "base64").toString("binary");
-    const fingerprint = this.fingerprintFromPkcs12(input.pkcs12Base64);
-    const cert = this.prisma.fiscalCertificate.create({
+    const tenant = await this.prisma.tenant.findUnique({ where: { id: input.tenantId }, select: { taxId: true } });
+    const salonNif = tenant?.taxId?.toUpperCase().replace(/[\s.\-]/g, "") ?? null;
+    // A new certificate replaces the previous one.
+    await this.prisma.fiscalCertificate.updateMany({ where: { tenantId: input.tenantId, isActive: true }, data: { isActive: false } });
+    const cert = await this.prisma.fiscalCertificate.create({
       data: {
         tenantId: input.tenantId,
         alias: input.alias,
         provider: input.provider,
         encryptedPem: this.encryption.encrypt(rawDer),
         passphraseCipher: this.encryption.encrypt(input.passphrase),
-        fingerprint,
-        notBefore: input.notBefore,
-        notAfter: input.notAfter,
+        encryptedKeyPair: this.encryption.encrypt(JSON.stringify({ keyPem: opened.keyPem, certPem: opened.certPem })),
+        certificateType: input.certificateType ?? "personal",
+        fingerprint: opened.fingerprint,
+        subject: opened.subject,
+        issuer: opened.issuer,
+        notBefore: opened.notBefore,
+        notAfter: opened.notAfter,
         isActive: true,
       },
     });
-    return { id: (await cert).id, fingerprint };
+    return {
+      id: cert.id,
+      fingerprint: opened.fingerprint,
+      subject: opened.subject,
+      notAfter: opened.notAfter,
+      nifMatchesSalon: opened.nif && salonNif ? opened.nif === salonNif : null,
+    };
   }
 
   async deactivate(id: string, tenantId: string) {
@@ -89,23 +111,5 @@ export class FiscalCertificateService {
       where: { id, tenantId },
       data: { isActive: false },
     });
-  }
-
-  /**
-   * Extract the SHA-256 fingerprint of the certificate contained in a
-   * PKCS#12 bundle, without exposing the private key.
-   */
-  private fingerprintFromPkcs12(pkcs12Base64: string): string {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const forge = require("node-forge");
-    const der = Buffer.from(pkcs12Base64, "base64").toString("binary");
-    const p12 = forge.pkcs12.pkcs12FromAsn1(forge.asn1.fromDer(der), "");
-    const certBags = p12.getBags({ bagType: forge.pki.oids.certBag });
-    const certBag = certBags[forge.pki.oids.certBag]?.[0];
-    if (!certBag?.cert) {
-      throw new Error("PKCS#12 is missing the certificate bag");
-    }
-    const pem = forge.pki.certificateToPem(certBag.cert);
-    return createHash("sha256").update(pem).digest("hex");
   }
 }

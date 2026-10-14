@@ -80,10 +80,27 @@ describe("InvoicePdfService (fallback path)", () => {
     expect(text).toContain("000001");
   });
 
-  it("includes a QR placeholder when fiscalQrUrl is set", async () => {
+  it("draws the VERI*FACTU QR first, between its two legends, as vector squares", async () => {
+    // The old fallback embedded a PNG declared as JPEG (unreadable) at the bottom.
+    // Rendered and decoded by hand on 2026-10-01: the code scans to the AEAT URL, 35 mm wide.
     const svc = makeService({ PUPPETEER_SKIP_DOWNLOAD: "true" });
-    const buf = await svc.generate(SAMPLE as any);
-    expect(buf.length).toBeGreaterThan(1000); // QR adds image bytes
+    const text = (await svc.generate(SAMPLE as any)).toString("latin1");
+    const qrLabel = text.indexOf("(QR tributario:) Tj");
+    const legend = text.indexOf("(VERI*FACTU) Tj");
+    const firstSquare = text.search(/[\d.]+ [\d.]+ [\d.]+ [\d.]+ re/);
+    expect(qrLabel).toBeGreaterThan(0);
+    expect(firstSquare).toBeGreaterThan(qrLabel);
+    expect(legend).toBeGreaterThan(firstSquare);
+    expect(text.indexOf("(Factura A000001) Tj")).toBeGreaterThan(legend);
+    expect(text).not.toContain("/Subtype /Image");
+  });
+
+  it("prints the issuer's NIF and the base and tax per rate", async () => {
+    const svc = makeService({ PUPPETEER_SKIP_DOWNLOAD: "true" });
+    const text = (await svc.generate(SAMPLE as any)).toString("latin1");
+    expect(text).toContain("(NIF: B12345678) Tj");
+    expect(text).toContain("(Base al 21%: 100.00 EUR  Cuota: 21.00 EUR) Tj");
+    expect(text).toContain("(TOTAL: 121.00 EUR) Tj");
   });
 
   it("handles missing fiscalQrUrl gracefully", async () => {

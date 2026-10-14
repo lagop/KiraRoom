@@ -6,6 +6,7 @@ import {
   IsEnum,
   IsIn,
   IsInt,
+  MaxLength,
   IsNumber,
   IsOptional,
   IsString,
@@ -177,6 +178,34 @@ export class UpdateTenantFiscalSettingsDto {
   @IsOptional()
   @IsString()
   legalName?: string;
+}
+
+/**
+ * The global ValidationPipe drops fields without validators: the inline
+ * body type the route used had none.
+ */
+export class UploadCertificateDto {
+  @IsString()
+  @MaxLength(100)
+  alias!: string;
+
+  @IsOptional()
+  @IsIn(["p12", "cloud_dnie"])
+  provider?: "p12" | "cloud_dnie";
+
+  /** The .p12 / .pfx file, base64. */
+  @IsString()
+  @MaxLength(100_000)
+  pkcs12Base64!: string;
+
+  @IsString()
+  @MaxLength(200)
+  passphrase!: string;
+
+  /** "seal" for a certificado de sello (sent through www10). */
+  @IsOptional()
+  @IsIn(["personal", "seal"])
+  certificateType?: "personal" | "seal";
 }
 
 export class CancelInvoiceDto {
