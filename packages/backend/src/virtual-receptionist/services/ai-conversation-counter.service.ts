@@ -1,15 +1,17 @@
 ﻿
-import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createClient, RedisClientType } from 'redis';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AiFairUseAction } from '@prisma/client';
 import { SubscriptionsService } from '../../payments/services/subscriptions.service';
 import { MetricsService, COUNTERS } from '../../common/observability/metrics.service';
+import { NotificationsService } from '../../notifications/notifications.service';
+import { AI_PACK_ADDON_KEYS, aiDailyCap } from '@kira/shared';
 
 export interface FairUseDecision {
   allowed: boolean;
-  reason: 'ok' | 'no_plan' | 'cap_exceeded';
+  reason: 'ok' | 'no_plan' | 'cap_exceeded' | 'daily_cap_exceeded';
   capSource: 'plan' | 'unlimited' | 'addon';
   cap: number | null;
   used: number;
@@ -45,6 +47,7 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
     private readonly config: ConfigService,
     private readonly subs: SubscriptionsService,
     private readonly metrics: MetricsService,
+    @Optional() private readonly notifications?: NotificationsService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -86,7 +89,11 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
   }
 
 
-  /** Returns the effective cap for the tenant (null = unlimited). */
+  /**
+   * The month's AI message cap for the tenant: 500 in the trial, else the
+   * plan's (Empresa: per location) plus 1,000 per AI pack. Never unlimited:
+   * each message is a paid model call. null only for an unknown tenant.
+   */
   async getEffectiveCap(tenantId: string): Promise<number | null> {
     const ctx = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
@@ -94,6 +101,7 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
         plan: true,
         subscriptionStatus: true,
         trialEnd: true,
+        maxLocations: true,
         tenantAddOns: {
           where: { status: 'active' },
           select: { addOn: { select: { key: true } } },
@@ -101,19 +109,21 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
       },
     });
     if (!ctx) return null;
-    const hasAiExpansion = ctx.tenantAddOns.some(
-      (a) => a.addOn?.key === 'ai_expansion',
-    );
-    // The trial is the whole of Pro, AI included: every self-signup is
-    // stored as `esencial`, so the stored plan alone capped trials at 500.
+    const packs = (ctx.tenantAddOns ?? []).filter((a) => AI_PACK_ADDON_KEYS.has(a.addOn?.key ?? '')).length;
     const inTrial =
       ctx.subscriptionStatus === 'trialing' &&
       !!ctx.trialEnd &&
       ctx.trialEnd.getTime() > Date.now();
-    return this.subs.resolveEffectiveAiCap(
-      this.subs.effectivePlan(ctx.plan, inTrial),
-      hasAiExpansion,
-    );
+    return this.subs.aiCap(ctx.plan, { inTrial, locations: ctx.maxLocations, packs });
+  }
+
+  /** AI messages the tenant has used today (UTC). */
+  async getDailyUsage(tenantId: string): Promise<number> {
+    const t = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { aiMessagesToday: true, aiMessagesDay: true },
+    });
+    return t?.aiMessagesDay === currentDay() ? (t.aiMessagesToday ?? 0) : 0;
   }
 
   /** Returns the configured fair-use action for the tenant. */
@@ -170,8 +180,7 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
    * source of truth. If Redis is down or slow, the Postgres write
    * still wins and the next read will see the right value.
    *
-   * For plans with cap=null we skip the counter altogether (no
-   * reason to track Pro/Enterprise usage beyond observability).
+   * Also counts the day, for the daily cap.
    */
   async increment(tenantId: string): Promise<{ newCount: number; cappedBy: number | null }> {
     const cap = await this.getEffectiveCap(tenantId);
@@ -211,6 +220,18 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
       );
     }
 
+    // Today's count: one atomic statement, restarting at 1 on a new day.
+    try {
+      const day = currentDay();
+      await this.prisma.$executeRaw`
+        UPDATE "tenants"
+        SET "aiMessagesToday" = CASE WHEN "aiMessagesDay" = ${day} THEN "aiMessagesToday" + 1 ELSE 1 END,
+            "aiMessagesDay" = ${day}
+        WHERE "id" = ${tenantId}`;
+    } catch (e) {
+      this.logger.error(`Daily AI count failed for tenant ${tenantId}: ${(e as Error).message}`);
+    }
+
     return { newCount, cappedBy: cap };
   }
 
@@ -240,9 +261,12 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
       };
     }
     const used = await this.getUsage(tenantId);
+    const today = await this.getDailyUsage(tenantId);
+    const dailyCap = aiDailyCap(cap);
     const action = await this.getFairUseAction(tenantId);
+    const reason = used >= cap ? 'cap_exceeded' : 'daily_cap_exceeded';
 
-    if (used < cap) {
+    if (used < cap && today < dailyCap) {
       this.metrics.counter(COUNTERS.AI_CALLS, 'AI conversation outcomes by status').inc({ status: 'success' });
       return {
         allowed: true,
@@ -270,14 +294,58 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
     // we report whatever the data has (esencial / pro / empresa).
     const planLabel = await this.getPlanLabel(tenantId);
     this.metrics.counter(COUNTERS.AI_FAIRUSE_CAP_HIT, 'AI fair-use cap hit by plan (cap_exceeded path)').inc({ plan: planLabel });
+    void this.notifyCapReached(tenantId, reason, reason === 'cap_exceeded' ? cap : dailyCap).catch((e: Error) =>
+      this.logger.warn(`AI cap notice not sent for tenant ${tenantId}: ${e.message}`),
+    );
     return {
       allowed: false,
-      reason: 'cap_exceeded',
+      reason,
       capSource: 'plan',
       cap,
       used,
       fairUseAction: action,
     };
+  }
+
+  /**
+   * Tells the salon's owners and admins, once a day, that the receptionist
+   * hit a cap and is handing conversations to the team. Without it the
+   * salon only found out from its clients.
+   */
+  private async notifyCapReached(
+    tenantId: string,
+    reason: 'cap_exceeded' | 'daily_cap_exceeded',
+    limit: number,
+  ): Promise<void> {
+    if (!this.notifications) return;
+    const day = currentDay();
+    // Claim today's notice; a concurrent refusal finds it taken.
+    const claimed = await this.prisma.tenant.updateMany({
+      where: { id: tenantId, OR: [{ aiCapNotifiedOn: null }, { aiCapNotifiedOn: { not: day } }] },
+      data: { aiCapNotifiedOn: day },
+    });
+    if (claimed.count === 0) return;
+
+    const managers = await this.prisma.user.findMany({
+      where: { tenantId, role: { in: ['owner', 'admin'] }, isActive: true },
+      select: { id: true },
+    });
+    const limitText = limit.toLocaleString('es-ES');
+    const title = 'Tu recepcionista IA ha llegado a su límite';
+    const message =
+      reason === 'cap_exceeded'
+        ? `Has usado los ${limitText} mensajes de IA de este mes. Hasta que empiece el mes que viene, la recepcionista pasa las conversaciones a tu equipo. Puedes añadir 1.000 mensajes más por 19 €/mes en Facturación.`
+        : `Hoy se han usado ${limitText} mensajes de IA, el máximo de un día. Hasta mañana la recepcionista pasa las conversaciones a tu equipo. Si no reconoces tanto uso, revisa las conversaciones.`;
+    for (const m of managers) {
+      await this.notifications.create({
+        tenantId,
+        userId: m.id,
+        type: 'system_alert' as any,
+        title,
+        message,
+        data: { kind: 'ai_cap', reason, limit, url: '/dashboard/billing' },
+      });
+    }
   }
 
   /** Resets the counter for a tenant (called by the monthly scheduler). */
@@ -301,6 +369,11 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
       }
     }
   }
+}
+
+/** Today as YYYY-MM-DD in UTC, the daily cap's key. */
+function currentDay(now: Date = new Date()): string {
+  return now.toISOString().slice(0, 10);
 }
 
 function currentYearMonth(now: Date = new Date()): string {

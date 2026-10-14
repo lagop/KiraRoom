@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import Stripe from 'stripe';
 import { isAddOnItem, planItemOf } from '../plan-activation';
+import { aiMessageCap } from '@kira/shared';
 
 // Public plan ids (rev 3). Legacy aliases are accepted and mapped in helpers
 // below so existing tenants + Stripe webhooks keep working.
@@ -220,7 +221,7 @@ export class SubscriptionsService {
         // Messenger, Instagram and Telegram answer since the multichannel
         // receptionist was built (Messenger/Instagram need KiraRoom's Meta app
         // approved by Meta for pages_messaging / instagram_manage_messages).
-        'Recepcionista IA en tu web, WhatsApp, Messenger, Instagram y Telegram, sin límite de mensajes',
+        'Recepcionista IA en tu web, WhatsApp, Messenger, Instagram y Telegram (2.000 mensajes/mes)',
         'Recordatorios por SMS',
         'Fidelización, promociones y tarjetas regalo',
         'Wallet y comisiones',
@@ -231,7 +232,8 @@ export class SubscriptionsService {
       maxClients: null,                  // unlimited (was 500 in rev3)
       maxProfessionals: 10,
       maxAppointmentsPerMonth: null,    // unlimited (was 2000 in rev3)
-      aiConversationsPerMonth: null,    // unlimited for Pro+
+      // Every plan has a cap: see PLAN_AI_CONVERSATIONS in @kira/shared.
+      aiConversationsPerMonth: 2000,
       minLocations: 1,
       featureKeys: PLAN_MATRIX.pro,
     },
@@ -249,13 +251,13 @@ export class SubscriptionsService {
         // Messenger, Instagram and Telegram answer since the multichannel
         // receptionist was built (Messenger/Instagram need KiraRoom's Meta app
         // approved by Meta for pages_messaging / instagram_manage_messages).
-        'Recepcionista IA en tu web, WhatsApp, Messenger, Instagram y Telegram, sin límite de mensajes',
+        'Recepcionista IA en tu web, WhatsApp, Messenger, Instagram y Telegram (3.000 mensajes/mes por local)',
         'Todo lo de Pro',
       ],
       maxClients: null,                  // unlimited
       maxProfessionals: null,
       maxAppointmentsPerMonth: null,
-      aiConversationsPerMonth: null,
+      aiConversationsPerMonth: 3000,     // per location
       minLocations: 1,                   // was 2 in rev3
       featureKeys: PLAN_MATRIX.empresa,
     },
@@ -326,27 +328,16 @@ export class SubscriptionsService {
   }
 
   /**
-   * Effective IA fair-use cap for the plan.
-   * null = unlimited. Reads from the plan details directly.
-   * Use esolveEffectiveAiCap(plan, unlockedAddOns) for the
-   * add-on-aware version.
+   * The month's AI message cap: the trial's 500, or the plan's (per
+   * location on Empresa) plus 1,000 per AI pack add-on. No plan is
+   * unlimited any more, and no add-on removes the cap: each message is a
+   * paid model call. See aiMessageCap in @kira/shared.
    */
-  aiConversationsCapForPlan(plan: PlanId): number | null {
-    return this.plans[plan]?.aiConversationsPerMonth ?? null;
-  }
-
-  /**
-   * Resolves the effective AI cap for a tenant by combining plan + add-ons.
-   * The 'ai_expansion' add-on removes the cap entirely, regardless
-   * of the plan (works for Esencial primarily; on Pro/Empresa is a no-op).
-   */
-  resolveEffectiveAiCap(
-    plan: PlanId,
-    hasAiExpansion: boolean,
-  ): number | null {
-    const base = this.aiConversationsCapForPlan(plan);
-    if (hasAiExpansion) return null; // unlimited when add-on active
-    return base;
+  aiCap(
+    plan: string | null | undefined,
+    opts: { inTrial: boolean; locations?: number | null; packs?: number },
+  ): number {
+    return aiMessageCap({ plan: this.normalizePlan(plan) as any, ...opts });
   }
 
   /**
@@ -361,7 +352,7 @@ export class SubscriptionsService {
    */
   upsellableAddOnsForPlan(plan: PlanId): string[] {
     const all = [
-      'ai_expansion',
+      'ai_messages_1000',
       'loyalty_giftcards',
       'email_marketing',
       'multichannel',
@@ -372,9 +363,10 @@ export class SubscriptionsService {
     ];
     // Filter out add-ons whose unlocks are already covered by the plan.
     // H-4: Pro+ already includes `multichannel` in PLAN_MATRIX, so the
-    // Esencial-only multichannel add-on is hidden for them.
+    // Esencial-only multichannel add-on is hidden for them. The AI pack
+    // adds messages on any plan.
     if (plan === 'pro' || plan === 'empresa') {
-      return all.filter((k) => k !== 'ai_expansion' && k !== 'multichannel');
+      return all.filter((k) => k !== 'multichannel');
     }
     return all;
   }
