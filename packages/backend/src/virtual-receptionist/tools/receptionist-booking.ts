@@ -341,6 +341,14 @@ export async function confirmAppointment(ctx: SalonToolContext): Promise<Record<
         .join(' '),
       date: pending.date,
       time: pending.time,
+      // A service with a deposit: the slot is held until the client pays.
+      ...(appointment.deposit
+        ? {
+            depositRequired: true,
+            depositAmount: appointment.deposit.amountCents / 100,
+            depositPaymentUrl: appointment.deposit.checkoutUrl,
+          }
+        : {}),
     };
   } catch (err) {
     const status = err instanceof HttpException ? err.getStatus() : undefined;
