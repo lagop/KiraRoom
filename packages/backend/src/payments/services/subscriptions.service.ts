@@ -193,14 +193,15 @@ export class SubscriptionsService {
       features: [
         'Clientas y citas ilimitadas',
         'Hasta 4 profesionales',
-        // What the plan does today, nothing more. Verifactu/TicketBAI and
-        // WhatsApp reminders were listed here when they did not work. The
-        // multichannel receptionist (Messenger/Instagram/Telegram) is not part
-        // of Esencial: it is the Multicanal add-on.
+        // What the plan does today, nothing more. Verifactu/TicketBAI were
+        // listed here when they did not work. WhatsApp reminders work since
+        // #110, from the salon's own number. The multichannel receptionist
+        // (Messenger/Instagram/Telegram) is not part of Esencial: it is the
+        // Multicanal add-on.
         'Facturas con IVA o IGIC',
         'Recepcionista IA en tu web y en WhatsApp (500 mensajes/mes)',
         'Agenda online',
-        'Recordatorios automáticos por email',
+        'Recordatorios automáticos por WhatsApp y email',
         'Soporte por email',
       ],
       maxClients: null,                  // unlimited (was 150 in rev3)
@@ -222,7 +223,6 @@ export class SubscriptionsService {
         // receptionist was built (Messenger/Instagram need KiraRoom's Meta app
         // approved by Meta for pages_messaging / instagram_manage_messages).
         'Recepcionista IA en tu web, WhatsApp, Messenger, Instagram y Telegram (2.000 mensajes/mes)',
-        'Recordatorios por SMS',
         'Fidelización, promociones y tarjetas regalo',
         'Wallet y comisiones',
         'Analítica avanzada',

@@ -34,6 +34,7 @@ const PROVIDER_OPTIONS = [
 
 const MODEL_PRESETS: Record<string, string[]> = {
   anthropic: [
+    "claude-haiku-5-5",
     "claude-haiku-4-5",
     "claude-sonnet-4-5",
     "claude-opus-4-5",
