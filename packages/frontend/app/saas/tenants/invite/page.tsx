@@ -15,9 +15,9 @@ import {
 import apiClient from "@/lib/api";
 
 const PLANS = [
-  { id: "esencial", label: "Esencial · 29 €/mes" },
-  { id: "pro", label: "Pro · 59 €/mes" },
-  { id: "empresa", label: "Empresa · 119 €/mes" },
+  { id: "esencial", label: "Esencial · 49 €/mes" },
+  { id: "pro", label: "Pro · 79 €/mes" },
+  { id: "empresa", label: "Empresa · 149 €/local/mes" },
 ];
 
 export default function InviteTenantPage() {

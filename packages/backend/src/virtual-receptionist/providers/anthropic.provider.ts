@@ -3,6 +3,12 @@ import { ConfigService } from '@nestjs/config';
 import { LLMProvider, LLMGenerationConfig, LLMCompletion, ChatMessage } from '@kira/shared';
 import Anthropic from '@anthropic-ai/sdk';
 import { createUsageAccumulator } from './usage-totals';
+import {
+  maxTokensFor,
+  samplingParams,
+  thinkingParams,
+  withCacheBreakpoints,
+} from './anthropic-request';
 
 @Injectable()
 export class AnthropicProvider {
@@ -79,20 +85,22 @@ export class AnthropicProvider {
     const firstToolChoice = this.toToolChoice(options?.toolChoice ?? 'auto');
 
     try {
-      const messages = this.buildConversationHistory(
+      const messages: any[] = this.buildConversationHistory(
         conversationHistory,
         currentUserMessage,
       );
+      // Everything before the current user turn: the stable part of the
+      // conversation, cached at its end (see withCacheBreakpoints).
+      const historyCount = messages.length - 1;
 
-      // P2A-anthropic-params: newer Anthropic models (Haiku 4.5,
-      // Sonnet 4.5, Opus 4.1) reject requests that specify BOTH
-      // `temperature` and `top_p` — they return 400. We prefer
-      // `temperature` and only fall back to `top_p` when temperature
-      // is not provided.
-      const useTopP =
-        config.temperature === undefined && config.topP !== undefined;
-      const temperature = config.temperature;
-      const topP = config.topP;
+      // Model-dependent parameters (anthropic-request.ts): no sampling
+      // parameters and a thinking effort on Claude Haiku 5.5 and the rest of
+      // the Claude 5 family; temperature as before on Haiku 4.5.
+      const modelParams = {
+        max_tokens: maxTokensFor(config.model, config.maxTokens),
+        ...samplingParams(config.model, config.temperature, config.topP),
+        ...thinkingParams(config.model, this.configService.get('LLM_EFFORT')),
+      };
 
       // Prompt caching. The system prompt is the largest part of the input
       // and is stable per salon, so it is the natural cache prefix: a read
@@ -128,6 +136,13 @@ export class AnthropicProvider {
       // the prefix clears the minimum. Do not read a run of zeroes as "the
       // prefix is being invalidated" for a salon until its prefix is known
       // to be over 4096: below that, zero is the expected answer.
+      //
+      // Measured in production (October 2026, test salon with one service):
+      // about 2,600 input tokens per request and no cache write at all --
+      // below the minimum. Two things change that: Claude Haiku 5.5 caches
+      // from 512 tokens, and the messages now carry breakpoints too (end of
+      // the stored history, and the last message for the tool loop), so a
+      // longer conversation clears the minimum even on Haiku 4.5.
       const cacheableSystem = [
         {
           type: "text" as const,
@@ -140,18 +155,15 @@ export class AnthropicProvider {
       // after the loop silently dropped every intermediate request.
       const usage = createUsageAccumulator();
 
-      let response = await this.anthropic.messages.create({
+      let response: any = await this.anthropic.messages.create({
         model: config.model,
         system: cacheableSystem,
-        messages,
-        max_tokens: config.maxTokens,
-        ...(useTopP
-          ? { top_p: topP }
-          : { temperature }),
+        messages: withCacheBreakpoints(messages, historyCount) as any,
+        ...modelParams,
         ...(tools && tools.length > 0
           ? { tools: tools as any, tool_choice: firstToolChoice }
           : {}),
-      });
+      } as any);
       usage.add(response.usage);
 
       // Tool-execution loop. The model can emit `tool_use` blocks; we
@@ -170,16 +182,14 @@ export class AnthropicProvider {
           (b: any) => b && b.type === 'tool_use',
         ) as Array<{ id: string; name: string; input: unknown }>;
 
-        // Append the model's tool_use blocks to the conversation so the
-        // next request can pair them with our tool_result blocks.
+        // Append the model's whole turn so the next request can pair its
+        // tool_use blocks with our tool_result blocks. Whole, not just the
+        // tool_use blocks: an adaptive-thinking model (Haiku 5.5) needs its
+        // thinking blocks back unchanged with the tool results, and any text
+        // it wrote before the call is part of the turn too.
         messages.push({
           role: 'assistant',
-          content: toolUseBlocks.map((tu) => ({
-            type: 'tool_use',
-            id: tu.id,
-            name: tu.name,
-            input: tu.input,
-          })) as any,
+          content: response.content,
         });
 
         // Execute every tool call and append tool_result blocks. The
@@ -228,21 +238,36 @@ export class AnthropicProvider {
         response = await this.anthropic.messages.create({
           model: config.model,
           system: cacheableSystem,
-          messages,
-          max_tokens: config.maxTokens,
-          ...(useTopP
-            ? { top_p: topP }
-            : { temperature }),
+          messages: withCacheBreakpoints(messages, historyCount) as any,
+          ...modelParams,
           ...(tools && tools.length > 0
             ? { tools: tools as any, tool_choice: { type: 'auto' as const } }
             : {}),
-        });
+        } as any);
         usage.add(response.usage);
       }
 
       const latency = Date.now() - startTime;
+      // Claude Haiku 5.5 runs safety classifiers that can decline a request,
+      // with no server-side fallback. Say so plainly instead of returning
+      // whatever partial text came with the refusal.
+      if (response.stop_reason === 'refusal') {
+        this.logger.warn(`Anthropic declined the request (stop_reason=refusal, model=${config.model})`);
+        return {
+          id: response.id,
+          text: 'Ahora mismo no puedo responder a eso por aquí. Le paso tu mensaje al equipo del salón para que te conteste.',
+          usage: usage.totals(),
+          model: config.model,
+          provider: LLMProvider.ANTHROPIC,
+          timestamp: new Date(),
+          latency,
+          finishReason: 'refusal',
+          ...({ toolsExecuted: executedTools } as any),
+        };
+      }
       // Concatenate every text block so multi-block responses render as
-      // a single reply.
+      // a single reply. Blocks are picked by type: a thinking model's
+      // response starts with thinking blocks.
       const completion = (response.content ?? [])
         .filter((b: any) => b && b.type === 'text')
         .map((b: any) => b.text)
