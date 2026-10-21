@@ -268,7 +268,7 @@ describe("limits", () => {
 });
 
 describe("isAffirmative", () => {
-  it.each(["sí", "Si", "Sí, perfecto", "vale", "ok", "de acuerdo", "confirmo", "correcto", "yes", "sure!", "that's right"])(
+  it.each(["sí", "Si", "Sí, perfecto", "vale", "ok", "de acuerdo", "confirmo", "correcto", "yes", "sure!", "that's right", "Sí, confírmala por favor.", "vale, confírmamela", "sí, resérvamelo"])(
     "reads %p as yes",
     (text) => expect(isAffirmative(text)).toBe(true),
   );

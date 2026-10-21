@@ -60,6 +60,9 @@ const YES_PHRASES = [
 const COURTESY = new Set([
   ...YES_PHRASES.flatMap((p) => p.split(' ')),
   'gracias', 'muchas', 'por', 'favor', 'todo', 'bien', 'esta', 'asi', 'reservala', 'reserva', 'reservalo',
+  // "Sí, confírmala por favor" was not a yes: only "confirma"/"confirmo" were
+  // listed, so a real client's confirmation booked nothing.
+  'confirmala', 'confirmalo', 'confirmamela', 'confirmamelo', 'reservamela', 'reservamelo',
   'thanks', 'thank', 'you', 'please', 'all', 'good', 'great', 'fine', 'book', 'it',
 ]);
 
