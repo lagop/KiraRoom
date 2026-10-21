@@ -292,7 +292,11 @@ export class AnthropicProvider {
         ...({ toolsExecuted: executedTools } as any),
       };
     } catch (error) {
-      this.logger.error('Error generating Anthropic completion:', error);
+      // The reason goes in the message itself: passed as a second argument
+      // the error object was dropped by the JSON logger, and production only
+      // showed "Error generating Anthropic completion:" with no cause. The
+      // SDK's message is the API's error body (type and text), never the key.
+      this.logger.error(`Error generating Anthropic completion: ${describeApiError(error)}`);
       throw new Error(`Anthropic API error: ${(error as Error).message}`);
     }
   }
@@ -377,4 +381,16 @@ export class AnthropicProvider {
     if (choice === 'auto') return { type: 'auto' };
     return { type: 'tool', name: choice.name };
   }
+}
+
+/**
+ * One line on why a request failed: the HTTP status and the API error
+ * message. The SDK puts the API error body in `message` (for example
+ * `401 {"type":"error","error":{"type":"authentication_error",...}}`);
+ * it never contains the API key.
+ */
+export function describeApiError(error: unknown): string {
+  const e = error as { status?: number; message?: string } | null;
+  const status = typeof e?.status === "number" ? `status=${e.status} ` : "";
+  return `${status}${e?.message ?? String(error)}`.slice(0, 500);
 }
