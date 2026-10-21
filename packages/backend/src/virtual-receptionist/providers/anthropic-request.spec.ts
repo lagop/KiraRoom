@@ -208,3 +208,18 @@ describe("AnthropicProvider requests", () => {
     expect(completion.text).toContain("equipo del salón");
   });
 });
+
+describe("describeApiError", () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { describeApiError } = require("./anthropic.provider");
+
+  it("puts the status and the API's message on one line", () => {
+    const err = Object.assign(new Error('401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}'), { status: 401 });
+    expect(describeApiError(err)).toBe('status=401 401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}');
+  });
+
+  it("copes with errors that are not API errors", () => {
+    expect(describeApiError(new Error("socket hang up"))).toBe("socket hang up");
+    expect(describeApiError("boom")).toBe("boom");
+  });
+});
