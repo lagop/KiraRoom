@@ -8,6 +8,7 @@ import apiClient, { decodeJwtToken, getToken, removeToken, removeRefreshToken } 
 import { ShieldAlert } from "lucide-react";
 import { OnboardingHost } from "./_components/onboarding/OnboardingHost";
 import CookieBanner from "../components/cookie-banner";
+import { ReadOnlyBanner } from "@/components/billing/ReadOnlyBanner";
 
 /**
  * Decode the current access token's impersonation claims and update
@@ -197,6 +198,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           // hamburger here only opens the mobile drawer.
           mobileOnly
         />
+        {/* Trial ended without a plan, or the subscription was cancelled or suspended. */}
+        <ReadOnlyBanner />
 
         {/* Page content */}
         <main className="flex-1 p-6 bg-white shadow-sm min-w-0 overflow-x-hidden">{children}</main>

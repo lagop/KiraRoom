@@ -16,6 +16,7 @@ import {
   getEscalationPrompt,
   getIntentClassifierPrompt,
 } from '../prompts/templates';
+import { salonPublicUrlFromEnv } from '../../web-domain/public-url';
 
 /** Providers whose implementation runs the tool loop. The others ignore `tools`. */
 const TOOL_CAPABLE_PROVIDERS = new Set<LLMProvider>([LLMProvider.ANTHROPIC, LLMProvider.MiniMax]);
@@ -100,6 +101,8 @@ interface SalonContext {
   name: string;
   /** Public site slug: /sites/<slug> is where a client can book. */
   slug?: string;
+  /** Where a client books: own domain, subdomain or /sites/<slug> (salonPublicUrlFromEnv). */
+  publicUrl?: string;
   assistantName?: string;
   email?: string;
   phone?: string;
@@ -490,6 +493,7 @@ export class LLMService {
               workingHours: true,
             },
           },
+          customDomain: { select: { domain: true, verifiedAt: true } },
         },
       });
 
@@ -501,6 +505,7 @@ export class LLMService {
       return {
         name: tenant.name,
         slug: tenant.slug,
+        publicUrl: salonPublicUrlFromEnv(tenant.slug, (tenant as any).customDomain),
         email: tenant.email || undefined,
         phone: tenant.phone || undefined,
         whatsapp: tenant.whatsapp || undefined,
@@ -691,11 +696,11 @@ const dynamicContext = getDynamicContext(language, {
       salonHours: formatWorkingHours(workingHours, language),
       cancellationPolicy: context.cancellationPolicy,
       minCancelHours: context.minCancelHours ?? 24,
-      // Stable per salon, so it stays inside the cacheable prefix. Built
-      // like QrController.publicSiteUrl.
-      bookingUrl: context.slug
-        ? `${(process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, "")}/sites/${context.slug}`
-        : undefined,
+      // Stable per salon, so it stays inside the cacheable prefix. The
+      // salon's real address -- own domain or subdomain -- not the old
+      // app.kiraroom.net/sites/<slug>, which the receptionist used to give.
+      bookingUrl:
+        context.publicUrl ?? (context.slug ? salonPublicUrlFromEnv(context.slug, null) : undefined),
       // P2A-receptionist-tools: services and professionals are NOT
       // inlined in the system prompt. The model must use the salon
       // tools to look them up — otherwise it answers from stale
