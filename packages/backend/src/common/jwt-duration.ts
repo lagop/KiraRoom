@@ -38,8 +38,13 @@ export function parseJwtDuration(
   return n * mult;
 }
 
-/** Access-token lifetime in seconds. Default: 8 hours. */
-export const DEFAULT_ACCESS_TOKEN_SECONDS = 8 * 60 * 60;
+/**
+ * Access-token lifetime in seconds. Default: 15 minutes. The access token is
+ * still kept where page scripts can read it (localStorage), so a short life
+ * bounds what a stolen one is worth; the frontend renews it a minute before
+ * it expires, with the refresh cookie, so nobody is asked to sign in again.
+ */
+export const DEFAULT_ACCESS_TOKEN_SECONDS = 15 * 60;
 
 /** Refresh-token lifetime in seconds. Default: 7 days. */
 export const DEFAULT_REFRESH_TOKEN_SECONDS = 7 * 24 * 60 * 60;

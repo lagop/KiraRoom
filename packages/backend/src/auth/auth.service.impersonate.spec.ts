@@ -100,7 +100,7 @@ describe("AuthService.impersonate — JWT payload validation", () => {
       // Impersonation never sends mail; a stub keeps the constructor happy.
       sendWelcome: jest.fn().mockResolvedValue({ success: true }),
       sendEmailVerification: jest.fn().mockResolvedValue({ success: true }),
-    } as any);
+    } as any, { start: jest.fn(async () => ({ sid: "sid-1", jti: "jti-1" })), rotate: jest.fn() } as any);
   });
 
   const enc = (obj: unknown) =>

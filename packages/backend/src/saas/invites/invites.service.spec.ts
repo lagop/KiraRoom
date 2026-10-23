@@ -310,6 +310,10 @@ m.tenantInvites.set(token, row);
   return row;
 }
 
+function makeSessionsMock() {
+  return { start: jest.fn(async () => ({ sid: "sid-1", jti: "jti-1" })) } as any;
+}
+
 // ────────────────────── tests
 
 describe("InvitesService.createInvite", () => {
@@ -321,6 +325,7 @@ describe("InvitesService.createInvite", () => {
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
 
     const view = await svc.createInvite(
@@ -352,6 +357,7 @@ describe("InvitesService.createInvite", () => {
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
 
     await expect(
@@ -379,6 +385,7 @@ describe("InvitesService.createInvite", () => {
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
 
     await expect(
@@ -410,6 +417,7 @@ describe("InvitesService.createInvite", () => {
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
     await expect(
       svc.createInvite(
@@ -434,6 +442,7 @@ describe("InvitesService.getInviteForAcceptance", () => {
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
     const ctx = await svc.getInviteForAcceptance("tok-1-long-enough-16");
     expect(ctx.email).toBe("owner@glamour.com");
@@ -452,6 +461,7 @@ describe("InvitesService.getInviteForAcceptance", () => {
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
     await expect(svc.getInviteForAcceptance("tok-expired")).rejects.toThrow();
   });
@@ -464,6 +474,7 @@ describe("InvitesService.getInviteForAcceptance", () => {
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
     await expect(svc.getInviteForAcceptance("short")).rejects.toThrow();
   });
@@ -488,6 +499,7 @@ seedActiveInvite(m, "tok-accept-1-long-16");
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
 
     const result = await svc.acceptInvite("tok-accept-1-long-16", validAcceptDto as any);
@@ -517,6 +529,7 @@ seedActiveInvite(m, "tok-once-16-chars-long");
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
 
     const first = await svc.acceptInvite("tok-once-16-chars-long", validAcceptDto as any);
@@ -538,6 +551,7 @@ seedActiveInvite(m, "tok-once-16-chars-long");
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
 
     await expect(
@@ -554,6 +568,7 @@ seedActiveInvite(m, "tok-once-16-chars-long");
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
 
     await expect(
@@ -589,6 +604,7 @@ seedActiveInvite(m, "tok-collision-long-16");
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
 
     const result = await svc.acceptInvite("tok-collision-long-16", validAcceptDto as any);
@@ -617,6 +633,7 @@ seedActiveInvite(m, "tok-collision-long-16");
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
     await expect(
       svc.acceptInvite("tok-3x-very-long-16", validAcceptDto as any),
@@ -639,6 +656,7 @@ describe("InvitesService.resendInvite (atomicity)", () => {
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
 
     const view = await svc.resendInvite(
@@ -665,6 +683,7 @@ describe("InvitesService.resendInvite (atomicity)", () => {
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
     await expect(
       svc.resendInvite(m.tenantInvites.get("tok-done").id, "saas-admin-1"),
@@ -691,6 +710,7 @@ describe("InvitesService.listInvites (A1.1: N+1 fix)", () => {
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
 
     const updateManySpy = jest.spyOn(m.prisma.tenantInvite, "updateMany");
@@ -729,6 +749,7 @@ describe("InvitesService.buildMagicLink (APP_BASE_URL fallback)", () => {
       makeAuditMock(),
       { get: () => undefined } as any,
       makeJwtMock(),
+      makeSessionsMock(),
     );
     // @ts-expect-error — overwrite private logger for the test
     svc.logger = logger;

@@ -56,6 +56,7 @@ import { SmsModule } from "./sms/sms.module";
 // Controllers
 import { AppController } from "./app.controller";
 import { AuthController } from "./auth/auth.controller";
+import { AuthSessionsModule } from "./auth/sessions/auth-sessions.module";
 import { AppointmentsController } from "./appointments/appointments.controller";
 import { AppointmentServicesController } from "./appointments/appointment-services.controller";
 import { ClientsController } from "./clients/clients.controller";
@@ -87,6 +88,9 @@ import { PublicModule } from "./public-site/public.module";
       isGlobal: true,
       envFilePath: ".env",
     }),
+
+    // Refresh-token sessions (global: sign-in, refresh, invite acceptance)
+    AuthSessionsModule,
 
     // Passport
     PassportModule.register({ defaultStrategy: "jwt" }),

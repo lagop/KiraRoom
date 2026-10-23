@@ -97,7 +97,7 @@ describe("PasswordResetService.reset", () => {
 
 describe("logout", () => {
   function auth(p: any) {
-    return new AuthService(p, {} as any, {} as any, {} as any, {} as any);
+    return new AuthService(p, {} as any, {} as any, {} as any, {} as any, {} as any);
   }
 
   it("ends every session of a user", async () => {

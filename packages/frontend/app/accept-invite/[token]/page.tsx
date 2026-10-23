@@ -111,10 +111,9 @@ export default function AcceptInvitePage() {
         phone: phone.trim() || undefined,
       });
       if (res?.accessToken) {
+        // The refresh token arrived as an httpOnly cookie.
         localStorage.setItem("kira_auth_token", res.accessToken);
-        if (res.refreshToken) {
-          localStorage.setItem("kira_refresh_token", res.refreshToken);
-        }
+        localStorage.removeItem("kira_refresh_token");
       }
       setStep(4);
       // Redirect to the onboarding wizard after a short pause.

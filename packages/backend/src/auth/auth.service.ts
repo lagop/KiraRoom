@@ -28,13 +28,20 @@ import {
   DEFAULT_ACCESS_TOKEN_SECONDS,
   DEFAULT_REFRESH_TOKEN_SECONDS,
 } from "../common/jwt-duration";
+import { AuthSessionsService } from "./sessions/auth-sessions.service";
 
 export interface TokenResponse {
   accessToken: string;
-  refreshToken: string;
+  /** Absent when a refresh inside the rotation grace window only renews access. */
+  refreshToken?: string;
+  /** Lifetime of refreshToken, for the cookie that carries it. */
+  refreshExpiresIn?: number;
   expiresIn: number;
   tokenType: string;
 }
+
+/** How a new token pair relates to the sign-in it continues. */
+type SessionOptions = { session?: { sid: string; jti: string }; accessOnly?: boolean };
 
 export interface AuthUser {
   id: string;
@@ -60,6 +67,7 @@ export class AuthService {
     private readonly auditLog: AuditLogService,
     private readonly events: ProductEventsService,
     private readonly email: EmailService,
+    private readonly sessions: AuthSessionsService,
   ) {}
 
   async register(
@@ -362,6 +370,9 @@ export class AuthService {
           client.email!,
           "client",
           client.tenantId,
+          undefined,
+          undefined,
+          await this.continueSession(payload),
         );
       } else {
         // Find user by id
@@ -407,11 +418,33 @@ export class AuthService {
               impersonatedTenantId: impersonationClaims.impersonatedTenantId,
             }),
           },
+          await this.continueSession(payload),
         );
       }
     } catch {
       throw new UnauthorizedException("Invalid refresh token");
     }
+  }
+
+  /**
+   * Rotates the session a refresh token belongs to. A token issued before
+   * sessions existed has no sid: it starts one, so the browsers signed in at
+   * deploy time move to the cookie on their next refresh.
+   */
+  private async continueSession(payload: { sid?: string; jti?: string }): Promise<SessionOptions> {
+    if (!payload.sid || !payload.jti) return {};
+    const outcome = await this.sessions.rotate(payload.sid, payload.jti, this.refreshExpiry());
+    return outcome.kind === "rotated"
+      ? { session: { sid: payload.sid, jti: outcome.jti } }
+      : { accessOnly: true };
+  }
+
+  private refreshTokenSeconds(): number {
+    return parseJwtDuration(process.env.JWT_REFRESH_EXPIRES_IN, DEFAULT_REFRESH_TOKEN_SECONDS);
+  }
+
+  private refreshExpiry(): Date {
+    return new Date(Date.now() + this.refreshTokenSeconds() * 1000);
   }
 
   /**
@@ -422,6 +455,25 @@ export class AuthService {
    * refresh, on every device) stop working.
    */
   async logout(id: string, role?: string): Promise<void> {
+    return this.logoutEverywhere(id, role);
+  }
+
+  /**
+   * Ends the session of the browser that holds this refresh token (its
+   * cookie), leaving the account's other devices signed in. Its access
+   * token, already removed from the page, expires within minutes.
+   */
+  async endSession(refreshToken: string | undefined): Promise<void> {
+    if (!refreshToken) return;
+    try {
+      const payload = this.jwtService.verify(refreshToken, { secret: process.env.JWT_REFRESH_SECRET });
+      if (payload?.sid) await this.sessions.revoke(payload.sid);
+    } catch {
+      // An expired or forged token has no session worth ending.
+    }
+  }
+
+  async logoutEverywhere(id: string, role?: string): Promise<void> {
     if (role === "client") {
       await this.prisma.client.update({ where: { id }, data: { tokenVersion: { increment: 1 } } });
       return;
@@ -645,6 +697,7 @@ export class AuthService {
       impersonationId?: string;
       impersonatedTenantId?: string;
     },
+    sessionOptions: SessionOptions = {},
   ): Promise<TokenResponse> {
     // The account's session version, so logout and a password change can
     // end every token issued before them (see logout and JwtStrategy).
@@ -673,29 +726,42 @@ export class AuthService {
 
     // Parse expiresIn values. Accepts both seconds ("3600") and
     // stringified durations as the Nest JWT module does: "15m", "1h",
-    // "7d", "30s". Defaults: 8h access, 7d refresh (long enough that a
+    // "7d", "30s". Defaults: 15m access, 7d refresh (long enough that a
     // legitimate actively-used user never sees a forced re-login).
     const accessTokenExpiresIn = parseJwtDuration(
       process.env.JWT_EXPIRES_IN,
       DEFAULT_ACCESS_TOKEN_SECONDS,
     );
-    const refreshTokenExpiresIn = parseJwtDuration(
-      process.env.JWT_REFRESH_EXPIRES_IN,
-      DEFAULT_REFRESH_TOKEN_SECONDS,
-    );
+    const refreshTokenExpiresIn = this.refreshTokenSeconds();
 
     const accessToken = this.jwtService.sign(payload, {
       expiresIn: accessTokenExpiresIn,
     });
 
-    const refreshToken = this.jwtService.sign(payload, {
-      secret: process.env.JWT_REFRESH_SECRET,
-      expiresIn: refreshTokenExpiresIn,
-    });
+    if (sessionOptions.accessOnly) {
+      return { accessToken, expiresIn: accessTokenExpiresIn, tokenType: "Bearer" };
+    }
+
+    // A new sign-in starts a session; a refresh continues its own.
+    const session =
+      sessionOptions.session ??
+      (await this.sessions.start(
+        { id: userId, type: role === "client" ? "client" : "user" },
+        new Date(Date.now() + refreshTokenExpiresIn * 1000),
+      ));
+
+    const refreshToken = this.jwtService.sign(
+      { ...payload, sid: session.sid, jti: session.jti },
+      {
+        secret: process.env.JWT_REFRESH_SECRET,
+        expiresIn: refreshTokenExpiresIn,
+      },
+    );
 
     return {
       accessToken,
       refreshToken,
+      refreshExpiresIn: refreshTokenExpiresIn,
       expiresIn: accessTokenExpiresIn,
       tokenType: "Bearer",
     };

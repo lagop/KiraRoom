@@ -18,6 +18,7 @@ import {
 } from "@prisma/client";
 import { PrismaService } from "../../common/prisma/prisma.service";
 import { EmailService } from "../../notifications/services/email.service";
+import { AuthSessionsService } from "../../auth/sessions/auth-sessions.service";
 import { AuditLogService } from "../audit-log.service";
 import {
   createTenantWithOwner,
@@ -89,6 +90,7 @@ export class InvitesService {
     private readonly auditLog: AuditLogService,
     private readonly config: ConfigService,
     private readonly jwt: JwtService,
+    private readonly sessions: AuthSessionsService,
   ) {}
 
   /**
@@ -314,7 +316,7 @@ export class InvitesService {
       }
 
       return { tenantId, userId, email, role };
-    }).then((result) => {
+    }).then(async (result) => {
       // After the tenant + user are committed, mint a JWT pair for
       // instant dashboard access. Mirrors AuthService.generateTokens
       // so the frontend login flow is identical.
@@ -340,10 +342,18 @@ export class InvitesService {
       const accessToken = this.jwt.sign(payload, {
         expiresIn: accessExpiresIn,
       });
-      const refreshToken = this.jwt.sign(payload, {
-        secret: process.env.JWT_REFRESH_SECRET,
-        expiresIn: refreshExpiresIn,
-      });
+      // A session like any sign-in's, so the refresh token rotates.
+      const session = await this.sessions.start(
+        { id: result.userId, type: "user" },
+        new Date(Date.now() + refreshExpiresIn * 1000),
+      );
+      const refreshToken = this.jwt.sign(
+        { ...payload, sid: session.sid, jti: session.jti },
+        {
+          secret: process.env.JWT_REFRESH_SECRET,
+          expiresIn: refreshExpiresIn,
+        },
+      );
 
       return {
         tenantId: result.tenantId,
@@ -352,6 +362,7 @@ export class InvitesService {
         role: result.role,
         accessToken,
         refreshToken,
+        refreshExpiresIn,
         expiresIn: accessExpiresIn,
         tokenType: "Bearer",
       };

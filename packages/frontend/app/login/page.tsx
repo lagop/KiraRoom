@@ -2,7 +2,7 @@
 
 import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import apiClient, { setToken, setRefreshToken } from "@/lib/api";
+import apiClient, { setToken, removeRefreshToken } from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
 import { LanguageSwitcher } from "@/app/dashboard/components/language-switcher";
 import { AlertCircle } from "lucide-react";
@@ -43,7 +43,8 @@ function LoginPageContent() {
       .impersonate(token)
       .then((response) => {
         setToken(response.tokens.accessToken);
-        setRefreshToken(response.tokens.refreshToken);
+        // The refresh token is the httpOnly cookie the response set.
+        removeRefreshToken();
         if (typeof window !== "undefined") {
           localStorage.setItem("user", JSON.stringify(response.user));
         }
