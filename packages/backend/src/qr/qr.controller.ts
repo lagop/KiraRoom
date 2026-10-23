@@ -4,6 +4,8 @@ import { ApiTags, ApiOperation } from "@nestjs/swagger";
 import * as QRCode from "qrcode";
 import type { Response } from "express";
 import { Public } from "../auth/decorators/public.decorator";
+import { Roles, SALON_TEAM } from "../auth/decorators/roles.decorator";
+import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { salonPublicUrlFromEnv } from "../web-domain/public-url";
 
@@ -13,6 +15,29 @@ const TENANT_ADDRESS = { slug: true, customDomain: { select: { domain: true, ver
 @Controller("qr")
 export class QrController {
   constructor(private prisma: PrismaService) {}
+
+  /**
+   * What the dashboard needs to share and print the salon page: its name,
+   * logo and real address (own domain, subdomain or /sites/<slug>). The QR
+   * codes themselves are drawn in the browser from this address, so the
+   * page, the printables and the image for social media all match.
+   */
+  @Get("share")
+  @Roles(...SALON_TEAM)
+  @ApiOperation({ summary: "The salon public address, name and logo, for sharing and printing" })
+  async share(@CurrentUser() user: { tenantId: string }) {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: user.tenantId },
+      select: { name: true, logo: true, ...TENANT_ADDRESS },
+    });
+    if (!tenant) throw new NotFoundException("Salon not found");
+    return {
+      name: tenant.name,
+      slug: tenant.slug,
+      logo: tenant.logo ?? null,
+      url: salonPublicUrlFromEnv(tenant.slug, tenant.customDomain),
+    };
+  }
 
   @Get("salon/:slug")
   @Public()
@@ -104,7 +129,9 @@ export class QrController {
     tenant: { slug: string; customDomain?: { domain: string; verifiedAt: Date | null } | null },
     suffix = "",
   ): string {
-    const base = salonPublicUrlFromEnv(tenant.slug, tenant.customDomain);
-    return suffix.startsWith("?") ? `${base}/${suffix}` : `${base}${suffix}`;
+    // Same as the dashboard's qrTargetUrl, so both draw the same code.
+    const url = new URL(salonPublicUrlFromEnv(tenant.slug, tenant.customDomain));
+    new URLSearchParams(suffix.replace(/^\?/, "")).forEach((v, k) => url.searchParams.set(k, v));
+    return url.toString();
   }
 }

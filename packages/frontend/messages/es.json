@@ -1422,7 +1422,8 @@
     "appName": "KiraRoom",
     "services": "Servicios",
     "reviews": "Reseñas",
-    "whatsapp_campaigns": "WhatsApp masivo"
+    "whatsapp_campaigns": "WhatsApp masivo",
+    "share": "Comparte tu página"
   },
   "Failed to add points": "Failed to add points",
   "Failed to create professional": {
