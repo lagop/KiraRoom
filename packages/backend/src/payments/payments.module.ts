@@ -14,6 +14,7 @@ import { MessageBundlesModule } from "../message-bundles/message-bundles.module"
 import { BillingScheduler } from "./billing.scheduler";
 import { TrialExpiryScheduler } from "./trial-expiry.scheduler";
 import { GracePeriodScheduler } from "./grace-period.scheduler";
+import { ReadOnlyNoticeService } from "./read-only-notice.service";
 import { NotificationsModule } from "../notifications/notifications.module";
 import { ProfessionalsModule } from "../professionals/professionals.module";
 import { LoyaltyModule } from "../loyalty/loyalty.module";
@@ -38,6 +39,7 @@ import { LoyaltyModule } from "../loyalty/loyalty.module";
     BillingScheduler,
     TrialExpiryScheduler,
     GracePeriodScheduler,
+    ReadOnlyNoticeService,
   ],
   exports: [
     PaymentsService,
@@ -45,6 +47,8 @@ import { LoyaltyModule } from "../loyalty/loyalty.module";
     WalletService,
     SubscriptionsService,
     AddOnsService,
+    // AppModule also mounts PaymentsController, which needs it.
+    ReadOnlyNoticeService,
   ],
 })
 export class PaymentsModule {}

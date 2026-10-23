@@ -356,11 +356,27 @@ describe("EmailService.sendAccountSuspended (Sprint 2.2)", () => {
       to: "owner@salon.com",
       tenantName: "Salón",
       gracePeriodEndsAt: new Date("2026-07-17T00:00:00Z"),
+      readOnlyUntil: new Date("2026-08-16T00:00:00Z"),
       updatePaymentUrl: "https://app.kiraroom.com/dashboard/billing",
     });
     expect(calls[0].subject).toMatch(/suspendido/);
     expect(calls[0].html).toMatch(/17 de julio/);
     expect(calls[0].html).toMatch(/modo lectura/);
+  });
+
+  it("promises what the account really keeps: the read-only window, no anonymising", async () => {
+    const { service, calls } = makeService();
+    await service.sendAccountSuspended({
+      to: "owner@salon.com",
+      tenantName: "Salón",
+      gracePeriodEndsAt: new Date("2026-07-17T00:00:00Z"),
+      readOnlyUntil: new Date("2026-08-16T00:00:00Z"),
+      updatePaymentUrl: "https://app.kiraroom.com/dashboard/billing",
+    });
+    for (const body of [calls[0].html, calls[0].text]) {
+      expect(body.replace(/<\/?strong>/g, "")).toMatch(/se conservan hasta el 16 de agosto de 2026/);
+      expect(body).not.toMatch(/60 días|anonimiz/);
+    }
   });
 
   it("attaches List-Unsubscribe header", async () => {
@@ -369,6 +385,7 @@ describe("EmailService.sendAccountSuspended (Sprint 2.2)", () => {
       to: "owner@salon.com",
       tenantName: "Salón",
       gracePeriodEndsAt: new Date(),
+      readOnlyUntil: new Date(),
       updatePaymentUrl: "https://app.kiraroom.com/dashboard/billing",
     });
     expect(calls[0].headers["List-Unsubscribe"]).toBeDefined();
@@ -383,8 +400,55 @@ describe("EmailService.sendAccountSuspended (Sprint 2.2)", () => {
       to: "b@x.com",
       tenantName: "X",
       gracePeriodEndsAt: new Date(),
+      readOnlyUntil: new Date(),
       updatePaymentUrl: "https://app.kiraroom.com/dashboard/billing",
     });
+    expect(sent.skipped).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("EmailService.sendAccountReadOnly", () => {
+  const base = {
+    to: "owner@salon.com",
+    tenantName: "Salón <Lucía>",
+    // 23:30 UTC on the 21st is already the 22nd in Madrid.
+    readOnlyUntil: new Date("2026-11-21T23:30:00Z"),
+    billingUrl: "https://app.kiraroom.com/dashboard/billing",
+  };
+
+  it("trial ended: says it is read-only, what still works, until when, and links to Billing", async () => {
+    const { service, calls } = makeService();
+    await service.sendAccountReadOnly({ ...base, reason: "trial_ended" });
+    const { subject, html, text } = calls[0];
+    expect(subject).toMatch(/prueba .* ha terminado/);
+    expect(subject).toMatch(/modo lectura/);
+    for (const body of [html, text]) {
+      expect(body).toMatch(/consultar y exportar/);
+      expect(body).toMatch(/no acepta reservas/);
+      expect(body).toMatch(/se conservan hasta el 22 de noviembre de 2026/);
+      expect(body).toMatch(/Elegir un plan/);
+      expect(body).toContain(base.billingUrl);
+    }
+    expect(html).toContain("Salón &lt;Lucía&gt;");
+    expect(html).not.toContain("<Lucía>");
+  });
+
+  it("cancelled: confirms the cancellation and offers to reactivate", async () => {
+    const { service, calls } = makeService();
+    await service.sendAccountReadOnly({ ...base, reason: "cancelled" });
+    expect(calls[0].subject).toBe("Hemos cancelado tu suscripción de KiraRoom");
+    expect(calls[0].text).toMatch(/No se te volverá a cobrar/);
+    expect(calls[0].text).toMatch(/Reactivar mi suscripción/);
+    expect(calls[0].text).not.toMatch(/prueba/);
+  });
+
+  it("skips a bounced recipient", async () => {
+    const m = makePrismaMock();
+    m.users.set("owner@salon.com", { email: "owner@salon.com", emailBouncedAt: new Date() });
+    const { service, calls } = makeService();
+    (service as any).prisma = m.prisma;
+    const sent = await service.sendAccountReadOnly({ ...base, reason: "cancelled" });
     expect(sent.skipped).toBe(true);
     expect(calls).toHaveLength(0);
   });

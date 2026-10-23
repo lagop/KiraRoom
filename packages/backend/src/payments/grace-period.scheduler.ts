@@ -91,6 +91,7 @@ export class GracePeriodScheduler {
           tenantName: tenant.name,
           gracePeriodEndsAt:
             tenant.gracePeriodEndsAt ?? new Date(now.getTime() - MS_PER_DAY),
+          readOnlyUntil,
           updatePaymentUrl,
         });
       } catch (err) {

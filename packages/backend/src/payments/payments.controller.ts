@@ -16,6 +16,7 @@ import { FeatureGuard } from "../common/guards/feature.guard";
 import { Feature } from "../common/decorators/feature.decorator";
 import { Public } from "../auth/decorators/public.decorator";
 import { AllowWhenReadOnly } from "../common/decorators/allow-when-read-only.decorator";
+import { ReadOnlyNoticeService } from "./read-only-notice.service";
 
 @ApiTags("Payments")
 @Controller("payments")
@@ -28,6 +29,7 @@ export class PaymentsController {
     private readonly walletService: WalletService,
     private readonly stripeService: StripeService,
     private readonly professionalsService: ProfessionalsService,
+    private readonly readOnlyNotices: ReadOnlyNoticeService,
   ) {}
 
   // ============ PAYMENTS ============
@@ -272,10 +274,16 @@ export class PaymentsController {
     @Req() req: any,
     @Body() body: { immediately?: boolean },
   ) {
-    return this.subscriptionsService.cancelSubscription(
+    const { newlyCancelled, ...result } = await this.subscriptionsService.cancelSubscription(
       req.user.tenantId,
       body.immediately,
     );
+    // Confirmation to the owner. Only here: a SaaS-console deletion also
+    // cancels, and that salon is not told its account is read-only.
+    if (newlyCancelled) {
+      await this.readOnlyNotices.notify(req.user.tenantId, "cancelled", result.readOnlyUntil);
+    }
+    return result;
   }
 
   @Post("subscription/reactivate")

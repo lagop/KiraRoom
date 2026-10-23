@@ -22,8 +22,10 @@ function controller(tenant: any = { id: "t1", subscriptionStatus: "trialing" }) 
       findUnique: jest.fn(async () => tenant),
       findFirst: jest.fn(async () => tenant),
       update: jest.fn(async () => ({})),
+      updateMany: jest.fn(async () => ({ count: 1 })),
     },
   };
+  c.readOnlyNotices = { notify: jest.fn(async () => undefined) };
   c.addonsService = {
     provisionFromStripe: jest.fn(),
     cancelFromStripe: jest.fn(),
@@ -95,9 +97,33 @@ describe("Stripe webhook", () => {
       type: "customer.subscription.deleted",
       data: { object: subscription({ status: "canceled" }) },
     });
-    expect(c.prisma.tenant.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ subscriptionStatus: "cancelled" }) }),
+    expect(c.prisma.tenant.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "t1", subscriptionStatus: { not: "cancelled" } },
+        data: expect.objectContaining({ subscriptionStatus: "cancelled" }),
+      }),
     );
+    expect(c.readOnlyNotices.notify).toHaveBeenCalledWith("t1", "cancelled", expect.any(Date));
+  });
+
+  it("does not email again when the dashboard already cancelled it", async () => {
+    const c = controller({ id: "t1", subscriptionStatus: "cancelled", stripeSubscriptionId: "sub_1" });
+    c.prisma.tenant.updateMany.mockResolvedValue({ count: 0 });
+    await c.processStripeEvent({
+      type: "customer.subscription.deleted",
+      data: { object: subscription({ status: "canceled" }) },
+    });
+    expect(c.readOnlyNotices.notify).not.toHaveBeenCalled();
+  });
+
+  it("ignores an older subscription ending when the salon pays another one", async () => {
+    const c = controller({ id: "t1", subscriptionStatus: "active", stripeSubscriptionId: "sub_new" });
+    await c.processStripeEvent({
+      type: "customer.subscription.deleted",
+      data: { object: subscription({ id: "sub_old", status: "canceled" }) },
+    });
+    expect(c.prisma.tenant.updateMany).not.toHaveBeenCalled();
+    expect(c.readOnlyNotices.notify).not.toHaveBeenCalled();
   });
 });
 
