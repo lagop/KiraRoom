@@ -228,6 +228,24 @@ export const TRIAL_AI_MESSAGES = 500;
 /** Messages each AI pack add-on adds to the month. */
 export const AI_PACK_MESSAGES = 1000;
 
+/**
+ * Client messages in a typical receptionist conversation, for saying a cap
+ * in conversations ("500 mensajes, unas 70 conversaciones"). A full booking
+ * took 4 in a production trial; real chats run longer, so 7 errs on the
+ * side of not promising too much. kiraroom.com uses the same figures.
+ */
+export const MESSAGES_PER_CONVERSATION = 7;
+
+/** Approximate conversations in a number of AI messages, rounded down to tens. */
+export function aiConversationsApprox(messages: number): number {
+  return Math.floor(messages / MESSAGES_PER_CONVERSATION / 10) * 10;
+}
+
+/** A count in Spanish style for plan texts: 2000 -> "2.000" (es-ES leaves 4 digits ungrouped). */
+export function formatCountEs(n: number): string {
+  return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+}
+
 /** Add-on keys that add AI messages (ai_expansion: the retired unlimited one). */
 export const AI_PACK_ADDON_KEYS: ReadonlySet<string> = new Set(['ai_messages_1000', 'ai_expansion']);
 

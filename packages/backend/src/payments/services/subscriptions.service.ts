@@ -3,7 +3,13 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import Stripe from 'stripe';
 import { isAddOnItem, planItemOf } from '../plan-activation';
-import { aiMessageCap } from '@kira/shared';
+import { aiConversationsApprox, aiMessageCap, formatCountEs, PLAN_AI_CONVERSATIONS } from '@kira/shared';
+
+/** "500 mensajes al mes, unas 70 conversaciones", as kiraroom.com puts it. */
+function aiAllowance(messages: number, perLocation = false): string {
+  const where = perLocation ? ' por local' : '';
+  return `${formatCountEs(messages)} mensajes al mes${where}, unas ${formatCountEs(aiConversationsApprox(messages))} conversaciones`;
+}
 
 // Public plan ids (rev 3). Legacy aliases are accepted and mapped in helpers
 // below so existing tenants + Stripe webhooks keep working.
@@ -199,7 +205,7 @@ export class SubscriptionsService {
         // (Messenger/Instagram/Telegram) is not part of Esencial: it is the
         // Multicanal add-on.
         'Facturas con IVA o IGIC',
-        'Recepcionista IA en tu web y en WhatsApp (500 mensajes/mes)',
+        `Recepcionista IA en tu web y en WhatsApp: ${aiAllowance(PLAN_AI_CONVERSATIONS.esencial)}`,
         'Agenda online',
         'Recordatorios automáticos por WhatsApp y email',
         'Soporte por email',
@@ -222,7 +228,7 @@ export class SubscriptionsService {
         // Messenger, Instagram and Telegram answer since the multichannel
         // receptionist was built (Messenger/Instagram need KiraRoom's Meta app
         // approved by Meta for pages_messaging / instagram_manage_messages).
-        'Recepcionista IA en tu web, WhatsApp, Messenger, Instagram y Telegram (2.000 mensajes/mes)',
+        `Recepcionista IA en tu web, WhatsApp, Messenger, Instagram y Telegram: ${aiAllowance(PLAN_AI_CONVERSATIONS.pro)}`,
         'Fidelización, promociones y tarjetas regalo',
         'Wallet y comisiones',
         'Analítica avanzada',
@@ -251,7 +257,7 @@ export class SubscriptionsService {
         // Messenger, Instagram and Telegram answer since the multichannel
         // receptionist was built (Messenger/Instagram need KiraRoom's Meta app
         // approved by Meta for pages_messaging / instagram_manage_messages).
-        'Recepcionista IA en tu web, WhatsApp, Messenger, Instagram y Telegram (3.000 mensajes/mes por local)',
+        `Recepcionista IA en tu web, WhatsApp, Messenger, Instagram y Telegram: ${aiAllowance(PLAN_AI_CONVERSATIONS.empresa, true)}`,
         'Todo lo de Pro',
       ],
       maxClients: null,                  // unlimited

@@ -464,7 +464,8 @@
       "unlimitedDesc": "Your plan does not cap AI conversations per month.",
       "unlimitedBadge": "Unlimited",
       "resetsAt": "Resets on {date}",
-      "legend": "{pct}% of this month’s AI messages. At the limit the receptionist hands conversations to your team; you can add 1,000 messages for €19/month in the add-ons."
+      "legend": "{pct}% of this month’s AI messages. At the limit the receptionist hands conversations to your team; you can add 1,000 messages (about 140 conversations) for €19/month in the add-ons.",
+      "capConversations": "messages · about {count} conversations"
     },
     "bundles": {
       "title": "Message bundles",

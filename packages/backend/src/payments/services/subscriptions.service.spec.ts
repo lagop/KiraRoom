@@ -126,3 +126,31 @@ describe('P2A-receptionist-v2: PLAN_MATRIX', () => {
     expect(empresa).not.toContain('multichannel');
   });
 });
+
+// The app says the AI caps the way kiraroom.com does: messages, and the
+// conversations they come to at about 7 client messages each.
+describe('AI caps in conversations', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { aiConversationsApprox, formatCountEs } = require('@kira/shared');
+
+  it('matches the figures on kiraroom.com', () => {
+    expect(aiConversationsApprox(500)).toBe(70);
+    expect(aiConversationsApprox(2000)).toBe(280);
+    expect(aiConversationsApprox(3000)).toBe(420);
+    expect(aiConversationsApprox(1000)).toBe(140);
+  });
+
+  it('writes counts the Spanish way', () => {
+    expect(formatCountEs(500)).toBe('500');
+    expect(formatCountEs(2000)).toBe('2.000');
+    expect(formatCountEs(12000)).toBe('12.000');
+  });
+
+  it('puts both in the plan texts', () => {
+    const subs = new SubscriptionsService({} as any, { get: () => undefined } as any);
+    const ai = (plan: 'esencial' | 'pro' | 'empresa') => subs.plans[plan].features.find((f) => f.startsWith('Recepcionista IA'));
+    expect(ai('esencial')).toBe('Recepcionista IA en tu web y en WhatsApp: 500 mensajes al mes, unas 70 conversaciones');
+    expect(ai('pro')).toContain(': 2.000 mensajes al mes, unas 280 conversaciones');
+    expect(ai('empresa')).toContain(': 3.000 mensajes al mes por local, unas 420 conversaciones');
+  });
+});

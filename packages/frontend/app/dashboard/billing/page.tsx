@@ -9,6 +9,7 @@ import { UsageMeters } from "@/components/billing/UsageMeters";
 import { TrialBanner } from "@/components/billing/TrialBanner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { PlanId } from "@/lib/plans";
+import { aiConversationsApprox } from "@kira/shared";
 import { Check, Loader2, Sparkles, X } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
 
@@ -743,7 +744,11 @@ function AiUsageMeter({
       <div className="mb-2 flex items-baseline justify-between">
         <p className="text-sm font-medium text-gray-900">
           <span className="text-2xl font-bold text-gray-900">{ai.used}</span>
-          <span className="text-sm text-gray-500"> / {ai.cap}</span>
+          <span className="text-sm text-gray-500">
+            {" "}
+            / {ai.cap}{" "}
+            {t("billing.aiUsage.capConversations", { count: aiConversationsApprox(ai.cap) })}
+          </span>
         </p>
         {ai.resetsAt && (
           <p className="text-xs text-gray-500">
