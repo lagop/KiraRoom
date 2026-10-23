@@ -49,6 +49,7 @@ function buildAuth(user: Record<string, unknown> | null): {
       sendWelcome: jest.fn().mockResolvedValue({ success: true }),
       sendEmailVerification: jest.fn().mockResolvedValue({ success: true }),
     } as any,
+    { start: jest.fn(async () => ({ sid: "sid-1", jti: "jti-1" })), rotate: jest.fn() } as any,
   );
   return { auth, prisma };
 }

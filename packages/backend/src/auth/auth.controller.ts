@@ -1,13 +1,14 @@
 import { Throttle } from "@nestjs/throttler";
 import { PasswordResetService } from "./password-reset.service";
 import { ForgotPasswordDto, ResetPasswordDto } from "./dto/password-reset.dto";
-import { Controller, Post, Body, UseGuards, HttpCode, HttpStatus, Get, Patch, Query } from "@nestjs/common";
+import { Controller, Post, Body, UseGuards, HttpCode, HttpStatus, Get, Patch, Query, Req, Res, UnauthorizedException } from "@nestjs/common";
+import type { Request, Response } from "express";
 import {
   ApiTags,
   ApiOperation,
   ApiResponse,
   ApiBearerAuth } from "@nestjs/swagger";
-import { AuthService } from "./auth.service";
+import { AuthService, AuthUser, TokenResponse } from "./auth.service";
 import { RegisterDto } from "./dto/register.dto";
 import { LoginDto } from "./dto/login.dto";
 import { UpdateTenantDto } from "./dto/update-tenant.dto";
@@ -20,6 +21,17 @@ import { UserRole } from "@prisma/client";
 import { IMPERSONATION_AUDIENCE, IMPERSONATION_DEFAULT_REASON } from "../saas/saas.constants";
 import { SignedIn } from "./decorators/signed-in.decorator";
 import { AllowWhenReadOnly } from "../common/decorators/allow-when-read-only.decorator";
+import {
+  CookieKind,
+  clearRefreshCookie,
+  cookieKindForRole,
+  deliverTokens,
+  readRefreshCookie,
+} from "./sessions/refresh-cookie";
+
+function deliverSession(res: Response, result: { user: AuthUser; tokens: TokenResponse }) {
+  return { ...result, tokens: deliverTokens(res, cookieKindForRole(result.user.role), result.tokens) };
+}
 
 @ApiTags("Authentication")
 @Controller("auth")
@@ -73,8 +85,8 @@ export class AuthController {
   @ApiResponse({ status: 201, description: "Successfully registered" })
   @ApiResponse({ status: 409, description: "Email already registered" })
   @ApiResponse({ status: 400, description: "Invalid input" })
-  async register(@Body() registerDto: RegisterDto) {
-    return this.authService.register(registerDto);
+  async register(@Body() registerDto: RegisterDto, @Res({ passthrough: true }) res: Response) {
+    return deliverSession(res, await this.authService.register(registerDto));
   }
 
   @Public()
@@ -84,8 +96,8 @@ export class AuthController {
   @ApiOperation({ summary: "Login and get access/refresh tokens" })
   @ApiResponse({ status: 200, description: "Successfully logged in" })
   @ApiResponse({ status: 401, description: "Invalid credentials" })
-  async login(@Body() loginDto: LoginDto) {
-    return this.authService.login(loginDto);
+  async login(@Body() loginDto: LoginDto, @Res({ passthrough: true }) res: Response) {
+    return deliverSession(res, await this.authService.login(loginDto));
   }
 
   @Public()
@@ -97,11 +109,17 @@ export class AuthController {
       "Consume a SaaS-owner impersonation token and exchange it for a real session as the tenant owner. Writes an AuditLog row." })
   @ApiResponse({ status: 200, description: "Impersonation session minted" })
   @ApiResponse({ status: 401, description: "Invalid or expired token" })
-  async impersonate(@Body() body: { token: string; reason?: string }) {
-    return this.authService.impersonate(
-      body.token,
-      body.reason ?? IMPERSONATION_DEFAULT_REASON,
-      IMPERSONATION_AUDIENCE,
+  async impersonate(
+    @Body() body: { token: string; reason?: string },
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    return deliverSession(
+      res,
+      await this.authService.impersonate(
+        body.token,
+        body.reason ?? IMPERSONATION_DEFAULT_REASON,
+        IMPERSONATION_AUDIENCE,
+      ),
     );
   }
 
@@ -113,8 +131,26 @@ export class AuthController {
   @ApiOperation({ summary: "Refresh access token using refresh token" })
   @ApiResponse({ status: 200, description: "Successfully refreshed token" })
   @ApiResponse({ status: 401, description: "Invalid refresh token" })
-  async refreshToken(@Body("refreshToken") refreshToken: string) {
-    return this.authService.refreshToken(refreshToken);
+  /**
+   * The refresh token comes from its cookie; `kind: "client"` says a salon
+   * site is asking, so the client's cookie is read and set. A token in the
+   * body is a browser that signed in before the cookie existed (it kept it in
+   * localStorage): it is accepted once more and moves to the cookie.
+   */
+  async refreshToken(
+    @Body() body: { refreshToken?: string; kind?: string },
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const kind: CookieKind = body?.kind === "client" ? "client" : "staff";
+    const token = readRefreshCookie(req, kind) ?? (typeof body?.refreshToken === "string" ? body.refreshToken : undefined);
+    if (!token) throw new UnauthorizedException("Invalid refresh token");
+    try {
+      return deliverTokens(res, kind, await this.authService.refreshToken(token));
+    } catch (err) {
+      if (err instanceof UnauthorizedException) clearRefreshCookie(res, kind);
+      throw err;
+    }
   }
 
   @UseGuards(JwtAuthGuard)
@@ -125,8 +161,23 @@ export class AuthController {
   @ApiOperation({ summary: "Logout and invalidate tokens" })
   @ApiResponse({ status: 200, description: "Successfully logged out" })
   @SignedIn()
-  async logout(@CurrentUser() user: { id: string; role: string }) {
-    await this.authService.logout(user.id, user.role);
+  /**
+   * Signs this browser out: its session is revoked and its cookie cleared.
+   * `everywhere: true` also ends every other session of the account.
+   * Until the cookie existed the panel never called this (it only emptied
+   * localStorage); now it must, or the next page load would renew the
+   * session from the cookie.
+   */
+  async logout(
+    @CurrentUser() user: { id: string; role: string },
+    @Body() body: { everywhere?: boolean } | undefined,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const kind = cookieKindForRole(user.role);
+    await this.authService.endSession(readRefreshCookie(req, kind));
+    if (body?.everywhere === true) await this.authService.logoutEverywhere(user.id, user.role);
+    clearRefreshCookie(res, kind);
     return { message: "Successfully logged out" };
   }
 

@@ -67,9 +67,9 @@ const BACKEND_RESPONSE = {
     role: "owner",
     tenantId: "t-1",
   },
+  // The refresh token comes as an httpOnly cookie, not in the body.
   tokens: {
     accessToken: "access-token-for-the-new-salon",
-    refreshToken: "refresh-token-for-the-new-salon",
   },
 };
 
@@ -97,7 +97,6 @@ async function run(): Promise<void> {
 
   // The bug: this was undefined, which is why the signup page's `if` never ran.
   check("accessToken is present", res.accessToken, BACKEND_RESPONSE.tokens.accessToken);
-  check("refreshToken is present", res.refreshToken, BACKEND_RESPONSE.tokens.refreshToken);
   check("the user comes through", res.user.email, BACKEND_RESPONSE.user.email);
   check("with the tenant's owner role", res.user.role, "owner");
 
@@ -109,9 +108,9 @@ async function run(): Promise<void> {
     BACKEND_RESPONSE.tokens.accessToken,
   );
   check(
-    "the new refresh token is stored",
-    store.get("kira_refresh_token"),
-    BACKEND_RESPONSE.tokens.refreshToken,
+    "no refresh token is kept in localStorage (it lives in the httpOnly cookie)",
+    store.has("kira_refresh_token"),
+    false,
   );
   // The heart of the 403: a surviving token from another role.
   check(

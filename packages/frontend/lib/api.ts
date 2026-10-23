@@ -188,7 +188,6 @@ export const removeRefreshToken = () => {
 
 interface LoginResponse {
   accessToken: string;
-  refreshToken: string;
   user: {
     id: string;
     email: string;
@@ -1799,6 +1798,9 @@ class ApiClient implements ApiClientInterface {
 
     const response = await fetch(url, {
       headers,
+      // The refresh token is an httpOnly cookie on the API's host: sign-in
+      // sets it and logout clears it only if the request carries credentials.
+      credentials: "include",
       ...options,
     });
 
@@ -1892,14 +1894,13 @@ class ApiClient implements ApiClientInterface {
       },
     );
 
-    // Store both tokens
+    // The refresh token came as an httpOnly cookie; only the access token is ours.
     setToken(response.tokens.accessToken);
-    setRefreshToken(response.tokens.refreshToken);
+    removeRefreshToken();
     scheduleProactiveRefresh(response.tokens.accessToken);
 
     return {
       accessToken: response.tokens.accessToken,
-      refreshToken: response.tokens.refreshToken,
       user: response.user,
     };
   }
@@ -1940,8 +1941,16 @@ class ApiClient implements ApiClientInterface {
   }
 
   private async doRefreshAccessToken(): Promise<boolean> {
-    const refreshToken = getRefreshToken();
-    if (!refreshToken) return false;
+    // Only a browser signed in before the cookie existed still has one here;
+    // the server accepts it once more and moves it to the cookie.
+    const legacyRefreshToken = getRefreshToken();
+    const isClient = (() => {
+      try {
+        return JSON.parse(localStorage.getItem("user") || "null")?.role === "client";
+      } catch {
+        return false;
+      }
+    })();
 
     try {
       // Use raw fetch here â€” NOT `this.request` â€” to bypass the 401
@@ -1952,20 +1961,27 @@ class ApiClient implements ApiClientInterface {
       const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refreshToken }),
+        credentials: "include",
+        body: JSON.stringify({
+          ...(legacyRefreshToken && { refreshToken: legacyRefreshToken }),
+          // A client on a salon's site has its own cookie, apart from the panel's.
+          ...(isClient && { kind: "client" }),
+        }),
       });
 
-      if (!response.ok) return false;
+      if (!response.ok) {
+        if (response.status === 401) removeRefreshToken();
+        return false;
+      }
       const data = (await response.json()) as {
         accessToken?: string;
-        refreshToken?: string;
         expiresIn?: number;
         tokenType?: string;
       };
-      if (!data.accessToken || !data.refreshToken) return false;
+      if (!data.accessToken) return false;
 
       setToken(data.accessToken);
-      setRefreshToken(data.refreshToken);
+      removeRefreshToken();
       scheduleProactiveRefresh(data.accessToken, data.expiresIn);
       return true;
     } catch {
@@ -2012,18 +2028,29 @@ class ApiClient implements ApiClientInterface {
     );
 
     setToken(response.tokens.accessToken);
-    setRefreshToken(response.tokens.refreshToken);
+    removeRefreshToken();
     scheduleProactiveRefresh(response.tokens.accessToken);
 
     return {
       accessToken: response.tokens.accessToken,
-      refreshToken: response.tokens.refreshToken,
       user: response.user,
     };
   }
 
+  /**
+   * Signs this browser out on the server too: it revokes the session and
+   * clears the refresh cookie. Emptying localStorage alone is not enough any
+   * more, since the next page load would renew the session from the cookie.
+   */
   async logout(): Promise<void> {
-    removeToken();
+    try {
+      if (getToken()) await this.request("/auth/logout", { method: "POST" });
+    } catch {
+      // Offline or already signed out: the local tokens still go.
+    } finally {
+      removeToken();
+      removeRefreshToken();
+    }
   }
 
   // Appointments
@@ -4063,7 +4090,7 @@ class ApiClient implements ApiClientInterface {
   async impersonate(
     token: string,
     reason: string = "support",
-  ): Promise<{ user: any; tokens: { accessToken: string; refreshToken: string; expiresIn: number; tokenType: string } }> {
+  ): Promise<{ user: any; tokens: { accessToken: string; expiresIn: number; tokenType: string } }> {
     return this.request(`/auth/impersonate`, {
       method: "POST",
       body: JSON.stringify({ token, reason }),
@@ -4227,7 +4254,6 @@ class ApiClient implements ApiClientInterface {
     email: string;
     role: string;
     accessToken: string;
-    refreshToken: string;
     expiresIn: number;
     tokenType: string;
   }> {
