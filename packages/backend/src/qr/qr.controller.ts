@@ -5,6 +5,9 @@ import * as QRCode from "qrcode";
 import type { Response } from "express";
 import { Public } from "../auth/decorators/public.decorator";
 import { PrismaService } from "../common/prisma/prisma.service";
+import { salonPublicUrlFromEnv } from "../web-domain/public-url";
+
+const TENANT_ADDRESS = { slug: true, customDomain: { select: { domain: true, verifiedAt: true } } } as const;
 
 @ApiTags("qr")
 @Controller("qr")
@@ -20,9 +23,9 @@ export class QrController {
     @Query("format") format: "png" | "svg" = "png",
     @Res() res: Response,
   ) {
-    const tenant = await this.prisma.tenant.findUnique({ where: { slug } });
+    const tenant = await this.prisma.tenant.findUnique({ where: { slug }, select: TENANT_ADDRESS });
     if (!tenant) throw new NotFoundException("Salon not found");
-    const url = this.publicSiteUrl(tenant.slug);
+    const url = this.publicSiteUrl(tenant);
     return this.render(res, url, format, `salon-${slug}`);
   }
 
@@ -37,13 +40,13 @@ export class QrController {
   ) {
     const professional = await this.prisma.professional.findUnique({
       where: { id },
-      include: { tenant: true },
+      include: { tenant: { select: TENANT_ADDRESS } },
     });
     if (!professional || !professional.tenant) {
       throw new NotFoundException("Professional not found");
     }
     const url = this.publicSiteUrl(
-      professional.tenant.slug,
+      professional.tenant,
       `?professionalId=${professional.id}`,
     );
     return this.render(res, url, format, `professional-${id}`);
@@ -60,13 +63,13 @@ export class QrController {
   ) {
     const service = await this.prisma.service.findUnique({
       where: { id },
-      include: { tenant: true },
+      include: { tenant: { select: TENANT_ADDRESS } },
     });
     if (!service || !service.tenant) {
       throw new NotFoundException("Service not found");
     }
     const url = this.publicSiteUrl(
-      service.tenant.slug,
+      service.tenant,
       `?serviceId=${service.id}`,
     );
     return this.render(res, url, format, `service-${id}`);
@@ -92,9 +95,16 @@ export class QrController {
     return res.send(png);
   }
 
-  private publicSiteUrl(slug: string, suffix = ""): string {
-    const base =
-      process.env.FRONTEND_URL?.replace(/\/$/, "") || "http://localhost:3000";
-    return `${base}/sites/${slug}${suffix}`;
+  /**
+   * The salon's page at its real address: own domain or subdomain, else
+   * /sites/<slug> (salonPublicUrlFromEnv). Codes printed with the old
+   * address keep working: it redirects, query string included.
+   */
+  private publicSiteUrl(
+    tenant: { slug: string; customDomain?: { domain: string; verifiedAt: Date | null } | null },
+    suffix = "",
+  ): string {
+    const base = salonPublicUrlFromEnv(tenant.slug, tenant.customDomain);
+    return suffix.startsWith("?") ? `${base}/${suffix}` : `${base}${suffix}`;
   }
 }

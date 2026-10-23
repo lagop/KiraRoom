@@ -71,3 +71,25 @@ export function slugFromSalonSubdomain(host: string, base: string | null | undef
   const label = h.slice(0, -suffix.length);
   return label && !label.includes('.') && isSalonSubdomainSlug(label) ? label : null;
 }
+
+/**
+ * Where a salon's public page lives, for anything that hands its address to
+ * a client: its own domain when that is verified and served over HTTPS, else
+ * its subdomain once subdomains are live, else /sites/<slug> on the app (which
+ * redirects to the subdomain when there is one). The receptionist and the QR
+ * codes used to build the last form by hand.
+ */
+export function salonPublicUrl(opts: {
+  slug: string;
+  appBaseUrl: string;
+  subdomainBase?: string | null;
+  subdomainsReady?: boolean;
+  /** Only when verified and served: pass null otherwise. */
+  customDomain?: string | null;
+}): string {
+  const own = (opts.customDomain ?? '').trim().toLowerCase().replace(/\.$/, '');
+  if (own) return `https://${own}`;
+  const host = opts.subdomainsReady ? salonSubdomainHost(opts.slug, opts.subdomainBase) : null;
+  if (host) return `https://${host}`;
+  return `${opts.appBaseUrl.replace(/\/+$/, '')}/sites/${encodeURIComponent(opts.slug)}`;
+}

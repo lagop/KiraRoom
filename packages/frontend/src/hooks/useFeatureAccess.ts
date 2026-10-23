@@ -18,6 +18,12 @@ interface TenantContext {
   readOnlyUntil: string | null;
   addons: Record<string, any>;
   loading: boolean;
+  /**
+   * True once the status comes from the server. Until then it is read from
+   * the token, whose fallback is "cancelled": anything that warns about the
+   * subscription waits for this, or a paying salon sees the warning flash.
+   */
+  confirmed: boolean;
 }
 
 const EMPTY: TenantContext = {
@@ -29,6 +35,7 @@ const EMPTY: TenantContext = {
   readOnlyUntil: null,
   addons: {},
   loading: true,
+  confirmed: false,
 };
 
 /**
@@ -72,6 +79,7 @@ export function useTenantContext(): TenantContext {
           readOnlyUntil: sub.readOnlyUntil ?? null,
           addons: (sub.addons as Record<string, any>) ?? {},
           loading: false,
+          confirmed: true,
         });
       } catch {
         setCtx((prev) => ({ ...prev, loading: false }));
@@ -112,6 +120,7 @@ function readFromJwt(): TenantContext {
     readOnlyUntil: null,
     addons: {},
     loading: false,
+    confirmed: false,
   };
 }
 
