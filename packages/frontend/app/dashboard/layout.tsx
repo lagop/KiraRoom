@@ -112,12 +112,14 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const closeMobileSidebar = () => setMobileSidebarOpen(false);
 
   const exitImpersonation = async () => {
-    removeToken();
-    removeRefreshToken();
+    // Server first, while the access token still exists: it ends the
+    // impersonated session and clears its cookie. apiClient.logout empties
+    // the local tokens either way.
     try {
       await apiClient.logout();
     } catch {
-      // Even if the request fails, the local tokens are gone — that's what matters.
+      removeToken();
+      removeRefreshToken();
     }
     if (typeof window !== "undefined") {
       localStorage.removeItem("user");

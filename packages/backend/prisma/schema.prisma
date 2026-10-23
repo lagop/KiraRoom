@@ -319,6 +319,26 @@ model UsedImpersonationToken {
   @@map("used_impersonation_tokens")
 }
 
+// One signed-in browser or device. The refresh token names its session (sid)
+// and the current rotation (jti): each refresh issues a new jti, and a jti
+// presented again after it was replaced means the token was copied, so the
+// session is revoked. See auth/sessions/auth-sessions.service.ts.
+model AuthSession {
+  id          String    @id @default(uuid())
+  subjectId   String /// User.id or Client.id
+  subjectType String /// "user" or "client"
+  currentJti  String
+  previousJti String?
+  rotatedAt   DateTime?
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([subjectId])
+  @@index([expiresAt])
+  @@map("auth_sessions")
+}
+
 // Single-use tenant onboarding invite (Sprint 2, Workstream 2.1).
 // The SaaS admin mints a `TenantInvite` row when they want to bring a
 // new salon onto the platform. The owner receives a magic link via

@@ -42,7 +42,7 @@ describe('parseJwtDuration', () => {
   });
 
   it('exposes the defaults the callers share', () => {
-    expect(DEFAULT_ACCESS_TOKEN_SECONDS).toBe(8 * 60 * 60);
+    expect(DEFAULT_ACCESS_TOKEN_SECONDS).toBe(15 * 60);
     expect(DEFAULT_REFRESH_TOKEN_SECONDS).toBe(7 * 24 * 60 * 60);
   });
 });

@@ -192,9 +192,9 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
       # Left empty on purpose: the token lifetimes default in code
-      # (common/jwt-duration.ts -- 8h access, 7d refresh) so there is one
+      # (common/jwt-duration.ts -- 15m access, 7d refresh) so there is one
       # source of truth. A bare number here would mean SECONDS, not
-      # minutes; write the unit, e.g. JWT_EXPIRES_IN=8h.
+      # minutes; write the unit, e.g. JWT_EXPIRES_IN=15m.
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-}
       JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-}
       OAUTH_STATE_SECRET: ${OAUTH_STATE_SECRET}
