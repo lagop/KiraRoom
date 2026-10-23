@@ -62,6 +62,7 @@ import { AppointmentServicesController } from "./appointments/appointment-servic
 import { ClientsController } from "./clients/clients.controller";
 import { ServicesController } from "./services/services.controller";
 import { PaymentsController } from "./payments/payments.controller";
+import { CspReportController } from "./security/csp-report.controller";
 
 // Services
 import { AppService } from "./app.service";
@@ -248,6 +249,7 @@ import { PublicModule } from "./public-site/public.module";
     ClientsController,
     ServicesController,
     PaymentsController,
+    CspReportController,
   ],
   providers: [
     {

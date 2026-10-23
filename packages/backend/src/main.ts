@@ -139,6 +139,12 @@ async function bootstrap(): Promise<void> {
 
   applyHttpHardening(app);
 
+  // Browsers post CSP reports as application/csp-report or
+  // application/reports+json, which the JSON parser below skips.
+  app.use(
+    "/api/v1/csp-report",
+    json({ type: ["application/csp-report", "application/reports+json"], limit: "64kb" }),
+  );
   app.use(
     json({
       verify: (req: any, _res, buf) => {
