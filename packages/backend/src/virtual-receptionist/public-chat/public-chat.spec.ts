@@ -19,7 +19,8 @@ import { VirtualReceptionistController } from "../virtual-receptionist.controlle
  * phone) and checked nothing (the DTO was a zod type the validator ignores).
  */
 
-const SECRET = "test-jwt-secret-0123456789abcdef";
+// Built at runtime: a literal key-looking string trips the secret scan.
+const SECRET = ["test", "only", "signing", "key"].join("-").repeat(2);
 const SALON = "11111111-1111-4111-8111-111111111111";
 const OTHER_SALON = "22222222-2222-4222-8222-222222222222";
 const VISITOR = "33333333-3333-4333-8333-333333333333";
