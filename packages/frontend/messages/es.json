@@ -464,7 +464,8 @@
       "unlimitedDesc": "Tu plan no aplica cap mensual a las conversaciones de IA.",
       "unlimitedBadge": "Sin límite",
       "resetsAt": "Se reinicia el {date}",
-      "legend": "{pct}% de los mensajes de IA de este mes. Al llegar al límite, la recepcionista pasa las conversaciones a tu equipo; puedes añadir 1.000 mensajes por 19 €/mes en los complementos."
+      "legend": "{pct}% de los mensajes de IA de este mes. Al llegar al límite, la recepcionista pasa las conversaciones a tu equipo; puedes añadir 1.000 mensajes (unas 140 conversaciones) por 19 €/mes en los complementos.",
+      "capConversations": "mensajes · unas {count} conversaciones"
     },
     "bundles": {
       "title": "Bonos de mensajes",
