@@ -88,15 +88,16 @@ function roundHalfEven(value: number): number {
 }
 
 /**
- * Group line totals by taxRate. Rates are normalised to whole percent so
- * 21.0 and 21.00001 do not produce two separate buckets.
+ * Group line totals by taxRate. Rates are normalised to two decimals so
+ * 21.0 and 21.00001 do not produce two separate buckets. Not to whole
+ * percent: IGIC 9.5 % and IVA 7.5 % exist, and became 10 % and 8 %.
  */
 function aggregateTaxBreakdown(
   lines: ComputedInvoiceLine[],
 ): TaxBreakdownEntry[] {
   const buckets = new Map<number, TaxBreakdownEntry>();
   for (const l of lines) {
-    const rate = Math.round(l.taxRate);
+    const rate = Math.round(l.taxRate * 100) / 100;
     const baseCents = l.totalCents - l.taxCents;
     const entry = buckets.get(rate) ?? { rate, baseCents: 0, taxCents: 0 };
     entry.baseCents += baseCents;

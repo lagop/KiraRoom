@@ -3,7 +3,7 @@
  *
  * Verifies the production-real (`FISCAL_E2E_MODE=real`) branch of each
  * transport:
- *   - Builds the correct URL (AEAT Verifactu, TBAI Bizkaia/Gipuzkoa/Álava,
+ *   - Builds the correct URL (TBAI Bizkaia/Gipuzkoa/Álava,
  *     Holded, Sage).
  *   - Sends the right headers (Content-Type, SOAPAction, Authorization).
  *   - Returns accepted / rejected / error based on the mocked fetch response.
@@ -13,9 +13,11 @@
  * branch is exercised. The actual `fetch()` call is mocked so no network
  * is involved — we just want to assert the shape and the
  * accept/reject/error classification.
+ *
+ * The VERI*FACTU transport (mutual TLS) is tested in
+ * verifactu/verifactu-dispatcher.spec.ts against a local TLS server.
  */
 
-import { VerifactuService } from "./verifactu.service";
 import { TicketBaiService } from "./ticketbai.service";
 import { EncryptionService } from "../../common/encryption/encryption.service";
 
@@ -60,21 +62,6 @@ function makePrisma() {
   return { prisma, inv };
 }
 
-function makeVerifactu(prisma: any) {
-  const service: any = new VerifactuService(
-    prisma,
-    encryption(),
-    {} as any,
-    { buildVerifactuUrl: () => "https://fake/q" } as any,
-    {} as any,
-  );
-  service.signWithTenantCert = async () => ({
-    signedXml: "<signed/>",
-    documentHash: "hash",
-  });
-  return service as VerifactuService;
-}
-
 function makeTicketBai(prisma: any) {
   const service: any = new TicketBaiService(
     prisma,
@@ -98,7 +85,6 @@ function makeTicketBai(prisma: any) {
  * so the result no longer depends on whose machine it runs on.
  */
 const ENDPOINT_ENV_KEYS = [
-  "AEAT_VERIFACTU_ENDPOINT",
   "DIPUTACION_TBAI_BIZKAIA",
   "DIPUTACION_TBAI_GIPUZKOA",
   "DIPUTACION_TBAI_ALAVA",
@@ -119,118 +105,6 @@ function restoreEndpointEnv(saved: Record<string, string | undefined>): void {
     else process.env[key] = saved[key];
   }
 }
-
-describe("VerifactuService._postToAeat (real branch)", () => {
-  let originalEnv: string | undefined;
-  let originalFetch: typeof fetch | undefined;
-  let savedEndpoints: Record<string, string | undefined>;
-
-  beforeEach(() => {
-    originalEnv = process.env.FISCAL_E2E_MODE;
-    originalFetch = globalThis.fetch;
-    savedEndpoints = takeEndpointEnv();
-    process.env.FISCAL_E2E_MODE = "real";
-    process.env.AEAT_VERIFACTU_ENDPOINT =
-      "https://prewww1.aeat.es/wlpl/inwinvoc/ws.Suministro";
-  });
-
-  afterEach(() => {
-    process.env.FISCAL_E2E_MODE = originalEnv;
-    globalThis.fetch = originalFetch as any;
-    restoreEndpointEnv(savedEndpoints);
-  });
-
-  it("POSTs to AEAT_VERIFACTU_ENDPOINT with xml body + SOAP headers", async () => {
-    let capturedUrl: string | undefined;
-    let capturedHeaders: Record<string, string> | undefined;
-    let capturedBody: string | undefined;
-    globalThis.fetch = (async (url: string, init: any) => {
-      capturedUrl = url;
-      capturedHeaders = init?.headers;
-      capturedBody = init?.body;
-      return {
-        ok: true,
-        status: 200,
-        text: async () =>
-          "<response><ault:CSV>CSV-REAL-ABC123</ault:CSV></response>",
-      };
-    }) as any;
-
-    const { prisma, inv } = makePrisma();
-    const v = makeVerifactu(prisma);
-    // The mock sign returns "<signed/>" — that's the actual XML that
-    // reaches fetch(). The dispatch then extracts the CSV from the response.
-    const result = await v.dispatch({
-      invoiceId: inv.id,
-      xml: "<root/>",
-      tenantNif: "B12345678",
-      nif: "12345678Z",
-      invoiceNumber: "A000001",
-      issueDate: "2026-07-16",
-      totalCents: 12100,
-    });
-
-    expect(result.status).toBe("accepted");
-    expect(result.reference).toBe("CSV-REAL-ABC123");
-    expect(capturedUrl).toBe(
-      "https://prewww1.aeat.es/wlpl/inwinvoc/ws.Suministro",
-    );
-    expect(capturedHeaders?.["Content-Type"]).toBe("application/xml");
-    expect(capturedHeaders?.["SOAPAction"]).toBe("suministrar");
-    // The signed XML is what gets POSTed.
-    expect(capturedBody).toBe("<signed/>");
-    expect(inv.fiscalReference).toBe("CSV-REAL-ABC123");
-    expect(inv.fiscalStatus).toBe("accepted");
-  });
-
-  it("5xx response persists as 'rejected' with AEAT error message", async () => {
-    // VerifactuService maps any non-ok HTTP status to 'rejected'. The
-    // retry queue (in FiscalService) decides retryability downstream.
-    globalThis.fetch = (async () => ({
-      ok: false,
-      status: 503,
-      text: async () => "AEAT 503 Service Unavailable",
-    })) as any;
-
-    const { prisma, inv } = makePrisma();
-    const v = makeVerifactu(prisma);
-    const result = await v.dispatch({
-      invoiceId: inv.id,
-      xml: "<root/>",
-      tenantNif: "B12345678",
-      nif: "12345678Z",
-      invoiceNumber: "A000001",
-      issueDate: "2026-07-16",
-      totalCents: 12100,
-    });
-    expect(result.status).toBe("rejected");
-    expect(inv.fiscalStatus).toBe("rejected");
-    expect(inv.fiscalError).toContain("AEAT 503");
-  });
-
-  it("4xx response persists as 'rejected'", async () => {
-    globalThis.fetch = (async () => ({
-      ok: false,
-      status: 400,
-      text: async () => "AEAT 400 Bad schema",
-    })) as any;
-
-    const { prisma, inv } = makePrisma();
-    const v = makeVerifactu(prisma);
-    const result = await v.dispatch({
-      invoiceId: inv.id,
-      xml: "<root/>",
-      tenantNif: "B12345678",
-      nif: "12345678Z",
-      invoiceNumber: "A000001",
-      issueDate: "2026-07-16",
-      totalCents: 12100,
-    });
-    expect(result.status).toBe("rejected");
-    expect(inv.fiscalStatus).toBe("rejected");
-    expect(inv.fiscalError).toContain("AEAT 400");
-  });
-});
 
 describe("TicketBaiService._postToDeputacion (real branch)", () => {
   let originalEnv: string | undefined;
