@@ -12,13 +12,26 @@
  *
  * L-1 (P2A-receptionist-v2): freeze `Date.now()` to a fixed instant
  * so wall-clock transitions during the run (e.g. crossing midnight)
- * don't flake the T-3 / T-1 bucket math.
+ * don't flake the T-3 / T-1 bucket math. Frozen time also keeps two
+ * `Date.now()` calls in one test equal: the idempotency test used to
+ * flake when the clock ticked a millisecond between building the log
+ * key and seeding the tenant.
  */
 
 import { TrialExpiryScheduler } from "./trial-expiry.scheduler";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WINDOW_MS = 12 * 60 * 60 * 1000;
+// 09:00 Madrid (CEST), the time the cron actually fires.
+const FIXED_NOW = new Date("2026-10-23T07:00:00Z");
+
+beforeEach(() => {
+  jest.useFakeTimers().setSystemTime(FIXED_NOW);
+});
+
+afterEach(() => {
+  jest.useRealTimers();
+});
 
 function makePrismaMock() {
   const tenants = new Map<string, any>();
@@ -243,8 +256,10 @@ describe("TrialExpiryScheduler.sendTrialWarnings", () => {
     const m = makePrismaMock();
     const email = makeEmailMock();
     const tenantId = "t-already";
-    const trialEnd = new Date(Date.now() + 3 * DAY_MS);
     seedTrialingTenant(m, { id: tenantId, trialEndInDays: 3 });
+    // Key the log off the tenant's stored trialEnd, exactly as the
+    // scheduler does, rather than recomputing it.
+    const trialEnd: Date = m.tenants.get(tenantId).trialEnd;
     // Pre-seed the log as if a previous cron run already sent.
     m.trialLog.set(
       `${tenantId}|3|${trialEnd.toISOString()}`,
