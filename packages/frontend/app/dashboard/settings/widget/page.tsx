@@ -187,9 +187,6 @@ export default function WidgetSettingsPage() {
           <div className="space-y-4">
             {instances.map((w) => {
               const snippet = w.token ? buildEmbedSnippet(w.token, frontendUrl) : "";
-              const qrUrl = tenantSlug
-                ? `${apiClient["request"] ? "" : ""}${API}/qr/salon/${tenantSlug}`
-                : "";
               return (
                 <div
                   key={w.id}
@@ -264,28 +261,12 @@ export default function WidgetSettingsPage() {
                           </a>
                         </div>
                       </div>
-                      {tenantSlug && (
-                        <div className="flex items-center gap-3">
-                          <QrCode className="w-4 h-4 text-gray-500" />
-                          <a
-                            href={`${API.replace(/\/api\/v1$/, "")}/api/v1/qr/salon/${tenantSlug}?format=png`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-purple-600 hover:underline text-sm"
-                          >
-                            Descargar QR del salón (PNG)
-                          </a>
-                          <span className="text-gray-300">·</span>
-                          <a
-                            href={`${API.replace(/\/api\/v1$/, "")}/api/v1/qr/salon/${tenantSlug}?format=svg`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-purple-600 hover:underline text-sm"
-                          >
-                            SVG
-                          </a>
-                        </div>
-                      )}
+                      <div className="flex items-center gap-3">
+                        <QrCode className="w-4 h-4 text-gray-500" />
+                        <a href="/dashboard/compartir" className="text-purple-600 hover:underline text-sm">
+                          QR, carteles, tarjetas e imagen para redes → Comparte tu página
+                        </a>
+                      </div>
                     </>
                   )}
                 </div>

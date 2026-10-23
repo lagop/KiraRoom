@@ -3386,6 +3386,11 @@ class ApiClient implements ApiClientInterface {
     return this.request("/virtual-receptionist/ai-usage");
   }
 
+  /** The salon page address, name and logo, for sharing and printing (QrController.share). */
+  async getShareInfo(): Promise<import("./share-page").ShareInfo> {
+    return this.request("/qr/share");
+  }
+
   async getMessageBundlesBalance(): Promise<MessageBundlesBalance> {
     return this.request<MessageBundlesBalance>(
       "/message-bundles/tenants/current/balance",
