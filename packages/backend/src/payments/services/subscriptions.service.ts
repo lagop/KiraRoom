@@ -597,6 +597,11 @@ export class SubscriptionsService {
    * Rev3 cancellation: tenant enters READ-ONLY mode (30 days) and is then
    * archived. The plan field is preserved for historical reporting.
    * Subscription in Stripe is also cancelled.
+   *
+   * The local row changes first, conditionally: `newlyCancelled` says this
+   * call made the transition (the caller emails the owner on it), and the
+   * Stripe webhook that follows finds the tenant already cancelled and stays
+   * quiet.
    */
   async cancelSubscription(tenantId: string, immediately: boolean = false) {
     const tenant = await this.prisma.tenant.findUnique({
@@ -609,6 +614,22 @@ export class SubscriptionsService {
 
     const now = new Date();
     const readOnlyUntil = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    const data = {
+      subscriptionStatus: 'cancelled' as const,
+      cancelledAt: now,
+      readOnlyUntil,
+      // plan preserved on purpose (memory for reporting / reactivation)
+    };
+
+    const { count } = await this.prisma.tenant.updateMany({
+      where: { id: tenantId, subscriptionStatus: { not: 'cancelled' } },
+      data,
+    });
+    const newlyCancelled = count === 1;
+    if (!newlyCancelled) {
+      // Already cancelled: cancelling again restarts the read-only window.
+      await this.prisma.tenant.update({ where: { id: tenantId }, data });
+    }
 
     if (this.isEnabled && tenant.stripeSubscriptionId) {
       try {
@@ -620,21 +641,12 @@ export class SubscriptionsService {
       }
     }
 
-    await this.prisma.tenant.update({
-      where: { id: tenantId },
-      data: {
-        subscriptionStatus: 'cancelled',
-        cancelledAt: now,
-        readOnlyUntil,
-        // plan preserved on purpose (memory for reporting / reactivation)
-      },
-    });
-
     return {
       subscriptionId: tenant.stripeSubscriptionId,
       status: 'cancelled',
       cancelledAt: now,
       readOnlyUntil,
+      newlyCancelled,
     };
   }
 

@@ -9,6 +9,7 @@ import { AddOnsService, addOnStatusFromStripe } from './services/addons.service'
 import { MessageBundlesService } from '../message-bundles/message-bundles.service';
 import { Public } from '../auth/decorators/public.decorator';
 import { activationFromCheckout, activationFromSubscription, PlanActivation } from './plan-activation';
+import { ReadOnlyNoticeService } from './read-only-notice.service';
 
 @Controller('webhooks')
 export class WebhooksController {
@@ -23,6 +24,7 @@ export class WebhooksController {
     private readonly email: EmailService,
     private readonly addonsService: AddOnsService,
     private readonly messageBundles: MessageBundlesService,
+    private readonly readOnlyNotices: ReadOnlyNoticeService,
   ) {
     const apiKey = this.configService.get<string>('STRIPE_SECRET_KEY');
     if (apiKey && apiKey.startsWith('sk_')) {
@@ -328,7 +330,7 @@ export class WebhooksController {
     try {
       const tenant = await this.prisma.tenant.findUnique({
         where: { id: tenantId },
-        select: { id: true, subscriptionStatus: true } });
+        select: { id: true, subscriptionStatus: true, stripeSubscriptionId: true } });
       if (!tenant) return;
 
       if (subscription.status === 'active') {
@@ -348,16 +350,28 @@ export class WebhooksController {
           );
         }
       } else if (subscription.status === 'canceled') {
-        if (tenant.subscriptionStatus !== 'cancelled') {
-          await this.prisma.tenant.update({
-            where: { id: tenantId },
-            data: {
-              subscriptionStatus: 'cancelled',
-              cancelledAt: new Date(),
-              readOnlyUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) } });
+        // An older subscription ending (the salon has since paid for
+        // another one) must not lock the account or email the owner.
+        if (tenant.stripeSubscriptionId && tenant.stripeSubscriptionId !== subscription.id) {
+          this.logger.log(
+            `Ignoring cancellation of ${subscription.id} for tenant ${tenantId}: its current subscription is ${tenant.stripeSubscriptionId}`,
+          );
+          return;
+        }
+        // Conditional, so a cancellation made from the dashboard (already
+        // `cancelled` here) is neither re-stamped nor emailed twice.
+        const readOnlyUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+        const { count } = await this.prisma.tenant.updateMany({
+          where: { id: tenantId, subscriptionStatus: { not: 'cancelled' } },
+          data: {
+            subscriptionStatus: 'cancelled',
+            cancelledAt: new Date(),
+            readOnlyUntil } });
+        if (count === 1) {
           this.logger.log(
             `Tenant ${tenantId} marked cancelled via Stripe subscription update`,
           );
+          await this.readOnlyNotices.notify(tenantId, 'cancelled', readOnlyUntil);
         }
       }
     } catch (err) {

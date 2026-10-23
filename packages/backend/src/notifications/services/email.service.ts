@@ -50,6 +50,16 @@ export interface AppointmentEmailData {
   language?: string;
 }
 
+/** "23 de noviembre de 2026", in Madrid time so a late-UTC instant shows the right day. */
+export function formatLongDateEs(date: Date): string {
+  return date.toLocaleDateString("es-ES", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "Europe/Madrid",
+  });
+}
+
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
@@ -708,6 +718,8 @@ export class EmailService {
     to: string;
     tenantName: string;
     gracePeriodEndsAt: Date;
+    /** End of the read-only window: what the email promises to keep. */
+    readOnlyUntil: Date;
     updatePaymentUrl: string;
   }): Promise<{ success: boolean; id?: string; error?: string; skipped?: boolean }> {
     if (await this.shouldSkipBouncedUser(data.to)) {
@@ -715,11 +727,8 @@ export class EmailService {
     }
 
     const subject = `Hemos suspendido tu cuenta de KiraRoom`;
-    const formattedDate = data.gracePeriodEndsAt.toLocaleDateString("es-ES", {
-      day: "2-digit",
-      month: "long",
-      year: "numeric",
-    });
+    const formattedDate = formatLongDateEs(data.gracePeriodEndsAt);
+    const keptUntil = formatLongDateEs(data.readOnlyUntil);
 
     const html = `
 <!DOCTYPE html>
@@ -734,20 +743,19 @@ export class EmailService {
           <p style="font-size:14px;color:#64748b;margin:0 0 24px 0;">Tu suscripción lleva más de 7 días sin poder cobrarse</p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">Hola,</p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
-            Después de los avisos enviados desde el <strong>${formattedDate}</strong>,
-            no hemos podido procesar el cargo de tu suscripción de
-            KiraRoom para <strong>${this.escapeHtml(data.tenantName)}</strong>.
+            No hemos podido procesar el cargo de tu suscripción de
+            KiraRoom para <strong>${this.escapeHtml(data.tenantName)}</strong>,
+            y el plazo para actualizar el pago terminó el <strong>${formattedDate}</strong>.
             Tu cuenta ha pasado a modo lectura.
           </p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
-            <strong>¿Qué significa esto?</strong> Puedes iniciar sesión y consultar
-            tus datos y los de tus clientas, pero no podrás emitir facturas
-            nuevas, registrar citas, ni modificar información hasta que
-            actualices tu método de pago.
+            <strong>¿Qué significa esto?</strong> Puedes iniciar sesión, consultar
+            y exportar tus datos y los de tus clientas, pero no podrás emitir facturas
+            nuevas, registrar citas, ni modificar información, y tu página no
+            acepta reservas hasta que actualices tu método de pago.
           </p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 24px 0;">
-            Tus datos se conservan durante 60 días. Pasado ese plazo se
-            anonimizarán conforme a nuestra política de privacidad.
+            Tus datos se conservan hasta el <strong>${keptUntil}</strong>.
           </p>
           <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 24px 0;">
             <tr><td style="background:#4f46e5;border-radius:8px;">
@@ -771,13 +779,112 @@ export class EmailService {
     const text = [
       `Hemos suspendido tu cuenta de KiraRoom.`,
       ``,
-      `No pudimos procesar el cargo de tu suscripción tras los avisos`,
-      `enviados desde el ${formattedDate}. Tu cuenta ha pasado a modo lectura:`,
-      `puedes consultar tus datos pero no emitir facturas, registrar citas`,
-      `ni modificar información hasta actualizar tu método de pago.`,
+      `No pudimos procesar el cargo de tu suscripción y el plazo para`,
+      `actualizar el pago terminó el ${formattedDate}. Tu cuenta ha pasado a modo lectura:`,
+      `puedes consultar y exportar tus datos, pero no emitir facturas, registrar citas`,
+      `ni modificar información, y tu página no acepta reservas, hasta actualizar tu método de pago.`,
+      ``,
+      `Tus datos se conservan hasta el ${keptUntil}.`,
       ``,
       `Reactivar:`,
       data.updatePaymentUrl,
+    ].join("\n");
+
+    return this.sendEmail({
+      to: data.to,
+      subject,
+      html,
+      text,
+      listUnsubscribe: true,
+    });
+  }
+
+  /**
+   * Sent the day an account becomes read-only without a failed payment:
+   * the trial ended without a plan (`BillingScheduler.expireTrials`) or the
+   * subscription was cancelled, from the dashboard or in Stripe. The
+   * suspended case has its own email above. Says what still works, until
+   * when the data is kept, and links back to Billing.
+   */
+  async sendAccountReadOnly(data: {
+    to: string;
+    tenantName: string;
+    reason: "trial_ended" | "cancelled";
+    readOnlyUntil: Date;
+    billingUrl: string;
+  }): Promise<{ success: boolean; id?: string; error?: string; skipped?: boolean }> {
+    if (await this.shouldSkipBouncedUser(data.to)) {
+      return { success: false, skipped: true, error: "email_bounced" };
+    }
+
+    const trial = data.reason === "trial_ended";
+    const subject = trial
+      ? `Tu prueba de KiraRoom ha terminado: tu cuenta está en modo lectura`
+      : `Hemos cancelado tu suscripción de KiraRoom`;
+    const heading = trial ? "Tu prueba gratuita ha terminado" : "Suscripción cancelada";
+    const lead = trial
+      ? "La prueba gratuita de 14 días ha terminado sin un plan elegido, así que tu cuenta ha pasado a modo lectura."
+      : "Tu suscripción está cancelada y tu cuenta ha pasado a modo lectura. No se te volverá a cobrar.";
+    const cta = trial ? "Elegir un plan" : "Reactivar mi suscripción";
+    const keptUntil = formatLongDateEs(data.readOnlyUntil);
+    const meaning =
+      "Puedes iniciar sesión, consultar y exportar tus datos y los de tus clientas, " +
+      "pero no crear ni cambiar citas, clientas ni servicios, y tu página no acepta reservas.";
+    const keep = trial
+      ? `Tus datos se conservan hasta el ${keptUntil}. Si eliges un plan antes, sigues donde lo dejaste, sin perder nada.`
+      : `Tus datos se conservan hasta el ${keptUntil}. Si reactivas la suscripción antes, sigues donde lo dejaste, sin perder nada.`;
+
+    const html = `
+<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:12px;padding:32px;">
+        <tr><td>
+          <div style="font-size:24px;font-weight:700;color:#0f172a;margin-bottom:8px;">KiraRoom</div>
+          <p style="font-size:14px;color:#64748b;margin:0 0 24px 0;">${heading}</p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">Hola,</p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
+            ${lead} Cuenta: <strong>${this.escapeHtml(data.tenantName)}</strong>.
+          </p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
+            <strong>¿Qué significa esto?</strong> ${meaning}
+          </p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 24px 0;">
+            ${keep}
+          </p>
+          <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 24px 0;">
+            <tr><td style="background:#4f46e5;border-radius:8px;">
+              <a href="${data.billingUrl}"
+                 style="display:inline-block;padding:14px 28px;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;">
+                ${cta}
+              </a>
+            </td></tr>
+          </table>
+          <p style="font-size:13px;color:#64748b;line-height:1.5;margin:0;">
+            Si tienes cualquier duda sobre qué plan encaja con tu salón,
+            responde a este correo y te ayudamos.
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`.trim();
+
+    const text = [
+      `${heading}.`,
+      ``,
+      `${lead} Cuenta: ${data.tenantName}.`,
+      ``,
+      meaning,
+      ``,
+      keep,
+      ``,
+      `${cta}:`,
+      data.billingUrl,
     ].join("\n");
 
     return this.sendEmail({

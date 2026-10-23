@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { runUnscoped } from '../common/tenancy/tenant.context';
 import { ProductEventsService, PRODUCT_EVENTS } from '../common/telemetry/product-events.service';
+import { ReadOnlyNoticeService } from './read-only-notice.service';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const READ_ONLY_DAYS = 30;
@@ -27,6 +28,7 @@ export class BillingScheduler {
   constructor(
     private readonly prisma: PrismaService,
     private readonly events: ProductEventsService,
+    private readonly notices: ReadOnlyNoticeService,
   ) {}
 
   /**
@@ -34,6 +36,10 @@ export class BillingScheduler {
    * window. The data stays intact and `FeatureGuard` keeps allowing GETs
    * and the CSV/Excel exports, so a tenant that comes back can reactivate
    * without having lost anything.
+   *
+   * Each tenant is flipped by its own conditional update (still
+   * `trialing`), and only the ones this run flipped get the email: a second
+   * run, or a plan bought in between, sends nothing.
    */
   @Cron(CronExpression.EVERY_DAY_AT_4AM)
   async expireTrials(): Promise<void> {
@@ -55,26 +61,35 @@ export class BillingScheduler {
 
     if (expired.length === 0) return;
 
-    await runUnscoped(() =>
-      this.prisma.tenant.updateMany({
-        where: { id: { in: expired.map((t) => t.id) }, deletedAt: null },
-        data: {
-          subscriptionStatus: 'cancelled',
-          cancelledAt: now,
-          readOnlyUntil,
-        },
-      }),
-    );
-
+    const flipped: typeof expired = [];
     for (const t of expired) {
+      const { count } = await runUnscoped(() =>
+        this.prisma.tenant.updateMany({
+          where: { id: t.id, subscriptionStatus: 'trialing', deletedAt: null },
+          data: {
+            subscriptionStatus: 'cancelled',
+            cancelledAt: now,
+            readOnlyUntil,
+          },
+        }),
+      );
+      if (count === 1) flipped.push(t);
+    }
+    if (flipped.length === 0) return;
+
+    for (const t of flipped) {
       this.events.record(PRODUCT_EVENTS.TRIAL_EXPIRED, t.id, { plan: t.plan });
     }
 
     this.logger.log(
-      `Expired ${expired.length} trial(s): ${expired
+      `Expired ${flipped.length} trial(s): ${flipped
         .map((t) => `${t.name} (${t.id})`)
         .join(', ')}. Read-only until ${readOnlyUntil.toISOString()}.`,
     );
+
+    for (const t of flipped) {
+      await this.notices.notify(t.id, 'trial_ended', readOnlyUntil);
+    }
   }
 
   /**
