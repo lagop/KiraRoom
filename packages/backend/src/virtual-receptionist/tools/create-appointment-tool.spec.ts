@@ -109,6 +109,27 @@ describe("propose, then book on a real yes", () => {
     });
   });
 
+  it("hands the model the payment link when the service asks for a deposit", async () => {
+    const { run, say } = setup({
+      book: async () =>
+        ({
+          id: "apt-1",
+          service: { name: "Corte" },
+          professional: { firstName: "Ana", lastName: "García" },
+          deposit: { amountCents: 1250, checkoutUrl: "https://checkout.stripe.test/cs_1", expiresAt: new Date() },
+        }) as any,
+    });
+
+    await run("propose_appointment", DETAILS);
+    say("Sí");
+    expect(await run("create_appointment")).toMatchObject({
+      created: true,
+      depositRequired: true,
+      depositAmount: 12.5,
+      depositPaymentUrl: "https://checkout.stripe.test/cs_1",
+    });
+  });
+
   it("refuses to book in the same turn as the proposal", async () => {
     // The model cannot propose and book before the client has answered.
     const { run, booked } = setup();

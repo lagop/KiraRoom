@@ -93,5 +93,16 @@ export function publicBooking(appointment: any) {
           lastName: appointment.professional.lastName,
         }
       : null,
+    // Present when the service asks for a deposit: the page sends the
+    // client to pay it; the slot is held until expiresAt.
+    ...(appointment.deposit
+      ? {
+          deposit: {
+            amount: appointment.deposit.amountCents / 100,
+            checkoutUrl: appointment.deposit.checkoutUrl,
+            expiresAt: appointment.deposit.expiresAt,
+          },
+        }
+      : {}),
   };
 }
