@@ -3422,8 +3422,11 @@ class ApiClient implements ApiClientInterface {
   }
 
   async getMessageBundlesBalance(): Promise<MessageBundlesBalance> {
+    // The salon's own route (TenantAddOnsController, owner/admin). The
+    // similar-looking /message-bundles/tenants/:tenantId/balance is the
+    // SaaS-admin one and answers 403 to a salon.
     return this.request<MessageBundlesBalance>(
-      "/message-bundles/tenants/current/balance",
+      "/payments/message-bundles/tenants/current/balance",
     );
   }
 

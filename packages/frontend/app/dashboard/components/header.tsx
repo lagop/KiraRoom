@@ -1,7 +1,7 @@
 "use client";
 
 import { Search, User, Menu } from "lucide-react";
-import { useMemo } from "react";
+import { useEffect, useState } from "react";
 import { NotificationBell } from "./notification-bell";
 import { LanguageSwitcher } from "./language-switcher";
 import { TenantIdentityBadge } from "./tenant-identity-badge";
@@ -22,7 +22,14 @@ export function DashboardHeader({
   onToggleSidebar,
   mobileOnly = false,
 }: DashboardHeaderProps) {
-  const currentUser = useMemo(() => getCurrentUser(), []);
+  // Read after mount: the server has no localStorage and renders "User", so
+  // a first client render with the email would not hydrate.
+  const [currentUser, setCurrentUser] = useState<ReturnType<
+    typeof getCurrentUser
+  > | null>(null);
+  useEffect(() => {
+    setCurrentUser(getCurrentUser());
+  }, []);
 
   return (
     <header className="bg-white/90 backdrop-blur-md border-b border-gray-200 px-4 py-3 sm:px-6 sticky top-0 z-10">

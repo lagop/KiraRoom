@@ -26,8 +26,12 @@ export interface CopilotPanelProps {
 export function CopilotPanel({ fullPage = false, onClose }: CopilotPanelProps) {
   const t = useTranslations();
   const { state, send, clear, tier, costCapReached } = useCopilotConversation();
-  const user = getCurrentUser();
-  const firstName = user?.id ? " " : "";
+  // Read after mount, as in the dashboard header: the server has no
+  // localStorage, and /dashboard/copilot is rendered there first.
+  const [user, setUser] = useState<ReturnType<typeof getCurrentUser>>(null);
+  useEffect(() => {
+    setUser(getCurrentUser());
+  }, []);
   const role = user?.role ?? "staff";
   const [input, setInput] = useState("");
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
