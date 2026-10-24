@@ -1,159 +1,164 @@
+import { Identification, LAST_UPDATED, LEGAL_ENTITY, Pending, ProcessorList, Section } from "../legal-entity";
+
+/**
+ * Terms of service, with the data processing agreement (RGPD art. 28).
+ *
+ * Rewritten on 1 October 2026. The previous text sold features that are not
+ * built (sending invoices to the AEAT, accounting sync, WhatsApp
+ * reminders), promised 99 % availability and point-in-time restores,
+ * pointed to the EU online dispute platform (closed in July 2025) and had
+ * no processing agreement, which KiraRoom needs as processor of each
+ * salon's client data. Review with a lawyer.
+ */
 export default function TermsPage() {
+  const email = LEGAL_ENTITY.email;
   return (
     <main style={{ maxWidth: 760, margin: "0 auto", padding: "32px 16px", lineHeight: 1.6 }}>
-      <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 8 }}>
-        Términos del Servicio
-      </h1>
-      <p style={{ color: "#64748b", marginBottom: 16 }}>
-        Última actualización: 17 de julio de 2026
-      </p>
+      <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 8 }}>Términos del Servicio</h1>
+      <p style={{ color: "#64748b", marginBottom: 24 }}>Última actualización: {LAST_UPDATED}</p>
 
-      <Section title="1. Aceptación">
+      <Section title="1. Quién presta el servicio">
+        <Identification />
         <p>
-          Al crear una cuenta o utilizar el servicio SaaS KiraRoom,
-          acepta estos Términos del Servicio. Si no está de acuerdo, no
-          use el servicio.
+          Estos términos regulan el uso de KiraRoom por los negocios que lo contratan (en adelante, "el
+          salón"). Al crear una cuenta, el salón los acepta.
         </p>
       </Section>
 
-      <Section title="2. Descripción del servicio">
-        <p>
-          KiraRoom es una plataforma SaaS de gestión de citas,
-          profesionales, clientes y facturación para negocios de belleza y
-          bienestar en España. Incluye:
-        </p>
+      <Section title="2. El servicio">
+        <p>KiraRoom es un programa en la nube para peluquerías y centros de belleza. Incluye:</p>
         <ul>
-          <li>Agenda de citas y gestión de profesionales y servicios.</li>
-          <li>Emisión de facturas conformes a la normativa española.</li>
-          <li>Remisión a la AEAT (Verifactu, SII) o a las diputaciones forales (TicketBAI).</li>
-          <li>Sincronización opcional con software contable (Holded, Sage, A3, NCS).</li>
-          <li>Recordatorios automáticos por email/WhatsApp.</li>
-          <li>Panel SaaS para multi-tenant y multi-localización.</li>
+          <li>Agenda, profesionales, servicios y fichas de clientes.</li>
+          <li>Reservas online en la web del salón y un recepcionista virtual con IA en el chat de esa web.</li>
+          <li>Recordatorios por email y, en los planes que lo incluyen, por SMS.</li>
+          <li>Caja (TPV), cobros y emisión de facturas con IVA o IGIC.</li>
+          <li>Las demás funciones que describa el plan contratado.</li>
+        </ul>
+        <p>
+          El envío de facturas a la Agencia Tributaria o a las diputaciones forales (Verifactu, TicketBAI,
+          SII) no está disponible todavía. Mientras tanto, el salón sigue siendo responsable de cumplir esas
+          obligaciones por otros medios. Las funciones anunciadas como "próximamente" no forman parte del
+          servicio hasta que se lancen.
+        </p>
+      </Section>
+
+      <Section title="3. Planes, precio y prueba">
+        <ul>
+          <li>El servicio se contrata por suscripción mensual al precio publicado en la web en el momento de contratar.</li>
+          <li>La suscripción se renueva cada mes hasta que el salón la cancela. No hay permanencia.</li>
+          <li>Los 14 primeros días son de prueba, sin coste y sin tarjeta. Si al terminar no se ha contratado un plan, la cuenta pasa a modo de solo lectura durante 30 días para que el salón pueda exportar sus datos.</li>
+          <li>KiraRoom no cobra comisiones por las reservas ni por los clientes del salón.</li>
         </ul>
       </Section>
 
-      <Section title="3. Planes y precios">
-        <p>
-          El servicio se ofrece bajo suscripción mensual. Los precios
-          vigentes están publicados en <code>/dashboard/billing</code>.
-          Las suscripciones se renuevan automáticamente al final de cada
-          período salvo que el cliente cancele.
-        </p>
-        <p>
-          Durante el período de prueba (14 días), todas las funciones
-          están disponibles sin coste. Transcurrido el período, la cuenta
-          pasa a modo lectura si no se ha confirmado un método de pago.
-        </p>
-      </Section>
-
-      <Section title="4. Obligaciones del cliente">
-        <p>El cliente se compromete a:</p>
+      <Section title="4. Obligaciones del salón">
         <ul>
-          <li>Proporcionar información veraz y mantenerla actualizada.</li>
-          <li>No usar el servicio para actividades ilícitas, fraudulentas o que vulneren derechos de terceros.</li>
-          <li>No intentar acceder a datos de otros tenants del sistema.</li>
-          <li>Respetar los límites técnicos (rate limiting, almacenamiento) contratados.</li>
-          <li>Realizar las obligaciones legales (fiscales, laborales, RGPD) que correspondan a su actividad.</li>
+          <li>Dar información veraz y mantenerla al día.</li>
+          <li>No usar el servicio para actividades ilícitas ni para acceder a datos de otros salones.</li>
+          <li>Custodiar las contraseñas de sus usuarios y dar a cada uno solo el rol que necesita.</li>
+          <li>Cumplir las obligaciones legales de su actividad, incluidas las fiscales y las de protección de datos como responsable de los datos de sus clientes.</li>
         </ul>
       </Section>
 
       <Section title="5. Obligaciones de KiraRoom">
-        <p>KiraRoom se compromete a:</p>
         <ul>
-          <li>Mantener el servicio disponible al menos el 99% del tiempo medido mensualmente, salvo mantenimientos programados (con aviso de 48h).</li>
-          <li>Realizar backups diarios cifrados con posibilidad de restauración puntual (WAL archiving).</li>
-          <li>Conservar las facturas durante 4 años conforme al Art. 66 RGGI.</li>
-          <li>Cumplir las obligaciones del RGPD y la LOPDGDD, incluyendo atender las solicitudes de acceso, rectificación y supresión en plazo de 30 días.</li>
-          <li>Notificar al cliente cualquier incidente de seguridad con impacto en sus datos en un plazo máximo de 72 horas.</li>
+          <li>Prestar el servicio con diligencia y mantenerlo disponible en la medida de lo razonable. No se garantiza un porcentaje mínimo de disponibilidad.</li>
+          <li>Avisar con antelación de los mantenimientos que se puedan prever.</li>
+          <li>Hacer copias de seguridad diarias de la base de datos.</li>
+          <li>Tratar los datos de los clientes del salón según el contrato de encargo del apartado 11.</li>
         </ul>
       </Section>
 
-      <Section title="6. Limitación de responsabilidad">
-        <p>
-          KiraRoom no será responsable de:
-        </p>
+      <Section title="6. Responsabilidad">
+        <p>KiraRoom no responde de:</p>
         <ul>
-          <li>Daños indirectos o lucro cesante derivados de la indisponibilidad del servicio.</li>
-          <li>Errores en los datos fiscales si el cliente los facilitó incorrectamente (NIF mal escrito, dirección, etc.).</li>
-          <li>Reclamaciones de la AEAT derivadas de una facturación incorrecta por datos erróneos del cliente.</li>
-          <li>Cumplimiento de obligaciones legales específicas del sector del cliente que no estén expresamente incluidas en el servicio.</li>
+          <li>Daños indirectos o lucro cesante por la indisponibilidad del servicio.</li>
+          <li>Errores derivados de datos incorrectos introducidos por el salón.</li>
+          <li>Las respuestas del recepcionista virtual que el salón no haya revisado: es una herramienta automática y puede equivocarse. Las reservas siempre se confirman en el sistema.</li>
         </ul>
-        <p>
-          La responsabilidad agregada de KiraRoom queda limitada al
-          importe de las tarifas satisfechas por el cliente en los
-          últimos <strong>12 meses</strong>.
-        </p>
+        <p>La responsabilidad total de KiraRoom se limita al importe pagado por el salón en los últimos 12 meses.</p>
       </Section>
 
-      <Section title="7. Suspensión y terminación">
-        <p>
-          KiraRoom puede suspender o terminar el servicio en caso de:
-        </p>
+      <Section title="7. Suspensión y baja">
         <ul>
-          <li>Incumplimiento de pago tras 7 días desde el segundo aviso.</li>
-          <li>Incumplimiento material de estos Términos.</li>
-          <li>Actividad fraudulenta o ilegal detectada.</li>
-        </ul>
-        <p>
-          El cliente puede cancelar el servicio en cualquier momento
-          desde <code>/dashboard/billing</code>. Tras la cancelación:
-        </p>
-        <ul>
-          <li>Acceso de lectura durante 30 días para exportar datos.</li>
-          <li>Anonimización de PII tras 60 días de inactividad conforme a RGPD.</li>
-          <li>Conservación de facturas 4 años conforme a la normativa fiscal.</li>
+          <li>KiraRoom puede suspender la cuenta si un pago sigue sin hacerse 7 días después del primer intento fallido, por incumplimiento grave de estos términos o por actividad ilícita.</li>
+          <li>El salón puede darse de baja en cualquier momento desde el panel. Tras la baja, la cuenta queda en modo de solo lectura 30 días para exportar los datos; después se suprimen o anonimizan, salvo lo que la ley obligue a conservar (como las facturas).</li>
         </ul>
       </Section>
 
-      <Section title="8. Modificaciones del servicio">
+      <Section title="8. Cambios en el servicio y en estos términos">
         <p>
-          KiraRoom puede modificar el servicio previa notificación con
-          al menos <strong>30 días</strong> de antelación. Las
-          modificaciones que reduzcan funcionalidades sustanciales
-          permitirán al cliente cancelar sin penalización durante esos 30
-          días.
+          KiraRoom avisará por email con al menos 30 días de antelación de cualquier cambio relevante. Si un
+          cambio reduce funciones sustanciales, el salón podrá darse de baja sin coste en ese plazo.
         </p>
       </Section>
 
-      <Section title="9. Ley aplicable y jurisdicción">
+      <Section title="9. Ley aplicable">
         <p>
-          Estos Términos se rigen por la legislación española y europea
-          aplicable. Para cualquier controversia, las partes se someten
-          a los Juzgados y Tribunales de la ciudad del domicilio del
-          cliente, sin perjuicio de los derechos del consumidor ante los
-          tribunales de su domicilio.
-        </p>
-        <p>
-          Conforme al Reglamento (UE) 524/2013, los consumidores de la UE
-          pueden acceder a la plataforma de resolución de litigios en
-          línea en <code>ec.europa.eu/consumers/odr</code>.
+          Estos términos se rigen por la ley española. Las controversias se someterán a los juzgados y
+          tribunales que correspondan según la ley.
         </p>
       </Section>
 
-      <Section title="10. Cambios a estos términos">
+      <Section title="10. Contacto">
         <p>
-          Cualquier cambio material se notificará por email al propietario
-          del salón con al menos <strong>30 días</strong> de antelación y
-          se publicará una nueva versión en esta URL.
+          Para cualquier cuestión sobre el servicio o estos términos: <Pending value={email} label="email de contacto" />.
         </p>
+      </Section>
+
+      <Section title="11. Contrato de encargo del tratamiento (art. 28 RGPD)">
+        <p>
+          El salón es el <strong>responsable</strong> de los datos de sus clientes y KiraRoom, el{" "}
+          <strong>encargado</strong> que los trata para prestarle el servicio. Este apartado es el contrato
+          que exige el artículo 28 del RGPD.
+        </p>
+        <ol>
+          <li>
+            <strong>Objeto y duración.</strong> Tratar los datos de los clientes del salón para prestar el
+            servicio descrito en el apartado 2, mientras dure la suscripción.
+          </li>
+          <li>
+            <strong>Datos y personas afectadas.</strong> Clientes del salón y personas que escriben al
+            recepcionista virtual: datos identificativos y de contacto, citas, compras, pagos,
+            consentimientos y las notas que el salón decida guardar, que pueden incluir datos de salud.
+          </li>
+          <li>
+            <strong>Instrucciones.</strong> KiraRoom trata los datos solo según las instrucciones del salón,
+            que son el uso que hace del servicio y estos términos, salvo que la ley le obligue a otra cosa.
+          </li>
+          <li>
+            <strong>Confidencialidad.</strong> Las personas autorizadas por KiraRoom para tratar los datos
+            están obligadas a guardar secreto.
+          </li>
+          <li>
+            <strong>Seguridad.</strong> KiraRoom aplica las medidas descritas en la{" "}
+            <a href="/legal/privacy">Política de Privacidad</a> (art. 32 RGPD).
+          </li>
+          <li>
+            <strong>Subencargados.</strong> El salón autoriza a KiraRoom a recurrir a los proveedores
+            siguientes. KiraRoom avisará de cualquier cambio con antelación, y el salón podrá oponerse y,
+            en su caso, darse de baja.
+            <ProcessorList />
+          </li>
+          <li>
+            <strong>Derechos de las personas.</strong> KiraRoom ayudará al salón a atender las solicitudes de
+            acceso, rectificación, supresión y demás derechos, y le trasladará las que reciba directamente.
+          </li>
+          <li>
+            <strong>Brechas de seguridad.</strong> KiraRoom avisará al salón sin dilación indebida, y en todo
+            caso en 48 horas, de cualquier brecha que afecte a sus datos, con la información disponible para
+            que el salón pueda cumplir sus propias obligaciones de notificación.
+          </li>
+          <li>
+            <strong>Fin del contrato.</strong> Al terminar, y tras los 30 días de solo lectura para exportar
+            los datos, KiraRoom los suprimirá, salvo los que la ley obligue a conservar.
+          </li>
+          <li>
+            <strong>Información y auditoría.</strong> KiraRoom pondrá a disposición del salón la información
+            necesaria para demostrar que cumple este contrato.
+          </li>
+        </ol>
       </Section>
     </main>
-  );
-}
-
-function Section({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section style={{ marginBottom: 24 }}>
-      <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>
-        {title}
-      </h2>
-      <div>{children}</div>
-    </section>
   );
 }
