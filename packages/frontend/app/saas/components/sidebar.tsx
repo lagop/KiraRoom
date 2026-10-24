@@ -14,6 +14,7 @@ import {
   ChevronRight,
   X,
   Bug,
+  ShieldCheck,
 } from "lucide-react";
 import apiClient from "@/lib/api";
 import { removeToken } from "@/lib/api";
@@ -67,6 +68,7 @@ export function SaasSidebar({
     { href: "/saas/analytics", icon: BarChart2, labelKey: "saas.nav.analytics" },
     { href: "/saas/bug-reports", icon: Bug, labelKey: "saas.nav.bugReports" },
     { href: "/saas/settings", icon: Settings, labelKey: "saas.nav.settings" },
+    { href: "/saas/seguridad", icon: ShieldCheck, labelKey: "saas.nav.security" },
   ];
 
   const isActive = (item: { href: string; exact?: boolean }) => {

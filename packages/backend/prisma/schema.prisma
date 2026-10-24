@@ -396,6 +396,7 @@ model User {
   passwordHash             String
   profileImage             String?
   phone                    String?
+  /// Two-step sign-in is on; see auth/two-factor.
   twoFactorEnabled         Boolean                 @default(false)
   language                 String                  @default("es")
   twoFactorSecret          String?
@@ -407,6 +408,14 @@ model User {
   /// Bumped on logout and password change; tokens carry it as `tv` and
   /// stop working once it moves on.
   tokenVersion             Int                     @default(0)
+  /// Two-step sign-in (TOTP, auth/two-factor), with twoFactorEnabled and
+  /// twoFactorSecret above; secrets are encrypted with EncryptionService. The
+  /// pending one waits for the first code to confirm the authenticator app.
+  twoFactorPendingSecret   String?
+  /// Last 30 s step accepted, so a code cannot be used twice.
+  twoFactorLastStep        Int?
+  /// SHA-256 of the unused recovery codes.
+  twoFactorRecoveryCodes   String[]                @default([])
   emailVerificationToken   String?
   emailVerificationExpires DateTime?
   preferences              Json                    @default("{}")

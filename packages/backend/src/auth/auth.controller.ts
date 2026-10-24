@@ -1,14 +1,16 @@
 import { Throttle } from "@nestjs/throttler";
 import { PasswordResetService } from "./password-reset.service";
 import { ForgotPasswordDto, ResetPasswordDto } from "./dto/password-reset.dto";
-import { Controller, Post, Body, UseGuards, HttpCode, HttpStatus, Get, Patch, Query, Req, Res, UnauthorizedException } from "@nestjs/common";
+import { Controller, Post, Body, UseGuards, HttpCode, HttpStatus, Get, Patch, Query, Req, Res, UnauthorizedException, ForbiddenException } from "@nestjs/common";
 import type { Request, Response } from "express";
 import {
   ApiTags,
   ApiOperation,
   ApiResponse,
   ApiBearerAuth } from "@nestjs/swagger";
-import { AuthService, AuthUser, TokenResponse } from "./auth.service";
+import { AuthService, AuthUser, TokenResponse, TwoFactorChallenge } from "./auth.service";
+import { TwoFactorService } from "./two-factor/two-factor.service";
+import { TwoFactorCodeDto, TwoFactorDisableDto, TwoFactorVerifyDto } from "./two-factor/two-factor.dto";
 import { RegisterDto } from "./dto/register.dto";
 import { LoginDto } from "./dto/login.dto";
 import { UpdateTenantDto } from "./dto/update-tenant.dto";
@@ -33,12 +35,23 @@ function deliverSession(res: Response, result: { user: AuthUser; tokens: TokenRe
   return { ...result, tokens: deliverTokens(res, cookieKindForRole(result.user.role), result.tokens) };
 }
 
+/** Signed out of nothing yet: a challenge carries no session, so no cookie. */
+function deliverLogin(res: Response, result: { user: AuthUser; tokens: TokenResponse } | TwoFactorChallenge) {
+  return "twoFactorRequired" in result ? result : deliverSession(res, result);
+}
+
+/** Two-step verification is for panel accounts; a salon's clients sign in on its site. */
+function staffOnly(user: { role: string }) {
+  if (user.role === "client") throw new ForbiddenException();
+}
+
 @ApiTags("Authentication")
 @Controller("auth")
 export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly passwordReset: PasswordResetService,
+    private readonly twoFactor: TwoFactorService,
   ) {}
 
   /**
@@ -97,7 +110,74 @@ export class AuthController {
   @ApiResponse({ status: 200, description: "Successfully logged in" })
   @ApiResponse({ status: 401, description: "Invalid credentials" })
   async login(@Body() loginDto: LoginDto, @Res({ passthrough: true }) res: Response) {
-    return deliverSession(res, await this.authService.login(loginDto));
+    return deliverLogin(res, await this.authService.login(loginDto));
+  }
+
+  /** Second step of a sign-in with two-step verification. */
+  @Public()
+  @Post("2fa/verify")
+  @Throttle({ default: { ttl: 60_000, limit: 10 } }) // with the per-account lockout
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Finish a sign-in with a code from the authenticator app or a recovery code" })
+  async verifyTwoFactor(@Body() dto: TwoFactorVerifyDto, @Res({ passthrough: true }) res: Response) {
+    return deliverSession(res, await this.authService.completeTwoFactorLogin(dto.challenge, dto.code));
+  }
+
+  @Get("2fa")
+  @SignedIn()
+  @AllowWhenReadOnly()
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Whether two-step verification is on for the signed-in user" })
+  async twoFactorStatus(@CurrentUser() user: { id: string; role: string }) {
+    staffOnly(user);
+    return this.twoFactor.status(user.id);
+  }
+
+  @Post("2fa/setup")
+  @SignedIn()
+  @AllowWhenReadOnly()
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Start turning on two-step verification: a secret for the authenticator app" })
+  async twoFactorSetup(@CurrentUser() user: { id: string; role: string }) {
+    staffOnly(user);
+    return this.twoFactor.setup(user.id);
+  }
+
+  @Post("2fa/enable")
+  @SignedIn()
+  @AllowWhenReadOnly()
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Confirm the app with its first code; answers the recovery codes once" })
+  async twoFactorEnable(@CurrentUser() user: { id: string; role: string }, @Body() dto: TwoFactorCodeDto) {
+    staffOnly(user);
+    return this.twoFactor.enable(user.id, dto.code);
+  }
+
+  @Post("2fa/disable")
+  @SignedIn()
+  @AllowWhenReadOnly()
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Turn two-step verification off (password and a code)" })
+  async twoFactorDisable(@CurrentUser() user: { id: string; role: string }, @Body() dto: TwoFactorDisableDto) {
+    staffOnly(user);
+    return this.twoFactor.disable(user.id, dto.password, dto.code);
+  }
+
+  @Post("2fa/recovery-codes")
+  @SignedIn()
+  @AllowWhenReadOnly()
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "New recovery codes, replacing the old ones (needs a code)" })
+  async twoFactorRecoveryCodes(@CurrentUser() user: { id: string; role: string }, @Body() dto: TwoFactorCodeDto) {
+    staffOnly(user);
+    return this.twoFactor.regenerateRecoveryCodes(user.id, dto.code);
   }
 
   @Public()
