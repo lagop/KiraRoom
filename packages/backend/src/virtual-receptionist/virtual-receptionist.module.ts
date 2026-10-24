@@ -40,6 +40,7 @@ import { ChannelReceptionistService } from './channels/channel-receptionist.serv
 import { MetaGraphClient } from './channels/meta-graph.client';
 import { TelegramBotClient } from './channels/telegram-bot.client';
 import { PlatformModule } from '../platform/platform.module';
+import { PublicChatAccessService } from './public-chat/public-chat-access.service';
 
 @Module({
   imports: [
@@ -62,6 +63,7 @@ import { PlatformModule } from '../platform/platform.module';
     AiConversationCounterService,
     BookingService,
     ReceptionistStatsService,
+    PublicChatAccessService,
     AnalysisService,
     LLMProviderFactory,
     OpenAIProvider,

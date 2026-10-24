@@ -12,6 +12,8 @@ import { FAQService } from './services/faq.service';
 import { BookingService } from './services/booking.service';
 import { LLMService } from './services/llm.service';
 import { ReceptionistStatsService } from './services/receptionist-stats.service';
+import { PublicChatAccessService } from './public-chat/public-chat-access.service';
+import { PublicChatMessageDto } from './public-chat/public-chat-message.dto';
 import {
   SendMessageDto,
   MessageResponseDto,
@@ -41,6 +43,7 @@ export class VirtualReceptionistController {
     private readonly bookingService: BookingService,
     private readonly llmService: LLMService,
     private readonly statsService: ReceptionistStatsService,
+    private readonly publicChat: PublicChatAccessService,
   ) {}
 
   // POST/GET/PUT /virtual-receptionist/config[/:salonId] used to be here.
@@ -140,13 +143,33 @@ export class VirtualReceptionistController {
   }
 
   // Chat Messaging
+  /**
+   * The chat on a salon's site. Public, because visitors have no account;
+   * who is writing is decided here (see PublicChatAccessService), never taken
+   * from the body: a signed-in client by their session, anyone else by a
+   * signed visitor token this endpoint issued. Then a daily limit per person,
+   * on top of the per-IP limit, before the paid model call.
+   */
   @Post('messages')
   @Throttle({ default: { ttl: 60_000, limit: 20 } }) // each message is a paid model call
   @Public()
   @ApiOperation({ summary: 'Send message to virtual receptionist' })
-  async sendMessage(@Body(new ValidationPipe()) message: SendMessageDto) {
-    this.logger.log(`Processing message from client: ${message.clientId}`);
-    return this.virtualReceptionistService.sendMessage(message);
+  async sendMessage(@Body() body: PublicChatMessageDto, @Req() req: { headers: Record<string, string | undefined> }) {
+    const identity = await this.publicChat.identify(body, req.headers?.authorization);
+    await this.publicChat.assertWithinDailyLimit(identity, body.salonId);
+    this.logger.log(`Processing web message from ${identity.kind} ${identity.clientId}`);
+    const reply = await this.virtualReceptionistService.sendMessage({
+      clientId: identity.clientId,
+      salonId: body.salonId,
+      message: body.message,
+      channel: 'web',
+      // A visitor's name is whatever they type in the chat, not a field.
+      metadata:
+        identity.kind === 'client'
+          ? { clientName: body.metadata?.clientName, serviceId: body.metadata?.serviceId }
+          : { serviceId: body.metadata?.serviceId },
+    } as SendMessageDto);
+    return identity.kind === 'visitor' ? { ...reply, visitorToken: identity.visitorToken } : reply;
   }
 
   @Get('conversations/:id/messages')

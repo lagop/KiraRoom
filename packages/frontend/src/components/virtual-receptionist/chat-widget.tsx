@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, X, Minimize, Maximize, MessageCircle, Phone } from 'lucide-react';
 import apiClient from '@/lib/api';
+import { CHAT_MAX_MESSAGE, chatErrorText, readVisitorToken, rememberVisitorToken } from '@/lib/chat-visitor';
 import { ChatInline, parseChatMarkdown } from '@/lib/chat-markdown';
 
 function Inline({ parts }: { parts: ChatInline[] }) {
@@ -54,11 +55,17 @@ interface MessageResponseDto {
   id: string;
   content: string;
   requiresHandoff: boolean;
+  /** Issued to visitors; sent back with the next message. */
+  visitorToken?: string;
 }
 
 const VISITOR_KEY = 'kira_chat_visitor';
 
 /**
+ * The id a visitor's browser chose before the server issued signed tokens
+ * (see lib/chat-visitor.ts). Still sent, so a chat that was going on when
+ * tokens arrived carries on; the server ignores anything that is not one.
+ *
  * A stable id for a visitor who is not signed in, kept in this browser.
  *
  * The widget used to send clientId "anonymous" for all of them. The backend
@@ -89,6 +96,7 @@ interface ChatWidgetProps {
   salonId?: string;
   clientId?: string;
   clientName?: string;
+  /** Not sent any more: the server ignores contact fields from the page. */
   clientEmail?: string;
   clientPhone?: string;
   className?: string;
@@ -99,8 +107,6 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
   salonId = 'default', 
   clientId,
   clientName,
-  clientEmail,
-  clientPhone,
   className = '',
   isOpenByDefault = false
 }) => {
@@ -143,17 +149,17 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
     setIsLoading(true);
 
     try {
+      const storage = typeof window !== 'undefined' ? window.localStorage : undefined;
       const response: MessageResponseDto = await apiClient.sendVirtualReceptionistMessage({
         clientId: effectiveClientId(),
+        visitorToken: readVisitorToken(storage, salonId),
         salonId,
         message: inputValue,
         channel: 'web',
-        metadata: {
-          clientName,
-          clientEmail,
-          clientPhone,
-        },
+        // A signed-in client's name for the greeting; the server ignores it for visitors.
+        metadata: { clientName },
       });
+      rememberVisitorToken(storage, salonId, response.visitorToken);
 
       const assistantMessage: ChatMessage = {
         id: response.id,
@@ -169,12 +175,11 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
       }
     } catch (error) {
       console.error('Error sending message:', error);
-      // The visitor gets a plain apology; the HTTP status and server
-      // message are for the console above, not for them.
+      // A plain apology, except for the limits, which say what to do.
       const errorMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: `Lo sentimos, estamos experimentando problemas. Por favor, inténtalo de nuevo.`,
+        content: chatErrorText(error),
         timestamp: new Date(),
       };
       setMessages(prev => [...prev, errorMessage]);
@@ -316,6 +321,7 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
                   type="text"
                   value={inputValue}
                   onChange={(e) => setInputValue(e.target.value)}
+                  maxLength={CHAT_MAX_MESSAGE}
                   onKeyPress={handleKeyPress}
                   placeholder="Escribe tu mensaje..."
                   className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"

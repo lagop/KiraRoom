@@ -2,3 +2,7 @@
 # (appointment_reminder_24h / _1h) in the client account settings page.
 5bfdc96acb54c0acd9c60b2e0bc092a49814b51b:packages/frontend/lib/account-settings.ts:generic-api-key:17
 5bfdc96acb54c0acd9c60b2e0bc092a49814b51b:packages/frontend/lib/account-settings.ts:generic-api-key:18
+
+# False positive: the fictitious signing key in a test (generic-api-key), in the
+# first commit of #146. The spec now builds that value at runtime.
+04ba1593d8f0a652b0b2839f645f0674e9c5995d:packages/backend/src/virtual-receptionist/public-chat/public-chat.spec.ts:generic-api-key:22

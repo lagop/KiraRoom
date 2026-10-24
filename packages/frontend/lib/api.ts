@@ -2758,6 +2758,8 @@ class ApiClient implements ApiClientInterface {
 
   async sendVirtualReceptionistMessage(data: {
     clientId: string;
+    /** The signed visitor id the previous answer issued (lib/chat-visitor.ts). */
+    visitorToken?: string;
     salonId: string;
     message: string;
     channel: "whatsapp" | "web";
@@ -2770,6 +2772,7 @@ class ApiClient implements ApiClientInterface {
     responseTime: number;
     requiresHandoff: boolean;
     intent: string;
+    visitorToken?: string;
   }> {
     return this.request("/virtual-receptionist/messages", {
       method: "POST",

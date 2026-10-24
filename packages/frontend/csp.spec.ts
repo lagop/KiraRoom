@@ -56,5 +56,24 @@ check(
 check("with the Reporting-Endpoints header Chromium needs", headers[1]?.value === `csp="${API}/csp-report"`, headers);
 check("a trailing slash in the API URL does not double up", buildCsp({ apiUrl: `${API}/` }).includes(`${API}/csp-report`));
 
+// The production image copies next.config.js on its own (packages/frontend/Dockerfile),
+// so every local file it requires must be copied too. csp.js was not, and the
+// first deploy of this policy left the frontend container restarting.
+{
+  const fs = require("fs");
+  const path = require("path");
+  const config: string = fs.readFileSync(path.join(__dirname, "next.config.js"), "utf8");
+  const dockerfile: string = fs.readFileSync(path.join(__dirname, "Dockerfile"), "utf8");
+  const localRequires = [...config.matchAll(/require\(\s*['"]\.\/([^'"]+)['"]\s*\)/g)].map((m) => m[1]);
+  check("next.config.js requires csp.js", localRequires.some((r) => r.replace(/\.js$/, "") === "csp"), localRequires);
+  for (const r of localRequires) {
+    const file = r.endsWith(".js") ? r : `${r}.js`;
+    check(
+      `the production image copies ${file}, which next.config.js requires`,
+      dockerfile.includes(`/repo/packages/frontend/${file} ./${file}`),
+    );
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
