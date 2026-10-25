@@ -26,6 +26,28 @@ import { PrismaService } from "../../common/prisma/prisma.service";
 
 const ANON = "[anonymized]";
 
+/**
+ * A user's sign-in credentials: not personal data the export is for, and
+ * enough to attack the account offline. The export used to include the
+ * password hash; two-step verification added its secrets.
+ */
+const USER_CREDENTIAL_FIELDS = [
+  "passwordHash",
+  "passwordResetToken",
+  "emailVerificationToken",
+  "twoFactorSecret",
+  "twoFactorPendingSecret",
+  "twoFactorRecoveryCodes",
+  "twoFactorLastStep",
+  "tokenVersion",
+] as const;
+
+export function withoutCredentials<T extends Record<string, unknown>>(user: T): Omit<T, (typeof USER_CREDENTIAL_FIELDS)[number]> {
+  const out: Record<string, unknown> = { ...user };
+  for (const field of USER_CREDENTIAL_FIELDS) delete out[field];
+  return out as Omit<T, (typeof USER_CREDENTIAL_FIELDS)[number]>;
+}
+
 @Injectable()
 export class GdprService {
   private readonly logger = new Logger(GdprService.name);
@@ -192,7 +214,7 @@ export class GdprService {
 
     return {
       tenant: tenant ?? null,
-      users: users ?? [],
+      users: (users ?? []).map(withoutCredentials),
       clients: clients ?? [],
       invoices: (invoices ?? []).map((inv) => ({
         ...inv,

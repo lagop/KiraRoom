@@ -34,6 +34,7 @@ import {
   X,
   Hourglass,
   QrCode,
+  ShieldCheck,
 } from "lucide-react";
 import apiClient, { removeToken } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
@@ -604,6 +605,20 @@ export function DashboardSidebar({
                   >
                     <Globe className="w-4 h-4 mr-3" />
                     <span suppressHydrationWarning>Web y dominio</span>
+                  </Link>
+                </li>
+                <li>
+                  <Link
+                    href="/dashboard/settings/seguridad"
+                    className={`flex items-center pl-9 pr-3 py-2 rounded-l-lg w-full transition-all duration-200 ${
+                      pathname.startsWith("/dashboard/settings/seguridad")
+                        ? "bg-white text-violet-950 rounded-r-none"
+                        : "text-white hover:text-violet-950 hover:bg-violet-200 hover:-translate-x-3 hover:rounded-lg rounded-r-none"
+                    }`}
+                    title="Seguridad"
+                  >
+                    <ShieldCheck className="w-4 h-4 mr-3" />
+                    <span suppressHydrationWarning>Seguridad</span>
                   </Link>
                 </li>
                 <li>

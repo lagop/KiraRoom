@@ -3,7 +3,7 @@
 import { useParams } from "next/navigation";
 import { useState } from "react";
 import { X, LogIn } from "lucide-react";
-import apiClient, { setToken } from "@/lib/api";
+import apiClient, { setToken, isTwoFactorRequired } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { useTranslations } from "@/lib/use-translation";
 
@@ -34,6 +34,12 @@ export default function LoginModal({
 
     try {
       const response = await apiClient.login(email, password, salonName);
+      // Clients have no two-step verification; a panel account that does
+      // signs in at the panel, which has the code step.
+      if (isTwoFactorRequired(response)) {
+        setError("Esta cuenta es del panel del salón: entra desde app.kiraroom.net/login.");
+        return;
+      }
       setToken(response.accessToken);
 
       // Fetch fresh client data from API to ensure we have the latest info

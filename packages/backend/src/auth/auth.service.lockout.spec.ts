@@ -50,6 +50,7 @@ function buildAuth(user: Record<string, unknown> | null): {
       sendEmailVerification: jest.fn().mockResolvedValue({ success: true }),
     } as any,
     { start: jest.fn(async () => ({ sid: "sid-1", jti: "jti-1" })), rotate: jest.fn() } as any,
+    {} as any,
   );
   return { auth, prisma };
 }
@@ -127,7 +128,7 @@ describe("SEC-8: AuthService.login honours lockedUntil", () => {
       password: "correct-horse-battery",
     });
 
-    expect(result.user.email).toBe("owner@salon.test");
+    expect((result as any).user.email).toBe("owner@salon.test");
   });
 
   it("is unaffected when lockedUntil is null", async () => {
@@ -138,7 +139,7 @@ describe("SEC-8: AuthService.login honours lockedUntil", () => {
       password: "correct-horse-battery",
     });
 
-    expect(result.user.role).toBe("saas_owner");
+    expect((result as any).user.role).toBe("saas_owner");
   });
 
   it("still rejects a wrong password on an unlocked account", async () => {

@@ -57,6 +57,7 @@ import { SmsModule } from "./sms/sms.module";
 import { AppController } from "./app.controller";
 import { AuthController } from "./auth/auth.controller";
 import { AuthSessionsModule } from "./auth/sessions/auth-sessions.module";
+import { TwoFactorService } from "./auth/two-factor/two-factor.service";
 import { AppointmentsController } from "./appointments/appointments.controller";
 import { AppointmentServicesController } from "./appointments/appointment-services.controller";
 import { ClientsController } from "./clients/clients.controller";
@@ -272,6 +273,7 @@ import { PublicModule } from "./public-site/public.module";
     },
     AppService,
     AuthService,
+    TwoFactorService,
     PasswordResetService,
     AuditLogService,
     ClientsService,
