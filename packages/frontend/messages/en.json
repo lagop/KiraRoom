@@ -669,7 +669,8 @@
       "users": "Users",
       "analytics": "Analytics",
       "bugReports": "Bug reports",
-      "settings": "Settings"
+      "settings": "Settings",
+      "security": "Security"
     },
     "platform_analytics": "Platform analytics",
     "platform_revenue": "Platform revenue",

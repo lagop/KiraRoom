@@ -68,6 +68,8 @@ export const getToken = () => {
  */
 const CREDENTIAL_ENDPOINTS = [
   "/auth/login",
+  // The second step of a sign-in: a wrong code is an answer, not an expired session.
+  "/auth/2fa/verify",
   "/auth/register",
   "/auth/forgot-password",
   "/auth/reset-password",
@@ -185,6 +187,22 @@ export const removeRefreshToken = () => {
     localStorage.removeItem(REFRESH_TOKEN_KEY);
   }
 };
+
+/** The password was right and the account asks for a code from the app next. */
+export interface TwoFactorRequired {
+  twoFactorRequired: true;
+  /** Sent back with the code to verifyTwoFactor; valid 5 minutes. */
+  challenge: string;
+}
+
+export interface TwoFactorStatus {
+  enabled: boolean;
+  recoveryCodesLeft: number;
+}
+
+export function isTwoFactorRequired(r: unknown): r is TwoFactorRequired {
+  return !!r && typeof r === "object" && (r as TwoFactorRequired).twoFactorRequired === true;
+}
 
 interface LoginResponse {
   accessToken: string;
@@ -1300,7 +1318,7 @@ export interface WebDomainStatus {
 
 export interface ApiClientInterface {
   request<T>(endpoint: string, options?: RequestInit): Promise<T>;
-  login(email: string, password: string, tenantSlug?: string): Promise<LoginResponse>;
+  login(email: string, password: string, tenantSlug?: string): Promise<LoginResponse | TwoFactorRequired>;
   forgotPassword(email: string, tenantSlug?: string): Promise<{ message: string }>;
   resetPassword(token: string, password: string): Promise<{ message: string }>;
   register(data: {
@@ -1885,15 +1903,52 @@ class ApiClient implements ApiClientInterface {
    * `tenantSlug`: pass it when a client signs in on a salon's site, so a
    * client of two salons lands in this one.
    */
-  async login(email: string, password: string, tenantSlug?: string): Promise<LoginResponse> {
-    const response = await this.request<{ user: any; tokens: any }>(
+  async login(email: string, password: string, tenantSlug?: string): Promise<LoginResponse | TwoFactorRequired> {
+    const response = await this.request<{ user: any; tokens: any } | TwoFactorRequired>(
       "/auth/login",
       {
         method: "POST",
         body: JSON.stringify({ email, password, ...(tenantSlug && { tenantSlug }) }),
       },
     );
+    // Two-step verification: no session yet, the code comes next.
+    if (isTwoFactorRequired(response)) return response;
+    return this.startSession(response);
+  }
 
+  /** Second step of a sign-in with two-step verification. */
+  async verifyTwoFactor(challenge: string, code: string): Promise<LoginResponse> {
+    const response = await this.request<{ user: any; tokens: any }>("/auth/2fa/verify", {
+      method: "POST",
+      body: JSON.stringify({ challenge, code: code.trim() }),
+    });
+    return this.startSession(response);
+  }
+
+  async getTwoFactorStatus(): Promise<TwoFactorStatus> {
+    return this.request("/auth/2fa");
+  }
+
+  async setupTwoFactor(): Promise<{ secret: string; otpauthUrl: string }> {
+    return this.request("/auth/2fa/setup", { method: "POST" });
+  }
+
+  async enableTwoFactor(code: string): Promise<{ recoveryCodes: string[] }> {
+    return this.request("/auth/2fa/enable", { method: "POST", body: JSON.stringify({ code: code.trim() }) });
+  }
+
+  async disableTwoFactor(password: string, code: string): Promise<TwoFactorStatus> {
+    return this.request("/auth/2fa/disable", {
+      method: "POST",
+      body: JSON.stringify({ password, code: code.trim() }),
+    });
+  }
+
+  async regenerateRecoveryCodes(code: string): Promise<{ recoveryCodes: string[] }> {
+    return this.request("/auth/2fa/recovery-codes", { method: "POST", body: JSON.stringify({ code: code.trim() }) });
+  }
+
+  private startSession(response: { user: any; tokens: any }): LoginResponse {
     // The refresh token came as an httpOnly cookie; only the access token is ours.
     setToken(response.tokens.accessToken);
     removeRefreshToken();

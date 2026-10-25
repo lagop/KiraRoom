@@ -29,6 +29,20 @@ import {
   DEFAULT_REFRESH_TOKEN_SECONDS,
 } from "../common/jwt-duration";
 import { AuthSessionsService } from "./sessions/auth-sessions.service";
+import { TwoFactorService } from "./two-factor/two-factor.service";
+
+/** Audience of the short-lived token that stands between password and code. */
+const TWO_FACTOR_AUDIENCE = "kira-2fa-login";
+const TWO_FACTOR_CHALLENGE_SECONDS = 5 * 60;
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOCKOUT_MS = 30 * 60 * 1000;
+
+/** The password was right and the account asks for a code next. */
+export interface TwoFactorChallenge {
+  twoFactorRequired: true;
+  /** Signed, 5 minutes; sent back with the code to POST /auth/2fa/verify. */
+  challenge: string;
+}
 
 export interface TokenResponse {
   accessToken: string;
@@ -68,6 +82,7 @@ export class AuthService {
     private readonly events: ProductEventsService,
     private readonly email: EmailService,
     private readonly sessions: AuthSessionsService,
+    private readonly twoFactor: TwoFactorService,
   ) {}
 
   async register(
@@ -220,7 +235,7 @@ export class AuthService {
 
   async login(
     loginDto: LoginDto,
-  ): Promise<{ user: AuthUser; tokens: TokenResponse }> {
+  ): Promise<{ user: AuthUser; tokens: TokenResponse } | TwoFactorChallenge> {
     // First, try to find user by email
     const user = await this.prisma.user.findUnique({
       where: { email: loginDto.email },
@@ -269,6 +284,20 @@ export class AuthService {
           },
         });
         throw new UnauthorizedException("Invalid credentials");
+      }
+
+      // Two-step sign-in: the password was right, now the code. The failed
+      // attempts are not reset here, so someone who has the password cannot
+      // alternate it with code guesses: wrong codes count towards the same
+      // lockout (see completeTwoFactorLogin).
+      if (user.twoFactorEnabled) {
+        return {
+          twoFactorRequired: true,
+          challenge: this.jwtService.sign(
+            { sub: user.id, purpose: "2fa-login" },
+            { audience: TWO_FACTOR_AUDIENCE, expiresIn: TWO_FACTOR_CHALLENGE_SECONDS },
+          ),
+        };
       }
 
       // Reset login attempts on successful login
@@ -454,6 +483,74 @@ export class AuthService {
    * Bumping tokenVersion makes every token issued so far (access and
    * refresh, on every device) stop working.
    */
+  /**
+   * The second step of a sign-in with two-step verification: the challenge
+   * from login plus a code from the app or a recovery code. Wrong codes count
+   * as failed attempts, with the password's lockout (5, then 30 minutes).
+   */
+  async completeTwoFactorLogin(
+    challenge: string,
+    code: string,
+  ): Promise<{ user: AuthUser; tokens: TokenResponse }> {
+    let payload: { sub?: string; purpose?: string };
+    try {
+      payload = this.jwtService.verify(challenge ?? "", { audience: TWO_FACTOR_AUDIENCE });
+    } catch {
+      throw new UnauthorizedException("Han pasado más de 5 minutos. Vuelve a escribir la contraseña.");
+    }
+    if (payload.purpose !== "2fa-login" || !payload.sub) {
+      throw new UnauthorizedException("Vuelve a escribir la contraseña.");
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: payload.sub },
+      include: { professional: true },
+    });
+    if (!user || !user.isActive || !user.twoFactorEnabled) {
+      throw new UnauthorizedException("Vuelve a escribir la contraseña.");
+    }
+    if (user.lockedUntil && user.lockedUntil > new Date()) {
+      const minutes = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 60000);
+      throw new UnauthorizedException(
+        `Cuenta bloqueada por demasiados intentos. Vuelve a intentarlo en ${minutes} minuto${minutes === 1 ? "" : "s"}.`,
+      );
+    }
+
+    if (!(await this.twoFactor.verifyForLogin(user.id, code))) {
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          loginAttempts: { increment: 1 },
+          lockedUntil: user.loginAttempts >= MAX_LOGIN_ATTEMPTS - 1 ? new Date(Date.now() + LOCKOUT_MS) : null,
+        },
+      });
+      throw new UnauthorizedException("El código no es correcto.");
+    }
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { loginAttempts: 0, lockedUntil: null, lastLoginAt: new Date() },
+    });
+    const tokens = await this.generateTokens(
+      user.id,
+      user.email,
+      user.role,
+      user.tenantId,
+      user.professional?.id,
+    );
+    return {
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        role: user.role,
+        tenantId: user.tenantId,
+      },
+      tokens,
+    };
+  }
+
   async logout(id: string, role?: string): Promise<void> {
     return this.logoutEverywhere(id, role);
   }

@@ -2,7 +2,8 @@
 
 import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import apiClient, { setToken, removeRefreshToken } from "@/lib/api";
+import apiClient, { setToken, removeRefreshToken, isTwoFactorRequired } from "@/lib/api";
+import { TwoFactorStep } from "@/src/components/auth/two-factor-step";
 import { useTranslations } from "@/lib/use-translation";
 import { LanguageSwitcher } from "@/app/dashboard/components/language-switcher";
 import { AlertCircle } from "lucide-react";
@@ -15,6 +16,8 @@ function LoginPageContent() {
   const [loading, setLoading] = useState(false);
   const [isLaunchMode, setIsLaunchMode] = useState(false);
   const [launchInfo, setLaunchInfo] = useState<{ tenantName: string; ownerName: string } | null>(null);
+  // Set when the account has two-step verification: the code step replaces the form.
+  const [challenge, setChallenge] = useState<string | null>(null);
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -59,6 +62,14 @@ function LoginPageContent() {
       });
   }, [searchParams]);
 
+  const signedIn = (response: { accessToken: string; user: unknown }) => {
+    setToken(response.accessToken);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("user", JSON.stringify(response.user));
+    }
+    router.push("/dashboard");
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
@@ -66,11 +77,11 @@ function LoginPageContent() {
 
     try {
       const response = await apiClient.login(email, password);
-      setToken(response.accessToken);
-      if (typeof window !== "undefined") {
-        localStorage.setItem("user", JSON.stringify(response.user));
+      if (isTwoFactorRequired(response)) {
+        setChallenge(response.challenge);
+        return;
       }
-      router.push("/dashboard");
+      signedIn(response);
     } catch (err) {
       setError(err instanceof Error ? err.message : t("common.error"));
     } finally {
@@ -164,6 +175,16 @@ function LoginPageContent() {
             </div>
           )}
 
+          {challenge ? (
+            <TwoFactorStep
+              challenge={challenge}
+              onSignedIn={signedIn}
+              onCancel={() => {
+                setChallenge(null);
+                setPassword("");
+              }}
+            />
+          ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label htmlFor="login-email" className="block text-sm font-medium text-gray-700 mb-1">
@@ -208,6 +229,7 @@ function LoginPageContent() {
               {loading ? t("login.logging_in") : t("login.login")}
             </button>
           </form>
+          )}
 
           {/* This used to be the bare question with nowhere to go: the
               sign-up page links back here, but not the other way round, so

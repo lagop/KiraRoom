@@ -161,7 +161,7 @@ describe("AuthService.refreshToken with sessions", () => {
       client: { findUnique: jest.fn(async () => null) },
     };
     const sessions = new AuthSessionsService(prisma as any);
-    const auth = new AuthService(prisma as any, jwt, {} as any, {} as any, {} as any, sessions);
+    const auth = new AuthService(prisma as any, jwt, {} as any, {} as any, {} as any, sessions, {} as any);
     return { auth, jwt, sessionsDb };
   }
 
@@ -219,7 +219,7 @@ describe("AuthController refresh, login and logout", () => {
       endSession: jest.fn(async () => undefined),
       logoutEverywhere: jest.fn(async () => undefined),
     };
-    const c = new AuthController(authService as any, {} as any);
+    const c = new AuthController(authService as any, {} as any, {} as any);
     const res = { cookie: jest.fn(), clearCookie: jest.fn() };
     return { c, authService, res };
   }
@@ -253,7 +253,7 @@ describe("AuthController refresh, login and logout", () => {
     const { c, res } = controller();
     const out = await c.login({ email: "x@y.test", password: "secreto123" } as any, res as any);
     expect(res.cookie).toHaveBeenCalledWith(CLIENT_REFRESH_COOKIE, "r", expect.anything());
-    expect(out.tokens).toEqual({ accessToken: "a", expiresIn: 900, tokenType: "Bearer" });
+    expect((out as any).tokens).toEqual({ accessToken: "a", expiresIn: 900, tokenType: "Bearer" });
   });
 
   it("logout ends this browser's session and clears its cookie, leaving other devices signed in", async () => {
