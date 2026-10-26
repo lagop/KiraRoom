@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException, BadRequestException, Logger, Optional } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger, Optional } from '@nestjs/common';
+import { assertCanReschedule, salonDayAndTime } from './reschedule-check';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { LoyaltyService } from '../loyalty/loyalty.service';
 import { CreateAppointmentServiceDto, UpdateAppointmentServiceDto, AppointmentServiceFiltersDto, AppointmentServiceType, AppointmentServiceStatus } from './dto/appointment-services.dto';
@@ -163,9 +164,63 @@ export class AppointmentServicesService {
     return appointmentService;
   }
 
-  async update(id: string, updateDto: UpdateAppointmentServiceDto) {
+  async update(
+    id: string,
+    updateDto: UpdateAppointmentServiceDto,
+    user?: { id: string; role: string; tenantId: string },
+  ) {
     // Check if exists
     await this.findOne(id);
+    const current = await this.prisma.appointmentService.findUnique({
+      where: { id },
+      select: {
+        professionalId: true,
+        scheduledStart: true,
+        scheduledEnd: true,
+        appointment: {
+          select: { id: true, tenantId: true, professionalId: true, tenant: { select: { timezone: true } } },
+        },
+      },
+    });
+    if (!current) throw new NotFoundException('Appointment service not found');
+    const rowProfessional = current.professionalId ?? current.appointment.professionalId;
+
+    // A professional moves only their own services, within their own agenda.
+    // This route let any member of the team change anyone's.
+    if (user?.role === 'staff') {
+      const own = await this.prisma.professional.findFirst({
+        where: { userId: user.id, tenantId: user.tenantId },
+        select: { id: true },
+      });
+      if (!own || rowProfessional !== own.id) {
+        throw new NotFoundException('No tienes permiso para modificar esta cita');
+      }
+      if (updateDto.professionalId && updateDto.professionalId !== own.id) {
+        throw new ForbiddenException('Solo puedes mover tus citas dentro de tu agenda.');
+      }
+    }
+
+    // Moving it (time or professional) must land on a free slot: the same
+    // rule as moving a whole appointment (reschedule-check.ts).
+    const start = updateDto.scheduledStart ? new Date(updateDto.scheduledStart) : current.scheduledStart;
+    const end = updateDto.scheduledEnd ? new Date(updateDto.scheduledEnd) : current.scheduledEnd;
+    const professionalId = updateDto.professionalId ?? rowProfessional;
+    const moved =
+      (start && current.scheduledStart ? start.getTime() !== current.scheduledStart.getTime() : !!updateDto.scheduledStart) ||
+      (end && current.scheduledEnd ? end.getTime() !== current.scheduledEnd.getTime() : !!updateDto.scheduledEnd) ||
+      professionalId !== rowProfessional;
+    if (moved && start && end && professionalId) {
+      if (end <= start) throw new BadRequestException('scheduledEnd must be after scheduledStart');
+      const { day, time } = salonDayAndTime(start, current.appointment.tenant?.timezone || 'Europe/Madrid');
+      await assertCanReschedule(this.prisma as any, {
+        tenantId: current.appointment.tenantId,
+        appointmentId: current.appointment.id,
+        professionalId,
+        day,
+        time,
+        durationMinutes: Math.round((end.getTime() - start.getTime()) / 60000),
+      });
+    }
 
     // If professional is being updated, verify they exist
     if (updateDto.professionalId) {
@@ -431,54 +486,6 @@ export class AppointmentServicesService {
 
     this.logger.log(`Reordered ${updatedServices.length} services for appointment ${appointmentId}`);
     return updatedServices;
-  }
-
-  // Update timing for a specific service
-  async updateTiming(id: string, scheduledStart: Date, scheduledEnd: Date) {
-    const appointmentService = await this.findOne(id);
-
-    // Validate times
-    if (scheduledEnd <= scheduledStart) {
-      throw new BadRequestException('scheduledEnd must be after scheduledStart');
-    }
-
-    // Update the service timing
-    const updatedService = await this.prisma.appointmentService.update({
-      where: { id },
-      data: {
-        scheduledStart,
-        scheduledEnd,
-      },
-      include: {
-        service: true,
-        professional: true,
-        appointment: true,
-      },
-    });
-
-    // If this is a serial service, cascade the update to subsequent services
-    if (!updatedService.isParallel) {
-      await this.cascadeTimingUpdate(updatedService.appointmentId, id, scheduledEnd);
-    }
-
-    // Update appointment's scheduledTime to match the first service's scheduledStart
-    const allServices = await this.prisma.appointmentService.findMany({
-      where: { appointmentId: updatedService.appointmentId },
-      orderBy: { order: 'asc' },
-    });
-    const firstService = allServices[0];
-    if (firstService && firstService.scheduledStart) {
-      await this.prisma.appointment.update({
-        where: { id: updatedService.appointmentId },
-        data: {
-          scheduledTime: firstService.scheduledStart.toISOString(),
-        },
-      });
-      this.logger.log(`Updated appointment ${updatedService.appointmentId} scheduledTime to ${firstService.scheduledStart}`);
-    }
-
-    this.logger.log(`Updated timing for appointment service ${id}`);
-    return updatedService;
   }
 
   // Cascade timing update to subsequent serial services

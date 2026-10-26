@@ -12,21 +12,43 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { AppointmentServicesService } from './appointment-services.service';
+import { AppointmentsService } from './appointments.service';
 import { 
   CreateAppointmentServiceDto, 
   UpdateAppointmentServiceDto, 
   AppointmentServiceFiltersDto,
   AppointmentServiceStatus,
+  MoveVisitServiceDto,
 } from './dto/appointment-services.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles, SALON_TEAM } from "../auth/decorators/roles.decorator";
+import { CurrentUser } from "../auth/decorators/current-user.decorator";
 
 @ApiTags('Appointment Services')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @Controller('appointment-services')
 export class AppointmentServicesController {
-  constructor(private readonly appointmentServicesService: AppointmentServicesService) {}
+  constructor(
+    private readonly appointmentServicesService: AppointmentServicesService,
+    private readonly appointmentsService: AppointmentsService,
+  ) {}
+
+  @Put(':id/move')
+  @ApiOperation({ summary: 'Drag one service of a multi-service appointment: the whole visit, or only this service' })
+  @ApiResponse({ status: 409, description: 'The new slot is not free, or the client would be in two services at once' })
+  @Roles(...SALON_TEAM)
+  move(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: MoveVisitServiceDto,
+    @CurrentUser() user: { id: string; role: string; tenantId: string },
+  ) {
+    return this.appointmentsService.moveVisitService(user, id, {
+      scope: dto.scope,
+      minutesDelta: dto.minutesDelta,
+      professionalId: dto.professionalId,
+    });
+  }
 
   @Post()
   @ApiOperation({ summary: 'Create a new appointment service' })
@@ -70,8 +92,9 @@ export class AppointmentServicesController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() updateDto: UpdateAppointmentServiceDto,
+    @CurrentUser() user: { id: string; role: string; tenantId: string },
   ) {
-    return this.appointmentServicesService.update(id, updateDto);
+    return this.appointmentServicesService.update(id, updateDto, user);
   }
 
   @Delete(':id')
@@ -166,8 +189,12 @@ export class AppointmentServicesController {
   updateTiming(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: { scheduledStart: string; scheduledEnd: string },
+    @CurrentUser() user: { id: string; role: string; tenantId: string },
   ) {
-    return this.appointmentServicesService.updateTiming(
+    // Through the same checks as a move (and the appointment's time kept on
+    // the salon's clock): AppointmentsService.retimeVisitService.
+    return this.appointmentsService.retimeVisitService(
+      user,
       id,
       new Date(body.scheduledStart),
       new Date(body.scheduledEnd),
