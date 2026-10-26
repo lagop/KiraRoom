@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ConflictException,
 } from "@nestjs/common";
 import { PrismaService } from "../../common/prisma/prisma.service";
 import {
@@ -9,7 +10,7 @@ import {
   UpdateProfessionalDto,
   ChangeProfessionalPasswordDto,
 } from "./dto";
-import { Professional } from "@prisma/client";
+import { Professional, UserRole } from "@prisma/client";
 import * as bcrypt from "bcryptjs";
 import { assertProfessionalSlot } from "../../professionals/professional-limit";
 
@@ -124,13 +125,14 @@ export class AdminProfessionalsService {
               service: true,
             },
           },
+          user: { select: { role: true, isActive: true, email: true, lastLoginAt: true } },
         },
       }),
       this.prisma.professional.count({ where }),
     ]);
 
     return {
-      data: professionals,
+      data: professionals.map(({ user, ...p }) => ({ ...p, panelAccess: panelAccessOf(user) })),
       total,
       page,
       limit,
@@ -307,7 +309,14 @@ export class AdminProfessionalsService {
 
     if (!professional.user) {
       throw new BadRequestException(
-        "Professional does not have an associated user account",
+        "Este profesional todavía no tiene acceso al panel. Dale acceso primero.",
+      );
+    }
+    // The owner's own record is linked to the owner's account: an admin must
+    // not be able to reset the owner's password from the team screen.
+    if (professional.user.role !== UserRole.staff) {
+      throw new BadRequestException(
+        "Esta ficha es la de la cuenta principal del salón: su contraseña se cambia desde esa cuenta.",
       );
     }
 
@@ -319,9 +328,10 @@ export class AdminProfessionalsService {
       );
 
       // Update the user's password hash
+      // A new password ends the sessions opened with the old one.
       await this.prisma.user.update({
         where: { id: professional.userId! },
-        data: { passwordHash },
+        data: { passwordHash, tokenVersion: { increment: 1 }, loginAttempts: 0, lockedUntil: null },
       });
 
       return { success: true, message: "Password updated successfully" };
@@ -330,4 +340,102 @@ export class AdminProfessionalsService {
       throw new BadRequestException("Failed to update password");
     }
   }
+
+  /**
+   * Gives a professional their own login to the panel: a staff account with
+   * the email on their record and a first password the owner sets and hands
+   * over (email delivery is not set up yet). Creating a professional only
+   * ever created the record, so no professional could sign in, and the
+   * "change password" button always failed for want of an account.
+   *
+   * Again on a professional whose access was removed: reactivated, with the
+   * new password. Never on the owner's own record (another role's account).
+   */
+  async grantPanelAccess(tenantId: string, id: string, password: string) {
+    const professional = await this.prisma.professional.findFirst({
+      where: { id, tenantId },
+      include: { user: { select: { id: true, role: true } } },
+    });
+    if (!professional) throw new NotFoundException("Professional not found");
+    const email = professional.email?.trim().toLowerCase();
+    if (!email) {
+      throw new BadRequestException("Pon un email en la ficha: es con el que entrará al panel.");
+    }
+    const passwordHash = await bcrypt.hash(password, Number(process.env.BCRYPT_ROUNDS) || 12);
+
+    if (professional.user) {
+      if (professional.user.role !== UserRole.staff) {
+        throw new BadRequestException(
+          "Esta ficha es la de la cuenta principal del salón, que ya entra al panel.",
+        );
+      }
+      await this.prisma.user.update({
+        where: { id: professional.user.id },
+        data: {
+          passwordHash,
+          isActive: true,
+          tokenVersion: { increment: 1 },
+          loginAttempts: 0,
+          lockedUntil: null,
+        },
+      });
+      return { active: true, email };
+    }
+
+    const taken = await this.prisma.user.findUnique({ where: { email }, select: { id: true } });
+    if (taken) {
+      throw new ConflictException(
+        "Ese email ya es de otra cuenta de KiraRoom. Pon en la ficha un email propio del profesional.",
+      );
+    }
+    await this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          tenantId,
+          email,
+          firstName: professional.firstName,
+          lastName: professional.lastName,
+          role: UserRole.staff,
+          passwordHash,
+          professionalId: professional.id,
+          isActive: true,
+        },
+        select: { id: true },
+      });
+      await tx.professional.update({ where: { id: professional.id }, data: { userId: user.id } });
+    });
+    return { active: true, email };
+  }
+
+  /** Removes a professional's login: the account is deactivated and its sessions end. */
+  async revokePanelAccess(tenantId: string, id: string) {
+    const professional = await this.prisma.professional.findFirst({
+      where: { id, tenantId },
+      include: { user: { select: { id: true, role: true } } },
+    });
+    if (!professional) throw new NotFoundException("Professional not found");
+    if (!professional.user) return { active: false };
+    if (professional.user.role !== UserRole.staff) {
+      throw new BadRequestException("La cuenta principal del salón no se puede desactivar desde aquí.");
+    }
+    await this.prisma.user.update({
+      where: { id: professional.user.id },
+      data: { isActive: false, tokenVersion: { increment: 1 } },
+    });
+    return { active: false };
+  }
 }
+
+/** What the team list shows about a professional's login. */
+export function panelAccessOf(
+  user: { role: UserRole; isActive: boolean; email: string; lastLoginAt: Date | null } | null | undefined,
+) {
+  if (!user) return { status: "none" as const };
+  if (user.role !== UserRole.staff) return { status: "owner" as const, email: user.email };
+  return {
+    status: user.isActive ? ("active" as const) : ("revoked" as const),
+    email: user.email,
+    lastLoginAt: user.lastLoginAt,
+  };
+}
+

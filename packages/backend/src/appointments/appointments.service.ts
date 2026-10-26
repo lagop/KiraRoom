@@ -634,9 +634,15 @@ export class AppointmentsService {
     createAppointmentDto: CreateAppointmentDto,
     user: AuthenticatedUser,
   ) {
-    // Staff users can ALWAYS only create appointments for themselves
-    if (user.role === "staff") {
-      if (createAppointmentDto.professionalId !== user.professionalId) {
+    // A professional books on their own agenda, or on a colleague's when the
+    // salon allows it (Configuración → Asignación profesional). The setting
+    // was saved and the booking form honoured it, but this always refused.
+    if (user.role === "staff" && createAppointmentDto.professionalId !== user.professionalId) {
+      const tenant = await this.prisma.tenant.findUnique({
+        where: { id: user.tenantId },
+        select: { allowProfessionalCrossBooking: true },
+      });
+      if (!tenant?.allowProfessionalCrossBooking) {
         throw new ForbiddenException(
           "Los profesionales solo pueden crear citas para sí mismos",
         );
@@ -657,11 +663,13 @@ export class AppointmentsService {
         select: { id: true },
       });
 
-      if (professional) {
-        where.professionalId = professional.id;
-        // Ignorar cualquier professionalId enviado por el cliente para evitar bypass
-        filters.professionalId = professional.id;
-      }
+      // A staff account not linked to a professional sees no appointment.
+      // Without this it saw every appointment of the salon: the filter was
+      // only added when the record was found.
+      if (!professional) return [];
+      where.professionalId = professional.id;
+      // Ignorar cualquier professionalId enviado por el cliente para evitar bypass
+      filters.professionalId = professional.id;
     }
 
     if (filters) {
@@ -1247,9 +1255,9 @@ export class AppointmentsService {
         select: { id: true },
       });
 
-      if (professional) {
-        where.professionalId = professional.id;
-      }
+      // Unlinked staff account: nothing, not the whole salon (see findAll).
+      if (!professional) return [];
+      where.professionalId = professional.id;
     }
 
     // Apply search query (client name or appointment ID)

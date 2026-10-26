@@ -245,7 +245,7 @@ export class AuthService {
     if (user) {
       // Check if user is active
       if (!user.isActive) {
-        throw new UnauthorizedException("Account is deactivated");
+        throw new UnauthorizedException("Esta cuenta está desactivada. Pide acceso a quien gestiona el salón.");
       }
 
       // SEC-8: honour the lockout this method sets.

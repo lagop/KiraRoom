@@ -726,6 +726,24 @@ export function DashboardSidebar({
             )}
           </Link>
         )}
+        {/* Security - staff: their own two-step verification (the settings
+            submenu, where owners find it, is not theirs). */}
+        {!isAdminOrOwner && (
+          <Link
+            href="/dashboard/settings/seguridad"
+            className={`flex items-center rounded-l-lg w-full transition-all duration-200 ${
+              effectiveCollapsed ? "justify-center py-2" : "py-2 px-3"
+            } ${
+              pathname.startsWith("/dashboard/settings/seguridad")
+                ? "bg-white text-violet-950 rounded-r-none"
+                : "text-white hover:text-violet-950 hover:bg-violet-200 hover:-translate-x-3 hover:rounded-lg rounded-r-none"
+            }`}
+            title={effectiveCollapsed ? "Seguridad" : undefined}
+          >
+            <ShieldCheck className={`w-4 h-4 ${effectiveCollapsed ? "" : "mr-3"}`} />
+            {!collapsed && <span suppressHydrationWarning>Seguridad</span>}
+          </Link>
+        )}
         <button
           onClick={() => setShowBugReport(true)}
           className={`flex items-center rounded-l-lg w-full mt-1 transition-all duration-200 ${

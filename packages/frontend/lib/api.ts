@@ -2587,6 +2587,18 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
+  /** Gives a professional their own login, with a first password (also: a new one, or back after removal). */
+  async grantProfessionalAccess(professionalId: string, password: string): Promise<{ active: boolean; email: string }> {
+    return this.request(`/admin/professionals/${professionalId}/access`, {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    });
+  }
+
+  async revokeProfessionalAccess(professionalId: string): Promise<{ active: boolean }> {
+    return this.request(`/admin/professionals/${professionalId}/access`, { method: "DELETE" });
+  }
+
   async changeProfessionalPassword(
     professionalId: string,
     data: { newPassword: string },
