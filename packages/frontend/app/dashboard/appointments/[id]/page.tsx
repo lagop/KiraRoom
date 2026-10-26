@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import apiClient, { Appointment as ApiAppointment } from '../../../../lib/api';
 import { appointmentEditHref } from '../components/appointment-drawer.utils';
+import { getCurrentUser } from '../../../../lib/utils';
 
 type AppointmentStatus = 'confirmed' | 'pending' | 'in_progress' | 'completed' | 'cancelled';
 
@@ -85,6 +86,12 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
   const [appointment, setAppointment] = useState<Appointment | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Deleting an appointment is for the owner and managers; a professional
+  // cancels instead. Read after mount: localStorage is not there on the server.
+  const [canDelete, setCanDelete] = useState(false);
+  useEffect(() => {
+    setCanDelete(getCurrentUser()?.role !== 'staff');
+  }, []);
 
   useEffect(() => {
     const fetchAppointment = async () => {
@@ -205,7 +212,11 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
       }
     } catch (error) {
       console.error('Error updating appointment status:', error);
-      alert('Failed to update appointment status');
+      alert(
+        error instanceof Error && error.message
+          ? `No se ha podido cambiar el estado: ${error.message}`
+          : 'No se ha podido cambiar el estado de la cita.',
+      );
     } finally {
       setUpdating(false);
     }
@@ -303,14 +314,16 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
             <Edit className="w-4 h-4 mr-2" />
             Edit
           </button>
-          <button
-            onClick={handleDelete}
-            disabled={updating}
-            className="inline-flex items-center px-4 py-2 border border-red-300 text-red-700 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50"
-          >
-            <Trash2 className="w-4 h-4 mr-2" />
-            Delete
-          </button>
+          {canDelete && (
+            <button
+              onClick={handleDelete}
+              disabled={updating}
+              className="inline-flex items-center px-4 py-2 border border-red-300 text-red-700 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50"
+            >
+              <Trash2 className="w-4 h-4 mr-2" />
+              Delete
+            </button>
+          )}
         </div>
       </div>
 

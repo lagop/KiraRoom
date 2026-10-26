@@ -220,6 +220,12 @@ function AppointmentsPageContent() {
       );
     } catch (error) {
       console.error("Error updating appointment status:", error);
+      // It used to fail in silence: the badge just did not change.
+      window.alert(
+        error instanceof Error && error.message
+          ? `No se ha podido cambiar el estado: ${error.message}`
+          : "No se ha podido cambiar el estado de la cita.",
+      );
     } finally {
       setUpdatingId(null);
     }
