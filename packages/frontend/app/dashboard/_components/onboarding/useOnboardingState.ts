@@ -5,8 +5,9 @@ import apiClient, { OnboardingState } from "@/lib/api";
 
 const QUERY_KEY = ["onboarding", "state"] as const;
 
-export function useOnboardingState(options?: { refetchInterval?: number }) {
+export function useOnboardingState(options?: { refetchInterval?: number; enabled?: boolean }) {
   return useQuery<OnboardingState>({
+    enabled: options?.enabled ?? true,
     queryKey: QUERY_KEY,
     queryFn: () => apiClient.getOnboardingState(),
     refetchInterval: options?.refetchInterval ?? 30_000,

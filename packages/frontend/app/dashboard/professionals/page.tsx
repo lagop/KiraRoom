@@ -9,6 +9,8 @@ import { Input } from "@/src/components/ui/Input";
 import { Plus, Pencil, Trash2, Power } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { useTranslations } from "@/lib/use-translation";
+import { PanelAccessBlock } from "@/src/components/team/panel-access";
+import type { PanelAccess } from "@/lib/panel-access";
 
 // Local type definitions
 interface Service {
@@ -41,6 +43,8 @@ interface Professional {
       category: string;
     };
   }[];
+  /** Their own login to the panel (see PanelAccessBlock). */
+  panelAccess?: PanelAccess;
 }
 
 function ProfessionalsPageContent() {
@@ -491,6 +495,12 @@ function ProfessionalsPageContent() {
                       <Trash2 className="w-4 h-4" />
                     </Button>
                   </div>
+                  <PanelAccessBlock
+                    professionalId={professional.id}
+                    name={`${professional.firstName} ${professional.lastName}`}
+                    email={professional.email}
+                    access={professional.panelAccess}
+                  />
                 </div>
               </div>
             </Card>
@@ -557,7 +567,7 @@ function ProfessionalsPageContent() {
                   }
                   required
                 />
-                {editingProfessional && (
+                {editingProfessional?.panelAccess?.status === "active" && (
                   <button
                     type="button"
                     onClick={() => setShowPasswordDialog(true)}

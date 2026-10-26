@@ -10,6 +10,7 @@ import {
   CreateProfessionalDto,
   UpdateProfessionalDto,
   ChangeProfessionalPasswordDto,
+  GrantPanelAccessDto,
 } from "./dto";
 import { JwtAuthGuard } from "../../auth/guards/jwt-auth.guard";
 import { Roles } from "../../auth/decorators/roles.decorator";
@@ -161,5 +162,23 @@ export class AdminProfessionalsController {
     @Body() changePasswordDto: ChangeProfessionalPasswordDto,
   ) {
     return this.adminProfessionalsService.changePassword(user.tenantId, id, changePasswordDto);
+  }
+
+  @Post(":id/access")
+  @ApiOperation({ summary: "Give a professional their own login to the panel, with a first password" })
+  @ApiResponse({ status: 201, description: "Access granted" })
+  @ApiResponse({ status: 409, description: "The email belongs to another account" })
+  async grantAccess(
+    @CurrentUser() user: any,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() dto: GrantPanelAccessDto,
+  ) {
+    return this.adminProfessionalsService.grantPanelAccess(user.tenantId, id, dto.password);
+  }
+
+  @Delete(":id/access")
+  @ApiOperation({ summary: "Remove a professional's login (deactivated, sessions ended)" })
+  async revokeAccess(@CurrentUser() user: any, @Param("id", ParseUUIDPipe) id: string) {
+    return this.adminProfessionalsService.revokePanelAccess(user.tenantId, id);
   }
 }

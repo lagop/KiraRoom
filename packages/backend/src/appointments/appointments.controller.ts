@@ -153,8 +153,10 @@ export class AppointmentsController {
     return this.appointmentsService.findOne(req.user, id);
   }
 
+  // A professional edits or moves their own appointments (the service checks
+  // the appointment is theirs and keeps it on their agenda).
   @Patch(":id")
-  @Roles(UserRole.owner, UserRole.admin)
+  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
   @ApiOperation({ summary: "Update an appointment" })
   @ApiResponse({ status: 200, description: "Appointment updated successfully" })
   @ApiResponse({ status: 404, description: "Appointment not found" })
@@ -184,7 +186,7 @@ export class AppointmentsController {
   }
 
   @Put(":id/complete")
-  @Roles(UserRole.owner, UserRole.admin)
+  @Roles(UserRole.owner, UserRole.admin, UserRole.staff) // staff: their own, via findOne
   @ApiOperation({ summary: "Mark appointment as completed" })
   @ApiResponse({ status: 200, description: "Appointment marked as completed" })
   @ApiResponse({ status: 404, description: "Appointment not found" })
@@ -197,7 +199,7 @@ export class AppointmentsController {
   }
 
   @Put(":id/no-show")
-  @Roles(UserRole.owner, UserRole.admin)
+  @Roles(UserRole.owner, UserRole.admin, UserRole.staff) // staff: their own, via findOne
   @ApiOperation({ summary: "Mark appointment as no-show" })
   @ApiResponse({ status: 200, description: "Appointment marked as no-show" })
   @ApiResponse({ status: 404, description: "Appointment not found" })

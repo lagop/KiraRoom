@@ -187,6 +187,6 @@ describe("SEC-8: AuthService.login honours lockedUntil", () => {
 
     await expect(
       auth.login({ email: "owner@salon.test", password: "correct-horse-battery" }),
-    ).rejects.toThrow(/deactivated/);
+    ).rejects.toThrow(/desactivada/);
   });
 });
