@@ -140,6 +140,7 @@ export const transformToCalendarFormat = (
           isMultiService: true,
           status: appointment.status,
           appointmentServiceId: serviceAppointment.id,
+          isParallel: !!serviceAppointment.isParallel,
         });
         
         // Move current time forward for the next serial service

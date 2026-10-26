@@ -2305,6 +2305,19 @@ class ApiClient implements ApiClientInterface {
     );
   }
 
+  /**
+   * Drags one service of a multi-service appointment: the whole visit, or
+   * only this service (owners and managers). The server checks every
+   * professional's agenda and that the client is never in two places.
+   */
+  async moveAppointmentService(
+    id: string,
+    /** minutesDelta: how far it moves, not a clock time (see MoveVisitServiceDto). */
+    data: { scope: "visit" | "service"; minutesDelta: number; professionalId?: string },
+  ): Promise<{ appointmentId: string; moved: number; scheduledDate?: string; scheduledTime?: string; duration?: number }> {
+    return this.request(`/appointment-services/${id}/move`, { method: "PUT", body: JSON.stringify(data) });
+  }
+
   async updateAppointmentServiceTiming(
     id: string,
     scheduledStart: string,

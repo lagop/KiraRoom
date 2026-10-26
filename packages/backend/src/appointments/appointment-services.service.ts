@@ -488,54 +488,6 @@ export class AppointmentServicesService {
     return updatedServices;
   }
 
-  // Update timing for a specific service
-  async updateTiming(id: string, scheduledStart: Date, scheduledEnd: Date) {
-    const appointmentService = await this.findOne(id);
-
-    // Validate times
-    if (scheduledEnd <= scheduledStart) {
-      throw new BadRequestException('scheduledEnd must be after scheduledStart');
-    }
-
-    // Update the service timing
-    const updatedService = await this.prisma.appointmentService.update({
-      where: { id },
-      data: {
-        scheduledStart,
-        scheduledEnd,
-      },
-      include: {
-        service: true,
-        professional: true,
-        appointment: true,
-      },
-    });
-
-    // If this is a serial service, cascade the update to subsequent services
-    if (!updatedService.isParallel) {
-      await this.cascadeTimingUpdate(updatedService.appointmentId, id, scheduledEnd);
-    }
-
-    // Update appointment's scheduledTime to match the first service's scheduledStart
-    const allServices = await this.prisma.appointmentService.findMany({
-      where: { appointmentId: updatedService.appointmentId },
-      orderBy: { order: 'asc' },
-    });
-    const firstService = allServices[0];
-    if (firstService && firstService.scheduledStart) {
-      await this.prisma.appointment.update({
-        where: { id: updatedService.appointmentId },
-        data: {
-          scheduledTime: firstService.scheduledStart.toISOString(),
-        },
-      });
-      this.logger.log(`Updated appointment ${updatedService.appointmentId} scheduledTime to ${firstService.scheduledStart}`);
-    }
-
-    this.logger.log(`Updated timing for appointment service ${id}`);
-    return updatedService;
-  }
-
   // Cascade timing update to subsequent serial services
   private async cascadeTimingUpdate(appointmentId: string, currentServiceId: string, newEndTime: Date) {
     // Get all services for this appointment, ordered by order

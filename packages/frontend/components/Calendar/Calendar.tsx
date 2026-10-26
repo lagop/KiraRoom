@@ -17,7 +17,8 @@ import { fetchCalendarData, transformToCalendarFormat } from "./calendar.service
 import { useToast } from "@/components/ui/use-toast";
 import apiClient from "../../lib/api";
 import { SlotClickData } from "./TimeSlot";
-import { droppedOnProfessional, minutesFromDrag, moveErrorText, planMove } from "./drag-move";
+import { droppedOnProfessional, minutesFromDrag, moveErrorText, planMove, serviceOnlyEffect, type MovePlan, type ServiceOnlyEffect } from "./drag-move";
+import { MoveVisitDialog, type MoveScope } from "./MoveVisitDialog";
 import { getCurrentUser } from "@/lib/utils";
 import { NewAppointmentPopover } from "./NewAppointmentPopover";
 import { EditAppointmentPopover } from "./EditAppointmentPopover";
@@ -60,6 +61,13 @@ export const Calendar: React.FC<{
   const [debugMode, setDebugMode] = useState(false); // Debug mode for drop zones
   const [newAppointmentSlot, setNewAppointmentSlot] = useState<SlotClickData | null>(null);
   const [editingAppointmentId, setEditingAppointmentId] = useState<string | null>(null);
+  // A dropped service of a multi-service visit, waiting for the owner to say
+  // whether the whole visit moves or only that service.
+  const [pendingVisitMove, setPendingVisitMove] = useState<{
+    moving: Appointment;
+    plan: Extract<MovePlan, { kind: "move" }>;
+    effect: ServiceOnlyEffect;
+  } | null>(null);
   // Mobile-first calendar: prefer the chronological list (agenda) on
   // phones, the multi-column day grid on tablets/desktops. Falls back
   // to agenda during SSR (window undefined) so the initial markup
@@ -113,6 +121,34 @@ export const Calendar: React.FC<{
     setActiveId(event.active.id as string);
   }, []);
 
+  /** Moves one service of a multi-service visit on the server, then redraws the day. */
+  const moveVisit = useCallback(
+    async (moving: Appointment, plan: Extract<MovePlan, { kind: "move" }>, scope: MoveScope) => {
+      try {
+        setIsUpdating(true);
+        // How far, not where to: the calendar draws in this browser's time
+        // zone and the server reckons in the salon's.
+        await apiClient.moveAppointmentService(moving.appointmentServiceId as string, {
+          scope,
+          minutesDelta: Math.round((plan.start.getTime() - new Date(moving.start).getTime()) / 60_000),
+          professionalId: plan.professionalId,
+        });
+        toast({
+          title: scope === "visit" ? "Visita movida" : "Servicio movido",
+          description: `Ahora a las ${format(plan.start, "HH:mm")}.`,
+        });
+        // Every service of the visit may have moved: redraw from the server.
+        await fetchData();
+        onAppointmentUpdated?.();
+      } catch (error) {
+        toast({ title: "No se ha movido", description: moveErrorText(error), variant: "destructive" });
+      } finally {
+        setIsUpdating(false);
+      }
+    },
+    [toast, fetchData, onAppointmentUpdated],
+  );
+
   const handleDragEnd = useCallback(
     async (event: DragEndEvent) => {
       const { active, over, delta } = event;
@@ -135,6 +171,30 @@ export const Calendar: React.FC<{
         return;
       }
 
+      // One service of a visit with several: the visit decides (visit-move.ts
+      // on the server). Owners and managers choose; a professional moves the
+      // whole visit, and only one that is all theirs.
+      const visit = moving.appointmentId
+        ? appointments.filter((a) => a.appointmentId === moving.appointmentId && a.appointmentServiceId)
+        : [];
+      if (moving.appointmentServiceId && visit.length > 1) {
+        if (getCurrentUser()?.role === "staff") {
+          if (visit.some((a) => a.professionalId !== moving.professionalId)) {
+            toast({
+              title: "No se ha movido",
+              description: "Esta cita la comparten varios profesionales: pide a la dueña o al encargado que la mueva.",
+              variant: "destructive",
+            });
+            return;
+          }
+          await moveVisit(moving, plan, "visit");
+          return;
+        }
+        const minutesDelta = Math.round((plan.start.getTime() - new Date(moving.start).getTime()) / 60_000);
+        setPendingVisitMove({ moving, plan, effect: serviceOnlyEffect(visit, moving.id, minutesDelta) });
+        return;
+      }
+
       // Optimistic: the block moves now and comes back if the server refuses.
       const original = { ...moving };
       setAppointments((prev) =>
@@ -147,24 +207,15 @@ export const Calendar: React.FC<{
 
       try {
         setIsUpdating(true);
-        if (moving.appointmentServiceId) {
-          // One service of a multi-service appointment.
-          await apiClient.updateAppointmentService(moving.appointmentServiceId, {
-            professionalId: plan.professionalId,
-            scheduledStart: plan.start.toISOString(),
-            scheduledEnd: plan.end.toISOString(),
-          });
-        } else {
-          // The whole appointment. Its id was taken from the block id by
-          // cutting at the last dash, which for a plain UUID cut off its last
-          // group: every single-service move failed. The wall clock the
-          // calendar shows is what is saved (toISOString() would send UTC).
-          await apiClient.updateAppointment(moving.appointmentId ?? moving.id, {
-            professionalId: plan.professionalId,
-            scheduledDate: format(plan.start, "yyyy-MM-dd"),
-            scheduledTime: format(plan.start, "HH:mm"),
-          });
-        }
+        // The whole appointment. Its id was taken from the block id by
+        // cutting at the last dash, which for a plain UUID cut off its last
+        // group: every single-service move failed. The wall clock the
+        // calendar shows is what is saved (toISOString() would send UTC).
+        await apiClient.updateAppointment(moving.appointmentId ?? moving.id, {
+          professionalId: plan.professionalId,
+          scheduledDate: format(plan.start, "yyyy-MM-dd"),
+          scheduledTime: format(plan.start, "HH:mm"),
+        });
         toast({ title: "Cita movida", description: `Ahora a las ${format(plan.start, "HH:mm")}.` });
         onAppointmentUpdated?.();
       } catch (error) {
@@ -174,7 +225,7 @@ export const Calendar: React.FC<{
         setIsUpdating(false);
       }
     },
-    [appointments, toast, onAppointmentUpdated]
+    [appointments, toast, onAppointmentUpdated, moveVisit]
   );
 
   const handleSlotClick = useCallback((data: SlotClickData) => {
@@ -269,6 +320,20 @@ export const Calendar: React.FC<{
               )}
             </div>
           </>
+        )}
+        {pendingVisitMove && (
+          <MoveVisitDialog
+            professionalName={professionals.find((p) => p.id === pendingVisitMove.moving.professionalId)?.name ?? "este profesional"}
+            serviceName={pendingVisitMove.moving.serviceName}
+            when={`a las ${format(pendingVisitMove.plan.start, "HH:mm")}`}
+            serviceOnly={pendingVisitMove.effect}
+            onCancel={() => setPendingVisitMove(null)}
+            onConfirm={(scope) => {
+              const { moving, plan } = pendingVisitMove;
+              setPendingVisitMove(null);
+              void moveVisit(moving, plan, scope);
+            }}
+          />
         )}
         <DragOverlay>
           {activeAppointment && (

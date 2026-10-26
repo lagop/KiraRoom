@@ -3,7 +3,7 @@
  *
  * Run: npx ts-node --project tsconfig.test.json --transpile-only components/Calendar/drag-move.spec.ts
  */
-import { droppedOnProfessional, minutesFromDrag, moveErrorText, planMove } from "./drag-move";
+import { droppedOnProfessional, minutesFromDrag, moveErrorText, planMove, serviceOnlyEffect, serviceOnlyText } from "./drag-move";
 
 let pass = 0;
 let fail = 0;
@@ -54,6 +54,30 @@ check(
 );
 check("a network failure gets a plain message", /No se ha podido mover/.test(moveErrorText(new Error("Failed to fetch"))));
 check("so does anything without a message", /No se ha podido mover/.test(moveErrorText(null)));
+
+// A visit: cut with Ana 10:00-10:30, colour with Bea 10:30-11:30 (Madrid).
+const visit = [
+  { id: "cut", serviceName: "Corte", start: "2026-11-02T09:00:00.000Z", end: "2026-11-02T09:30:00.000Z" },
+  { id: "colour", serviceName: "Color", start: "2026-11-02T09:30:00.000Z", end: "2026-11-02T10:30:00.000Z" },
+];
+const earlier = serviceOnlyEffect(visit, "cut", -45);
+check(
+  "moving only the cut 45 min earlier: she waits 45 min between cut and colour",
+  earlier.kind === "wait" && earlier.minutes === 45 && earlier.before === "Corte" && earlier.after === "Color",
+  earlier,
+);
+check("and the dialog says so", serviceOnlyText(earlier) === "La clienta esperará 45 min entre Corte y Color.");
+const laterOnly = serviceOnlyEffect(visit, "cut", 15);
+check("moving only the cut 15 min later: she would be in two places", laterOnly.kind === "two-places" && laterOnly.with === "Color", laterOnly);
+check("which the dialog refuses", /No se puede/.test(serviceOnlyText(laterOnly)));
+check(
+  "a parallel service may overlap by design",
+  serviceOnlyEffect([visit[0], { ...visit[1], isParallel: true }], "cut", 15).kind !== "two-places",
+);
+check(
+  "closing an existing gap is no extra wait",
+  serviceOnlyEffect([visit[0], { ...visit[1], start: "2026-11-02T10:00:00.000Z", end: "2026-11-02T11:00:00.000Z" }], "cut", 30).kind === "same",
+);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

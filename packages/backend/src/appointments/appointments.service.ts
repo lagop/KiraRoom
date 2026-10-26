@@ -35,7 +35,17 @@ import { NotificationType } from "../notifications/dto";
 import { TranslationsService } from "../translations/translations.service";
 import { ConsentService } from "../consent/consent.service";
 import { salonInstant } from "./salon-time";
-import { assertCanReschedule } from "./reschedule-check";
+import { assertCanReschedule, salonDayAndTime } from "./reschedule-check";
+import {
+  MoveScope,
+  VisitService,
+  changedServices,
+  clientDoubleBooked,
+  currentVisitSchedule,
+  planRetime,
+  planVisitMove,
+  visitSpan,
+} from "./visit-move";
 import { appointmentLocationId } from "../multi-location/appointment-location";
 import { normalizePhone, phoneKey } from "../common/phone";
 import { isReadOnlyStatus } from "../common/guards/read-only-tenant.guard";
@@ -934,11 +944,14 @@ export class AppointmentsService {
       });
 
       // Then create new service records
-      const serviceRecords = updateAppointmentDto.services.map((svc) => ({
+      // In the order given: every row used to get order 0, so which service
+      // came first (and so the visit's flow) was up to the database.
+      const serviceRecords = updateAppointmentDto.services.map((svc, index) => ({
         appointmentId: id,
         serviceId: svc.serviceId,
         professionalId: svc.professionalId || null,
         isParallel: svc.isParallel || false,
+        order: index,
       }));
 
       await this.prisma.appointmentService.createMany({
@@ -1392,6 +1405,167 @@ export class AppointmentsService {
     await this.loyaltyAfterStatus(updatedAppointment.tenantId, id);
 
     return this.enrichAppointment(updatedAppointment);
+  }
+
+  /**
+   * Drag one service of a multi-service appointment in the calendar. See
+   * visit-move.ts: by default the whole visit moves; owners and managers may
+   * move just this service (a wait agreed with the client). Every service
+   * that moves must fit its professional's agenda and hours, the client is
+   * never in two services at once, and the appointment's own time,
+   * reminders and notice to the client follow.
+   */
+  async moveVisitService(
+    user: any,
+    serviceRowId: string,
+    input: { scope: MoveScope; minutesDelta: number; professionalId?: string },
+  ) {
+    const visit = await this.loadVisit(user, serviceRowId);
+    const staffOwn = await this.staffVisitCheck(user, visit);
+    if (staffOwn) {
+      if (input.scope !== "visit") {
+        throw new ForbiddenException("Mover solo un servicio de la visita es cosa de la dueña o del encargado.");
+      }
+      if (input.professionalId && input.professionalId !== staffOwn) {
+        throw new ForbiddenException("Solo puedes mover tus citas dentro de tu agenda.");
+      }
+    }
+    const dragged = visit.services.find((s) => s.id === serviceRowId);
+    if (!dragged) throw new NotFoundException("Servicio no encontrado en esta cita");
+    const newStart = new Date(dragged.start.getTime() + input.minutesDelta * 60_000);
+    const after = planVisitMove(visit.services, serviceRowId, newStart, input.scope, input.professionalId);
+    return this.applyVisit(user, visit, after);
+  }
+
+  /**
+   * The timing editor in the appointment card: one service gets a new start
+   * and end, the serial ones after it follow. Same checks as a move. It used
+   * to save the appointment's time as an ISO date ("2026-11-02T09:00:00Z")
+   * instead of the salon's clock, and checked nothing.
+   */
+  async retimeVisitService(user: any, serviceRowId: string, start: Date, end: Date) {
+    if (!(end > start)) throw new BadRequestException("El final tiene que ser después del inicio.");
+    const visit = await this.loadVisit(user, serviceRowId);
+    await this.staffVisitCheck(user, visit);
+    return this.applyVisit(user, visit, planRetime(visit.services, serviceRowId, start, end));
+  }
+
+  private async loadVisit(user: any, serviceRowId: string) {
+    const row = await this.prisma.appointmentService.findUnique({
+      where: { id: serviceRowId },
+      select: { appointmentId: true },
+    });
+    if (!row) throw new NotFoundException("Servicio no encontrado");
+    const appointment = await this.prisma.appointment.findFirst({
+      where: { id: row.appointmentId, tenantId: user.tenantId },
+      include: {
+        tenant: { select: { timezone: true } },
+        services: {
+          orderBy: [{ order: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+          include: { service: { select: { name: true, duration: true } } },
+        },
+      },
+    });
+    if (!appointment) throw new NotFoundException("Cita no encontrada");
+    const timeZone = (appointment as any).tenant?.timezone || "Europe/Madrid";
+    const rows = (appointment as any).services as any[];
+    const services = currentVisitSchedule({
+      appointmentStart: salonInstant(appointment.scheduledDate, appointment.scheduledTime, timeZone),
+      appointmentProfessionalId: appointment.professionalId,
+      services: rows.map((r) => ({
+        id: r.id,
+        professionalId: r.professionalId,
+        scheduledStart: r.scheduledStart,
+        scheduledEnd: r.scheduledEnd,
+        isParallel: !!r.isParallel,
+        durationMinutes: r.service?.duration ?? 0,
+      })),
+    });
+    const names = new Map<string, string>(rows.map((r) => [r.id, r.service?.name ?? "otro servicio"]));
+    return { appointment, timeZone, services, names };
+  }
+
+  /**
+   * A professional changes a visit only when every service in it is theirs:
+   * otherwise they would move colleagues' agendas. Returns their professional
+   * id (null for owners and managers, who may).
+   */
+  private async staffVisitCheck(user: any, visit: { services: VisitService[] }): Promise<string | null> {
+    if (user.role !== "staff") return null;
+    const own = await this.prisma.professional.findFirst({
+      where: { userId: user.id, tenantId: user.tenantId },
+      select: { id: true },
+    });
+    if (!own) throw new NotFoundException("No tienes permiso para modificar esta cita");
+    if (!visit.services.every((s) => s.professionalId === own.id)) {
+      throw new ForbiddenException(
+        "Esta cita la comparten varios profesionales: pide a la dueña o al encargado que la mueva.",
+      );
+    }
+    return own.id;
+  }
+
+  private async applyVisit(
+    user: any,
+    visit: { appointment: any; timeZone: string; services: VisitService[]; names: Map<string, string> },
+    after: VisitService[],
+  ) {
+    const { appointment, timeZone } = visit;
+    const changed = changedServices(visit.services, after);
+    if (changed.length === 0) return { appointmentId: appointment.id, moved: 0 };
+
+    // She may wait between services if the salon chose to; she cannot be in two.
+    const clash = clientDoubleBooked(after);
+    if (clash && !clientDoubleBooked(visit.services)) {
+      throw new ConflictException(
+        `La clienta estaría a la vez en ${visit.names.get(clash[0].id)} y ${visit.names.get(clash[1].id)}.`,
+      );
+    }
+    for (const s of changed) {
+      const { day, time } = salonDayAndTime(s.start, timeZone);
+      await assertCanReschedule(this.prisma as any, {
+        tenantId: user.tenantId,
+        appointmentId: appointment.id,
+        professionalId: s.professionalId,
+        day,
+        time,
+        durationMinutes: Math.round((s.end.getTime() - s.start.getTime()) / 60_000),
+      });
+    }
+
+    // The appointment's own time and length: from its first to its last service.
+    const span = visitSpan(after);
+    const { day, time } = salonDayAndTime(span.start, timeZone);
+    const duration = Math.round((span.end.getTime() - span.start.getTime()) / 60_000);
+    const oldDate = appointment.scheduledDate;
+    const oldTime = appointment.scheduledTime;
+    const startChanged = !appointment.startTime || new Date(appointment.startTime).getTime() !== span.start.getTime();
+
+    const updated = await this.prisma.$transaction(async (tx: any) => {
+      for (const s of changed) {
+        await tx.appointmentService.update({
+          where: { id: s.id },
+          data: { scheduledStart: s.start, scheduledEnd: s.end, professionalId: s.professionalId },
+        });
+      }
+      return tx.appointment.update({
+        where: { id: appointment.id },
+        data: {
+          scheduledDate: new Date(`${day}T00:00:00.000Z`),
+          scheduledTime: time,
+          duration,
+          endTime: this.calculateEndTime(time, duration),
+          ...(startChanged ? { startTime: span.start, reminder24hSent: false, reminder1hSent: false } : {}),
+        },
+        include: { client: true, professional: true, service: true, tenant: true },
+      });
+    });
+
+    const dayOf = (d: Date | string) => (typeof d === "string" ? d.slice(0, 10) : new Date(d).toISOString().slice(0, 10));
+    if (dayOf(oldDate) !== day || oldTime !== time) {
+      await this.sendAppointmentRescheduledNotifications(updated, oldDate, oldTime);
+    }
+    return { appointmentId: appointment.id, moved: changed.length, scheduledDate: day, scheduledTime: time, duration };
   }
 
   async remove(user: any, id: string) {

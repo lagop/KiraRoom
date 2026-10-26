@@ -19,6 +19,8 @@ export type Appointment = {
   isMultiService?: boolean;
   status?: string;
   appointmentServiceId?: string; // ID of the AppointmentService for multi-service appointments
+  /** Runs alongside the other services of the visit (e.g. while a colour sets). */
+  isParallel?: boolean;
   notes?: string;
   depositRequired?: boolean;
   depositAmount?: number;
