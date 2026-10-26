@@ -130,6 +130,7 @@ export const transformToCalendarFormat = (
         
         calendarAppointments.push({
           id: `${appointment.id}-${index}`,
+          appointmentId: appointment.id,
           professionalId,
           clientName,
           serviceName,
@@ -159,6 +160,7 @@ export const transformToCalendarFormat = (
       
       calendarAppointments.push({
         id: appointment.id,
+        appointmentId: appointment.id,
         professionalId: appointment.professionalId,
         clientName,
         serviceName,

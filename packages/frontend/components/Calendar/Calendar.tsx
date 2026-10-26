@@ -17,6 +17,8 @@ import { fetchCalendarData, transformToCalendarFormat } from "./calendar.service
 import { useToast } from "@/components/ui/use-toast";
 import apiClient from "../../lib/api";
 import { SlotClickData } from "./TimeSlot";
+import { droppedOnProfessional, minutesFromDrag, moveErrorText, planMove } from "./drag-move";
+import { getCurrentUser } from "@/lib/utils";
 import { NewAppointmentPopover } from "./NewAppointmentPopover";
 import { EditAppointmentPopover } from "./EditAppointmentPopover";
 
@@ -114,174 +116,65 @@ export const Calendar: React.FC<{
   const handleDragEnd = useCallback(
     async (event: DragEndEvent) => {
       const { active, over, delta } = event;
-      
-      // Visual debug indicator
-      console.log('%c=== DRAG END DEBUG ===', 'color: red; font-weight: bold;');
-      console.log('Active appointment ID:', active.id);
-      console.log('Over object:', over);
-      console.log('Delta:', { x: delta.x, y: delta.y });
-      
-      console.log('Over object:', over);
-      console.log('Delta:', { x: delta.x, y: delta.y });
+      setActiveId(null);
 
-      const activeAppointment = appointments.find((a) => a.id === active.id);
-      if (!activeAppointment) {
-        console.log('Active appointment not found');
-        setActiveId(null);
+      const moving = appointments.find((a) => a.id === active.id);
+      if (!moving) return;
+
+      const plan = planMove({
+        start: moving.start,
+        end: moving.end,
+        professionalId: moving.professionalId,
+        newProfessionalId: droppedOnProfessional(over as any, moving.professionalId),
+        minutesDelta: minutesFromDrag(delta.y),
+        isStaff: getCurrentUser()?.role === "staff",
+      });
+      if (plan.kind === "none") return;
+      if (plan.kind === "refuse") {
+        toast({ title: "No se ha movido", description: plan.message, variant: "destructive" });
         return;
       }
 
-      // Extract drop data more robustly
-      let overData = over ? (over.data.current as any) : null;
-      let newProfessionalId = activeAppointment.professionalId;
-      let minutesDelta = Math.round(delta.y / 24) * 15;
-
-      console.log('Over data:', over?.data);
-      console.log('Over data current:', over?.data?.current);
-      
-      if (!overData) {
-        console.log('No data in drop target, trying alternative access');
-        // Try alternative ways to access the data
-        if (over && over.data && typeof over.data === 'object') {
-          overData = {...over.data};
-        }
-      }
-      
-      if (overData) {
-        console.log('Found overData:', overData);
-        // Handle different drop target types
-        if (overData.professionalId) {
-          newProfessionalId = overData.professionalId;
-          console.log('Drop on professional column, new professional:', newProfessionalId);
-        } else if (overData.slot && overData.professionalId) {
-          newProfessionalId = overData.professionalId;
-          console.log('Drop on time slot, new professional:', newProfessionalId);
-        } else if (over && over.id && typeof over.id === 'string' && over.id.startsWith('professional-column-')) {
-          newProfessionalId = (over.id as string).replace('professional-column-', '');
-          console.log('Drop on professional column (from ID), new professional:', newProfessionalId);
-        } else if (over && over.id && typeof over.id === 'string' && over.id.includes('-')) {
-          // Try to extract professionalId from slot ID format: "professionalId-index"
-          const parts = (over.id as string).split('-');
-          if (parts.length >= 2) {
-            newProfessionalId = parts[0];
-            console.log('Drop on time slot (from ID), new professional:', newProfessionalId);
-          }
-        }
-      } else {
-        console.log('Could not extract data from drop target, using original professional');
-      }
-      
-      // Calculate new time based on delta
-      const newStart = new Date(activeAppointment.start);
-      newStart.setMinutes(newStart.getMinutes() + minutesDelta);
-      
-      console.log('Calculated new time:', {
-        minutesDelta,
-        newStart,
-        originalStart: activeAppointment.start
-      });
-
-      const duration =
-        new Date(activeAppointment.end).getTime() -
-        new Date(activeAppointment.start).getTime();
-      const newEnd = new Date(newStart.getTime() + duration);
-
-      console.log('New appointment details:', {
-        newProfessionalId,
-        newStart,
-        newEnd,
-        minutesDelta
-      });
-
-      // Store original appointment for potential revert
-      const originalAppointment = {...activeAppointment};
-
-      // Extract original appointment ID from calendar appointment ID
-      // Calendar appointment IDs are in format: `${appointmentId}-${index}` for multi-service
-      const activeIdStr = String(active.id);
-      const originalAppointmentId = activeIdStr.includes('-')
-        ? activeIdStr.substring(0, activeIdStr.lastIndexOf('-'))
-        : activeIdStr;
-
-      // Check if this is a multi-service appointment (has appointmentServiceId)
-      const isMultiService = activeAppointment.appointmentServiceId != null;
-
-      // Optimistic UI update - only update the dragged appointment
+      // Optimistic: the block moves now and comes back if the server refuses.
+      const original = { ...moving };
       setAppointments((prev) =>
-        prev.map((a) => {
-          if (a.id === active.id) {
-            return {
-              ...a,
-              professionalId: newProfessionalId,
-              start: newStart.toISOString(),
-              end: newEnd.toISOString(),
-            };
-          }
-          return a;
-        })
+        prev.map((a) =>
+          a.id === moving.id
+            ? { ...a, professionalId: plan.professionalId, start: plan.start.toISOString(), end: plan.end.toISOString() }
+            : a,
+        ),
       );
-      setActiveId(null);
 
-      // Backend API call
       try {
         setIsUpdating(true);
-
-        if (isMultiService) {
-          // For multi-service appointments, update the individual service
-          console.log('Calling backend update for appointment service:', {
-            appointmentServiceId: activeAppointment.appointmentServiceId,
-            professionalId: newProfessionalId,
-            scheduledStart: newStart.toISOString(),
-            scheduledEnd: newEnd.toISOString(),
-          });
-
-          await apiClient.updateAppointmentService(activeAppointment.appointmentServiceId as string, {
-            professionalId: newProfessionalId,
-            scheduledStart: newStart.toISOString(),
-            scheduledEnd: newEnd.toISOString(),
+        if (moving.appointmentServiceId) {
+          // One service of a multi-service appointment.
+          await apiClient.updateAppointmentService(moving.appointmentServiceId, {
+            professionalId: plan.professionalId,
+            scheduledStart: plan.start.toISOString(),
+            scheduledEnd: plan.end.toISOString(),
           });
         } else {
-          // For single service appointments, update the appointment
-          // The wall clock the calendar shows (it renders scheduledTime as
-          // local time). toISOString() sent UTC: in Madrid a drop at 10:00
-          // was saved as 08:00, and near midnight on the wrong day.
-          await apiClient.updateAppointment(originalAppointmentId as string, {
-            professionalId: newProfessionalId,
-            scheduledDate: format(newStart, "yyyy-MM-dd"),
-            scheduledTime: format(newStart, "HH:mm"),
+          // The whole appointment. Its id was taken from the block id by
+          // cutting at the last dash, which for a plain UUID cut off its last
+          // group: every single-service move failed. The wall clock the
+          // calendar shows is what is saved (toISOString() would send UTC).
+          await apiClient.updateAppointment(moving.appointmentId ?? moving.id, {
+            professionalId: plan.professionalId,
+            scheduledDate: format(plan.start, "yyyy-MM-dd"),
+            scheduledTime: format(plan.start, "HH:mm"),
           });
         }
-
-        toast({
-          title: 'Appointment updated',
-          description: 'The appointment has been successfully rescheduled.',
-          variant: 'default',
-        });
-        
-        // Notify parent component about the update
-        if (onAppointmentUpdated) {
-          onAppointmentUpdated();
-        }
+        toast({ title: "Cita movida", description: `Ahora a las ${format(plan.start, "HH:mm")}.` });
+        onAppointmentUpdated?.();
       } catch (error) {
-        console.error('Failed to update appointment:', error);
-
-        // Revert UI changes on failure
-        setAppointments((prev) =>
-          prev.map((a) =>
-            a.id === active.id ? originalAppointment : a
-          )
-        );
-
-        toast({
-          title: 'Update failed',
-          description: 'Failed to update appointment. Please try again.',
-          variant: 'destructive',
-        });
+        setAppointments((prev) => prev.map((a) => (a.id === moving.id ? original : a)));
+        toast({ title: "No se ha movido", description: moveErrorText(error), variant: "destructive" });
       } finally {
         setIsUpdating(false);
       }
     },
-    [appointments, toast]
+    [appointments, toast, onAppointmentUpdated]
   );
 
   const handleSlotClick = useCallback((data: SlotClickData) => {

@@ -35,6 +35,7 @@ import { NotificationType } from "../notifications/dto";
 import { TranslationsService } from "../translations/translations.service";
 import { ConsentService } from "../consent/consent.service";
 import { salonInstant } from "./salon-time";
+import { assertCanReschedule } from "./reschedule-check";
 import { appointmentLocationId } from "../multi-location/appointment-location";
 import { normalizePhone, phoneKey } from "../common/phone";
 import { isReadOnlyStatus } from "../common/guards/read-only-tenant.guard";
@@ -846,6 +847,30 @@ export class AppointmentsService {
         delete updateData[key];
       }
     });
+
+    // A move (new day, time or professional) must land on a free slot of the
+    // professional's hours. Only when something actually changes: a form that
+    // resends the same day and time to save a note is not a move.
+    const dayOf = (d: Date | string) => (typeof d === "string" ? d.slice(0, 10) : d.toISOString().slice(0, 10));
+    const target = {
+      day: dayOf(updateData.scheduledDate ?? appointment.scheduledDate),
+      time: (updateData.scheduledTime as string | undefined) ?? appointment.scheduledTime,
+      professionalId: (updateData.professionalId as string | undefined) ?? appointment.professionalId,
+    };
+    const moved =
+      target.day !== dayOf(appointment.scheduledDate) ||
+      target.time !== appointment.scheduledTime ||
+      target.professionalId !== appointment.professionalId;
+    if (moved && updateData.status !== AppointmentStatus.cancelled) {
+      await assertCanReschedule(this.prisma as any, {
+        tenantId: user.tenantId,
+        appointmentId: appointment.id,
+        professionalId: target.professionalId,
+        day: target.day,
+        time: target.time,
+        durationMinutes: (updateData.duration as number | undefined) ?? appointment.duration,
+      });
+    }
 
     // Update endTime if scheduledTime is provided
     if (updateAppointmentDto.scheduledTime) {

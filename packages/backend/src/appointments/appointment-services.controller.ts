@@ -20,6 +20,7 @@ import {
 } from './dto/appointment-services.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles, SALON_TEAM } from "../auth/decorators/roles.decorator";
+import { CurrentUser } from "../auth/decorators/current-user.decorator";
 
 @ApiTags('Appointment Services')
 @ApiBearerAuth()
@@ -70,8 +71,9 @@ export class AppointmentServicesController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() updateDto: UpdateAppointmentServiceDto,
+    @CurrentUser() user: { id: string; role: string; tenantId: string },
   ) {
-    return this.appointmentServicesService.update(id, updateDto);
+    return this.appointmentServicesService.update(id, updateDto, user);
   }
 
   @Delete(':id')

@@ -6,7 +6,10 @@ export type Professional = {
 };
 
 export type Appointment = {
+  /** The block's id: the appointment's, or "<appointmentId>-<index>" per service. */
   id: string;
+  /** The appointment it belongs to (block ids cannot be parsed: UUIDs have dashes). */
+  appointmentId?: string;
   professionalId: string;
   clientName?: string;
   serviceName?: string;
