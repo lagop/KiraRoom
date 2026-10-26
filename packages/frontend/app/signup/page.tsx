@@ -7,6 +7,15 @@ import { AlertCircle, Building2, Loader2, Check } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
 import apiClient from "@/lib/api";
 
+/** The browser's IANA zone, if it can tell. */
+function browserTimeZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 
 
 export default function SignupPage() {
@@ -40,6 +49,9 @@ export default function SignupPage() {
         ownerName,
         language,
         acceptTerms: true,
+        // A first guess at the salon's zone; the server keeps it only when
+        // it is one a salon can be in (Las Palmas signs up on Canary time).
+        timezone: browserTimeZone(),
       });
       // apiClient.register stores both tokens, like login does. This used to
       // read res.accessToken — which register never returned — behind an

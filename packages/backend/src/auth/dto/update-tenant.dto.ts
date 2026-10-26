@@ -1,6 +1,7 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
-import { IsString, IsOptional, IsIn, IsUrl, IsEmail, IsInt, Min, Max, Matches, ValidateNested } from "class-validator";
+import { IsString, IsOptional, IsIn, IsUrl, IsEmail, IsInt, Min, Max, Matches, ValidateNested, IsTimeZone } from "class-validator";
 import { Type } from "class-transformer";
+import { EmptyStringToUndefined } from "../../common/dto/empty-to-undefined";
 
 /** The salon-wide window getAvailableSlots reads. HH:MM, 24-hour. */
 export class OpeningHoursDto {
@@ -51,9 +52,12 @@ export class UpdateTenantDto {
   @IsOptional()
   currency?: string;
 
-  @ApiPropertyOptional({ description: "Tenant timezone" })
-  @IsString()
+  // A zone the runtime does not know made every salon-time computation
+  // (reminders, availability, the calendar) throw a RangeError.
+  @ApiPropertyOptional({ description: "Tenant timezone (IANA, e.g. Atlantic/Canary)" })
+  @EmptyStringToUndefined()
   @IsOptional()
+  @IsTimeZone()
   timezone?: string;
 
   @ApiPropertyOptional({ description: "Tenant date format" })

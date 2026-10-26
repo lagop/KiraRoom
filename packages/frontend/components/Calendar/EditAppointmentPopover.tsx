@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import { format } from "date-fns";
 import { X, Search, CheckCircle, Loader2, Zap, DollarSign, Percent, Trash2 } from "lucide-react";
 import { Professional } from "./types";
 import apiClient from "../../lib/api";
 import { getCurrentUser } from "../../lib/utils";
 import { Appointment } from "./types";
+import { salonClock, salonInstant, salonTime } from "./salon-time";
+import { useSalonTimeZone } from "./SalonTimeZone";
 
 interface ClientOption {
   id: string;
@@ -33,9 +34,13 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
   onClose,
   onSuccess,
 }) => {
+  const timeZone = useSalonTimeZone();
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [services, setServices] = useState<ServiceOption[]>([]);
   const [appointmentData, setAppointmentData] = useState<Appointment | null>(null);
+  // The appointment's own day and time on the salon's clock, sent back as
+  // they are: this form does not move it.
+  const [when, setWhen] = useState<{ day: string; time: string } | null>(null);
   const [clientId, setClientId] = useState("");
   const [serviceId, setServiceId] = useState("");
   const [clientSearch, setClientSearch] = useState("");
@@ -69,6 +74,21 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
          setFetching(true);
          const apiAppointment = await apiClient.getAppointment(appointmentId);
          
+         // It was fetched and never kept, so the form sat on "Loading..."
+         // for good. Its start is read on the salon's clock, as the grid's.
+         const day = apiAppointment.scheduledDate.slice(0, 10);
+         const start = salonInstant(day, apiAppointment.scheduledTime, timeZone);
+         setWhen({ day, time: apiAppointment.scheduledTime });
+         setAppointmentData({
+           id: apiAppointment.id,
+           appointmentId: apiAppointment.id,
+           professionalId: apiAppointment.professionalId,
+           start: start.toISOString(),
+           end: new Date(start.getTime() + (apiAppointment.duration || 0) * 60_000).toISOString(),
+           type: "appointment",
+           status: apiAppointment.status,
+         });
+
          // Set form fields directly from API response (it has all the fields we need)
          setClientId(apiAppointment.clientId || "");
          setServiceId(apiAppointment.serviceId || "");
@@ -119,7 +139,7 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
 
     fetchAppointment();
     fetchData();
-  }, [appointmentId, professionals]);
+  }, [appointmentId, professionals, timeZone]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -162,8 +182,8 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
     setLoading(true);
     try {
       const appointment = appointmentData!;
-      const dateStr = format(new Date(appointment.start), "yyyy-MM-dd");
-      const timeStr = format(new Date(appointment.start), "HH:mm");
+      const dateStr = when!.day;
+      const timeStr = when!.time;
 
       const currentUser = getCurrentUser();
       const updateData: Partial<{
@@ -202,9 +222,10 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
     }
   };
 
-  const topOffset =
-    ((appointmentData?.start ? new Date(appointmentData.start).getHours() - 8 : 8) * 4 +
-      (appointmentData?.start ? new Date(appointmentData.start).getMinutes() / 15 : 0)) * 24;
+  // Level with the block, on the salon's clock like the grid.
+  const topOffset = appointmentData?.start
+    ? ((salonClock(appointmentData.start, timeZone).minutes - 8 * 60) / 15) * 24
+    : 0;
 
   return (
     <div className="absolute inset-0 z-30 pointer-events-none">
@@ -243,7 +264,7 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
         ) : (
           <>
             <div className="text-xs text-muted-foreground mb-3">
-              {professional?.name} • {format(new Date(appointmentData.start), "HH:mm")}
+              {professional?.name} • {salonTime(appointmentData.start, timeZone)}
             </div>
 
             <div className="space-y-3">

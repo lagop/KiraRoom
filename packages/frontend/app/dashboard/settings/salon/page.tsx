@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import apiClient from "@/lib/api";
 import { Loader2, Save, Upload } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
+import { CanaryTimezoneHint } from "@/components/settings/CanaryTimezoneHint";
 
 const LOGO_MAX_BYTES = 500 * 1024;
 const LOGO_RECOMMENDED_PX = 512;
@@ -176,6 +177,11 @@ export default function SalonSettingsPage() {
             />
           </div>
         </div>
+
+        <CanaryTimezoneHint
+          timezone={tenant.data?.timezone}
+          address={{ street, city, postalCode, state, country: tenant.data?.country }}
+        />
 
         <LogoUploadField
           value={logo}

@@ -1,10 +1,11 @@
 // components/calendar/TimeGrid.tsx
 import React, { useMemo } from "react";
-import { isToday } from "date-fns";
 import { Professional } from "./types";
 import { ProfessionalColumn } from "./ProfessionalColumn";
 import { Appointment } from "./types";
 import { SlotClickData } from "./TimeSlot";
+import { pickedDay, salonClock } from "./salon-time";
+import { useSalonTimeZone } from "./SalonTimeZone";
 
 interface TimeGridProps {
   date: Date;
@@ -29,19 +30,20 @@ export const TimeGrid: React.FC<TimeGridProps> = ({
   onSlotClick,
   onEditClick,
 }) => {
+  const timeZone = useSalonTimeZone();
   const hours = useMemo(
     () =>
       Array.from({ length: END_HOUR - START_HOUR }, (_, i) => START_HOUR + i),
     []
   );
 
+  // The salon's "now", on the salon's today.
   const nowTop = useMemo(() => {
-    if (!isToday(date)) return null;
-    const now = new Date();
-    const minutes = now.getHours() * 60 + now.getMinutes();
+    const now = salonClock(Date.now(), timeZone);
+    if (now.day !== pickedDay(date)) return null;
     const startMinutes = START_HOUR * 60;
-    return ((minutes - startMinutes) / 15) * 24;
-  }, [date]);
+    return ((now.minutes - startMinutes) / 15) * 24;
+  }, [date, timeZone]);
 
   return (
     <div className="relative min-w-[640px] md:min-w-0" data-test="time-grid">

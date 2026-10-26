@@ -22,7 +22,8 @@ import { StripeSettingsContent } from "./stripe-settings-content";
 import apiClient from "@/lib/api";
 import { getCurrentUser } from "@/lib/utils";
 import { useTranslations } from "@/lib/use-translation";
-import { SALON_TIMEZONES, DEFAULT_SALON_TIMEZONE } from "@kira/shared";
+import { SALON_TIMEZONES, DEFAULT_SALON_TIMEZONE, type SalonAddress } from "@kira/shared";
+import { CanaryTimezoneHint } from "@/components/settings/CanaryTimezoneHint";
 
 const defaultSettingsData = {
   general: [
@@ -514,6 +515,8 @@ export default function SettingsPage() {
   });
   // What the tenant holds, as field values: the baseline for "changed".
   const [savedSettings, setSavedSettings] = useState<Record<string, any>>({});
+  // Where the salon is, to catch a Canarian salon left on Madrid time.
+  const [address, setAddress] = useState<SalonAddress>({});
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   // PATCH /auth/tenant is owner/admin only. Read after mount: reading
@@ -533,6 +536,13 @@ export default function SettingsPage() {
         const tenant = await apiClient.getTenant();
         const fromTenant = settingsFromTenant(tenant);
         setSavedSettings(fromTenant);
+        setAddress({
+          street: tenant.street,
+          city: tenant.city,
+          postalCode: tenant.postalCode,
+          state: tenant.state,
+          country: tenant.country,
+        });
         setSettings((prev) => ({ ...prev, ...fromTenant }));
 
         // Load professional cross-booking setting
@@ -882,6 +892,13 @@ export default function SettingsPage() {
                     <p className="text-xs text-gray-500">{field.description}</p>
                   )}
                   {renderInput(field)}
+                  {field.id === "timezone" && canAccessAdminSettings && (
+                    <CanaryTimezoneHint
+                      timezone={settings.timezone}
+                      address={address}
+                      onApply={(tz) => handleFieldChange("timezone", tz)}
+                    />
+                  )}
                 </div>
               ))}
             </div>

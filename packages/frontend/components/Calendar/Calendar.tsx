@@ -1,6 +1,5 @@
 // components/calendar/Calendar.tsx
-import { format } from "date-fns";
-import React, { useState, useMemo, useCallback, useEffect } from "react";
+import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useMediaQuery } from "@/lib/use-media-query";
 import {
   DndContext,
@@ -13,7 +12,9 @@ import { TimeGrid } from "./TimeGrid";
 import { AgendaView } from "./AgendaView";
 import { Professional, Appointment } from "./types";
 import { AppointmentBlock } from "./AppointmentBlock";
-import { fetchCalendarData, transformToCalendarFormat } from "./calendar.service";
+import { fetchCalendarData, fetchSalonTimeZone, transformToCalendarFormat } from "./calendar.service";
+import { FALLBACK_SALON_TIMEZONE, salonClock, salonTime } from "./salon-time";
+import { SalonTimeZoneProvider } from "./SalonTimeZone";
 import { useToast } from "@/components/ui/use-toast";
 import apiClient from "../../lib/api";
 import { SlotClickData } from "./TimeSlot";
@@ -31,6 +32,10 @@ import { EditAppointmentPopover } from "./EditAppointmentPopover";
  * the calendar loaded for that salon only and answered "Failed to load
  * calendar data" for every other; it also opened on 2026-01-06 with mock
  * appointments until the fetch returned.
+ *
+ * Everything is drawn on the salon's clock (Tenant.timezone), whatever zone
+ * the browser is in: blocks hold real instants and salon-time.ts turns them
+ * into the salon's hours and minutes.
  */
 export const Calendar: React.FC<{
   date?: Date;
@@ -54,6 +59,9 @@ export const Calendar: React.FC<{
   }, [externalOnDateChange]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [professionals, setProfessionals] = useState<Professional[]>([]);
+  // The salon's zone, asked for once: it does not change from day to day.
+  const [timeZone, setTimeZone] = useState(FALLBACK_SALON_TIMEZONE);
+  const timeZoneRequest = useRef<Promise<string> | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -91,14 +99,15 @@ export const Calendar: React.FC<{
       setLoading(true);
       setError(null);
       
-      // Fetch real data from backend
-      const { appointments: backendAppointments, professionals: backendProfessionals } =
-        await fetchCalendarData(selectedDate);
-      
+      timeZoneRequest.current ??= fetchSalonTimeZone();
+      const [salonZone, { appointments: backendAppointments, professionals: backendProfessionals }] =
+        await Promise.all([timeZoneRequest.current, fetchCalendarData(selectedDate)]);
+
       // Transform data to calendar format
       const { appointments: calendarAppointments, professionals: calendarProfessionals } =
-        transformToCalendarFormat(backendAppointments, backendProfessionals);
-      
+        transformToCalendarFormat(backendAppointments, backendProfessionals, salonZone);
+
+      setTimeZone(salonZone);
       setAppointments(calendarAppointments);
       setProfessionals(calendarProfessionals);
       
@@ -126,8 +135,8 @@ export const Calendar: React.FC<{
     async (moving: Appointment, plan: Extract<MovePlan, { kind: "move" }>, scope: MoveScope) => {
       try {
         setIsUpdating(true);
-        // How far, not where to: the calendar draws in this browser's time
-        // zone and the server reckons in the salon's.
+        // How far, not where to: the server moves every service of the visit
+        // by the same amount and re-reads each on the salon's clock.
         await apiClient.moveAppointmentService(moving.appointmentServiceId as string, {
           scope,
           minutesDelta: Math.round((plan.start.getTime() - new Date(moving.start).getTime()) / 60_000),
@@ -135,7 +144,7 @@ export const Calendar: React.FC<{
         });
         toast({
           title: scope === "visit" ? "Visita movida" : "Servicio movido",
-          description: `Ahora a las ${format(plan.start, "HH:mm")}.`,
+          description: `Ahora a las ${salonTime(plan.start, timeZone)}.`,
         });
         // Every service of the visit may have moved: redraw from the server.
         await fetchData();
@@ -146,7 +155,7 @@ export const Calendar: React.FC<{
         setIsUpdating(false);
       }
     },
-    [toast, fetchData, onAppointmentUpdated],
+    [toast, fetchData, onAppointmentUpdated, timeZone],
   );
 
   const handleDragEnd = useCallback(
@@ -209,14 +218,16 @@ export const Calendar: React.FC<{
         setIsUpdating(true);
         // The whole appointment. Its id was taken from the block id by
         // cutting at the last dash, which for a plain UUID cut off its last
-        // group: every single-service move failed. The wall clock the
-        // calendar shows is what is saved (toISOString() would send UTC).
+        // group: every single-service move failed. The appointment keeps a
+        // day and time on the salon's clock, so the moved instant is read on
+        // that clock (the browser's could be an hour away).
+        const at = salonClock(plan.start, timeZone);
         await apiClient.updateAppointment(moving.appointmentId ?? moving.id, {
           professionalId: plan.professionalId,
-          scheduledDate: format(plan.start, "yyyy-MM-dd"),
-          scheduledTime: format(plan.start, "HH:mm"),
+          scheduledDate: at.day,
+          scheduledTime: at.time,
         });
-        toast({ title: "Cita movida", description: `Ahora a las ${format(plan.start, "HH:mm")}.` });
+        toast({ title: "Cita movida", description: `Ahora a las ${at.time}.` });
         onAppointmentUpdated?.();
       } catch (error) {
         setAppointments((prev) => prev.map((a) => (a.id === moving.id ? original : a)));
@@ -225,7 +236,7 @@ export const Calendar: React.FC<{
         setIsUpdating(false);
       }
     },
-    [appointments, toast, onAppointmentUpdated, moveVisit]
+    [appointments, toast, onAppointmentUpdated, moveVisit, timeZone]
   );
 
   const handleSlotClick = useCallback((data: SlotClickData) => {
@@ -247,6 +258,7 @@ export const Calendar: React.FC<{
   );
 
   return (
+    <SalonTimeZoneProvider timeZone={timeZone}>
     <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
       <div className="flex flex-col h-full min-w-0 bg-background">
         {loading ? (
@@ -325,7 +337,7 @@ export const Calendar: React.FC<{
           <MoveVisitDialog
             professionalName={professionals.find((p) => p.id === pendingVisitMove.moving.professionalId)?.name ?? "este profesional"}
             serviceName={pendingVisitMove.moving.serviceName}
-            when={`a las ${format(pendingVisitMove.plan.start, "HH:mm")}`}
+            when={`a las ${salonTime(pendingVisitMove.plan.start, timeZone)}`}
             serviceOnly={pendingVisitMove.effect}
             onCancel={() => setPendingVisitMove(null)}
             onConfirm={(scope) => {
@@ -342,5 +354,6 @@ export const Calendar: React.FC<{
         </DragOverlay>
       </div>
     </DndContext>
+    </SalonTimeZoneProvider>
   );
 };
