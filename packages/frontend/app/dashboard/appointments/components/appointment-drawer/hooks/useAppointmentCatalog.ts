@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import apiClient from "../../../../../../lib/api";
+import { DEFAULT_SALON_TIMEZONE } from "@kira/shared";
 import { getCurrentUser } from "../../../../../../lib/utils";
 
 /**
@@ -94,7 +95,9 @@ export function useAppointmentCatalog(
   const [currentUser, setCurrentUser] = useState<CatalogUser | null>(null);
   const [allowProfessionalCrossBooking, setAllowProfessionalCrossBooking] =
     useState<boolean>(false);
-  const [timezone, setTimezone] = useState<string>("UTC");
+  // Until the salon's own zone arrives: the zone a salon starts on, not
+  // UTC, which put every time an hour or two off.
+  const [timezone, setTimezone] = useState<string>(DEFAULT_SALON_TIMEZONE);
 
   // Mount-time: load user + tenant settings
   useEffect(() => {
@@ -219,10 +222,10 @@ export function useAppointmentCatalog(
   const fetchTenantTimezone = async () => {
     try {
       const tenant = await apiClient.getTenant();
-      setTimezone(tenant.timezone || "UTC");
+      setTimezone(tenant.timezone || DEFAULT_SALON_TIMEZONE);
     } catch (error) {
       console.error("Error fetching tenant timezone:", error);
-      setTimezone("UTC");
+      setTimezone(DEFAULT_SALON_TIMEZONE);
     }
   };
 

@@ -4,8 +4,8 @@ import { useDraggable } from "@dnd-kit/core";
 import { cn } from "@/lib/utils";
 import { Appointment } from "./types";
 import { Card } from "@/components/ui/Card";
-import { format } from "date-fns";
-import { es } from "date-fns/locale";
+import { salonClock, salonTime } from "./salon-time";
+import { useSalonTimeZone } from "./SalonTimeZone";
 
 interface AppointmentBlockProps {
   appointment: Appointment;
@@ -26,6 +26,7 @@ export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
   onClick,
   onEditClick,
 }) => {
+  const timeZone = useSalonTimeZone();
   const dragStartPos = useRef<{ x: number; y: number } | null>(null);
   const isRightMouseDown = useRef(false);
   const lastClickTime = useRef<number>(0);
@@ -70,11 +71,10 @@ export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
   const handleClick = (e: React.MouseEvent) => {
     // Only handle left mouse button (button === 0) for click
     if (e.button === 0) {
-      // Extract original appointment ID from calendar appointment ID
-      // Calendar appointment IDs are in format: `${appointmentId}-${index}` for multi-service
-      const originalAppointmentId = appointment.id.includes('-')
-        ? appointment.id.substring(0, appointment.id.lastIndexOf('-'))
-        : appointment.id;
+      // The appointment, not the block: block ids of a multi-service visit
+      // are "<appointmentId>-<index>", and cutting a plain UUID at its last
+      // dash broke the id of every single-service appointment.
+      const originalAppointmentId = appointment.appointmentId ?? appointment.id;
       
        // Double-click detection for edit mode
        const now = Date.now();
@@ -96,10 +96,10 @@ export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
   };
 
   const style = useMemo(() => {
+    // On the salon's clock: the grid's rows are the salon's hours.
     const start = new Date(appointment.start);
     const end = new Date(appointment.end);
-    const startMinutes =
-      (start.getHours() - START_HOUR) * 60 + start.getMinutes();
+    const startMinutes = salonClock(start, timeZone).minutes - START_HOUR * 60;
     const duration = (end.getTime() - start.getTime()) / 1000 / 60;
 
     return {
@@ -111,7 +111,7 @@ export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
         : undefined,
       zIndex: isDragging ? 1000 : 1,
     };
-  }, [appointment, transform, isDragging]);
+  }, [appointment, transform, isDragging, timeZone]);
 
   const getStatusStyles = (status?: string) => {
     switch (status) {
@@ -177,8 +177,8 @@ export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
           {appointment.serviceName}
         </div>
         <div className="text-xs opacity-60 mt-1">
-          {format(new Date(appointment.start), "HH:mm", { locale: es })} -{" "}
-          {format(new Date(appointment.end), "HH:mm", { locale: es })}</div>
+          {salonTime(appointment.start, timeZone)} -{" "}
+          {salonTime(appointment.end, timeZone)}</div>
       </Card>
     );
   }
@@ -215,8 +215,8 @@ export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
         {appointment.serviceName}
       </div>
       <div className="text-xs opacity-60 mt-1">
-        {format(new Date(appointment.start), "HH:mm", { locale: es })} -{" "}
-        {format(new Date(appointment.end), "HH:mm", { locale: es })}</div>
+        {salonTime(appointment.start, timeZone)} -{" "}
+        {salonTime(appointment.end, timeZone)}</div>
     </Card>
   );
 };

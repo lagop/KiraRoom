@@ -2052,6 +2052,8 @@ class ApiClient implements ApiClientInterface {
     ownerName: string;
     language?: string;
     acceptTerms: boolean;
+    /** The browser's IANA zone, a first guess at the salon's. */
+    timezone?: string;
   }): Promise<LoginResponse> {
     /*
      * Signing up did not log anyone in.
