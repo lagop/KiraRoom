@@ -22,7 +22,7 @@ import {
 import { AuditLogService } from "../saas/audit-log.service";
 import { EmailService } from "../notifications/services/email.service";
 import { randomBytes } from "crypto";
-import { normalizePlan } from "@kira/shared";
+import { isKnownSalonTimezone, normalizePlan, suggestedSalonTimezone } from "@kira/shared";
 import {
   parseJwtDuration,
   DEFAULT_ACCESS_TOKEN_SECONDS,
@@ -124,6 +124,10 @@ export class AuthService {
       ownerPassword: registerDto.password,
       ownerFirstName: firstName,
       ownerLastName: lastName,
+      // The browser's zone at sign-up, when it is one a salon can be in: a
+      // salon signing up from Las Palmas starts on Canary time instead of
+      // Madrid's. Onboarding's address step corrects the rest.
+      timezone: isKnownSalonTimezone(registerDto.timezone) ? registerDto.timezone : undefined,
     });
 
     // Funnel entry point: everything else in the activation funnel is
@@ -777,10 +781,39 @@ export class AuthService {
         close: updateData.openingHours.close,
       };
     }
+    const timezone = await this.timezoneForAddressChange(tenantId, updateData);
+    if (timezone) data.timezone = timezone;
     return this.prisma.tenant.update({
       where: { id: tenantId },
       data,
     });
+  }
+
+  /**
+   * Canary time for a salon whose new address is in the Canary Islands while
+   * it is still on Madrid's, the zone every sign-up started on; else null.
+   * A zone sent in the same request, or any other zone, is left alone.
+   */
+  private async timezoneForAddressChange(
+    tenantId: string,
+    update: { timezone?: string; street?: string; city?: string; postalCode?: string; state?: string },
+  ): Promise<string | null> {
+    if (update.timezone !== undefined) return null;
+    if ([update.street, update.city, update.postalCode, update.state].every((v) => v === undefined)) return null;
+    const current = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { timezone: true, street: true, city: true, postalCode: true, state: true, country: true },
+    });
+    if (!current) return null;
+    const suggested = suggestedSalonTimezone(current.timezone, {
+      street: update.street ?? current.street,
+      city: update.city ?? current.city,
+      postalCode: update.postalCode ?? current.postalCode,
+      state: update.state ?? current.state,
+      country: current.country,
+    });
+    if (suggested) this.logger.log(`tenant ${tenantId}: address in the Canary Islands, timezone set to ${suggested}`);
+    return suggested;
   }
 
   private async generateTokens(

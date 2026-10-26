@@ -39,6 +39,7 @@ import { Button } from "@/src/components/ui/Button";
 import apiClient from "@/lib/api"
 import { useTranslations } from "@/lib/use-translation";
 import { ServiceTimeline } from "@/components/Calendar/ServiceTimeline";
+import { salonInstant } from "@/components/Calendar/salon-time";
 import { AppointmentScheduler } from "@/lib/appointment-scheduler";
 import {
   prepareServiceObjects,
@@ -374,10 +375,10 @@ useEffect(() => {
 
       // If multiple services, create them via bulk API
       if (hasMultipleServices) {
-        // Calculate start time for the appointment
-        const appointmentStart = new Date(
-          `${newAppointment.date}T${newAppointment.time}:00`,
-        );
+        // The appointment's start on the salon's clock, as the server reads
+        // its day and time (the browser's clock put every service an hour
+        // off from the Canaries on Madrid time).
+        const appointmentStart = salonInstant(newAppointment.date, newAppointment.time, timezone);
         let currentTime = appointmentStart.getTime();
 
         const servicesToCreate = resolvedSelectedServices.map((sel, index) => {
@@ -1359,12 +1360,9 @@ useEffect(() => {
                       <ServiceTimeline
                         timezone={timezone}
                         services={(() => {
-                          // Calculate scheduled times for services that don't have them
-                          // Create appointment start time - ensure we work in local time
-                          const [hours, minutes] = appointment.time.split(':').map(Number);
-                          const appointmentDate = new Date(appointment.date);
-                          appointmentDate.setHours(hours, minutes, 0, 0);
-                          let currentTime = appointmentDate.getTime();
+                          // Calculate scheduled times for services that don't have them,
+                          // from the appointment's start on the salon's clock
+                          let currentTime = salonInstant(appointment.date, appointment.time, timezone).getTime();
 
                           return appointment.services.map((svc, index) => {
                             const duration = svc.service?.duration || 0;

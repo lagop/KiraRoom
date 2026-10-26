@@ -5,6 +5,7 @@ import { useOnboardingState } from "./useOnboardingState";
 import { Loader2, Check, AlertCircle, Building2, Scissors, Clock, Upload } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
 import apiClient from "@/lib/api";
+import { CanaryTimezoneHint } from "@/components/settings/CanaryTimezoneHint";
 
 /**
  * Inline 3-step wizard. Each linear_required step renders its own form
@@ -157,6 +158,9 @@ function WorkspaceBusinessStep({ onDone }: { onDone: () => Promise<unknown> }) {
   const [city, setCity] = useState("");
   const [phone, setPhone] = useState("");
   const [logo, setLogo] = useState("");
+  // The zone the salon signed up on: a Canarian address on Madrid time is
+  // switched to Canary time when this step saves (PATCH /auth/tenant).
+  const [timezone, setTimezone] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -170,6 +174,7 @@ function WorkspaceBusinessStep({ onDone }: { onDone: () => Promise<unknown> }) {
         if (t?.city) setCity(t.city);
         if (t?.phone) setPhone(t.phone);
         if (t?.logo) setLogo(t.logo);
+        if (t?.timezone) setTimezone(t.timezone);
       })
       .catch(() => {
         /* first-time tenants will 404 / be empty — that's fine */
@@ -220,6 +225,7 @@ function WorkspaceBusinessStep({ onDone }: { onDone: () => Promise<unknown> }) {
         <Field label="Ciudad" value={city} onChange={setCity} required />
         <LogoUpload value={logo} onChange={setLogo} className="md:col-span-2" />
       </div>
+      <CanaryTimezoneHint timezone={timezone} address={{ street, city }} />
       <ErrorBanner message={error} />
       <div className="flex justify-end">
         <StepSubmitButton submitting={submitting} label="Guardar y continuar" />

@@ -1,11 +1,13 @@
 // components/calendar/AgendaView.tsx
-import React, { useMemo } from "react";
-import { format, isToday, isSameDay } from "date-fns";
+import React, { useCallback, useMemo } from "react";
+import { format } from "date-fns";
 import { es } from "date-fns/locale";
 import { Clock, User } from "lucide-react";
 import { Appointment, Professional } from "./types";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
+import { pickedDay, salonClock, salonTime } from "./salon-time";
+import { useSalonTimeZone } from "./SalonTimeZone";
 
 interface AgendaViewProps {
   date: Date;
@@ -21,8 +23,8 @@ interface AgendaViewProps {
  * horizontal (unlike the day-grid, which assumes a desktop viewport).
  *
  * Appointment IDs in calendar mode can be `${originalId}-${index}`
- * for multi-service splits — strip the suffix when forwarding the
- * click up so the parent sees the canonical appointmentId.
+ * for multi-service splits — the click forwards the block's
+ * appointmentId so the parent sees the canonical one.
  */
 export const AgendaView: React.FC<AgendaViewProps> = ({
   date,
@@ -30,6 +32,14 @@ export const AgendaView: React.FC<AgendaViewProps> = ({
   appointments,
   onAppointmentClick,
 }) => {
+  const timeZone = useSalonTimeZone();
+  // The picked day on the salon's calendar, and each block's day on it.
+  const day = pickedDay(date);
+  const onDay = useCallback(
+    (apt: Appointment) => salonClock(apt.start, timeZone).day === day,
+    [day, timeZone],
+  );
+
   const professionalMap = useMemo(() => {
     const map = new Map<string, Professional>();
     for (const p of professionals) map.set(p.id, p);
@@ -39,7 +49,7 @@ export const AgendaView: React.FC<AgendaViewProps> = ({
   const groupedByPro = useMemo(() => {
     const groups = new Map<string, Appointment[]>();
     for (const apt of appointments) {
-      if (!isSameDay(new Date(apt.start), date)) continue;
+      if (!onDay(apt)) continue;
       const list = groups.get(apt.professionalId) ?? [];
       list.push(apt);
       groups.set(apt.professionalId, list);
@@ -57,15 +67,15 @@ export const AgendaView: React.FC<AgendaViewProps> = ({
     return professionals
       .filter((p) => groups.has(p.id))
       .map((p) => ({ pro: p, items: groups.get(p.id) ?? [] }));
-  }, [appointments, date, professionals]);
+  }, [appointments, onDay, professionals]);
 
-  const dayIsToday = isToday(date);
+  const dayIsToday = day === salonClock(Date.now(), timeZone).day;
   const dayLabel = format(date, "EEEE d 'de' MMMM", { locale: es });
 
   const totalForDay = useMemo(
     () =>
-      appointments.filter((a) => isSameDay(new Date(a.start), date)).length,
-    [appointments, date],
+      appointments.filter(onDay).length,
+    [appointments, onDay],
   );
 
   return (
@@ -117,22 +127,21 @@ export const AgendaView: React.FC<AgendaViewProps> = ({
             ) : (
               <ul className="ml-12 space-y-1.5">
                 {items.map((apt) => {
-                  const start = new Date(apt.start);
-                  const end = new Date(apt.end);
-                  const originalId = apt.id.includes("-")
-                    ? apt.id.substring(0, apt.id.lastIndexOf("-"))
-                    : apt.id;
+                  const start = salonTime(apt.start, timeZone);
+                  const end = salonTime(apt.end, timeZone);
+                  // Not cut from the block id: a plain UUID has dashes too.
+                  const originalId = apt.appointmentId ?? apt.id;
                   return (
                     <li key={apt.id}>
                       <button
                         type="button"
                         onClick={() => onAppointmentClick?.(originalId)}
                         className="w-full text-left flex items-start gap-2 rounded-md border bg-white px-3 py-2 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors"
-                        aria-label={`Cita de ${apt.clientName ?? "cliente"} a las ${format(start, "HH:mm")}`}
+                        aria-label={`Cita de ${apt.clientName ?? "cliente"} a las ${start}`}
                       >
                         <Clock className="h-4 w-4 mt-0.5 text-indigo-500 flex-shrink-0" />
                         <span className="text-sm font-medium tabular-nums text-gray-900 w-20 flex-shrink-0">
-                          {format(start, "HH:mm")}
+                          {start}
                         </span>
                         <span className="text-sm text-gray-700 min-w-0 flex-1 truncate">
                           {apt.clientName ?? "(sin cliente)"}
@@ -143,7 +152,7 @@ export const AgendaView: React.FC<AgendaViewProps> = ({
                           )}
                         </span>
                         <span className="text-xs text-muted-foreground flex-shrink-0">
-                          {format(start, "HH:mm")}–{format(end, "HH:mm")}
+                          {start}–{end}
                         </span>
                       </button>
                     </li>

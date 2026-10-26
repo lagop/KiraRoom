@@ -57,6 +57,16 @@ export class RegisterDto {
   language?: string;
 
   @ApiProperty({
+    description:
+      "The sign-up browser's IANA time zone. Taken as the salon's when it is one of SALON_TIMEZONES; otherwise ignored.",
+    example: 'Atlantic/Canary',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  timezone?: string;
+
+  @ApiProperty({
     description: 'Accept terms and conditions',
     example: true,
   })

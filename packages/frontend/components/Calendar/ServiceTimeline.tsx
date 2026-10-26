@@ -3,6 +3,7 @@
 import React, { useState, useRef } from "react";
 import { Clock, GripVertical, Users, ArrowRight } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
+import { FALLBACK_SALON_TIMEZONE, salonClock, salonInstant, salonTime } from "./salon-time";
 
 interface ServiceItem {
   id: string;
@@ -28,6 +29,7 @@ interface ServiceTimelineProps {
   ) => void;
   onModeToggle?: (serviceId: string, isParallel: boolean) => void;
   editable?: boolean;
+  /** The salon's zone: times are shown and typed on its clock. */
   timezone?: string;
 }
 
@@ -49,16 +51,11 @@ export function ServiceTimeline({
   // Sort services by order
   const sortedServices = [...services].sort((a, b) => a.order - b.order);
 
-  // Format time for display
-  const formatTime = (isoString: string) => {
-    const date = new Date(isoString);
-    // For appointment display, use local time formatting to match the appointment header
-    return date.toLocaleTimeString("en-US", {
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    });
-  };
+  const salonZone = timezone || FALLBACK_SALON_TIMEZONE;
+
+  // On the salon's clock, like the appointment's own time and the calendar
+  // (this used the browser's, an hour off from the Canaries on Madrid time).
+  const formatTime = (isoString: string) => salonTime(isoString, salonZone);
 
   // Handle drag start
   const handleDragStart = (index: number) => {
@@ -128,11 +125,9 @@ export function ServiceTimeline({
       return;
     }
 
-    // Parse the new start time
-    const [hours, minutes] = tempStartTime.split(":").map(Number);
-    const originalStart = new Date(service.scheduledStart);
-    const newStart = new Date(originalStart);
-    newStart.setHours(hours, minutes, 0, 0);
+    // The typed time is the salon's, on the service's own salon day.
+    const day = salonClock(service.scheduledStart, salonZone).day;
+    const newStart = salonInstant(day, tempStartTime, salonZone);
 
     // Calculate new end time based on duration
     const newEnd = new Date(newStart.getTime() + service.duration * 60000);
