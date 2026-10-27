@@ -27,8 +27,6 @@ export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
   onEditClick,
 }) => {
   const timeZone = useSalonTimeZone();
-  const dragStartPos = useRef<{ x: number; y: number } | null>(null);
-  const isRightMouseDown = useRef(false);
   const lastClickTime = useRef<number>(0);
   
   const { attributes, listeners, setNodeRef, transform } = useDraggable({
@@ -38,35 +36,6 @@ export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
       appointment,
     },
   });
-
-  const handleMouseDown = (e: React.MouseEvent) => {
-    // Only allow drag with right mouse button (button === 2)
-    if (e.button === 2) {
-      isRightMouseDown.current = true;
-      dragStartPos.current = { x: e.clientX, y: e.clientY };
-      if (listeners?.onMouseDown) {
-        listeners.onMouseDown(e);
-      }
-    }
-  };
-
-  const handleMouseUp = (e: React.MouseEvent) => {
-    // Only handle right mouse button for drag
-    if (e.button === 2 && dragStartPos.current) {
-      isRightMouseDown.current = false;
-      dragStartPos.current = null;
-      if (listeners?.onMouseUp) {
-        listeners.onMouseUp(e);
-      }
-    }
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    // Only allow drag move if right mouse button is down
-    if (isRightMouseDown.current && listeners?.onMouseMove) {
-      listeners.onMouseMove(e);
-    }
-  };
 
   const handleClick = (e: React.MouseEvent) => {
     // Only handle left mouse button (button === 0) for click
@@ -193,9 +162,6 @@ export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
         "mt-[1px] mb-[1px]",
         typeStyles[appointment.type]
       )}
-      onMouseDown={handleMouseDown}
-      onMouseUp={handleMouseUp}
-      onMouseMove={handleMouseMove}
       onClick={handleClick}
       onContextMenu={handleContextMenu}
       {...attributes}

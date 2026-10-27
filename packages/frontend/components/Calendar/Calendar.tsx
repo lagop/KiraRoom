@@ -6,6 +6,10 @@ import {
   DragEndEvent,
   DragOverlay,
   DragStartEvent,
+  MouseSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
 } from "@dnd-kit/core";
 import { CalendarHeader } from "./CalendarHeader";
 import { TimeGrid } from "./TimeGrid";
@@ -18,7 +22,7 @@ import { SalonTimeZoneProvider } from "./SalonTimeZone";
 import { useToast } from "@/components/ui/use-toast";
 import apiClient from "../../lib/api";
 import { SlotClickData } from "./TimeSlot";
-import { droppedOnProfessional, minutesFromDrag, moveErrorText, planMove, serviceOnlyEffect, type MovePlan, type ServiceOnlyEffect } from "./drag-move";
+import { DRAG_START, droppedOnProfessional, minutesFromDrag, moveErrorText, planMove, serviceOnlyEffect, type MovePlan, type ServiceOnlyEffect } from "./drag-move";
 import { MoveVisitDialog, type MoveScope } from "./MoveVisitDialog";
 import { getCurrentUser } from "@/lib/utils";
 import { NewAppointmentPopover } from "./NewAppointmentPopover";
@@ -125,6 +129,12 @@ export const Calendar: React.FC<{
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // A click stays a click; only a real drag (or a long press) moves it.
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: DRAG_START.mouse }),
+    useSensor(TouchSensor, { activationConstraint: DRAG_START.touch }),
+  );
 
   const handleDragStart = useCallback((event: DragStartEvent) => {
     setActiveId(event.active.id as string);
@@ -259,7 +269,7 @@ export const Calendar: React.FC<{
 
   return (
     <SalonTimeZoneProvider timeZone={timeZone}>
-    <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+    <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
       <div className="flex flex-col h-full min-w-0 bg-background">
         {loading ? (
           <div className="flex-1 flex items-center justify-center">

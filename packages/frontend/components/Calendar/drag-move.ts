@@ -7,6 +7,20 @@
 /** Height of a 15-minute row in the time grid (TimeGrid: 96px per hour). */
 export const PX_PER_QUARTER = 24;
 
+/**
+ * When a press on an appointment becomes a drag. Without a threshold every
+ * press started one: the block was swapped for its drag copy and dnd-kit
+ * swallowed the click, so clicking an appointment often did nothing.
+ * - mouse: after moving a few pixels, well under half a row, so any drag
+ *   long enough to change the time still starts;
+ * - touch (the grid shows from tablet width): press and hold, so a tap opens
+ *   the appointment and a swipe scrolls the day.
+ */
+export const DRAG_START = {
+  mouse: { distance: 6 },
+  touch: { delay: 250, tolerance: 8 },
+} as const;
+
 export function minutesFromDrag(deltaY: number): number {
   return Math.round(deltaY / PX_PER_QUARTER) * 15;
 }

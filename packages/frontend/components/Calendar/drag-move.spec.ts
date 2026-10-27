@@ -3,7 +3,7 @@
  *
  * Run: npx ts-node --project tsconfig.test.json --transpile-only components/Calendar/drag-move.spec.ts
  */
-import { droppedOnProfessional, minutesFromDrag, moveErrorText, planMove, serviceOnlyEffect, serviceOnlyText } from "./drag-move";
+import { DRAG_START, PX_PER_QUARTER, droppedOnProfessional, minutesFromDrag, moveErrorText, planMove, serviceOnlyEffect, serviceOnlyText } from "./drag-move";
 
 let pass = 0;
 let fail = 0;
@@ -19,6 +19,14 @@ function check(name: string, ok: boolean, detail?: unknown) {
 
 check("one 24px row is 15 minutes", minutesFromDrag(24) === 15 && minutesFromDrag(-48) === -30);
 check("a small wobble is no move", minutesFromDrag(8) === 0);
+
+check("a click is not a drag: the mouse must move first", DRAG_START.mouse.distance > 0);
+check(
+  "but any drag long enough to change the time starts one",
+  DRAG_START.mouse.distance < PX_PER_QUARTER / 2 && minutesFromDrag(PX_PER_QUARTER / 2) === 15,
+);
+check("on a tablet a tap opens it: dragging needs a press and hold", DRAG_START.touch.delay >= 200);
+check("and a finger may wobble a little while holding", DRAG_START.touch.tolerance > 0);
 
 check(
   "the column's professional, from the drop data",
