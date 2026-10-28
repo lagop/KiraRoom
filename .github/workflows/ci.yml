@@ -121,12 +121,16 @@ jobs:
         run: |
           cd packages/backend
           npx prisma generate
+      # Specs included: ts-jest only transpiles them (isolatedModules, see
+      # packages/backend/jest.config.js), so this is where their types are
+      # checked. tsconfig.json leaves them out because it also drives the
+      # build; tsconfig.eslint.json is the same options over all of src.
       - name: Backend Type Check
         env:
           DATABASE_URL: postgresql://${{ env.POSTGRES_USER }}:${{ env.POSTGRES_PASSWORD }}@localhost:5432/${{ env.POSTGRES_DB }}
         run: |
           cd packages/backend
-          npx tsc --noEmit
+          npx tsc --noEmit -p tsconfig.eslint.json
       - name: Frontend Type Check
         run: |
           cd packages/frontend
