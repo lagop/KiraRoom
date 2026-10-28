@@ -3081,6 +3081,21 @@ enum ChatChannel {
   telegram
 }
 
+// Platform email (Resend), set by the saas_owner in the console. Each field
+// is optional: an empty one falls back to the server .env (RESEND_API_KEY,
+// EMAIL_FROM, RESEND_WEBHOOK_SECRET). The key and the webhook secret are
+// encrypted with EncryptionService and never returned by the API.
+model PlatformEmailConfig {
+  id                     String   @id @default("global")
+  apiKeyEncrypted        String?  @db.Text
+  fromAddress            String?
+  webhookSecretEncrypted String?  @db.Text
+  updatedAt              DateTime @updatedAt
+  updatedBy              String?
+
+  @@map("platform_email_config")
+}
+
 // ============================================================================
 // P2A-platform-llm: single platform-wide LLM provider config
 // ============================================================================

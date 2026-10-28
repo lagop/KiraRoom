@@ -3,6 +3,8 @@ import { ConfigService } from "@nestjs/config";
 import { Resend } from "resend";
 import { TranslationsService } from "../../translations/translations.service";
 import { PrismaService } from "../../common/prisma/prisma.service";
+import { PlatformEmailConfigService } from "../../platform/platform-email-config.service";
+import { EmailSettings, senderDomain } from "../../platform/email-settings";
 
 export interface EmailOptions {
   to: string | string[];
@@ -64,27 +66,54 @@ export function formatLongDateEs(date: Date): string {
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
   private resend: Resend | null = null;
+  /** The key `resend` was built with: a new one in the console builds a new client. */
+  private resendKey: string | null = null;
 
   constructor(
     private configService: ConfigService,
     private translationsService: TranslationsService,
     private readonly prisma: PrismaService,
-  ) {
-    const apiKey = this.configService.get<string>("RESEND_API_KEY");
-    if (apiKey) {
-      this.resend = new Resend(apiKey);
-    } else {
-      this.logger.warn(
-        "RESEND_API_KEY not configured - email sending disabled",
-      );
+    // The platform console's settings, falling back to the server's .env.
+    // Always injected in the app (a module that forgets PlatformModule fails
+    // at boot); tests that build the service by hand leave it out.
+    private readonly platformEmail?: PlatformEmailConfigService,
+  ) {}
+
+  /** API key, sender and webhook secret in force (console, else .env). */
+  private settings(): EmailSettings {
+    if (this.platformEmail) return this.platformEmail.current();
+    return {
+      apiKey: this.configService.get<string>("RESEND_API_KEY") || null,
+      from: this.configService.get<string>("EMAIL_FROM") || null,
+      webhookSecret: this.configService.get<string>("RESEND_WEBHOOK_SECRET") || null,
+    };
+  }
+
+  /** The Resend client for the key in force, or null when there is none. */
+  private client(): Resend | null {
+    const key = this.settings().apiKey;
+    if (!key) return null;
+    if (!this.resend || key !== this.resendKey) {
+      this.resend = new Resend(key);
+      this.resendKey = key;
     }
+    return this.resend;
+  }
+
+  private fromAddress(): string {
+    return this.settings().from || "noreply@yourdomain.com";
   }
 
   /**
    * Check if email service is configured
    */
   isConfigured(): boolean {
-    return this.resend !== null;
+    return !!this.settings().apiKey;
+  }
+
+  /** Whether Resend's delivery events can be verified (webhook secret set). */
+  isTrackingConfigured(): boolean {
+    return !!this.settings().webhookSecret;
   }
 
   /**
@@ -93,18 +122,18 @@ export class EmailService {
   async sendEmail(
     options: EmailOptions,
   ): Promise<{ success: boolean; id?: string; error?: string }> {
-    if (!this.resend) {
+    const resend = this.client();
+    if (!resend) {
       this.logger.warn("Email service not configured - skipping email send");
       return { success: false, error: "Email service not configured" };
     }
 
-    const from =
-      this.configService.get<string>("EMAIL_FROM") || "noreply@yourdomain.com";
+    const from = this.fromAddress();
 
     const headers = this.buildHeaders(options, from);
 
     try {
-      const { data, error } = await this.resend.emails.send({
+      const { data, error } = await resend.emails.send({
         from,
         to: Array.isArray(options.to) ? options.to : [options.to],
         subject: options.subject,
@@ -134,13 +163,13 @@ export class EmailService {
   async sendScheduledEmail(
     options: EmailOptions,
   ): Promise<{ success: boolean; id?: string; error?: string }> {
-    if (!this.resend) {
+    const resend = this.client();
+    if (!resend) {
       this.logger.warn("Email service not configured - skipping email send");
       return { success: false, error: "Email service not configured" };
     }
 
-    const from =
-      this.configService.get<string>("EMAIL_FROM") || "noreply@yourdomain.com";
+    const from = this.fromAddress();
 
     try {
       // Build email payload with optional scheduling
@@ -159,7 +188,7 @@ export class EmailService {
         emailPayload.send_at = Math.floor(options.sendAt.getTime() / 1000);
       }
 
-      const { data, error } = await this.resend.emails.send(emailPayload);
+      const { data, error } = await resend.emails.send(emailPayload);
 
       if (error) {
         this.logger.error(`Failed to send scheduled email: ${error.message}`);
@@ -182,7 +211,8 @@ export class EmailService {
   async sendBatchEmails(
     emails: BatchEmailOptions[],
   ): Promise<{ success: boolean; ids?: string[]; error?: string }> {
-    if (!this.resend) {
+    const resend = this.client();
+    if (!resend) {
       this.logger.warn(
         "Email service not configured - skipping batch email send",
       );
@@ -194,7 +224,7 @@ export class EmailService {
     }
 
     try {
-      const { data, error } = await this.resend.batch.send(emails);
+      const { data, error } = await resend.batch.send(emails);
 
       if (error) {
         this.logger.error(`Failed to send batch emails: ${error.message}`);
@@ -1014,7 +1044,9 @@ export class EmailService {
   ): Record<string, string> | undefined {
     const out: Record<string, string> = { ...(options.headers ?? {}) };
     if (options.listUnsubscribe) {
-      const domain = from.split("@")[1] ?? "kiraroom.com";
+      // The address's domain, also when the sender has a name in front
+      // ("KiraRoom <notificaciones@kiraroom.com>").
+      const domain = senderDomain(from) ?? "kiraroom.com";
       const baseUrl =
         this.configService.get<string>("APP_BASE_URL") ||
         this.configService.get<string>("FRONTEND_URL") ||

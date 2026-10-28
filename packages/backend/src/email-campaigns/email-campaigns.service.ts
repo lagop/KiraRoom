@@ -4,7 +4,6 @@ import {
   NotFoundException,
   BadRequestException,
 } from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { EmailService } from "../notifications/services/email.service";
 import { clientsWhoRefusedMarketing } from "../consent/marketing-consent";
@@ -27,7 +26,6 @@ export class EmailCampaignsService {
     private readonly prisma: PrismaService,
     private readonly emailService: EmailService,
     private readonly suppressions: EmailSuppressionService,
-    private readonly config: ConfigService,
     private readonly unsubscribes: EmailUnsubscribeService,
   ) {}
 
@@ -186,7 +184,7 @@ export class EmailCampaignsService {
       // Before, every send "failed" silently and the campaign still ended
       // up as sent. Say it instead, and leave the campaign as it was.
       throw new BadRequestException(
-        "El envío de emails no está configurado en el servidor (falta RESEND_API_KEY).",
+        "El envío de emails todavía no está configurado en KiraRoom. Escríbenos y lo revisamos.",
       );
     }
     return this.deliverCampaign(tenantId, campaignId, ["draft", "scheduled"]);
@@ -310,7 +308,7 @@ export class EmailCampaignsService {
   async getTrackingStatus(tenantId: string) {
     return {
       sendingConfigured: this.emailService.isConfigured(),
-      trackingConfigured: !!this.config.get<string>("RESEND_WEBHOOK_SECRET"),
+      trackingConfigured: this.emailService.isTrackingConfigured(),
       suppressedAddresses: await this.suppressions.count(tenantId),
     };
   }
@@ -512,7 +510,7 @@ export class EmailCampaignsService {
   async broadcastToAllClients(tenantId: string, dto: SendCampaignDto) {
     if (dto.sendNow && !this.emailService.isConfigured()) {
       throw new BadRequestException(
-        "El envío de emails no está configurado en el servidor (falta RESEND_API_KEY).",
+        "El envío de emails todavía no está configurado en KiraRoom. Escríbenos y lo revisamos.",
       );
     }
 

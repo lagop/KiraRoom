@@ -46,11 +46,10 @@ describe("EmailCampaignsService.deliverCampaign", () => {
     const suppressions: any = {
       suppressedAmong: jest.fn().mockResolvedValue(new Set(opts.suppressed ?? [])),
     };
-    const config: any = { get: jest.fn() };
     // The real link builder: only its config is used to sign and build URLs.
     const env: Record<string, string> = { JWT_SECRET: "test-secret", APP_BASE_URL: "https://app.test" };
     const unsubscribes = new EmailUnsubscribeService({} as any, { get: (k: string) => env[k] } as any, {} as any, {} as any);
-    const service = new EmailCampaignsService(prisma, email, suppressions, config, unsubscribes);
+    const service = new EmailCampaignsService(prisma, email, suppressions, unsubscribes);
     (service as any).logger = { log: jest.fn() };
     return { service, prisma, email, unsubscribes };
   }

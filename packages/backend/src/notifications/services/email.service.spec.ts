@@ -97,6 +97,8 @@ function makeService(opts?: {
     };
   }
   (service as any).resend = resend;
+  // The client is rebuilt when the key in force changes; this one is it.
+  (service as any).resendKey = env.RESEND_API_KEY;
   return { service, calls, prismaMock, config, resend };
 }
 
@@ -650,5 +652,41 @@ describe("EmailService.escapeHtml (anti-XSS)", () => {
     );
     const escaped = (svc as any).escapeHtml("hello world");
     expect(escaped).toBe("hello world");
+  });
+});
+describe("EmailService with the platform console's settings", () => {
+  it("a sender with a name still gives a clean unsubscribe address", async () => {
+    // makeService's EMAIL_FROM is "KiraRoom <hola@kiraroom.com>".
+    const { service, calls } = makeService();
+    await service.sendEmail({ to: "x@y.com", subject: "X", html: "<p>X</p>", listUnsubscribe: true });
+    expect(calls[0].headers["List-Unsubscribe"]).toMatch(/^<mailto:unsubscribe@kiraroom\.com>, </);
+  });
+
+  it("uses the key and sender set in the console, and a new key at once", async () => {
+    // Built at runtime: fictitious values that only look like Resend keys.
+    const [key1, key2, serverKey] = ["consoleKey0001", "consoleKey0002", "serverKey0001"].map((k) => ["re", k].join("_"));
+    let settings = { apiKey: key1, from: "KiraRoom <notificaciones@kiraroom.com>", webhookSecret: null };
+    const platformEmail = { current: () => settings };
+    const service = new EmailService(
+      makeConfigMock({ RESEND_API_KEY: serverKey, EMAIL_FROM: "noreply@kiraroom.com" }),
+      makeTranslationsMock(),
+      makePrismaMock().prisma,
+      platformEmail as any,
+    );
+    expect(service.isConfigured()).toBe(true);
+    expect(service.isTrackingConfigured()).toBe(false);
+
+    const first = (service as any).client();
+    expect((service as any).resendKey).toBe(key1);
+    expect((service as any).fromAddress()).toBe("KiraRoom <notificaciones@kiraroom.com>");
+    expect((service as any).client()).toBe(first);
+
+    settings = { ...settings, apiKey: key2 };
+    expect((service as any).client()).not.toBe(first);
+    expect((service as any).resendKey).toBe(key2);
+
+    settings = { ...settings, apiKey: null as any };
+    expect(service.isConfigured()).toBe(false);
+    expect((service as any).client()).toBeNull();
   });
 });

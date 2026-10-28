@@ -1,6 +1,6 @@
 "use client";
 
-import { Settings as SettingsIcon, Key, ArrowRight } from "lucide-react";
+import { Settings as SettingsIcon, Key, Mail, ArrowRight } from "lucide-react";
 import Link from "next/link";
 
 export default function SaasSettingsPage() {
@@ -12,6 +12,14 @@ export default function SaasSettingsPage() {
       description:
         "Configura el modelo y la API key del Asistente Virtual para todos los salones.",
       badge: "Haiku · Sonnet",
+    },
+    {
+      href: "/saas/settings/email",
+      icon: Mail,
+      title: "Email de la plataforma",
+      description:
+        "Clave de Resend, dirección de envío y webhook de los emails de todos los salones.",
+      badge: "Resend",
     },
   ];
 

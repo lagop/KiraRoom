@@ -4937,6 +4937,26 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
+  // Platform email (Resend). The key and the webhook secret are write-only:
+  // GET says where each setting comes from, never its value.
+  async getPlatformEmailConfig(): Promise<PlatformEmailConfig> {
+    return this.request(`/platform/email-config`);
+  }
+  /** A string sets a field, null clears it (the server's .env applies), absent keeps it. */
+  async updatePlatformEmailConfig(input: {
+    apiKey?: string | null;
+    from?: string | null;
+    webhookSecret?: string | null;
+  }): Promise<PlatformEmailConfig> {
+    return this.request(`/platform/email-config`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+  }
+  async sendPlatformTestEmail(): Promise<{ ok: boolean; message: string }> {
+    return this.request(`/platform/email-config/test`, { method: "POST" });
+  }
+
   // ---------------------------------------------------------------------------
   //  P2A-staff-copilot
   // ---------------------------------------------------------------------------
@@ -5047,6 +5067,16 @@ class ApiClient implements ApiClientInterface {
 const apiClient = new ApiClient();
 export default apiClient;
 export { ApiClient, apiClient };
+
+export type EmailSettingSource = "console" | "server" | "none";
+
+export interface PlatformEmailConfig {
+  apiKey: { source: EmailSettingSource; lastFour: string | null };
+  from: { source: EmailSettingSource; value: string | null };
+  webhookSecret: { source: EmailSettingSource; lastFour: string | null };
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
 
 export interface PlatformLlmConfig {
   provider: string;
