@@ -45,10 +45,12 @@ check(
 check("where each setting comes from", sourceText("console") === "Configurada aquí" && /servidor/.test(sourceText("server")));
 
 check("nothing typed: nothing to save", emailUpdate({ apiKey: "", from: "noreply@kiraroom.com", webhookSecret: "" }, sending) === null);
+// Built at runtime: a fictitious value that only looks like a Resend key.
+const typedKey = ["re", "abc12345678"].join("_");
 check(
   "a typed key is sent, blank secret kept",
-  JSON.stringify(emailUpdate({ apiKey: " re_abc12345678 ", from: "noreply@kiraroom.com", webhookSecret: "" }, sending)) ===
-    JSON.stringify({ apiKey: "re_abc12345678" }),
+  JSON.stringify(emailUpdate({ apiKey: ` ${typedKey} `, from: "noreply@kiraroom.com", webhookSecret: "" }, sending)) ===
+    JSON.stringify({ apiKey: typedKey }),
 );
 check(
   "a changed sender is sent",

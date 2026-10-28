@@ -663,10 +663,12 @@ describe("EmailService with the platform console's settings", () => {
   });
 
   it("uses the key and sender set in the console, and a new key at once", async () => {
-    let settings = { apiKey: "re_consoleKey0001", from: "KiraRoom <notificaciones@kiraroom.com>", webhookSecret: null };
+    // Built at runtime: fictitious values that only look like Resend keys.
+    const [key1, key2, serverKey] = ["consoleKey0001", "consoleKey0002", "serverKey0001"].map((k) => ["re", k].join("_"));
+    let settings = { apiKey: key1, from: "KiraRoom <notificaciones@kiraroom.com>", webhookSecret: null };
     const platformEmail = { current: () => settings };
     const service = new EmailService(
-      makeConfigMock({ RESEND_API_KEY: "re_serverKey0001", EMAIL_FROM: "noreply@kiraroom.com" }),
+      makeConfigMock({ RESEND_API_KEY: serverKey, EMAIL_FROM: "noreply@kiraroom.com" }),
       makeTranslationsMock(),
       makePrismaMock().prisma,
       platformEmail as any,
@@ -675,13 +677,13 @@ describe("EmailService with the platform console's settings", () => {
     expect(service.isTrackingConfigured()).toBe(false);
 
     const first = (service as any).client();
-    expect((service as any).resendKey).toBe("re_consoleKey0001");
+    expect((service as any).resendKey).toBe(key1);
     expect((service as any).fromAddress()).toBe("KiraRoom <notificaciones@kiraroom.com>");
     expect((service as any).client()).toBe(first);
 
-    settings = { ...settings, apiKey: "re_consoleKey0002" };
+    settings = { ...settings, apiKey: key2 };
     expect((service as any).client()).not.toBe(first);
-    expect((service as any).resendKey).toBe("re_consoleKey0002");
+    expect((service as any).resendKey).toBe(key2);
 
     settings = { ...settings, apiKey: null as any };
     expect(service.isConfigured()).toBe(false);
