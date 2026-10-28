@@ -14,7 +14,7 @@ export class ServicesService {
         tenantId,
         name: createServiceDto.name,
         description: createServiceDto.description,
-        category: createServiceDto.category as any,
+        category: createServiceDto.category,
         duration: createServiceDto.duration,
         price: createServiceDto.price,
         currency: createServiceDto.currency || 'EUR',
@@ -64,7 +64,7 @@ export class ServicesService {
       data: {
         name: updateServiceDto.name,
         description: updateServiceDto.description,
-        category: updateServiceDto.category as any,
+        category: updateServiceDto.category,
         duration: updateServiceDto.duration,
         price: updateServiceDto.price,
         currency: updateServiceDto.currency,
