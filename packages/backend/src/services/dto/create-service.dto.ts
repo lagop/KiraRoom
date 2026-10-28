@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNumber, IsBoolean, IsOptional, IsNotEmpty } from 'class-validator';
+import { IsString, IsNumber, IsBoolean, IsOptional, IsNotEmpty, IsEnum } from 'class-validator';
+import { ServiceCategory } from '@prisma/client';
 
 /**
  * No `tenantId` here on purpose: the tenant comes from the caller's token.
@@ -19,10 +20,13 @@ export class CreateServiceDto {
   @IsOptional()
   description?: string;
 
-  @ApiProperty({ description: 'Service category' })
-  @IsString()
-  @IsNotEmpty()
-  category: string;
+  // One of the database's categories: anything else used to reach Postgres
+  // and come back as a 500 instead of a 400 saying what is allowed.
+  @ApiProperty({ description: 'Service category', enum: ServiceCategory })
+  @IsEnum(ServiceCategory, {
+    message: `category must be one of: ${Object.values(ServiceCategory).join(", ")}`,
+  })
+  category: ServiceCategory;
 
   @ApiProperty({ description: 'Service duration in minutes' })
   @IsNumber()
