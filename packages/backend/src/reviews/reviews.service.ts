@@ -538,7 +538,7 @@ export class ReviewsService {
 
     if (await this.allowed(client, "email", reasons)) {
       if (!this.emailService.isConfigured()) {
-        reasons.push("email: proveedor no configurado (RESEND_API_KEY)");
+        reasons.push("email: proveedor no configurado (consola de la plataforma o RESEND_API_KEY)");
       } else {
         const res = await this.emailService.sendReviewRequest({
           to: client.email!,

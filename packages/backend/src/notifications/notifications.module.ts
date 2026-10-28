@@ -15,6 +15,7 @@ import { PrismaModule } from "../common/prisma/prisma.module";
 import { TranslationsModule } from "../translations/translations.module";
 import { MessageBundlesModule } from "../message-bundles/message-bundles.module";
 import { WhatsAppMessagingModule } from "../whatsapp/whatsapp-messaging.module";
+import { PlatformModule } from "../platform/platform.module";
 
 @Module({
   imports: [
@@ -25,6 +26,8 @@ import { WhatsAppMessagingModule } from "../whatsapp/whatsapp-messaging.module";
     MessageBundlesModule,
     // Reminders through the salon's WhatsApp Business number (templates).
     WhatsAppMessagingModule,
+    // Email settings set in the platform console (Resend key, sender).
+    PlatformModule,
   ],
   controllers: [
     NotificationsController,

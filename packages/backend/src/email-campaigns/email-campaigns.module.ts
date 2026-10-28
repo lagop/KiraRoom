@@ -12,9 +12,10 @@ import { EmailService } from "../notifications/services/email.service";
 import { PromotionsModule } from "../promotions/promotions.module";
 import { TranslationsModule } from "../translations/translations.module";
 import { ConsentModule } from "../consent/consent.module";
+import { PlatformModule } from "../platform/platform.module";
 
 @Module({
-  imports: [PrismaModule, PromotionsModule, TranslationsModule, ConsentModule],
+  imports: [PrismaModule, PromotionsModule, TranslationsModule, ConsentModule, PlatformModule],
   controllers: [EmailCampaignsController, ResendWebhooksController, EmailUnsubscribeController],
   providers: [
     EmailCampaignsService,

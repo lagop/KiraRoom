@@ -170,9 +170,8 @@ describe("marketing consent from the client's account", () => {
       sendEmail: jest.fn().mockResolvedValue({ success: true, id: "re_1" }),
     };
     const suppressions: any = { suppressedAmong: async () => new Set<string>() };
-    const config: any = { get: () => undefined };
     const unsubscribes: any = { link: () => ({ pageUrl: "https://app.test/public/baja/x", headers: {} }), withFooter: (html: string) => html };
-    const campaigns = new EmailCampaignsService(prisma, email as any, suppressions, config, unsubscribes);
+    const campaigns = new EmailCampaignsService(prisma, email as any, suppressions, unsubscribes);
 
     const result: any = await campaigns.sendCampaignNow("t1", "camp");
 

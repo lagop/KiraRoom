@@ -21,8 +21,8 @@ describe("ResendWebhooksController", () => {
 
   function build(configured = true) {
     const events = { handle: jest.fn().mockResolvedValue(undefined) };
-    const config = { get: (k: string) => (k === "RESEND_WEBHOOK_SECRET" && configured ? secret : undefined) };
-    const controller = new ResendWebhooksController(config as any, events as any);
+    const platformEmail = { current: () => ({ apiKey: null, from: null, webhookSecret: configured ? secret : null }) };
+    const controller = new ResendWebhooksController(platformEmail as any, events as any);
     (controller as any).logger = { warn: jest.fn(), error: jest.fn(), log: jest.fn() };
     return { controller, events };
   }
