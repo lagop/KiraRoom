@@ -10,12 +10,20 @@ import { MessageBundlesService } from '../message-bundles/message-bundles.servic
 import { Public } from '../auth/decorators/public.decorator';
 import { activationFromCheckout, activationFromSubscription, PlanActivation } from './plan-activation';
 import { ReadOnlyNoticeService } from './read-only-notice.service';
+import { PlatformStripeConfigService } from '../platform/platform-stripe-config.service';
 
 @Controller('webhooks')
 export class WebhooksController {
-  private stripe: Stripe;
-  private webhookSecret: string;
   private readonly logger = new Logger(WebhooksController.name);
+
+  /** KiraRoom's Stripe account and webhook secret: the console's, else .env. */
+  private get stripe(): Stripe | null {
+    return this.platformStripe.client();
+  }
+
+  private get webhookSecret(): string {
+    return this.platformStripe.current().webhookSecret ?? '';
+  }
 
   constructor(
     private readonly configService: ConfigService,
@@ -25,14 +33,8 @@ export class WebhooksController {
     private readonly addonsService: AddOnsService,
     private readonly messageBundles: MessageBundlesService,
     private readonly readOnlyNotices: ReadOnlyNoticeService,
-  ) {
-    const apiKey = this.configService.get<string>('STRIPE_SECRET_KEY');
-    if (apiKey && apiKey.startsWith('sk_')) {
-      this.stripe = new Stripe(apiKey, {
-        apiVersion: '2024-12-18.acacia' as any });
-    }
-    this.webhookSecret = this.configService.get<string>('STRIPE_WEBHOOK_SECRET', '');
-  }
+    private readonly platformStripe: PlatformStripeConfigService,
+  ) {}
 
   // Public: Stripe never has a session. It required one, so every event got
   // a 401 and no payment ever activated an account. The signature checked
@@ -59,7 +61,7 @@ export class WebhooksController {
     if (!this.webhookSecret || !this.stripe) {
       if (isProd && !allowUnverified) {
         this.logger.error(
-          'Stripe webhook called but STRIPE_WEBHOOK_SECRET is not configured; refusing to process unsigned event in production.',
+          'Stripe webhook called but no webhook secret is set (console or STRIPE_WEBHOOK_SECRET); refusing to process unsigned event in production.',
         );
         throw new HttpException(
           'Stripe webhook not configured',

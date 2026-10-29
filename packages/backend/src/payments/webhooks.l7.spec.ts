@@ -37,7 +37,7 @@ describe('WebhooksController L-7 (invoice.paid reactivation rules)', () => {
     const c = Object.create(WebhooksController.prototype) as any;
     c.logger = { log: () => {}, warn: () => {}, error: () => {} };
     c.configService = configService;
-    c.stripe = stripe;
+    c.platformStripe = { client: () => stripe, current: () => ({ webhookSecret: configService.get('STRIPE_WEBHOOK_SECRET') }) };
     c.addonsService = addonsService;
     c.subscriptionsService = subscriptionsService;
     c.billingService = billingService;

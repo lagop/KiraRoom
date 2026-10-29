@@ -38,6 +38,7 @@ describe("plan catalogue consistency", () => {
     const registry = new SubscriptionsService(
       {} as any,
       { get: () => undefined } as any,
+      { client: () => null, current: () => ({ taxEnabled: false }) } as any,
     ).plans;
 
     for (const plan of PLAN_IDS) {

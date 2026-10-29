@@ -4957,6 +4957,27 @@ class ApiClient implements ApiClientInterface {
     return this.request(`/platform/email-config/test`, { method: "POST" });
   }
 
+  // KiraRoom's own Stripe account. Secret key and webhook secret are
+  // write-only: GET says where each comes from, never its value.
+  async getPlatformStripeConfig(): Promise<PlatformStripeConfig> {
+    return this.request(`/platform/stripe-config`);
+  }
+  /** A value sets a field, null clears it (the server's .env applies), absent keeps it. */
+  async updatePlatformStripeConfig(input: {
+    secretKey?: string | null;
+    publishableKey?: string | null;
+    webhookSecret?: string | null;
+    taxEnabled?: boolean | null;
+  }): Promise<PlatformStripeConfig> {
+    return this.request(`/platform/stripe-config`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+  }
+  async testPlatformStripe(): Promise<{ ok: boolean; message: string }> {
+    return this.request(`/platform/stripe-config/test`, { method: "POST" });
+  }
+
   // ---------------------------------------------------------------------------
   //  P2A-staff-copilot
   // ---------------------------------------------------------------------------
@@ -5074,6 +5095,16 @@ export interface PlatformEmailConfig {
   apiKey: { source: EmailSettingSource; lastFour: string | null };
   from: { source: EmailSettingSource; value: string | null };
   webhookSecret: { source: EmailSettingSource; lastFour: string | null };
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+export interface PlatformStripeConfig {
+  mode: "test" | "live" | "none";
+  secretKey: { source: EmailSettingSource; lastFour: string | null };
+  publishableKey: { source: EmailSettingSource; value: string | null };
+  webhookSecret: { source: EmailSettingSource; lastFour: string | null };
+  taxEnabled: { source: EmailSettingSource; value: boolean };
   updatedAt: string | null;
   updatedBy: string | null;
 }
