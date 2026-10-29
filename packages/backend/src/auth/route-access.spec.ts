@@ -39,7 +39,10 @@ function undeclaredRoutes(): string[] {
     for (const cls of Object.values<any>(exported)) {
       if (typeof cls !== "function" || Reflect.getMetadata(PATH_METADATA, cls) === undefined) continue;
       for (const name of Object.getOwnPropertyNames(cls.prototype)) {
-        const handler = cls.prototype[name];
+        // The descriptor's value, not cls.prototype[name]: that would run any
+        // getter (a controller may read its config through one) on the bare
+        // prototype. Route handlers are always plain methods.
+        const handler = Object.getOwnPropertyDescriptor(cls.prototype, name)?.value;
         if (typeof handler !== "function" || Reflect.getMetadata(METHOD_METADATA, handler) === undefined) continue;
         const declared = KEYS.some(
           (key) => Reflect.getMetadata(key, handler) !== undefined || Reflect.getMetadata(key, cls) !== undefined,
