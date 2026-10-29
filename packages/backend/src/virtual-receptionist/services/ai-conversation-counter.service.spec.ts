@@ -115,7 +115,7 @@ describe('AiConversationCounterService caps', () => {
       user: { findMany: jest.fn().mockResolvedValue(Array.from({ length: extra.managers ?? 1 }, (_, i) => ({ id: 'u' + i }))) },
     } as any;
     const notifications = { create: jest.fn().mockResolvedValue({}) };
-    const subs = new SubscriptionsService({} as any, { get: () => undefined } as any);
+    const subs = new SubscriptionsService({} as any, { get: () => undefined } as any, { client: () => null, current: () => ({ taxEnabled: false }) } as any);
     const svc = new AiConversationCounterService(
       prisma,
       { get: () => undefined } as any,

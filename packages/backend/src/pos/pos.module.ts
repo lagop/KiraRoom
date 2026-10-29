@@ -6,9 +6,11 @@ import { PrismaModule } from '../common/prisma/prisma.module';
 import { WalletService } from '../payments/services/wallet.service';
 import { StripeService } from '../payments/services/stripe.service';
 import { LoyaltyModule } from '../loyalty/loyalty.module';
+import { PlatformModule } from '../platform/platform.module';
 
 @Module({
-  imports: [PrismaModule, LoyaltyModule],
+  // PlatformModule: StripeService reads KiraRoom's account settings from it.
+  imports: [PrismaModule, LoyaltyModule, PlatformModule],
   controllers: [PosController],
   // ProductService still uses StripeService (product payments); PosService no
   // longer does. Removing it from here took the API down on 2026-10-01.

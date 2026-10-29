@@ -5,7 +5,8 @@ import Link from "next/link";
 import { AlertCircle, Check, Mail, Save, Send } from "lucide-react";
 import apiClient, { PlatformEmailConfig } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
-import { EmailForm, emailStatus, emailUpdate, sourceText } from "@/lib/platform-email";
+import { EmailForm, emailStatus, emailUpdate } from "@/lib/platform-email";
+import { SettingField as Field } from "../setting-field";
 
 // Where Resend sends delivery events; shown so it can be copied into Resend.
 const WEBHOOK_URL = `${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1").replace(/\/+$/, "")}/webhooks/resend`;
@@ -201,34 +202,6 @@ export default function PlatformEmailPage() {
           )}
         </span>
       </div>
-    </div>
-  );
-}
-
-function Field(props: {
-  label: string;
-  source: PlatformEmailConfig["apiKey"]["source"];
-  current: string | null;
-  hint: string;
-  onClear?: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
-        <label className="text-sm font-medium text-gray-700">{props.label}</label>
-        <span className="text-xs text-gray-500">
-          {sourceText(props.source)}
-          {props.current ? ` · ${props.current}` : ""}
-          {props.onClear && (
-            <button type="button" onClick={props.onClear} className="ml-2 underline hover:text-gray-700">
-              Quitar
-            </button>
-          )}
-        </span>
-      </div>
-      {props.children}
-      <p className="text-xs text-gray-500 mt-1">{props.hint}</p>
     </div>
   );
 }

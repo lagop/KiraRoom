@@ -161,9 +161,9 @@ function setup(opts: { tenant?: any } = {}) {
       create: jest.fn(async (p: any) => ({ id: p.id ?? "prod_new" })),
     },
   };
-  const subs = new SubscriptionsService(prisma, { get: () => undefined } as any);
-  (subs as any).stripe = stripe;
-  (subs as any).isEnabled = true;
+  // KiraRoom's Stripe account, as the platform console would give it.
+  const platformStripe = { client: () => stripe, current: () => ({ taxEnabled: false }) } as any;
+  const subs = new SubscriptionsService(prisma, { get: () => undefined } as any, platformStripe);
   const metrics: any = { counter: () => ({ inc: () => undefined }) };
   const svc = new AddOnsService(prisma, { get: () => undefined } as any, subs, metrics, {} as any);
   return { svc, subs, stripe, prisma, rows, setLive: (s: any) => (live = s), getLive: () => live };

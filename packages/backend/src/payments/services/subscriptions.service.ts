@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import Stripe from 'stripe';
 import { isAddOnItem, planItemOf } from '../plan-activation';
+import { PlatformStripeConfigService } from '../../platform/platform-stripe-config.service';
 import { aiConversationsApprox, aiMessageCap, formatCountEs, PLAN_AI_CONVERSATIONS } from '@kira/shared';
 
 /** "500 mensajes al mes, unas 70 conversaciones", as kiraroom.com puts it. */
@@ -187,8 +188,17 @@ export const PLAN_MATRIX: Record<PlanId, ReadonlyArray<FeatureKey>> = {
 
 @Injectable()
 export class SubscriptionsService {
-  private stripe: Stripe;
-  private isEnabled: boolean = false;
+  /**
+   * KiraRoom's Stripe account, set in the platform console (else .env).
+   * Read on every use, so a new key or a switch to live works at once.
+   */
+  private get stripe(): Stripe | null {
+    return this.platformStripe.client();
+  }
+
+  private get isEnabled(): boolean {
+    return this.stripe !== null;
+  }
 
   // Define subscription plans (rev 3)
   readonly plans: Record<PlanId, SubscriptionPlanDetails> = {
@@ -277,19 +287,12 @@ export class SubscriptionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
+    private readonly platformStripe: PlatformStripeConfigService,
   ) {
     this.plans.basic = this.plans.esencial;
     this.plans.professional = this.plans.pro;
     this.plans.advanced = this.plans.empresa;
     this.plans.enterprise = this.plans.empresa;
-
-    const apiKey = this.configService.get<string>('STRIPE_SECRET_KEY');
-    if (apiKey && apiKey.startsWith('sk_')) {
-      this.stripe = new Stripe(apiKey, {
-        apiVersion: '2024-12-18.acacia' as any,
-      });
-      this.isEnabled = true;
-    }
   }
 
   // ============ HELPERS ============
@@ -297,7 +300,8 @@ export class SubscriptionsService {
   /**
    * Stripe Checkout tax options.
    *
-   * Returns the empty object unless STRIPE_TAX_ENABLED is set, because
+   * Returns the empty object unless tax is on (platform console, else
+   * STRIPE_TAX_ENABLED), because
    * automatic_tax needs Stripe Tax active and an origin address configured
    * in the Stripe dashboard. Sending it before that is done makes every
    * checkout fail, so the default is the previous behaviour.
@@ -307,10 +311,7 @@ export class SubscriptionsService {
    * correctly for EU business customers outside Spain.
    */
   private taxOptions(): Record<string, unknown> {
-    const enabled = String(
-      this.configService.get("STRIPE_TAX_ENABLED", ""),
-    ).toLowerCase();
-    if (enabled !== "true" && enabled !== "1") return {};
+    if (!this.platformStripe.current().taxEnabled) return {};
     return {
       automatic_tax: { enabled: true },
       tax_id_collection: { enabled: true },
@@ -513,7 +514,7 @@ export class SubscriptionsService {
       // Behind a flag because `automatic_tax` requires Stripe Tax to be
       // switched on and an origin address set in the Stripe dashboard --
       // enabling it in code first makes every checkout fail. Turn it on in
-      // Stripe, then set STRIPE_TAX_ENABLED=true.
+      // Stripe, then turn it on in the platform console (or STRIPE_TAX_ENABLED).
       ...this.taxOptions(),
     });
 

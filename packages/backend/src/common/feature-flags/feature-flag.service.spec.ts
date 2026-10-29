@@ -10,7 +10,7 @@ import { SubscriptionsService, PLAN_MATRIX } from '../../payments/services/subsc
  */
 describe('FeatureFlagService (v2 union gating)', () => {
   function makeSvc(plan: 'esencial' | 'pro' | 'empresa' = 'esencial') {
-    const subs = new SubscriptionsService({} as any, { get: () => undefined } as any);
+    const subs = new SubscriptionsService({} as any, { get: () => undefined } as any, { client: () => null, current: () => ({ taxEnabled: false }) } as any);
     // Silence unused-import warning in lint (we use PLAN_MATRIX below
     // for read-only assertions in some tests).
     void PLAN_MATRIX;

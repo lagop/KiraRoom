@@ -18,6 +18,7 @@ import { ReadOnlyNoticeService } from "./read-only-notice.service";
 import { NotificationsModule } from "../notifications/notifications.module";
 import { ProfessionalsModule } from "../professionals/professionals.module";
 import { LoyaltyModule } from "../loyalty/loyalty.module";
+import { PlatformModule } from "../platform/platform.module";
 
 @Module({
   imports: [
@@ -28,6 +29,8 @@ import { LoyaltyModule } from "../loyalty/loyalty.module";
     NotificationsModule,
     forwardRef(() => MessageBundlesModule),
     ScheduleModule.forRoot(),
+    // KiraRoom's Stripe account, set in the platform console (else .env).
+    PlatformModule,
   ],
   controllers: [PaymentsController, WebhooksController, AddOnsAdminController, TenantAddOnsController],
   providers: [

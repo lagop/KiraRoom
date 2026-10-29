@@ -130,7 +130,7 @@ describe("cancelled from the dashboard", () => {
         update: jest.fn(async () => ({})),
       },
     };
-    return { svc: new SubscriptionsService(prisma as any, { get: () => undefined } as any), prisma };
+    return { svc: new SubscriptionsService(prisma as any, { get: () => undefined } as any, { client: () => null, current: () => ({ taxEnabled: false }) } as any), prisma };
   }
 
   it("cancelSubscription says whether this call made the change", async () => {

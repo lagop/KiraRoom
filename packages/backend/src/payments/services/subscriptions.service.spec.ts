@@ -13,7 +13,7 @@ describe('P2A-receptionist-v2: PLAN_MATRIX', () => {
   beforeEach(() => {
     // The service has constructor deps (prisma, config) but the
     // matrix + plan details are static -- we never call them.
-    subs = new SubscriptionsService({} as any, { get: () => undefined } as any);
+    subs = new SubscriptionsService({} as any, { get: () => undefined } as any, { client: () => null, current: () => ({ taxEnabled: false }) } as any);
   });
 
   it('esencial incluye whatsapp_notifications + virtual_receptionist (base IA, cap 500)', () => {
@@ -147,7 +147,7 @@ describe('AI caps in conversations', () => {
   });
 
   it('puts both in the plan texts', () => {
-    const subs = new SubscriptionsService({} as any, { get: () => undefined } as any);
+    const subs = new SubscriptionsService({} as any, { get: () => undefined } as any, { client: () => null, current: () => ({ taxEnabled: false }) } as any);
     const ai = (plan: 'esencial' | 'pro' | 'empresa') => subs.plans[plan].features.find((f) => f.startsWith('Recepcionista IA'));
     expect(ai('esencial')).toBe('Recepcionista IA en tu web y en WhatsApp: 500 mensajes al mes, unas 70 conversaciones');
     expect(ai('pro')).toContain(': 2.000 mensajes al mes, unas 280 conversaciones');

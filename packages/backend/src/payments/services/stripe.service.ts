@@ -1,33 +1,21 @@
-import { Injectable, OnModuleInit, Inject, forwardRef } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Stripe from 'stripe';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { PlatformStripeConfigService } from '../../platform/platform-stripe-config.service';
 
 @Injectable()
-export class StripeService implements OnModuleInit {
-  private defaultStripe: Stripe;
-  private isEnabled: boolean = false;
+export class StripeService {
   private tenantStripes: Map<string, Stripe> = new Map();
   private tenantEnabled: Map<string, boolean> = new Map();
 
   constructor(
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
+    // KiraRoom's account (console, else .env): only the publishable-key
+    // fallback below. Salon payments always use the salon's own account.
+    private readonly platformStripe: PlatformStripeConfigService,
   ) {}
-
-  async onModuleInit() {
-    const apiKey = this.configService.get<string>('STRIPE_SECRET_KEY');
-    
-    if (apiKey && apiKey.startsWith('sk_')) {
-      this.defaultStripe = new Stripe(apiKey, {
-        apiVersion: '2024-12-18.acacia' as any,
-      });
-      this.isEnabled = true;
-      console.log('[StripeService] Default Stripe payment integration enabled');
-    } else {
-      console.warn('[StripeService] STRIPE_SECRET_KEY not configured - Stripe payments disabled');
-    }
-  }
 
   /**
    * The salon's own Stripe account, from the keys it saved in its settings.
@@ -96,7 +84,7 @@ export class StripeService implements OnModuleInit {
       });
 
       if (!tenant) {
-        return this.configService.get<string>('STRIPE_PUBLISHABLE_KEY') || null;
+        return this.platformStripe.current().publishableKey;
       }
 
       const mode = tenant.stripeMode || 'test';
@@ -105,7 +93,7 @@ export class StripeService implements OnModuleInit {
         : tenant.stripeTestPublishableKey;
     } catch (error) {
       console.error(`[StripeService] Error getting publishable key for tenant ${tenantId}:`, error);
-      return this.configService.get<string>('STRIPE_PUBLISHABLE_KEY') || null;
+      return this.platformStripe.current().publishableKey;
     }
   }
 
@@ -115,13 +103,6 @@ export class StripeService implements OnModuleInit {
   async isStripeEnabledForTenant(tenantId: string): Promise<boolean> {
     const { isEnabled } = await this.getStripeForTenant(tenantId);
     return isEnabled;
-  }
-
-  /**
-   * Legacy method for checking default Stripe
-   */
-  isStripeEnabled(): boolean {
-    return this.isEnabled;
   }
 
   /** amountCents: in cents, like Payment.amount. */
@@ -347,24 +328,6 @@ export class StripeService implements OnModuleInit {
     }
 
     return stripe.subscriptions.retrieve(subscriptionId);
-  }
-
-  /**
-   * Construct webhook event from payload and signature
-   */
-  constructWebhookEvent(
-    payload: Buffer | string,
-    signature: string,
-  ): Stripe.Event {
-    const webhookSecret = this.configService.get<string>('STRIPE_WEBHOOK_SECRET');
-    if (!webhookSecret) {
-      throw new Error('STRIPE_WEBHOOK_SECRET not configured');
-    }
-    return this.defaultStripe.webhooks.constructEvent(
-      payload,
-      signature,
-      webhookSecret,
-    );
   }
 
   /**

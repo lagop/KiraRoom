@@ -161,9 +161,9 @@ describe("checkout session", () => {
         update: jest.fn(),
       },
     };
-    const config: any = { get: (k: string, d?: string) => (k === "STRIPE_SECRET_KEY" ? "sk_test_x" : d) };
-    const subs = new SubscriptionsService(prisma, config);
-    (subs as any).stripe = { checkout: { sessions: { create } } };
+    const config: any = { get: (_k: string, d?: string) => d };
+    const platformStripe: any = { client: () => ({ checkout: { sessions: { create } } }), current: () => ({ taxEnabled: false }) };
+    const subs = new SubscriptionsService(prisma, config, platformStripe);
 
     await subs.createCheckoutSession("t1", "empresa", 2);
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { Settings as SettingsIcon, Key, Mail, ArrowRight } from "lucide-react";
+import { Settings as SettingsIcon, Key, Mail, CreditCard, ArrowRight } from "lucide-react";
 import Link from "next/link";
 
 export default function SaasSettingsPage() {
@@ -20,6 +20,14 @@ export default function SaasSettingsPage() {
       description:
         "Clave de Resend, dirección de envío y webhook de los emails de todos los salones.",
       badge: "Resend",
+    },
+    {
+      href: "/saas/settings/stripe",
+      icon: CreditCard,
+      title: "Stripe de la plataforma",
+      description:
+        "Claves, webhook e IVA de la cuenta de Stripe con la que pagan los salones.",
+      badge: "Stripe",
     },
   ];
 

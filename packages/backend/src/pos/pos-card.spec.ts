@@ -45,9 +45,9 @@ describe("POS card sales", () => {
 describe("StripeService for a salon", () => {
   it("never falls back to the platform's account", async () => {
     const prisma: any = { tenant: { findUnique: jest.fn(async () => ({ stripeMode: "live" })) } };
-    const config: any = { get: (k: string) => (k === "STRIPE_SECRET_KEY" ? "sk_test_platform" : undefined) };
-    const stripe = new StripeService(config, prisma);
-    await stripe.onModuleInit();
+    // KiraRoom's own account is set; a salon must still never use it.
+    const platformStripe: any = { client: () => ({}), current: () => ({ secretKey: "sk_test_platform", publishableKey: null }) };
+    const stripe = new StripeService({ get: () => undefined } as any, prisma, platformStripe);
     const { isEnabled } = await stripe.getStripeForTenant("t1");
     expect(isEnabled).toBe(false);
     await expect(stripe.createPaymentIntent("t1", 2500)).rejects.toThrow(/not configured/);
@@ -55,7 +55,7 @@ describe("StripeService for a salon", () => {
 
   it("charges the amount it is given, in cents", async () => {
     const create = jest.fn(async (args: any) => args);
-    const stripe = new StripeService({ get: (_k: string, d?: string) => d } as any, {} as any);
+    const stripe = new StripeService({ get: (_k: string, d?: string) => d } as any, {} as any, {} as any);
     (stripe as any).getStripeForTenant = async () => ({ stripe: { paymentIntents: { create } }, isEnabled: true });
     await stripe.createPaymentIntent("t1", 2500);
     expect((create.mock.calls[0] as any[])[0].amount).toBe(2500);

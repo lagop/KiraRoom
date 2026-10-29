@@ -79,7 +79,7 @@ describe('AddOnsService', () => {
     } as any;
     const config = { get: (k: string) => (k === 'FRONTEND_URL' ? 'https://app.test' : undefined) } as any;
     const flags = {} as any;
-    const subs = new SubscriptionsService({} as any, { get: () => undefined } as any);
+    const subs = new SubscriptionsService({} as any, { get: () => undefined } as any, { client: () => null, current: () => ({ taxEnabled: false }) } as any);
     const email = {
       sendMultichannelActivated: jest.fn().mockResolvedValue({ success: true }),
     };
