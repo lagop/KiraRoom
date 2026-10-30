@@ -415,9 +415,11 @@
       "unavailable": "Stripe no devolvio una URL de portal."
     },
     "cancel": {
-      "confirm": "Cancelarás tu suscripción. Pasarás a modo lectura durante 30 días. Continuar?",
+      "confirm": "¿Cancelar la suscripción?",
       "cta": "Cancelar suscripción",
-      "doing": "Cancelando..."
+      "doing": "Cancelando...",
+      "description": "Pasarás a modo lectura durante 30 días. Mientras tanto puedes reactivarla desde esta página.",
+      "keep": "Mantenerla"
     },
     "reactivate": {
       "cta": "Reactivar plan",
@@ -507,8 +509,8 @@
     },
     "choosePlan": "Elegir plan",
     "processing": "Procesando...",
-    "checkoutConfirm": "¿Contratar el plan {plan}? Irás a la página de pago de Stripe.",
-    "checkoutDevNotice": "Checkout no disponible (modo dev sin Stripe)",
+    "checkoutConfirm": "¿Contratar el plan {plan}?",
+    "checkoutDevNotice": "El pago no está disponible: Stripe no está configurado.",
     "checkoutError": "No se pudo iniciar el checkout",
     "cancelError": "Error cancelando",
     "reactivateError": "Error reactivando",
@@ -517,9 +519,13 @@
     "loading": "Cargando facturación...",
     "subscribeCurrent": "Contratar este plan",
     "switchPlan": "Cambiar a este plan",
-    "switchConfirm": "¿Cambiar al plan {plan}? Stripe ajusta el próximo cobro según los días que quedan del mes.",
+    "switchConfirm": "¿Cambiar al plan {plan}?",
     "switchDone": "Listo: ya estás en el plan {plan}.",
-    "trialCheckoutNote": "Puedes contratar ya sin perder la prueba: guardas la tarjeta ahora y el primer cobro llega cuando acaba la prueba, el {date}. Si contratas en sus dos últimos días, se cobra al momento."
+    "trialCheckoutNote": "Puedes contratar ya sin perder la prueba: guardas la tarjeta ahora y el primer cobro llega cuando acaba la prueba, el {date}. Si contratas en sus dos últimos días, se cobra al momento.",
+    "checkoutDescription": "Irás a la página de pago segura de Stripe para poner la tarjeta.",
+    "checkoutGo": "Ir al pago",
+    "switchDescription": "Stripe ajusta el próximo cobro según los días que quedan del mes.",
+    "back": "Volver"
   },
   "plans": {
     "esencial": "Esencial",
