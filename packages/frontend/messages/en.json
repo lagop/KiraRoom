@@ -415,9 +415,11 @@
       "unavailable": "Stripe did not return a portal URL."
     },
     "cancel": {
-      "confirm": "You will cancel your subscription and enter read-only mode for 30 days. Continue?",
+      "confirm": "Cancel your subscription?",
       "cta": "Cancel subscription",
-      "doing": "Cancelling..."
+      "doing": "Cancelling...",
+      "description": "You will be in read-only mode for 30 days. You can reactivate it from this page in that time.",
+      "keep": "Keep it"
     },
     "reactivate": {
       "cta": "Reactivate plan",
@@ -507,8 +509,8 @@
     },
     "choosePlan": "Choose plan",
     "processing": "Processing...",
-    "checkoutConfirm": "Subscribe to the {plan} plan? You will go to Stripe's payment page.",
-    "checkoutDevNotice": "Checkout not available (dev mode without Stripe)",
+    "checkoutConfirm": "Subscribe to the {plan} plan?",
+    "checkoutDevNotice": "Payment is not available: Stripe is not configured.",
     "checkoutError": "Could not start checkout",
     "cancelError": "Error cancelling",
     "reactivateError": "Error reactivating",
@@ -517,9 +519,13 @@
     "loading": "Loading billing...",
     "subscribeCurrent": "Subscribe to this plan",
     "switchPlan": "Switch to this plan",
-    "switchConfirm": "Switch to the {plan} plan? Stripe adjusts your next charge for the days left this month.",
+    "switchConfirm": "Switch to the {plan} plan?",
     "switchDone": "Done: you are now on the {plan} plan.",
-    "trialCheckoutNote": "You can subscribe now without losing your trial: your card is saved today and the first charge comes when the trial ends, on {date}. In its last two days, you are charged at once."
+    "trialCheckoutNote": "You can subscribe now without losing your trial: your card is saved today and the first charge comes when the trial ends, on {date}. In its last two days, you are charged at once.",
+    "checkoutDescription": "You will go to Stripe's secure payment page to enter your card.",
+    "checkoutGo": "Go to payment",
+    "switchDescription": "Stripe adjusts your next charge for the days left this month.",
+    "back": "Back"
   },
   "plans": {
     "esencial": "Esencial",

@@ -41,6 +41,10 @@ function BillingPageContent() {
   } | null>(null);
 
   // M-2: confirm dialog state for add-on purchase + cancel.
+  // The plan the salon is about to subscribe to or switch to, and whether it
+  // is about to cancel: confirmed in the panel's dialog, not window.confirm.
+  const [pendingPlan, setPendingPlan] = useState<{ planId: string; change: boolean } | null>(null);
+  const [confirmCancel, setConfirmCancel] = useState(false);
   const [confirmAddOn, setConfirmAddOn] = useState<{
     key: string;
     action: "purchase" | "cancel";
@@ -207,12 +211,17 @@ function BillingPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleChoosePlan = async (planId: string) => {
-    const plan = t(`plans.${planId}`);
+  const handleChoosePlan = (planId: string) => {
     // A salon that already pays changes the plan of its subscription: a
     // checkout would open a second one, billed on top.
-    if (paysSubscription(sub)) {
-      if (!confirm(t("billing.switchConfirm", { plan }))) return;
+    setPendingPlan({ planId, change: paysSubscription(sub) });
+  };
+
+  const performChoosePlan = async () => {
+    if (!pendingPlan) return;
+    const { planId, change } = pendingPlan;
+    const plan = t(`plans.${planId}`);
+    if (change) {
       setWorking(planId);
       setError(null);
       try {
@@ -223,10 +232,10 @@ function BillingPageContent() {
         setError(e?.message || t("billing.checkoutError"));
       } finally {
         setWorking(null);
+        setPendingPlan(null);
       }
       return;
     }
-    if (!confirm(t("billing.checkoutConfirm", { plan }))) return;
     setWorking(planId);
     setError(null);
     try {
@@ -236,19 +245,20 @@ function BillingPageContent() {
       };
       const url = res.checkoutUrl || res.url;
       if (url) {
+        // The dialog stays up, busy, until Stripe's page loads.
         window.location.href = url;
-      } else {
-        alert(t("billing.checkoutDevNotice"));
+        return;
       }
+      setError(t("billing.checkoutDevNotice"));
     } catch (e: any) {
       setError(e?.message || t("billing.checkoutError"));
-    } finally {
-      setWorking(null);
     }
+    setWorking(null);
+    setPendingPlan(null);
   };
 
   const handleCancel = async () => {
-    if (!confirm(t("billing.cancel.confirm"))) return;
+    setConfirmCancel(false);
     setWorking("cancel");
     try {
       await apiClient.cancelSubscription(false);
@@ -443,7 +453,7 @@ function BillingPageContent() {
           )}
           {!isCancelled && (
             <button
-              onClick={handleCancel}
+              onClick={() => setConfirmCancel(true)}
               disabled={working === "cancel"}
               className="ml-auto text-xs text-red-600 underline hover:text-red-700"
             >
@@ -598,6 +608,34 @@ function BillingPageContent() {
           {error}
         </p>
       )}
+
+      <ConfirmDialog
+        open={!!pendingPlan}
+        title={
+          pendingPlan
+            ? t(pendingPlan.change ? "billing.switchConfirm" : "billing.checkoutConfirm", {
+                plan: t(`plans.${pendingPlan.planId}`),
+              })
+            : ""
+        }
+        description={pendingPlan && t(pendingPlan.change ? "billing.switchDescription" : "billing.checkoutDescription")}
+        confirmLabel={pendingPlan?.change ? t("billing.switchPlan") : t("billing.checkoutGo")}
+        cancelLabel={t("billing.back")}
+        loading={!!pendingPlan && working === pendingPlan.planId}
+        onCancel={() => setPendingPlan(null)}
+        onConfirm={performChoosePlan}
+      />
+
+      <ConfirmDialog
+        open={confirmCancel}
+        title={t("billing.cancel.confirm")}
+        description={t("billing.cancel.description")}
+        confirmLabel={t("billing.cancel.cta")}
+        cancelLabel={t("billing.cancel.keep")}
+        destructive
+        onCancel={() => setConfirmCancel(false)}
+        onConfirm={handleCancel}
+      />
 
       <ConfirmDialog
         open={!!confirmAddOn}
