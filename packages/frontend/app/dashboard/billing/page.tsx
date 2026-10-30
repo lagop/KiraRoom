@@ -9,6 +9,7 @@ import { UsageMeters } from "@/components/billing/UsageMeters";
 import { TrialBanner } from "@/components/billing/TrialBanner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { PlanId } from "@/lib/plans";
+import { planAction, paysSubscription } from "@/lib/billing-plan";
 import { aiConversationsApprox } from "@kira/shared";
 import { Check, Loader2, Sparkles, X } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
@@ -207,7 +208,25 @@ function BillingPageContent() {
   }, []);
 
   const handleChoosePlan = async (planId: string) => {
-    if (!confirm(t("billing.checkoutConfirm", { plan: planId }))) return;
+    const plan = t(`plans.${planId}`);
+    // A salon that already pays changes the plan of its subscription: a
+    // checkout would open a second one, billed on top.
+    if (paysSubscription(sub)) {
+      if (!confirm(t("billing.switchConfirm", { plan }))) return;
+      setWorking(planId);
+      setError(null);
+      try {
+        await apiClient.changeSubscriptionPlan(planId);
+        await load();
+        setFlowBanner({ kind: "success", message: t("billing.switchDone", { plan }) });
+      } catch (e: any) {
+        setError(e?.message || t("billing.checkoutError"));
+      } finally {
+        setWorking(null);
+      }
+      return;
+    }
+    if (!confirm(t("billing.checkoutConfirm", { plan }))) return;
     setWorking(planId);
     setError(null);
     try {
@@ -447,9 +466,17 @@ function BillingPageContent() {
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-700">
           {t("billing.changePlan")}
         </h2>
+        {isTrialing && !paysSubscription(sub) && sub?.trialEnd && (
+          <p className="mb-3 text-sm text-gray-600">
+            {t("billing.trialCheckoutNote", {
+              date: new Date(sub.trialEnd).toLocaleDateString(dateLocale),
+            })}
+          </p>
+        )}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {plans?.map((p: any) => {
             const isCurrent = p.id === currentPlan;
+            const action = planAction(sub, p.id);
             return (
               <div
                 key={p.id}
@@ -486,14 +513,18 @@ function BillingPageContent() {
                 </ul>
                 <button
                   onClick={() => handleChoosePlan(p.id)}
-                  disabled={isCurrent || working === p.id}
-                  className={"mt-4 w-full rounded-md px-3 py-2 text-sm font-medium " + (isCurrent ? "bg-gray-100 text-gray-400" : "bg-violet-600 text-white hover:bg-violet-700") + " disabled:opacity-50"}
+                  disabled={action === "current" || working !== null}
+                  className={"mt-4 w-full rounded-md px-3 py-2 text-sm font-medium " + (action === "current" ? "bg-gray-100 text-gray-400" : "bg-violet-600 text-white hover:bg-violet-700") + " disabled:opacity-50"}
                 >
-                  {isCurrent
+                  {action === "current"
                     ? t("billing.currentPlanLabel")
                     : working === p.id
                       ? t("billing.processing")
-                      : t("billing.choosePlan")}
+                      : action === "subscribe"
+                        ? t("billing.subscribeCurrent")
+                        : action === "change"
+                          ? t("billing.switchPlan")
+                          : t("billing.choosePlan")}
                 </button>
               </div>
             );
