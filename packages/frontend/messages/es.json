@@ -507,14 +507,19 @@
     },
     "choosePlan": "Elegir plan",
     "processing": "Procesando...",
-    "checkoutConfirm": "Crear sesión de checkout para el plan {plan}?",
+    "checkoutConfirm": "¿Contratar el plan {plan}? Irás a la página de pago de Stripe.",
     "checkoutDevNotice": "Checkout no disponible (modo dev sin Stripe)",
     "checkoutError": "No se pudo iniciar el checkout",
     "cancelError": "Error cancelando",
     "reactivateError": "Error reactivando",
     "portalError": "Error abriendo portal de facturación",
     "loadError": "Error cargando datos de facturación",
-    "loading": "Cargando facturación..."
+    "loading": "Cargando facturación...",
+    "subscribeCurrent": "Contratar este plan",
+    "switchPlan": "Cambiar a este plan",
+    "switchConfirm": "¿Cambiar al plan {plan}? Stripe ajusta el próximo cobro según los días que quedan del mes.",
+    "switchDone": "Listo: ya estás en el plan {plan}.",
+    "trialCheckoutNote": "Puedes contratar ya sin perder la prueba: guardas la tarjeta ahora y el primer cobro llega cuando acaba la prueba, el {date}. Si contratas en sus dos últimos días, se cobra al momento."
   },
   "plans": {
     "esencial": "Esencial",

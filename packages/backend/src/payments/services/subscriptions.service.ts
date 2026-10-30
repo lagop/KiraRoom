@@ -2,7 +2,7 @@
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import Stripe from 'stripe';
-import { isAddOnItem, planItemOf } from '../plan-activation';
+import { checkoutTrialEnd, hasLivePlanSubscription, isAddOnItem, planItemOf } from '../plan-activation';
 import { PlatformStripeConfigService } from '../../platform/platform-stripe-config.service';
 import { aiConversationsApprox, aiMessageCap, formatCountEs, PLAN_AI_CONVERSATIONS } from '@kira/shared';
 
@@ -436,6 +436,13 @@ export class SubscriptionsService {
       throw new Error('Invalid plan');
     }
 
+    if (hasLivePlanSubscription(tenant)) {
+      throw new BadRequestException(
+        'Ya tienes una suscripción activa: cambia de plan en lugar de contratar otra.',
+      );
+    }
+    const trialEnd = checkoutTrialEnd(tenant, new Date());
+
     // Empresa bills per location from 1 upwards. It used to clamp to a
     // minimum of 2, which charged 298 EUR at a checkout that the catalogue
     // and the marketing site both advertised as 149 EUR.
@@ -496,6 +503,8 @@ export class SubscriptionsService {
       // (renewals, failures, cancellation) arrive without the session, and
       // without tenantId the webhook ignored every one of them.
       subscription_data: {
+        // In the free trial: card now, first charge when the trial ends.
+        ...(trialEnd ? { trial_end: trialEnd } : {}),
         metadata: {
           kind: 'plan',
           tenantId,
@@ -682,6 +691,9 @@ export class SubscriptionsService {
         subscriptionStatus: inTrial ? 'trialing' : 'active',
         cancelledAt: null,
         readOnlyUntil: null,
+        // Cancelled in Stripe with the subscription; the checkout below
+        // starts a new one.
+        stripeSubscriptionId: null,
       },
     });
 

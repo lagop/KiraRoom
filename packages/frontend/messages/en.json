@@ -507,14 +507,19 @@
     },
     "choosePlan": "Choose plan",
     "processing": "Processing...",
-    "checkoutConfirm": "Create checkout session for the {plan} plan?",
+    "checkoutConfirm": "Subscribe to the {plan} plan? You will go to Stripe's payment page.",
     "checkoutDevNotice": "Checkout not available (dev mode without Stripe)",
     "checkoutError": "Could not start checkout",
     "cancelError": "Error cancelling",
     "reactivateError": "Error reactivating",
     "portalError": "Error opening billing portal",
     "loadError": "Error loading billing data",
-    "loading": "Loading billing..."
+    "loading": "Loading billing...",
+    "subscribeCurrent": "Subscribe to this plan",
+    "switchPlan": "Switch to this plan",
+    "switchConfirm": "Switch to the {plan} plan? Stripe adjusts your next charge for the days left this month.",
+    "switchDone": "Done: you are now on the {plan} plan.",
+    "trialCheckoutNote": "You can subscribe now without losing your trial: your card is saved today and the first charge comes when the trial ends, on {date}. In its last two days, you are charged at once."
   },
   "plans": {
     "esencial": "Esencial",

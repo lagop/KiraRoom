@@ -75,3 +75,35 @@ export function activationFromSubscription(subscription: Stripe.Subscription): P
     subscriptionId: subscription.id,
   };
 }
+
+/**
+ * Stripe Checkout refuses a trial_end less than 48 hours away; an hour of
+ * margin covers the time between building the session and Stripe reading it.
+ */
+const MIN_TRIAL_LEFT_MS = 49 * 60 * 60 * 1000;
+
+/**
+ * When a salon in its free trial subscribes, the first charge waits for the
+ * trial to end (Unix seconds for subscription_data.trial_end): subscribing
+ * early must not cost it the days it has left. Undefined (charge now) out of
+ * trial, or in its last two days.
+ */
+export function checkoutTrialEnd(
+  tenant: { subscriptionStatus: string | null; trialEnd: Date | null },
+  now: Date,
+): number | undefined {
+  if (tenant.subscriptionStatus !== 'trialing' || !tenant.trialEnd) return undefined;
+  if (tenant.trialEnd.getTime() - now.getTime() < MIN_TRIAL_LEFT_MS) return undefined;
+  return Math.floor(tenant.trialEnd.getTime() / 1000);
+}
+
+/**
+ * A salon that already pays has a live plan subscription: another checkout
+ * would start a second one, billed on top. It changes plan instead.
+ */
+export function hasLivePlanSubscription(tenant: {
+  subscriptionStatus: string | null;
+  stripeSubscriptionId: string | null;
+}): boolean {
+  return !!tenant.stripeSubscriptionId && tenant.subscriptionStatus !== 'cancelled';
+}
