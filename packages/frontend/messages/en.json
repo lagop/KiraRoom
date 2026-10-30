@@ -2006,5 +2006,18 @@
     "request_new": "Ask for a new link",
     "back_to_login": "Back to log in",
     "error": "That didn't work. Please try again."
+  },
+  "email_verify": {
+    "title": "Email confirmation",
+    "checking": "Checking the link...",
+    "done_title": "Email confirmed",
+    "done": "Your email address is confirmed. Thank you.",
+    "go_dashboard": "Go to the dashboard",
+    "go_login": "Log in",
+    "invalid_title": "Expired or invalid link",
+    "invalid": "This link has expired, has already been used or isn't valid. Confirmation links last 48 hours.",
+    "error": "We couldn't check the link. Please try again in a few minutes.",
+    "retry": "Try again",
+    "back_to_login": "Back to log in"
   }
 }

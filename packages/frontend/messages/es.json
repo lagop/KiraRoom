@@ -2006,5 +2006,18 @@
     "request_new": "Pedir un enlace nuevo",
     "back_to_login": "Volver a iniciar sesión",
     "error": "No se ha podido completar. Inténtalo de nuevo."
+  },
+  "email_verify": {
+    "title": "Confirmación de email",
+    "checking": "Comprobando el enlace...",
+    "done_title": "Email confirmado",
+    "done": "Tu dirección de email ha quedado confirmada. Gracias.",
+    "go_dashboard": "Ir al panel",
+    "go_login": "Iniciar sesión",
+    "invalid_title": "Enlace caducado o no válido",
+    "invalid": "Este enlace ha caducado, ya se ha usado o no es válido. Los enlaces de confirmación duran 48 horas.",
+    "error": "No se ha podido comprobar el enlace. Inténtalo de nuevo en unos minutos.",
+    "retry": "Reintentar",
+    "back_to_login": "Volver a iniciar sesión"
   }
 }

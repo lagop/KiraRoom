@@ -73,6 +73,10 @@ const CREDENTIAL_ENDPOINTS = [
   "/auth/register",
   "/auth/forgot-password",
   "/auth/reset-password",
+  // Opened from the welcome email, usually signed out. The endpoint is public
+  // and answers { verified } either way; should it ever answer 401, that is
+  // the link page's to show, not a reason to navigate to /login.
+  "/auth/verify-email",
 ];
 
 export function isCredentialEndpoint(endpoint: string): boolean {
@@ -1321,6 +1325,7 @@ export interface ApiClientInterface {
   login(email: string, password: string, tenantSlug?: string): Promise<LoginResponse | TwoFactorRequired>;
   forgotPassword(email: string, tenantSlug?: string): Promise<{ message: string }>;
   resetPassword(token: string, password: string): Promise<{ message: string }>;
+  verifyEmail(token: string): Promise<{ verified: boolean }>;
   register(data: {
     email: string;
     password: string;
@@ -1974,6 +1979,15 @@ class ApiClient implements ApiClientInterface {
       method: "POST",
       body: JSON.stringify({ token, password }),
     });
+  }
+
+  /**
+   * Confirms an email address with the token from the welcome email. The
+   * answer is { verified: false } for an unknown, used or expired token
+   * rather than an error, so the server never says which.
+   */
+  async verifyEmail(token: string): Promise<{ verified: boolean }> {
+    return this.request(`/auth/verify-email?token=${encodeURIComponent(token)}`);
   }
 
   /**
