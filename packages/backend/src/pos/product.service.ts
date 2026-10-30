@@ -52,6 +52,18 @@ export interface UpdateProductDto {
   pointsEarned?: number;
 }
 
+/**
+ * What a product edit may change. The controller passes the request body
+ * untyped, and writing it whole let it reach the salon and its users
+ * through the `tenant` relation.
+ */
+const PRODUCT_FIELDS = [
+  "name", "description", "sku", "barcode", "category", "subcategory",
+  "price", "costPrice", "currency", "trackInventory", "quantity", "lowStockAlert",
+  "imageUrl", "images", "isActive", "isFeatured", "taxRate", "showOnline",
+  "onlinePrice", "earnPoints", "pointsEarned",
+] as const satisfies ReadonlyArray<keyof UpdateProductDto>;
+
 export interface CreateOrderDto {
   tenantId: string;
   clientId?: string;
@@ -165,9 +177,13 @@ export class ProductService {
   async updateProduct(id: string, dto: UpdateProductDto) {
     await this.getProduct(id); // Verify exists
 
+    const data: Record<string, unknown> = {};
+    for (const key of PRODUCT_FIELDS) {
+      if (dto?.[key] !== undefined) data[key] = dto[key];
+    }
     return this.prisma.product.update({
       where: { id },
-      data: dto,
+      data,
     });
   }
 

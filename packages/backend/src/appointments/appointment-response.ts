@@ -36,6 +36,10 @@ const SECRET_FIELDS = new Set([
   "stripeLiveSecretKey",
   "emailVerificationToken",
   "twoFactorSecret",
+  "twoFactorPendingSecret",
+  "twoFactorRecoveryCodes",
+  "passwordResetToken",
+  "tokenVersion",
 ]);
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

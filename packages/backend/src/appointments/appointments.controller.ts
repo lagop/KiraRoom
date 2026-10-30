@@ -9,9 +9,11 @@ import {
 import {
   AppointmentsService,
   CreateAppointmentDto,
-  UpdateAppointmentDto,
   AppointmentFiltersDto,
 } from "./appointments.service";
+// The class, not the service's same-named interface: the ValidationPipe
+// only validates (and strips unknown keys from) a class.
+import { UpdateAppointmentDto } from "./dto/update-appointment.dto";
 import { AvailableSlotsDto } from "./dto/available-slots.dto";
 import { OnlineBookingDto, StaffBookingDto } from "./dto/book-appointment.dto";
 import { PublicViewerService } from "../common/tenancy/public-viewer.service";
