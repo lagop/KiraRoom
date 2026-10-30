@@ -193,7 +193,12 @@ export function ServiceForm({ initialData, isEditing, onClose, onSubmit }: Servi
 
             {/* Deposit Settings Section */}
              <div className="sm:col-span-2 border-t pt-4 mt-4">
-              <h3 className="text-sm font-medium text-gray-900 mb-3">Deposit Settings</h3>
+              <h3 className="text-sm font-medium text-gray-900 mb-1">Señal al reservar online</h3>
+              <p className="text-xs text-gray-500 mb-3">
+                El cliente la paga con tarjeta al reservar desde tu web o el asistente. Necesitas tener{" "}
+                <a href="/dashboard/settings/stripe" className="text-purple-600 underline">tu cuenta de Stripe conectada</a>;
+                si no, la reserva se hace sin señal.
+              </p>
                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <div className="space-y-2">
                   <Label className="flex items-center gap-2">
@@ -203,14 +208,14 @@ export function ServiceForm({ initialData, isEditing, onClose, onSubmit }: Servi
                       onChange={(e) => setFormData({ ...formData, depositRequired: e.target.checked })}
                       className="w-4 h-4"
                     />
-                    Require Deposit
+                    Pedir señal
                   </Label>
                 </div>
 
                 {formData.depositRequired && (
                   <>
                     <div className="space-y-2">
-                      <Label htmlFor="depositAmount">Deposit Amount (Fixed)</Label>
+                      <Label htmlFor="depositAmount">Importe fijo (€)</Label>
                       <Input
                         id="depositAmount"
                         type="number"
@@ -227,7 +232,7 @@ export function ServiceForm({ initialData, isEditing, onClose, onSubmit }: Servi
                     </div>
 
                     <div className="space-y-2">
-                      <Label htmlFor="depositPercentage">Deposit Percentage</Label>
+                      <Label htmlFor="depositPercentage">O porcentaje del precio</Label>
                       <Input
                         id="depositPercentage"
                         type="number"
@@ -242,7 +247,7 @@ export function ServiceForm({ initialData, isEditing, onClose, onSubmit }: Servi
                         })}
                         placeholder="0"
                       />
-                      <p className="text-xs text-gray-500">% of total price</p>
+                      <p className="text-xs text-gray-500">% del precio del servicio</p>
                     </div>
                   </>
                 )}
