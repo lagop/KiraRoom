@@ -9,6 +9,7 @@ import apiClient, {
   WhatsAppConnection,
 } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   CAMPAIGN_FOOTER,
   MAX_BODY_LENGTH,
@@ -34,6 +35,8 @@ const SEGMENTS = [
   { value: "90", label: "Sin venir desde hace más de 90 días" },
   { value: "180", label: "Sin venir desde hace más de 6 meses" },
 ];
+
+type CampaignAction = "submit" | "cancel" | "remove";
 
 interface FormState {
   id: string | null;
@@ -71,6 +74,8 @@ export default function WhatsAppCampaignsPage() {
   const [form, setForm] = useState<FormState | null>(null);
   const [audience, setAudience] = useState<WhatsAppAudiencePreview | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // The campaign action about to run, confirmed in the panel's dialog.
+  const [pendingAct, setPendingAct] = useState<{ campaign: WhatsAppCampaign; action: CampaignAction } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -172,13 +177,9 @@ export default function WhatsAppCampaignsPage() {
     }
   }
 
-  async function act(c: WhatsAppCampaign, action: "submit" | "cancel" | "remove") {
-    const confirmText = {
-      submit: `¿Enviar «${c.name}» a revisión de Meta? Cuando la apruebe se enviará a los clientes que lo hayan aceptado.`,
-      cancel: `¿Cancelar «${c.name}»? Lo que ya se haya enviado no se puede deshacer.`,
-      remove: `¿Eliminar «${c.name}»?`,
-    }[action];
-    if (!confirm(confirmText)) return;
+  async function performAct() {
+    if (!pendingAct) return;
+    const { campaign: c, action } = pendingAct;
     setBusy(c.id);
     try {
       if (action === "submit") await apiClient.submitWhatsAppCampaign(c.id);
@@ -189,8 +190,33 @@ export default function WhatsAppCampaignsPage() {
       toast({ title: "No se pudo hacer", description: err?.message, variant: "destructive" });
     } finally {
       setBusy(null);
+      setPendingAct(null);
     }
   }
+
+  const confirmCopy = pendingAct && {
+    submit: {
+      title: `¿Enviar «${pendingAct.campaign.name}» a revisión de Meta?`,
+      description: "Cuando Meta la apruebe, se enviará a los clientes que hayan aceptado promociones por WhatsApp.",
+      confirmLabel: "Enviar a revisión",
+      cancelLabel: "Cancelar",
+      destructive: false,
+    },
+    cancel: {
+      title: `¿Cancelar «${pendingAct.campaign.name}»?`,
+      description: "Lo que ya se haya enviado no se puede deshacer.",
+      confirmLabel: "Cancelar campaña",
+      cancelLabel: "Mantener campaña",
+      destructive: true,
+    },
+    remove: {
+      title: `¿Eliminar «${pendingAct.campaign.name}»?`,
+      description: undefined,
+      confirmLabel: "Eliminar campaña",
+      cancelLabel: "Cancelar",
+      destructive: true,
+    },
+  }[pendingAct.action];
 
   const preview = useMemo(() => (form ? previewBody(form.body) : ""), [form]);
 
@@ -285,7 +311,7 @@ export default function WhatsAppCampaignsPage() {
                       <button
                         type="button"
                         disabled={!connected || busy === c.id}
-                        onClick={() => act(c, "submit")}
+                        onClick={() => setPendingAct({ campaign: c, action: "submit" })}
                         className="inline-flex items-center gap-1 rounded-md bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
                       >
                         <Send className="h-3 w-3" /> Enviar a revisión
@@ -295,7 +321,7 @@ export default function WhatsAppCampaignsPage() {
                       <button
                         type="button"
                         disabled={busy === c.id}
-                        onClick={() => act(c, "cancel")}
+                        onClick={() => setPendingAct({ campaign: c, action: "cancel" })}
                         className="inline-flex items-center gap-1 rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
                       >
                         <Ban className="h-3 w-3" /> Cancelar
@@ -305,7 +331,7 @@ export default function WhatsAppCampaignsPage() {
                       <button
                         type="button"
                         disabled={busy === c.id}
-                        onClick={() => act(c, "remove")}
+                        onClick={() => setPendingAct({ campaign: c, action: "remove" })}
                         className="inline-flex items-center gap-1 rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
                         aria-label={`Eliminar ${c.name}`}
                       >
@@ -448,6 +474,18 @@ export default function WhatsAppCampaignsPage() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!pendingAct}
+        title={confirmCopy?.title ?? ""}
+        description={confirmCopy?.description}
+        confirmLabel={confirmCopy?.confirmLabel}
+        cancelLabel={confirmCopy?.cancelLabel}
+        destructive={confirmCopy?.destructive}
+        loading={!!pendingAct && busy === pendingAct.campaign.id}
+        onCancel={() => setPendingAct(null)}
+        onConfirm={performAct}
+      />
     </div>
   );
 }

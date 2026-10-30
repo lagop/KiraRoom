@@ -4,6 +4,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useTranslations } from "@/lib/use-translation";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import apiClient, { ChannelsConfig, ReceptionistStats } from "@/lib/api";
 import {
   AlertCircle,
@@ -93,6 +94,8 @@ function ChannelsSettingsContent() {
   const [whatsappConnected, setWhatsappConnected] = useState(false);
   const [metaRedirecting, setMetaRedirecting] = useState(false);
   const [pickerDismissed, setPickerDismissed] = useState(false);
+  // The channel about to be disconnected, confirmed in the panel's dialog.
+  const [pendingDisconnect, setPendingDisconnect] = useState<"meta" | "telegram" | null>(null);
 
   const tRef = useRef(t);
   tRef.current = t;
@@ -170,8 +173,9 @@ function ChannelsSettingsContent() {
     }
   };
 
-  const disconnect = async (which: "meta" | "telegram") => {
-    if (!window.confirm(t("billing.channels.disconnectConfirm"))) return;
+  const performDisconnect = async () => {
+    const which = pendingDisconnect;
+    if (!which) return;
     setSaving(true);
     setError(null);
     try {
@@ -182,6 +186,7 @@ function ChannelsSettingsContent() {
       setError(err?.message ?? t("billing.channels.errorSaving"));
     } finally {
       setSaving(false);
+      setPendingDisconnect(null);
     }
   };
 
@@ -317,7 +322,7 @@ function ChannelsSettingsContent() {
             action={
               metaConnected ? (
                 <button
-                  onClick={() => disconnect("meta")}
+                  onClick={() => setPendingDisconnect("meta")}
                   disabled={saving}
                   className="px-3 py-1.5 text-xs rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
                 >
@@ -367,7 +372,7 @@ function ChannelsSettingsContent() {
             action={
               telegramConnected ? (
                 <button
-                  onClick={() => disconnect("telegram")}
+                  onClick={() => setPendingDisconnect("telegram")}
                   disabled={saving}
                   className="px-3 py-1.5 text-xs rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
                 >
@@ -416,6 +421,17 @@ function ChannelsSettingsContent() {
           }}
         />
       )}
+
+      <ConfirmDialog
+        open={!!pendingDisconnect}
+        title={t("billing.channels.disconnectConfirm")}
+        confirmLabel={t("billing.channels.disconnect")}
+        cancelLabel={t("billing.channels.cancel")}
+        destructive
+        loading={saving}
+        onCancel={() => setPendingDisconnect(null)}
+        onConfirm={performDisconnect}
+      />
     </div>
   );
 }

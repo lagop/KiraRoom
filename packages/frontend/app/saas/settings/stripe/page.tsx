@@ -5,6 +5,7 @@ import Link from "next/link";
 import { AlertCircle, Check, CreditCard, FlaskConical, PlugZap, Save } from "lucide-react";
 import apiClient, { PlatformStripeConfig } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { STRIPE_WEBHOOK_EVENTS, StripeForm, stripeStatus, stripeUpdate } from "@/lib/platform-stripe";
 import { SettingField as Field } from "../setting-field";
 
@@ -30,6 +31,11 @@ export default function PlatformStripePage() {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The console setting about to be removed, confirmed in the panel's dialog.
+  const [pendingClear, setPendingClear] = useState<{
+    field: "secretKey" | "publishableKey" | "webhookSecret" | "taxEnabled";
+    what: string;
+  } | null>(null);
 
   function show(next: PlatformStripeConfig) {
     setCfg(next);
@@ -70,9 +76,13 @@ export default function PlatformStripePage() {
   }
 
   function clear(field: "secretKey" | "publishableKey" | "webhookSecret" | "taxEnabled", what: string) {
-    if (window.confirm(`¿Quitar ${what} de la consola? Se usará lo del servidor (.env), si lo hay.`)) {
-      save({ [field]: null });
-    }
+    setPendingClear({ field, what });
+  }
+
+  async function performClear() {
+    if (!pendingClear) return;
+    await save({ [pendingClear.field]: null });
+    setPendingClear(null);
   }
 
   if (!cfg) {
@@ -243,6 +253,17 @@ export default function PlatformStripePage() {
           )}
         </span>
       </div>
+
+      <ConfirmDialog
+        open={!!pendingClear}
+        title={`¿Quitar ${pendingClear?.what ?? ""} de la consola?`}
+        description="Se usará lo del servidor (.env), si lo hay."
+        confirmLabel="Quitar de la consola"
+        destructive
+        loading={saving}
+        onCancel={() => setPendingClear(null)}
+        onConfirm={performClear}
+      />
     </div>
   );
 }

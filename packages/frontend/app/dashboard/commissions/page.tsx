@@ -3,6 +3,8 @@
 import { useState, useEffect } from "react";
 import apiClient from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { useToast } from "@/components/ui/use-toast";
 import {
   DollarSign,
   TrendingUp,
@@ -57,6 +59,10 @@ export default function CommissionsPage() {
     string | null
   >(null);
   const [payingCommission, setPayingCommission] = useState(false);
+  // The professional whose pending commissions are about to be marked paid,
+  // confirmed in the panel's dialog.
+  const [pendingPay, setPendingPay] = useState<CommissionSummary | null>(null);
+  const { toast } = useToast();
   const [dateRange, setDateRange] = useState({
     startDate: new Date(new Date().getFullYear(), new Date().getMonth(), 1)
       .toISOString()
@@ -95,28 +101,24 @@ export default function CommissionsPage() {
     }
   };
 
-  const handlePayCommission = async (professionalId: string) => {
-    if (
-      !confirm(t("commissions.confirm_mark_all_paid"))
-    ) {
-      return;
-    }
-
+  const performPayCommission = async () => {
+    if (!pendingPay) return;
     try {
       setPayingCommission(true);
       await apiClient.payCommission(
-        professionalId,
+        pendingPay.professionalId,
         [],
         dateRange.startDate,
         dateRange.endDate,
       );
       await loadCommissions();
-      alert(t("commissions.commissions_paid_success"));
+      toast({ title: t("commissions.commissions_paid_success") });
     } catch (error) {
       console.error("Failed to pay commission:", error);
-      alert(t("commissions.failed_to_pay_commissions"));
+      toast({ title: t("commissions.failed_to_pay_commissions"), variant: "destructive" });
     } finally {
       setPayingCommission(false);
+      setPendingPay(null);
     }
   };
 
@@ -297,9 +299,7 @@ export default function CommissionsPage() {
                       </button>
                       {commission.pendingCommission > 0 && (
                         <button
-                          onClick={() =>
-                            handlePayCommission(commission.professionalId)
-                          }
+                          onClick={() => setPendingPay(commission)}
                           disabled={payingCommission}
                           className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50"
                         >
@@ -505,6 +505,22 @@ export default function CommissionsPage() {
           )}
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!pendingPay}
+        title={t("commissions.confirm_mark_all_paid")}
+        description={
+          pendingPay &&
+          t("commissions.confirm_mark_paid_description", {
+            name: pendingPay.professionalName,
+            amount: formatCurrency(pendingPay.pendingCommission),
+          })
+        }
+        confirmLabel={t("commissions.mark_paid")}
+        loading={payingCommission}
+        onCancel={() => setPendingPay(null)}
+        onConfirm={performPayCommission}
+      />
     </div>
   );
 }

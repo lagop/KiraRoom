@@ -15,6 +15,7 @@ import apiClient, {
   Professional,
 } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 function buildEmbedSnippet(token: string, frontendUrl?: string) {
   const base = (frontendUrl ||
@@ -34,6 +35,9 @@ export default function WidgetSettingsPage() {
   const [allowedOriginsText, setAllowedOriginsText] = useState("");
   const [loading, setLoading] = useState(true);
   const [tenantSlug, setTenantSlug] = useState<string>("");
+  // The widget about to be revoked, confirmed in the panel's dialog.
+  const [pendingRevoke, setPendingRevoke] = useState<WidgetInstance | null>(null);
+  const [revoking, setRevoking] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -99,14 +103,18 @@ export default function WidgetSettingsPage() {
     }
   }
 
-  async function handleRevoke(id: string) {
-    if (!confirm("¿Revocar este widget? Las reservas pendientes no se verán afectadas pero el iframe dejará de funcionar.")) return;
+  async function performRevoke() {
+    if (!pendingRevoke) return;
+    setRevoking(true);
     try {
-      await apiClient.revokeWidgetInstance(id);
+      await apiClient.revokeWidgetInstance(pendingRevoke.id);
       toast({ title: "Widget revocado" });
       await load();
     } catch (err: any) {
       toast({ title: err?.message ?? "Error", variant: "destructive" });
+    } finally {
+      setRevoking(false);
+      setPendingRevoke(null);
     }
   }
 
@@ -203,7 +211,7 @@ export default function WidgetSettingsPage() {
                       </div>
                     </div>
                     <button
-                      onClick={() => handleRevoke(w.id)}
+                      onClick={() => setPendingRevoke(w)}
                       className="text-red-600 hover:bg-red-50 p-2 rounded-lg"
                       title="Revocar"
                     >
@@ -275,6 +283,17 @@ export default function WidgetSettingsPage() {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={!!pendingRevoke}
+        title={`¿Revocar el widget «${pendingRevoke?.name ?? ""}»?`}
+        description="Las reservas ya hechas no se ven afectadas, pero el iframe dejará de funcionar en tu web."
+        confirmLabel="Revocar widget"
+        destructive
+        loading={revoking}
+        onCancel={() => setPendingRevoke(null)}
+        onConfirm={performRevoke}
+      />
     </div>
   );
 }

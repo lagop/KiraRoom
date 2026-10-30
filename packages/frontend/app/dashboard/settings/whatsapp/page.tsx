@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import apiClient, { WhatsAppConnection } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 /** KiraRoom's standard templates (backend whatsapp-templates.ts), by name. */
 const TEMPLATE_LABELS: Record<string, string> = {
@@ -32,6 +33,9 @@ export default function WhatsAppSettingsPage() {
     displayName: "",
   });
   const [busy, setBusy] = useState(false);
+  // Disconnecting is confirmed in the panel's dialog.
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
   const [templates, setTemplates] = useState<Array<{ name: string; status: string }>>([]);
 
   async function load() {
@@ -91,14 +95,17 @@ export default function WhatsAppSettingsPage() {
     }
   }
 
-  async function disconnect() {
-    if (!confirm("¿Desconectar WhatsApp? Las campañas pendientes no se enviarán.")) return;
+  async function performDisconnect() {
+    setDisconnecting(true);
     try {
       await apiClient.disconnectWhatsApp();
       toast({ title: "Desconectado" });
       await load();
     } catch (err: any) {
       toast({ title: err?.message ?? "Error", variant: "destructive" });
+    } finally {
+      setDisconnecting(false);
+      setConfirmDisconnect(false);
     }
   }
 
@@ -200,7 +207,7 @@ export default function WhatsAppSettingsPage() {
             )}
           </div>
           <button
-            onClick={disconnect}
+            onClick={() => setConfirmDisconnect(true)}
             className="text-red-600 hover:bg-red-50 px-3 py-1.5 rounded inline-flex items-center gap-2 text-sm"
           >
             <Unlink className="w-4 h-4" /> Desconectar
@@ -258,6 +265,17 @@ export default function WhatsAppSettingsPage() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmDisconnect}
+        title="¿Desconectar WhatsApp?"
+        description="Las campañas pendientes no se enviarán."
+        confirmLabel="Desconectar WhatsApp"
+        destructive
+        loading={disconnecting}
+        onCancel={() => setConfirmDisconnect(false)}
+        onConfirm={performDisconnect}
+      />
     </div>
   );
 }

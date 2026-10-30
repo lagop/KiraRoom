@@ -17,6 +17,8 @@ import {
 import apiClient from "@/lib/api";
 import { LineChart } from "../../components/line-chart";
 import { useTranslations } from "@/lib/use-translation";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { useToast } from "@/components/ui/use-toast";
 import { GrowthIndicator } from "../../components/metric-card";
 
 interface Tenant {
@@ -86,6 +88,10 @@ export default function TenantDetailPage() {
   const [growth, setGrowth] = useState<GrowthMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { toast } = useToast();
+  // Suspending is confirmed in the panel's dialog.
+  const [confirmSuspend, setConfirmSuspend] = useState(false);
+  const [suspending, setSuspending] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -110,14 +116,17 @@ export default function TenantDetailPage() {
     fetchData();
   }, [tenantId]);
 
-  const handleSuspend = async () => {
-    if (!confirm(t("saas.suspendConfirm"))) return;
+  const performSuspend = async () => {
+    setSuspending(true);
     try {
       await apiClient.suspendSaasTenant(tenantId);
+      // The dialog stays up, busy, until the page reloads.
       window.location.reload();
     } catch (err) {
       console.error("Error suspending tenant:", err);
-      alert(t("saas.failedToSuspend"));
+      setSuspending(false);
+      setConfirmSuspend(false);
+      toast({ title: t("saas.failedToSuspend"), variant: "destructive" });
     }
   };
 
@@ -127,7 +136,7 @@ export default function TenantDetailPage() {
       window.location.reload();
     } catch (err) {
       console.error("Error reactivating tenant:", err);
-      alert(t("saas.failedToReactivate"));
+      toast({ title: t("saas.failedToReactivate"), variant: "destructive" });
     }
   };
 
@@ -215,7 +224,7 @@ export default function TenantDetailPage() {
           </Link>
           {tenant.subscriptionStatus === "active" || tenant.subscriptionStatus === "trialing" ? (
             <button
-              onClick={handleSuspend}
+              onClick={() => setConfirmSuspend(true)}
               className="inline-flex items-center px-4 py-2 border border-yellow-200 rounded-lg text-yellow-700 hover:bg-yellow-50 transition-colors"
             >
               <AlertTriangle className="w-4 h-4 mr-2" />
@@ -390,6 +399,18 @@ export default function TenantDetailPage() {
         <TrendingUp className="w-4 h-4 mr-2" />
         View Full Analytics
       </Link>
+
+      <ConfirmDialog
+        open={confirmSuspend}
+        title={t("saas.suspendConfirm")}
+        description={tenant.name}
+        confirmLabel={t("saas.suspend_action")}
+        cancelLabel={t("common.cancel")}
+        destructive
+        loading={suspending}
+        onCancel={() => setConfirmSuspend(false)}
+        onConfirm={performSuspend}
+      />
     </div>
   );
 }

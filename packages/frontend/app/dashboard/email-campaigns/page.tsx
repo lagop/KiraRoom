@@ -36,6 +36,7 @@ import {
 } from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
 import { useToast } from "@/components/ui/use-toast";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 const statusColors: Record<CampaignStatus, string> = {
   draft: "bg-gray-100 text-gray-800",
@@ -62,9 +63,20 @@ const getCampaignTypeLabel = (type: CampaignType) => {
   return labels[type] || type;
 };
 
+// What a campaign card's buttons ask before doing; the copy lives under
+// email_campaigns.confirm.<action>.
+type CampaignAction = "delete" | "send" | "sendAll" | "activate" | "deactivate";
+
 export default function EmailCampaignsPage() {
   const t = useTranslations();
   const { toast } = useToast();
+  // The action a campaign button is about to take, confirmed in the panel's
+  // dialog before it runs.
+  const [pendingAction, setPendingAction] = useState<{
+    action: CampaignAction;
+    campaign: EmailCampaign;
+  } | null>(null);
+  const [performingAction, setPerformingAction] = useState(false);
   const [campaigns, setCampaigns] = useState<EmailCampaign[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -215,8 +227,7 @@ export default function EmailCampaignsPage() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm("¿Estás seguro de que quieres eliminar esta campaña?")) return;
+  const performDelete = async (id: string) => {
     try {
       await apiClient.deleteEmailCampaign(id);
       fetchCampaigns();
@@ -225,8 +236,7 @@ export default function EmailCampaignsPage() {
     }
   };
 
-  const handleSendNow = async (id: string) => {
-    if (!confirm("¿Quieres enviar esta campaña ahora?")) return;
+  const performSendNow = async (id: string) => {
     try {
       const result = await apiClient.sendEmailCampaignNow(id);
       fetchCampaigns();
@@ -305,13 +315,7 @@ export default function EmailCampaignsPage() {
     }
   };
 
-  const handleActivateCampaign = async (id: string) => {
-    if (
-      !confirm(
-        "¿Activar esta campaña de re-engagement? Se enviarán correos automáticamente a los clientes inactivos.",
-      )
-    )
-      return;
+  const performActivateCampaign = async (id: string) => {
     try {
       await apiClient.activateEmailCampaign(id);
       fetchCampaigns();
@@ -320,8 +324,7 @@ export default function EmailCampaignsPage() {
     }
   };
 
-  const handleDeactivateCampaign = async (id: string) => {
-    if (!confirm("¿Desactivar esta campaña?")) return;
+  const performDeactivateCampaign = async (id: string) => {
     try {
       await apiClient.deactivateEmailCampaign(id);
       fetchCampaigns();
@@ -555,11 +558,7 @@ export default function EmailCampaignsPage() {
     }
   };
 
-  const handleSendToAll = async (campaignId: string) => {
-    if (
-      !confirm("¿Añadir todos los clientes como destinatarios y enviar ahora?")
-    )
-      return;
+  const performSendToAll = async (campaignId: string) => {
     try {
       // First add all clients as recipients
       const clientsData = await apiClient.getClients();
@@ -587,6 +586,25 @@ export default function EmailCampaignsPage() {
     } catch (error) {
       console.error("Error sending to all:", error);
       toastSendError(error);
+    }
+  };
+
+  const performPendingAction = async () => {
+    if (!pendingAction) return;
+    const { action, campaign } = pendingAction;
+    const perform = {
+      delete: performDelete,
+      send: performSendNow,
+      sendAll: performSendToAll,
+      activate: performActivateCampaign,
+      deactivate: performDeactivateCampaign,
+    }[action];
+    setPerformingAction(true);
+    try {
+      await perform(campaign.id);
+    } finally {
+      setPerformingAction(false);
+      setPendingAction(null);
     }
   };
 
@@ -787,7 +805,7 @@ export default function EmailCampaignsPage() {
                 {campaign.status === "draft" && (
                   <>
                     <button
-                      onClick={() => handleSendToAll(campaign.id)}
+                      onClick={() => setPendingAction({ action: "sendAll", campaign })}
                       className="p-2 text-orange-600 hover:text-orange-700 hover:bg-orange-100 rounded-lg"
                       title={t("email_campaigns.send_to_all_clients")}
                     >
@@ -820,7 +838,7 @@ export default function EmailCampaignsPage() {
                       <AlarmClock className="w-4 h-4" />
                     </button>
                     <button
-                      onClick={() => handleSendNow(campaign.id)}
+                      onClick={() => setPendingAction({ action: "send", campaign })}
                       className="p-2 text-green-600 hover:text-green-700 hover:bg-green-100 rounded-lg"
                       title={t("email_campaigns.send_now")}
                     >
@@ -840,7 +858,7 @@ export default function EmailCampaignsPage() {
                 {campaign.campaignType === "reengagement" &&
                   campaign.status === "draft" && (
                     <button
-                      onClick={() => handleActivateCampaign(campaign.id)}
+                      onClick={() => setPendingAction({ action: "activate", campaign })}
                       className="p-2 text-green-600 hover:text-green-700 hover:bg-green-100 rounded-lg"
                       title={t("email_campaigns.activate_campaign")}
                     >
@@ -850,7 +868,7 @@ export default function EmailCampaignsPage() {
                 {campaign.campaignType === "reengagement" &&
                   campaign.status === "active" && (
                     <button
-                      onClick={() => handleDeactivateCampaign(campaign.id)}
+                      onClick={() => setPendingAction({ action: "deactivate", campaign })}
                       className="p-2 text-orange-600 hover:text-orange-700 hover:bg-orange-100 rounded-lg"
                       title={t("email_campaigns.deactivate_campaign")}
                     >
@@ -858,7 +876,7 @@ export default function EmailCampaignsPage() {
                     </button>
                   )}
                 <button
-                  onClick={() => handleDelete(campaign.id)}
+                  onClick={() => setPendingAction({ action: "delete", campaign })}
                   className="p-2 text-red-600 hover:text-red-700 hover:bg-red-100 rounded-lg"
                   title={t("email_campaigns.delete_tooltip")}
                 >
@@ -1567,6 +1585,27 @@ export default function EmailCampaignsPage() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!pendingAction}
+        title={
+          pendingAction
+            ? t(`email_campaigns.confirm.${pendingAction.action}.title`, {
+                name: pendingAction.campaign.name,
+              })
+            : ""
+        }
+        description={
+          pendingAction?.action === "delete"
+            ? undefined
+            : pendingAction && t(`email_campaigns.confirm.${pendingAction.action}.description`)
+        }
+        confirmLabel={pendingAction ? t(`email_campaigns.confirm.${pendingAction.action}.cta`) : undefined}
+        destructive={pendingAction?.action === "delete"}
+        loading={performingAction}
+        onCancel={() => setPendingAction(null)}
+        onConfirm={performPendingAction}
+      />
     </div>
   );
 }

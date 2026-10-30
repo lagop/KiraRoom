@@ -5,6 +5,7 @@ import Link from "next/link";
 import { AlertCircle, Check, Mail, Save, Send } from "lucide-react";
 import apiClient, { PlatformEmailConfig } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { EmailForm, emailStatus, emailUpdate } from "@/lib/platform-email";
 import { SettingField as Field } from "../setting-field";
 
@@ -24,6 +25,11 @@ export default function PlatformEmailPage() {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The console setting about to be removed, confirmed in the panel's dialog.
+  const [pendingClear, setPendingClear] = useState<{
+    field: "apiKey" | "from" | "webhookSecret";
+    what: string;
+  } | null>(null);
 
   function show(next: PlatformEmailConfig) {
     setCfg(next);
@@ -64,9 +70,13 @@ export default function PlatformEmailPage() {
   }
 
   function clear(field: "apiKey" | "from" | "webhookSecret", what: string) {
-    if (window.confirm(`¿Quitar ${what} de la consola? Se usará la del servidor (.env), si la hay.`)) {
-      save({ [field]: null });
-    }
+    setPendingClear({ field, what });
+  }
+
+  async function performClear() {
+    if (!pendingClear) return;
+    await save({ [pendingClear.field]: null });
+    setPendingClear(null);
   }
 
   if (!cfg) {
@@ -202,6 +212,17 @@ export default function PlatformEmailPage() {
           )}
         </span>
       </div>
+
+      <ConfirmDialog
+        open={!!pendingClear}
+        title={`¿Quitar ${pendingClear?.what ?? ""} de la consola?`}
+        description="Se usará la del servidor (.env), si la hay."
+        confirmLabel="Quitar de la consola"
+        destructive
+        loading={saving}
+        onCancel={() => setPendingClear(null)}
+        onConfirm={performClear}
+      />
     </div>
   );
 }

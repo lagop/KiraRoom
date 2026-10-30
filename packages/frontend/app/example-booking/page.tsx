@@ -1,6 +1,7 @@
 "use client";
 
 import BookingWidget from '@/components/booking/BookingWidget';
+import { useToast } from '@/components/ui/use-toast';
 
 // Mock data for demonstration
 const mockSalon = {
@@ -74,9 +75,10 @@ const mockProfessionals = [
 ];
 
 export default function ExampleBookingPage() {
+  const { toast } = useToast();
   const handleBookingComplete = (appointment: any) => {
     console.log('Booking completed:', appointment);
-    alert(`¡Reserva confirmada! ID: ${appointment.id}`);
+    toast({ title: '¡Reserva confirmada!', description: `ID: ${appointment.id}` });
   };
 
   return (

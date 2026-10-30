@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import apiClient from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 interface Promotion {
   id: string;
@@ -42,6 +43,9 @@ export default function PromotionsPage() {
     null,
   );
   const [tenantId, setTenantId] = useState<string>("");
+  // The promotion about to be deleted, confirmed in the panel's dialog.
+  const [pendingDelete, setPendingDelete] = useState<Promotion | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     const token = localStorage.getItem("kira_auth_token");
@@ -103,14 +107,17 @@ export default function PromotionsPage() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm(t("promotions.delete_confirm"))) return;
-
+  const performDelete = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
     try {
-      await apiClient.deletePromotion(id);
+      await apiClient.deletePromotion(pendingDelete.id);
       await loadPromotions(tenantId);
     } catch (error) {
       console.error("Failed to delete promotion:", error);
+    } finally {
+      setDeleting(false);
+      setPendingDelete(null);
     }
   };
 
@@ -305,7 +312,7 @@ export default function PromotionsPage() {
                   {t("promotions.edit")}
                 </button>
                 <button
-                  onClick={() => handleDelete(promotion.id)}
+                  onClick={() => setPendingDelete(promotion)}
                   className="text-red-600 hover:text-red-800 text-sm font-medium"
                 >
                   {t("promotions.delete")}
@@ -485,6 +492,18 @@ export default function PromotionsPage() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!pendingDelete}
+        title={t("promotions.delete_confirm")}
+        description={pendingDelete?.name}
+        confirmLabel={t("promotions.delete_cta")}
+        cancelLabel={t("common.cancel")}
+        destructive
+        loading={deleting}
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={performDelete}
+      />
     </div>
   );
 }

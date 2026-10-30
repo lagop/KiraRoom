@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { CheckCircle2, Clock, Copy, ExternalLink, Globe, Loader2, AlertTriangle } from "lucide-react";
 import apiClient, { type WebDomainStatus } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 /**
  * The salon's public page and its own domain.
@@ -23,6 +24,8 @@ export default function DomainSettingsPage() {
   const [input, setInput] = useState("");
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState<null | "save" | "verify" | "remove">(null);
+  // Disconnecting the domain is confirmed in the panel's dialog.
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
   useEffect(() => {
     apiClient
@@ -223,11 +226,7 @@ export default function DomainSettingsPage() {
                     Cambiar dominio
                   </button>
                   <button
-                    onClick={() => {
-                      if (confirm(`¿Desconectar ${domain.name}? Tu página seguirá en ${status.publicUrl}.`)) {
-                        void run("remove", () => apiClient.removeWebDomain());
-                      }
-                    }}
+                    onClick={() => setConfirmRemove(true)}
                     disabled={busy !== null}
                     className="rounded-md border border-red-200 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:opacity-50"
                   >
@@ -285,6 +284,20 @@ export default function DomainSettingsPage() {
           </section>
         </>
       )}
+
+      <ConfirmDialog
+        open={confirmRemove && !!domain}
+        title={`¿Desconectar ${domain?.name ?? ""}?`}
+        description={status ? `Tu página seguirá en ${status.publicUrl}.` : undefined}
+        confirmLabel="Desconectar dominio"
+        destructive
+        loading={busy === "remove"}
+        onCancel={() => setConfirmRemove(false)}
+        onConfirm={async () => {
+          await run("remove", () => apiClient.removeWebDomain());
+          setConfirmRemove(false);
+        }}
+      />
     </div>
   );
 }

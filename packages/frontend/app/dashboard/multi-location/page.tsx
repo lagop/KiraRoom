@@ -5,6 +5,8 @@ import apiClient from "../../../lib/api";
 import { Plus, MapPin, Phone, Mail, Trash2, Edit2, BarChart3 } from "lucide-react";
 import { PlanGate } from "@/components/billing/PlanGate";
 import { useTranslations } from "@/lib/use-translation";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { useToast } from "@/components/ui/use-toast";
 import { formatCents, formatRate } from "@/lib/analytics-format";
 import { ConsolidatedReport } from "./consolidated-report";
 
@@ -171,18 +173,26 @@ function LocationCard({
   onEdit: () => void;
   onDeleted: () => void;
 }) {
-  const handleDelete = async () => {
-    if (
-      !confirm(t("multiLocation.card.deactivateConfirm", { name: location.name }))
-    )
-      return;
+  const { toast } = useToast();
+  // Deactivating is confirmed in the panel's dialog.
+  const [confirmDeactivate, setConfirmDeactivate] = useState(false);
+  const [deactivating, setDeactivating] = useState(false);
+  const performDeactivate = async () => {
+    setDeactivating(true);
     try {
       await apiClient.request(`/locations/${location.id}`, {
         method: "DELETE",
       });
       onDeleted();
     } catch (e: any) {
-      alert(e?.message || t("multiLocation.card.deactivateError"));
+      toast({
+        title: t("multiLocation.card.deactivateError"),
+        description: e?.message,
+        variant: "destructive",
+      });
+    } finally {
+      setDeactivating(false);
+      setConfirmDeactivate(false);
     }
   };
   return (
@@ -282,13 +292,24 @@ function LocationCard({
           {t("multiLocation.card.edit")}
         </button>
         <button
-          onClick={handleDelete}
+          onClick={() => setConfirmDeactivate(true)}
           className="ml-auto inline-flex items-center gap-1 rounded-md border border-red-100 px-2.5 py-1 text-xs text-red-600 hover:bg-red-50"
         >
           <Trash2 className="h-3.5 w-3.5" />
           {t("multiLocation.card.deactivate")}
         </button>
       </div>
+
+      <ConfirmDialog
+        open={confirmDeactivate}
+        title={t("multiLocation.card.deactivateConfirm", { name: location.name })}
+        confirmLabel={t("multiLocation.card.deactivateCta")}
+        cancelLabel={t("common.cancel")}
+        destructive
+        loading={deactivating}
+        onCancel={() => setConfirmDeactivate(false)}
+        onConfirm={performDeactivate}
+      />
     </div>
   );
 }

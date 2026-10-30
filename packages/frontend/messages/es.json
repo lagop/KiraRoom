@@ -208,7 +208,8 @@
     "logStatus": "Estado",
     "logExternalId": "ID en Holded",
     "logError": "Error",
-    "ownerOnly": "Solo el propietario del salón puede conectar o desconectar Holded."
+    "ownerOnly": "Solo el propietario del salón puede conectar o desconectar Holded.",
+    "disconnectCta": "Desconectar Holded"
   },
   "onboarding": {
     "linear": {
@@ -578,8 +579,9 @@
       "viewKpis": "Ver KPIs",
       "edit": "Editar",
       "deactivate": "Desactivar",
-      "deactivateConfirm": "Desactivar el local \"{name}\"?",
-      "deactivateError": "No se pudo desactivar el local"
+      "deactivateConfirm": "¿Desactivar el local «{name}»?",
+      "deactivateError": "No se pudo desactivar el local",
+      "deactivateCta": "Desactivar local"
     },
     "stats": {
       "appointments30d": "Citas (30d)",
@@ -1118,7 +1120,8 @@
     "view_manage_appointment": "Ver / gestionar cita",
     "view_mode": "Modo vista",
     "view_profile": "Ver perfil",
-    "load_failed": "No se pudieron cargar las citas"
+    "load_failed": "No se pudieron cargar las citas",
+    "statusChangeFailed": "No se ha podido cambiar el estado de la cita."
   },
   "settings": {
     "title": "Ajustes",
@@ -1559,7 +1562,9 @@
     "total_payroll": "Total nominas",
     "total_sales": "Ventas totales",
     "view_details": "Ver detalles",
-    "confirm_mark_all_paid": "¿Seguro que quieres marcar todas las comisiones pendientes como pagadas?"
+    "confirm_mark_all_paid": "¿Seguro que quieres marcar todas las comisiones pendientes como pagadas?",
+    "confirm_mark_paid_description": "Se marcarán como pagadas las comisiones pendientes de {name} en el período elegido: {amount}.",
+    "mark_paid": "Marcar como pagadas"
   },
   "description": "Resumen de comisiones de tu equipo",
   "email_campaigns": {
@@ -1614,7 +1619,33 @@
     "tooltip_opened": "Aperturas",
     "tooltip_recipients": "Destinatarios",
     "tooltip_sent": "Enviados",
-    "unsubscribe_note": "Al final de cada email se añade automáticamente un enlace para darse de baja, como exige la ley (LSSI). Quien se da de baja deja de recibir tus campañas."
+    "unsubscribe_note": "Al final de cada email se añade automáticamente un enlace para darse de baja, como exige la ley (LSSI). Quien se da de baja deja de recibir tus campañas.",
+    "confirm": {
+      "delete": {
+        "title": "¿Eliminar la campaña «{name}»?",
+        "cta": "Eliminar campaña"
+      },
+      "send": {
+        "title": "¿Enviar «{name}» ahora?",
+        "description": "Se enviará ahora mismo a los destinatarios que tiene añadidos.",
+        "cta": "Enviar ahora"
+      },
+      "sendAll": {
+        "title": "¿Enviar «{name}» a todos los clientes?",
+        "description": "Se añadirán como destinatarios todos los clientes con email y se enviará ahora mismo.",
+        "cta": "Enviar a todos"
+      },
+      "activate": {
+        "title": "¿Activar «{name}»?",
+        "description": "Se enviarán correos automáticamente a los clientes inactivos.",
+        "cta": "Activar campaña"
+      },
+      "deactivate": {
+        "title": "¿Desactivar «{name}»?",
+        "description": "Dejará de enviar correos automáticos a los clientes inactivos. Puedes volver a activarla cuando quieras.",
+        "cta": "Desactivar campaña"
+      }
+    }
   },
   "loyalty": {
     "active": "Activa",
@@ -1729,7 +1760,9 @@
     "confirm_cancel_subscription": "¿Seguro que quieres cancelar tu suscripción?",
     "deposit_failed": "No se pudo registrar el ingreso.",
     "manage_in_loyalty": "Se gestionan en Fidelización",
-    "not_in_loyalty": "No está en el programa"
+    "not_in_loyalty": "No está en el programa",
+    "cancel_subscription_description": "Tu salón pasará a modo lectura durante 30 días.",
+    "keep_subscription": "Mantener suscripción"
   },
   "pos": {
     "action": "Action",
@@ -1773,10 +1806,10 @@
     "pay_full": "Pay Full",
     "pay_full_amount": "Pay Full Amount",
     "payment": "Payment",
-    "payment_cancelled": "Payment Cancelled",
-    "payment_cancelled_description": "Payment Cancelled Description",
+    "payment_cancelled": "Cobro anulado",
+    "payment_cancelled_description": "Se ha borrado del registro de la caja.",
     "payment_completed": "Payment Completed",
-    "payment_delete_failed": "Payment Delete Failed",
+    "payment_delete_failed": "No se ha podido anular el cobro.",
     "payment_failed": "Payment Failed",
     "payment_history": "Payment History",
     "payment_type": "Payment Type",
@@ -1808,7 +1841,11 @@
     "tomorrow": "Tomorrow",
     "total": "Total",
     "total_amount": "Total Amount",
-    "transactions": "Transactions"
+    "transactions": "Transactions",
+    "confirm_void_payment": "¿Anular este cobro de {amount}?",
+    "confirm_void_payment_description": "Se borra del registro de la caja. Solo se pueden anular los cobros pendientes o fallidos.",
+    "void_payment": "Anular cobro",
+    "keep_payment": "Mantener cobro"
   },
   "pos_today": "Pos Today",
   "pos_tomorrow": "Pos Tomorrow",
@@ -1846,7 +1883,8 @@
     "unlimited": "Ilimitado",
     "update": "Actualizar",
     "uses": "Usos",
-    "value": "Valor"
+    "value": "Valor",
+    "delete_cta": "Eliminar promoción"
   },
   "quantity": "Cantidad",
   "login": {

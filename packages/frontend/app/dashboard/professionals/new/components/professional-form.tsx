@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import apiClient from '@/lib/api';
+import { useToast } from '@/components/ui/use-toast';
 
 interface Service {
   id: string;
@@ -16,6 +17,7 @@ interface Service {
 
 export function ProfessionalForm() {
   const router = useRouter();
+  const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
   const [services, setServices] = useState<Service[]>([]);
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
@@ -81,7 +83,11 @@ export function ProfessionalForm() {
       router.refresh();
     } catch (error) {
       console.error('Error creating professional:', error);
-      alert('Failed to create professional. Please try again.');
+      toast({
+        title: 'No se ha podido crear el profesional. Inténtalo de nuevo.',
+        description: error instanceof Error ? error.message : undefined,
+        variant: 'destructive',
+      });
     } finally {
       setIsLoading(false);
     }

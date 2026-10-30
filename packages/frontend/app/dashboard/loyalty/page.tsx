@@ -9,6 +9,7 @@ import apiClient, {
   LoyaltyProgramSettings,
   LoyaltyRewardInput,
 } from "@/lib/api";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 /**
  * The salon's loyalty programme. One per salon: how points are earned
@@ -324,6 +325,9 @@ function RewardsSection({
 }) {
   const [services, setServices] = useState<Array<{ id: string; name: string }>>([]);
   const [adding, setAdding] = useState(false);
+  // The reward about to be deleted, confirmed in the panel's dialog.
+  const [pendingDelete, setPendingDelete] = useState<LoyaltyProgram["rewards"][number] | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [draft, setDraft] = useState<LoyaltyRewardInput & { discountEuros?: string }>({
     name: "",
     type: "discount",
@@ -339,6 +343,20 @@ function RewardsSection({
   }, []);
 
   const serviceName = useMemo(() => new Map(services.map((s) => [s.id, s.name])), [services]);
+
+  const performDelete = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    try {
+      await apiClient.deleteLoyaltyReward(pendingDelete.id);
+      onChange();
+    } catch (err) {
+      onError(errorText(err));
+    } finally {
+      setDeleting(false);
+      setPendingDelete(null);
+    }
+  };
 
   const describe = (r: LoyaltyRewardInput) => {
     if (r.type === "discount") {
@@ -507,15 +525,7 @@ function RewardsSection({
                 </button>
                 <button
                   aria-label="Borrar recompensa"
-                  onClick={async () => {
-                    if (!confirm("¿Borrar esta recompensa? Si ya se ha canjeado, solo se desactiva.")) return;
-                    try {
-                      await apiClient.deleteLoyaltyReward(r.id);
-                      onChange();
-                    } catch (err) {
-                      onError(errorText(err));
-                    }
-                  }}
+                  onClick={() => setPendingDelete(r)}
                   className="text-red-600 hover:text-red-800"
                 >
                   <Trash2 className="w-4 h-4" />
@@ -525,6 +535,17 @@ function RewardsSection({
           ))}
         </ul>
       )}
+
+      <ConfirmDialog
+        open={!!pendingDelete}
+        title={`¿Borrar la recompensa «${pendingDelete?.name ?? ""}»?`}
+        description="Si algún cliente ya la ha canjeado, solo se desactiva."
+        confirmLabel="Borrar recompensa"
+        destructive
+        loading={deleting}
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={performDelete}
+      />
     </section>
   );
 }

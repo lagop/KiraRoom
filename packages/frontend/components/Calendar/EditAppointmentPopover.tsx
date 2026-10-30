@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { X, Search, CheckCircle, Loader2, Zap, DollarSign, Percent, Trash2 } from "lucide-react";
 import { Professional } from "./types";
 import apiClient from "../../lib/api";
@@ -6,6 +7,7 @@ import { getCurrentUser } from "../../lib/utils";
 import { Appointment } from "./types";
 import { salonClock, salonInstant, salonTime } from "./salon-time";
 import { useSalonTimeZone } from "./SalonTimeZone";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 interface ClientOption {
   id: string;
@@ -52,6 +54,10 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
   const [loading, setLoading] = useState(false);
   const [fetching, setFetching] = useState(true);
   const [deleting, setDeleting] = useState(false);
+  // Cancelling is confirmed in the panel's dialog. It is portalled to <body>
+  // (the popover is translated, which would trap a fixed overlay), so a click
+  // in it must not count as a click outside the popover.
+  const [confirmCancel, setConfirmCancel] = useState(false);
   const popoverRef = useRef<HTMLDivElement>(null);
   const clientSearchRef = useRef<HTMLDivElement>(null);
 
@@ -143,6 +149,7 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
+      if (confirmCancel) return;
       if (
         popoverRef.current &&
         !popoverRef.current.contains(e.target as Node)
@@ -152,7 +159,7 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [onClose]);
+  }, [onClose, confirmCancel]);
 
   const handleClientSelect = (client: ClientOption) => {
     setClientId(client.id);
@@ -160,11 +167,7 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
     setShowClientSuggestions(false);
   };
 
-  const handleDelete = async () => {
-    if (!window.confirm("Are you sure you want to delete this appointment?")) {
-      return;
-    }
-
+  const performCancel = async () => {
     setDeleting(true);
     try {
       await apiClient.cancelAppointment(appointmentId);
@@ -173,6 +176,7 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
       console.error("Error deleting appointment:", err);
     } finally {
       setDeleting(false);
+      setConfirmCancel(false);
     }
   };
 
@@ -241,7 +245,7 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
           </h3>
           <div className="flex items-center gap-2">
             <button
-              onClick={handleDelete}
+              onClick={() => setConfirmCancel(true)}
               disabled={deleting || fetching || !appointmentData}
               className="px-2 py-1 text-sm border border-border rounded-md hover:bg-red-50 hover:text-red-600 transition-colors"
             >
@@ -435,6 +439,24 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
             </div>
           </>
         )}
+
+        {/* Rendered inside the popover so React clicks still stop at its
+            stopPropagation, but portalled so the overlay covers the page. */}
+        {confirmCancel &&
+          createPortal(
+            <ConfirmDialog
+              open
+              title="¿Cancelar esta cita?"
+              description="Quedará como cancelada en el historial del cliente."
+              confirmLabel="Cancelar cita"
+              cancelLabel="Mantener cita"
+              destructive
+              loading={deleting}
+              onCancel={() => setConfirmCancel(false)}
+              onConfirm={performCancel}
+            />,
+            document.body,
+          )}
       </div>
     </div>
   );

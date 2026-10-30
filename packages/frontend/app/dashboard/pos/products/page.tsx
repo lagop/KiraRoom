@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { apiClient } from '@/lib/api'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 
 interface Product {
   id: string
@@ -32,6 +33,9 @@ export default function ProductsPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('')
   const [showLowStock, setShowLowStock] = useState(false)
+  // The product about to be deleted, confirmed in the panel's dialog.
+  const [pendingDelete, setPendingDelete] = useState<Product | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     loadData()
@@ -99,13 +103,17 @@ export default function ProductsPage() {
     }
   }
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this product?')) return
+  const performDelete = async () => {
+    if (!pendingDelete) return
+    setDeleting(true)
     try {
-      await apiClient.deleteProduct(id)
+      await apiClient.deleteProduct(pendingDelete.id)
       loadData()
     } catch (error) {
       console.error('Failed to delete product:', error)
+    } finally {
+      setDeleting(false)
+      setPendingDelete(null)
     }
   }
 
@@ -231,7 +239,7 @@ export default function ProductsPage() {
                       Edit
                     </button>
                     <button
-                      onClick={() => handleDelete(product.id)}
+                      onClick={() => setPendingDelete(product)}
                       className="text-red-600 hover:text-red-800"
                     >
                       Delete
@@ -362,6 +370,16 @@ export default function ProductsPage() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!pendingDelete}
+        title={`¿Eliminar el producto «${pendingDelete?.name ?? ''}»?`}
+        confirmLabel="Eliminar producto"
+        destructive
+        loading={deleting}
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={performDelete}
+      />
     </div>
   )
 }
