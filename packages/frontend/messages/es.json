@@ -1415,7 +1415,7 @@
     "pos": "TPV",
     "commissions": "Comisiones",
     "loyalty": "Fidelización",
-    "email_campaigns": "Campanas de email",
+    "email_campaigns": "Campañas de email",
     "promotions": "Promociones",
     "analytics": "Analítica",
     "settings": "Ajustes",
@@ -1424,7 +1424,18 @@
     "services": "Servicios",
     "reviews": "Reseñas",
     "whatsapp_campaigns": "WhatsApp masivo",
-    "share": "Comparte tu página"
+    "share": "Comparte tu página",
+    "wait_list": "Lista de espera",
+    "gift_cards": "Tarjetas regalo",
+    "group_team": "Equipo y servicios",
+    "group_sales": "Caja y ventas",
+    "group_marketing": "Marketing",
+    "settings_general": "Generales",
+    "billing": "Plan y suscripción",
+    "salon": "Datos del salón",
+    "domain": "Web y dominio",
+    "security": "Seguridad",
+    "account": "Tu cuenta"
   },
   "Failed to add points": "Failed to add points",
   "Failed to create professional": {
