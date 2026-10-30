@@ -10,7 +10,9 @@ import {
   IsString,
   IsUUID,
   Matches,
+  Max,
   MaxLength,
+  Min,
   MinLength,
   ValidateIf,
   ValidateNested,
@@ -154,8 +156,11 @@ export class StaffBookingDto extends BookingSlotDto {
   @IsOptional()
   clientInfo?: BookingClientInfoDto;
 
+  // Owner or admin only: the service ignores it for a professional.
   @ApiPropertyOptional()
   @IsNumber()
+  @Min(0)
+  @Max(100)
   @IsOptional()
   commissionRate?: number;
 

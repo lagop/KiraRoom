@@ -339,6 +339,24 @@ export class AppointmentServicesService {
       throw new NotFoundException('Appointment not found');
     }
 
+    // The body is not validated item by item, and rows on this model are not
+    // stamped with the tenant: another salon's service or professional id
+    // linked it here and returned its record whole.
+    if (!Array.isArray(services) || services.length === 0 || services.length > 20) {
+      throw new BadRequestException('Between 1 and 20 services');
+    }
+    const serviceIds = [...new Set(services.map((s) => s?.serviceId))];
+    const professionalIds = [...new Set(services.map((s) => s?.professionalId).filter((id): id is string => !!id))];
+    const [ownServices, ownProfessionals] = await Promise.all([
+      this.prisma.service.count({ where: { tenantId: appointment.tenantId, id: { in: serviceIds.filter((id): id is string => typeof id === 'string') } } }),
+      professionalIds.length
+        ? this.prisma.professional.count({ where: { tenantId: appointment.tenantId, id: { in: professionalIds } } })
+        : Promise.resolve(0),
+    ]);
+    if (ownServices !== serviceIds.length || ownProfessionals !== professionalIds.length) {
+      throw new NotFoundException('Service or professional not found');
+    }
+
     // Create all services in a transaction
     const createdServices = await this.prisma.$transaction(
       services.map((service, index) =>

@@ -4,6 +4,7 @@ import {
   NotFoundException,
   ConflictException,
   ForbiddenException,
+  HttpException,
   Logger,
   Optional,
 } from "@nestjs/common";
@@ -50,6 +51,7 @@ import { appointmentLocationId } from "../multi-location/appointment-location";
 import { normalizePhone, phoneKey } from "../common/phone";
 import { isReadOnlyStatus } from "../common/guards/read-only-tenant.guard";
 import type { OnlineBookingDto } from "./dto/book-appointment.dto";
+import { UpdateAppointmentDto } from "./dto/update-appointment.dto";
 
 interface AppointmentActivity {
   action: string;
@@ -88,24 +90,7 @@ export interface AuthenticatedUser {
   professionalId?: string;
 }
 
-export interface UpdateAppointmentDto {
-  serviceId?: string;
-  professionalId?: string;
-  scheduledDate?: string;
-  scheduledTime?: string;
-  notes?: string;
-  status?: AppointmentStatus;
-  cancellationReason?: string;
-  addons?: Array<{
-    addonId: string;
-    quantity: number;
-  }>;
-  services?: Array<{
-    serviceId: string;
-    professionalId?: string | null;
-    isParallel?: boolean;
-  }>;
-}
+export { UpdateAppointmentDto };
 
 export interface AppointmentFiltersDto {
   tenantId?: string;
@@ -660,6 +645,15 @@ export class AppointmentsService {
       }
     }
 
+    // The commission is the salon's term: a professional booking with
+    // `commissionRate: 100` set their own pay.
+    if (user.role === "staff") {
+      const { commissionRate: _ignored, ...rest } = createAppointmentDto as CreateAppointmentDto & {
+        commissionRate?: number;
+      };
+      createAppointmentDto = rest;
+    }
+
     // The staff member's own salon, from the token.
     return this.create(createAppointmentDto, user.tenantId);
   }
@@ -817,21 +811,41 @@ export class AppointmentsService {
     const oldTime = appointment.scheduledTime;
     const oldStatus = appointment.status;
 
-    // Parse scheduledDate to Date if provided
-    const parsedDto = { ...updateAppointmentDto };
-    if (parsedDto.scheduledDate) {
-      const date = new Date(parsedDto.scheduledDate);
+    // Built field by field from what an edit may change. The body used to be
+    // spread in whole, so a request could set any column (price, payment,
+    // commission, tenantId) or write the salon and its users through nested
+    // relation updates.
+    const dto = updateAppointmentDto;
+    const updateData: any = { updatedAt: new Date() };
+    if (dto.scheduledDate) {
+      const date = new Date(dto.scheduledDate);
       if (isNaN(date.getTime())) {
         throw new BadRequestException("Invalid scheduledDate provided");
       }
-      parsedDto.scheduledDate = date as any;
+      updateData.scheduledDate = date;
     }
-
-    // Build update data including foreign keys
-    const updateData: any = {
-      ...parsedDto,
-      updatedAt: new Date(),
-    };
+    for (const key of [
+      "serviceId",
+      "professionalId",
+      "clientId",
+      "scheduledTime",
+      "notes",
+      "status",
+      "cancellationReason",
+    ] as const) {
+      if (dto[key] !== undefined) updateData[key] = dto[key];
+    }
+    // Commission and deposit are the salon's terms, not the professional's.
+    if (user.role === "owner" || user.role === "admin") {
+      for (const key of ["commissionRate", "depositRequired", "depositAmount"] as const) {
+        if (dto[key] !== undefined) updateData[key] = dto[key];
+      }
+    }
+    await this.assertSalonRecords(user.tenantId, {
+      serviceIds: [dto.serviceId, ...(dto.services ?? []).map((s) => s.serviceId)],
+      professionalIds: [dto.professionalId, ...(dto.services ?? []).map((s) => s.professionalId)],
+      clientIds: [dto.clientId],
+    });
 
     // Restricciones para usuarios STAFF
     if (user.role === "staff") {
@@ -1054,6 +1068,8 @@ export class AppointmentsService {
       return this.enrichAppointment(updatedAppointment);
     } catch (error) {
       console.error("Error updating appointment:", error);
+      // A refusal (consent missing, forbidden) keeps its status and message.
+      if (error instanceof HttpException) throw error;
       throw new Error("Failed to update appointment");
     }
   }
@@ -1583,6 +1599,34 @@ export class AppointmentsService {
       where: { appointmentId },
       orderBy: { createdAt: "desc" },
     });
+  }
+
+  /**
+   * Every service, professional and client an edit points at is this
+   * salon's. The tenant filter guards queries, not the ids written into a
+   * row, so an id from another salon would link its record to this
+   * appointment (and return it in the response).
+   */
+  async assertSalonRecords(
+    tenantId: string,
+    refs: {
+      serviceIds?: Array<string | null | undefined>;
+      professionalIds?: Array<string | null | undefined>;
+      clientIds?: Array<string | null | undefined>;
+    },
+  ): Promise<void> {
+    const unique = (ids?: Array<string | null | undefined>) =>
+      [...new Set((ids ?? []).filter((id): id is string => !!id))];
+    const checks: Array<[string[], (ids: string[]) => Promise<number>]> = [
+      [unique(refs.serviceIds), (ids) => this.prisma.service.count({ where: { tenantId, id: { in: ids } } })],
+      [unique(refs.professionalIds), (ids) => this.prisma.professional.count({ where: { tenantId, id: { in: ids } } })],
+      [unique(refs.clientIds), (ids) => this.prisma.client.count({ where: { tenantId, id: { in: ids } } })],
+    ];
+    for (const [ids, count] of checks) {
+      if (ids.length > 0 && (await count(ids)) !== ids.length) {
+        throw new NotFoundException("Servicio, profesional o cliente no encontrado en este salón");
+      }
+    }
   }
 
   private calculateEndTime(startTime: string, durationMinutes: number): string {

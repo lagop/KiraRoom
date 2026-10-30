@@ -8,6 +8,7 @@ import {
   Param, 
   Query,
   UseGuards,
+  UseInterceptors,
   ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
@@ -23,10 +24,13 @@ import {
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles, SALON_TEAM } from "../auth/decorators/roles.decorator";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
+import { ScrubSecretsInterceptor } from "./appointment-response";
 
 @ApiTags('Appointment Services')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
+// Its rows include the appointment's client whole: password hash and all.
+@UseInterceptors(ScrubSecretsInterceptor)
 @Controller('appointment-services')
 export class AppointmentServicesController {
   constructor(
