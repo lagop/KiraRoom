@@ -38,6 +38,7 @@ import { Button } from "@/src/components/ui/Button";
 //import apiClient from '@/lib/api';
 import apiClient from "@/lib/api"
 import { useTranslations } from "@/lib/use-translation";
+import { useToast } from "@/components/ui/use-toast";
 import { ServiceTimeline } from "@/components/Calendar/ServiceTimeline";
 import { salonInstant } from "@/components/Calendar/salon-time";
 import { AppointmentScheduler } from "@/lib/appointment-scheduler";
@@ -102,6 +103,7 @@ export function AppointmentDrawer({
   startInEditMode = false,
 }: AppointmentDrawerProps) {
   const t = useTranslations();
+  const { toast } = useToast();
 
   // Local component state that does NOT belong in the data hooks.
   // Kept here because it crosses concerns (edit-mode toggles,
@@ -339,7 +341,7 @@ useEffect(() => {
       !serviceId ||
       (!selectedSuggestion && (!newAppointment.date || !newAppointment.time || !selectedProfessionalId))
     ) {
-      alert(t("appointments.drawer.selectSuggestionOrDate"));
+      toast({ title: t("appointments.drawer.selectSuggestionOrDate"), variant: "destructive" });
       return;
     }
 
@@ -440,7 +442,7 @@ useEffect(() => {
       }
     } catch (error) {
       console.error("Error creating appointment:", error);
-      alert(t("appointments.drawer.failedToCreate"));
+      toast({ title: t("appointments.drawer.failedToCreate"), variant: "destructive" });
     } finally {
       setUpdating(false);
     }
@@ -514,7 +516,7 @@ useEffect(() => {
       setAppointment({ ...appointment!, status: newStatus });
     } catch (error) {
       console.error("Error updating appointment status:", error);
-      alert(t("appointments.drawer.failedToUpdateStatus"));
+      toast({ title: t("appointments.drawer.failedToUpdateStatus"), variant: "destructive" });
     } finally {
       setUpdating(false);
     }
@@ -608,14 +610,14 @@ useEffect(() => {
 
       if (!dateValue || !timeValue) {
         console.error("Date or time is missing:", dateValue, timeValue);
-        alert(t("appointments.drawer.provideDateAndTime"));
+        toast({ title: t("appointments.drawer.provideDateAndTime"), variant: "destructive" });
         return;
       }
 
       const date = new Date(`${dateValue}T${timeValue}`);
       if (isNaN(date.getTime())) {
         console.error("Invalid date or time:", dateValue, timeValue);
-        alert(t("appointments.drawer.provideValidDateAndTime"));
+        toast({ title: t("appointments.drawer.provideValidDateAndTime"), variant: "destructive" });
         return;
       }
       // The calendar day as the salon sees it. toISOString() sent a UTC
@@ -698,7 +700,7 @@ useEffect(() => {
       }
     } catch (error) {
       console.error("Error updating appointment:", error);
-      alert(t("appointments.drawer.failedToUpdate"));
+      toast({ title: t("appointments.drawer.failedToUpdate"), variant: "destructive" });
     } finally {
       setUpdating(false);
     }
@@ -1440,7 +1442,7 @@ useEffect(() => {
                             await refreshAppointment();
                           } catch (error) {
                             console.error("Error reordering services:", error);
-                            alert(t("appointments.drawer.failedToReorderServices"));
+                            toast({ title: t("appointments.drawer.failedToReorderServices"), variant: "destructive" });
                           }
                         }}
                         onTimeChange={async (
@@ -1461,7 +1463,7 @@ useEffect(() => {
                               "Error updating service timing:",
                               error,
                             );
-                            alert(t("appointments.drawer.failedToUpdateServiceTiming"));
+                            toast({ title: t("appointments.drawer.failedToUpdateServiceTiming"), variant: "destructive" });
                           }
                         }}
                         onModeToggle={async (serviceId, isParallel) => {
@@ -1477,7 +1479,7 @@ useEffect(() => {
                               "Error toggling service mode:",
                               error,
                             );
-                            alert(t("appointments.drawer.failedToToggleServiceMode"));
+                            toast({ title: t("appointments.drawer.failedToToggleServiceMode"), variant: "destructive" });
                           }
                         }}
                       />

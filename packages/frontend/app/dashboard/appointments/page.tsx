@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import apiClient, { Appointment as ApiAppointment } from "../../../lib/api";
 import { useTranslations } from "@/lib/use-translation";
+import { useToast } from "@/components/ui/use-toast";
 import { Calendar as CalendarComponent } from "../../../components/Calendar/Calendar";
 import { AppointmentDrawer } from "./components/appointment-drawer";
 import { drawerTargetFromQuery } from "./components/appointment-drawer.utils";
@@ -147,6 +148,7 @@ const getTotalPrice = (appointment: Appointment) => {
 function AppointmentsPageContent() {
   const searchParams = useSearchParams();
   const t = useTranslations();
+  const { toast } = useToast();
   const today = new Date().toISOString().split("T")[0];
   const [currentDate, setCurrentDate] = useState(new Date());
   const [view, setView] = useState<"list" | "calendar">("list");
@@ -221,11 +223,11 @@ function AppointmentsPageContent() {
     } catch (error) {
       console.error("Error updating appointment status:", error);
       // It used to fail in silence: the badge just did not change.
-      window.alert(
-        error instanceof Error && error.message
-          ? `No se ha podido cambiar el estado: ${error.message}`
-          : "No se ha podido cambiar el estado de la cita.",
-      );
+      toast({
+        title: t("appointments.statusChangeFailed"),
+        description: error instanceof Error && error.message ? error.message : undefined,
+        variant: "destructive",
+      });
     } finally {
       setUpdatingId(null);
     }

@@ -19,6 +19,8 @@ import {
 } from "lucide-react";
 import apiClient from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { useToast } from "@/components/ui/use-toast";
 
 interface TenantProgress {
   tenantId: string;
@@ -125,6 +127,10 @@ function ProgressCell({
 
 export default function TenantsPage() {
   const t = useTranslations();
+  const { toast } = useToast();
+  // The tenant about to be deleted, confirmed in the panel's dialog.
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -205,16 +211,18 @@ export default function TenantsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tenants]);
 
-  const handleDelete = async (id: string, name: string) => {
-    if (!confirm(t("saas.deleteConfirm", { name }))) {
-      return;
-    }
+  const performDelete = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
     try {
-      await apiClient.deleteSaasTenant(id);
+      await apiClient.deleteSaasTenant(pendingDelete.id);
       fetchTenants();
     } catch (err) {
       console.error("Error deleting tenant:", err);
-      alert(t("saas.failedToDelete"));
+      toast({ title: t("saas.failedToDelete"), variant: "destructive" });
+    } finally {
+      setDeleting(false);
+      setPendingDelete(null);
     }
   };
 
@@ -224,7 +232,7 @@ export default function TenantsPage() {
       fetchTenants();
     } catch (err) {
       console.error("Error suspending tenant:", err);
-      alert(t("saas.failedToSuspend"));
+      toast({ title: t("saas.failedToSuspend"), variant: "destructive" });
     }
   };
 
@@ -234,7 +242,7 @@ export default function TenantsPage() {
       fetchTenants();
     } catch (err) {
       console.error("Error reactivating tenant:", err);
-      alert(t("saas.failedToReactivate"));
+      toast({ title: t("saas.failedToReactivate"), variant: "destructive" });
     }
   };
 
@@ -441,7 +449,10 @@ export default function TenantsPage() {
                                   const res = await apiClient.launchSalonDashboard(tenant.id);
                                   window.location.href = `/login?as_owner=${tenant.id}&token=${encodeURIComponent(res.token)}&owner=${encodeURIComponent(res.ownerName)}`;
                                 } catch (err) {
-                                  alert(t("saas.failed_to_load") || t("saas.failedToLoadTenant"));
+                                  toast({
+                                    title: t("saas.failed_to_load") || t("saas.failedToLoadTenant"),
+                                    variant: "destructive",
+                                  });
                                 }
                               }}
                               className="p-2 text-gray-400 hover:text-indigo-600 rounded-lg hover:bg-indigo-50"
@@ -486,7 +497,7 @@ export default function TenantsPage() {
                             ))}
                           {!tenant.deletedAt && (
                             <button
-                              onClick={() => handleDelete(tenant.id, tenant.name)}
+                              onClick={() => setPendingDelete({ id: tenant.id, name: tenant.name })}
                               className="p-2 text-gray-400 hover:text-indigo-600 rounded-lg hover:bg-indigo-50"
                               title={t("saas.delete_action")}
                             >
@@ -532,6 +543,17 @@ export default function TenantsPage() {
           )}
         </>
       )}
+
+      <ConfirmDialog
+        open={!!pendingDelete}
+        title={pendingDelete ? t("saas.deleteConfirm", { name: pendingDelete.name }) : ""}
+        confirmLabel={t("saas.delete_tenant")}
+        cancelLabel={t("common.cancel")}
+        destructive
+        loading={deleting}
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={performDelete}
+      />
     </div>
   );
 }

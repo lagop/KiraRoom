@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Plus, Trash2, Save, AlertTriangle } from "lucide-react";
 import apiClient, { ConsentForm, ConsentFormField, ConsentFormInput } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 function blankField(type: ConsentFormField["type"]): ConsentFormField {
   return {
@@ -20,6 +21,9 @@ export default function ConsentFormsPage() {
   const [editing, setEditing] = useState<ConsentFormInput | null>(null);
   const [editId, setEditId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // The form about to be deleted, confirmed in the panel's dialog.
+  const [pendingRemove, setPendingRemove] = useState<ConsentForm | null>(null);
+  const [removing, setRemoving] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -94,14 +98,18 @@ export default function ConsentFormsPage() {
     }
   }
 
-  async function remove(id: string) {
-    if (!confirm("¿Eliminar este formulario? Las firmas existentes se preservan (append-only) pero el form no podrá editarse.")) return;
+  async function performRemove() {
+    if (!pendingRemove) return;
+    setRemoving(true);
     try {
-      await apiClient.deleteConsentForm(id);
+      await apiClient.deleteConsentForm(pendingRemove.id);
       toast({ title: "Formulario eliminado" });
       await load();
     } catch (err: any) {
       toast({ title: err?.message ?? "Error", variant: "destructive" });
+    } finally {
+      setRemoving(false);
+      setPendingRemove(null);
     }
   }
 
@@ -180,7 +188,7 @@ export default function ConsentFormsPage() {
                   Editar
                 </button>
                 <button
-                  onClick={() => remove(f.id)}
+                  onClick={() => setPendingRemove(f)}
                   className="text-red-600 hover:bg-red-50 p-2 rounded"
                 >
                   <Trash2 className="w-4 h-4" />
@@ -200,6 +208,17 @@ export default function ConsentFormsPage() {
           están firmados.
         </div>
       </div>
+
+      <ConfirmDialog
+        open={!!pendingRemove}
+        title={`¿Eliminar el formulario «${pendingRemove?.name ?? ""}»?`}
+        description="Las firmas que ya tiene se conservan, pero el formulario no se podrá volver a editar."
+        confirmLabel="Eliminar formulario"
+        destructive
+        loading={removing}
+        onCancel={() => setPendingRemove(null)}
+        onConfirm={performRemove}
+      />
     </div>
   );
 }

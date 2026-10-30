@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Bell, CheckCircle2, Clock, Loader2, Plus, Trash2, XCircle } from "lucide-react";
 import apiClient, { ApiError, WaitListEntry, WaitListNotifyResult } from "@/lib/api";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 /**
  * Wait-list for fully booked services. "Avisar" really sends the notice
@@ -42,6 +43,9 @@ export default function WaitListPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [notifying, setNotifying] = useState<WaitListEntry | null>(null);
   const [results, setResults] = useState<Record<string, WaitListNotifyResult>>({});
+  // The entry about to be removed, confirmed in the panel's dialog.
+  const [pendingRemove, setPendingRemove] = useState<WaitListEntry | null>(null);
+  const [removing, setRemoving] = useState(false);
 
   const [services, setServices] = useState<Named[]>([]);
   const [professionals, setProfessionals] = useState<Named[]>([]);
@@ -244,15 +248,7 @@ export default function WaitListPage() {
                     )}
                     <button
                       aria-label="Eliminar"
-                      onClick={async () => {
-                        if (!confirm("¿Eliminar de la lista de espera?")) return;
-                        try {
-                          await apiClient.removeWaitListEntry(e.id);
-                          load();
-                        } catch (err) {
-                          setError(errorText(err));
-                        }
-                      }}
+                      onClick={() => setPendingRemove(e)}
                       className="text-red-600 hover:text-red-800 p-1"
                     >
                       <Trash2 className="w-4 h-4" />
@@ -293,6 +289,32 @@ export default function WaitListPage() {
           onError={setError}
         />
       )}
+
+      <ConfirmDialog
+        open={!!pendingRemove}
+        title={
+          pendingRemove
+            ? `¿Quitar a ${pendingRemove.client.firstName} ${pendingRemove.client.lastName} de la lista de espera?`
+            : ""
+        }
+        confirmLabel="Quitar de la lista"
+        destructive
+        loading={removing}
+        onCancel={() => setPendingRemove(null)}
+        onConfirm={async () => {
+          if (!pendingRemove) return;
+          setRemoving(true);
+          try {
+            await apiClient.removeWaitListEntry(pendingRemove.id);
+            load();
+          } catch (err) {
+            setError(errorText(err));
+          } finally {
+            setRemoving(false);
+            setPendingRemove(null);
+          }
+        }}
+      />
     </div>
   );
 }

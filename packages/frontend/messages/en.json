@@ -208,7 +208,8 @@
     "logStatus": "Status",
     "logExternalId": "Holded ID",
     "logError": "Error",
-    "ownerOnly": "Only the salon owner can connect or disconnect Holded."
+    "ownerOnly": "Only the salon owner can connect or disconnect Holded.",
+    "disconnectCta": "Disconnect Holded"
   },
   "onboarding": {
     "linear": {
@@ -572,8 +573,9 @@
       "viewKpis": "View KPIs",
       "edit": "Edit",
       "deactivate": "Deactivate",
-      "deactivateConfirm": "Deactivate location \"{name}\"?",
-      "deactivateError": "Could not deactivate the location"
+      "deactivateConfirm": "Deactivate the location “{name}”?",
+      "deactivateError": "Could not deactivate the location",
+      "deactivateCta": "Deactivate location"
     },
     "stats": {
       "appointments30d": "Appointments (30d)",
@@ -1112,7 +1114,8 @@
     "view_manage_appointment": "View Manage Appointment",
     "view_mode": "View Mode",
     "view_profile": "View Profile",
-    "load_failed": "Could not load appointments"
+    "load_failed": "Could not load appointments",
+    "statusChangeFailed": "The appointment status could not be changed."
   },
   "settings": {
     "title": "Settings",
@@ -1526,12 +1529,12 @@
     "client": "Client",
     "commission": "Commission",
     "commission_summary": "Commission Summary",
-    "commissions_paid_success": "Commissions Paid Success",
+    "commissions_paid_success": "Commissions marked as paid",
     "complete_appointments_message": "Complete Appointments Message",
     "date": "Date",
     "description": "Description",
     "end_date": "End Date",
-    "failed_to_pay_commissions": "Failed To Pay Commissions",
+    "failed_to_pay_commissions": "The commissions could not be marked as paid",
     "generate_report": "Generate Report",
     "hide_details": "Hide Details",
     "no_commission_data": "No Commission Data",
@@ -1553,7 +1556,9 @@
     "total_payroll": "Total Payroll",
     "total_sales": "Total Sales",
     "view_details": "View Details",
-    "confirm_mark_all_paid": "Are you sure you want to mark all pending commissions as paid?"
+    "confirm_mark_all_paid": "Are you sure you want to mark all pending commissions as paid?",
+    "confirm_mark_paid_description": "{name}'s pending commissions for the selected period will be marked as paid: {amount}.",
+    "mark_paid": "Mark as paid"
   },
   "description": "Description",
   "email_campaigns": {
@@ -1608,7 +1613,33 @@
     "tooltip_opened": "Tooltip Opened",
     "tooltip_recipients": "Tooltip Recipients",
     "tooltip_sent": "Tooltip Sent",
-    "unsubscribe_note": "An unsubscribe link is added automatically at the end of every email, as Spanish law (LSSI) requires. Whoever unsubscribes stops receiving your campaigns."
+    "unsubscribe_note": "An unsubscribe link is added automatically at the end of every email, as Spanish law (LSSI) requires. Whoever unsubscribes stops receiving your campaigns.",
+    "confirm": {
+      "delete": {
+        "title": "Delete the campaign “{name}”?",
+        "cta": "Delete campaign"
+      },
+      "send": {
+        "title": "Send “{name}” now?",
+        "description": "It goes out right away to the recipients it already has.",
+        "cta": "Send now"
+      },
+      "sendAll": {
+        "title": "Send “{name}” to every client?",
+        "description": "Every client with an email address is added as a recipient and it goes out right away.",
+        "cta": "Send to everyone"
+      },
+      "activate": {
+        "title": "Activate “{name}”?",
+        "description": "Inactive clients will be emailed automatically.",
+        "cta": "Activate campaign"
+      },
+      "deactivate": {
+        "title": "Deactivate “{name}”?",
+        "description": "It stops emailing inactive clients automatically. You can activate it again at any time.",
+        "cta": "Deactivate campaign"
+      }
+    }
   },
   "loyalty": {
     "active": "Active",
@@ -1723,7 +1754,9 @@
     "confirm_cancel_subscription": "Are you sure you want to cancel your subscription?",
     "deposit_failed": "Could not record the deposit.",
     "manage_in_loyalty": "Managed in Loyalty",
-    "not_in_loyalty": "Not in the programme"
+    "not_in_loyalty": "Not in the programme",
+    "cancel_subscription_description": "Your salon switches to read-only mode for 30 days.",
+    "keep_subscription": "Keep subscription"
   },
   "pos": {
     "action": "Action",
@@ -1767,10 +1800,10 @@
     "pay_full": "Pay Full",
     "pay_full_amount": "Pay Full Amount",
     "payment": "Payment",
-    "payment_cancelled": "Payment Cancelled",
-    "payment_cancelled_description": "Payment Cancelled Description",
+    "payment_cancelled": "Payment voided",
+    "payment_cancelled_description": "It has been removed from the till records.",
     "payment_completed": "Payment Completed",
-    "payment_delete_failed": "Payment Delete Failed",
+    "payment_delete_failed": "The payment could not be voided.",
     "payment_failed": "Payment Failed",
     "payment_history": "Payment History",
     "payment_type": "Payment Type",
@@ -1802,7 +1835,11 @@
     "tomorrow": "Tomorrow",
     "total": "Total",
     "total_amount": "Total Amount",
-    "transactions": "Transactions"
+    "transactions": "Transactions",
+    "confirm_void_payment": "Void this {amount} payment?",
+    "confirm_void_payment_description": "It is removed from the till records. Only pending or failed payments can be voided.",
+    "void_payment": "Void payment",
+    "keep_payment": "Keep payment"
   },
   "pos_today": "Pos Today",
   "pos_tomorrow": "Pos Tomorrow",
@@ -1817,7 +1854,7 @@
     "create_promotion_title": "Create Promotion Title",
     "deactivate": "Deactivate",
     "delete": "Delete",
-    "delete_confirm": "Delete Confirm",
+    "delete_confirm": "Delete this promotion?",
     "description": "Description",
     "discount": "Discount",
     "discount_code": "Discount Code",
@@ -1840,7 +1877,8 @@
     "unlimited": "Unlimited",
     "update": "Update",
     "uses": "Uses",
-    "value": "Value"
+    "value": "Value",
+    "delete_cta": "Delete promotion"
   },
   "quantity": "Quantity",
   "login": {

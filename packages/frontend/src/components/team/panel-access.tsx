@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { KeyRound, Copy, UserX } from "lucide-react";
 import apiClient from "@/lib/api";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   MIN_PASSWORD,
   type PanelAccess,
@@ -40,6 +41,8 @@ export function PanelAccessBlock({ professionalId, name, email, access: initial,
   const [busy, setBusy] = useState(false);
   const [instructions, setInstructions] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // Revoking is confirmed in the panel's dialog.
+  const [confirmRevoke, setConfirmRevoke] = useState(false);
 
   const status = access?.status ?? "none";
   if (status === "owner") {
@@ -75,8 +78,7 @@ export function PanelAccessBlock({ professionalId, name, email, access: initial,
     }
   };
 
-  const revoke = async () => {
-    if (!window.confirm(`¿Quitar el acceso al panel a ${name}? No podrá entrar hasta que se lo vuelvas a dar.`)) return;
+  const performRevoke = async () => {
     setBusy(true);
     try {
       await apiClient.revokeProfessionalAccess(professionalId);
@@ -87,6 +89,7 @@ export function PanelAccessBlock({ professionalId, name, email, access: initial,
       setError(e instanceof Error ? e.message : "No se ha podido quitar el acceso.");
     } finally {
       setBusy(false);
+      setConfirmRevoke(false);
     }
   };
 
@@ -170,7 +173,7 @@ export function PanelAccessBlock({ professionalId, name, email, access: initial,
             <button
               type="button"
               className="inline-flex items-center gap-1 px-3 py-1.5 border rounded-lg hover:bg-gray-50 text-red-700"
-              onClick={revoke}
+              onClick={() => setConfirmRevoke(true)}
               disabled={busy}
             >
               <UserX className="w-4 h-4" aria-hidden /> Quitar acceso
@@ -183,6 +186,17 @@ export function PanelAccessBlock({ professionalId, name, email, access: initial,
           )}
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmRevoke}
+        title={`¿Quitar el acceso al panel a ${name}?`}
+        description="No podrá entrar hasta que se lo vuelvas a dar."
+        confirmLabel="Quitar acceso"
+        destructive
+        loading={busy}
+        onCancel={() => setConfirmRevoke(false)}
+        onConfirm={performRevoke}
+      />
     </div>
   );
 }

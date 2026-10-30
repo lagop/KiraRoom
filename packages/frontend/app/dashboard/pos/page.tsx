@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import apiClient from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
 import { useToast, toast } from "@/components/ui/use-toast";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import AppointmentSelector from "./components/appointment-selector";
 import type { ClientLoyaltySummary } from "@/lib/api";
 
@@ -105,6 +106,9 @@ export default function POSPage() {
   const [showClientSearch, setShowClientSearch] = useState(false);
   const [lastSale, setLastSale] = useState<any>(null);
   const [todayPayments, setTodayPayments] = useState<TodayPayment[]>([]);
+  // The payment about to be voided, confirmed in the panel's dialog.
+  const [pendingVoid, setPendingVoid] = useState<TodayPayment | null>(null);
+  const [voiding, setVoiding] = useState(false);
   const [cashTotal, setCashTotal] = useState(0);
   const [cardTotal, setCardTotal] = useState(0);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -488,11 +492,11 @@ export default function POSPage() {
     }
   };
 
-  const handleDeletePayment = async (paymentId: string) => {
-    if (!confirm(t("pos.payment_cancelled_description"))) return;
-
+  const performDeletePayment = async () => {
+    if (!pendingVoid) return;
+    setVoiding(true);
     try {
-      await apiClient.deletePayment(paymentId);
+      await apiClient.deletePayment(pendingVoid.id);
       toast({
         title: t("pos.payment_cancelled"),
         description: t("pos.payment_cancelled_description"),
@@ -508,10 +512,13 @@ export default function POSPage() {
     } catch (error) {
       console.error("Failed to cancel payment:", error);
       toast({
-        title: t("pos.payment_failed"),
-        description: t("pos.payment_delete_failed"),
+        title: t("pos.payment_delete_failed"),
+        description: error instanceof Error ? error.message : undefined,
         variant: "destructive",
       });
+    } finally {
+      setVoiding(false);
+      setPendingVoid(null);
     }
   };
 
@@ -1424,7 +1431,7 @@ export default function POSPage() {
                       payment.status !== "refunded" && (
                         <td className="px-4 py-2">
                           <button
-                            onClick={() => handleDeletePayment(payment.id)}
+                            onClick={() => setPendingVoid(payment)}
                             className="text-red-600 hover:text-red-800 text-sm"
                           >
                             {t("pos.cancel")}
@@ -1522,6 +1529,22 @@ export default function POSPage() {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={!!pendingVoid}
+        title={
+          pendingVoid
+            ? t("pos.confirm_void_payment", { amount: formatCurrency(pendingVoid.amount / 100) })
+            : ""
+        }
+        description={t("pos.confirm_void_payment_description")}
+        confirmLabel={t("pos.void_payment")}
+        cancelLabel={t("pos.keep_payment")}
+        destructive
+        loading={voiding}
+        onCancel={() => setPendingVoid(null)}
+        onConfirm={performDeletePayment}
+      />
     </div>
   );
 }

@@ -20,6 +20,8 @@ import {
 import apiClient, { Appointment as ApiAppointment } from '../../../../lib/api';
 import { appointmentEditHref } from '../components/appointment-drawer.utils';
 import { getCurrentUser } from '../../../../lib/utils';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { useToast } from '@/components/ui/use-toast';
 
 type AppointmentStatus = 'confirmed' | 'pending' | 'in_progress' | 'completed' | 'cancelled';
 
@@ -89,6 +91,9 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
   // Deleting an appointment is for the owner and managers; a professional
   // cancels instead. Read after mount: localStorage is not there on the server.
   const [canDelete, setCanDelete] = useState(false);
+  // Asked in the panel's dialog, not window.confirm.
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const { toast } = useToast();
   useEffect(() => {
     setCanDelete(getCurrentUser()?.role !== 'staff');
   }, []);
@@ -212,11 +217,11 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
       }
     } catch (error) {
       console.error('Error updating appointment status:', error);
-      alert(
-        error instanceof Error && error.message
-          ? `No se ha podido cambiar el estado: ${error.message}`
-          : 'No se ha podido cambiar el estado de la cita.',
-      );
+      toast({
+        title: 'No se ha podido cambiar el estado de la cita.',
+        description: error instanceof Error && error.message ? error.message : undefined,
+        variant: 'destructive',
+      });
     } finally {
       setUpdating(false);
     }
@@ -227,8 +232,7 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
     router.push(appointmentEditHref(params.id));
   };
 
-  const handleDelete = async () => {
-    if (!confirm('Are you sure you want to delete this appointment?')) return;
+  const performDelete = async () => {
     setUpdating(true);
     try {
       await apiClient.deleteAppointment(params.id);
@@ -236,7 +240,8 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
     } catch (error) {
       // Stay on the page: navigating away would read as "deleted".
       console.error('Error deleting appointment:', error);
-      alert('Failed to delete appointment');
+      setConfirmDelete(false);
+      toast({ title: 'No se ha podido eliminar la cita.', variant: 'destructive' });
     } finally {
       setUpdating(false);
     }
@@ -316,7 +321,7 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
           </button>
           {canDelete && (
             <button
-              onClick={handleDelete}
+              onClick={() => setConfirmDelete(true)}
               disabled={updating}
               className="inline-flex items-center px-4 py-2 border border-red-300 text-red-700 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50"
             >
@@ -573,6 +578,17 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
           </div>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title="¿Eliminar esta cita?"
+        description="La cita desaparecerá de la agenda. Si el cliente no va a venir, mejor cancélala: así queda en su historial."
+        confirmLabel="Eliminar cita"
+        destructive
+        loading={updating}
+        onCancel={() => setConfirmDelete(false)}
+        onConfirm={performDelete}
+      />
     </div>
   );
 }

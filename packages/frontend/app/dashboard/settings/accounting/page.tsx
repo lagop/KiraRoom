@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import apiClient, { AccountingStatus, AccountingSyncLog } from "@/lib/api";
 import { getCurrentUser } from "@/lib/utils";
 import { useTranslations } from "@/lib/use-translation";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Download, KeyRound, Loader2, Send, Unplug } from "lucide-react";
 import { Modelo303Card } from "@/components/tax/modelo-303-card";
 import { Modelo420Card } from "@/components/tax/modelo-420-card";
@@ -65,6 +66,8 @@ export default function AccountingSettingsPage() {
     mutationFn: () => apiClient.disconnectAccounting(),
     onSuccess: refresh,
   });
+  // Disconnecting is confirmed in the panel's dialog.
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const settings = useMutation({
     mutationFn: (syncOnIssue: boolean) => apiClient.updateAccountingSettings({ syncOnIssue }),
     onSuccess: (data) => qc.setQueryData(["accounting", "status"], data),
@@ -159,9 +162,7 @@ export default function AccountingSettingsPage() {
             <button
               type="button"
               disabled={disconnect.isPending}
-              onClick={() => {
-                if (window.confirm(t("accounting.disconnectConfirm"))) disconnect.mutate();
-              }}
+              onClick={() => setConfirmDisconnect(true)}
               className="inline-flex shrink-0 items-center gap-2 rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
             >
               <Unplug className="h-3 w-3" />
@@ -395,6 +396,19 @@ export default function AccountingSettingsPage() {
 
       <Modelo303Card />
       <Modelo420Card />
+
+      <ConfirmDialog
+        open={confirmDisconnect}
+        title={t("accounting.disconnectConfirm")}
+        confirmLabel={t("accounting.disconnectCta")}
+        cancelLabel={t("common.cancel")}
+        destructive
+        loading={disconnect.isPending}
+        onCancel={() => setConfirmDisconnect(false)}
+        onConfirm={() =>
+          disconnect.mutate(undefined, { onSettled: () => setConfirmDisconnect(false) })
+        }
+      />
     </div>
   );
 }

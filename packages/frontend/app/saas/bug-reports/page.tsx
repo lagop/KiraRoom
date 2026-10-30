@@ -365,6 +365,7 @@ function BugReportDrawer({
   const [status, setStatus] = useState<BugReport["status"]>(report.status);
   const [resolution, setResolution] = useState(report.resolution ?? "");
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     setStatus(report.status);
@@ -373,6 +374,7 @@ function BugReportDrawer({
 
   const save = async () => {
     setSaving(true);
+    setSaveError(null);
     try {
       await apiClient.updateSaasBugReport(report.id, {
         status,
@@ -381,7 +383,7 @@ function BugReportDrawer({
       await onUpdated();
     } catch (err) {
       console.error("Error saving report:", err);
-      alert("No se pudo guardar el cambio");
+      setSaveError("No se pudo guardar el cambio");
     } finally {
       setSaving(false);
     }
@@ -549,6 +551,11 @@ function BugReportDrawer({
               </p>
             )}
 
+            {saveError && (
+              <p role="alert" className="mb-2 text-right text-sm text-red-600">
+                {saveError}
+              </p>
+            )}
             <div className="flex justify-end gap-2">
               <button
                 onClick={onClose}

@@ -4,6 +4,8 @@ import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import apiClient, { ClientLoyaltySummary } from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { useToast } from "@/components/ui/use-toast";
 
 // Type definitions for payments
 interface Payment {
@@ -741,6 +743,10 @@ function SubscriptionPanel() {
   const [invoices, setInvoices] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
+  // Cancelling is confirmed in the panel's dialog, not window.confirm.
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const { toast } = useToast();
 
   useEffect(() => {
     loadSubscriptionData();
@@ -773,19 +779,22 @@ function SubscriptionPanel() {
       window.location.href = url;
     } catch (error) {
       console.error("Failed to create checkout:", error);
-      alert(t("payments.checkout_failed"));
+      toast({ title: t("payments.checkout_failed"), variant: "destructive" });
     } finally {
       setCheckoutLoading(false);
     }
   };
 
-  const handleCancel = async () => {
-    if (!confirm(t("payments.confirm_cancel_subscription"))) return;
+  const performCancel = async () => {
+    setCancelling(true);
     try {
       await apiClient.cancelSubscription(false);
       loadSubscriptionData();
     } catch (error) {
       console.error("Failed to cancel:", error);
+    } finally {
+      setCancelling(false);
+      setConfirmCancel(false);
     }
   };
 
@@ -839,7 +848,7 @@ function SubscriptionPanel() {
               </div>
             )}
             <button
-              onClick={handleCancel}
+              onClick={() => setConfirmCancel(true)}
               className="mt-4 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
             >
               {t("payments.cancel_subscription")}
@@ -978,6 +987,18 @@ function SubscriptionPanel() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmCancel}
+        title={t("payments.confirm_cancel_subscription")}
+        description={t("payments.cancel_subscription_description")}
+        confirmLabel={t("payments.cancel_subscription")}
+        cancelLabel={t("payments.keep_subscription")}
+        destructive
+        loading={cancelling}
+        onCancel={() => setConfirmCancel(false)}
+        onConfirm={performCancel}
+      />
     </div>
   );
 }
@@ -985,6 +1006,7 @@ function SubscriptionPanel() {
 // Wallet Panel Component
 function WalletPanel() {
   const t = useTranslations();
+  const { toast } = useToast();
   const [clients, setClients] = useState<any[]>([]);
   const [selectedClient, setSelectedClient] = useState<string | null>(null);
   const [wallet, setWallet] = useState<any>(null);
@@ -1048,7 +1070,7 @@ function WalletPanel() {
       loadWallet(selectedClient);
     } catch (error) {
       console.error("Failed to deposit:", error);
-      alert(t("payments.deposit_failed"));
+      toast({ title: t("payments.deposit_failed"), variant: "destructive" });
     } finally {
       setActionLoading(false);
     }
