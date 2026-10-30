@@ -9,3 +9,6 @@
 # Fictitious Resend-looking key in a frontend spec (#154); the spec now builds it at runtime.
 8aff1d62b8cc94f262bf85a4fe9dfcf4cf52504a:packages/frontend/lib/platform-email.spec.ts:generic-api-key:50
 8aff1d62b8cc94f262bf85a4fe9dfcf4cf52504a:packages/frontend/lib/platform-email.spec.ts:generic-api-key:51
+# A test UUID beside clientId (generic-api-key), in the first commit of #161.
+# The spec now builds the UUIDs at runtime.
+acfa4b9bb2f2d07bd97a7ae2f09e7de6693c579c:packages/backend/src/appointments/update-appointment-body.spec.ts:generic-api-key:49
