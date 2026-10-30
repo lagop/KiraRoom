@@ -1424,7 +1424,18 @@
     "services": "Services",
     "reviews": "Reviews",
     "whatsapp_campaigns": "WhatsApp Broadcast",
-    "share": "Share your page"
+    "share": "Share your page",
+    "wait_list": "Waiting list",
+    "gift_cards": "Gift cards",
+    "group_team": "Team & services",
+    "group_sales": "Till & sales",
+    "group_marketing": "Marketing",
+    "settings_general": "General",
+    "billing": "Plan & subscription",
+    "salon": "Salon details",
+    "domain": "Website & domain",
+    "security": "Security",
+    "account": "Your account"
   },
   "Failed to add points": "Failed to add points",
   "Failed to create professional": {
