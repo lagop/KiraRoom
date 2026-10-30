@@ -140,6 +140,8 @@ check("POST /auth/login is a credential endpoint", isCredentialEndpoint("/auth/l
 check("so is /auth/register", isCredentialEndpoint("/auth/register"), true);
 check("so is /auth/forgot-password", isCredentialEndpoint("/auth/forgot-password"), true);
 check("so is /auth/reset-password", isCredentialEndpoint("/auth/reset-password"), true);
+// The welcome email's link page is opened signed out: never a reason to navigate.
+check("so is /auth/verify-email, with its token", isCredentialEndpoint("/auth/verify-email?token=abc"), true);
 check("a query string does not hide it", isCredentialEndpoint("/auth/login?next=%2Fsaas"), true);
 
 // Everything else keeps the session-expiry behaviour: a 401 there really
