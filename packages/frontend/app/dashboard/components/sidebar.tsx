@@ -35,6 +35,7 @@ import {
   Hourglass,
   QrCode,
   ShieldCheck,
+  BadgeEuro,
 } from "lucide-react";
 import apiClient, { removeToken } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
@@ -89,6 +90,7 @@ export function DashboardSidebar({
   const settingsOpen =
     pathname === "/dashboard/settings" ||
     pathname.startsWith("/dashboard/settings/") ||
+    pathname === "/dashboard/billing" ||
     pathname.startsWith("/dashboard/billing/invoices");
   const onSettingsIndex = pathname === "/dashboard/settings";
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -577,6 +579,22 @@ export function DashboardSidebar({
                   >
                     <Sliders className="w-4 h-4 mr-3" />
                     <span suppressHydrationWarning>Generales</span>
+                  </Link>
+                </li>
+                <li>
+                  {/* What the salon pays KiraRoom: plan, add-ons, card and
+                      receipts (the page the trial banner links to). */}
+                  <Link
+                    href="/dashboard/billing"
+                    className={`flex items-center pl-9 pr-3 py-2 rounded-l-lg w-full transition-all duration-200 ${
+                      pathname === "/dashboard/billing"
+                        ? "bg-white text-violet-950 rounded-r-none"
+                        : "text-white hover:text-violet-950 hover:bg-violet-200 hover:-translate-x-3 hover:rounded-lg rounded-r-none"
+                    }`}
+                    title="Plan y suscripción"
+                  >
+                    <BadgeEuro className="w-4 h-4 mr-3" />
+                    <span suppressHydrationWarning>Plan y suscripción</span>
                   </Link>
                 </li>
                 <li>
