@@ -40,4 +40,39 @@ describe("POST /onboarding/wizard body", () => {
     await c.submitWizard({ user: { tenantId: "t1" } } as any, body);
     expect(submitWizard.mock.calls[0][1].workingHours).toEqual({ mon: expect.objectContaining({ open: "09:00" }) });
   });
+
+  it("takes the salon's week with shifts in the list format, normalised", async () => {
+    const out = await parse({
+      openingHours: [
+        { day: "Monday", openTime: "16:00", closeTime: "20:00" },
+        { day: "monday", openTime: "9:00", closeTime: "14:00" },
+      ],
+    });
+    expect(out.openingHours).toEqual([
+      { day: "monday", openTime: "09:00", closeTime: "14:00" },
+      { day: "monday", openTime: "16:00", closeTime: "20:00" },
+    ]);
+  });
+
+  it("refuses a shift that ends before it starts, or overlapping shifts, with the reason", async () => {
+    await expect(
+      parse({ openingHours: [{ day: "monday", openTime: "19:00", closeTime: "09:00" }] }),
+    ).rejects.toBeDefined();
+    await expect(
+      parse({
+        openingHours: [
+          { day: "monday", openTime: "09:00", closeTime: "14:00" },
+          { day: "monday", openTime: "13:00", closeTime: "18:00" },
+        ],
+      }),
+    ).rejects.toBeDefined();
+  });
+
+  it("hands the service the week in the list format", async () => {
+    const submitWizard = jest.fn(async (..._args: any[]) => ({}));
+    const c = new OnboardingController({ submitWizard } as any);
+    const openingHours = [{ day: "monday", openTime: "09:00", closeTime: "14:00" }];
+    await c.submitWizard({ user: { tenantId: "t1" } } as any, await parse({ openingHours }));
+    expect(submitWizard.mock.calls[0][1].openingHours).toEqual(openingHours);
+  });
 });

@@ -76,6 +76,7 @@ export class OnboardingController {
         time: body.firstAppointment.time,
       },
       workingHours,
+      openingHours: body.openingHours,
     });
   }
 

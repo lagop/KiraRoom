@@ -219,6 +219,8 @@ export class OnboardingService {
         time: string;
       };
       workingHours?: Record<string, { open: string; close: string } | null>;
+      /** The week in the list format (shifts); wins over `workingHours`. */
+      openingHours?: Array<{ day: string; openTime: string; closeTime: string }>;
     },
   ): Promise<{
     ok: true;
@@ -245,7 +247,7 @@ export class OnboardingService {
     }
     // A day that closes before it opens would be read as closed: refused
     // with the reason instead, before anything is written.
-    const openingWeek = wizardWeekToEntries(payload.workingHours);
+    const openingWeek = payload.openingHours ?? wizardWeekToEntries(payload.workingHours);
     const hoursProblem = openingWeek.length > 0 ? workingHoursProblem(openingWeek) : null;
     if (hoursProblem) throw new BadRequestException(hoursProblem);
 

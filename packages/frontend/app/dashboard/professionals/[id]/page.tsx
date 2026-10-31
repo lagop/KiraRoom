@@ -5,13 +5,16 @@ import Link from 'next/link';
 import { Suspense, useState, useEffect } from 'react';
 import { ArrowLeft, Edit, Mail, Phone, Calendar, User, Clock, Star, MapPin, Percent, Briefcase } from 'lucide-react';
 import apiClient from '@/lib/api';
+import { useTranslations } from '@/lib/use-translation';
+import { specialtyLabelKey } from '@/lib/professional-specialties';
 
 function ProfessionalViewContent() {
   const params = useParams();
+  const t = useTranslations();
   const professionalId = params?.id as string;
   const [professionalData, setProfessionalData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   useEffect(() => {
     const fetchProfessional = async () => {
@@ -20,7 +23,7 @@ function ProfessionalViewContent() {
         setProfessionalData(data);
       } catch (err) {
         console.error('Failed to fetch professional:', err);
-        setError('Failed to load professional data');
+        setLoadFailed(true);
       } finally {
         setIsLoading(false);
       }
@@ -39,11 +42,13 @@ function ProfessionalViewContent() {
     );
   }
 
-  if (error || !professionalData) {
+  if (loadFailed || !professionalData) {
     return (
       <div className="space-y-6">
         <div className="bg-yellow-50 border border-yellow-200 text-yellow-700 px-4 py-3 rounded-lg">
-          {error || 'Professional not found'}
+          {loadFailed
+            ? t('professionals.detailPage.loadFailed')
+            : t('professionals.detailPage.notFound')}
         </div>
       </div>
     );
@@ -53,14 +58,14 @@ function ProfessionalViewContent() {
     return (
       <div className="space-y-6">
         <div className="bg-yellow-50 border border-yellow-200 text-yellow-700 px-4 py-3 rounded-lg">
-          Professional not found
+          {t('professionals.detailPage.notFound')}
         </div>
       </div>
     );
   }
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
+    return new Date(dateString).toLocaleDateString('es-ES', {
       year: 'numeric',
       month: 'long',
       day: 'numeric',
@@ -79,8 +84,8 @@ function ProfessionalViewContent() {
             <ArrowLeft className="w-5 h-5 text-gray-600" />
           </Link>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900 truncate">Professional Details</h1>
-            <p className="text-gray-500 mt-1">View professional information</p>
+            <h1 className="text-2xl font-bold text-gray-900 truncate">{t('professionals.detailPage.title')}</h1>
+            <p className="text-gray-500 mt-1">{t('professionals.detailPage.subtitle')}</p>
           </div>
         </div>
         <Link
@@ -88,7 +93,7 @@ function ProfessionalViewContent() {
           className="inline-flex items-center px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
         >
           <Edit className="w-4 h-4 mr-2" />
-          Edit Professional
+          {t('professionals.detailPage.edit')}
         </Link>
       </div>
 
@@ -104,7 +109,12 @@ function ProfessionalViewContent() {
             </div>
             <div className="text-white">
               <h2 className="text-2xl font-bold">{professionalData.firstName} {professionalData.lastName}</h2>
-              <p className="text-indigo-100">{professionalData.specialties?.[0] || 'Not specified'}</p>
+              <p className="text-indigo-100">{professionalData.specialties?.[0]
+                  ? (() => {
+                      const key = specialtyLabelKey(professionalData.specialties[0]);
+                      return key ? t(key) : professionalData.specialties[0];
+                    })()
+                  : t('professionals.detailPage.noSpecialty')}</p>
               <div className="flex flex-wrap items-center gap-4 mt-2">
                 <div className="flex items-center">
                   <Star className="w-4 h-4 text-yellow-400 fill-current" />
@@ -112,11 +122,11 @@ function ProfessionalViewContent() {
                 </div>
                 <div className="flex items-center">
                   <User className="w-4 h-4 text-indigo-200" />
-                  <span className="ml-1 text-sm">156 clients</span>
+                  <span className="ml-1 text-sm">{t('professionals.detailPage.clientsCount', { count: 156 })}</span>
                 </div>
                 <div className="flex items-center">
                   <Clock className="w-4 h-4 text-indigo-200" />
-                  <span className="ml-1 text-sm">10 years</span>
+                  <span className="ml-1 text-sm">{t('professionals.detailPage.yearsCount', { count: 10 })}</span>
                 </div>
               </div>
             </div>
@@ -125,23 +135,23 @@ function ProfessionalViewContent() {
 
         {/* Bio */}
         <div className="p-6 border-b border-gray-200">
-          <h3 className="text-lg font-semibold text-gray-900 mb-2">About</h3>
-          <p className="text-gray-600">{professionalData.bio || 'No bio available'}</p>
+          <h3 className="text-lg font-semibold text-gray-900 mb-2">{t('professionals.detailPage.about')}</h3>
+          <p className="text-gray-600">{professionalData.bio || t('professionals.detailPage.noBio')}</p>
         </div>
 
         {/* Services */}
         <div className="p-6 border-b border-gray-200">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Services Provided</h3>
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">{t('professionals.fields.servicesProvided')}</h3>
           <div className="flex flex-wrap gap-2">
             {professionalData.services && professionalData.services.length > 0 ? (
               professionalData.services.map((service: any) => (
                 <span key={service.serviceId || service.service?.id} className="inline-flex px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm font-medium">
-                  {service.service?.name || 'Unknown Service'}
+                  {service.service?.name || t('professionals.detailPage.unknownService')}
                 </span>
               ))
             ) : (
               <span className="inline-flex px-3 py-1 bg-gray-100 text-gray-800 rounded-full text-sm font-medium">
-                No services assigned
+                {t('professionals.detailPage.noServices')}
               </span>
             )}
           </div>
@@ -149,15 +159,19 @@ function ProfessionalViewContent() {
 
         {/* Professional Information */}
         <div className="p-6 border-b border-gray-200">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Professional Information</h3>
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">{t('professionals.detailPage.infoTitle')}</h3>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <div className="flex items-start space-x-3">
               <div className="p-2 bg-blue-100 rounded-lg">
                 <Briefcase className="w-5 h-5 text-blue-600" />
               </div>
               <div>
-                <p className="text-sm text-gray-500">Position</p>
-                <p className="font-medium text-gray-900">{professionalData.position || 'Not provided'}</p>
+                <p className="text-sm text-gray-500">{t('professionals.detailPage.position')}</p>
+                <p className="font-medium text-gray-900">
+                  {professionalData.position === 'professional'
+                    ? t('professionals.detailPage.positionProfessional')
+                    : professionalData.position || t('professionals.detailPage.notProvided')}
+                </p>
               </div>
             </div>
             <div className="flex items-start space-x-3">
@@ -165,8 +179,12 @@ function ProfessionalViewContent() {
                 <Percent className="w-5 h-5 text-green-600" />
               </div>
               <div>
-                <p className="text-sm text-gray-500">Commission Rate</p>
-                <p className="font-medium text-gray-900">{professionalData.commissionRate || 'Not provided'}%</p>
+                <p className="text-sm text-gray-500">{t('professionals.detailPage.commissionRate')}</p>
+                <p className="font-medium text-gray-900">
+                  {professionalData.commissionRate
+                    ? `${professionalData.commissionRate}%`
+                    : t('professionals.detailPage.notProvided')}
+                </p>
               </div>
             </div>
             <div className="flex items-start space-x-3">
@@ -174,8 +192,8 @@ function ProfessionalViewContent() {
                 <Calendar className="w-5 h-5 text-purple-600" />
               </div>
               <div>
-                <p className="text-sm text-gray-500">Hire Date</p>
-                <p className="font-medium text-gray-900">{professionalData.hireDate ? formatDate(professionalData.hireDate) : 'Not provided'}</p>
+                <p className="text-sm text-gray-500">{t('professionals.detailPage.hireDate')}</p>
+                <p className="font-medium text-gray-900">{professionalData.hireDate ? formatDate(professionalData.hireDate) : t('professionals.detailPage.notProvided')}</p>
               </div>
             </div>
           </div>
@@ -183,15 +201,15 @@ function ProfessionalViewContent() {
 
         {/* Contact Information */}
         <div className="p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Contact Information</h3>
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">{t('professionals.detailPage.contactTitle')}</h3>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="flex items-start space-x-3">
               <div className="p-2 bg-gray-100 rounded-lg">
                 <Mail className="w-5 h-5 text-gray-600" />
               </div>
               <div>
-                <p className="text-sm text-gray-500">Email</p>
-                <p className="font-medium text-gray-900">{professionalData.email || 'Not provided'}</p>
+                <p className="text-sm text-gray-500">{t('professionals.fields.email')}</p>
+                <p className="font-medium text-gray-900">{professionalData.email || t('professionals.detailPage.notProvided')}</p>
               </div>
             </div>
             <div className="flex items-start space-x-3">
@@ -199,8 +217,8 @@ function ProfessionalViewContent() {
                 <Phone className="w-5 h-5 text-gray-600" />
               </div>
               <div>
-                <p className="text-sm text-gray-500">Phone</p>
-                <p className="font-medium text-gray-900">{professionalData.phone || 'Not provided'}</p>
+                <p className="text-sm text-gray-500">{t('professionals.fields.phone')}</p>
+                <p className="font-medium text-gray-900">{professionalData.phone || t('professionals.detailPage.notProvided')}</p>
               </div>
             </div>
           </div>
@@ -212,17 +230,23 @@ function ProfessionalViewContent() {
             <div className="flex items-center space-x-3">
               <Calendar className="w-5 h-5 text-gray-500" />
               <div>
-                <p className="text-sm text-gray-500">Account Status</p>
+                <p className="text-sm text-gray-500">{t('professionals.detailPage.accountStatus')}</p>
                 <span className={`inline-flex px-3 py-1 rounded-full text-sm font-medium ${
                   professionalData.isActive ? 'bg-green-100 text-green-800' :
                   'bg-gray-100 text-gray-800'
                 }`}>
-                  {professionalData.isActive ? 'active' : 'inactive'}
+                  {professionalData.isActive
+                    ? t('professionals.statusOptions.active')
+                    : t('professionals.statusOptions.inactive')}
                 </span>
               </div>
             </div>
             <div className="text-sm text-gray-500">
-              Joined: {professionalData.createdAt ? formatDate(professionalData.createdAt) : 'Not available'}
+              {t('professionals.detailPage.joined', {
+                date: professionalData.createdAt
+                  ? formatDate(professionalData.createdAt)
+                  : t('professionals.detailPage.notAvailable'),
+              })}
             </div>
           </div>
         </div>
@@ -236,8 +260,8 @@ function ProfessionalViewContent() {
               <Calendar className="w-6 h-6 text-blue-600" />
             </div>
             <div>
-              <p className="font-medium text-gray-900">View Schedule</p>
-              <p className="text-sm text-gray-500">View professional availability</p>
+              <p className="font-medium text-gray-900">{t('professionals.detailPage.viewSchedule')}</p>
+              <p className="text-sm text-gray-500">{t('professionals.detailPage.viewScheduleDesc')}</p>
             </div>
           </div>
         </div>
@@ -247,8 +271,8 @@ function ProfessionalViewContent() {
               <User className="w-6 h-6 text-green-600" />
             </div>
             <div>
-              <p className="font-medium text-gray-900">Client List</p>
-              <p className="text-sm text-gray-500">View assigned clients</p>
+              <p className="font-medium text-gray-900">{t('professionals.detailPage.clientList')}</p>
+              <p className="text-sm text-gray-500">{t('professionals.detailPage.clientListDesc')}</p>
             </div>
           </div>
         </div>
@@ -258,8 +282,8 @@ function ProfessionalViewContent() {
               <User className="w-6 h-6 text-red-600" />
             </div>
             <div>
-              <p className="font-medium text-red-900">Deactivate</p>
-              <p className="text-sm text-gray-500">Disable professional access</p>
+              <p className="font-medium text-red-900">{t('professionals.detailPage.deactivate')}</p>
+              <p className="text-sm text-gray-500">{t('professionals.detailPage.deactivateDesc')}</p>
             </div>
           </div>
         </div>
