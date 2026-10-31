@@ -52,6 +52,8 @@ import { normalizePhone, phoneKey } from "../common/phone";
 import { isReadOnlyStatus } from "../common/guards/read-only-tenant.guard";
 import type { OnlineBookingDto } from "./dto/book-appointment.dto";
 import { UpdateAppointmentDto } from "./dto/update-appointment.dto";
+import { appointmentDeleteBlocker, deleteAppointmentRow } from "./appointment-delete";
+import { isForeignKeyViolation } from "../common/prisma/history-deletes";
 
 interface AppointmentActivity {
   action: string;
@@ -1584,11 +1586,26 @@ export class AppointmentsService {
     return { appointmentId: appointment.id, moved: changed.length, scheduledDate: day, scheduledTime: time, duration };
   }
 
+  /**
+   * Hard delete, only for an appointment that is not history yet: completed,
+   * paid or invoiced ones are refused with a 409 that says to cancel instead.
+   * See appointment-delete.ts.
+   */
   async remove(user: any, id: string) {
     const appointment = await this.findOne(user, id);
-    await this.prisma.appointment.delete({
-      where: { id },
-    });
+    const blocker = await appointmentDeleteBlocker(this.prisma, appointment);
+    if (blocker) throw new ConflictException(blocker);
+    try {
+      await deleteAppointmentRow(this.prisma, id);
+    } catch (error) {
+      // A payment recorded between the check and the delete.
+      if (isForeignKeyViolation(error)) {
+        throw new ConflictException(
+          "No se puede eliminar una cita con pagos registrados: forma parte de la contabilidad. Cancélala en su lugar.",
+        );
+      }
+      throw error;
+    }
   }
 
   async getAppointmentActivity(user: any, appointmentId: string) {

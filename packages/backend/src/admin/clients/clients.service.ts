@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { deleteClientKeepingHistory } from '../../common/prisma/history-deletes';
 import { CreateClientDto, UpdateClientDto } from './dto';
 import { Client, ClientStatus } from '@prisma/client';
 
@@ -128,17 +129,9 @@ export class AdminClientsService {
     }
   }
 
+  /** History survives the delete: see common/prisma/history-deletes.ts. */
   async remove(tenantId: string, id: string) {
-    try {
-      return await this.prisma.client.delete({
-        where: { id, tenantId },
-      });
-    } catch (error) {
-      if (error.code === 'P2025') {
-        throw new NotFoundException('Client not found');
-      }
-      throw new BadRequestException('Failed to delete client');
-    }
+    return deleteClientKeepingHistory(this.prisma, tenantId, id);
   }
 
   async search(tenantId: string, query: string) {

@@ -101,7 +101,7 @@ export class ProfessionalsController {
     description: "Professional deleted successfully",
   })
   @ApiResponse({ status: 404, description: "Professional not found" })
-  async remove(@Param("id", ParseUUIDPipe) id: string) {
-    return this.professionalsService.remove(id);
+  async remove(@CurrentUser() user: any, @Param("id", ParseUUIDPipe) id: string) {
+    return this.professionalsService.remove(user.tenantId, id);
   }
 }
