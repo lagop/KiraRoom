@@ -33,6 +33,7 @@ interface Row {
   startTime?: string | null;
   endTime?: string | null;
   note?: string | null;
+  status?: string;
 }
 
 function build(opts: {
@@ -150,6 +151,25 @@ describe("availability with a professional's time off", () => {
 
   it("even when no schedule is recorded for them", async () => {
     expect(await named({ professionals: [{ id: ANA }], timeOff: [vacation] })).toEqual([]);
+  });
+
+  it("a request still pending, or rejected, takes nothing out of the day", async () => {
+    // The mock answers whatever matches the dates: the rules ignore it all the same.
+    for (const status of ["pending", "rejected"]) {
+      expect(
+        await named({ professionals: [{ id: ANA, workingHours: MON_10_TO_14 }], timeOff: [{ ...vacation, status }] }),
+      ).toEqual(await named({ professionals: [{ id: ANA, workingHours: MON_10_TO_14 }] }));
+    }
+    expect(await named({ professionals: [{ id: ANA, workingHours: MON_10_TO_14 }] })).not.toEqual([]);
+    const { svc, prisma } = build({ professionals: [{ id: ANA }] });
+    await svc.getAvailableSlots(TENANT_ID, new Date(`${MONDAY}T00:00:00.000Z`), ANA, SERVICE_ID);
+    expect(prisma.timeOff.findMany.mock.calls[0][0].where.status).toBe("approved");
+  });
+
+  it("once approved, it does", async () => {
+    expect(
+      await named({ professionals: [{ id: ANA, workingHours: MON_10_TO_14 }], timeOff: [{ ...vacation, status: "approved" }] }),
+    ).toEqual([]);
   });
 
   it("any professional: a colleague still covers the day", async () => {

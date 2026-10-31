@@ -228,6 +228,7 @@ console.log("time off bands");
     startTime: null as string | null,
     endTime: null as string | null,
     note: null as string | null,
+    status: undefined as "approved" | "pending" | "rejected" | undefined,
     ...b,
   });
   check(
@@ -269,6 +270,29 @@ console.log("time off bands");
     timeOffBands("2026-12-14", "ana", [{ ...closure, note: null }], range)[0]?.label === "Salón cerrado",
   );
   check("the salon's all-day closure is found for the banner", salonClosureOn("2026-12-14", [block({}), closure]) === closure);
+  check(
+    "a pending request is drawn apart, as Pendiente, and a rejected one not at all",
+    same(timeOffBands("2026-12-14", "ana", [block({ status: "pending" }), block({ status: "rejected", kind: "day_off" })], range), [
+      { start: 540, end: 1200, label: "Pendiente · Vacaciones", salon: false, pending: true },
+    ]),
+    timeOffBands("2026-12-14", "ana", [block({ status: "pending" }), block({ status: "rejected" })], range),
+  );
+  check(
+    "an approved block is drawn as before, above a pending one",
+    same(
+      timeOffBands("2026-12-14", "ana", [block({ status: "pending", kind: "day_off" }), block({ status: "approved", kind: "other", startTime: "10:00", endTime: "11:00" })], range).map(
+        (b) => [b.label, !!b.pending],
+      ),
+      [
+        ["Ausencia", false],
+        ["Pendiente · Día libre", true],
+      ],
+    ),
+  );
+  check(
+    "a pending closure (never sent) would not close the day",
+    salonClosureOn("2026-12-14", [{ ...closure, status: "pending" }]) === null,
+  );
   check(
     "a partial closure is not a closed day",
     salonClosureOn("2026-12-14", [{ ...closure, startTime: "14:00", endTime: "20:00" }]) === null,

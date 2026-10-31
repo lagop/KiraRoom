@@ -66,7 +66,11 @@ const fullName = (p?: { firstName?: string | null; lastName?: string | null } | 
 export class TimeOffService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** The salon's blocks touching `from`..`to`, the salon's closures included. */
+  /**
+   * The salon's blocks touching `from`..`to`, the salon's closures included:
+   * approved ones only, what blocks the agenda. Whoever runs the salon may
+   * ask for the pending requests too (the calendar marks them).
+   */
   async list(user: TimeOffUser, query: TimeOffQueryDto) {
     if (query.to < query.from) throw new BadRequestException("La fecha final no puede ser anterior a la inicial.");
     const days = daysInRange(query.from, query.to);
@@ -78,13 +82,14 @@ export class TimeOffService {
         tenantId: user.tenantId,
         startDate: { lte: dateOfDay(query.to)! },
         endDate: { gte: dateOfDay(query.from)! },
+        status: isManager(user) && query.includePending ? { in: ["approved", "pending"] } : "approved",
         ...(query.professionalId ? { professionalId: query.professionalId } : {}),
       },
       include: { professional: { select: { firstName: true, lastName: true } } },
       orderBy: [{ startDate: "asc" }, { startTime: "asc" }],
     });
-    const staff = !isManager(user);
-    return rows.map((row) => this.view(row, staff));
+    const audience: TimeOffAudience = isManager(user) ? "manager" : "colleague";
+    return rows.map((row) => timeOffView(row, audience));
   }
 
   /** The appointments a block would clash with, before it is saved. */
@@ -106,10 +111,12 @@ export class TimeOffService {
         endTime: input.endTime ?? null,
         note: input.note ?? null,
         createdById: user.id,
+        // What the salon records is decided already.
+        status: "approved",
       },
       include: { professional: { select: { firstName: true, lastName: true } } },
     });
-    return { timeOff: this.view(row, false), conflicts: await this.conflicts(user.tenantId, input) };
+    return { timeOff: timeOffView(row, "manager"), conflicts: await this.conflicts(user.tenantId, input) };
   }
 
   async update(user: TimeOffUser, id: string, dto: UpdateTimeOffDto) {
@@ -141,7 +148,7 @@ export class TimeOffService {
       },
       include: { professional: { select: { firstName: true, lastName: true } } },
     });
-    return { timeOff: this.view(row, false), conflicts: await this.conflicts(user.tenantId, input) };
+    return { timeOff: timeOffView(row, "manager"), conflicts: await this.conflicts(user.tenantId, input) };
   }
 
   /** Hard delete: a removed absence frees its time again, nothing else refers to it. */
@@ -256,34 +263,51 @@ export class TimeOffService {
     }
     return input;
   }
-
-  /**
-   * A block as the API answers it. Staff see who is away and when, the salon's
-   * closures with their note, but not the note on a colleague's absence: why
-   * someone is away (a medical appointment) is for whoever runs the salon.
-   *
-   * Nor do they see that it is sick leave: that a colleague is ill is health
-   * data (GDPR art. 9), so to staff it is just an absence ("Ausencia").
-   */
-  private view(row: any, staff: boolean) {
-    const personal = row.professionalId !== null;
-    const kind = staff && row.kind === "sick_leave" ? "other" : row.kind;
-    return {
-      id: row.id,
-      professionalId: row.professionalId,
-      professionalName: personal ? fullName(row.professional) || null : null,
-      kind,
-      startDate: dayOf(row.startDate),
-      endDate: dayOf(row.endDate),
-      startTime: row.startTime ?? null,
-      endTime: row.endTime ?? null,
-      ...(staff && personal ? {} : { note: row.note ?? null }),
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
-    };
-  }
 }
 
-function isManager(user: TimeOffUser): boolean {
+/**
+ * Who reads a block: whoever runs the salon, the professional it is about
+ * (their own requests and absences), or a colleague (the calendar).
+ */
+export type TimeOffAudience = "manager" | "self" | "colleague";
+
+/**
+ * A block as the API answers it. Staff see who is away and when, the salon's
+ * closures with their note, but not the note on a colleague's absence: why
+ * someone is away (a medical appointment) is for whoever runs the salon.
+ *
+ * Nor do they see that it is sick leave: that a colleague is ill is health
+ * data (GDPR art. 9), so to staff it is just an absence ("Ausencia"). Their
+ * own absences they see as they are, notes and the answer to a request
+ * included.
+ */
+export function timeOffView(row: any, audience: TimeOffAudience) {
+  const personal = row.professionalId !== null;
+  const colleague = audience === "colleague";
+  const kind = colleague && row.kind === "sick_leave" ? "other" : row.kind;
+  return {
+    id: row.id,
+    professionalId: row.professionalId,
+    professionalName: personal ? fullName(row.professional) || null : null,
+    kind,
+    status: row.status ?? "approved",
+    startDate: dayOf(row.startDate),
+    endDate: dayOf(row.endDate),
+    startTime: row.startTime ?? null,
+    endTime: row.endTime ?? null,
+    ...(colleague && personal ? {} : { note: row.note ?? null }),
+    ...(colleague
+      ? {}
+      : {
+          requested: !!row.requestedById,
+          decidedAt: row.decidedAt ?? null,
+          decisionNote: row.decisionNote ?? null,
+        }),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+export function isManager(user: TimeOffUser): boolean {
   return user.role === "owner" || user.role === "admin";
 }

@@ -12,12 +12,13 @@ export const TIME_OFF_SELECT = {
   startTime: true,
   endTime: true,
   note: true,
+  status: true,
 } as const;
 
 /**
- * The salon's time off and closures that touch the days `from` to `to`
- * ("YYYY-MM-DD", inclusive), everyone's: the callers pick what applies with
- * dayBlocks. Filtered by tenant here as well as by the client extension,
+ * The salon's approved time off and closures that touch the days `from` to
+ * `to` ("YYYY-MM-DD", inclusive), everyone's: the callers pick what applies
+ * with dayBlocks. A request still pending or rejected blocks nothing. Filtered by tenant here as well as by the client extension,
  * like every other query on a booking path.
  */
 export async function timeOffBetween(
@@ -30,7 +31,7 @@ export async function timeOffBetween(
   const toDate = dateOfDay(to);
   if (!fromDate || !toDate) return [];
   return prisma.timeOff.findMany({
-    where: { tenantId, startDate: { lte: toDate }, endDate: { gte: fromDate } },
+    where: { tenantId, status: "approved", startDate: { lte: toDate }, endDate: { gte: fromDate } },
     select: TIME_OFF_SELECT,
   });
 }

@@ -129,26 +129,42 @@ export const ProfessionalColumn: React.FC<ProfessionalColumnProps> = ({
             }}
           />
         ))}
-        {away.map((band, i) => (
-          <div
-            key={`away-${i}`}
-            data-test="time-off"
-            title={band.label}
-            className={`absolute inset-x-0 pointer-events-none overflow-hidden border-y ${
-              band.salon ? "bg-amber-100/70 border-amber-200" : "bg-slate-200/70 border-slate-300"
-            }`}
-            style={{
-              top: minutesToTop(band.start, hours.startHour),
-              height: ((band.end - band.start) / 15) * SLOT_HEIGHT,
-              backgroundImage:
-                "repeating-linear-gradient(135deg, transparent 0 8px, rgba(100,116,139,0.12) 8px 16px)",
-            }}
-          >
-            <span className="block px-2 py-1 text-xs font-medium text-slate-700 truncate">
-              {band.label}
-            </span>
-          </div>
-        ))}
+        {away.map((band, i) =>
+          band.pending ? (
+            // A request not yet answered: light and dashed, it blocks nothing.
+            <div
+              key={`away-${i}`}
+              data-test="time-off-pending"
+              title={`${band.label} (sin aprobar: no bloquea la agenda)`}
+              className="absolute inset-x-1 pointer-events-none overflow-hidden rounded border border-dashed border-amber-400 bg-amber-50/40"
+              style={{
+                top: minutesToTop(band.start, hours.startHour),
+                height: ((band.end - band.start) / 15) * SLOT_HEIGHT,
+              }}
+            >
+              <span className="block px-2 py-1 text-xs font-medium text-amber-800 truncate">{band.label}</span>
+            </div>
+          ) : (
+            <div
+              key={`away-${i}`}
+              data-test="time-off"
+              title={band.label}
+              className={`absolute inset-x-0 pointer-events-none overflow-hidden border-y ${
+                band.salon ? "bg-amber-100/70 border-amber-200" : "bg-slate-200/70 border-slate-300"
+              }`}
+              style={{
+                top: minutesToTop(band.start, hours.startHour),
+                height: ((band.end - band.start) / 15) * SLOT_HEIGHT,
+                backgroundImage:
+                  "repeating-linear-gradient(135deg, transparent 0 8px, rgba(100,116,139,0.12) 8px 16px)",
+              }}
+            >
+              <span className="block px-2 py-1 text-xs font-medium text-slate-700 truncate">
+                {band.label}
+              </span>
+            </div>
+          ),
+        )}
         {released.map((appointment) => (
           <AppointmentBlock
             key={appointment.id}
