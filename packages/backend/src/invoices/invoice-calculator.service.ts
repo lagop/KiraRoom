@@ -25,6 +25,15 @@ export interface InvoiceLineInput {
    * the net one, like any other line. Default false: the tax is added on top.
    */
   taxIncluded?: boolean;
+  /**
+   * Amounts already worked out, taken as they are: a rectification
+   * crediting a stored line (rectification-lines.ts), whose base, tax and
+   * total have to be exactly the original's, negated, rather than
+   * recomputed from its rounded net unit price (10,00 EUR with 21 % included
+   * is stored at 8,26 a unit; 8,26 + 21 % on top is 9,99). With it,
+   * unitPriceCents is the stored net one and discountPct is kept as given.
+   */
+  fixed?: { taxCents: number; totalCents: number };
 }
 
 export interface ComputedInvoiceLine {
@@ -37,6 +46,8 @@ export interface ComputedInvoiceLine {
   totalCents: number;
   productId?: string;
   serviceId?: string;
+  /** The line's price was given with the tax included (stored on InvoiceLine). */
+  taxIncluded: boolean;
 }
 
 export interface TaxBreakdownEntry {
@@ -67,6 +78,7 @@ export class InvoiceCalculator {
     }
 
     const lines: ComputedInvoiceLine[] = input.map((l) => {
+      if (l.fixed) return fixedLine(l);
       if ((l.discountCents ?? 0) > 0) return amountDiscountLine(l);
       const discountPct = clampNumber(l.discountPct ?? 0, 0, 100);
       if (l.taxIncluded) return taxIncludedLine(l, discountPct);
@@ -86,6 +98,7 @@ export class InvoiceCalculator {
         totalCents,
         productId: l.productId,
         serviceId: l.serviceId,
+        taxIncluded: false,
       };
     });
 
@@ -118,6 +131,24 @@ function taxIncludedLine(l: InvoiceLineInput, discountPct: number): ComputedInvo
     totalCents: grossCents,
     productId: l.productId,
     serviceId: l.serviceId,
+    taxIncluded: true,
+  };
+}
+
+/** A line whose amounts were worked out already (InvoiceLineInput.fixed). */
+function fixedLine(l: InvoiceLineInput): ComputedInvoiceLine {
+  const fixed = l.fixed as { taxCents: number; totalCents: number };
+  return {
+    description: l.description,
+    quantity: l.quantity,
+    unitPriceCents: l.unitPriceCents,
+    discountPct: clampNumber(l.discountPct ?? 0, 0, 100),
+    taxRate: l.taxRate,
+    taxCents: fixed.taxCents,
+    totalCents: fixed.totalCents,
+    productId: l.productId,
+    serviceId: l.serviceId,
+    taxIncluded: l.taxIncluded === true,
   };
 }
 
@@ -155,6 +186,7 @@ function amountDiscountLine(l: InvoiceLineInput): ComputedInvoiceLine {
     totalCents: base + taxCents,
     productId: l.productId,
     serviceId: l.serviceId,
+    taxIncluded: l.taxIncluded === true,
   };
 }
 

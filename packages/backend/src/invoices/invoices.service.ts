@@ -14,6 +14,7 @@ import { appointmentInvoiceLines } from "./appointment-invoice-pricing";
 import { pricesIncludeTaxOf, productTaxRatePercent, salonTaxRate } from "./salon-tax-settings";
 import { addonServices } from "../appointments/visit-sync";
 import { allocateCents } from "../pos/pos-discounts";
+import { rectificationLines, type RectificationLineRequest } from "./rectification-lines";
 
 interface CreateInvoiceInput {
   tenantId: string;
@@ -35,6 +36,8 @@ interface CreateInvoiceInput {
     productId?: string;
     serviceId?: string;
     taxIncluded?: boolean;
+    /** Amounts taken as they are (InvoiceLineInput.fixed): a rectification. */
+    fixed?: { taxCents: number; totalCents: number };
   }>;
   notes?: string;
   /**
@@ -111,6 +114,7 @@ export class InvoiceService {
             totalCents: l.totalCents,
             productId: l.productId,
             serviceId: l.serviceId,
+            taxIncluded: l.taxIncluded,
           })),
         },
       },
@@ -287,18 +291,14 @@ export class InvoiceService {
   /**
    * Rectify: creates a NEW invoice with series="R" referencing the
    * original, marked with the negative amount delta. Used for partial
-   * refunds, discounts, etc.
+   * refunds, discounts, etc. No lines: the whole original, each line's
+   * stored amounts negated, so the two net to zero. Lines that name an
+   * original line credit it from its stored amounts (rectification-lines.ts).
    */
   async emitRectification(
     tenantId: string,
     originalInvoiceId: string,
-    lines: Array<{
-      description: string;
-      quantity: number;
-      unitPriceCents: number;
-      discountPct?: number;
-      taxRate: number;
-    }>,
+    lines: RectificationLineRequest[] | undefined,
     reason: string,
   ): Promise<{ id: string }> {
     const original = await this.findOne(tenantId, originalInvoiceId);
@@ -309,7 +309,7 @@ export class InvoiceService {
       recipientId: original.recipientId ?? undefined,
       recipientName: original.recipientName,
       recipientTaxId: original.recipientTaxId ?? undefined,
-      lines,
+      lines: rectificationLines(original.lines ?? [], lines),
       notes: `Rectificación de ${original.series}${original.number}: ${reason}`,
     });
   }

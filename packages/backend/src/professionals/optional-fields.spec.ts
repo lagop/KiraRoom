@@ -1,6 +1,7 @@
 import { ProfessionalsController } from "./professionals.controller";
 import { ProfessionalsService } from "./professionals.service";
 import { AdminProfessionalsService } from "../admin/professionals/professionals.service";
+import { AdminProfessionalsController } from "../admin/professionals/professionals.controller";
 import { bodyParser } from "../common/validation/validated-body.testing";
 import { commissionRateUpdate, optionalDateUpdate } from "./optional-fields";
 
@@ -114,5 +115,52 @@ describe("POST /admin/professionals (AdminProfessionalsService.create)", () => {
     const svc = new AdminProfessionalsService(prisma);
     await svc.create({ tenantId: "t1", firstName: "Ana", lastName: "G", email: "a@salon.test", commissionRate: 0 } as any);
     expect(create.mock.calls[0][0].data.commissionRate).toBe(0);
+  });
+});
+
+/**
+ * The professionals list's edit modal (dashboard/professionals/page.tsx)
+ * saves through PATCH /admin/professionals/:id: 0 sets a rate of 0, null
+ * clears it, left out keeps it.
+ */
+describe("PATCH /admin/professionals/:id (AdminProfessionalsController.update)", () => {
+  const parse = bodyParser(AdminProfessionalsController, "update");
+
+  it("the body takes 0 and null, and leaves the rate out when not sent", async () => {
+    expect((await parse({ commissionRate: 0 })).commissionRate).toBe(0);
+    expect((await parse({ commissionRate: 12.5 })).commissionRate).toBe(12.5);
+    expect((await parse({ commissionRate: null })).commissionRate).toBeNull();
+    expect("commissionRate" in (await parse({ phone: "+34600000000" }))).toBe(false);
+  });
+
+  it("refuses a rate that is not a number", async () => {
+    await expect(parse({ commissionRate: "abc" })).rejects.toBeDefined();
+  });
+
+  function adminSetup() {
+    const update = jest.fn(async (args: any) => ({ id: "pro-1", commissionRate: 40, ...args.data }));
+    const prisma: any = {
+      professional: { update, findFirst: async () => ({ isActive: true }) },
+      professionalService: { deleteMany: jest.fn(), createMany: jest.fn() },
+    };
+    return { svc: new AdminProfessionalsService(prisma), update };
+  }
+
+  it("stores 0 as 0", async () => {
+    const { svc, update } = adminSetup();
+    await svc.update("t1", "pro-1", { commissionRate: 0 } as any);
+    expect(update.mock.calls[0][0].data.commissionRate).toBe(0);
+  });
+
+  it("clears the rate with null", async () => {
+    const { svc, update } = adminSetup();
+    await svc.update("t1", "pro-1", { commissionRate: null } as any);
+    expect(update.mock.calls[0][0].data.commissionRate).toBeNull();
+  });
+
+  it("keeps the rate when the update does not mention it", async () => {
+    const { svc, update } = adminSetup();
+    await svc.update("t1", "pro-1", { isActive: true, phone: "+34600000000" } as any);
+    expect(update.mock.calls[0][0].data).not.toHaveProperty("commissionRate");
   });
 });

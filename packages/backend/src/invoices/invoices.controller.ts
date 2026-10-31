@@ -79,6 +79,8 @@ export class InvoicesController {
       lines: dto.lines.map((l) => ({
         ...l,
         discountPct: l.discountPct ?? 0,
+        // Explicit: only true includes the tax; left out is on top.
+        taxIncluded: l.taxIncluded === true,
       })),
     });
   }
@@ -113,7 +115,10 @@ export class InvoicesController {
     return this.invoices.emitRectification(
       this.requireTenantId(req),
       id,
-      body.lines.map((l) => ({
+      // Left out: the whole invoice. A line with originalLineId credits that
+      // line of the original, from its stored amounts (rectification-lines.ts).
+      body.lines?.map((l) => ({
+        originalLineId: l.originalLineId,
         description: l.description,
         quantity: l.quantity,
         unitPriceCents: l.unitPriceCents,

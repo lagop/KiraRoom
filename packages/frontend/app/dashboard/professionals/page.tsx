@@ -11,6 +11,11 @@ import { useToast } from "@/components/ui/use-toast";
 import { useTranslations } from "@/lib/use-translation";
 import { PanelAccessBlock } from "@/src/components/team/panel-access";
 import type { PanelAccess } from "@/lib/panel-access";
+import {
+  commissionRateFieldValue,
+  commissionRateForCreate,
+  commissionRateForUpdate,
+} from "@/lib/commission-rate-field";
 
 // Local type definitions
 interface Service {
@@ -32,7 +37,8 @@ interface Professional {
   bio?: string;
   specialties: string[];
   position?: string;
-  commissionRate?: number;
+  /** Percent; Prisma's Decimal arrives as a string. None: the salon's default applies. */
+  commissionRate?: number | string | null;
   hireDate?: string;
   isActive: boolean;
   services?: {
@@ -67,11 +73,14 @@ function ProfessionalsPageContent() {
     bio: "",
     specialties: "",
     position: "",
-    commissionRate: 0,
+    commissionRate: "",
     hireDate: "",
     isActive: true,
     serviceIds: [] as string[],
   });
+
+  // The rate as the modal opened it: an update sends it only when changed.
+  const [initialCommissionRate, setInitialCommissionRate] = useState("");
 
   // Password change dialog state
   const [showPasswordDialog, setShowPasswordDialog] = useState(false);
@@ -172,8 +181,13 @@ function ProfessionalsPageContent() {
         if (specialtiesArray.length > 0)
           updateData.specialties = specialtiesArray;
         if (formData.position) updateData.position = formData.position;
-        if (formData.commissionRate)
-          updateData.commissionRate = formData.commissionRate;
+        // 0 is a rate, emptied clears it (null), untouched is left out.
+        const commissionRate = commissionRateForUpdate(
+          formData.commissionRate,
+          initialCommissionRate,
+        );
+        if (commissionRate !== undefined)
+          updateData.commissionRate = commissionRate;
         if (formData.hireDate) updateData.hireDate = formData.hireDate;
         updateData.isActive = formData.isActive;
         if (formData.serviceIds.length > 0)
@@ -193,7 +207,7 @@ function ProfessionalsPageContent() {
           bio: formData.bio || undefined,
           specialties: specialtiesArray,
           position: formData.position || undefined,
-          commissionRate: formData.commissionRate || undefined,
+          commissionRate: commissionRateForCreate(formData.commissionRate),
           hireDate: formData.hireDate ? new Date(formData.hireDate) : undefined,
           serviceIds: formData.serviceIds,
         });
@@ -210,7 +224,7 @@ function ProfessionalsPageContent() {
         bio: "",
         specialties: "",
         position: "",
-        commissionRate: 0,
+        commissionRate: "",
         hireDate: "",
         isActive: true,
         serviceIds: [],
@@ -242,6 +256,7 @@ function ProfessionalsPageContent() {
     console.log("extracted serviceIds:", serviceIds);
 
     setEditingProfessional(professional);
+    setInitialCommissionRate(commissionRateFieldValue(professional.commissionRate));
     setFormData({
       firstName: professional.firstName,
       lastName: professional.lastName,
@@ -251,7 +266,7 @@ function ProfessionalsPageContent() {
       bio: professional.bio || "",
       specialties: professional.specialties.join(", "),
       position: professional.position || "",
-      commissionRate: professional.commissionRate || 0,
+      commissionRate: commissionRateFieldValue(professional.commissionRate),
       hireDate: professional.hireDate
         ? professional.hireDate.split("T")[0]
         : "",
@@ -344,7 +359,7 @@ function ProfessionalsPageContent() {
       bio: "",
       specialties: "",
       position: "",
-      commissionRate: 0,
+      commissionRate: "",
       hireDate: "",
       isActive: true,
       serviceIds: [],
@@ -696,12 +711,13 @@ function ProfessionalsPageContent() {
                     onChange={(e) =>
                       setFormData({
                         ...formData,
-                        commissionRate: parseInt(e.target.value),
+                        commissionRate: e.target.value,
                       })
                     }
-                    placeholder="0"
+                    placeholder={t("professionals.commission_rate_empty")}
                     min="0"
                     max="100"
+                    step="0.01"
                   />
                 </div>
               </div>
