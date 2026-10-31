@@ -3,6 +3,10 @@ export type Professional = {
   id: string;
   name: string;
   avatarUrl?: string;
+  /** Staff are sent the salon's inactive professionals too. */
+  isActive?: boolean;
+  /** `[{ day: "monday", openTime: "09:00", closeTime: "18:00" }]`, when known. */
+  workingHours?: unknown[];
 };
 
 export type Appointment = {

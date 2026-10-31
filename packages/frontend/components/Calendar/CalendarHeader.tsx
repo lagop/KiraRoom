@@ -5,12 +5,12 @@ import { es } from "date-fns/locale";
 import { ChevronLeft, ChevronRight, Calendar, LayoutGrid, List } from "lucide-react";
 import { Button } from "@/src/components/ui/Button";
 import { MonthPicker } from "./MonthPicker";
-import { Professional } from "./types";
+import { dateOfDay, localDay, shiftDay } from "./day-grid";
 
 interface CalendarHeaderProps {
-  selectedDate: Date;
-  onDateChange: (date: Date) => void;
-  professionals: Professional[];
+  /** The day shown, "yyyy-MM-dd". */
+  day: string;
+  onDayChange: (day: string) => void;
   /**
    * Two layouts share this calendar surface:
    *   - "day":    full grid with professional columns.
@@ -20,43 +20,43 @@ interface CalendarHeaderProps {
    */
   mode?: "day" | "agenda";
   onModeChange?: (mode: "day" | "agenda") => void;
+  t: (key: string, params?: Record<string, any>) => string;
 }
 
 export const CalendarHeader: React.FC<CalendarHeaderProps> = ({
-  selectedDate,
-  onDateChange,
-  professionals,
+  day,
+  onDayChange,
   mode = "day",
   onModeChange,
+  t,
 }) => {
+  // Days move by the calendar, not by 24 hours: a day with a clock change
+  // is 23 or 25 hours long (see day-grid.ts).
+  const selectedDate = dateOfDay(day);
   return (
     <div className="flex flex-col gap-3 p-4 border-b bg-card sm:flex-row sm:items-center sm:justify-between">
       <div className="flex items-center gap-2 flex-wrap">
         <Button
           variant="outline"
           size="icon"
-          aria-label="Día anterior"
-          onClick={() => {
-            const newDate = new Date(selectedDate);
-            newDate.setDate(newDate.getDate() - 1);
-            onDateChange(newDate);
-          }}
+          aria-label={t("appointments.calendarView.prevDay")}
+          onClick={() => onDayChange(shiftDay(day, -1))}
         >
           <ChevronLeft className="h-4 w-4" />
         </Button>
         <Button
           variant="outline"
           size="icon"
-          aria-label="Día siguiente"
-          onClick={() => {
-            const newDate = new Date(selectedDate);
-            newDate.setDate(newDate.getDate() + 1);
-            onDateChange(newDate);
-          }}
+          aria-label={t("appointments.calendarView.nextDay")}
+          onClick={() => onDayChange(shiftDay(day, 1))}
         >
           <ChevronRight className="h-4 w-4" />
         </Button>
-        <MonthPicker selected={selectedDate} onSelect={onDateChange} />
+        <MonthPicker
+          selected={selectedDate}
+          onSelect={(date) => onDayChange(localDay(date))}
+          label={t("appointments.calendarView.pickDay")}
+        />
         <div className="ml-0 sm:ml-4">
           <h2 className="text-lg sm:text-2xl font-bold capitalize">
             {format(selectedDate, "EEEE d", { locale: es })}
@@ -71,7 +71,7 @@ export const CalendarHeader: React.FC<CalendarHeaderProps> = ({
           <div className="inline-flex rounded-md border border-input bg-background p-0.5 text-xs">
             <button
               type="button"
-              aria-label="Vista agenda"
+              aria-label={t("appointments.calendarView.agendaView")}
               aria-pressed={mode === "agenda"}
               onClick={() => onModeChange("agenda")}
               className={`inline-flex items-center gap-1 rounded-sm px-2 py-1 transition-colors ${
@@ -81,11 +81,11 @@ export const CalendarHeader: React.FC<CalendarHeaderProps> = ({
               }`}
             >
               <List className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Agenda</span>
+              <span className="hidden sm:inline">{t("appointments.calendarView.agenda")}</span>
             </button>
             <button
               type="button"
-              aria-label="Vista cuadrícula"
+              aria-label={t("appointments.calendarView.gridView")}
               aria-pressed={mode === "day"}
               onClick={() => onModeChange("day")}
               className={`inline-flex items-center gap-1 rounded-sm px-2 py-1 transition-colors ${
@@ -95,13 +95,18 @@ export const CalendarHeader: React.FC<CalendarHeaderProps> = ({
               }`}
             >
               <LayoutGrid className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Día</span>
+              <span className="hidden sm:inline">{t("appointments.calendarView.day")}</span>
             </button>
           </div>
         )}
-        <Button variant="outline" size="sm" onClick={() => onDateChange(new Date())}>
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label={t("appointments.calendarView.today")}
+          onClick={() => onDayChange(localDay())}
+        >
           <Calendar className="h-4 w-4 sm:mr-2" />
-          <span className="hidden sm:inline">Hoy</span>
+          <span className="hidden sm:inline">{t("appointments.calendarView.today")}</span>
         </Button>
       </div>
     </div>

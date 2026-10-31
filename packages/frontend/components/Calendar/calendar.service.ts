@@ -1,6 +1,7 @@
 // components/calendar/calendar.service.ts
 import apiClient, { Appointment, Professional as ApiProfessional, Client, Service, AppointmentService } from '../../lib/api';
-import { dayQueryRange, FALLBACK_SALON_TIMEZONE, pickedDay, salonInstant } from './salon-time';
+import { dayQueryRange, FALLBACK_SALON_TIMEZONE, salonInstant } from './salon-time';
+import { isBreakService } from './day-grid';
 
 // Extended appointment type that includes populated relationships
 interface PopulatedAppointment extends Appointment {
@@ -11,13 +12,13 @@ interface PopulatedAppointment extends Appointment {
 }
 
 // The salon is the caller's, from the token: no tenantId is sent.
-// `date` stands for a day of the salon's calendar (see pickedDay).
-export const fetchCalendarData = async (date: Date) => {
+// `day` ("YYYY-MM-DD") is a day of the salon's calendar.
+export const fetchCalendarData = async (day: string) => {
   try {
-    const appointments = await apiClient.getAppointments(dayQueryRange(pickedDay(date)));
-
-    // Fetch professionals for the tenant
-    const professionals = await apiClient.getProfessionalsPublic();
+    const [appointments, professionals] = await Promise.all([
+      apiClient.getAppointments(dayQueryRange(day)),
+      apiClient.getProfessionalsPublic(),
+    ]);
 
     return { appointments, professionals };
   } catch (error) {
@@ -30,14 +31,25 @@ export const fetchCalendarData = async (date: Date) => {
   }
 };
 
-/** The salon's own zone (Tenant.timezone): the calendar draws its clock. */
-export const fetchSalonTimeZone = async (): Promise<string> => {
+export interface SalonSettings {
+  /** The salon's own zone (Tenant.timezone): the calendar draws its clock. */
+  timeZone: string;
+  /** Tenant.openingHours: one `{ open, close }` for the week, when set. */
+  openingHours: { open?: unknown; close?: unknown } | null;
+}
+
+/** What the calendar needs from the salon, asked for once. */
+export const fetchSalonSettings = async (): Promise<SalonSettings> => {
   try {
     const tenant = await apiClient.getTenant();
-    return tenant.timezone || FALLBACK_SALON_TIMEZONE;
+    const hours = tenant.openingHours;
+    return {
+      timeZone: tenant.timezone || FALLBACK_SALON_TIMEZONE,
+      openingHours: hours && typeof hours === 'object' ? (hours as SalonSettings['openingHours']) : null,
+    };
   } catch (error) {
-    console.error('Error fetching the salon time zone:', error);
-    return FALLBACK_SALON_TIMEZONE;
+    console.error('Error fetching the salon settings:', error);
+    return { timeZone: FALLBACK_SALON_TIMEZONE, openingHours: null };
   }
 };
 
@@ -89,12 +101,9 @@ export const transformToCalendarFormat = (
     // Determine appointment type
     let type: "appointment" | "lunch" | "blocked" = "appointment";
     
-    // If the service name contains "lunch" or "break", mark as lunch
-    if (appointment.service && typeof appointment.service === 'object') {
-      if (appointment.service.name.toLowerCase().includes('lunch') ||
-          appointment.service.name.toLowerCase().includes('break')) {
-        type = "lunch";
-      }
+    // A lunch or a break, by the service's name (in Spanish or English).
+    if (appointment.service && typeof appointment.service === 'object' && isBreakService(appointment.service.name)) {
+      type = "lunch";
     }
     
     // Handle multi-service appointments with different professionals
@@ -191,6 +200,9 @@ export const transformToCalendarFormat = (
     // to initials. This used to load a random stranger from i.pravatar.cc,
     // sending each professional id to that third party.
     avatarUrl: professional.profileImage || undefined,
+    isActive: professional.isActive,
+    // Staff receive the full row, with the hours the onboarding stores.
+    workingHours: Array.isArray((professional as any).workingHours) ? (professional as any).workingHours : undefined,
   }));
   
   return { appointments: calendarAppointments, professionals: calendarProfessionals };
