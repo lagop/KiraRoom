@@ -4633,6 +4633,8 @@ class ApiClient implements ApiClientInterface {
       time: string;
     };
     workingHours?: Record<string, { open: string; close: string } | null>;
+    /** The salon's week in the list format (several entries a day = shifts). */
+    openingHours?: Array<{ day: string; openTime: string; closeTime: string }>;
   }): Promise<{
     ok: true;
     completed: number;

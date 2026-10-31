@@ -106,6 +106,35 @@ describe("onboarding wizard: the salon's hours", () => {
     expect(prisma.tenant.update).not.toHaveBeenCalled();
   });
 
+  it("stores a week sent in the list format, split days included", async () => {
+    const { prisma, svc } = setup();
+    const openingHours = [
+      { day: "monday", openTime: "10:00", closeTime: "14:00" },
+      { day: "monday", openTime: "17:00", closeTime: "20:00" },
+      { day: "saturday", openTime: "10:00", closeTime: "14:00" },
+    ];
+    await svc.submitWizard("t1", {
+      openingHours,
+      workingHours: { tue: { open: "09:00", close: "19:00" } },
+    });
+    expect(prisma.tenant.update.mock.calls[0][0].data.openingHours).toEqual(openingHours);
+  });
+
+  it("refuses overlapping shifts in the list format, before saving any step", async () => {
+    const { prisma, svc } = setup();
+    await expect(
+      svc.submitWizard("t1", {
+        services: [{ name: "Corte", durationMinutes: 30, price: 15 }],
+        openingHours: [
+          { day: "monday", openTime: "09:00", closeTime: "14:00" },
+          { day: "monday", openTime: "13:00", closeTime: "18:00" },
+        ],
+      }),
+    ).rejects.toThrow(BadRequestException);
+    expect(prisma.service.createMany).not.toHaveBeenCalled();
+    expect(prisma.tenant.update).not.toHaveBeenCalled();
+  });
+
   it("an all-closed week stores nothing", async () => {
     const { prisma, svc } = setup();
     await svc.submitWizard("t1", { workingHours: { mon: null, sun: null } });

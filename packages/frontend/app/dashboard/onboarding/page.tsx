@@ -12,6 +12,13 @@ import {
   UserPlus,
 } from "lucide-react";
 import apiClient from "@/lib/api";
+import { WeeklyScheduleEditor } from "@/components/professionals/WeeklyScheduleEditor";
+import {
+  defaultSchedule,
+  scheduleProblems,
+  workingHoursFromSchedule,
+  type WeeklySchedule,
+} from "@/lib/weekly-schedule";
 
 type WizardData = {
   tenantId: string;
@@ -28,16 +35,6 @@ type WizardData = {
   }>;
 };
 
-const DAYS = [
-  { key: "mon", label: "Lunes" },
-  { key: "tue", label: "Martes" },
-  { key: "wed", label: "Miércoles" },
-  { key: "thu", label: "Jueves" },
-  { key: "fri", label: "Viernes" },
-  { key: "sat", label: "Sábado" },
-  { key: "sun", label: "Domingo" },
-];
-
 export default function OwnerOnboardingWizardPage() {
   const router = useRouter();
   const [data, setData] = useState<WizardData | null>(null);
@@ -53,17 +50,9 @@ export default function OwnerOnboardingWizardPage() {
     Array<{ name: string; durationMinutes: number; price: number }>
   >([]);
 
-  const [hours, setHours] = useState<
-    Record<string, { open: string; close: string } | null>
-  >({
-    mon: { open: "09:00", close: "19:00" },
-    tue: { open: "09:00", close: "19:00" },
-    wed: { open: "09:00", close: "19:00" },
-    thu: { open: "09:00", close: "19:00" },
-    fri: { open: "09:00", close: "19:00" },
-    sat: null,
-    sun: null,
-  });
+  // The salon's week, with shifts (a salon that closes at midday has two a
+  // day). Monday to Friday, 09:00 to 19:00 until the owner changes it.
+  const [hours, setHours] = useState<WeeklySchedule>(defaultSchedule);
 
   const [clientName, setClientName] = useState("");
   const [apDate, setApDate] = useState("");
@@ -109,23 +98,18 @@ export default function OwnerOnboardingWizardPage() {
     setCustomServices((prev) => prev.filter((_, idx) => idx !== i));
   }
 
-  function toggleDay(key: string) {
-    setHours((prev) => ({ ...prev, [key]: prev[key] ? null : { open: "09:00", close: "19:00" } }));
-  }
-
-  function updateDay(key: string, patch: { open?: string; close?: string }) {
-    setHours((prev) => {
-      const cur = prev[key];
-      if (!cur) return prev;
-      return { ...prev, [key]: { ...cur, ...patch } };
-    });
-  }
-
   async function submit() {
     if (!data) return;
-    setSubmitting(true);
     setSubmitError(null);
     setSkipWarning(null);
+    // A shift that ends before it starts (or two that overlap) is refused
+    // here, next to the day it is on, before anything is saved. A week with
+    // no open day is fine: no salon hours are stored, as before.
+    if (Object.keys(scheduleProblems(hours).days).length > 0) {
+      setSubmitError("Revisa el horario de apertura: hay tramos que no se pueden guardar.");
+      return;
+    }
+    setSubmitting(true);
 
     const services: Array<{ name: string; durationMinutes: number; price: number }> = [];
     for (const t of data.serviceTemplates) {
@@ -137,10 +121,7 @@ export default function OwnerOnboardingWizardPage() {
       if (c.name.trim()) services.push(c);
     }
 
-    const filteredHours: Record<string, { open: string; close: string }> = {};
-    for (const [k, v] of Object.entries(hours)) {
-      if (v) filteredHours[k] = v;
-    }
+    const openingHours = workingHoursFromSchedule(hours);
 
     // The appointment block only makes sense once the owner has added
     // at least one Professional — without one, the server silently
@@ -153,7 +134,7 @@ export default function OwnerOnboardingWizardPage() {
     try {
       const res = await apiClient.submitOwnerOnboardingWizard({
         services: services.length ? services : undefined,
-        workingHours: Object.keys(filteredHours).length ? filteredHours : undefined,
+        openingHours: openingHours.length ? openingHours : undefined,
         firstAppointment: appointmentRequested
           ? {
               clientName: clientName.trim(),
@@ -345,44 +326,13 @@ export default function OwnerOnboardingWizardPage() {
           <h2 className="text-lg font-semibold">2. Horario de apertura</h2>
           {data.hasWorkingHours && <Check className="w-4 h-4 text-emerald-600 ml-auto" />}
         </div>
-        <div className="space-y-2">
-          {DAYS.map((d) => {
-            const h = hours[d.key];
-            const open = !!h;
-            return (
-              <div key={d.key} className="flex items-center gap-3">
-                <label className="flex items-center gap-2 w-32">
-                  <input
-                    type="checkbox"
-                    checked={open}
-                    onChange={() => toggleDay(d.key)}
-                  />
-                  <span className="text-sm">{d.label}</span>
-                </label>
-                {open && h && (
-                  <>
-                    <input
-                      type="time"
-                      value={h.open}
-                      onChange={(e) => updateDay(d.key, { open: e.target.value })}
-                      className="px-2 py-1 text-sm border border-slate-300 rounded"
-                    />
-                    <span className="text-slate-500">–</span>
-                    <input
-                      type="time"
-                      value={h.close}
-                      onChange={(e) => updateDay(d.key, { close: e.target.value })}
-                      className="px-2 py-1 text-sm border border-slate-300 rounded"
-                    />
-                  </>
-                )}
-                {!open && (
-                  <span className="text-xs text-slate-400">Cerrado</span>
-                )}
-              </div>
-            );
-          })}
-        </div>
+        <WeeklyScheduleEditor
+          variant="salon"
+          value={hours}
+          onChange={setHours}
+          disabled={submitting}
+          weekProblem={null}
+        />
       </section>
 
       {/* Step 3 — first appointment */}

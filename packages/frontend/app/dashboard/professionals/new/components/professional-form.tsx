@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import apiClient from '@/lib/api';
 import { useToast } from '@/components/ui/use-toast';
+import { useTranslations } from '@/lib/use-translation';
 import { WeeklyScheduleEditor } from '@/components/professionals/WeeklyScheduleEditor';
 import {
   defaultSchedule,
@@ -25,6 +26,7 @@ interface Service {
 export function ProfessionalForm() {
   const router = useRouter();
   const { toast } = useToast();
+  const t = useTranslations();
   const [isLoading, setIsLoading] = useState(false);
   const [services, setServices] = useState<Service[]>([]);
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
@@ -114,7 +116,7 @@ export function ProfessionalForm() {
     <form onSubmit={handleSubmit} className="space-y-6">
        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="space-y-2">
-          <Label htmlFor="email">Email</Label>
+          <Label htmlFor="email">{t('professionals.fields.email')}</Label>
           <Input
             id="email"
             name="email"
@@ -127,7 +129,7 @@ export function ProfessionalForm() {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="password">Password</Label>
+          <Label htmlFor="password">{t('professionals.fields.password')}</Label>
           <Input
             id="password"
             name="password"
@@ -140,7 +142,7 @@ export function ProfessionalForm() {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="firstName">First Name</Label>
+          <Label htmlFor="firstName">{t('professionals.fields.firstName')}</Label>
           <Input
             id="firstName"
             name="firstName"
@@ -152,7 +154,7 @@ export function ProfessionalForm() {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="lastName">Last Name</Label>
+          <Label htmlFor="lastName">{t('professionals.fields.lastName')}</Label>
           <Input
             id="lastName"
             name="lastName"
@@ -164,7 +166,7 @@ export function ProfessionalForm() {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="phone">Phone</Label>
+          <Label htmlFor="phone">{t('professionals.fields.phone')}</Label>
           <Input
             id="phone"
             name="phone"
@@ -176,19 +178,19 @@ export function ProfessionalForm() {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="specialty">Specialty</Label>
+          <Label htmlFor="specialty">{t('professionals.fields.specialty')}</Label>
           <Input
             id="specialty"
             name="specialty"
             value={formData.specialty}
             onChange={handleChange}
-            placeholder="e.g., Hair Styling, Makeup Artist"
+            placeholder={t('professionals.fields.specialtyPlaceholder')}
             disabled={isLoading}
           />
         </div>
 
          <div className="space-y-2 sm:col-span-2">
-          <Label htmlFor="avatarUrl">Avatar URL</Label>
+          <Label htmlFor="avatarUrl">{t('professionals.fields.avatarUrl')}</Label>
           <Input
             id="avatarUrl"
             name="avatarUrl"
@@ -201,7 +203,7 @@ export function ProfessionalForm() {
         </div>
 
          <div className="space-y-2 sm:col-span-2">
-          <Label htmlFor="bio">Bio</Label>
+          <Label htmlFor="bio">{t('professionals.fields.bio')}</Label>
           <textarea
             id="bio"
             name="bio"
@@ -209,14 +211,14 @@ export function ProfessionalForm() {
             onChange={handleChange}
             rows={4}
             className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            placeholder="Write a short bio about the professional..."
+            placeholder={t('professionals.fields.bioPlaceholder')}
             disabled={isLoading}
           />
         </div>
 
         {/* Services Selection */}
          <div className="space-y-2 sm:col-span-2">
-          <Label>Services Provided</Label>
+          <Label>{t('professionals.fields.servicesProvided')}</Label>
            <div className="grid grid-cols-1 gap-2 mt-2 sm:grid-cols-2 lg:grid-cols-3">
             {services.map((service) => (
               <label
@@ -239,7 +241,7 @@ export function ProfessionalForm() {
           </div>
           {services.length === 0 && (
             <p className="text-sm text-gray-500 mt-2">
-              No services available. Please create services first.
+              {t('professionals.fields.noServices')}
             </p>
           )}
         </div>
@@ -269,10 +271,10 @@ export function ProfessionalForm() {
           onClick={() => router.back()}
           disabled={isLoading}
         >
-          Cancel
+          {t('professionals.newForm.cancel')}
         </Button>
         <Button type="submit" disabled={isLoading}>
-          {isLoading ? 'Creating...' : 'Create Professional'}
+          {isLoading ? t('professionals.newForm.creating') : t('professionals.newForm.create')}
         </Button>
       </div>
     </form>

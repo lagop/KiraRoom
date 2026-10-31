@@ -6,6 +6,13 @@ import { Loader2, Check, AlertCircle, Building2, Scissors, Clock, Upload } from 
 import { useTranslations } from "@/lib/use-translation";
 import apiClient from "@/lib/api";
 import { CanaryTimezoneHint } from "@/components/settings/CanaryTimezoneHint";
+import { WeeklyScheduleEditor } from "@/components/professionals/WeeklyScheduleEditor";
+import {
+  defaultSchedule,
+  scheduleProblems,
+  workingHoursFromSchedule,
+  type WeeklySchedule,
+} from "@/lib/weekly-schedule";
 
 /**
  * Inline 3-step wizard. Each linear_required step renders its own form
@@ -310,29 +317,12 @@ function ServiceCreateStep({ onDone }: { onDone: () => Promise<unknown> }) {
 // set their hours in a single inline form.
 function ScheduleSetStep({ onDone }: { onDone: () => Promise<unknown> }) {
   const t = useTranslations();
-  const DAYS = [
-    { key: "monday", label: "Lunes" },
-    { key: "tuesday", label: "Martes" },
-    { key: "wednesday", label: "Miércoles" },
-    { key: "thursday", label: "Jueves" },
-    { key: "friday", label: "Viernes" },
-    { key: "saturday", label: "Sábado" },
-    { key: "sunday", label: "Domingo" },
-  ];
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
-  const [hours, setHours] = useState<
-    Record<string, { open: string; close: string } | null>
-  >({
-    monday: { open: "09:00", close: "19:00" },
-    tuesday: { open: "09:00", close: "19:00" },
-    wednesday: { open: "09:00", close: "19:00" },
-    thursday: { open: "09:00", close: "19:00" },
-    friday: { open: "09:00", close: "19:00" },
-    saturday: null,
-    sunday: null,
-  });
+  // Monday to Friday, 09:00 to 19:00 until the salon changes it; a day can
+  // have several shifts (jornada partida).
+  const [schedule, setSchedule] = useState<WeeklySchedule>(defaultSchedule);
   // Services this professional performs. Fetched on mount; the backend's
   // `createProfessional` accepts `serviceIds` and persists the join rows
   // so the new pro is bookable from day one.
@@ -366,21 +356,6 @@ function ScheduleSetStep({ onDone }: { onDone: () => Promise<unknown> }) {
     });
   }
 
-  function toggleDay(key: string) {
-    setHours((prev) => ({
-      ...prev,
-      [key]: prev[key] ? null : { open: "09:00", close: "19:00" },
-    }));
-  }
-
-  function updateDay(key: string, patch: { open?: string; close?: string }) {
-    setHours((prev) => {
-      const cur = prev[key];
-      if (!cur) return prev;
-      return { ...prev, [key]: { ...cur, ...patch } };
-    });
-  }
-
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -388,15 +363,20 @@ function ScheduleSetStep({ onDone }: { onDone: () => Promise<unknown> }) {
       setError("Rellena nombre y apellidos del profesional.");
       return;
     }
-    // Convert { mon: {open,close} } → [{day, openTime, closeTime}, ...]
-    const workingHours: Array<{ day: string; openTime: string; closeTime: string }> = [];
-    for (const [day, v] of Object.entries(hours)) {
-      if (v) workingHours.push({ day, openTime: v.open, closeTime: v.close });
-    }
-    if (workingHours.length === 0) {
-      setError("Selecciona al menos un día abierto para el profesional.");
+    // Refused here, before saving, as the server would: no working day, a
+    // shift that ends before it starts, overlapping shifts. Each day's
+    // problem is also shown next to it in the editor.
+    const problems = scheduleProblems(schedule);
+    if (problems.week) {
+      setError("Selecciona al menos un día de trabajo para el profesional.");
       return;
     }
+    if (Object.keys(problems.days).length > 0) {
+      setError("Revisa el horario: hay tramos que no se pueden guardar.");
+      return;
+    }
+    // [{ day, openTime, closeTime }, ...]: one entry per shift.
+    const workingHours = workingHoursFromSchedule(schedule);
     if (services.length > 0 && selectedServiceIds.size === 0) {
       setError("Asigna al menos un servicio al profesional.");
       return;
@@ -454,41 +434,13 @@ function ScheduleSetStep({ onDone }: { onDone: () => Promise<unknown> }) {
         <p className="text-xs font-medium text-slate-700 mb-2">
           Horario de trabajo
         </p>
-        <div className="space-y-2">
-          {DAYS.map((d) => {
-            const h = hours[d.key];
-            return (
-              <div key={d.key} className="flex items-center gap-3">
-                <label className="flex items-center gap-2 w-32">
-                  <input
-                    type="checkbox"
-                    checked={!!h}
-                    onChange={() => toggleDay(d.key)}
-                  />
-                  <span className="text-sm">{d.label}</span>
-                </label>
-                {h && (
-                  <>
-                    <input
-                      type="time"
-                      value={h.open}
-                      onChange={(e) => updateDay(d.key, { open: e.target.value })}
-                      className="px-2 py-1 text-sm border border-slate-300 rounded"
-                    />
-                    <span className="text-slate-500">–</span>
-                    <input
-                      type="time"
-                      value={h.close}
-                      onChange={(e) => updateDay(d.key, { close: e.target.value })}
-                      className="px-2 py-1 text-sm border border-slate-300 rounded"
-                    />
-                  </>
-                )}
-                {!h && <span className="text-xs text-slate-400">Cerrado</span>}
-              </div>
-            );
-          })}
-        </div>
+        <WeeklyScheduleEditor
+          compact
+          value={schedule}
+          onChange={setSchedule}
+          disabled={submitting}
+          weekProblem="Marca al menos un día de trabajo."
+        />
       </div>
       {/* Services this professional performs — at least one required so the
           new pro is bookable from day one. The list is fetched once on
@@ -606,7 +558,7 @@ function LogoUpload({
             );
           } else if (img.width < LOGO_RECOMMENDED_PX / 2) {
             setHint(
-              `Tu imagen mide ${img.width}×${img.height} px. Se verá borrosa al放大. Recomendado: ${LOGO_RECOMMENDED_PX}×${LOGO_RECOMMENDED_PX}.`,
+              `Tu imagen mide ${img.width}×${img.height} px. Se verá borrosa al ampliarla. Recomendado: ${LOGO_RECOMMENDED_PX}×${LOGO_RECOMMENDED_PX}.`,
             );
           }
         };

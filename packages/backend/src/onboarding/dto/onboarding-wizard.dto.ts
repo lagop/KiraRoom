@@ -14,6 +14,8 @@ import {
   ValidateNested,
 } from "class-validator";
 import { OpeningHoursDto } from "../../auth/dto/update-tenant.dto";
+import { IsWorkingHours } from "../../professionals/working-hours-input";
+import type { WorkingHoursEntry } from "../../appointments/working-hours";
 
 export class WizardServiceDto {
   @IsString() @IsNotEmpty() @MaxLength(200)
@@ -68,6 +70,16 @@ export class SubmitOnboardingWizardDto {
   @IsOptional() @ValidateNested() @Type(() => WizardFirstAppointmentDto)
   firstAppointment?: WizardFirstAppointmentDto;
 
+  /** One window per open day. Superseded by `openingHours`; still accepted. */
   @IsOptional() @ValidateNested() @Type(() => WizardWorkingWeekDto)
   workingHours?: WizardWorkingWeekDto;
+
+  /**
+   * The salon's week in the list format the settings page saves
+   * ([{ day, openTime, closeTime }], several entries for a day being shifts),
+   * so a salon that closes at midday can say so from the start. Used instead
+   * of `workingHours` when both are sent; [] stores nothing.
+   */
+  @IsOptional() @IsWorkingHours()
+  openingHours?: WorkingHoursEntry[];
 }

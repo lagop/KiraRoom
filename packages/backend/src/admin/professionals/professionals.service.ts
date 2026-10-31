@@ -14,6 +14,7 @@ import {
 import { Professional, UserRole } from "@prisma/client";
 import * as bcrypt from "bcryptjs";
 import { assertProfessionalSlot } from "../../professionals/professional-limit";
+import { commissionRateUpdate } from "../../professionals/optional-fields";
 
 @Injectable()
 export class AdminProfessionalsService {
@@ -50,9 +51,8 @@ export class AdminProfessionalsService {
           isActive: true,
           isOwner: false,
           position: professionalData.position,
-          commissionRate: professionalData.commissionRate
-            ? parseFloat(String(professionalData.commissionRate))
-            : null,
+          // 0 is a rate: only "not given" (or null) means none.
+          commissionRate: commissionRateUpdate(professionalData.commissionRate) ?? null,
           hireDate: professionalData.hireDate
             ? new Date(professionalData.hireDate)
             : new Date(),
