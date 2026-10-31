@@ -192,6 +192,16 @@ export const removeRefreshToken = () => {
   }
 };
 
+/**
+ * Deleting a client, professional or service. One with appointments or
+ * payments is history, so the server deactivates it instead of deleting it
+ * (`deactivated: true`): it stays in the list, marked inactive.
+ */
+export interface HistoryDeleteResult {
+  ok: boolean;
+  deactivated: boolean;
+}
+
 /** The password was right and the account asks for a code from the app next. */
 export interface TwoFactorRequired {
   twoFactorRequired: true;
@@ -1413,7 +1423,7 @@ export interface ApiClientInterface {
       status: "active" | "inactive" | "blocked";
     }>,
   ): Promise<Client>;
-  deleteClient(id: string): Promise<void>;
+  deleteClient(id: string): Promise<HistoryDeleteResult>;
   getServices(tenantId?: string): Promise<Service[]>;
   getService(id: string): Promise<Service>;
   createService(data: {
@@ -1436,7 +1446,7 @@ export interface ApiClientInterface {
       isActive: boolean;
     }>,
   ): Promise<Service>;
-  deleteService(id: string): Promise<void>;
+  deleteService(id: string): Promise<HistoryDeleteResult>;
   getProfessionalsPublic(tenantId?: string): Promise<Professional[]>;
   getProfessionals(tenantId?: string): Promise<Professional[]>;
   getProfessional(id: string): Promise<Professional>;
@@ -1479,7 +1489,7 @@ export interface ApiClientInterface {
       serviceIds?: string[];
     }>,
   ): Promise<Professional>;
-  deleteProfessional(id: string): Promise<void>;
+  deleteProfessional(id: string): Promise<HistoryDeleteResult>;
   changeProfessionalPassword(
     professionalId: string,
     data: { newPassword: string },
@@ -2443,8 +2453,8 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  async deleteClient(id: string): Promise<void> {
-    return this.request<void>(`/admin/clients/${id}`, {
+  async deleteClient(id: string): Promise<HistoryDeleteResult> {
+    return this.request<HistoryDeleteResult>(`/admin/clients/${id}`, {
       method: "DELETE",
     });
   }
@@ -2493,8 +2503,8 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  async deleteService(id: string): Promise<void> {
-    return this.request<void>(`/services/${id}`, {
+  async deleteService(id: string): Promise<HistoryDeleteResult> {
+    return this.request<HistoryDeleteResult>(`/services/${id}`, {
       method: "DELETE",
     });
   }
@@ -2610,8 +2620,8 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  async deleteProfessional(id: string): Promise<void> {
-    return this.request<void>(`/admin/professionals/${id}`, {
+  async deleteProfessional(id: string): Promise<HistoryDeleteResult> {
+    return this.request<HistoryDeleteResult>(`/admin/professionals/${id}`, {
       method: "DELETE",
     });
   }

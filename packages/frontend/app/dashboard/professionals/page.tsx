@@ -275,19 +275,29 @@ function ProfessionalsPageContent() {
           <button
             onClick={async () => {
               try {
-                await (apiClient as any).deleteProfessional(id);
+                // With appointments they are history: the server deactivates
+                // them instead, and the reloaded list shows them inactive.
+                const { deactivated } = await apiClient.deleteProfessional(id);
                 toast({
-                  title: t("professionals.professional_deleted"),
-                  description: t("professionals.professional_deleted_success"),
+                  title: t(
+                    deactivated
+                      ? "professionals.professional_deactivated"
+                      : "professionals.professional_deleted",
+                  ),
+                  description: t(
+                    deactivated
+                      ? "professionals.professional_deactivated_history"
+                      : "professionals.professional_deleted_success",
+                  ),
                   variant: "default",
                 });
                 fetchProfessionals();
               } catch (err) {
-                setError("Failed to delete professional");
                 console.error(err);
+                // The server says why (e.g. they have history), in Spanish.
                 toast({
-                  title: t("professionals.error"),
-                  description: t("professionals.failed_to_delete"),
+                  title: t("professionals.failed_to_delete"),
+                  description: err instanceof Error ? err.message : undefined,
                   variant: "destructive",
                 });
               }

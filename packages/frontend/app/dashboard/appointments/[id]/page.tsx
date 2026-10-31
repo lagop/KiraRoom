@@ -241,7 +241,13 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
       // Stay on the page: navigating away would read as "deleted".
       console.error('Error deleting appointment:', error);
       setConfirmDelete(false);
-      toast({ title: 'No se ha podido eliminar la cita.', variant: 'destructive' });
+      // The server says why: a completed, paid or invoiced appointment is
+      // history and is cancelled, not deleted.
+      toast({
+        title: 'No se ha podido eliminar la cita.',
+        description: error instanceof Error ? error.message : undefined,
+        variant: 'destructive',
+      });
     } finally {
       setUpdating(false);
     }
