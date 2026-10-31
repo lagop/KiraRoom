@@ -1280,6 +1280,12 @@ export interface FiscalSettings {
     diputacion?: "bizkaia" | "gipuzkoa" | "alava" | null;
     /** Territory tax regime: iva (peninsula/Baleares), igic (Canarias), ipsi (Ceuta/Melilla). */
     taxRegime?: TaxRegime;
+    /**
+     * The salon's prices already include the tax (true: an invoice splits
+     * them into base + tax) or have it added on top (false, or missing for a
+     * salon from before the setting).
+     */
+    pricesIncludeTax?: boolean;
     /** P2A â€” emitter NIF/CIF/NIE (mirrored to Tenant.taxId on the backend). */
     tenantNif?: string;
   };
@@ -1808,6 +1814,7 @@ export interface ApiClientInterface {
     diputacion?: "bizkaia" | "gipuzkoa" | "alava" | null;
     /** Territory tax regime: iva (peninsula/Baleares), igic (Canarias), ipsi (Ceuta/Melilla). */
     taxRegime?: TaxRegime;
+    pricesIncludeTax?: boolean;
     /** Emitter NIF/CIF/NIE â€” mirrored to Tenant.taxId on the backend. */
     tenantNif?: string;
     taxIdType?: "nif" | "cif" | "nie" | "passport" | "other";

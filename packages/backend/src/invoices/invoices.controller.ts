@@ -33,7 +33,7 @@ import {
   UploadCertificateDto,
 } from "./dto/invoice.dto";
 import { PrismaService } from "../common/prisma/prisma.service";
-import { taxRegimeOf, TAX_REGIME_DEFAULT_RATE } from "@kira/shared";
+import { taxLabelOf, taxRegimeOf, TAX_REGIME_DEFAULT_RATE } from "@kira/shared";
 
 interface AuthedRequest extends Request {
   user: { tenantId?: string };
@@ -185,6 +185,8 @@ fiscalQrUrl: invoice.fiscalQrUrl,
       },
       lines,
       taxBreakdown: (invoice.taxBreakdown as any[]) ?? [],
+      // IGIC for a Canarian salon, IPSI in Ceuta and Melilla: not always IVA.
+      taxLabel: taxLabelOf(tenant.fiscalSettings),
       tenant: {
         name: tenant.name,
         taxId: null, // would come from Tenant settings
@@ -253,6 +255,7 @@ fiscalQrUrl: invoice.fiscalQrUrl,
       ...(dto.diputacion !== undefined ? { diputacion: dto.diputacion } : {}),
       ...(dto.tenantNif !== undefined ? { tenantNif: dto.tenantNif } : {}),
       ...(dto.taxRegime !== undefined ? { taxRegime: dto.taxRegime } : {}),
+      ...(typeof dto.pricesIncludeTax === "boolean" ? { pricesIncludeTax: dto.pricesIncludeTax } : {}),
     };
 
     // Switching regime without touching the rate would leave a Canarian salon

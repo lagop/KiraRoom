@@ -151,6 +151,10 @@
       "saved": "Settings saved",
       "taxRegime": "Territory tax regime",
       "taxRegimeHint": "VAT in mainland Spain and the Balearics, IGIC in the Canary Islands, IPSI in Ceuta and Melilla. Changing it adjusts the default rate.",
+      "pricesIncludeTax": "My prices already include the tax",
+      "pricesIncludeTaxHint": "Applies to invoices for appointments and till sales.",
+      "pricesIncludeTaxExampleIncluded": "A {price} service is invoiced as {base} + {tax} {label}",
+      "pricesIncludeTaxExampleOnTop": "A {price} service is invoiced as {base} + {tax} {label} = {total}",
       "submissionUnavailable": "Sending invoices to the tax agency (Verifactu, TicketBAI or SII) is not available yet. You can issue invoices in KiraRoom, but they are not sent."
     },
     "errors": {
@@ -1324,6 +1328,7 @@
     "section_notifications": "Notifications",
     "section_account": "Account",
     "coming_soon": "Coming soon",
+    "tax_moved": "Your salon's tax (IVA, IGIC or IPSI), and whether your prices already include it, are set in",
     "load_failed": "Could not load settings",
     "save_failed": "Could not save settings",
     "hours_need_both": "Set both the opening and the closing time",

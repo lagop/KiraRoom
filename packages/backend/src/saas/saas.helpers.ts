@@ -13,6 +13,7 @@ import {
 } from "./saas.constants";
 import type { Tenant } from "@prisma/client";
 import { RESERVED_SUBDOMAINS } from "@kira/shared";
+import { NEW_SALON_FISCAL_SETTINGS } from "../invoices/salon-tax-settings";
 
 /** Read an "active" (non-soft-deleted) tenant by id. */
 export async function getActiveTenant(
@@ -167,6 +168,10 @@ async function createTenantAndUserOnTx(
       currentPeriodStart: now,
       currentPeriodEnd: trialEnd,
       trialEnd,
+      // A new salon's prices include the tax (pricesIncludeTax: true); one
+      // created before the setting keeps the column default, with no key,
+      // which reads as tax on top. See salon-tax-settings.ts.
+      fiscalSettings: { ...NEW_SALON_FISCAL_SETTINGS },
     },
     select: { id: true },
   });

@@ -237,7 +237,7 @@ describe("InvoiceService.fromAppointment", () => {
     return { m, svc, lastNumber };
   }
 
-  it("issues one invoice linked to the appointment, priced as before (21 % on top)", async () => {
+  it("issues one invoice linked to the appointment; a salon without the setting keeps 21 % on top", async () => {
     const { m, svc } = setup();
     const r = await svc.fromAppointment("appt-1");
     expect(r).toEqual({ id: "inv-1" });
@@ -309,5 +309,95 @@ describe("InvoiceService.fromAppointment", () => {
     const { m, svc } = setup({}, { defaultTaxRate: 7 });
     await svc.fromAppointment("appt-1");
     expect(m.invoices[0].totalCents).toBe(3210);
+  });
+
+  it("a salon whose prices include the tax: invoiced at what the client paid, 24,79 + 5,21", async () => {
+    const { m, svc } = setup({}, { pricesIncludeTax: true });
+    await svc.fromAppointment("appt-1");
+    const inv = m.invoices[0];
+    expect(inv.subtotalCents).toBe(2479);
+    expect(inv.totalCents).toBe(3000);
+    expect(inv.taxBreakdown).toEqual([{ rate: 21, baseCents: 2479, taxCents: 521 }]);
+    // The stored line is the net one, like any other line.
+    expect(m.invoiceLines[0]).toMatchObject({ unitPriceCents: 2479, taxCents: 521, totalCents: 3000 });
+  });
+
+  it("IGIC 7 %, prices including the tax: 28,04 + 1,96 = 30,00", async () => {
+    const { m, svc } = setup({}, { defaultTaxRate: 7, pricesIncludeTax: true });
+    await svc.fromAppointment("appt-1");
+    expect(m.invoices[0].totalCents).toBe(3000);
+    expect(m.invoices[0].subtotalCents).toBe(2804);
+  });
+
+  it("pricesIncludeTax false is the tax on top, as without the key", async () => {
+    const { m, svc } = setup({}, { pricesIncludeTax: false });
+    await svc.fromAppointment("appt-1");
+    expect(m.invoices[0].totalCents).toBe(3630);
+  });
+});
+
+describe("InvoiceService.fromOrder", () => {
+  function setup(
+    items: Array<{ quantity: number; unitPrice: string; product: { name: string; taxRate: unknown } | null }>,
+    fiscalSettings: Record<string, unknown>,
+  ) {
+    const m = makePrismaMock();
+    m.prisma.order.findUnique = async () => ({
+      id: "order-1",
+      tenantId: "tenant-1",
+      orderNumber: "T-0001",
+      status: "completed",
+      items: items.map((it, i) => ({ productId: `p-${i + 1}`, ...it, unitPrice: new Prisma.Decimal(it.unitPrice) })),
+      client: null,
+      tenant: { name: "Salón Luna", fiscalSettings },
+    });
+    const svc = new InvoiceService(m.prisma, new InvoiceCalculator(), {} as any);
+    return { m, svc };
+  }
+
+  it("a salon without the setting: the tax goes on top of the till price", async () => {
+    const { m, svc } = setup([{ quantity: 2, unitPrice: "10.00", product: { name: "Champú", taxRate: null } }], {
+      defaultTaxRate: 21,
+    });
+    await svc.fromOrder("order-1");
+    expect(m.invoices[0].subtotalCents).toBe(2000);
+    expect(m.invoices[0].totalCents).toBe(2420);
+  });
+
+  it("a salon whose prices include the tax: the till price is the total", async () => {
+    const { m, svc } = setup([{ quantity: 2, unitPrice: "12.10", product: { name: "Champú", taxRate: null } }], {
+      defaultTaxRate: 21,
+      pricesIncludeTax: true,
+    });
+    await svc.fromOrder("order-1");
+    expect(m.invoices[0].totalCents).toBe(2420);
+    expect(m.invoices[0].subtotalCents).toBe(2000);
+  });
+
+  it("a product with its own rate (a fraction, 0.10) is invoiced at 10 %, not 0,10 %", async () => {
+    const { m, svc } = setup(
+      [
+        { quantity: 1, unitPrice: "11.00", product: { name: "Libro", taxRate: new Prisma.Decimal("0.10") } },
+        { quantity: 1, unitPrice: "12.10", product: { name: "Champú", taxRate: null } },
+      ],
+      { defaultTaxRate: 21, pricesIncludeTax: true },
+    );
+    await svc.fromOrder("order-1");
+    const inv = m.invoices[0];
+    expect(inv.totalCents).toBe(2310);
+    expect(inv.taxBreakdown).toEqual([
+      { rate: 21, baseCents: 1000, taxCents: 210 },
+      { rate: 10, baseCents: 1000, taxCents: 100 },
+    ]);
+    expect(m.invoiceLines.map((l) => Number(l.taxRate))).toEqual([10, 21]);
+  });
+
+  it("IGIC 7 %, prices on top: 10,00 + 0,70", async () => {
+    const { m, svc } = setup([{ quantity: 1, unitPrice: "10.00", product: { name: "Laca", taxRate: null } }], {
+      defaultTaxRate: 7,
+      taxRegime: "igic",
+    });
+    await svc.fromOrder("order-1");
+    expect(m.invoices[0].totalCents).toBe(1070);
   });
 });
