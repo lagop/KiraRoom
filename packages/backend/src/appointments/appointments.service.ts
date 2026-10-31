@@ -1124,6 +1124,8 @@ export class AppointmentsService {
         updateData.startTime = newStart;
         updateData.reminder24hSent = false;
         updateData.reminder1hSent = false;
+        updateData.reminder24hAttempts = 0;
+        updateData.reminder1hAttempts = 0;
       }
     }
 
@@ -1799,7 +1801,9 @@ export class AppointmentsService {
           scheduledTime: time,
           duration,
           endTime: this.calculateEndTime(time, duration),
-          ...(startChanged ? { startTime: span.start, reminder24hSent: false, reminder1hSent: false } : {}),
+          ...(startChanged
+            ? { startTime: span.start, reminder24hSent: false, reminder1hSent: false, reminder24hAttempts: 0, reminder1hAttempts: 0 }
+            : {}),
         },
         include: { client: true, professional: true, service: true, tenant: true },
       });
