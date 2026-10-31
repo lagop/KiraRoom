@@ -29,6 +29,11 @@ import {
   DEFAULT_REFRESH_TOKEN_SECONDS,
 } from "../common/jwt-duration";
 import { AuthSessionsService } from "./sessions/auth-sessions.service";
+import {
+  normalizeWorkingHours,
+  weekFromOpeningPair,
+  workingHoursProblem,
+} from "../professionals/working-hours-input";
 import { TwoFactorService } from "./two-factor/two-factor.service";
 
 /** Audience of the short-lived token that stands between password and code. */
@@ -758,28 +763,19 @@ export class AuthService {
 
   async updateTenant(tenantId: string, updateData: any) {
     const data = { ...updateData };
-    if (updateData.openingHours) {
-      // getAvailableSlots builds every salon's grid from this window; a
-      // reversed or empty one leaves the salon with no bookable slot at all,
-      // silently.
-      if (updateData.openingHours.open >= updateData.openingHours.close) {
-        throw new BadRequestException("La hora de apertura debe ser anterior a la de cierre");
-      }
-      // Merge rather than replace: onboarding stores other keys in the same
-      // JSON, and only { open, close } is edited from settings.
-      const current = await this.prisma.tenant.findUnique({
-        where: { id: tenantId },
-        select: { openingHours: true },
-      });
-      const existing =
-        current?.openingHours && typeof current.openingHours === "object"
-          ? (current.openingHours as Record<string, unknown>)
-          : {};
-      data.openingHours = {
-        ...existing,
-        open: updateData.openingHours.open,
-        close: updateData.openingHours.close,
-      };
+    // The salon's own week, in the list format of a professional's
+    // workingHours. The DTO already normalised and validated it
+    // (@IsWorkingHours); done again here for callers that skip the DTO. A
+    // legacy { open, close } becomes that window every day. It replaces the
+    // whole value: the old merge kept the onboarding wizard's day keys next
+    // to { open, close }, which nothing reads once the week itself is here.
+    if (updateData.openingHours === undefined || updateData.openingHours === null) {
+      delete data.openingHours;
+    } else {
+      const week = normalizeWorkingHours(weekFromOpeningPair(updateData.openingHours));
+      const problem = workingHoursProblem(week);
+      if (problem) throw new BadRequestException(problem);
+      data.openingHours = week;
     }
     const timezone = await this.timezoneForAddressChange(tenantId, updateData);
     if (timezone) data.timezone = timezone;

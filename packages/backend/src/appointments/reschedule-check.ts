@@ -5,8 +5,8 @@ import {
   clockOf,
   describeShifts,
   fitsInShifts,
-  fitsInWindow,
   minutesOf,
+  salonWindowsFor,
   workingWindowsFor,
 } from "./working-hours";
 import { salonInstant } from "./salon-time";
@@ -26,7 +26,8 @@ import { timeOffBetween } from "../time-off/time-off-query";
  * The same rules as online availability (getAvailableSlots), on 15-minute
  * steps rather than its 30-minute slots: the professional's schedule (none
  * recorded means no limit), their time off and the salon's closures
- * (time-off-rules.ts), the salon's opening hours when it set them, and the
+ * (time-off-rules.ts), the salon's opening hours when it set them (its own
+ * week, shifts included: closed on a weekday without hours), and the
  * professional's other appointments that day, cancelled ones aside.
  *
  * "Other appointments" means every block of time the professional is busy:
@@ -71,7 +72,12 @@ export function rescheduleProblem(input: {
    */
   professionalShifts: ShiftWindow[] | undefined;
   professionalName: string;
-  salonWindow?: { startMinutes: number; endMinutes: number };
+  /**
+   * salonWindowsFor: undefined = the salon set no hours, [] = closed that
+   * weekday, else its open stretches. Like a shift, the appointment has to
+   * fit inside one of them.
+   */
+  salonShifts?: ShiftWindow[];
   /**
    * Why time off or a salon closure blocks this slot (timeOffProblem), if it
    * does. One of "the hours": an owner may confirm a booking past it, as
@@ -95,6 +101,8 @@ export function rescheduleProblem(input: {
   if (startMinutes + durationMinutes > 24 * 60) return "La cita terminaría al día siguiente.";
   // Before the shifts: "Ana está de vacaciones" says more than "no trabaja".
   if (hours && input.timeOff) return input.timeOff;
+  const salon = input.salonShifts;
+  if (hours && salon && salon.length === 0) return "El salón está cerrado ese día.";
   const shifts = input.professionalShifts;
   if (hours && shifts && shifts.length === 0) {
     return `${input.professionalName} no trabaja ese día.`;
@@ -104,8 +112,8 @@ export function rescheduleProblem(input: {
   if (hours && shifts && !fitsInShifts(startMinutes, durationMinutes, shifts)) {
     return `Está fuera del horario de ${input.professionalName} (${describeShifts(shifts)}).`;
   }
-  if (hours && input.salonWindow && !fitsInWindow(startMinutes, durationMinutes, input.salonWindow)) {
-    return `Está fuera del horario del salón (${clock(input.salonWindow.startMinutes)}–${clock(input.salonWindow.endMinutes)}).`;
+  if (hours && salon && !fitsInShifts(startMinutes, durationMinutes, salon)) {
+    return `Está fuera del horario del salón (${describeShifts(salon)}).`;
   }
   const end = startMinutes + durationMinutes;
   const clash = input.others.find((o) => {
@@ -231,9 +239,6 @@ async function scheduleCheckInput(
   ]);
   if (!professional) throw new ConflictException("Ese profesional no existe en este salón.");
 
-  const hours = (tenant?.openingHours ?? {}) as { open?: string; close?: string };
-  const open = hours.open ? minutesOf(hours.open) : null;
-  const close = hours.close ? minutesOf(hours.close) : null;
   const timeZone = tenant?.timezone || "Europe/Madrid";
   const [others, timeOff] = await Promise.all([
     professionalBusyTime(prisma, {
@@ -246,13 +251,14 @@ async function scheduleCheckInput(
     timeOffBetween(prisma, target.tenantId, target.day),
   ]);
   const startMinutes = minutesOf(target.time);
+  const noon = new Date(`${target.day}T12:00:00.000Z`);
 
   return {
     startMinutes,
     durationMinutes: target.durationMinutes,
-    professionalShifts: workingWindowsFor(professional.workingHours, new Date(`${target.day}T12:00:00.000Z`)),
+    professionalShifts: workingWindowsFor(professional.workingHours, noon),
     professionalName: professional.firstName,
-    salonWindow: open !== null && close !== null && close > open ? { startMinutes: open, endMinutes: close } : undefined,
+    salonShifts: salonWindowsFor(tenant?.openingHours, noon),
     timeOff:
       startMinutes === null
         ? null

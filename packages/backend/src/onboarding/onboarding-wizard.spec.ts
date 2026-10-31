@@ -77,3 +77,38 @@ describe("onboarding wizard: first appointment", () => {
     expect(prisma.appointment.create).not.toHaveBeenCalled();
   });
 });
+
+describe("onboarding wizard: the salon's hours", () => {
+  // Stored as the salon's week in the list format the settings page edits
+  // and availability reads (working-hours.ts salonHoursEntries); the
+  // wizard's { mon: { open, close } } used to be stored as it came, which
+  // nothing read.
+  it("stores the week as one entry per open day, Monday first", async () => {
+    const { prisma, svc } = setup();
+    await svc.submitWizard("t1", {
+      workingHours: { sat: { open: "10:00", close: "14:00" }, mon: { open: "09:00", close: "19:00" }, sun: null },
+    });
+    expect(prisma.tenant.update.mock.calls[0][0].data.openingHours).toEqual([
+      { day: "monday", openTime: "09:00", closeTime: "19:00" },
+      { day: "saturday", openTime: "10:00", closeTime: "14:00" },
+    ]);
+  });
+
+  it("refuses a day that closes before it opens, before saving any step", async () => {
+    const { prisma, svc } = setup();
+    await expect(
+      svc.submitWizard("t1", {
+        services: [{ name: "Corte", durationMinutes: 30, price: 15 }],
+        workingHours: { mon: { open: "19:00", close: "09:00" } },
+      }),
+    ).rejects.toThrow(BadRequestException);
+    expect(prisma.service.createMany).not.toHaveBeenCalled();
+    expect(prisma.tenant.update).not.toHaveBeenCalled();
+  });
+
+  it("an all-closed week stores nothing", async () => {
+    const { prisma, svc } = setup();
+    await svc.submitWizard("t1", { workingHours: { mon: null, sun: null } });
+    expect(prisma.tenant.update).not.toHaveBeenCalled();
+  });
+});
