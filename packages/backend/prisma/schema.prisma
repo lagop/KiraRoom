@@ -2648,6 +2648,9 @@ model ClientCadence {
   lastComputedAt            DateTime  @default(now())
   reminderSentFor           Json      @default("[]")
   optedOut                  Boolean   @default(false)
+  // When a dispatcher tick last took this row (RebookingDispatcherService):
+  // a second tick or instance does not take it again within the lease.
+  dispatchClaimedAt         DateTime?
   createdAt                 DateTime  @default(now())
   updatedAt                 DateTime  @updatedAt
   tenant                    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)

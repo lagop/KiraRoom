@@ -3,11 +3,12 @@ import { ConfigService } from "@nestjs/config";
 import { createHmac, timingSafeEqual } from "crypto";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { ConsentService } from "../consent/consent.service";
+import { escapeHtml } from "../common/html-escape";
 import { EmailSuppressionService } from "./email-suppression.service";
 
 /**
  * Who an unsubscribe link belongs to: a campaign recipient row ("r"), or a
- * client for the re-engagement emails, whose recipient row is only written
+ * client for the re-engagement and rebooking emails, whose recipient row is only written
  * after the send ("c"). Ids, never the address, so the link carries no
  * personal data.
  */
@@ -28,9 +29,11 @@ const SIGNATURE_CHARS = 32;
  *
  * The link is signed with a key derived from JWT_SECRET, so it needs no new
  * secret and cannot be forged to unsubscribe somebody else. Unsubscribing
- * puts the address on the salon's suppression list (every campaign and
- * re-engagement send skips it) and, for a known client, records the refusal
- * in the marketing consent, so the client's account shows the same answer.
+ * puts the address on the salon's suppression list (every campaign,
+ * re-engagement and rebooking send skips it) and, for a known client,
+ * records the refusal in the marketing consent, so the client's account
+ * shows the same answer, and opts her out of the rebooking reminders
+ * ("vuelve a reservar"), which carry this same link.
  */
 @Injectable()
 export class EmailUnsubscribeService {
@@ -63,14 +66,19 @@ export class EmailUnsubscribeService {
     return { kind, id };
   }
 
-  link(target: UnsubscribeTarget): UnsubscribeLink {
-    const token = this.tokenFor(target);
+  /** The unsubscribe page for a token (a bad token shows "Enlace no válido" there). */
+  pageUrl(token: string): string {
     const appBase = (
       this.config.get<string>("APP_BASE_URL") ||
       this.config.get<string>("FRONTEND_URL") ||
       "https://app.kiraroom.net"
     ).replace(/\/+$/, "");
-    const pageUrl = `${appBase}/public/baja/${token}`;
+    return `${appBase}/public/baja/${encodeURIComponent(token)}`;
+  }
+
+  link(target: UnsubscribeTarget): UnsubscribeLink {
+    const token = this.tokenFor(target);
+    const pageUrl = this.pageUrl(token);
     // One-click (RFC 8058) needs a URL that accepts a POST with no page in
     // between: the API's. Without API_BASE_URL the header points at the
     // page, which mail clients open like the footer link.
@@ -124,6 +132,18 @@ export class EmailUnsubscribeService {
         // The suppression list already stops the emails; the consent record
         // is what the client's account shows, so a failure is only logged.
         this.logger.warn(`marketing refusal for client ${found.clientId} not recorded: ${(err as Error).message}`);
+      }
+      // The rebooking reminders are commercial emails too and carry this
+      // same link: one unsubscribe stops them all. The dispatcher also reads
+      // the refusal and the suppression list; this flag is what the salon's
+      // rebooking panel shows, so a failure is only logged.
+      try {
+        await this.prisma.clientCadence.updateMany({
+          where: { clientId: found.clientId, tenantId: found.tenantId },
+          data: { optedOut: true, nextRecommendedReminderAt: null },
+        });
+      } catch (err) {
+        this.logger.warn(`rebooking opt-out for client ${found.clientId} not recorded: ${(err as Error).message}`);
       }
     }
 
@@ -199,13 +219,4 @@ export function maskEmail(email: string): string {
   const [local, domain] = email.split("@");
   if (!domain) return "•••";
   return `${local.slice(0, Math.min(2, local.length))}•••@${domain}`;
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }

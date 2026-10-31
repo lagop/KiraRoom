@@ -1,25 +1,31 @@
 ﻿/**
  * RebookingDispatcherService.processOne + runDailyTick unit tests.
  *
- * Covers the plan's validation matrix:
+ * Covers:
  *  - high variability (stdDev > avg/2) skips the cycle but advances
- *  - tenant disabled at row level â†’ skip with reason 'tenant_disabled'
- *  - already-sent-in-cycle â†’ skip
- *  - existing scheduled reminder (30d window) â†’ idempotent skip
- *  - HTML escaping in email body for XSS-class payloads
- *  - HMAC secret fallback rejects in production
+ *  - tenant disabled at row level -> skip with reason 'tenant_disabled'
+ *  - already-sent-in-cycle -> skip
+ *  - existing scheduled reminder -> idempotent skip
+ *  - HTML escaping in the email body; the subject is plain text
+ *  - commercial-communication rules: refusal, suppression list, client
+ *    status, WhatsApp opt-in
+ *  - the shared signed unsubscribe link (and no more dead opt-out link)
+ *  - the atomic claim, sending hours and the overdue window
  *
  * Uses lightweight in-memory mocks; no DB or network.
  */
 
-import { RebookingDispatcherService } from "./rebooking-dispatcher.service";
-import { RebookStatus, RebookChannel } from "@prisma/client";
+import { RebookingDispatcherService, OVERDUE_WINDOW_DAYS, CLAIM_LEASE_MS } from "./rebooking-dispatcher.service";
+import { RebookStatus } from "@prisma/client";
 
-function makeMocks(overrides: any = {}) {
+const DAY = 24 * 60 * 60 * 1000;
+
+function makeMocks() {
   const tenant: any = {
     id: "tenant-1",
-    name: "<img src=x onerror=alert(1)>", // XSS payload in name
+    name: "<img src=x onerror=alert(1)>", // markup in the salon's name
     slug: "salon-xss",
+    timezone: "Europe/Madrid",
     rebookingSettings: {
       enabled: true,
       leadDays: 3,
@@ -34,9 +40,9 @@ function makeMocks(overrides: any = {}) {
       "svc-1": {
         avgDays: 21,
         stdDevDays: 1,
-        lastVisit: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
+        lastVisit: new Date(Date.now() - 5 * DAY).toISOString(),
         visitsCount: 5,
-        nextExpectedAt: new Date(Date.now() + 16 * 24 * 60 * 60 * 1000).toISOString(),
+        nextExpectedAt: new Date(Date.now() + 16 * DAY).toISOString(),
       },
     },
     nextRecommendedReminderAt: new Date(),
@@ -47,31 +53,17 @@ function makeMocks(overrides: any = {}) {
     tenant,
   };
 
-  const cadenceFindUnique = jest.fn(async () => cadence);
-  const cadenceFindMany = jest.fn(async () => [cadence]);
   const cadenceUpdate = jest.fn(async (args: any) => {
     Object.assign(cadence, args.data);
     return cadence;
   });
-  const reminderCreate = jest.fn(async (args: any) => ({
-    id: "rem-1",
-    ...args.data,
-  }));
-  const reminderUpdate = jest.fn(async (args: any) => ({
-    id: args.where.id,
-    ...args.data,
-  }));
-  const reminderFindFirst = jest.fn(async () => null);
-  const clientFindUnique = jest.fn(async (args: any) => ({
-    id: args.where.id,
+  const client: any = {
+    id: "client-1",
     firstName: "<script>alert(1)</script>",
     email: "x@example.com",
     phone: null,
-  }));
-  const serviceFindUnique = jest.fn(async () => ({
-    name: "Corte",
-    duration: 30,
-  }));
+    status: "active",
+  };
 
   const cadenceSvc: any = {
     getTenantConfig: jest.fn(async () => ({
@@ -97,52 +89,62 @@ function makeMocks(overrides: any = {}) {
     return visits.upcoming ? { id: "upcoming-1" } : null;
   });
 
+  // Consent records of client-1: { purpose, accepts }.
+  const consents: Array<{ purpose: string; accepts: boolean }> = [];
+  const consentFindMany = jest.fn(async (args: any) =>
+    consents
+      .filter((c) => c.purpose === args.where.form.purpose)
+      .map((c) => ({ clientId: "client-1", responses: { accepts: c.accepts } })),
+  );
+
   const prisma: any = {
     clientCadence: {
-      findUnique: cadenceFindUnique,
-      findMany: cadenceFindMany,
+      findUnique: jest.fn(async () => cadence),
+      findMany: jest.fn(async () => []),
       update: cadenceUpdate,
+      updateMany: jest.fn(async () => ({ count: 1 })),
     },
     rebookingReminder: {
-      create: reminderCreate,
-      update: reminderUpdate,
-      findFirst: reminderFindFirst,
+      create: jest.fn(async (args: any) => ({ id: "rem-1", ...args.data })),
+      update: jest.fn(async (args: any) => ({ id: args.where.id, ...args.data })),
+      findFirst: jest.fn(async () => null),
       count: jest.fn(async () => 0),
     },
     appointment: { findFirst: appointmentFindFirst },
-    client: { findUnique: clientFindUnique },
-    service: { findUnique: serviceFindUnique },
+    client: { findUnique: jest.fn(async () => client) },
+    service: { findUnique: jest.fn(async () => ({ name: "Corte & color", duration: 30 })) },
+    consent: { findMany: consentFindMany },
   };
 
-  // Apply overrides
-  Object.assign(cadenceSvc.getTenantConfig, overrides.getTenantConfig);
+  const suppressed = new Set<string>();
+  const suppressions: any = {
+    suppressedAmong: jest.fn(async (_t: string, emails: string[]) =>
+      new Set(emails.map((e) => e.toLowerCase()).filter((e) => suppressed.has(e))),
+    ),
+  };
+  const unsubscribes: any = {
+    link: jest.fn((target: { kind: string; id: string }) => ({
+      pageUrl: `https://app.test/public/baja/signed-${target.id}`,
+      headers: {
+        "List-Unsubscribe": `<https://api.test/api/v1/public/email/unsubscribe/signed-${target.id}>`,
+        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+      },
+    })),
+  };
 
-  // P2A-receptionist-advanced â€” a stub FeatureFlagService that always
-  // says "no advanced". Tests that need the advanced path override
-  // `flags` via the constructor argument or by mutating the instance.
-  const flagsStub = {
-    isFeatureUnlocked: jest.fn().mockResolvedValue(false),
-  } as any;
-  return { prisma, cadenceSvc, emailService, cadence, tenant, reminders: [], flags: flagsStub, visits };
+  // Stub FeatureFlagService: "no advanced" unless a test says otherwise.
+  const flags: any = { isFeatureUnlocked: jest.fn().mockResolvedValue(false) };
+  return { prisma, cadenceSvc, emailService, cadence, tenant, client, flags, visits, consents, suppressed, suppressions, unsubscribes };
+}
+
+function build(m: ReturnType<typeof makeMocks>) {
+  return new RebookingDispatcherService(m.prisma, m.cadenceSvc, m.emailService, m.flags, m.suppressions, m.unsubscribes);
 }
 
 describe("RebookingDispatcherService.processOne", () => {
-  function buildDispatcher(mocks: ReturnType<typeof makeMocks>) {
-    const dispatcher = new RebookingDispatcherService(
-      mocks.prisma,
-      mocks.cadenceSvc,
-      mocks.emailService,
-      mocks.flags ?? ({} as any),
-    );
-    // Skip the prod-secret check in tests.
-    dispatcher.onModuleInit();
-    return dispatcher;
-  }
-
   it("sends a reminder for a healthy cadence and marks the row 'sent'", async () => {
     const m = makeMocks();
-    const d = buildDispatcher(m);
-    const result = await d.processOne("client-1");
+    const result = await build(m).processOne("client-1");
     expect(result.ok).toBe(true);
     expect(m.emailService.sendEmail).toHaveBeenCalledTimes(1);
     expect(m.prisma.rebookingReminder.create).toHaveBeenCalledTimes(1);
@@ -153,24 +155,16 @@ describe("RebookingDispatcherService.processOne", () => {
 
   it("skips when tenant is disabled (returns reason 'tenant_disabled')", async () => {
     const m = makeMocks();
-    m.cadenceSvc.getTenantConfig.mockResolvedValue({
-      enabled: false,
-      leadDays: 3,
-      channelFallback: "email",
-      minVisits: 3,
-    });
-    const d = buildDispatcher(m);
-    const result = await d.processOne("client-1");
-    expect(result.ok).toBe(false);
-    expect(result.reason).toBe("tenant_disabled");
+    m.cadenceSvc.getTenantConfig.mockResolvedValue({ enabled: false, leadDays: 3, channelFallback: "email", minVisits: 3 });
+    const result = await build(m).processOne("client-1");
+    expect(result).toEqual({ ok: false, reason: "tenant_disabled" });
     expect(m.emailService.sendEmail).not.toHaveBeenCalled();
   });
 
   it("skips when optedOut is true", async () => {
     const m = makeMocks();
     m.cadence.optedOut = true;
-    const d = buildDispatcher(m);
-    const result = await d.processOne("client-1");
+    const result = await build(m).processOne("client-1");
     expect(result.reason).toBe("opted_out");
     expect(m.emailService.sendEmail).not.toHaveBeenCalled();
   });
@@ -178,18 +172,14 @@ describe("RebookingDispatcherService.processOne", () => {
   it("skips when no recommendedServiceId", async () => {
     const m = makeMocks();
     m.cadence.recommendedServiceId = null;
-    const d = buildDispatcher(m);
-    const result = await d.processOne("client-1");
+    const result = await build(m).processOne("client-1");
     expect(result.reason).toBe("no_recommended_service");
   });
 
   it("skips when reminderSentFor already contains this serviceId", async () => {
     const m = makeMocks();
-    m.cadence.reminderSentFor = [
-      { serviceId: "svc-1", sentAt: new Date().toISOString(), channel: "email" },
-    ];
-    const d = buildDispatcher(m);
-    const result = await d.processOne("client-1");
+    m.cadence.reminderSentFor = [{ serviceId: "svc-1", sentAt: new Date().toISOString(), channel: "email" }];
+    const result = await build(m).processOne("client-1");
     expect(result.reason).toBe("already_sent_for_cycle");
   });
 
@@ -200,11 +190,10 @@ describe("RebookingDispatcherService.processOne", () => {
       clientId: "client-1",
       serviceId: "svc-1",
       status: RebookStatus.sent,
-      sentAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
-      createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
+      sentAt: new Date(Date.now() - 5 * DAY),
+      createdAt: new Date(Date.now() - 5 * DAY),
     });
-    const d = buildDispatcher(m);
-    const result = await d.processOne("client-1");
+    const result = await build(m).processOne("client-1");
     expect(result.reason).toBe("reminder_already_exists");
   });
 
@@ -217,55 +206,180 @@ describe("RebookingDispatcherService.processOne", () => {
       visitsCount: 5,
       nextExpectedAt: new Date().toISOString(),
     };
-    const d = buildDispatcher(m);
-    const result = await d.processOne("client-1");
-    expect(result.ok).toBe(false);
-    expect(result.reason).toBe("high_variability");
-    // advanceCycle should have updated cadence.nextRecommendedReminderAt
+    const result = await build(m).processOne("client-1");
+    expect(result).toEqual({ ok: false, reason: "high_variability" });
     expect(m.prisma.clientCadence.update).toHaveBeenCalled();
   });
 
-  it("escapes HTML in client name and salon name (XSS regression)", async () => {
+  it("escapes every value in the HTML; the subject is plain text", async () => {
     const m = makeMocks();
-    const d = buildDispatcher(m);
-    await d.processOne("client-1");
+    await build(m).processOne("client-1");
     const call = m.emailService.sendEmail.mock.calls[0][0];
     expect(call.html).not.toContain("<script>");
     expect(call.html).not.toContain("<img src=x onerror=alert(1)>");
     expect(call.html).toContain("&lt;script&gt;");
     expect(call.html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+    expect(call.html).toContain("Corte &amp; color");
+    // The subject is not HTML: it used to show "&amp;" literally.
+    expect(call.subject).toContain("Corte & color");
+    expect(call.subject).not.toContain("&amp;");
+  });
+
+  it("carries the shared signed unsubscribe link and its one-click headers", async () => {
+    const m = makeMocks();
+    await build(m).processOne("client-1");
+    const call = m.emailService.sendEmail.mock.calls[0][0];
+    expect(m.unsubscribes.link).toHaveBeenCalledWith({ kind: "c", id: "client-1" });
+    expect(call.html).toContain('href="https://app.test/public/baja/signed-client-1"');
+    expect(call.html).not.toContain("/api/public/rebooking/opt-out");
+    expect(call.headers).toEqual({
+      "List-Unsubscribe": "<https://api.test/api/v1/public/email/unsubscribe/signed-client-1>",
+      "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+    });
   });
 
   it("advances nextRecommendedReminderAt after successful send", async () => {
     const m = makeMocks();
-    const d = buildDispatcher(m);
-    await d.processOne("client-1");
-    // At least one update call for cadence.advanceCycle and one for reminderSentFor.
-    const updateCalls = m.prisma.clientCadence.update.mock.calls;
-    expect(updateCalls.length).toBeGreaterThanOrEqual(1);
+    await build(m).processOne("client-1");
+    expect(m.prisma.clientCadence.update.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 
   it("missing client marks reminder failed", async () => {
     const m = makeMocks();
     m.prisma.client.findUnique.mockResolvedValue(null);
-    const d = buildDispatcher(m);
-    const result = await d.processOne("client-1");
+    const result = await build(m).processOne("client-1");
     expect(result.ok).toBe(false);
-    expect(m.prisma.rebookingReminder.update).toHaveBeenCalled();
     const updateCall = m.prisma.rebookingReminder.update.mock.calls[0][0];
     expect(updateCall.data.status).toBe(RebookStatus.failed);
     expect(updateCall.data.sentAt).toBeNull();
   });
 });
 
-describe("RebookingDispatcherService one notice per visit cycle", () => {
-  const DAY = 24 * 60 * 60 * 1000;
-  function build(m: ReturnType<typeof makeMocks>) {
-    const d = new RebookingDispatcherService(m.prisma, m.cadenceSvc, m.emailService, m.flags);
-    d.onModuleInit();
-    return d;
+describe("RebookingDispatcherService commercial-communication rules", () => {
+  it("does not email a client who refused promotions, and moves on to the next cycle", async () => {
+    const m = makeMocks();
+    m.consents.push({ purpose: "marketing", accepts: false });
+    const result = await build(m).processOne("client-1");
+    expect(result).toEqual({ ok: false, reason: "marketing_refused" });
+    expect(m.emailService.sendEmail).not.toHaveBeenCalled();
+    expect(m.prisma.rebookingReminder.create).not.toHaveBeenCalled();
+    expect(m.prisma.clientCadence.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ nextRecommendedReminderAt: expect.any(Date) }) }),
+    );
+  });
+
+  it("emails a client who accepted (or has not chosen: existing-client exception)", async () => {
+    const m = makeMocks();
+    m.consents.push({ purpose: "marketing", accepts: true });
+    expect((await build(m).processOne("client-1")).ok).toBe(true);
+  });
+
+  it("does not email an address on the salon's suppression list (bounce, complaint, unsubscribe)", async () => {
+    const m = makeMocks();
+    m.suppressed.add("x@example.com");
+    const result = await build(m).processOne("client-1");
+    expect(result).toEqual({ ok: false, reason: "email_suppressed" });
+    expect(m.suppressions.suppressedAmong).toHaveBeenCalledWith("tenant-1", ["x@example.com"]);
+    expect(m.emailService.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it.each(["inactive", "blocked"])("does not email a client whose status is %s", async (status) => {
+    const m = makeMocks();
+    m.client.status = status;
+    const result = await build(m).processOne("client-1");
+    expect(result).toEqual({ ok: false, reason: "client_not_active" });
+    expect(m.emailService.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("WhatsApp needs the client's explicit opt-in", async () => {
+    const m = makeMocks();
+    m.cadenceSvc.getTenantConfig.mockResolvedValue({ enabled: true, leadDays: 3, channelFallback: "whatsapp", minVisits: 3 });
+    expect(await build(m).processOne("client-1")).toEqual({ ok: false, reason: "no_whatsapp_marketing_consent" });
+    expect(m.prisma.rebookingReminder.create).not.toHaveBeenCalled();
+
+    const n = makeMocks();
+    n.cadenceSvc.getTenantConfig.mockResolvedValue({ enabled: true, leadDays: 3, channelFallback: "whatsapp", minVisits: 3 });
+    n.consents.push({ purpose: "marketing_whatsapp", accepts: true });
+    // Allowed; WhatsApp itself is not wired yet.
+    expect(await build(n).processOne("client-1")).toEqual({ ok: false, reason: "whatsapp_not_wired" });
+  });
+});
+
+describe("RebookingDispatcherService atomic claim", () => {
+  it("claims the row before anything else, with a lease", async () => {
+    const m = makeMocks();
+    const before = Date.now();
+    await build(m).processOne("client-1");
+    const claim = m.prisma.clientCadence.updateMany.mock.calls[0][0];
+    expect(claim.where.clientId).toBe("client-1");
+    expect(claim.where.OR[0]).toEqual({ dispatchClaimedAt: null });
+    const leaseEdge: Date = claim.where.OR[1].dispatchClaimedAt.lt;
+    expect(Math.abs(leaseEdge.getTime() - (before - CLAIM_LEASE_MS))).toBeLessThan(5_000);
+    expect(claim.data.dispatchClaimedAt).toBeInstanceOf(Date);
+  });
+
+  it("does nothing when another tick or instance holds the row", async () => {
+    const m = makeMocks();
+    m.prisma.clientCadence.updateMany.mockResolvedValue({ count: 0 });
+    const result = await build(m).processOne("client-1");
+    expect(result).toEqual({ ok: false, reason: "claimed_elsewhere" });
+    expect(m.prisma.clientCadence.findUnique).not.toHaveBeenCalled();
+    expect(m.emailService.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("two overlapping runs send one email", async () => {
+    const m = makeMocks();
+    let held = false;
+    m.prisma.clientCadence.updateMany.mockImplementation(async () => {
+      if (held) return { count: 0 };
+      held = true;
+      return { count: 1 };
+    });
+    const d = build(m);
+    await Promise.all([d.processOne("client-1"), d.processOne("client-1")]);
+    expect(m.emailService.sendEmail).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("RebookingDispatcherService suggested date", () => {
+  function localDay(at: Date) {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Madrid" }).format(at);
   }
 
+  it("never proposes a day gone by, even for a client well past her cycle", async () => {
+    const m = makeMocks();
+    m.cadence.byService["svc-1"].lastVisit = new Date(Date.now() - 60 * DAY).toISOString(); // due 39 days ago
+    await build(m).processOne("client-1", { hasAdvanced: true });
+    const slot = m.prisma.rebookingReminder.update.mock.calls[0][0].data.proposedSlot;
+    expect(slot.date >= localDay(new Date(Date.now() + DAY))).toBe(true);
+    expect(slot.time).toBe("18:30");
+  });
+
+  it("proposes her usual cycle when it is still ahead", async () => {
+    const m = makeMocks();
+    m.cadence.byService["svc-1"].lastVisit = new Date(Date.now() - 10 * DAY).toISOString();
+    await build(m).processOne("client-1", { hasAdvanced: true });
+    const slot = m.prisma.rebookingReminder.update.mock.calls[0][0].data.proposedSlot;
+    expect(slot.date).toBe(localDay(new Date(Date.now() + 11 * DAY)));
+    const html: string = m.emailService.sendEmail.mock.calls[0][0].html;
+    expect(html).toMatch(/Hace 10 días que no te vemos/);
+  });
+
+  it("basic mode proposes three days ahead and stores no slot", async () => {
+    const m = makeMocks();
+    await build(m).processOne("client-1", { hasAdvanced: false });
+    expect(m.prisma.rebookingReminder.update.mock.calls[0][0].data.proposedSlot).toBeUndefined();
+    const expected = new Date(Date.now() + 3 * DAY).toLocaleDateString("es-ES", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      timeZone: "Europe/Madrid",
+    });
+    expect(m.emailService.sendEmail.mock.calls[0][0].html).toContain(`el ${expected} a las 10:00`);
+  });
+});
+
+describe("RebookingDispatcherService one notice per visit cycle", () => {
   it("is eligible again once the service was completed after the last notice", async () => {
     const m = makeMocks();
     m.cadence.reminderSentFor = [
@@ -320,12 +434,8 @@ describe("RebookingDispatcherService one notice per visit cycle", () => {
 
   it("never emails a placeholder address, and does not retry it this cycle", async () => {
     const m = makeMocks();
-    m.prisma.client.findUnique.mockResolvedValue({
-      id: "client-1",
-      firstName: "Ana",
-      email: "wizard-1730000000000@placeholder.local",
-      phone: null,
-    });
+    m.client.email = "wizard-1730000000000@placeholder.local";
+    m.client.firstName = "Ana";
     const result = await build(m).processOne("client-1");
     expect(result).toEqual({ ok: false, reason: "no_email" });
     expect(m.emailService.sendEmail).not.toHaveBeenCalled();
@@ -355,162 +465,78 @@ describe("RebookingDispatcherService one notice per visit cycle", () => {
   });
 });
 
-describe("RebookingDispatcherService HMAC secret", () => {
-  const ORIGINAL_ENV = process.env;
-
-  beforeEach(() => {
-    jest.resetModules();
-    process.env = { ...ORIGINAL_ENV, NODE_ENV: "production" };
-    delete process.env.REBOOKING_OPT_OUT_SECRET;
-  });
-
-  afterEach(() => {
-    process.env = ORIGINAL_ENV;
-  });
-
-  it("throws at module init if NODE_ENV=production and no secret", () => {
-    const m = makeMocks();
-    const dispatcher = new RebookingDispatcherService(
-      m.prisma,
-      m.cadenceSvc,
-      m.emailService,
-      m.flags ?? ({} as any),
-    );
-    expect(() => dispatcher.onModuleInit()).toThrow(/REBOOKING_OPT_OUT_SECRET/);
-  });
-
-  it("throws if secret is too short", () => {
-    process.env.REBOOKING_OPT_OUT_SECRET = "short";
-    const m = makeMocks();
-    const dispatcher = new RebookingDispatcherService(
-      m.prisma,
-      m.cadenceSvc,
-      m.emailService,
-      m.flags ?? ({} as any),
-    );
-    expect(() => dispatcher.onModuleInit()).toThrow(/REBOOKING_OPT_OUT_SECRET/);
-  });
-
-  it("accepts a 16+ char secret in production", () => {
-    process.env.REBOOKING_OPT_OUT_SECRET = "this-is-a-secret-of-sufficient-length";
-    const m = makeMocks();
-    const dispatcher = new RebookingDispatcherService(
-      m.prisma,
-      m.cadenceSvc,
-      m.emailService,
-      m.flags ?? ({} as any),
-    );
-    expect(() => dispatcher.onModuleInit()).not.toThrow();
-  });
-});
-
 describe("RebookingDispatcherService.runDailyTick", () => {
-  function buildDispatcher(mocks: ReturnType<typeof makeMocks>) {
-    const dispatcher = new RebookingDispatcherService(
-      mocks.prisma,
-      mocks.cadenceSvc,
-      mocks.emailService,
-      // P2A-receptionist-advanced â€” spec passes a stub; tests that need
-      // a specific gating outcome (advanced vs basic) override this
-      // field on the returned dispatcher instance.
-      mocks.flags ?? ({} as any),
-    );
-    dispatcher.onModuleInit();
-    return dispatcher;
+  // 11:00 and 02:30 in Madrid (CET, UTC+1).
+  const MORNING = new Date("2026-11-03T10:00:00Z");
+  const NIGHT = new Date("2026-11-03T01:30:00Z");
+
+  function row(clientId: string, dueAt: Date, timezone = "Europe/Madrid") {
+    return { clientId, tenantId: "tenant-1", nextRecommendedReminderAt: dueAt, tenant: { timezone } };
   }
 
-  it("dispatches all cadences for the current UTC day", async () => {
+  it("sends the reminders due today in the salon's sending hours", async () => {
     const m = makeMocks();
-    const d = buildDispatcher(m);
-    const result = await d.runDailyTick();
-    expect(result.processed).toBe(1);
-    expect(result.sent).toBe(1);
-    expect(result.skipped).toBe(0);
+    m.prisma.clientCadence.findMany.mockResolvedValue([row("client-1", new Date("2026-11-03T08:00:00Z"))]);
+    const result = await build(m).runDailyTick(MORNING);
+    expect(result).toEqual({ processed: 1, sent: 1, skipped: 0, deferred: 0 });
   });
 
-  it("does not crash when no cadences match the current day", async () => {
+  it("defers, does not skip, outside the sending hours", async () => {
     const m = makeMocks();
-    m.prisma.clientCadence.findMany.mockResolvedValue([]);
-    const d = buildDispatcher(m);
-    const result = await d.runDailyTick();
+    m.prisma.clientCadence.findMany.mockResolvedValue([row("client-1", new Date("2026-11-02T23:30:00Z"))]);
+    const result = await build(m).runDailyTick(NIGHT);
+    expect(result).toEqual({ processed: 0, sent: 0, skipped: 0, deferred: 1 });
+    expect(m.prisma.clientCadence.updateMany).not.toHaveBeenCalled();
+    expect(m.emailService.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("picks up reminders from missed days, within the overdue window", async () => {
+    const m = makeMocks();
+    m.prisma.clientCadence.findMany.mockResolvedValue([row("client-1", new Date(MORNING.getTime() - 2 * DAY))]);
+    const result = await build(m).runDailyTick(MORNING);
+    expect(result.sent).toBe(1);
+    const where = m.prisma.clientCadence.findMany.mock.calls[0][0].where;
+    expect(where.nextRecommendedReminderAt.gte).toEqual(new Date(MORNING.getTime() - OVERDUE_WINDOW_DAYS * DAY));
+    expect(where.optedOut).toBe(false);
+    // rows another tick holds are not read again within the lease
+    expect(where.OR).toEqual([
+      { dispatchClaimedAt: null },
+      { dispatchClaimedAt: { lt: new Date(MORNING.getTime() - CLAIM_LEASE_MS) } },
+    ]);
+  });
+
+  it("leaves a reminder due tomorrow in the salon's time zone for tomorrow", async () => {
+    const m = makeMocks();
+    // 23:30 UTC on the 3rd is already the 4th in Madrid.
+    m.prisma.clientCadence.findMany.mockResolvedValue([row("client-1", new Date("2026-11-03T23:30:00Z"))]);
+    const result = await build(m).runDailyTick(MORNING);
+    expect(result).toEqual({ processed: 0, sent: 0, skipped: 0, deferred: 0 });
+  });
+
+  it("does not crash when nothing is due", async () => {
+    const m = makeMocks();
+    const result = await build(m).runDailyTick(MORNING);
     expect(result.processed).toBe(0);
     expect(result.sent).toBe(0);
   });
 
-  // P2A-receptionist-advanced â€” proactive rescheduling gate. The
-  // dispatcher must only run the "advanced" path (which adds the
-  // proposedSlot + calls suggestSlotFromCadence) when the tenant has
-  // `virtual_receptionist_advanced` unlocked. With advanced, the
-  // rebooking_reminder row must include `proposedSlot`; without
-  // advanced, the row goes through the basic path with no proposedSlot.
-  it("P2A-receptionist-advanced â€” proposedSlot is set when advanced=true and cadence has stats", async () => {
+  it("proposedSlot is set when advanced is unlocked and the cadence has stats", async () => {
     const m = makeMocks();
-    m.flags.isFeatureUnlocked = jest
-      .fn()
-      .mockImplementation((_t: string, key: string) =>
-        Promise.resolve(key === "virtual_receptionist_advanced"),
-      );
-    m.prisma.clientCadence.findMany.mockResolvedValue([
-      {
-        clientId: "client-1",
-        tenantId: "tenant-1",
-        lastComputedAt: new Date(Date.now() - 30 * 86400000),
-        byService: {
-          "service-1": { avgDays: 28, stdDevDays: 2, count: 3 },
-        },
-        recommendedServiceId: "service-1",
-        reminderSentFor: [],
-        optedOut: false,
-        tenant: m.tenant,
-      },
-    ] as any);
-    m.cadence.getTenantConfig = jest.fn().mockResolvedValue({
-      enabled: true,
-      leadDays: 3,
-      channelFallback: "email",
-    });
-    const d = buildDispatcher(m);
-    await d.runDailyTick();
-
-    expect(m.prisma.rebookingReminder.create).toHaveBeenCalled();
-    // proposedSlot is set in the UPDATE (after the deliver), not
-    // the create. Inspect the update call.
-    expect(m.prisma.rebookingReminder.update).toHaveBeenCalled();
+    m.flags.isFeatureUnlocked.mockImplementation((_t: string, key: string) =>
+      Promise.resolve(key === "virtual_receptionist_advanced"),
+    );
+    m.prisma.clientCadence.findMany.mockResolvedValue([row("client-1", MORNING)]);
+    await build(m).runDailyTick(MORNING);
     const updated = m.prisma.rebookingReminder.update.mock.calls[0][0];
-    expect(updated.data.proposedSlot).toBeDefined();
-    expect(updated.data.proposedSlot.date).toBeTruthy();
-    expect(updated.data.proposedSlot.time).toBeTruthy();
+    expect(updated.data.proposedSlot.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(updated.data.proposedSlot.time).toBe("18:30");
   });
 
-  it("P2A-receptionist-advanced â€” proposedSlot is null when advanced is locked", async () => {
+  it("proposedSlot is not set when advanced is locked", async () => {
     const m = makeMocks();
-    // flags.isFeatureUnlocked returns false for any key (default stub).
-    m.prisma.clientCadence.findMany.mockResolvedValue([
-      {
-        clientId: "client-2",
-        tenantId: "tenant-1",
-        lastComputedAt: new Date(Date.now() - 30 * 86400000),
-        byService: {
-          "service-2": { avgDays: 28, stdDevDays: 2, count: 3 },
-        },
-        recommendedServiceId: "service-2",
-        reminderSentFor: [],
-        optedOut: false,
-        tenant: m.tenant,
-      },
-    ] as any);
-    m.cadence.getTenantConfig = jest.fn().mockResolvedValue({
-      enabled: true,
-      leadDays: 3,
-      channelFallback: "email",
-    });
-    const d = buildDispatcher(m);
-    await d.runDailyTick();
-
+    m.prisma.clientCadence.findMany.mockResolvedValue([row("client-1", MORNING)]);
+    await build(m).runDailyTick(MORNING);
     expect(m.prisma.rebookingReminder.create).toHaveBeenCalled();
-    const created = m.prisma.rebookingReminder.create.mock.calls[0][0];
-    // Basic path leaves the field undefined so the migration's
-    // `proposedSlot: undefined` leaves the column NULL.
-    expect(created.proposedSlot).toBeUndefined();
+    expect(m.prisma.rebookingReminder.update.mock.calls[0][0].data.proposedSlot).toBeUndefined();
   });
 });

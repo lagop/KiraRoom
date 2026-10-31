@@ -25,6 +25,6 @@ import { PlatformModule } from "../platform/platform.module";
     EmailUnsubscribeService,
     ResendEventsService,
   ],
-  exports: [EmailCampaignsService],
+  exports: [EmailCampaignsService, EmailUnsubscribeService, EmailSuppressionService],
 })
 export class EmailCampaignsModule {}
