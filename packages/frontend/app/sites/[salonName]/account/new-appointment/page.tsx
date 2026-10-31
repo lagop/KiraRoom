@@ -182,7 +182,8 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
           apiClient.getServices(tenant.id),
         ]);
         setProfessionals(professionalsData as any);
-        setServices(servicesData as any);
+        // Only what the salon takes online: the server refuses the rest.
+        setServices((servicesData as any[]).filter((s) => s.isActive !== false && s.isOnlineBookable !== false) as any);
       } catch (error) {
         console.error('Error fetching salon data:', error);
         toast({

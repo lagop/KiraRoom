@@ -149,6 +149,30 @@ function refuseUnlessPrivateConversation(ctx: SalonToolContext): Record<string, 
   return null;
 }
 
+/**
+ * A service the salon has not opened to online booking (isOnlineBookable
+ * off) is not offered or booked by the receptionist either: the chat and
+ * WhatsApp are online bookings. The server refuses the booking itself
+ * (AppointmentsService.assertBookableOnline); this tells the model why, so
+ * it sends the client to the salon instead of trying other times.
+ */
+export async function notBookableOnline(
+  ctx: SalonToolContext,
+  serviceId: string,
+): Promise<{ error: string; message: string } | null> {
+  const service = await ctx.prisma.service.findFirst({
+    where: { id: serviceId, tenantId: ctx.tenantId, isActive: true },
+    select: { isOnlineBookable: true },
+  });
+  if (service?.isOnlineBookable !== false) return null;
+  return {
+    error: 'not_bookable_online',
+    message:
+      'The salon does not take bookings for this service online or by chat. Tell the client to call ' +
+      'the salon to book it (get_salon_info has the phone). Do not offer times for it.',
+  };
+}
+
 /** The phone a channel already gives us: WhatsApp identifies the user by number. */
 function channelPhone(ctx: SalonToolContext): string | undefined {
   const c = ctx.conversation;
@@ -186,6 +210,9 @@ export async function proposeAppointment(
       message: 'Ask the client for these details, then propose again.',
     };
   }
+
+  const closed = await notBookableOnline(ctx, details.serviceId);
+  if (closed) return { proposed: false, ...closed };
 
   // Is the slot still bookable online right now? (Booking re-checks it.)
   const slots = await ctx.appointmentsService!.getAvailableSlots(

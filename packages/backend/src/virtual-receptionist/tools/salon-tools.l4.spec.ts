@@ -214,6 +214,7 @@ describe('SalonToolsService (L-4)', () => {
         durationMinutes: 60,
         price: '45.00',
         currency: 'EUR',
+        onlineBookable: true,
       });
       expect(result.totalMatching).toBe(4);
     });

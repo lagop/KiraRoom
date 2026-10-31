@@ -174,7 +174,7 @@ describe("the dedicated endpoints", () => {
     const b = build(S.confirmed);
     await b.service.complete(OWNER, "apt-1", "Mechas");
     const write = b.prisma.appointment.update.mock.calls[0][0];
-    expect(write.where).toEqual({ id: "apt-1", status: S.confirmed });
+    expect(write.where).toEqual({ id: "apt-1", tenantId: OWNER.tenantId, status: S.confirmed });
     expect(write.data).toMatchObject({ status: S.completed, notes: "Mechas" });
     expect(write.data.completionTime).toBeInstanceOf(Date);
     expect(b.invoice.fromAppointment).toHaveBeenCalledWith("apt-1");
@@ -278,7 +278,7 @@ describe("PATCH /appointments/:id with a status", () => {
       cancellationReason: "Viaje",
     } as any);
     const write = b.prisma.appointment.update.mock.calls[0][0];
-    expect(write.where).toEqual({ id: "apt-1", status: S.confirmed });
+    expect(write.where).toEqual({ id: "apt-1", tenantId: OWNER.tenantId, status: S.confirmed });
     expect(write.data).toMatchObject({ status: S.cancelled, cancellationReason: "Viaje" });
     expect(b.sent.sendAppointmentCancelledNotifications).toHaveBeenCalledWith(expect.anything(), "Viaje");
     expect(b.waitList.onAppointmentCancelled).toHaveBeenCalledTimes(1);
@@ -332,7 +332,7 @@ describe("PATCH /appointments/:id with a status", () => {
     const b = build(S.completed);
     await b.service.update(OWNER, "apt-1", { status: S.completed, notes: "Le gustó" } as any);
     const write = b.prisma.appointment.update.mock.calls[0][0];
-    expect(write.where).toEqual({ id: "apt-1" });
+    expect(write.where).toEqual({ id: "apt-1", tenantId: OWNER.tenantId });
     expect(write.data.status).toBeUndefined();
     expect(write.data.notes).toBe("Le gustó");
     expect(b.invoice.fromAppointment).not.toHaveBeenCalled();
@@ -343,14 +343,15 @@ describe("the other callers", () => {
   it("a visit whose services are all done completes through the same path", async () => {
     const prisma: any = {
       appointmentService: {
+        findFirst: jest.fn(async () => ({ id: "row-1", appointmentId: "apt-1" })),
         update: jest.fn(async () => ({ id: "row-1", appointmentId: "apt-1" })),
         count: jest.fn(async () => 0),
       },
-      appointment: { findUnique: jest.fn(async () => ({ status: S.in_progress, tenantId: "t1" })) },
+      appointment: { findFirst: jest.fn(async () => ({ status: S.in_progress, tenantId: "t1" })) },
     };
     const appointments = { changeStatus: jest.fn(async () => ({})) };
     const svc = new AppointmentServicesService(prisma, appointments as any);
-    await svc.completeService("row-1");
+    await svc.completeService("row-1", OWNER);
     expect(appointments.changeStatus).toHaveBeenCalledWith(
       { role: "system", tenantId: "t1" },
       "apt-1",
@@ -362,13 +363,14 @@ describe("the other callers", () => {
     for (const status of [S.cancelled, S.completed]) {
       const prisma: any = {
         appointmentService: {
+          findFirst: jest.fn(async () => ({ id: "row-1", appointmentId: "apt-1" })),
           update: jest.fn(async () => ({ id: "row-1", appointmentId: "apt-1" })),
           count: jest.fn(async () => 0),
         },
-        appointment: { findUnique: jest.fn(async () => ({ status, tenantId: "t1" })) },
+        appointment: { findFirst: jest.fn(async () => ({ status, tenantId: "t1" })) },
       };
       const appointments = { changeStatus: jest.fn() };
-      await new AppointmentServicesService(prisma, appointments as any).completeService("row-1");
+      await new AppointmentServicesService(prisma, appointments as any).completeService("row-1", OWNER);
       expect(appointments.changeStatus).not.toHaveBeenCalled();
     }
   });

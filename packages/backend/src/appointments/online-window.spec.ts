@@ -62,6 +62,20 @@ describe("getAvailableSlots with onlineWindow", () => {
   it("offers nothing for an inactive service", async () => {
     expect(await slots(build({ isActive: false }), day(5), true)).toEqual([]);
   });
+
+  it("offers nothing for a service the salon does not take online; the staff still see its slots", async () => {
+    const svc = build({ isOnlineBookable: false });
+    expect(await slots(svc, day(5), true)).toEqual([]);
+    expect((await slots(svc, day(5), false)).length).toBeGreaterThan(0);
+  });
+
+  it("offers nothing with a professional who is no longer active", async () => {
+    const svc = build();
+    (svc as any).prisma.professional.findMany = async () => [
+      { id: PRO, tenantId: TENANT, workingHours: null, isActive: false },
+    ];
+    expect(await slots(svc, day(5), true)).toEqual([]);
+  });
 });
 
 describe("GET /appointments/available-slots", () => {

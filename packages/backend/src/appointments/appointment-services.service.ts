@@ -7,6 +7,13 @@ import { canTransition } from './appointment-status';
 import { syncVisitTotals } from './visit-sync';
 import { CreateAppointmentServiceDto, UpdateAppointmentServiceDto, AppointmentServiceFiltersDto, AppointmentServiceType, AppointmentServiceStatus } from './dto/appointment-services.dto';
 
+/** Whoever calls a route of this controller: req.user. */
+export interface ServiceRowCaller {
+  id: string;
+  role: string;
+  tenantId: string;
+}
+
 @Injectable()
 export class AppointmentServicesService {
   private readonly logger = new Logger(AppointmentServicesService.name);
@@ -18,19 +25,71 @@ export class AppointmentServicesService {
     private readonly appointments?: AppointmentsService,
   ) {}
 
-  async create(createDto: CreateAppointmentServiceDto) {
-    // Verify appointment exists
-    const appointment = await this.prisma.appointment.findUnique({
-      where: { id: createDto.appointmentId },
+  /** The caller's own professional record, or null when the account has none. */
+  private async ownProfessionalId(user: ServiceRowCaller): Promise<string | null> {
+    const own = await this.prisma.professional.findFirst({
+      where: { userId: user.id, tenantId: user.tenantId },
+      select: { id: true },
     });
+    return own?.id ?? null;
+  }
 
+  /**
+   * The rows a caller may see and act on, as a filter: always this salon's
+   * (the tenant filter adds it too; said here so it does not rest on that
+   * alone). A professional (role staff) only their own rows, as for
+   * appointments (findAll / findOne): the services they perform, or, for a
+   * row with nobody on it (a colour's processing time), those of an
+   * appointment that is theirs. The same rule `update` applies. Per row and
+   * not per appointment: in a visit shared by two professionals each starts,
+   * completes or cancels their own service, and neither touches the
+   * other's. Null for a staff account not linked to a professional: nothing.
+   */
+  private async visibleRows(user: ServiceRowCaller): Promise<Record<string, any> | null> {
+    const where: Record<string, any> = { appointment: { tenantId: user.tenantId } };
+    if (user.role !== 'staff') return where;
+    const own = await this.ownProfessionalId(user);
+    if (!own) return null;
+    where.OR = [{ professionalId: own }, { professionalId: null, appointment: { professionalId: own } }];
+    return where;
+  }
+
+  /**
+   * The appointment new rows go into. A professional adds services only to
+   * an appointment of their own, and only for themselves: a row on a
+   * colleague's appointment would also open that visit and its client to
+   * them.
+   */
+  private async appointmentForNewRows(
+    user: ServiceRowCaller,
+    appointmentId: string,
+    professionalIds: Array<string | null | undefined>,
+  ) {
+    const appointment = await this.prisma.appointment.findFirst({
+      where: { id: appointmentId, tenantId: user.tenantId },
+    });
     if (!appointment) {
       throw new NotFoundException('Appointment not found');
     }
+    if (user.role === 'staff') {
+      const own = await this.ownProfessionalId(user);
+      if (!own || appointment.professionalId !== own) {
+        throw new NotFoundException('Appointment not found');
+      }
+      if (professionalIds.some((id) => !!id && id !== own)) {
+        throw new ForbiddenException('Solo puedes añadir a tu cita servicios que haces tú.');
+      }
+    }
+    return appointment;
+  }
+
+  async create(createDto: CreateAppointmentServiceDto, user: ServiceRowCaller) {
+    // The appointment is this salon's and, for a professional, theirs.
+    await this.appointmentForNewRows(user, createDto.appointmentId, [createDto.professionalId]);
 
     // Verify service exists
-    const service = await this.prisma.service.findUnique({
-      where: { id: createDto.serviceId },
+    const service = await this.prisma.service.findFirst({
+      where: { id: createDto.serviceId, tenantId: user.tenantId },
     });
 
     if (!service) {
@@ -39,8 +98,8 @@ export class AppointmentServicesService {
 
     // If professional is provided, verify they exist
     if (createDto.professionalId) {
-      const professional = await this.prisma.professional.findUnique({
-        where: { id: createDto.professionalId },
+      const professional = await this.prisma.professional.findFirst({
+        where: { id: createDto.professionalId, tenantId: user.tenantId },
       });
 
       if (!professional) {
@@ -52,7 +111,7 @@ export class AppointmentServicesService {
     let order = createDto.order;
     if (order === undefined) {
       const lastService = await this.prisma.appointmentService.findFirst({
-        where: { appointmentId: createDto.appointmentId },
+        where: { appointmentId: createDto.appointmentId, appointment: { tenantId: user.tenantId } },
         orderBy: { order: 'desc' },
       });
       order = lastService ? lastService.order + 1 : 0;
@@ -85,8 +144,10 @@ export class AppointmentServicesService {
     return appointmentService;
   }
 
-  async findAll(filters: AppointmentServiceFiltersDto) {
-    const where: any = {};
+  async findAll(filters: AppointmentServiceFiltersDto, user: ServiceRowCaller) {
+    const visible = await this.visibleRows(user);
+    if (!visible) return [];
+    const where: any = { ...visible };
 
     if (filters.appointmentId) {
       where.appointmentId = filters.appointmentId;
@@ -138,9 +199,11 @@ export class AppointmentServicesService {
     return appointmentServices;
   }
 
-  async findByAppointment(appointmentId: string) {
+  async findByAppointment(appointmentId: string, user: ServiceRowCaller) {
+    const visible = await this.visibleRows(user);
+    if (!visible) return [];
     const appointmentServices = await this.prisma.appointmentService.findMany({
-      where: { appointmentId },
+      where: { ...visible, appointmentId },
       include: {
         service: true,
         professional: true,
@@ -151,9 +214,15 @@ export class AppointmentServicesService {
     return appointmentServices;
   }
 
-  async findOne(id: string) {
-    const appointmentService = await this.prisma.appointmentService.findUnique({
-      where: { id },
+  /**
+   * One row the caller may see (visibleRows). Every route that acts on a row
+   * reads it through here first: a row that is not theirs is "not found".
+   */
+  async findOne(id: string, user: ServiceRowCaller) {
+    const visible = await this.visibleRows(user);
+    if (!visible) throw new NotFoundException('Appointment service not found');
+    const appointmentService = await this.prisma.appointmentService.findFirst({
+      where: { ...visible, id },
       include: {
         service: true,
         professional: true,
@@ -175,12 +244,12 @@ export class AppointmentServicesService {
   async update(
     id: string,
     updateDto: UpdateAppointmentServiceDto,
-    user?: { id: string; role: string; tenantId: string },
+    user: ServiceRowCaller,
   ) {
-    // Check if exists
-    await this.findOne(id);
-    const current = await this.prisma.appointmentService.findUnique({
-      where: { id },
+    // Check it exists and the caller may change it
+    await this.findOne(id, user);
+    const current = await this.prisma.appointmentService.findFirst({
+      where: { id, appointment: { tenantId: user.tenantId } },
       select: {
         professionalId: true,
         scheduledStart: true,
@@ -195,7 +264,7 @@ export class AppointmentServicesService {
 
     // A professional moves only their own services, within their own agenda.
     // This route let any member of the team change anyone's.
-    if (user?.role === 'staff') {
+    if (user.role === 'staff') {
       const own = await this.prisma.professional.findFirst({
         where: { userId: user.id, tenantId: user.tenantId },
         select: { id: true },
@@ -232,8 +301,8 @@ export class AppointmentServicesService {
 
     // If professional is being updated, verify they exist
     if (updateDto.professionalId) {
-      const professional = await this.prisma.professional.findUnique({
-        where: { id: updateDto.professionalId },
+      const professional = await this.prisma.professional.findFirst({
+        where: { id: updateDto.professionalId, tenantId: user.tenantId },
       });
 
       if (!professional) {
@@ -242,7 +311,7 @@ export class AppointmentServicesService {
     }
 
     const appointmentService = await this.prisma.appointmentService.update({
-      where: { id },
+      where: { id, appointment: { tenantId: user.tenantId } },
       data: {
         professionalId: updateDto.professionalId,
         scheduledStart: updateDto.scheduledStart,
@@ -269,16 +338,16 @@ export class AppointmentServicesService {
     return appointmentService;
   }
 
-  async remove(id: string) {
-    // Check if exists
-    const row = await this.findOne(id);
+  async remove(id: string, user: ServiceRowCaller) {
+    // Check it exists and the caller may remove it
+    const row = await this.findOne(id, user);
     // A service already done is part of what the client is charged for.
     if (row.status === AppointmentServiceStatus.completed) {
       throw new ConflictException('Este servicio ya está completado: no se puede quitar de la cita.');
     }
 
     await this.prisma.appointmentService.delete({
-      where: { id },
+      where: { id, appointment: { tenantId: user.tenantId } },
     });
     await syncVisitTotals(this.prisma, row.appointmentId);
 
@@ -286,9 +355,11 @@ export class AppointmentServicesService {
     return { success: true };
   }
 
-  async updateStatus(id: string, status: AppointmentServiceStatus) {
+  async updateStatus(id: string, status: AppointmentServiceStatus, user: ServiceRowCaller) {
+    // Only a row the caller may act on (visibleRows).
+    await this.findOne(id, user);
     const appointmentService = await this.prisma.appointmentService.update({
-      where: { id },
+      where: { id, appointment: { tenantId: user.tenantId } },
       data: { status },
       include: {
         service: true,
@@ -303,29 +374,30 @@ export class AppointmentServicesService {
 
     // If service is completed, check if all services for the appointment are done
     if (status === AppointmentServiceStatus.completed) {
-      await this.checkAppointmentCompletion(appointmentService.appointmentId);
+      await this.checkAppointmentCompletion(appointmentService.appointmentId, user.tenantId);
     }
 
     this.logger.log(`Updated status of appointment service ${id} to ${status}`);
     return appointmentService;
   }
 
-  async startService(id: string) {
-    return this.updateStatus(id, AppointmentServiceStatus.active);
+  async startService(id: string, user: ServiceRowCaller) {
+    return this.updateStatus(id, AppointmentServiceStatus.active, user);
   }
 
-  async completeService(id: string) {
-    return this.updateStatus(id, AppointmentServiceStatus.completed);
+  async completeService(id: string, user: ServiceRowCaller) {
+    return this.updateStatus(id, AppointmentServiceStatus.completed, user);
   }
 
-  async cancelService(id: string) {
-    return this.updateStatus(id, AppointmentServiceStatus.cancelled);
+  async cancelService(id: string, user: ServiceRowCaller) {
+    return this.updateStatus(id, AppointmentServiceStatus.cancelled, user);
   }
 
-  private async checkAppointmentCompletion(appointmentId: string) {
+  private async checkAppointmentCompletion(appointmentId: string, tenantId: string) {
     const pendingServices = await this.prisma.appointmentService.count({
       where: {
         appointmentId,
+        appointment: { tenantId },
         status: {
           notIn: [AppointmentServiceStatus.completed, AppointmentServiceStatus.cancelled],
         },
@@ -339,8 +411,8 @@ export class AppointmentServicesService {
     // to be a bare status write: no invoice, and a cancelled visit could
     // become completed. Only when the transition table allows it -- a
     // completed visit is not completed (and invoiced) twice.
-    const appointment = await this.prisma.appointment.findUnique({
-      where: { id: appointmentId },
+    const appointment = await this.prisma.appointment.findFirst({
+      where: { id: appointmentId, tenantId },
       select: { status: true, tenantId: true },
     });
     if (!appointment || !this.appointments) return;
@@ -360,15 +432,14 @@ export class AppointmentServicesService {
   }
 
   // Bulk create services for an appointment (for multi-service bookings)
-  async bulkCreate(appointmentId: string, services: CreateAppointmentServiceDto[]) {
-    // Verify appointment exists
-    const appointment = await this.prisma.appointment.findUnique({
-      where: { id: appointmentId },
-    });
-
-    if (!appointment) {
-      throw new NotFoundException('Appointment not found');
-    }
+  async bulkCreate(appointmentId: string, services: CreateAppointmentServiceDto[], user: ServiceRowCaller) {
+    // The appointment is this salon's and, for a professional, theirs; and a
+    // professional adds only services they do.
+    const appointment = await this.appointmentForNewRows(
+      user,
+      appointmentId,
+      Array.isArray(services) ? services.map((s) => s?.professionalId) : [],
+    );
 
     // The body is not validated item by item, and rows on this model are not
     // stamped with the tenant: another salon's service or professional id
@@ -420,9 +491,12 @@ export class AppointmentServicesService {
   }
 
   // Get services that need processing time decomposition
-  async getServicesWithProcessingTime(appointmentId: string) {
+  async getServicesWithProcessingTime(appointmentId: string, user: ServiceRowCaller) {
+    const visible = await this.visibleRows(user);
+    if (!visible) return [];
     const services = await this.prisma.appointmentService.findMany({
       where: {
+        ...visible,
         appointmentId,
         service: {
           hasProcessingTime: true,
@@ -437,11 +511,11 @@ export class AppointmentServicesService {
   }
 
   // Create processing time blocks for a service
-  async createProcessingBlocks(appointmentServiceId: string, processingDuration?: number) {
-    const appointmentService = await this.findOne(appointmentServiceId);
-    
-    const service = await this.prisma.service.findUnique({
-      where: { id: appointmentService.serviceId },
+  async createProcessingBlocks(appointmentServiceId: string, user: ServiceRowCaller, processingDuration?: number) {
+    const appointmentService = await this.findOne(appointmentServiceId, user);
+
+    const service = await this.prisma.service.findFirst({
+      where: { id: appointmentService.serviceId, tenantId: user.tenantId },
     });
 
     if (!service || !service.hasProcessingTime) {
@@ -474,7 +548,7 @@ export class AppointmentServicesService {
 
     // Update original service to end when processing starts
     await this.prisma.appointmentService.update({
-      where: { id: appointmentServiceId },
+      where: { id: appointmentServiceId, appointment: { tenantId: user.tenantId } },
       data: {
         scheduledEnd: applicationEnd,
         type: AppointmentServiceType.active,

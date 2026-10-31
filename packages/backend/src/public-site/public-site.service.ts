@@ -71,6 +71,8 @@ export class PublicSiteService {
           price: true,
           currency: true,
           category: true,
+          // Shown on the price list, but booked by phone when false.
+          isOnlineBookable: true,
         },
         orderBy: [{ category: "asc" }, { name: "asc" }],
       }),

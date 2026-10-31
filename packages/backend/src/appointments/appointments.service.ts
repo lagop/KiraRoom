@@ -257,7 +257,10 @@ export class AppointmentsService {
    * for 03:00, for yesterday, or for a slot already taken.
    *
    * - The salon is the chosen professional's -- or, for the widget's "any
-   *   professional", the widget's.
+   *   professional", the widget's. A widget named alongside a professional
+   *   must be that salon's (assertBookableOnline).
+   * - Only a service the salon offers online (active, isOnlineBookable), and
+   *   only an active professional.
    * - The start must be inside the service's booking window
    *   (minAdvanceBooking hours to maxAdvanceBooking days from now).
    * - The slot must be one getAvailableSlots offers: on the professional's
@@ -310,6 +313,7 @@ export class AppointmentsService {
   ) {
     const professionalId = dto.professionalId || undefined;
     const widgetProfessionals = allowedProfessionals;
+    await this.assertBookableOnline(tenantId, dto);
     const window = await this.onlineBookingWindow(tenantId, dto.serviceId);
     if (!window) throw new NotFoundException("Servicio no encontrado");
 
@@ -343,8 +347,9 @@ export class AppointmentsService {
 
         // Inserted through the normal client: it commits at once, before this
         // transaction ends and releases the lock, so the next request's check
-        // sees it.
-        return this.insertAppointment({ ...dto, professionalId: assigned }, tenantId);
+        // sees it. `online`: an existing client's contact details are left
+        // as they are (findOrCreateClient).
+        return this.insertAppointment({ ...dto, professionalId: assigned }, tenantId, { online: true });
       },
       { timeout: 15_000 },
     );
@@ -356,6 +361,48 @@ export class AppointmentsService {
       confirmationEmailSent: notified?.emailSent === true,
       confirmationSmsSent: notified?.smsSent === true,
     });
+  }
+
+  /**
+   * What an online booking may not name, whoever makes it (the site, the
+   * widget, the virtual receptionist): a service the salon does not offer
+   * online -- inactive, or marked not bookable online -- an inactive
+   * professional, or another salon's widget. The panel's bookings
+   * (createByStaff) do not come through here: the team may book any of
+   * the salon's services by hand.
+   */
+  private async assertBookableOnline(tenantId: string, dto: OnlineBookingDto): Promise<void> {
+    const professionalId = dto.professionalId || undefined;
+    const [service, professional, widget] = await Promise.all([
+      this.prisma.service.findFirst({
+        where: { id: dto.serviceId, tenantId },
+        select: { isActive: true, isOnlineBookable: true },
+      }),
+      professionalId
+        ? this.prisma.professional.findFirst({
+            where: { id: professionalId, tenantId },
+            select: { isActive: true },
+          })
+        : Promise.resolve(undefined),
+      dto.widgetInstanceId
+        ? this.prisma.widgetInstance.findFirst({
+            where: { id: dto.widgetInstanceId, tenantId },
+            select: { id: true },
+          })
+        : Promise.resolve(undefined),
+    ]);
+    if (!service || !service.isActive) throw new NotFoundException("Servicio no encontrado");
+    if (!service.isOnlineBookable) {
+      throw new ForbiddenException({
+        code: "SERVICE_NOT_BOOKABLE_ONLINE",
+        message: "Este servicio no se puede reservar online. Llama al salón para pedir cita.",
+      });
+    }
+    if (professional !== undefined && !professional?.isActive) {
+      throw new NotFoundException("Profesional no encontrado");
+    }
+    // Attribution only, but never to another salon's widget.
+    if (widget === null) throw new NotFoundException("Widget no encontrado");
   }
 
   /**
@@ -451,12 +498,21 @@ export class AppointmentsService {
    *
    * Online bookings require a phone and make the email optional, so a
    * returning client may come with either. A detail the record lacks is
-   * filled in; one it has is never overwritten by what a booking form says.
+   * filled in on a booking by the team (`fillMissing`); one it has is never
+   * overwritten by what a booking form says.
+   *
+   * A public booking (the site, the widget, the receptionist) changes
+   * nothing on an existing client: whoever books is only known by the one
+   * detail that matched. Filling in the other one from the form would send
+   * that client's notices to whoever typed it. The booking is still made
+   * for the matched client; the appointment has no contact fields of its
+   * own to keep the differing detail in.
    */
   private async findOrCreateClient(
     tenantId: string,
     info: { firstName: string; lastName: string; email?: string; phone?: string },
     db: any = this.prisma,
+    { fillMissing }: { fillMissing: boolean } = { fillMissing: true },
   ): Promise<string> {
     const email = info.email?.trim() || undefined;
     const phone = info.phone?.trim() || undefined;
@@ -485,11 +541,12 @@ export class AppointmentsService {
     }
 
     if (existing) {
+      if (!fillMissing) return existing.id;
       const fill: Record<string, string> = {};
       if (email && !existing.email) fill.email = email;
       if (phone && !existing.phone) fill.phone = await this.salonPhone(tenantId, phone, db);
       if (Object.keys(fill).length > 0) {
-        await db.client.update({ where: { id: existing.id }, data: fill });
+        await db.client.update({ where: { id: existing.id, tenantId }, data: fill });
       }
       return existing.id;
     }
@@ -522,7 +579,8 @@ export class AppointmentsService {
    * `visit`: a panel booking passes its transaction (`db`), so the client,
    * the appointment and its service rows are written together or not at
    * all; the visit's length when it has several services; and those rows,
-   * already timed.
+   * already timed. `online`: a public booking, which leaves an existing
+   * client's contact details as they are (findOrCreateClient).
    */
   private async insertAppointment(
     createAppointmentDto: CreateAppointmentDto & { commissionRate?: number },
@@ -537,6 +595,7 @@ export class AppointmentsService {
         scheduledStart: Date;
         scheduledEnd: Date;
       }>;
+      online?: boolean;
     } = {},
   ) {
     const db = visit.db ?? this.prisma;
@@ -578,7 +637,9 @@ export class AppointmentsService {
 
     // Find or create client if clientInfo provided
     if (!clientId && createAppointmentDto.clientInfo) {
-      clientId = await this.findOrCreateClient(tenantId, createAppointmentDto.clientInfo, db);
+      clientId = await this.findOrCreateClient(tenantId, createAppointmentDto.clientInfo, db, {
+        fillMissing: !visit.online,
+      });
     }
 
     if (!clientId) {
@@ -887,7 +948,9 @@ export class AppointmentsService {
   }
 
   async findAll(user: any, filters?: AppointmentFiltersDto) {
-    const where: any = {};
+    // This salon's only: the tenant filter adds it too, and a tenantId in
+    // the filters is not the caller's to choose.
+    const where: any = { tenantId: user.tenantId };
 
     // Aplicar filtro automático para usuarios STAFF - solo ven sus propias citas
     if (user.role === "staff") {
@@ -906,7 +969,6 @@ export class AppointmentsService {
     }
 
     if (filters) {
-      if (filters.tenantId) where.tenantId = filters.tenantId;
       // Para STAFF, el professionalId ya fue forzado arriba, ignorar el del cliente
       if (filters.professionalId && user.role !== "staff")
         where.professionalId = filters.professionalId;
@@ -924,7 +986,7 @@ export class AppointmentsService {
       // Handle clientEmail filter by finding the client first
       if (filters.clientEmail && !filters.clientId) {
         const client = await this.prisma.client.findFirst({
-          where: { email: filters.clientEmail },
+          where: { email: filters.clientEmail, tenantId: user.tenantId },
         });
         if (client) {
           where.clientId = client.id;
@@ -939,6 +1001,7 @@ export class AppointmentsService {
         const searchTerm = filters.searchQuery.trim();
         const clients = await this.prisma.client.findMany({
           where: {
+            tenantId: user.tenantId,
             OR: [
               { firstName: { contains: searchTerm, mode: 'insensitive' } },
               { lastName: { contains: searchTerm, mode: 'insensitive' } },
@@ -1002,7 +1065,7 @@ export class AppointmentsService {
 
   async findOne(user: any, id: string) {
     const appointment = await (this.prisma.appointment.findUnique as any)({
-      where: { id },
+      where: { id, tenantId: user.tenantId },
       include: {
         client: true,
         professional: true,
@@ -1351,7 +1414,9 @@ export class AppointmentsService {
     if (rowEdit && rowsChanged) {
       const removeIds = rowEdit.remove.map((r) => r.id);
       if (removeIds.length > 0) {
-        rowWrites.push((db) => db.appointmentService.deleteMany({ where: { id: { in: removeIds }, appointmentId: id } }));
+        rowWrites.push((db) => db.appointmentService.deleteMany({
+          where: { id: { in: removeIds }, appointmentId: id, appointment: { tenantId: user.tenantId } },
+        }));
       }
       for (const a of rowEdit.add) {
         rowWrites.push((db) =>
@@ -1379,7 +1444,10 @@ export class AppointmentsService {
       if (!!was.isParallel !== !!r.isParallel) data.isParallel = r.isParallel;
       if (rowEdit && (was.order ?? null) !== r.order) data.order = r.order;
       if (Object.keys(data).length > 0) {
-        rowWrites.push((db) => db.appointmentService.update({ where: { id: r.id }, data }));
+        rowWrites.push((db) => db.appointmentService.update({
+          where: { id: r.id, appointmentId: id, appointment: { tenantId: user.tenantId } },
+          data,
+        }));
       }
     }
 
@@ -1387,7 +1455,7 @@ export class AppointmentsService {
     try {
       // Get current appointment for activity logging
       const currentAppointment = await this.prisma.appointment.findUnique({
-        where: { id },
+        where: { id, tenantId: user.tenantId },
         include: {
           client: true,
           professional: true,
@@ -1402,7 +1470,9 @@ export class AppointmentsService {
         return db.appointment.update({
           // A status change is written only over the status it was checked
           // against (see changeStatus).
-          where: (statusTo ? { id, status: oldStatus } : { id }) as any,
+          where: (statusTo
+            ? { id, tenantId: user.tenantId, status: oldStatus }
+            : { id, tenantId: user.tenantId }) as any,
           data: updateData,
           include: {
             client: true,
@@ -1549,7 +1619,7 @@ export class AppointmentsService {
       updated = await this.prisma.appointment.update({
         // Only if nobody changed it since we read it: two "complete" clicks
         // at once used to both go through and issue two invoices.
-        where: { id, status: from } as any,
+        where: { id, tenantId: user.tenantId, status: from } as any,
         data: { ...data, updatedAt: new Date() },
         include: {
           client: true,
@@ -1760,6 +1830,7 @@ export class AppointmentsService {
     filters: PendingPaymentFiltersDto,
   ) {
     const where: any = {
+      tenantId: user.tenantId,
       paymentStatus: { in: [PaymentStatus.pending, PaymentStatus.failed] },
       status: { notIn: [AppointmentStatus.cancelled, AppointmentStatus.no_show] },
     };
@@ -1780,6 +1851,7 @@ export class AppointmentsService {
     if (filters.searchQuery) {
       const client = await this.prisma.client.findFirst({
         where: {
+          tenantId: user.tenantId,
           OR: [
             { firstName: { contains: filters.searchQuery, mode: "insensitive" } },
             { lastName: { contains: filters.searchQuery, mode: "insensitive" } },
@@ -1898,7 +1970,7 @@ export class AppointmentsService {
     if (data.status === PaymentStatus.paid) assertVisitChargeable(appointment);
 
     const updatedAppointment = await this.prisma.appointment.update({
-      where: { id },
+      where: { id, tenantId: user.tenantId },
       data: {
         paymentStatus: data.status,
         amountPaid: data.amountPaid,
@@ -1965,7 +2037,7 @@ export class AppointmentsService {
 
   private async loadVisit(user: any, serviceRowId: string) {
     const row = await this.prisma.appointmentService.findUnique({
-      where: { id: serviceRowId },
+      where: { id: serviceRowId, appointment: { tenantId: user.tenantId } },
       select: { appointmentId: true },
     });
     if (!row) throw new NotFoundException("Servicio no encontrado");
@@ -2193,7 +2265,7 @@ export class AppointmentsService {
         const extra = rowData.get(s.id);
         if (!changedIds.has(s.id) && !extra) continue;
         await tx.appointmentService.update({
-          where: { id: s.id },
+          where: { id: s.id, appointmentId: appointment.id, appointment: { tenantId: user.tenantId } },
           data: {
             ...(changedIds.has(s.id)
               ? { scheduledStart: s.start, scheduledEnd: s.end, professionalId: s.professionalId }
@@ -2205,10 +2277,13 @@ export class AppointmentsService {
       // Rows outside the schedule (cancelled ones) may still take a new order.
       for (const [id, extra] of rowData) {
         if (after.some((s) => s.id === id)) continue;
-        await tx.appointmentService.update({ where: { id }, data: extra });
+        await tx.appointmentService.update({
+          where: { id, appointmentId: appointment.id, appointment: { tenantId: user.tenantId } },
+          data: extra,
+        });
       }
       return tx.appointment.update({
-        where: { id: appointment.id },
+        where: { id: appointment.id, tenantId: user.tenantId },
         data: {
           scheduledDate: new Date(`${day}T00:00:00.000Z`),
           scheduledTime: time,
@@ -2256,7 +2331,7 @@ export class AppointmentsService {
     await this.findOne(user, appointmentId);
 
     return this.prisma.appointmentActivity.findMany({
-      where: { appointmentId },
+      where: { appointmentId, appointment: { tenantId: user.tenantId } },
       orderBy: { createdAt: "desc" },
     });
   }
@@ -2373,7 +2448,12 @@ export class AppointmentsService {
 
     // Get the service duration if specified
     let serviceDuration = duration;
-    let serviceRow: { isActive: boolean; minAdvanceBooking: number | null; maxAdvanceBooking: number | null } | null = null;
+    let serviceRow: {
+      isActive: boolean;
+      isOnlineBookable: boolean;
+      minAdvanceBooking: number | null;
+      maxAdvanceBooking: number | null;
+    } | null = null;
     if (serviceId) {
       const service = await this.prisma.service.findFirst({
         where: { id: serviceId, tenantId },
@@ -2521,7 +2601,11 @@ export class AppointmentsService {
     const free = availableSlots.filter((slot) => slot.isAvailable);
     if (!opts.onlineWindow) return free;
 
-    if (serviceRow && serviceRow.isActive === false) return [];
+    // Nothing a booking from outside the salon would refuse
+    // (assertBookableOnline): a service it does not offer online, or a named
+    // professional who no longer works there.
+    if (serviceRow && (serviceRow.isActive === false || serviceRow.isOnlineBookable === false)) return [];
+    if (professionalRows.some((p: any) => p.isActive === false)) return [];
     const window = {
       timeZone: (tenant as any).timezone || "Europe/Madrid",
       minHours: serviceRow?.minAdvanceBooking ?? 0,

@@ -31,6 +31,9 @@ import { ScrubSecretsInterceptor } from "./appointment-response";
 @UseGuards(JwtAuthGuard)
 // Its rows include the appointment's client whole: password hash and all.
 @UseInterceptors(ScrubSecretsInterceptor)
+// Every route passes the caller on: a professional (role staff) sees and acts
+// on their own service rows only (AppointmentServicesService.visibleRows; the
+// visit moves check the same through AppointmentsService.staffVisitCheck).
 @Controller('appointment-services')
 export class AppointmentServicesController {
   constructor(
@@ -59,24 +62,33 @@ export class AppointmentServicesController {
   @ApiResponse({ status: 201, description: 'Appointment service created successfully' })
   @ApiResponse({ status: 404, description: 'Appointment or Service not found' })
   @Roles(...SALON_TEAM)
-  create(@Body() createDto: CreateAppointmentServiceDto) {
-    return this.appointmentServicesService.create(createDto);
+  create(
+    @Body() createDto: CreateAppointmentServiceDto,
+    @CurrentUser() user: { id: string; role: string; tenantId: string },
+  ) {
+    return this.appointmentServicesService.create(createDto, user);
   }
 
   @Get()
   @ApiOperation({ summary: 'Get all appointment services with optional filters' })
   @ApiResponse({ status: 200, description: 'List of appointment services' })
   @Roles(...SALON_TEAM)
-  findAll(@Query() filters: AppointmentServiceFiltersDto) {
-    return this.appointmentServicesService.findAll(filters);
+  findAll(
+    @Query() filters: AppointmentServiceFiltersDto,
+    @CurrentUser() user: { id: string; role: string; tenantId: string },
+  ) {
+    return this.appointmentServicesService.findAll(filters, user);
   }
 
   @Get('appointment/:appointmentId')
   @ApiOperation({ summary: 'Get all services for a specific appointment' })
   @ApiResponse({ status: 200, description: 'List of appointment services for the appointment' })
   @Roles(...SALON_TEAM)
-  findByAppointment(@Param('appointmentId', ParseUUIDPipe) appointmentId: string) {
-    return this.appointmentServicesService.findByAppointment(appointmentId);
+  findByAppointment(
+    @Param('appointmentId', ParseUUIDPipe) appointmentId: string,
+    @CurrentUser() user: { id: string; role: string; tenantId: string },
+  ) {
+    return this.appointmentServicesService.findByAppointment(appointmentId, user);
   }
 
   @Get(':id')
@@ -84,8 +96,11 @@ export class AppointmentServicesController {
   @ApiResponse({ status: 200, description: 'Appointment service details' })
   @ApiResponse({ status: 404, description: 'Appointment service not found' })
   @Roles(...SALON_TEAM)
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.appointmentServicesService.findOne(id);
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: { id: string; role: string; tenantId: string },
+  ) {
+    return this.appointmentServicesService.findOne(id, user);
   }
 
   @Put(':id')
@@ -106,8 +121,11 @@ export class AppointmentServicesController {
   @ApiResponse({ status: 200, description: 'Appointment service deleted successfully' })
   @ApiResponse({ status: 404, description: 'Appointment service not found' })
   @Roles(...SALON_TEAM)
-  remove(@Param('id', ParseUUIDPipe) id: string) {
-    return this.appointmentServicesService.remove(id);
+  remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: { id: string; role: string; tenantId: string },
+  ) {
+    return this.appointmentServicesService.remove(id, user);
   }
 
   @Post(':id/start')
@@ -115,8 +133,11 @@ export class AppointmentServicesController {
   @ApiResponse({ status: 200, description: 'Service started' })
   @ApiResponse({ status: 404, description: 'Appointment service not found' })
   @Roles(...SALON_TEAM)
-  startService(@Param('id', ParseUUIDPipe) id: string) {
-    return this.appointmentServicesService.startService(id);
+  startService(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: { id: string; role: string; tenantId: string },
+  ) {
+    return this.appointmentServicesService.startService(id, user);
   }
 
   @Post(':id/complete')
@@ -124,8 +145,11 @@ export class AppointmentServicesController {
   @ApiResponse({ status: 200, description: 'Service completed' })
   @ApiResponse({ status: 404, description: 'Appointment service not found' })
   @Roles(...SALON_TEAM)
-  completeService(@Param('id', ParseUUIDPipe) id: string) {
-    return this.appointmentServicesService.completeService(id);
+  completeService(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: { id: string; role: string; tenantId: string },
+  ) {
+    return this.appointmentServicesService.completeService(id, user);
   }
 
   @Post(':id/cancel')
@@ -133,8 +157,11 @@ export class AppointmentServicesController {
   @ApiResponse({ status: 200, description: 'Service cancelled' })
   @ApiResponse({ status: 404, description: 'Appointment service not found' })
   @Roles(...SALON_TEAM)
-  cancelService(@Param('id', ParseUUIDPipe) id: string) {
-    return this.appointmentServicesService.cancelService(id);
+  cancelService(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: { id: string; role: string; tenantId: string },
+  ) {
+    return this.appointmentServicesService.cancelService(id, user);
   }
 
   @Post('bulk/:appointmentId')
@@ -145,8 +172,9 @@ export class AppointmentServicesController {
   bulkCreate(
     @Param('appointmentId', ParseUUIDPipe) appointmentId: string,
     @Body() services: CreateAppointmentServiceDto[],
+    @CurrentUser() user: { id: string; role: string; tenantId: string },
   ) {
-    return this.appointmentServicesService.bulkCreate(appointmentId, services);
+    return this.appointmentServicesService.bulkCreate(appointmentId, services, user);
   }
 
   @Get('processing/:appointmentId')
@@ -155,8 +183,9 @@ export class AppointmentServicesController {
   @Roles(...SALON_TEAM)
   getServicesWithProcessingTime(
     @Param('appointmentId', ParseUUIDPipe) appointmentId: string,
+    @CurrentUser() user: { id: string; role: string; tenantId: string },
   ) {
-    return this.appointmentServicesService.getServicesWithProcessingTime(appointmentId);
+    return this.appointmentServicesService.getServicesWithProcessingTime(appointmentId, user);
   }
 
   @Post(':id/processing-block')
@@ -166,9 +195,10 @@ export class AppointmentServicesController {
   @Roles(...SALON_TEAM)
   createProcessingBlock(
     @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: { id: string; role: string; tenantId: string },
     @Body('processingDuration') processingDuration?: number,
   ) {
-    return this.appointmentServicesService.createProcessingBlocks(id, processingDuration);
+    return this.appointmentServicesService.createProcessingBlocks(id, user, processingDuration);
   }
 
   @Put('appointment/:appointmentId/reorder')
