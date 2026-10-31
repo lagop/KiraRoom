@@ -48,6 +48,14 @@ const statusColors: Record<CampaignStatus, string> = {
   failed: "bg-red-100 text-red-800",
 };
 
+/**
+ * Clients a campaign can reach: with an email and active (the server
+ * leaves out blocked and inactive ones, and those who said no to
+ * promotions, when recipients are added and again when it sends).
+ */
+const campaignReachable = (c: Client) =>
+  !!c.email && (c.status ?? "active") === "active";
+
 // Campaign type labels using translations
 const getCampaignTypeLabel = (type: CampaignType) => {
   const labels: Record<CampaignType, string> = {
@@ -164,6 +172,8 @@ export default function EmailCampaignsPage() {
       );
     if (result.skippedCount)
       parts.push(`${result.skippedCount} no quieren recibir promociones`);
+    if (result.droppedCount)
+      parts.push(`${result.droppedCount} quitados (ya no son clientes activos)`);
     toast({
       title: "Campaña enviada",
       description: parts.join(", "),
@@ -356,7 +366,7 @@ export default function EmailCampaignsPage() {
 
       // Get all clients with email
       const clientsData = await apiClient.getClients();
-      const clientsWithEmail = clientsData.filter((c: Client) => c.email);
+      const clientsWithEmail = clientsData.filter(campaignReachable);
 
       setClients(clientsWithEmail);
       setExistingRecipients(existingRecipientsData);
@@ -368,7 +378,7 @@ export default function EmailCampaignsPage() {
       // Fallback: show all clients if we can't check existing recipients
       try {
         const clientsData = await apiClient.getClients();
-        setClients(clientsData.filter((c: Client) => c.email));
+        setClients(clientsData.filter(campaignReachable));
         setSelectedClients([]);
         setExistingRecipients([]);
       } catch (fallbackError) {
@@ -453,10 +463,10 @@ export default function EmailCampaignsPage() {
 
       if (hasFilters) {
         const filteredClients = await apiClient.filterClients(filterParams);
-        setClients(filteredClients.filter((c: Client) => c.email));
+        setClients(filteredClients.filter(campaignReachable));
       } else {
         const allClients = await apiClient.getClients();
-        setClients(allClients.filter((c: Client) => c.email));
+        setClients(allClients.filter(campaignReachable));
       }
     } catch (error) {
       console.error("Error applying filters:", error);
@@ -560,27 +570,11 @@ export default function EmailCampaignsPage() {
 
   const performSendToAll = async (campaignId: string) => {
     try {
-      // First add all clients as recipients
-      const clientsData = await apiClient.getClients();
-      const clientsWithEmail = clientsData.filter((c: Client) => c.email);
-
-      if (clientsWithEmail.length === 0) {
-        toast({
-          title: t("email_campaigns.no_clients_with_email"),
-          variant: "destructive",
-        });
-        return;
-      }
-
-      await apiClient.addRecipientsToCampaign(
-        campaignId,
-        clientsWithEmail.map((c: Client) => c.id),
-      );
-
-      // Then send immediately. The toast reports what the server did, not
-      // how many clients were selected: suppressed or failed addresses are
-      // not "sent".
-      const result = await apiClient.sendEmailCampaignNow(campaignId);
+      // The server adds every active client with an email who accepts
+      // promotions, then sends (this page used to post every client's id,
+      // blocked and inactive ones included). The toast reports what the
+      // server did: suppressed or failed addresses are not "sent".
+      const result = await apiClient.sendEmailCampaignToAll(campaignId);
       fetchCampaigns();
       toastSendResult(result);
     } catch (error) {

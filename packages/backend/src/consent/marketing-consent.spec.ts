@@ -164,6 +164,8 @@ describe("marketing consent from the client's account", () => {
         update: async () => ({}),
       },
       emailCampaignRecipient: { update: async (args: any) => recipientUpdates.push(args) },
+      // Both are active clients of the salon.
+      client: { findMany: async ({ where }: any) => where.id.in.map((id: string) => ({ id })) },
     };
     const email = {
       isConfigured: () => true,

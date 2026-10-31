@@ -2007,6 +2007,8 @@ model EmailCampaignRecipient {
   @@index([email])
   /// Resend webhooks find the recipient by the id Resend returned on send.
   @@index([messageId])
+  /// A client is on a campaign's list once (adding her twice emailed her twice).
+  @@unique([campaignId, clientId])
   @@map("email_campaign_recipients")
 }
 

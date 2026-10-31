@@ -180,6 +180,7 @@ export class EmailCampaignsScheduler {
 
     let sent = 0;
     let errors = 0;
+    let newRecipients = 0;
 
     for (const client of eligibleClients) {
       try {
@@ -209,17 +210,37 @@ export class EmailCampaignsScheduler {
 
           // The recipient row carries Resend's id, which is how delivery,
           // opens, clicks and bounces find their way back to this campaign.
-          await this.prisma.emailCampaignRecipient.create({
-            data: {
-              campaignId: campaign.id,
-              clientId: client.id,
-              email: client.email,
-              name: `${client.firstName} ${client.lastName}`,
-              status: 'sent',
-              sentAt: new Date(),
-              messageId: result.id,
-            },
-          });
+          // A client is on a campaign's list once: a later re-engagement
+          // email to her updates her row to the latest send.
+          const key = { campaignId_clientId: { campaignId: campaign.id, clientId: client.id } };
+          const row = {
+            email: client.email,
+            name: `${client.firstName} ${client.lastName}`,
+            status: 'sent',
+            sentAt: new Date(),
+            messageId: result.id,
+          };
+          const existing = await this.prisma.emailCampaignRecipient.findUnique({ where: key, select: { id: true } });
+          if (existing) {
+            await this.prisma.emailCampaignRecipient.update({
+              where: { id: existing.id },
+              data: {
+                ...row,
+                deliveredAt: null,
+                openedAt: null,
+                clickedAt: null,
+                bouncedAt: null,
+                complainedAt: null,
+                unsubscribedAt: null,
+                errorMessage: null,
+              },
+            });
+          } else {
+            await this.prisma.emailCampaignRecipient.create({
+              data: { campaignId: campaign.id, clientId: client.id, ...row },
+            });
+            newRecipients++;
+          }
 
           sent++;
         } else {
@@ -239,7 +260,7 @@ export class EmailCampaignsScheduler {
       await this.prisma.emailCampaign.update({
         where: { id: campaign.id },
         data: {
-          totalRecipients: { increment: sent },
+          totalRecipients: { increment: newRecipients },
           emailsSent: { increment: sent },
         },
       });

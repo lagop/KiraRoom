@@ -926,6 +926,8 @@ export interface SendEmailCampaignResult {
   suppressedCount: number;
   /** Clients who said no to promotions in their account. */
   skippedCount?: number;
+  /** Recipients dropped at send time: client deleted or no longer active. */
+  droppedCount?: number;
 }
 
 export interface EmailCampaignTemplate {
@@ -1740,6 +1742,7 @@ export interface ApiClientInterface {
     scheduledAt: string,
   ): Promise<EmailCampaign>;
   sendEmailCampaignNow(id: string): Promise<SendEmailCampaignResult>;
+  sendEmailCampaignToAll(id: string): Promise<SendEmailCampaignResult>;
   addRecipientsToCampaign(id: string, clientIds: string[]): Promise<any>;
   getEmailCampaignAnalytics(id: string): Promise<EmailCampaignAnalytics>;
   getEmailCampaignTrackingStatus(): Promise<EmailCampaignTrackingStatus>;
@@ -3934,6 +3937,16 @@ class ApiClient implements ApiClientInterface {
 
   async sendEmailCampaignNow(id: string): Promise<SendEmailCampaignResult> {
     return this.request<SendEmailCampaignResult>(`/email-campaigns/${id}/send`, {
+      method: "POST",
+    });
+  }
+
+  /**
+   * "Enviar a todos": the server adds every active client with an email
+   * who accepts promotions, then sends.
+   */
+  async sendEmailCampaignToAll(id: string): Promise<SendEmailCampaignResult> {
+    return this.request<SendEmailCampaignResult>(`/email-campaigns/${id}/send-to-all`, {
       method: "POST",
     });
   }
