@@ -2,21 +2,14 @@ import type { InvoiceLineInput } from "./invoice-calculator.service";
 import { VisitRow, visitLines } from "../appointments/visit-totals";
 
 /**
- * Do the prices a salon sets on its services already include the tax
- * (IVA, or IGIC / IPSI)? OPEN DECISION FOR THE OWNER: this constant is the
- * one line to change. There is no per-salon setting for it yet.
- *
- *   false (what KiraRoom has always done): the service price is the taxable
- *     base and the tax is added on top. A 30,00 EUR service is invoiced as
- *     30,00 + 6,30 IVA = 36,30 EUR, more than the price the client was shown.
- *   true: the price is what the client pays, tax included. The same service
- *     is invoiced as 24,79 + 5,21 IVA = 30,00 EUR.
- *
- * Spanish consumer law requires prices shown to consumers to include taxes,
- * which points to true for a salon's public prices; but changing it lowers
- * every future automatic invoice's base, so it is not flipped silently.
+ * The prices a salon sets on its services and products are final prices:
+ * what the client pays, tax (IVA, or IGIC / IPSI) included. The owner's
+ * decision (31 Oct 2026), in line with Spanish consumer law. An invoice
+ * still has to show the base and the tax, so it splits the price instead of
+ * adding tax on top: a 30,00 EUR service is invoiced as 24,79 + 5,21 IVA =
+ * 30,00 EUR (before, 30,00 + 6,30 = 36,30, more than the price shown).
  */
-export const SALON_PRICES_INCLUDE_TAX = false;
+export const SALON_PRICES_INCLUDE_TAX = true;
 
 /** IVA general rate, used when the salon set no defaultTaxRate. */
 const FALLBACK_TAX_RATE = 21;
