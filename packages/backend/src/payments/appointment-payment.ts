@@ -98,15 +98,21 @@ export interface AppointmentShare<A> {
  * ticket with no appointment (products added to the cart, or the cashier's
  * rounding). An appointment the ticket does not cover in full is left
  * partly paid, never marked paid.
+ *
+ * `manualDiscounts` (appointment id -> cents) are discounts given at the
+ * till (pos-discounts.ts): unlike the loyalty reward they lower what the
+ * visit costs, so they come off what it owes before anything is split.
  */
 export function splitTicket<A extends PayableAppointment>(
   appointments: A[],
   tenders: { method: string; amount: number }[],
   discountCents: number,
+  manualDiscounts?: ReadonlyMap<string, number>,
 ): { rows: TenderSplit<A>[]; shares: AppointmentShare<A>[] } {
+  const owedOf = (a: A) => Math.max(0, appointmentOwedCents(a) - (manualDiscounts?.get(a.id) ?? 0));
   let discountLeft = Math.max(0, discountCents);
   const shares: AppointmentShare<A>[] = appointments.map((appointment) => {
-    const owed = appointmentOwedCents(appointment);
+    const owed = owedOf(appointment);
     const fromDiscount = Math.min(owed, discountLeft);
     discountLeft -= fromDiscount;
     return { appointment, fromDiscount, fromMoney: 0, methods: [] };
@@ -116,7 +122,7 @@ export function splitTicket<A extends PayableAppointment>(
   for (const tender of tenders) {
     let left = tender.amount;
     for (const share of shares) {
-      const need = appointmentOwedCents(share.appointment) - share.fromDiscount - share.fromMoney;
+      const need = owedOf(share.appointment) - share.fromDiscount - share.fromMoney;
       const take = Math.min(left, need);
       if (take <= 0) continue;
       rows.push({ method: tender.method, amount: take, appointment: share.appointment });
@@ -151,14 +157,24 @@ export function shareMethod(share: AppointmentShare<unknown>): string | null {
  * checks its consent forms and issues its invoice, notices and points;
  * that is the agenda's job (AppointmentsService.changeStatus), and the
  * points follow once both are true (LoyaltyService.settleAppointment).
+ *
+ * `discount`: a discount given at the till on this visit. The visit then
+ * costs that much less, in the same write: its total and price go down (so
+ * commissions, which are a percent of the total, follow what was charged)
+ * and `discount` (the column) keeps the record its invoice reads
+ * (appointment-invoice-pricing.ts). The write also checks the total did not
+ * change since it was read.
  */
 export async function recordAppointmentPayment(
   db: { appointment: { updateMany: (args: any) => Promise<{ count: number }> } },
   apt: PayableAppointment,
   coveredCents: number,
   method: string | null,
+  discount?: { cents: number; record: Record<string, unknown> },
 ): Promise<{ amountPaid: number; paymentStatus: PaymentStatus }> {
-  const total = appointmentTotalCents(apt);
+  const listTotal = appointmentTotalCents(apt);
+  const discounted = !!discount && discount.cents > 0;
+  const total = discounted ? Math.max(0, listTotal - discount.cents) : listTotal;
   const before = Math.round(Number(apt.amountPaid ?? 0));
   const amountPaid = Math.min(total, before + Math.max(0, coveredCents));
   const paymentStatus = amountPaid >= total ? PaymentStatus.paid : (apt.paymentStatus as PaymentStatus);
@@ -166,6 +182,7 @@ export async function recordAppointmentPayment(
     where: {
       id: apt.id,
       amountPaid: apt.amountPaid,
+      ...(discounted ? { totalAmount: apt.totalAmount } : {}),
       paymentStatus: { not: PaymentStatus.paid },
       status: { notIn: [AppointmentStatus.cancelled, AppointmentStatus.no_show] },
     },
@@ -173,6 +190,7 @@ export async function recordAppointmentPayment(
       amountPaid,
       paymentStatus,
       ...(method ? { paymentMethod: method } : {}),
+      ...(discounted ? { totalAmount: total, price: total / 100, discount: discount.record } : {}),
     },
   });
   if (count !== 1) {

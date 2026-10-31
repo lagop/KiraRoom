@@ -65,6 +65,14 @@ function escapeHtml(s: string | null | undefined): string {
     .replace(/'/g, "&#39;");
 }
 
+/** "Dto. 10 %" under a discounted line (its price column is already net of it). */
+function discountNote(discountPct: unknown): string {
+  const pct = Number(discountPct ?? 0);
+  if (!Number.isFinite(pct) || pct <= 0) return "";
+  const shown = pct.toLocaleString("es-ES", { maximumFractionDigits: 2 });
+  return `<div class="discount">Dto. ${escapeHtml(shown)} %</div>`;
+}
+
 /**
  * Build a self-contained HTML document. The QR is passed as a
  * base64 data URL (the renderer doesn't run an HTTP server to fetch
@@ -76,7 +84,7 @@ export function buildInvoiceHtml(data: InvoiceTemplateData): string {
     .map(
       (l) => `
         <tr>
-          <td class="desc">${escapeHtml(l.description)}</td>
+          <td class="desc">${escapeHtml(l.description)}${discountNote(l.discountPct)}</td>
           <td class="qty">${escapeHtml(String(l.quantity))}</td>
           <td class="price">${fmt(l.unitPriceCents * (1 - (l.discountPct ?? 0) / 100), data.invoice.currency)}</td>
           <td class="tax">${escapeHtml(String(l.taxRate))}%</td>
@@ -123,6 +131,7 @@ export function buildInvoiceHtml(data: InvoiceTemplateData): string {
   <title>Factura ${escapeHtml(data.invoice.series)}${escapeHtml(data.invoice.number)}</title>
   <style>
     * { box-sizing: border-box; }
+    .discount { font-size: 9pt; color: #555; }
     body {
       font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       color: #111;

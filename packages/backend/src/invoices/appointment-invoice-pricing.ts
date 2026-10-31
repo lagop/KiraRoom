@@ -1,6 +1,7 @@
 import type { InvoiceLineInput } from "./invoice-calculator.service";
 import { VisitRow, visitLines } from "../appointments/visit-totals";
 import { pricesIncludeTaxOf, salonTaxRate } from "./salon-tax-settings";
+import { allocateCents } from "../pos/pos-discounts";
 
 export interface AppointmentToInvoice {
   /** Appointment.price: Decimal, in EUROS (not cents). */
@@ -43,6 +44,18 @@ export interface VisitToInvoice extends AppointmentToInvoice {
   services?: Array<VisitRow & { service?: { name?: string | null; price?: unknown; duration?: number | null } | null }>;
   /** Its add-ons, resolved to the catalog services they are (visit-sync.ts's addonServices). */
   addons?: Array<{ quantity: number; service: { id?: string; name?: string | null; price?: unknown } | null }>;
+  /** Appointment.discount (JSON): a till discount sits under `pos` (pos.service.ts). */
+  discount?: unknown;
+}
+
+/**
+ * The cents a discount given at the till took off the visit
+ * (`Appointment.discount.pos.amountCents`), else 0.
+ */
+export function tillDiscountCents(discount: unknown): number {
+  const pos = (discount as { pos?: { amountCents?: unknown } } | null | undefined)?.pos;
+  const cents = Number(pos?.amountCents);
+  return Number.isFinite(cents) && cents > 0 ? Math.round(cents) : 0;
 }
 
 /**
@@ -55,27 +68,36 @@ export interface VisitToInvoice extends AppointmentToInvoice {
  * When they do not (a catalog price changed after the booking, an imported
  * price), the invoice must still say what was charged: one line at the
  * visit's price, naming its services.
+ *
+ * A discount given at the till lowered the price to what was charged; the
+ * invoice shows the price before it and the discount on each line
+ * (`discountCents`, shared over the lines in proportion), so the lines
+ * still come to what was charged and the tax is on the discounted amount.
  */
 export function appointmentInvoiceLines(
   appointment: VisitToInvoice,
   fiscalSettings: Record<string, unknown>,
 ): InvoiceLineInput[] {
   const tax = { taxRate: salonTaxRate(fiscalSettings), taxIncluded: pricesIncludeTaxOf(fiscalSettings) };
+  const off = tillDiscountCents(appointment.discount);
   const charged = Math.round(Number(appointment.price) * 100);
+  const listed = charged + off;
   const lines = visitLines({
     mainService: { id: appointment.serviceId, name: appointment.service?.name, price: appointment.service?.price },
     rows: appointment.services ?? [],
     addons: appointment.addons ?? [],
   });
   const sum = lines.reduce((total, l) => total + l.unitPriceCents * l.quantity, 0);
-  if (lines.length > 1 && sum === charged) {
-    return lines.map((l) => ({ ...l, ...tax }));
+  if (lines.length > 1 && sum === listed) {
+    const shares = allocateCents(off, lines.map((l) => l.unitPriceCents * l.quantity));
+    return lines.map((l, i) => ({ ...l, ...tax, ...(shares[i] > 0 ? { discountCents: shares[i] } : {}) }));
   }
   const names = [...new Set(lines.map((l) => l.description))];
   return [
     {
       ...appointmentInvoiceLine(appointment, fiscalSettings),
       ...(names.length > 1 ? { description: names.join(" + ") } : {}),
+      ...(off > 0 ? { unitPriceCents: listed, discountCents: off } : {}),
     },
   ];
 }

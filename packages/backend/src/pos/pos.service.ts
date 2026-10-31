@@ -1,4 +1,12 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger, Optional } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Logger,
+  Optional,
+} from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { WalletService } from '../payments/services/wallet.service';
@@ -11,14 +19,23 @@ import {
   appointmentOwedCents,
   type PayableAppointment,
 } from '../payments/appointment-payment';
-import { CreatePosOrderDto, PosCartItemDto } from './dto/pos.dto';
+import { SALON_MANAGERS } from '../auth/decorators/roles.decorator';
+import { CreatePosOrderDto, PosCartItemDto, PosSettingsDto } from './dto/pos.dto';
+import {
+  applyDiscounts,
+  assertDiscountAllowed,
+  isDiscount,
+  type DiscountSpec,
+  type DiscountedTicket,
+} from './pos-discounts';
 
 export { CreatePosOrderDto };
 
 /**
  * A cart line as the server prices it: cents per unit, from the database
  * (the service or product, or what the appointment still owes). The
- * client sends only what is sold and how many.
+ * client sends only what is sold and how many, and the discount it asks
+ * for (pos-discounts.ts), never a price.
  */
 export interface PricedLine {
   serviceId?: string;
@@ -27,6 +44,14 @@ export interface PricedLine {
   name: string;
   price: number;
   quantity: number;
+  discount?: DiscountSpec;
+}
+
+/** A cart line's discount, when it takes something off (0 % or 0 cents is none). */
+function discountOf(line?: { discount?: DiscountSpec }): DiscountSpec | undefined {
+  if (!line || !isDiscount(line.discount)) return undefined;
+  const { type, value, reason } = line.discount;
+  return { type, value: Number(value), ...(reason ? { reason } : {}) };
 }
 
 /** The validated body plus the tenant and the actor, from the JWT. */
@@ -181,8 +206,26 @@ export class PosService {
 
     // Priced here. The lines used to carry their own price from the
     // client, so a ticket could be rung up for any amount.
-    const items = await this.priceLines(tenantId, dto.items ?? [], appointments);
-    const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+    const priced = await this.priceLines(tenantId, dto.items ?? [], appointments);
+
+    // Discounts asked for at the till, worked out on those prices and
+    // checked against who is at the till, before anything is written.
+    const orderDiscount = discountOf(dto) ?? null;
+    const ticket = applyDiscounts(priced, orderDiscount);
+    if (ticket.discountCents > 0) await this.assertMayDiscount(tenantId, dto.actor, ticket, orderDiscount);
+    const items = ticket.lines;
+    const subtotal = ticket.subtotalCents;
+
+    // What each appointment of the ticket gets off: its line's discount and
+    // its share of the ticket's. Its total goes down by that much.
+    const appointmentDiscounts = new Map<string, number>();
+    for (const line of items) {
+      const off = line.lineDiscountCents + line.orderDiscountCents;
+      if (line.appointmentId && off > 0) {
+        appointmentDiscounts.set(line.appointmentId, (appointmentDiscounts.get(line.appointmentId) ?? 0) + off);
+      }
+    }
+    if (appointmentDiscounts.size > 0) await this.assertNotInvoiced(tenantId, [...appointmentDiscounts.keys()]);
 
     if (clientId) await this.assertClient(tenantId, clientId);
     // The wallet is a client's: without one nothing would be taken from it
@@ -228,15 +271,17 @@ export class PosService {
         clientId: finalClientId,
         rewardId: dto.loyaltyRewardId,
         saleId,
-        items: items.map((i) => ({ serviceId: i.serviceId, price: i.price, quantity: i.quantity })),
-        subtotalCents: subtotal,
+        // At what the lines cost after the till's discounts: a free service
+        // is worth what is left of its line, never more.
+        items: items.map((i) => ({ serviceId: i.serviceId, price: Math.floor(i.netCents / i.quantity), quantity: i.quantity })),
+        subtotalCents: ticket.totalCents,
         appointmentId: appointmentIds[0] ?? null,
       });
       loyaltyDiscount = redeemed.discountCents;
       pointsSpent = redeemed.pointsSpent;
       rewardName = redeemed.rewardName;
     }
-    const total = subtotal - loyaltyDiscount;
+    const total = ticket.totalCents - loyaltyDiscount;
 
     // Verify payment amounts match total
     const paymentTotal = payments.reduce((sum, p) => sum + p.amount, 0);
@@ -249,7 +294,8 @@ export class PosService {
     // own payment row (Payment.appointmentId): the reward first, then the
     // money. It used to be one row with the ids only in its metadata, and a
     // second call from the panel marked the appointment paid for any amount.
-    const { rows, shares } = splitTicket(appointments, payments, loyaltyDiscount);
+    const { rows, shares } = splitTicket(appointments, payments, loyaltyDiscount, appointmentDiscounts);
+    const discountRows = this.discountRecords(tenantId, saleId, ticket, orderDiscount, dto.actor);
 
     // "Card" at the till is the salon's own card terminal: the money is
     // already taken when the sale is recorded. It used to create a Stripe
@@ -286,19 +332,32 @@ export class PosService {
                   posSaleId: saleId,
                   ...(appointmentIds.length ? { appointmentIds } : {}),
                   ...(loyaltyDiscount ? { loyaltyDiscount, loyaltyRewardId: dto.loyaltyRewardId } : {}),
+                  ...(ticket.discountCents ? { posDiscountCents: ticket.discountCents } : {}),
                 },
               },
             }),
           );
         }
+        // The discounts given, with the sale they belong to: recorded if and
+        // only if the sale is.
+        if (discountRows.length > 0) {
+          await db.posDiscount.createMany({ data: discountRows });
+        }
         // Same transaction: an appointment is paid if and only if the
         // payments that pay it are recorded.
         for (const share of shares) {
-          await recordAppointmentPayment(db, share.appointment, share.fromDiscount + share.fromMoney, shareMethod(share));
+          const off = appointmentDiscounts.get(share.appointment.id) ?? 0;
+          await recordAppointmentPayment(
+            db,
+            share.appointment,
+            share.fromDiscount + share.fromMoney,
+            shareMethod(share),
+            off > 0 ? { cents: off, record: this.appointmentDiscountRecord(share.appointment, saleId, off, items, orderDiscount, dto.actor) } : undefined,
+          );
         }
         return created;
       };
-      paymentRecords = appointments.length
+      paymentRecords = appointments.length || discountRows.length
         ? await this.prisma.$transaction((tx) => write(tx))
         : await write(this.prisma);
     } catch (err) {
@@ -342,6 +401,11 @@ export class PosService {
       clientId: finalClientId,
       items,
       subtotal,
+      discount: {
+        lines: ticket.lineDiscountsCents,
+        order: ticket.orderDiscountCents,
+        total: ticket.discountCents,
+      },
       total,
       payments: paymentRecords,
       loyalty: { pointsEarned, pointsSpent, discount: loyaltyDiscount, rewardName },
@@ -372,6 +436,8 @@ export class PosService {
         paymentStatus: true,
         amountPaid: true,
         totalAmount: true,
+        // Kept alongside a till discount's record (appointmentDiscountRecord).
+        discount: true,
         service: { select: { name: true, price: true } },
       },
     });
@@ -400,6 +466,10 @@ export class PosService {
    * the first line of its service, else a line added for it. Further units
    * of that line, and every other line, are sold at the list price of the
    * service or product.
+   *
+   * A line's discount goes with it. When the appointment takes one unit of
+   * a longer line, a percentage applies to both parts; a fixed amount stays
+   * with the appointment's unit (it may not exceed that unit's price).
    */
   private async priceLines(
     tenantId: string,
@@ -415,15 +485,22 @@ export class PosService {
       let at = pending.findIndex((l) => l.appointmentId === apt.id);
       if (at < 0) at = pending.findIndex((l) => !l.appointmentId && !!l.serviceId && l.serviceId === apt.serviceId);
       const line = at >= 0 ? pending.splice(at, 1)[0] : undefined;
+      const discount = discountOf(line);
       priced.push({
         ...(apt.serviceId ? { serviceId: apt.serviceId } : {}),
         appointmentId: apt.id,
         name: apt.service?.name ?? 'Cita',
         price: appointmentOwedCents(apt),
         quantity: 1,
+        ...(discount ? { discount } : {}),
       });
       if (line && line.quantity > 1) {
-        pending.push({ ...line, appointmentId: undefined, quantity: line.quantity - 1 });
+        pending.push({
+          ...line,
+          appointmentId: undefined,
+          quantity: line.quantity - 1,
+          discount: discount?.type === 'percentage' ? line.discount : undefined,
+        });
       }
     }
     if (pending.some((l) => l.appointmentId)) {
@@ -453,14 +530,156 @@ export class PosService {
     const productById = new Map(products.map((x) => [x.id, x]));
     for (const line of pending) {
       const source = line.serviceId ? serviceById.get(line.serviceId)! : productById.get(line.productId as string)!;
+      const discount = discountOf(line);
       priced.push({
         ...(line.serviceId ? { serviceId: line.serviceId } : { productId: line.productId }),
         name: source.name,
         price: Math.round(Number(source.price) * 100),
         quantity: line.quantity,
+        ...(discount ? { discount } : {}),
       });
     }
     return priced;
+  }
+
+  /**
+   * 403 unless the actor may give the ticket's discounts: the owner and
+   * managers always; staff up to the salon's maxStaffDiscountPercent per
+   * line (pos-discounts.ts assertDiscountAllowed).
+   */
+  private async assertMayDiscount(
+    tenantId: string,
+    actor: { id: string; role: string } | undefined,
+    ticket: DiscountedTicket<PricedLine>,
+    orderDiscount: DiscountSpec | null,
+  ): Promise<void> {
+    let max = 0;
+    if (!actor || !(SALON_MANAGERS as string[]).includes(actor.role)) {
+      const tenant = await this.prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { maxStaffDiscountPercent: true },
+      });
+      max = tenant?.maxStaffDiscountPercent ?? 0;
+    }
+    assertDiscountAllowed(actor?.role, max, ticket, orderDiscount);
+  }
+
+  /**
+   * 409 when a discounted appointment already has its invoice. With
+   * VERI*FACTU an issued invoice is chained and sent: lowering the price
+   * afterwards takes a corrective invoice, not a discount at the till.
+   */
+  private async assertNotInvoiced(tenantId: string, appointmentIds: string[]): Promise<void> {
+    const invoiced = await this.prisma.invoice.findFirst({
+      where: { tenantId, sourceType: 'appointment', sourceId: { in: appointmentIds } },
+      select: { sourceId: true },
+    });
+    if (invoiced) {
+      throw new ConflictException({
+        code: 'APPOINTMENT_ALREADY_INVOICED',
+        message:
+          'Esta cita ya tiene su factura emitida: no se le puede aplicar un descuento en caja. Cóbrala sin descuento o emite una factura rectificativa.',
+        appointmentId: invoiced.sourceId,
+      });
+    }
+  }
+
+  /** The PosDiscount rows of a ticket: one per discounted line, one for the ticket's own discount. */
+  private discountRecords(
+    tenantId: string,
+    saleId: string,
+    ticket: DiscountedTicket<PricedLine>,
+    orderDiscount: DiscountSpec | null,
+    actor?: { id: string; role: string },
+  ) {
+    const by = { appliedById: actor?.id ?? null, appliedByRole: actor?.role ?? null };
+    const rows: any[] = [];
+    ticket.lines.forEach((line, lineIndex) => {
+      if (!line.discount) return;
+      rows.push({
+        tenantId,
+        saleId,
+        scope: 'line',
+        lineIndex,
+        serviceId: line.serviceId ?? null,
+        productId: line.productId ?? null,
+        appointmentId: line.appointmentId ?? null,
+        description: line.name.slice(0, 200),
+        type: line.discount.type,
+        value: line.discount.value,
+        baseCents: line.grossCents,
+        amountCents: line.lineDiscountCents,
+        reason: line.discount.reason ?? null,
+        ...by,
+      });
+    });
+    if (orderDiscount) {
+      rows.push({
+        tenantId,
+        saleId,
+        scope: 'order',
+        description: 'Ticket',
+        type: orderDiscount.type,
+        value: orderDiscount.value,
+        baseCents: ticket.orderBaseCents,
+        amountCents: ticket.orderDiscountCents,
+        reason: orderDiscount.reason ?? null,
+        ...by,
+      });
+    }
+    return rows;
+  }
+
+  /**
+   * What an appointment keeps of a till discount (its `discount` column):
+   * the cents its invoice takes off (appointment-invoice-pricing.ts), the
+   * sale, the reasons and who gave it. Other keys already there stay.
+   */
+  private appointmentDiscountRecord(
+    apt: { id: string; discount?: unknown },
+    saleId: string,
+    cents: number,
+    lines: DiscountedTicket<PricedLine>['lines'],
+    orderDiscount: DiscountSpec | null,
+    actor?: { id: string; role: string },
+  ): Record<string, unknown> {
+    const own = lines.filter((l) => l.appointmentId === apt.id);
+    const reasons = [
+      ...own.map((l) => l.discount?.reason),
+      own.some((l) => l.orderDiscountCents > 0) ? orderDiscount?.reason : undefined,
+    ].filter((r): r is string => !!r);
+    const existing = apt.discount && typeof apt.discount === 'object' && !Array.isArray(apt.discount) ? apt.discount : {};
+    return {
+      ...(existing as Record<string, unknown>),
+      pos: {
+        saleId,
+        amountCents: cents,
+        lineCents: own.reduce((s, l) => s + l.lineDiscountCents, 0),
+        orderCents: own.reduce((s, l) => s + l.orderDiscountCents, 0),
+        ...(reasons.length ? { reason: [...new Set(reasons)].join(' · ') } : {}),
+        appliedById: actor?.id ?? null,
+        appliedByRole: actor?.role ?? null,
+        at: new Date().toISOString(),
+      },
+    };
+  }
+
+  /** The till's settings: how far staff may discount. */
+  async getSettings(tenantId: string): Promise<{ maxStaffDiscountPercent: number }> {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { maxStaffDiscountPercent: true },
+    });
+    return { maxStaffDiscountPercent: tenant?.maxStaffDiscountPercent ?? 0 };
+  }
+
+  async updateSettings(tenantId: string, dto: PosSettingsDto): Promise<{ maxStaffDiscountPercent: number }> {
+    const tenant = await this.prisma.tenant.update({
+      where: { id: tenantId },
+      data: { maxStaffDiscountPercent: dto.maxStaffDiscountPercent },
+      select: { maxStaffDiscountPercent: true },
+    });
+    return { maxStaffDiscountPercent: tenant.maxStaffDiscountPercent };
   }
 
   /** 404 unless the client is one of this salon's. */

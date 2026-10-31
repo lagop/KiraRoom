@@ -155,6 +155,13 @@ model Tenant {
   /// straight away instead of leaving it to the "Avisar" button.
   waitListAutoNotify Boolean @default(false)
 
+  /// Till (POS) discounts: the most a staff member may take off a line, in
+  /// percent (0-100). 0, the default: only the owner or a manager discount.
+  /// Edited by them in the till settings (PUT /pos/settings).
+  maxStaffDiscountPercent Int           @default(0)
+  /// Discounts given by hand at the till, one row each (audit).
+  posDiscounts            PosDiscount[]
+
   /// P1.3 Ã¢â‚¬â€ Onboarding wizard state (one row per tenant)
   onboardingState      OnboardingState?
   /// P1.4 Ã¢â‚¬â€ Rebooking per-tenant settings (analogous to `features` / `addons`)
@@ -3384,4 +3391,57 @@ enum TimeOffKind {
   sick_leave
   closure
   other
+}
+
+/// A discount given by hand at the till (POS): "10 % a esta clienta", "5 €
+/// menos". One row per discount, written in the same transaction as the
+/// ticket's payments, so who gave how much, on what and why stays on record.
+/// The amounts are the server's: the till sends only the type, the value and
+/// the reason (pos/pos-discounts.ts).
+model PosDiscount {
+  id            String           @id @default(uuid())
+  createdAt     DateTime         @default(now())
+  tenantId      String
+  /// The ticket: `posSaleId` in the metadata of its payments.
+  saleId        String
+  /// The whole ticket, or one of its lines.
+  scope         PosDiscountScope
+  /// Position of the line in the ticket as the server priced it (scope line).
+  lineIndex     Int?
+  /// What the line sells (scope line). Not relations: the record outlives them.
+  serviceId     String?
+  productId     String?
+  /// The appointment the line charges, if any (scope line).
+  appointmentId String?
+  /// The line's name, or "Ticket".
+  description   String           @db.VarChar(200)
+  type          PosDiscountType
+  /// As entered: a percent (0-100) or cents.
+  value         Decimal          @db.Decimal(12, 2)
+  /// What it came off, in cents: the line (price x quantity), or the ticket
+  /// after its line discounts.
+  baseCents     Int
+  /// What it took off, in cents.
+  amountCents   Int
+  reason        String?          @db.VarChar(120)
+  /// Who gave it (a user id) and their role then. Not a relation: the
+  /// record outlives the account.
+  appliedById   String?
+  appliedByRole String?
+  tenant        Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([saleId])
+  @@index([appointmentId])
+  @@map("pos_discounts")
+}
+
+enum PosDiscountScope {
+  order
+  line
+}
+
+enum PosDiscountType {
+  percentage
+  fixed
 }

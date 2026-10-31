@@ -18,8 +18,11 @@ import {
   Min,
   ValidateIf,
   ValidateNested,
+  ValidationArguments,
+  registerDecorator,
 } from "class-validator";
 import { EmptyStringToUndefined } from "../../common/dto/empty-to-undefined";
+import { POS_DISCOUNT_TYPES, PosDiscountType } from "../pos-discounts";
 
 export const POS_PAYMENT_METHODS = ["card", "cash", "bank_transfer", "wallet", "gift_card"] as const;
 export type PosPaymentMethod = (typeof POS_PAYMENT_METHODS)[number];
@@ -27,6 +30,53 @@ export type PosPaymentMethod = (typeof POS_PAYMENT_METHODS)[number];
 /** Cents: one million euros is no salon ticket. */
 const MAX_CENTS = 100_000_000;
 const MAX_EUROS = 1_000_000;
+
+/**
+ * A percentage discount is 0-100 with up to 2 decimals; a fixed one is
+ * whole cents (up to MAX_CENTS). Whether a fixed amount fits the line or
+ * the ticket is the server's check (pos-discounts.ts), on its own prices.
+ */
+function IsDiscountValue(): PropertyDecorator {
+  return (target: object, propertyKey: string | symbol) => {
+    registerDecorator({
+      name: "isDiscountValue",
+      target: target.constructor,
+      propertyName: propertyKey as string,
+      validator: {
+        validate: (value: unknown, args?: ValidationArguments) => {
+          if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return false;
+          const type = (args?.object as { type?: string })?.type;
+          if (type === "percentage") return value <= 100 && Number.isInteger(Math.round(value * 1e6) / 1e4);
+          if (type === "fixed") return Number.isInteger(value) && value <= MAX_CENTS;
+          return false;
+        },
+        defaultMessage: (args?: ValidationArguments) =>
+          (args?.object as { type?: string })?.type === "fixed"
+            ? "Un descuento fijo va en céntimos: un número entero, 0 o más."
+            : "Un descuento en porcentaje va de 0 a 100 (hasta 2 decimales).",
+      },
+    });
+  };
+}
+
+/**
+ * A discount asked for at the till, on a line or on the whole ticket:
+ * what kind, how much and why. Never an amount to charge: the server works
+ * the cents out from its own prices and checks who may give it.
+ */
+export class PosDiscountDto {
+  @IsIn(POS_DISCOUNT_TYPES as unknown as string[], { message: "El descuento es en porcentaje o un importe fijo." })
+  type!: PosDiscountType;
+
+  /** percentage: percent (12.5 for 12,5 %). fixed: cents (500 for 5 €). */
+  @Type(() => Number)
+  @IsDiscountValue()
+  value!: number;
+
+  @EmptyStringToUndefined() @IsOptional() @IsString()
+  @MaxLength(120, { message: "El motivo del descuento admite 120 caracteres como mucho." })
+  reason?: string;
+}
 
 /**
  * One line of the cart: what is sold and how many. The price is NOT read
@@ -53,6 +103,10 @@ export class PosCartItemDto {
   @Min(1)
   @Max(99)
   quantity!: number;
+
+  /** A discount on this line (see PosDiscountDto). */
+  @IsOptional() @ValidateNested() @Type(() => PosDiscountDto)
+  discount?: PosDiscountDto;
 }
 
 export class PosTenderDto {
@@ -113,6 +167,20 @@ export class CreatePosOrderDto {
   /** A loyalty reward the client spends points on: comes off the total. */
   @IsOptional() @IsUUID()
   loyaltyRewardId?: string;
+
+  /** A discount on the whole ticket, taken after the lines' own discounts. */
+  @IsOptional() @ValidateNested() @Type(() => PosDiscountDto)
+  discount?: PosDiscountDto;
+}
+
+/** Body of `PUT /pos/settings` (owner and managers). */
+export class PosSettingsDto {
+  /** The most a staff member may take off a line, in percent. 0: staff cannot discount. */
+  @Type(() => Number)
+  @IsInt({ message: "El límite de descuento del personal es un porcentaje entero." })
+  @Min(0, { message: "El límite de descuento del personal va de 0 a 100." })
+  @Max(100, { message: "El límite de descuento del personal va de 0 a 100." })
+  maxStaffDiscountPercent!: number;
 }
 
 /** Body of `POST /pos/quick-sale`: one service, priced from the database. */

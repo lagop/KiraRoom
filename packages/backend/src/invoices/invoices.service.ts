@@ -13,6 +13,7 @@ import { FiscalMode, InvoiceSource, InvoiceStatus, Prisma } from "@prisma/client
 import { appointmentInvoiceLines } from "./appointment-invoice-pricing";
 import { pricesIncludeTaxOf, productTaxRatePercent, salonTaxRate } from "./salon-tax-settings";
 import { addonServices } from "../appointments/visit-sync";
+import { allocateCents } from "../pos/pos-discounts";
 
 interface CreateInvoiceInput {
   tenantId: string;
@@ -28,6 +29,8 @@ interface CreateInvoiceInput {
     quantity: number;
     unitPriceCents: number;
     discountPct?: number;
+    /** A discount on the whole line, in cents (InvoiceLineInput.discountCents). */
+    discountCents?: number;
     taxRate: number;
     productId?: string;
     serviceId?: string;
@@ -351,7 +354,15 @@ export class InvoiceService {
     // included or on top, its own choice (salon-tax-settings.ts).
     const taxIncluded = pricesIncludeTaxOf(settings);
 
-    const lines = order.items.map((it) => ({
+    // The order's discount (Order.discount, euros) used to be left off the
+    // invoice, which then said more than was charged. Shared over the lines
+    // in proportion, in the prices' own terms (tax included or not).
+    const lineCents = order.items.map((it) => Math.round(Number(it.unitPrice) * 100) * Number(it.quantity));
+    const shares = allocateCents(
+      Math.min(Math.round(Number(order.discount ?? 0) * 100), lineCents.reduce((s, c) => s + c, 0)),
+      lineCents,
+    );
+    const lines = order.items.map((it, i) => ({
       description: it.product?.name ?? "Producto",
       quantity: Number(it.quantity),
       unitPriceCents: Math.round(Number(it.unitPrice) * 100),
@@ -359,6 +370,7 @@ export class InvoiceService {
       taxRate: productTaxRatePercent(it.product?.taxRate, defaultTaxRate),
       taxIncluded,
       productId: it.productId,
+      ...(shares[i] > 0 ? { discountCents: shares[i] } : {}),
     }));
 
     if (lines.length === 0) return null;
