@@ -133,7 +133,9 @@ export const Calendar: React.FC<{
           settingsRequest.current,
           fetchCalendarData(forDay),
           // Only shading: a failure here must not take the day's appointments with it.
-          apiClient.getTimeOff(forDay, forDay).catch((err) => {
+          // Pending requests too: the server sends them to the owner and
+          // managers only, and they are drawn as "Pendiente", blocking nothing.
+          apiClient.getTimeOff(forDay, forDay, undefined, { includePending: true }).catch((err) => {
             console.error("Failed to fetch time off:", err);
             return [] as TimeOff[];
           }),

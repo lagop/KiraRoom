@@ -1591,6 +1591,8 @@
     "domain": "Web y dominio",
     "security": "Seguridad",
     "closures": "Cierres y festivos",
+    "my_time_off": "Mis ausencias",
+    "time_off_requests": "Solicitudes de ausencia",
     "account": "Tu cuenta"
   },
   "Failed to add points": "Failed to add points",

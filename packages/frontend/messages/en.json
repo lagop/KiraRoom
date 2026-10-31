@@ -1591,6 +1591,8 @@
     "domain": "Website & domain",
     "security": "Security",
     "closures": "Closures & holidays",
+    "my_time_off": "My time off",
+    "time_off_requests": "Time off requests",
     "account": "Your account"
   },
   "Failed to add points": "Failed to add points",

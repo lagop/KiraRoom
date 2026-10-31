@@ -76,6 +76,13 @@ describe("assertCanBook with time off", () => {
     expect(await outcome(assertCanBook(doctor, { ...target, time: "09:30" }, { now: NOW }))).toBeNull();
   });
 
+  it("a request still pending, or rejected, does not stop the booking", async () => {
+    expect(await outcome(assertCanBook(prismaWith([row({ status: "pending" })]), target, { now: NOW }))).toBeNull();
+    expect(await outcome(assertCanBook(prismaWith([row({ status: "rejected" })]), target, { now: NOW }))).toBeNull();
+    const err = await outcome(assertCanBook(prismaWith([row({ status: "approved" })]), target, { now: NOW }));
+    expect(err?.message).toBe("Ana está de vacaciones ese día.");
+  });
+
   it("a colleague's absence is not Ana's", async () => {
     expect(await outcome(assertCanBook(prismaWith([row({ professionalId: "p2" })]), target, { now: NOW }))).toBeNull();
   });
@@ -87,6 +94,7 @@ describe("assertCanBook with time off", () => {
       expect.objectContaining({
         where: {
           tenantId: TENANT,
+          status: "approved",
           startDate: { lte: new Date(`${DAY}T00:00:00.000Z`) },
           endDate: { gte: new Date(`${DAY}T00:00:00.000Z`) },
         },
@@ -108,6 +116,14 @@ describe("assertCanReschedule with time off", () => {
     const eve = row({ professionalId: null, kind: "closure", startTime: "14:00", endTime: "20:00" });
     const err = await outcome(assertCanReschedule(prismaWith([eve]), { ...target, appointmentId: "a1", time: "13:30" }, NOW));
     expect(err.message).toBe("El salón está cerrado de 14:00 a 20:00 ese día.");
+  });
+});
+
+describe("assertCanReschedule with a request", () => {
+  it("a move into a pending request goes through", async () => {
+    expect(
+      await outcome(assertCanReschedule(prismaWith([row({ status: "pending" })]), { ...target, appointmentId: "a1" }, NOW)),
+    ).toBeNull();
   });
 });
 

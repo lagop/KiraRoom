@@ -8,13 +8,19 @@ import { useToast } from "@/components/ui/use-toast";
 import { localDay } from "@/components/Calendar/day-grid";
 import {
   PERSONAL_KINDS,
+  REQUESTABLE_KINDS,
   TIME_OFF_KIND_LABELS,
+  TIME_OFF_STATUS_LABELS,
+  TIME_OFF_STATUS_STYLES,
+  canWithdraw,
   addDays,
   conflictLine,
   conflictTitle,
   dateRangeLabel,
   hoursLabel,
   isCurrentOrUpcoming,
+  myAbsences,
+  statusOf,
   timeOffFormProblem,
   type TimeOff,
   type TimeOffConflict,
@@ -23,8 +29,14 @@ import {
 } from "@/lib/time-off";
 
 interface TimeOffManagerProps {
-  /** A professional's absences; null for the salon's closures. */
+  /** A professional's absences; null for the salon's closures. Ignored with `self`. */
   professionalId: string | null;
+  /**
+   * The signed-in professional's own absences ("Mis ausencias"): what they add
+   * is a request, pending until the salon approves it, and they may withdraw
+   * it only while it is pending.
+   */
+  self?: boolean;
 }
 
 /** How many clashes the confirmation lists before "y N más". */
@@ -40,8 +52,9 @@ const errorText = (err: unknown) => (err instanceof Error && err.message ? err.m
  * server lists the ones that fall inside the block, and the salon either
  * saves anyway (and moves them or warns the clients) or goes back.
  */
-export function TimeOffManager({ professionalId }: TimeOffManagerProps) {
-  const salon = professionalId === null;
+export function TimeOffManager({ professionalId, self = false }: TimeOffManagerProps) {
+  const salon = !self && professionalId === null;
+  const kinds = self ? REQUESTABLE_KINDS : PERSONAL_KINDS;
   const { toast } = useToast();
   const [today] = useState(() => localDay());
   const [blocks, setBlocks] = useState<TimeOff[]>([]);
@@ -64,14 +77,18 @@ export function TimeOffManager({ professionalId }: TimeOffManagerProps) {
 
   const load = useCallback(async () => {
     try {
-      // The API answers up to 400 days at once: a year ahead is plenty.
-      const rows = await apiClient.getTimeOff(today, addDays(today, 399), professionalId ?? undefined);
-      setBlocks(
-        rows
-          .filter((b) => (salon ? b.professionalId === null : b.professionalId === professionalId))
-          .filter((b) => isCurrentOrUpcoming(b, today))
-          .sort((a, b) => a.startDate.localeCompare(b.startDate) || (a.startTime ?? "").localeCompare(b.startTime ?? "")),
-      );
+      if (self) {
+        setBlocks(myAbsences(await apiClient.getMyTimeOff(), today));
+      } else {
+        // The API answers up to 400 days at once: a year ahead is plenty.
+        const rows = await apiClient.getTimeOff(today, addDays(today, 399), professionalId ?? undefined);
+        setBlocks(
+          rows
+            .filter((b) => (salon ? b.professionalId === null : b.professionalId === professionalId))
+            .filter((b) => isCurrentOrUpcoming(b, today))
+            .sort((a, b) => a.startDate.localeCompare(b.startDate) || (a.startTime ?? "").localeCompare(b.startTime ?? "")),
+        );
+      }
       setLoadError(false);
     } catch (err) {
       console.error("Failed to load time off:", err);
@@ -79,7 +96,7 @@ export function TimeOffManager({ professionalId }: TimeOffManagerProps) {
     } finally {
       setLoading(false);
     }
-  }, [today, professionalId, salon]);
+  }, [today, professionalId, salon, self]);
 
   useEffect(() => {
     void load();
@@ -100,18 +117,26 @@ export function TimeOffManager({ professionalId }: TimeOffManagerProps) {
   const save = async (input: TimeOffInput) => {
     setSaving(true);
     try {
-      const { conflicts } = await apiClient.createTimeOff(input);
-      toast({
-        title: salon ? "Cierre guardado" : "Ausencia guardada",
-        description: conflicts.length
-          ? `Recuerda mover o avisar a ${conflicts.length === 1 ? "la cita que coincide" : `las ${conflicts.length} citas que coinciden`}.`
-          : "Ya no se ofrecerán citas en ese tiempo.",
-      });
+      if (self) {
+        await apiClient.createTimeOffRequest(input);
+        toast({
+          title: "Solicitud enviada",
+          description: "Te avisaremos en las notificaciones cuando el responsable la apruebe o la rechace.",
+        });
+      } else {
+        const { conflicts } = await apiClient.createTimeOff(input);
+        toast({
+          title: salon ? "Cierre guardado" : "Ausencia guardada",
+          description: conflicts.length
+            ? `Recuerda mover o avisar a ${conflicts.length === 1 ? "la cita que coincide" : `las ${conflicts.length} citas que coinciden`}.`
+            : "Ya no se ofrecerán citas en ese tiempo.",
+        });
+      }
       setPending(null);
       resetForm();
       await load();
     } catch (err) {
-      toast({ title: "No se ha guardado", description: errorText(err), variant: "destructive" });
+      toast({ title: self ? "No se ha enviado" : "No se ha guardado", description: errorText(err), variant: "destructive" });
     } finally {
       setSaving(false);
     }
@@ -127,7 +152,8 @@ export function TimeOffManager({ professionalId }: TimeOffManagerProps) {
     }
     setFormError(null);
     const input: TimeOffInput = {
-      ...(salon ? {} : { professionalId }),
+      // A request carries no professional: the server takes the caller's own.
+      ...(salon || self ? {} : { professionalId }),
       kind: salon ? "closure" : kind,
       startDate,
       endDate: end,
@@ -137,7 +163,9 @@ export function TimeOffManager({ professionalId }: TimeOffManagerProps) {
     };
     setSaving(true);
     try {
-      const { conflicts } = await apiClient.previewTimeOff(input);
+      const { conflicts } = self
+        ? await apiClient.previewTimeOffRequest(input)
+        : await apiClient.previewTimeOff(input);
       if (conflicts.length > 0) {
         setPending({ input, conflicts });
         setSaving(false);
@@ -155,12 +183,17 @@ export function TimeOffManager({ professionalId }: TimeOffManagerProps) {
     if (!deleting) return;
     setDeletingBusy(true);
     try {
-      await apiClient.deleteTimeOff(deleting.id);
-      toast({ title: salon ? "Cierre eliminado" : "Ausencia eliminada" });
+      if (self) {
+        await apiClient.cancelTimeOffRequest(deleting.id);
+        toast({ title: "Solicitud retirada" });
+      } else {
+        await apiClient.deleteTimeOff(deleting.id);
+        toast({ title: salon ? "Cierre eliminado" : "Ausencia eliminada" });
+      }
       setDeleting(null);
       await load();
     } catch (err) {
-      toast({ title: "No se ha eliminado", description: errorText(err), variant: "destructive" });
+      toast({ title: self ? "No se ha retirado" : "No se ha eliminado", description: errorText(err), variant: "destructive" });
     } finally {
       setDeletingBusy(false);
     }
@@ -183,7 +216,7 @@ export function TimeOffManager({ professionalId }: TimeOffManagerProps) {
         </p>
       ) : blocks.length === 0 ? (
         <p className="text-sm text-gray-500">
-          {salon ? "No hay cierres previstos." : "No tiene ausencias previstas."}
+          {salon ? "No hay cierres previstos." : self ? "No tienes ausencias previstas ni solicitudes." : "No tiene ausencias previstas."}
         </p>
       ) : (
         <ul className="divide-y divide-gray-100 rounded-lg border border-gray-200" data-test="time-off-list">
@@ -194,27 +227,55 @@ export function TimeOffManager({ professionalId }: TimeOffManagerProps) {
                 <p className="text-sm font-medium text-gray-900">
                   {salon ? b.note?.trim() || "Salón cerrado" : TIME_OFF_KIND_LABELS[b.kind]}
                   <span className="font-normal text-gray-600"> · {dateRangeLabel(b.startDate, b.endDate)}</span>
+                  {self && (
+                    <span
+                      className={`ml-2 inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${TIME_OFF_STATUS_STYLES[statusOf(b)]}`}
+                      data-test="time-off-status"
+                    >
+                      {TIME_OFF_STATUS_LABELS[statusOf(b)]}
+                    </span>
+                  )}
                 </p>
                 <p className="text-sm text-gray-500">
                   {hoursLabel(b)}
                   {!salon && b.note ? ` · ${b.note}` : ""}
                 </p>
+                {self && b.decisionNote && (
+                  <p className="text-sm text-gray-600">
+                    {statusOf(b) === "rejected" ? "Motivo" : "Nota del responsable"}: {b.decisionNote}
+                  </p>
+                )}
               </div>
-              <button
-                type="button"
-                onClick={() => setDeleting(b)}
-                aria-label={`Eliminar ${what} del ${dateRangeLabel(b.startDate, b.endDate)}`}
-                className="rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-red-600"
-              >
-                <Trash2 className="h-4 w-4" aria-hidden="true" />
-              </button>
+              {(!self || canWithdraw(b)) && (
+                <button
+                  type="button"
+                  onClick={() => setDeleting(b)}
+                  aria-label={
+                    self
+                      ? `Retirar la solicitud del ${dateRangeLabel(b.startDate, b.endDate)}`
+                      : `Eliminar ${what} del ${dateRangeLabel(b.startDate, b.endDate)}`
+                  }
+                  title={self ? "Retirar la solicitud" : undefined}
+                  className="rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-red-600"
+                >
+                  <Trash2 className="h-4 w-4" aria-hidden="true" />
+                </button>
+              )}
             </li>
           ))}
         </ul>
       )}
 
       <form onSubmit={submit} className="space-y-3 rounded-lg border border-dashed border-gray-300 p-4" noValidate>
-        <p className="text-sm font-medium text-gray-900">{salon ? "Añadir un cierre" : "Añadir una ausencia"}</p>
+        <p className="text-sm font-medium text-gray-900">
+          {salon ? "Añadir un cierre" : self ? "Pedir una ausencia" : "Añadir una ausencia"}
+        </p>
+        {self && (
+          <p className="text-xs text-gray-500">
+            Quedará pendiente hasta que el responsable del salón la apruebe: mientras tanto tu agenda sigue abierta. Si
+            estás de baja, avisa al responsable para que la registre.
+          </p>
+        )}
         <div className="grid gap-3 sm:grid-cols-3">
           {!salon && (
             <label className="block text-sm">
@@ -225,7 +286,7 @@ export function TimeOffManager({ professionalId }: TimeOffManagerProps) {
                 disabled={saving}
                 className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
               >
-                {PERSONAL_KINDS.map((k) => (
+                {kinds.map((k) => (
                   <option key={k} value={k}>
                     {TIME_OFF_KIND_LABELS[k]}
                   </option>
@@ -299,7 +360,11 @@ export function TimeOffManager({ professionalId }: TimeOffManagerProps) {
 
         <label className="block text-sm">
           <span className="mb-1 block text-gray-700">
-            {salon ? "Motivo (se muestra en la agenda, no a los clientes)" : "Nota (solo la ven los responsables)"}
+            {salon
+              ? "Motivo (se muestra en la agenda, no a los clientes)"
+              : self
+                ? "Nota para el responsable (opcional, no la ven tus compañeros)"
+                : "Nota (solo la ven los responsables)"}
           </span>
           <input
             type="text"
@@ -324,7 +389,7 @@ export function TimeOffManager({ professionalId }: TimeOffManagerProps) {
           className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-sm text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {saving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Plus className="h-4 w-4" aria-hidden="true" />}
-          {salon ? "Añadir cierre" : "Añadir ausencia"}
+          {salon ? "Añadir cierre" : self ? "Enviar solicitud" : "Añadir ausencia"}
         </button>
       </form>
 
@@ -342,11 +407,15 @@ export function TimeOffManager({ professionalId }: TimeOffManagerProps) {
               {pending.conflicts.length > LISTED_CONFLICTS && (
                 <p>y {pending.conflicts.length - LISTED_CONFLICTS} más.</p>
               )}
-              <p>No se cancelan: guárdalo igualmente y muévelas o avisa a los clientes, o vuelve atrás.</p>
+              <p>
+                {self
+                  ? "No se cancelan: si el responsable aprueba la ausencia, se encargará de moverlas o avisar a los clientes."
+                  : "No se cancelan: guárdalo igualmente y muévelas o avisa a los clientes, o vuelve atrás."}
+              </p>
             </div>
           )
         }
-        confirmLabel="Guardar igualmente"
+        confirmLabel={self ? "Enviar igualmente" : "Guardar igualmente"}
         cancelLabel="Cancelar"
         loading={saving}
         onCancel={() => setPending(null)}
@@ -355,13 +424,15 @@ export function TimeOffManager({ professionalId }: TimeOffManagerProps) {
 
       <ConfirmDialog
         open={!!deleting}
-        title={salon ? "¿Eliminar este cierre?" : "¿Eliminar esta ausencia?"}
+        title={salon ? "¿Eliminar este cierre?" : self ? "¿Retirar esta solicitud?" : "¿Eliminar esta ausencia?"}
         description={
           deleting
-            ? `${dateRangeLabel(deleting.startDate, deleting.endDate)} · ${hoursLabel(deleting)}. Se volverán a ofrecer citas en ese tiempo.`
+            ? `${dateRangeLabel(deleting.startDate, deleting.endDate)} · ${hoursLabel(deleting)}.${
+                self ? " El responsable ya no la verá." : " Se volverán a ofrecer citas en ese tiempo."
+              }`
             : undefined
         }
-        confirmLabel="Eliminar"
+        confirmLabel={self ? "Retirar" : "Eliminar"}
         destructive
         loading={deletingBusy}
         onCancel={() => setDeleting(null)}

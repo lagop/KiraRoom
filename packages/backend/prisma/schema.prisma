@@ -3359,12 +3359,30 @@ model TimeOff {
   note           String?       @db.VarChar(200)
   /// Who recorded it (a user id). Not a relation: the record outlives the account.
   createdById    String?
+  /// Only approved time off blocks the agenda. A professional's own request
+  /// is pending until whoever runs the salon approves or rejects it; what an
+  /// owner or manager records is approved from the start.
+  status         TimeOffStatus @default(approved)
+  /// The staff user who asked for it (null: recorded by the salon). Not a relation.
+  requestedById  String?
+  /// Who approved or rejected the request (a user id), and when.
+  decidedById    String?
+  decidedAt      DateTime?
+  /// Why it was rejected (or a word on approval), for the requester.
+  decisionNote   String?       @db.VarChar(200)
   tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   professional   Professional? @relation(fields: [professionalId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, startDate, endDate])
+  @@index([tenantId, status])
   @@index([professionalId])
   @@map("time_off")
+}
+
+enum TimeOffStatus {
+  approved
+  pending
+  rejected
 }
 
 enum TimeOffKind {

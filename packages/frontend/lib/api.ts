@@ -3,7 +3,8 @@
 import type { TaxRegime } from "@kira/shared";
 import type { PublicSalonPage } from "./salon-seo";
 import type { WorkingHoursEntry } from "./weekly-schedule";
-import type { TimeOff, TimeOffConflict, TimeOffInput } from "./time-off";
+import { requestBody } from "./time-off";
+import type { TimeOff, TimeOffConflict, TimeOffInput, TimeOffStatus } from "./time-off";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1";
@@ -1493,10 +1494,23 @@ export interface ApiClientInterface {
   getProfessionalsPublic(tenantId?: string): Promise<Professional[]>;
   getProfessionals(tenantId?: string): Promise<Professional[]>;
   getProfessional(id: string): Promise<Professional>;
-  getTimeOff(from: string, to: string, professionalId?: string): Promise<TimeOff[]>;
+  getTimeOff(
+    from: string,
+    to: string,
+    professionalId?: string,
+    opts?: { includePending?: boolean },
+  ): Promise<TimeOff[]>;
   previewTimeOff(input: TimeOffInput): Promise<{ conflicts: TimeOffConflict[] }>;
   createTimeOff(input: TimeOffInput): Promise<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }>;
   deleteTimeOff(id: string): Promise<{ deleted: boolean }>;
+  getMyTimeOff(): Promise<TimeOff[]>;
+  previewTimeOffRequest(input: TimeOffInput): Promise<{ conflicts: TimeOffConflict[] }>;
+  createTimeOffRequest(input: TimeOffInput): Promise<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }>;
+  cancelTimeOffRequest(id: string): Promise<{ deleted: boolean }>;
+  getTimeOffRequests(status?: TimeOffStatus): Promise<TimeOff[]>;
+  getTimeOffRequestCount(): Promise<{ count: number }>;
+  approveTimeOff(id: string, note?: string | null): Promise<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }>;
+  rejectTimeOff(id: string, note?: string | null): Promise<{ timeOff: TimeOff }>;
   createProfessional(data: {
     firstName: string;
     lastName: string;
@@ -2645,9 +2659,16 @@ class ApiClient implements ApiClientInterface {
   }
 
   // Time off and salon closures. The salon is the caller's, from the token.
-  async getTimeOff(from: string, to: string, professionalId?: string): Promise<TimeOff[]> {
+  async getTimeOff(
+    from: string,
+    to: string,
+    professionalId?: string,
+    opts: { includePending?: boolean } = {},
+  ): Promise<TimeOff[]> {
     const params = new URLSearchParams({ from, to });
     if (professionalId) params.set("professionalId", professionalId);
+    // Owner and admin only; the server ignores it for staff.
+    if (opts.includePending) params.set("includePending", "true");
     return this.request<TimeOff[]>(`/time-off?${params.toString()}`);
   }
 
@@ -2668,6 +2689,52 @@ class ApiClient implements ApiClientInterface {
 
   async deleteTimeOff(id: string): Promise<{ deleted: boolean }> {
     return this.request<{ deleted: boolean }>(`/time-off/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  // Time off requests. A professional asks for their own (who it is for comes
+  // from the session); the owner or a manager approves or rejects it.
+  async getMyTimeOff(): Promise<TimeOff[]> {
+    return this.request<TimeOff[]>("/time-off/requests/mine");
+  }
+
+  async previewTimeOffRequest(input: TimeOffInput): Promise<{ conflicts: TimeOffConflict[] }> {
+    return this.request<{ conflicts: TimeOffConflict[] }>("/time-off/requests/preview", {
+      method: "POST",
+      body: JSON.stringify(requestBody(input)),
+    });
+  }
+
+  async createTimeOffRequest(input: TimeOffInput): Promise<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }> {
+    return this.request<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }>("/time-off/requests", {
+      method: "POST",
+      body: JSON.stringify(requestBody(input)),
+    });
+  }
+
+  async cancelTimeOffRequest(id: string): Promise<{ deleted: boolean }> {
+    return this.request<{ deleted: boolean }>(`/time-off/requests/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  async getTimeOffRequests(status: TimeOffStatus = "pending"): Promise<TimeOff[]> {
+    return this.request<TimeOff[]>(`/time-off/requests?status=${encodeURIComponent(status)}`);
+  }
+
+  async getTimeOffRequestCount(): Promise<{ count: number }> {
+    return this.request<{ count: number }>("/time-off/requests/count");
+  }
+
+  async approveTimeOff(id: string, note?: string | null): Promise<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }> {
+    return this.request<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }>(
+      `/time-off/${encodeURIComponent(id)}/approve`,
+      { method: "POST", body: JSON.stringify(note ? { note } : {}) },
+    );
+  }
+
+  async rejectTimeOff(id: string, note?: string | null): Promise<{ timeOff: TimeOff }> {
+    return this.request<{ timeOff: TimeOff }>(`/time-off/${encodeURIComponent(id)}/reject`, {
+      method: "POST",
+      body: JSON.stringify(note ? { note } : {}),
+    });
   }
 
   async createProfessional(data: {
