@@ -1,14 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Copy, Calendar, Link as LinkIcon } from "lucide-react";
-import apiClient from "@/lib/api";
+import { Copy, Calendar, Link as LinkIcon, RefreshCw } from "lucide-react";
+import apiClient, { type IcsFeedTokens } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
+import { ConfirmDialog } from "@/src/components/ui/ConfirmDialog";
 
 const API =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1";
 
-type IcsTokens = Awaited<ReturnType<typeof apiClient.getIcsTokens>>;
+type IcsTokens = IcsFeedTokens;
 
 function feedUrl(scope: string, id: string, token: string): string {
   return `${API.replace(/\/api\/v1$/, "")}/api/v1/ics/${scope}/${encodeURIComponent(id)}?token=${token}`;
@@ -18,13 +19,35 @@ function feedUrl(scope: string, id: string, token: string): string {
  * Subscribe URLs for the salon's calendar.
  *
  * The tokens come from GET /ics/tokens. This page used to hand out URLs
- * ending in ?token=REEMPLAZAR_CON_TOKEN -- which no feed accepts -- and to say
- * the tokens rotate on demand, which nothing implements.
+ * ending in ?token=REEMPLAZAR_CON_TOKEN -- which no feed accepts. "Regenerar
+ * enlaces" (POST /ics/tokens/rotate) revokes every link handed out so far.
  */
 export default function CalendarFeedsPage() {
   const { toast } = useToast();
   const [tokens, setTokens] = useState<IcsTokens | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [confirmRotate, setConfirmRotate] = useState(false);
+  const [rotating, setRotating] = useState(false);
+
+  const rotate = async () => {
+    setRotating(true);
+    try {
+      setTokens(await apiClient.rotateIcsTokens());
+      setConfirmRotate(false);
+      toast({
+        title: "Enlaces regenerados",
+        description: "Los enlaces anteriores ya no funcionan. Vuelve a suscribir tus calendarios.",
+      });
+    } catch (err) {
+      toast({
+        title: "No se pudieron regenerar los enlaces",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setRotating(false);
+    }
+  };
 
   useEffect(() => {
     apiClient
@@ -79,8 +102,38 @@ export default function CalendarFeedsPage() {
               )}
             </div>
           </div>
+
+          <div className="bg-white rounded-xl border border-gray-200 p-6 flex flex-col sm:flex-row sm:items-center gap-4">
+            <div className="flex-1">
+              <h2 className="font-semibold mb-1">¿Se ha filtrado un enlace?</h2>
+              <p className="text-sm text-gray-500">
+                Regenera los enlaces para que los anteriores dejen de funcionar.
+                {tokens.rotatedAt && (
+                  <> Última regeneración: {new Date(tokens.rotatedAt).toLocaleString("es-ES")}.</>
+                )}
+              </p>
+            </div>
+            <button
+              onClick={() => setConfirmRotate(true)}
+              className="inline-flex items-center gap-2 border border-red-200 text-red-700 hover:bg-red-50 rounded-lg px-3 py-2 text-sm font-medium"
+            >
+              <RefreshCw className="w-4 h-4" /> Regenerar enlaces
+            </button>
+          </div>
         </>
       )}
+
+      <ConfirmDialog
+        open={confirmRotate}
+        title="¿Regenerar todos los enlaces?"
+        description="Todos los calendarios suscritos (el del salón y los de cada profesional) dejarán de actualizarse hasta que se suscriban de nuevo con los enlaces nuevos."
+        confirmLabel="Regenerar"
+        cancelLabel="Cancelar"
+        destructive
+        loading={rotating}
+        onCancel={() => setConfirmRotate(false)}
+        onConfirm={rotate}
+      />
     </div>
   );
 }

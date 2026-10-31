@@ -297,6 +297,14 @@ export interface ImportJob {
   completedAt?: string | null;
 }
 
+/** GET /ics/tokens and POST /ics/tokens/rotate. version 0 = never rotated. */
+export interface IcsFeedTokens {
+  version: number;
+  rotatedAt: string | null;
+  salon: { slug: string; token: string };
+  professionals: Array<{ id: string; name: string; token: string }>;
+}
+
 export interface ConsentFormField {
   id: string;
   type: "boolean" | "text" | "select" | "date" | "info";
@@ -2983,17 +2991,19 @@ class ApiClient implements ApiClientInterface {
     }>(`/payments${query ? `?${query}` : ""}`);
   }
 
-  // Get today's payments for POS
-  // An array: PaymentsService.getTodayPayments returns the rows themselves.
-  // This was typed as { payments, totals }, which nothing returns.
   /** Signed ICS feed tokens for the caller's salon (owner/admin). */
-  async getIcsTokens(): Promise<{
-    salon: { slug: string; token: string };
-    professionals: Array<{ id: string; name: string; token: string }>;
-  }> {
+  async getIcsTokens(): Promise<IcsFeedTokens> {
     return this.request("/ics/tokens");
   }
 
+  /** Revokes every calendar link of the salon and returns the new ones. */
+  async rotateIcsTokens(): Promise<IcsFeedTokens> {
+    return this.request("/ics/tokens/rotate", { method: "POST" });
+  }
+
+  // Get today's payments for POS
+  // An array: PaymentsService.getTodayPayments returns the rows themselves.
+  // This was typed as { payments, totals }, which nothing returns.
   async getTodayPayments(): Promise<any[]> {
     return this.request<any[]>("/payments/today");
   }
