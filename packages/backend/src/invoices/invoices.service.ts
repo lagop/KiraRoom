@@ -18,6 +18,7 @@ import {
   amountCreditLines,
   rectificationLines,
   type PriorRectificationLine,
+  type RectificationContext,
   type RectificationLineRequest,
 } from "./rectification-lines";
 import type { InvoiceLineInput } from "./invoice-calculator.service";
@@ -359,6 +360,7 @@ export class InvoiceService {
    * (for one never rectified, each line's stored amounts negated, so the
    * two net to zero). Lines that name an original line credit it from what
    * is left of it; past what is left is refused (rectification-lines.ts).
+   * Free lines without taxIncluded follow the salon's pricesIncludeTax.
    */
   async emitRectification(
     tenantId: string,
@@ -409,7 +411,7 @@ export class InvoiceService {
     tenantId: string,
     originalInvoiceId: string,
     reason: string,
-    linesOf: (original: RectifiableInvoice, context: { prior: PriorRectificationLine[]; invoiceTotalCents: number }) => InvoiceLineInput[],
+    linesOf: (original: RectifiableInvoice, context: RectificationContext) => InvoiceLineInput[],
   ): Promise<IssuedInvoice> {
     // One rectificativa of an invoice at a time: a second one waits here
     // until the first commits, and then sees what it credited.
@@ -422,10 +424,21 @@ export class InvoiceService {
       recipientId: original.recipientId ?? undefined,
       recipientName: original.recipientName,
       recipientTaxId: original.recipientTaxId ?? undefined,
-      lines: linesOf(original, await this.creditContext(tx, original)),
+      lines: linesOf(original, {
+        ...(await this.creditContext(tx, original)),
+        // A free line that does not say whether its price includes the tax
+        // is read the way the salon prices (Ajustes fiscales), like a manual
+        // invoice line (POST /invoices).
+        freeLinesTaxIncluded: await this.salonPricesIncludeTax(tx, tenantId),
+      }),
       notes: `${rectificationNotePrefix(original)} ${reason}`,
     };
     return this.insert(tx, input, await this.prepare(input, tx));
+  }
+
+  private async salonPricesIncludeTax(db: Prisma.TransactionClient, tenantId: string): Promise<boolean> {
+    const tenant = await db.tenant.findUnique({ where: { id: tenantId }, select: { fiscalSettings: true } });
+    return pricesIncludeTaxOf(tenant?.fiscalSettings);
   }
 
   /** The invoice to rectify, with its lines: 404 if not this salon's, 400 if cancelled. */

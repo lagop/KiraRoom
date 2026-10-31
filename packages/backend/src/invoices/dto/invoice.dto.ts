@@ -262,6 +262,16 @@ export class RectificationLineDto {
   @Min(0)
   @Max(100)
   taxRate?: number;
+
+  /**
+   * A free line: `unitPriceCents` already includes the tax, and the line is
+   * split into base + tax. Left out: the salon's pricesIncludeTax, as for a
+   * manual invoice line (CreateInvoiceLineDto.taxIncluded). Ignored with
+   * originalLineId: a credited line is split the way the original was.
+   */
+  @IsOptional()
+  @IsBoolean()
+  taxIncluded?: boolean;
 }
 
 /**

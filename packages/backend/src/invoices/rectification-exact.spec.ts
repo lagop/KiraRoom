@@ -71,7 +71,7 @@ describe("a full rectification nets the original to zero", () => {
         await svc.emitRectification(
           "tenant-1",
           id,
-          [{ description: "Corte", quantity: -1, unitPriceCents: stored.unitPriceCents, taxRate: 21 }],
+          [{ description: "Corte", quantity: -1, unitPriceCents: stored.unitPriceCents, taxRate: 21, taxIncluded: false }],
           "a mano",
         )
       ).id,
@@ -165,5 +165,65 @@ describe("POST /invoices/:id/rectify body", () => {
     await expect(parse({ reason: "x", lines: [{ quantity: -1 }] })).rejects.toBeDefined();
     const ok = await parse({ reason: "x", lines: [{ description: "Ajuste", quantity: -1, unitPriceCents: 500, taxRate: 21 }] });
     expect(ok.lines[0].description).toBe("Ajuste");
+  });
+
+  it("a free line may say whether its price includes the tax: a boolean, optional", async () => {
+    const free = { description: "Ajuste", quantity: -1, unitPriceCents: 500, taxRate: 21 };
+    expect((await parse({ reason: "x", lines: [{ ...free, taxIncluded: true }] })).lines[0].taxIncluded).toBe(true);
+    expect((await parse({ reason: "x", lines: [{ ...free, taxIncluded: false }] })).lines[0].taxIncluded).toBe(false);
+    expect((await parse({ reason: "x", lines: [free] })).lines[0].taxIncluded).toBeUndefined();
+    await expect(parse({ reason: "x", lines: [{ ...free, taxIncluded: "true" }] })).rejects.toBeDefined();
+  });
+
+  it("the controller passes it on, left out as left out (the service applies the salon's)", async () => {
+    const emit = jest.fn(async () => ({ id: "inv-2" }));
+    const ctl = new InvoicesController({ emitRectification: emit } as any, {} as any, {} as any, {} as any);
+    const free = { description: "Ajuste", quantity: -1, unitPriceCents: 500, taxRate: 21 };
+    await ctl.rectify({ user: { tenantId: "tenant-1" } } as any, "inv-1", {
+      reason: "x",
+      lines: [{ ...free, taxIncluded: true }, { ...free, taxIncluded: false }, free],
+    } as any);
+    expect((emit.mock.calls[0] as any[])[2].map((l: any) => l.taxIncluded)).toEqual([true, false, undefined]);
+  });
+});
+
+describe("a free line of a rectificativa follows the salon's prices", () => {
+  function storeFor(pricesIncludeTax?: boolean) {
+    const settings: Record<string, unknown> = { defaultSeries: "A", defaultTaxRate: 21 };
+    if (pricesIncludeTax !== undefined) settings.pricesIncludeTax = pricesIncludeTax;
+    const { prisma, invoices } = invoiceStore(settings);
+    return { svc: new InvoiceService(prisma, new InvoiceCalculator(), {} as any), invoices };
+  }
+  const adjust = (extra: Record<string, unknown> = {}) => [
+    { description: "Ajuste", quantity: -1, unitPriceCents: 500, taxRate: 21, ...extra },
+  ];
+  async function rectifyWith(pricesIncludeTax: boolean | undefined, extra: Record<string, unknown> = {}) {
+    const { svc, invoices } = storeFor(pricesIncludeTax);
+    const { id } = await issue(svc, [{ description: "Corte", quantity: 1, unitPriceCents: 3000, taxRate: 21, taxIncluded: true }]);
+    return invoices.get((await svc.emitRectification("tenant-1", id, adjust(extra) as any, "ajuste")).id);
+  }
+
+  it("prices with the tax included: 5,00 back is 4,13 + 0,87, not 5,00 + 1,05", async () => {
+    const rect = await rectifyWith(true);
+    expect(rect).toMatchObject({ totalCents: -500, subtotalCents: -413 });
+    expect(rect.lines[0]).toMatchObject({ taxIncluded: true, taxCents: -87, totalCents: -500 });
+  });
+
+  it("tax on top, or a salon from before the setting: 5,00 + 1,05, as before", async () => {
+    expect((await rectifyWith(false)).totalCents).toBe(-605);
+    expect((await rectifyWith(undefined)).totalCents).toBe(-605);
+  });
+
+  it("an explicit true or false wins over the salon", async () => {
+    expect((await rectifyWith(true, { taxIncluded: false })).totalCents).toBe(-605);
+    expect((await rectifyWith(false, { taxIncluded: true })).totalCents).toBe(-500);
+  });
+
+  it("the cap on the invoice is checked on the amount as it will be issued", async () => {
+    const { svc } = storeFor(true);
+    const { id } = await issue(svc, [{ description: "Corte", quantity: 1, unitPriceCents: 3000, taxRate: 21, taxIncluded: true }]);
+    // 30,00 included is all there is: on top it would have been 36,30 and refused.
+    const rect = await svc.emitRectification("tenant-1", id, [{ description: "Ajuste", quantity: -1, unitPriceCents: 3000, taxRate: 21 }], "x");
+    expect(rect.id).toBeDefined();
   });
 });
