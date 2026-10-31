@@ -1,4 +1,5 @@
 import { SalonCopilotToolsService } from './salon-copilot-tools';
+import { AppointmentsService } from '../../appointments/appointments.service';
 
 /**
  * L-4 contract tests for sprint 15 write tools:
@@ -65,6 +66,15 @@ function makePrisma(opts: {
   };
 }
 
+/** The appointments' own status path over the same fake database, notices off. */
+function appointmentsOver(prisma: any): AppointmentsService {
+  const stub = {} as any;
+  const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
+  (svc as any).logAppointmentActivity = jest.fn(async () => undefined);
+  (svc as any).sendAppointmentNoShowNotifications = jest.fn(async () => undefined);
+  return svc;
+}
+
 const STAFF_USER_ID = 'staff-1';
 const ctxFor = (role: string) => ({
   prisma: undefined as any, // each test injects its own
@@ -90,10 +100,13 @@ describe('SalonCopilotToolsService (L-4) — sprint 15 write tools', () => {
         id: 'a-1', tenantId: TENANT_ID, status: 'confirmed', client: { firstName: 'Carmen' },
       }];
       const prisma = makePrisma({ appointments: appts });
-      const svc = new SalonCopilotToolsService(prisma);
+      const appointments = appointmentsOver(prisma);
+      const svc = new SalonCopilotToolsService(prisma, undefined, appointments);
       const res = await svc.execute('mark_no_show', { appointmentId: 'a-1' }, {
         ...ctxFor('manager'), prisma,
       });
+      // Through the appointment's own path: the no-show notice goes out.
+      expect((appointments as any).sendAppointmentNoShowNotifications).toHaveBeenCalledTimes(1);
       expect(res).toMatchObject({
         ok: true,
         appointmentId: 'a-1',

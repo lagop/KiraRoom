@@ -54,6 +54,12 @@ import type { OnlineBookingDto } from "./dto/book-appointment.dto";
 import { UpdateAppointmentDto } from "./dto/update-appointment.dto";
 import { appointmentDeleteBlocker, deleteAppointmentRow } from "./appointment-delete";
 import { isForeignKeyViolation } from "../common/prisma/history-deletes";
+import {
+  assertTransition,
+  concurrentChange,
+  isStaleWrite,
+  needsConsent,
+} from "./appointment-status";
 
 interface AppointmentActivity {
   action: string;
@@ -104,6 +110,16 @@ export interface AppointmentFiltersDto {
   startDate?: Date;
   endDate?: Date;
   searchQuery?: string;
+}
+
+/** What a status change may carry besides the status. */
+export interface StatusChangeOptions {
+  /** Cancellation reason. */
+  reason?: string;
+  /** Completion notes; they replace the appointment's when given. */
+  notes?: string;
+  /** Further columns written with the status, for internal callers (the copilot's no-show fee). */
+  data?: Record<string, unknown>;
 }
 
 export interface PendingPaymentFiltersDto {
@@ -811,7 +827,7 @@ export class AppointmentsService {
     // Track old date/time for reschedule notifications
     const oldDate = appointment.scheduledDate;
     const oldTime = appointment.scheduledTime;
-    const oldStatus = appointment.status;
+    const oldStatus = appointment.status as AppointmentStatus;
 
     // Built field by field from what an edit may change. The body used to be
     // spread in whole, so a request could set any column (price, payment,
@@ -874,6 +890,22 @@ export class AppointmentsService {
       }
     });
 
+    // A new status takes the same path as the cancel / complete / no-show
+    // endpoints: checked here, before anything is written (services
+    // included), and followed by the same notices and jobs after the write.
+    // The form resends the status it shows, which is not a change.
+    const statusTo =
+      dto.status !== undefined && dto.status !== oldStatus ? dto.status : undefined;
+    delete updateData.status;
+    if (statusTo) {
+      Object.assign(
+        updateData,
+        await this.prepareStatusChange(user, appointment, statusTo, {
+          reason: dto.cancellationReason,
+        }),
+      );
+    }
+
     // A move (new day, time or professional) must land on a free slot of the
     // professional's hours. Only when something actually changes: a form that
     // resends the same day and time to save a note is not a move.
@@ -887,7 +919,8 @@ export class AppointmentsService {
       target.day !== dayOf(appointment.scheduledDate) ||
       target.time !== appointment.scheduledTime ||
       target.professionalId !== appointment.professionalId;
-    if (moved && updateData.status !== AppointmentStatus.cancelled) {
+    // A cancelled appointment holds no slot, so moving one checks none.
+    if (moved && (statusTo ?? oldStatus) !== AppointmentStatus.cancelled) {
       await assertCanReschedule(this.prisma as any, {
         tenantId: user.tenantId,
         appointmentId: appointment.id,
@@ -928,15 +961,6 @@ export class AppointmentsService {
         updateData.reminder24hSent = false;
         updateData.reminder1hSent = false;
       }
-    }
-
-    // The review request is timed from completionTime; completing through a
-    // plain edit never set it, so those visits were never asked about.
-    if (
-      updateAppointmentDto.status === AppointmentStatus.completed &&
-      appointment.status !== AppointmentStatus.completed
-    ) {
-      updateData.completionTime = new Date();
     }
 
     // Handle addons update if provided
@@ -990,35 +1014,45 @@ export class AppointmentsService {
         },
       });
 
-      const updatedAppointment = await this.prisma.appointment.update({
-        where: { id },
-        data: updateData,
-        include: {
-          client: true,
-          professional: true,
-          service: true,
-          tenant: true,
-          services: {
-            include: {
-              service: true,
-              professional: true,
+      let updatedAppointment: any;
+      try {
+        updatedAppointment = await this.prisma.appointment.update({
+          // A status change is written only over the status it was checked
+          // against (see changeStatus).
+          where: (statusTo ? { id, status: oldStatus } : { id }) as any,
+          data: updateData,
+          include: {
+            client: true,
+            professional: true,
+            service: true,
+            tenant: true,
+            services: {
+              include: {
+                service: true,
+                professional: true,
+              },
             },
           },
-        },
-      });
+        });
+      } catch (err) {
+        if (statusTo && isStaleWrite(err)) throw concurrentChange();
+        throw err;
+      }
 
       // Log activity for this update
       await this.logAppointmentActivity(id, "appointment_updated", user, {
         changes: updateData,
       });
 
-      // Check if appointment was rescheduled (date or time changed)
+      // Check if appointment was rescheduled (date or time changed). A
+      // cancellation is told as a cancellation, not as a move.
       const isRescheduled =
-        (updateAppointmentDto.scheduledDate &&
+        statusTo !== AppointmentStatus.cancelled &&
+        ((updateAppointmentDto.scheduledDate &&
           new Date(updateAppointmentDto.scheduledDate).getTime() !==
             new Date(oldDate).getTime()) ||
-        (updateAppointmentDto.scheduledTime &&
-          updateAppointmentDto.scheduledTime !== oldTime);
+          (updateAppointmentDto.scheduledTime &&
+            updateAppointmentDto.scheduledTime !== oldTime));
 
       if (isRescheduled) {
         await this.sendAppointmentRescheduledNotifications(
@@ -1028,43 +1062,10 @@ export class AppointmentsService {
         );
       }
 
-      // Check if status changed to confirmed
-      if (
-        updateAppointmentDto.status === AppointmentStatus.confirmed &&
-        oldStatus !== AppointmentStatus.confirmed
-      ) {
-        // P0 — Consent gate: if the tenant has active consent forms bound to
-        // this service, ensure the client has signed them before confirming.
-        if (this.consentService) {
-          const ok = await this.consentService.hasValidConsent(
-            appointment.tenantId,
-            appointment.clientId,
-            appointment.serviceId,
-          );
-          if (!ok) {
-            const required =
-              await this.consentService.getRequiredForms(
-                appointment.tenantId,
-                appointment.serviceId,
-              );
-            throw new ConflictException({
-              code: "CONSENT_REQUIRED",
-              message:
-                "Client must sign required consent forms before confirming",
-              appointmentId: id,
-              requiredConsents: required.map((f) => ({
-                id: f.id,
-                name: f.name,
-                version: f.version,
-              })),
-            });
-          }
-        }
-        await this.sendAppointmentConfirmedNotifications(updatedAppointment);
-      }
-
-      if (updateAppointmentDto.status && updateAppointmentDto.status !== oldStatus) {
-        await this.loyaltyAfterStatus(updatedAppointment.tenantId, id);
+      if (statusTo) {
+        await this.afterStatusChange(user, updatedAppointment, oldStatus, statusTo, {
+          reason: dto.cancellationReason,
+        });
       }
 
       return this.enrichAppointment(updatedAppointment);
@@ -1120,22 +1121,87 @@ export class AppointmentsService {
   }
 
   async cancel(user: any, id: string, reason?: string) {
-    const appointment = await this.findOne(user, id);
+    return this.changeStatus(user, id, AppointmentStatus.cancelled, { reason });
+  }
 
-    if (appointment.status === AppointmentStatus.cancelled) {
-      throw new BadRequestException("La cita ya está cancelada");
+  async complete(user: any, id: string, notes?: string) {
+    return this.changeStatus(user, id, AppointmentStatus.completed, { notes });
+  }
+
+  async markNoShow(user: any, id: string) {
+    return this.changeStatus(user, id, AppointmentStatus.no_show);
+  }
+
+  /**
+   * The one path a status change takes, whichever route asked for it: the
+   * cancel / complete / no-show endpoints, PATCH with a `status`, the
+   * copilot, a multi-service visit whose services are all done. Checked
+   * first (prepareStatusChange), written only if the status is still the one
+   * we read, then followed by what the new status sets off
+   * (afterStatusChange): the notices, the wait-list, the invoice, the
+   * rebooking cadence, the points.
+   *
+   * `user` is whoever asks: a member of the team, a client (cancel only, via
+   * the controller's roles) or, for the visit that completes on its own,
+   * the system.
+   */
+  async changeStatus(
+    user: any,
+    id: string,
+    to: AppointmentStatus,
+    opts: StatusChangeOptions = {},
+  ) {
+    const appointment = await this.findOne(user, id);
+    const from = appointment.status as AppointmentStatus;
+    const data = await this.prepareStatusChange(user, appointment, to, opts);
+
+    let updated: any;
+    try {
+      updated = await this.prisma.appointment.update({
+        // Only if nobody changed it since we read it: two "complete" clicks
+        // at once used to both go through and issue two invoices.
+        where: { id, status: from } as any,
+        data: { ...data, updatedAt: new Date() },
+        include: {
+          client: true,
+          professional: true,
+          service: true,
+          tenant: true,
+        },
+      });
+    } catch (err) {
+      if (isStaleWrite(err)) throw concurrentChange();
+      throw err;
     }
+
+    await this.afterStatusChange(user, updated, from, to, opts);
+    return this.enrichAppointment(updated);
+  }
+
+  /**
+   * Everything that may refuse a status change, before anything is written:
+   * the transition table, a client's cancellation notice, the service's
+   * consent forms. Returns the columns to write along with the status.
+   */
+  private async prepareStatusChange(
+    user: any,
+    appointment: any,
+    to: AppointmentStatus,
+    opts: StatusChangeOptions,
+  ): Promise<Record<string, unknown>> {
+    const from = appointment.status as AppointmentStatus;
+    assertTransition(from, to);
 
     // A client cancelling their own appointment is held to the salon's
     // minimum notice -- the same rule the virtual receptionist quotes. Staff
     // are not: the salon may always cancel.
-    if (user.role === "client") {
-      const tenant = (appointment as any).tenant as
+    if (to === AppointmentStatus.cancelled && user?.role === "client") {
+      const tenant = appointment.tenant as
         | { minCancelHours?: number; timezone?: string }
         | undefined;
       const minHours = tenant?.minCancelHours ?? 24;
       const startsAt = salonInstant(
-        appointment.scheduledDate as any,
+        appointment.scheduledDate,
         appointment.scheduledTime,
         tenant?.timezone || "Europe/Madrid",
       );
@@ -1147,155 +1213,151 @@ export class AppointmentsService {
       }
     }
 
-    const cancelledAppointment = await this.prisma.appointment.update({
-      where: { id },
-      data: {
-        status: AppointmentStatus.cancelled,
-        cancellationReason: reason || null,
-        updatedAt: new Date(),
-      },
-      include: {
-        client: true,
-        professional: true,
-        service: true,
-        tenant: true,
-      },
-    });
+    // Checked before the write: it used to run after it, so the client got
+    // the 409 while the appointment had already changed.
+    if (needsConsent(from, to)) {
+      await this.assertConsent(appointment);
+    }
 
-    // Log cancellation activity
-    await this.logAppointmentActivity(id, "appointment_cancelled", user, {
-      reason: reason,
-    });
+    const data: Record<string, unknown> = { status: to };
+    if (to === AppointmentStatus.cancelled) {
+      data.cancellationReason = opts.reason || null;
+    }
+    if (to === AppointmentStatus.completed) {
+      // The review request is timed from this.
+      data.completionTime = new Date();
+      if (opts.notes) data.notes = opts.notes;
+    }
+    return { ...data, ...opts.data };
+  }
 
-    // Send cancellation notifications
-    await this.sendAppointmentCancelledNotifications(
-      cancelledAppointment,
-      reason,
+  /**
+   * A service may require signed consent forms before the visit goes ahead
+   * (confirmed, started or completed).
+   */
+  private async assertConsent(appointment: any): Promise<void> {
+    if (!this.consentService) return;
+    const ok = await this.consentService.hasValidConsent(
+      appointment.tenantId,
+      appointment.clientId,
+      appointment.serviceId,
     );
-
-    // The freed slot goes to the wait-list. This used to mark every
-    // matching client "notified" without sending anything; now they are
-    // really told (when the salon switched automatic notices on), or the
-    // team is told who is waiting. Fire-and-forget: a slow email or SMS
-    // provider must not hold up the cancellation.
-    if (
-      this.waitListService &&
-      cancelledAppointment.serviceId &&
-      cancelledAppointment.professionalId
-    ) {
-      this.waitListService
-        .onAppointmentCancelled({
-          tenantId: cancelledAppointment.tenantId,
-          serviceId: cancelledAppointment.serviceId,
-          professionalId: cancelledAppointment.professionalId,
-          date: cancelledAppointment.scheduledDate,
-          time: cancelledAppointment.scheduledTime,
-        })
-        .catch((err) =>
-          this.logger.warn(
-            `wait-list notification failed for cancelled appointment ${cancelledAppointment.id}: ${err.message}`,
-          ),
-        );
-    }
-
-    await this.loyaltyAfterStatus(cancelledAppointment.tenantId, id);
-
-    return this.enrichAppointment(cancelledAppointment);
+    if (ok) return;
+    const required = await this.consentService.getRequiredForms(
+      appointment.tenantId,
+      appointment.serviceId,
+    );
+    throw new ConflictException({
+      code: "CONSENT_REQUIRED",
+      message:
+        "El cliente tiene que firmar los consentimientos de este servicio antes de seguir con la cita.",
+      appointmentId: appointment.id,
+      requiredConsents: required.map((f) => ({
+        id: f.id,
+        name: f.name,
+        version: f.version,
+      })),
+    });
   }
 
-  async complete(user: any, id: string, notes?: string) {
-    const appointment = await this.findOne(user, id);
-
-    if (appointment.status === AppointmentStatus.cancelled) {
-      throw new BadRequestException("No se puede completar una cita cancelada");
-    }
-
-    const completedAppointment = await this.prisma.appointment.update({
-      where: { id },
-      data: {
-        status: AppointmentStatus.completed,
-        notes: notes || appointment.notes,
-        // The review request is timed from this; it was never set here.
-        completionTime:
-          appointment.status === AppointmentStatus.completed
-            ? (appointment as any).completionTime ?? new Date()
-            : new Date(),
-        updatedAt: new Date(),
-      },
-      include: {
-        client: true,
-        professional: true,
-        service: true,
-        tenant: true,
-      },
-    });
-
-    // Log completion activity
-    await this.logAppointmentActivity(id, "appointment_completed", user, {
-      notes: notes,
-    });
-
-    // Send notifications for appointment completion
-    await this.sendAppointmentCompletedNotifications(completedAppointment);
-
-    // P1.4 — Recompute cadence for this client after the visit completes.
-    if (this.clientCadenceService) {
-      this.clientCadenceService
-        .computeForClient(completedAppointment.clientId)
-        .catch((err) => {
-          this.logger.warn(
-            `computeForClient failed for client ${completedAppointment.clientId}: ${(err as Error).message}`,
-          );
+  /**
+   * What a new status sets off. Notices and side jobs never fail the change
+   * itself: each catches its own errors.
+   */
+  private async afterStatusChange(
+    user: any,
+    updated: any,
+    from: AppointmentStatus,
+    to: AppointmentStatus,
+    opts: StatusChangeOptions,
+  ): Promise<void> {
+    const id = updated.id as string;
+    switch (to) {
+      case AppointmentStatus.cancelled:
+        await this.logAppointmentActivity(id, "appointment_cancelled", user, {
+          reason: opts.reason,
         });
-    }
+        await this.sendAppointmentCancelledNotifications(updated, opts.reason);
+        this.offerFreedSlot(updated);
+        break;
 
-    // P2A — Auto-invoice the appointment if the tenant has opted in.
-    if (this.invoiceService) {
-      this.invoiceService
-        .fromAppointment(completedAppointment.id)
-        .catch((err) => {
-          this.logger.warn(
-            `auto-invoice from appointment failed for ${completedAppointment.id}: ${(err as Error).message}`,
-          );
+      case AppointmentStatus.completed:
+        await this.logAppointmentActivity(id, "appointment_completed", user, {
+          notes: opts.notes,
         });
+        await this.sendAppointmentCompletedNotifications(updated);
+
+        // P1.4 — Recompute cadence for this client after the visit completes.
+        if (this.clientCadenceService) {
+          this.clientCadenceService
+            .computeForClient(updated.clientId)
+            .catch((err) => {
+              this.logger.warn(
+                `computeForClient failed for client ${updated.clientId}: ${(err as Error).message}`,
+              );
+            });
+        }
+
+        // P2A — Auto-invoice the appointment if the tenant has opted in.
+        // Once: the transition table refuses a second completion.
+        if (this.invoiceService) {
+          this.invoiceService.fromAppointment(id).catch((err) => {
+            this.logger.warn(
+              `auto-invoice from appointment failed for ${id}: ${(err as Error).message}`,
+            );
+          });
+        }
+        break;
+
+      case AppointmentStatus.no_show:
+        await this.logAppointmentActivity(id, "appointment_no_show", user, {});
+        await this.sendAppointmentNoShowNotifications(updated);
+        break;
+
+      case AppointmentStatus.confirmed:
+        await this.logAppointmentActivity(id, "appointment_status_changed", user, { from, to });
+        await this.sendAppointmentConfirmedNotifications(updated);
+        break;
+
+      default:
+        await this.logAppointmentActivity(id, "appointment_status_changed", user, { from, to });
     }
 
-    // Points, if it is also paid (otherwise when the payment comes in).
-    await this.loyaltyAfterStatus(completedAppointment.tenantId, id);
-
-    return this.enrichAppointment(completedAppointment);
+    // Points: completed and paid earns, cancelled gives them back.
+    await this.loyaltyAfterStatus(updated.tenantId, id);
   }
 
-  async markNoShow(user: any, id: string) {
-    const appointment = await this.findOne(user, id);
-
-    if (appointment.status === AppointmentStatus.cancelled) {
-      throw new BadRequestException(
-        "No se puede marcar como no presentado una cita cancelada",
+  /**
+   * The freed slot goes to the wait-list -- on any cancellation, and only
+   * while the slot is still ahead: nobody can take one that has passed.
+   * This used to mark every matching client "notified" without sending
+   * anything; now they are really told (when the salon switched automatic
+   * notices on), or the team is told who is waiting. Fire-and-forget: a
+   * slow email or SMS provider must not hold up the cancellation.
+   */
+  private offerFreedSlot(cancelled: any): void {
+    if (!this.waitListService || !cancelled.serviceId || !cancelled.professionalId) {
+      return;
+    }
+    const startsAt = salonInstant(
+      cancelled.scheduledDate,
+      cancelled.scheduledTime || "23:59",
+      cancelled.tenant?.timezone || "Europe/Madrid",
+    );
+    if (startsAt.getTime() <= Date.now()) return;
+    this.waitListService
+      .onAppointmentCancelled({
+        tenantId: cancelled.tenantId,
+        serviceId: cancelled.serviceId,
+        professionalId: cancelled.professionalId,
+        date: cancelled.scheduledDate,
+        time: cancelled.scheduledTime,
+      })
+      .catch((err) =>
+        this.logger.warn(
+          `wait-list notification failed for cancelled appointment ${cancelled.id}: ${err.message}`,
+        ),
       );
-    }
-
-    const noShowAppointment = await this.prisma.appointment.update({
-      where: { id },
-      data: {
-        status: AppointmentStatus.no_show,
-        updatedAt: new Date(),
-      },
-      include: {
-        client: true,
-        professional: true,
-        service: true,
-        tenant: true,
-      },
-    });
-
-    // Log no-show activity
-    await this.logAppointmentActivity(id, "appointment_no_show", user, {});
-
-    // Send no-show notifications
-    await this.sendAppointmentNoShowNotifications(noShowAppointment);
-
-    return this.enrichAppointment(noShowAppointment);
   }
 
   async findPendingPayment(

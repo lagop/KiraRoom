@@ -7,6 +7,8 @@ import {
 } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { LoyaltyService } from "../loyalty/loyalty.service";
+import { AppointmentStatus } from "@prisma/client";
+import { applyStatusIfAllowed } from "../appointments/appointment-status";
 
 @Injectable()
 export class PaymentsService {
@@ -35,6 +37,21 @@ export class PaymentsService {
       }
     } catch (err) {
       this.logger.warn(`loyalty after payment ${payment.id} failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * A payment marks its appointment completed, and a refund cancelled, as
+   * before -- but only where the appointments' transition table allows it,
+   * and only over the status just read. A visit already completed stays as
+   * it is (paying after completing is the usual order), and a cancelled or
+   * no-show one is not revived by a fee paid on it. The payment itself is
+   * never refused for it: it is already recorded by the time we get here.
+   */
+  private async markAppointment(appointmentId: string, to: AppointmentStatus) {
+    const changed = await applyStatusIfAllowed(this.prisma as any, appointmentId, to);
+    if (!changed) {
+      this.logger.log(`appointment ${appointmentId} not marked ${to} by its payment: status does not allow it`);
     }
   }
 
@@ -253,10 +270,7 @@ export class PaymentsService {
     });
 
     if (status === "paid" && appointmentId) {
-      await this.prisma.appointment.update({
-        where: { id: appointmentId },
-        data: { status: "completed" },
-      });
+      await this.markAppointment(appointmentId, AppointmentStatus.completed);
     }
 
     await this.loyaltyAfter(tenantId, payment);
@@ -286,10 +300,7 @@ export class PaymentsService {
     });
 
     if (status === "paid" && payment.appointmentId) {
-      await this.prisma.appointment.update({
-        where: { id: payment.appointmentId },
-        data: { status: "completed" },
-      });
+      await this.markAppointment(payment.appointmentId, AppointmentStatus.completed);
     }
 
     if (status !== payment.status) await this.loyaltyAfter(tenantId, updatedPayment);
@@ -356,10 +367,7 @@ export class PaymentsService {
     });
 
     if (payment.appointmentId) {
-      await this.prisma.appointment.update({
-        where: { id: payment.appointmentId },
-        data: { status: "cancelled" },
-      });
+      await this.markAppointment(payment.appointmentId, AppointmentStatus.cancelled);
     }
 
     await this.loyaltyAfter(tenantId, updatedPayment);
@@ -508,10 +516,7 @@ export class PaymentsService {
     });
 
     if (payment.appointmentId) {
-      await this.prisma.appointment.update({
-        where: { id: payment.appointmentId },
-        data: { status: "completed" },
-      });
+      await this.markAppointment(payment.appointmentId, AppointmentStatus.completed);
     }
 
     await this.loyaltyAfter(tenantId, updatedPayment);
@@ -592,10 +597,7 @@ export class PaymentsService {
     });
 
     // Update appointment status to completed
-    await this.prisma.appointment.update({
-      where: { id: appointmentId },
-      data: { status: "completed" },
-    });
+    await this.markAppointment(appointmentId, AppointmentStatus.completed);
 
     return payment;
   }
