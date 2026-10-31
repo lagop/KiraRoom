@@ -83,8 +83,19 @@ function makeMocks(overrides: any = {}) {
   };
 
   const emailService: any = {
-    sendEmail: jest.fn(async () => undefined),
+    sendEmail: jest.fn(async () => ({ success: true, id: "email-1" })),
   };
+
+  // The client's appointments: `completed` answers "completed this service
+  // since the last notice?", `upcoming` "already booked?".
+  const visits = { completedSince: null as Date | null, upcoming: false };
+  const appointmentFindFirst = jest.fn(async (args: any) => {
+    if (args.where.status === "completed") {
+      const since: Date = args.where.completionTime.gt;
+      return visits.completedSince && visits.completedSince > since ? { id: "visit-1" } : null;
+    }
+    return visits.upcoming ? { id: "upcoming-1" } : null;
+  });
 
   const prisma: any = {
     clientCadence: {
@@ -96,7 +107,9 @@ function makeMocks(overrides: any = {}) {
       create: reminderCreate,
       update: reminderUpdate,
       findFirst: reminderFindFirst,
+      count: jest.fn(async () => 0),
     },
+    appointment: { findFirst: appointmentFindFirst },
     client: { findUnique: clientFindUnique },
     service: { findUnique: serviceFindUnique },
   };
@@ -110,7 +123,7 @@ function makeMocks(overrides: any = {}) {
   const flagsStub = {
     isFeatureUnlocked: jest.fn().mockResolvedValue(false),
   } as any;
-  return { prisma, cadenceSvc, emailService, cadence, tenant, reminders: [], flags: flagsStub };
+  return { prisma, cadenceSvc, emailService, cadence, tenant, reminders: [], flags: flagsStub, visits };
 }
 
 describe("RebookingDispatcherService.processOne", () => {
@@ -180,13 +193,15 @@ describe("RebookingDispatcherService.processOne", () => {
     expect(result.reason).toBe("already_sent_for_cycle");
   });
 
-  it("skips when a scheduled/sent reminder exists in the last 30 days", async () => {
+  it("skips when a scheduled/sent reminder exists with no completed visit since", async () => {
     const m = makeMocks();
     m.prisma.rebookingReminder.findFirst.mockResolvedValue({
       id: "rem-existing",
       clientId: "client-1",
       serviceId: "svc-1",
       status: RebookStatus.sent,
+      sentAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
+      createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
     });
     const d = buildDispatcher(m);
     const result = await d.processOne("client-1");
@@ -240,6 +255,103 @@ describe("RebookingDispatcherService.processOne", () => {
     const updateCall = m.prisma.rebookingReminder.update.mock.calls[0][0];
     expect(updateCall.data.status).toBe(RebookStatus.failed);
     expect(updateCall.data.sentAt).toBeNull();
+  });
+});
+
+describe("RebookingDispatcherService one notice per visit cycle", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  function build(m: ReturnType<typeof makeMocks>) {
+    const d = new RebookingDispatcherService(m.prisma, m.cadenceSvc, m.emailService, m.flags);
+    d.onModuleInit();
+    return d;
+  }
+
+  it("is eligible again once the service was completed after the last notice", async () => {
+    const m = makeMocks();
+    m.cadence.reminderSentFor = [
+      { serviceId: "svc-1", sentAt: new Date(Date.now() - 40 * DAY).toISOString(), channel: "email" },
+    ];
+    m.visits.completedSince = new Date(Date.now() - 20 * DAY);
+    const result = await build(m).processOne("client-1");
+    expect(result.ok).toBe(true);
+    expect(m.emailService.sendEmail).toHaveBeenCalledTimes(1);
+    // Only the latest notice per service is kept.
+    const sentForUpdate = m.prisma.clientCadence.update.mock.calls.find((c: any) => c[0].data.reminderSentFor);
+    expect(sentForUpdate[0].data.reminderSentFor).toHaveLength(1);
+    expect(new Date(sentForUpdate[0].data.reminderSentFor[0].sentAt).getTime()).toBeGreaterThan(Date.now() - DAY);
+  });
+
+  it("is not eligible while the service has not been completed since the last notice", async () => {
+    const m = makeMocks();
+    m.cadence.reminderSentFor = [
+      { serviceId: "svc-1", sentAt: new Date(Date.now() - 10 * DAY).toISOString(), channel: "email" },
+    ];
+    m.visits.completedSince = new Date(Date.now() - 20 * DAY); // before the notice
+    const result = await build(m).processOne("client-1");
+    expect(result.reason).toBe("already_sent_for_cycle");
+    expect(m.emailService.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("an older reminder row stops blocking once she completed the service after it", async () => {
+    const m = makeMocks();
+    m.prisma.rebookingReminder.findFirst.mockResolvedValue({
+      id: "rem-old",
+      status: RebookStatus.sent,
+      sentAt: new Date(Date.now() - 40 * DAY),
+      createdAt: new Date(Date.now() - 40 * DAY),
+    });
+    m.visits.completedSince = new Date(Date.now() - 15 * DAY);
+    const result = await build(m).processOne("client-1");
+    expect(result.ok).toBe(true);
+  });
+
+  it("skips a client who already has an upcoming appointment", async () => {
+    const m = makeMocks();
+    m.visits.upcoming = true;
+    const result = await build(m).processOne("client-1");
+    expect(result).toEqual({ ok: false, reason: "has_upcoming_appointment" });
+    expect(m.prisma.rebookingReminder.create).not.toHaveBeenCalled();
+    expect(m.emailService.sendEmail).not.toHaveBeenCalled();
+    const upcomingQuery = m.prisma.appointment.findFirst.mock.calls.find((c: any) => c[0].where.status?.in)[0].where;
+    expect(upcomingQuery.status.in).toEqual(["pending", "confirmed"]);
+    expect(upcomingQuery.clientId).toBe("client-1");
+    expect(upcomingQuery.serviceId).toBeUndefined(); // any service
+  });
+
+  it("never emails a placeholder address, and does not retry it this cycle", async () => {
+    const m = makeMocks();
+    m.prisma.client.findUnique.mockResolvedValue({
+      id: "client-1",
+      firstName: "Ana",
+      email: "wizard-1730000000000@placeholder.local",
+      phone: null,
+    });
+    const result = await build(m).processOne("client-1");
+    expect(result).toEqual({ ok: false, reason: "no_email" });
+    expect(m.emailService.sendEmail).not.toHaveBeenCalled();
+    expect(m.prisma.rebookingReminder.update.mock.calls[0][0].data.status).toBe(RebookStatus.failed);
+    // advanced to the next cycle rather than retried every hour today
+    expect(m.prisma.clientCadence.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ nextRecommendedReminderAt: expect.any(Date) }) }),
+    );
+  });
+
+  it("an email the provider refused is not counted as sent", async () => {
+    const m = makeMocks();
+    m.emailService.sendEmail.mockResolvedValue({ success: false, error: "rate_limited" });
+    const result = await build(m).processOne("client-1");
+    expect(result).toEqual({ ok: false, reason: "rate_limited" });
+    expect(m.prisma.rebookingReminder.update.mock.calls[0][0].data.status).toBe(RebookStatus.failed);
+    // left for the next hourly tick: the cycle is not used up
+    expect(m.prisma.clientCadence.update).not.toHaveBeenCalled();
+  });
+
+  it("stops retrying after 3 failed sends in a day", async () => {
+    const m = makeMocks();
+    m.prisma.rebookingReminder.count.mockResolvedValue(3);
+    const result = await build(m).processOne("client-1");
+    expect(result.reason).toBe("too_many_failures");
+    expect(m.emailService.sendEmail).not.toHaveBeenCalled();
   });
 });
 
