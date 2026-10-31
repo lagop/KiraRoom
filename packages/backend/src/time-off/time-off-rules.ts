@@ -145,7 +145,6 @@ export function salonClosedOn(blocks: ReadonlyArray<TimeOffBlock>, day: string):
 const ALL_DAY_REASON: Record<string, (name: string) => string> = {
   vacation: (name) => `${name} está de vacaciones ese día.`,
   day_off: (name) => `${name} libra ese día.`,
-  sick_leave: (name) => `${name} está de baja ese día.`,
 };
 
 const noteOf = (block: TimeOffBlock) => (block.note?.trim() ? ` (${block.note.trim()})` : "");
@@ -154,7 +153,8 @@ const noteOf = (block: TimeOffBlock) => (block.note?.trim() ? ` (${block.note.tr
  * Why `block` stops a booking, in the words the salon reads. A closure names
  * its note ("Navidad"): it is the salon's. A professional's note is never in
  * it -- a professional booking a colleague reads this too, and the reason for
- * someone's absence is not theirs to read.
+ * someone's absence is not theirs to read. Sick leave reads like any other
+ * absence for the same reason: that a colleague is ill is health data.
  */
 export function timeOffReason(block: TimeOffBlock, professionalName: string): string {
   const window = blockWindow(block);

@@ -262,12 +262,14 @@ describe("listing", () => {
     ]);
   });
 
-  it("hides a colleague's note from staff, but not the salon's closure note", async () => {
+  it("hides a colleague's note and sick leave from staff, but not the salon's closure note", async () => {
     const { service } = build({ timeOff: rows() });
     const list = await service.list(STAFF, { from: "2026-12-01", to: "2026-12-31" });
     expect(list[0]).not.toHaveProperty("note");
-    expect(list[0]).toMatchObject({ kind: "sick_leave", professionalName: "Ana Gil" });
+    expect(list[0]).toMatchObject({ kind: "other", professionalName: "Ana Gil" });
     expect(list[1]).toMatchObject({ kind: "closure", note: "Navidad" });
+    const owner = await service.list(OWNER, { from: "2026-12-01", to: "2026-12-31" });
+    expect(owner[0]).toMatchObject({ kind: "sick_leave", note: "Operación" });
   });
 
   it("refuses a range backwards or longer than 400 days", async () => {

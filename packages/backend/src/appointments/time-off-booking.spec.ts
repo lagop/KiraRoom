@@ -101,7 +101,7 @@ describe("assertCanReschedule with time off", () => {
       assertCanReschedule(prismaWith([row({ kind: "sick_leave" })]), { ...target, appointmentId: "a1" }, NOW),
     );
     expect(err).toBeInstanceOf(ConflictException);
-    expect(err.message).toBe("Ana está de baja ese día.");
+    expect(err.message).toBe("Ana no está disponible ese día.");
   });
 
   it("refuses a move into a partial closure", async () => {

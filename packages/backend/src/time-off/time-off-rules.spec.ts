@@ -93,7 +93,7 @@ describe("timeOffProblem", () => {
   it("names the reason of an all-day absence, never its note", () => {
     expect(ask([block({ note: "Viaje a Roma" })], "10:00")).toBe("Ana está de vacaciones ese día.");
     expect(ask([block({ kind: "day_off" })], "10:00")).toBe("Ana libra ese día.");
-    expect(ask([block({ kind: "sick_leave", note: "Operación" })], "10:00")).toBe("Ana está de baja ese día.");
+    expect(ask([block({ kind: "sick_leave", note: "Operación" })], "10:00")).toBe("Ana no está disponible ese día.");
     expect(ask([block({ kind: "other" })], "10:00")).toBe("Ana no está disponible ese día.");
   });
 

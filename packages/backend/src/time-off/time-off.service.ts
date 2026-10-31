@@ -261,14 +261,18 @@ export class TimeOffService {
    * A block as the API answers it. Staff see who is away and when, the salon's
    * closures with their note, but not the note on a colleague's absence: why
    * someone is away (a medical appointment) is for whoever runs the salon.
+   *
+   * Nor do they see that it is sick leave: that a colleague is ill is health
+   * data (GDPR art. 9), so to staff it is just an absence ("Ausencia").
    */
   private view(row: any, staff: boolean) {
     const personal = row.professionalId !== null;
+    const kind = staff && row.kind === "sick_leave" ? "other" : row.kind;
     return {
       id: row.id,
       professionalId: row.professionalId,
       professionalName: personal ? fullName(row.professional) || null : null,
-      kind: row.kind,
+      kind,
       startDate: dayOf(row.startDate),
       endDate: dayOf(row.endDate),
       startTime: row.startTime ?? null,
