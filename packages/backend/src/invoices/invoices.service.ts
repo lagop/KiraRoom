@@ -11,6 +11,7 @@ import { FiscalService } from "./fiscal/fiscal.service";
 import { AccountingService, cancelNeedsMirror } from "../accounting/accounting.service";
 import { FiscalMode, InvoiceSource, InvoiceStatus, Prisma } from "@prisma/client";
 import { appointmentInvoiceLines } from "./appointment-invoice-pricing";
+import { pricesIncludeTaxOf, productTaxRatePercent, salonTaxRate } from "./salon-tax-settings";
 import { addonServices } from "../appointments/visit-sync";
 
 interface CreateInvoiceInput {
@@ -345,13 +346,18 @@ export class InvoiceService {
     if (order.status !== "completed") return null;
     const settings =
       (order.tenant?.fiscalSettings as Record<string, unknown>) ?? {};
-    const defaultTaxRate = (settings.defaultTaxRate as number) ?? 21;
+    const defaultTaxRate = salonTaxRate(settings);
+    // A till price is written the way the salon writes all its prices: tax
+    // included or on top, its own choice (salon-tax-settings.ts).
+    const taxIncluded = pricesIncludeTaxOf(settings);
 
     const lines = order.items.map((it) => ({
       description: it.product?.name ?? "Producto",
       quantity: Number(it.quantity),
       unitPriceCents: Math.round(Number(it.unitPrice) * 100),
-      taxRate: Number(it.product?.taxRate ?? defaultTaxRate),
+      // Product.taxRate is a fraction (0.21); a line's rate is a percent (21).
+      taxRate: productTaxRatePercent(it.product?.taxRate, defaultTaxRate),
+      taxIncluded,
       productId: it.productId,
     }));
 

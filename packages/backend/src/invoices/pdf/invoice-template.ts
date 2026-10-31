@@ -43,6 +43,8 @@ export interface InvoiceTemplateData {
   };
   lines: InvoiceLine[];
   taxBreakdown: Array<{ rate: number; baseCents: number; taxCents: number }>;
+  /** What the tax is called: IVA, IGIC (Canarias) or IPSI (Ceuta y Melilla). Default IVA. */
+  taxLabel?: string;
   qrPngDataUrl?: string;
 }
 
@@ -69,6 +71,7 @@ function escapeHtml(s: string | null | undefined): string {
  * the image).
  */
 export function buildInvoiceHtml(data: InvoiceTemplateData): string {
+  const taxLabel = escapeHtml(data.taxLabel || "IVA");
   const linesHtml = data.lines
     .map(
       (l) => `
@@ -196,7 +199,7 @@ export function buildInvoiceHtml(data: InvoiceTemplateData): string {
         <th>Descripción</th>
         <th class="qty">Cant.</th>
         <th class="price">P. unit.</th>
-        <th class="tax">IVA</th>
+        <th class="tax">${taxLabel}</th>
         <th class="total">Total</th>
       </tr>
     </thead>
@@ -209,7 +212,7 @@ export function buildInvoiceHtml(data: InvoiceTemplateData): string {
       ${data.taxBreakdown
         .map(
           (t) =>
-            `<tr><td class="label">IVA ${t.rate}%</td><td class="num">${fmt(t.taxCents, data.invoice.currency)}</td></tr>`,
+            `<tr><td class="label">${taxLabel} ${t.rate}%</td><td class="num">${fmt(t.taxCents, data.invoice.currency)}</td></tr>`,
         )
         .join("")}
       <tr class="total"><td class="label">Total</td><td class="num">${fmt(data.invoice.totalCents, data.invoice.currency)}</td></tr>

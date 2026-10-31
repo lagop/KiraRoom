@@ -1,13 +1,12 @@
 import { Prisma } from "@prisma/client";
-import { appointmentInvoiceLine, appointmentInvoiceLines, SALON_PRICES_INCLUDE_TAX } from "./appointment-invoice-pricing";
+import { appointmentInvoiceLine, appointmentInvoiceLines } from "./appointment-invoice-pricing";
 import { InvoiceCalculator } from "./invoice-calculator.service";
 
 const calc = new InvoiceCalculator();
 const appt = { price: new Prisma.Decimal("30.00"), serviceId: "svc-1", service: { name: "Corte" } };
 
 describe("appointmentInvoiceLine", () => {
-  it("keeps today's default: tax added on top of the price", () => {
-    expect(SALON_PRICES_INCLUDE_TAX).toBe(false);
+  it("a salon without the setting keeps tax added on top of the price", () => {
     const line = appointmentInvoiceLine(appt, {});
     expect(line).toEqual({
       description: "Corte",
@@ -22,11 +21,36 @@ describe("appointmentInvoiceLine", () => {
     expect(r.totalCents).toBe(3630);
   });
 
-  it("prices including tax: the invoice total is the price", () => {
-    const r = calc.compute([appointmentInvoiceLine(appt, {}, true)]);
+  it("pricesIncludeTax false: 30,00 + 6,30 IVA = 36,30", () => {
+    const line = appointmentInvoiceLine(appt, { pricesIncludeTax: false });
+    expect(line.taxIncluded).toBe(false);
+    const r = calc.compute([line]);
+    expect(r.subtotalCents).toBe(3000);
+    expect(r.totalCents).toBe(3630);
+    expect(r.taxBreakdown).toEqual([{ rate: 21, baseCents: 3000, taxCents: 630 }]);
+  });
+
+  it("pricesIncludeTax true: the invoice total is the price, 24,79 + 5,21 = 30,00", () => {
+    const line = appointmentInvoiceLine(appt, { pricesIncludeTax: true });
+    expect(line.taxIncluded).toBe(true);
+    const r = calc.compute([line]);
     expect(r.totalCents).toBe(3000);
     expect(r.subtotalCents).toBe(2479);
     expect(r.taxBreakdown).toEqual([{ rate: 21, baseCents: 2479, taxCents: 521 }]);
+  });
+
+  it("IGIC 7 %, prices included: 28,04 + 1,96 = 30,00; on top: 30,00 + 2,10", () => {
+    const included = calc.compute([appointmentInvoiceLine(appt, { defaultTaxRate: 7, pricesIncludeTax: true })]);
+    expect(included.taxBreakdown).toEqual([{ rate: 7, baseCents: 2804, taxCents: 196 }]);
+    expect(included.totalCents).toBe(3000);
+    const onTop = calc.compute([appointmentInvoiceLine(appt, { defaultTaxRate: 7, pricesIncludeTax: false })]);
+    expect(onTop.taxBreakdown).toEqual([{ rate: 7, baseCents: 3000, taxCents: 210 }]);
+    expect(onTop.totalCents).toBe(3210);
+  });
+
+  it("only a true boolean means included: a stray string or null keeps tax on top", () => {
+    expect(appointmentInvoiceLine(appt, { pricesIncludeTax: "true" }).taxIncluded).toBe(false);
+    expect(appointmentInvoiceLine(appt, { pricesIncludeTax: null }).taxIncluded).toBe(false);
   });
 
   it("converts Appointment.price from euros to cents", () => {
@@ -76,7 +100,35 @@ describe("appointmentInvoiceLines: a visit of several services", () => {
       ["Corte", 1, 2000, 7, "svc-cut"],
       ["Mascarilla", 2, 400, 7, "svc-mask"],
     ]);
+    expect(lines.every((l) => l.taxIncluded === false)).toBe(true);
     expect(calc.compute(lines).subtotalCents).toBe(7300);
+  });
+
+  it("prices including tax: every line is split, and the visit totals what was charged", () => {
+    const lines = appointmentInvoiceLines(visit, { defaultTaxRate: 21, pricesIncludeTax: true });
+    expect(lines.map((l) => [l.description, l.quantity, l.unitPriceCents, l.taxIncluded])).toEqual([
+      ["Color", 1, 4500, true],
+      ["Corte", 1, 2000, true],
+      ["Mascarilla", 2, 400, true],
+    ]);
+    const r = calc.compute(lines);
+    expect(r.totalCents).toBe(7300);
+    // 45 / 1,21 = 37,19; 20 / 1,21 = 16,53; 8 / 1,21 = 6,61.
+    expect(r.subtotalCents).toBe(3719 + 1653 + 661);
+    expect(r.subtotalCents + r.taxBreakdown[0].taxCents).toBe(7300);
+  });
+
+  it("prices including tax, IGIC 7 %: the add-on line totals its two units", () => {
+    const lines = appointmentInvoiceLines(visit, { defaultTaxRate: 7, pricesIncludeTax: true });
+    const r = calc.compute(lines);
+    expect(r.totalCents).toBe(7300);
+    expect(r.lines.find((l) => l.description === "Mascarilla")).toMatchObject({ quantity: 2, totalCents: 800, taxCents: 52 });
+  });
+
+  it("the one-line fallback follows the setting too", () => {
+    const lines = appointmentInvoiceLines({ ...visit, price: new Prisma.Decimal("70.00") }, { pricesIncludeTax: true });
+    expect(lines).toEqual([expect.objectContaining({ unitPriceCents: 7000, taxIncluded: true })]);
+    expect(calc.compute(lines).totalCents).toBe(7000);
   });
 
   it("a cancelled service is not invoiced", () => {

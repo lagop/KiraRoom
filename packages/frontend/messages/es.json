@@ -151,6 +151,10 @@
       "saved": "Configuración guardada",
       "taxRegime": "Régimen fiscal del territorio",
       "taxRegimeHint": "IVA en península y Baleares, IGIC en Canarias, IPSI en Ceuta y Melilla. Al cambiarlo se ajusta el tipo por defecto.",
+      "pricesIncludeTax": "Mis precios ya incluyen el impuesto",
+      "pricesIncludeTaxHint": "Se aplica a las facturas de citas y de ventas en caja.",
+      "pricesIncludeTaxExampleIncluded": "Un servicio de {price} se factura como {base} + {tax} de {label}",
+      "pricesIncludeTaxExampleOnTop": "Un servicio de {price} se factura como {base} + {tax} de {label} = {total}",
       "submissionUnavailable": "El envío de facturas a la AEAT (Verifactu, TicketBAI o SII) todavía no está disponible. Puedes emitir facturas desde KiraRoom, pero no se envían a Hacienda."
     },
     "errors": {
@@ -1324,6 +1328,7 @@
     "section_notifications": "Notificaciones",
     "section_account": "Cuenta",
     "coming_soon": "Próximamente",
+    "tax_moved": "El impuesto de tu salón (IVA, IGIC o IPSI) y si tus precios ya lo incluyen se configuran en",
     "load_failed": "No se pudo cargar la configuración",
     "save_failed": "No se pudo guardar la configuración",
     "hours_need_both": "Indica tanto la hora de apertura como la de cierre",
