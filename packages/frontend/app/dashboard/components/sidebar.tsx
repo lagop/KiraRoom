@@ -9,6 +9,7 @@ import {
   Bug,
   Calculator,
   Calendar,
+  CalendarOff,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -51,6 +52,7 @@ import { ProBadge } from "@/components/ProBadge";
 const ICONS: Record<string, LucideIcon> = {
   home: Home,
   calendar: Calendar,
+  "calendar-off": CalendarOff,
   users: Users,
   hourglass: Hourglass,
   scissors: Scissors,

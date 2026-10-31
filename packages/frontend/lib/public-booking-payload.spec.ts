@@ -123,6 +123,9 @@ check("a salon that opens on Sunday is open on Sunday", isClosedDay("2026-11-01"
 check("an open weekday is open", isClosedDay("2026-11-02", weekdaysOnly), false);
 check("no hours recorded: no day is closed", isClosedDay("2026-11-01", {}), false);
 check("no hours at all: no day is closed", isClosedDay("2026-11-01", undefined), false);
+check("a recorded closure is closed, even on a day it opens", isClosedDay("2026-12-25", weekdaysOnly, ["2026-12-25"]), true);
+check("a closure is closed with no hours recorded", isClosedDay("2026-12-25", undefined, ["2026-12-24", "2026-12-25"]), true);
+check("the day after a closure is open", isClosedDay("2026-12-28", weekdaysOnly, ["2026-12-25"]), false);
 check("no screen refuses Sundays outright any more", /dayOfWeek === 0|salonClosedSunday/.test(pageSource), false);
 const clientAreaSource = fs.readFileSync(
   path.join(ROOT, "app/sites/[salonName]/account/new-appointment/page.tsx"),

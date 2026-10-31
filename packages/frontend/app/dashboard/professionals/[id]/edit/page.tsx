@@ -7,6 +7,7 @@ import { ArrowLeft, Save, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import apiClient from '@/lib/api';
 import { WeeklyScheduleEditor } from '@/components/professionals/WeeklyScheduleEditor';
+import { TimeOffManager } from '@/components/time-off/TimeOffManager';
 import {
   defaultSchedule,
   hasProblems,
@@ -508,6 +509,16 @@ function EditProfessionalForm() {
           </button>
         </div>
       </form>
+
+      {/* Outside the form: each absence is saved on its own, not with "Save Changes". */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <h2 className="text-lg font-semibold text-gray-900 mb-1">Ausencias</h2>
+        <p className="text-sm text-gray-500 mb-4">
+          Vacaciones, días libres, bajas o unas horas sueltas. En ese tiempo no se ofrecen citas online ni por la
+          recepcionista; las citas que ya tenga no se cancelan.
+        </p>
+        <TimeOffManager professionalId={professionalId} />
+      </div>
     </div>
   );
 }

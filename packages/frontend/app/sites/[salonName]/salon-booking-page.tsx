@@ -529,7 +529,7 @@ export default function SalonBookingPage({
     date: bookingData.date,
     loading: slotsLoading,
     slots: availableSlots,
-    closed: isClosedDay(bookingData.date, initialData.openingHours),
+    closed: isClosedDay(bookingData.date, initialData.openingHours, initialData.closedDays),
   });
 
   return (

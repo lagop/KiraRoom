@@ -18,7 +18,8 @@ import { Professional, Appointment } from "./types";
 import { AppointmentBlock } from "./AppointmentBlock";
 import { fetchCalendarData, fetchSalonSettings, transformToCalendarFormat, type SalonSettings } from "./calendar.service";
 import { FALLBACK_SALON_TIMEZONE, salonClock, salonTime } from "./salon-time";
-import { dateOfDay, gridHours, holdsSlot, initialScrollMinutes, localDay, minutesToTop, visibleProfessionals } from "./day-grid";
+import { dateOfDay, gridHours, holdsSlot, initialScrollMinutes, localDay, minutesToTop, salonClosureOn, visibleProfessionals } from "./day-grid";
+import type { TimeOff } from "@/lib/time-off";
 import { SalonTimeZoneProvider } from "./SalonTimeZone";
 import { useToast } from "@/components/ui/use-toast";
 import { useTranslations } from "@/lib/use-translation";
@@ -72,6 +73,8 @@ export const Calendar: React.FC<{
   }, [externalOnDayChange]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [professionals, setProfessionals] = useState<Professional[]>([]);
+  // Time off and closures of the day, shaded in the columns.
+  const [timeOff, setTimeOff] = useState<TimeOff[]>([]);
   // The salon's zone and hours, asked for once: they do not change from day to day.
   const [timeZone, setTimeZone] = useState(FALLBACK_SALON_TIMEZONE);
   const [openingHours, setOpeningHours] = useState<SalonSettings["openingHours"]>(null);
@@ -125,8 +128,16 @@ export const Calendar: React.FC<{
     }
     try {
       settingsRequest.current ??= fetchSalonSettings();
-      const [settings, { appointments: backendAppointments, professionals: backendProfessionals }] =
-        await Promise.all([settingsRequest.current, fetchCalendarData(forDay)]);
+      const [settings, { appointments: backendAppointments, professionals: backendProfessionals }, dayTimeOff] =
+        await Promise.all([
+          settingsRequest.current,
+          fetchCalendarData(forDay),
+          // Only shading: a failure here must not take the day's appointments with it.
+          apiClient.getTimeOff(forDay, forDay).catch((err) => {
+            console.error("Failed to fetch time off:", err);
+            return [] as TimeOff[];
+          }),
+        ]);
       if (request !== requestSeq.current) return;
 
       // Transform data to calendar format
@@ -137,6 +148,7 @@ export const Calendar: React.FC<{
       setOpeningHours(settings.openingHours);
       setAppointments(calendarAppointments);
       setProfessionals(calendarProfessionals);
+      setTimeOff(dayTimeOff);
       setError(false);
     } catch (err) {
       if (request !== requestSeq.current) return;
@@ -147,6 +159,7 @@ export const Calendar: React.FC<{
         // No fallback to mock data
         setAppointments([]);
         setProfessionals([]);
+        setTimeOff([]);
       }
     } finally {
       if (request === requestSeq.current) setLoading(false);
@@ -347,6 +360,9 @@ export const Calendar: React.FC<{
     setEditingAppointmentId(appointmentId);
   }, []);
 
+  // The whole salon closed today: said above the grid and the agenda alike.
+  const closure = useMemo(() => salonClosureOn(day, timeOff), [day, timeOff]);
+
   const activeAppointment = useMemo(
     () => appointments.find((a) => a.id === activeId),
     [appointments, activeId]
@@ -364,6 +380,16 @@ export const Calendar: React.FC<{
           t={t}
         />
         <div className="relative flex-1 min-h-0 min-w-0 flex flex-col">
+          {!loading && !error && closure && (
+            <div
+              role="status"
+              data-test="salon-closed"
+              className="px-4 py-2 text-sm bg-amber-50 text-amber-900 border-b border-amber-200"
+            >
+              {closure.note?.trim() ? `Salón cerrado — ${closure.note.trim()}` : "Salón cerrado"}. No se ofrecen citas
+              online ni por la recepcionista.
+            </div>
+          )}
           {loading ? (
             <div className="flex-1 flex items-center justify-center">
               <div className="animate-spin w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full"></div>
@@ -405,6 +431,7 @@ export const Calendar: React.FC<{
                 hours={hours}
                 professionals={columns}
                 appointments={appointments}
+                timeOff={timeOff}
                 draggingId={activeId}
                 onAppointmentClick={onAppointmentClick}
                 onSlotClick={handleSlotClick}

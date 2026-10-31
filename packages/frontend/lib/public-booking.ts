@@ -83,11 +83,18 @@ export function weekdayKey(date: string): string | null {
 }
 
 /**
- * True only when the salon's recorded hours say it does not open that
- * weekday. No hours recorded means we do not know, and then no day is
- * called closed: the availability endpoint decides.
+ * True when the salon is closed that day: a closure it recorded (holidays,
+ * closures: `closedDays`, "YYYY-MM-DD"), or its recorded hours say it does
+ * not open that weekday. No hours recorded means we do not know, and then no
+ * weekday is called closed: the availability endpoint decides. Only picks the
+ * message; the slots come from the server either way.
  */
-export function isClosedDay(date: string, hours: OpeningHours): boolean {
+export function isClosedDay(
+  date: string,
+  hours: OpeningHours,
+  closedDays: ReadonlyArray<string> = [],
+): boolean {
+  if (date && closedDays.includes(date.slice(0, 10))) return true;
   if (!hours || Object.keys(hours).length === 0) return false;
   const key = weekdayKey(date);
   if (!key) return false;

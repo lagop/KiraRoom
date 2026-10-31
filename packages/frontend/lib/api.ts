@@ -3,6 +3,7 @@
 import type { TaxRegime } from "@kira/shared";
 import type { PublicSalonPage } from "./salon-seo";
 import type { WorkingHoursEntry } from "./weekly-schedule";
+import type { TimeOff, TimeOffConflict, TimeOffInput } from "./time-off";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1";
@@ -1486,6 +1487,10 @@ export interface ApiClientInterface {
   getProfessionalsPublic(tenantId?: string): Promise<Professional[]>;
   getProfessionals(tenantId?: string): Promise<Professional[]>;
   getProfessional(id: string): Promise<Professional>;
+  getTimeOff(from: string, to: string, professionalId?: string): Promise<TimeOff[]>;
+  previewTimeOff(input: TimeOffInput): Promise<{ conflicts: TimeOffConflict[] }>;
+  createTimeOff(input: TimeOffInput): Promise<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }>;
+  deleteTimeOff(id: string): Promise<{ deleted: boolean }>;
   createProfessional(data: {
     firstName: string;
     lastName: string;
@@ -2628,6 +2633,32 @@ class ApiClient implements ApiClientInterface {
 
   async getProfessional(id: string): Promise<Professional> {
     return this.request<Professional>(`/admin/professionals/${id}`);
+  }
+
+  // Time off and salon closures. The salon is the caller's, from the token.
+  async getTimeOff(from: string, to: string, professionalId?: string): Promise<TimeOff[]> {
+    const params = new URLSearchParams({ from, to });
+    if (professionalId) params.set("professionalId", professionalId);
+    return this.request<TimeOff[]>(`/time-off?${params.toString()}`);
+  }
+
+  // The appointments a block would clash with; nothing is saved.
+  async previewTimeOff(input: TimeOffInput): Promise<{ conflicts: TimeOffConflict[] }> {
+    return this.request<{ conflicts: TimeOffConflict[] }>("/time-off/preview", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async createTimeOff(input: TimeOffInput): Promise<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }> {
+    return this.request<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }>("/time-off", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async deleteTimeOff(id: string): Promise<{ deleted: boolean }> {
+    return this.request<{ deleted: boolean }>(`/time-off/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
 
   async createProfessional(data: {
