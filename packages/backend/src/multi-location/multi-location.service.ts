@@ -16,6 +16,7 @@ import {
   salonToday,
   scheduledDateRange,
 } from "../analytics/analytics-metrics";
+import { timeOffBetween } from "../time-off/time-off-query";
 
 @Injectable()
 export class MultiLocationService {
@@ -144,7 +145,7 @@ export class MultiLocationService {
     period: SalonPeriod,
     extra?: { id: string; name: string },
   ): Promise<ConsolidatedReport> {
-    const [active, appointments, professionals, links] = await Promise.all([
+    const [active, appointments, professionals, links, timeOff] = await Promise.all([
       this.prisma.location.findMany({
         where: { tenantId, isActive: true },
         orderBy: { createdAt: "asc" },
@@ -175,6 +176,7 @@ export class MultiLocationService {
         where: { location: { tenantId } },
         select: { professionalId: true, locationId: true, isPrimary: true },
       }),
+      timeOffBetween(this.prisma as any, tenantId, period.start, period.end),
     ]);
     const locations =
       extra && !active.some((l) => l.id === extra.id) ? [...active, extra] : active;
@@ -184,6 +186,7 @@ export class MultiLocationService {
       appointments: appointments as unknown as AnalyticsAppointment[],
       professionals,
       links,
+      timeOff,
     });
   }
 

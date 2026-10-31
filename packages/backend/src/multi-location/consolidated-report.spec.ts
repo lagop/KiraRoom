@@ -103,4 +103,33 @@ describe("buildConsolidatedReport", () => {
     expect(report.activeLocations).toBe(2);
     expect(report.currencyUnit).toBe("cents");
   });
+
+  it("takes approved closures and absences out of each location's capacity", () => {
+    const withTimeOff = buildConsolidatedReport({
+      period,
+      locations: [
+        { id: "centro", name: "Centro" },
+        { id: "playa", name: "Playa" },
+      ],
+      professionals: [
+        { id: "ana", workingHours: [{ day: "monday", openTime: "09:00", closeTime: "13:00" }] },
+        { id: "eva", workingHours: [{ day: "friday", openTime: "10:00", closeTime: "18:00" }] },
+      ],
+      links: [
+        { professionalId: "ana", locationId: "centro", isPrimary: true },
+        { professionalId: "eva", locationId: "playa", isPrimary: true },
+      ],
+      appointments: [apt({ professionalId: "eva", scheduledDate: "2026-10-02", duration: 120 })],
+      timeOff: [
+        // The salon closes on Monday: Ana's only working day.
+        { professionalId: null, kind: "closure", startDate: "2026-09-28", endDate: "2026-09-28" },
+        // Eva is out from 14:00 on Friday: 240 of her 480 minutes.
+        { professionalId: "eva", kind: "other", startDate: "2026-10-02", endDate: "2026-10-02", startTime: "14:00", endTime: "18:00" },
+      ],
+    });
+    const [centro, playa] = withTimeOff.perLocation;
+    expect(centro.occupancy).toMatchObject({ availableMinutes: 0, rate: null });
+    expect(playa.occupancy).toMatchObject({ bookedMinutes: 120, availableMinutes: 240, rate: 50 });
+    expect(withTimeOff.totals.occupancy).toMatchObject({ bookedMinutes: 120, availableMinutes: 240, rate: 50 });
+  });
 });

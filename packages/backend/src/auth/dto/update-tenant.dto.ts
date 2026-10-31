@@ -1,8 +1,16 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
-import { IsString, IsOptional, IsIn, IsUrl, IsEmail, IsInt, Min, Max, Matches, IsTimeZone } from "class-validator";
+import { Transform } from "class-transformer";
+import { IsString, IsOptional, IsIn, IsUrl, IsEmail, IsInt, Min, Max, Matches, IsTimeZone, IsBoolean } from "class-validator";
 import { EmptyStringToUndefined } from "../../common/dto/empty-to-undefined";
 import { IsWorkingHours } from "../../professionals/working-hours-input";
-import type { WorkingHoursEntry } from "../../appointments/working-hours";
+import { BOOKING_SLOT_MINUTES, type WorkingHoursEntry } from "../../appointments/working-hours";
+import {
+  IsFacebookProfile,
+  IsInstagramProfile,
+  facebookProfileUrl,
+  instagramProfileUrl,
+  socialLinkInput,
+} from "../../common/social-links";
 
 /**
  * One HH:MM, 24-hour window. The onboarding wizard sends one per weekday; the
@@ -43,6 +51,32 @@ export class UpdateTenantDto {
   @IsOptional()
   @IsWorkingHours({ legacyOpeningPair: true })
   openingHours?: WorkingHoursEntry[];
+
+  // The step between the start times offered when booking (getAvailableSlots).
+  @ApiPropertyOptional({ description: "Minutes between bookable start times", enum: BOOKING_SLOT_MINUTES })
+  @IsOptional()
+  @IsInt()
+  @IsIn([...BOOKING_SLOT_MINUTES])
+  bookingSlotMinutes?: number;
+
+  @ApiPropertyOptional({ description: "Online bookings start confirmed instead of pending" })
+  @IsOptional()
+  @IsBoolean()
+  autoConfirmOnlineBookings?: boolean;
+
+  // Linked from the salon's public page. A handle ("@salonana") or a profile
+  // link is stored as the canonical URL; blank or null clears it.
+  @ApiPropertyOptional({ description: "Instagram: @handle or profile URL; blank clears it", nullable: true })
+  @Transform(({ value }) => socialLinkInput(instagramProfileUrl)(value))
+  @IsOptional()
+  @IsInstagramProfile({ message: "Instagram: escribe tu usuario (@tusalon) o el enlace a tu perfil" })
+  instagram?: string | null;
+
+  @ApiPropertyOptional({ description: "Facebook: page name or page URL; blank clears it", nullable: true })
+  @Transform(({ value }) => socialLinkInput(facebookProfileUrl)(value))
+  @IsOptional()
+  @IsFacebookProfile({ message: "Facebook: escribe el nombre de tu página o el enlace a ella" })
+  facebook?: string | null;
 
   @ApiPropertyOptional({ description: "Tenant name" })
   @IsString()

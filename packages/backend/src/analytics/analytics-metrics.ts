@@ -16,6 +16,7 @@
 
 import { salonInstant } from "../appointments/salon-time";
 import { workingWindowsFor } from "../appointments/working-hours";
+import { TimeOffBlock, availableWindows, dayBlocks } from "../time-off/time-off-rules";
 
 // ---------------------------------------------------------------------------
 // Periods
@@ -470,7 +471,7 @@ export function clientRetention(
 export interface Occupancy {
   /** Minutes of non-cancelled appointments of professionals with a schedule. */
   bookedMinutes: number;
-  /** Minutes those professionals work in the period, per their schedule. */
+  /** Minutes those professionals work in the period, per their schedule, less approved time off. */
   availableMinutes: number;
   /** booked / available, as a percentage with one decimal; null when nobody has a schedule. */
   rate: number | null;
@@ -486,6 +487,12 @@ export interface Occupancy {
  * no hours recorded are left out on both sides rather than assumed to work
  * some default shift -- if none has hours, the rate is null and the panel says
  * the schedules are missing.
+ *
+ * Approved time off is taken out of working time: the salon's closures and
+ * each professional's own absences, whole days and stretches of hours alike,
+ * read the way availability reads them (dayBlocks, availableWindows). A
+ * stylist on holiday is not free time nobody sold. `timeOff` is the salon's
+ * approved blocks touching the period (timeOffBetween); others are ignored.
  */
 export function occupancy(
   professionals: ReadonlyArray<{ id: string; workingHours?: unknown }>,
@@ -496,6 +503,7 @@ export function occupancy(
     scheduledDate: Date | string;
   }>,
   period: SalonPeriod,
+  timeOff: ReadonlyArray<TimeOffBlock> = [],
 ): Occupancy {
   const days = daysIn(period);
   const counted = new Set<string>();
@@ -509,7 +517,9 @@ export function occupancy(
       hasSchedule = true;
       // Every shift of the day, not the first: a 10:00–14:00 + 17:00–20:00
       // day is 7 hours of capacity, and the lunch gap is not part of it.
-      for (const s of shifts) minutes += s.endMinutes - s.startMinutes;
+      // With shifts recorded, availableWindows is never undefined.
+      const open = availableWindows(shifts, dayBlocks(timeOff, day, p.id)) ?? [];
+      for (const s of open) minutes += s.endMinutes - s.startMinutes;
     }
     if (hasSchedule) {
       counted.add(p.id);

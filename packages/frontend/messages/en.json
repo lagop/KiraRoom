@@ -1265,10 +1265,8 @@
   "settings": {
     "title": "Settings",
     "general": "General",
-    "interface": "Interface",
     "payments": "Payments",
     "services": "Services",
-    "analytics": "Analytics",
     "preferences": "Preferences",
     "language": "Language",
     "users": "Users",
@@ -1331,7 +1329,6 @@
     "section_payments": "Payments and billing",
     "section_notifications": "Notifications",
     "section_account": "Account",
-    "coming_soon": "Coming soon",
     "tax_moved": "Your salon's tax (IVA, IGIC or IPSI), and whether your prices already include it, are set in",
     "load_failed": "Could not load settings",
     "save_failed": "Could not save settings",

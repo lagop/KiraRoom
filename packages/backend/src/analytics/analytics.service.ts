@@ -25,6 +25,7 @@ import {
   topProfessionals,
   topServices,
 } from "./analytics-metrics";
+import { timeOffBetween } from "../time-off/time-off-query";
 
 /**
  * Every figure here is computed from the salon's own rows; the definitions
@@ -196,13 +197,15 @@ export class AnalyticsService {
     const period = lastMonthsPeriod(today, months);
     const previous = previousPeriod(period, months);
 
-    const [current, before, newClients, previousNewClients, professionals] =
+    const [current, before, newClients, previousNewClients, professionals, timeOff] =
       await Promise.all([
         this.loadAppointments(tenantId, period, professionalId),
         this.loadAppointments(tenantId, previous, professionalId),
         this.countNewClients(tenantId, period, timezone, professionalId),
         this.countNewClients(tenantId, previous, timezone, professionalId),
         this.activeProfessionals(tenantId, professionalId),
+        // Closures and absences come out of working time (see occupancy).
+        timeOffBetween(this.prisma as any, tenantId, period.start, period.end),
       ]);
 
     const now = summarize(current);
@@ -224,7 +227,7 @@ export class AnalyticsService {
         clientsChange: percentChange(newClients, previousNewClients),
         orderValueChange: percentChange(now.avgTicket, then.avgTicket),
       },
-      occupancy: occupancy(professionals, current, period),
+      occupancy: occupancy(professionals, current, period, timeOff),
       revenueData: monthlyRevenue(current, period),
       servicePopularity: servicePopularity(current, 10),
       appointmentStatus: this.statusBreakdown(current),
