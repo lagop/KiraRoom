@@ -46,6 +46,12 @@ export interface PublicSalonPage {
   logo: string | null;
   coverImage: string | null;
   website: string | null;
+  /**
+   * The salon's Instagram and Facebook as profile URLs, set in its general
+   * settings. Absent from servers older than that setting.
+   */
+  instagram?: string | null;
+  facebook?: string | null;
   email: string | null;
   phone: string | null;
   address: {
@@ -197,6 +203,45 @@ export function openingHoursRows(
   });
 }
 
+const SOCIAL_HOSTS: Record<SocialLink["network"], string> = {
+  instagram: "www.instagram.com",
+  facebook: "www.facebook.com",
+};
+
+export interface SocialLink {
+  network: "instagram" | "facebook";
+  url: string;
+  /** "@salonluna" for Instagram, "Facebook" for a page (its URL may be an id). */
+  label: string;
+}
+
+/**
+ * The salon's social profiles for its page, only those it set and only on
+ * the network's own https host (the server stores canonical profile URLs;
+ * checked again here because the URL goes into an href).
+ */
+export function socialLinks(page: Pick<PublicSalonPage, "instagram" | "facebook">): SocialLink[] {
+  const links: SocialLink[] = [];
+  for (const network of ["instagram", "facebook"] as const) {
+    const raw = page[network];
+    if (!raw) continue;
+    let url: URL;
+    try {
+      url = new URL(raw);
+    } catch {
+      continue;
+    }
+    if (url.protocol !== "https:" || url.hostname !== SOCIAL_HOSTS[network]) continue;
+    const handle = url.pathname.split("/").filter(Boolean)[0];
+    links.push({
+      network,
+      url: url.toString(),
+      label: network === "instagram" && handle ? `@${handle}` : "Facebook",
+    });
+  }
+  return links;
+}
+
 /** schema.org BeautySalon for the page's JSON-LD block. */
 export function salonJsonLd(page: PublicSalonPage, url: string): Record<string, unknown> {
   const image = shareImage(page);
@@ -214,7 +259,9 @@ export function salonJsonLd(page: PublicSalonPage, url: string): Record<string, 
   if (isWebUrl(page.logo)) data.logo = page.logo;
   if (page.phone) data.telephone = page.phone;
   if (page.email) data.email = page.email;
-  if (isWebUrl(page.website)) data.sameAs = [page.website];
+  // The salon's own site and its social profiles: the same business elsewhere.
+  const sameAs = [...(isWebUrl(page.website) ? [page.website] : []), ...socialLinks(page).map((l) => l.url)];
+  if (sameAs.length > 0) data.sameAs = sameAs;
   if (hasAddress) {
     data.address = {
       "@type": "PostalAddress",

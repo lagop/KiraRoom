@@ -9,6 +9,7 @@ import {
   parseWorkingHours,
   subtractWindows,
   candidateStarts,
+  bookingSlotStep,
   salonHoursEntries,
   salonWindowsFor,
   intersectWindows,
@@ -312,6 +313,22 @@ describe("candidateStarts", () => {
   it("starts a slot at a shift start off the half hour, then keeps to the half hours", () => {
     const starts = clocks(candidateStarts(w("09:00", "10:00"), [w("10:15", "12:00")]));
     expect(starts).toEqual(["09:00", "09:30", "10:15", "10:30", "11:00", "11:30"]);
+  });
+
+  it("follows the salon's step (Tenant.bookingSlotMinutes)", () => {
+    expect(clocks(candidateStarts(w("09:00", "10:00"), [w("09:00", "10:00")], 15))).toEqual([
+      "09:00", "09:15", "09:30", "09:45",
+    ]);
+    expect(clocks(candidateStarts(w("09:00", "12:00"), [w("10:15", "12:00")], 60))).toEqual([
+      "09:00", "10:00", "10:15", "11:00",
+    ]);
+  });
+});
+
+describe("bookingSlotStep", () => {
+  it("is the salon's step when it is one of the offered ones, else half an hour", () => {
+    expect([10, 15, 20, 30, 60].map(bookingSlotStep)).toEqual([10, 15, 20, 30, 60]);
+    for (const v of [undefined, null, 0, 7, -15, "15", 1440]) expect(bookingSlotStep(v)).toBe(30);
   });
 });
 

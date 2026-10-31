@@ -159,6 +159,21 @@ describe("PublicSiteService.getPage", () => {
     expect(Array.isArray(page.openingHours)).toBe(false);
   });
 
+  it("sends the salon's Instagram and Facebook from its general settings, null when unset", async () => {
+    const page = await makeService({
+      tenant: {
+        instagram: "https://www.instagram.com/salonluna/",
+        facebook: "https://www.facebook.com/salonluna",
+      },
+    }).svc.getPage("x");
+    expect(page.instagram).toBe("https://www.instagram.com/salonluna/");
+    expect(page.facebook).toBe("https://www.facebook.com/salonluna");
+
+    const bare = await makeService({ tenant: { instagram: null, facebook: null } }).svc.getPage("x");
+    expect(bare.instagram).toBeNull();
+    expect(bare.facebook).toBeNull();
+  });
+
   it("reads the legacy { open, close } as every day", async () => {
     const page = await makeService({ tenant: { openingHours: { open: "09:00", close: "20:00" } } }).svc.getPage("x");
     expect(Object.keys(page.openingHours)).toHaveLength(7);

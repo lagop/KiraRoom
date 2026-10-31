@@ -23,6 +23,7 @@ import {
   salonJsonLd,
   serializeJsonLd,
   shareImage,
+  socialLinks,
   type PublicSalonPage,
 } from "./salon-seo";
 import {
@@ -208,6 +209,33 @@ check(
 );
 check("a reserved slug stays", subdomainRedirectFor("app.kiraroom.net", "/sites/admin", platform, "kiraroom.net", true), null);
 check("only from the app host", subdomainRedirectFor("reservas.salonluna.es", "/sites/salon-luna", platform, "kiraroom.net", true), null);
+
+console.log("\n=== social profiles (general settings) ===");
+const SOCIAL = {
+  ...PAGE,
+  instagram: "https://www.instagram.com/salonluna/",
+  facebook: "https://www.facebook.com/profile.php?id=100012345678",
+};
+check("none set, none shown", socialLinks(PAGE), []);
+check("Instagram shows the handle, Facebook its name", socialLinks(SOCIAL).map((l) => [l.network, l.label]), [
+  ["instagram", "@salonluna"],
+  ["facebook", "Facebook"],
+]);
+check("links go to the profile", socialLinks(SOCIAL).map((l) => l.url), [
+  "https://www.instagram.com/salonluna/",
+  "https://www.facebook.com/profile.php?id=100012345678",
+]);
+check(
+  "never a link off the network's own https host",
+  socialLinks({ instagram: "javascript:alert(1)", facebook: "https://evil.example/salonluna" }),
+  [],
+);
+check("schema.org sameAs: the website, then the profiles", (salonJsonLd(SOCIAL, "https://x") as any).sameAs, [
+  "https://salonluna.example",
+  "https://www.instagram.com/salonluna/",
+  "https://www.facebook.com/profile.php?id=100012345678",
+]);
+check("no website and no profiles: no sameAs", "sameAs" in (salonJsonLd({ ...PAGE, website: null }, "https://x") as any), false);
 
 console.log("\n=== Summary ===");
 console.log(`Pass: ${pass}, Fail: ${fail}`);

@@ -13,6 +13,8 @@ import {
   Mail,
   LogIn,
   LogOut,
+  Instagram,
+  Facebook,
 } from "lucide-react";
 import apiClient, { removeToken } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
@@ -21,7 +23,9 @@ import {
   formatAddress,
   formatPrice,
   openingHoursRows,
+  socialLinks,
   type PublicSalonPage,
+  type SocialLink,
 } from "@/lib/salon-seo";
 import {
   bookingDateFromQuery,
@@ -57,6 +61,8 @@ interface SalonData {
   email: string;
   logo: string | null;
   currency: string;
+  /** Instagram and Facebook, from the salon's general settings. */
+  social: SocialLink[];
 }
 
 interface Professional {
@@ -120,6 +126,7 @@ function fromPublicPage(page: PublicSalonPage) {
     email: page.email ?? "",
     logo: page.logo,
     currency: page.currency,
+    social: socialLinks(page),
   };
   const services: Service[] = page.services.map((s) => ({
     id: s.id,
@@ -640,6 +647,21 @@ export default function SalonBookingPage({
                 <span>{salonData.email}</span>
               </a>
             )}
+            {salonData.social.map((link) => {
+              const Icon = link.network === "instagram" ? Instagram : Facebook;
+              return (
+                <a
+                  key={link.network}
+                  href={link.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center space-x-1 hover:text-purple-700"
+                >
+                  <Icon className="w-4 h-4 text-purple-600" />
+                  <span>{link.label}</span>
+                </a>
+              );
+            })}
           </address>
         </div>
 

@@ -36,6 +36,7 @@ function build(opts: {
   professionals: Array<{ id: string; workingHours?: unknown }>;
   openingHours?: unknown;
   duration?: number;
+  bookingSlotMinutes?: number;
 }) {
   const prisma: any = {
     tenant: {
@@ -43,6 +44,7 @@ function build(opts: {
         id: TENANT_ID,
         openingHours: opts.openingHours ?? {},
         timezone: "Europe/Madrid",
+        bookingSlotMinutes: opts.bookingSlotMinutes ?? 30,
       })),
     },
     professional: {
@@ -154,5 +156,22 @@ describe("the legacy { open, close }", () => {
   it("an unreadable pair is no limit", async () => {
     const slots = await named({ professionals: [{ id: ANA, workingHours: EVERY_DAY_9_TO_19 }], openingHours: { open: "20:00", close: "09:00" } });
     expect(slots[0]).toBe("09:00");
+  });
+});
+
+describe("the salon's booking step (Tenant.bookingSlotMinutes)", () => {
+  const opts = { professionals: [{ id: ANA, workingHours: EVERY_DAY_9_TO_19 }], openingHours: SALON_WEEK };
+
+  it("offers a start every 15 minutes when the salon chose 15", async () => {
+    const slots = await named({ ...opts, bookingSlotMinutes: 15 });
+    expect(slots.slice(0, 5)).toEqual(["10:00", "10:15", "10:30", "10:45", "11:00"]);
+    // An hour still has to fit before the lunch closure at 14:00.
+    expect(slots).toContain("13:00");
+    expect(slots).not.toContain("13:15");
+  });
+
+  it("every hour when it chose 60, and half hours by default", async () => {
+    expect((await named({ ...opts, bookingSlotMinutes: 60 })).slice(0, 4)).toEqual(["10:00", "11:00", "12:00", "13:00"]);
+    expect((await named(opts)).slice(0, 3)).toEqual(["10:00", "10:30", "11:00"]);
   });
 });

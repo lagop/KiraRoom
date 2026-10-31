@@ -45,6 +45,10 @@ export class PublicSiteService {
         logo: true,
         coverImage: true,
         website: true,
+        // Canonical profile URLs (common/social-links.ts), set in the
+        // salon's general settings.
+        instagram: true,
+        facebook: true,
         email: true,
         phone: true,
         street: true,
@@ -140,6 +144,8 @@ export class PublicSiteService {
       logo: tenant.logo,
       coverImage: tenant.coverImage,
       website: tenant.website,
+      instagram: tenant.instagram,
+      facebook: tenant.facebook,
       email: tenant.email,
       phone: tenant.phone,
       address: {

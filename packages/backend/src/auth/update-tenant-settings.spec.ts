@@ -41,6 +41,45 @@ describe("UpdateTenantDto", () => {
   });
 });
 
+/**
+ * Fields the page showed as "Próximamente" and now saves: the salon's social
+ * profiles (linked from its public page), the step between the start times
+ * offered when booking, and whether online bookings start confirmed.
+ */
+describe("UpdateTenantDto: social links, booking step, auto-confirm", () => {
+  it("stores a handle or a profile link as the canonical profile URL", () => {
+    const dto = dtoOf({ instagram: "@salonana", facebook: "https://m.facebook.com/salonana?ref=x" });
+    expect(errorsFor({ instagram: "@salonana", facebook: "https://m.facebook.com/salonana?ref=x" })).toEqual([]);
+    expect(dto.instagram).toBe("https://www.instagram.com/salonana/");
+    expect(dto.facebook).toBe("https://www.facebook.com/salonana");
+  });
+
+  it("blank clears a profile; null too", () => {
+    expect(dtoOf({ instagram: "", facebook: "  " })).toMatchObject({ instagram: null, facebook: null });
+    expect(errorsFor({ instagram: "", facebook: null })).toEqual([]);
+  });
+
+  it("refuses what is not a profile on that site", () => {
+    expect(errorsFor({ instagram: "https://evil.example/salonana" })).toEqual(["instagram"]);
+    expect(errorsFor({ instagram: "https://www.instagram.com/p/C1abc/" })).toEqual(["instagram"]);
+    expect(errorsFor({ facebook: "javascript:alert(1)" })).toEqual(["facebook"]);
+    expect(errorsFor({ facebook: "https://www.facebook.com/sharer.php" })).toEqual(["facebook"]);
+    expect(errorsFor({ facebook: 42 })).toEqual(["facebook"]);
+  });
+
+  it("takes the booking step from a fixed list", () => {
+    for (const m of [10, 15, 20, 30, 60]) expect(errorsFor({ bookingSlotMinutes: m })).toEqual([]);
+    expect(errorsFor({ bookingSlotMinutes: 7 })).toEqual(["bookingSlotMinutes"]);
+    expect(errorsFor({ bookingSlotMinutes: 0 })).toEqual(["bookingSlotMinutes"]);
+    expect(errorsFor({ bookingSlotMinutes: "15" })).toEqual(["bookingSlotMinutes"]);
+  });
+
+  it("auto-confirm is a boolean", () => {
+    expect(errorsFor({ autoConfirmOnlineBookings: true })).toEqual([]);
+    expect(errorsFor({ autoConfirmOnlineBookings: "yes" })).toEqual(["autoConfirmOnlineBookings"]);
+  });
+});
+
 describe("UpdateTenantDto.openingHours: the salon's week", () => {
   it("takes shifts per weekday, normalised like a professional's schedule", () => {
     const body = {
