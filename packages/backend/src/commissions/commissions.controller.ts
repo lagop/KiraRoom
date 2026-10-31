@@ -5,10 +5,8 @@ import { RolesGuard } from "../auth/guards/roles.guard";
 import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { UserRole } from "@prisma/client";
-import {
-  CommissionsService,
-  CalculateCommissionDto,
-  PayCommissionDto } from "./commissions.service";
+import { CommissionsService } from "./commissions.service";
+import { CalculateCommissionBodyDto, PayCommissionDto } from "./dto/commission.dto";
 import { FeatureGuard } from "../common/guards/feature.guard";
 import { Feature } from "../common/decorators/feature.decorator";
 
@@ -50,7 +48,7 @@ export class CommissionsController {
   async calculateCommission(
     @CurrentUser() user: any,
     @Param("appointmentId") appointmentId: string,
-    @Body() dto: { amount?: number; rate?: number },
+    @Body() dto: CalculateCommissionBodyDto,
   ) {
     return this.commissionsService.calculateCommission(user.tenantId, {
       appointmentId,
