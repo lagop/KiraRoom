@@ -8,7 +8,6 @@ import {
   AddOnResponseDto,
   AddOnResponseSchema,
   GrantAddOnDto,
-  GrantAddOnSchema,
   TenantAddOnResponseDto,
   TenantAddOnResponseSchema,
 } from '../dto/addon.dto';
@@ -154,7 +153,6 @@ export class AddOnsAdminController {
     @CurrentUser() user: any,
   ): Promise<TenantAddOnResponseDto> {
     this.requireSaas(user);
-    GrantAddOnSchema.parse(body);
     const row = await this.addons.grantManually({
       tenantId,
       addOnKey: body.addOnKey,

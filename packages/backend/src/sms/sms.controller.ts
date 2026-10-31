@@ -6,6 +6,20 @@ import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 import { FeatureGuard } from "../common/guards/feature.guard";
 import { Feature } from "../common/decorators/feature.decorator";
 import { SmsService } from "../notifications/services/sms.service";
+import { IsNotEmpty, IsString, Matches, MaxLength } from "class-validator";
+
+/**
+ * A test SMS. Was an inline type: any recipient string and any length of
+ * text went to the provider. E.164 (or a national number) and three SMS
+ * segments at most.
+ */
+export class TestSmsDto {
+  @IsString() @Matches(/^\+?[0-9 ]{6,20}$/, { message: "to must be a phone number" })
+  to!: string;
+
+  @IsString() @IsNotEmpty() @MaxLength(459)
+  body!: string;
+}
 
 @ApiTags("sms")
 @ApiBearerAuth()
@@ -32,7 +46,7 @@ export class SmsController {
   @Feature("sms_notifications")
   async test(
     @Req() req: any,
-    @Body() dto: { to: string; body: string },
+    @Body() dto: TestSmsDto,
   ) {
     const result = await this.sms.sendSms({
       to: dto.to,

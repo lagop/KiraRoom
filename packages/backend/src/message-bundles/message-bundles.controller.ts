@@ -3,6 +3,14 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { MessageBundlesService } from './message-bundles.service';
 import { SaasOwner } from "../saas/decorators/saas-owner.decorator";
+import { Type } from "class-transformer";
+import { IsInt, Max, Min } from "class-validator";
+
+/** Credits are whole messages. Was an inline type checked by hand. */
+export class TopUpCreditsDto {
+  @Type(() => Number) @IsInt() @Min(1) @Max(1_000_000)
+  credits!: number;
+}
 
 @Controller('message-bundles')
 @UseGuards(JwtAuthGuard)
@@ -41,7 +49,7 @@ export class MessageBundlesController {
   @SaasOwner()
   topUp(
     @Param('tenantId') tenantId: string,
-    @Body() body: { credits: number },
+    @Body() body: TopUpCreditsDto,
     @CurrentUser() user: any,
   ) {
     this.requireSaas(user);

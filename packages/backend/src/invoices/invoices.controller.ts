@@ -28,7 +28,9 @@ import {
   CancelInvoiceDto,
   CreateInvoiceDto,
   ListInvoicesQueryDto,
+  RectifyInvoiceDto,
   UpdateTenantFiscalSettingsDto,
+  UploadCertificateDto,
 } from "./dto/invoice.dto";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { taxRegimeOf, TAX_REGIME_DEFAULT_RATE } from "@kira/shared";
@@ -106,21 +108,18 @@ export class InvoicesController {
   rectify(
     @Req() req: AuthedRequest,
     @Param("id", ParseUUIDPipe) id: string,
-    @Body()
-    body: {
-      reason: string;
-      lines: Array<{
-        description: string;
-        quantity: number;
-        unitPriceCents: number;
-        taxRate: number;
-      }>;
-    },
+    @Body() body: RectifyInvoiceDto,
   ) {
     return this.invoices.emitRectification(
       this.requireTenantId(req),
       id,
-      body.lines,
+      body.lines.map((l) => ({
+        description: l.description,
+        quantity: l.quantity,
+        unitPriceCents: l.unitPriceCents,
+        discountPct: l.discountPct,
+        taxRate: l.taxRate,
+      })),
       body.reason,
     );
   }
@@ -309,13 +308,7 @@ fiscalQrUrl: invoice.fiscalQrUrl,
   @Roles(UserRole.owner)
   async uploadCertificate(
     @Req() req: AuthedRequest,
-    @Body()
-    body: {
-      alias: string;
-      provider: "p12" | "cloud_dnie";
-      pkcs12Base64: string;
-      passphrase: string;
-    },
+    @Body() body: UploadCertificateDto,
   ) {
     return this.certs.saveCertificate({
       tenantId: this.requireTenantId(req),

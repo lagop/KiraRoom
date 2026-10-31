@@ -11,6 +11,29 @@ import { Feature } from "../common/decorators/feature.decorator";
 import { Public } from "../auth/decorators/public.decorator";
 import { ConfigService } from "@nestjs/config";
 import { WhatsAppService } from "./whatsapp.service";
+import { IsNotEmpty, IsOptional, IsString, Matches, MaxLength } from "class-validator";
+
+/**
+ * Manual connection with the salon's own Meta credentials. Was an inline
+ * type; the WABA and phone-number ids go into Graph API paths, so they
+ * must be the numeric ids Meta gives, nothing else.
+ */
+export class ManualWhatsAppConnectDto {
+  @IsString() @IsNotEmpty() @MaxLength(1000)
+  accessToken!: string;
+
+  @Matches(/^\d{1,30}$/, { message: "wabaId must be the numeric id Meta shows" })
+  wabaId!: string;
+
+  @Matches(/^\d{1,30}$/, { message: "phoneNumberId must be the numeric id Meta shows" })
+  phoneNumberId!: string;
+
+  @IsString() @IsNotEmpty() @MaxLength(30)
+  displayPhone!: string;
+
+  @IsOptional() @IsString() @MaxLength(200)
+  displayName?: string;
+}
 
 interface AuthedRequest extends Request {
   user: { id: string; tenantId: string; role: string };
@@ -46,13 +69,7 @@ export class WhatsAppController {
   @Roles(...SALON_MANAGERS)
   async manual(
     @Req() req: AuthedRequest,
-    @Body() body: {
-      accessToken: string;
-      wabaId: string;
-      phoneNumberId: string;
-      displayPhone: string;
-      displayName?: string;
-    },
+    @Body() body: ManualWhatsAppConnectDto,
   ) {
     return this.whatsapp.manualConnect(req.user.tenantId, body);
   }

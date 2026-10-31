@@ -1,6 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
   IsArray,
+  IsBase64,
   IsBoolean,
   IsDateString,
   IsEnum,
@@ -8,7 +11,10 @@ import {
   IsInt,
   IsNumber,
   IsOptional,
+  IsNotEmpty,
   IsString,
+  Max,
+  MaxLength,
   Min,
   ValidateNested,
 } from "class-validator";
@@ -183,4 +189,73 @@ export class CancelInvoiceDto {
   @ApiProperty()
   @IsString()
   reason!: string;
+}
+/**
+ * A line of a rectifying invoice. The quantity may be negative: a
+ * rectification "por diferencias" credits part of the original.
+ */
+export class RectificationLineDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(500)
+  description!: string;
+
+  @IsNumber({ maxDecimalPlaces: 3 })
+  @Min(-10_000)
+  @Max(10_000)
+  quantity!: number;
+
+  @IsInt()
+  @Min(0)
+  @Max(100_000_000)
+  unitPriceCents!: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  discountPct?: number;
+
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  taxRate!: number;
+}
+
+/** Body of `POST /invoices/:id/rectify`. Was an inline type. */
+export class RectifyInvoiceDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(500)
+  reason!: string;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(200)
+  @ValidateNested({ each: true })
+  @Type(() => RectificationLineDto)
+  lines!: RectificationLineDto[];
+}
+
+/**
+ * Body of `POST /invoices/certificates`. Was an inline type: any provider
+ * string and any size reached the encrypted store.
+ */
+export class UploadCertificateDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  alias!: string;
+
+  @IsIn(["p12", "cloud_dnie"])
+  provider!: "p12" | "cloud_dnie";
+
+  /** A .p12 is a few KB; 200 000 base64 characters is about 150 KB. */
+  @IsBase64()
+  @MaxLength(200_000)
+  pkcs12Base64!: string;
+
+  @IsString()
+  @MaxLength(500)
+  passphrase!: string;
 }

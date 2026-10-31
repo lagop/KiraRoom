@@ -30,6 +30,7 @@ import {
   deliverTokens,
   readRefreshCookie,
 } from "./sessions/refresh-cookie";
+import { ImpersonateDto, LogoutDto, RefreshTokenDto } from "./dto/session-bodies.dto";
 
 function deliverSession(res: Response, result: { user: AuthUser; tokens: TokenResponse }) {
   return { ...result, tokens: deliverTokens(res, cookieKindForRole(result.user.role), result.tokens) };
@@ -190,7 +191,7 @@ export class AuthController {
   @ApiResponse({ status: 200, description: "Impersonation session minted" })
   @ApiResponse({ status: 401, description: "Invalid or expired token" })
   async impersonate(
-    @Body() body: { token: string; reason?: string },
+    @Body() body: ImpersonateDto,
     @Res({ passthrough: true }) res: Response,
   ) {
     return deliverSession(
@@ -218,7 +219,7 @@ export class AuthController {
    * localStorage): it is accepted once more and moves to the cookie.
    */
   async refreshToken(
-    @Body() body: { refreshToken?: string; kind?: string },
+    @Body() body: RefreshTokenDto,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
@@ -250,7 +251,7 @@ export class AuthController {
    */
   async logout(
     @CurrentUser() user: { id: string; role: string },
-    @Body() body: { everywhere?: boolean } | undefined,
+    @Body() body: LogoutDto,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
