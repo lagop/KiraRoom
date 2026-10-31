@@ -961,6 +961,8 @@ export interface SendEmailCampaignResult {
   suppressedCount: number;
   /** Clients who said no to promotions in their account. */
   skippedCount?: number;
+  /** Recipients dropped at send time: client deleted or no longer active. */
+  droppedCount?: number;
 }
 
 export interface EmailCampaignTemplate {
@@ -1749,6 +1751,7 @@ export interface ApiClientInterface {
     scheduledAt: string,
   ): Promise<EmailCampaign>;
   sendEmailCampaignNow(id: string): Promise<SendEmailCampaignResult>;
+  sendEmailCampaignToAll(id: string): Promise<SendEmailCampaignResult>;
   addRecipientsToCampaign(id: string, clientIds: string[]): Promise<any>;
   getEmailCampaignAnalytics(id: string): Promise<EmailCampaignAnalytics>;
   getEmailCampaignTrackingStatus(): Promise<EmailCampaignTrackingStatus>;
@@ -3935,6 +3938,16 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
+  /**
+   * "Enviar a todos": the server adds every active client with an email
+   * who accepts promotions, then sends.
+   */
+  async sendEmailCampaignToAll(id: string): Promise<SendEmailCampaignResult> {
+    return this.request<SendEmailCampaignResult>(`/email-campaigns/${id}/send-to-all`, {
+      method: "POST",
+    });
+  }
+
   async getEmailCampaignTrackingStatus(): Promise<EmailCampaignTrackingStatus> {
     return this.request<EmailCampaignTrackingStatus>(
       "/email-campaigns/tracking-status",
@@ -4759,12 +4772,16 @@ class ApiClient implements ApiClientInterface {
   async deleteConsentForm(id: string): Promise<{ deleted: boolean }> {
     return this.request(`/consent-forms/${id}`, { method: "DELETE" });
   }
+  /**
+   * Records a signed consent; needs a session. The salon comes from the
+   * session. From the panel, name the client and the name she signed with;
+   * a signed-in client signs for herself (no clientId, her name by default).
+   */
   async signConsent(input: {
-    tenantId: string;
-    clientId: string;
+    clientId?: string;
     formId: string;
     responses: Record<string, unknown>;
-    signatureName: string;
+    signatureName?: string;
     appointmentId?: string;
     serviceId?: string;
   }): Promise<Consent> {

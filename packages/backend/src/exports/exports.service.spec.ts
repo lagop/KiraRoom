@@ -175,3 +175,41 @@ describe("ExportsService", () => {
     });
   });
 });
+
+describe("ExportsService CSV: cells a spreadsheet would run", () => {
+  it("keeps a value starting with = + - @ tab or CR as text", async () => {
+    const rows = [
+      { id: "1", firstName: '=HYPERLINK("x")', lastName: "+34", email: "-a@x.com", phone: "@SUM(1)", createdAt: "2026-01-01" },
+      { id: "2", firstName: "\tTab", lastName: "\rCR", email: "b@x.com", phone: "600 111-222", createdAt: "2026-01-02" },
+      { id: "3", firstName: "Ana", lastName: "López", email: "a@x.com", phone: "600111222", createdAt: "2026-01-03" },
+    ];
+    const { prisma } = buildPrisma(rows);
+    const res = mockResponse();
+
+    await new ExportsService(prisma).stream("tenant-1", "clients", "csv", res);
+
+    const body = res.chunks.join("");
+    expect(body).toContain(`"'=HYPERLINK(""x"")"`);
+    expect(body).toContain(`"'+34"`);
+    expect(body).toContain(`"'-a@x.com"`);
+    expect(body).toContain(`"'@SUM(1)"`);
+    expect(body).toContain(`"'\tTab"`);
+    expect(body).toContain(`"'\rCR"`);
+    // Ordinary values, a dash inside included, are untouched.
+    expect(body).toContain("600 111-222");
+    expect(body).toContain("3,Ana,López,a@x.com,600111222,2026-01-03");
+  });
+
+  it("starts each page on its own line", async () => {
+    const rows = Array.from({ length: 1001 }, (_, i) => ({ id: String(i), firstName: `F${i}` }));
+    const { prisma } = buildPrisma(rows);
+    const res = mockResponse();
+
+    await new ExportsService(prisma).stream("tenant-1", "clients", "csv", res);
+
+    const lines = res.chunks.join("").split(/\r?\n/).filter(Boolean);
+    expect(lines).toHaveLength(1 + 1001);
+    expect(lines[1000]).toBe("999,F999,,,,");
+    expect(lines[1001]).toBe("1000,F1000,,,,");
+  });
+});

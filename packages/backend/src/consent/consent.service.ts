@@ -124,15 +124,24 @@ export class ConsentService {
     return forms.filter((f) => !serviceId || f.serviceIds.length === 0 || f.serviceIds.includes(serviceId));
   }
 
+  /**
+   * Records a signed consent for one of the salon's clients. `tenantId`
+   * comes from the session (see ConsentController.sign). `recordedBy` is
+   * set when a team member records a signature taken in the salon (their
+   * user id): it is kept in the record's responses, like the marketing
+   * choices the salon records. Without it, the client signs for herself
+   * and her name is the default signature.
+   */
   async sign(input: {
     tenantId: string;
     clientId: string;
     formId: string;
     responses: Record<string, unknown>;
-    signatureName: string;
+    signatureName?: string;
     ip?: string;
     appointmentId?: string;
     serviceId?: string;
+    recordedBy?: string;
   }) {
     const form = await this.prisma.consentForm.findUnique({
       where: { id: input.formId },
@@ -144,23 +153,49 @@ export class ConsentService {
       throw new BadRequestException("Form version is no longer active");
     }
     if (SYSTEM_CONSENT_PURPOSES.includes(form.purpose)) {
-      // This route is public and takes the client id from the body; the
-      // marketing choice is only recorded by the signed-in client.
+      // The marketing choice has its own routes (recordMarketingChoice),
+      // which revoke the previous choice.
       throw new BadRequestException("Marketing consent is given from the client's account");
     }
-    if (!input.signatureName || input.signatureName.trim().length < 2) {
+    if (input.recordedBy && (!input.signatureName || input.signatureName.trim().length < 2)) {
       throw new BadRequestException("Typed signature name required");
     }
     if (JSON.stringify(input.responses ?? {}).length > MAX_RESPONSES_BYTES) {
       throw new BadRequestException("Responses too large");
     }
-    // The route is public and takes the client from the body: the consent
-    // must at least be recorded against one of this salon's clients.
     const client = await this.prisma.client.findFirst({
       where: { id: input.clientId, tenantId: input.tenantId },
-      select: { id: true },
+      select: { id: true, firstName: true, lastName: true },
     });
     if (!client) throw new NotFoundException("Client not found");
+    if (input.appointmentId) {
+      // The appointment must be this client's, in this salon; a service
+      // named with it must be one of the appointment's.
+      const appointment = await this.prisma.appointment.findFirst({
+        where: { id: input.appointmentId, tenantId: input.tenantId, clientId: input.clientId },
+        select: { serviceId: true, services: { select: { serviceId: true } } },
+      });
+      if (!appointment) throw new NotFoundException("Appointment not found");
+      if (
+        input.serviceId &&
+        input.serviceId !== appointment.serviceId &&
+        !appointment.services.some((s) => s.serviceId === input.serviceId)
+      ) {
+        throw new BadRequestException("The service is not part of this appointment");
+      }
+    } else if (input.serviceId) {
+      const service = await this.prisma.service.findFirst({
+        where: { id: input.serviceId, tenantId: input.tenantId },
+        select: { id: true },
+      });
+      if (!service) throw new NotFoundException("Service not found");
+    }
+    const signatureName =
+      input.signatureName?.trim() || `${client.firstName ?? ""} ${client.lastName ?? ""}`.trim();
+    if (signatureName.length < 2) throw new BadRequestException("Typed signature name required");
+    // Who recorded it is the session's to say, never the answers'.
+    const { source: _source, recordedBy: _recordedBy, ...answers } = input.responses ?? {};
+    const responses = input.recordedBy ? { ...answers, source: "salon", recordedBy: input.recordedBy } : answers;
     return this.prisma.consent.create({
       data: {
         tenantId: input.tenantId,
@@ -168,8 +203,8 @@ export class ConsentService {
         formId: form.id,
         formVersion: form.version,
         formSnapshot: form.fields as any,
-        responses: input.responses as any,
-        signatureName: input.signatureName.trim(),
+        responses: responses as any,
+        signatureName,
         signatureIpHash: this.encryption.hashIp(input.ip ?? ""),
         appointmentId: input.appointmentId ?? null,
         serviceId: input.serviceId ?? null,

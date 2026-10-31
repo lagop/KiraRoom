@@ -30,7 +30,7 @@ function day(offset: number): string {
 }
 
 function build({
-  existingClients = [] as Array<{ id: string; email?: string | null; phone?: string | null; tenantId: string }>,
+  existingClients = [] as Array<{ id: string; email?: string | null; phone?: string | null; tenantId: string; status?: string }>,
   freeTimes = { [PRO.id]: ["10:00"], [PRO_2.id]: ["10:00"] } as Record<string, string[]>,
   offering = [PRO.id, PRO_2.id],
   widgetProfessionals = [] as string[],
@@ -612,5 +612,51 @@ describe("the appointment's location", () => {
     const none = build();
     await none.service.createOnline(BOOKING as any);
     expect(none.created[0].locationId).toBeNull();
+  });
+});
+
+describe("online booking: a client the salon blocked", () => {
+  const blocked = () => [
+    { id: "blocked-ana", email: "ana@mail.test", phone: "600111222", tenantId: "tenant-b", status: "blocked" },
+  ];
+
+  it("refuses her from the site and the widget, without saying why", async () => {
+    const { service, created } = build({ existingClients: blocked() });
+
+    const refused = service.createOnline(BOOKING as any);
+    await expect(refused).rejects.toThrow(ForbiddenException);
+    await expect(refused).rejects.toMatchObject({
+      response: { code: "ONLINE_BOOKING_NOT_AVAILABLE", message: "No es posible reservar online; contacta con el salón." },
+    });
+    expect(created).toHaveLength(0);
+  });
+
+  it("refuses her when she is matched by phone only", async () => {
+    const { service, created } = build({ existingClients: blocked() });
+    await expect(
+      service.createOnline({ ...BOOKING, clientInfo: { firstName: "Ana", lastName: "López", phone: "600 111 222" } } as any),
+    ).rejects.toThrow(ForbiddenException);
+    expect(created).toHaveLength(0);
+  });
+
+  it("refuses her from the receptionist too (bookOnline)", async () => {
+    const { service, created } = build({ existingClients: blocked() });
+    await expect(service.bookOnline("tenant-b", BOOKING as any)).rejects.toThrow(ForbiddenException);
+    expect(created).toHaveLength(0);
+  });
+
+  it("still lets the team book her from the panel", async () => {
+    const { service, created } = build({ existingClients: blocked() });
+    await service.createByStaff(
+      { ...BOOKING, scheduledDate: "2026-12-01", clientInfo: undefined, clientId: "blocked-ana" } as any,
+      { id: "u1", role: "owner", tenantId: "tenant-b" },
+    );
+    expect(created[0].clientId).toBe("blocked-ana");
+  });
+
+  it("books an inactive client online as before", async () => {
+    const { service, created } = build({ existingClients: [{ ...blocked()[0], status: "inactive" }] });
+    await service.createOnline(BOOKING as any);
+    expect(created[0].clientId).toBe("blocked-ana");
   });
 });

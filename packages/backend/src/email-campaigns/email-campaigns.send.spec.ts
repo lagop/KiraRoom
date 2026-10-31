@@ -12,11 +12,20 @@ import { EmailUnsubscribeService } from "./email-unsubscribe.service";
  * pin what replaced it.
  */
 describe("EmailCampaignsService.deliverCampaign", () => {
-  function setup(opts: { configured?: boolean; suppressed?: string[]; claim?: number } = {}) {
+  function setup(
+    opts: {
+      configured?: boolean;
+      suppressed?: string[];
+      claim?: number;
+      extraRecipients?: Array<{ id: string; clientId: string | null; email: string; status: string }>;
+      notActive?: string[];
+    } = {},
+  ) {
     const recipients = [
-      { id: "r1", email: "ana@example.test", status: "pending" },
-      { id: "r2", email: "Rebotada@Example.test", status: "pending" },
-      { id: "r3", email: "fallo@example.test", status: "pending" },
+      { id: "r1", clientId: "k1", email: "ana@example.test", status: "pending" },
+      { id: "r2", clientId: "k2", email: "Rebotada@Example.test", status: "pending" },
+      { id: "r3", clientId: "k3", email: "fallo@example.test", status: "pending" },
+      ...(opts.extraRecipients ?? []),
     ];
     const prisma: any = {
       emailCampaign: {
@@ -33,7 +42,16 @@ describe("EmailCampaignsService.deliverCampaign", () => {
         updateMany: jest.fn().mockResolvedValue({ count: opts.claim ?? 1 }),
         update: jest.fn().mockResolvedValue({}),
       },
-      emailCampaignRecipient: { update: jest.fn().mockResolvedValue({}) },
+      emailCampaignRecipient: {
+        update: jest.fn().mockResolvedValue({}),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      // The salon's active clients among those asked for.
+      client: {
+        findMany: jest.fn(async ({ where }: any) =>
+          where.id.in.filter((id: string) => !(opts.notActive ?? []).includes(id)).map((id: string) => ({ id })),
+        ),
+      },
       // Nobody here said no to promotions (marketing-consent.spec covers that).
       consent: { findMany: jest.fn().mockResolvedValue([]) },
     };
@@ -58,7 +76,14 @@ describe("EmailCampaignsService.deliverCampaign", () => {
     const { service, prisma, email } = setup({ suppressed: ["rebotada@example.test"] });
     const result = await service.sendCampaignNow("t1", "c1");
 
-    expect(result).toEqual({ success: true, sentCount: 1, failedCount: 1, suppressedCount: 1, skippedCount: 0 });
+    expect(result).toEqual({
+      success: true,
+      sentCount: 1,
+      failedCount: 1,
+      suppressedCount: 1,
+      skippedCount: 0,
+      droppedCount: 0,
+    });
     expect(email.sendEmail).toHaveBeenCalledTimes(2);
     expect(email.sendEmail).not.toHaveBeenCalledWith(expect.objectContaining({ to: "Rebotada@Example.test" }));
 
@@ -107,5 +132,64 @@ describe("EmailCampaignsService.deliverCampaign", () => {
       expect(msg.html).toContain("cliente de Salón Lucía");
       expect(msg.headers["List-Unsubscribe"]).toBe("<" + pageUrl + ">");
     }
+  });
+});
+
+describe("EmailCampaignsService.deliverCampaign: active clients only", () => {
+  function setup(extra: any[], notActive: string[]) {
+    const recipients = [{ id: "r1", clientId: "k1", email: "ana@example.test", status: "pending" }, ...extra];
+    const prisma: any = {
+      emailCampaign: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", tenantId: "t1", status: "draft" }),
+        findFirstOrThrow: jest.fn().mockResolvedValue({
+          id: "c1", tenantId: "t1", subject: "Ofertas", content: "<p>Hola</p>", replyTo: null, recipients, tenant: { name: "Salón" },
+        }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      emailCampaignRecipient: { update: jest.fn().mockResolvedValue({}), deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      client: {
+        findMany: jest.fn(async ({ where }: any) => {
+          expect(where).toMatchObject({ tenantId: "t1", status: "active" });
+          return where.id.in.filter((id: string) => !notActive.includes(id)).map((id: string) => ({ id }));
+        }),
+      },
+      consent: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const email: any = { isConfigured: () => true, sendEmail: jest.fn(async () => ({ success: true, id: "re_1" })) };
+    const suppressions: any = { suppressedAmong: jest.fn().mockResolvedValue(new Set()) };
+    const unsubscribes: any = { link: () => ({ pageUrl: "https://app.test/baja", headers: {} }), withFooter: (h: string) => h };
+    const service = new EmailCampaignsService(prisma, email, suppressions, unsubscribes);
+    (service as any).logger = { log: jest.fn() };
+    return { service, prisma, email };
+  }
+
+  it("drops a recipient whose client was deleted or is no longer active, and emails the rest", async () => {
+    const { service, prisma, email } = setup(
+      [
+        { id: "r2", clientId: null, email: "borrada@example.test", status: "pending" },
+        { id: "r3", clientId: "k3", email: "bloqueada@example.test", status: "pending" },
+        { id: "r4", clientId: "k4", email: "inactiva@example.test", status: "pending" },
+      ],
+      ["k3", "k4"],
+    );
+
+    const result = await service.sendCampaignNow("t1", "c1");
+
+    expect(email.sendEmail).toHaveBeenCalledTimes(1);
+    expect(email.sendEmail.mock.calls[0][0].to).toBe("ana@example.test");
+    expect(result).toMatchObject({ sentCount: 1, droppedCount: 3 });
+    expect(prisma.emailCampaignRecipient.deleteMany).toHaveBeenCalledWith({
+      where: { id: { in: ["r2", "r3", "r4"] }, campaignId: "c1", status: "pending" },
+    });
+    const calls = prisma.emailCampaign.update.mock.calls;
+    expect(calls[calls.length - 1][0].data).toMatchObject({ totalRecipients: { decrement: 3 } });
+  });
+
+  it("deletes nothing when every recipient is an active client", async () => {
+    const { service, prisma } = setup([], []);
+    const result = await service.sendCampaignNow("t1", "c1");
+    expect(result).toMatchObject({ sentCount: 1, droppedCount: 0 });
+    expect(prisma.emailCampaignRecipient.deleteMany).not.toHaveBeenCalled();
   });
 });

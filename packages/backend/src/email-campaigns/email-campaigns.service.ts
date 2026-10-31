@@ -18,6 +18,15 @@ import {
   CampaignType,
 } from "./dto";
 
+/** What a campaign's recipient list shows of each client. */
+export const RECIPIENT_CLIENT_SELECT = {
+  id: true,
+  firstName: true,
+  lastName: true,
+  email: true,
+  status: true,
+} as const;
+
 @Injectable()
 export class EmailCampaignsService {
   private readonly logger = new Logger(EmailCampaignsService.name);
@@ -74,8 +83,10 @@ export class EmailCampaignsService {
       where: { id: campaignId, tenantId },
       include: {
         recipients: {
+          // Who the client is, not her whole record: the password hash,
+          // tokens and health fields have no business in a campaign list.
           include: {
-            client: true,
+            client: { select: RECIPIENT_CLIENT_SELECT },
           },
           orderBy: { createdAt: "desc" },
         },
@@ -191,6 +202,38 @@ export class EmailCampaignsService {
   }
 
   /**
+   * "Enviar a todos": adds every client the campaign may reach (active,
+   * with an email, who did not say no to promotions) and sends it. The
+   * panel used to list all clients itself, blocked and inactive ones
+   * included, and post their ids.
+   */
+  async sendToAllClients(tenantId: string, campaignId: string) {
+    const campaign = await this.prisma.emailCampaign.findFirst({
+      where: { id: campaignId, tenantId },
+      select: { status: true },
+    });
+    if (!campaign) {
+      throw new NotFoundException("Campaign not found");
+    }
+    if (campaign.status !== "draft" && campaign.status !== "scheduled") {
+      throw new BadRequestException("Campaign cannot be sent");
+    }
+    if (!this.emailService.isConfigured()) {
+      throw new BadRequestException(
+        "El envío de emails todavía no está configurado en KiraRoom. Escríbenos y lo revisamos.",
+      );
+    }
+    await this.addRecipients(tenantId, campaignId, "all");
+    const pending = await this.prisma.emailCampaignRecipient.count({
+      where: { campaignId, status: "pending" },
+    });
+    if (pending === 0) {
+      throw new BadRequestException("No hay clientas activas con email que acepten promociones.");
+    }
+    return this.sendCampaignNow(tenantId, campaignId);
+  }
+
+  /**
    * Sends a campaign to its pending recipients. Shared by "send now" and
    * the scheduler.
    *
@@ -222,9 +265,32 @@ export class EmailCampaignsService {
       },
     });
     const salonName = campaign.tenant?.name ?? "el salón";
+
+    // Only the salon's active clients, checked at send time too: a
+    // recipient whose client was deleted since (no clientId) or is no
+    // longer active (inactive, blocked) is dropped from the list.
+    const linked = [...new Set(campaign.recipients.map((r) => r.clientId).filter((id): id is string => !!id))];
+    const active = new Set(
+      linked.length === 0
+        ? []
+        : (
+            await this.prisma.client.findMany({
+              where: { tenantId, id: { in: linked }, status: "active" },
+              select: { id: true },
+            })
+          ).map((c) => c.id),
+    );
+    const recipients = campaign.recipients.filter((r) => !!r.clientId && active.has(r.clientId));
+    const dropped = campaign.recipients.filter((r) => !r.clientId || !active.has(r.clientId));
+    if (dropped.length > 0) {
+      await this.prisma.emailCampaignRecipient.deleteMany({
+        where: { id: { in: dropped.map((r) => r.id) }, campaignId, status: "pending" },
+      });
+    }
+
     const suppressed = await this.suppressions.suppressedAmong(
       tenantId,
-      campaign.recipients.map((r) => r.email),
+      recipients.map((r) => r.email),
     );
 
     let sentCount = 0;
@@ -237,10 +303,10 @@ export class EmailCampaignsService {
     const refused = await clientsWhoRefusedMarketing(
       this.prisma,
       tenantId,
-      campaign.recipients.map((r) => r.clientId).filter((id): id is string => !!id),
+      recipients.map((r) => r.clientId as string),
     );
 
-    for (const recipient of campaign.recipients) {
+    for (const recipient of recipients) {
       if (recipient.clientId && refused.has(recipient.clientId)) {
         await this.prisma.emailCampaignRecipient.update({
           where: { id: recipient.id },
@@ -295,13 +361,40 @@ export class EmailCampaignsService {
         status: "sent",
         sentAt: new Date(),
         emailsSent: { increment: sentCount },
+        ...(dropped.length > 0 ? { totalRecipients: { decrement: dropped.length } } : {}),
       },
     });
 
     this.logger.log(
-      `Campaign ${campaignId}: ${sentCount} sent, ${failedCount} failed, ${suppressedCount} suppressed, ${skippedCount} refused marketing`,
+      `Campaign ${campaignId}: ${sentCount} sent, ${failedCount} failed, ${suppressedCount} suppressed, ${skippedCount} refused marketing, ${dropped.length} no longer active clients`,
     );
-    return { success: true, sentCount, failedCount, suppressedCount, skippedCount };
+    return { success: true, sentCount, failedCount, suppressedCount, skippedCount, droppedCount: dropped.length };
+  }
+
+  /**
+   * The salon's clients a campaign may reach: active, with an email, and
+   * not among those who said no to promotions. Limited to `clientIds` when
+   * given (the panel's selection), else all of them.
+   */
+  private async reachableClients(tenantId: string, clientIds?: string[]) {
+    const refused = await clientsWhoRefusedMarketing(this.prisma, tenantId, clientIds);
+    const clients = await this.prisma.client.findMany({
+      where: {
+        ...(clientIds ? { id: { in: clientIds } } : {}),
+        tenantId,
+        status: "active",
+        email: { not: null },
+      },
+      select: { id: true, email: true, firstName: true, lastName: true },
+    });
+    return clients
+      .filter((c) => !refused.has(c.id))
+      .map((c) => ({
+        clientId: c.id,
+        email: c.email as string,
+        name: `${c.firstName} ${c.lastName}`,
+        status: "pending",
+      }));
   }
 
   /** What the panel needs to say honestly which numbers it can show. */
@@ -313,10 +406,11 @@ export class EmailCampaignsService {
     };
   }
 
+  /** Adds these clients (or "all" of the salon's) to a campaign not yet sent. */
   async addRecipients(
     tenantId: string,
     campaignId: string,
-    clientIds: string[],
+    clientIds: string[] | "all",
   ) {
     const campaign = await this.prisma.emailCampaign.findFirst({
       where: { id: campaignId, tenantId },
@@ -328,38 +422,20 @@ export class EmailCampaignsService {
       throw new BadRequestException("Cannot add recipients to sent campaigns");
     }
 
-    // Get client emails. Those who said no to promotions are left out.
-    const refused = await clientsWhoRefusedMarketing(this.prisma, tenantId, clientIds);
-    const clients = (
-      await this.prisma.client.findMany({
-        where: {
-          id: { in: clientIds },
-          tenantId,
-          email: { not: null },
-        },
-        select: {
-          id: true,
-          email: true,
-          firstName: true,
-          lastName: true,
-        },
-      })
-    ).filter((c) => !refused.has(c.id));
-
-    // Create recipients
-    const recipients = await Promise.all(
-      clients.map((client) =>
-        this.prisma.emailCampaignRecipient.create({
-          data: {
-            campaignId,
-            clientId: client.id,
-            email: client.email,
-            name: `${client.firstName} ${client.lastName}`,
-            status: "pending",
-          },
-        }),
-      ),
+    // Active clients with an email who did not say no to promotions. A
+    // client already on the list is not added twice ("Enviar a todos"
+    // after picking some, or a double click, emailed them twice).
+    const reachable = await this.reachableClients(
+      tenantId,
+      clientIds === "all" ? undefined : [...new Set(clientIds)],
     );
+    const recipients =
+      reachable.length === 0
+        ? []
+        : await this.prisma.emailCampaignRecipient.createManyAndReturn({
+            data: reachable.map((r) => ({ campaignId, ...r })),
+            skipDuplicates: true,
+          });
 
     // Update campaign total recipients count
     await this.prisma.emailCampaign.update({
@@ -514,23 +590,8 @@ export class EmailCampaignsService {
       );
     }
 
-    // Get all active clients with email, except who said no to promotions
-    const refused = await clientsWhoRefusedMarketing(this.prisma, tenantId);
-    const clients = (
-      await this.prisma.client.findMany({
-        where: {
-          tenantId,
-          status: "active",
-          email: { not: null },
-        },
-        select: {
-          id: true,
-          email: true,
-          firstName: true,
-          lastName: true,
-        },
-      })
-    ).filter((c) => !refused.has(c.id));
+    // Active clients with email, except who said no to promotions.
+    const clients = await this.reachableClients(tenantId);
 
     if (clients.length === 0) {
       throw new BadRequestException("No clients with email addresses found");
@@ -557,13 +618,8 @@ export class EmailCampaignsService {
 
     // Create recipients
     await this.prisma.emailCampaignRecipient.createMany({
-      data: clients.map((client) => ({
-        campaignId: campaign.id,
-        clientId: client.id,
-        email: client.email,
-        name: `${client.firstName} ${client.lastName}`,
-        status: "pending",
-      })),
+      data: clients.map((r) => ({ campaignId: campaign.id, ...r })),
+      skipDuplicates: true,
     });
 
     // Send immediately if requested
