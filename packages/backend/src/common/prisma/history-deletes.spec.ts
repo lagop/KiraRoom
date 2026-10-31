@@ -27,7 +27,7 @@ const fkError = () =>
     clientVersion: "5.22.0",
   });
 
-function prismaMock(counts: { appointments?: number; payments?: number; orders?: number; blocks?: number } = {}) {
+function prismaMock(counts: { appointments?: number; payments?: number; orders?: number; blocks?: number; wallets?: number; loyalty?: number } = {}) {
   const calls = { updates: [] as any[], deletes: [] as any[] };
   const record = (model: string) => ({
     findFirst: jest.fn(async ({ where }: any) => (where.id === "missing" ? null : { id: where.id })),
@@ -42,6 +42,8 @@ function prismaMock(counts: { appointments?: number; payments?: number; orders?:
     payment: { count: jest.fn(async () => counts.payments ?? 0) },
     order: { count: jest.fn(async () => counts.orders ?? 0) },
     appointmentService: { count: jest.fn(async () => counts.blocks ?? 0) },
+    clientWallet: { count: jest.fn(async () => counts.wallets ?? 0) },
+    loyaltyMember: { count: jest.fn(async () => counts.loyalty ?? 0) },
   };
   return { prisma, calls };
 }
@@ -58,6 +60,8 @@ describe("deleting a client", () => {
     ["appointments", { appointments: 2 }],
     ["payments", { payments: 1 }],
     ["orders", { orders: 1 }],
+    ["wallet balance", { wallets: 1 }],
+    ["loyalty points", { loyalty: 1 }],
   ])("deactivates one with %s instead of deleting it", async (_label, counts) => {
     const { prisma, calls } = prismaMock(counts);
     await expect(deleteClientKeepingHistory(prisma, "t1", "c1")).resolves.toEqual({ ok: true, deactivated: true });

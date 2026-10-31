@@ -23,7 +23,7 @@ export interface HistoryDeleteResult {
 }
 
 export const CLIENT_HAS_HISTORY =
-  "Esta clienta tiene citas, pagos o compras en su historial y no se puede eliminar. Desactívala para ocultarla sin perder ese historial.";
+  "Esta clienta tiene citas, pagos, compras o saldo en su historial y no se puede eliminar. Desactívala para ocultarla sin perder ese historial.";
 export const PROFESSIONAL_HAS_HISTORY =
   "Este profesional tiene citas en su historial y no se puede eliminar. Desactívalo para que deje de aparecer en las reservas.";
 export const SERVICE_HAS_HISTORY =
@@ -69,6 +69,11 @@ export async function deleteClientKeepingHistory(
         prisma.appointment.count({ where: { tenantId, clientId: id } }),
         prisma.payment.count({ where: { tenantId, clientId: id } }),
         prisma.order.count({ where: { tenantId, clientId: id } }),
+        // A balance or points she has not used yet is owed to her.
+        prisma.clientWallet.count({
+          where: { tenantId, clientId: id, OR: [{ balance: { not: 0 } }, { loyaltyPoints: { not: 0 } }] },
+        }),
+        prisma.loyaltyMember.count({ where: { clientId: id, currentPoints: { not: 0 } } }),
       ),
     () => prisma.client.update({ where: { id, tenantId }, data: { status: ClientStatus.inactive } }),
     () => prisma.client.delete({ where: { id, tenantId } }),
