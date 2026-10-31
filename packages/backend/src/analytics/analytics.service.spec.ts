@@ -18,6 +18,7 @@ function makePrisma(overrides: Record<string, any> = {}) {
     },
     client: { count: jest.fn().mockResolvedValue(0) },
     professional: { findMany: jest.fn().mockResolvedValue([]) },
+    timeOff: { findMany: jest.fn().mockResolvedValue([]) },
     ...overrides,
   };
 }
@@ -150,5 +151,36 @@ describe("AnalyticsService", () => {
       expect(args.where.professionalId).toBe("p9");
     }
     expect(prisma.professional.findMany.mock.calls[0][0].where).toMatchObject({ id: "p9" });
+  });
+
+  it("takes the salon's approved time off in the period out of occupancy", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-10-02T10:00:00Z"));
+    const prisma = makePrisma();
+    prisma.professional.findMany.mockResolvedValue([
+      { id: "p1", workingHours: [{ day: "thursday", openTime: "10:00", closeTime: "14:00" }] },
+    ]);
+    prisma.timeOff.findMany.mockResolvedValue([
+      {
+        professionalId: "p1",
+        kind: "sick_leave",
+        startDate: new Date("2026-10-01T00:00:00Z"),
+        endDate: new Date("2026-10-01T00:00:00Z"),
+        startTime: "12:00",
+        endTime: "14:00",
+        status: "approved",
+      },
+    ]);
+    const service = new AnalyticsService(prisma as any);
+
+    const overview = await service.getOverview("t1", 1);
+
+    // The period is 1–2 October; only Thursday 1 has a shift: 240 minutes, 120 off.
+    expect(overview.occupancy).toMatchObject({ availableMinutes: 120 });
+    expect(prisma.timeOff.findMany.mock.calls[0][0].where).toMatchObject({
+      tenantId: "t1",
+      status: "approved",
+      startDate: { lte: new Date("2026-10-02T00:00:00.000Z") },
+      endDate: { gte: new Date("2026-10-01T00:00:00.000Z") },
+    });
   });
 });

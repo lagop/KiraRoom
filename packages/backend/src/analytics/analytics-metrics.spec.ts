@@ -251,4 +251,70 @@ describe("occupancy", () => {
     expect(result.availableMinutes).toBe(420);
     expect(result.rate).toBe(50);
   });
+
+  describe("takes approved time off out of working time", () => {
+    // Monday to Friday, 09:00–17:00: 480 minutes a day, 2400 in the week.
+    const fullWeek = ["monday", "tuesday", "wednesday", "thursday", "friday"].map((day) => ({
+      day,
+      openTime: "09:00",
+      closeTime: "17:00",
+    }));
+    const staff = [
+      { id: "ana", workingHours: fullWeek },
+      { id: "eva", workingHours: fullWeek },
+    ];
+    const booked = [
+      { professionalId: "ana", duration: 240, status: "completed", scheduledDate: "2026-09-28" },
+    ];
+
+    it("a professional's holiday is not free time", () => {
+      const result = occupancy(staff, booked, week, [
+        { professionalId: "eva", kind: "vacation", startDate: "2026-09-29", endDate: "2026-10-01", status: "approved" },
+      ]);
+      // Eva is away three days: 4800 - 3 × 480.
+      expect(result.availableMinutes).toBe(3360);
+      expect(result.professionalsWithSchedule).toBe(2);
+    });
+
+    it("a salon closure takes the day from everyone", () => {
+      const result = occupancy(staff, booked, week, [
+        { professionalId: null, kind: "closure", startDate: "2026-10-02", endDate: "2026-10-02" },
+      ]);
+      expect(result.availableMinutes).toBe(4800 - 2 * 480);
+    });
+
+    it("a stretch of hours takes only those minutes, and only inside the shift", () => {
+      const result = occupancy(staff, booked, week, [
+        // 10:00–12:00 inside Ana's Monday shift: 120 minutes.
+        { professionalId: "ana", kind: "other", startDate: "2026-09-28", endDate: "2026-09-28", startTime: "10:00", endTime: "12:00" },
+        // 16:00–19:00 runs past Eva's 17:00 close: only 60 minutes come off.
+        { professionalId: "eva", kind: "day_off", startDate: "2026-09-29", endDate: "2026-09-29", startTime: "16:00", endTime: "19:00" },
+      ]);
+      expect(result.availableMinutes).toBe(4800 - 120 - 60);
+    });
+
+    it("a block that overlaps another is not taken out twice", () => {
+      const result = occupancy(staff, booked, week, [
+        { professionalId: null, kind: "closure", startDate: "2026-09-28", endDate: "2026-09-28" },
+        { professionalId: "ana", kind: "vacation", startDate: "2026-09-28", endDate: "2026-09-29" },
+      ]);
+      // Monday is gone for both (960); Tuesday for Ana only (480).
+      expect(result.availableMinutes).toBe(4800 - 960 - 480);
+    });
+
+    it("ignores requests that are pending or rejected", () => {
+      const result = occupancy(staff, booked, week, [
+        { professionalId: "eva", kind: "vacation", startDate: "2026-09-28", endDate: "2026-10-02", status: "pending" },
+        { professionalId: "ana", kind: "vacation", startDate: "2026-09-28", endDate: "2026-10-02", status: "rejected" },
+      ]);
+      expect(result.availableMinutes).toBe(4800);
+    });
+
+    it("leaves a professional with no schedule out, time off or not", () => {
+      const result = occupancy([{ id: "luz", workingHours: [] }], [], week, [
+        { professionalId: "luz", kind: "other", startDate: "2026-09-28", endDate: "2026-09-28", startTime: "10:00", endTime: "12:00" },
+      ]);
+      expect(result).toMatchObject({ availableMinutes: 0, rate: null, professionalsWithSchedule: 0 });
+    });
+  });
 });

@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { LLMProviderFactory } from '../factories/llm-provider.factory';
 import { salonOpenShifts } from '../../appointments/working-hours';
 import { salonClock } from '../prompts/clock';
+import { CLOSURE_HORIZON_DAYS, SalonClosure, salonClosuresNotice } from '../prompts/closures';
 import { PlatformLlmConfigService } from '../../platform/platform-llm-config.service';
 import { LLMProvider, LLMGenerationConfig, LLMCompletion } from '@kira/shared';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -130,6 +131,8 @@ interface SalonContext {
   professionals: Array<{ firstName: string; lastName: string; position?: string; specialties: string[] }>;
   /** Per weekday, the salon's open stretches (several when it closes for lunch). */
   workingHours: Record<string, DayHours | DayHours[]>;
+  /** Approved salon closures around the next weeks (salonClosuresNotice picks the dates). */
+  closures?: SalonClosure[];
   // P2A-receptionist-advanced -- persona settings (voice, tone,
   // signature phrases). The base system prompt already gives a default
   // voice; when `virtual_receptionist_advanced` is unlocked AND a
@@ -251,11 +254,19 @@ export class LLMService {
     //
     // The salon's local date, weekday and next two weeks, not a bare UTC
     // instant: see salonClock.
-    const promptWithClock = `${salonClock(
-      new Date(),
-      salonContext?.timezone || 'Europe/Madrid',
-      salonContext?.language || 'es',
-    )}\n${prompt}`;
+    //
+    // The salon's upcoming closures ride along for the same reason: the list
+    // moves with the date. Only for the receptionist; the staff copilot
+    // (systemPromptOverride) has its own prompt.
+    const now = new Date();
+    const timeZone = salonContext?.timezone || 'Europe/Madrid';
+    const language = salonContext?.language || 'es';
+    const closures = options?.systemPromptOverride
+      ? ''
+      : salonClosuresNotice(salonContext?.closures ?? [], now, timeZone, language);
+    const promptWithClock = `${salonClock(now, timeZone, language)}\n${
+      closures ? `${closures}\n` : ''
+    }${prompt}`;
 
     try {
       // Try with retry logic for transient errors
@@ -578,10 +589,42 @@ export class LLMService {
             ],
           ),
         ),
+        closures: await this.upcomingClosures(tenant.id),
       };
     } catch (error) {
       this.logger.error(`Error fetching salon context for ${salonId}:`, error);
       return null;
+    }
+  }
+
+  /**
+   * The salon's approved closures that touch the next CLOSURE_HORIZON_DAYS
+   * days. A day of margin on each side, since "today" is the salon's and
+   * salonClosuresNotice cuts the exact window.
+   *
+   * Closures only (professionalId null), and only their dates and hours: a
+   * professional's absence, a note or a kind never reaches the receptionist.
+   * A failure here costs the notice, not the reply.
+   */
+  private async upcomingClosures(tenantId: string): Promise<SalonClosure[]> {
+    try {
+      const from = new Date(Date.now() - 86_400_000);
+      from.setUTCHours(0, 0, 0, 0);
+      const to = new Date(from.getTime() + (CLOSURE_HORIZON_DAYS + 2) * 86_400_000);
+      return await this.prisma.timeOff.findMany({
+        where: {
+          tenantId,
+          professionalId: null,
+          status: 'approved',
+          startDate: { lte: to },
+          endDate: { gte: from },
+        },
+        select: { startDate: true, endDate: true, startTime: true, endTime: true },
+        orderBy: { startDate: 'asc' },
+      });
+    } catch (error) {
+      this.logger.warn(`Could not load closures for salon ${tenantId}: ${(error as Error).message}`);
+      return [];
     }
   }
 

@@ -26,6 +26,7 @@ import {
   summarize,
   topServices,
 } from "../analytics/analytics-metrics";
+import { TimeOffBlock } from "../time-off/time-off-rules";
 
 export interface LocationLink {
   professionalId: string;
@@ -105,8 +106,10 @@ export function buildConsolidatedReport(input: {
   appointments: ReadonlyArray<AnalyticsAppointment>;
   professionals: ReadonlyArray<{ id: string; workingHours?: unknown }>;
   links: ReadonlyArray<LocationLink>;
+  /** Approved time off touching the period: taken out of occupancy's working time. */
+  timeOff?: ReadonlyArray<TimeOffBlock>;
 }): ConsolidatedReport {
-  const { period, locations, appointments, professionals, links } = input;
+  const { period, locations, appointments, professionals, links, timeOff = [] } = input;
   const activeIds = new Set(locations.map((l) => l.id));
   const homes = homeLocations(links, activeIds);
 
@@ -128,7 +131,7 @@ export function buildConsolidatedReport(input: {
       locationId: loc.id,
       name: loc.name,
       ...summary,
-      occupancy: occupancy(staff, rows, period),
+      occupancy: occupancy(staff, rows, period, timeOff),
       professionals: staff.length,
       clients: new Set(rows.filter((a) => a.status !== "cancelled" && a.clientId).map((a) => a.clientId)).size,
       topServices: topServices(rows, 3),
@@ -146,7 +149,7 @@ export function buildConsolidatedReport(input: {
       completedAppointments: total.completedAppointments,
       paidAppointments: total.paidAppointments,
       avgTicket: total.avgTicket,
-      occupancy: occupancy(professionals, appointments, period),
+      occupancy: occupancy(professionals, appointments, period, timeOff),
     },
     perLocation,
     unassigned: { revenue: rest.revenue, appointments: rest.appointments },
