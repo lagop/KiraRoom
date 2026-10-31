@@ -14,6 +14,7 @@ import {
 // The class, not the service's same-named interface: the ValidationPipe
 // only validates (and strips unknown keys from) a class.
 import { UpdateAppointmentDto } from "./dto/update-appointment.dto";
+import { UpdateAppointmentPaymentDto } from "./dto/update-appointment-payment.dto";
 import { AvailableSlotsDto } from "./dto/available-slots.dto";
 import { OnlineBookingDto, StaffBookingDto } from "./dto/book-appointment.dto";
 import { PublicViewerService } from "../common/tenancy/public-viewer.service";
@@ -230,15 +231,21 @@ export class AppointmentsController {
     return this.appointmentsService.remove(req.user, id);
   }
 
+  // Owner and managers only: a manual correction. A professional marked
+  // their own appointments paid for any amount here, and the client earned
+  // points on it; the till charges appointments itself now (POST
+  // /pos/checkout), staff included.
   @Patch(":id/payment")
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  @ApiOperation({ summary: "Update appointment payment status" })
+  @Roles(UserRole.owner, UserRole.admin)
+  @ApiOperation({ summary: "Correct an appointment's payment status (owner/admin)" })
   @ApiResponse({ status: 200, description: "Payment status updated successfully" })
+  @ApiResponse({ status: 400, description: "Amount above the appointment's total" })
   @ApiResponse({ status: 404, description: "Appointment not found" })
+  @ApiResponse({ status: 409, description: "Cancelled or no-show appointment marked paid" })
   async updatePayment(
     @Req() req: any,
     @Param("id", ParseUUIDPipe) id: string,
-    @Body() body: { status: string; amountPaid: number; paymentMethod: string },
+    @Body() body: UpdateAppointmentPaymentDto,
   ) {
     return this.appointmentsService.updatePaymentStatus(
       req.user,
