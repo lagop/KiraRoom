@@ -18,6 +18,14 @@ export type ExportFormat = "csv" | "xlsx";
 const PAGE_SIZE = 1000;
 const MAX_XLSX_ROWS = 100_000;
 
+/**
+ * A client's name or notes starting with `=`, `+`, `-`, `@`, a tab or a
+ * carriage return is read as a formula when the CSV is opened in a
+ * spreadsheet. `escapeFormulae` prefixes those cells with a quote so they
+ * stay text. (XLSX cells are written as strings, never formulas.)
+ */
+const CSV_OPTIONS = { escapeFormulae: true } as const;
+
 @Injectable()
 export class ExportsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -61,11 +69,12 @@ export class ExportsService {
         }
         if (!header) {
           header = Object.keys(rows[0]);
-          res.write(Papa.unparse([header]) + "\n");
+          res.write(Papa.unparse([header], CSV_OPTIONS) + "\n");
         }
         // `Papa.unparse(rows)` with object arrays emits a header row by default;
         // pass `{ header: false }` so we don't duplicate the header on subsequent pages.
-        res.write(Papa.unparse(rows, { header: false }));
+        // Each page ends its last line: the next page's first row was glued to it.
+        res.write(Papa.unparse(rows, { ...CSV_OPTIONS, header: false }) + "\n");
         if (!nextCursor) {
           hasMore = false;
           break;
@@ -118,6 +127,8 @@ export class ExportsService {
       case "clients": {
         const rows = await this.prisma.client.findMany({
           where: { tenantId },
+          // Only the exported columns: never the password hash or tokens.
+          select: { id: true, firstName: true, lastName: true, email: true, phone: true, createdAt: true },
           take,
           skip: cursor ? 1 : 0,
           cursor: cursor ? { id: cursor } : undefined,
