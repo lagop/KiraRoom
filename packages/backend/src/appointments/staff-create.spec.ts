@@ -231,6 +231,28 @@ describe("an owner or manager books for any professional", () => {
     await unset.service.createByStaff({ ...BOOKING, professionalId: ME.id } as any, OWNER);
     expect(unset.db.appointments[0]).not.toHaveProperty("commissionRate");
   });
+
+  it("keeps the deposit they ask for, in cents", async () => {
+    const set = build();
+    await set.service.createByStaff(
+      { ...BOOKING, professionalId: ME.id, depositRequired: true, depositAmount: 1250 } as any,
+      OWNER,
+    );
+    expect(set.db.appointments[0]).toMatchObject({ depositRequired: true, depositAmount: 1250 });
+
+    const unset = build();
+    await unset.service.createByStaff(
+      { ...BOOKING, professionalId: ME.id, depositRequired: false, depositAmount: 1250 } as any,
+      OWNER,
+    );
+    expect(unset.db.appointments[0]).not.toHaveProperty("depositAmount");
+  });
+
+  it("a professional's booking sets no deposit", async () => {
+    const { service, db } = build();
+    await service.createByStaff({ ...BOOKING, depositRequired: true, depositAmount: 500 } as any, STAFF);
+    expect(db.appointments[0]).not.toHaveProperty("depositRequired");
+  });
 });
 
 describe("source and lock", () => {

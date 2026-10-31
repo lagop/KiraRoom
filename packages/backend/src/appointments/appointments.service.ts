@@ -596,6 +596,8 @@ export class AppointmentsService {
         scheduledEnd: Date;
       }>;
       online?: boolean;
+      /** A deposit the salon asked for (owner/admin only), in cents. */
+      deposit?: { amountCents: number };
     } = {},
   ) {
     const db = visit.db ?? this.prisma;
@@ -726,6 +728,12 @@ export class AppointmentsService {
         // Commission rate can be set by admin/owner
         ...(dto.commissionRate !== undefined && {
           commissionRate: dto.commissionRate,
+        }),
+        // Never from the booking itself: an online booking sends the same
+        // fields, and the deposit is the salon's term.
+        ...(visit.deposit && {
+          depositRequired: true,
+          depositAmount: visit.deposit.amountCents,
         }),
       },
       include: {
@@ -885,7 +893,8 @@ export class AppointmentsService {
         }];
     const span = visitSpan(visit);
 
-    const { services: _rows, allowOutsideHours, commissionRate, ...booking } = dto;
+    const { services: _rows, allowOutsideHours, commissionRate, depositRequired, depositAmount, ...booking } =
+      dto;
     const appointment = await this.prisma.$transaction(
       async (tx: any) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`booking:${tenantId}:${day}`}))`;
@@ -927,6 +936,11 @@ export class AppointmentsService {
                   scheduledEnd: visit[i].end,
                 }))
               : undefined,
+            // The panel's deposit (cents) was accepted and never written.
+            deposit:
+              manager && depositRequired
+                ? { amountCents: Math.max(0, Math.round(Number(depositAmount ?? 0))) }
+                : undefined,
           },
         );
       },
