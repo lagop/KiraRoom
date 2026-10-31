@@ -11,6 +11,10 @@
  * these and threads its own state into them.
  */
 
+import { dateOfDay } from "../../../../components/Calendar/day-grid";
+import { formatPrice } from "../../../../lib/salon-seo";
+import type { Appointment } from "./appointment-drawer/types";
+
 /**
  * "HH:MM" string + minutes → "HH:MM" string. Wraps at midnight (so
  * 23:30 + 60 → "00:30").
@@ -25,10 +29,12 @@ export function addMinutesToTime(timeStr: string, minutes: number): string {
 }
 
 /**
- * ISO yyyy-mm-dd → "Monday, March 17, 2026".
+ * "yyyy-mm-dd" → "martes, 17 de marzo de 2026". Read as the local calendar
+ * day: `new Date("2026-03-17")` is UTC midnight, the 16th west of UTC.
  */
-export function formatDateString(dateString: string): string {
-  return new Date(dateString).toLocaleDateString("en-US", {
+export function formatDateString(day: string): string {
+  if (!day) return "";
+  return dateOfDay(day).toLocaleDateString("es-ES", {
     weekday: "long",
     year: "numeric",
     month: "long",
@@ -36,11 +42,21 @@ export function formatDateString(dateString: string): string {
   });
 }
 
-/**
- * ISO yyyy-mm-dd → "Mar 17, 2026, 02:30 PM".
- */
+/** "yyyy-mm-dd" (or an ISO date-time) → "17/03/2026", the local calendar day. */
+export function formatShortDay(day: string): string {
+  if (!day) return "";
+  return dateOfDay(day).toLocaleDateString("es-ES", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+}
+
+/** An instant (createdAt, an activity entry) → "17 mar 2026, 15:30". */
 export function formatDateTimeString(dateString: string): string {
-  return new Date(dateString).toLocaleString("en-US", {
+  const date = new Date(dateString);
+  if (isNaN(date.getTime())) return "";
+  return date.toLocaleString("es-ES", {
     year: "numeric",
     month: "short",
     day: "numeric",
@@ -49,12 +65,155 @@ export function formatDateTimeString(dateString: string): string {
   });
 }
 
+// ----- Money -----------------------------------------------------------------
+//
+// The API mixes units: a service's and an appointment's `price` are euros;
+// `totalAmount`, `amountPaid`, `amountDue` and `depositAmount` are cents.
+
+/** Euros → "35,00 €". */
+export function formatEuros(euros: number | string | null | undefined): string {
+  return formatPrice(Number(euros) || 0);
+}
+
+/** Cents (`totalAmount`, `amountPaid`, `depositAmount`) → "35,00 €". */
+export function formatCents(cents: number | string | null | undefined): string {
+  return formatPrice(centsToEuros(cents));
+}
+
+/** Euros as typed in a form → whole cents, as the API stores a deposit. */
+export function eurosToCents(euros: number | string | null | undefined): number {
+  const n = typeof euros === "string" ? Number(euros.replace(",", ".")) : Number(euros);
+  return Number.isFinite(n) ? Math.round(n * 100) : 0;
+}
+
+/** Cents from the API → euros, for a form field or a sum. */
+export function centsToEuros(cents: number | string | null | undefined): number {
+  const n = Number(cents);
+  return Number.isFinite(n) ? Math.round(n) / 100 : 0;
+}
+
 /**
- * Date → "yyyy-mm-dd" (UTC ISO date part). Used by the suggestion
- * generator to stamp each suggestion with its date label.
+ * What the visit costs, in cents: the server's `totalAmount` (it adds up
+ * every service and add-on), else the services' prices, else `price`.
  */
-export function formatIsoDate(date: Date): string {
-  return date.toISOString().split("T")[0];
+export function appointmentTotalCents(appointment: {
+  totalAmount?: number | string | null;
+  price?: number | string | null;
+  services?: ReadonlyArray<{ service?: { price?: number | string | null } | null }> | null;
+}): number {
+  const total = Number(appointment.totalAmount);
+  if (Number.isFinite(total) && total > 0) return Math.round(total);
+  const rows = appointment.services ?? [];
+  const fromRows = rows.reduce((sum, r) => sum + (Number(r.service?.price) || 0), 0);
+  if (fromRows > 0) return eurosToCents(fromRows);
+  return eurosToCents(appointment.price);
+}
+
+// ----- Commission and deposit (the salon's terms) ---------------------------
+
+/**
+ * The rate the server applies when neither the appointment nor the
+ * professional sets one (commissions.service.ts).
+ */
+export const DEFAULT_COMMISSION_RATE = 10;
+
+export type CommissionSource = "appointment" | "professional" | "default";
+
+/**
+ * A rate from the API (a Decimal string), a form, or nothing. 0 is a rate;
+ * null, undefined and "" are "not set".
+ */
+export function parseRate(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+  const n = typeof value === "string" ? Number(value.replace(",", ".")) : Number(value);
+  return Number.isFinite(n) && n >= 0 && n <= 100 ? n : null;
+}
+
+/**
+ * The commission that applies to an appointment, and where it comes from:
+ * its own override (0 included), else the professional's, else the default.
+ * The same order the server's commission calculation uses.
+ */
+export function effectiveCommission(
+  appointmentRate: unknown,
+  professionalRate: unknown,
+): { rate: number; source: CommissionSource } {
+  const own = parseRate(appointmentRate);
+  if (own !== null) return { rate: own, source: "appointment" };
+  const professional = parseRate(professionalRate);
+  if (professional !== null) return { rate: professional, source: "professional" };
+  return { rate: DEFAULT_COMMISSION_RATE, source: "default" };
+}
+
+/** 12.5 → "12,5 %". */
+export function formatRate(rate: number): string {
+  return `${new Intl.NumberFormat("es-ES", { maximumFractionDigits: 2 }).format(rate)} %`;
+}
+
+/** The salon's terms on an appointment, as the edit form holds them. */
+export interface SalonTermsForm {
+  /** "" = no override (the professional's or the default rate); "0" is 0 %. */
+  commission: string;
+  depositRequired: boolean;
+  /** Euros, as typed. */
+  deposit: string;
+}
+
+export function salonTermsForm(appointment: {
+  commissionRate?: unknown;
+  depositRequired?: boolean | null;
+  depositAmount?: number | string | null;
+}): SalonTermsForm {
+  const rate = parseRate(appointment.commissionRate);
+  const cents = Number(appointment.depositAmount);
+  return {
+    commission: rate === null ? "" : String(rate),
+    depositRequired: !!appointment.depositRequired,
+    deposit: Number.isFinite(cents) && cents > 0 ? String(centsToEuros(cents)) : "",
+  };
+}
+
+/** Whether the form holds something the server would refuse (a rate outside 0-100, a negative deposit). */
+export function salonTermsInvalid(form: SalonTermsForm): boolean {
+  if (form.commission.trim() !== "" && parseRate(form.commission) === null) return true;
+  if (form.depositRequired && form.deposit.trim() !== "") {
+    const n = Number(form.deposit.replace(",", "."));
+    if (!Number.isFinite(n) || n < 0) return true;
+  }
+  return false;
+}
+
+/**
+ * The part of PATCH /appointments/:id that changes the salon's terms: only
+ * what changed, and only for an owner or manager (the server ignores them
+ * from a professional). The deposit goes in cents, as it is stored; a
+ * cleared commission goes as null, so the professional's rate applies
+ * again, and 0 stays 0.
+ */
+export function salonTermsUpdate(input: {
+  role?: string;
+  before: {
+    commissionRate?: unknown;
+    depositRequired?: boolean | null;
+    depositAmount?: number | string | null;
+  };
+  form: SalonTermsForm;
+}): { commissionRate?: number | null; depositRequired?: boolean; depositAmount?: number } {
+  if (input.role !== "owner" && input.role !== "admin") return {};
+  const out: { commissionRate?: number | null; depositRequired?: boolean; depositAmount?: number } = {};
+  const rateBefore = parseRate(input.before.commissionRate);
+  const rateAfter = parseRate(input.form.commission);
+  if (rateAfter !== rateBefore) out.commissionRate = rateAfter;
+  if (input.form.depositRequired !== !!input.before.depositRequired) {
+    out.depositRequired = input.form.depositRequired;
+  }
+  if (input.form.depositRequired) {
+    const cents = Math.max(0, eurosToCents(input.form.deposit));
+    const centsBefore = Math.round(Number(input.before.depositAmount) || 0);
+    if (cents !== centsBefore) out.depositAmount = cents;
+  }
+  return out;
 }
 
 /**
@@ -244,37 +403,37 @@ export function getStatusBadgeStyle(status: string): {
       bg: "bg-green-50",
       text: "text-green-700",
       border: "border-green-200",
-      label: "Confirmed",
+      label: "Confirmada",
     },
     pending: {
       bg: "bg-yellow-50",
       text: "text-yellow-700",
       border: "border-yellow-200",
-      label: "Pending",
+      label: "Pendiente",
     },
     in_progress: {
       bg: "bg-blue-50",
       text: "text-blue-700",
       border: "border-blue-200",
-      label: "In Progress",
+      label: "En curso",
     },
     completed: {
       bg: "bg-blue-50",
       text: "text-blue-700",
       border: "border-blue-200",
-      label: "Completed",
+      label: "Completada",
     },
     cancelled: {
       bg: "bg-red-50",
       text: "text-red-700",
       border: "border-red-200",
-      label: "Cancelled",
+      label: "Cancelada",
     },
     no_show: {
       bg: "bg-gray-50",
       text: "text-gray-700",
       border: "border-gray-300",
-      label: "No-show",
+      label: "No se presentó",
     },
   };
   return (
@@ -285,39 +444,6 @@ export function getStatusBadgeStyle(status: string): {
       label: status,
     }
   );
-}
-
-/**
- * Resolve a professional name for display. Returns "Staff" for
- * undefined / unknown ids so the UI never has to deal with `null`.
- */
-export function getProfessionalName(
-  profId: string | undefined,
-  professionals: ReadonlyArray<{
-    id: string;
-    firstName: string;
-    lastName: string;
-  }>,
-): string {
-  if (!profId) return "Staff";
-  const prof = professionals.find((p) => p.id === profId);
-  return prof ? `${prof.firstName} ${prof.lastName}` : "Staff";
-}
-
-/**
- * Sum of `selectedServices` durations, ignoring parallel/serial
- * semantics. Used by the suggestion generator when it wants the
- * total time on the day, not the schedule-aware duration.
- */
-export function sumServiceDurations(
-  selectedServices: ReadonlyArray<{ serviceId: string }>,
-  services: ReadonlyArray<{ id: string; duration?: number | null }>,
-  defaultDuration: number = 60,
-): number {
-  return selectedServices.reduce((sum, sel) => {
-    const service = services.find((s) => s.id === sel.serviceId);
-    return sum + (Number(service?.duration) || defaultDuration);
-  }, 0);
 }
 
 /**
@@ -445,6 +571,127 @@ export function serverMessage(error: unknown): string | undefined {
   return message || undefined;
 }
 
+// ----- The appointment as the drawer and the detail page show it ------------
+
+/** The activity entry the panel adds for the appointment's creation. */
+export const CREATED_ACTIVITY = "appointment_created";
+
+const ACTIVITY_KEYS: Record<string, string> = {
+  [CREATED_ACTIVITY]: "created",
+  appointment_updated: "updated",
+  appointment_cancelled: "cancelled",
+  appointment_completed: "completed",
+  appointment_no_show: "no_show",
+  appointment_status_changed: "status_changed",
+};
+
+/** The i18n key of an activity entry ("appointments.activityActions.cancelled"), or null for one the panel does not know. */
+export function activityLabelKey(action: string): string | null {
+  const key = ACTIVITY_KEYS[action];
+  return key ? `appointments.activityActions.${key}` : null;
+}
+
+/**
+ * The activity list: the panel's "created" entry and the server's entries
+ * (GET /appointments/:id/activity), newest first, without duplicates.
+ */
+export function mergeActivity(
+  createdAt: string,
+  entries: ReadonlyArray<{ createdAt: string; action: string; details?: unknown }> | null | undefined,
+): Array<{ timestamp: string; action: string; details?: string }> {
+  const byKey = new Map<string, { timestamp: string; action: string; details?: string }>();
+  byKey.set(`${createdAt}-${CREATED_ACTIVITY}`, { timestamp: createdAt, action: CREATED_ACTIVITY });
+  for (const entry of entries ?? []) {
+    const key = `${entry.createdAt}-${entry.action}`;
+    if (byKey.has(key)) continue;
+    byKey.set(key, {
+      timestamp: entry.createdAt,
+      action: entry.action,
+      details: entry.details ? JSON.stringify(entry.details) : undefined,
+    });
+  }
+  return Array.from(byKey.values()).sort(
+    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+  );
+}
+
+function numberOrNull(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * GET /appointments/:id → the drawer's shape. Carries the salon's terms
+ * (commission, deposit) and the server's totals, which it used to drop: the
+ * drawer showed no commission, and an edit could not keep the deposit.
+ */
+export function toDrawerAppointment(
+  data: any,
+  services: ReadonlyArray<{ id: string; name: string; price?: number | null; duration?: number | null }> = [],
+): Appointment {
+  const fullName = (p: { firstName?: string; lastName?: string } | null | undefined) =>
+    `${p?.firstName ?? ""} ${p?.lastName ?? ""}`.trim();
+  const toService = (s: any) => ({
+    id: s?.id ?? "",
+    name: s?.name ?? "",
+    description: s?.description || "",
+    duration: Number(s?.duration) || 0,
+    price: Number(s?.price) || 0,
+  });
+  return {
+    id: data.id,
+    client: {
+      id: data.client?.id ?? "",
+      name: fullName(data.client),
+      email: data.client?.email || "",
+      phone: data.client?.phone || "",
+    },
+    professional: {
+      id: data.professional?.id ?? "",
+      name: fullName(data.professional),
+      email: data.professional?.email || "",
+      phone: data.professional?.phone || "",
+      specialty: data.professional?.specialties?.[0] || "",
+    },
+    service: toService(data.service),
+    services: (data.services ?? []).map((s: any) => ({
+      id: s.id,
+      service: toService(s.service),
+      professional: s.professional
+        ? {
+            id: s.professional.id,
+            firstName: s.professional.firstName,
+            lastName: s.professional.lastName,
+            email: s.professional.email,
+            phone: s.professional.phone || "",
+            specialties: s.professional.specialties || [],
+          }
+        : undefined,
+      isParallel: !!s.isParallel,
+      scheduledStart: s.scheduledStart,
+      scheduledEnd: s.scheduledEnd,
+    })),
+    rawAddons: data.addons,
+    addons: services.length > 0 ? transformAddons(data.addons, services) : [],
+    date: String(data.scheduledDate ?? "").split("T")[0],
+    time: data.scheduledTime,
+    status: data.status,
+    price: Number(data.price) || 0,
+    notes: data.notes || "",
+    commissionRate: numberOrNull(data.commissionRate),
+    professionalCommissionRate: numberOrNull(data.professional?.commissionRate),
+    depositRequired: !!data.depositRequired,
+    depositAmount: numberOrNull(data.depositAmount),
+    depositPaid: !!data.depositPaid,
+    totalAmount: numberOrNull(data.totalAmount) ?? undefined,
+    amountPaid: numberOrNull(data.amountPaid) ?? undefined,
+    createdAt: data.createdAt,
+    updatedAt: data.updatedAt,
+    activity: [{ timestamp: data.createdAt, action: CREATED_ACTIVITY, details: undefined }],
+  };
+}
+
 /**
  * What a professional (role `staff`) sees in the new-appointment form:
  * their own professional record and the services they perform.
@@ -550,7 +797,7 @@ export function buildStaffBookingPayload(input: {
     scheduledTime: input.time,
     ...(input.notes ? { notes: input.notes } : {}),
     ...(input.depositRequired
-      ? { depositRequired: true, depositAmount: Math.round((input.depositAmount || 0) * 100) }
+      ? { depositRequired: true, depositAmount: Math.max(0, eurosToCents(input.depositAmount)) }
       : {}),
     ...(manager && typeof commission === "number" && Number.isFinite(commission)
       ? { commissionRate: commission }

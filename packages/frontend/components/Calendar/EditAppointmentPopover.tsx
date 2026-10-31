@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
-import { X, Search, CheckCircle, Loader2, Zap, DollarSign, Percent, Ban } from "lucide-react";
+import { X, Search, CheckCircle, Loader2, Zap, Euro, Percent, Ban } from "lucide-react";
 import { Professional } from "./types";
 import apiClient from "../../lib/api";
 import { getCurrentUser } from "../../lib/utils";
@@ -10,6 +10,11 @@ import { useSalonTimeZone } from "./SalonTimeZone";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/components/ui/use-toast";
 import { useTranslations } from "@/lib/use-translation";
+import {
+  salonTermsForm,
+  salonTermsInvalid,
+  salonTermsUpdate,
+} from "../../app/dashboard/appointments/components/appointment-drawer.utils";
 
 interface ClientOption {
   id: string;
@@ -53,8 +58,12 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
   const [showClientSuggestions, setShowClientSuggestions] = useState(false);
   const [notes, setNotes] = useState("");
   const [depositRequired, setDepositRequired] = useState(false);
-  const [depositAmount, setDepositAmount] = useState(0);
-  const [commissionRate, setCommissionRate] = useState(0);
+  // Euros as typed; the server stores cents.
+  const [depositAmount, setDepositAmount] = useState("");
+  // Empty: the professional's usual rate; "0" is a real 0 %.
+  const [commissionRate, setCommissionRate] = useState("");
+  // The terms as loaded, so a save sends only what changed.
+  const [termsBefore, setTermsBefore] = useState<Parameters<typeof salonTermsUpdate>[0]["before"]>({});
   const [loading, setLoading] = useState(false);
   const [fetching, setFetching] = useState(true);
   const [deleting, setDeleting] = useState(false);
@@ -109,9 +118,19 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
          // backend response under optional extensions; cast through `any`
          // so the form can read them if the backend supplies them.
          setNotes(apiAppointment.notes ?? "");
-         setDepositRequired((apiAppointment as any).depositRequired ?? false);
-         setDepositAmount((apiAppointment as any).depositAmount ?? 0);
-         setCommissionRate((apiAppointment as any).commissionRate ?? 0);
+         // The deposit comes in cents: a 20 € deposit showed as "2000" in a
+         // euros field, and typing 25 there saved 25 cents. A 0 % override
+         // showed as 0 and was then dropped on save.
+         const loaded = apiAppointment as any;
+         const terms = salonTermsForm(loaded);
+         setDepositRequired(terms.depositRequired);
+         setDepositAmount(terms.deposit);
+         setCommissionRate(terms.commission);
+         setTermsBefore({
+           commissionRate: loaded.commissionRate,
+           depositRequired: loaded.depositRequired,
+           depositAmount: loaded.depositAmount,
+         });
        } catch (err) {
          console.error("Error fetching appointment for edit:", err);
          toast({
@@ -200,6 +219,11 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
 
   const handleSubmit = async () => {
     if (!clientId || !serviceId) return;
+    const terms = { commission: commissionRate, depositRequired, deposit: depositAmount };
+    if (salonTermsInvalid(terms)) {
+      toast({ title: t("appointments.drawer.invalidTerms"), variant: "destructive" });
+      return;
+    }
 
     setLoading(true);
     try {
@@ -217,17 +241,18 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
         notes?: string;
         depositRequired?: boolean;
         depositAmount?: number;
-        commissionRate?: number;
+        commissionRate?: number | null;
       }> = {
         clientId,
         serviceId,
         professionalId: appointment.professionalId,
         scheduledDate: dateStr,
         scheduledTime: timeStr,
-        notes: notes || undefined,
-        depositRequired: depositRequired,
-        depositAmount: depositRequired ? depositAmount : undefined,
-        commissionRate: commissionRate !== 0 ? commissionRate : undefined,
+        // Always sent: an emptied field clears the notes.
+        notes,
+        // Only what changed, deposit in cents, a cleared override as null;
+        // nothing from a professional (the server ignores it).
+        ...salonTermsUpdate({ role: currentUser?.role, before: termsBefore, form: terms }),
       };
 
       if (currentUser?.role === "staff") {
@@ -402,7 +427,7 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
             {/* Deposit Payment Section */}
             <div className="border-t pt-4 mt-4">
               <label className="block text-xs font-medium mb-1 flex items-center">
-                <DollarSign className="w-4 h-4 mr-1 text-indigo-600" />
+                <Euro className="w-4 h-4 mr-1 text-indigo-600" />
                 {t("appointments.deposit_payment")}
               </label>
               <div className="space-y-2">
@@ -428,7 +453,7 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
                       step="0.01"
                       min="0"
                       value={depositAmount}
-                      onChange={(e) => setDepositAmount(parseFloat(e.target.value) || 0)}
+                      onChange={(e) => setDepositAmount(e.target.value)}
                       className="w-full px-3 py-1.5 text-sm border border-border rounded-md focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-background"
                       placeholder="0.00"
                     />
@@ -452,7 +477,7 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
                   min="0"
                   max="100"
                   value={commissionRate}
-                  onChange={(e) => setCommissionRate(parseInt(e.target.value) || 0)}
+                  onChange={(e) => setCommissionRate(e.target.value)}
                   className="w-full px-3 py-1.5 text-sm border border-border rounded-md focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-background"
                   placeholder={t("appointments.calendarView.commissionPlaceholder")}
                 />

@@ -64,3 +64,10 @@ describe("PATCH /appointments/:id body", () => {
     expect((await parse({ commissionRate: "40" })).commissionRate).toBe(40);
   });
 });
+
+describe("PATCH /appointments/:id commission override", () => {
+  it("keeps 0 as a real rate and null as clearing the override", async () => {
+    expect((await parse({ commissionRate: 0 })).commissionRate).toBe(0);
+    expect((await parse({ commissionRate: null })).commissionRate).toBeNull();
+  });
+});

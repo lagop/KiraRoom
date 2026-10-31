@@ -22,11 +22,14 @@ import apiClient, { Appointment as ApiAppointment } from "../../../lib/api";
 import { useTranslations } from "@/lib/use-translation";
 import { useToast } from "@/components/ui/use-toast";
 import { Calendar as CalendarComponent } from "../../../components/Calendar/Calendar";
-import { localDay } from "../../../components/Calendar/day-grid";
+import { dateOfDay, localDay } from "../../../components/Calendar/day-grid";
 import { AppointmentDrawer } from "./components/appointment-drawer";
 import {
+  appointmentTotalCents,
   drawerTargetFromQuery,
   asksFirst,
+  formatCents,
+  formatShortDay,
   sendStatusChange,
   serverMessage,
   statusActions,
@@ -42,6 +45,16 @@ type AppointmentStatus =
   | "cancelled"
   | "no_show";
 
+/** The statuses the filter offers, in the order of a visit. */
+const FILTER_STATUSES: AppointmentStatus[] = [
+  "pending",
+  "confirmed",
+  "in_progress",
+  "completed",
+  "cancelled",
+  "no_show",
+];
+
 interface Appointment extends ApiAppointment {
   client?:
     | string
@@ -56,25 +69,8 @@ interface Appointment extends ApiAppointment {
   service?: string | { id: string; name: string };
 }
 
-// Types for Calendar component
-type Professional = {
-  id: string;
-  name: string;
-  avatarUrl?: string;
-};
-
-type CalendarAppointment = {
-  id: string;
-  professionalId: string;
-  clientName?: string;
-  serviceName?: string;
-  start: string; // ISO
-  end: string; // ISO
-  type: "appointment" | "lunch" | "blocked";
-};
-
 const getClientName = (client: Appointment["client"]) => {
-  if (!client) return "Unknown";
+  if (!client) return "—";
   if (typeof client === "string") return client;
   return `${client.firstName} ${client.lastName}`;
 };
@@ -90,35 +86,32 @@ const getClientPhone = (client: Appointment["client"]) => {
 };
 
 const getServiceName = (service: Appointment["service"]) => {
-  if (!service) return "Unknown";
+  if (!service) return "—";
   if (typeof service === "string") return service;
   return service.name;
 };
 
 // Get all service names for multi-service appointments
 const getAllServiceNames = (appointment: Appointment) => {
-  // First check if there are multiple services
   if (appointment.services && appointment.services.length > 0) {
     const names = appointment.services
-      .map((s) => s.service?.name || "Unknown")
+      .map((s) => s.service?.name || "—")
       .filter(Boolean);
     if (names.length > 0) {
       return names;
     }
   }
-  // Fallback to single service
   return [getServiceName(appointment.service)];
 };
 
 const getProfessionalName = (professional: Appointment["professional"]) => {
-  if (!professional) return "Unknown";
+  if (!professional) return "—";
   if (typeof professional === "string") return professional;
   return `${professional.firstName} ${professional.lastName}`;
 };
 
 // Get all professional names for multi-service appointments
 const getAllProfessionalNames = (appointment: Appointment) => {
-  // First check if there are multiple services with professionals
   if (appointment.services && appointment.services.length > 0) {
     const names: string[] = [];
     appointment.services.forEach((s) => {
@@ -127,32 +120,30 @@ const getAllProfessionalNames = (appointment: Appointment) => {
       }
     });
     if (names.length > 0) {
-      // Remove duplicates
       return Array.from(new Set(names));
     }
   }
-  // Fallback to single professional
   return [getProfessionalName(appointment.professional)];
 };
 
-// Calculate total price from all services for multi-service appointments
-const getTotalPrice = (appointment: Appointment) => {
-  // totalAmount is in cents from backend, convert to dollars
-  if (appointment.totalAmount && Number(appointment.totalAmount) > 0) {
-    return (Number(appointment.totalAmount) / 100).toFixed(2);
-  }
-  // Fallback: compute from service prices (in dollars)
-  if (appointment.services && appointment.services.length > 0) {
-    const total = appointment.services.reduce((sum, s) => {
-      const servicePrice = Number(s.service?.price) || 0;
-      return sum + servicePrice;
-    }, 0);
-    if (total > 0) {
-      return total.toFixed(2);
-    }
-  }
-  // Single service fallback (price is in dollars)
-  return (Number(appointment.price) || 0).toFixed(2);
+/** "35,00 €": the server's total (cents), else the services' prices (euros). */
+const getTotalPrice = (appointment: Appointment) =>
+  formatCents(appointmentTotalCents(appointment as any));
+
+/** Whether an appointment falls in the month shown (its calendar day, not a UTC instant). */
+const inMonth = (appointment: Appointment, month: Date) => {
+  const day = dateOfDay(String(appointment.scheduledDate));
+  return day.getMonth() === month.getMonth() && day.getFullYear() === month.getFullYear();
+};
+
+// Function to parse time string to minutes since midnight
+const parseTimeToMinutes = (timeStr: string): number => {
+  const [time, period] = timeStr.split(" ");
+  const [hours, minutes] = time.split(":").map(Number);
+  let totalMinutes = hours * 60 + minutes;
+  if (period === "PM" && hours !== 12) totalMinutes += 12 * 60;
+  if (period === "AM" && hours === 12) totalMinutes = minutes;
+  return totalMinutes;
 };
 
 function AppointmentsPageContent() {
@@ -169,12 +160,9 @@ function AppointmentsPageContent() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
-  const [searchTerm, setSearchTerm] = useState("");
   const [professionalFilter, setProfessionalFilter] = useState("");
   const [serviceFilter, setServiceFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState<AppointmentStatus[] | "">(
-    [],
-  );
+  const [statusFilter, setStatusFilter] = useState<AppointmentStatus[]>([]);
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
   const [dateFilter, setDateFilter] = useState(today);
   const [selectedAppointmentId, setSelectedAppointmentId] = useState<
@@ -189,7 +177,6 @@ function AppointmentsPageContent() {
   const [clientSearchResults, setClientSearchResults] = useState<Appointment[]>(
     [],
   );
-  const [isSearchingClient, setIsSearchingClient] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
 
   // ?new=true opens the drawer for a new appointment; ?appointment=<id>
@@ -214,7 +201,7 @@ function AppointmentsPageContent() {
       // change on one of them then failed on its non-UUID id.
       console.error("Error fetching appointments:", error);
       setAppointments([]);
-      setLoadError(error instanceof Error ? error.message : "Error");
+      setLoadError(serverMessage(error) ?? "");
     } finally {
       setLoading(false);
     }
@@ -301,6 +288,8 @@ function AppointmentsPageContent() {
     },
   };
 
+  const statusLabel = (status: AppointmentStatus) => t(`appointments.status_${status}`);
+
   const getStatusBadge = (status: AppointmentStatus) => {
     const styles: Record<AppointmentStatus, string> = {
       confirmed: "bg-green-100 text-green-800",
@@ -309,15 +298,6 @@ function AppointmentsPageContent() {
       completed: "bg-purple-100 text-purple-800",
       cancelled: "bg-red-100 text-red-800",
       no_show: "bg-gray-100 text-gray-800",
-    };
-
-    const statusLabels: Record<AppointmentStatus, string> = {
-      confirmed: t("appointments.status_confirmed"),
-      pending: t("appointments.status_pending"),
-      in_progress: t("appointments.status_in_progress"),
-      completed: t("appointments.status_completed"),
-      cancelled: t("appointments.status_cancelled"),
-      no_show: t("appointments.no_show"),
     };
 
     const icons: Record<AppointmentStatus, React.ReactNode> = {
@@ -331,17 +311,17 @@ function AppointmentsPageContent() {
 
     return (
       <span
-        className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${styles[status]}`}
+        className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${styles[status] ?? "bg-gray-100 text-gray-800"}`}
       >
         {icons[status]}
-        {statusLabels[status]}
+        {statusLabel(status)}
       </span>
     );
   };
 
-  const formatDate = (date: Date) => {
-    return date.toLocaleDateString("en-US", { month: "long", year: "numeric" });
-  };
+  /** "marzo de 2026". */
+  const formatMonth = (date: Date) =>
+    date.toLocaleDateString("es-ES", { month: "long", year: "numeric" });
 
   const navigateMonth = (direction: "prev" | "next") => {
     setCurrentDate((prev) => {
@@ -355,7 +335,7 @@ function AppointmentsPageContent() {
     });
   };
 
-  // Handle client search for list view
+  // Client search for the list view: name, email or phone, in the month shown.
   const handleClientSearch = () => {
     if (!clientSearchTerm.trim()) {
       setClientSearchResults([]);
@@ -363,54 +343,17 @@ function AppointmentsPageContent() {
       return;
     }
 
-    setIsSearchingClient(true);
     setHasSearched(true);
     const term = clientSearchTerm.toLowerCase();
-
-    // Filter appointments by client name, email, or phone in the selected month
     const results = appointments.filter((apt) => {
-      // Handle both string and object client formats
-      let clientName = "";
-      let clientEmail = "";
-      let clientPhone = "";
-
-      if (typeof apt.client === "string") {
-        // Client is a string (name only)
-        clientName = apt.client.toLowerCase();
-      } else if (apt.client) {
-        // Client is an object
-        clientName =
-          `${apt.client.firstName || ""} ${apt.client.lastName || ""}`
-            .toLowerCase()
-            .trim();
-        clientEmail = (apt.client.email || "").toLowerCase();
-        clientPhone = (apt.client.phone || "").toLowerCase();
-      }
-
-      // Check if matches search term
       const matchesSearch =
-        clientName.includes(term) ||
-        clientEmail.includes(term) ||
-        clientPhone.includes(term);
-
-      // Check if in selected month
-      const appointmentDate = new Date(apt.scheduledDate);
-      const inSelectedMonth =
-        appointmentDate.getMonth() === currentDate.getMonth() &&
-        appointmentDate.getFullYear() === currentDate.getFullYear();
-
-      return matchesSearch && inSelectedMonth;
+        getClientName(apt.client).toLowerCase().includes(term) ||
+        getClientEmail(apt.client).toLowerCase().includes(term) ||
+        getClientPhone(apt.client).toLowerCase().includes(term);
+      return matchesSearch && inMonth(apt, currentDate);
     });
 
     setClientSearchResults(results);
-    setIsSearchingClient(false);
-  };
-
-  // Handle enter key press for client search
-  const handleClientSearchKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") {
-      handleClientSearch();
-    }
   };
 
   // Extract unique professionals and services for dropdowns
@@ -422,299 +365,14 @@ function AppointmentsPageContent() {
     new Set(appointments.flatMap((apt) => getAllServiceNames(apt))),
   ).sort();
 
-  // Check if appointment is multi-service
-  const isMultiService = (appointment: Appointment) => {
-    if (appointment.services && appointment.services.length > 0) {
-      return true;
-    }
-    // Fallback: check if service field indicates multiple services (comma-separated)
-    if (
-      appointment.service &&
-      typeof appointment.service === "string" &&
-      appointment.service.includes(",")
-    ) {
-      return true;
-    }
-    return false;
-  };
-
-  // Get unique professionals for an appointment (for multi-professional appointments)
-  const getAppointmentProfessionals = (appointment: Appointment) => {
-    if (appointment.services && appointment.services.length > 0) {
-      const professionals = appointment.services
-        .map((s) => {
-          if (s.professional) {
-            return `${s.professional.firstName} ${s.professional.lastName}`;
-          }
-          return null;
-        })
-        .filter(Boolean);
-      return [...new Set(professionals)];
-    }
-    return [getProfessionalName(appointment.professional)];
-  };
-
-  // Get all service/professional combinations for an appointment
-  const getServiceProfessionalCombinations = (appointment: Appointment) => {
-    if (appointment.services && appointment.services.length > 0) {
-      return appointment.services.map((s) => ({
-        serviceName: s.service?.name || "Unknown",
-        professionalName: s.professional
-          ? `${s.professional.firstName} ${s.professional.lastName}`
-          : "Unknown",
-        duration: s.service?.duration || 0,
-      }));
-    }
-    return [
-      {
-        serviceName: getServiceName(appointment.service),
-        professionalName: getProfessionalName(appointment.professional),
-        duration: appointment.duration || 0,
-      },
-    ];
-  };
-
-  // Get services for a specific professional in an appointment
-  const getServicesForProfessional = (
-    appointment: Appointment,
-    professionalName: string,
-  ) => {
-    if (appointment.services && appointment.services.length > 0) {
-      return appointment.services
-        .filter((s) => {
-          if (s.professional) {
-            return (
-              `${s.professional.firstName} ${s.professional.lastName}` ===
-              professionalName
-            );
-          }
-          return false;
-        })
-        .map((s) => s.service?.name || "Unknown");
-    }
-    return getAllServiceNames(appointment);
-  };
-
-  // Calculate total duration for services of a specific professional
-  const getProfessionalServiceDuration = (
-    appointment: Appointment,
-    professionalName: string,
-  ) => {
-    if (appointment.services && appointment.services.length > 0) {
-      return appointment.services
-        .filter((s) => {
-          if (s.professional) {
-            return (
-              `${s.professional.firstName} ${s.professional.lastName}` ===
-              professionalName
-            );
-          }
-          return false;
-        })
-        .reduce((sum, s) => sum + (s.service?.duration || 0), 0);
-    }
-    return appointment.duration || 0;
-  };
-
-  // Function to render calendar days
-  const renderCalendarDays = () => {
-    const year = currentDate.getFullYear();
-    const month = currentDate.getMonth();
-    const firstDay = new Date(year, month, 1).getDay();
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-
-    const days = [];
-
-    // Add empty cells for days before the first day of the month
-    for (let i = 0; i < firstDay; i++) {
-      days.push(<div key={`empty-${i}`} className="p-2"></div>);
-    }
-
-    // Add cells for each day of the month
-    for (let day = 1; day <= daysInMonth; day++) {
-      const date = new Date(year, month, day);
-      const dateString = date.toISOString().split("T")[0];
-      const dayAppointments = filteredAppointments.filter(
-        (apt) => apt.scheduledDate === dateString,
-      ).sort((a, b) => {
-        const aPriority = getStatusPriority(a.status as AppointmentStatus);
-        const bPriority = getStatusPriority(b.status as AppointmentStatus);
-        if (aPriority !== bPriority) {
-          return aPriority - bPriority;
-        }
-        // Same status, sort by time
-        const aMinutes = parseTimeToMinutes(a.scheduledTime);
-        const bMinutes = parseTimeToMinutes(b.scheduledTime);
-        return aMinutes - bMinutes;
-      });
-
-      days.push(
-        <div
-          key={`day-${day}`}
-          className="min-h-[120px] border border-gray-200 p-2 relative"
-        >
-          <div className="font-medium text-gray-900 mb-2">{day}</div>
-          <div className="space-y-1">
-            {dayAppointments.map((appointment) => {
-              const isMulti = isMultiService(appointment);
-              const professionals = getAppointmentProfessionals(appointment);
-              const hasMultipleProfessionals = professionals.length > 1;
-
-              // If multi-service, render separate cards for each service/professional combination
-              if (isMulti) {
-                const combinations =
-                  getServiceProfessionalCombinations(appointment);
-                return combinations.map((combo, idx) => (
-                  <div
-                    key={`${appointment.id}-${idx}`}
-                    className={`p-1 rounded text-xs border-t-2 ${
-                      appointment.status === "confirmed"
-                        ? "bg-green-100 text-green-800 border-green-500"
-                        : appointment.status === "pending"
-                          ? "bg-yellow-100 text-yellow-800 border-yellow-500"
-                          : appointment.status === "in_progress"
-                            ? "bg-blue-100 text-blue-800 border-blue-500"
-                            : appointment.status === "completed"
-                              ? "bg-purple-100 text-purple-800 border-purple-500"
-                              : "bg-red-100 text-red-800 border-red-500"
-                    } ${isMulti ? "border-t-indigo-500" : ""}`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="font-medium">
-                        {appointment.scheduledTime}
-                      </div>
-                      {isMulti && (
-                        <span
-                          className="flex items-center"
-                          title={t("appointments.multipleServices")}
-                        >
-                          <svg
-                            className="w-3 h-3"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M4 6h16M4 10h16M4 14h16M4 18h16"
-                            />
-                          </svg>
-                        </span>
-                      )}
-                    </div>
-                    <div>{getClientName(appointment.client)}</div>
-                    <div className="text-[10px] opacity-75">
-                      {combo.serviceName}
-                    </div>
-                    <div className="text-[10px] opacity-75 font-medium">
-                      {combo.professionalName} ({combo.duration}min)
-                    </div>
-                  </div>
-                ));
-              }
-
-              // Single service - render as one card
-              return (
-                <div
-                  key={appointment.id}
-                  className={`p-1 rounded text-xs ${
-                    appointment.status === "confirmed"
-                      ? "bg-green-100 text-green-800"
-                      : appointment.status === "pending"
-                        ? "bg-yellow-100 text-yellow-800"
-                        : appointment.status === "in_progress"
-                          ? "bg-blue-100 text-blue-800"
-                          : appointment.status === "completed"
-                            ? "bg-purple-100 text-purple-800"
-                            : "bg-red-100 text-red-800"
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="font-medium">
-                      {appointment.scheduledTime}
-                    </div>
-                    {isMulti && (
-                      <span
-                        className="flex items-center"
-                        title={t("appointments.multipleServices")}
-                      >
-                        <svg
-                          className="w-3 h-3"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M4 6h16M4 10h16M4 14h16M4 18h16"
-                          />
-                        </svg>
-                      </span>
-                    )}
-                  </div>
-                  <div>{getClientName(appointment.client)}</div>
-                  <div>{getAllServiceNames(appointment).join(", ")}</div>
-                  {isMulti && professionals.length === 1 && (
-                    <div className="text-[10px] opacity-75 font-medium">
-                      {professionals[0]} ({appointment.duration}min total)
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>,
-      );
-    }
-
-    return days;
-  };
-
-  // Function to parse time string to minutes since midnight
-  const parseTimeToMinutes = (timeStr: string): number => {
-    const [time, period] = timeStr.split(' ');
-    const [hours, minutes] = time.split(':').map(Number);
-    let totalMinutes = hours * 60 + minutes;
-    if (period === 'PM' && hours !== 12) totalMinutes += 12 * 60;
-    if (period === 'AM' && hours === 12) totalMinutes = minutes;
-    return totalMinutes;
-  };
-
-  // Function to check if appointment is at current time slot
+  // The row of an appointment happening now: only today's, at this hour.
   const isCurrentTimeSlot = (appointment: Appointment): boolean => {
-    const currentHour = new Date().getHours();
-    const appointmentMinutes = parseTimeToMinutes(appointment.scheduledTime);
-    const appointmentHour = Math.floor(appointmentMinutes / 60);
-    return appointmentHour === currentHour;
+    if (String(appointment.scheduledDate).slice(0, 10) !== today) return false;
+    const appointmentHour = Math.floor(parseTimeToMinutes(appointment.scheduledTime) / 60);
+    return appointmentHour === new Date().getHours();
   };
 
   const filteredAppointments = appointments.filter((apt) => {
-    // Search term filter - search by client name, email, or phone
-    if (searchTerm) {
-      const term = searchTerm.toLowerCase();
-      const clientName = getClientName(apt.client).toLowerCase();
-      const clientEmail = getClientEmail(apt.client).toLowerCase();
-      const clientPhone = getClientPhone(apt.client).toLowerCase();
-      const allProfessionalNames = getAllProfessionalNames(apt).map((n) =>
-        n.toLowerCase(),
-      );
-      const serviceNames = getAllServiceNames(apt).map((n) => n.toLowerCase());
-      if (
-        !clientName.includes(term) &&
-        !clientEmail.includes(term) &&
-        !clientPhone.includes(term) &&
-        !allProfessionalNames.some((name) => name.includes(term)) &&
-        !serviceNames.some((name) => name.includes(term))
-      ) {
-        return false;
-      }
-    }
-
-    // Professional filter
     if (professionalFilter) {
       const allProfessionalNames = getAllProfessionalNames(apt).map((n) =>
         n.toLowerCase(),
@@ -728,7 +386,6 @@ function AppointmentsPageContent() {
       }
     }
 
-    // Service filter
     if (serviceFilter) {
       const serviceNames = getAllServiceNames(apt).map((n) => n.toLowerCase());
       if (
@@ -738,31 +395,20 @@ function AppointmentsPageContent() {
       }
     }
 
-    // Status filter
-    if (statusFilter && statusFilter.length > 0) {
-      if (!statusFilter.includes(apt.status)) {
-        return false;
-      }
+    if (statusFilter.length > 0 && !statusFilter.includes(apt.status as AppointmentStatus)) {
+      return false;
     }
 
     // Date filter (only apply if dateFilter is set)
     if (dateFilter && dateFilter.trim() !== "") {
-      if (apt.scheduledDate.split("T")[0] !== dateFilter) {
+      if (String(apt.scheduledDate).split("T")[0] !== dateFilter) {
         return false;
       }
     }
 
-    // Month filter based on currentDate (only apply when client search is open)
-    if (clientSearchOpen) {
-      const appointmentDate = new Date(apt.scheduledDate);
-      if (currentDate) {
-        if (
-          appointmentDate.getMonth() !== currentDate.getMonth() ||
-          appointmentDate.getFullYear() !== currentDate.getFullYear()
-        ) {
-          return false;
-        }
-      }
+    // Month filter (only while the client search is open)
+    if (clientSearchOpen && !inMonth(apt, currentDate)) {
+      return false;
     }
 
     return true;
@@ -787,17 +433,176 @@ function AppointmentsPageContent() {
     if (aPriority !== bPriority) {
       return aPriority - bPriority;
     }
-    // Same status, sort by time
-    const aMinutes = parseTimeToMinutes(a.scheduledTime);
-    const bMinutes = parseTimeToMinutes(b.scheduledTime);
-    return aMinutes - bMinutes;
+    return parseTimeToMinutes(a.scheduledTime) - parseTimeToMinutes(b.scheduledTime);
   });
+
+  const openAppointment = (id: string) => {
+    setSelectedAppointmentId(id);
+    setDrawerOpen(true);
+  };
+
+  /** The status buttons and "Ver" for a row or a card. */
+  const renderActions = (appointment: Appointment, withStatus: boolean) => (
+    <div className="flex items-center justify-end gap-2">
+      {/* Only what the server's transition table allows: the next step,
+          "No se presentó", "Cancelar". */}
+      {withStatus &&
+        statusActions(appointment.status).map((to) => {
+          const ui = statusActionUi[to];
+          if (!ui) return null;
+          return (
+            <button
+              key={to}
+              type="button"
+              onClick={() => requestStatus(appointment.id, to)}
+              disabled={updatingId === appointment.id}
+              className={`p-1 text-sm ${ui.className} disabled:opacity-50`}
+              title={ui.label}
+              aria-label={ui.label}
+            >
+              {ui.icon}
+            </button>
+          );
+        })}
+      <button
+        type="button"
+        onClick={() => openAppointment(appointment.id)}
+        className="p-1 text-sm text-indigo-600 hover:text-indigo-700"
+        title={t("appointments.view_details")}
+        aria-label={t("appointments.view_details")}
+      >
+        <Eye className="w-5 h-5" />
+      </button>
+    </div>
+  );
+
+  const renderStatus = (appointment: Appointment) =>
+    updatingId === appointment.id ? (
+      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+        <div className="animate-spin w-3 h-3 border-2 border-gray-500 border-t-transparent rounded-full mr-1"></div>
+        {t("appointments.updating")}
+      </span>
+    ) : (
+      getStatusBadge(appointment.status as AppointmentStatus)
+    );
+
+  /** Under md: one card per appointment instead of a 920px table. */
+  const renderCards = (list: Appointment[], withStatus: boolean) => (
+    <ul className="md:hidden divide-y divide-gray-200">
+      {list.map((appointment) => (
+        <li
+          key={appointment.id}
+          className={`p-4 ${isCurrentTimeSlot(appointment) ? "border-l-4 border-red-500" : ""}`}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="font-medium text-gray-900 truncate">{getClientName(appointment.client)}</p>
+              <p className="text-sm text-gray-700 truncate">{getAllServiceNames(appointment).join(", ")}</p>
+              <p className="text-sm text-gray-500 truncate">{getAllProfessionalNames(appointment).join(", ")}</p>
+            </div>
+            <div className="flex-shrink-0">{renderStatus(appointment)}</div>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-gray-600">
+              <span className="inline-flex items-center">
+                <Calendar className="w-4 h-4 mr-1 text-gray-400" />
+                {formatShortDay(String(appointment.scheduledDate))}
+              </span>
+              <span className="inline-flex items-center">
+                <Clock className="w-4 h-4 mr-1 text-gray-400" />
+                {appointment.scheduledTime}
+              </span>
+              <span className="font-medium text-gray-900">{getTotalPrice(appointment)}</span>
+            </div>
+            {renderActions(appointment, withStatus)}
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+
+  /** From md: the table. */
+  const renderTable = (list: Appointment[], withStatus: boolean, compact: boolean) => {
+    const cell = compact ? "px-4 py-3" : "px-6 py-4";
+    const head = `text-left ${compact ? "px-4 py-2" : "px-6 py-3"} text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap`;
+    return (
+      <div className="hidden md:block overflow-x-auto">
+        <table className="w-full">
+          <thead className="bg-gray-50 border-b border-gray-200">
+            <tr>
+              <th className={head}>{t("appointments.status")}</th>
+              <th className={head}>{t("appointments.client")}</th>
+              <th className={head}>{t("appointments.service")}</th>
+              <th className={`${head} hidden lg:table-cell`}>{t("appointments.professional")}</th>
+              <th className={head}>
+                {t("appointments.date")} / {t("appointments.time")}
+              </th>
+              <th className={head}>{t("appointments.price")}</th>
+              <th className={`${head} text-right`}>
+                <span className="sr-only">{t("appointments.actions")}</span>
+                <span className="flex items-center justify-end" aria-hidden="true">
+                  <User className="w-4 h-4" />
+                </span>
+              </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200">
+            {list.map((appointment) => (
+              <tr
+                key={appointment.id}
+                className={`hover:bg-gray-50 ${isCurrentTimeSlot(appointment) ? "border-l-4 border-red-500" : ""}`}
+              >
+                <td className={cell}>{renderStatus(appointment)}</td>
+                <td className={cell}>
+                  <div className="flex items-center">
+                    <div className="w-8 h-8 lg:w-10 lg:h-10 bg-indigo-100 rounded-full flex items-center justify-center flex-shrink-0">
+                      <User className="w-4 h-4 lg:w-5 lg:h-5 text-indigo-600" />
+                    </div>
+                    <div className="ml-3 min-w-0">
+                      <p className="font-medium text-gray-900 truncate max-w-[12rem]">
+                        {getClientName(appointment.client)}
+                      </p>
+                    </div>
+                  </div>
+                </td>
+                <td className={`${cell} text-sm text-gray-900`}>
+                  {getAllServiceNames(appointment).map((name, idx) => (
+                    <div key={idx}>{name}</div>
+                  ))}
+                </td>
+                <td className={`${cell} text-sm text-gray-600 hidden lg:table-cell`}>
+                  {getAllProfessionalNames(appointment).map((name, idx) => (
+                    <div key={idx}>{name}</div>
+                  ))}
+                </td>
+                <td className={`${cell} whitespace-nowrap`}>
+                  <div className="flex items-center text-sm text-gray-600">
+                    <Calendar className="w-4 h-4 mr-1 text-gray-400" />
+                    {formatShortDay(String(appointment.scheduledDate))}
+                  </div>
+                  <div className="flex items-center text-sm text-gray-600 mt-1">
+                    <Clock className="w-4 h-4 mr-1 text-gray-400" />
+                    {appointment.scheduledTime}
+                  </div>
+                </td>
+                <td className={`${cell} text-sm font-medium text-gray-900 whitespace-nowrap`}>
+                  {getTotalPrice(appointment)}
+                </td>
+                <td className={`${cell} text-right`}>{renderActions(appointment, withStatus)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-6">
-      {loadError && (
+      {loadError !== null && (
         <div className="bg-red-50 text-red-600 p-4 rounded-lg">
-          {t("appointments.load_failed")}: {loadError}
+          {t("appointments.load_failed")}
+          {loadError ? `: ${loadError}` : ""}
         </div>
       )}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -810,7 +615,9 @@ function AppointmentsPageContent() {
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center bg-gray-100 rounded-lg p-1">
             <button
+              type="button"
               onClick={() => setView("list")}
+              aria-pressed={view === "list"}
               className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
                 view === "list"
                   ? "bg-white text-gray-900 shadow-sm"
@@ -820,7 +627,9 @@ function AppointmentsPageContent() {
               {t("appointments.list")}
             </button>
             <button
+              type="button"
               onClick={() => setView("calendar")}
+              aria-pressed={view === "calendar"}
               className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
                 view === "calendar"
                   ? "bg-white text-gray-900 shadow-sm"
@@ -832,6 +641,7 @@ function AppointmentsPageContent() {
           </div>
           <ImportLink kind="appointments" />
           <button
+            type="button"
             onClick={() => {
               setSelectedAppointmentId(null);
               setDrawerOpen(true);
@@ -844,203 +654,110 @@ function AppointmentsPageContent() {
         </div>
       </div>
 
-      {/* Calendar Navigation (for both views) */}
+      {/* Find a client's appointments in a month */}
       <div className="bg-white rounded-xl border border-gray-200 p-4">
-        {/* Collapsible Search My Appointment Section */}
-        {(
-          <div>
-            <button
-              onClick={() => setClientSearchOpen(!clientSearchOpen)}
-              className="w-full flex items-center justify-between py-2 hover:bg-gray-50 transition-colors rounded-lg px-2"
-            >
-              <div className="flex items-center">
-                <Search className="w-5 h-5 text-gray-500 mr-2" />
-                <span className="font-medium text-gray-700">
-                  {t("appointments.find_client_appointment")}
-                </span>
-                <span className="ml-2 text-sm text-gray-500">
-                  {t("appointments.search_by_name_email_phone")}
-                </span>
-              </div>
-              {clientSearchOpen ? (
-                <ChevronDown className="w-5 h-5 text-gray-500 transform rotate-180 transition-transform" />
-              ) : (
-                <ChevronDown className="w-5 h-5 text-gray-500 transition-transform" />
-              )}
-            </button>
+        <button
+          type="button"
+          onClick={() => setClientSearchOpen(!clientSearchOpen)}
+          aria-expanded={clientSearchOpen}
+          className="w-full flex items-center justify-between py-2 hover:bg-gray-50 transition-colors rounded-lg px-2 text-left"
+        >
+          <div className="flex flex-wrap items-center">
+            <Search className="w-5 h-5 text-gray-500 mr-2" />
+            <span className="font-medium text-gray-700">
+              {t("appointments.find_client_appointment")}
+            </span>
+            <span className="ml-2 text-sm text-gray-500">
+              {t("appointments.search_by_name_email_phone")}
+            </span>
+          </div>
+          <ChevronDown
+            className={`w-5 h-5 text-gray-500 transition-transform flex-shrink-0 ${clientSearchOpen ? "rotate-180" : ""}`}
+          />
+        </button>
 
-            {clientSearchOpen && (
-              <div className="mt-3">
-                {/* Month Selector, Search Input and Button in same row */}
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:space-x-4">
-                  {/* Month Selector */}
-                  <div className="flex items-center space-x-2">
-                    <button
-                      onClick={() => navigateMonth("prev")}
-                      className="p-2 hover:bg-gray-100 rounded-lg"
-                    >
-                      <ChevronLeft className="w-5 h-5 text-gray-600" />
-                    </button>
-                    <div className="flex items-center">
-                      <Calendar className="w-5 h-5 text-gray-400 mr-2" />
-                      <span className="font-semibold text-gray-900">
-                        {formatDate(currentDate)}
-                      </span>
-                    </div>
-                    <button
-                      onClick={() => navigateMonth("next")}
-                      className="p-2 hover:bg-gray-100 rounded-lg"
-                    >
-                      <ChevronRight className="w-5 h-5 text-gray-600" />
-                    </button>
-                  </div>
-
-                  {/* Search Input */}
-                  <div className="flex-1 relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                    <input
-                      type="text"
-                      placeholder={t("appointments.enter_name_email_phone")}
-                      value={clientSearchTerm}
-                      onChange={(e) => setClientSearchTerm(e.target.value)}
-                      onKeyPress={handleClientSearchKeyPress}
-                      className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                    />
-                  </div>
-
-                  {/* Search Button */}
-                  <button
-                    onClick={handleClientSearch}
-                    disabled={isSearchingClient}
-                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
-                  >
-                    {isSearchingClient
-                      ? t("appointments.searching")
-                      : t("appointments.search")}
-                  </button>
+        {clientSearchOpen && (
+          <div className="mt-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:space-x-4">
+              {/* Month Selector */}
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={() => navigateMonth("prev")}
+                  className="p-2 hover:bg-gray-100 rounded-lg"
+                  aria-label={t("appointments.previous_month")}
+                  title={t("appointments.previous_month")}
+                >
+                  <ChevronLeft className="w-5 h-5 text-gray-600" />
+                </button>
+                <div className="flex items-center">
+                  <Calendar className="w-5 h-5 text-gray-400 mr-2" />
+                  <span className="font-semibold text-gray-900 first-letter:uppercase">
+                    {formatMonth(currentDate)}
+                  </span>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => navigateMonth("next")}
+                  className="p-2 hover:bg-gray-100 rounded-lg"
+                  aria-label={t("appointments.next_month")}
+                  title={t("appointments.next_month")}
+                >
+                  <ChevronRight className="w-5 h-5 text-gray-600" />
+                </button>
+              </div>
 
-                {/* Search Results */}
-                {clientSearchResults.length > 0 && (
-                  <div className="mt-4">
-                    <p className="text-sm font-medium text-gray-700 mb-2">
-                      {t("appointments.found_appointments_for", {
-                        count: clientSearchResults.length,
-                        date: formatDate(currentDate),
-                      })}
-                    </p>
-                    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                      <div className="overflow-x-auto">
-                      <table className="w-full min-w-[820px]">
-                        <thead className="bg-gray-50 border-b border-gray-200">
-                          <tr>
-                            <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              {t("appointments.status")}
-                            </th>
-                            <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              {t("appointments.client")}
-                            </th>
-                            <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              {t("appointments.service")}
-                            </th>
-                            <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              {t("appointments.professional")}
-                            </th>
-                            <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              {t("appointments.date")} &{" "}
-                              {t("appointments.time")}
-                            </th>
-                            <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              {t("appointments.price")}
-                            </th>
-                            <th className="text-right px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              <span className="flex items-center justify-end">
-                                <User className="w-4 h-4" />
-                              </span>
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-200">
-                          {clientSearchResults.map((apt) => (
-                            <tr key={apt.id} className="hover:bg-gray-50">
-                              <td className="px-4 py-3">
-                                {getStatusBadge(
-                                  apt.status as AppointmentStatus,
-                                )}
-                              </td>
-                              <td className="px-4 py-3">
-                                <div className="flex items-center">
-                                  <div className="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center flex-shrink-0">
-                                    <User className="w-4 h-4 text-indigo-600" />
-                                  </div>
-                                  <div className="ml-3 min-w-0">
-                                    <p className="font-medium text-gray-900 text-sm truncate max-w-[12rem]">
-                                      {getClientName(apt.client)}
-                                    </p>
-                                  </div>
-                                </div>
-                              </td>
-                              <td className="px-4 py-3 text-sm text-gray-900">
-                                {getAllServiceNames(apt).map((name, idx) => (
-                                  <div key={idx}>{name}</div>
-                                ))}
-                              </td>
-                              <td className="px-4 py-3 text-sm text-gray-600">
-                                {getAllProfessionalNames(apt).map(
-                                  (name, idx) => (
-                                    <div key={idx}>{name}</div>
-                                  ),
-                                )}
-                              </td>
-                              <td className="px-4 py-3 whitespace-nowrap">
-                                <div className="flex items-center text-sm text-gray-600">
-                                  <Calendar className="w-4 h-4 mr-1 text-gray-400" />
-                                  {apt.scheduledDate.split("T")[0]}
-                                </div>
-                                <div className="flex items-center text-sm text-gray-600 mt-1">
-                                  <Clock className="w-4 h-4 mr-1 text-gray-400" />
-                                  {apt.scheduledTime}
-                                </div>
-                              </td>
-                              <td className="px-4 py-3 text-sm font-medium text-gray-900">
-                                ${getTotalPrice(apt)}
-                              </td>
-                              <td className="px-4 py-3 text-right">
-                                <button
-                                  onClick={() => {
-                                    setSelectedAppointmentId(apt.id);
-                                    setDrawerOpen(true);
-                                  }}
-                                  className="p-2 text-indigo-600 hover:bg-indigo-100 rounded-lg"
-                                  title={t("appointments.view_details")}
-                                >
-                                  <Eye className="w-5 h-5" />
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                      </div>
-                    </div>
-                  </div>
-                )}
+              <div className="flex-1 relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <input
+                  type="text"
+                  aria-label={t("appointments.enter_name_email_phone")}
+                  placeholder={t("appointments.enter_name_email_phone")}
+                  value={clientSearchTerm}
+                  onChange={(e) => setClientSearchTerm(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleClientSearch();
+                  }}
+                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                />
+              </div>
 
-                {hasSearched &&
-                  clientSearchTerm &&
-                  clientSearchResults.length === 0 &&
-                  !isSearchingClient && (
-                    <div className="mt-4 p-4 bg-yellow-50 rounded-lg">
-                      <p className="text-sm text-yellow-800">
-                        {t("appointments.no_appointments_found", {
-                          term: clientSearchTerm,
-                          date: formatDate(currentDate),
-                        })}
-                      </p>
-                    </div>
-                  )}
+              <button
+                type="button"
+                onClick={handleClientSearch}
+                className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+              >
+                {t("appointments.search")}
+              </button>
+            </div>
+
+            {clientSearchResults.length > 0 && (
+              <div className="mt-4">
+                <p className="text-sm font-medium text-gray-700 mb-2">
+                  {t("appointments.found_appointments_for", {
+                    count: clientSearchResults.length,
+                    date: formatMonth(currentDate),
+                  })}
+                </p>
+                <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                  {renderCards(clientSearchResults, false)}
+                  {renderTable(clientSearchResults, false, true)}
+                </div>
               </div>
             )}
+
+            {hasSearched &&
+              clientSearchTerm &&
+              clientSearchResults.length === 0 && (
+                <div className="mt-4 p-4 bg-yellow-50 rounded-lg">
+                  <p className="text-sm text-yellow-800">
+                    {t("appointments.no_appointments_found", {
+                      term: clientSearchTerm,
+                      date: formatMonth(currentDate),
+                    })}
+                  </p>
+                </div>
+              )}
           </div>
         )}
       </div>
@@ -1049,10 +766,11 @@ function AppointmentsPageContent() {
       <div className="bg-white rounded-xl border border-gray-200 p-4">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="filter-professional" className="block text-sm font-medium text-gray-700 mb-1">
               {t("appointments.professional")}
             </label>
             <select
+              id="filter-professional"
               value={professionalFilter}
               onChange={(e) => setProfessionalFilter(e.target.value)}
               className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent ${
@@ -1068,10 +786,11 @@ function AppointmentsPageContent() {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="filter-service" className="block text-sm font-medium text-gray-700 mb-1">
               {t("appointments.service")}
             </label>
             <select
+              id="filter-service"
               value={serviceFilter}
               onChange={(e) => setServiceFilter(e.target.value)}
               className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent ${
@@ -1087,220 +806,78 @@ function AppointmentsPageContent() {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <span className="block text-sm font-medium text-gray-700 mb-1">
               {t("appointments.status")}
-            </label>
+            </span>
             <div className="relative">
               <button
                 type="button"
                 onClick={() => setShowStatusDropdown(!showStatusDropdown)}
+                aria-expanded={showStatusDropdown}
                 className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent flex items-center justify-between ${
                   statusFilter.length > 0 ? "bg-blue-50" : ""
                 }`}
               >
-                <span className="text-sm text-gray-700">
+                <span className="text-sm text-gray-700 truncate">
                   {statusFilter.length === 0
                     ? t("appointments.all_statuses")
-                    : Array.isArray(statusFilter)
-                      ? statusFilter.join(", ")
-                      : t("appointments.all_statuses")}
+                    : statusFilter.map(statusLabel).join(", ")}
                 </span>
-                <ChevronDown className="w-4 h-4 text-gray-400" />
+                <ChevronDown className="w-4 h-4 text-gray-400 flex-shrink-0" />
               </button>
               {showStatusDropdown && (
                 <div className="absolute z-10 mt-1 w-full bg-white border border-gray-300 rounded-lg shadow-lg">
-                  <div className="p-2">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm font-medium text-gray-700">
-                        {t("appointments.all_statuses")}
-                      </span>
+                  <label className="flex items-center justify-between p-2 cursor-pointer">
+                    <span className="text-sm font-medium text-gray-700">
+                      {t("appointments.all_statuses")}
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={statusFilter.length === 0}
+                      onChange={(e) => {
+                        if (e.target.checked) setStatusFilter([]);
+                      }}
+                      className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
+                    />
+                  </label>
+                  {FILTER_STATUSES.map((status) => (
+                    <label
+                      key={status}
+                      className="flex items-center justify-between p-2 border-t border-gray-200 cursor-pointer"
+                    >
+                      <span className="text-sm text-gray-700">{statusLabel(status)}</span>
                       <input
                         type="checkbox"
-                        checked={statusFilter.length === 0}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setStatusFilter([]);
-                          }
-                        }}
+                        value={status}
+                        checked={statusFilter.includes(status)}
+                        onChange={(e) =>
+                          setStatusFilter((prev) =>
+                            e.target.checked ? [...prev, status] : prev.filter((s) => s !== status),
+                          )
+                        }
                         className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
                       />
-                    </div>
-                  </div>
-                  <div className="border-t border-gray-200">
-                    <div className="p-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-gray-700">
-                          {t("appointments.status_confirmed")}
-                        </span>
-                        <input
-                          type="checkbox"
-                          value="confirmed"
-                          checked={statusFilter.includes("confirmed")}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setStatusFilter(
-                                Array.isArray(statusFilter)
-                                  ? [...statusFilter, "confirmed"]
-                                  : ["confirmed"],
-                              );
-                            } else {
-                              setStatusFilter(
-                                Array.isArray(statusFilter)
-                                  ? statusFilter.filter(
-                                      (s) => s !== "confirmed",
-                                    )
-                                  : [],
-                              );
-                            }
-                          }}
-                          className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                  <div className="border-t border-gray-200">
-                    <div className="p-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-gray-700">
-                          {t("appointments.status_pending")}
-                        </span>
-                        <input
-                          type="checkbox"
-                          value="pending"
-                          checked={statusFilter.includes("pending")}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setStatusFilter(
-                                Array.isArray(statusFilter)
-                                  ? [...statusFilter, "pending"]
-                                  : ["pending"],
-                              );
-                            } else {
-                              setStatusFilter(
-                                Array.isArray(statusFilter)
-                                  ? statusFilter.filter((s) => s !== "pending")
-                                  : [],
-                              );
-                            }
-                          }}
-                          className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                  <div className="border-t border-gray-200">
-                    <div className="p-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-gray-700">
-                          {t("appointments.status_in_progress")}
-                        </span>
-                        <input
-                          type="checkbox"
-                          value="in_progress"
-                          checked={statusFilter.includes("in_progress")}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setStatusFilter(
-                                Array.isArray(statusFilter)
-                                  ? [...statusFilter, "in_progress"]
-                                  : ["in_progress"],
-                              );
-                            } else {
-                              setStatusFilter(
-                                Array.isArray(statusFilter)
-                                  ? statusFilter.filter(
-                                      (s) => s !== "in_progress",
-                                    )
-                                  : [],
-                              );
-                            }
-                          }}
-                          className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                  <div className="border-t border-gray-200">
-                    <div className="p-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-gray-700">
-                          {t("appointments.status_completed")}
-                        </span>
-                        <input
-                          type="checkbox"
-                          value="completed"
-                          checked={statusFilter.includes("completed")}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setStatusFilter(
-                                Array.isArray(statusFilter)
-                                  ? [...statusFilter, "completed"]
-                                  : ["completed"],
-                              );
-                            } else {
-                              setStatusFilter(
-                                Array.isArray(statusFilter)
-                                  ? statusFilter.filter(
-                                      (s) => s !== "completed",
-                                    )
-                                  : [],
-                              );
-                            }
-                          }}
-                          className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                  <div className="border-t border-gray-200">
-                    <div className="p-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-gray-700">
-                          {t("appointments.status_cancelled")}
-                        </span>
-                        <input
-                          type="checkbox"
-                          value="cancelled"
-                          checked={statusFilter.includes("cancelled")}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setStatusFilter(
-                                Array.isArray(statusFilter)
-                                  ? [...statusFilter, "cancelled"]
-                                  : ["cancelled"],
-                              );
-                            } else {
-                              setStatusFilter(
-                                Array.isArray(statusFilter)
-                                  ? statusFilter.filter(
-                                      (s) => s !== "cancelled",
-                                    )
-                                  : [],
-                              );
-                            }
-                          }}
-                          className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
-                        />
-                      </div>
-                    </div>
-                  </div>
+                    </label>
+                  ))}
                 </div>
               )}
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="filter-date" className="block text-sm font-medium text-gray-700 mb-1">
               {t("appointments.date")}
             </label>
             <div className="flex items-center space-x-2">
               <input
+                id="filter-date"
                 type="date"
                 value={dateFilter}
                 onChange={(e) => setDateFilter(e.target.value)}
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                className="flex-1 min-w-0 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
               />
               <button
-                onClick={() => setDateFilter(today)}
+                type="button"
+                onClick={() => setDateFilter(localDay())}
                 className="px-3 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
               >
                 {t("appointments.today")}
@@ -1318,125 +895,15 @@ function AppointmentsPageContent() {
             <p className="mt-2">{t("appointments.loading_appointments")}</p>
           </div>
         ) : view === "list" ? (
-          filteredAppointments.length === 0 ? (
+          sortedAppointments.length === 0 ? (
             <div className="p-8 text-center text-gray-500">
               <p>{t("appointments.no_appointments")}</p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-            <table className="w-full min-w-[920px]">
-              <thead className="bg-gray-50 border-b border-gray-200">
-                <tr>
-                  <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
-                    {t("appointments.status")}
-                  </th>
-                  <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
-                    {t("appointments.client")}
-                  </th>
-                  <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
-                    {t("appointments.service")}
-                  </th>
-                  <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
-                    {t("appointments.professional")}
-                  </th>
-                  <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
-                    {t("appointments.date")} & {t("appointments.time")}
-                  </th>
-                  <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
-                    {t("appointments.price")}
-                  </th>
-                  <th className="text-right px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
-                    <span className="flex items-center justify-end">
-                      <User className="w-4 h-4" />
-                    </span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {sortedAppointments.map((appointment) => (
-                  <tr key={appointment.id} className={`hover:bg-gray-50 ${isCurrentTimeSlot(appointment) ? 'border-l-4 border-red-500' : ''}`}>
-                    <td className="px-6 py-4">
-                      {updatingId === appointment.id ? (
-                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
-                          <div className="animate-spin w-3 h-3 border-2 border-gray-500 border-t-transparent rounded-full mr-1"></div>
-                          {t("appointments.updating")}
-                        </span>
-                      ) : (
-                        getStatusBadge(appointment.status as AppointmentStatus)
-                      )}
-                    </td>
-                    <td className="px-6 py-4">
-                        <div className="flex items-center">
-                          <div className="w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center flex-shrink-0">
-                            <User className="w-5 h-5 text-indigo-600" />
-                          </div>
-                          <div className="ml-3 min-w-0">
-                            <p className="font-medium text-gray-900 truncate max-w-[12rem]">
-                              {getClientName(appointment.client)}
-                            </p>
-                          </div>
-                        </div>
-                      </td>
-                    <td className="px-6 py-4 text-sm text-gray-900">
-                      {getAllServiceNames(appointment).map((name, idx) => (
-                        <div key={idx}>{name}</div>
-                      ))}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-600">
-                      {getAllProfessionalNames(appointment).map((name, idx) => (
-                        <div key={idx}>{name}</div>
-                      ))}
-                    </td>
-                     <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center text-sm text-gray-600">
-                          <Calendar className="w-4 h-4 mr-1 text-gray-400" />
-                          {appointment.scheduledDate.split("T")[0]}
-                        </div>
-                        <div className="flex items-center text-sm text-gray-600 mt-1">
-                          <Clock className="w-4 h-4 mr-1 text-gray-400" />
-                          {appointment.scheduledTime}
-                        </div>
-                      </td>
-                    <td className="px-6 py-4 text-sm font-medium text-gray-900">
-                      ${getTotalPrice(appointment)}
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <div className="flex items-center justify-end space-x-2">
-                        {/* Only what the server's transition table allows:
-                            the next step, "No se presentó", "Cancelar". */}
-                        {statusActions(appointment.status).map((to) => {
-                          const ui = statusActionUi[to];
-                          if (!ui) return null;
-                          return (
-                            <button
-                              key={to}
-                              onClick={() => requestStatus(appointment.id, to)}
-                              disabled={updatingId === appointment.id}
-                              className={`text-sm ${ui.className} disabled:opacity-50`}
-                              title={ui.label}
-                              aria-label={ui.label}
-                            >
-                              {ui.icon}
-                            </button>
-                          );
-                        })}
-                        <button
-                          onClick={() => {
-                            setSelectedAppointmentId(appointment.id);
-                            setDrawerOpen(true);
-                          }}
-                          className="text-sm text-indigo-600 hover:text-indigo-700"
-                          title={t("appointments.view")}
-                        >
-                          <Eye className="w-5 h-5" />
-                        </button>
-                      </div>
-                     </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </div>
+            <>
+              {renderCards(sortedAppointments, true)}
+              {renderTable(sortedAppointments, true, false)}
+            </>
           )
         ) : (
           // Calendar View using the new Calendar component
@@ -1444,10 +911,7 @@ function AppointmentsPageContent() {
             <CalendarComponent
               day={dateFilter}
               onDayChange={setDateFilter}
-              onAppointmentClick={(appointmentId) => {
-                setSelectedAppointmentId(appointmentId);
-                setDrawerOpen(true);
-              }}
+              onAppointmentClick={openAppointment}
               onAppointmentUpdated={() => {
                 fetchAppointments();
                 setDrawerRefreshKey((prev) => prev + 1);

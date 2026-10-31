@@ -641,7 +641,8 @@ export interface CreateAppointmentDto {
   notes?: string;
   depositRequired?: boolean;
   depositAmount?: number;
-  commissionRate?: number;
+  /** null clears the appointment's own rate (PATCH). */
+  commissionRate?: number | null;
 }
 
 /**

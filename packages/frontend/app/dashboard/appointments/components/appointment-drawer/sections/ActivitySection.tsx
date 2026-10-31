@@ -1,7 +1,11 @@
 import React, { useState } from "react";
 import { ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
-import { formatDateTimeString } from "../../appointment-drawer.utils";
+import {
+  activityLabelKey,
+  formatDateTimeString,
+  statusLabelKey,
+} from "../../appointment-drawer.utils";
 import type { Appointment } from "../types";
 
 /**
@@ -48,9 +52,12 @@ export function ActivitySection({
           {t("appointments.activity")}
         </h2>
         <button
+          type="button"
           onClick={handleToggle}
           disabled={activityLoading}
           className="text-gray-400 hover:text-gray-600 disabled:opacity-50"
+          aria-expanded={expanded}
+          aria-label={expanded ? t("appointments.activity_hide") : t("appointments.activity_show")}
         >
           {activityLoading ? (
             <Loader2 className="w-4 h-4 animate-spin" />
@@ -69,7 +76,9 @@ export function ActivitySection({
                 <div className="w-2 h-2 bg-gray-300 rounded-full mt-2" />
                 <div>
                   <p className="text-sm font-medium text-gray-900">
-                    {activity.action}
+                    {activityLabelKey(activity.action)
+                      ? t(activityLabelKey(activity.action)!)
+                      : activity.action}
                   </p>
                   <p className="text-xs text-gray-500">
                     {formatDateTimeString(activity.timestamp)}
@@ -82,7 +91,9 @@ export function ActivitySection({
               <div className="w-2 h-2 bg-green-500 rounded-full mt-2" />
               <div>
                 <p className="text-sm font-medium text-gray-900">
-                  Appointment {appointment.status}
+                  {statusLabelKey(appointment.status)
+                    ? t(statusLabelKey(appointment.status)!)
+                    : appointment.status}
                 </p>
                 <p className="text-xs text-gray-500">
                   {formatDateTimeString(appointment.updatedAt)}
