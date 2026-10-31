@@ -397,6 +397,34 @@ describe("the professional's agenda and hours", () => {
     await owner.service.createByStaff({ ...past, professionalId: ME.id, allowOutsideHours: true } as any, OWNER);
     expect(owner.db.appointments).toHaveLength(1);
   });
+
+  it("treats time off the same way: refused for a professional, confirmed by an owner", async () => {
+    const vacation = {
+      professionalId: ME.id,
+      kind: "vacation",
+      startDate: new Date(`${DAY}T00:00:00.000Z`),
+      endDate: new Date(`${DAY}T00:00:00.000Z`),
+      startTime: null,
+      endTime: null,
+      note: null,
+    };
+    // The transaction reads through the same delegate.
+    const staff = build();
+    staff.prisma.timeOff.findMany = jest.fn(async () => [vacation]);
+    await expect(
+      staff.service.createByStaff({ ...BOOKING, allowOutsideHours: true } as any, STAFF),
+    ).rejects.toMatchObject({ response: { code: OUTSIDE_HOURS, message: "Ana está de vacaciones ese día." } });
+    expect(staff.db.appointments).toHaveLength(0);
+
+    const owner = build();
+    owner.prisma.timeOff.findMany = jest.fn(async () => [vacation]);
+    const mine = { ...BOOKING, professionalId: ME.id };
+    await expect(owner.service.createByStaff(mine as any, OWNER)).rejects.toMatchObject({
+      response: { code: OUTSIDE_HOURS, message: "Ana está de vacaciones ese día." },
+    });
+    await owner.service.createByStaff({ ...mine, allowOutsideHours: true } as any, OWNER);
+    expect(owner.db.appointments).toHaveLength(1);
+  });
 });
 
 describe("request validation", () => {

@@ -438,6 +438,48 @@ describe('SalonToolsService (L-4)', () => {
       expect(result).toEqual({ date: '2026-10-04', serviceId: 's-massage-rel', slots: [] });
     });
 
+    describe('with time off recorded', () => {
+      const none = {
+        getAvailableSlots: jest.fn().mockResolvedValue([]),
+        onlineBookingWindow: jest.fn().mockResolvedValue({ timeZone: 'Europe/Madrid', minHours: 2, maxHours: 720 }),
+        fitsOnlineWindow: jest.fn().mockReturnValue('ok'),
+      };
+      const day = new Date('2026-12-25T00:00:00.000Z');
+      const withTimeOff = (rows: any[]) =>
+        ({ ...prisma, timeOff: { findMany: jest.fn().mockResolvedValue(rows) } }) as any;
+      const closure = { professionalId: null, kind: 'closure', startDate: day, endDate: day, startTime: null, endTime: null, note: 'Navidad' };
+
+      it('says the salon is closed that day, without the note', async () => {
+        const result: any = await svc.checkAvailability(
+          { prisma: withTimeOff([closure]), tenantId: TENANT_ID, appointmentsService: none as any },
+          { serviceId: 's-cut-m', date: '2026-12-25' },
+        );
+        expect(result.slots).toEqual([]);
+        expect(result.reason).toBe('salon_closed');
+        expect(result.message).toMatch(/closed all day on 2026-12-25/);
+        expect(result.message).not.toMatch(/Navidad/);
+      });
+
+      it('says the named professional is away, never why', async () => {
+        const away = { ...closure, professionalId: 'p-ana', kind: 'sick_leave', note: 'Operación' };
+        const result: any = await svc.checkAvailability(
+          { prisma: withTimeOff([away]), tenantId: TENANT_ID, appointmentsService: none as any },
+          { serviceId: 's-cut-m', date: '2026-12-25', professionalId: 'p-ana' },
+        );
+        expect(result.reason).toBe('professional_unavailable');
+        expect(result.message).not.toMatch(/Operación|baja|sick/i);
+      });
+
+      it('a partial closure is not called a closed day', async () => {
+        const evening = { ...closure, startTime: '14:00', endTime: '20:00' };
+        const result: any = await svc.checkAvailability(
+          { prisma: withTimeOff([evening]), tenantId: TENANT_ID, appointmentsService: none as any },
+          { serviceId: 's-cut-m', date: '2026-12-25' },
+        );
+        expect(result.reason).toBeUndefined();
+      });
+    });
+
     it('returns an error envelope for an unparseable date', async () => {
       const result = await svc.checkAvailability({ prisma, tenantId: TENANT_ID, appointmentsService: appointments }, {
         serviceId: 's-cut-m',

@@ -119,6 +119,25 @@ describe('tenant-scope extension', () => {
     ).rejects.toBeDefined();
   });
 
+  // Time off decides what can be booked: another salon's closure must never
+  // reach this salon's availability, nor be edited from it.
+  dbTest('time off: reads and deletes stay inside the caller tenant', async () => {
+    const day = new Date('2026-12-25T00:00:00.000Z');
+    const closure = (tenantId: string) => ({ tenantId, kind: 'closure', startDate: day, endDate: day });
+    const [, offB] = await unscoped(async () => [
+      await raw.timeOff.create({ data: closure(tenantA.id) }),
+      await raw.timeOff.create({ data: closure(tenantB.id) }),
+    ]);
+    const seen = await asTenant(tenantA.id, () => db.timeOff.findMany({ where: { startDate: { lte: day } } }));
+    expect(seen.map((r: any) => r.tenantId)).toEqual([tenantA.id]);
+    const removed = await asTenant(tenantA.id, () => db.timeOff.deleteMany({ where: { id: offB.id } }));
+    expect(removed.count).toBe(0);
+    const created = await asTenant(tenantA.id, () =>
+      db.timeOff.create({ data: { kind: 'closure', startDate: day, endDate: day } }),
+    );
+    expect(created.tenantId).toBe(tenantA.id);
+  });
+
   dbTest('bypass still sees every tenant', async () => {
     const rows = await unscoped(() => db.client.findMany({ where: { phone: { startsWith: '7000000' } } }));
     expect(rows.length).toBeGreaterThanOrEqual(2);
