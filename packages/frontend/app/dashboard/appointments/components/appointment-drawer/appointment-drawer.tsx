@@ -66,9 +66,12 @@ import {
   getStatusBadgeStyle,
   getTotalDuration,
   getTotalPrice,
+  asksFirst,
   sendStatusChange,
   serverMessage,
+  statusLabelKey,
   sumServiceDurations,
+  type AskedStatus,
   transformAddons,
 } from "../appointment-drawer.utils";
 import { StatusChangeDialog } from "../StatusChangeDialog";
@@ -500,7 +503,7 @@ useEffect(() => {
         className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium border ${style.bg} ${style.text} ${style.border}`}
       >
         {icons[status] ?? null}
-        {style.label}
+        {statusLabelKey(status) ? t(statusLabelKey(status)!) : style.label}
       </span>
     );
   };
@@ -508,12 +511,12 @@ useEffect(() => {
   // `formatDateString` and `formatDateTimeString` are imported from
   // ./appointment-drawer.utils.
 
-  // Cancelling and a no-show tell the client, so they are asked first
-  // (cancelling with an optional reason).
-  const [askingStatus, setAskingStatus] = useState<"cancelled" | "no_show" | null>(null);
+  // Cancelling and a no-show tell the client, and completing is final and
+  // may issue an invoice, so they are asked first.
+  const [askingStatus, setAskingStatus] = useState<AskedStatus | null>(null);
 
   const requestStatusChange = (newStatus: AppointmentStatus) => {
-    if (newStatus === "cancelled" || newStatus === "no_show") {
+    if (asksFirst(newStatus)) {
       setAskingStatus(newStatus);
     } else {
       void handleStatusChange(newStatus);

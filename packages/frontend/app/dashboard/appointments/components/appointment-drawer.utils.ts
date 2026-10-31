@@ -392,6 +392,21 @@ export function statusActions(from: string): AppointmentStatusValue[] {
   return (byStatus[from] ?? []).filter((to) => canChangeStatus(from, to));
 }
 
+/**
+ * The changes the panel asks about before sending: cancelling and a no-show
+ * tell the client, and completing is final and may issue an invoice.
+ */
+export type AskedStatus = "cancelled" | "no_show" | "completed";
+
+export function asksFirst(to: string): to is AskedStatus {
+  return to === "cancelled" || to === "no_show" || to === "completed";
+}
+
+/** The i18n key of a status's badge label ("appointments.status_no_show"). */
+export function statusLabelKey(status: string): string | null {
+  return status in NEXT_STATUSES ? `appointments.status_${status}` : null;
+}
+
 /** The API calls a status change may use (a subset of the panel's client). */
 export interface StatusChangeApi {
   cancelAppointment(id: string, reason?: string): Promise<unknown>;

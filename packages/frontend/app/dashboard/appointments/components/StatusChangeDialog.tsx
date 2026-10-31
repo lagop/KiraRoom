@@ -4,11 +4,13 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useTranslations } from "@/lib/use-translation";
+import type { AskedStatus } from "./appointment-drawer.utils";
 
 /**
- * Asks before the two status changes that tell the client something:
+ * Asks before the status changes that cannot be taken back lightly:
  * cancelling (with an optional reason, which goes in the notice and the
- * appointment's history) and marking a no-show.
+ * appointment's history), marking a no-show, and completing (final, and
+ * the salon's automatic invoice is issued from it).
  */
 export function StatusChangeDialog({
   to,
@@ -18,7 +20,7 @@ export function StatusChangeDialog({
   onConfirm,
 }: {
   /** Which change is being asked about; null renders nothing. */
-  to: "cancelled" | "no_show" | null;
+  to: AskedStatus | null;
   loading?: boolean;
   /**
    * Render over the whole page (default). Inside the drawer, which is a modal
@@ -67,6 +69,17 @@ export function StatusChangeDialog({
         loading={loading}
         onCancel={onCancel}
         onConfirm={() => onConfirm(reason)}
+      />
+    ) : to === "completed" ? (
+      <ConfirmDialog
+        open
+        title={t("appointments.complete_confirm")}
+        description={t("appointments.complete_notice")}
+        confirmLabel={t("appointments.mark_completed")}
+        cancelLabel={t("appointments.not_yet")}
+        loading={loading}
+        onCancel={onCancel}
+        onConfirm={() => onConfirm()}
       />
     ) : (
       <ConfirmDialog

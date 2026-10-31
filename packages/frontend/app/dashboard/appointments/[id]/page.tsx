@@ -21,9 +21,11 @@ import {
 import apiClient, { Appointment as ApiAppointment } from '../../../../lib/api';
 import {
   appointmentEditHref,
+  asksFirst,
   sendStatusChange,
   serverMessage,
   statusActions,
+  type AskedStatus,
 } from '../components/appointment-drawer.utils';
 import { StatusChangeDialog } from '../components/StatusChangeDialog';
 import { useTranslations } from '@/lib/use-translation';
@@ -103,8 +105,9 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
   const [confirmDelete, setConfirmDelete] = useState(false);
   const { toast } = useToast();
   const t = useTranslations();
-  // Cancelling and a no-show tell the client, so they are asked first.
-  const [askingStatus, setAskingStatus] = useState<'cancelled' | 'no_show' | null>(null);
+  // Cancelling and a no-show tell the client, and completing is final and
+  // may issue an invoice, so they are asked first.
+  const [askingStatus, setAskingStatus] = useState<AskedStatus | null>(null);
   useEffect(() => {
     setCanDelete(getCurrentUser()?.role !== 'staff');
   }, []);
@@ -173,12 +176,12 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
     };
 
     const statusLabels: Record<AppointmentStatus, string> = {
-      confirmed: 'Confirmed',
-      pending: 'Pending',
-      in_progress: 'In Progress',
-      completed: 'Completed',
-      cancelled: 'Cancelled',
-      no_show: 'No-show',
+      confirmed: t('appointments.status_confirmed'),
+      pending: t('appointments.status_pending'),
+      in_progress: t('appointments.status_in_progress'),
+      completed: t('appointments.status_completed'),
+      cancelled: t('appointments.status_cancelled'),
+      no_show: t('appointments.status_no_show'),
     };
 
     const icons: Record<AppointmentStatus, React.ReactNode> = {
@@ -222,7 +225,7 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
   };
 
   const requestStatusChange = (newStatus: AppointmentStatus) => {
-    if (newStatus === 'cancelled' || newStatus === 'no_show') {
+    if (asksFirst(newStatus)) {
       setAskingStatus(newStatus);
     } else {
       void handleStatusChange(newStatus);

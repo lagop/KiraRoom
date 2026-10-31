@@ -26,9 +26,11 @@ import { localDay } from "../../../components/Calendar/day-grid";
 import { AppointmentDrawer } from "./components/appointment-drawer";
 import {
   drawerTargetFromQuery,
+  asksFirst,
   sendStatusChange,
   serverMessage,
   statusActions,
+  type AskedStatus,
 } from "./components/appointment-drawer.utils";
 import { StatusChangeDialog } from "./components/StatusChangeDialog";
 
@@ -222,15 +224,16 @@ function AppointmentsPageContent() {
     fetchAppointments();
   }, [view]);
 
-  // Cancelling and a no-show tell the client, so they are asked first
-  // (cancelling with an optional reason).
+  // Cancelling and a no-show tell the client, and completing is final and
+  // may issue an invoice, so they are asked first (cancelling with an
+  // optional reason).
   const [askingStatus, setAskingStatus] = useState<{
     id: string;
-    to: "cancelled" | "no_show";
+    to: AskedStatus;
   } | null>(null);
 
   const requestStatus = (id: string, newStatus: AppointmentStatus) => {
-    if (newStatus === "cancelled" || newStatus === "no_show") {
+    if (asksFirst(newStatus)) {
       setAskingStatus({ id, to: newStatus });
     } else {
       void updateStatus(id, newStatus);

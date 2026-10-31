@@ -14,7 +14,9 @@ import * as path from "path";
 import {
   addMinutesToTime,
   appointmentEditHref,
+  asksFirst,
   canChangeStatus,
+  statusLabelKey,
   NEXT_STATUSES,
   sendStatusChange,
   serverMessage,
@@ -327,6 +329,17 @@ checkTrue("an unknown status offers nothing", statusActions("archived").length =
   ]);
 }
 
+checkTrue("cancel, no-show and complete are asked first", asksFirst("cancelled") && asksFirst("no_show") && asksFirst("completed"));
+checkTrue("confirm and start are not", !asksFirst("confirmed") && !asksFirst("in_progress"));
+{
+  const es = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "..", "..", "messages", "es.json"), "utf8"));
+  const en = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "..", "..", "messages", "en.json"), "utf8"));
+  const has = (json: any, key: string) => typeof key.split(".").reduce((o, k) => o?.[k], json) === "string";
+  checkTrue("every status badge label exists in es and en", Object.keys(NEXT_STATUSES).every((s) => has(es, statusLabelKey(s)!) && has(en, statusLabelKey(s)!)));
+  check("an unknown status has no label key", statusLabelKey("archived"), null);
+  checkTrue("the completion dialog's copy exists in es and en", ["complete_confirm", "complete_notice", "mark_completed", "not_yet"].every((k) => has(es, `appointments.${k}`) && has(en, `appointments.${k}`)));
+  checkTrue("and it warns about the invoice", /factura/.test(es.appointments.complete_notice));
+}
 check("the server's reason reaches the toast", serverMessage(new Error("Una cita cancelada no puede pasar a completada.")), "Una cita cancelada no puede pasar a completada.");
 check("no reason, no description", serverMessage(new Error("  ")), undefined);
 check("not an error, no description", serverMessage("boom"), undefined);
