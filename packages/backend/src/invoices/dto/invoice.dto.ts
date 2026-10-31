@@ -56,6 +56,22 @@ export class CreateInvoiceLineDto {
   @IsOptional()
   @IsString()
   serviceId?: string;
+
+  /**
+   * `unitPriceCents` already includes the tax, and the line is split into
+   * base + tax (InvoiceLineInput.taxIncluded). The manual invoice form sends
+   * it on every line, true or false, from the salon's pricesIncludeTax
+   * (Ajustes fiscales). Left out: false, the tax is added on top, what this
+   * endpoint always did. Without this property the global ValidationPipe
+   * (whitelist) dropped it silently and every line was taxed on top.
+   */
+  @ApiPropertyOptional({
+    default: false,
+    description: "The unit price already includes the tax (true) or the tax is added on top (false)",
+  })
+  @IsOptional()
+  @IsBoolean()
+  taxIncluded?: boolean;
 }
 
 export class CreateInvoiceDto {

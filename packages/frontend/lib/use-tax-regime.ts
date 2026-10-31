@@ -23,12 +23,21 @@ import {
  *
  * Falls back to IVA while the request is in flight and if it fails: it is the
  * regime of most of the country, and a label is not worth a loading spinner.
+ *
+ * `pricesIncludeTax` is the salon's "Mis precios ya incluyen el impuesto"
+ * (fiscalSettings.pricesIncludeTax), read the way the server reads it
+ * (salon-tax-settings.ts pricesIncludeTaxOf): only the boolean true counts,
+ * missing is false. It is `undefined` while the settings are loading or when
+ * they could not be loaded: unlike a label, it changes the amounts of an
+ * invoice, so a caller that issues one has to wait for it instead of guessing.
  */
 export function useTaxRegime(): {
   regime: TaxRegime;
   label: string;
   defaultRate: number;
+  pricesIncludeTax: boolean | undefined;
   isLoading: boolean;
+  isError: boolean;
 } {
   const settings = useQuery<FiscalSettings>({
     queryKey: ["invoices", "fiscal-settings"],
@@ -44,6 +53,10 @@ export function useTaxRegime(): {
     regime,
     label: TAX_REGIME_LABELS[regime],
     defaultRate: TAX_REGIME_DEFAULT_RATE[regime],
+    pricesIncludeTax: settings.data
+      ? settings.data.fiscalSettings?.pricesIncludeTax === true
+      : undefined,
     isLoading: settings.isLoading,
+    isError: settings.isError,
   };
 }

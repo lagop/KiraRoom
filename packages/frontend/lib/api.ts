@@ -1544,7 +1544,8 @@ export interface ApiClientInterface {
       languages: string[];
       certifications: string[];
       position?: string;
-      commissionRate?: number;
+      /** 0 is a rate; null clears it (the salon default applies); left out keeps it. */
+      commissionRate?: number | null;
       hireDate?: string;
       isActive: boolean;
       serviceIds?: string[];
@@ -1808,6 +1809,11 @@ export interface ApiClientInterface {
       taxRate: number;
       productId?: string;
       serviceId?: string;
+      /**
+       * The unit price already includes the tax (the salon's pricesIncludeTax).
+       * Left out, the server adds the tax on top.
+       */
+      taxIncluded?: boolean;
     }>;
     notes?: string;
   }): Promise<{ id: string }>;
@@ -2777,7 +2783,8 @@ class ApiClient implements ApiClientInterface {
       languages: string[];
       certifications: string[];
       position?: string;
-      commissionRate?: number;
+      /** 0 is a rate; null clears it (the salon default applies); left out keeps it. */
+      commissionRate?: number | null;
       hireDate?: string;
       isActive: boolean;
       serviceIds?: string[];
@@ -4953,6 +4960,11 @@ class ApiClient implements ApiClientInterface {
       taxRate: number;
       productId?: string;
       serviceId?: string;
+      /**
+       * The unit price already includes the tax (the salon's pricesIncludeTax).
+       * Left out, the server adds the tax on top.
+       */
+      taxIncluded?: boolean;
     }>;
     notes?: string;
   }): Promise<{ id: string }> {

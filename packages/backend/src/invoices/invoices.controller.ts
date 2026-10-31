@@ -79,6 +79,8 @@ export class InvoicesController {
       lines: dto.lines.map((l) => ({
         ...l,
         discountPct: l.discountPct ?? 0,
+        // Explicit: only true includes the tax; left out is on top.
+        taxIncluded: l.taxIncluded === true,
       })),
     });
   }
@@ -113,6 +115,9 @@ export class InvoicesController {
     return this.invoices.emitRectification(
       this.requireTenantId(req),
       id,
+      // No taxIncluded: an invoice line is stored with its net unit price
+      // (the calculator splits a tax-included price before saving), so lines
+      // copied from the original are always priced without the tax.
       body.lines.map((l) => ({
         description: l.description,
         quantity: l.quantity,

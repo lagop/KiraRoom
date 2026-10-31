@@ -125,7 +125,12 @@
       "defaultSeries": "Default series",
       "lineNumber": "Line {number}",
       "cancel": "Cancel",
-      "creating": "Creating..."
+      "creating": "Creating...",
+      "pricesIncludeTaxHint": "Prices include {tax} (per Fiscal settings)",
+      "pricesExcludeTaxHint": "Prices without {tax}: {tax} is added on top",
+      "pricesTaxSettingsLink": "Change in Fiscal settings",
+      "pricesTaxLoading": "Loading fiscal settings...",
+      "pricesTaxUnavailable": "Fiscal settings could not be loaded, so it is unknown whether prices include the tax. Reload the page to issue the invoice."
     },
     "empty": "No invoices yet. Create one or wait for auto-generation from paid orders.",
     "fiscalSettings": {
@@ -1474,6 +1479,7 @@
     "bio": "Bio",
     "cancel": "Cancel",
     "commission_rate": "Commission Rate",
+    "commission_rate_empty": "Empty: the salon default",
     "create_professional": "Create Professional",
     "deactivate_tooltip": "Deactivate Tooltip",
     "delete_professional": "Delete Professional",

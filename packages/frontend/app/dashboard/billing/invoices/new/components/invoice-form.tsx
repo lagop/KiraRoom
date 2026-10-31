@@ -8,6 +8,11 @@ import { AlertCircle, Loader2, Plus, Trash2 } from "lucide-react";
 import apiClient, { Client } from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
 import { useTaxRegime } from "@/lib/use-tax-regime";
+import {
+  computeInvoiceTotals,
+  pricesTaxHintKey,
+  type InvoiceLineAmountsInput,
+} from "@/lib/invoice-totals";
 
 interface InvoiceLineForm {
   id: string;
@@ -37,17 +42,20 @@ function parseNumber(value: string) {
   return Number.isFinite(number) ? number : 0;
 }
 
-function calculateLine(line: InvoiceLineForm) {
-  const quantity = parseNumber(line.quantity);
-  const unitPriceCents = Math.round(parseNumber(line.unitPrice) * 100);
-  const discountPct = parseNumber(line.discountPct);
-  const taxRate = parseNumber(line.taxRate);
-  const subtotalCents = Math.round(
-    quantity * unitPriceCents * (1 - discountPct / 100),
-  );
-  const taxCents = Math.round(subtotalCents * (taxRate / 100));
-
-  return { subtotalCents, taxCents, totalCents: subtotalCents + taxCents };
+// What a line is worth, as typed: the same numbers feed the preview and the
+// request, so the totals shown are the ones the server computes. Whether the
+// unit price includes the tax is the salon's setting (Ajustes fiscales).
+function lineAmounts(
+  line: InvoiceLineForm,
+  taxIncluded: boolean,
+): InvoiceLineAmountsInput {
+  return {
+    quantity: parseNumber(line.quantity),
+    unitPriceCents: Math.round(parseNumber(line.unitPrice) * 100),
+    discountPct: parseNumber(line.discountPct),
+    taxRate: parseNumber(line.taxRate),
+    taxIncluded,
+  };
 }
 
 function formatMoney(cents: number) {
@@ -59,7 +67,15 @@ function formatMoney(cents: number) {
 
 export function InvoiceForm() {
   const t = useTranslations();
-  const { label: taxLabel, defaultRate } = useTaxRegime();
+  const {
+    label: taxLabel,
+    defaultRate,
+    pricesIncludeTax,
+    isError: fiscalSettingsFailed,
+  } = useTaxRegime();
+  // Unknown until the fiscal settings load: no invoice is sent meanwhile.
+  const taxIncluded = pricesIncludeTax === true;
+  const taxSettingKnown = pricesIncludeTax !== undefined;
   const router = useRouter();
   const queryClient = useQueryClient();
   const [series, setSeries] = useState("");
@@ -80,19 +96,8 @@ export function InvoiceForm() {
   });
 
   const totals = useMemo(
-    () =>
-      lines.reduce(
-        (sum, line) => {
-          const current = calculateLine(line);
-          return {
-            subtotalCents: sum.subtotalCents + current.subtotalCents,
-            taxCents: sum.taxCents + current.taxCents,
-            totalCents: sum.totalCents + current.totalCents,
-          };
-        },
-        { subtotalCents: 0, taxCents: 0, totalCents: 0 },
-      ),
-    [lines],
+    () => computeInvoiceTotals(lines.map((line) => lineAmounts(line, taxIncluded))),
+    [lines, taxIncluded],
   );
 
   const selectClient = (id: string) => {
@@ -131,6 +136,8 @@ export function InvoiceForm() {
     event.preventDefault();
     setError(null);
 
+    if (!taxSettingKnown) return;
+
     if (!recipientName.trim()) {
       setError(t("invoices.errors.recipientRequired"));
       return;
@@ -167,13 +174,19 @@ export function InvoiceForm() {
         recipientId: recipientId || undefined,
         recipientName: recipientName.trim(),
         recipientTaxId: recipientTaxId.trim().toUpperCase() || undefined,
-        lines: lines.map((line) => ({
-          description: line.description.trim(),
-          quantity: parseNumber(line.quantity),
-          unitPriceCents: Math.round(parseNumber(line.unitPrice) * 100),
-          discountPct: parseNumber(line.discountPct),
-          taxRate: parseNumber(line.taxRate),
-        })),
+        // taxIncluded always sent, true or false: the server never
+        // guesses what the form meant.
+        lines: lines.map((line) => {
+          const amounts = lineAmounts(line, taxIncluded);
+          return {
+            description: line.description.trim(),
+            quantity: amounts.quantity,
+            unitPriceCents: amounts.unitPriceCents,
+            discountPct: amounts.discountPct,
+            taxRate: amounts.taxRate,
+            taxIncluded,
+          };
+        }),
         notes: notes.trim() || undefined,
       });
       await queryClient.invalidateQueries({ queryKey: ["invoices"] });
@@ -298,6 +311,27 @@ export function InvoiceForm() {
             {t("invoices.fields.addLine")}
           </button>
         </div>
+
+        <p className="mb-4 text-sm text-gray-600" data-testid="prices-tax-hint">
+          {taxSettingKnown ? (
+            <>
+              {t(pricesTaxHintKey(taxIncluded), { tax: taxLabel })}
+              {" · "}
+              <Link
+                href="/dashboard/settings/fiscal"
+                className="font-medium text-violet-700 hover:underline"
+              >
+                {t("invoices.form.pricesTaxSettingsLink")}
+              </Link>
+            </>
+          ) : fiscalSettingsFailed ? (
+            <span className="text-red-700">
+              {t("invoices.form.pricesTaxUnavailable")}
+            </span>
+          ) : (
+            t("invoices.form.pricesTaxLoading")
+          )}
+        </p>
 
         <div className="space-y-4">
           {lines.map((line, index) => (
@@ -432,7 +466,7 @@ export function InvoiceForm() {
         </Link>
         <button
           type="submit"
-          disabled={isSubmitting}
+          disabled={isSubmitting || !taxSettingKnown}
           className="inline-flex items-center justify-center gap-2 rounded-lg bg-violet-600 px-5 py-2 text-sm font-medium text-white shadow-sm hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}

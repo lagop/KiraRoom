@@ -125,7 +125,12 @@
       "defaultSeries": "Serie por defecto",
       "lineNumber": "Línea {number}",
       "cancel": "Cancelar",
-      "creating": "Creando..."
+      "creating": "Creando...",
+      "pricesIncludeTaxHint": "Precios con {tax} incluido (según Ajustes fiscales)",
+      "pricesExcludeTaxHint": "Precios sin {tax}: el {tax} se suma",
+      "pricesTaxSettingsLink": "Cambiar en Ajustes fiscales",
+      "pricesTaxLoading": "Cargando los Ajustes fiscales...",
+      "pricesTaxUnavailable": "No se pudieron cargar los Ajustes fiscales: no se sabe si los precios incluyen el impuesto. Recarga la página para emitir la factura."
     },
     "empty": "Aún no hay facturas. Crea la primera o espera a que se genere automáticamente desde un pedido pagado.",
     "fiscalSettings": {
@@ -1474,6 +1479,7 @@
     "bio": "Biografía",
     "cancel": "Cancelar",
     "commission_rate": "Tasa de comisión",
+    "commission_rate_empty": "Vacío: la del salón por defecto",
     "create_professional": "Crear profesional",
     "deactivate_tooltip": "Desactivar",
     "delete_professional": "Eliminar profesional",
