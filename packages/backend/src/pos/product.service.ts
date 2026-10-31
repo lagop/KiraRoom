@@ -2,60 +2,15 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { PrismaService } from '../common/prisma/prisma.service';
 import { StripeService } from '../payments/services/stripe.service';
 import { WalletService } from '../payments/services/wallet.service';
+import { CreateProductDto, UpdateProductDto } from './dto/pos.dto';
 
-export interface CreateProductDto {
-  tenantId: string;
-  name: string;
-  description?: string;
-  sku?: string;
-  barcode?: string;
-  category?: string;
-  subcategory?: string;
-  price: number;
-  costPrice?: number;
-  currency?: string;
-  trackInventory?: boolean;
-  quantity?: number;
-  lowStockAlert?: number;
-  imageUrl?: string;
-  images?: string[];
-  isActive?: boolean;
-  isFeatured?: boolean;
-  taxRate?: number;
-  showOnline?: boolean;
-  onlinePrice?: number;
-  earnPoints?: boolean;
-  pointsEarned?: number;
-}
-
-export interface UpdateProductDto {
-  name?: string;
-  description?: string;
-  sku?: string;
-  barcode?: string;
-  category?: string;
-  subcategory?: string;
-  price?: number;
-  costPrice?: number;
-  currency?: string;
-  trackInventory?: boolean;
-  quantity?: number;
-  lowStockAlert?: number;
-  imageUrl?: string;
-  images?: string[];
-  isActive?: boolean;
-  isFeatured?: boolean;
-  taxRate?: number;
-  showOnline?: boolean;
-  onlinePrice?: number;
-  earnPoints?: boolean;
-  pointsEarned?: number;
-}
+export { CreateProductDto, UpdateProductDto };
 
 /**
- * What a product edit may change. The controller passes the request body
- * untyped, and writing it whole let it reach the salon and its users
- * through the `tenant` relation.
+ * What a product edit may change. The body was untyped, and writing it
+ * whole let it reach the salon and its users through the `tenant`
+ * relation. It is a validated class now, and the update is still built
+ * from this list.
  */
 const PRODUCT_FIELDS = [
   "name", "description", "sku", "barcode", "category", "subcategory",
@@ -64,13 +19,18 @@ const PRODUCT_FIELDS = [
   "onlinePrice", "earnPoints", "pointsEarned",
 ] as const satisfies ReadonlyArray<keyof UpdateProductDto>;
 
+/** Columns that may be cleared; for the rest a `null` means "unchanged". */
+const NULLABLE_PRODUCT_FIELDS: ReadonlySet<string> = new Set([
+  "description", "sku", "barcode", "category", "subcategory",
+  "costPrice", "imageUrl", "taxRate", "onlinePrice",
+]);
+
 export interface CreateOrderDto {
   tenantId: string;
   clientId?: string;
   items: {
     productId: string;
     quantity: number;
-    unitPrice: number;
   }[];
   paymentMethod: 'card' | 'cash' | 'bank_transfer' | 'wallet' | 'gift_card';
   notes?: string;
@@ -98,10 +58,10 @@ export class ProductService {
   // PRODUCT CRUD
   // ============================================
 
-  async createProduct(dto: CreateProductDto) {
+  async createProduct(tenantId: string, dto: CreateProductDto) {
     return this.prisma.product.create({
       data: {
-        tenantId: dto.tenantId,
+        tenantId,
         name: dto.name,
         description: dto.description,
         sku: dto.sku,
@@ -179,7 +139,9 @@ export class ProductService {
 
     const data: Record<string, unknown> = {};
     for (const key of PRODUCT_FIELDS) {
-      if (dto?.[key] !== undefined) data[key] = dto[key];
+      const value = dto?.[key];
+      if (value === undefined || (value === null && !NULLABLE_PRODUCT_FIELDS.has(key))) continue;
+      data[key] = value;
     }
     return this.prisma.product.update({
       where: { id },
@@ -216,6 +178,13 @@ export class ProductService {
     imageUrl?: string;
     displayOrder?: number;
   }) {
+    if (data.parentId) {
+      const parent = await this.prisma.productCategory.findFirst({
+        where: { id: data.parentId, tenantId },
+        select: { id: true },
+      });
+      if (!parent) throw new NotFoundException('Parent category not found');
+    }
     return this.prisma.productCategory.create({
       data: {
         tenantId,
@@ -333,13 +302,15 @@ export class ProductService {
         throw new BadRequestException(`Insufficient inventory for ${product.name}`);
       }
 
-      const itemTotal = item.unitPrice * item.quantity;
+      // The product's own price, never one sent by the client.
+      const unitPrice = Number(product.price);
+      const itemTotal = unitPrice * item.quantity;
       subtotal += itemTotal;
 
       orderItems.push({
         productId: item.productId,
         quantity: item.quantity,
-        unitPrice: item.unitPrice,
+        unitPrice,
         totalPrice: itemTotal,
       });
 

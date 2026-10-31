@@ -10,8 +10,11 @@ import { StripeService } from "../payments/services/stripe.service";
 function pos() {
   const prisma: any = {
     payment: { create: jest.fn(async ({ data }: any) => ({ id: "p1", ...data })) },
-    service: { findUnique: jest.fn(async () => ({ id: "s1", name: "Corte", price: 25, currency: "EUR" })) },
-    client: { findFirst: jest.fn(), create: jest.fn() },
+    service: {
+      findUnique: jest.fn(async () => ({ id: "s1", name: "Corte", price: 25, currency: "EUR" })),
+      findMany: jest.fn(async () => [{ id: "s1", name: "Corte", price: 25 }]),
+    },
+    client: { findFirst: jest.fn(async ({ where }: any) => (where.id ? { id: where.id } : null)), create: jest.fn() },
   };
   const wallet: any = { deductFunds: jest.fn() };
   return { service: new PosService(prisma, wallet), prisma };
@@ -23,7 +26,7 @@ describe("POS card sales", () => {
     await service.processCheckout({
       tenantId: "t1",
       clientId: "c1",
-      items: [{ name: "Corte", price: 2500, quantity: 1 }] as any,
+      items: [{ serviceId: "s1", quantity: 1 }] as any,
       payments: [{ method: "card", amount: 2500 }] as any,
     } as any);
     expect(prisma.payment.create).toHaveBeenCalledWith({

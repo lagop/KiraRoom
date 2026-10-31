@@ -1,5 +1,13 @@
 import { ParseUUIDPipe, Controller, Get, Post, Body, Param, Query, Req, Patch, Delete } from "@nestjs/common";
-import { PosService, CreatePosOrderDto } from './pos.service';
+import { PosService } from './pos.service';
+import {
+  CreatePosOrderDto,
+  CreateProductCategoryDto,
+  CreateProductDto,
+  InventoryAdjustmentBodyDto,
+  PosQuickSaleDto,
+  UpdateProductDto,
+} from './dto/pos.dto';
 import { ProductService } from './product.service';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Roles, SALON_TEAM, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
@@ -64,7 +72,7 @@ export class PosController {
   @Roles(...SALON_TEAM)
   async quickSale(
     @Req() req: any,
-    @Body() body: { serviceId: string; paymentMethod: 'cash' | 'card'; clientId?: string },
+    @Body() body: PosQuickSaleDto,
   ) {
     const tenantId = req.user.tenantId;
     return this.posService.quickSale(
@@ -130,10 +138,10 @@ export class PosController {
   @Roles(...SALON_MANAGERS)
   async createProduct(
     @Req() req: any,
-    @Body() body: any,
+    @Body() body: CreateProductDto,
   ) {
     const tenantId = req.user.tenantId;
-    return this.productService.createProduct({ ...body, tenantId });
+    return this.productService.createProduct(tenantId, body);
   }
 
   @Patch('products/:id')
@@ -141,7 +149,7 @@ export class PosController {
   @Roles(...SALON_MANAGERS)
   async updateProduct(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() body: any,
+    @Body() body: UpdateProductDto,
   ) {
     return this.productService.updateProduct(id, body);
   }
@@ -158,7 +166,7 @@ export class PosController {
   @Roles(...SALON_MANAGERS)
   async createProductCategory(
     @Req() req: any,
-    @Body() body: { name: string; description?: string },
+    @Body() body: CreateProductCategoryDto,
   ) {
     const tenantId = req.user.tenantId;
     return this.productService.createCategory(tenantId, body);
@@ -184,10 +192,16 @@ export class PosController {
   @Roles(...SALON_MANAGERS)
   async adjustInventory(
     @Req() req: any,
-    @Body() body: { productId: string; type: 'restock' | 'adjustment' | 'transfer' | 'damaged' | 'expired'; quantity: number; reason?: string },
+    @Body() body: InventoryAdjustmentBodyDto,
   ) {
     const tenantId = req.user.tenantId;
-    return this.productService.adjustInventory({ tenantId, ...body });
+    return this.productService.adjustInventory({
+      tenantId,
+      productId: body.productId,
+      type: body.type,
+      quantity: body.quantity,
+      reason: body.reason,
+    });
   }
 
   // ============ ORDERS ============
