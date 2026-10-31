@@ -5,6 +5,7 @@ import {
   ConflictException,
 } from "@nestjs/common";
 import { PrismaService } from "../../common/prisma/prisma.service";
+import { deleteProfessionalKeepingHistory } from "../../common/prisma/history-deletes";
 import {
   CreateProfessionalDto,
   UpdateProfessionalDto,
@@ -224,17 +225,9 @@ export class AdminProfessionalsService {
     }
   }
 
+  /** History survives the delete: see common/prisma/history-deletes.ts. */
   async remove(tenantId: string, id: string) {
-    try {
-      return await this.prisma.professional.delete({
-        where: { id, tenantId },
-      });
-    } catch (error) {
-      if (error.code === "P2025") {
-        throw new NotFoundException("Professional not found");
-      }
-      throw new BadRequestException("Failed to delete professional");
-    }
+    return deleteProfessionalKeepingHistory(this.prisma, tenantId, id);
   }
 
   async search(tenantId: string, query: string) {

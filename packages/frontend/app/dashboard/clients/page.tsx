@@ -234,22 +234,26 @@ function ClientsPageContent() {
             onClick={async () => {
               setDeletingId(client.id);
               try {
-                await (apiClient as any).deleteClient(client.id);
-                setClients(clients.filter((c) => c.id !== client.id));
+                const { deactivated } = await apiClient.deleteClient(client.id);
+                // With appointments or payments she is history: the server
+                // deactivates her instead, so she stays in the list.
+                setClients((prev) =>
+                  deactivated
+                    ? prev.map((c) => (c.id === client.id ? { ...c, status: "inactive" } : c))
+                    : prev.filter((c) => c.id !== client.id),
+                );
                 toast({
-                  title: t("clients.client_deleted"),
-                  description: t("clients.client_deleted_success"),
+                  title: t(deactivated ? "clients.client_deactivated" : "clients.client_deleted"),
+                  description: t(
+                    deactivated ? "clients.client_deactivated_history" : "clients.client_deleted_success",
+                  ),
                   variant: "default",
                 });
               } catch (err) {
-                setError(
-                  err instanceof Error
-                    ? err.message
-                    : "Failed to delete client",
-                );
+                // The server says why (e.g. she has history), in Spanish.
                 toast({
-                  title: t("clients.error"),
-                  description: t("clients.failed_to_delete"),
+                  title: t("clients.failed_to_delete"),
+                  description: err instanceof Error ? err.message : undefined,
                   variant: "destructive",
                 });
               } finally {

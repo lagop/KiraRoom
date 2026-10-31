@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
+import { deleteProfessionalKeepingHistory } from "../common/prisma/history-deletes";
 import { CreateProfessionalDto, UpdateProfessionalDto } from "./dto";
 import { assertProfessionalSlot } from "./professional-limit";
 
@@ -193,18 +194,9 @@ export class ProfessionalsService {
     });
   }
 
-  async remove(id: string) {
-    const professional = await this.prisma.professional.findUnique({
-      where: { id },
-    });
-
-    if (!professional) {
-      throw new NotFoundException(`Professional with ID ${id} not found`);
-    }
-
-    return this.prisma.professional.delete({
-      where: { id },
-    });
+  /** History survives the delete: see common/prisma/history-deletes.ts. */
+  async remove(tenantId: string, id: string) {
+    return deleteProfessionalKeepingHistory(this.prisma, tenantId, id);
   }
 
   /**

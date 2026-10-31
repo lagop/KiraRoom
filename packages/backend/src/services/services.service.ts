@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { deleteServiceKeepingHistory } from '../common/prisma/history-deletes';
 import { CreateServiceDto, UpdateServiceDto } from './dto';
 
 @Injectable()
@@ -82,17 +83,8 @@ export class ServicesService {
     });
   }
 
-  async remove(id: string) {
-    const service = await this.prisma.service.findUnique({
-      where: { id },
-    });
-
-    if (!service) {
-      throw new NotFoundException(`Service with ID ${id} not found`);
-    }
-
-    return this.prisma.service.delete({
-      where: { id },
-    });
+  /** History survives the delete: see common/prisma/history-deletes.ts. */
+  async remove(tenantId: string, id: string) {
+    return deleteServiceKeepingHistory(this.prisma, tenantId, id);
   }
 }

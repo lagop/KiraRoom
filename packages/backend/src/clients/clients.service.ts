@@ -9,6 +9,7 @@ import { hashPassword } from "../saas/saas.helpers";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { CreateClientDto, UpdateClientDto, UpdateMyProfileDto, ChangeMyPasswordDto } from "./dto";
 import { validateNif } from "../common/validation/nif.validator";
+import { deleteClientKeepingHistory } from "../common/prisma/history-deletes";
 
 export interface ClientFilters {
   gender?: "male" | "female" | "other";
@@ -232,18 +233,9 @@ export class ClientsService {
     });
   }
 
+  /** History survives the delete: see common/prisma/history-deletes.ts. */
   async remove(tenantId: string, id: string) {
-    const client = await this.prisma.client.findUnique({
-      where: { id, tenantId },
-    });
-
-    if (!client) {
-      throw new NotFoundException(`Client with ID ${id} not found`);
-    }
-
-    return this.prisma.client.delete({
-      where: { id, tenantId },
-    });
+    return deleteClientKeepingHistory(this.prisma, tenantId, id);
   }
 
   /**

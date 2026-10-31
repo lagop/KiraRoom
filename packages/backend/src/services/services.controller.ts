@@ -77,7 +77,7 @@ export class ServicesController {
   @ApiOperation({ summary: "Delete a service" })
   @ApiResponse({ status: 200, description: "Service deleted successfully" })
   @ApiResponse({ status: 404, description: "Service not found" })
-  async remove(@Param("id", ParseUUIDPipe) id: string) {
-    return this.servicesService.remove(id);
+  async remove(@CurrentUser() user: any, @Param("id", ParseUUIDPipe) id: string) {
+    return this.servicesService.remove(user.tenantId, id);
   }
 }

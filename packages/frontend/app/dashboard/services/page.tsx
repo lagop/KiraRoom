@@ -172,10 +172,16 @@ function ServicesPageContent() {
           <button
             onClick={async () => {
               try {
-                await apiClient.deleteService(service.id);
+                // With appointments it is history: the server deactivates it
+                // instead, and the reloaded list shows it inactive.
+                const { deactivated } = await apiClient.deleteService(service.id);
                 toast({
-                  title: t("services.service_deleted"),
-                  description: t("services.service_deleted_success"),
+                  title: t(deactivated ? "services.service_deactivated" : "services.service_deleted"),
+                  description: t(
+                    deactivated
+                      ? "services.service_deactivated_history"
+                      : "services.service_deleted_success",
+                  ),
                   variant: "default",
                 });
                 fetchServices();
