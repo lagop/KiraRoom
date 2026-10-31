@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { localDay, shiftDay } from "../../../../../../components/Calendar/day-grid";
 
 /**
  * Form state for the appointment drawer.
@@ -117,12 +118,10 @@ export function useAppointmentFormState(): UseAppointmentFormStateResult {
   const resetForNewAppointment = () => {
     setNewAppointment({
       ...EMPTY_NEW_APPOINTMENT,
-      // Default date = tomorrow (verbatim from appointment-drawer.tsx:589-595)
-      date: (() => {
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        return tomorrow.toISOString().split("T")[0];
-      })(),
+      // Tomorrow on the browser's calendar: toISOString() gave the UTC day,
+      // which after 23:00 in Madrid (or in the evening in America) was
+      // already the day after.
+      date: shiftDay(localDay(), 1),
     });
     setSelectedServices([]);
     setDateTimePreference({ ...EMPTY_DATE_TIME_PREFERENCE });

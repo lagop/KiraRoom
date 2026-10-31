@@ -144,9 +144,21 @@ export interface Appointment {
   date: string;
   time: string;
   status: AppointmentStatus;
+  /** Euros. */
   price: number;
   notes: string;
-  commissionRate?: number;
+  /** This appointment's own rate; null when it takes the professional's. 0 is a rate. */
+  commissionRate?: number | null;
+  /** The professional's usual rate (null: the salon's default). */
+  professionalCommissionRate?: number | null;
+  depositRequired?: boolean;
+  /** Cents. */
+  depositAmount?: number | null;
+  depositPaid?: boolean;
+  /** Cents: what the visit adds up to (the server's sum). */
+  totalAmount?: number;
+  /** Cents. */
+  amountPaid?: number;
   createdAt: string;
   updatedAt: string;
   activity?: Array<{

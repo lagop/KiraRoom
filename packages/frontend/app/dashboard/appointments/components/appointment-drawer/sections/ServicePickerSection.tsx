@@ -3,6 +3,7 @@ import { Scissors } from "lucide-react";
 import type { CatalogProfessional, CatalogService } from "../hooks/useAppointmentCatalog";
 import type { SelectedService } from "../hooks/useAppointmentFormState";
 import type { CatalogUser } from "../hooks/useAppointmentCatalog";
+import { formatEuros } from "../../appointment-drawer.utils";
 
 /**
  * Step 2 of the create-mode form: service (multi-)selection.
@@ -84,6 +85,7 @@ export interface ServicePickerSectionProps {
     runInParallel: string;
     selectAService: string;
     selectAProfessional: string;
+    pickOneHint: string;
     totalPrice: string;
     totalDuration: string;
     assignedTo: (name: string) => string;
@@ -165,7 +167,7 @@ export function ServicePickerSection({
                         {service.name}
                       </p>
                       <p className="text-lg font-bold text-indigo-600 mt-1">
-                        €{service.price}
+                        {formatEuros(service.price)}
                       </p>
                       <p className="text-sm text-gray-500 mt-1">
                         {service.duration} min
@@ -182,6 +184,16 @@ export function ServicePickerSection({
                       onClick={() =>
                         onToggle(service.id, suggestedProfessionalId)
                       }
+                      role="checkbox"
+                      aria-checked={isSelected}
+                      aria-label={service.name}
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          onToggle(service.id, suggestedProfessionalId);
+                        }
+                      }}
                     >
                       {isSelected && (
                         <svg
@@ -263,7 +275,7 @@ export function ServicePickerSection({
             <div className="flex justify-between text-sm">
               <span className="text-gray-600">{labels.totalPrice}</span>
               <span className="font-semibold text-indigo-700">
-                €{totalPrice}
+                {formatEuros(totalPrice)}
               </span>
             </div>
             <div className="flex justify-between text-sm mt-1">
@@ -282,12 +294,13 @@ export function ServicePickerSection({
           <p className="text-sm text-gray-500 mb-3">
             {labels.selectAService}{" "}
             <span className="text-gray-400">
-              · Pick one to continue. You can add more services after.
+              · {labels.pickOneHint}
             </span>
           </p>
 
           {/* Single-select dropdown */}
           <select
+            aria-label={labels.selectAService}
             value={newAppointment.serviceId}
             onChange={(e) => onSingleServiceChange(e.target.value)}
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
@@ -295,7 +308,7 @@ export function ServicePickerSection({
             <option value="">{labels.selectAService}</option>
             {services.map((service) => (
               <option key={service.id} value={service.id}>
-                {service.name} - €{service.price} ({service.duration} min)
+                {service.name} - {formatEuros(service.price)} ({service.duration} min)
               </option>
             ))}
           </select>
