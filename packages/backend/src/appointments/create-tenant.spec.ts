@@ -331,8 +331,20 @@ describe("online booking: confirmed automatically when the salon says so", () =>
 
   it("starts confirmed when the salon confirms online bookings automatically", async () => {
     const { service, created } = build({ autoConfirmOnlineBookings: true });
+    const hasValidConsent = jest.fn(async () => true);
+    (service as any).consentService = { hasValidConsent };
     await service.createOnline(BOOKING as any);
     expect(created[0].status).toBe("confirmed");
+    expect(hasValidConsent).toHaveBeenCalledWith(expect.any(String), expect.any(String), SERVICE_ID);
+  });
+
+  it("stays pending when the service needs consent forms the client hasn't signed", async () => {
+    // Confirming is where consent is checked; a visit born confirmed would
+    // never be checked again.
+    const { service, created } = build({ autoConfirmOnlineBookings: true });
+    (service as any).consentService = { hasValidConsent: jest.fn(async () => false) };
+    await service.createOnline(BOOKING as any);
+    expect(created[0].status).toBe("pending");
   });
 
   it("leaves the team's own bookings from the panel alone", async () => {

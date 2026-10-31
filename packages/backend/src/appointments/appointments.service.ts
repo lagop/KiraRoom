@@ -715,6 +715,14 @@ export class AppointmentsService {
 
     // Create appointment
     const dto = createAppointmentDto as any;
+    // A salon that confirms online bookings automatically (its general
+    // settings) gets them confirmed, unless the service still needs consent
+    // forms the client hasn't signed: confirming is where that is checked
+    // (needsConsent), so such a visit starts pending like any other.
+    const autoConfirm =
+      visit.online &&
+      !!tenant?.autoConfirmOnlineBookings &&
+      (await this.consentAllowsConfirming(tenantId, clientId, dto.serviceId));
     const appointment = await db.appointment.create({
       data: {
         tenantId: tenantId,
@@ -732,12 +740,7 @@ export class AppointmentsService {
         ),
         duration,
         endTime: endTime,
-        // A salon that confirms online bookings automatically (its general
-        // settings) gets them confirmed; everything else starts pending.
-        status:
-          visit.online && tenant?.autoConfirmOnlineBookings
-            ? AppointmentStatus.confirmed
-            : AppointmentStatus.pending,
+        status: autoConfirm ? AppointmentStatus.confirmed : AppointmentStatus.pending,
         price: priceCents / 100,
         totalAmount: priceCents, // Store in cents
         currency: service.currency,
@@ -1723,6 +1726,16 @@ export class AppointmentsService {
       if (opts.notes) data.notes = opts.notes;
     }
     return { ...data, ...opts.data };
+  }
+
+  /** Whether the client has signed every consent form the service needs. */
+  private async consentAllowsConfirming(
+    tenantId: string,
+    clientId: string,
+    serviceId: string,
+  ): Promise<boolean> {
+    if (!this.consentService) return true;
+    return this.consentService.hasValidConsent(tenantId, clientId, serviceId);
   }
 
   /**
