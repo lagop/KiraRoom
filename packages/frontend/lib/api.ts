@@ -5,6 +5,7 @@ import type { PublicSalonPage } from "./salon-seo";
 import type { WorkingHoursEntry } from "./weekly-schedule";
 import { requestBody } from "./time-off";
 import type { TimeOff, TimeOffConflict, TimeOffInput, TimeOffStatus } from "./time-off";
+import type { CreateClientPayload, UpdateClientPayload } from "./client-form";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1";
@@ -546,9 +547,9 @@ export interface Client {
   lastName: string;
   email?: string;
   phone?: string;
-  dateOfBirth?: string;
-  gender?: "male" | "female" | "other";
-  profileImage?: string;
+  dateOfBirth?: string | null;
+  gender?: "male" | "female" | "other" | "prefer_not_to_say" | null;
+  profileImage?: string | null;
   status: "active" | "inactive" | "blocked";
   preferredLanguage?: string;
   preferredServices?: string[];
@@ -560,10 +561,44 @@ export interface Client {
   visitCount?: number;
   totalSpent?: number;
   tags?: string[];
-  notes?: string;
+  notes?: string | null;
+  loyaltyPoints?: number;
+  loyaltyTier?: string;
   // P2A â€” Spanish tax compliance
   taxId?: string | null;
   taxIdType?: "nif" | "cif" | "nie" | "passport" | "other" | null;
+}
+
+/** A visit in the client file (GET /clients/:id): what, with whom, what it cost. */
+export interface ClientAppointmentSummary {
+  id: string;
+  scheduledDate: string;
+  scheduledTime: string;
+  duration: number;
+  status: "pending" | "confirmed" | "in_progress" | "completed" | "cancelled" | "no_show";
+  /** Euros. */
+  price: number | string;
+  /** Cents: every service and add-on, after discounts. */
+  totalAmount: number | string;
+  /** Cents. */
+  amountPaid: number | string;
+  paymentStatus: string;
+  notes?: string | null;
+  service?: { id: string; name: string } | null;
+  professional?: { id: string; firstName: string; lastName: string } | null;
+  services?: Array<{
+    id: string;
+    order: number;
+    service?: { id: string; name: string } | null;
+    professional?: { id: string; firstName: string; lastName: string } | null;
+  }>;
+}
+
+/** GET /clients/:id: the list row plus health data and the visits. */
+export interface ClientDetail extends Client {
+  allergies?: string[];
+  medicalConditions?: string[];
+  appointments: ClientAppointmentSummary[];
 }
 
 export interface Service {
@@ -1440,35 +1475,9 @@ export interface ApiClientInterface {
     minVisits?: number;
     maxVisits?: number;
   }): Promise<Client[]>;
-  getClient(id: string): Promise<Client>;
-  createClient(data: {
-    tenantId: string;
-    firstName: string;
-    lastName: string;
-    email?: string;
-    phone?: string;
-    dateOfBirth?: string;
-    gender?: "male" | "female" | "other" | "prefer_not_to_say";
-    profileImage?: string;
-  }): Promise<Client>;
-  updateClient(
-    id: string,
-    data: Partial<{
-      firstName: string;
-      lastName: string;
-      email?: string;
-      phone?: string;
-      dateOfBirth?: string;
-      gender?: "male" | "female" | "other" | "prefer_not_to_say";
-      profileImage?: string;
-      preferredLanguage?: string;
-      preferredServices?: string[];
-      preferredProfessionals?: string[];
-      preferredTimes?: string[];
-      communicationPreferences?: Record<string, any>;
-      status: "active" | "inactive" | "blocked";
-    }>,
-  ): Promise<Client>;
+  getClient(id: string): Promise<ClientDetail>;
+  createClient(data: CreateClientPayload & { tenantId?: string }): Promise<Client>;
+  updateClient(id: string, data: UpdateClientPayload, options?: { asStaff?: boolean }): Promise<Client>;
   deleteClient(id: string): Promise<HistoryDeleteResult>;
   getServices(tenantId?: string): Promise<Service[]>;
   getService(id: string): Promise<Service>;
@@ -2501,46 +2510,34 @@ class ApiClient implements ApiClientInterface {
     return this.request<Client[]>(`/clients/filter?${params.toString()}`);
   }
 
-  async getClient(id: string): Promise<Client> {
-    return this.request<Client>(`/admin/clients/${id}`);
+  /**
+   * A client's file. /clients/:id, not /admin/clients/:id: staff may read
+   * the clients they serve (the server answers 404 for the others).
+   */
+  async getClient(id: string): Promise<ClientDetail> {
+    return this.request<ClientDetail>(`/clients/${id}`);
   }
 
-  async createClient(data: {
-    tenantId: string;
-    firstName: string;
-    lastName: string;
-    email?: string;
-    phone?: string;
-    dateOfBirth?: string;
-    gender?: "male" | "female" | "other" | "prefer_not_to_say";
-    profileImage?: string;
-  }): Promise<Client> {
+  /** The tenant is taken from the token; a `tenantId` here is ignored. */
+  async createClient(data: CreateClientPayload & { tenantId?: string }): Promise<Client> {
     return this.request<Client>("/clients", {
       method: "POST",
       body: JSON.stringify(data),
     });
   }
 
+  /**
+   * Owner/admin edit through /admin/clients/:id. Staff go through
+   * /clients/:id, which lets them edit the clients they serve (not the
+   * email or the status).
+   */
   async updateClient(
     id: string,
-    data: Partial<{
-      firstName: string;
-      lastName: string;
-      email?: string;
-      phone?: string;
-      dateOfBirth?: string;
-      gender?: "male" | "female" | "other" | "prefer_not_to_say";
-      profileImage?: string;
-      preferredLanguage?: string;
-      preferredServices?: string[];
-      preferredProfessionals?: string[];
-      preferredTimes?: string[];
-      communicationPreferences?: Record<string, any>;
-      status: "active" | "inactive" | "blocked";
-      notes?: string;
-    }>,
+    data: UpdateClientPayload,
+    options: { asStaff?: boolean } = {},
   ): Promise<Client> {
-    return this.request<Client>(`/admin/clients/${id}`, {
+    const path = options.asStaff ? `/clients/${id}` : `/admin/clients/${id}`;
+    return this.request<Client>(path, {
       method: "PUT",
       body: JSON.stringify(data),
     });

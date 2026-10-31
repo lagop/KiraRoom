@@ -29,6 +29,7 @@ import {
   type DiscountedTicket,
 } from './pos-discounts';
 import { InvoiceService, type IssuedInvoice } from '../invoices/invoices.service';
+import { CLIENT_POS_SELECT } from '../clients/client-select';
 
 export { CreatePosOrderDto };
 
@@ -201,6 +202,8 @@ export class PosService {
       where,
       orderBy: { firstName: 'asc' },
       take: 50,
+      // Who, how to reach, points: never her sign-in secrets or health data.
+      select: CLIENT_POS_SELECT,
     });
   }
 
@@ -895,7 +898,7 @@ export class PosService {
         tenantId,
         createdAt: { gte: startDate, lte: endDate },
       },
-      include: { client: true },
+      include: { client: { select: { firstName: true, lastName: true } } },
     });
 
     const paidPayments = payments.filter((p) => p.status === 'paid');

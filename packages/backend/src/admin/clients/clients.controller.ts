@@ -24,10 +24,7 @@ export class AdminClientsController {
   @ApiResponse({ status: 403, description: 'Forbidden' })
   async create(@CurrentUser() user: any, @Body() createClientDto: CreateClientDto) {
     // The tenant comes from the caller's token, never from the body.
-    return this.adminClientsService.create({
-      ...createClientDto,
-      tenantId: user.tenantId,
-    });
+    return this.adminClientsService.create(user.tenantId, createClientDto);
   }
 
   @Get()
