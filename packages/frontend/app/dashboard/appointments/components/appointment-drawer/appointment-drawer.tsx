@@ -66,9 +66,12 @@ import {
   getStatusBadgeStyle,
   getTotalDuration,
   getTotalPrice,
+  sendStatusChange,
+  serverMessage,
   sumServiceDurations,
   transformAddons,
 } from "../appointment-drawer.utils";
+import { StatusChangeDialog } from "../StatusChangeDialog";
 // Phase 1+2+5 refactor — primitives, data hooks, and section components.
 // See .kilo/plans/appointment-drawer-refactor.md.
 import { AppointmentStatusBadge } from "./primitives/AppointmentStatusBadge";
@@ -505,20 +508,41 @@ useEffect(() => {
   // `formatDateString` and `formatDateTimeString` are imported from
   // ./appointment-drawer.utils.
 
-  const handleStatusChange = async (newStatus: AppointmentStatus) => {
+  // Cancelling and a no-show tell the client, so they are asked first
+  // (cancelling with an optional reason).
+  const [askingStatus, setAskingStatus] = useState<"cancelled" | "no_show" | null>(null);
+
+  const requestStatusChange = (newStatus: AppointmentStatus) => {
+    if (newStatus === "cancelled" || newStatus === "no_show") {
+      setAskingStatus(newStatus);
+    } else {
+      void handleStatusChange(newStatus);
+    }
+  };
+
+  const handleStatusChange = async (newStatus: AppointmentStatus, reason?: string) => {
     if (!appointment) return;
 
     setUpdating(true);
     try {
-      await apiClient.updateAppointment(appointment!.id, {
-        status: newStatus,
-      } as any);
+      // Cancel, complete and no-show go to their own routes, which send the
+      // notices, tell the wait-list and issue the invoice.
+      await sendStatusChange(apiClient, appointment.id, newStatus, reason);
       setAppointment({ ...appointment!, status: newStatus });
+      // The list behind the drawer showed the old status until reloaded.
+      onAppointmentUpdated?.();
     } catch (error) {
       console.error("Error updating appointment status:", error);
-      toast({ title: t("appointments.drawer.failedToUpdateStatus"), variant: "destructive" });
+      // The server's reason, e.g. "Una cita cancelada no puede pasar a
+      // completada.", rather than only "Error al actualizar".
+      toast({
+        title: t("appointments.drawer.failedToUpdateStatus"),
+        description: serverMessage(error),
+        variant: "destructive",
+      });
     } finally {
       setUpdating(false);
+      setAskingStatus(null);
     }
   };
 
@@ -1171,7 +1195,7 @@ useEffect(() => {
                   setEditedAppointment(null);
                 }}
                 onSave={handleUpdate}
-                onStatusChange={handleStatusChange}
+                onStatusChange={requestStatusChange}
                 labels={{
                   created: t("appointments.created"),
                   viewMode: t("appointments.view_mode"),
@@ -1183,6 +1207,17 @@ useEffect(() => {
                   cancel: t("appointments.cancel"),
                   start: t("appointments.start"),
                   complete: t("appointments.complete"),
+                  noShow: t("appointments.no_show"),
+                }}
+              />
+              {/* In place, not portalled: the drawer is a modal dialog. */}
+              <StatusChangeDialog
+                to={askingStatus}
+                loading={updating}
+                portal={false}
+                onCancel={() => setAskingStatus(null)}
+                onConfirm={(reason) => {
+                  if (askingStatus) void handleStatusChange(askingStatus, reason);
                 }}
               />
 

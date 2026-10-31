@@ -15,15 +15,23 @@ import {
   XCircle,
   AlertCircle,
   Edit,
-  Trash2
+  Trash2,
+  UserX
 } from 'lucide-react';
 import apiClient, { Appointment as ApiAppointment } from '../../../../lib/api';
-import { appointmentEditHref } from '../components/appointment-drawer.utils';
+import {
+  appointmentEditHref,
+  sendStatusChange,
+  serverMessage,
+  statusActions,
+} from '../components/appointment-drawer.utils';
+import { StatusChangeDialog } from '../components/StatusChangeDialog';
+import { useTranslations } from '@/lib/use-translation';
 import { getCurrentUser } from '../../../../lib/utils';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/use-toast';
 
-type AppointmentStatus = 'confirmed' | 'pending' | 'in_progress' | 'completed' | 'cancelled';
+type AppointmentStatus = 'confirmed' | 'pending' | 'in_progress' | 'completed' | 'cancelled' | 'no_show';
 
 interface PopulatedAppointment extends ApiAppointment {
   client: {
@@ -94,6 +102,9 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
   // Asked in the panel's dialog, not window.confirm.
   const [confirmDelete, setConfirmDelete] = useState(false);
   const { toast } = useToast();
+  const t = useTranslations();
+  // Cancelling and a no-show tell the client, so they are asked first.
+  const [askingStatus, setAskingStatus] = useState<'cancelled' | 'no_show' | null>(null);
   useEffect(() => {
     setCanDelete(getCurrentUser()?.role !== 'staff');
   }, []);
@@ -158,6 +169,7 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
       in_progress: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200' },
       completed: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200' },
       cancelled: { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200' },
+      no_show: { bg: 'bg-gray-50', text: 'text-gray-700', border: 'border-gray-300' },
     };
 
     const statusLabels: Record<AppointmentStatus, string> = {
@@ -166,6 +178,7 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
       in_progress: 'In Progress',
       completed: 'Completed',
       cancelled: 'Cancelled',
+      no_show: 'No-show',
     };
 
     const icons: Record<AppointmentStatus, React.ReactNode> = {
@@ -174,6 +187,7 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
       in_progress: <Clock className="w-4 h-4 mr-2" />,
       completed: <CheckCircle className="w-4 h-4 mr-2" />,
       cancelled: <XCircle className="w-4 h-4 mr-2" />,
+      no_show: <UserX className="w-4 h-4 mr-2" />,
     };
 
     const style = styles[status];
@@ -207,10 +221,20 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
     });
   };
 
-  const handleStatusChange = async (newStatus: AppointmentStatus) => {
+  const requestStatusChange = (newStatus: AppointmentStatus) => {
+    if (newStatus === 'cancelled' || newStatus === 'no_show') {
+      setAskingStatus(newStatus);
+    } else {
+      void handleStatusChange(newStatus);
+    }
+  };
+
+  const handleStatusChange = async (newStatus: AppointmentStatus, reason?: string) => {
     setUpdating(true);
     try {
-      await apiClient.updateAppointment(params.id, { status: newStatus } as any);
+      // Cancel, complete and no-show go to their own routes, which send the
+      // notices, tell the wait-list and issue the invoice.
+      await sendStatusChange(apiClient, params.id, newStatus, reason);
       // Update local state
       if (appointment) {
         setAppointment({ ...appointment, status: newStatus });
@@ -219,12 +243,21 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
       console.error('Error updating appointment status:', error);
       toast({
         title: 'No se ha podido cambiar el estado de la cita.',
-        description: error instanceof Error && error.message ? error.message : undefined,
+        description: serverMessage(error),
         variant: 'destructive',
       });
     } finally {
       setUpdating(false);
+      setAskingStatus(null);
     }
+  };
+
+  const statusButtons: Partial<Record<AppointmentStatus, { icon: React.ReactNode; className: string; label: string }>> = {
+    confirmed: { icon: <CheckCircle className="w-4 h-4 mr-1" />, className: 'bg-green-600 hover:bg-green-700', label: t('appointments.confirm') },
+    in_progress: { icon: <Clock className="w-4 h-4 mr-1" />, className: 'bg-blue-600 hover:bg-blue-700', label: t('appointments.start') },
+    completed: { icon: <CheckCircle className="w-4 h-4 mr-1" />, className: 'bg-green-600 hover:bg-green-700', label: t('appointments.complete') },
+    no_show: { icon: <UserX className="w-4 h-4 mr-1" />, className: 'bg-gray-600 hover:bg-gray-700', label: t('appointments.no_show') },
+    cancelled: { icon: <XCircle className="w-4 h-4 mr-1" />, className: 'bg-red-600 hover:bg-red-700', label: t('appointments.cancel') },
   };
 
   const handleEdit = () => {
@@ -355,42 +388,20 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
               </span>
             ) : (
               <>
-                {appointment.status === 'pending' && (
-                  <>
+                {statusActions(appointment.status).map((to) => {
+                  const button = statusButtons[to as AppointmentStatus];
+                  if (!button) return null;
+                  return (
                     <button
-                      onClick={() => handleStatusChange('confirmed')}
-                      className="inline-flex items-center px-3 py-1.5 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 transition-colors"
+                      key={to}
+                      onClick={() => requestStatusChange(to as AppointmentStatus)}
+                      className={`inline-flex items-center px-3 py-1.5 ${button.className} text-white text-sm rounded-lg transition-colors`}
                     >
-                      <CheckCircle className="w-4 h-4 mr-1" />
-                      Confirm
+                      {button.icon}
+                      {button.label}
                     </button>
-                    <button
-                      onClick={() => handleStatusChange('cancelled')}
-                      className="inline-flex items-center px-3 py-1.5 bg-red-600 text-white text-sm rounded-lg hover:bg-red-700 transition-colors"
-                    >
-                      <XCircle className="w-4 h-4 mr-1" />
-                      Cancel
-                    </button>
-                  </>
-                )}
-                {appointment.status === 'confirmed' && (
-                  <button
-                    onClick={() => handleStatusChange('in_progress')}
-                    className="inline-flex items-center px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors"
-                  >
-                    <Clock className="w-4 h-4 mr-1" />
-                    Start
-                  </button>
-                )}
-                {appointment.status === 'in_progress' && (
-                  <button
-                    onClick={() => handleStatusChange('completed')}
-                    className="inline-flex items-center px-3 py-1.5 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 transition-colors"
-                  >
-                    <CheckCircle className="w-4 h-4 mr-1" />
-                    Complete
-                  </button>
-                )}
+                  );
+                })}
               </>
             )}
           </div>
@@ -584,6 +595,15 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
           </div>
         </div>
       </div>
+
+      <StatusChangeDialog
+        to={askingStatus}
+        loading={updating}
+        onCancel={() => setAskingStatus(null)}
+        onConfirm={(reason) => {
+          if (askingStatus) void handleStatusChange(askingStatus, reason);
+        }}
+      />
 
       <ConfirmDialog
         open={confirmDelete}

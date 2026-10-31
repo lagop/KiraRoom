@@ -1381,6 +1381,8 @@ export interface ApiClientInterface {
     data: Partial<CreateAppointmentDto>,
   ): Promise<Appointment>;
   cancelAppointment(id: string, reason?: string): Promise<Appointment>;
+  completeAppointment(id: string, notes?: string): Promise<Appointment>;
+  markAppointmentNoShow(id: string): Promise<Appointment>;
   deleteAppointment(id: string): Promise<void>;
   getClients(tenantId?: string): Promise<Client[]>;
   filterClients(filters: {
@@ -2204,6 +2206,22 @@ class ApiClient implements ApiClientInterface {
     return this.request<Appointment>(`/appointments/${id}/cancel`, {
       method: "PUT",
       body: JSON.stringify({ reason }),
+    });
+  }
+
+  // Completing and marking a no-show have their own routes, like cancelling:
+  // they set off the invoice, the cadence and the notices, which a PATCH of
+  // `status` used to skip (the server now routes that the same way too).
+  async completeAppointment(id: string, notes?: string): Promise<Appointment> {
+    return this.request<Appointment>(`/appointments/${id}/complete`, {
+      method: "PUT",
+      body: JSON.stringify({ notes }),
+    });
+  }
+
+  async markAppointmentNoShow(id: string): Promise<Appointment> {
+    return this.request<Appointment>(`/appointments/${id}/no-show`, {
+      method: "PUT",
     });
   }
 

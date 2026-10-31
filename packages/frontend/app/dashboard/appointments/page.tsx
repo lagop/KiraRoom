@@ -16,6 +16,7 @@ import {
   AlertCircle,
   Eye,
   ChevronDown,
+  UserX,
 } from "lucide-react";
 import apiClient, { Appointment as ApiAppointment } from "../../../lib/api";
 import { useTranslations } from "@/lib/use-translation";
@@ -23,7 +24,13 @@ import { useToast } from "@/components/ui/use-toast";
 import { Calendar as CalendarComponent } from "../../../components/Calendar/Calendar";
 import { localDay } from "../../../components/Calendar/day-grid";
 import { AppointmentDrawer } from "./components/appointment-drawer";
-import { drawerTargetFromQuery } from "./components/appointment-drawer.utils";
+import {
+  drawerTargetFromQuery,
+  sendStatusChange,
+  serverMessage,
+  statusActions,
+} from "./components/appointment-drawer.utils";
+import { StatusChangeDialog } from "./components/StatusChangeDialog";
 
 type AppointmentStatus =
   | "confirmed"
@@ -215,10 +222,31 @@ function AppointmentsPageContent() {
     fetchAppointments();
   }, [view]);
 
-  const updateStatus = async (id: string, newStatus: AppointmentStatus) => {
+  // Cancelling and a no-show tell the client, so they are asked first
+  // (cancelling with an optional reason).
+  const [askingStatus, setAskingStatus] = useState<{
+    id: string;
+    to: "cancelled" | "no_show";
+  } | null>(null);
+
+  const requestStatus = (id: string, newStatus: AppointmentStatus) => {
+    if (newStatus === "cancelled" || newStatus === "no_show") {
+      setAskingStatus({ id, to: newStatus });
+    } else {
+      void updateStatus(id, newStatus);
+    }
+  };
+
+  const updateStatus = async (
+    id: string,
+    newStatus: AppointmentStatus,
+    reason?: string,
+  ) => {
     setUpdatingId(id);
     try {
-      await apiClient.updateAppointment(id, { status: newStatus } as any);
+      // Cancel, complete and no-show go to their own routes, which send the
+      // notices, tell the wait-list and issue the invoice.
+      await sendStatusChange(apiClient, id, newStatus, reason);
       setAppointments((prev) =>
         prev.map((apt) =>
           apt.id === id ? { ...apt, status: newStatus } : apt,
@@ -226,15 +254,48 @@ function AppointmentsPageContent() {
       );
     } catch (error) {
       console.error("Error updating appointment status:", error);
-      // It used to fail in silence: the badge just did not change.
+      // It used to fail in silence: the badge just did not change. The
+      // description is the server's reason, e.g. "Una cita cancelada no
+      // puede pasar a completada."
       toast({
         title: t("appointments.statusChangeFailed"),
-        description: error instanceof Error && error.message ? error.message : undefined,
+        description: serverMessage(error),
         variant: "destructive",
       });
     } finally {
       setUpdatingId(null);
+      setAskingStatus(null);
     }
+  };
+
+  const statusActionUi: Partial<
+    Record<AppointmentStatus, { icon: React.ReactNode; className: string; label: string }>
+  > = {
+    confirmed: {
+      icon: <CheckCircle className="w-5 h-5" />,
+      className: "text-green-600 hover:text-green-700",
+      label: t("appointments.confirm"),
+    },
+    in_progress: {
+      icon: <Clock className="w-5 h-5" />,
+      className: "text-blue-600 hover:text-blue-700",
+      label: t("appointments.start"),
+    },
+    completed: {
+      icon: <CheckCircle className="w-5 h-5" />,
+      className: "text-green-600 hover:text-green-700",
+      label: t("appointments.complete"),
+    },
+    no_show: {
+      icon: <UserX className="w-5 h-5" />,
+      className: "text-gray-600 hover:text-gray-700",
+      label: t("appointments.no_show"),
+    },
+    cancelled: {
+      icon: <XCircle className="w-5 h-5" />,
+      className: "text-red-600 hover:text-red-700",
+      label: t("appointments.cancel"),
+    },
   };
 
   const getStatusBadge = (status: AppointmentStatus) => {
@@ -1338,55 +1399,24 @@ function AppointmentsPageContent() {
                     </td>
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center justify-end space-x-2">
-                        {appointment.status === "pending" && (
-                          <button
-                            onClick={() =>
-                              updateStatus(appointment.id, "confirmed")
-                            }
-                            disabled={updatingId === appointment.id}
-                            className="text-sm text-green-600 hover:text-green-700 disabled:opacity-50"
-                            title={t("appointments.confirm")}
-                          >
-                            <CheckCircle className="w-5 h-5" />
-                          </button>
-                        )}
-                        {appointment.status === "confirmed" && (
-                          <button
-                            onClick={() =>
-                              updateStatus(appointment.id, "in_progress")
-                            }
-                            disabled={updatingId === appointment.id}
-                            className="text-sm text-blue-600 hover:text-blue-700 disabled:opacity-50"
-                            title={t("appointments.start")}
-                          >
-                            <Clock className="w-5 h-5" />
-                          </button>
-                        )}
-                        {appointment.status === "in_progress" && (
-                          <button
-                            onClick={() =>
-                              updateStatus(appointment.id, "completed")
-                            }
-                            disabled={updatingId === appointment.id}
-                            className="text-sm text-green-600 hover:text-green-700 disabled:opacity-50"
-                            title={t("appointments.complete")}
-                          >
-                            <CheckCircle className="w-5 h-5" />
-                          </button>
-                        )}
-                        {appointment.status !== "cancelled" &&
-                          appointment.status !== "completed" && (
+                        {/* Only what the server's transition table allows:
+                            the next step, "No se presentó", "Cancelar". */}
+                        {statusActions(appointment.status).map((to) => {
+                          const ui = statusActionUi[to];
+                          if (!ui) return null;
+                          return (
                             <button
-                              onClick={() =>
-                                updateStatus(appointment.id, "cancelled")
-                              }
+                              key={to}
+                              onClick={() => requestStatus(appointment.id, to)}
                               disabled={updatingId === appointment.id}
-                              className="text-sm text-red-600 hover:text-red-700 disabled:opacity-50"
-                              title={t("appointments.cancel")}
+                              className={`text-sm ${ui.className} disabled:opacity-50`}
+                              title={ui.label}
+                              aria-label={ui.label}
                             >
-                              <XCircle className="w-5 h-5" />
+                              {ui.icon}
                             </button>
-                          )}
+                          );
+                        })}
                         <button
                           onClick={() => {
                             setSelectedAppointmentId(appointment.id);
@@ -1434,6 +1464,15 @@ function AppointmentsPageContent() {
         onAppointmentUpdated={fetchAppointments}
         refreshKey={drawerRefreshKey}
         startInEditMode={drawerStartsInEdit}
+      />
+
+      <StatusChangeDialog
+        to={askingStatus?.to ?? null}
+        loading={!!askingStatus && updatingId === askingStatus.id}
+        onCancel={() => setAskingStatus(null)}
+        onConfirm={(reason) => {
+          if (askingStatus) void updateStatus(askingStatus.id, askingStatus.to, reason);
+        }}
       />
     </div>
   );

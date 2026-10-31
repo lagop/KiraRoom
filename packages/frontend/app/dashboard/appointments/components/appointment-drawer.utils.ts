@@ -270,6 +270,12 @@ export function getStatusBadgeStyle(status: string): {
       border: "border-red-200",
       label: "Cancelled",
     },
+    no_show: {
+      bg: "bg-gray-50",
+      text: "text-gray-700",
+      border: "border-gray-300",
+      label: "No-show",
+    },
   };
   return (
     styles[status] ?? {
@@ -337,4 +343,89 @@ export function drawerTargetFromQuery(
   if (id) return { mode: "existing", appointmentId: id, edit: params.get("edit") === "1" };
   if (params.get("new") === "true") return { mode: "new" };
   return null;
+}
+// ----- Status changes -----------------------------------------------------
+
+export type AppointmentStatusValue =
+  | "pending"
+  | "confirmed"
+  | "in_progress"
+  | "completed"
+  | "cancelled"
+  | "no_show";
+
+/**
+ * What may follow each status: a copy of the server's table
+ * (packages/backend/src/appointments/appointment-status.ts). The server
+ * decides, and answers 409 with the reason otherwise; this only keeps the
+ * panel from offering a button that would be refused. Completed and
+ * cancelled are final; a no-show can go back to confirmed (a client who
+ * turns up late).
+ */
+export const NEXT_STATUSES: Readonly<
+  Record<AppointmentStatusValue, readonly AppointmentStatusValue[]>
+> = {
+  pending: ["confirmed", "in_progress", "completed", "cancelled", "no_show"],
+  confirmed: ["in_progress", "completed", "cancelled", "no_show"],
+  in_progress: ["confirmed", "completed", "cancelled"],
+  completed: [],
+  cancelled: [],
+  no_show: ["confirmed"],
+};
+
+export function canChangeStatus(from: string, to: AppointmentStatusValue): boolean {
+  return (NEXT_STATUSES[from as AppointmentStatusValue] ?? []).includes(to);
+}
+
+/**
+ * The status buttons the list and the drawer show, in order: the next step
+ * of the visit, then "No se presentó", then "Cancelar". A no-show offers
+ * "Confirmar" again for a client who arrived late.
+ */
+export function statusActions(from: string): AppointmentStatusValue[] {
+  const byStatus: Record<string, AppointmentStatusValue[]> = {
+    pending: ["confirmed", "no_show", "cancelled"],
+    confirmed: ["in_progress", "no_show", "cancelled"],
+    in_progress: ["completed", "cancelled"],
+    no_show: ["confirmed"],
+  };
+  return (byStatus[from] ?? []).filter((to) => canChangeStatus(from, to));
+}
+
+/** The API calls a status change may use (a subset of the panel's client). */
+export interface StatusChangeApi {
+  cancelAppointment(id: string, reason?: string): Promise<unknown>;
+  completeAppointment(id: string): Promise<unknown>;
+  markAppointmentNoShow(id: string): Promise<unknown>;
+  // The panel client types its edit body without `status`; any body will do here.
+  updateAppointment(id: string, data: object): Promise<unknown>;
+}
+
+/**
+ * Sends a status change to the route that owns it. Cancelling, completing
+ * and a no-show have their own endpoints, which send the notices, offer the
+ * slot to the wait-list, issue the invoice and so on; the rest is an edit.
+ */
+export function sendStatusChange(
+  api: StatusChangeApi,
+  id: string,
+  to: AppointmentStatusValue,
+  reason?: string,
+): Promise<unknown> {
+  switch (to) {
+    case "cancelled":
+      return api.cancelAppointment(id, reason?.trim() || undefined);
+    case "completed":
+      return api.completeAppointment(id);
+    case "no_show":
+      return api.markAppointmentNoShow(id);
+    default:
+      return api.updateAppointment(id, { status: to });
+  }
+}
+
+/** The server's reason for a refusal (a 409 on a transition), if it gave one. */
+export function serverMessage(error: unknown): string | undefined {
+  const message = error instanceof Error ? error.message.trim() : "";
+  return message || undefined;
 }

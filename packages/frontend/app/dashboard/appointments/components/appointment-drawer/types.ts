@@ -15,7 +15,8 @@ export type AppointmentStatus =
   | "pending"
   | "in_progress"
   | "completed"
-  | "cancelled";
+  | "cancelled"
+  | "no_show";
 
 export interface PopulatedAppointment {
   client: {
