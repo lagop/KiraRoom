@@ -20,6 +20,7 @@ import {
   dateOfDay,
   shiftDay,
   salonClosureOn,
+  salonClosedWeekday,
   timeOffBands,
   visibleProfessionals,
 } from "./day-grid";
@@ -272,6 +273,67 @@ console.log("time off bands");
   check(
     "a partial closure is not a closed day",
     salonClosureOn("2026-12-14", [{ ...closure, startTime: "14:00", endTime: "20:00" }]) === null,
+  );
+}
+
+// --- The salon's own hours (Tenant.openingHours, lib/salon-hours.ts) ---
+{
+  const SALON = [
+    { day: "monday", openTime: "10:00", closeTime: "14:00" },
+    { day: "monday", openTime: "17:00", closeTime: "20:00" },
+    { day: "saturday", openTime: "10:00", closeTime: "14:00" },
+  ];
+  const NINE_TO_SEVEN = ["monday", "tuesday", "sunday"].map((day) => ({ day, openTime: "09:00", closeTime: "19:00" }));
+  check(
+    "the grid covers the salon's hours that weekday and the shifts",
+    same(gridHours({ day: "2026-11-02", openingHours: SALON }), { startHour: 10, endHour: 20 }) &&
+      same(gridHours({ day: "2026-11-02", openingHours: SALON, workingHours: [NINE_TO_SEVEN] }), { startHour: 9, endHour: 20 }),
+    gridHours({ day: "2026-11-02", openingHours: SALON, workingHours: [NINE_TO_SEVEN] }),
+  );
+  check(
+    "a weekday the salon is closed: the default grid",
+    same(gridHours({ day: "2026-11-03", openingHours: SALON }), { startHour: 8, endHour: 20 }),
+  );
+  check(
+    "shaded outside the shift AND outside the salon's hours (its lunch too)",
+    same(offShiftBands("2026-11-02", NINE_TO_SEVEN, range, SALON), [
+      { start: 480, end: 600 },
+      { start: 840, end: 1020 },
+      { start: 1140, end: 1260 },
+    ]),
+    offShiftBands("2026-11-02", NINE_TO_SEVEN, range, SALON),
+  );
+  check(
+    "a professional with no schedule is shaded outside the salon's hours",
+    same(offShiftBands("2026-11-02", [], range, SALON), [
+      { start: 480, end: 600 },
+      { start: 840, end: 1020 },
+      { start: 1200, end: 1260 },
+    ]),
+  );
+  check(
+    "a weekday the salon is closed is shaded entirely, whoever has a shift",
+    same(offShiftBands("2026-11-08", NINE_TO_SEVEN, range, SALON), [{ start: 480, end: 1260 }]),
+  );
+  check(
+    "the legacy { open, close } is the salon's hours every day",
+    same(offShiftBands("2026-11-08", [], range, { open: "09:00", close: "20:00" }), [
+      { start: 480, end: 540 },
+      { start: 1200, end: 1260 },
+    ]) && same(gridHours({ day: "2026-11-08", openingHours: { open: "09:30", close: "18:15" } }), { startHour: 9, endHour: 19 }),
+  );
+  check(
+    "no salon hours (none, {}, [] or the old wizard's days): nothing changes",
+    [undefined, {}, [], { mon: { open: "10:00", close: "12:00" } }].every((openingHours) =>
+      same(offShiftBands("2026-11-02", [], range, openingHours), []),
+    ),
+  );
+  check(
+    "the closed-weekday banner",
+    salonClosedWeekday("2026-11-08", SALON) &&
+      !salonClosedWeekday("2026-11-02", SALON) &&
+      !salonClosedWeekday("2026-11-08", {}) &&
+      !salonClosedWeekday("2026-11-08", { open: "09:00", close: "20:00" }),
   );
 }
 

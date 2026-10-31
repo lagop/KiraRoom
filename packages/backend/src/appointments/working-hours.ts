@@ -300,3 +300,119 @@ export function salonWeekFrom(
   }
   return week;
 }
+
+/* -------------------------------------------------------------------------- */
+/*  The salon's own opening hours (Tenant.openingHours)                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The salon's own week, as the owner set it, in the same flat format as a
+ * professional's `workingHours` -- or undefined when the salon recorded none.
+ *
+ * `Tenant.openingHours` has held three shapes over time, and all of them are
+ * still in the database:
+ *
+ *   - `[{ day, openTime, closeTime }, ...]` -- the current one, written by
+ *     the settings page and the onboarding wizard. A weekday with no entry is
+ *     a day the salon is closed; several entries for one day are shifts.
+ *   - `{ open: "09:00", close: "20:00" }` -- the settings page's single pair
+ *     before shifts. It was read (reschedule check, slot grid) as "open every
+ *     day from `open` to `close`", and it still is: seven entries.
+ *   - `{}`, `null`, or the old wizard's `{ mon: { open, close }, ... }` --
+ *     nothing availability ever read, so nothing recorded: no salon-level
+ *     limit. The wizard's week is shown in the settings editor as a starting
+ *     point, but it is not imposed on anyone until the owner saves it there.
+ *
+ * An array with no readable entry (`[]`) is "nothing recorded" too, exactly
+ * as for a professional: it is what the settings page saves when the owner
+ * chooses to leave the hours to each professional.
+ */
+export function salonHoursEntries(openingHours: unknown): WorkingHoursEntry[] | undefined {
+  if (Array.isArray(openingHours)) {
+    const entries = parseWorkingHours(openingHours);
+    return entries.length > 0 ? entries : undefined;
+  }
+  const legacy = legacyOpeningWindow(openingHours);
+  if (!legacy) return undefined;
+  return WEEKDAY_NAMES.map((day) => ({ day, openTime: legacy.openTime, closeTime: legacy.closeTime }));
+}
+
+/**
+ * The pre-shifts `{ open, close }` pair, when the value carries a readable one
+ * (open before close). Other keys next to it (the old wizard's days) are
+ * ignored, as they always were.
+ */
+export function legacyOpeningWindow(openingHours: unknown): SalonDayWindow | null {
+  if (!openingHours || typeof openingHours !== "object" || Array.isArray(openingHours)) return null;
+  const { open, close } = openingHours as { open?: unknown; close?: unknown };
+  if (typeof open !== "string" || typeof close !== "string") return null;
+  const start = minutesOf(open);
+  const end = minutesOf(close);
+  if (start === null || end === null || end <= start) return null;
+  return { openTime: clockOf(start), closeTime: clockOf(end) };
+}
+
+/**
+ * The salon's open stretches on `date`, with workingWindowsFor's contract:
+ *   undefined — the salon recorded no hours: no salon-level limit
+ *   []        — the salon is closed that weekday
+ *   windows   — open these minutes; the gaps between them it is closed
+ */
+export function salonWindowsFor(openingHours: unknown, date: Date): ShiftWindow[] | undefined {
+  const entries = salonHoursEntries(openingHours);
+  if (!entries) return undefined;
+  return shiftsOnDay(entries, weekdayNameOf(date));
+}
+
+/** The minutes inside both `a` and `b`, sorted and merged. */
+export function intersectWindows(
+  a: ReadonlyArray<ShiftWindow>,
+  b: ReadonlyArray<ShiftWindow>,
+): ShiftWindow[] {
+  const out: ShiftWindow[] = [];
+  for (const x of mergeWindows(a)) {
+    for (const y of mergeWindows(b)) {
+      const startMinutes = Math.max(x.startMinutes, y.startMinutes);
+      const endMinutes = Math.min(x.endMinutes, y.endMinutes);
+      if (endMinutes > startMinutes) out.push({ startMinutes, endMinutes });
+    }
+  }
+  return mergeWindows(out);
+}
+
+/**
+ * When a professional can be booked on a day: inside their shifts AND the
+ * salon's hours when both are recorded, inside whichever one is when only one
+ * is, and with no limit (undefined) when neither is -- as before salon hours
+ * existed. A day the salon is closed is [] whatever the professional's shift.
+ */
+export function bookableWindows(
+  professionalShifts: ShiftWindow[] | undefined,
+  salonShifts: ShiftWindow[] | undefined,
+): ShiftWindow[] | undefined {
+  if (salonShifts === undefined) return professionalShifts;
+  if (professionalShifts === undefined) return mergeWindows(salonShifts);
+  return intersectWindows(professionalShifts, salonShifts);
+}
+
+/**
+ * The week a client is told the salon is open: the salon's own hours when it
+ * set them, else derived from its professionals' schedules (salonShiftsFrom)
+ * as before. `{}` when neither is recorded.
+ */
+export function salonOpenShifts(
+  openingHours: unknown,
+  professionals: ReadonlyArray<{ workingHours?: unknown }>,
+): Record<string, SalonDayWindow[]> {
+  const own = salonHoursEntries(openingHours);
+  return salonShiftsFrom(own ? [{ workingHours: own }] : professionals);
+}
+
+/** salonOpenShifts as one window per day (earliest open to latest close), like salonWeekFrom. */
+export function salonOpenWeek(
+  openingHours: unknown,
+  professionals: ReadonlyArray<{ workingHours?: unknown }>,
+): Record<string, SalonDayWindow> {
+  const own = salonHoursEntries(openingHours);
+  return salonWeekFrom(own ? [{ workingHours: own }] : professionals);
+}

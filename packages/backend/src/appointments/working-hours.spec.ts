@@ -9,6 +9,12 @@ import {
   parseWorkingHours,
   subtractWindows,
   candidateStarts,
+  salonHoursEntries,
+  salonWindowsFor,
+  intersectWindows,
+  bookableWindows,
+  salonOpenShifts,
+  salonOpenWeek,
 } from "./working-hours";
 
 /**
@@ -306,5 +312,80 @@ describe("candidateStarts", () => {
   it("starts a slot at a shift start off the half hour, then keeps to the half hours", () => {
     const starts = clocks(candidateStarts(w("09:00", "10:00"), [w("10:15", "12:00")]));
     expect(starts).toEqual(["09:00", "09:30", "10:15", "10:30", "11:00", "11:30"]);
+  });
+});
+
+describe("the salon's own hours (Tenant.openingHours)", () => {
+  const MONDAY = new Date("2026-11-02T12:00:00.000Z");
+  const SUNDAY = new Date("2026-11-08T12:00:00.000Z");
+  const W = (start: string, end: string) => ({ startMinutes: minutesOf(start)!, endMinutes: minutesOf(end)! });
+  const WEEK = [
+    { day: "monday", openTime: "17:00", closeTime: "20:00" },
+    { day: "monday", openTime: "10:00", closeTime: "14:00" },
+    { day: "saturday", openTime: "10:00", closeTime: "14:00" },
+  ];
+
+  it("the list format: shifts per weekday, a weekday without hours closed", () => {
+    expect(salonWindowsFor(WEEK, MONDAY)).toEqual([W("10:00", "14:00"), W("17:00", "20:00")]);
+    expect(salonWindowsFor(WEEK, SUNDAY)).toEqual([]);
+  });
+
+  it("the legacy { open, close }: that window every day", () => {
+    expect(salonWindowsFor({ open: "09:00", close: "20:00" }, MONDAY)).toEqual([W("09:00", "20:00")]);
+    expect(salonWindowsFor({ open: "9:00", close: "20:00" }, SUNDAY)).toEqual([W("09:00", "20:00")]);
+    expect(salonHoursEntries({ open: "09:00", close: "20:00" })).toHaveLength(7);
+    // With the old wizard's days next to it, as the settings page merged it.
+    expect(salonWindowsFor({ mon: { open: "08:00", close: "12:00" }, open: "10:00", close: "19:00" }, MONDAY)).toEqual([
+      W("10:00", "19:00"),
+    ]);
+  });
+
+  it("nothing recorded is undefined: no salon-level limit", () => {
+    for (const raw of [{}, [], null, undefined, "x", { open: "20:00", close: "09:00" }, { open: "09:00" }]) {
+      expect(salonWindowsFor(raw, MONDAY)).toBeUndefined();
+      expect(salonHoursEntries(raw)).toBeUndefined();
+    }
+  });
+
+  it("the old wizard's { mon: { open, close } } was never read, and still is not", () => {
+    expect(salonWindowsFor({ mon: { open: "09:00", close: "19:00" }, sat: null }, SUNDAY)).toBeUndefined();
+  });
+
+  it("intersectWindows keeps the minutes in both", () => {
+    expect(intersectWindows([W("09:00", "19:00")], [W("10:00", "14:00"), W("17:00", "20:00")])).toEqual([
+      W("10:00", "14:00"),
+      W("17:00", "19:00"),
+    ]);
+    expect(intersectWindows([W("09:00", "10:00")], [W("10:00", "14:00")])).toEqual([]);
+  });
+
+  it("bookableWindows: both, either one, or neither", () => {
+    const pro = [W("09:00", "19:00")];
+    const salon = [W("10:00", "14:00"), W("17:00", "20:00")];
+    expect(bookableWindows(pro, salon)).toEqual([W("10:00", "14:00"), W("17:00", "19:00")]);
+    expect(bookableWindows(undefined, salon)).toEqual(salon);
+    expect(bookableWindows(pro, undefined)).toEqual(pro);
+    expect(bookableWindows(undefined, undefined)).toBeUndefined();
+    // The salon closed: closed, whatever the professional's shift.
+    expect(bookableWindows(pro, [])).toEqual([]);
+    // The professional off: off.
+    expect(bookableWindows([], salon)).toEqual([]);
+  });
+
+  it("the week a client is told: the salon's when set, else the professionals'", () => {
+    const pros = [{ workingHours: [{ day: "tuesday", openTime: "09:00", closeTime: "18:00" }] }];
+    expect(salonOpenShifts(WEEK, pros)).toEqual({
+      monday: [
+        { openTime: "10:00", closeTime: "14:00" },
+        { openTime: "17:00", closeTime: "20:00" },
+      ],
+      saturday: [{ openTime: "10:00", closeTime: "14:00" }],
+    });
+    expect(salonOpenWeek(WEEK, pros)).toEqual({
+      monday: { openTime: "10:00", closeTime: "20:00" },
+      saturday: { openTime: "10:00", closeTime: "14:00" },
+    });
+    expect(salonOpenShifts({}, pros)).toEqual({ tuesday: [{ openTime: "09:00", closeTime: "18:00" }] });
+    expect(salonOpenWeek([], [])).toEqual({});
   });
 });

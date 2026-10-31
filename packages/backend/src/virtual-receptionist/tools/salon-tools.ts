@@ -5,6 +5,7 @@ import { confirmAppointment, notBookableOnline, proposeAppointment } from './rec
 import { resolveIds } from './resolve-ids';
 import { dayBlocks, salonClosedOn } from '../../time-off/time-off-rules';
 import { timeOffBetween } from '../../time-off/time-off-query';
+import { salonOpenShifts } from '../../appointments/working-hours';
 
 /**
  * Tools the Virtual Receptionist exposes to the LLM.
@@ -191,6 +192,8 @@ export const SALON_TOOLS = [
 /* -------------------------------------------------------------------------- */
 /*  Helpers                                                                   */
 /* -------------------------------------------------------------------------- */
+
+const WEEK_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
 function normalize(s: string): string {
   return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -598,7 +601,13 @@ export class SalonToolsService {
         country: string;
         timezone: string;
         currency: string;
-        openingHours: unknown;
+        /**
+         * Per weekday ("monday"...), the open stretches as "HH:MM–HH:MM"; an
+         * empty list is a day the salon is closed. null when no hours are
+         * recorded at all, so the model says it does not know rather than
+         * inventing them.
+         */
+        openingHours: Record<string, string[]> | null;
         assistantName: string;
       }
     | { error: string }
@@ -623,7 +632,21 @@ export class SalonToolsService {
       },
     });
     if (!tenant) return { error: 'tenant_not_found' };
-    return tenant;
+    // The same week the prompt carries: the salon's own hours when it set
+    // them, else its professionals' schedules. The raw column used to be
+    // returned, in whichever of its stored shapes it happened to be.
+    const professionals = await ctx.prisma.professional.findMany({
+      where: { tenantId: ctx.tenantId, isActive: true },
+      select: { workingHours: true },
+    });
+    const shifts = salonOpenShifts(tenant.openingHours, professionals);
+    const openingHours =
+      Object.keys(shifts).length === 0
+        ? null
+        : Object.fromEntries(
+            WEEK_DAYS.map((day) => [day, (shifts[day] ?? []).map((w) => `${w.openTime}–${w.closeTime}`)]),
+          );
+    return { ...tenant, openingHours };
   }
 }
 

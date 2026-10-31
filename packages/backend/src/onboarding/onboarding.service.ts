@@ -5,6 +5,7 @@ import { OnboardingGroup } from "@prisma/client";
 import { salonInstant } from "../appointments/salon-time";
 import { appointmentLocationId } from "../multi-location/appointment-location";
 import { placeholderEmail } from "../common/placeholder-email";
+import { workingHoursProblem } from "../professionals/working-hours-input";
 
 interface StepStatusRecord {
   status: "pending" | "done" | "skipped" | "dismissed";
@@ -14,6 +15,31 @@ interface StepStatusRecord {
 }
 
 export type { StepStatusRecord };
+
+const WIZARD_DAYS: ReadonlyArray<[string, string]> = [
+  ["mon", "monday"],
+  ["tue", "tuesday"],
+  ["wed", "wednesday"],
+  ["thu", "thursday"],
+  ["fri", "friday"],
+  ["sat", "saturday"],
+  ["sun", "sunday"],
+];
+
+/**
+ * The wizard's week (`{ mon: { open, close } | null, ... }`, a closed day
+ * absent or null) as the salon's opening hours are stored: one entry per open
+ * day, Monday first. The DTO has already checked each time is HH:MM.
+ */
+export function wizardWeekToEntries(
+  week: Record<string, { open: string; close: string } | null> | undefined,
+): Array<{ day: string; openTime: string; closeTime: string }> {
+  if (!week) return [];
+  return WIZARD_DAYS.flatMap(([key, day]) => {
+    const hours = week[key];
+    return hours ? [{ day, openTime: hours.open, closeTime: hours.close }] : [];
+  });
+}
 
 @Injectable()
 export class OnboardingService {
@@ -148,6 +174,7 @@ export class OnboardingService {
       this.prisma.appointment.count({ where: { tenantId } }),
     ]);
 
+    // A non-empty week (the list format), or what an earlier wizard stored.
     const hours = (tenant.openingHours as Record<string, unknown> | null) ?? {};
     const hasWorkingHours = Object.keys(hours).length > 0;
 
@@ -216,6 +243,11 @@ export class OnboardingService {
     ) {
       throw new BadRequestException("Fecha u hora de la primera cita no válidas");
     }
+    // A day that closes before it opens would be read as closed: refused
+    // with the reason instead, before anything is written.
+    const openingWeek = wizardWeekToEntries(payload.workingHours);
+    const hoursProblem = openingWeek.length > 0 ? workingHoursProblem(openingWeek) : null;
+    if (hoursProblem) throw new BadRequestException(hoursProblem);
 
     let completed = 0;
     let appointmentSkipped: "no_staff" | "no_service" | null = null;
@@ -247,11 +279,14 @@ export class OnboardingService {
       }
     }
 
-    // Step 3 — working hours
-    if (payload.workingHours && Object.keys(payload.workingHours).length > 0) {
+    // Step 3 — working hours. Stored as the salon's own week in the list
+    // format the settings page edits and availability reads
+    // (working-hours.ts salonHoursEntries). The wizard's { mon: { open,
+    // close } } used to be stored as it came, which nothing read.
+    if (openingWeek.length > 0) {
       await this.prisma.tenant.update({
         where: { id: tenantId },
-        data: { openingHours: payload.workingHours as any },
+        data: { openingHours: openingWeek as any },
       });
       completed++;
     }

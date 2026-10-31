@@ -1,9 +1,13 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
-import { IsString, IsOptional, IsIn, IsUrl, IsEmail, IsInt, Min, Max, Matches, ValidateNested, IsTimeZone } from "class-validator";
-import { Type } from "class-transformer";
+import { IsString, IsOptional, IsIn, IsUrl, IsEmail, IsInt, Min, Max, Matches, IsTimeZone } from "class-validator";
 import { EmptyStringToUndefined } from "../../common/dto/empty-to-undefined";
+import { IsWorkingHours } from "../../professionals/working-hours-input";
+import type { WorkingHoursEntry } from "../../appointments/working-hours";
 
-/** The salon-wide window getAvailableSlots reads. HH:MM, 24-hour. */
+/**
+ * One HH:MM, 24-hour window. The onboarding wizard sends one per weekday; the
+ * settings page used to send one for the whole salon as `openingHours`.
+ */
 export class OpeningHoursDto {
   @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
   open: string;
@@ -25,11 +29,20 @@ export class UpdateTenantDto {
   @IsOptional()
   minCancelHours?: number;
 
-  @ApiPropertyOptional({ description: "Salon opening window, merged into openingHours" })
-  @ValidateNested()
-  @Type(() => OpeningHoursDto)
+  // The salon's own week, in the format of a professional's workingHours:
+  // [{ day: "monday", openTime: "10:00", closeTime: "14:00" }, ...], several
+  // entries for a day being shifts, a day without entries closed. [] means
+  // no salon-level hours (each professional's own schedule decides). The
+  // old single { open, close } is still accepted and stored as that window
+  // every day of the week.
+  @ApiPropertyOptional({
+    description:
+      "Salon opening hours per weekday: [{ day, openTime, closeTime }]; [] = no salon-level hours. " +
+      "A legacy { open, close } is stored as that window every day.",
+  })
   @IsOptional()
-  openingHours?: OpeningHoursDto;
+  @IsWorkingHours({ legacyOpeningPair: true })
+  openingHours?: WorkingHoursEntry[];
 
   @ApiPropertyOptional({ description: "Tenant name" })
   @IsString()

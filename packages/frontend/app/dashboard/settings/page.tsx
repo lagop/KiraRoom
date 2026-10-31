@@ -24,6 +24,13 @@ import { getCurrentUser } from "@/lib/utils";
 import { useTranslations } from "@/lib/use-translation";
 import { SALON_TIMEZONES, DEFAULT_SALON_TIMEZONE, type SalonAddress } from "@kira/shared";
 import { CanaryTimezoneHint } from "@/components/settings/CanaryTimezoneHint";
+import { SalonHoursField } from "@/components/settings/SalonHoursField";
+import {
+  openingHoursForSave,
+  salonHoursProblem,
+  salonHoursSettingFrom,
+  sameSalonHours,
+} from "@/lib/salon-hours";
 
 const defaultSettingsData = {
   general: [
@@ -71,41 +78,15 @@ const defaultSettingsData = {
       description: "Página de Facebook",
     },
     {
-      id: "openingTime",
-      label: "Horario de apertura",
-      type: "time",
-      value: "09:00",
-      description: "Hora de apertura del salón",
-    },
-    {
-      id: "closingTime",
-      label: "Horario de cierre",
-      type: "time",
-      value: "20:00",
-      description: "Hora de cierre del salón",
-    },
-    {
-      id: "workingDays",
-      label: "Días laborables",
-      type: "checkbox-group",
-      value: [
-        "monday",
-        "tuesday",
-        "wednesday",
-        "thursday",
-        "friday",
-        "saturday",
-      ],
-      options: [
-        { id: "monday", label: "Lunes" },
-        { id: "tuesday", label: "Martes" },
-        { id: "wednesday", label: "Miércoles" },
-        { id: "thursday", label: "Jueves" },
-        { id: "friday", label: "Viernes" },
-        { id: "saturday", label: "Sábado" },
-        { id: "sunday", label: "Domingo" },
-      ],
-      description: "Días de la semana en que el salón está abierto",
+      // The salon's own week, with shifts (components/settings/SalonHoursField).
+      // It replaced a single opening/closing pair for every day and a
+      // "working days" list that was never saved.
+      id: "salonHours",
+      label: "Horario del salón",
+      type: "salon-hours",
+      value: null,
+      description:
+        "Los días y horas en que abre el salón. Si cierra a mediodía, añade un segundo tramo.",
     },
   ],
   preferences: [
@@ -431,8 +412,7 @@ const PERSISTED_FIELDS = new Set([
   "address",
   "contactPhone",
   "contactEmail",
-  "openingTime",
-  "closingTime",
+  "salonHours",
   "language",
   "timezone",
   "currency",
@@ -447,14 +427,13 @@ type TenantUpdate = Parameters<typeof apiClient.updateTenant>[0];
 
 /** Tenant row -> the page's field values. */
 function settingsFromTenant(tenant: Tenant): Record<string, any> {
-  const hours = (tenant.openingHours ?? {}) as { open?: unknown; close?: unknown };
   return {
     businessName: tenant.name ?? "",
     address: tenant.street ?? "",
     contactPhone: tenant.phone ?? "",
     contactEmail: tenant.email ?? "",
-    openingTime: typeof hours.open === "string" ? hours.open : "",
-    closingTime: typeof hours.close === "string" ? hours.close : "",
+    // The salon's week; a legacy { open, close } shows as that window every day.
+    salonHours: salonHoursSettingFrom(tenant.openingHours),
     language: tenant.language,
     timezone: tenant.timezone,
     currency: tenant.currency,
@@ -483,12 +462,8 @@ function tenantUpdateFrom(
   if (changed("dateFormat")) update.dateFormat = String(settings.dateFormat).toUpperCase();
   if (changed("timeFormat")) update.timeFormat = settings.timeFormat === "12" ? "12h" : "24h";
   if (changed("cancellationPolicy")) update.minCancelHours = Number(settings.cancellationPolicy);
-  if (
-    (changed("openingTime") || changed("closingTime")) &&
-    settings.openingTime &&
-    settings.closingTime
-  ) {
-    update.openingHours = { open: settings.openingTime, close: settings.closingTime };
+  if (settings.salonHours && !sameSalonHours(settings.salonHours, saved.salonHours)) {
+    update.openingHours = openingHoursForSave(settings.salonHours);
   }
   return update;
 }
@@ -496,6 +471,7 @@ function tenantUpdateFrom(
 /** An empty value of the right shape, for fields with nothing to show. */
 function emptyValueFor(field: { type: string }) {
   if (field.type === "checkbox-group") return [];
+  if (field.type === "salon-hours") return null;
   if (field.type === "switch") return "false";
   return "";
 }
@@ -582,16 +558,11 @@ export default function SettingsPage() {
   const handleSubmit = async () => {
     setSaveError(null);
 
-    // Both or neither: saving one alone was dropped while "updated" showed.
-    // And open before close: a reversed window leaves no bookable slot.
-    const open = settings.openingTime;
-    const close = settings.closingTime;
-    if ((open && !close) || (!open && close)) {
-      setSaveError(t("settings.hours_need_both"));
-      return;
-    }
-    if (open && close && open >= close) {
-      setSaveError(t("settings.hours_open_before_close"));
+    // The salon's week, checked here so the reason shows next to the day
+    // (the editor) and here, rather than as a 400 after saving.
+    const hoursProblem = settings.salonHours ? salonHoursProblem(settings.salonHours) : null;
+    if (hoursProblem) {
+      setSaveError(hoursProblem);
       return;
     }
 
@@ -767,6 +738,16 @@ export default function SettingsPage() {
           </div>
         );
 
+      case "salon-hours":
+        // Nothing to show until the tenant is read: never a made-up week.
+        return settings.salonHours ? (
+          <SalonHoursField
+            value={settings.salonHours}
+            onChange={(next) => handleFieldChange("salonHours", next)}
+            disabled={locked}
+          />
+        ) : null;
+
       case "file":
         return (
           <div
@@ -879,7 +860,10 @@ export default function SettingsPage() {
           ) : (defaultSettingsData as any)[activeTab] ? (
             <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
               {(defaultSettingsData as any)[activeTab].map((field: any) => (
-                <div key={field.id} className="space-y-2">
+                <div
+                  key={field.id}
+                  className={`space-y-2 ${field.type === "salon-hours" ? "sm:col-span-2" : ""}`}
+                >
                   <label className="block text-sm font-medium text-gray-700">
                     {field.label}
                     {!PERSISTED_FIELDS.has(field.id) && (
