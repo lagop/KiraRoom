@@ -435,6 +435,7 @@ function ScheduleSetStep({ onDone }: { onDone: () => Promise<unknown> }) {
           Horario de trabajo
         </p>
         <WeeklyScheduleEditor
+          compact
           value={schedule}
           onChange={setSchedule}
           disabled={submitting}

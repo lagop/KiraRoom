@@ -24,6 +24,8 @@ interface WeeklyScheduleEditorProps {
   variant?: "professional" | "salon";
   /** Replaces the whole-week problem (no day on) with the caller's own words. */
   weekProblem?: string | null;
+  /** Tighter rows, "Añadir tramo" beside the last shift: for the onboarding overlay. */
+  compact?: boolean;
 }
 
 const COPY = {
@@ -57,6 +59,7 @@ export function WeeklyScheduleEditor({
   className,
   variant = "professional",
   weekProblem,
+  compact = false,
 }: WeeklyScheduleEditorProps) {
   const problems = scheduleProblems(value);
   const copy = COPY[variant];
@@ -84,9 +87,24 @@ export function WeeklyScheduleEditor({
           const day = value[key];
           const problem = problems.days[key];
           const switchId = variant === "salon" ? `salon-open-${key}` : `works-${key}`;
+          const canAdd = day.shifts.length < MAX_SHIFTS_PER_DAY;
+          const addButton = (
+            <button
+              type="button"
+              onClick={() => onChange(addShift(value, key))}
+              disabled={disabled}
+              className="inline-flex items-center gap-1 text-sm font-medium text-indigo-600 hover:text-indigo-800 disabled:opacity-50"
+            >
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              Añadir tramo
+            </button>
+          );
           return (
-            <li key={key} className="flex flex-col gap-2 p-3 sm:flex-row sm:items-start">
-              <div className="flex w-40 shrink-0 items-center gap-3 pt-1">
+            <li
+              key={key}
+              className={cn("flex flex-col sm:flex-row sm:items-start", compact ? "gap-1.5 px-3 py-2" : "gap-2 p-3")}
+            >
+              <div className={cn("flex shrink-0 items-center gap-3 pt-1", compact ? "w-32" : "w-40")}>
                 <button
                   id={switchId}
                   type="button"
@@ -112,7 +130,7 @@ export function WeeklyScheduleEditor({
                 </label>
               </div>
 
-              <div className="flex-1 space-y-2">
+              <div className={cn("flex-1", compact ? "space-y-1.5" : "space-y-2")}>
                 {!day.works ? (
                   <p className="pt-1 text-sm text-gray-400">{copy.offLabel}</p>
                 ) : (
@@ -151,19 +169,10 @@ export function WeeklyScheduleEditor({
                         >
                           <Trash2 className="h-4 w-4" aria-hidden="true" />
                         </button>
+                        {compact && index === day.shifts.length - 1 && canAdd && addButton}
                       </div>
                     ))}
-                    {day.shifts.length < MAX_SHIFTS_PER_DAY && (
-                      <button
-                        type="button"
-                        onClick={() => onChange(addShift(value, key))}
-                        disabled={disabled}
-                        className="inline-flex items-center gap-1 text-sm font-medium text-indigo-600 hover:text-indigo-800 disabled:opacity-50"
-                      >
-                        <Plus className="h-4 w-4" aria-hidden="true" />
-                        Añadir tramo
-                      </button>
-                    )}
+                    {(!compact || day.shifts.length === 0) && canAdd && addButton}
                     {problem && (
                       <p role="alert" className="text-sm text-red-600">
                         {problem}
