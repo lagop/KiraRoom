@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Twilio from 'twilio';
 import { MessageBundlesService } from '../../message-bundles/message-bundles.service';
+import { displayDate } from './email.service';
 
 export interface SmsOptions {
   to: string;
@@ -192,16 +193,25 @@ export class SmsService {
   }
 
   /**
+   * Who the SMS is from, as its first word: the salon. They used to start
+   * with "KiraRoom:", a name the client never booked with.
+   */
+  private signature(data: AppointmentSmsData): string {
+    return (data.salonName ?? "").replace(/s+/g, " ").trim().slice(0, 40) || "Tu salón";
+  }
+
+  /**
    * Generate confirmation SMS body
    * Keep under 160 characters for single SMS
    */
   private generateConfirmationBody(data: AppointmentSmsData): string {
-    // Template: "KiraRoom: Tu cita está confirmada. {service} con {professional} el {date} a las {time}. ¡Gracias!"
-    const message = `KiraRoom: Tu cita está confirmada. ${data.serviceName} con ${data.professionalName} el ${data.date} a las ${data.time}. ¡Gracias!`;
+    const from = this.signature(data);
+    const date = displayDate(data.date);
+    const message = `${from}: Tu cita está confirmada. ${data.serviceName} con ${data.professionalName} el ${date} a las ${data.time}. ¡Gracias!`;
 
     // Truncate if too long (preserve key info)
     if (message.length > 160) {
-      return `KiraRoom: Cita confirmada. ${data.serviceName} el ${data.date} a las ${data.time}. ¡Gracias!`;
+      return `${from}: Cita confirmada. ${data.serviceName} el ${date} a las ${data.time}. ¡Gracias!`;
     }
 
     return message;
@@ -211,23 +221,22 @@ export class SmsService {
    * Generate reminder SMS body
    */
   private generateReminderBody(data: AppointmentSmsData, hoursBefore: number): string {
+    const from = this.signature(data);
     if (hoursBefore <= 1) {
       // 1 hour reminder - more urgent
-      // Template: "KiraRoom: Tu cita es en 1 hora ({time}). {service} con {professional}."
-      const message = `KiraRoom: Tu cita es en 1 hora (${data.time}). ${data.serviceName} con ${data.professionalName}.`;
+      const message = `${from}: Tu cita es en 1 hora (${data.time}). ${data.serviceName} con ${data.professionalName}.`;
 
       if (message.length > 160) {
-        return `KiraRoom: Cita en 1 hora (${data.time}). ${data.serviceName}.`;
+        return `${from}: Cita en 1 hora (${data.time}). ${data.serviceName}.`;
       }
 
       return message;
     } else {
       // 24 hour reminder
-      // Template: "KiraRoom: Recordatorio - Tu cita mañana a las {time} para {service}. ¡Te esperamos!"
-      const message = `KiraRoom: Recordatorio - Tu cita mañana a las ${data.time} para ${data.serviceName}. ¡Te esperamos!`;
+      const message = `${from}: Recordatorio - Tu cita mañana a las ${data.time} para ${data.serviceName}. ¡Te esperamos!`;
 
       if (message.length > 160) {
-        return `KiraRoom: Recordatorio - Cita mañana a las ${data.time}. ${data.serviceName}.`;
+        return `${from}: Recordatorio - Cita mañana a las ${data.time}. ${data.serviceName}.`;
       }
 
       return message;
@@ -238,17 +247,14 @@ export class SmsService {
    * Generate cancellation SMS body
    */
   private generateCancellationBody(data: AppointmentSmsData, reason?: string): string {
-    // Template: "KiraRoom: Tu cita del {date} ha sido cancelada. Para reagendar, contáctanos."
-    let message: string;
-
-    if (reason) {
-      message = `KiraRoom: Tu cita del ${data.date} ha sido cancelada. Motivo: ${reason}. Para reagendar, contáctanos.`;
-    } else {
-      message = `KiraRoom: Tu cita del ${data.date} ha sido cancelada. Para reagendar, contáctanos.`;
-    }
+    const from = this.signature(data);
+    const date = displayDate(data.date);
+    const message = reason
+      ? `${from}: Tu cita del ${date} ha sido cancelada. Motivo: ${reason}. Para pedir otra cita, contáctanos.`
+      : `${from}: Tu cita del ${date} ha sido cancelada. Para pedir otra cita, contáctanos.`;
 
     if (message.length > 160) {
-      return `KiraRoom: Cita del ${data.date} cancelada. Contáctanos para reagendar.`;
+      return `${from}: Cita del ${date} cancelada. Contáctanos para pedir otra.`;
     }
 
     return message;
@@ -258,11 +264,12 @@ export class SmsService {
    * Generate rescheduled SMS body
    */
   private generateRescheduledBody(data: AppointmentSmsData, oldDate: string, oldTime: string): string {
-    // Template: "KiraRoom: Tu cita ha sido movida al {date} a las {time}. {service} con {professional}."
-    const message = `KiraRoom: Tu cita ha sido movida al ${data.date} a las ${data.time}. ${data.serviceName} con ${data.professionalName}.`;
+    const from = this.signature(data);
+    const date = displayDate(data.date);
+    const message = `${from}: Tu cita ha cambiado al ${date} a las ${data.time}. ${data.serviceName} con ${data.professionalName}.`;
 
     if (message.length > 160) {
-      return `KiraRoom: Cita movida al ${data.date} a las ${data.time}. ${data.serviceName}.`;
+      return `${from}: Cita cambiada al ${date} a las ${data.time}. ${data.serviceName}.`;
     }
 
     return message;

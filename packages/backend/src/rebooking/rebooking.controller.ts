@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, Redirect, Req, UseGuards } from "@nestjs/common";
 import { Request } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { Roles } from "../auth/decorators/roles.decorator";
@@ -11,6 +11,7 @@ import { UpdateRebookingConfigDto } from "./dto/rebooking.dto";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { createHmac, timingSafeEqual } from "crypto";
 import { Throttle } from "@nestjs/throttler";
+import { EmailUnsubscribeService } from "../email-campaigns/email-unsubscribe.service";
 
 interface AuthedRequest extends Request {
   user: { tenantId?: string };
@@ -23,6 +24,7 @@ export class RebookingController {
     private readonly cadence: ClientCadenceService,
     private readonly dispatcher: RebookingDispatcherService,
     private readonly prisma: PrismaService,
+    private readonly unsubscribes: EmailUnsubscribeService,
   ) {}
 
   @Get("config")
@@ -78,9 +80,30 @@ export class RebookingController {
   }
 
   /**
-   * Public opt-out endpoint reachable from the footer link in the reminder
-   * email. Auth-less by design (clients don't have accounts necessarily).
-   * Validates an HMAC token bound to the clientId.
+   * Links in reminders sent before the shared unsubscribe link.
+   *
+   * Those emails pointed at the web app's /api/public/rebooking/opt-out,
+   * which never existed (a click answered 404); the web app now forwards
+   * that path here. Opening a link only describes, as with the campaigns'
+   * link (a mail scanner must not unsubscribe anyone): a valid old link
+   * redirects to the unsubscribe page of that client, whose button does it;
+   * anything else lands on the same page saying the link is not valid.
+   */
+  @Public()
+  @Get("public/opt-out")
+  @Redirect()
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  legacyOptOutPage(@Query("token") token: string, @Query("client") clientId: string) {
+    const url = this.legacyTokenValid(token, clientId)
+      ? this.unsubscribes.link({ kind: "c", id: clientId }).pageUrl
+      : this.unsubscribes.pageUrl("invalido");
+    return { url, statusCode: 302 };
+  }
+
+  /**
+   * The old opt-out action (HMAC over the client id), kept for anything that
+   * still posts to it. It now does what the shared unsubscribe link does:
+   * suppression list, marketing refusal and rebooking opt-out.
    */
   @Public()
   @Post("public/opt-out")
@@ -89,30 +112,30 @@ export class RebookingController {
     if (!token || !clientId) {
       throw new BadRequestException("token and client query params required");
     }
-    const secret = this.resolveOptOutSecret();
-    const expected = createHmac("sha256", secret)
-      .update(clientId)
-      .digest("hex")
-      .slice(0, 32);
-    if (
-      expected.length !== token.length ||
-      !timingSafeEqual(Buffer.from(expected), Buffer.from(token))
-    ) {
+    if (!this.legacyTokenValid(token, clientId)) {
       throw new BadRequestException("invalid token");
     }
-    await this.cadence.optOutClient(clientId);
+    try {
+      await this.unsubscribes.unsubscribe(this.unsubscribes.tokenFor({ kind: "c", id: clientId }));
+    } catch {
+      // A client without an email address: nothing to suppress, only the
+      // rebooking reminders to stop.
+      await this.cadence.optOutClient(clientId);
+    }
     return { ok: true };
   }
 
-  private resolveOptOutSecret(): string {
+  /** Whether `token` is the old opt-out signature of `clientId`. */
+  private legacyTokenValid(token: unknown, clientId: unknown): boolean {
+    if (typeof token !== "string" || typeof clientId !== "string" || !token || !clientId) return false;
     const secret = process.env.REBOOKING_OPT_OUT_SECRET;
-    if (secret && secret.length >= 16) return secret;
-    if (process.env.NODE_ENV === "production") {
-      throw new BadRequestException(
-        "rebooking is not configured for production",
-      );
-    }
-    return "dev-secret-do-not-use-in-production";
+    let key: string;
+    if (secret && secret.length >= 16) key = secret;
+    else if (process.env.NODE_ENV === "production") return false;
+    else key = "dev-secret-do-not-use-in-production";
+    const expected = Buffer.from(createHmac("sha256", key).update(clientId).digest("hex").slice(0, 32));
+    const given = Buffer.from(token);
+    return expected.length === given.length && timingSafeEqual(expected, given);
   }
 
   private requireTenantId(req: AuthedRequest): string {

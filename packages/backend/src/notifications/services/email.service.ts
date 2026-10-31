@@ -6,6 +6,7 @@ import { PrismaService } from "../../common/prisma/prisma.service";
 import { PlatformEmailConfigService } from "../../platform/platform-email-config.service";
 import { EmailSettings, senderDomain } from "../../platform/email-settings";
 import { isPlaceholderEmail } from "../../common/placeholder-email";
+import { escapeHtml } from "../../common/html-escape";
 
 /**
  * How long a send may take before the caller gives up on it. Resend's client
@@ -71,6 +72,10 @@ export interface AppointmentEmailData {
   salonName: string;
   salonAddress?: string;
   salonPhone?: string;
+  /**
+   * Not used: the appointment emails are in Spanish. No caller knows the
+   * salon's language today, and the dates they pass are already Spanish.
+   */
   language?: string;
 }
 
@@ -83,6 +88,35 @@ export function formatLongDateEs(date: Date): string {
     timeZone: "Europe/Madrid",
   });
 }
+
+/**
+ * An appointment's date as the client reads it. A calendar day
+ * ("2026-11-02", what the reminder scheduler passes, or its midnight-UTC
+ * serialisation) becomes "lunes, 2 de noviembre de 2026"; it is the salon's
+ * own calendar day, so it is read in UTC and never shifts. Anything else is
+ * already a formatted date and is shown as given.
+ */
+export function displayDate(date: string): string {
+  const value = String(date ?? "").trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:T00:00:00(?:\.000)?Z)?$/.exec(value);
+  if (!m) return value;
+  return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))).toLocaleDateString("es-ES", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+/** The appointment card's look in the confirmation and reminders. */
+const CARD_DEFAULT = {
+  title: "📅 Detalles de la cita",
+  background: "#f9fafb",
+  border: "#e5e7eb",
+  titleColor: "#111827",
+  accent: "#667eea",
+};
 
 @Injectable()
 export class EmailService {
@@ -298,37 +332,23 @@ export class EmailService {
   }
 
   /**
-   * Send appointment confirmation
+   * The appointment emails to the client: confirmation, 24 h / 1 h reminder,
+   * cancellation and change of date.
+   *
+   * In Spanish, signed with the salon's own name. They used to be in English
+   * (the confirmation half and half), and a SALON_NAME setting of the server
+   * replaced every salon's name with one. Every value in the HTML is escaped;
+   * the plain-text part and the subject are not HTML.
    */
   async sendAppointmentConfirmation(
     data: AppointmentEmailData,
   ): Promise<{ success: boolean; id?: string; error?: string }> {
-    const salonName =
-      this.configService.get<string>("SALON_NAME") || data.salonName;
-    const language = data.language || "es";
-
-    const subject = this.translationsService.translate(
-      language as any,
-      "emails.appointment.confirmation.subject",
-      {
-        business_name: salonName,
-      },
-    );
-
-    const html = this.generateConfirmationHtml(
-      { ...data, salonName },
-      language,
-    );
-    const text = this.generateConfirmationText(
-      { ...data, salonName },
-      language,
-    );
-
+    const subject = `Tu cita en ${data.salonName} está confirmada`;
     return this.sendEmail({
       to: data.clientEmail,
       subject,
-      html,
-      text,
+      html: this.generateConfirmationHtml(data),
+      text: this.generateConfirmationText(data),
     });
   }
 
@@ -340,18 +360,16 @@ export class EmailService {
     hoursBefore: number,
     options: Pick<EmailOptions, "idempotencyKey"> = {},
   ): Promise<{ success: boolean; id?: string; error?: string }> {
-    const salonName =
-      this.configService.get<string>("SALON_NAME") || data.salonName;
-    const subject = `Reminder: Your appointment ${hoursBefore === 1 ? "in 1 hour" : "tomorrow"} - ${data.serviceName}`;
-
-    const html = this.generateReminderHtml({ ...data, salonName }, hoursBefore);
-    const text = this.generateReminderText({ ...data, salonName }, hoursBefore);
+    const subject =
+      hoursBefore === 1
+        ? `Recordatorio: tu cita en ${data.salonName} es dentro de 1 hora`
+        : `Recordatorio: mañana tienes cita en ${data.salonName} (${data.serviceName})`;
 
     return this.sendEmail({
       to: data.clientEmail,
       subject,
-      html,
-      text,
+      html: this.generateReminderHtml(data, hoursBefore),
+      text: this.generateReminderText(data, hoursBefore),
       idempotencyKey: options.idempotencyKey,
     });
   }
@@ -363,18 +381,12 @@ export class EmailService {
     data: AppointmentEmailData,
     reason?: string,
   ): Promise<{ success: boolean; id?: string; error?: string }> {
-    const salonName =
-      this.configService.get<string>("SALON_NAME") || data.salonName;
-    const subject = `Appointment Cancelled - ${data.serviceName} on ${data.date}`;
-
-    const html = this.generateCancellationHtml({ ...data, salonName }, reason);
-    const text = this.generateCancellationText({ ...data, salonName }, reason);
-
+    const subject = `Cita cancelada en ${data.salonName}: ${data.serviceName}, ${displayDate(data.date)}`;
     return this.sendEmail({
       to: data.clientEmail,
       subject,
-      html,
-      text,
+      html: this.generateCancellationHtml(data, reason),
+      text: this.generateCancellationText(data, reason),
     });
   }
 
@@ -386,26 +398,12 @@ export class EmailService {
     oldDate: string,
     oldTime: string,
   ): Promise<{ success: boolean; id?: string; error?: string }> {
-    const salonName =
-      this.configService.get<string>("SALON_NAME") || data.salonName;
-    const subject = `Appointment Rescheduled - ${data.serviceName} on ${data.date}`;
-
-    const html = this.generateRescheduledHtml(
-      { ...data, salonName },
-      oldDate,
-      oldTime,
-    );
-    const text = this.generateRescheduledText(
-      { ...data, salonName },
-      oldDate,
-      oldTime,
-    );
-
+    const subject = `Tu cita en ${data.salonName} ha cambiado: ${displayDate(data.date)} a las ${data.time}`;
     return this.sendEmail({
       to: data.clientEmail,
       subject,
-      html,
-      text,
+      html: this.generateRescheduledHtml(data, oldDate, oldTime),
+      text: this.generateRescheduledText(data, oldDate, oldTime),
     });
   }
 
@@ -1115,413 +1113,117 @@ export class EmailService {
     return Object.keys(out).length > 0 ? out : undefined;
   }
 
-  /** Minimal HTML escape for interpolating user-controlled strings into emails. */
-  private escapeHtml(input: string): string {
-    return input
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
+  /** HTML escape for interpolating user-controlled strings into emails. */
+  private escapeHtml(input: unknown): string {
+    return escapeHtml(input);
   }
 
-  // ==================== HTML Templates ====================
+  // ==================== Appointment emails: HTML ====================
 
-  private generateConfirmationHtml(
+  /**
+   * The layout the four appointment emails share. Only `rows` values,
+   * `previous` and the salon's details come from data, and they are escaped
+   * here; the other strings are this file's own copy.
+   */
+  private appointmentHtml(
     data: AppointmentEmailData,
-    language: string = "es",
+    parts: {
+      title: string;
+      banner?: { color: string; text: string };
+      intro: string;
+      previous?: string;
+      card: { title: string; background: string; border: string; titleColor: string; accent: string };
+      rows: Array<[string, string | undefined]>;
+      closing: string;
+      closingColor?: string;
+    },
   ): string {
+    const e = (v: unknown) => this.escapeHtml(v);
+    const rows = parts.rows
+      .filter(([, value]) => value !== undefined && value !== "")
+      .map(
+        ([label, value]) => `
+                <tr>
+                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px; width: 120px;">${label}:</td>
+                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${e(value)}</td>
+                </tr>`,
+      )
+      .join("");
     return `
 <!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Appointment Confirmation</title>
+  <title>${parts.title}</title>
 </head>
 <body style="margin: 0; padding: 0; background-color: #f4f4f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; padding: 20px;">
-    <!-- Header -->
     <tr>
       <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 12px 12px 0 0;">
-        <h1 style="color: #ffffff; margin: 0; font-size: 28px; font-weight: 600;">${data.salonName}</h1>
-        <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 16px;">${this.translationsService.translate(language as any, "emails.appointment.confirmation.subject")}</p>
+        <h1 style="color: #ffffff; margin: 0; font-size: 28px; font-weight: 600;">${e(data.salonName)}</h1>
+        <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 16px;">${parts.title}</p>
       </td>
-    </tr>
-    
-    <!-- Main Content -->
+    </tr>${
+      parts.banner
+        ? `
+    <tr>
+      <td style="background-color: ${parts.banner.color}; padding: 15px; text-align: center;">
+        <p style="margin: 0; color: #ffffff; font-size: 16px; font-weight: 600;">⏰ ${parts.banner.text}</p>
+      </td>
+    </tr>`
+        : ""
+    }
     <tr>
       <td style="background-color: #ffffff; padding: 40px 30px; border: 1px solid #e5e7eb; border-top: none;">
         <p style="margin: 0 0 20px 0; color: #374151; font-size: 16px; line-height: 1.6;">
-          ${this.translationsService.translate(language as any, "emails.appointment.confirmation.greeting", { client_name: data.clientName })}
+          Hola <strong>${e(data.clientName)}</strong>,
         </p>
         <p style="margin: 0 0 30px 0; color: #374151; font-size: 16px; line-height: 1.6;">
-          ${this.translationsService.translate(language as any, "emails.appointment.confirmation.body")}
-        </p>
-        
-        <!-- Appointment Details Card -->
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb;">
-          <tr>
-            <td style="padding: 25px;">
-              <h2 style="margin: 0 0 20px 0; color: #111827; font-size: 18px; border-bottom: 2px solid #667eea; padding-bottom: 10px;">
-                📅 Appointment Details
-              </h2>
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px; width: 120px;">Service:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.serviceName}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Professional:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.professionalName}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Date:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.date}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Time:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.time}</td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-        </table>
-        
-        <p style="margin: 30px 0 0 0; color: #374151; font-size: 14px; line-height: 1.6;">
-          Please arrive 5-10 minutes before your appointment time. If you need to reschedule or cancel, please contact us as soon as possible.
-        </p>
-      </td>
-    </tr>
-    
-    <!-- Footer -->
-    <tr>
-      <td style="background-color: #f9fafb; padding: 30px; border-radius: 0 0 12px 12px; border: 1px solid #e5e7eb; border-top: none;">
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-          <tr>
-            <td style="text-align: center;">
-              <p style="margin: 0 0 10px 0; color: #111827; font-size: 16px; font-weight: 600;">${data.salonName}</p>
-              ${data.salonAddress ? `<p style="margin: 0 0 5px 0; color: #6b7280; font-size: 14px;">📍 ${data.salonAddress}</p>` : ""}
-              ${data.salonPhone ? `<p style="margin: 0; color: #6b7280; font-size: 14px;">📞 ${data.salonPhone}</p>` : ""}
-            </td>
-          </tr>
-        </table>
-        <p style="margin: 20px 0 0 0; text-align: center; color: #9ca3af; font-size: 12px;">
-          This email was sent to ${data.clientEmail}
-        </p>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>
-    `.trim();
-  }
-
-  private generateReminderHtml(
-    data: AppointmentEmailData,
-    hoursBefore: number,
-  ): string {
-    const urgencyColor = hoursBefore === 1 ? "#ef4444" : "#f59e0b";
-    const urgencyText = hoursBefore === 1 ? "Starting in 1 hour!" : "Tomorrow";
-
-    return `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Appointment Reminder</title>
-</head>
-<body style="margin: 0; padding: 0; background-color: #f4f4f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; padding: 20px;">
-    <!-- Header -->
-    <tr>
-      <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 12px 12px 0 0;">
-        <h1 style="color: #ffffff; margin: 0; font-size: 28px; font-weight: 600;">${data.salonName}</h1>
-        <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 16px;">Appointment Reminder</p>
-      </td>
-    </tr>
-    
-    <!-- Urgency Banner -->
-    <tr>
-      <td style="background-color: ${urgencyColor}; padding: 15px; text-align: center;">
-        <p style="margin: 0; color: #ffffff; font-size: 16px; font-weight: 600;">
-          ⏰ ${urgencyText}
-        </p>
-      </td>
-    </tr>
-    
-    <!-- Main Content -->
-    <tr>
-      <td style="background-color: #ffffff; padding: 40px 30px; border: 1px solid #e5e7eb; border-top: none;">
-        <p style="margin: 0 0 20px 0; color: #374151; font-size: 16px; line-height: 1.6;">
-          Hi <strong>${data.clientName}</strong>,
-        </p>
-        <p style="margin: 0 0 30px 0; color: #374151; font-size: 16px; line-height: 1.6;">
-          This is a friendly reminder about your upcoming appointment ${hoursBefore === 1 ? "in 1 hour" : "tomorrow"}.
-        </p>
-        
-        <!-- Appointment Details Card -->
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb;">
-          <tr>
-            <td style="padding: 25px;">
-              <h2 style="margin: 0 0 20px 0; color: #111827; font-size: 18px; border-bottom: 2px solid #667eea; padding-bottom: 10px;">
-                📅 Appointment Details
-              </h2>
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px; width: 120px;">Service:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.serviceName}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Professional:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.professionalName}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Date:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.date}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Time:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.time}</td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-        </table>
-        
-        ${
-          hoursBefore === 1
+          ${parts.intro}
+        </p>${
+          parts.previous
             ? `
-        <p style="margin: 30px 0 0 0; color: #ef4444; font-size: 14px; line-height: 1.6; font-weight: 500;">
-          Please head to the salon now if you haven't already. We're excited to see you soon!
-        </p>
-        `
-            : `
-        <p style="margin: 30px 0 0 0; color: #374151; font-size: 14px; line-height: 1.6;">
-          We look forward to seeing you tomorrow! Please remember to arrive 5-10 minutes early.
-        </p>
-        `
-        }
-      </td>
-    </tr>
-    
-    <!-- Footer -->
-    <tr>
-      <td style="background-color: #f9fafb; padding: 30px; border-radius: 0 0 12px 12px; border: 1px solid #e5e7eb; border-top: none;">
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-          <tr>
-            <td style="text-align: center;">
-              <p style="margin: 0 0 10px 0; color: #111827; font-size: 16px; font-weight: 600;">${data.salonName}</p>
-              ${data.salonAddress ? `<p style="margin: 0 0 5px 0; color: #6b7280; font-size: 14px;">📍 ${data.salonAddress}</p>` : ""}
-              ${data.salonPhone ? `<p style="margin: 0; color: #6b7280; font-size: 14px;">📞 ${data.salonPhone}</p>` : ""}
-            </td>
-          </tr>
-        </table>
-        <p style="margin: 20px 0 0 0; text-align: center; color: #9ca3af; font-size: 12px;">
-          This email was sent to ${data.clientEmail}
-        </p>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>
-    `.trim();
-  }
-
-  private generateCancellationHtml(
-    data: AppointmentEmailData,
-    reason?: string,
-  ): string {
-    return `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Appointment Cancelled</title>
-</head>
-<body style="margin: 0; padding: 0; background-color: #f4f4f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; padding: 20px;">
-    <!-- Header -->
-    <tr>
-      <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 12px 12px 0 0;">
-        <h1 style="color: #ffffff; margin: 0; font-size: 28px; font-weight: 600;">${data.salonName}</h1>
-        <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 16px;">Appointment Cancelled</p>
-      </td>
-    </tr>
-    
-    <!-- Main Content -->
-    <tr>
-      <td style="background-color: #ffffff; padding: 40px 30px; border: 1px solid #e5e7eb; border-top: none;">
-        <p style="margin: 0 0 20px 0; color: #374151; font-size: 16px; line-height: 1.6;">
-          Hi <strong>${data.clientName}</strong>,
-        </p>
-        <p style="margin: 0 0 30px 0; color: #374151; font-size: 16px; line-height: 1.6;">
-          Your appointment has been cancelled. Here are the details of the cancelled appointment:
-        </p>
-        
-        <!-- Cancelled Appointment Details Card -->
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #fef2f2; border-radius: 8px; border: 1px solid #fecaca;">
-          <tr>
-            <td style="padding: 25px;">
-              <h2 style="margin: 0 0 20px 0; color: #991b1b; font-size: 18px; border-bottom: 2px solid #f87171; padding-bottom: 10px;">
-                ❌ Cancelled Appointment
-              </h2>
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px; width: 120px;">Service:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.serviceName}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Professional:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.professionalName}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Date:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.date}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Time:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.time}</td>
-                </tr>
-                ${
-                  reason
-                    ? `
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Reason:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${reason}</td>
-                </tr>
-                `
-                    : ""
-                }
-              </table>
-            </td>
-          </tr>
-        </table>
-        
-        <p style="margin: 30px 0 0 0; color: #374151; font-size: 14px; line-height: 1.6;">
-          Would you like to book a new appointment? Please contact us or visit our website to schedule a new time.
-        </p>
-      </td>
-    </tr>
-    
-    <!-- Footer -->
-    <tr>
-      <td style="background-color: #f9fafb; padding: 30px; border-radius: 0 0 12px 12px; border: 1px solid #e5e7eb; border-top: none;">
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-          <tr>
-            <td style="text-align: center;">
-              <p style="margin: 0 0 10px 0; color: #111827; font-size: 16px; font-weight: 600;">${data.salonName}</p>
-              ${data.salonAddress ? `<p style="margin: 0 0 5px 0; color: #6b7280; font-size: 14px;">📍 ${data.salonAddress}</p>` : ""}
-              ${data.salonPhone ? `<p style="margin: 0; color: #6b7280; font-size: 14px;">📞 ${data.salonPhone}</p>` : ""}
-            </td>
-          </tr>
-        </table>
-        <p style="margin: 20px 0 0 0; text-align: center; color: #9ca3af; font-size: 12px;">
-          This email was sent to ${data.clientEmail}
-        </p>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>
-    `.trim();
-  }
-
-  private generateRescheduledHtml(
-    data: AppointmentEmailData,
-    oldDate: string,
-    oldTime: string,
-  ): string {
-    return `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Appointment Rescheduled</title>
-</head>
-<body style="margin: 0; padding: 0; background-color: #f4f4f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; padding: 20px;">
-    <!-- Header -->
-    <tr>
-      <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 12px 12px 0 0;">
-        <h1 style="color: #ffffff; margin: 0; font-size: 28px; font-weight: 600;">${data.salonName}</h1>
-        <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 16px;">Appointment Rescheduled</p>
-      </td>
-    </tr>
-    
-    <!-- Main Content -->
-    <tr>
-      <td style="background-color: #ffffff; padding: 40px 30px; border: 1px solid #e5e7eb; border-top: none;">
-        <p style="margin: 0 0 20px 0; color: #374151; font-size: 16px; line-height: 1.6;">
-          Hi <strong>${data.clientName}</strong>,
-        </p>
-        <p style="margin: 0 0 30px 0; color: #374151; font-size: 16px; line-height: 1.6;">
-          Your appointment has been rescheduled. Here are the updated details:
-        </p>
-        
-        <!-- Old Appointment (Crossed out) -->
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f3f4f6; border-radius: 8px; border: 1px solid #e5e7eb; margin-bottom: 20px;">
           <tr>
             <td style="padding: 20px;">
-              <p style="margin: 0 0 10px 0; color: #9ca3af; font-size: 14px; text-decoration: line-through;">
-                <strong>Previous:</strong> ${oldDate} at ${oldTime}
+              <p style="margin: 0; color: #9ca3af; font-size: 14px; text-decoration: line-through;">
+                <strong>Antes:</strong> ${e(parts.previous)}
               </p>
             </td>
           </tr>
-        </table>
-        
-        <!-- New Appointment Details Card -->
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f0fdf4; border-radius: 8px; border: 1px solid #bbf7d0;">
+        </table>`
+            : ""
+        }
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: ${parts.card.background}; border-radius: 8px; border: 1px solid ${parts.card.border};">
           <tr>
             <td style="padding: 25px;">
-              <h2 style="margin: 0 0 20px 0; color: #166534; font-size: 18px; border-bottom: 2px solid #4ade80; padding-bottom: 10px;">
-                ✅ New Appointment Details
+              <h2 style="margin: 0 0 20px 0; color: ${parts.card.titleColor}; font-size: 18px; border-bottom: 2px solid ${parts.card.accent}; padding-bottom: 10px;">
+                ${parts.card.title}
               </h2>
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px; width: 120px;">Service:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.serviceName}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Professional:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.professionalName}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Date:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.date}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Time:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.time}</td>
-                </tr>
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0">${rows}
               </table>
             </td>
           </tr>
         </table>
-        
-        <p style="margin: 30px 0 0 0; color: #374151; font-size: 14px; line-height: 1.6;">
-          Please arrive 5-10 minutes before your new appointment time. If you need to make further changes, please contact us.
+        <p style="margin: 30px 0 0 0; color: ${parts.closingColor ?? "#374151"}; font-size: 14px; line-height: 1.6;">
+          ${parts.closing}
         </p>
       </td>
     </tr>
-    
-    <!-- Footer -->
     <tr>
       <td style="background-color: #f9fafb; padding: 30px; border-radius: 0 0 12px 12px; border: 1px solid #e5e7eb; border-top: none;">
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
           <tr>
             <td style="text-align: center;">
-              <p style="margin: 0 0 10px 0; color: #111827; font-size: 16px; font-weight: 600;">${data.salonName}</p>
-              ${data.salonAddress ? `<p style="margin: 0 0 5px 0; color: #6b7280; font-size: 14px;">📍 ${data.salonAddress}</p>` : ""}
-              ${data.salonPhone ? `<p style="margin: 0; color: #6b7280; font-size: 14px;">📞 ${data.salonPhone}</p>` : ""}
+              <p style="margin: 0 0 10px 0; color: #111827; font-size: 16px; font-weight: 600;">${e(data.salonName)}</p>
+              ${data.salonAddress ? `<p style="margin: 0 0 5px 0; color: #6b7280; font-size: 14px;">📍 ${e(data.salonAddress)}</p>` : ""}
+              ${data.salonPhone ? `<p style="margin: 0; color: #6b7280; font-size: 14px;">📞 ${e(data.salonPhone)}</p>` : ""}
             </td>
           </tr>
         </table>
         <p style="margin: 20px 0 0 0; text-align: center; color: #9ca3af; font-size: 12px;">
-          This email was sent to ${data.clientEmail}
+          Este email se ha enviado a ${e(data.clientEmail)}
         </p>
       </td>
     </tr>
@@ -1531,133 +1233,136 @@ export class EmailService {
     `.trim();
   }
 
-  // ==================== Text Templates ====================
-
-  private generateConfirmationText(
-    data: AppointmentEmailData,
-    language: string = "es",
-  ): string {
-    return `
-${data.salonName}
-Appointment Confirmation
-
-Hi ${data.clientName},
-
-Your appointment has been confirmed! We're looking forward to seeing you.
-
-APPOINTMENT DETAILS
--------------------
-Service: ${data.serviceName}
-Professional: ${data.professionalName}
-Date: ${data.date}
-Time: ${data.time}
-
-Please arrive 5-10 minutes before your appointment time. If you need to reschedule or cancel, please contact us as soon as possible.
-
-${data.salonName}
-${data.salonAddress ? `Address: ${data.salonAddress}` : ""}
-${data.salonPhone ? `Phone: ${data.salonPhone}` : ""}
-
-This email was sent to ${data.clientEmail}
-    `.trim();
+  private appointmentRows(data: AppointmentEmailData): Array<[string, string | undefined]> {
+    return [
+      ["Servicio", data.serviceName],
+      ["Profesional", data.professionalName],
+      ["Fecha", displayDate(data.date)],
+      ["Hora", data.time],
+    ];
   }
 
-  private generateReminderText(
-    data: AppointmentEmailData,
-    hoursBefore: number,
-  ): string {
-    return `
-${data.salonName}
-Appointment Reminder
-
-Hi ${data.clientName},
-
-This is a friendly reminder about your upcoming appointment ${hoursBefore === 1 ? "in 1 hour" : "tomorrow"}.
-
-APPOINTMENT DETAILS
--------------------
-Service: ${data.serviceName}
-Professional: ${data.professionalName}
-Date: ${data.date}
-Time: ${data.time}
-
-${
-  hoursBefore === 1
-    ? "Please head to the salon now if you haven't already. We're excited to see you soon!"
-    : "We look forward to seeing you tomorrow! Please remember to arrive 5-10 minutes early."
-}
-
-${data.salonName}
-${data.salonAddress ? `Address: ${data.salonAddress}` : ""}
-${data.salonPhone ? `Phone: ${data.salonPhone}` : ""}
-
-This email was sent to ${data.clientEmail}
-    `.trim();
+  private generateConfirmationHtml(data: AppointmentEmailData): string {
+    return this.appointmentHtml(data, {
+      title: "Cita confirmada",
+      intro: "Tu cita está confirmada. ¡Te esperamos!",
+      card: CARD_DEFAULT,
+      rows: this.appointmentRows(data),
+      closing:
+        "Te recomendamos llegar 5-10 minutos antes. Si necesitas cambiar o cancelar la cita, avísanos cuanto antes.",
+    });
   }
 
-  private generateCancellationText(
-    data: AppointmentEmailData,
-    reason?: string,
-  ): string {
-    return `
-${data.salonName}
-Appointment Cancelled
-
-Hi ${data.clientName},
-
-Your appointment has been cancelled. Here are the details of the cancelled appointment:
-
-CANCELLED APPOINTMENT
----------------------
-Service: ${data.serviceName}
-Professional: ${data.professionalName}
-Date: ${data.date}
-Time: ${data.time}
-${reason ? `Reason: ${reason}` : ""}
-
-Would you like to book a new appointment? Please contact us or visit our website to schedule a new time.
-
-${data.salonName}
-${data.salonAddress ? `Address: ${data.salonAddress}` : ""}
-${data.salonPhone ? `Phone: ${data.salonPhone}` : ""}
-
-This email was sent to ${data.clientEmail}
-    `.trim();
+  private generateReminderHtml(data: AppointmentEmailData, hoursBefore: number): string {
+    const soon = hoursBefore === 1;
+    return this.appointmentHtml(data, {
+      title: "Recordatorio de cita",
+      banner: soon ? { color: "#ef4444", text: "¡Dentro de 1 hora!" } : { color: "#f59e0b", text: "Mañana" },
+      intro: soon ? "Te recordamos que tu cita es dentro de 1 hora." : "Te recordamos tu cita de mañana.",
+      card: CARD_DEFAULT,
+      rows: this.appointmentRows(data),
+      closing: soon
+        ? "Si aún no has salido, es buen momento. ¡Hasta ahora!"
+        : "¡Nos vemos mañana! Recuerda llegar 5-10 minutos antes.",
+      closingColor: soon ? "#ef4444" : undefined,
+    });
   }
 
-  private generateRescheduledText(
+  private generateCancellationHtml(data: AppointmentEmailData, reason?: string): string {
+    return this.appointmentHtml(data, {
+      title: "Cita cancelada",
+      intro: "Tu cita ha sido cancelada. Estos eran sus datos:",
+      card: { title: "❌ Cita cancelada", background: "#fef2f2", border: "#fecaca", titleColor: "#991b1b", accent: "#f87171" },
+      rows: [...this.appointmentRows(data), ["Motivo", reason || undefined]],
+      closing: "¿Quieres reservar otra cita? Escríbenos o llámanos, o reserva en nuestra web.",
+    });
+  }
+
+  private generateRescheduledHtml(data: AppointmentEmailData, oldDate: string, oldTime: string): string {
+    return this.appointmentHtml(data, {
+      title: "Cita modificada",
+      intro: "Hemos cambiado tu cita. Estos son los nuevos datos:",
+      previous: `${displayDate(oldDate)} a las ${oldTime}`,
+      card: { title: "✅ Nueva cita", background: "#f0fdf4", border: "#bbf7d0", titleColor: "#166534", accent: "#4ade80" },
+      rows: this.appointmentRows(data),
+      closing: "Te recomendamos llegar 5-10 minutos antes. Si necesitas cambiar algo más, contáctanos.",
+    });
+  }
+
+  // ==================== Appointment emails: plain text ====================
+
+  /** The plain-text version: the same content, not HTML, so nothing is escaped. */
+  private appointmentText(
     data: AppointmentEmailData,
-    oldDate: string,
-    oldTime: string,
+    parts: { title: string; intro: string; previous?: string; cardTitle: string; extraRows?: string[]; closing: string },
   ): string {
-    return `
-${data.salonName}
-Appointment Rescheduled
+    return [
+      data.salonName,
+      parts.title,
+      "",
+      `Hola ${data.clientName},`,
+      "",
+      parts.intro,
+      "",
+      ...(parts.previous ? [`ANTES: ${parts.previous}`, ""] : []),
+      parts.cardTitle.toUpperCase(),
+      "-".repeat(parts.cardTitle.length),
+      `Servicio: ${data.serviceName}`,
+      `Profesional: ${data.professionalName}`,
+      `Fecha: ${displayDate(data.date)}`,
+      `Hora: ${data.time}`,
+      ...(parts.extraRows ?? []),
+      "",
+      parts.closing,
+      "",
+      data.salonName,
+      ...(data.salonAddress ? [`Dirección: ${data.salonAddress}`] : []),
+      ...(data.salonPhone ? [`Teléfono: ${data.salonPhone}`] : []),
+      "",
+      `Este email se ha enviado a ${data.clientEmail}`,
+    ].join("\n");
+  }
 
-Hi ${data.clientName},
+  private generateConfirmationText(data: AppointmentEmailData): string {
+    return this.appointmentText(data, {
+      title: "Cita confirmada",
+      intro: "Tu cita está confirmada. ¡Te esperamos!",
+      cardTitle: "Detalles de la cita",
+      closing:
+        "Te recomendamos llegar 5-10 minutos antes. Si necesitas cambiar o cancelar la cita, avísanos cuanto antes.",
+    });
+  }
 
-Your appointment has been rescheduled. Here are the updated details:
+  private generateReminderText(data: AppointmentEmailData, hoursBefore: number): string {
+    const soon = hoursBefore === 1;
+    return this.appointmentText(data, {
+      title: "Recordatorio de cita",
+      intro: soon ? "Te recordamos que tu cita es dentro de 1 hora." : "Te recordamos tu cita de mañana.",
+      cardTitle: "Detalles de la cita",
+      closing: soon
+        ? "Si aún no has salido, es buen momento. ¡Hasta ahora!"
+        : "¡Nos vemos mañana! Recuerda llegar 5-10 minutos antes.",
+    });
+  }
 
-PREVIOUS APPOINTMENT (CANCELLED)
---------------------------------
-Date: ${oldDate}
-Time: ${oldTime}
+  private generateCancellationText(data: AppointmentEmailData, reason?: string): string {
+    return this.appointmentText(data, {
+      title: "Cita cancelada",
+      intro: "Tu cita ha sido cancelada. Estos eran sus datos:",
+      cardTitle: "Cita cancelada",
+      extraRows: reason ? [`Motivo: ${reason}`] : [],
+      closing: "¿Quieres reservar otra cita? Escríbenos o llámanos, o reserva en nuestra web.",
+    });
+  }
 
-NEW APPOINTMENT DETAILS
------------------------
-Service: ${data.serviceName}
-Professional: ${data.professionalName}
-Date: ${data.date}
-Time: ${data.time}
-
-Please arrive 5-10 minutes before your new appointment time. If you need to make further changes, please contact us.
-
-${data.salonName}
-${data.salonAddress ? `Address: ${data.salonAddress}` : ""}
-${data.salonPhone ? `Phone: ${data.salonPhone}` : ""}
-
-This email was sent to ${data.clientEmail}
-    `.trim();
+  private generateRescheduledText(data: AppointmentEmailData, oldDate: string, oldTime: string): string {
+    return this.appointmentText(data, {
+      title: "Cita modificada",
+      intro: "Hemos cambiado tu cita. Estos son los nuevos datos:",
+      previous: `${displayDate(oldDate)} a las ${oldTime}`,
+      cardTitle: "Nueva cita",
+      closing: "Te recomendamos llegar 5-10 minutos antes. Si necesitas cambiar algo más, contáctanos.",
+    });
   }
 
   /**

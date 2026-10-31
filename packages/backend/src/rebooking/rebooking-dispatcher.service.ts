@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { Cron, CronExpression } from "@nestjs/schedule";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { ClientCadenceService } from "./client-cadence.service";
@@ -6,7 +6,14 @@ import { AppointmentStatus, RebookChannel, RebookStatus } from "@prisma/client";
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
 import { EmailService } from "../notifications/services/email.service";
 import { realEmail } from "../common/placeholder-email";
-import { createHmac } from "crypto";
+import { escapeHtml } from "../common/html-escape";
+import { withinSendingHours } from "../whatsapp/campaigns/campaign-template";
+import {
+  clientsWhoAcceptedWhatsAppMarketing,
+  clientsWhoRefusedMarketing,
+} from "../consent/marketing-consent";
+import { EmailSuppressionService } from "../email-campaigns/email-suppression.service";
+import { EmailUnsubscribeService } from "../email-campaigns/email-unsubscribe.service";
 
 interface SendResult {
   ok: boolean;
@@ -16,119 +23,151 @@ interface SendResult {
   permanent?: boolean;
 }
 
+interface CadenceStats {
+  avgDays: number;
+  stdDevDays: number;
+  lastVisit?: string;
+}
+
+interface RebookClient {
+  id: string;
+  firstName: string;
+  email: string | null;
+  phone: string | null;
+  status: string;
+}
+
 const CRON_BATCH_SIZE = 500;
+/** Pages of CRON_BATCH_SIZE read per tick, so rows that wait cannot starve the rest. */
+const MAX_PAGES_PER_TICK = 10;
 const CRON_PARALLEL_TENANTS = 8;
 /** Failed sends for one client and service in a day before the cycle is skipped. */
 const MAX_FAILED_SENDS_PER_DAY = 3;
 const DAY_MS = 24 * 60 * 60 * 1000;
+/**
+ * A reminder that fell due while nothing could send it (the server was down,
+ * the salon was outside its sending hours all day) still goes out within
+ * this many days; older ones wait for the next cycle.
+ */
+export const OVERDUE_WINDOW_DAYS = 3;
+/**
+ * How long a tick owns a row it claimed. Under the hourly tick, so a failed
+ * send is retried on the next tick, and long enough that an overlapping tick
+ * or a second instance never sends the same reminder twice.
+ */
+export const CLAIM_LEASE_MS = 50 * 60 * 1000;
+const DEFAULT_TIMEZONE = "Europe/Madrid";
 
-function escapeHtml(value: unknown): string {
-  const s = value === null || value === undefined ? "" : String(value);
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function resolveOptOutSecret(): string {
-  const secret = process.env.REBOOKING_OPT_OUT_SECRET;
-  if (secret && secret.length >= 16) return secret;
-  if (process.env.NODE_ENV === "production") {
-    throw new Error(
-      "REBOOKING_OPT_OUT_SECRET must be set (>=16 chars) in production",
-    );
+/** "2026-11-04": the calendar day of `at` where the salon is. */
+function localDay(at: Date, timeZone: string): string {
+  const format = (tz: string) =>
+    new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit", timeZone: tz }).format(at);
+  try {
+    return format(timeZone);
+  } catch {
+    return format(DEFAULT_TIMEZONE);
   }
-  // Dev/test only — explicit warning so it never silently ships.
-  // eslint-disable-next-line no-console
-  console.warn(
-    "[rebooking] REBOOKING_OPT_OUT_SECRET is unset; using insecure dev fallback. " +
-      "Do NOT deploy this build to production.",
-  );
-  return "dev-secret-do-not-use-in-production";
 }
 
+/** "martes, 4 de noviembre", in the salon's time zone. */
+function longDayEs(at: Date, timeZone: string): string {
+  const options: Intl.DateTimeFormatOptions = { weekday: "long", day: "numeric", month: "long" };
+  try {
+    return at.toLocaleDateString("es-ES", { ...options, timeZone });
+  } catch {
+    return at.toLocaleDateString("es-ES", { ...options, timeZone: DEFAULT_TIMEZONE });
+  }
+}
+
+/**
+ * The "vuelve a reservar" reminders: a client whose usual cycle for a
+ * service is coming round gets one email inviting her to book it again.
+ *
+ * They are commercial communications (LSSI art. 21), not appointment
+ * notices, so they follow the campaigns' rules: only active clients, never
+ * someone who refused promotions or whose address bounced, complained or
+ * unsubscribed, only within the salon's sending hours, and always with the
+ * same signed unsubscribe link the campaigns carry (EmailUnsubscribeService).
+ */
 @Injectable()
-export class RebookingDispatcherService implements OnModuleInit {
+export class RebookingDispatcherService {
   private readonly logger = new Logger(RebookingDispatcherService.name);
-  private optOutSecret!: string;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly cadence: ClientCadenceService,
     private readonly emailService: EmailService,
     private readonly flags: FeatureFlagService,
+    private readonly suppressions: EmailSuppressionService,
+    private readonly unsubscribes: EmailUnsubscribeService,
   ) {}
 
-  onModuleInit(): void {
-    // Validate the secret eagerly so a misconfigured prod deploy fails fast.
-    this.optOutSecret = resolveOptOutSecret();
-  }
-
-  /**
-   * Hourly cron that processes every cadence whose `nextRecommendedReminderAt`
-   * falls within the current UTC day. We dispatch per-tenant in bounded
-   * parallel batches so a 10k-cadence hour doesn't run sequentially.
-   */
   @Cron(CronExpression.EVERY_HOUR)
   async runHourlyTick() {
     return this.runDailyTick();
   }
 
   /**
-   * Public method so tests can bypass the cron decorator and call directly.
+   * Sends the reminders that are due: those whose day has come where the
+   * salon is, or came within the last OVERDUE_WINDOW_DAYS. Outside the
+   * salon's sending hours (9:00-21:00, as WhatsApp campaigns) they are left
+   * for a later tick, not skipped. It used to take the cadences of the
+   * current UTC day at the first tick after midnight, so the emails went out
+   * at 01:00-02:00 in Madrid, and a day the cron missed was never sent.
    */
-  async runDailyTick(): Promise<{ processed: number; sent: number; skipped: number }> {
-    const now = new Date();
-    const todayStart = new Date(now);
-    todayStart.setHours(0, 0, 0, 0);
-    const tomorrowStart = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
+  async runDailyTick(
+    now: Date = new Date(),
+  ): Promise<{ processed: number; sent: number; skipped: number; deferred: number }> {
+    const from = new Date(now.getTime() - OVERDUE_WINDOW_DAYS * DAY_MS);
+    // A salon's "today" can end up to a day after the UTC one; the exact
+    // local-day test is below.
+    const until = new Date(now.getTime() + DAY_MS);
+    const claimableBefore = new Date(now.getTime() - CLAIM_LEASE_MS);
 
-    // Group candidates by tenant so we can dispatch per-tenant concurrently and
-    // respect each tenant's `enabled` / `channelFallback` / `leadDays` in one
-    // pass without redundant config reads.
-    const cadences = await this.prisma.clientCadence.findMany({
-      where: {
-        optedOut: false,
-        nextRecommendedReminderAt: {
-          gte: todayStart,
-          lt: tomorrowStart,
+    const byTenant = new Map<string, Array<{ clientId: string }>>();
+    let deferred = 0;
+    let cursor: string | undefined;
+    for (let page = 0; page < MAX_PAGES_PER_TICK; page++) {
+      const rows = await this.prisma.clientCadence.findMany({
+        where: {
+          optedOut: false,
+          nextRecommendedReminderAt: { gte: from, lt: until },
+          OR: [{ dispatchClaimedAt: null }, { dispatchClaimedAt: { lt: claimableBefore } }],
         },
-      },
-      include: {
-        tenant: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-            rebookingSettings: true,
-          },
+        select: {
+          clientId: true,
+          tenantId: true,
+          nextRecommendedReminderAt: true,
+          tenant: { select: { timezone: true } },
         },
-      },
-      take: CRON_BATCH_SIZE,
-      orderBy: { nextRecommendedReminderAt: "asc" },
-    });
+        orderBy: [{ nextRecommendedReminderAt: "asc" }, { clientId: "asc" }],
+        take: CRON_BATCH_SIZE,
+        ...(cursor ? { cursor: { clientId: cursor }, skip: 1 } : {}),
+      });
+      for (const row of rows) {
+        const timeZone = row.tenant?.timezone || DEFAULT_TIMEZONE;
+        const dueAt = row.nextRecommendedReminderAt;
+        if (!dueAt || localDay(dueAt, timeZone) > localDay(now, timeZone)) continue;
+        if (!withinSendingHours(now, timeZone)) {
+          deferred++;
+          continue;
+        }
+        const list = byTenant.get(row.tenantId) ?? [];
+        list.push({ clientId: row.clientId });
+        byTenant.set(row.tenantId, list);
+      }
+      if (rows.length < CRON_BATCH_SIZE) break;
+      cursor = rows[rows.length - 1].clientId;
+    }
 
     let processed = 0;
     let sent = 0;
     let skipped = 0;
-
-    // Group by tenantId, then dispatch tenants in bounded parallel.
-    const byTenant = new Map<string, typeof cadences>();
-    for (const c of cadences) {
-      const arr = byTenant.get(c.tenantId) ?? [];
-      arr.push(c);
-      byTenant.set(c.tenantId, arr);
-    }
     const tenantIds = [...byTenant.keys()];
-
     for (let i = 0; i < tenantIds.length; i += CRON_PARALLEL_TENANTS) {
       const slice = tenantIds.slice(i, i + CRON_PARALLEL_TENANTS);
       const results = await Promise.allSettled(
-        slice.map((tenantId) =>
-          this.processTenantBatch(tenantId, byTenant.get(tenantId)!),
-        ),
+        slice.map((tenantId) => this.processTenantBatch(tenantId, byTenant.get(tenantId)!)),
       );
       for (const r of results) {
         if (r.status === "fulfilled") {
@@ -137,25 +176,23 @@ export class RebookingDispatcherService implements OnModuleInit {
           skipped += r.value.skipped;
         } else {
           skipped++;
-          this.logger.warn(
-            `Tenant batch failed: ${(r.reason as Error).message}`,
-          );
+          this.logger.warn(`Tenant batch failed: ${(r.reason as Error).message}`);
         }
       }
     }
 
-    if (processed > 0) {
+    if (processed > 0 || deferred > 0) {
       this.logger.log(
-        `Rebooking tick: processed=${processed} sent=${sent} skipped=${skipped}`,
+        `Rebooking tick: processed=${processed} sent=${sent} skipped=${skipped} deferred=${deferred}`,
       );
     }
-    return { processed, sent, skipped };
+    return { processed, sent, skipped, deferred };
   }
 
   private async processTenantBatch(
     tenantId: string,
     rows: Array<{ clientId: string }>,
-  ): Promise<{ processed: number; sent: 0 | number; skipped: number }> {
+  ): Promise<{ processed: number; sent: number; skipped: number }> {
     // Re-check enabled flag at dispatch time — the cadence row may have been
     // computed when the tenant had rebooking enabled, but the owner may have
     // toggled it off afterwards. No work for disabled tenants.
@@ -165,19 +202,9 @@ export class RebookingDispatcherService implements OnModuleInit {
     }
 
     // P2A-receptionist-advanced — "Proactive rescheduling" (advanced mode)
-    // is a paid feature. When the tenant doesn't have the advanced flag we
-    // silently downgrade to a plain "you should come back" message and skip
-    // the AI-curated slot suggestion. The basic reminder (channel-aware)
-    // still fires; advanced only adds the "we held a slot for you" copy.
-    const hasAdvanced = await this.flags.isFeatureUnlocked(
-      tenantId,
-      'virtual_receptionist_advanced',
-    );
-    if (!hasAdvanced) {
-      this.logger.log(
-        `[rebooking] tenant ${tenantId}: virtual_receptionist_advanced locked; falling back to basic-reminder mode.`,
-      );
-    }
+    // is a paid feature. Without it the reminder is the plain "you should
+    // come back" one; advanced adds a date derived from her own cadence.
+    const hasAdvanced = await this.flags.isFeatureUnlocked(tenantId, "virtual_receptionist_advanced");
     let sent = 0;
     let skipped = 0;
     for (const row of rows) {
@@ -187,26 +214,40 @@ export class RebookingDispatcherService implements OnModuleInit {
         else skipped++;
       } catch (err) {
         skipped++;
-        this.logger.warn(
-          `Failed to process cadence ${row.clientId}: ${(err as Error).message}`,
-        );
+        this.logger.warn(`Failed to process cadence ${row.clientId}: ${(err as Error).message}`);
       }
     }
     return { processed: rows.length, sent, skipped };
   }
 
   /**
-   * Process a single cadence: idempotency-check, send, and advance the
-   * prediction to the next cycle.
+   * Process a single cadence: claim it, check it may be sent, send, and
+   * advance the prediction to the next cycle.
+   *
+   * The claim is the appointment reminders' one (NotificationsScheduler.remind):
+   * the conditional update that stamps dispatchClaimedAt wins, so with two
+   * backend instances, or a tick that overlaps the previous one, only one
+   * goes on. The stamp is not cleared: it also spaces retries of a failed
+   * send to one per hourly tick.
    */
   async processOne(
     cadenceId: string,
     opts: { hasAdvanced: boolean } = { hasAdvanced: true },
   ): Promise<{ ok: boolean; reason?: string }> {
+    const now = new Date();
+    const claimed = await this.prisma.clientCadence.updateMany({
+      where: {
+        clientId: cadenceId,
+        OR: [{ dispatchClaimedAt: null }, { dispatchClaimedAt: { lt: new Date(now.getTime() - CLAIM_LEASE_MS) } }],
+      },
+      data: { dispatchClaimedAt: now },
+    });
+    if (claimed.count !== 1) return { ok: false, reason: "claimed_elsewhere" };
+
     const cadence = await this.prisma.clientCadence.findUnique({
       where: { clientId: cadenceId },
       include: {
-        tenant: { select: { id: true, name: true, slug: true, rebookingSettings: true } },
+        tenant: { select: { id: true, name: true, slug: true, timezone: true, rebookingSettings: true } },
       },
     });
     if (!cadence) return { ok: false, reason: "missing" };
@@ -262,10 +303,25 @@ export class RebookingDispatcherService implements OnModuleInit {
     }
 
     const byService = (cadence.byService as Record<string, any>) ?? {};
-    const stats = byService[serviceId];
+    const stats: CadenceStats | undefined = byService[serviceId];
     if (stats && stats.stdDevDays > stats.avgDays / 2) {
       await this.advanceCycle(cadence.clientId, serviceId, stats, cfg.leadDays);
       return { ok: false, reason: "high_variability" };
+    }
+
+    const channel = cfg.channelFallback as RebookChannel;
+    const client = (await this.prisma.client.findUnique({
+      where: { id: cadence.clientId },
+      select: { id: true, firstName: true, email: true, phone: true, status: true },
+    })) as RebookClient | null;
+
+    // A commercial message: not to someone who said no, or whose address
+    // must not be emailed. Nothing to retry this cycle; her answer is read
+    // again on the next one.
+    const notAllowed = client ? await this.notAllowedReason(cadence.tenantId, client, channel) : null;
+    if (notAllowed) {
+      if (stats) await this.advanceCycle(cadence.clientId, serviceId, stats, cfg.leadDays);
+      return { ok: false, reason: notAllowed };
     }
 
     // Failed sends are retried on the next hourly ticks, a few times a day.
@@ -288,33 +344,25 @@ export class RebookingDispatcherService implements OnModuleInit {
         clientId: cadence.clientId,
         serviceId,
         scheduledAt: new Date(),
-        channel: cfg.channelFallback as RebookChannel,
+        channel,
         status: RebookStatus.scheduled,
       },
     });
 
-    // P2A-receptionist-advanced — "Proactive rescheduling" lifts the
-    // suggested slot from a generic +3d@10:00 to one derived from the
-    // client's own visit cadence (avg cycle +/- half std-dev). For Esencial
-    // (or Esencial without ai_expansion) the basic placeholder stays in place.
-    const suggestedSlot = opts.hasAdvanced
-      ? this.suggestSlotFromCadence(cadence, serviceId, stats)
-      : undefined;
+    const timeZone = cadence.tenant?.timezone || DEFAULT_TIMEZONE;
+    const suggestion = this.suggestDate(stats, opts.hasAdvanced, timeZone, now);
 
-    const result = await this.deliver(
-      cadence,
-      serviceId,
-      cfg.channelFallback as RebookChannel,
-      suggestedSlot,
-    );
+    const result = await this.deliver(cadence, client, serviceId, channel, stats, suggestion);
     await this.prisma.rebookingReminder.update({
       where: { id: created.id },
       data: {
         status: result.ok ? RebookStatus.sent : RebookStatus.failed,
         sentAt: result.ok ? new Date() : null,
-        // Persist the proposed slot so the tenant dashboard can show
-        // "we held this for you".
-        proposedSlot: suggestedSlot ?? undefined,
+        // P2A-receptionist-advanced: the date the email proposed, from her
+        // own cadence. Basic mode proposes a generic date and stores none.
+        proposedSlot: suggestion.fromCadence
+          ? { date: localDay(suggestion.date, timeZone), time: suggestion.time }
+          : undefined,
       },
     });
 
@@ -338,6 +386,35 @@ export class RebookingDispatcherService implements OnModuleInit {
       await this.advanceCycle(cadence.clientId, serviceId, stats, cfg.leadDays);
     }
     return result.ok ? { ok: true } : { ok: false, reason: result.error };
+  }
+
+  /**
+   * Why this client may not get the reminder on `channel`, or null.
+   *
+   * Email ("both" is email until WhatsApp is wired): the campaigns' rules --
+   * silence is not a no for an existing client (LSSI art. 21.2), a refusal
+   * is, and so is an address on the salon's suppression list (hard bounce,
+   * complaint, unsubscribe link). WhatsApp: Meta only allows marketing to
+   * people who opted in, so there silence is a no.
+   */
+  private async notAllowedReason(
+    tenantId: string,
+    client: RebookClient,
+    channel: RebookChannel,
+  ): Promise<string | null> {
+    if (client.status !== "active") return "client_not_active";
+    if (channel === "whatsapp") {
+      const accepted = await clientsWhoAcceptedWhatsAppMarketing(this.prisma, tenantId, [client.id]);
+      return accepted.has(client.id) ? null : "no_whatsapp_marketing_consent";
+    }
+    const refused = await clientsWhoRefusedMarketing(this.prisma, tenantId, [client.id]);
+    if (refused.has(client.id)) return "marketing_refused";
+    const email = realEmail(client.email);
+    if (email) {
+      const suppressed = await this.suppressions.suppressedAmong(tenantId, [email]);
+      if (suppressed.has(email.toLowerCase())) return "email_suppressed";
+    }
+    return null;
   }
 
   /** Has the client completed this service after `since`? */
@@ -386,12 +463,8 @@ export class RebookingDispatcherService implements OnModuleInit {
     stats: { avgDays: number; stdDevDays: number },
     leadDays: number,
   ) {
-    const nextExpectedAt = new Date(
-      Date.now() + stats.avgDays * 24 * 60 * 60 * 1000,
-    );
-    const nextReminder = new Date(
-      nextExpectedAt.getTime() - leadDays * 24 * 60 * 60 * 1000,
-    );
+    const nextExpectedAt = new Date(Date.now() + stats.avgDays * DAY_MS);
+    const nextReminder = new Date(nextExpectedAt.getTime() - leadDays * DAY_MS);
     await this.prisma.clientCadence.update({
       where: { clientId },
       data: {
@@ -401,16 +474,44 @@ export class RebookingDispatcherService implements OnModuleInit {
     });
   }
 
+  /**
+   * The date the email proposes. With the advanced feature and enough
+   * history: her last visit plus her usual cycle (P2A-receptionist-advanced),
+   * at 18:30, the most common rebooking window. Otherwise three days ahead
+   * at 10:00. Never today or earlier: a reminder sent late (overdue window)
+   * or to a client already past her cycle used to propose a day gone by.
+   */
+  private suggestDate(
+    stats: CadenceStats | undefined,
+    hasAdvanced: boolean,
+    timeZone: string,
+    now: Date,
+  ): { date: Date; time: string; fromCadence: boolean } {
+    const tomorrow = new Date(now.getTime() + DAY_MS);
+    const lastVisit = stats?.lastVisit ? new Date(stats.lastVisit) : null;
+    if (
+      hasAdvanced &&
+      stats &&
+      typeof stats.avgDays === "number" &&
+      stats.avgDays > 0 &&
+      lastVisit &&
+      !Number.isNaN(lastVisit.getTime())
+    ) {
+      const target = new Date(lastVisit.getTime() + stats.avgDays * DAY_MS);
+      const date = localDay(target, timeZone) < localDay(tomorrow, timeZone) ? tomorrow : target;
+      return { date, time: "18:30", fromCadence: true };
+    }
+    return { date: new Date(now.getTime() + 3 * DAY_MS), time: "10:00", fromCadence: false };
+  }
+
   private async deliver(
-    cadence: any,
+    cadence: { clientId: string; lastComputedAt: Date | string; tenant?: { name?: string | null; slug?: string | null; timezone?: string | null } | null },
+    client: RebookClient | null,
     serviceId: string,
     channel: RebookChannel,
-    suggestedSlot?: { date: string; time: string } | undefined,
+    stats: CadenceStats | undefined,
+    suggestion: { date: Date; time: string },
   ): Promise<SendResult> {
-    const client = await this.prisma.client.findUnique({
-      where: { id: cadence.clientId },
-      select: { id: true, firstName: true, email: true, phone: true },
-    });
     const service = await this.prisma.service.findUnique({
       where: { id: serviceId },
       select: { name: true, duration: true },
@@ -419,37 +520,9 @@ export class RebookingDispatcherService implements OnModuleInit {
       return { ok: false, channel, error: "missing_client_or_service", permanent: true };
     }
 
-    const daysSinceLastVisit = this.daysSince(cadence.lastComputedAt);
-    const optOutUrl = this.buildOptOutUrl(cadence.clientId);
-    const bookingUrl = this.buildBookingUrl(cadence.tenant?.slug, serviceId);
-
-    // P2A-receptionist-advanced: when an AI-derived slot was computed
-    // (avgDays +/- half-stdev), surface it; otherwise fall back to the
-    // "next business day at 10:00" placeholder.
-    const dateStr =
-      suggestedSlot?.date ??
-      new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toLocaleDateString("es-ES");
-    const timeStr = suggestedSlot?.time ?? "10:00";
-
-    // NOTE: every variable interpolated into the HTML template below is
-    // escaped via `escapeHtml()`. Do NOT remove the escape calls — client
-    // names come from self-service signup and are an XSS sink in the
-    // recipient's mail client.
-    const vars = {
-      clientFirstName: escapeHtml(client.firstName),
-      salonName: escapeHtml(cadence.tenant?.name ?? ""),
-      serviceName: escapeHtml(service.name),
-      daysSinceLastVisit: escapeHtml(String(daysSinceLastVisit)),
-      suggestedDate: escapeHtml(dateStr),
-      suggestedTime: escapeHtml(timeStr),
-      bookingUrl: escapeHtml(bookingUrl),
-      optoutUrl: escapeHtml(optOutUrl),
-    };
-
     // WhatsApp is not wired yet (Phase 3), so email is the only channel that
     // can deliver: "both" means email today, and the notice only counts as
-    // sent when the email went out. It used to be marked sent regardless
-    // (no address, provider error, WhatsApp-only), which used up the cycle.
+    // sent when the email went out.
     if (channel === "whatsapp") {
       return { ok: false, channel, error: "whatsapp_not_wired", permanent: true };
     }
@@ -457,11 +530,33 @@ export class RebookingDispatcherService implements OnModuleInit {
     if (!email) {
       return { ok: false, channel, error: "no_email", permanent: true };
     }
+
+    const salonName = cadence.tenant?.name || "tu salón";
+    const timeZone = cadence.tenant?.timezone || DEFAULT_TIMEZONE;
+    const lastVisit = stats?.lastVisit ? new Date(stats.lastVisit) : null;
+    const daysSinceLastVisit = this.daysSince(
+      lastVisit && !Number.isNaN(lastVisit.getTime()) ? lastVisit : cadence.lastComputedAt,
+    );
+    // The client's own unsubscribe link, the one campaigns carry: it stops
+    // these reminders and the salon's promotions alike.
+    const unsubscribe = this.unsubscribes.link({ kind: "c", id: client.id });
+
     try {
       const sent = await this.emailService.sendEmail({
         to: email,
-        subject: `¿Listo para tu próximo ${vars.serviceName}?`,
-        html: this.renderEmailBody(vars),
+        // A subject is plain text: not escaped (it used to show "&amp;").
+        subject: `¿Reservamos tu próximo ${service.name} en ${salonName}?`,
+        html: this.renderEmailBody({
+          clientFirstName: client.firstName,
+          salonName,
+          serviceName: service.name,
+          daysSinceLastVisit: String(daysSinceLastVisit),
+          suggestedDate: longDayEs(suggestion.date, timeZone),
+          suggestedTime: suggestion.time,
+          bookingUrl: this.buildBookingUrl(cadence.tenant?.slug ?? undefined, serviceId),
+          unsubscribeUrl: unsubscribe.pageUrl,
+        }),
+        headers: unsubscribe.headers,
       });
       if (!sent?.success) {
         this.logger.warn(`Email rebook failed: ${sent?.error ?? "unknown error"}`);
@@ -474,70 +569,37 @@ export class RebookingDispatcherService implements OnModuleInit {
     return { ok: true, channel };
   }
 
-  private buildOptOutUrl(clientId: string): string {
-    const token = createHmac("sha256", this.optOutSecret)
-      .update(clientId)
-      .digest("hex")
-      .slice(0, 32);
-    const base = process.env.FRONTEND_BASE_URL ?? "http://localhost:3000";
-    return `${base}/api/public/rebooking/opt-out?token=${token}&client=${clientId}`;
-  }
-
   private buildBookingUrl(slug?: string, serviceId?: string): string {
     const base = process.env.FRONTEND_BASE_URL ?? "http://localhost:3000";
-    const params = serviceId ? `?service=${serviceId}` : "";
-    return slug ? `${base}/sites/${slug}/account/new-appointment${params}` : `${base}${params}`;
+    const params = serviceId ? `?service=${encodeURIComponent(serviceId)}` : "";
+    return slug ? `${base}/sites/${encodeURIComponent(slug)}/account/new-appointment${params}` : `${base}${params}`;
   }
 
   private daysSince(date: Date | string): number {
     const d = typeof date === "string" ? new Date(date) : date;
-    return Math.max(0, Math.round((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24)));
+    return Math.max(0, Math.round((Date.now() - d.getTime()) / DAY_MS));
   }
 
   /**
-   * P2A-receptionist-advanced — derive a promising suggested slot from
-   * the cadence stats when we have enough history. Returns undefined
-   * when stats are missing or too noisy (callers fall back to the
-   * "next business day +3d" placeholder).
-   *
-   * Algorithm:
-   *   - target_date = lastComputedAt + avgDays +/- half std-dev
-   *   - target_time = 18:30 (after work hours, the most common rebook
-   *     window for beauty/salon services) — would be better per-tenant
-   *     once we collect hour-of-day history.
+   * The email. Every value is escaped here: client names come from
+   * self-service sign-up and imports, and markup in them would be rendered
+   * by the recipient's mail client.
    */
-  private suggestSlotFromCadence(
-    cadence: any,
-    serviceId: string,
-    stats: { avgDays?: number; stdDevDays?: number } | undefined,
-  ): { date: string; time: string } | undefined {
-    if (!stats || typeof stats.avgDays !== "number" || stats.avgDays <= 0) {
-      return undefined;
-    }
-    const anchor = cadence.lastComputedAt
-      ? typeof cadence.lastComputedAt === "string"
-        ? new Date(cadence.lastComputedAt)
-        : cadence.lastComputedAt
-      : new Date(Date.now() - stats.avgDays * 24 * 60 * 60 * 1000);
-    const jitter =
-      typeof stats.stdDevDays === "number"
-        ? Math.min(stats.stdDevDays, 7) * 24 * 60 * 60 * 1000 / 2
-        : 0;
-    const offset = (Math.random() * 2 - 1) * jitter;
-    const target = new Date(
-      anchor.getTime() + stats.avgDays * 24 * 60 * 60 * 1000 + offset,
-    );
-    return {
-      date: target.toLocaleDateString("es-ES"),
-      time: "18:30",
-    };
-  }
-
-  private renderEmailBody(vars: Record<string, string>): string {
-    return `<p>Hola ${vars.clientFirstName},</p>
-<p>Hace ${vars.daysSinceLastVisit} días que no te vemos para tu <strong>${vars.serviceName}</strong> en ${vars.salonName}.</p>
-<p>¿Te reservamos el ${vars.suggestedDate} a las ${vars.suggestedTime}?</p>
-<p><a href="${vars.bookingUrl}">Reservar ahora</a></p>
-<p style="font-size:11px;color:#999">Si no quieres recibir más recordatorios, <a href="${vars.optoutUrl}">cancela la suscripción</a>.</p>`;
+  private renderEmailBody(vars: {
+    clientFirstName: string;
+    salonName: string;
+    serviceName: string;
+    daysSinceLastVisit: string;
+    suggestedDate: string;
+    suggestedTime: string;
+    bookingUrl: string;
+    unsubscribeUrl: string;
+  }): string {
+    const v = Object.fromEntries(Object.entries(vars).map(([k, val]) => [k, escapeHtml(val)])) as typeof vars;
+    return `<p>Hola ${v.clientFirstName},</p>
+<p>Hace ${v.daysSinceLastVisit} días que no te vemos para tu <strong>${v.serviceName}</strong> en ${v.salonName}.</p>
+<p>¿Te reservamos el ${v.suggestedDate} a las ${v.suggestedTime}?</p>
+<p><a href="${v.bookingUrl}">Reservar ahora</a></p>
+<p style="font-size:11px;color:#999">Recibes este email porque eres cliente de ${v.salonName}. Si no quieres recibir más recordatorios ni promociones, <a href="${v.unsubscribeUrl}">date de baja aquí</a>.</p>`;
   }
 }

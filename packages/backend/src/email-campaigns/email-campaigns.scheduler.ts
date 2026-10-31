@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { clientsWhoRefusedMarketing } from "../consent/marketing-consent";
+import { escapeHtml } from '../common/html-escape';
 import { EmailService } from '../notifications/services/email.service';
 import { CampaignType } from './dto';
 import { EmailCampaignsService } from './email-campaigns.service';
@@ -252,34 +253,27 @@ export class EmailCampaignsScheduler {
    * Build personalized email content for re-engagement
    */
   private buildReengagementEmailContent(campaign: any, client: any) {
-    const clientName = `${client.firstName} ${client.lastName}`;
-    const salonName = campaign.tenant?.name || 'our salon';
-
-    let subject = campaign.subject;
-    let html = campaign.content;
-
-    // Replace placeholders
-    subject = subject.replace(/{{clientName}}/g, clientName);
-    subject = subject.replace(/{{salonName}}/g, salonName);
-
-    html = html.replace(/{{clientName}}/g, clientName);
-    html = html.replace(/{{salonName}}/g, salonName);
-
+    const values: Record<string, string> = {
+      clientName: `${client.firstName ?? ''} ${client.lastName ?? ''}`.trim(),
+      salonName: campaign.tenant?.name || 'el salón',
+    };
     // If there's a linked promotion, add discount code
     if (campaign.linkedPromotion) {
-      const discountCode = campaign.linkedPromotion.code;
-      const discountValue = campaign.linkedPromotion.type === 'PERCENTAGE'
+      values.discountCode = String(campaign.linkedPromotion.code ?? '');
+      values.discountValue = campaign.linkedPromotion.type === 'PERCENTAGE'
         ? `${campaign.linkedPromotion.value}%`
-        : `€${campaign.linkedPromotion.value}`;
-
-      html = html.replace(/{{discountCode}}/g, discountCode);
-      html = html.replace(/{{discountValue}}/g, discountValue);
-
-      // Also add to subject if placeholder exists
-      subject = subject.replace(/{{discountCode}}/g, discountCode);
-      subject = subject.replace(/{{discountValue}}/g, discountValue);
+        : `${campaign.linkedPromotion.value} €`;
     }
 
-    return { subject, html };
+    // The salon wrote the template; the values come from data (a client's
+    // name from sign-up or an import), so in the HTML they are escaped. The
+    // subject is plain text. A function replacer, so "$&" and the like in a
+    // value are inserted as typed.
+    const fill = (template: string, escape: boolean) =>
+      String(template ?? '').replace(/{{(clientName|salonName|discountCode|discountValue)}}/g, (placeholder, key: string) =>
+        key in values ? (escape ? escapeHtml(values[key]) : values[key]) : placeholder,
+      );
+
+    return { subject: fill(campaign.subject, false), html: fill(campaign.content, true) };
   }
 }
