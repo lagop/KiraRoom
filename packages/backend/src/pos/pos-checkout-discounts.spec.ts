@@ -109,10 +109,11 @@ function till(appointments: Row[], opts: { maxStaff?: number; invoiced?: string[
       update: jest.fn(async ({ data }: any) => ({ maxStaffDiscountPercent: data.maxStaffDiscountPercent })),
     },
     invoice: {
-      findFirst: jest.fn(async ({ where }: any) => {
-        const id = where.sourceId.in.find((x: string) => (opts.invoiced ?? []).includes(x));
-        return id ? { sourceId: id } : null;
-      }),
+      findMany: jest.fn(async ({ where }: any) =>
+        where.sourceId.in
+          .filter((x: string) => (opts.invoiced ?? []).includes(x))
+          .map((x: string) => ({ id: `inv-${x}`, sourceId: x, status: "issued", series: "A", number: "000001" })),
+      ),
     },
     client: { findFirst: jest.fn(async ({ where }: any) => (where.id ? { id: where.id } : null)), create: jest.fn() },
     $transaction: jest.fn(async (fn: any) => {
@@ -385,7 +386,9 @@ describe("POS discounts: an appointment", () => {
     expect(t.committed.payments.reduce((s, p) => s + p.amount, 0)).toBe(7000);
   });
 
-  it("refuses a discount on an appointment whose invoice is already issued (409), and writes nothing", async () => {
+  // With invoicing available, the discount is credited by a rectificativa
+  // instead (pos-invoiced-discount.spec.ts). Without it, still refused.
+  it("without invoicing, refuses a discount on an appointment whose invoice is already issued (409), and writes nothing", async () => {
     const t = till([apt("a1")], { invoiced: ["a1"] });
     const err = await t.service
       .processCheckout({
@@ -413,7 +416,7 @@ describe("POS discounts: an appointment", () => {
       payments: [{ method: "card", amount: 4000 }],
       actor: OWNER,
     } as any);
-    expect(t.prisma.invoice.findFirst).not.toHaveBeenCalled();
+    expect(t.prisma.invoice.findMany).not.toHaveBeenCalled();
     expect(t.committed.appointments.get("a1")).toMatchObject({ totalAmount: 4000, paymentStatus: "paid" });
   });
 

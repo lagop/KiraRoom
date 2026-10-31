@@ -4,6 +4,7 @@ import { InvoiceService } from "./invoices.service";
 import { InvoiceCalculator } from "./invoice-calculator.service";
 import { InvoicesController } from "./invoices.controller";
 import { bodyParser } from "../common/validation/validated-body.testing";
+import { invoiceStore } from "./invoice-store.testing";
 
 /**
  * A rectifying invoice that cancels the original nets it to exactly zero:
@@ -17,44 +18,7 @@ import { bodyParser } from "../common/validation/validated-body.testing";
  */
 
 function store() {
-  const invoices = new Map<string, any>();
-  let n = 0;
-  const tx: any = {
-    fiscalSequence: {
-      upsert: jest.fn(async () => ({})),
-      update: jest.fn(async () => ({ lastNumber: ++n })),
-    },
-    invoice: {
-      create: jest.fn(async (args: any) => {
-        const id = `inv-${invoices.size + 1}`;
-        const { lines, ...rest } = args.data;
-        const row = {
-          id,
-          ...rest,
-          lines: lines.create.map((l: any, i: number) => ({ id: `${id}-line-${i + 1}`, invoiceId: id, ...l })),
-        };
-        invoices.set(id, row);
-        return row;
-      }),
-    },
-  };
-  const prisma: any = {
-    ...tx,
-    tenant: {
-      findUnique: jest.fn(async () => ({
-        fiscalMode: "none",
-        fiscalSettings: { defaultSeries: "A", defaultTaxRate: 21, pricesIncludeTax: true },
-      })),
-    },
-    invoice: {
-      ...tx.invoice,
-      findFirst: jest.fn(async (args: any) => {
-        const row = invoices.get(args.where.id);
-        return row && row.tenantId === args.where.tenantId ? row : null;
-      }),
-    },
-    $transaction: async (fn: any) => fn(tx),
-  };
+  const { prisma, invoices } = invoiceStore({ defaultSeries: "A", defaultTaxRate: 21, pricesIncludeTax: true });
   const svc = new InvoiceService(prisma, new InvoiceCalculator(), {} as any);
   return { svc, invoices };
 }

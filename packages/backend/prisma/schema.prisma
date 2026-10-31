@@ -2816,9 +2816,18 @@ model InvoiceLine {
   productId      String?
   serviceId      String?
   appointmentId  String?
+  /// On a rectificativa: the line of the original invoice this line credits
+  /// (rectification-lines.ts). What is left to credit of a line is its
+  /// amounts minus every non-cancelled line naming it. Null on ordinary
+  /// lines, on free "por diferencias" lines and on rectificativas issued
+  /// before the column (those count against the original as a whole).
+  rectifiesLineId String?
+  rectifiesLine   InvoiceLine?  @relation("LineRectifications", fields: [rectifiesLineId], references: [id], onDelete: SetNull)
+  rectifiedBy     InvoiceLine[] @relation("LineRectifications")
   invoice        Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   @@index([invoiceId])
+  @@index([rectifiesLineId])
   @@map("invoice_lines")
 }
 
@@ -3433,6 +3442,10 @@ model PosDiscount {
   /// record outlives the account.
   appliedById   String?
   appliedByRole String?
+  /// The rectificativa issued for this discount, when it came off an
+  /// appointment whose invoice was already issued (pos.service.ts). Not a
+  /// relation, like the ids above.
+  rectificationInvoiceId String?
   tenant        Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, createdAt])
