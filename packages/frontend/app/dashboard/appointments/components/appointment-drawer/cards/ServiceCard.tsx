@@ -1,6 +1,7 @@
 import React from "react";
 import { Clock, Edit, Scissors, User, X } from "lucide-react";
 import type { CatalogProfessional, CatalogService } from "../hooks/useAppointmentCatalog";
+import { formatEuros } from "../../appointment-drawer.utils";
 import type { Appointment } from "../types";
 
 /**
@@ -38,11 +39,14 @@ export interface ServiceCardProps {
   onAddService: () => void;
   labels: {
     services: string;
+    service: string;
     parallel: string;
     selectProfessional: string;
     addMoreServices: string;
     selectServiceToAdd: string;
     add: string;
+    edit: string;
+    remove: string;
   };
 }
 
@@ -79,7 +83,7 @@ export function ServiceCard({
           <button
             onClick={onEnterEditMode}
             className="text-gray-400 hover:text-gray-600 flex-shrink-0"
-            aria-label="Editar servicios"
+            aria-label={labels.edit}
           >
             <Edit className="w-4 h-4" />
           </button>
@@ -106,12 +110,14 @@ export function ServiceCard({
                 <div className="flex-1 min-w-0">
                   <div className="flex items-start justify-between gap-2">
                     <h3 className="font-semibold text-gray-900 truncate">
-                      {appService.service?.name || "Service"}
+                      {appService.service?.name || labels.service}
                     </h3>
                     <button
                       type="button"
                       onClick={() => onRemoveService(index)}
                       className="text-red-600 hover:text-red-800 p-1 flex-shrink-0"
+                      aria-label={labels.remove}
+                      title={labels.remove}
                     >
                       <X className="w-4 h-4" />
                     </button>
@@ -125,10 +131,7 @@ export function ServiceCard({
                       {appService.service?.duration || 0} min
                     </span>
                     <span className="text-sm font-medium text-gray-900">
-                      $
-                      {(
-                        Number(appService.service?.price) || 0
-                      ).toFixed(2)}
+                      {formatEuros(appService.service?.price)}
                     </span>
                     {appService.isParallel && (
                       <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full">
@@ -140,6 +143,7 @@ export function ServiceCard({
                     <div className="flex items-center space-x-2">
                       <User className="w-4 h-4 text-purple-600 flex-shrink-0" />
                       <select
+                        aria-label={labels.selectProfessional}
                         value={appService.professional?.id || ""}
                         onChange={(e) =>
                           onUpdateProfessional(index, e.target.value)
@@ -166,6 +170,7 @@ export function ServiceCard({
       {renderSingleEdit && (
         <div className="flex items-center space-x-2 mb-4">
           <select
+            aria-label={labels.services}
             value={
               editedAppointment?.service?.id || appointment.service.id
             }
@@ -194,7 +199,7 @@ export function ServiceCard({
               </div>
               <div className="flex-1 min-w-0">
                 <h3 className="font-semibold text-gray-900 truncate">
-                  {appService.service?.name || "Service"}
+                  {appService.service?.name || labels.service}
                 </h3>
                 <p className="text-sm text-gray-500 mt-1">
                   {appService.service?.description || ""}
@@ -205,10 +210,7 @@ export function ServiceCard({
                     {appService.service?.duration || 0} min
                   </span>
                   <span className="text-sm font-medium text-gray-900">
-                    $
-                    {(
-                      Number(appService.service?.price) || 0
-                    ).toFixed(2)}
+                    {formatEuros(appService.service?.price)}
                   </span>
                   {appService.isParallel && (
                     <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full">
@@ -254,15 +256,7 @@ export function ServiceCard({
                 {appointment.service.duration} min
               </span>
               <span className="text-sm font-medium text-gray-900">
-                $
-                {(
-                  Number(
-                    editMode &&
-                      editedAppointment?.service?.price !== undefined
-                      ? editedAppointment.service.price
-                      : appointment.service.price,
-                  ) || 0
-                ).toFixed(2)}
+                {formatEuros(appointment.service.price)}
               </span>
             </div>
           </div>
@@ -277,6 +271,7 @@ export function ServiceCard({
           </h3>
           <div className="flex flex-col sm:flex-row sm:items-center gap-2 mt-2">
             <select
+              aria-label={labels.selectServiceToAdd}
               value={selectedAddon}
               onChange={(e) => onSelectedAddonChange(e.target.value)}
               className="border border-gray-300 rounded px-2 py-1 text-sm w-full sm:flex-1 min-w-0"
@@ -291,7 +286,7 @@ export function ServiceCard({
                 )
                 .map((service) => (
                   <option key={service.id} value={service.id}>
-                    {service.name} - ${service.price} ({service.duration} min)
+                    {service.name} - {formatEuros(service.price)} ({service.duration} min)
                   </option>
                 ))}
             </select>
