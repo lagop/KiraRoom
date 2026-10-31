@@ -59,7 +59,9 @@ function makePrismaMock() {
       accountingConnection: { findUnique: async () => null },
       accountingsyncLog: { create: async () => ({}) },
   };
-  // Invoice number and invoice are created in one transaction.
+  // Invoice number and invoice are created in one transaction; a
+  // rectificativa locks its original first (SELECT ... FOR UPDATE).
+  prisma.$queryRaw = async () => [];
   prisma.$transaction = async (fn: any) => fn(prisma);
   return { tenant, invoices, sequences, prisma };
 }

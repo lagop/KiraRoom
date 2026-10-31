@@ -79,9 +79,13 @@ export class InvoicesController {
       lines: dto.lines.map((l) => ({
         ...l,
         discountPct: l.discountPct ?? 0,
-        // Explicit: only true includes the tax; left out is on top.
-        taxIncluded: l.taxIncluded === true,
+        // true or false as sent; left out, the salon's pricesIncludeTax.
+        taxIncluded: typeof l.taxIncluded === "boolean" ? l.taxIncluded : undefined,
       })),
+      // A line without taxIncluded used to get the tax on top whatever the
+      // salon's setting: 30,00 EUR became 36,30 for a salon whose prices
+      // include it. Now it follows Ajustes fiscales, server-side.
+      taxIncludedFromSalon: true,
     });
   }
 

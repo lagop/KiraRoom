@@ -34,6 +34,11 @@ export interface InvoiceLineInput {
    * unitPriceCents is the stored net one and discountPct is kept as given.
    */
   fixed?: { taxCents: number; totalCents: number };
+  /**
+   * On a rectificativa: the line of the original this line credits
+   * (InvoiceLine.rectifiesLineId), so what is left to credit of it is known.
+   */
+  rectifiesLineId?: string;
 }
 
 export interface ComputedInvoiceLine {
@@ -48,6 +53,8 @@ export interface ComputedInvoiceLine {
   serviceId?: string;
   /** The line's price was given with the tax included (stored on InvoiceLine). */
   taxIncluded: boolean;
+  /** InvoiceLineInput.rectifiesLineId. */
+  rectifiesLineId?: string;
 }
 
 export interface TaxBreakdownEntry {
@@ -149,6 +156,7 @@ function fixedLine(l: InvoiceLineInput): ComputedInvoiceLine {
     productId: l.productId,
     serviceId: l.serviceId,
     taxIncluded: l.taxIncluded === true,
+    ...(l.rectifiesLineId ? { rectifiesLineId: l.rectifiesLineId } : {}),
   };
 }
 

@@ -28,8 +28,24 @@ import {
   type DiscountSpec,
   type DiscountedTicket,
 } from './pos-discounts';
+import { InvoiceService, type IssuedInvoice } from '../invoices/invoices.service';
 
 export { CreatePosOrderDto };
+
+/** An appointment's issued invoice that a till discount will rectify: its id and "A000123". */
+interface InvoiceToRectify {
+  id: string;
+  name: string;
+}
+
+/** 409: the discount does not fit in what is left to credit of the appointment's invoice. */
+function notCreditable(appointmentId: string, invoiceName: string, err: BadRequestException): ConflictException {
+  return new ConflictException({
+    code: 'APPOINTMENT_INVOICE_NOT_CREDITABLE',
+    message: `La factura de esta cita (${invoiceName}) ya está emitida y el descuento no cabe en una rectificativa: ${err.message}. Cóbrala sin descuento o con uno menor.`,
+    appointmentId,
+  });
+}
 
 /**
  * A cart line as the server prices it: cents per unit, from the database
@@ -69,6 +85,7 @@ export class PosService {
     private readonly prisma: PrismaService,
     private readonly walletService: WalletService,
     @Optional() private readonly loyalty?: LoyaltyService,
+    @Optional() private readonly invoices?: InvoiceService,
   ) {}
 
   /**
@@ -225,7 +242,11 @@ export class PosService {
         appointmentDiscounts.set(line.appointmentId, (appointmentDiscounts.get(line.appointmentId) ?? 0) + off);
       }
     }
-    if (appointmentDiscounts.size > 0) await this.assertNotInvoiced(tenantId, [...appointmentDiscounts.keys()]);
+    // An appointment already invoiced gets its discount as a rectificativa
+    // by difference, issued with the sale; checked here, before anything is
+    // written (a cancelled invoice, or less left to credit, is a 409).
+    const toRectify =
+      appointmentDiscounts.size > 0 ? await this.invoicesToRectify(tenantId, appointmentDiscounts) : new Map<string, InvoiceToRectify>();
 
     if (clientId) await this.assertClient(tenantId, clientId);
     // The wallet is a client's: without one nothing would be taken from it
@@ -305,6 +326,7 @@ export class PosService {
     // out of the day's card total.
     const walletTaken: number[] = [];
     let paymentRecords: any[] = [];
+    const rectifications = new Map<string, IssuedInvoice>();
     try {
       for (const payment of payments) {
         if (payment.method === 'wallet' && finalClientId) {
@@ -315,6 +337,24 @@ export class PosService {
 
       const write = async (db: any) => {
         const created: any[] = [];
+        // The rectificativas, numbered in the sale's transaction: issued if
+        // and only if the sale is recorded. Each one checks again, with the
+        // original locked, that the discount fits in what is left of it.
+        for (const [appointmentId, invoice] of toRectify) {
+          const issued = await this.invoices!
+            .rectifyByAmountIn(
+              db,
+              tenantId,
+              invoice.id,
+              appointmentDiscounts.get(appointmentId) as number,
+              `Descuento en caja (venta ${saleId})`,
+            )
+            .catch((err) => {
+              // Another rectificativa got there first: the sale rolls back.
+              throw err instanceof BadRequestException ? notCreditable(appointmentId, invoice.name, err) : err;
+            });
+          rectifications.set(appointmentId, issued);
+        }
         for (const row of rows) {
           created.push(
             await db.payment.create({
@@ -341,7 +381,7 @@ export class PosService {
         // The discounts given, with the sale they belong to: recorded if and
         // only if the sale is.
         if (discountRows.length > 0) {
-          await db.posDiscount.createMany({ data: discountRows });
+          await db.posDiscount.createMany({ data: this.withRectifications(discountRows, items, rectifications) });
         }
         // Same transaction: an appointment is paid if and only if the
         // payments that pay it are recorded.
@@ -352,7 +392,20 @@ export class PosService {
             share.appointment,
             share.fromDiscount + share.fromMoney,
             shareMethod(share),
-            off > 0 ? { cents: off, record: this.appointmentDiscountRecord(share.appointment, saleId, off, items, orderDiscount, dto.actor) } : undefined,
+            off > 0
+              ? {
+                  cents: off,
+                  record: this.appointmentDiscountRecord(
+                    share.appointment,
+                    saleId,
+                    off,
+                    items,
+                    orderDiscount,
+                    dto.actor,
+                    rectifications.get(share.appointment.id)?.id,
+                  ),
+                }
+              : undefined,
           );
         }
         return created;
@@ -370,6 +423,8 @@ export class PosService {
       }
       throw err;
     }
+    // Committed: the rectificativas go to the AEAT / Holded like any invoice.
+    for (const issued of rectifications.values()) this.invoices?.afterIssue(issued);
 
     // Points for the sale. An appointment's ticket earns through the
     // appointment instead (once it is completed and paid), never both.
@@ -409,6 +464,14 @@ export class PosService {
       total,
       payments: paymentRecords,
       loyalty: { pointsEarned, pointsSpent, discount: loyaltyDiscount, rewardName },
+      ...(rectifications.size
+        ? {
+            rectifications: [...rectifications].map(([appointmentId, issued]) => ({
+              appointmentId,
+              invoiceId: issued.id,
+            })),
+          }
+        : {}),
       status: 'completed',
       createdAt: new Date().toISOString(),
     };
@@ -565,23 +628,76 @@ export class PosService {
   }
 
   /**
-   * 409 when a discounted appointment already has its invoice. With
-   * VERI*FACTU an issued invoice is chained and sent: lowering the price
-   * afterwards takes a corrective invoice, not a discount at the till.
+   * The issued invoices of the discounted appointments, by appointment.
+   * With VERI*FACTU an issued invoice is chained and sent, never edited: a
+   * discount given afterwards at the till is credited by a rectificativa by
+   * difference (InvoiceService.rectifyByAmountIn), issued with the sale. It
+   * used to be refused with a 409. Still a 409, before anything is written,
+   * when the invoice is cancelled or has less left to credit than the
+   * discount (earlier rectificativas included).
    */
-  private async assertNotInvoiced(tenantId: string, appointmentIds: string[]): Promise<void> {
-    const invoiced = await this.prisma.invoice.findFirst({
-      where: { tenantId, sourceType: 'appointment', sourceId: { in: appointmentIds } },
-      select: { sourceId: true },
+  private async invoicesToRectify(
+    tenantId: string,
+    discounts: Map<string, number>,
+  ): Promise<Map<string, InvoiceToRectify>> {
+    const invoiced = await this.prisma.invoice.findMany({
+      where: { tenantId, sourceType: 'appointment', sourceId: { in: [...discounts.keys()] } },
+      select: { id: true, sourceId: true, status: true, series: true, number: true },
     });
-    if (invoiced) {
-      throw new ConflictException({
-        code: 'APPOINTMENT_ALREADY_INVOICED',
-        message:
-          'Esta cita ya tiene su factura emitida: no se le puede aplicar un descuento en caja. Cóbrala sin descuento o emite una factura rectificativa.',
-        appointmentId: invoiced.sourceId,
-      });
+    const out = new Map<string, InvoiceToRectify>();
+    for (const invoice of invoiced) {
+      const appointmentId = invoice.sourceId as string;
+      const name = `${invoice.series}${invoice.number}`;
+      if (!this.invoices) {
+        throw new ConflictException({
+          code: 'APPOINTMENT_ALREADY_INVOICED',
+          message:
+            'Esta cita ya tiene su factura emitida: no se le puede aplicar un descuento en caja. Cóbrala sin descuento o emite una factura rectificativa.',
+          appointmentId,
+        });
+      }
+      if (invoice.status === 'cancelled') {
+        throw new ConflictException({
+          code: 'APPOINTMENT_INVOICE_CANCELLED',
+          message: `La factura de esta cita (${name}) está anulada: no se le puede aplicar un descuento en caja. Cóbrala sin descuento.`,
+          appointmentId,
+        });
+      }
+      try {
+        await this.invoices.assertCreditable(tenantId, invoice.id, discounts.get(appointmentId) as number);
+      } catch (err) {
+        throw err instanceof BadRequestException ? notCreditable(appointmentId, name, err) : err;
+      }
+      out.set(appointmentId, { id: invoice.id, name });
     }
+    return out;
+  }
+
+  /**
+   * The ticket's discount rows, each naming the rectificativa issued for it:
+   * a line's, its appointment's; the ticket's own discount, the one
+   * rectificativa its share went to (none when it went to several: each
+   * appointment's record keeps its own, appointmentDiscountRecord).
+   */
+  private withRectifications(
+    rows: any[],
+    lines: DiscountedTicket<PricedLine>['lines'],
+    rectifications: Map<string, IssuedInvoice>,
+  ): any[] {
+    if (rectifications.size === 0) return rows;
+    const fromOrder = [
+      ...new Set(
+        lines
+          .filter((l) => l.appointmentId && l.orderDiscountCents > 0 && rectifications.has(l.appointmentId))
+          .map((l) => rectifications.get(l.appointmentId as string)!.id),
+      ),
+    ];
+    return rows.map((row) => {
+      let id: string | undefined;
+      if (row.scope === 'line') id = row.appointmentId ? rectifications.get(row.appointmentId)?.id : undefined;
+      else if (fromOrder.length === 1) id = fromOrder[0];
+      return id ? { ...row, rectificationInvoiceId: id } : row;
+    });
   }
 
   /** The PosDiscount rows of a ticket: one per discounted line, one for the ticket's own discount. */
@@ -642,6 +758,7 @@ export class PosService {
     lines: DiscountedTicket<PricedLine>['lines'],
     orderDiscount: DiscountSpec | null,
     actor?: { id: string; role: string },
+    rectificationInvoiceId?: string,
   ): Record<string, unknown> {
     const own = lines.filter((l) => l.appointmentId === apt.id);
     const reasons = [
@@ -659,6 +776,8 @@ export class PosService {
         ...(reasons.length ? { reason: [...new Set(reasons)].join(' · ') } : {}),
         appliedById: actor?.id ?? null,
         appliedByRole: actor?.role ?? null,
+        // The appointment was invoiced already: the rectificativa that credits it.
+        ...(rectificationInvoiceId ? { rectificationInvoiceId } : {}),
         at: new Date().toISOString(),
       },
     };

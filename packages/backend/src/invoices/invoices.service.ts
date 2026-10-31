@@ -14,7 +14,13 @@ import { appointmentInvoiceLines } from "./appointment-invoice-pricing";
 import { pricesIncludeTaxOf, productTaxRatePercent, salonTaxRate } from "./salon-tax-settings";
 import { addonServices } from "../appointments/visit-sync";
 import { allocateCents } from "../pos/pos-discounts";
-import { rectificationLines, type RectificationLineRequest } from "./rectification-lines";
+import {
+  amountCreditLines,
+  rectificationLines,
+  type PriorRectificationLine,
+  type RectificationLineRequest,
+} from "./rectification-lines";
+import type { InvoiceLineInput } from "./invoice-calculator.service";
 
 interface CreateInvoiceInput {
   tenantId: string;
@@ -38,13 +44,38 @@ interface CreateInvoiceInput {
     taxIncluded?: boolean;
     /** Amounts taken as they are (InvoiceLineInput.fixed): a rectification. */
     fixed?: { taxCents: number; totalCents: number };
+    /** On a rectificativa: the line of the original it credits. */
+    rectifiesLineId?: string;
   }>;
+  /**
+   * Lines that leave `taxIncluded` out follow the salon's
+   * `fiscalSettings.pricesIncludeTax` (salon-tax-settings.ts) instead of
+   * taking the tax on top. POST /invoices sets it; explicit true or false
+   * on a line still wins.
+   */
+  taxIncludedFromSalon?: boolean;
   notes?: string;
   /**
    * What the invoice is for (an appointment, an order). Unique per tenant:
    * a second invoice for the same source fails with P2002. Omitted: manual.
    */
   source?: { type: InvoiceSource; id: string };
+}
+
+/** An invoice just numbered and stored: what afterIssue() needs. */
+export interface IssuedInvoice {
+  id: string;
+  fiscalMode: FiscalMode;
+}
+
+type RectifiableInvoice = Prisma.InvoiceGetPayload<{ include: { lines: true } }>;
+
+/**
+ * How every rectificativa's note starts ("Rectificación de A000123:"). For
+ * those issued before rectifiesLineId it is the only link to the original.
+ */
+export function rectificationNotePrefix(original: { series: string; number: string }): string {
+  return `Rectificación de ${original.series}${original.number}:`;
 }
 
 @Injectable()
@@ -59,11 +90,25 @@ export class InvoiceService {
   ) {}
 
   async create(input: CreateInvoiceInput): Promise<{ id: string }> {
+    const prepared = await this.prepare(input);
+    // Number and invoice in one transaction: when the insert fails (a source
+    // that already has its invoice, see fromAppointment) the number is given
+    // back, so the series stays correlative with no gaps.
+    const invoice = await this.prisma.$transaction((tx) => this.insert(tx, input, prepared));
+    this.afterIssue(invoice);
+    return { id: invoice.id };
+  }
+
+  /**
+   * The amounts, series, date and fiscal mode of an invoice about to be
+   * issued, from its lines and the salon's fiscal settings. Read with `db`:
+   * the caller's transaction when the invoice is issued inside one.
+   */
+  private async prepare(input: CreateInvoiceInput, db: Prisma.TransactionClient = this.prisma) {
     if (!input.lines?.length) {
       throw new BadRequestException("Invoice must have at least one line");
     }
-    const computation = this.calculator.compute(input.lines);
-    const tenant = await this.prisma.tenant.findUnique({
+    const tenant = await db.tenant.findUnique({
       where: { id: input.tenantId },
       select: { fiscalMode: true, fiscalSettings: true },
     });
@@ -71,17 +116,28 @@ export class InvoiceService {
       throw new NotFoundException("Tenant not found");
     }
     const settings = (tenant.fiscalSettings as Record<string, unknown>) ?? {};
+    const lines = input.taxIncludedFromSalon
+      ? input.lines.map((l) =>
+          l.taxIncluded === undefined || l.taxIncluded === null
+            ? { ...l, taxIncluded: pricesIncludeTaxOf(settings) }
+            : l,
+        )
+      : input.lines;
+    const computation = this.calculator.compute(lines);
     const series = input.series ?? (settings.defaultSeries as string) ?? "A";
     const issueDate = input.issueDate ?? new Date();
-    const year = issueDate.getFullYear();
-    const fiscalMode = tenant.fiscalMode;
+    return { computation, series, issueDate, year: issueDate.getFullYear(), fiscalMode: tenant.fiscalMode };
+  }
 
-    // Number and invoice in one transaction: when the insert fails (a source
-    // that already has its invoice, see fromAppointment) the number is given
-    // back, so the series stays correlative with no gaps.
-    const invoice = await this.prisma.$transaction(async (tx) => {
-      const number = await this.allocateNumber(input.tenantId, series, year, tx);
-      return tx.invoice.create({
+  /** Numbers and stores the invoice, inside `tx`. */
+  private async insert(
+    tx: Prisma.TransactionClient,
+    input: CreateInvoiceInput,
+    prepared: Awaited<ReturnType<InvoiceService["prepare"]>>,
+  ): Promise<IssuedInvoice> {
+    const { computation, series, issueDate, year, fiscalMode } = prepared;
+    const number = await this.allocateNumber(input.tenantId, series, year, tx);
+    const invoice = await tx.invoice.create({
       data: {
         tenantId: input.tenantId,
         series,
@@ -115,15 +171,24 @@ export class InvoiceService {
             productId: l.productId,
             serviceId: l.serviceId,
             taxIncluded: l.taxIncluded,
+            ...(l.rectifiesLineId ? { rectifiesLineId: l.rectifiesLineId } : {}),
           })),
         },
       },
     });
-    });
+    return { id: invoice.id, fiscalMode };
+  }
 
+  /**
+   * What follows an invoice once it is committed: the fiscal dispatch and
+   * the push to Holded, both in the background. An invoice issued inside a
+   * caller's transaction (rectifyByAmountIn) is handed back to it to call
+   * this after its commit.
+   */
+  afterIssue(invoice: IssuedInvoice): void {
     // Fire fiscal dispatch in the background. Failures don't roll back the
     // invoice — the operator can retry via /invoices/:id/resend-fiscal.
-    if (fiscalMode !== FiscalMode.none) {
+    if (invoice.fiscalMode !== FiscalMode.none) {
       void this.fiscal.dispatchInvoice(invoice.id).catch((err) => {
         this.logger.warn(
           `Background fiscal dispatch failed for ${invoice.id}: ${(err as Error).message}`,
@@ -141,7 +206,6 @@ export class InvoiceService {
         );
       });
     }
-    return { id: invoice.id };
   }
 
   /**
@@ -291,9 +355,10 @@ export class InvoiceService {
   /**
    * Rectify: creates a NEW invoice with series="R" referencing the
    * original, marked with the negative amount delta. Used for partial
-   * refunds, discounts, etc. No lines: the whole original, each line's
-   * stored amounts negated, so the two net to zero. Lines that name an
-   * original line credit it from its stored amounts (rectification-lines.ts).
+   * refunds, discounts, etc. No lines: what is left of the whole original
+   * (for one never rectified, each line's stored amounts negated, so the
+   * two net to zero). Lines that name an original line credit it from what
+   * is left of it; past what is left is refused (rectification-lines.ts).
    */
   async emitRectification(
     tenantId: string,
@@ -301,17 +366,110 @@ export class InvoiceService {
     lines: RectificationLineRequest[] | undefined,
     reason: string,
   ): Promise<{ id: string }> {
-    const original = await this.findOne(tenantId, originalInvoiceId);
-    return this.create({
+    const issued = await this.prisma.$transaction((tx) =>
+      this.rectifyIn(tx, tenantId, originalInvoiceId, reason, (original, context) =>
+        rectificationLines(original.lines, lines, context),
+      ),
+    );
+    this.afterIssue(issued);
+    return { id: issued.id };
+  }
+
+  /**
+   * A rectificativa by difference for `amountCents` of the invoice's price
+   * (a discount given at the till after the invoice was issued), issued
+   * inside the caller's transaction like any other rectificativa: series
+   * R, numbered, linked line by line to the original and counted in what is
+   * left to credit of it. The caller calls afterIssue() once it commits.
+   */
+  rectifyByAmountIn(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    originalInvoiceId: string,
+    amountCents: number,
+    reason: string,
+  ): Promise<IssuedInvoice> {
+    return this.rectifyIn(tx, tenantId, originalInvoiceId, reason, (original, context) =>
+      amountCreditLines(original.lines, amountCents, context),
+    );
+  }
+
+  /**
+   * Throws what rectifyByAmountIn would refuse (a cancelled invoice, more
+   * than is left to credit), without issuing anything or locking: a check
+   * before a sale is written. rectifyByAmountIn checks again under the lock.
+   */
+  async assertCreditable(tenantId: string, originalInvoiceId: string, amountCents: number): Promise<void> {
+    const original = await this.rectifiable(this.prisma, tenantId, originalInvoiceId);
+    amountCreditLines(original.lines, amountCents, await this.creditContext(this.prisma, original));
+  }
+
+  private async rectifyIn(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    originalInvoiceId: string,
+    reason: string,
+    linesOf: (original: RectifiableInvoice, context: { prior: PriorRectificationLine[]; invoiceTotalCents: number }) => InvoiceLineInput[],
+  ): Promise<IssuedInvoice> {
+    // One rectificativa of an invoice at a time: a second one waits here
+    // until the first commits, and then sees what it credited.
+    await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${originalInvoiceId} AND "tenantId" = ${tenantId} FOR UPDATE`;
+    const original = await this.rectifiable(tx, tenantId, originalInvoiceId);
+    const input: CreateInvoiceInput = {
       tenantId,
       series: "R",
       recipientType: "client",
       recipientId: original.recipientId ?? undefined,
       recipientName: original.recipientName,
       recipientTaxId: original.recipientTaxId ?? undefined,
-      lines: rectificationLines(original.lines ?? [], lines),
-      notes: `Rectificación de ${original.series}${original.number}: ${reason}`,
+      lines: linesOf(original, await this.creditContext(tx, original)),
+      notes: `${rectificationNotePrefix(original)} ${reason}`,
+    };
+    return this.insert(tx, input, await this.prepare(input, tx));
+  }
+
+  /** The invoice to rectify, with its lines: 404 if not this salon's, 400 if cancelled. */
+  private async rectifiable(
+    db: Prisma.TransactionClient,
+    tenantId: string,
+    id: string,
+  ): Promise<RectifiableInvoice> {
+    const invoice = await db.invoice.findFirst({ where: { id, tenantId }, include: { lines: true } });
+    if (!invoice) throw new NotFoundException("Invoice not found");
+    if (invoice.status === InvoiceStatus.cancelled) {
+      throw new BadRequestException(
+        `La factura ${invoice.series}${invoice.number} está anulada: no se puede rectificar`,
+      );
+    }
+    return invoice;
+  }
+
+  /**
+   * What earlier rectificativas of `original` credited: the lines of every
+   * non-cancelled one. Found by the line link (rectifiesLineId) and by the
+   * note every rectificativa carries ("Rectificación de A000123: ..."), which
+   * is the only link the ones issued before the line link have. Their lines
+   * have no rectifiesLineId and count against the invoice as a whole
+   * (rectification-lines.ts).
+   */
+  private async creditContext(db: Prisma.TransactionClient, original: RectifiableInvoice) {
+    const lineIds = original.lines.map((l) => l.id);
+    const earlier = await db.invoice.findMany({
+      where: {
+        tenantId: original.tenantId,
+        id: { not: original.id },
+        status: { not: InvoiceStatus.cancelled },
+        OR: [
+          { notes: { startsWith: rectificationNotePrefix(original) } },
+          ...(lineIds.length ? [{ lines: { some: { rectifiesLineId: { in: lineIds } } } }] : []),
+        ],
+      },
+      select: { lines: { select: { rectifiesLineId: true, quantity: true, taxCents: true, totalCents: true } } },
     });
+    return {
+      prior: earlier.flatMap((inv) => inv.lines) as PriorRectificationLine[],
+      invoiceTotalCents: original.totalCents,
+    };
   }
 
   async resendFiscal(tenantId: string, id: string) {
