@@ -5,6 +5,23 @@ import { TranslationsService } from "../../translations/translations.service";
 import { PrismaService } from "../../common/prisma/prisma.service";
 import { PlatformEmailConfigService } from "../../platform/platform-email-config.service";
 import { EmailSettings, senderDomain } from "../../platform/email-settings";
+import { isPlaceholderEmail } from "../../common/placeholder-email";
+
+/**
+ * How long a send may take before the caller gives up on it. Resend's client
+ * has no timeout of its own, so a hung provider used to hold a scheduler
+ * tick (and every reminder after it) indefinitely.
+ */
+export const EMAIL_SEND_TIMEOUT_MS = 15_000;
+
+/** Rejects when `promise` has not settled within `ms`. The request itself is not aborted. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Email provider did not answer within ${ms} ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 
 export interface EmailOptions {
   to: string | string[];
@@ -27,6 +44,11 @@ export interface EmailOptions {
    * preserve the historical behavior of one-off `sendEmail` callers.
    */
   listUnsubscribe?: boolean;
+  /**
+   * Resend's Idempotency-Key: a retry with the same key within 24 hours is
+   * not delivered twice (e.g. after a send that timed out but went through).
+   */
+  idempotencyKey?: string;
 }
 
 export interface BatchEmailOptions {
@@ -128,20 +150,32 @@ export class EmailService {
       return { success: false, error: "Email service not configured" };
     }
 
+    const to = this.deliverableRecipients(options.to);
+    if (!to.length) {
+      this.logger.warn("Email to a placeholder address only - skipping email send");
+      return { success: false, error: "No deliverable recipient" };
+    }
+
     const from = this.fromAddress();
 
     const headers = this.buildHeaders(options, from);
 
     try {
-      const { data, error } = await resend.emails.send({
-        from,
-        to: Array.isArray(options.to) ? options.to : [options.to],
-        subject: options.subject,
-        html: options.html,
-        text: options.text,
-        replyTo: options.replyTo,
-        headers,
-      });
+      const { data, error } = await withTimeout(
+        resend.emails.send(
+          {
+            from,
+            to,
+            subject: options.subject,
+            html: options.html,
+            text: options.text,
+            replyTo: options.replyTo,
+            headers,
+          },
+          options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : undefined,
+        ),
+        EMAIL_SEND_TIMEOUT_MS,
+      );
 
       if (error) {
         this.logger.error(`Failed to send email: ${error.message}`);
@@ -169,13 +203,19 @@ export class EmailService {
       return { success: false, error: "Email service not configured" };
     }
 
+    const to = this.deliverableRecipients(options.to);
+    if (!to.length) {
+      this.logger.warn("Email to a placeholder address only - skipping email send");
+      return { success: false, error: "No deliverable recipient" };
+    }
+
     const from = this.fromAddress();
 
     try {
       // Build email payload with optional scheduling
       const emailPayload: any = {
         from,
-        to: Array.isArray(options.to) ? options.to : [options.to],
+        to,
         subject: options.subject,
         html: options.html,
         text: options.text,
@@ -188,7 +228,13 @@ export class EmailService {
         emailPayload.send_at = Math.floor(options.sendAt.getTime() / 1000);
       }
 
-      const { data, error } = await resend.emails.send(emailPayload);
+      const { data, error } = await withTimeout(
+        resend.emails.send(
+          emailPayload,
+          options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : undefined,
+        ),
+        EMAIL_SEND_TIMEOUT_MS,
+      );
 
       if (error) {
         this.logger.error(`Failed to send scheduled email: ${error.message}`);
@@ -219,12 +265,15 @@ export class EmailService {
       return { success: false, error: "Email service not configured" };
     }
 
+    emails = emails
+      .map((email) => ({ ...email, to: this.deliverableRecipients(email.to) }))
+      .filter((email) => email.to.length > 0);
     if (emails.length === 0) {
       return { success: true, ids: [] };
     }
 
     try {
-      const { data, error } = await resend.batch.send(emails);
+      const { data, error } = await withTimeout(resend.batch.send(emails), EMAIL_SEND_TIMEOUT_MS);
 
       if (error) {
         this.logger.error(`Failed to send batch emails: ${error.message}`);
@@ -241,6 +290,11 @@ export class EmailService {
       this.logger.error(`Failed to send batch emails: ${errorMessage}`);
       return { success: false, error: errorMessage };
     }
+  }
+
+  /** The recipients without KiraRoom's placeholder addresses (never deliverable). */
+  private deliverableRecipients(to: string | string[]): string[] {
+    return (Array.isArray(to) ? to : [to]).filter((address) => !isPlaceholderEmail(address));
   }
 
   /**
@@ -284,6 +338,7 @@ export class EmailService {
   async sendAppointmentReminder(
     data: AppointmentEmailData,
     hoursBefore: number,
+    options: Pick<EmailOptions, "idempotencyKey"> = {},
   ): Promise<{ success: boolean; id?: string; error?: string }> {
     const salonName =
       this.configService.get<string>("SALON_NAME") || data.salonName;
@@ -297,6 +352,7 @@ export class EmailService {
       subject,
       html,
       text,
+      idempotencyKey: options.idempotencyKey,
     });
   }
 

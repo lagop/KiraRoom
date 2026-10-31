@@ -2,19 +2,25 @@ import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { Cron, CronExpression } from "@nestjs/schedule";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { ClientCadenceService } from "./client-cadence.service";
-import { RebookChannel, RebookStatus } from "@prisma/client";
+import { AppointmentStatus, RebookChannel, RebookStatus } from "@prisma/client";
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
 import { EmailService } from "../notifications/services/email.service";
+import { realEmail } from "../common/placeholder-email";
 import { createHmac } from "crypto";
 
 interface SendResult {
   ok: boolean;
   channel: RebookChannel;
   error?: string;
+  /** Retrying cannot help (no address, channel not wired): skip this cycle. */
+  permanent?: boolean;
 }
 
 const CRON_BATCH_SIZE = 500;
 const CRON_PARALLEL_TENANTS = 8;
+/** Failed sends for one client and service in a day before the cycle is skipped. */
+const MAX_FAILED_SENDS_PER_DAY = 3;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function escapeHtml(value: unknown): string {
   const s = value === null || value === undefined ? "" : String(value);
@@ -214,22 +220,45 @@ export class RebookingDispatcherService implements OnModuleInit {
     const serviceId = cadence.recommendedServiceId;
     if (!serviceId) return { ok: false, reason: "no_recommended_service" };
 
+    // One notice per visit cycle: after a notice for this service, the
+    // client is eligible again once she has completed it again since.
     const reminderSentFor = (cadence.reminderSentFor as any[]) ?? [];
-    const alreadySent = reminderSentFor.some(
-      (r) => r.serviceId === serviceId,
-    );
-    if (alreadySent) return { ok: false, reason: "already_sent_for_cycle" };
+    const lastSentForService = reminderSentFor
+      .filter((r) => r.serviceId === serviceId && r.sentAt)
+      .map((r) => new Date(r.sentAt))
+      .sort((a, b) => b.getTime() - a.getTime())[0];
+    if (
+      lastSentForService &&
+      !(await this.completedSince(cadence.tenantId, cadence.clientId, serviceId, lastSentForService))
+    ) {
+      return { ok: false, reason: "already_sent_for_cycle" };
+    }
 
     const existingReminder = await this.prisma.rebookingReminder.findFirst({
       where: {
         clientId: cadence.clientId,
         serviceId,
         status: { in: [RebookStatus.scheduled, RebookStatus.sent] },
-        createdAt: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
       },
+      orderBy: { createdAt: "desc" },
     });
-    if (existingReminder) {
+    if (
+      existingReminder &&
+      !(await this.completedSince(
+        cadence.tenantId,
+        cadence.clientId,
+        serviceId,
+        existingReminder.sentAt ?? existingReminder.createdAt,
+      ))
+    ) {
       return { ok: false, reason: "reminder_already_exists" };
+    }
+
+    // Already booked (any service, from today on): she is coming in anyway,
+    // and the salon can rebook her at the desk. The cadence is left alone;
+    // completing that visit recomputes it.
+    if (await this.hasUpcomingAppointment(cadence.tenantId, cadence.clientId)) {
+      return { ok: false, reason: "has_upcoming_appointment" };
     }
 
     const byService = (cadence.byService as Record<string, any>) ?? {};
@@ -237,6 +266,20 @@ export class RebookingDispatcherService implements OnModuleInit {
     if (stats && stats.stdDevDays > stats.avgDays / 2) {
       await this.advanceCycle(cadence.clientId, serviceId, stats, cfg.leadDays);
       return { ok: false, reason: "high_variability" };
+    }
+
+    // Failed sends are retried on the next hourly ticks, a few times a day.
+    const recentFailures = await this.prisma.rebookingReminder.count({
+      where: {
+        clientId: cadence.clientId,
+        serviceId,
+        status: RebookStatus.failed,
+        createdAt: { gte: new Date(Date.now() - DAY_MS) },
+      },
+    });
+    if (recentFailures >= MAX_FAILED_SENDS_PER_DAY) {
+      if (stats) await this.advanceCycle(cadence.clientId, serviceId, stats, cfg.leadDays);
+      return { ok: false, reason: "too_many_failures" };
     }
 
     const created = await this.prisma.rebookingReminder.create({
@@ -276,8 +319,9 @@ export class RebookingDispatcherService implements OnModuleInit {
     });
 
     if (result.ok && stats) {
+      // The latest notice per service is all the cycle check needs.
       const sentFor = [
-        ...reminderSentFor,
+        ...reminderSentFor.filter((r) => r.serviceId !== serviceId),
         {
           serviceId,
           sentAt: new Date().toISOString(),
@@ -289,8 +333,51 @@ export class RebookingDispatcherService implements OnModuleInit {
         data: { reminderSentFor: sentFor as any },
       });
       await this.advanceCycle(cadence.clientId, serviceId, stats, cfg.leadDays);
+    } else if (!result.ok && result.permanent && stats) {
+      // Nothing to retry this cycle (no address, channel not wired).
+      await this.advanceCycle(cadence.clientId, serviceId, stats, cfg.leadDays);
     }
-    return { ok: result.ok };
+    return result.ok ? { ok: true } : { ok: false, reason: result.error };
+  }
+
+  /** Has the client completed this service after `since`? */
+  private async completedSince(
+    tenantId: string,
+    clientId: string,
+    serviceId: string,
+    since: Date,
+  ): Promise<boolean> {
+    const visit = await this.prisma.appointment.findFirst({
+      where: {
+        tenantId,
+        clientId,
+        serviceId,
+        status: AppointmentStatus.completed,
+        completionTime: { gt: since },
+      },
+      select: { id: true },
+    });
+    return !!visit;
+  }
+
+  /** A pending or confirmed appointment that has not started yet. */
+  private async hasUpcomingAppointment(tenantId: string, clientId: string): Promise<boolean> {
+    const now = new Date();
+    const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const upcoming = await this.prisma.appointment.findFirst({
+      where: {
+        tenantId,
+        clientId,
+        status: { in: [AppointmentStatus.pending, AppointmentStatus.confirmed] },
+        OR: [
+          { startTime: { gt: now } },
+          // Rows without the instant: by their calendar day.
+          { startTime: null, scheduledDate: { gte: todayUtc } },
+        ],
+      },
+      select: { id: true },
+    });
+    return !!upcoming;
   }
 
   private async advanceCycle(
@@ -329,7 +416,7 @@ export class RebookingDispatcherService implements OnModuleInit {
       select: { name: true, duration: true },
     });
     if (!client || !service) {
-      return { ok: false, channel, error: "missing_client_or_service" };
+      return { ok: false, channel, error: "missing_client_or_service", permanent: true };
     }
 
     const daysSinceLastVisit = this.daysSince(cadence.lastComputedAt);
@@ -359,30 +446,31 @@ export class RebookingDispatcherService implements OnModuleInit {
       optoutUrl: escapeHtml(optOutUrl),
     };
 
-    if (channel === "email" || channel === "both") {
-      if (!client.email) {
-        if (channel === "email") {
-          return { ok: false, channel, error: "no_email" };
-        }
-      } else {
-        try {
-          await this.emailService.sendEmail({
-            to: client.email,
-            subject: `¿Listo para tu próximo ${vars.serviceName}?`,
-            html: this.renderEmailBody(vars),
-          });
-        } catch (err) {
-          this.logger.warn(`Email rebook failed: ${(err as Error).message}`);
-          if (channel === "email") {
-            return { ok: false, channel, error: (err as Error).message };
-          }
-        }
-      }
+    // WhatsApp is not wired yet (Phase 3), so email is the only channel that
+    // can deliver: "both" means email today, and the notice only counts as
+    // sent when the email went out. It used to be marked sent regardless
+    // (no address, provider error, WhatsApp-only), which used up the cycle.
+    if (channel === "whatsapp") {
+      return { ok: false, channel, error: "whatsapp_not_wired", permanent: true };
     }
-
-    // WhatsApp channel is intentionally a no-op here — Phase 3 will wire it.
-    // We still mark ok=true for "both" if email succeeded; if both was
-    // requested and only WhatsApp is missing we still consider it ok.
+    const email = realEmail(client.email);
+    if (!email) {
+      return { ok: false, channel, error: "no_email", permanent: true };
+    }
+    try {
+      const sent = await this.emailService.sendEmail({
+        to: email,
+        subject: `¿Listo para tu próximo ${vars.serviceName}?`,
+        html: this.renderEmailBody(vars),
+      });
+      if (!sent?.success) {
+        this.logger.warn(`Email rebook failed: ${sent?.error ?? "unknown error"}`);
+        return { ok: false, channel, error: sent?.error ?? "email_failed" };
+      }
+    } catch (err) {
+      this.logger.warn(`Email rebook failed: ${(err as Error).message}`);
+      return { ok: false, channel, error: (err as Error).message };
+    }
     return { ok: true, channel };
   }
 

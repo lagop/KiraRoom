@@ -50,7 +50,9 @@ const DEFAULT_PREFERENCES: Record<
   },
   appointment_reminder_1h: {
     inApp: true,
-    email: false,
+    // Used only when the salon has no SMS/WhatsApp for the client: the
+    // 1-hour reminder then falls back to email (NotificationsScheduler).
+    email: true,
     sms: true,
     whatsapp: false,
   },
