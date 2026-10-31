@@ -41,6 +41,7 @@ function build({
   isOnlineBookable = true,
   serviceActive = true,
   inactiveProfessionals = [] as string[],
+  autoConfirmOnlineBookings = false,
 } = {}) {
   const clientLookups: any[] = [];
   const created: any[] = [];
@@ -53,7 +54,9 @@ function build({
     $transaction: jest.fn(async (fn: any) =>
       fn({ ...prisma, $executeRaw: async (_s: TemplateStringsArray, key: string) => { locks.push(key); return 0; } }),
     ),
-    tenant: { findUnique: async () => ({ timezone: "Europe/Madrid", country: "ES", subscriptionStatus }) },
+    tenant: {
+      findUnique: async () => ({ timezone: "Europe/Madrid", country: "ES", subscriptionStatus, autoConfirmOnlineBookings }),
+    },
     // findOrCreateClient's phone lookup: tenant and last nine digits.
     $queryRaw: jest.fn(async (_s: TemplateStringsArray, tenantId: string, key: string) =>
       existingClients
@@ -315,6 +318,45 @@ describe("online booking: a salon without an active plan", () => {
       await service.createOnline(BOOKING as any);
       expect(created).toHaveLength(1);
     }
+  });
+});
+
+describe("online booking: confirmed automatically when the salon says so", () => {
+  // Tenant.autoConfirmOnlineBookings, from the salon's general settings.
+  it("starts pending by default, as before", async () => {
+    const { service, created } = build();
+    await service.createOnline(BOOKING as any);
+    expect(created[0].status).toBe("pending");
+  });
+
+  it("starts confirmed when the salon confirms online bookings automatically", async () => {
+    const { service, created } = build({ autoConfirmOnlineBookings: true });
+    const hasValidConsent = jest.fn(async () => true);
+    (service as any).consentService = { hasValidConsent };
+    await service.createOnline(BOOKING as any);
+    expect(created[0].status).toBe("confirmed");
+    expect(hasValidConsent).toHaveBeenCalledWith(expect.any(String), expect.any(String), SERVICE_ID);
+  });
+
+  it("stays pending when the service needs consent forms the client hasn't signed", async () => {
+    // Confirming is where consent is checked; a visit born confirmed would
+    // never be checked again.
+    const { service, created } = build({ autoConfirmOnlineBookings: true });
+    (service as any).consentService = { hasValidConsent: jest.fn(async () => false) };
+    await service.createOnline(BOOKING as any);
+    expect(created[0].status).toBe("pending");
+  });
+
+  it("leaves the team's own bookings from the panel alone", async () => {
+    const { service, created } = build({
+      autoConfirmOnlineBookings: true,
+      existingClients: [{ id: "c1", email: "x@mail.test", tenantId: "tenant-b" }],
+    });
+    await service.createByStaff(
+      { ...BOOKING, scheduledDate: "2026-12-01", clientInfo: undefined, clientId: "c1" } as any,
+      { id: "u1", role: "owner", tenantId: "tenant-b" },
+    );
+    expect(created[0].status).toBe("pending");
   });
 });
 

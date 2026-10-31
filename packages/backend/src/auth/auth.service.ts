@@ -747,6 +747,10 @@ export class AuthService {
         timeFormat: true,
         minCancelHours: true,
         openingHours: true,
+        instagram: true,
+        facebook: true,
+        bookingSlotMinutes: true,
+        autoConfirmOnlineBookings: true,
         // Tax identifiers (consumed by /dashboard/settings/fiscal).
         taxId: true,
         taxIdType: true,

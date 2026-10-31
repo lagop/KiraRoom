@@ -21,6 +21,10 @@ model Tenant {
   logo                   String?
   coverImage             String?
   website                String?
+  /// The salon's Instagram and Facebook as canonical https URLs
+  /// (common/social-links.ts), linked from its public page.
+  instagram              String?
+  facebook               String?
   email                  String?
   phone                  String?
   whatsapp               String?
@@ -39,6 +43,12 @@ model Tenant {
   cancellationPolicy     String?
   minCancelHours         Int                @default(24)
   openingHours           Json               @default("{}")
+  /// Minutes between the start times offered when booking (site, widget,
+  /// receptionist, the panel's suggestions): 10, 15, 20, 30 or 60.
+  bookingSlotMinutes     Int                @default(30)
+  /// Online bookings (site, widget, receptionist) start confirmed instead
+  /// of pending. The team's own bookings from the panel are unaffected.
+  autoConfirmOnlineBookings Boolean         @default(false)
   /// Subscription
   plan                   SubscriptionPlan
   subscriptionStatus     SubscriptionStatus

@@ -4194,6 +4194,13 @@ class ApiClient implements ApiClientInterface {
      * shape: read it with lib/salon-hours.ts.
      */
     openingHours?: unknown;
+    /** Profile URLs, linked from the salon's public page. */
+    instagram?: string | null;
+    facebook?: string | null;
+    /** Minutes between the start times offered when booking. */
+    bookingSlotMinutes?: number;
+    /** Online bookings start confirmed instead of pending. */
+    autoConfirmOnlineBookings?: boolean;
   }> {
     return this.request("/auth/tenant");
   }
@@ -4216,6 +4223,11 @@ class ApiClient implements ApiClientInterface {
     minCancelHours?: number;
     /** The salon's week, replacing what was stored; [] = no salon-level hours. */
     openingHours?: WorkingHoursEntry[];
+    /** "@handle" or a profile link (stored as the profile URL); "" clears it. */
+    instagram?: string;
+    facebook?: string;
+    bookingSlotMinutes?: number;
+    autoConfirmOnlineBookings?: boolean;
   }): Promise<{
     id: string;
     name: string;

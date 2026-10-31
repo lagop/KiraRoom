@@ -11,6 +11,7 @@ import {
 import { PrismaService } from "../common/prisma/prisma.service";
 import {
   ShiftWindow,
+  bookingSlotStep,
   candidateStarts,
   clockOf as clockOfMinutes,
   workingWindowsFor,
@@ -625,7 +626,7 @@ export class AppointmentsService {
     // receptionist either. ReadOnlyTenantGuard covers the team's own routes.
     const tenant = await db.tenant.findUnique({
       where: { id: tenantId },
-      select: { subscriptionStatus: true },
+      select: { subscriptionStatus: true, autoConfirmOnlineBookings: true },
     });
     if (isReadOnlyStatus(tenant?.subscriptionStatus)) {
       throw new ForbiddenException({
@@ -714,6 +715,14 @@ export class AppointmentsService {
 
     // Create appointment
     const dto = createAppointmentDto as any;
+    // A salon that confirms online bookings automatically (its general
+    // settings) gets them confirmed, unless the service still needs consent
+    // forms the client hasn't signed: confirming is where that is checked
+    // (needsConsent), so such a visit starts pending like any other.
+    const autoConfirm =
+      visit.online &&
+      !!tenant?.autoConfirmOnlineBookings &&
+      (await this.consentAllowsConfirming(tenantId, clientId, dto.serviceId));
     const appointment = await db.appointment.create({
       data: {
         tenantId: tenantId,
@@ -731,7 +740,7 @@ export class AppointmentsService {
         ),
         duration,
         endTime: endTime,
-        status: AppointmentStatus.pending,
+        status: autoConfirm ? AppointmentStatus.confirmed : AppointmentStatus.pending,
         price: priceCents / 100,
         totalAmount: priceCents, // Store in cents
         currency: service.currency,
@@ -1719,6 +1728,16 @@ export class AppointmentsService {
     return { ...data, ...opts.data };
   }
 
+  /** Whether the client has signed every consent form the service needs. */
+  private async consentAllowsConfirming(
+    tenantId: string,
+    clientId: string,
+    serviceId: string,
+  ): Promise<boolean> {
+    if (!this.consentService) return true;
+    return this.consentService.hasValidConsent(tenantId, clientId, serviceId);
+  }
+
   /**
    * A service may require signed consent forms before the visit goes ahead
    * (confirmed, started or completed).
@@ -2522,7 +2541,9 @@ export class AppointmentsService {
     const windowsById = new Map(relevantRows.map((p) => [p.id, windowsOf(p)]));
 
     // Candidate slots: the salon's hours that day, from its first opening to
-    // its last closing (09:00–20:00 when it set none) in half hours --
+    // its last closing (09:00–20:00 when it set none) every
+    // Tenant.bookingSlotMinutes (half an hour unless the salon chose another
+    // step in its general settings) --
     // previously hardcoded 9:00–18:00, which made the suggestion engine miss
     // every appointment past 17:30 -- plus every stretch the professionals
     // asked about can be booked in: a shift from 20:00 to 22:00, or the 10:15
@@ -2542,7 +2563,9 @@ export class AppointmentsService {
           return windowsById.get(p.id) ?? [];
         })
       : subtractWindows(salonOpen, salonBlocked.windows);
-    const timeSlots = candidateStarts(base, stretches).map((m) => ({ time: clockOfMinutes(m) }));
+    const timeSlots = candidateStarts(base, stretches, bookingSlotStep(tenant.bookingSlotMinutes)).map(
+      (m) => ({ time: clockOfMinutes(m) }),
+    );
 
     // Get existing appointments for the date and professionals
     // Use date range to avoid timezone issues with date comparison

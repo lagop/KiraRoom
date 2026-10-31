@@ -124,6 +124,20 @@ export function subtractWindows(
 }
 
 /**
+ * The steps a salon may choose between the start times it offers
+ * (Tenant.bookingSlotMinutes, from its general settings).
+ */
+export const BOOKING_SLOT_MINUTES = [10, 15, 20, 30, 60] as const;
+export const DEFAULT_BOOKING_SLOT_MINUTES = 30;
+
+/** The salon's step, or half an hour when it holds anything else. */
+export function bookingSlotStep(value: unknown): number {
+  return (BOOKING_SLOT_MINUTES as readonly unknown[]).includes(value)
+    ? (value as number)
+    : DEFAULT_BOOKING_SLOT_MINUTES;
+}
+
+/**
  * The candidate start times (minutes) availability checks for a day: every
  * `step` from the salon's `base` window, as before, plus every window someone
  * can work in -- its start, then the `step` marks of the clock inside it.
@@ -137,7 +151,7 @@ export function subtractWindows(
 export function candidateStarts(
   base: ShiftWindow,
   windows: ReadonlyArray<ShiftWindow>,
-  step = 30,
+  step = DEFAULT_BOOKING_SLOT_MINUTES,
 ): number[] {
   const starts = new Set<number>();
   for (let m = base.startMinutes; m + step <= base.endMinutes; m += step) starts.add(m);
