@@ -3,6 +3,7 @@
  * unit tests. Uses an in-memory Prisma mock.
  */
 
+import { Prisma } from "@prisma/client";
 import { InvoiceService } from "./invoices.service";
 import { InvoiceCalculator } from "./invoice-calculator.service";
 
@@ -66,6 +67,17 @@ function makePrismaMock() {
   });
 
   const invoiceCreate = jest.fn(async (args: any) => {
+    // The unique key (tenantId, sourceType, sourceId), as Postgres enforces it.
+    const d = args.data;
+    if (
+      d.sourceId != null &&
+      invoices.some((i) => i.tenantId === d.tenantId && i.sourceType === d.sourceType && i.sourceId === d.sourceId)
+    ) {
+      throw new Prisma.PrismaClientKnownRequestError(
+        "Unique constraint failed on the fields: (`tenantId`,`sourceType`,`sourceId`)",
+        { code: "P2002", clientVersion: "5.22.0", meta: { target: ["tenantId", "sourceType", "sourceId"] } },
+      );
+    }
     const inv = {
       id: `inv-${invoices.length + 1}`,
       ...args.data,
@@ -86,13 +98,44 @@ function makePrismaMock() {
   const prisma: any = {
     tenant: { findUnique: tenantFindUnique },
     fiscalSequence: { upsert: sequenceUpsert, update: sequenceUpdate },
-    invoice: { create: invoiceCreate, update: async () => ({}), findMany: async () => [], findUnique: async () => null, findFirst: async () => null },
+    invoice: {
+      create: invoiceCreate,
+      update: async () => ({}),
+      findMany: async () => [],
+      findUnique: async () => null,
+      findFirst: jest.fn(async (args: any) => {
+        const w = args?.where ?? {};
+        const row = invoices.find((i) => Object.keys(w).every((k) => i[k] === w[k]));
+        if (!row || !args?.select) return row ?? null;
+        return Object.fromEntries(Object.keys(args.select).map((k) => [k, row[k]]));
+      }),
+    },
     order: { findUnique: async () => null },
-    appointment: { findUnique: async () => null },
+    appointment: { findUnique: jest.fn(async () => null as any) },
   };
+
+  // Invoice number and invoice are created in one transaction. Like Postgres,
+  // transactions on the same counter run one after another (row lock), and
+  // one that throws leaves the counter as it found it.
+  let txChain: Promise<unknown> = Promise.resolve();
+  prisma.$transaction = jest.fn((fn: any) => {
+    const run = txChain.then(async () => {
+      const before = new Map([...sequences].map(([k, v]) => [k, { ...v }]));
+      try {
+        return await fn(prisma);
+      } catch (err) {
+        sequences.clear();
+        before.forEach((v, k) => sequences.set(k, v));
+        throw err;
+      }
+    });
+    txChain = run.catch(() => undefined);
+    return run;
+  });
 
   return {
     prisma,
+    invoiceCreate,
     sequences,
     invoices,
     invoiceLines,
@@ -172,5 +215,99 @@ describe("InvoiceService.create", () => {
         lines: [],
       }),
     ).rejects.toThrow(/at least one line/);
+  });
+});
+describe("InvoiceService.fromAppointment", () => {
+  function setup(overrides: Record<string, unknown> = {}, fiscalSettings: Record<string, unknown> = {}) {
+    const m = makePrismaMock();
+    const appointment = {
+      id: "appt-1",
+      tenantId: "tenant-1",
+      status: "completed",
+      price: new Prisma.Decimal("30.00"),
+      serviceId: "svc-1",
+      service: { name: "Corte" },
+      client: { id: "client-1", firstName: "Ana", lastName: "López" },
+      tenant: { fiscalSettings: { autoInvoiceAppointments: true, defaultTaxRate: 21, ...fiscalSettings } },
+      ...overrides,
+    };
+    m.prisma.appointment.findUnique.mockImplementation(async () => appointment);
+    const svc = new InvoiceService(m.prisma, new InvoiceCalculator(), {} as any);
+    const lastNumber = () => [...m.sequences.values()][0]?.lastNumber ?? 0;
+    return { m, svc, lastNumber };
+  }
+
+  it("issues one invoice linked to the appointment, priced as before (21 % on top)", async () => {
+    const { m, svc } = setup();
+    const r = await svc.fromAppointment("appt-1");
+    expect(r).toEqual({ id: "inv-1" });
+    const inv = m.invoices[0];
+    expect(inv.sourceType).toBe("appointment");
+    expect(inv.sourceId).toBe("appt-1");
+    expect(inv.subtotalCents).toBe(3000);
+    expect(inv.totalCents).toBe(3630);
+    expect(inv.recipientName).toBe("Ana López");
+  });
+
+  it("a second call returns the same invoice and uses no number", async () => {
+    const { m, svc, lastNumber } = setup();
+    const first = await svc.fromAppointment("appt-1");
+    const second = await svc.fromAppointment("appt-1");
+    expect(second).toEqual(first);
+    expect(m.invoices).toHaveLength(1);
+    expect(m.invoiceCreate).toHaveBeenCalledTimes(1);
+    expect(lastNumber()).toBe(1);
+  });
+
+  it("two concurrent calls create one invoice; the loser gets it back and its number is given back", async () => {
+    const { m, svc, lastNumber } = setup();
+    const [a, b] = await Promise.all([svc.fromAppointment("appt-1"), svc.fromAppointment("appt-1")]);
+    // Both passed the "already invoiced?" check and both tried to insert...
+    expect(m.invoiceCreate).toHaveBeenCalledTimes(2);
+    // ...and the unique key let one through.
+    expect(m.invoices).toHaveLength(1);
+    expect(a).toEqual({ id: "inv-1" });
+    expect(b).toEqual({ id: "inv-1" });
+    expect(lastNumber()).toBe(1);
+  });
+
+  it("a unique violation with no appointment invoice behind it is not swallowed", async () => {
+    const { m, svc } = setup();
+    const p2002 = new Prisma.PrismaClientKnownRequestError(
+      "Unique constraint failed on the fields: (`tenantId`,`series`,`number`)",
+      { code: "P2002", clientVersion: "5.22.0" },
+    );
+    m.invoiceCreate.mockRejectedValueOnce(p2002);
+    await expect(svc.fromAppointment("appt-1")).rejects.toBe(p2002);
+  });
+
+  it("other errors propagate", async () => {
+    const { m, svc } = setup();
+    m.invoiceCreate.mockRejectedValueOnce(new Error("db down"));
+    await expect(svc.fromAppointment("appt-1")).rejects.toThrow("db down");
+  });
+
+  it("returns the existing invoice even after the salon turned auto-invoicing off", async () => {
+    const { m, svc } = setup();
+    await svc.fromAppointment("appt-1");
+    m.prisma.appointment.findUnique.mockImplementation(async () => ({
+      id: "appt-1",
+      tenantId: "tenant-1",
+      status: "completed",
+      tenant: { fiscalSettings: {} },
+    }));
+    expect(await svc.fromAppointment("appt-1")).toEqual({ id: "inv-1" });
+    expect(m.invoices).toHaveLength(1);
+  });
+
+  it("does nothing for an appointment not completed, or a salon that did not opt in", async () => {
+    expect(await setup({ status: "confirmed" }).svc.fromAppointment("appt-1")).toBeNull();
+    expect(await setup({}, { autoInvoiceAppointments: false }).svc.fromAppointment("appt-1")).toBeNull();
+  });
+
+  it("uses the salon's rate (IGIC 7 %)", async () => {
+    const { m, svc } = setup({}, { defaultTaxRate: 7 });
+    await svc.fromAppointment("appt-1");
+    expect(m.invoices[0].totalCents).toBe(3210);
   });
 });

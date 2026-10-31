@@ -8,6 +8,13 @@ export interface InvoiceLineInput {
   taxRate: number;
   productId?: string;
   serviceId?: string;
+  /**
+   * `unitPriceCents` already includes the tax (a price the client sees and
+   * pays). The line is split so that base + tax equals that price exactly:
+   * base = gross / (1 + rate), tax = gross - base. The stored unit price is
+   * the net one, like any other line. Default false: the tax is added on top.
+   */
+  taxIncluded?: boolean;
 }
 
 export interface ComputedInvoiceLine {
@@ -51,6 +58,7 @@ export class InvoiceCalculator {
 
     const lines: ComputedInvoiceLine[] = input.map((l) => {
       const discountPct = clampNumber(l.discountPct ?? 0, 0, 100);
+      if (l.taxIncluded) return taxIncludedLine(l, discountPct);
       const discountedUnitCents = roundHalfEven(
         l.unitPriceCents * (1 - discountPct / 100),
       );
@@ -76,6 +84,30 @@ export class InvoiceCalculator {
 
     return { lines, subtotalCents, taxBreakdown, totalCents };
   }
+}
+
+/**
+ * A line whose price includes the tax. Taking the tax as gross - base (not
+ * round(base * rate)) keeps the total equal to the price: 10,00 EUR at 21 %
+ * is 8,26 + 1,74, where rounding each part gave 8,26 + 1,73 = 9,99. The
+ * difference from base * rate is under one cent.
+ */
+function taxIncludedLine(l: InvoiceLineInput, discountPct: number): ComputedInvoiceLine {
+  const divisor = 1 + l.taxRate / 100;
+  const discountedUnitCents = roundHalfEven(l.unitPriceCents * (1 - discountPct / 100));
+  const grossCents = roundHalfEven(discountedUnitCents * l.quantity);
+  const lineBase = roundHalfEven(grossCents / divisor);
+  return {
+    description: l.description,
+    quantity: l.quantity,
+    unitPriceCents: roundHalfEven(l.unitPriceCents / divisor),
+    discountPct,
+    taxRate: l.taxRate,
+    taxCents: grossCents - lineBase,
+    totalCents: grossCents,
+    productId: l.productId,
+    serviceId: l.serviceId,
+  };
 }
 
 function clampNumber(value: number, min: number, max: number): number {

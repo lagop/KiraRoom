@@ -120,3 +120,45 @@ describe("InvoiceCalculator", () => {
     expect(r.totalCents).toBe(12_100_000);
   });
 });
+describe("InvoiceCalculator, tax included in the price (taxIncluded)", () => {
+  const calc = new InvoiceCalculator();
+
+  it("splits a 10,00 EUR price at 21 % into 8,26 + 1,74, keeping the total at 10,00", () => {
+    const r = calc.compute([
+      { description: "Corte", quantity: 1, unitPriceCents: 1000, taxRate: 21, taxIncluded: true },
+    ]);
+    expect(r.subtotalCents).toBe(826);
+    expect(r.taxBreakdown).toEqual([{ rate: 21, baseCents: 826, taxCents: 174 }]);
+    expect(r.totalCents).toBe(1000);
+    // Stored unit price is the net one, like any other line.
+    expect(r.lines[0].unitPriceCents).toBe(826);
+  });
+
+  it("total always equals the price, and the tax is within a cent of base x rate", () => {
+    for (const rate of [21, 10, 4, 7, 9.5, 0]) {
+      for (let gross = 1; gross <= 20000; gross += 7) {
+        const r = calc.compute([
+          { description: "x", quantity: 1, unitPriceCents: gross, taxRate: rate, taxIncluded: true },
+        ]);
+        expect(r.totalCents).toBe(gross);
+        expect(r.subtotalCents + r.taxBreakdown[0].taxCents).toBe(gross);
+        expect(Math.abs(r.taxBreakdown[0].taxCents - (r.subtotalCents * rate) / 100)).toBeLessThan(1);
+      }
+    }
+  });
+
+  it("applies discount and quantity to the gross amount", () => {
+    const r = calc.compute([
+      { description: "x", quantity: 2, unitPriceCents: 1210, discountPct: 50, taxRate: 21, taxIncluded: true },
+    ]);
+    expect(r.totalCents).toBe(1210);
+    expect(r.subtotalCents).toBe(1000);
+  });
+
+  it("leaves lines without the flag as before (tax on top)", () => {
+    const r = calc.compute([
+      { description: "x", quantity: 1, unitPriceCents: 1000, taxRate: 21, taxIncluded: false },
+    ]);
+    expect(r.totalCents).toBe(1210);
+  });
+});
