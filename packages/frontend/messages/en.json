@@ -147,7 +147,6 @@
       "certAlias": "Alias",
       "certFingerprint": "Fingerprint",
       "certNotAfter": "Expires",
-      "deactivate": "Deactivate",
       "saved": "Settings saved",
       "taxRegime": "Territory tax regime",
       "taxRegimeHint": "VAT in mainland Spain and the Balearics, IGIC in the Canary Islands, IPSI in Ceuta and Melilla. Changing it adjusts the default rate.",
@@ -1521,6 +1520,7 @@
       "phonePlaceholder": "Enter phone number",
       "specialtyPlaceholder": "e.g., Hair Styling, Makeup Artist",
       "selectSpecialty": "Select specialty",
+      "noSpecialty": "No specialty",
       "bioPlaceholder": "Write a brief bio about the professional...",
       "bioHint": "Brief description for the professional profile",
       "noServices": "No services available. Please create services first."
@@ -1563,8 +1563,6 @@
       "loadFailed": "Failed to load professional data",
       "notFound": "Professional not found",
       "noSpecialty": "Not specified",
-      "clientsCount": "{count} clients",
-      "yearsCount": "{count} years",
       "about": "About",
       "noBio": "No bio available",
       "unknownService": "Unknown service",
@@ -1579,12 +1577,7 @@
       "accountStatus": "Account status",
       "joined": "Joined: {date}",
       "notAvailable": "Not available",
-      "viewSchedule": "View schedule",
-      "viewScheduleDesc": "View professional availability",
-      "clientList": "Client list",
-      "clientListDesc": "View assigned clients",
-      "deactivate": "Deactivate",
-      "deactivateDesc": "Disable professional access"
+      "deactivate": "Deactivate"
     },
     "newForm": {
       "create": "Create professional",

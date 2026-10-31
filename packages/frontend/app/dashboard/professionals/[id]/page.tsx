@@ -3,7 +3,7 @@
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { Suspense, useState, useEffect } from 'react';
-import { ArrowLeft, Edit, Mail, Phone, Calendar, User, Clock, Star, MapPin, Percent, Briefcase } from 'lucide-react';
+import { ArrowLeft, Edit, Mail, Phone, Calendar, Percent, Briefcase } from 'lucide-react';
 import apiClient from '@/lib/api';
 import { useTranslations } from '@/lib/use-translation';
 import { specialtyLabelKey } from '@/lib/professional-specialties';
@@ -115,20 +115,6 @@ function ProfessionalViewContent() {
                       return key ? t(key) : professionalData.specialties[0];
                     })()
                   : t('professionals.detailPage.noSpecialty')}</p>
-              <div className="flex flex-wrap items-center gap-4 mt-2">
-                <div className="flex items-center">
-                  <Star className="w-4 h-4 text-yellow-400 fill-current" />
-                  <span className="ml-1 text-sm">4.8</span>
-                </div>
-                <div className="flex items-center">
-                  <User className="w-4 h-4 text-indigo-200" />
-                  <span className="ml-1 text-sm">{t('professionals.detailPage.clientsCount', { count: 156 })}</span>
-                </div>
-                <div className="flex items-center">
-                  <Clock className="w-4 h-4 text-indigo-200" />
-                  <span className="ml-1 text-sm">{t('professionals.detailPage.yearsCount', { count: 10 })}</span>
-                </div>
-              </div>
             </div>
           </div>
         </div>
@@ -247,43 +233,6 @@ function ProfessionalViewContent() {
                   ? formatDate(professionalData.createdAt)
                   : t('professionals.detailPage.notAvailable'),
               })}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Additional Actions */}
-       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <div className="bg-white rounded-xl border border-gray-200 p-6 hover:shadow-md transition-shadow cursor-pointer">
-          <div className="flex items-center space-x-3">
-            <div className="p-3 bg-blue-100 rounded-lg">
-              <Calendar className="w-6 h-6 text-blue-600" />
-            </div>
-            <div>
-              <p className="font-medium text-gray-900">{t('professionals.detailPage.viewSchedule')}</p>
-              <p className="text-sm text-gray-500">{t('professionals.detailPage.viewScheduleDesc')}</p>
-            </div>
-          </div>
-        </div>
-        <div className="bg-white rounded-xl border border-gray-200 p-6 hover:shadow-md transition-shadow cursor-pointer">
-          <div className="flex items-center space-x-3">
-            <div className="p-3 bg-green-100 rounded-lg">
-              <User className="w-6 h-6 text-green-600" />
-            </div>
-            <div>
-              <p className="font-medium text-gray-900">{t('professionals.detailPage.clientList')}</p>
-              <p className="text-sm text-gray-500">{t('professionals.detailPage.clientListDesc')}</p>
-            </div>
-          </div>
-        </div>
-        <div className="bg-white rounded-xl border border-red-200 p-6 hover:shadow-md transition-shadow cursor-pointer">
-          <div className="flex items-center space-x-3">
-            <div className="p-3 bg-red-100 rounded-lg">
-              <User className="w-6 h-6 text-red-600" />
-            </div>
-            <div>
-              <p className="font-medium text-red-900">{t('professionals.detailPage.deactivate')}</p>
-              <p className="text-sm text-gray-500">{t('professionals.detailPage.deactivateDesc')}</p>
             </div>
           </div>
         </div>

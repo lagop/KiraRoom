@@ -147,7 +147,6 @@
       "certAlias": "Alias",
       "certFingerprint": "Huella",
       "certNotAfter": "Caduca",
-      "deactivate": "Desactivar",
       "saved": "Configuración guardada",
       "taxRegime": "Régimen fiscal del territorio",
       "taxRegimeHint": "IVA en península y Baleares, IGIC en Canarias, IPSI en Ceuta y Melilla. Al cambiarlo se ajusta el tipo por defecto.",
@@ -1521,6 +1520,7 @@
       "phonePlaceholder": "Introduce el teléfono",
       "specialtyPlaceholder": "Ej. Peluquería, Maquillaje",
       "selectSpecialty": "Selecciona una especialidad",
+      "noSpecialty": "Sin especialidad",
       "bioPlaceholder": "Escribe una breve biografía del profesional...",
       "bioHint": "Breve descripción para el perfil del profesional",
       "noServices": "No hay servicios. Crea primero algún servicio."
@@ -1563,8 +1563,6 @@
       "loadFailed": "No se han podido cargar los datos del profesional",
       "notFound": "No se ha encontrado el profesional",
       "noSpecialty": "Sin especialidad",
-      "clientsCount": "{count} clientes",
-      "yearsCount": "{count} años",
       "about": "Sobre el profesional",
       "noBio": "Sin biografía",
       "unknownService": "Servicio desconocido",
@@ -1579,12 +1577,7 @@
       "accountStatus": "Estado de la cuenta",
       "joined": "Alta: {date}",
       "notAvailable": "Sin dato",
-      "viewSchedule": "Ver horario",
-      "viewScheduleDesc": "Consulta la disponibilidad del profesional",
-      "clientList": "Clientes",
-      "clientListDesc": "Consulta los clientes asignados",
-      "deactivate": "Desactivar",
-      "deactivateDesc": "Retira el acceso del profesional"
+      "deactivate": "Desactivar"
     },
     "newForm": {
       "create": "Crear profesional",

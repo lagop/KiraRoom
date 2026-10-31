@@ -7,7 +7,12 @@ import { ArrowLeft, Save, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import apiClient from '@/lib/api';
 import { useTranslations } from '@/lib/use-translation';
-import { PROFESSIONAL_SPECIALTIES } from '@/lib/professional-specialties';
+import {
+  currentSpecialty,
+  specialtiesForSave,
+  specialtyIsRequired,
+  specialtyOptions,
+} from '@/lib/professional-specialties';
 import { WeeklyScheduleEditor } from '@/components/professionals/WeeklyScheduleEditor';
 import { TimeOffManager } from '@/components/time-off/TimeOffManager';
 import {
@@ -64,6 +69,9 @@ function EditProfessionalForm() {
   });
 
   const [services, setServices] = useState<Service[]>([]);
+  // The specialty as stored: shown as it is (free text included), required
+  // only if there is one, and sent only when changed (lib/professional-specialties).
+  const [originalSpecialty, setOriginalSpecialty] = useState('');
   const [errors, setErrors] = useState<FormErrors>({});
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -105,12 +113,14 @@ function EditProfessionalForm() {
           // Extract service IDs from the nested structure
           const serviceIds = (professional as any).services?.map((ps: any) => ps.serviceId || ps.service?.id).filter(Boolean) || [];
            
+          const specialty = currentSpecialty(professional.specialties);
+          setOriginalSpecialty(specialty);
           setFormData({
             firstName: professional.firstName || '',
             lastName: professional.lastName || '',
             email: professional.email || '',
             phone: professional.phone || '',
-            specialty: professional.specialties?.[0] || '',
+            specialty,
             status: professional.isActive ? 'active' : 'inactive',
             bio: (professional as any).bio || '',
             serviceIds,
@@ -147,7 +157,7 @@ function EditProfessionalForm() {
       newErrors.email = t('professionals.validation.emailInvalid');
     }
 
-    if (!formData.specialty) {
+    if (!formData.specialty && specialtyIsRequired(originalSpecialty)) {
       newErrors.specialty = t('professionals.validation.specialtyRequired');
     }
 
@@ -186,7 +196,7 @@ function EditProfessionalForm() {
         lastName: formData.lastName,
         email: formData.email,
         phone: formData.phone || undefined,
-        specialties: [formData.specialty],
+        specialties: specialtiesForSave(originalSpecialty, formData.specialty),
         bio: formData.bio || undefined,
         isActive: formData.status === 'active',
         serviceIds: formData.serviceIds,
@@ -347,7 +357,8 @@ function EditProfessionalForm() {
             {/* Specialty */}
             <div>
               <label htmlFor="specialty" className="block text-sm font-medium text-gray-700 mb-2">
-                {t('professionals.fields.specialty')} *
+                {t('professionals.fields.specialty')}
+                {specialtyIsRequired(originalSpecialty) && ' *'}
               </label>
               <select
                 id="specialty"
@@ -358,10 +369,14 @@ function EditProfessionalForm() {
                   errors.specialty ? 'border-red-500' : 'border-gray-300'
                 }`}
               >
-                <option value="">{t('professionals.fields.selectSpecialty')}</option>
-                {PROFESSIONAL_SPECIALTIES.map((specialty) => (
-                  <option key={specialty.value} value={specialty.value}>
-                    {t(`professionals.specialtyOptions.${specialty.key}`)}
+                <option value="">
+                  {specialtyIsRequired(originalSpecialty)
+                    ? t('professionals.fields.selectSpecialty')
+                    : t('professionals.fields.noSpecialty')}
+                </option>
+                {specialtyOptions(originalSpecialty).map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.labelKey ? t(option.labelKey) : option.value}
                   </option>
                 ))}
               </select>
