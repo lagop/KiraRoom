@@ -21,6 +21,7 @@ import apiClient, { Appointment as ApiAppointment } from "../../../lib/api";
 import { useTranslations } from "@/lib/use-translation";
 import { useToast } from "@/components/ui/use-toast";
 import { Calendar as CalendarComponent } from "../../../components/Calendar/Calendar";
+import { localDay } from "../../../components/Calendar/day-grid";
 import { AppointmentDrawer } from "./components/appointment-drawer";
 import { drawerTargetFromQuery } from "./components/appointment-drawer.utils";
 
@@ -149,7 +150,10 @@ function AppointmentsPageContent() {
   const searchParams = useSearchParams();
   const t = useTranslations();
   const { toast } = useToast();
-  const today = new Date().toISOString().split("T")[0];
+  // The browser's calendar day. toISOString() gave the UTC one: after
+  // midnight in Madrid it was still yesterday, and in America, after the
+  // evening, already tomorrow.
+  const today = localDay();
   const [currentDate, setCurrentDate] = useState(new Date());
   const [view, setView] = useState<"list" | "calendar">("list");
   const [appointments, setAppointments] = useState<Appointment[]>([]);
@@ -1405,10 +1409,8 @@ function AppointmentsPageContent() {
           // Calendar View using the new Calendar component
           <div className="p-6 h-[800px] min-w-0 overflow-x-auto overflow-y-hidden">
             <CalendarComponent
-              date={new Date(dateFilter)}
-              onDateChange={(date) =>
-                setDateFilter(date.toISOString().split("T")[0])
-              }
+              day={dateFilter}
+              onDayChange={setDateFilter}
               onAppointmentClick={(appointmentId) => {
                 setSelectedAppointmentId(appointmentId);
                 setDrawerOpen(true);

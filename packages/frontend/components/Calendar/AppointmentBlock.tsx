@@ -6,25 +6,36 @@ import { Appointment } from "./types";
 import { Card } from "@/components/ui/Card";
 import { salonClock, salonTime } from "./salon-time";
 import { useSalonTimeZone } from "./SalonTimeZone";
+import { SLOT_HEIGHT, minutesToTop, type Lane } from "./day-grid";
 
 interface AppointmentBlockProps {
   appointment: Appointment;
+  /** First hour of the grid it is drawn on. */
+  startHour?: number;
+  /** Its lane among the overlapping appointments of its column. */
+  lane?: Lane;
+  /**
+   * A cancelled or no-show appointment: drawn faded behind the bookings, and
+   * let clicks through to the slot under it, which is free again.
+   */
+  ghost?: boolean;
   isDragging?: boolean;
   isDragOverlay?: boolean;
   onClick?: (appointmentId: string) => void;
   onEditClick?: (appointmentId: string) => void;
+  t: (key: string, params?: Record<string, any>) => string;
 }
-
-const SLOT_HEIGHT = 24; // 15min = 24px
-const START_HOUR = 8;
-const CARD_WIDTH = 256; // Standard width for appointment cards
 
 export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
   appointment,
+  startHour = 8,
+  lane = { lane: 0, lanes: 1 },
+  ghost = false,
   isDragging,
   isDragOverlay = false,
   onClick,
   onEditClick,
+  t,
 }) => {
   const timeZone = useSalonTimeZone();
   const lastClickTime = useRef<number>(0);
@@ -35,6 +46,7 @@ export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
       type: "appointment",
       appointment,
     },
+    disabled: ghost,
   });
 
   const handleClick = (e: React.MouseEvent) => {
@@ -68,19 +80,24 @@ export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
     // On the salon's clock: the grid's rows are the salon's hours.
     const start = new Date(appointment.start);
     const end = new Date(appointment.end);
-    const startMinutes = salonClock(start, timeZone).minutes - START_HOUR * 60;
     const duration = (end.getTime() - start.getTime()) / 1000 / 60;
+    // Its share of the column: the cards were a fixed 256px, wider than a
+    // narrow column and on top of each other when two overlapped.
+    const share = 100 / lane.lanes;
 
     return {
-      top: (startMinutes / 15) * SLOT_HEIGHT,
+      top: minutesToTop(salonClock(start, timeZone).minutes, startHour),
       height: (duration / 15) * SLOT_HEIGHT,
-      width: CARD_WIDTH,
+      left: `calc(${lane.lane * share}% + 2px)`,
+      width: `calc(${share}% - 4px)`,
       transform: transform
         ? `translate3d(${transform.x}px, ${transform.y}px, 0)`
         : undefined,
-      zIndex: isDragging ? 1000 : 1,
+      zIndex: isDragging ? 1000 : ghost ? 0 : 1,
     };
-  }, [appointment, transform, isDragging, timeZone]);
+  }, [appointment, transform, isDragging, timeZone, startHour, lane.lane, lane.lanes, ghost]);
+
+  const statusLabel = appointment.status ? t(`appointments.status_${appointment.status}`) : undefined;
 
   const getStatusStyles = (status?: string) => {
     switch (status) {
@@ -116,8 +133,9 @@ export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
   // If this is the DragOverlay version, use Card component with proper styling
   if (isDragOverlay) {
     // For DragOverlay, use the same Card component but with transform positioning
+    // The overlay takes the size of the dragged block (dnd-kit measures it).
     const overlayStyle = {
-      width: style.width,
+      width: "100%",
       height: style.height,
       transform: transform
         ? `translate3d(${transform.x}px, ${transform.y}px, 0)`
@@ -140,7 +158,7 @@ export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
         onContextMenu={handleContextMenu}
       >
         <div className="text-xs font-medium truncate">
-          {appointment.clientName || "Bloqueado"}
+          {appointment.clientName || t("appointments.calendarView.blocked")}
         </div>
         <div className="text-xs opacity-80 truncate">
           {appointment.serviceName}
@@ -152,16 +170,35 @@ export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
     );
   }
 
+  if (ghost) {
+    return (
+      <Card
+        style={style}
+        aria-hidden
+        className={cn(
+          "absolute p-2 pointer-events-none overflow-hidden border-dashed shadow-none opacity-60",
+          typeStyles[appointment.type],
+        )}
+      >
+        <div className="text-xs font-medium truncate line-through">
+          {appointment.clientName || t("appointments.calendarView.blocked")}
+        </div>
+        <div className="text-xs truncate">{statusLabel}</div>
+      </Card>
+    );
+  }
+
   // Regular grid rendering
   return (
     <Card
       ref={setNodeRef}
       style={style}
       className={cn(
-        "absolute left-1 right-1 p-2 cursor-move transition-shadow hover:shadow-lg",
+        "absolute p-2 cursor-move overflow-hidden transition-shadow hover:shadow-lg",
         "mt-[1px] mb-[1px]",
         typeStyles[appointment.type]
       )}
+      title={statusLabel}
       onClick={handleClick}
       onContextMenu={handleContextMenu}
       {...attributes}
@@ -175,7 +212,7 @@ export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
         </div>
       )}
       <div className="text-xs font-medium truncate">
-        {appointment.clientName || "Bloqueado"}
+        {appointment.clientName || t("appointments.calendarView.blocked")}
       </div>
       <div className="text-xs opacity-80 truncate">
         {appointment.serviceName}
