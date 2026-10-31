@@ -1,12 +1,17 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { format } from "date-fns";
-import { X, Search, CheckCircle, Loader2, Zap, DollarSign, Percent } from "lucide-react";
+import { X, Search, CheckCircle, Loader2, Zap, Euro, Percent } from "lucide-react";
 import { SlotClickData } from "./TimeSlot";
 import { Professional } from "./types";
 import apiClient, { ApiError } from "../../lib/api";
 import { getCurrentUser } from "../../lib/utils";
 import { useToast } from "@/components/ui/use-toast";
 import { useTranslations } from "@/lib/use-translation";
+import {
+  eurosToCents,
+  parseRate,
+  salonTermsInvalid,
+} from "../../app/dashboard/appointments/components/appointment-drawer.utils";
 import { ConfirmDialog } from "@/src/components/ui/ConfirmDialog";
 
 interface ClientOption {
@@ -46,8 +51,10 @@ export const NewAppointmentPopover: React.FC<NewAppointmentPopoverProps> = ({
   const [showClientSuggestions, setShowClientSuggestions] = useState(false);
   const [notes, setNotes] = useState("");
   const [depositRequired, setDepositRequired] = useState(false);
-  const [depositAmount, setDepositAmount] = useState(0);
-  const [commissionRate, setCommissionRate] = useState(0);
+  // Euros as typed; the server stores cents.
+  const [depositAmount, setDepositAmount] = useState("");
+  // Empty: the professional's usual rate; "0" is a real 0 %.
+  const [commissionRate, setCommissionRate] = useState("");
   const [loading, setLoading] = useState(false);
   const [fetching, setFetching] = useState(true);
   // The server's reason when the slot is in the past or outside the hours:
@@ -124,6 +131,10 @@ export const NewAppointmentPopover: React.FC<NewAppointmentPopoverProps> = ({
 
   const handleSubmit = async (allowOutsideHours = false) => {
     if (!clientId || !serviceId) return;
+    if (salonTermsInvalid({ commission: commissionRate, depositRequired, deposit: depositAmount })) {
+      toast({ title: t("appointments.drawer.invalidTerms"), variant: "destructive" });
+      return;
+    }
 
     setLoading(true);
     try {
@@ -138,8 +149,10 @@ export const NewAppointmentPopover: React.FC<NewAppointmentPopoverProps> = ({
         scheduledTime: timeStr,
         notes: notes || undefined,
         depositRequired: depositRequired,
-        depositAmount: depositRequired ? depositAmount : undefined,
-        commissionRate: commissionRate !== 0 ? commissionRate : undefined,
+        // In cents, as stored: it went in euros.
+        depositAmount: depositRequired ? Math.max(0, eurosToCents(depositAmount)) : undefined,
+        // 0 % is a rate; empty leaves the professional's.
+        commissionRate: parseRate(commissionRate) ?? undefined,
         ...(allowOutsideHours ? { allowOutsideHours: true } : {}),
       };
 
@@ -310,7 +323,7 @@ export const NewAppointmentPopover: React.FC<NewAppointmentPopoverProps> = ({
               {/* Deposit Payment Section */}
               <div className="border-t pt-4 mt-4">
                 <label className="block text-xs font-medium mb-1 flex items-center">
-                  <DollarSign className="w-4 h-4 mr-1 text-indigo-600" />
+                  <Euro className="w-4 h-4 mr-1 text-indigo-600" />
                   {t("appointments.deposit_payment")}
                 </label>
                 <div className="space-y-2">
@@ -336,7 +349,7 @@ export const NewAppointmentPopover: React.FC<NewAppointmentPopoverProps> = ({
                         step="0.01"
                         min="0"
                         value={depositAmount}
-                        onChange={(e) => setDepositAmount(parseFloat(e.target.value) || 0)}
+                        onChange={(e) => setDepositAmount(e.target.value)}
                         className="w-full px-3 py-1.5 text-sm border border-border rounded-md focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-background"
                         placeholder="0.00"
                       />
@@ -360,7 +373,7 @@ export const NewAppointmentPopover: React.FC<NewAppointmentPopoverProps> = ({
                     min="0"
                     max="100"
                     value={commissionRate}
-                    onChange={(e) => setCommissionRate(parseInt(e.target.value) || 0)}
+                    onChange={(e) => setCommissionRate(e.target.value)}
                     className="w-full px-3 py-1.5 text-sm border border-border rounded-md focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-background"
                     placeholder={t("appointments.calendarView.commissionPlaceholder")}
                   />
