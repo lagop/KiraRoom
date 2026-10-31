@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { SubscriptionStatus } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
-import { salonShiftsFrom, salonWeekFrom, SalonDayWindow } from "../appointments/working-hours";
+import { salonOpenShifts, salonOpenWeek, SalonDayWindow } from "../appointments/working-hours";
 import { normalizeDomain } from "../web-domain/custom-domain";
 import { WebDomainService } from "../web-domain/web-domain.service";
 import { MAX_SPAN_DAYS, dateOfDay, daysOf } from "../time-off/time-off-rules";
@@ -55,6 +55,8 @@ export class PublicSiteService {
         currency: true,
         timezone: true,
         language: true,
+        // Read into openingHours/openingShifts below, never sent as stored.
+        openingHours: true,
         updatedAt: true,
         customDomain: { select: { domain: true, verifiedAt: true } },
       },
@@ -107,6 +109,8 @@ export class PublicSiteService {
           tenantId: tenant.id,
           professionalId: null,
           startTime: null,
+          // Closures are always approved (a CHECK says so); said here too, as everywhere time off blocks.
+          status: "approved",
           endDate: { gte: dateOfDay(today)! },
           startDate: { lte: horizon },
         },
@@ -120,11 +124,13 @@ export class PublicSiteService {
       ),
     ].sort();
 
-    // openingHours keeps one window per day (earliest to latest) for pages
-    // and widgets built before split shifts; openingShifts has the gaps, so
-    // a salon that closes for lunch can say so.
-    const openingHours: Record<string, SalonDayWindow> = salonWeekFrom(professionals);
-    const openingShifts: Record<string, SalonDayWindow[]> = salonShiftsFrom(professionals);
+    // The salon's own hours when it set them, else derived from its
+    // professionals' schedules as before. openingHours keeps one window per
+    // day (earliest to latest) for pages and widgets built before split
+    // shifts; openingShifts has the gaps, so a salon that closes for lunch
+    // can say so.
+    const openingHours: Record<string, SalonDayWindow> = salonOpenWeek(tenant.openingHours, professionals);
+    const openingShifts: Record<string, SalonDayWindow[]> = salonOpenShifts(tenant.openingHours, professionals);
 
     return {
       id: tenant.id,

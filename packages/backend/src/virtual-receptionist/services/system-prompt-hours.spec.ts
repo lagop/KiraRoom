@@ -228,3 +228,66 @@ describe("the booking flow ends honestly", () => {
     expect(promptFor({ ...withSlug, language: "en" })).toMatch(/The email is optional/);
   });
 });
+
+describe("the salon's own opening hours, when the owner set them", () => {
+  // getSalonContext reads the salon's week (Tenant.openingHours) first and
+  // only falls back to its professionals' schedules when there is none.
+  async function contextFor(tenant: Record<string, unknown>) {
+    const configService = { get: (): undefined => undefined } as unknown as ConfigService;
+    const prisma = {
+      tenant: {
+        findFirst: jest.fn(async () => ({
+          id: "tenant-1",
+          name: "Salon Prueba",
+          slug: "salon-prueba",
+          language: "es",
+          services: [],
+          customDomain: null,
+          ...tenant,
+        })),
+      },
+    };
+    const faqs = { getFAQs: async () => [] };
+    const flags = { isFeatureUnlocked: async () => false };
+    const stub = {} as any;
+    const service = new LLMService(stub, configService, prisma as any, faqs as any, flags as any, stub, stub);
+    const context = await (service as any).getSalonContext("tenant-1");
+    return { context, prompt: (service as any).buildSystemPrompt(context) as string };
+  }
+
+  const PROFESSIONALS = [
+    {
+      firstName: "Ana",
+      lastName: "P",
+      specialties: [],
+      workingHours: [{ day: "sunday", openTime: "09:00", closeTime: "19:00" }],
+    },
+  ];
+
+  it("describes the salon's week, shifts and closed days", async () => {
+    const { prompt } = await contextFor({
+      openingHours: [
+        { day: "monday", openTime: "10:00", closeTime: "14:00" },
+        { day: "monday", openTime: "17:00", closeTime: "20:00" },
+        { day: "saturday", openTime: "10:00", closeTime: "14:00" },
+      ],
+      professionals: PROFESSIONALS,
+    });
+    expect(prompt).toContain("- lunes: 10:00–14:00 y 17:00–20:00");
+    expect(prompt).toContain("- sábado: 10:00–14:00");
+    // A professional's Sunday shift does not open the salon.
+    expect(prompt).toContain("- domingo: cerrado");
+  });
+
+  it("reads the legacy { open, close } as every day", async () => {
+    const { prompt } = await contextFor({ openingHours: { open: "09:00", close: "20:00" }, professionals: [] });
+    expect(prompt).toContain("- lunes: 09:00–20:00");
+    expect(prompt).toContain("- domingo: 09:00–20:00");
+  });
+
+  it("falls back to the professionals' schedules when the salon set none", async () => {
+    const { prompt } = await contextFor({ openingHours: {}, professionals: PROFESSIONALS });
+    expect(prompt).toContain("- domingo: 09:00–19:00");
+    expect(prompt).toContain("- lunes: cerrado");
+  });
+});

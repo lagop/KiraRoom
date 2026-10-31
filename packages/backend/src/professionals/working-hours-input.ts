@@ -119,12 +119,31 @@ export function normalizeWorkingHours(value: unknown): unknown {
 }
 
 /**
+ * The salon's pre-shifts `{ open, close }` pair as the week it always meant:
+ * every day, those hours. Anything else is returned as it came. The times are
+ * copied as sent, so a bad one is refused by workingHoursProblem with its
+ * reason rather than dropped here.
+ */
+export function weekFromOpeningPair(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const { open, close } = value as { open?: unknown; close?: unknown };
+  if (typeof open !== "string" || typeof close !== "string") return value;
+  return WEEK.map((day) => ({ day, openTime: open, closeTime: close }));
+}
+
+/**
  * For a DTO's `workingHours`: normalise, then refuse with the reason. Pair it
  * with `@IsOptional()` -- leaving the schedule out of an update keeps it.
+ *
+ * `legacyOpeningPair` is for the salon's own hours (Tenant.openingHours):
+ * clients that still send the old single `{ open, close }` get it stored as
+ * the same week in the list format.
  */
-export function IsWorkingHours(): PropertyDecorator {
+export function IsWorkingHours(opts: { legacyOpeningPair?: boolean } = {}): PropertyDecorator {
   return (target: object, propertyKey: string | symbol) => {
-    Transform(({ value }) => normalizeWorkingHours(value))(target, propertyKey);
+    Transform(({ value }) =>
+      normalizeWorkingHours(opts.legacyOpeningPair ? weekFromOpeningPair(value) : value),
+    )(target, propertyKey);
     registerDecorator({
       name: "isWorkingHours",
       target: target.constructor,

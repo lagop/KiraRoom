@@ -18,7 +18,7 @@ import { Professional, Appointment } from "./types";
 import { AppointmentBlock } from "./AppointmentBlock";
 import { fetchCalendarData, fetchSalonSettings, transformToCalendarFormat, type SalonSettings } from "./calendar.service";
 import { FALLBACK_SALON_TIMEZONE, salonClock, salonTime } from "./salon-time";
-import { dateOfDay, gridHours, holdsSlot, initialScrollMinutes, localDay, minutesToTop, salonClosureOn, visibleProfessionals } from "./day-grid";
+import { dateOfDay, gridHours, holdsSlot, initialScrollMinutes, localDay, minutesToTop, salonClosedWeekday, salonClosureOn, visibleProfessionals } from "./day-grid";
 import type { TimeOff } from "@/lib/time-off";
 import { SalonTimeZoneProvider } from "./SalonTimeZone";
 import { useToast } from "@/components/ui/use-toast";
@@ -364,6 +364,8 @@ export const Calendar: React.FC<{
 
   // The whole salon closed today: said above the grid and the agenda alike.
   const closure = useMemo(() => salonClosureOn(day, timeOff), [day, timeOff]);
+  // A weekday outside the salon's own hours (settings): no closure, just shut.
+  const closedWeekday = useMemo(() => salonClosedWeekday(day, openingHours), [day, openingHours]);
 
   const activeAppointment = useMemo(
     () => appointments.find((a) => a.id === activeId),
@@ -390,6 +392,15 @@ export const Calendar: React.FC<{
             >
               {closure.note?.trim() ? `Salón cerrado — ${closure.note.trim()}` : "Salón cerrado"}. No se ofrecen citas
               online ni por la recepcionista.
+            </div>
+          )}
+          {!loading && !error && !closure && closedWeekday && (
+            <div
+              role="status"
+              data-test="salon-closed-weekday"
+              className="px-4 py-2 text-sm bg-amber-50 text-amber-900 border-b border-amber-200"
+            >
+              El salón no abre este día según su horario. No se ofrecen citas online ni por la recepcionista.
             </div>
           )}
           {loading ? (
@@ -434,6 +445,7 @@ export const Calendar: React.FC<{
                 professionals={columns}
                 appointments={appointments}
                 timeOff={timeOff}
+                openingHours={openingHours}
                 draggingId={activeId}
                 onAppointmentClick={onAppointmentClick}
                 onSlotClick={handleSlotClick}

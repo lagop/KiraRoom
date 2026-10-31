@@ -4171,7 +4171,11 @@ class ApiClient implements ApiClientInterface {
     dateFormat?: string;
     timeFormat?: string;
     minCancelHours?: number;
-    openingHours?: Record<string, unknown> | null;
+    /**
+     * The salon's own week ([{ day, openTime, closeTime }]), or a legacy
+     * shape: read it with lib/salon-hours.ts.
+     */
+    openingHours?: unknown;
   }> {
     return this.request("/auth/tenant");
   }
@@ -4192,8 +4196,8 @@ class ApiClient implements ApiClientInterface {
     logo?: string;
     email?: string;
     minCancelHours?: number;
-    /** Merged server-side into the tenant's openingHours JSON. */
-    openingHours?: { open: string; close: string };
+    /** The salon's week, replacing what was stored; [] = no salon-level hours. */
+    openingHours?: WorkingHoursEntry[];
   }): Promise<{
     id: string;
     name: string;
