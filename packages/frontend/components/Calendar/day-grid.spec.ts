@@ -15,6 +15,8 @@ import {
   isBreakService,
   layoutLanes,
   localDay,
+  offShiftBands,
+  shiftsOn,
   dateOfDay,
   shiftDay,
   visibleProfessionals,
@@ -148,6 +150,69 @@ check(
   initialScrollMinutes({ isToday: false, nowMinutes: 16 * 60, firstAppointment: 17 * 60, startHour: 8 }) === 16 * 60 + 30,
 );
 check("an empty day: the top", initialScrollMinutes({ isToday: false, nowMinutes: 0, startHour: 9 }) === 9 * 60);
+
+// --- Time outside the shifts, shaded per column ---
+// 2026-11-02 is a Monday. A split day: 10:00-14:00 and 17:00-20:00, saved
+// afternoon first, with a Tuesday that must not leak into Monday.
+const SPLIT = [
+  { day: "monday", openTime: "17:00", closeTime: "20:00" },
+  { day: "Monday", openTime: "10:00", closeTime: "14:00" },
+  { day: "tuesday", openTime: "08:00", closeTime: "21:00" },
+];
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+const range = { startHour: 8, endHour: 21 };
+check(
+  "a split day has both shifts, in order",
+  same(shiftsOn("2026-11-02", SPLIT), [{ start: 600, end: 840 }, { start: 1020, end: 1200 }]),
+  shiftsOn("2026-11-02", SPLIT),
+);
+check(
+  "shaded: before, the lunch gap, and after",
+  same(offShiftBands("2026-11-02", SPLIT, range), [
+    { start: 480, end: 600 },
+    { start: 840, end: 1020 },
+    { start: 1200, end: 1260 },
+  ]),
+  offShiftBands("2026-11-02", SPLIT, range),
+);
+check(
+  "a day off is shaded entirely",
+  same(offShiftBands("2026-11-04", SPLIT, range), [{ start: 480, end: 1260 }]),
+  offShiftBands("2026-11-04", SPLIT, range),
+);
+check(
+  "no schedule recorded: nothing shaded",
+  same(offShiftBands("2026-11-02", [], range), []) && same(offShiftBands("2026-11-02", undefined, range), []),
+);
+check(
+  "a shift past the drawn hours is clipped to them",
+  same(offShiftBands("2026-11-03", SPLIT, { startHour: 9, endHour: 20 }), []),
+  offShiftBands("2026-11-03", SPLIT, { startHour: 9, endHour: 20 }),
+);
+check(
+  "touching shifts leave no gap",
+  same(
+    offShiftBands(
+      "2026-11-02",
+      [
+        { day: "monday", openTime: "09:00", closeTime: "14:00" },
+        { day: "monday", openTime: "14:00", closeTime: "18:00" },
+      ],
+      { startHour: 9, endHour: 18 },
+    ),
+    [],
+  ),
+);
+check(
+  "a malformed shift is skipped, the good one kept",
+  same(
+    shiftsOn("2026-11-02", [
+      { day: "monday", openTime: "10:00", closeTime: "14:00" },
+      { day: "monday", openTime: "20:00", closeTime: "17:00" },
+    ]),
+    [{ start: 600, end: 840 }],
+  ),
+);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

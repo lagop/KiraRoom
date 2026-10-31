@@ -1,7 +1,7 @@
 ﻿import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { LLMProviderFactory } from '../factories/llm-provider.factory';
-import { salonWeekFrom } from '../../appointments/working-hours';
+import { salonShiftsFrom } from '../../appointments/working-hours';
 import { salonClock } from '../prompts/clock';
 import { PlatformLlmConfigService } from '../../platform/platform-llm-config.service';
 import { LLMProvider, LLMGenerationConfig, LLMCompletion } from '@kira/shared';
@@ -42,9 +42,13 @@ const DAY_LABELS: Record<string, { es: string; en: string }> = {
  * "los domingos cerramos" instead of going quiet. An empty input returns an
  * empty string and the caller falls back to saying the hours are unknown --
  * inventing a default is how the prompt ended up disagreeing with the tools.
+ *
+ * A day may carry several stretches (a salon that closes for lunch): they are
+ * joined on one line, "10:00–14:00 y 17:00–20:00". Showing only the widest
+ * window had the receptionist promise a 15:00 the tools then refused.
  */
 function formatWorkingHours(
-  hours: Record<string, { start: string; end: string }>,
+  hours: Record<string, DayHours | DayHours[]>,
   language: string,
 ): string {
   if (!hours || Object.keys(hours).length === 0) {
@@ -52,22 +56,26 @@ function formatWorkingHours(
   }
   const lang = language === 'en' ? 'en' : 'es';
   const closed = lang === 'en' ? 'closed' : 'cerrado';
+  const joiner = lang === 'en' ? ' and ' : ' y ';
   return WEEK_ORDER.map((key) => {
     const label = DAY_LABELS[key][lang];
-    const h = hours[key];
-    const open = h?.start;
-    const close = h?.end;
-    const isOpen =
-      !!open &&
-      !!close &&
-      open !== 'closed' &&
-      close !== 'closed' &&
-      open !== close;
-    return isOpen
-      ? `- ${label}: ${open}–${close}`
+    const raw = hours[key];
+    const stretches = (Array.isArray(raw) ? raw : raw ? [raw] : []).filter(
+      (h) =>
+        !!h?.start &&
+        !!h?.end &&
+        h.start !== 'closed' &&
+        h.end !== 'closed' &&
+        h.start !== h.end,
+    );
+    return stretches.length > 0
+      ? `- ${label}: ${stretches.map((h) => `${h.start}–${h.end}`).join(joiner)}`
       : `- ${label}: ${closed}`;
   }).join('\n');
 }
+
+/** One open stretch of a day, as the prompt renders it. */
+type DayHours = { start: string; end: string };
 
 // Retry configuration interface
 interface RetryConfig {
@@ -121,7 +129,8 @@ interface SalonContext {
   faqs?: Array<{ question: string; answer: string }>;
   services: Array<{ name: string; duration: number; price: number; category: string }>;
   professionals: Array<{ firstName: string; lastName: string; position?: string; specialties: string[] }>;
-  workingHours: Record<string, { start: string; end: string }>;
+  /** Per weekday, the salon's open stretches (several when it closes for lunch). */
+  workingHours: Record<string, DayHours | DayHours[]>;
   // P2A-receptionist-advanced -- persona settings (voice, tone,
   // signature phrases). The base system prompt already gives a default
   // voice; when `virtual_receptionist_advanced` is unlocked AND a
@@ -561,11 +570,13 @@ export class LLMService {
         // which flatly contradicted what check_availability computes from the
         // same schedules: the prompt told the model the salon opened on
         // Saturday while the tool correctly refused to offer a slot.
+        // Every stretch of the day, so a salon that closes from 14:00 to
+        // 17:00 is not described as open straight through.
         workingHours: Object.fromEntries(
-          Object.entries(salonWeekFrom(tenant.professionals)).map(
-            ([day, window]) => [
+          Object.entries(salonShiftsFrom(tenant.professionals)).map(
+            ([day, stretches]) => [
               day,
-              { start: window.openTime, end: window.closeTime },
+              stretches.map((w) => ({ start: w.openTime, end: w.closeTime })),
             ],
           ),
         ),
@@ -673,7 +684,7 @@ export class LLMService {
 
     const baseSystem = getSystemPrompt(language, salonName, assistantName);
 
-    const workingHours: Record<string, { start: string; end: string }> =
+    const workingHours: Record<string, DayHours | DayHours[]> =
       context.workingHours ?? context.openingHours ?? {};
 
     const faqs = (context.faqs ?? [])

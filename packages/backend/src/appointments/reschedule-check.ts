@@ -1,6 +1,14 @@
 import { ConflictException } from "@nestjs/common";
 import { AppointmentStatus } from "@prisma/client";
-import { fitsInWindow, minutesOf, workingWindowFor } from "./working-hours";
+import {
+  ShiftWindow,
+  clockOf,
+  describeShifts,
+  fitsInShifts,
+  fitsInWindow,
+  minutesOf,
+  workingWindowsFor,
+} from "./working-hours";
 import { salonInstant } from "./salon-time";
 import { VISIT_ROW_ORDER, VISIT_ROW_SELECT, appointmentBusyBlocks } from "./visit-totals";
 
@@ -54,8 +62,11 @@ export type Busy = {
 export function rescheduleProblem(input: {
   startMinutes: number | null;
   durationMinutes: number;
-  /** workingWindowFor: undefined = no schedule, null = not working that day. */
-  professionalWindow: { startMinutes: number; endMinutes: number } | null | undefined;
+  /**
+   * workingWindowsFor: undefined = no schedule, [] = not working that day,
+   * else that day's shifts. The appointment has to fit inside one of them.
+   */
+  professionalShifts: ShiftWindow[] | undefined;
   professionalName: string;
   salonWindow?: { startMinutes: number; endMinutes: number };
   others: Busy[];
@@ -73,11 +84,14 @@ export function rescheduleProblem(input: {
       : "No se puede mover una cita a un momento que ya ha pasado.";
   }
   if (startMinutes + durationMinutes > 24 * 60) return "La cita terminaría al día siguiente.";
-  if (hours && input.professionalWindow === null) {
+  const shifts = input.professionalShifts;
+  if (hours && shifts && shifts.length === 0) {
     return `${input.professionalName} no trabaja ese día.`;
   }
-  if (hours && input.professionalWindow && !fitsInWindow(startMinutes, durationMinutes, input.professionalWindow)) {
-    return `Está fuera del horario de ${input.professionalName} (${clock(input.professionalWindow.startMinutes)}–${clock(input.professionalWindow.endMinutes)}).`;
+  // Every shift is named, so with a split day the salon reads why 13:30 for
+  // an hour was refused: "(10:00–14:00 y 17:00–20:00)".
+  if (hours && shifts && !fitsInShifts(startMinutes, durationMinutes, shifts)) {
+    return `Está fuera del horario de ${input.professionalName} (${describeShifts(shifts)}).`;
   }
   if (hours && input.salonWindow && !fitsInWindow(startMinutes, durationMinutes, input.salonWindow)) {
     return `Está fuera del horario del salón (${clock(input.salonWindow.startMinutes)}–${clock(input.salonWindow.endMinutes)}).`;
@@ -95,9 +109,7 @@ export function rescheduleProblem(input: {
   return null;
 }
 
-function clock(minutes: number): string {
-  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
-}
+const clock = clockOf;
 
 type PrismaLike = {
   tenant: { findUnique: (args: any) => Promise<any> };
@@ -220,7 +232,7 @@ async function scheduleCheckInput(
   return {
     startMinutes: minutesOf(target.time),
     durationMinutes: target.durationMinutes,
-    professionalWindow: workingWindowFor(professional.workingHours, new Date(`${target.day}T12:00:00.000Z`)),
+    professionalShifts: workingWindowsFor(professional.workingHours, new Date(`${target.day}T12:00:00.000Z`)),
     professionalName: professional.firstName,
     salonWindow: open !== null && close !== null && close > open ? { startMinutes: open, endMinutes: close } : undefined,
     others,

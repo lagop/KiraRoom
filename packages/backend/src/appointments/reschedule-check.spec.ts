@@ -19,7 +19,7 @@ describe("rescheduleProblem", () => {
   const base = {
     startMinutes: 10 * 60,
     durationMinutes: 60,
-    professionalWindow: { startMinutes: 9 * 60, endMinutes: 17 * 60 },
+    professionalShifts: [{ startMinutes: 9 * 60, endMinutes: 17 * 60 }],
     professionalName: "Ana",
     others: [],
     inPast: false,
@@ -41,21 +41,47 @@ describe("rescheduleProblem", () => {
 
   it("outside the professional's hours, or a day they do not work", () => {
     expect(rescheduleProblem({ ...base, startMinutes: 16 * 60 + 30 })).toMatch(/fuera del horario de Ana \(09:00–17:00\)/);
-    expect(rescheduleProblem({ ...base, professionalWindow: null })).toBe("Ana no trabaja ese día.");
+    expect(rescheduleProblem({ ...base, professionalShifts: [] })).toBe("Ana no trabaja ese día.");
   });
 
   it("no schedule recorded is no limit, as for online booking", () => {
-    expect(rescheduleProblem({ ...base, professionalWindow: undefined, startMinutes: 7 * 60 })).toBeNull();
+    expect(rescheduleProblem({ ...base, professionalShifts: undefined, startMinutes: 7 * 60 })).toBeNull();
   });
 
   it("outside the salon's hours when it set them", () => {
     expect(
-      rescheduleProblem({ ...base, professionalWindow: undefined, startMinutes: 7 * 60, salonWindow: { startMinutes: 9 * 60, endMinutes: 20 * 60 } }),
+      rescheduleProblem({ ...base, professionalShifts: undefined, startMinutes: 7 * 60, salonWindow: { startMinutes: 9 * 60, endMinutes: 20 * 60 } }),
     ).toMatch(/fuera del horario del salón/);
   });
 
   it("in the past", () => {
     expect(rescheduleProblem({ ...base, inPast: true })).toMatch(/ya ha pasado/);
+  });
+
+  describe("a split day (10:00–14:00 and 17:00–20:00)", () => {
+    // With one window per day the afternoon did not exist: 17:00 was refused
+    // and the message named only the morning.
+    const split = {
+      ...base,
+      professionalShifts: [
+        { startMinutes: 10 * 60, endMinutes: 14 * 60 },
+        { startMinutes: 17 * 60, endMinutes: 20 * 60 },
+      ],
+    };
+
+    it("fits in either shift", () => {
+      expect(rescheduleProblem({ ...split, startMinutes: 13 * 60 })).toBeNull();
+      expect(rescheduleProblem({ ...split, startMinutes: 17 * 60 })).toBeNull();
+      expect(rescheduleProblem({ ...split, startMinutes: 19 * 60 })).toBeNull();
+    });
+
+    it("not into the gap, nor across it, and the message names both shifts", () => {
+      const msg = "Está fuera del horario de Ana (10:00–14:00 y 17:00–20:00).";
+      expect(rescheduleProblem({ ...split, startMinutes: 13 * 60 + 30 })).toBe(msg);
+      expect(rescheduleProblem({ ...split, startMinutes: 15 * 60 })).toBe(msg);
+      // Starts in the gap, ends inside the afternoon.
+      expect(rescheduleProblem({ ...split, startMinutes: 16 * 60 + 30 })).toBe(msg);
+    });
   });
 });
 
@@ -90,6 +116,23 @@ describe("assertCanReschedule", () => {
     const err = await assertCanReschedule(prismaWith({}), { ...target, day: "2026-10-30", time: "10:00" }, NOW).catch((e) => e);
     // 10:00 in Madrid on 30 Oct is 09:00 UTC, before NOW (10:00 UTC).
     expect(err?.message).toMatch(/ya ha pasado/);
+  });
+
+  it("reads every shift of the day from the professional's schedule", async () => {
+    const workingHours = [
+      { day: "monday", openTime: "17:00", closeTime: "20:00" },
+      { day: "monday", openTime: "10:00", closeTime: "14:00" },
+    ];
+    const at = (time: string) =>
+      assertCanReschedule(prismaWith({ workingHours }), { ...target, time }, NOW).then(
+        () => null,
+        (e) => e,
+      );
+    expect(await at("17:00")).toBeNull();
+    expect(await at("13:00")).toBeNull();
+    const err = await at("13:30");
+    expect(err).toBeInstanceOf(ConflictException);
+    expect(err.message).toBe("Está fuera del horario de Ana (10:00–14:00 y 17:00–20:00).");
   });
 
   it("the salon's day and clock for a stored instant", () => {
