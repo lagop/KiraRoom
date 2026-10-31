@@ -44,7 +44,9 @@ import {
 } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
 import { getCurrentUser } from "@/lib/utils";
-import { NavGroup, NavLink, activeGroup, isActive, navFor } from "@/lib/dashboard-nav";
+import { NavBadge, NavGroup, NavLink, activeGroup, badgesIn, isActive, navFor } from "@/lib/dashboard-nav";
+import apiClient from "@/lib/api";
+import { TIME_OFF_REQUESTS_CHANGED, pendingBadge } from "@/lib/time-off";
 import { signOut } from "@/lib/sign-out";
 import { BugReportModal } from "./bug-report-modal";
 import { ProBadge } from "@/components/ProBadge";
@@ -81,6 +83,18 @@ const ICONS: Record<string, LucideIcon> = {
   scroll: ScrollText,
   calculator: Calculator,
 };
+
+/** A count next to a link: requests waiting for an answer. */
+function CountBadge({ value, label }: { value: string; label: string }) {
+  return (
+    <span
+      className="ml-2 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-amber-400 px-1.5 text-xs font-semibold text-violet-950"
+      aria-label={`${label}: ${value} pendientes`}
+    >
+      {value}
+    </span>
+  );
+}
 
 const ROW = "flex items-center rounded-l-lg w-full transition-all duration-200";
 const ACTIVE = "bg-white text-violet-950 rounded-r-none";
@@ -128,6 +142,34 @@ export function DashboardSidebar({
 
   const nav = useMemo(() => navFor(currentUser?.role), [currentUser?.role]);
 
+  // Counts next to links (requests waiting for an answer), for the links
+  // this role sees only; recounted on each page and when one is answered.
+  const badgeKinds = useMemo(() => badgesIn(nav).join(","), [nav]);
+  const [counts, setCounts] = useState<Partial<Record<NavBadge, number>>>({});
+  useEffect(() => {
+    if (!badgeKinds.includes("time-off-requests")) {
+      setCounts({});
+      return;
+    }
+    let live = true;
+    const recount = () => {
+      apiClient
+        .getTimeOffRequestCount()
+        .then(({ count }) => {
+          if (live) setCounts((c) => ({ ...c, "time-off-requests": count }));
+        })
+        // Only a badge: a failure leaves the menu as it is.
+        .catch(() => undefined);
+    };
+    recount();
+    window.addEventListener(TIME_OFF_REQUESTS_CHANGED, recount);
+    return () => {
+      live = false;
+      window.removeEventListener(TIME_OFF_REQUESTS_CHANGED, recount);
+    };
+  }, [badgeKinds, pathname]);
+  const badgeOf = (item: NavLink) => (item.badge ? pendingBadge(counts[item.badge] ?? 0) : null);
+
   // One group open at a time: the one holding the current page, or the
   // one last clicked.
   const currentGroup = activeGroup(nav, pathname);
@@ -148,22 +190,27 @@ export function DashboardSidebar({
 
   const renderLink = (item: NavLink, nested: boolean) => {
     const label = t(item.label);
+    const badge = badgeOf(item);
     return (
       <li key={item.id}>
         <Link
           href={item.href}
-          className={`${ROW} ${
+          className={`${ROW} relative ${
             effectiveCollapsed ? "justify-center py-2" : nested ? "pl-9 pr-3 py-1.5" : "py-1.5 px-3"
           } ${isActive(item, pathname) ? ACTIVE : IDLE}`}
-          title={effectiveCollapsed ? label : undefined}
+          title={effectiveCollapsed ? (badge ? `${label} (${badge})` : label) : undefined}
         >
           {icon(item.icon, !effectiveCollapsed)}
+          {badge && effectiveCollapsed && (
+            <span aria-hidden="true" className="absolute right-2 top-1.5 h-2 w-2 rounded-full bg-amber-400" />
+          )}
           {!effectiveCollapsed && (
             <span suppressHydrationWarning className="flex-1 truncate">
               {label}
             </span>
           )}
           {!effectiveCollapsed && item.pro && <ProBadge />}
+          {!effectiveCollapsed && badge && <CountBadge value={badge} label={label} />}
         </Link>
       </li>
     );
@@ -171,6 +218,9 @@ export function DashboardSidebar({
 
   const renderGroup = (group: NavGroup) => {
     const label = t(group.label);
+    // A closed group still says something inside it is waiting.
+    const waiting = group.items.reduce((n, item) => n + (item.badge ? (counts[item.badge] ?? 0) : 0), 0);
+    const groupBadge = pendingBadge(waiting);
     const holdsCurrent = group.id === currentGroup;
     const open = !effectiveCollapsed && openGroup === group.id;
     return (
@@ -198,6 +248,7 @@ export function DashboardSidebar({
               <span suppressHydrationWarning className="flex-1 text-left truncate">
                 {label}
               </span>
+              {groupBadge && !open && <CountBadge value={groupBadge} label={label} />}
               <ChevronDown
                 className={`w-4 h-4 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
               />

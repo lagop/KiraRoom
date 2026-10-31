@@ -13,6 +13,14 @@ import {
   hoursLabel,
   isCurrentOrUpcoming,
   timeOffFormProblem,
+  REQUESTABLE_KINDS,
+  approvedToast,
+  blocksAgenda,
+  canWithdraw,
+  myAbsences,
+  pendingBadge,
+  requestBody,
+  statusOf,
 } from "./time-off";
 
 let pass = 0;
@@ -72,6 +80,40 @@ eq(
   }),
   "14 dic 2026 · 10:00 · Lucía Pérez · Color, Aclarado (Ana Gil)",
 );
+
+console.log("requests");
+eq("a professional asks for vacation, a day off or another absence: not sick leave nor a closure", REQUESTABLE_KINDS, ["vacation", "day_off", "other"]);
+eq("a block from before requests is approved", statusOf({}), "approved");
+check("only approved blocks the agenda", blocksAgenda({}) && blocksAgenda({ status: "approved" }) && !blocksAgenda({ status: "pending" }) && !blocksAgenda({ status: "rejected" }));
+check(
+  "a request may be withdrawn only while pending",
+  canWithdraw({ status: "pending", requested: true }) && !canWithdraw({ status: "approved", requested: true }) && !canWithdraw({ status: "rejected", requested: true }),
+);
+eq(
+  "a request never carries a professional",
+  requestBody({ professionalId: "someone-else", kind: "vacation", startDate: "2026-12-01", endDate: "2026-12-02" }),
+  { kind: "vacation", startDate: "2026-12-01", endDate: "2026-12-02", startTime: null, endTime: null, note: null },
+);
+eq(
+  "my absences: current and ahead, soonest first",
+  myAbsences(
+    [
+      { id: "b", startDate: "2026-12-20", endDate: "2026-12-21", startTime: null, status: "pending" },
+      { id: "past", startDate: "2026-11-01", endDate: "2026-11-02", startTime: null, status: "rejected" },
+      { id: "a", startDate: "2026-12-01", endDate: "2026-12-14", startTime: null, status: "approved" },
+    ],
+    "2026-12-10",
+  ).map((r) => r.id),
+  ["a", "b"],
+);
+eq("no badge for none", pendingBadge(0), null);
+eq("the badge counts", pendingBadge(3), "3");
+eq("and stops at 9+", pendingBadge(12), "9+");
+eq("approved with nothing to move", approvedToast("Ana Gil", 0), {
+  title: "Ausencia de Ana Gil aprobada",
+  description: "Ya no se ofrecerán citas en ese tiempo.",
+});
+eq("approved with clashes", approvedToast(null, 2).description, "Recuerda mover o avisar a las 2 citas que coinciden.");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
