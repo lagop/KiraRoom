@@ -22,7 +22,12 @@ export interface NavLink {
   staffOnly?: boolean;
   /** Shows the Pro badge. */
   pro?: boolean;
+  /** Shows a count the sidebar reads (e.g. requests waiting for an answer). */
+  badge?: NavBadge;
 }
+
+/** The counts the sidebar can show next to a link. */
+export type NavBadge = "time-off-requests";
 
 export interface NavGroup {
   kind: "group";
@@ -49,6 +54,8 @@ export const DASHBOARD_NAV: NavEntry[] = [
   link("appointments", "/dashboard/appointments", "nav.appointments", "calendar"),
   link("clients", "/dashboard/clients", "nav.clients", "users"),
   link("wait-list", "/dashboard/wait-list", "nav.wait_list", "hourglass"),
+  // A professional asks for their own time off; the salon answers in Solicitudes de ausencia.
+  link("my-time-off", "/dashboard/mis-ausencias", "nav.my_time_off", "calendar-off", { staffOnly: true }),
   {
     kind: "group",
     id: "team",
@@ -56,6 +63,10 @@ export const DASHBOARD_NAV: NavEntry[] = [
     icon: "scissors",
     items: [
       link("professionals", "/dashboard/professionals", "nav.professionals", "user-cog", { managers: true }),
+      link("time-off-requests", "/dashboard/solicitudes-ausencia", "nav.time_off_requests", "calendar-off", {
+        managers: true,
+        badge: "time-off-requests",
+      }),
       link("services", "/dashboard/services", "nav.services", "scissors", { managers: true }),
       link("commissions", "/dashboard/commissions", "nav.commissions", "dollar", { managers: true }),
     ],
@@ -134,6 +145,12 @@ export function navFor(role: string | null | undefined, nav: NavEntry[] = DASHBO
 export function isActive(item: NavLink, pathname: string): boolean {
   if (item.exact) return pathname === item.href;
   return pathname === item.href || pathname.startsWith(item.href + "/");
+}
+
+/** The badges a menu shows, so the sidebar fetches only those. */
+export function badgesIn(nav: NavEntry[]): NavBadge[] {
+  const all = nav.flatMap((e) => (e.kind === "link" ? [e] : e.items)).flatMap((l) => (l.badge ? [l.badge] : []));
+  return [...new Set(all)];
 }
 
 /** The group holding the current page, so it opens by itself; null if none. */

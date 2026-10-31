@@ -87,7 +87,10 @@ function build(opts: { appointments?: Apt[]; timeOff?: any[] } = {}) {
             r.tenantId === where.tenantId &&
             r.startDate <= where.startDate.lte &&
             r.endDate >= where.endDate.gte &&
-            (!where.professionalId || r.professionalId === where.professionalId),
+            (!where.professionalId || r.professionalId === where.professionalId) &&
+            (typeof where.status === "string"
+              ? (r.status ?? "approved") === where.status
+              : where.status.in.includes(r.status ?? "approved")),
         ),
       ),
       findFirst: jest.fn(async ({ where }: any) => rows.find((r) => r.id === where.id && r.tenantId === where.tenantId) ?? null),

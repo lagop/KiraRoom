@@ -1,8 +1,11 @@
 import {
   TimeOffBlock,
   availableWindows,
+  blocksAgenda,
   dayBlocks,
   daysOf,
+  periodLabel,
+  requestSummary,
   salonClosedOn,
   timeOffInputProblem,
   timeOffProblem,
@@ -166,5 +169,31 @@ describe("daysOf", () => {
       "2027-01-01",
       "2027-01-02",
     ]);
+  });
+});
+
+describe("requests: only approved time off blocks", () => {
+  it("a pending or rejected request applies to nobody; approved (or a row with no status) does", () => {
+    expect(blocksAgenda({ status: "approved" })).toBe(true);
+    expect(blocksAgenda({})).toBe(true);
+    expect(blocksAgenda({ status: "pending" })).toBe(false);
+    expect(blocksAgenda({ status: "rejected" })).toBe(false);
+    const pending = block({ status: "pending" });
+    const rejected = block({ status: "rejected", startTime: "10:00", endTime: "12:00" });
+    expect(dayBlocks([pending, rejected], DAY, ANA)).toEqual({ allDay: null, windows: [], blocks: [] });
+    expect(
+      timeOffProblem({ blocks: [pending, rejected], day: DAY, professionalId: ANA, professionalName: "Ana", startMinutes: 600, durationMinutes: 60 }),
+    ).toBeNull();
+    expect(dayBlocks([pending, block({ status: "approved" })], DAY, ANA).allDay).toMatchObject({ status: "approved" });
+  });
+
+  it("reads the days and hours of a request in Spanish, for the notifications", () => {
+    expect(periodLabel(block({}))).toBe("el 14/12/2026");
+    expect(periodLabel(block({ endDate: "2026-12-16" }))).toBe("del 14/12/2026 al 16/12/2026");
+    expect(periodLabel(block({ startTime: "10:00", endTime: "12:00" }))).toBe("el 14/12/2026 de 10:00 a 12:00");
+    expect(requestSummary(block({ kind: "day_off" }))).toBe("un día libre el 14/12/2026");
+    expect(requestSummary(block({ kind: "other", startTime: "10:00", endTime: "12:00" }))).toBe(
+      "una ausencia el 14/12/2026 de 10:00 a 12:00",
+    );
   });
 });

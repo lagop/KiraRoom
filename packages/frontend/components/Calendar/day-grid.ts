@@ -11,7 +11,7 @@
  * midnight it stands for, and moved with calendar arithmetic.
  */
 import { addDays, format } from "date-fns";
-import { calendarLabel, type TimeOff } from "../../lib/time-off";
+import { TIME_OFF_KIND_LABELS, calendarLabel, statusOf, type TimeOff } from "../../lib/time-off";
 import { salonWindowsOn } from "../../lib/salon-hours";
 
 /** 15 minutes of grid. */
@@ -215,9 +215,14 @@ export interface TimeOffBand extends MinuteRange {
   label: string;
   /** The salon is closed (drawn across every column), not one person away. */
   salon: boolean;
+  /** A request not yet answered: drawn light and dashed, it blocks nothing. */
+  pending?: boolean;
 }
 
-type CalendarTimeOff = Pick<TimeOff, "professionalId" | "kind" | "startDate" | "endDate" | "startTime" | "endTime" | "note">;
+type CalendarTimeOff = Pick<
+  TimeOff,
+  "professionalId" | "kind" | "startDate" | "endDate" | "startTime" | "endTime" | "note" | "status"
+>;
 
 /**
  * The time off and closures to shade in a professional's column on `day`,
@@ -225,6 +230,10 @@ type CalendarTimeOff = Pick<TimeOff, "professionalId" | "kind" | "startDate" | "
  * blocks, all day or their hours. Shaded, not blocked, like the time outside
  * a shift: an owner may still book a walk-in there (the server asks them to
  * confirm it), so clicks pass through.
+ *
+ * A request still pending (only the owner and managers are sent those) is
+ * drawn as "Pendiente": the salon sees it coming, nothing is blocked. A
+ * rejected one is not drawn.
  */
 export function timeOffBands(
   day: string,
@@ -236,6 +245,8 @@ export function timeOffBands(
   const bottom = range.endHour * 60;
   const bands: TimeOffBand[] = [];
   for (const b of blocks) {
+    const status = statusOf(b);
+    if (status === "rejected") continue;
     if (b.professionalId !== null && b.professionalId !== professionalId) continue;
     if (!(b.startDate <= day && day <= b.endDate)) continue;
     // No hours: the whole day. An unreadable hour is read as the day's edge.
@@ -244,10 +255,17 @@ export function timeOffBands(
     const start = Math.max(top, from);
     const end = Math.min(bottom, to);
     if (end <= start) continue;
+    if (status === "pending") {
+      bands.push({ start, end, label: `Pendiente · ${TIME_OFF_KIND_LABELS[b.kind] ?? "Ausencia"}`, salon: false, pending: true });
+      continue;
+    }
     bands.push({ start, end, label: calendarLabel(b), salon: b.professionalId === null });
   }
-  // The salon's first, so its label is the one on top when they overlap.
-  return bands.sort((a, b) => Number(b.salon) - Number(a.salon) || a.start - b.start);
+  // The salon's first, so its label is the one on top when they overlap;
+  // pending requests last, under what does block.
+  return bands.sort(
+    (a, b) => Number(!!a.pending) - Number(!!b.pending) || Number(b.salon) - Number(a.salon) || a.start - b.start,
+  );
 }
 
 /**
@@ -260,7 +278,7 @@ export function salonClosedWeekday(day: string, openingHours: unknown): boolean 
 
 /** The salon's all-day closure on `day`, if any: the calendar says so above the grid. */
 export function salonClosureOn<T extends CalendarTimeOff>(day: string, blocks: ReadonlyArray<T>): T | null {
-  return blocks.find((b) => b.professionalId === null && !b.startTime && b.startDate <= day && day <= b.endDate) ?? null;
+  return blocks.find((b) => statusOf(b) === "approved" && b.professionalId === null && !b.startTime && b.startDate <= day && day <= b.endDate) ?? null;
 }
 
 /** Pixels from the top of the hours (below the professionals' row). */

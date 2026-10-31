@@ -109,6 +109,8 @@ export class PublicSiteService {
           tenantId: tenant.id,
           professionalId: null,
           startTime: null,
+          // Closures are always approved (a CHECK says so); said here too, as everywhere time off blocks.
+          status: "approved",
           endDate: { gte: dateOfDay(today)! },
           startDate: { lte: horizon },
         },

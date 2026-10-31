@@ -206,7 +206,7 @@ describe("PublicSiteService.getPage", () => {
     const args = (prisma.timeOff.findMany.mock.calls[0] as any[])[0];
     // The salon's whole-day closures only: no professional's time off, and
     // nothing but dates leaves the database (no note).
-    expect(args.where).toMatchObject({ tenantId: "t1", professionalId: null, startTime: null });
+    expect(args.where).toMatchObject({ tenantId: "t1", professionalId: null, startTime: null, status: "approved" });
     expect(Object.keys(args.select)).not.toContain("note");
   });
 

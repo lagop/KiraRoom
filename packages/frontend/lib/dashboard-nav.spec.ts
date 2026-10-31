@@ -6,7 +6,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { DASHBOARD_NAV, NavEntry, NavLink, activeGroup, isActive, navFor } from "./dashboard-nav";
+import { DASHBOARD_NAV, NavEntry, NavLink, activeGroup, badgesIn, isActive, navFor } from "./dashboard-nav";
 
 let pass = 0;
 let fail = 0;
@@ -27,7 +27,11 @@ console.log("who sees what");
 {
   const owner = ids(navFor("owner"));
   const staff = ids(navFor("staff"));
-  check("the owner sees every screen but the staff-only one", owner.length === links(DASHBOARD_NAV).length - 1, owner);
+  const staffOnly = links(DASHBOARD_NAV).filter((l) => l.staffOnly).map((l) => l.id);
+  check("the staff-only screens are their security and their own time off", staffOnly.join() === "my-time-off,security-staff", staffOnly);
+  check("the owner sees every screen but the staff-only ones", owner.length === links(DASHBOARD_NAV).length - staffOnly.length, owner);
+  check("staff ask for their time off; the owner answers the requests", staff.includes("my-time-off") && !staff.includes("time-off-requests") && owner.includes("time-off-requests") && !owner.includes("my-time-off"));
+  check("only the owner and managers fetch the pending requests badge", badgesIn(navFor("owner")).join() === "time-off-requests" && badgesIn(navFor("admin")).join() === "time-off-requests" && badgesIn(navFor("staff")).length === 0);
   check("the owner finds the plan and subscription in the menu", owner.includes("billing"));
   check("staff keep their daily screens", ["dashboard", "appointments", "clients", "wait-list", "pos", "invoices", "share"].every((id) => staff.includes(id)), staff);
   check("staff do not see the salon's management screens", !["payments", "professionals", "billing", "analytics", "whatsapp"].some((id) => staff.includes(id)), staff);
@@ -51,6 +55,7 @@ console.log("current page");
   check("a WhatsApp campaign opens Marketing", activeGroup(nav, "/dashboard/marketing/whatsapp/new") === "marketing");
   check("the till opens Caja y ventas", activeGroup(nav, "/dashboard/pos") === "sales");
   check("a top-level page opens no group", activeGroup(nav, "/dashboard/appointments") === null);
+  check("the requests page opens Equipo y servicios", activeGroup(nav, "/dashboard/solicitudes-ausencia") === "team");
 }
 
 console.log("every link has its translation and its page");

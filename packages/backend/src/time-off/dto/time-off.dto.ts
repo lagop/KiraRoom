@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
+  IsBoolean,
   IsIn,
   IsOptional,
   IsString,
@@ -12,9 +13,12 @@ import {
 import { Transform } from "class-transformer";
 import {
   DATE_PATTERN,
+  REQUESTABLE_KINDS,
   TIME_OFF_KINDS,
+  TIME_OFF_STATUSES,
   TIME_PATTERN,
   TimeOffKindName,
+  TimeOffStatusName,
   timeOffInputProblem,
 } from "../time-off-rules";
 
@@ -41,6 +45,26 @@ function IsTimeOffInput(): PropertyDecorator {
           timeOffInputProblem(args?.object as any) === null,
         defaultMessage: (args?: ValidationArguments) =>
           timeOffInputProblem(args?.object as any) ?? "La ausencia no es válida.",
+      },
+    });
+  };
+}
+
+/**
+ * The same rules on a request's body, as the caller's own absence: any
+ * professional id stands in for theirs (the DTO has none).
+ */
+function IsTimeOffRequest(): PropertyDecorator {
+  const asOwn = (args?: ValidationArguments) => ({ ...(args?.object as any), professionalId: "self" });
+  return (target: object, propertyKey: string | symbol) => {
+    registerDecorator({
+      name: "isTimeOffRequest",
+      target: target.constructor,
+      propertyName: propertyKey as string,
+      validator: {
+        validate: (_value: unknown, args?: ValidationArguments) => timeOffInputProblem(asOwn(args)) === null,
+        defaultMessage: (args?: ValidationArguments) =>
+          timeOffInputProblem(asOwn(args)) ?? "La solicitud no es válida.",
       },
     });
   };
@@ -142,4 +166,72 @@ export class TimeOffQueryDto {
   @IsOptional()
   @IsUUID(undefined, { message: "El profesional no es válido." })
   professionalId?: string;
+
+  /** Owner and admin only (ignored for staff): pending requests as well. */
+  @ApiPropertyOptional({ description: "true: pending requests too (owner and admin)" })
+  @Transform(({ value }) => value === true || value === "true" || value === "1")
+  @IsOptional()
+  @IsBoolean()
+  includePending?: boolean;
+}
+
+/**
+ * POST /time-off/requests and its preview: a professional asking for time
+ * off for themselves. There is no professional in it -- it is always the
+ * caller's own, from the session; one sent anyway is dropped by the
+ * ValidationPipe (whitelist) and never read.
+ */
+export class CreateTimeOffRequestDto {
+  @ApiProperty({ enum: REQUESTABLE_KINDS })
+  @IsIn(REQUESTABLE_KINDS as unknown as string[], {
+    message: "Puedes pedir vacaciones, un día libre u otra ausencia. Una baja o un cierre los registra el responsable.",
+  })
+  kind!: TimeOffKindName;
+
+  @ApiProperty({ example: "2026-12-24" })
+  @Matches(DATE_PATTERN, { message: DATE_MESSAGE })
+  startDate!: string;
+
+  /** Inclusive. */
+  @ApiProperty({ example: "2026-12-26" })
+  @Matches(DATE_PATTERN, { message: DATE_MESSAGE })
+  @IsTimeOffRequest()
+  endDate!: string;
+
+  @ApiPropertyOptional({ example: "10:00", description: "With endTime: a few hours of one day" })
+  @emptyToNull
+  @IsOptional()
+  @Matches(TIME_PATTERN, { message: TIME_MESSAGE })
+  startTime?: string | null;
+
+  @ApiPropertyOptional({ example: "12:00" })
+  @emptyToNull
+  @IsOptional()
+  @Matches(TIME_PATTERN, { message: TIME_MESSAGE })
+  endTime?: string | null;
+
+  @ApiPropertyOptional({ maxLength: 200, description: "For whoever runs the salon only" })
+  @trimmed
+  @IsOptional()
+  @IsString()
+  @MaxLength(200, { message: "La nota puede tener como máximo 200 caracteres." })
+  note?: string | null;
+}
+
+/** POST /time-off/:id/approve and /reject: an optional word for the requester. */
+export class DecideTimeOffDto {
+  @ApiPropertyOptional({ maxLength: 200 })
+  @trimmed
+  @IsOptional()
+  @IsString()
+  @MaxLength(200, { message: "El motivo puede tener como máximo 200 caracteres." })
+  note?: string | null;
+}
+
+/** GET /time-off/requests. */
+export class TimeOffRequestsQueryDto {
+  @ApiPropertyOptional({ enum: TIME_OFF_STATUSES, default: "pending" })
+  @IsOptional()
+  @IsIn(TIME_OFF_STATUSES as unknown as string[], { message: "El estado no es válido." })
+  status?: TimeOffStatusName;
 }

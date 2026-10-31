@@ -28,8 +28,22 @@ export const TIME_OFF_KINDS: readonly TimeOffKindName[] = [
   "other",
 ];
 
+export type TimeOffStatusName = "approved" | "pending" | "rejected";
+
+export const TIME_OFF_STATUSES: readonly TimeOffStatusName[] = ["approved", "pending", "rejected"];
+
+/**
+ * What a professional may ask for themselves (POST /time-off/requests). Not
+ * a closure (the salon's), and not sick leave: a baja is not something the
+ * salon approves -- the professional tells whoever runs the salon, who
+ * records it (and keeps it from the rest of the team, GDPR art. 9).
+ */
+export const REQUESTABLE_KINDS: readonly TimeOffKindName[] = ["vacation", "day_off", "other"];
+
 export interface TimeOffBlock {
   id?: string;
+  /** Absent: approved (a block read before requests existed). */
+  status?: TimeOffStatusName | string | null;
   /** Null: the whole salon is closed. */
   professionalId: string | null;
   kind: TimeOffKindName | string;
@@ -38,6 +52,15 @@ export interface TimeOffBlock {
   startTime?: string | null;
   endTime?: string | null;
   note?: string | null;
+}
+
+/**
+ * Only approved time off blocks anything: a request still pending, or one
+ * rejected, leaves the agenda as it was. Queries ask for approved rows
+ * (timeOffBetween); this keeps a row that slipped through from blocking.
+ */
+export function blocksAgenda(block: Pick<TimeOffBlock, "status">): boolean {
+  return block.status == null || block.status === "approved";
 }
 
 /** The whole of a salon day, for professionals with no schedule recorded. */
@@ -110,6 +133,7 @@ export function dayBlocks(
   professionalId: string | null,
 ): DayBlocks {
   const applying = blocks
+    .filter(blocksAgenda)
     .filter((b) => coversDay(b, day))
     .filter((b) => b.professionalId === null || (professionalId !== null && b.professionalId === professionalId))
     .sort((a, b) => Number(a.professionalId !== null) - Number(b.professionalId !== null));
@@ -250,4 +274,34 @@ export function daysOf(block: TimeOffBlock, limit = MAX_SPAN_DAYS + 1): string[]
     out.push(day);
   }
   return out;
+}
+
+const REQUEST_KIND_WORDS: Record<string, string> = {
+  vacation: "vacaciones",
+  day_off: "un día libre",
+  sick_leave: "una ausencia",
+  other: "una ausencia",
+};
+
+/** "24/12/2026" for a "YYYY-MM-DD" day. */
+function spanishDay(value: Date | string): string {
+  const [y, m, d] = dayOf(value).split("-");
+  return `${d}/${m}/${y}`;
+}
+
+/**
+ * The days and hours of a block as a sentence ends: "el 24/12/2026",
+ * "del 24/12/2026 al 26/12/2026", "el 24/12/2026 de 10:00 a 12:00".
+ */
+export function periodLabel(block: TimeOffBlock): string {
+  const start = dayOf(block.startDate);
+  const end = dayOf(block.endDate);
+  if (start !== end) return `del ${spanishDay(start)} al ${spanishDay(end)}`;
+  const hours = isAllDay(block) ? "" : ` de ${block.startTime} a ${block.endTime}`;
+  return `el ${spanishDay(start)}${hours}`;
+}
+
+/** "vacaciones el 24/12/2026", for the notifications about a request. */
+export function requestSummary(block: TimeOffBlock): string {
+  return `${REQUEST_KIND_WORDS[block.kind] ?? "una ausencia"} ${periodLabel(block)}`;
 }
