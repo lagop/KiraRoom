@@ -19,6 +19,8 @@ export interface PublicSalonService {
   price: number;
   currency: string;
   category: string;
+  /** False: on the price list, but booked by phone (the server refuses it online). */
+  isOnlineBookable?: boolean;
 }
 
 export interface PublicSalonProfessional {

@@ -88,6 +88,7 @@ interface Service {
   price: number;
   category: string;
   isActive: boolean;
+  isOnlineBookable: boolean;
 }
 
 interface AvailableTimeSlot {
@@ -128,6 +129,7 @@ function fromPublicPage(page: PublicSalonPage) {
     price: s.price,
     category: s.category,
     isActive: true,
+    isOnlineBookable: s.isOnlineBookable !== false,
   }));
   const professionals: Professional[] = page.professionals.map((p) => ({
     id: p.id,
@@ -160,6 +162,8 @@ export default function SalonBookingPage({
   const salonData: SalonData = initial.salon;
   const professionals = initial.professionals;
   const services = initial.services;
+  // The booking form offers only what the salon takes online; the price list shows everything.
+  const bookableServices = services.filter((s) => s.isOnlineBookable);
   const hoursRows = openingHoursRows(initialData.openingHours);
   const [availableSlots, setAvailableSlots] = useState<AvailableTimeSlot[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
@@ -773,7 +777,7 @@ export default function SalonBookingPage({
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors"
                 >
                   <option value="">-- {t("bookingPublic.select_service")} --</option>
-                  {services.map((service) => (
+                  {bookableServices.map((service) => (
                     <option key={service.id} value={service.id}>
                       {service.name} - {formatPrice(service.price, salonData.currency)} ({service.duration} min)
                     </option>
