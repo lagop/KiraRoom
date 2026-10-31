@@ -169,6 +169,16 @@ export class UpdateTenantFiscalSettingsDto {
   @IsIn(TAX_REGIMES as unknown as string[])
   taxRegime?: TaxRegime;
 
+  /**
+   * Whether the prices the salon sets on its services and products already
+   * include the tax (IVA / IGIC / IPSI). True: an invoice splits the price
+   * into base + tax. False: the tax is added on top. See salon-tax-settings.ts.
+   */
+  @ApiPropertyOptional({ description: "Salon prices already include the tax (true) or have it added on top (false)" })
+  @IsOptional()
+  @IsBoolean()
+  pricesIncludeTax?: boolean;
+
   @ApiPropertyOptional({ description: "Emitter NIF/CIF/NIE — mirrored to Tenant.taxId" })
   @IsOptional()
   @IsString()
