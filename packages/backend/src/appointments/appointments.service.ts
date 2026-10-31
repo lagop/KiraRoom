@@ -10,8 +10,8 @@ import {
 } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import {
-  workingWindowFor,
-  fitsInWindow,
+  workingWindowsFor,
+  fitsInShifts,
   minutesOf,
 } from "./working-hours";
 import { ProductEventsService, PRODUCT_EVENTS } from "../common/telemetry/product-events.service";
@@ -2536,19 +2536,21 @@ export class AppointmentsService {
           // Outside this professional's shift the slot is not bookable, no
           // matter how empty the calendar looks. A missing schedule imposes no
           // limit, so salons that never filled it in keep working.
+          // With a split day the service has to fit inside one shift: 13:30
+          // for an hour runs into the lunch gap of a 10:00–14:00 morning.
           const row = professionalRows.find((p) => p.id === profId);
-          const window = workingWindowFor(row?.workingHours, date);
+          const shifts = workingWindowsFor(row?.workingHours, date);
           const slotMinutes = minutesOf(slot.time);
 
-          if (window === null) {
+          if (shifts && shifts.length === 0) {
             // Has a schedule and does not work this weekday.
             isAvailable = false;
             break;
           }
           if (
-            window &&
+            shifts &&
             slotMinutes !== null &&
-            !fitsInWindow(slotMinutes, serviceDuration, window)
+            !fitsInShifts(slotMinutes, serviceDuration, shifts)
           ) {
             isAvailable = false;
             break;
@@ -2586,11 +2588,10 @@ export class AppointmentsService {
           // and then "does ANY appointment overlap" -- so one stylist's 11:00
           // took 10:30 away from the four who were free.
           isAvailable = anyProfessionalRows.some((p) => {
-            const window = workingWindowFor(p.workingHours, date);
-            if (window === null) return false;
+            const shifts = workingWindowsFor(p.workingHours, date);
             if (
-              window &&
-              !(slotMinutes !== null && fitsInWindow(slotMinutes, serviceDuration, window))
+              shifts &&
+              !(slotMinutes !== null && fitsInShifts(slotMinutes, serviceDuration, shifts))
             ) {
               return false;
             }

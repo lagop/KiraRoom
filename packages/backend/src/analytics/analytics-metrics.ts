@@ -15,7 +15,7 @@
  */
 
 import { salonInstant } from "../appointments/salon-time";
-import { workingWindowFor } from "../appointments/working-hours";
+import { workingWindowsFor } from "../appointments/working-hours";
 
 // ---------------------------------------------------------------------------
 // Periods
@@ -504,10 +504,12 @@ export function occupancy(
     let minutes = 0;
     let hasSchedule = false;
     for (const day of days) {
-      const window = workingWindowFor(p.workingHours, toUtcDate(day));
-      if (window === undefined) break; // nothing recorded for this professional
+      const shifts = workingWindowsFor(p.workingHours, toUtcDate(day));
+      if (shifts === undefined) break; // nothing recorded for this professional
       hasSchedule = true;
-      if (window) minutes += window.endMinutes - window.startMinutes;
+      // Every shift of the day, not the first: a 10:00–14:00 + 17:00–20:00
+      // day is 7 hours of capacity, and the lunch gap is not part of it.
+      for (const s of shifts) minutes += s.endMinutes - s.startMinutes;
     }
     if (hasSchedule) {
       counted.add(p.id);

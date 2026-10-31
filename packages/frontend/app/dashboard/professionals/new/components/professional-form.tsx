@@ -8,6 +8,13 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import apiClient from '@/lib/api';
 import { useToast } from '@/components/ui/use-toast';
+import { WeeklyScheduleEditor } from '@/components/professionals/WeeklyScheduleEditor';
+import {
+  defaultSchedule,
+  hasProblems,
+  workingHoursFromSchedule,
+  type WeeklySchedule,
+} from '@/lib/weekly-schedule';
 
 interface Service {
   id: string;
@@ -21,6 +28,10 @@ export function ProfessionalForm() {
   const [isLoading, setIsLoading] = useState(false);
   const [services, setServices] = useState<Service[]>([]);
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
+  // Created with a schedule: without one a new professional would be
+  // bookable at any hour the salon opens.
+  const [schedule, setSchedule] = useState<WeeklySchedule>(defaultSchedule);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     email: '',
     password: '',
@@ -64,6 +75,11 @@ export function ProfessionalForm() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (hasProblems(schedule)) {
+      setScheduleError('Revisa el horario: hay tramos que no se pueden guardar.');
+      return;
+    }
+    setScheduleError(null);
     setIsLoading(true);
 
     try {
@@ -77,6 +93,7 @@ export function ProfessionalForm() {
         specialties: formData.specialty ? [formData.specialty] : [],
         position: 'professional',
         serviceIds: selectedServices,
+        workingHours: workingHoursFromSchedule(schedule),
       });
 
       router.push('/dashboard/professionals');
@@ -223,6 +240,23 @@ export function ProfessionalForm() {
           {services.length === 0 && (
             <p className="text-sm text-gray-500 mt-2">
               No services available. Please create services first.
+            </p>
+          )}
+        </div>
+
+        <div className="space-y-2 sm:col-span-2">
+          <Label>Horario semanal</Label>
+          <WeeklyScheduleEditor
+            value={schedule}
+            onChange={(next) => {
+              setSchedule(next);
+              setScheduleError(null);
+            }}
+            disabled={isLoading}
+          />
+          {scheduleError && (
+            <p role="alert" className="text-sm text-red-600">
+              {scheduleError}
             </p>
           )}
         </div>

@@ -120,6 +120,10 @@ describe("PublicSiteService.getPage", () => {
       monday: { openTime: "09:00", closeTime: "18:00" },
       saturday: { openTime: "10:00", closeTime: "14:00" },
     });
+    expect(page.openingShifts).toEqual({
+      monday: [{ openTime: "09:00", closeTime: "18:00" }],
+      saturday: [{ openTime: "10:00", closeTime: "14:00" }],
+    });
     expect(page.professionals[0]).not.toHaveProperty("workingHours");
     expect(page.professionals[0].services).toEqual([{ serviceId: "s1" }]);
     expect(page.address).toEqual({ street: "Calle Mayor 1", city: "Madrid", state: "Madrid", postalCode: "28013", country: "ES" });

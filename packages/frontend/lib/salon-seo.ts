@@ -61,8 +61,16 @@ export interface PublicSalonPage {
   updatedAt: string;
   services: PublicSalonService[];
   professionals: PublicSalonProfessional[];
-  /** Weekday name (lower-case English) -> window. Absent day = closed. */
+  /**
+   * Weekday name (lower-case English) -> window, earliest open to latest
+   * close. Absent day = closed.
+   */
   openingHours: Record<string, { openTime: string; closeTime: string }>;
+  /**
+   * The same week with its gaps: every open stretch of each day, several when
+   * the salon closes for lunch. Absent from servers older than split shifts.
+   */
+  openingShifts?: Record<string, Array<{ openTime: string; closeTime: string }>>;
   /** Set only once the salon's own domain serves the page over HTTPS. */
   customDomain: string | null;
   /** salon-lucia.kiraroom.net, set only once subdomains serve over HTTPS. */
@@ -147,17 +155,43 @@ const WEEK: Array<{ key: string; label: string; schema: string }> = [
   { key: "sunday", label: "Domingo", schema: "Sunday" },
 ];
 
+type Stretch = { openTime: string; closeTime: string };
+
+/**
+ * Each day's open stretches: `openingShifts` when the server sent it (a salon
+ * that closes for lunch has two), else the single `openingHours` window. One
+ * window per day used to be all there was, so a salon shut from 14:00 to 17:00
+ * told Google, and its own page, that it was open straight through.
+ */
+function stretchesOf(
+  hours: PublicSalonPage["openingHours"] | null | undefined,
+  shifts: PublicSalonPage["openingShifts"],
+  key: string,
+): Stretch[] {
+  if (shifts && Object.keys(shifts).length > 0) return shifts[key] ?? [];
+  const w = hours?.[key];
+  return w ? [w] : [];
+}
+
 /**
  * Monday-first rows for display. Empty when no schedule is recorded at all,
  * so the page says nothing rather than "closed every day".
  */
 export function openingHoursRows(
   hours: PublicSalonPage["openingHours"],
+  shifts?: PublicSalonPage["openingShifts"],
 ): Array<{ day: string; hours: string | null }> {
-  if (!hours || Object.keys(hours).length === 0) return [];
+  const known = (o: object | null | undefined) => !!o && Object.keys(o).length > 0;
+  if (!known(hours) && !known(shifts)) return [];
   return WEEK.map(({ key, label }) => {
-    const w = hours[key];
-    return { day: label, hours: w ? `${w.openTime} – ${w.closeTime}` : null };
+    const stretches = stretchesOf(hours, shifts, key);
+    return {
+      day: label,
+      hours:
+        stretches.length > 0
+          ? stretches.map((w) => `${w.openTime} – ${w.closeTime}`).join(" y ")
+          : null,
+    };
   });
 }
 
@@ -189,12 +223,16 @@ export function salonJsonLd(page: PublicSalonPage, url: string): Record<string, 
       ...(a.country ? { addressCountry: a.country } : {}),
     };
   }
-  const spec = WEEK.filter(({ key }) => page.openingHours?.[key]).map(({ key, schema }) => ({
-    "@type": "OpeningHoursSpecification",
-    dayOfWeek: `https://schema.org/${schema}`,
-    opens: page.openingHours[key].openTime,
-    closes: page.openingHours[key].closeTime,
-  }));
+  // One specification per open stretch: schema.org allows several for the
+  // same day, which is how a lunch closure is said.
+  const spec = WEEK.flatMap(({ key, schema }) =>
+    stretchesOf(page.openingHours, page.openingShifts, key).map((w) => ({
+      "@type": "OpeningHoursSpecification",
+      dayOfWeek: `https://schema.org/${schema}`,
+      opens: w.openTime,
+      closes: w.closeTime,
+    })),
+  );
   if (spec.length > 0) data.openingHoursSpecification = spec;
   if (page.services.length > 0) {
     data.hasOfferCatalog = {

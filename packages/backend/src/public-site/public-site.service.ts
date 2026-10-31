@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { SubscriptionStatus } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
-import { salonWeekFrom, SalonDayWindow } from "../appointments/working-hours";
+import { salonShiftsFrom, salonWeekFrom, SalonDayWindow } from "../appointments/working-hours";
 import { normalizeDomain } from "../web-domain/custom-domain";
 import { WebDomainService } from "../web-domain/web-domain.service";
 
@@ -97,7 +97,11 @@ export class PublicSiteService {
       }),
     ]);
 
+    // openingHours keeps one window per day (earliest to latest) for pages
+    // and widgets built before split shifts; openingShifts has the gaps, so
+    // a salon that closes for lunch can say so.
     const openingHours: Record<string, SalonDayWindow> = salonWeekFrom(professionals);
+    const openingShifts: Record<string, SalonDayWindow[]> = salonShiftsFrom(professionals);
 
     return {
       id: tenant.id,
@@ -125,6 +129,7 @@ export class PublicSiteService {
       // per person.
       professionals: professionals.map(({ workingHours: _wh, ...p }) => p),
       openingHours,
+      openingShifts,
       customDomain: this.liveDomain(tenant.customDomain),
       // salon-lucia.kiraroom.net, once subdomains serve over HTTPS.
       subdomainHost: this.webDomain.liveSubdomain(tenant.slug),

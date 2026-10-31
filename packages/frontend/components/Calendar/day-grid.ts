@@ -109,6 +109,76 @@ export function gridHours(input: {
   return { startHour, endHour };
 }
 
+/** A stretch of the day, in minutes since midnight. */
+export interface MinuteRange {
+  start: number;
+  end: number;
+}
+
+/**
+ * A professional's shifts on `day`, sorted and with touching or overlapping
+ * ones joined, or `undefined` when no schedule is recorded at all.
+ *
+ * The same reading as the server's workingWindowsFor (working-hours.ts):
+ * several entries for one weekday are several shifts (jornada partida), a
+ * malformed entry is skipped, and a schedule with nothing valid for the day
+ * means the day off -- `[]`, not "no limit".
+ */
+export function shiftsOn(day: string, workingHours: unknown): MinuteRange[] | undefined {
+  if (!Array.isArray(workingHours)) return undefined;
+  const entries = (workingHours as WorkingHoursEntry[]).filter(
+    (e) =>
+      !!e &&
+      typeof e === "object" &&
+      typeof e.day === "string" &&
+      typeof e.openTime === "string" &&
+      typeof e.closeTime === "string",
+  );
+  if (entries.length === 0) return undefined;
+
+  const weekday = WEEKDAYS[dateOfDay(day).getDay()];
+  const windows: MinuteRange[] = [];
+  for (const entry of entries) {
+    if ((entry.day as string).toLowerCase() !== weekday) continue;
+    const start = minutesOf(entry.openTime);
+    const end = minutesOf(entry.closeTime);
+    if (start !== null && end !== null && end > start) windows.push({ start, end });
+  }
+  windows.sort((a, b) => a.start - b.start || a.end - b.end);
+  const merged: MinuteRange[] = [];
+  for (const w of windows) {
+    const last = merged[merged.length - 1];
+    if (last && w.start <= last.end) last.end = Math.max(last.end, w.end);
+    else merged.push({ ...w });
+  }
+  return merged;
+}
+
+/**
+ * The parts of the drawn hours a professional is NOT working on `day`, to
+ * shade in their column: before the first shift, after the last, and the gap
+ * between shifts (the lunch of a split day), so the calendar shows the same
+ * hours online booking offers.
+ *
+ * Nothing is shaded when no schedule is recorded: online booking puts no
+ * limit on those professionals either, and greying their whole day would say
+ * the opposite. A day off is shaded entirely.
+ */
+export function offShiftBands(day: string, workingHours: unknown, range: HoursRange): MinuteRange[] {
+  const shifts = shiftsOn(day, workingHours);
+  if (!shifts) return [];
+  const top = range.startHour * 60;
+  const bottom = range.endHour * 60;
+  const bands: MinuteRange[] = [];
+  let cursor = top;
+  for (const s of shifts) {
+    if (s.start > cursor) bands.push({ start: cursor, end: Math.min(s.start, bottom) });
+    cursor = Math.max(cursor, s.end);
+  }
+  if (cursor < bottom) bands.push({ start: cursor, end: bottom });
+  return bands.filter((b) => b.end > b.start);
+}
+
 /** Pixels from the top of the hours (below the professionals' row). */
 export function minutesToTop(minutes: number, startHour: number): number {
   return ((minutes - startHour * 60) / 15) * SLOT_HEIGHT;

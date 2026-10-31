@@ -1,4 +1,16 @@
-import { BaseEntity, ContactInfo, DaySchedule } from './common';
+import { BaseEntity, ContactInfo } from './common';
+
+/**
+ * One shift of a professional's week, as the API stores `workingHours`.
+ * Several entries with the same `day` are separate shifts (a split day:
+ * 10:00-14:00 and 17:00-20:00). Times are "HH:MM"; `day` is the lower-case
+ * English weekday name.
+ */
+export interface WorkingHoursShift {
+  day: 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
+  openTime: string;
+  closeTime: string;
+}
 
 export interface Professional extends BaseEntity {
   firstName: string;
@@ -14,7 +26,7 @@ export interface Professional extends BaseEntity {
   commissionRate?: number; // Percentage commission on services
   hireDate: Date;
   terminationDate?: Date;
-  workingHours: DaySchedule[];
+  workingHours: WorkingHoursShift[];
   services: string[]; // Service IDs this professional can perform
   availability: ProfessionalAvailability;
   settings: ProfessionalSettings;
@@ -87,7 +99,7 @@ export interface CreateProfessionalDto {
   position: string;
   commissionRate?: number;
   hireDate: Date;
-  workingHours: DaySchedule[];
+  workingHours: WorkingHoursShift[];
   services: string[];
   profileImage?: string;
 }

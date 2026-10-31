@@ -6,6 +6,14 @@ import { useState, useEffect, Suspense } from 'react';
 import { ArrowLeft, Save, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import apiClient from '@/lib/api';
+import { WeeklyScheduleEditor } from '@/components/professionals/WeeklyScheduleEditor';
+import {
+  defaultSchedule,
+  hasProblems,
+  scheduleFromWorkingHours,
+  workingHoursFromSchedule,
+  type WeeklySchedule,
+} from '@/lib/weekly-schedule';
 
 const specialties = [
   'Hair Stylist',
@@ -70,6 +78,18 @@ function EditProfessionalForm() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  // The weekly schedule. Null while none is recorded: such a professional is
+  // bookable at any hour, and a default week is only shown once the salon
+  // asks for one. Sent only when edited, so saving a name never rewrites it.
+  const [schedule, setSchedule] = useState<WeeklySchedule | null>(null);
+  const [scheduleTouched, setScheduleTouched] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+
+  const editSchedule = (next: WeeklySchedule) => {
+    setSchedule(next);
+    setScheduleTouched(true);
+    setScheduleError(null);
+  };
 
   // Fetch services and professional data
   useEffect(() => {
@@ -105,6 +125,8 @@ function EditProfessionalForm() {
             bio: (professional as any).bio || '',
             serviceIds,
           });
+          setSchedule(scheduleFromWorkingHours(professional.workingHours));
+          setScheduleTouched(false);
         }
       } catch (err) {
         console.error('Failed to fetch professional:', err);
@@ -159,8 +181,13 @@ function EditProfessionalForm() {
     if (!validateForm()) {
       return;
     }
+    if (scheduleTouched && schedule && hasProblems(schedule)) {
+      setScheduleError('Revisa el horario: hay tramos que no se pueden guardar.');
+      return;
+    }
 
     setIsSaving(true);
+    setScheduleError(null);
 
     try {
       // Prepare update payload
@@ -173,6 +200,7 @@ function EditProfessionalForm() {
         bio: formData.bio || undefined,
         isActive: formData.status === 'active',
         serviceIds: formData.serviceIds,
+        ...(scheduleTouched && schedule ? { workingHours: workingHoursFromSchedule(schedule) } : {}),
       };
 
       await apiClient.updateProfessional(professionalId, updateData);
@@ -185,7 +213,14 @@ function EditProfessionalForm() {
       }, 1500);
     } catch (err) {
       console.error('Error updating professional:', err);
-      setErrors({ ...errors, email: 'Failed to update professional. Please try again.' });
+      // A refused schedule comes back with its reason, in Spanish: show it
+      // under the schedule rather than as an email error.
+      const message = err instanceof Error ? err.message : '';
+      if (scheduleTouched && /horario|tramo/i.test(message)) {
+        setScheduleError(message);
+      } else {
+        setErrors({ ...errors, email: 'Failed to update professional. Please try again.' });
+      }
     } finally {
       setIsSaving(false);
     }
@@ -414,6 +449,36 @@ function EditProfessionalForm() {
               </p>
             )}
           </div>
+        </div>
+
+        {/* Weekly schedule */}
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <h2 className="text-lg font-semibold text-gray-900 mb-1">Horario semanal</h2>
+          <p className="text-sm text-gray-500 mb-4">
+            Las reservas online y la recepcionista solo ofrecen huecos dentro de estos tramos.
+          </p>
+          {schedule ? (
+            <WeeklyScheduleEditor value={schedule} onChange={editSchedule} disabled={isSaving} />
+          ) : (
+            <div className="rounded-lg border border-dashed border-gray-300 p-4">
+              <p className="text-sm text-gray-700">
+                Este profesional no tiene horario registrado, así que se le puede reservar a cualquier hora en que
+                el salón abre.
+              </p>
+              <button
+                type="button"
+                onClick={() => editSchedule(defaultSchedule())}
+                className="mt-3 inline-flex items-center px-4 py-2 border border-indigo-600 text-indigo-700 rounded-lg hover:bg-indigo-50 transition-colors"
+              >
+                Definir horario
+              </button>
+            </div>
+          )}
+          {scheduleError && (
+            <p role="alert" className="mt-3 text-sm text-red-600">
+              {scheduleError}
+            </p>
+          )}
         </div>
 
         {/* Action Buttons */}

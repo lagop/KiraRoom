@@ -164,7 +164,7 @@ export default function SalonBookingPage({
   const services = initial.services;
   // The booking form offers only what the salon takes online; the price list shows everything.
   const bookableServices = services.filter((s) => s.isOnlineBookable);
-  const hoursRows = openingHoursRows(initialData.openingHours);
+  const hoursRows = openingHoursRows(initialData.openingHours, initialData.openingShifts);
   const [availableSlots, setAvailableSlots] = useState<AvailableTimeSlot[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
   // Bumped to ask the server for the slots again (after a failed booking).

@@ -1,6 +1,7 @@
 import { ApiProperty, PartialType } from '@nestjs/swagger';
 import { CreateProfessionalDto } from './create-professional.dto';
 import { IsString, IsEmail, IsOptional, IsDateString, IsArray, IsNumber, IsBoolean, IsUUID, IsNotEmpty, ValidateNested } from 'class-validator';
+import { IsWorkingHours } from '../../../professionals/working-hours-input';
 import { Type } from 'class-transformer';
 
 export class UpdateProfessionalDto extends PartialType(CreateProfessionalDto) {
@@ -78,10 +79,17 @@ export class UpdateProfessionalDto extends PartialType(CreateProfessionalDto) {
   @IsOptional()
   hireDate?: Date;
 
-  @ApiProperty({ description: 'Working hours', type: 'array', example: [{ day: 'monday', start: '09:00', end: '18:00' }], required: false })
-  @IsArray()
+  @ApiProperty({
+    description: 'Weekly schedule: one entry per shift, several per day for a split shift (max 21). Owners and admins only.',
+    required: false,
+    example: [
+      { day: 'monday', openTime: '10:00', closeTime: '14:00' },
+      { day: 'monday', openTime: '17:00', closeTime: '20:00' },
+    ],
+  })
   @IsOptional()
-  workingHours?: any[];
+  @IsWorkingHours()
+  workingHours?: Array<{ day: string; openTime: string; closeTime: string }>;
 
   @ApiProperty({ description: 'Availability schedule', type: 'object', example: {}, required: false })
   @IsOptional()

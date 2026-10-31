@@ -230,4 +230,25 @@ describe("occupancy", () => {
   it("is null when no professional has working hours", () => {
     expect(occupancy([{ id: "p1", workingHours: [] }], [], week).rate).toBeNull();
   });
+
+  it("counts every shift of a split day, and not the gap between them", () => {
+    // 10:00–14:00 + 17:00–20:00 is 7 hours. Reading only the first entry gave
+    // 4, and the widest window (10:00–20:00) would give 10.
+    const split = [
+      {
+        id: "p1",
+        workingHours: [
+          { day: "monday", openTime: "10:00", closeTime: "14:00" },
+          { day: "monday", openTime: "17:00", closeTime: "20:00" },
+        ],
+      },
+    ];
+    const result = occupancy(
+      split,
+      [{ professionalId: "p1", duration: 210, status: "completed", scheduledDate: "2026-09-28" }],
+      week,
+    );
+    expect(result.availableMinutes).toBe(420);
+    expect(result.rate).toBe(50);
+  });
 });

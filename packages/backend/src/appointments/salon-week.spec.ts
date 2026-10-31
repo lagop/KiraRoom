@@ -1,4 +1,4 @@
-import { salonWeekFrom } from "./working-hours";
+import { salonShiftsFrom, salonWeekFrom } from "./working-hours";
 
 /**
  * The salon's own week, derived from its professionals' schedules.
@@ -103,5 +103,42 @@ describe("salonWeekFrom", () => {
     };
 
     expect(salonWeekFrom([junk])).toEqual({});
+  });
+});
+
+describe("salonShiftsFrom", () => {
+  // Lucía works a split day; Marta covers only the morning.
+  const LUCIA = {
+    workingHours: [
+      { day: "monday", openTime: "10:00", closeTime: "14:00" },
+      { day: "monday", openTime: "17:00", closeTime: "20:00" },
+    ],
+  };
+  const MARTA = {
+    workingHours: [{ day: "monday", openTime: "09:00", closeTime: "13:00" }],
+  };
+
+  it("keeps the lunch gap when nobody works through it", () => {
+    expect(salonShiftsFrom([LUCIA, MARTA])).toEqual({
+      monday: [
+        { openTime: "09:00", closeTime: "14:00" },
+        { openTime: "17:00", closeTime: "20:00" },
+      ],
+    });
+  });
+
+  it("closes the gap when somebody covers it", () => {
+    const afternoon = { workingHours: [{ day: "monday", openTime: "13:00", closeTime: "18:00" }] };
+    expect(salonShiftsFrom([LUCIA, afternoon]).monday).toEqual([{ openTime: "10:00", closeTime: "20:00" }]);
+  });
+
+  it("is empty when nobody has a schedule", () => {
+    expect(salonShiftsFrom([{ workingHours: [] }, { workingHours: null }])).toEqual({});
+  });
+
+  it("agrees with salonWeekFrom on the outer edges of each day", () => {
+    // salonWeekFrom is the same week without its gaps: what the public page's
+    // openingHours has always carried.
+    expect(salonWeekFrom([LUCIA, MARTA])).toEqual({ monday: { openTime: "09:00", closeTime: "20:00" } });
   });
 });

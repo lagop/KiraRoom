@@ -129,6 +129,32 @@ check("offers with prices", ld.hasOfferCatalog.itemListElement.map((o: any) => [
 check("team", ld.employee, [{ "@type": "Person", name: "Ana García", jobTitle: "Estilista" }]);
 check("no data: image", "image" in ld, false);
 
+console.log("\n=== a salon that closes for lunch ===");
+// The server sends openingShifts next to openingHours: every open stretch of
+// the day. With only openingHours the page and Google read Monday as open
+// from 10:00 to 20:00 straight through.
+const SPLIT_PAGE: PublicSalonPage = {
+  ...PAGE,
+  openingHours: { monday: { openTime: "10:00", closeTime: "20:00" } },
+  openingShifts: {
+    monday: [
+      { openTime: "10:00", closeTime: "14:00" },
+      { openTime: "17:00", closeTime: "20:00" },
+    ],
+  },
+};
+const splitRows = openingHoursRows(SPLIT_PAGE.openingHours, SPLIT_PAGE.openingShifts);
+check("Monday names both stretches", splitRows[0].hours, "10:00 – 14:00 y 17:00 – 20:00");
+check("Tuesday is closed", splitRows[1].hours, null);
+check("rows without openingShifts fall back to the single window", openingHoursRows(SPLIT_PAGE.openingHours)[0].hours, "10:00 – 20:00");
+const splitLd = salonJsonLd(SPLIT_PAGE, "https://app.kiraroom.net/sites/salon-luna") as any;
+check("one OpeningHoursSpecification per stretch, same day", splitLd.openingHoursSpecification, [
+  { "@type": "OpeningHoursSpecification", dayOfWeek: "https://schema.org/Monday", opens: "10:00", closes: "14:00" },
+  { "@type": "OpeningHoursSpecification", dayOfWeek: "https://schema.org/Monday", opens: "17:00", closes: "20:00" },
+]);
+const oldServer = salonJsonLd({ ...SPLIT_PAGE, openingShifts: undefined }, "https://x.test/") as any;
+check("an older server's page still gets its one window", oldServer.openingHoursSpecification.length, 1);
+
 const evil = serializeJsonLd({ description: "</script><script>alert(1)</script> & co" });
 check("salon text cannot close the script tag", /<\/script/i.test(evil), false);
 check("and still parses back to the same text", JSON.parse(evil).description, "</script><script>alert(1)</script> & co");

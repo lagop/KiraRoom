@@ -111,6 +111,38 @@ describe("the English prompt carries the real hours too", () => {
   });
 });
 
+describe("a salon that closes for lunch", () => {
+  // salonShiftsFrom gives each day its open stretches. Showing only the widest
+  // window had the receptionist promise a 15:00 that check_availability then
+  // refused.
+  const SPLIT_WEEK = {
+    monday: [
+      { start: "10:00", end: "14:00" },
+      { start: "17:00", end: "20:00" },
+    ],
+    tuesday: [{ start: "09:00", end: "18:00" }],
+  };
+
+  it("names every stretch of the day in Spanish", () => {
+    const prompt = promptFor({ ...BASE, language: "es", workingHours: SPLIT_WEEK });
+
+    expect(prompt).toContain("- lunes: 10:00–14:00 y 17:00–20:00\n- martes: 09:00–18:00");
+    expect(prompt).toContain("- miércoles: cerrado");
+  });
+
+  it("and in English", () => {
+    const prompt = promptFor({ ...BASE, language: "en", workingHours: SPLIT_WEEK });
+
+    expect(prompt).toContain("- Monday: 10:00–14:00 and 17:00–20:00");
+  });
+
+  it("treats an empty list of stretches as closed", () => {
+    const prompt = promptFor({ ...BASE, language: "es", workingHours: { ...SPLIT_WEEK, friday: [] } });
+
+    expect(prompt).toContain("- viernes: cerrado");
+  });
+});
+
 describe("an unknown week is admitted, not invented", () => {
   it("falls back to saying the hours are unavailable when there is no week", () => {
     // A salon whose professionals have no schedule recorded. Saying so is

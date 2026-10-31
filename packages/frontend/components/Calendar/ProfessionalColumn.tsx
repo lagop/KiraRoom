@@ -5,7 +5,15 @@ import { useDroppable } from "@dnd-kit/core";
 import { Professional, Appointment } from "./types";
 import { TimeSlot, SlotClickData } from "./TimeSlot";
 import { AppointmentBlock } from "./AppointmentBlock";
-import { holdsSlot, layoutLanes, type HoursRange } from "./day-grid";
+import {
+  SLOT_HEIGHT,
+  holdsSlot,
+  layoutLanes,
+  localDay,
+  minutesToTop,
+  offShiftBands,
+  type HoursRange,
+} from "./day-grid";
 
 interface ProfessionalColumnProps {
   professional: Professional;
@@ -56,6 +64,14 @@ export const ProfessionalColumn: React.FC<ProfessionalColumnProps> = ({
     return { active, released, lanes, maxLanes };
   }, [appointments]);
 
+  // Time outside this professional's shifts, the lunch gap of a split day
+  // included. Shaded, not blocked: an owner may still book a walk-in there
+  // (the server asks them to confirm it).
+  const offShift = useMemo(
+    () => offShiftBands(localDay(date), professional.workingHours, hours),
+    [date, professional.workingHours, hours],
+  );
+
   const { setNodeRef } = useDroppable({
     id: `professional-column-${professional.id}`,
     data: {
@@ -87,6 +103,18 @@ export const ProfessionalColumn: React.FC<ProfessionalColumnProps> = ({
             index={index}
             date={date}
             onSlotClick={onSlotClick}
+          />
+        ))}
+        {offShift.map((band) => (
+          <div
+            key={band.start}
+            aria-hidden="true"
+            data-test="off-shift"
+            className="absolute inset-x-0 bg-muted/60 pointer-events-none"
+            style={{
+              top: minutesToTop(band.start, hours.startHour),
+              height: ((band.end - band.start) / 15) * SLOT_HEIGHT,
+            }}
           />
         ))}
         {released.map((appointment) => (

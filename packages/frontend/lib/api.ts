@@ -2,6 +2,7 @@
 
 import type { TaxRegime } from "@kira/shared";
 import type { PublicSalonPage } from "./salon-seo";
+import type { WorkingHoursEntry } from "./weekly-schedule";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1";
@@ -599,6 +600,13 @@ export interface Professional {
   commissionRate?: number;
   hireDate?: string;
   isActive: boolean;
+  /**
+   * One entry per shift, several per day for a split shift:
+   * `[{ day: "monday", openTime: "10:00", closeTime: "14:00" }, ...]`. Read it
+   * with scheduleFromWorkingHours (lib/weekly-schedule.ts); older rows may
+   * hold another shape.
+   */
+  workingHours?: unknown;
   // Services relation - populated by admin endpoints
   services?: {
     serviceId: string;
@@ -2638,6 +2646,7 @@ class ApiClient implements ApiClientInterface {
     commissionRate?: number;
     hireDate?: string;
     serviceIds?: string[];
+    workingHours?: WorkingHoursEntry[];
   }): Promise<Professional> {
     return this.request<Professional>("/admin/professionals", {
       method: "POST",
@@ -2665,6 +2674,8 @@ class ApiClient implements ApiClientInterface {
       hireDate?: string;
       isActive: boolean;
       serviceIds?: string[];
+      /** Owners and admins only; leave it out to keep the current schedule. */
+      workingHours: WorkingHoursEntry[];
     }>,
   ): Promise<Professional> {
     return this.request<Professional>(`/admin/professionals/${id}`, {

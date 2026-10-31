@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsString, IsEmail, IsBoolean, IsOptional } from 'class-validator';
+import { IsWorkingHours } from '../working-hours-input';
 
 export class UpdateProfessionalDto {
   @ApiProperty({ description: 'First name', required: false })
@@ -66,9 +67,17 @@ export class UpdateProfessionalDto {
   @IsOptional()
   terminationDate?: string;
 
-  @ApiProperty({ description: 'Working hours', required: false })
+  @ApiProperty({
+    description: 'Weekly schedule: one entry per shift, several per day for a split shift (max 21). Owners and admins only.',
+    required: false,
+    example: [
+      { day: 'monday', openTime: '10:00', closeTime: '14:00' },
+      { day: 'monday', openTime: '17:00', closeTime: '20:00' },
+    ],
+  })
   @IsOptional()
-  workingHours?: any[];
+  @IsWorkingHours()
+  workingHours?: Array<{ day: string; openTime: string; closeTime: string }>;
 
   @ApiProperty({ description: 'Availability', required: false })
   @IsOptional()
