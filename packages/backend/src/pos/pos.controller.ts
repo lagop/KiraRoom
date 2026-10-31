@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Get, Post, Body, Param, Query, Req, Patch, Delete } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Put, Body, Param, Query, Req, Patch, Delete } from "@nestjs/common";
 import { PosService } from './pos.service';
 import {
   CreatePosOrderDto,
@@ -6,6 +6,7 @@ import {
   CreateProductDto,
   InventoryAdjustmentBodyDto,
   PosQuickSaleDto,
+  PosSettingsDto,
   UpdateProductDto,
 } from './dto/pos.dto';
 import { ProductService } from './product.service';
@@ -49,6 +50,22 @@ export class PosController {
   ) {
     const tenantId = req.user.tenantId;
     return this.posService.getClients(tenantId, search);
+  }
+
+  /** The till's settings; staff read them too, to know their discount limit. */
+  @Get('settings')
+  @ApiOperation({ summary: 'Get POS settings (staff discount limit)' })
+  @Roles(...SALON_TEAM)
+  async getSettings(@Req() req: any) {
+    return this.posService.getSettings(req.user.tenantId);
+  }
+
+  /** How far staff may discount at the till: the owner and managers decide. */
+  @Put('settings')
+  @ApiOperation({ summary: 'Update POS settings (staff discount limit)' })
+  @Roles(...SALON_MANAGERS)
+  async updateSettings(@Req() req: any, @Body() body: PosSettingsDto) {
+    return this.posService.updateSettings(req.user.tenantId, body);
   }
 
   @Post('checkout')

@@ -191,7 +191,7 @@ describe("POS: charging an appointment", () => {
       actor: OWNER,
     } as any);
     expect(out.subtotal).toBe(3000);
-    expect(out.items).toEqual([{ serviceId: "svc1", appointmentId: "a1", name: "Corte", price: 3000, quantity: 1 }]);
+    expect(out.items).toMatchObject([{ serviceId: "svc1", appointmentId: "a1", name: "Corte", price: 3000, quantity: 1 }]);
     expect(t.committed.appointments.get("a1")).toMatchObject({ amountPaid: 4000, paymentStatus: "paid" });
   });
 

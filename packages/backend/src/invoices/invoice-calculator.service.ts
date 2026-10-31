@@ -5,6 +5,16 @@ export interface InvoiceLineInput {
   quantity: number;
   unitPriceCents: number;
   discountPct?: number;
+  /**
+   * A discount on the whole line, in cents, off unit price x quantity (a
+   * discount given at the till, pos-discounts.ts). Exact where a percent
+   * per unit would round: the line comes to the cents charged. Taken
+   * instead of `discountPct`; the line's discountPct is then worked out
+   * from it, for the PDF and the accounting export. In the price's own
+   * terms: with `taxIncluded` it comes off the price with tax, otherwise
+   * off the base, and the tax is computed on what is left either way.
+   */
+  discountCents?: number;
   taxRate: number;
   productId?: string;
   serviceId?: string;
@@ -57,6 +67,7 @@ export class InvoiceCalculator {
     }
 
     const lines: ComputedInvoiceLine[] = input.map((l) => {
+      if ((l.discountCents ?? 0) > 0) return amountDiscountLine(l);
       const discountPct = clampNumber(l.discountPct ?? 0, 0, 100);
       if (l.taxIncluded) return taxIncludedLine(l, discountPct);
       const discountedUnitCents = roundHalfEven(
@@ -105,6 +116,43 @@ function taxIncludedLine(l: InvoiceLineInput, discountPct: number): ComputedInvo
     taxRate: l.taxRate,
     taxCents: grossCents - lineBase,
     totalCents: grossCents,
+    productId: l.productId,
+    serviceId: l.serviceId,
+  };
+}
+
+/**
+ * A line with a discount in cents (InvoiceLineInput.discountCents): the
+ * line is price x quantity less that amount, exactly. 30,00 EUR with 3,00
+ * off at 21 %: tax on top, base 27,00 + 5,67 IVA; tax included, 27,00 =
+ * 22,31 + 4,69 IVA. Its discountPct is that amount over the line, as a
+ * percent with up to 6 decimals.
+ */
+function amountDiscountLine(l: InvoiceLineInput): ComputedInvoiceLine {
+  const lineCents = roundHalfEven(l.unitPriceCents * l.quantity);
+  const discount = Math.min(Math.max(0, Math.round(l.discountCents ?? 0)), Math.max(0, lineCents));
+  const discountPct = lineCents > 0 ? Math.round((discount / lineCents) * 100 * 1e6) / 1e6 : 0;
+  const afterDiscount = lineCents - discount;
+  let unitPriceCents = l.unitPriceCents;
+  let base: number;
+  let taxCents: number;
+  if (l.taxIncluded) {
+    const divisor = 1 + l.taxRate / 100;
+    unitPriceCents = roundHalfEven(l.unitPriceCents / divisor);
+    base = roundHalfEven(afterDiscount / divisor);
+    taxCents = afterDiscount - base;
+  } else {
+    base = afterDiscount;
+    taxCents = roundHalfEven(base * (l.taxRate / 100));
+  }
+  return {
+    description: l.description,
+    quantity: l.quantity,
+    unitPriceCents,
+    discountPct,
+    taxRate: l.taxRate,
+    taxCents,
+    totalCents: base + taxCents,
     productId: l.productId,
     serviceId: l.serviceId,
   };

@@ -1682,6 +1682,8 @@ export interface ApiClientInterface {
   getPosClients(search?: string): Promise<any[]>;
   getPosDashboard(date?: string): Promise<any>;
   posCheckout(data: any): Promise<{ orderId: string }>;
+  getPosSettings(): Promise<PosSettings>;
+  savePosSettings(settings: PosSettings): Promise<PosSettings>;
   // Products
   getProducts(params?: {
     category?: string;
@@ -3755,6 +3757,15 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
+  /** The till's settings: the staff discount limit (everyone reads, owner and managers save). */
+  async getPosSettings(): Promise<PosSettings> {
+    return this.request<PosSettings>("/pos/settings");
+  }
+
+  async savePosSettings(settings: PosSettings): Promise<PosSettings> {
+    return this.request<PosSettings>("/pos/settings", { method: "PUT", body: JSON.stringify(settings) });
+  }
+
   async posQuickSale(data: {
     serviceId: string;
     paymentMethod: string;
@@ -5511,6 +5522,12 @@ export interface LoyaltyTransactionRow {
   type: string;
   points: number;
   description: string | null;
+}
+
+/** The till's settings (GET/PUT /pos/settings). */
+export interface PosSettings {
+  /** The most a staff member may take off a line at the till, in percent. 0: only the owner or a manager. */
+  maxStaffDiscountPercent: number;
 }
 
 export interface ClientLoyaltySummary {
