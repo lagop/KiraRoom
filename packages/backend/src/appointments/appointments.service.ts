@@ -47,6 +47,24 @@ import {
   planVisitMove,
   visitSpan,
 } from "./visit-move";
+import {
+  BusyBlock,
+  VISIT_ROW_ORDER,
+  VISIT_ROW_SELECT,
+  appointmentBusyBlocks,
+  overlapsBlock,
+  VisitRow,
+  clockOf,
+  endClock,
+  freesProfessional,
+  isLiveRow,
+  layoutVisit,
+  normalizeAddons,
+  visitSchedule,
+  visitTotals,
+} from "./visit-totals";
+import { editChangesRows, planRowEdit } from "./visit-edit";
+import { priceIsFrozen } from "./visit-sync";
 import { appointmentLocationId } from "../multi-location/appointment-location";
 import { normalizePhone, phoneKey } from "../common/phone";
 import { isReadOnlyStatus } from "../common/guards/read-only-tenant.guard";
@@ -225,6 +243,8 @@ export class AppointmentsService {
     const amountPaid = Number(apt.amountPaid || 0);
     return {
       ...apt,
+      // Rows saved before the fix hold {"set": [...]}: always a plain list.
+      ...(apt.addons !== undefined ? { addons: normalizeAddons(apt.addons) } : {}),
       totalAmount,
       amountDue: Math.max(0, totalAmount - amountPaid),
     };
@@ -914,8 +934,23 @@ export class AppointmentsService {
       }
     }
 
-    const appointments = await (this.prisma.appointment.findMany as any)({
+    // Bounded. The list asked for every appointment the salon ever had, with
+    // its client, services and salon, on every load. Without a date range or
+    // a client, it covers a year back and a year ahead (the list page pages
+    // months within that); a client's history is whole. Never more than
+    // FIND_ALL_MAX rows: the latest-dated ones, returned oldest first.
+    if (!where.scheduledDate && !where.clientId) {
+      const today = new Date();
+      const yearMs = 366 * 24 * 60 * 60 * 1000;
+      where.scheduledDate = {
+        gte: new Date(today.getTime() - yearMs),
+        lte: new Date(today.getTime() + yearMs),
+      };
+    }
+
+    const newestFirst = await (this.prisma.appointment.findMany as any)({
       where,
+      take: AppointmentsService.FIND_ALL_MAX,
       include: {
         client: true,
         professional: true,
@@ -931,13 +966,15 @@ export class AppointmentsService {
           },
         },
       },
-      orderBy: {
-        scheduledDate: "asc",
-      },
+      orderBy: [{ scheduledDate: "desc" }, { scheduledTime: "desc" }],
     });
+    const appointments = (newestFirst as any[]).reverse();
 
     return appointments.map((apt: any) => this.enrichAppointment(apt));
   }
+
+  /** The most appointments GET /appointments returns. */
+  static readonly FIND_ALL_MAX = 5000;
 
   async findOne(user: any, id: string) {
     const appointment = await (this.prisma.appointment.findUnique as any)({
@@ -1026,7 +1063,11 @@ export class AppointmentsService {
       }
     }
     await this.assertSalonRecords(user.tenantId, {
-      serviceIds: [dto.serviceId, ...(dto.services ?? []).map((s) => s.serviceId)],
+      serviceIds: [
+        dto.serviceId,
+        ...(dto.services ?? []).map((s) => s.serviceId),
+        ...(dto.addons ?? []).map((a) => a.addonId),
+      ],
       professionalIds: [dto.professionalId, ...(dto.services ?? []).map((s) => s.professionalId)],
       clientIds: [dto.clientId],
     });
@@ -1075,55 +1116,205 @@ export class AppointmentsService {
     // A move (new day, time or professional) must land on a free slot of the
     // professional's hours. Only when something actually changes: a form that
     // resends the same day and time to save a note is not a move.
+    const timeZone = ((appointment as any).tenant?.timezone as string | undefined) || "Europe/Madrid";
     const dayOf = (d: Date | string) => (typeof d === "string" ? d.slice(0, 10) : d.toISOString().slice(0, 10));
+    const oldClock = clockOf(appointment.scheduledTime, timeZone) ?? appointment.scheduledTime;
     const target = {
       day: dayOf(updateData.scheduledDate ?? appointment.scheduledDate),
-      time: (updateData.scheduledTime as string | undefined) ?? appointment.scheduledTime,
+      time: (updateData.scheduledTime as string | undefined) ?? oldClock,
       professionalId: (updateData.professionalId as string | undefined) ?? appointment.professionalId,
     };
     const moved =
       target.day !== dayOf(appointment.scheduledDate) ||
-      target.time !== appointment.scheduledTime ||
+      target.time !== oldClock ||
       target.professionalId !== appointment.professionalId;
     // A cancelled appointment holds no slot, so moving one checks none.
-    if (moved && (statusTo ?? oldStatus) !== AppointmentStatus.cancelled) {
-      await assertCanReschedule(this.prisma as any, {
-        tenantId: user.tenantId,
-        appointmentId: appointment.id,
-        professionalId: target.professionalId,
-        day: target.day,
-        time: target.time,
-        durationMinutes: (updateData.duration as number | undefined) ?? appointment.duration,
-      });
-    }
+    const holdsSlot = (statusTo ?? oldStatus) !== AppointmentStatus.cancelled;
 
-    // Update endTime if scheduledTime is provided
-    if (updateAppointmentDto.scheduledTime) {
-      updateData.endTime = this.calculateEndTime(
-        updateAppointmentDto.scheduledTime,
-        appointment.duration,
+    // The visit after this edit: its service rows (diffed, never recreated:
+    // visit-edit.ts), its add-ons, and what they add up to (visit-totals.ts).
+    const rowsBefore = (((appointment as any).services ?? []) as any[]).map((r) => ({
+      ...r,
+      isParallel: !!r.isParallel,
+    }));
+    const rowEdit =
+      dto.services && dto.services.length > 0 ? planRowEdit(rowsBefore, dto.services) : null;
+    const rowsChanged = !!rowEdit && editChangesRows(rowEdit);
+    const done = rowEdit?.remove.find((r) => r.status === "completed");
+    if (done) {
+      throw new ConflictException(
+        `${done.service?.name ?? "Un servicio"} ya está completado: no se puede quitar de la cita.`,
       );
     }
+    if (dto.addons !== undefined) {
+      // A plain list. It was written as {"set": [...]}, which the panel
+      // could not read back.
+      updateData.addons = normalizeAddons(dto.addons);
+    }
+    const serviceChanged = !!dto.serviceId && dto.serviceId !== appointment.serviceId;
+    const priceChanges = rowsChanged || dto.addons !== undefined || serviceChanged;
+    // A visit with services is always added up again: one saved before this
+    // was fixed holds its first service's length and price only.
+    const needsTotals = priceChanges || rowsBefore.some(isLiveRow);
 
-    // Update scheduledTime if provided
-    if (updateAppointmentDto.scheduledTime) {
-      updateData.scheduledTime = updateAppointmentDto.scheduledTime;
+    // Services the edit brings in (a new main service, new rows, add-ons):
+    // their duration and price, from the salon's catalog.
+    const catalogIds = [
+      ...(serviceChanged ? [dto.serviceId!] : []),
+      ...(rowEdit?.add ?? []).map((a) => a.serviceId),
+      ...normalizeAddons(updateData.addons ?? (appointment as any).addons).map((a) => a.addonId),
+    ];
+    const catalog: Array<{ id: string; name?: string; duration: number; price: unknown }> =
+      needsTotals && catalogIds.length > 0
+        ? await this.prisma.service.findMany({
+            where: { tenantId: user.tenantId, id: { in: [...new Set(catalogIds)] } },
+            select: { id: true, name: true, duration: true, price: true },
+          })
+        : [];
+    const fromCatalog = (serviceId: string) => catalog.find((s) => s.id === serviceId) ?? null;
+
+    const oldStart = salonInstant(appointment.scheduledDate, oldClock, timeZone);
+    const newStart = salonInstant(target.day, target.time, timeZone);
+    const shift = (d: Date | null | undefined) =>
+      d ? new Date(new Date(d).getTime() + (newStart.getTime() - oldStart.getTime())) : null;
+
+    // The rows as they will be: kept ones moved with the visit (or laid out
+    // again when their place or mode changed), new ones after them.
+    let rowsAfter: Array<VisitRow & { order: number }> = rowsBefore.map((r, order) => ({
+      ...r,
+      order: r.order ?? order,
+      scheduledStart: shift(r.scheduledStart),
+      scheduledEnd: shift(r.scheduledEnd),
+    }));
+    if (rowEdit) {
+      rowsAfter = [
+        ...rowEdit.keep.map((k) => ({
+          ...k.row,
+          order: k.order,
+          professionalId: k.professionalId,
+          isParallel: k.isParallel,
+          scheduledStart: k.retime ? null : shift(k.row.scheduledStart),
+          scheduledEnd: k.retime ? null : shift(k.row.scheduledEnd),
+        })),
+        ...rowEdit.add.map((a) => ({
+          id: `new:${a.order}`,
+          serviceId: a.serviceId,
+          professionalId: a.professionalId,
+          isParallel: a.isParallel,
+          order: a.order,
+          scheduledStart: null,
+          scheduledEnd: null,
+          type: "active",
+          status: "pending",
+          service: fromCatalog(a.serviceId),
+        })),
+      ].sort((a, b) => a.order - b.order);
+    }
+    const liveAfter = rowsAfter.filter(isLiveRow);
+    const rowsMove = liveAfter.length > 0 && (moved || rowsChanged);
+
+    // A professional changes a visit only when every service in it is
+    // theirs (as for a drag: staffVisitCheck).
+    if (user.role === "staff" && (rowsMove || rowsChanged)) {
+      const mine = appointment.professionalId;
+      const others = [...rowsBefore, ...rowsAfter].some((r) => (r.professionalId ?? mine) !== mine);
+      if (others) {
+        throw new ForbiddenException(
+          "Esta cita la comparten varios profesionales: pide a la dueña o al encargado que la cambie.",
+        );
+      }
+    }
+
+    const addons = needsTotals
+      ? normalizeAddons(updateData.addons ?? (appointment as any).addons).map((a) => ({
+          quantity: a.quantity,
+          service: fromCatalog(a.addonId),
+        }))
+      : [];
+    const totals =
+      needsTotals || liveAfter.length > 0
+        ? visitTotals({
+            start: newStart,
+            professionalId: target.professionalId,
+            mainService: serviceChanged ? fromCatalog(dto.serviceId!) : (appointment as any).service ?? null,
+            rows: rowsAfter,
+            addons,
+          })
+        : null;
+    // Without a change to what a single-service appointment holds, its length
+    // stays what it is (an imported appointment may have its own).
+    const duration = totals ? totals.durationMinutes : appointment.duration;
+
+    if (holdsSlot) {
+      if (liveAfter.length > 0) {
+        if (rowsMove) {
+          const before = visitSchedule(oldStart, appointment.professionalId, rowsBefore);
+          const after = totals!.schedule;
+          const clash = clientDoubleBooked(after);
+          if (clash && !clientDoubleBooked(before)) {
+            const name = (rowId: string) =>
+              (rowsAfter.find((r) => r.id === rowId)?.service as { name?: string } | null)?.name ?? "otro servicio";
+            throw new ConflictException(`La clienta estaría a la vez en ${name(clash[0].id)} y ${name(clash[1].id)}.`);
+          }
+          for (const s of after) {
+            const row = liveAfter.find((r) => r.id === s.id);
+            if (row && freesProfessional(row)) continue;
+            const b = before.find((x) => x.id === s.id);
+            if (b && b.start.getTime() === s.start.getTime() && b.end.getTime() === s.end.getTime() && b.professionalId === s.professionalId) {
+              continue;
+            }
+            const at = salonDayAndTime(s.start, timeZone);
+            await assertCanReschedule(this.prisma as any, {
+              tenantId: user.tenantId,
+              appointmentId: appointment.id,
+              professionalId: s.professionalId,
+              day: at.day,
+              time: at.time,
+              durationMinutes: Math.round((s.end.getTime() - s.start.getTime()) / 60_000),
+            });
+          }
+        }
+      } else if (moved || duration > appointment.duration) {
+        await assertCanReschedule(this.prisma as any, {
+          tenantId: user.tenantId,
+          appointmentId: appointment.id,
+          professionalId: target.professionalId,
+          day: target.day,
+          time: target.time,
+          durationMinutes: duration,
+        });
+      }
+    }
+
+    // The appointment's own time: the visit's first service, its length,
+    // its end, its price (unless it is history: visit-sync.ts).
+    if (totals && liveAfter.length > 0 && totals.start.getTime() !== newStart.getTime()) {
+      const at = salonDayAndTime(totals.start, timeZone);
+      updateData.scheduledDate = new Date(`${at.day}T00:00:00.000Z`);
+      updateData.scheduledTime = at.time;
+    }
+    if (duration !== appointment.duration) updateData.duration = duration;
+    if (updateData.scheduledTime || updateData.duration !== undefined) {
+      updateData.endTime = endClock((updateData.scheduledTime as string | undefined) ?? target.time, duration);
+    }
+    if (totals && !priceIsFrozen(appointment)) {
+      updateData.price = totals.price;
+      updateData.totalAmount = totals.totalCents;
     }
 
     // A reschedule moves the instant the reminder jobs select on, and the
     // reminders already sent were for the old time.
-    if (updateAppointmentDto.scheduledDate || updateAppointmentDto.scheduledTime) {
-      const tenant = (appointment as any).tenant as { timezone?: string } | undefined;
-      const newStart = salonInstant(
+    if (updateData.scheduledDate || updateData.scheduledTime) {
+      const start = salonInstant(
         updateData.scheduledDate ?? appointment.scheduledDate,
-        updateData.scheduledTime ?? appointment.scheduledTime,
-        tenant?.timezone || "Europe/Madrid",
+        (updateData.scheduledTime as string | undefined) ?? oldClock,
+        timeZone,
       );
-      const oldStart = (appointment as any).startTime as Date | null | undefined;
+      const before = (appointment as any).startTime as Date | null | undefined;
       // The drawer sends date and time on every full edit, so only a real move
       // re-arms the reminders: resetting on any edit re-sent ones already sent.
-      if (!oldStart || new Date(oldStart).getTime() !== newStart.getTime()) {
-        updateData.startTime = newStart;
+      if (!before || new Date(before).getTime() !== start.getTime()) {
+        updateData.startTime = start;
         updateData.reminder24hSent = false;
         updateData.reminder1hSent = false;
         updateData.reminder24hAttempts = 0;
@@ -1131,44 +1322,43 @@ export class AppointmentsService {
       }
     }
 
-    // Handle addons update if provided
-    if (updateAppointmentDto.addons && updateAppointmentDto.addons.length > 0) {
-      updateData.addons = {
-        set: updateAppointmentDto.addons.map((addon) => ({
-          addonId: addon.addonId,
-          quantity: addon.quantity,
-        })),
-      };
+    // The rows to write, in the same transaction as the appointment.
+    const rowWrites: Array<(db: any) => Promise<unknown>> = [];
+    if (rowEdit && rowsChanged) {
+      const removeIds = rowEdit.remove.map((r) => r.id);
+      if (removeIds.length > 0) {
+        rowWrites.push((db) => db.appointmentService.deleteMany({ where: { id: { in: removeIds }, appointmentId: id } }));
+      }
+      for (const a of rowEdit.add) {
+        rowWrites.push((db) =>
+          db.appointmentService.create({
+            data: {
+              appointmentId: id,
+              serviceId: a.serviceId,
+              professionalId: a.professionalId,
+              isParallel: a.isParallel,
+              order: a.order,
+            },
+          }),
+        );
+      }
+    }
+    for (const r of rowsAfter) {
+      if (r.id.startsWith("new:")) continue;
+      const was = rowsBefore.find((x) => x.id === r.id)!;
+      const data: Record<string, unknown> = {};
+      const sameTime = (x: Date | null | undefined, y: Date | null | undefined) =>
+        (x ? new Date(x).getTime() : null) === (y ? new Date(y).getTime() : null);
+      if (!sameTime(was.scheduledStart, r.scheduledStart)) data.scheduledStart = r.scheduledStart;
+      if (!sameTime(was.scheduledEnd, r.scheduledEnd)) data.scheduledEnd = r.scheduledEnd;
+      if ((was.professionalId ?? null) !== (r.professionalId ?? null)) data.professionalId = r.professionalId;
+      if (!!was.isParallel !== !!r.isParallel) data.isParallel = r.isParallel;
+      if (rowEdit && (was.order ?? null) !== r.order) data.order = r.order;
+      if (Object.keys(data).length > 0) {
+        rowWrites.push((db) => db.appointmentService.update({ where: { id: r.id }, data }));
+      }
     }
 
-    // Handle services update for multi-service appointments
-    if (
-      updateAppointmentDto.services &&
-      updateAppointmentDto.services.length > 0
-    ) {
-      // First, disconnect all existing services
-      await this.prisma.appointmentService.deleteMany({
-        where: { appointmentId: id },
-      });
-
-      // Then create new service records
-      // In the order given: every row used to get order 0, so which service
-      // came first (and so the visit's flow) was up to the database.
-      const serviceRecords = updateAppointmentDto.services.map((svc, index) => ({
-        appointmentId: id,
-        serviceId: svc.serviceId,
-        professionalId: svc.professionalId || null,
-        isParallel: svc.isParallel || false,
-        order: index,
-      }));
-
-      await this.prisma.appointmentService.createMany({
-        data: serviceRecords,
-      });
-
-      // Remove services from updateData as it's handled separately
-      delete updateData.services;
-    }
 
     try {
       // Get current appointment for activity logging
@@ -1183,8 +1373,9 @@ export class AppointmentsService {
       });
 
       let updatedAppointment: any;
-      try {
-        updatedAppointment = await this.prisma.appointment.update({
+      const write = async (db: any) => {
+        for (const w of rowWrites) await w(db);
+        return db.appointment.update({
           // A status change is written only over the status it was checked
           // against (see changeStatus).
           where: (statusTo ? { id, status: oldStatus } : { id }) as any,
@@ -1199,9 +1390,15 @@ export class AppointmentsService {
                 service: true,
                 professional: true,
               },
+              orderBy: { order: "asc" },
             },
           },
         });
+      };
+      try {
+        // Rows and appointment together, or neither.
+        updatedAppointment =
+          rowWrites.length > 0 ? await this.prisma.$transaction(write) : await write(this.prisma);
       } catch (err) {
         if (statusTo && isStaleWrite(err)) throw concurrentChange();
         throw err;
@@ -1528,11 +1725,20 @@ export class AppointmentsService {
       );
   }
 
+  /**
+   * Appointments the salon has not been paid for yet: payment pending or
+   * failed, and a visit that is owed (not cancelled, not a no-show), from
+   * today back unless a range is asked for. It used to return every
+   * appointment, paid and future ones included, under "pending payment".
+   */
   async findPendingPayment(
     user: any,
     filters: PendingPaymentFiltersDto,
   ) {
-    const where: any = {};
+    const where: any = {
+      paymentStatus: { in: [PaymentStatus.pending, PaymentStatus.failed] },
+      status: { notIn: [AppointmentStatus.cancelled, AppointmentStatus.no_show] },
+    };
 
     // Apply user role filtering
     if (user.role === "staff") {
@@ -1564,19 +1770,26 @@ export class AppointmentsService {
       }
     }
 
-    // Apply date range filter
-    if (filters.dateFrom || filters.dateTo) {
-      where.scheduledDate = {};
-      if (filters.dateFrom) {
-        where.scheduledDate.gte = new Date(filters.dateFrom);
-      }
-      if (filters.dateTo) {
-        where.scheduledDate.lte = new Date(filters.dateTo);
-      }
+    // Apply date range filter. Without one: up to the end of today, the
+    // visits that have already happened.
+    where.scheduledDate = {
+      lte: filters.dateTo
+        ? new Date(filters.dateTo)
+        : new Date(`${new Date().toISOString().slice(0, 10)}T23:59:59.999Z`),
+    };
+    if (filters.dateFrom) {
+      where.scheduledDate.gte = new Date(filters.dateFrom);
     }
 
-    // Apply status filter
+    // Apply status filter: one of the owed ones.
     if (filters.status) {
+      if (
+        !(Object.values(AppointmentStatus) as string[]).includes(filters.status) ||
+        filters.status === AppointmentStatus.cancelled ||
+        filters.status === AppointmentStatus.no_show
+      ) {
+        return [];
+      }
       where.status = filters.status;
     }
 
@@ -1621,9 +1834,14 @@ export class AppointmentsService {
         },
       },
       orderBy: { scheduledDate: "asc" },
+      take: AppointmentsService.FIND_ALL_MAX,
     });
 
-    return appointments.map((apt: any) => this.enrichAppointment(apt));
+    // Nothing left to pay (a free service, or paid in full without the
+    // status being updated) is not pending.
+    return appointments
+      .map((apt: any) => this.enrichAppointment(apt))
+      .filter((apt: any) => apt.amountDue > 0);
   }
 
   /**
@@ -1727,33 +1945,37 @@ export class AppointmentsService {
       select: { appointmentId: true },
     });
     if (!row) throw new NotFoundException("Servicio no encontrado");
+    return this.loadVisitOf(user, row.appointmentId);
+  }
+
+  /**
+   * A visit as visit-move.ts models it: where each of its live services sits
+   * (cancelled ones are no longer part of it). `rows` are all its rows, in
+   * order; `processing` the ones during which nobody is busy.
+   */
+  private async loadVisitOf(user: any, appointmentId: string) {
     const appointment = await this.prisma.appointment.findFirst({
-      where: { id: row.appointmentId, tenantId: user.tenantId },
+      where: { id: appointmentId, tenantId: user.tenantId },
       include: {
         tenant: { select: { timezone: true } },
         services: {
           orderBy: [{ order: "asc" }, { createdAt: "asc" }, { id: "asc" }],
-          include: { service: { select: { name: true, duration: true } } },
+          include: { service: { select: { name: true, duration: true, price: true } } },
         },
       },
     });
     if (!appointment) throw new NotFoundException("Cita no encontrada");
     const timeZone = (appointment as any).tenant?.timezone || "Europe/Madrid";
     const rows = (appointment as any).services as any[];
-    const services = currentVisitSchedule({
-      appointmentStart: salonInstant(appointment.scheduledDate, appointment.scheduledTime, timeZone),
-      appointmentProfessionalId: appointment.professionalId,
-      services: rows.map((r) => ({
-        id: r.id,
-        professionalId: r.professionalId,
-        scheduledStart: r.scheduledStart,
-        scheduledEnd: r.scheduledEnd,
-        isParallel: !!r.isParallel,
-        durationMinutes: r.service?.duration ?? 0,
-      })),
-    });
+    const start = salonInstant(
+      appointment.scheduledDate,
+      clockOf(appointment.scheduledTime, timeZone) ?? appointment.scheduledTime,
+      timeZone,
+    );
+    const services = visitSchedule(start, appointment.professionalId, rows);
     const names = new Map<string, string>(rows.map((r) => [r.id, r.service?.name ?? "otro servicio"]));
-    return { appointment, timeZone, services, names };
+    const processing = new Set<string>(rows.filter((r) => freesProfessional(r)).map((r) => r.id));
+    return { appointment, timeZone, start, services, rows, names, processing };
   }
 
   /**
@@ -1776,14 +1998,135 @@ export class AppointmentsService {
     return own.id;
   }
 
+  /**
+   * Reorder the services of a visit (the drawer's drag-and-drop). The visit
+   * is laid out again from its start in the new order (layoutVisit) and goes
+   * through the same checks and writes as a move. It used to write the
+   * first row's ISO instant into the appointment's "HH:MM" time, and checked
+   * nothing.
+   *
+   * Each item names a row by its id or, as the drawer sends it, by its
+   * service; rows of the same service are taken in their current order.
+   */
+  async reorderVisitServices(
+    user: any,
+    appointmentId: string,
+    serviceOrders: Array<{ serviceId: string; order: number }>,
+  ) {
+    if (!Array.isArray(serviceOrders)) throw new BadRequestException("Lista de servicios no válida");
+    const visit = await this.loadVisitOf(user, appointmentId);
+    await this.staffVisitCheck(user, visit);
+    if (visit.rows.length === 0) throw new BadRequestException("Esta cita no tiene servicios que ordenar");
+
+    const taken = new Set<string>();
+    const ordered: any[] = [];
+    for (const item of [...serviceOrders].sort((a, b) => Number(a?.order) - Number(b?.order))) {
+      const row =
+        visit.rows.find((r) => !taken.has(r.id) && r.id === item?.serviceId) ??
+        visit.rows.find((r) => !taken.has(r.id) && r.serviceId === item?.serviceId);
+      if (!row) throw new BadRequestException(`El servicio ${item?.serviceId} no está en esta cita`);
+      taken.add(row.id);
+      ordered.push(row);
+    }
+    if (ordered.length !== visit.rows.length) {
+      throw new BadRequestException("Faltan servicios de la cita en el nuevo orden");
+    }
+
+    const byId = new Map(visit.services.map((s) => [s.id, s]));
+    const live = ordered.map((r) => byId.get(r.id)).filter((s): s is VisitService => !!s);
+    const after = layoutVisit(visitSpan(visit.services).start, live);
+    const rowData = new Map<string, Record<string, unknown>>();
+    ordered.forEach((r, order) => {
+      if (r.order !== order) rowData.set(r.id, { order });
+    });
+    return this.applyVisit(user, visit, after, rowData);
+  }
+
+  /**
+   * Switch one service of a visit between serial and parallel. The visit is
+   * laid out again from its start (serial services one after another,
+   * parallel ones alongside), through the same checks as a move. It used to
+   * write an ISO instant into the appointment's "HH:MM" time.
+   */
+  async setVisitServiceMode(user: any, serviceRowId: string, isParallel: boolean) {
+    if (typeof isParallel !== "boolean") throw new BadRequestException("isParallel tiene que ser true o false");
+    const visit = await this.loadVisit(user, serviceRowId);
+    await this.staffVisitCheck(user, visit);
+    const row = visit.rows.find((r) => r.id === serviceRowId);
+    if (!row) throw new NotFoundException("Servicio no encontrado en esta cita");
+    if (!!row.isParallel === isParallel) return { appointmentId: visit.appointment.id, moved: 0 };
+    const toggled = visit.services.map((s) => (s.id === serviceRowId ? { ...s, isParallel } : s));
+    const after = layoutVisit(visitSpan(visit.services).start, toggled);
+    return this.applyVisit(user, visit, after, new Map([[serviceRowId, { isParallel }]]));
+  }
+
+  /**
+   * Move a whole appointment to a new day and time on the salon's clock,
+   * through the panel's own checks: who may (findOne, staffVisitCheck),
+   * whether its status allows it, and the reschedule check for every
+   * professional in it. For callers that are not the drag or the form (the
+   * copilot's reschedule_appointment, which wrote the date and time
+   * straight into the row and checked nothing).
+   */
+  async rescheduleVisit(user: any, appointmentId: string, day: string, time: string) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || minutesOf(time) === null) {
+      throw new BadRequestException("Fecha u hora no válida");
+    }
+    const appointment = await this.findOne(user, appointmentId);
+    this.assertMovable(appointment.status, false);
+    const visit = await this.loadVisitOf(user, appointmentId);
+    if (visit.services.length === 0) {
+      return this.update(user, appointmentId, { scheduledDate: day, scheduledTime: time } as UpdateAppointmentDto);
+    }
+    await this.staffVisitCheck(user, visit);
+    const delta = salonInstant(day, time, visit.timeZone).getTime() - visitSpan(visit.services).start.getTime();
+    const after = visit.services.map((s) => ({
+      ...s,
+      start: new Date(s.start.getTime() + delta),
+      end: new Date(s.end.getTime() + delta),
+    }));
+    return this.applyVisit(user, visit, after);
+  }
+
+  /**
+   * Only a visit still to happen is moved: not one done, cancelled or
+   * missed. One under way may have its services adjusted (the timing
+   * editor), but is not moved to another time as a whole.
+   */
+  private assertMovable(status: string, startedMayChange = true) {
+    if (
+      status === AppointmentStatus.completed ||
+      status === AppointmentStatus.cancelled ||
+      status === AppointmentStatus.no_show ||
+      (!startedMayChange && status === AppointmentStatus.in_progress)
+    ) {
+      const word: Record<string, string> = {
+        completed: "completada",
+        cancelled: "cancelada",
+        no_show: "marcada como no presentada",
+        in_progress: "en curso",
+      };
+      throw new ConflictException(`Una cita ${word[status]} no se puede mover.`);
+    }
+  }
+
   private async applyVisit(
     user: any,
-    visit: { appointment: any; timeZone: string; services: VisitService[]; names: Map<string, string> },
+    visit: {
+      appointment: any;
+      timeZone: string;
+      services: VisitService[];
+      names: Map<string, string>;
+      processing?: Set<string>;
+    },
     after: VisitService[],
+    /** Further columns per row (order, mode), written with the times. */
+    rowData: Map<string, Record<string, unknown>> = new Map(),
   ) {
     const { appointment, timeZone } = visit;
     const changed = changedServices(visit.services, after);
-    if (changed.length === 0) return { appointmentId: appointment.id, moved: 0 };
+    if (changed.length === 0 && rowData.size === 0) return { appointmentId: appointment.id, moved: 0 };
+    this.assertMovable(appointment.status);
 
     // She may wait between services if the salon chose to; she cannot be in two.
     const clash = clientDoubleBooked(after);
@@ -1793,6 +2136,8 @@ export class AppointmentsService {
       );
     }
     for (const s of changed) {
+      // While a colour sets, its professional is free: nothing to check.
+      if (visit.processing?.has(s.id)) continue;
       const { day, time } = salonDayAndTime(s.start, timeZone);
       await assertCanReschedule(this.prisma as any, {
         tenantId: user.tenantId,
@@ -1804,20 +2149,39 @@ export class AppointmentsService {
       });
     }
 
-    // The appointment's own time and length: from its first to its last service.
+    // The appointment's own time and length: from its first to its last
+    // service, plus what it held beyond them (add-ons).
     const span = visitSpan(after);
+    const before = visitSpan(visit.services);
+    const beyond = Math.max(
+      0,
+      (Number(appointment.duration) || 0) - Math.round((before.end.getTime() - before.start.getTime()) / 60_000),
+    );
     const { day, time } = salonDayAndTime(span.start, timeZone);
-    const duration = Math.round((span.end.getTime() - span.start.getTime()) / 60_000);
+    const duration = Math.round((span.end.getTime() - span.start.getTime()) / 60_000) + beyond;
     const oldDate = appointment.scheduledDate;
     const oldTime = appointment.scheduledTime;
     const startChanged = !appointment.startTime || new Date(appointment.startTime).getTime() !== span.start.getTime();
 
     const updated = await this.prisma.$transaction(async (tx: any) => {
-      for (const s of changed) {
+      const changedIds = new Set(changed.map((s) => s.id));
+      for (const s of after) {
+        const extra = rowData.get(s.id);
+        if (!changedIds.has(s.id) && !extra) continue;
         await tx.appointmentService.update({
           where: { id: s.id },
-          data: { scheduledStart: s.start, scheduledEnd: s.end, professionalId: s.professionalId },
+          data: {
+            ...(changedIds.has(s.id)
+              ? { scheduledStart: s.start, scheduledEnd: s.end, professionalId: s.professionalId }
+              : {}),
+            ...(extra ?? {}),
+          },
         });
+      }
+      // Rows outside the schedule (cancelled ones) may still take a new order.
+      for (const [id, extra] of rowData) {
+        if (after.some((s) => s.id === id)) continue;
+        await tx.appointmentService.update({ where: { id }, data: extra });
       }
       return tx.appointment.update({
         where: { id: appointment.id },
@@ -1901,18 +2265,12 @@ export class AppointmentsService {
     }
   }
 
+  /**
+   * "HH:MM" plus minutes, saturating at 23:59 (see endClock). It used to go
+   * through the server's local clock and wrap: 23:30 + 60 min gave 00:30.
+   */
   private calculateEndTime(startTime: string, durationMinutes: number): string {
-    const [hoursStr, minutesStr] = startTime.split(":");
-    const hours = parseInt(hoursStr);
-    const minutes = parseInt(minutesStr);
-
-    const startDateTime = new Date();
-    startDateTime.setHours(hours, minutes, 0, 0);
-
-    const endDateTime = new Date(
-      startDateTime.getTime() + durationMinutes * 60000,
-    );
-    return endDateTime.toTimeString().slice(0, 5); // HH:MM format
+    return endClock(startTime, durationMinutes);
   }
 
   async getAvailableSlots(
@@ -2022,7 +2380,10 @@ export class AppointmentsService {
     const startOfDay = new Date(dateString + 'T00:00:00.000Z');
     const endOfDay = new Date(dateString + 'T23:59:59.999Z');
 
-    const existingAppointments = await this.prisma.appointment.findMany({
+    // With their service rows: a multi-service visit keeps each of its
+    // professionals busy during their own services, not its main one for
+    // its first service (visit-totals.ts).
+    const existingAppointments = await (this.prisma.appointment.findMany as any)({
       where: {
         tenantId,
         scheduledDate: {
@@ -2030,11 +2391,21 @@ export class AppointmentsService {
           lte: endOfDay,
         },
         ...(professionalsToCheck.length > 0
-          ? { professionalId: { in: professionalsToCheck } }
+          ? {
+              OR: [
+                { professionalId: { in: professionalsToCheck } },
+                { services: { some: { professionalId: { in: professionalsToCheck } } } },
+              ],
+            }
           : {}),
         status: { not: AppointmentStatus.cancelled },
       },
+      include: { services: { select: VISIT_ROW_SELECT, orderBy: VISIT_ROW_ORDER } },
     });
+    const salonTimeZone = (tenant as any).timezone || "Europe/Madrid";
+    const busy: BusyBlock[] = (existingAppointments as any[]).flatMap((apt) =>
+      appointmentBusyBlocks(apt, salonTimeZone, dateString),
+    );
 
     // Filter out unavailable slots
     const availableSlots = timeSlots.map((slot) => {
@@ -2065,25 +2436,13 @@ export class AppointmentsService {
             break;
           }
 
-          const profAppointments = existingAppointments.filter(
-            (apt) => apt.professionalId === profId,
-          );
-
-          const hasConflict = profAppointments.some((appointment) => {
-            const [appointmentHour, appointmentMinute] =
-              appointment.scheduledTime.split(":").map(Number);
-            const [slotHour, slotMinute] = slot.time.split(":").map(Number);
-
-            const appointmentStart = appointmentHour * 60 + appointmentMinute;
-            const appointmentEnd = appointmentStart + appointment.duration;
-            const slotStart = slotHour * 60 + slotMinute;
-            const slotEnd = slotStart + serviceDuration;
-
-            // Check if the slot overlaps with this professional's appointment
-            return !(
-              appointmentEnd <= slotStart || appointmentStart >= slotEnd
+          const hasConflict =
+            slotMinutes !== null &&
+            busy.some(
+              (block) =>
+                block.professionalId === profId &&
+                overlapsBlock(block, slotMinutes, serviceDuration),
             );
-          });
 
           if (hasConflict) {
             isAvailable = false;
@@ -2096,22 +2455,13 @@ export class AppointmentsService {
         // only "is anybody busy" answered a different question, and answered
         // it wrongly — it offered hours nobody works.
         const slotMinutes = minutesOf(slot.time);
-        const overlaps = (appointment: { scheduledTime: string; duration: number }) => {
-          const [appointmentHour, appointmentMinute] = appointment.scheduledTime
-            .split(":")
-            .map(Number);
-          const [slotHour, slotMinute] = slot.time.split(":").map(Number);
-          const appointmentStart = appointmentHour * 60 + appointmentMinute;
-          const appointmentEnd = appointmentStart + appointment.duration;
-          const slotStart = slotHour * 60 + slotMinute;
-          const slotEnd = slotStart + serviceDuration;
-          return !(appointmentEnd <= slotStart || appointmentStart >= slotEnd);
-        };
+        const overlaps = (block: BusyBlock) =>
+          slotMinutes !== null && overlapsBlock(block, slotMinutes, serviceDuration);
 
         if (anyProfessionalRows.length === 0) {
           // No professionals recorded at all: impose no shift limit, and the
           // salon is free when nothing overlaps.
-          isAvailable = !existingAppointments.some(overlaps);
+          isAvailable = !busy.some(overlaps);
         } else {
           // Somebody who is on shift for the whole slot AND has nothing of
           // their own overlapping it. This used to ask "is anyone on shift"
@@ -2126,9 +2476,7 @@ export class AppointmentsService {
             ) {
               return false;
             }
-            return !existingAppointments.some(
-              (appointment) => appointment.professionalId === p.id && overlaps(appointment),
-            );
+            return !busy.some((block) => block.professionalId === p.id && overlaps(block));
           });
         }
       }

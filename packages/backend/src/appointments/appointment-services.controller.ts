@@ -177,11 +177,15 @@ export class AppointmentServicesController {
   @ApiResponse({ status: 404, description: 'Appointment not found' })
   @ApiResponse({ status: 400, description: 'Invalid reorder request' })
   @Roles(...SALON_TEAM)
+  @ApiResponse({ status: 409, description: 'The new layout does not fit the agenda of a professional' })
   reorderServices(
     @Param('appointmentId', ParseUUIDPipe) appointmentId: string,
     @Body() serviceOrders: Array<{ serviceId: string; order: number }>,
+    @CurrentUser() user: { id: string; role: string; tenantId: string },
   ) {
-    return this.appointmentServicesService.reorderServices(appointmentId, serviceOrders);
+    // Through the same checks and writes as a move (and the appointment's
+    // time kept on the salon's clock): AppointmentsService.reorderVisitServices.
+    return this.appointmentsService.reorderVisitServices(user, appointmentId, serviceOrders);
   }
 
   @Put(':id/timing')
@@ -210,10 +214,12 @@ export class AppointmentServicesController {
   @ApiResponse({ status: 200, description: 'Mode toggled successfully' })
   @ApiResponse({ status: 404, description: 'Appointment service not found' })
   @Roles(...SALON_TEAM)
+  @ApiResponse({ status: 409, description: 'The new layout does not fit the agenda of a professional' })
   toggleMode(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: { isParallel: boolean },
+    @CurrentUser() user: { id: string; role: string; tenantId: string },
   ) {
-    return this.appointmentServicesService.toggleMode(id, body.isParallel);
+    return this.appointmentsService.setVisitServiceMode(user, id, body?.isParallel);
   }
 }

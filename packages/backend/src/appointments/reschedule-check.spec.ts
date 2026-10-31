@@ -74,11 +74,13 @@ describe("assertCanReschedule", () => {
     const prisma = prismaWith({});
     await assertCanReschedule(prisma, target, NOW);
     const where = (prisma.appointment.findMany.mock.calls[0] as any)[0].where;
-    expect(where).toMatchObject({ tenantId: TENANT, professionalId: "p1", id: { not: "a1" }, status: { not: "cancelled" } });
+    expect(where).toMatchObject({ tenantId: TENANT, id: { not: "a1" }, status: { not: "cancelled" } });
+    // Their own appointments, and the services they do in a colleague's visit.
+    expect(where.OR).toEqual([{ professionalId: "p1" }, { services: { some: { professionalId: "p1" } } }]);
   });
 
   it("refuses with a 409 and the reason", async () => {
-    const prisma = prismaWith({ others: [{ scheduledTime: "10:15", duration: 45, client: { firstName: "Lucía", lastName: "Pérez" } }] });
+    const prisma = prismaWith({ others: [{ professionalId: "p1", scheduledTime: "10:15", duration: 45, client: { firstName: "Lucía", lastName: "Pérez" } }] });
     const err = await assertCanReschedule(prisma, target, NOW).catch((e) => e);
     expect(err).toBeInstanceOf(ConflictException);
     expect(err.message).toBe("Ana ya tiene una cita con Lucía Pérez a las 10:15.");
@@ -125,7 +127,7 @@ describe("moving an appointment (PATCH /appointments/:id)", () => {
   const owner = { id: "u1", role: "owner", tenantId: TENANT };
 
   it("onto another appointment: refused, nothing saved", async () => {
-    const { svc, prisma } = service({ others: [{ scheduledTime: "11:00", duration: 60, client: null }] });
+    const { svc, prisma } = service({ others: [{ professionalId: "p1", scheduledTime: "11:00", duration: 60, client: null }] });
     await expect(svc.update(owner, "a1", { scheduledTime: "11:00" } as any)).rejects.toBeInstanceOf(ConflictException);
     expect(prisma.appointment.update).not.toHaveBeenCalled();
   });
@@ -155,8 +157,11 @@ describe("moving one service of a multi-service appointment (PUT /appointment-se
       appointment: { id: "a1", tenantId: TENANT, professionalId: "p1", tenant: { timezone: "Europe/Madrid" } },
       ...row,
     };
+    const base = prismaWith({ others: opts.others });
     const prisma: any = {
-      ...prismaWith({ others: opts.others }),
+      ...base,
+      // The visit's totals are synced after the save (visit-sync.ts).
+      appointment: { ...base.appointment, findUnique: jest.fn(async () => null) },
       appointmentService: {
         findUnique: jest.fn(async () => current),
         update: jest.fn(async () => ({ id: "s1" })),
@@ -186,7 +191,7 @@ describe("moving one service of a multi-service appointment (PUT /appointment-se
   });
 
   it("onto another appointment: refused", async () => {
-    const { svc, prisma } = services({}, { others: [{ scheduledTime: "11:30", duration: 30, client: null }] });
+    const { svc, prisma } = services({}, { others: [{ professionalId: "p1", scheduledTime: "11:30", duration: 30, client: null }] });
     await expect(
       svc.update(
         "s1",

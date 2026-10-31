@@ -165,6 +165,20 @@ describe('SalonCopilotToolsService (L-4) — sprint 14 write tools', () => {
   });
 
   describe('reschedule_appointment', () => {
+    /**
+     * The move itself is AppointmentsService.rescheduleVisit (the panel's
+     * path, with its checks): here a stand-in that writes the row the way it
+     * would. Its refusals are in appointments/copilot-reschedule.spec.ts.
+     */
+    const appointmentsFor = (appts: any[]) => ({
+      rescheduleVisit: jest.fn(async (_user: any, id: string, day: string, time: string) => {
+        const a = appts.find((x) => x.id === id);
+        a.scheduledDate = new Date(`${day}T00:00:00.000Z`);
+        a.scheduledTime = time;
+        return { appointmentId: id };
+      }),
+    });
+
     it('moves a confirmed appointment to a new date/time', async () => {
       const today = new Date(); today.setHours(0, 0, 0, 0);
       const appts = [
@@ -180,12 +194,21 @@ describe('SalonCopilotToolsService (L-4) — sprint 14 write tools', () => {
         },
       ];
       const prisma = makePrisma({ appointments: appts, clients: [{ id: 'c-1' }] });
-      const svc = new SalonCopilotToolsService(prisma);
+      const appointments = appointmentsFor(appts);
+      const svc = new SalonCopilotToolsService(prisma, undefined, appointments as any);
       const res = await svc.execute(
         'reschedule_appointment',
         { appointmentId: 'a-1', newDate: today.toISOString().slice(0, 10), newTime: '11:30' },
         { prisma, tenantId: TENANT_ID, userId: 'u-1', role: 'manager' },
       );
+      expect(appointments.rescheduleVisit).toHaveBeenCalledWith(
+        { id: 'u-1', tenantId: TENANT_ID, role: 'manager' },
+        'a-1',
+        today.toISOString().slice(0, 10),
+        '11:30',
+      );
+      // Never written by the tool itself, past the panel's checks.
+      expect(prisma.appointment.update).not.toHaveBeenCalled();
       expect(res).toMatchObject({
         ok: true,
         appointmentId: 'a-1',
@@ -232,7 +255,7 @@ describe('SalonCopilotToolsService (L-4) — sprint 14 write tools', () => {
         appointments: appts,
         professionals: [{ id: 'staff-prof', userId: 'staff-u', firstName: 'M' }],
       });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = new SalonCopilotToolsService(prisma, undefined, appointmentsFor(appts) as any);
       const res = await svc.execute(
         'reschedule_appointment',
         { appointmentId: 'a-1', newDate: today.toISOString().slice(0, 10), newTime: '11:30' },

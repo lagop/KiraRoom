@@ -108,7 +108,9 @@ function build({
         db.appointments.filter(
           (a) =>
             a.tenantId === where.tenantId &&
-            a.professionalId === where.professionalId &&
+            // The check asks for the professional's own appointments or their
+            // services in a colleague's visit (where.OR).
+            a.professionalId === (where.OR?.[0]?.professionalId ?? where.professionalId) &&
             a.status !== where.status.not,
         ),
       ),
