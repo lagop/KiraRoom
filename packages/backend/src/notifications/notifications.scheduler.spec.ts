@@ -87,7 +87,7 @@ function appointment(overrides: any = {}) {
 function makeScheduler(prisma: any, opts: { sms?: boolean; prefs?: (channel: string) => boolean } = {}) {
   const email = {
     isConfigured: jest.fn(() => true),
-    sendAppointmentReminder: jest.fn(async () => ({ success: true, id: "email-1" })),
+    sendAppointmentReminder: jest.fn(async (..._args: unknown[]) => ({ success: true, id: "email-1" })),
   };
   const sms = {
     isConfigured: jest.fn(() => !!opts.sms),
