@@ -4,6 +4,7 @@ import { OnboardingDetectorService } from "./onboarding-detector.service";
 import { OnboardingGroup } from "@prisma/client";
 import { salonInstant } from "../appointments/salon-time";
 import { appointmentLocationId } from "../multi-location/appointment-location";
+import { placeholderEmail } from "../common/placeholder-email";
 
 interface StepStatusRecord {
   status: "pending" | "done" | "skipped" | "dismissed";
@@ -301,7 +302,7 @@ export class OnboardingService {
               tenantId,
               firstName,
               lastName,
-              email: `wizard-${Date.now()}@placeholder.local`,
+              email: placeholderEmail(`wizard-${Date.now()}`),
             },
           });
         }

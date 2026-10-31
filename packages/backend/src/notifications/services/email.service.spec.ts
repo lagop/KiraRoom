@@ -17,7 +17,8 @@
  * changed.
  */
 
-import { EmailService } from "./email.service";
+import { EmailService, EMAIL_SEND_TIMEOUT_MS } from "./email.service";
+import { isPlaceholderEmail, placeholderEmail, realEmail } from "../../common/placeholder-email";
 
 // ────────────────────── mock helpers
 
@@ -627,6 +628,65 @@ describe("EmailService.sendEmail (low-level)", () => {
       html: "<p>X</p>",
     });
     expect(calls[0].to).toEqual(["a@example.com", "b@example.com"]);
+  });
+
+  it("never sends to a placeholder address", async () => {
+    const { service, calls } = makeService();
+    const sent = await service.sendEmail({
+      to: "wizard-1730000000000@placeholder.local",
+      subject: "X",
+      html: "<p>X</p>",
+    });
+    expect(sent.success).toBe(false);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("drops placeholder addresses from a list and sends to the rest", async () => {
+    const { service, calls } = makeService();
+    await service.sendEmail({
+      to: ["a@example.com", "[anonymized]+abcd1234@deleted.local"],
+      subject: "X",
+      html: "<p>X</p>",
+    });
+    expect(calls[0].to).toEqual(["a@example.com"]);
+  });
+
+  it("passes the idempotency key to Resend", async () => {
+    const { service, resend } = makeService();
+    const send = jest.spyOn(resend.emails, "send");
+    await service.sendEmail({ to: "a@example.com", subject: "X", html: "<p>X</p>", idempotencyKey: "reminder-1" });
+    expect(send).toHaveBeenCalledWith(expect.anything(), { idempotencyKey: "reminder-1" });
+  });
+
+  it(`gives up on a provider that does not answer within ${EMAIL_SEND_TIMEOUT_MS / 1000} s`, async () => {
+    jest.useFakeTimers();
+    try {
+      const { service, resend } = makeService();
+      resend.emails.send = () => new Promise(() => undefined) as any; // hangs
+      const pending = service.sendEmail({ to: "a@example.com", subject: "X", html: "<p>X</p>" });
+      await jest.advanceTimersByTimeAsync(EMAIL_SEND_TIMEOUT_MS);
+      const sent = await pending;
+      expect(sent.success).toBe(false);
+      expect(sent.error).toMatch(/did not answer/);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
+
+describe("isPlaceholderEmail", () => {
+  it("knows KiraRoom's stand-in addresses and reserved domains", () => {
+    expect(isPlaceholderEmail("wizard-1@placeholder.local")).toBe(true);
+    expect(isPlaceholderEmail(placeholderEmail("wizard-2"))).toBe(true);
+    expect(isPlaceholderEmail("[anonymized]+abcd1234@deleted.local")).toBe(true);
+    expect(isPlaceholderEmail("x@foo.invalid")).toBe(true);
+    expect(isPlaceholderEmail(" Ana@Mail.LOCAL ")).toBe(true);
+    expect(isPlaceholderEmail("ana@gmail.com")).toBe(false);
+    expect(isPlaceholderEmail("ana@local-salon.es")).toBe(false);
+    expect(isPlaceholderEmail(null)).toBe(false);
+    expect(realEmail(null)).toBeNull();
+    expect(realEmail("wizard-1@placeholder.local")).toBeNull();
+    expect(realEmail(" ana@gmail.com ")).toBe("ana@gmail.com");
   });
 });
 
