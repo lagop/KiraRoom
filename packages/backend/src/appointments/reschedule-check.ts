@@ -2,6 +2,7 @@ import { ConflictException } from "@nestjs/common";
 import { AppointmentStatus } from "@prisma/client";
 import { fitsInWindow, minutesOf, workingWindowFor } from "./working-hours";
 import { salonInstant } from "./salon-time";
+import { VISIT_ROW_ORDER, VISIT_ROW_SELECT, appointmentBusyBlocks } from "./visit-totals";
 
 /**
  * Whether an appointment may be moved to a new day, time or professional:
@@ -16,6 +17,11 @@ import { salonInstant } from "./salon-time";
  * steps rather than its 30-minute slots: the professional's schedule (none
  * recorded means no limit), the salon's opening hours when it set them, and
  * the professional's other appointments that day, cancelled ones aside.
+ *
+ * "Other appointments" means every block of time the professional is busy:
+ * their own appointments, and the services they do in a colleague's visit
+ * (the rinse after a colour). A multi-service visit used to count as its
+ * first service only, for its main professional only (visit-totals.ts).
  */
 
 export interface RescheduleTarget {
@@ -30,7 +36,13 @@ export interface RescheduleTarget {
   durationMinutes: number;
 }
 
-type Busy = { scheduledTime: string; duration: number; clientName?: string | null };
+export type Busy = {
+  scheduledTime: string;
+  duration: number;
+  clientName?: string | null;
+  /** Minutes of the day, when known; else read from scheduledTime. */
+  startMinutes?: number;
+};
 
 /**
  * The reason a move cannot be made, in the words the salon reads; null when it can.
@@ -72,7 +84,7 @@ export function rescheduleProblem(input: {
   }
   const end = startMinutes + durationMinutes;
   const clash = input.others.find((o) => {
-    const s = minutesOf(o.scheduledTime);
+    const s = o.startMinutes ?? minutesOf(o.scheduledTime);
     if (s === null) return false;
     return s < end && startMinutes < s + o.duration;
   });
@@ -92,6 +104,48 @@ type PrismaLike = {
   professional: { findFirst: (args: any) => Promise<any> };
   appointment: { findMany: (args: any) => Promise<any[]> };
 };
+
+/**
+ * A professional's busy time on a salon day, from other appointments: their
+ * own, and their services in a colleague's visit (visit-totals.ts). For the
+ * reschedule and booking checks here, and any other check that books a
+ * slot. `timeZone` is the salon's.
+ */
+export async function professionalBusyTime(
+  prisma: Pick<PrismaLike, "appointment">,
+  q: { tenantId: string; professionalId: string; day: string; timeZone: string; excludeAppointmentId?: string },
+): Promise<Busy[]> {
+  const others = await prisma.appointment.findMany({
+    where: {
+      tenantId: q.tenantId,
+      ...(q.excludeAppointmentId ? { id: { not: q.excludeAppointmentId } } : {}),
+      OR: [{ professionalId: q.professionalId }, { services: { some: { professionalId: q.professionalId } } }],
+      scheduledDate: {
+        gte: new Date(`${q.day}T00:00:00.000Z`),
+        lte: new Date(`${q.day}T23:59:59.999Z`),
+      },
+      status: { not: AppointmentStatus.cancelled },
+    },
+    select: {
+      professionalId: true,
+      scheduledDate: true,
+      scheduledTime: true,
+      duration: true,
+      client: { select: { firstName: true, lastName: true } },
+      services: { select: VISIT_ROW_SELECT, orderBy: VISIT_ROW_ORDER as any },
+    },
+  });
+  return others.flatMap((o) =>
+    appointmentBusyBlocks(o, q.timeZone, q.day)
+      .filter((b) => b.professionalId === q.professionalId)
+      .map((b) => ({
+        scheduledTime: clock(Math.max(0, b.startMinutes)),
+        startMinutes: b.startMinutes,
+        duration: b.endMinutes - b.startMinutes,
+        clientName: o.client ? `${o.client.firstName} ${o.client.lastName}`.trim() : null,
+      })),
+  );
+}
 
 /** Throws a 409 with the reason when the move is not possible. */
 export async function assertCanReschedule(
@@ -139,7 +193,7 @@ async function scheduleCheckInput(
   target: RescheduleTarget,
   now: Date,
 ): Promise<Parameters<typeof rescheduleProblem>[0]> {
-  const [tenant, professional, others] = await Promise.all([
+  const [tenant, professional] = await Promise.all([
     prisma.tenant.findUnique({
       where: { id: target.tenantId },
       select: { openingHours: true, timezone: true },
@@ -148,23 +202,6 @@ async function scheduleCheckInput(
       where: { id: target.professionalId, tenantId: target.tenantId },
       select: { firstName: true, lastName: true, workingHours: true },
     }),
-    prisma.appointment.findMany({
-      where: {
-        tenantId: target.tenantId,
-        professionalId: target.professionalId,
-        ...(target.appointmentId ? { id: { not: target.appointmentId } } : {}),
-        scheduledDate: {
-          gte: new Date(`${target.day}T00:00:00.000Z`),
-          lte: new Date(`${target.day}T23:59:59.999Z`),
-        },
-        status: { not: AppointmentStatus.cancelled },
-      },
-      select: {
-        scheduledTime: true,
-        duration: true,
-        client: { select: { firstName: true, lastName: true } },
-      },
-    }),
   ]);
   if (!professional) throw new ConflictException("Ese profesional no existe en este salón.");
 
@@ -172,6 +209,13 @@ async function scheduleCheckInput(
   const open = hours.open ? minutesOf(hours.open) : null;
   const close = hours.close ? minutesOf(hours.close) : null;
   const timeZone = tenant?.timezone || "Europe/Madrid";
+  const others = await professionalBusyTime(prisma, {
+    tenantId: target.tenantId,
+    professionalId: target.professionalId,
+    day: target.day,
+    timeZone,
+    excludeAppointmentId: target.appointmentId,
+  });
 
   return {
     startMinutes: minutesOf(target.time),
@@ -179,11 +223,7 @@ async function scheduleCheckInput(
     professionalWindow: workingWindowFor(professional.workingHours, new Date(`${target.day}T12:00:00.000Z`)),
     professionalName: professional.firstName,
     salonWindow: open !== null && close !== null && close > open ? { startMinutes: open, endMinutes: close } : undefined,
-    others: others.map((o) => ({
-      scheduledTime: o.scheduledTime,
-      duration: o.duration,
-      clientName: o.client ? `${o.client.firstName} ${o.client.lastName}`.trim() : null,
-    })),
+    others,
     inPast: minutesOf(target.time) !== null && salonInstant(target.day, target.time, timeZone) < now,
   };
 }

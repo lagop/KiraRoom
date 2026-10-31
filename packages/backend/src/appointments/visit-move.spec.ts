@@ -102,7 +102,12 @@ function salon(opts: { busy?: Record<string, Array<{ scheduledTime: string; dura
     appointmentService: { findUnique: jest.fn(async () => ({ appointmentId: "a1" })) },
     appointment: {
       findFirst: jest.fn(async () => appointment),
-      findMany: jest.fn(async (args: any) => (opts.busy?.[args.where.professionalId] ?? []).map((b) => ({ ...b, client: null }))),
+      // Whoever the reschedule check asks about: their appointments, or the
+      // services they do in someone else's (where.OR).
+      findMany: jest.fn(async (args: any) => {
+        const pro = args.where.OR?.[0]?.professionalId ?? args.where.professionalId;
+        return (opts.busy?.[pro] ?? []).map((b) => ({ professionalId: pro, ...b, client: null }));
+      }),
     },
     tenant: { findUnique: jest.fn(async () => ({ openingHours: {}, timezone: "Europe/Madrid" })) },
     professional: {

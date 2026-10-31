@@ -1073,6 +1073,14 @@ private async sendMessage(
 /**
  * Reschedule an appointment. Owner / manager / receptionist can move
  * any appointment; staff can only move their own.
+ *
+ * Through the panel's own path (AppointmentsService.rescheduleVisit): the
+ * status must allow it, every professional in the visit must be free and on
+ * shift, the visit's services move with it, and the start the reminders
+ * read, the reminders and the notice to the client follow. It used to write
+ * the date and time straight into the row: on top of another booking,
+ * outside hours, on a cancelled appointment, with the reminders still set
+ * for the old time.
  */
 private async rescheduleAppointment(
   args: Record<string, unknown>,
@@ -1114,30 +1122,38 @@ private async rescheduleAppointment(
     }
   }
 
-  const updated = await this.prisma.appointment.update({
-    where: { id: appointmentId },
-    data: {
-      scheduledDate: new Date(`${newDate}T00:00:00`),
-      scheduledTime: newTime,
-      updatedAt: new Date(),
-    },
-    select: {
-      id: true,
-      scheduledDate: true,
-      scheduledTime: true,
-      client: { select: { firstName: true } },
-    },
-  });
+  if (!this.appointments) return { error: 'unavailable' };
+  try {
+    await this.appointments.rescheduleVisit(
+      { id: ctx.userId, tenantId: ctx.tenantId, role: ctx.role },
+      appointmentId,
+      newDate,
+      newTime,
+    );
+  } catch (err) {
+    if (err instanceof HttpException) {
+      const status = err.getStatus();
+      return {
+        error: status === 409 ? 'slot_unavailable' : status === 403 || status === 404 ? 'forbidden' : 'invalid_input',
+        message: err.message,
+      };
+    }
+    throw err;
+  }
 
+  const updated = await this.prisma.appointment.findUnique({
+    where: { id: appointmentId },
+    select: { scheduledDate: true, scheduledTime: true },
+  });
   return {
     ok: true,
-    appointmentId: updated.id,
+    appointmentId,
     from: { date: appt.scheduledDate, time: appt.scheduledTime },
     to: {
-      date: updated.scheduledDate.toISOString().slice(0, 10),
-      time: updated.scheduledTime,
+      date: updated ? updated.scheduledDate.toISOString().slice(0, 10) : newDate,
+      time: updated?.scheduledTime ?? newTime,
     },
-    clientFirstName: updated.client?.firstName ?? null,
+    clientFirstName: appt.client?.firstName ?? null,
   };
 }
 

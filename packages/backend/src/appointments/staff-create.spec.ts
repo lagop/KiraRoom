@@ -108,7 +108,9 @@ function build({
         db.appointments.filter(
           (a) =>
             a.tenantId === where.tenantId &&
-            a.professionalId === where.professionalId &&
+            // The check asks for the professional's own appointments or their
+            // services in a colleague's visit (where.OR).
+            a.professionalId === (where.OR?.[0]?.professionalId ?? where.professionalId) &&
             a.status !== where.status.not,
         ),
       ),
@@ -262,7 +264,8 @@ describe("a visit of several services, in one request", () => {
 
     expect(db.appointments).toHaveLength(1);
     // 10:00 to 11:30: the colour, then the cut. Madrid is UTC+1 in December.
-    expect(db.appointments[0]).toMatchObject({ duration: 90, endTime: "11:30" });
+    // And charged for both: 50 + 20 (it used to be the colour only).
+    expect(db.appointments[0]).toMatchObject({ duration: 90, endTime: "11:30", price: 70, totalAmount: 7000 });
     expect(db.serviceRows).toEqual([
       expect.objectContaining({
         appointmentId: db.appointments[0].id,

@@ -1,9 +1,10 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, ConflictException, Logger } from '@nestjs/common';
 import { assertCanReschedule, salonDayAndTime } from './reschedule-check';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { AppointmentStatus } from '@prisma/client';
 import { AppointmentsService } from './appointments.service';
 import { canTransition } from './appointment-status';
+import { syncVisitTotals } from './visit-sync';
 import { CreateAppointmentServiceDto, UpdateAppointmentServiceDto, AppointmentServiceFiltersDto, AppointmentServiceType, AppointmentServiceStatus } from './dto/appointment-services.dto';
 
 @Injectable()
@@ -76,6 +77,9 @@ export class AppointmentServicesService {
         appointment: true,
       },
     });
+
+    // The visit is longer and costs more now (visit-sync.ts).
+    await syncVisitTotals(this.prisma, createDto.appointmentId);
 
     this.logger.log(`Created appointment service ${appointmentService.id} for appointment ${createDto.appointmentId}`);
     return appointmentService;
@@ -258,17 +262,25 @@ export class AppointmentServicesService {
       },
     });
 
+    // Its time or length may have moved the visit's start or end.
+    await syncVisitTotals(this.prisma, appointmentService.appointmentId);
+
     this.logger.log(`Updated appointment service ${id}`);
     return appointmentService;
   }
 
   async remove(id: string) {
     // Check if exists
-    await this.findOne(id);
+    const row = await this.findOne(id);
+    // A service already done is part of what the client is charged for.
+    if (row.status === AppointmentServiceStatus.completed) {
+      throw new ConflictException('Este servicio ya está completado: no se puede quitar de la cita.');
+    }
 
     await this.prisma.appointmentService.delete({
       where: { id },
     });
+    await syncVisitTotals(this.prisma, row.appointmentId);
 
     this.logger.log(`Deleted appointment service ${id}`);
     return { success: true };
@@ -283,6 +295,11 @@ export class AppointmentServicesService {
         professional: true,
       },
     });
+
+    // A cancelled service leaves the visit: shorter, and not charged.
+    if (status === AppointmentServiceStatus.cancelled) {
+      await syncVisitTotals(this.prisma, appointmentService.appointmentId);
+    }
 
     // If service is completed, check if all services for the appointment are done
     if (status === AppointmentServiceStatus.completed) {
@@ -395,6 +412,9 @@ export class AppointmentServicesService {
       ),
     );
 
+    // The appointment covers the whole visit and charges for all of it.
+    await syncVisitTotals(this.prisma, appointmentId);
+
     this.logger.log(`Created ${createdServices.length} appointment services for appointment ${appointmentId}`);
     return createdServices;
   }
@@ -434,7 +454,9 @@ export class AppointmentServicesService {
     const applicationEnd = appointmentService.scheduledEnd;
     const processingEnd = new Date(applicationEnd.getTime() + processingMins * 60000);
 
-    // Create processing block (professional is free during this time)
+    // Create processing block (professional is free during this time).
+    // Typed "processing": as "active" it was charged as a second service and
+    // kept the professional busy (visit-totals.ts).
     const processingBlock = await this.prisma.appointmentService.create({
       data: {
         appointmentId: appointmentService.appointmentId,
@@ -442,7 +464,8 @@ export class AppointmentServicesService {
         professionalId: null, // Professional is free during processing
         scheduledStart: applicationEnd,
         scheduledEnd: processingEnd,
-        type: AppointmentServiceType.active,
+        type: AppointmentServiceType.processing,
+        isParallel: false,
       },
       include: {
         service: true,
@@ -458,184 +481,15 @@ export class AppointmentServicesService {
       },
     });
 
+    await syncVisitTotals(this.prisma, appointmentService.appointmentId);
+
     this.logger.log(`Created processing block for appointment service ${appointmentServiceId}`);
     return processingBlock;
   }
 
-  // Reorder services for an appointment
-  async reorderServices(appointmentId: string, serviceOrders: Array<{ serviceId: string; order: number }>) {
-    // Verify appointment exists
-    const appointment = await this.prisma.appointment.findUnique({
-      where: { id: appointmentId },
-    });
-
-    if (!appointment) {
-      throw new NotFoundException('Appointment not found');
-    }
-
-    // Get all services for this appointment
-    const services = await this.prisma.appointmentService.findMany({
-      where: { appointmentId },
-      orderBy: { order: 'asc' },
-    });
-
-    if (services.length === 0) {
-      throw new BadRequestException('No services found for this appointment');
-    }
-
-    // Create a map of serviceId to new order
-    const orderMap = new Map(serviceOrders.map(so => [so.serviceId, so.order]));
-
-    // Update each service's order
-    const updatedServices = await this.prisma.$transaction(
-      services.map(service => {
-        const newOrder = orderMap.get(service.serviceId);
-        if (newOrder === undefined) {
-          throw new BadRequestException(`Service ${service.serviceId} not found in reorder request`);
-        }
-        return this.prisma.appointmentService.update({
-          where: { id: service.id },
-          data: { order: newOrder },
-          include: {
-            service: true,
-            professional: true,
-          },
-        });
-      }),
-    );
-
-    // Update appointment's scheduledTime to match the first service's scheduledStart
-    const firstService = updatedServices[0];
-    if (firstService && firstService.scheduledStart) {
-      await this.prisma.appointment.update({
-        where: { id: appointmentId },
-        data: {
-          scheduledTime: firstService.scheduledStart.toISOString(),
-        },
-      });
-      this.logger.log(`Updated appointment ${appointmentId} scheduledTime to ${firstService.scheduledStart}`);
-    }
-
-    this.logger.log(`Reordered ${updatedServices.length} services for appointment ${appointmentId}`);
-    return updatedServices;
-  }
-
-  // Cascade timing update to subsequent serial services
-  private async cascadeTimingUpdate(appointmentId: string, currentServiceId: string, newEndTime: Date) {
-    // Get all services for this appointment, ordered by order
-    const services = await this.prisma.appointmentService.findMany({
-      where: { appointmentId },
-      orderBy: { order: 'asc' },
-      include: {
-        service: true,
-      },
-    });
-
-    // Find the current service index
-    const currentIndex = services.findIndex(s => s.id === currentServiceId);
-    if (currentIndex === -1) {
-      return;
-    }
-
-    // Update subsequent serial services
-    let currentTime = newEndTime;
-    for (let i = currentIndex + 1; i < services.length; i++) {
-      const service = services[i];
-      
-      // Skip parallel services - they don't affect timing
-      if (service.isParallel) {
-        continue;
-      }
-
-      // Calculate new end time based on service duration
-      const duration = service.service?.duration || 0;
-      const newStartTime = currentTime;
-      const newEndTime = new Date(currentTime.getTime() + duration * 60000);
-
-      // Update the service
-      await this.prisma.appointmentService.update({
-        where: { id: service.id },
-        data: {
-          scheduledStart: newStartTime,
-          scheduledEnd: newEndTime,
-        },
-      });
-
-      currentTime = newEndTime;
-    }
-  }
-
-  // Toggle parallel/serial mode for a service
-  async toggleMode(id: string, isParallel: boolean) {
-    const appointmentService = await this.findOne(id);
-
-    // Update the mode
-    const updatedService = await this.prisma.appointmentService.update({
-      where: { id },
-      data: { isParallel },
-      include: {
-        service: true,
-        professional: true,
-        appointment: true,
-      },
-    });
-
-    // If toggling to serial, we may need to adjust timing
-    if (!isParallel) {
-      // Get all services for this appointment
-      const services = await this.prisma.appointmentService.findMany({
-        where: { appointmentId: updatedService.appointmentId },
-        orderBy: { order: 'asc' },
-        include: {
-          service: true,
-        },
-      });
-
-      // Find the previous serial service
-      const currentIndex = services.findIndex(s => s.id === id);
-      let previousSerialEndTime: Date | null = null;
-
-      for (let i = currentIndex - 1; i >= 0; i--) {
-        if (!services[i].isParallel) {
-          previousSerialEndTime = services[i].scheduledEnd;
-          break;
-        }
-      }
-
-      // If there's a previous serial service, adjust this service's start time
-      if (previousSerialEndTime) {
-        const duration = updatedService.service?.duration || 0;
-        const newStartTime = previousSerialEndTime;
-        const newEndTime = new Date(previousSerialEndTime.getTime() + duration * 60000);
-
-        await this.prisma.appointmentService.update({
-          where: { id },
-          data: {
-            scheduledStart: newStartTime,
-            scheduledEnd: newEndTime,
-          },
-        });
-
-        // Cascade the timing update to subsequent services
-        await this.cascadeTimingUpdate(updatedService.appointmentId, id, newEndTime);
-      }
-    }
-
-    // Update the appointment's scheduledTime to match the first service's scheduledStart
-    const allServices = await this.prisma.appointmentService.findMany({
-      where: { appointmentId: updatedService.appointmentId },
-      orderBy: { order: 'asc' },
-    });
-
-    if (allServices.length > 0) {
-      const firstService = allServices[0];
-      await this.prisma.appointment.update({
-        where: { id: updatedService.appointmentId },
-        data: { scheduledTime: firstService.scheduledStart.toISOString() },
-      });
-    }
-
-    this.logger.log(`Toggled mode for appointment service ${id} to ${isParallel ? 'parallel' : 'serial'}`);
-    return updatedService;
-  }
+  // Reordering a visit's services and switching one between serial and
+  // parallel live in AppointmentsService (reorderVisitServices,
+  // setVisitServiceMode): they move the visit, so they take the same checks
+  // and writes as a drag. These versions wrote an ISO instant into the
+  // appointment's "HH:MM" time and checked nothing.
 }
