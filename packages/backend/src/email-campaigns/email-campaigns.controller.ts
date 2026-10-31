@@ -133,6 +133,14 @@ export class EmailCampaignsController {
     return this.campaignsService.sendCampaignNow(user.tenantId, id);
   }
 
+  @Post(":id/send-to-all")
+  @ApiOperation({ summary: "Add every active client who accepts promotions, then send" })
+  @ApiResponse({ status: 200, description: "Campaign sent" })
+  @Roles(...SALON_MANAGERS)
+  async sendToAll(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
+    return this.campaignsService.sendToAllClients(user.tenantId, id);
+  }
+
   @Post(":id/recipients")
   @ApiOperation({ summary: "Add recipients to campaign" })
   @ApiResponse({ status: 201, description: "Recipients added" })

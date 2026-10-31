@@ -671,6 +671,15 @@ export class AppointmentsService {
     if (!client) {
       throw new NotFoundException("Cliente no encontrado");
     }
+    // A client the salon blocked cannot book from its page, its widget or
+    // the receptionist; the team can still book her from the panel. The
+    // message does not say why: the reason is the salon's.
+    if (visit.online && client.status === "blocked") {
+      throw new ForbiddenException({
+        code: "ONLINE_BOOKING_NOT_AVAILABLE",
+        message: "No es posible reservar online; contacta con el salón.",
+      });
+    }
 
     // A visit of several services lasts from its first to its last service.
     const duration = visit.duration ?? service.duration;

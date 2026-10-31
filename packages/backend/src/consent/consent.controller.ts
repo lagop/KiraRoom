@@ -1,11 +1,10 @@
-import { ParseUUIDPipe, Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, Req, UseGuards, BadRequestException } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, Req, UseGuards, BadRequestException, ForbiddenException } from "@nestjs/common";
 import { UserRole } from "@prisma/client";
 import { IsBoolean, IsOptional } from "class-validator";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
 import type { Request } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
-import { Public } from "../auth/decorators/public.decorator";
 import { ConsentService } from "./consent.service";
 import { CreateConsentFormDto, RevokeConsentDto, SignConsentDto, UpdateConsentFormDto } from "./consent.dto";
 import { Roles, SALON_TEAM, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
@@ -87,23 +86,44 @@ export class ConsentController {
     return this.service.getRequiredForms(req.user.tenantId, serviceId);
   }
 
+  /**
+   * Records a signed consent. It used to be public and take the salon and
+   * the client from the body; a signature now needs a session, and the
+   * salon is the session's:
+   * - a team member records a signature taken in the salon: names the
+   *   client and types the name she signed with; the record keeps who
+   *   recorded it;
+   * - a signed-in client signs for herself: the client is the session's.
+   */
   @Post("sign")
-  @Public()
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @Roles(...SALON_TEAM, UserRole.client)
   @Throttle({ default: { ttl: 60_000, limit: 30 } })
-  async sign(@Body() body: SignConsentDto, @Req() req: Request) {
-    const ip =
-      (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
-      req.socket?.remoteAddress ||
-      "";
-    return this.service.sign({
-      tenantId: body.tenantId,
-      clientId: body.clientId,
+  async sign(@Body() body: SignConsentDto, @Req() req: AuthedRequest) {
+    const base = {
+      tenantId: req.user.tenantId,
       formId: body.formId,
       responses: body.responses ?? {},
-      signatureName: body.signatureName,
-      ip,
+      ip: clientIp(req),
       appointmentId: body.appointmentId,
       serviceId: body.serviceId,
+    };
+    if (req.user.role === UserRole.client) {
+      if (body.clientId && body.clientId !== req.user.id) {
+        throw new ForbiddenException("Solo puedes firmar tus propios consentimientos");
+      }
+      return this.service.sign({ ...base, clientId: req.user.id, signatureName: body.signatureName });
+    }
+    if (!body.clientId) throw new BadRequestException("Indica la clienta que firma");
+    if (!body.signatureName?.trim()) {
+      throw new BadRequestException("Escribe el nombre con el que firma la clienta");
+    }
+    return this.service.sign({
+      ...base,
+      clientId: body.clientId,
+      signatureName: body.signatureName,
+      recordedBy: req.user.id,
     });
   }
 
