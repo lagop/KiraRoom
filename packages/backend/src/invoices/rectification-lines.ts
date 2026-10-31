@@ -39,7 +39,21 @@ import { allocateCents } from "../pos/pos-discounts";
  *                         negative price): no unit is given back.
  * No lines at all: what is left of every line (a full rectification).
  * Lines without `originalLineId` are free lines (a "por diferencias" amount),
- * computed as given with the tax on top, as before.
+ * computed as given: with the tax included when the line says so
+ * (`taxIncluded`), else as the salon prices (`freeLinesTaxIncluded`, its
+ * pricesIncludeTax), like a manual invoice's lines.
+ *
+ * The unit price printed. A line credited as the original was keeps the
+ * original's unit price and discount, so the two invoices mirror each other.
+ * Once part of the line was credited by amount (a discount after the
+ * invoice), or shared a credit not tied to a line, units given back are
+ * worth less than the original's unit price: the line is then printed with
+ * the unit price actually credited, base / quantity, with no discount, so
+ * quantity x unit price is the credited base exactly. When that does not
+ * come out in whole cents, a whole number of units is split in two lines
+ * (some units at one cent more), each exact; a fractional quantity, which
+ * cannot be split that way, keeps one line at the rounded unit price and
+ * says so in its description.
  *
  * Credits not tied to a line. Rectificativas issued before the line link
  * existed, and free lines, cannot be told apart by line. They are taken,
@@ -84,6 +98,8 @@ export interface RectificationLineRequest {
   unitPriceCents?: number;
   discountPct?: number;
   taxRate?: number;
+  /** A free line's price includes the tax. Left out: `freeLinesTaxIncluded`. Ignored with originalLineId. */
+  taxIncluded?: boolean;
 }
 
 /** A line of an earlier, non-cancelled rectificativa of the same invoice. */
@@ -99,6 +115,12 @@ export interface RectificationContext {
   prior?: PriorRectificationLine[];
   /** The original's total: no rectificativa takes the invoice past zero. */
   invoiceTotalCents?: number;
+  /**
+   * Whether a free line that does not say (`taxIncluded` left out) has the
+   * tax included: the salon's pricesIncludeTax (POST /invoices/:id/rectify).
+   * Undefined: on top.
+   */
+  freeLinesTaxIncluded?: boolean;
 }
 
 const EPSILON = 1e-9;
@@ -111,6 +133,12 @@ interface Remaining {
   totalCents: number;
   /** An earlier rectificativa (or an earlier line of this one) credited it. */
   credited: boolean;
+  /**
+   * Part of it was credited by amount, not by units: what is left is no
+   * longer the original's unit price x the units left, so units given back
+   * are printed at the unit price actually credited (repriced).
+   */
+  creditedByAmount: boolean;
 }
 
 interface CreditState {
@@ -136,8 +164,10 @@ export function rectificationLines(
     return wholeRemaining(state);
   }
 
-  const lines = requested.map((req) => {
-    if (req.originalLineId === undefined || req.originalLineId === null) return freeLine(req);
+  const lines = requested.flatMap((req): InvoiceLineInput | InvoiceLineInput[] => {
+    if (req.originalLineId === undefined || req.originalLineId === null) {
+      return freeLine(req, context.freeLinesTaxIncluded);
+    }
     const r = state.lines.get(req.originalLineId);
     if (!r) {
       throw new BadRequestException(`La línea ${req.originalLineId} no es de la factura que se rectifica`);
@@ -183,7 +213,7 @@ function creditState(original: StoredInvoiceLine[], context: RectificationContex
   const lines = new Map<string, Remaining>(
     original.map((line) => [
       line.id,
-      { line, quantity: Number(line.quantity), taxCents: line.taxCents, totalCents: line.totalCents, credited: false },
+      { line, quantity: Number(line.quantity), taxCents: line.taxCents, totalCents: line.totalCents, credited: false, creditedByAmount: false },
     ]),
   );
   const sign = Math.sign(context.invoiceTotalCents ?? 0);
@@ -196,6 +226,7 @@ function creditState(original: StoredInvoiceLine[], context: RectificationContex
       const q = Number(p.quantity);
       // Units given back have the opposite sign; a credit by amount keeps the quantity.
       if (Math.sign(q) === -Math.sign(Number(r.line.quantity))) r.quantity += q;
+      else r.creditedByAmount = true;
       r.taxCents += p.taxCents;
       r.totalCents += p.totalCents;
       r.credited = true;
@@ -225,11 +256,13 @@ function wholeRemaining(state: CreditState): InvoiceLineInput[] {
     else shares = allocateCents(absorb, weights);
   }
   const lines = open.flatMap((r, i) => {
-    if (shares[i] === 0) return [creditOf(r, r.taxCents, r.totalCents, 0 - r.quantity)];
+    if (shares[i] === 0) return unitsBack(r, r.taxCents, r.totalCents, 0 - r.quantity);
     const totalCents = r.totalCents - sign * shares[i];
     if (totalCents === 0) return [];
     const taxCents = Math.round((r.taxCents * totalCents) / r.totalCents);
-    return [creditOf(r, taxCents, totalCents, 0 - r.quantity)];
+    // Less than the units' worth at the original price: printed at what is credited.
+    r.creditedByAmount = true;
+    return unitsBack(r, taxCents, totalCents, 0 - r.quantity);
   });
   if (lines.length === 0) {
     throw new BadRequestException("La factura ya está abonada entera: no queda nada que rectificar");
@@ -237,7 +270,7 @@ function wholeRemaining(state: CreditState): InvoiceLineInput[] {
   return lines;
 }
 
-function quantityCredit(r: Remaining, requested: number | undefined): InvoiceLineInput {
+function quantityCredit(r: Remaining, requested: number | undefined): InvoiceLineInput[] {
   const { line } = r;
   if (r.credited && r.totalCents === 0 && r.taxCents === 0) {
     throw new BadRequestException(`La línea "${line.description}" ya está abonada entera`);
@@ -252,7 +285,7 @@ function quantityCredit(r: Remaining, requested: number | undefined): InvoiceLin
     );
   }
   const share = Math.min(1, -ratio);
-  if (share >= 1 - EPSILON) return creditOf(r, r.taxCents, r.totalCents, 0 - r.quantity);
+  if (share >= 1 - EPSILON) return unitsBack(r, r.taxCents, r.totalCents, 0 - r.quantity);
 
   const taxRate = Number(line.taxRate);
   let taxCents: number;
@@ -266,7 +299,62 @@ function quantityCredit(r: Remaining, requested: number | undefined): InvoiceLin
     taxCents = Math.round(base * (taxRate / 100));
     totalCents = base + taxCents;
   }
-  return creditOf(r, taxCents, totalCents, quantity);
+  return unitsBack(r, taxCents, totalCents, quantity);
+}
+
+/**
+ * Units of a line given back (creditOf), printed at the original's unit
+ * price, or, once part of the line was credited by amount, at the unit
+ * price actually credited (repriced).
+ */
+function unitsBack(r: Remaining, taxCents: number, totalCents: number, quantity: number): InvoiceLineInput[] {
+  const repriced = r.creditedByAmount;
+  const credit = creditOf(r, taxCents, totalCents, quantity);
+  return repriced ? repricedLines(credit) : [credit];
+}
+
+/**
+ * A credit line printed at the unit price it actually credits: base /
+ * quantity, no discount, so quantity x unit price is the credited base.
+ * Whole units that do not divide into whole cents go in two lines, some at
+ * one cent more (largest remainder), each with its share of the tax, so
+ * every line is exact and they add up to the credit. A fractional quantity
+ * stays one line at the rounded unit price, and its description says so.
+ */
+function repricedLines(credit: InvoiceLineInput): InvoiceLineInput[] {
+  const fixed = credit.fixed as { taxCents: number; totalCents: number };
+  // Worked on positive amounts (a credit is negative), then given its sign back.
+  const sign = Math.sign(fixed.totalCents) || -1;
+  const base = sign * (fixed.totalCents - fixed.taxCents);
+  const tax = sign * fixed.taxCents;
+  const units = Math.abs(credit.quantity);
+  const qSign = Math.sign(credit.quantity) || -1;
+  if (units <= 0 || base < 0 || tax < 0) return [credit];
+  const line = (quantity: number, unitPriceCents: number, lineBase: number, taxCents: number): InvoiceLineInput => ({
+    ...credit,
+    quantity: qSign * quantity,
+    unitPriceCents,
+    discountPct: 0,
+    fixed: { taxCents: 0 + sign * taxCents, totalCents: 0 + sign * (lineBase + taxCents) },
+  });
+
+  if (!Number.isInteger(units)) {
+    const unit = Math.round(base / units);
+    if (Math.abs(unit * units - base) < 1e-6) return [line(units, unit, base, tax)];
+    return [
+      {
+        ...line(units, unit, base, tax),
+        description: `${credit.description} (precio unitario redondeado; base abonada ${euros(base)})`,
+      },
+    ];
+  }
+  const unit = Math.floor(base / units);
+  const plusOne = base - unit * units; // units at one cent more; fewer than `units`
+  if (plusOne === 0) return [line(units, unit, base, tax)];
+  const low = (units - plusOne) * unit;
+  const high = plusOne * (unit + 1);
+  const [taxLow, taxHigh] = tax > 0 ? allocateCents(tax, [low, high]) : [0, 0];
+  return [line(units - plusOne, unit, low, taxLow), line(plusOne, unit + 1, high, taxHigh)];
 }
 
 /** `amountCents` of the line's price, in its own terms, credited as one line of 1 x a negative price. */
@@ -297,8 +385,10 @@ function amountCredit(r: Remaining, amountCents: number): InvoiceLineInput {
     taxCents = Math.min(Math.round(amountCents * (taxRate / 100)), r.taxCents);
     totalCents = amountCents + taxCents;
   }
+  const credit = creditOf(r, taxCents, totalCents, 1, false);
+  r.creditedByAmount = true;
   return {
-    ...creditOf(r, taxCents, totalCents, 1, false),
+    ...credit,
     description: `Descuento: ${line.description}`,
     unitPriceCents: 0 - (totalCents - taxCents),
     discountPct: 0,
@@ -378,7 +468,7 @@ function euros(cents: number): string {
   return (cents / 100).toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
 }
 
-function freeLine(req: RectificationLineRequest): InvoiceLineInput {
+function freeLine(req: RectificationLineRequest, salonTaxIncluded?: boolean): InvoiceLineInput {
   if (
     typeof req.description !== "string" ||
     typeof req.quantity !== "number" ||
@@ -395,5 +485,6 @@ function freeLine(req: RectificationLineRequest): InvoiceLineInput {
     unitPriceCents: req.unitPriceCents,
     discountPct: req.discountPct,
     taxRate: req.taxRate,
+    taxIncluded: typeof req.taxIncluded === "boolean" ? req.taxIncluded : salonTaxIncluded === true,
   };
 }

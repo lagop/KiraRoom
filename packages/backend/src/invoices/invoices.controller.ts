@@ -128,6 +128,8 @@ export class InvoicesController {
         unitPriceCents: l.unitPriceCents,
         discountPct: l.discountPct,
         taxRate: l.taxRate,
+        // Free lines: as sent; left out, the salon's pricesIncludeTax.
+        taxIncluded: typeof l.taxIncluded === "boolean" ? l.taxIncluded : undefined,
       })),
       body.reason,
     );
