@@ -6,20 +6,20 @@ const calc = new InvoiceCalculator();
 const appt = { price: new Prisma.Decimal("30.00"), serviceId: "svc-1", service: { name: "Corte" } };
 
 describe("appointmentInvoiceLine", () => {
-  it("keeps today's default: tax added on top of the price", () => {
-    expect(SALON_PRICES_INCLUDE_TAX).toBe(false);
+  it("prices are final: the tax is inside the price, not on top", () => {
+    expect(SALON_PRICES_INCLUDE_TAX).toBe(true);
     const line = appointmentInvoiceLine(appt, {});
     expect(line).toEqual({
       description: "Corte",
       quantity: 1,
       unitPriceCents: 3000,
       taxRate: 21,
-      taxIncluded: false,
+      taxIncluded: true,
       serviceId: "svc-1",
     });
     const r = calc.compute([line]);
-    expect(r.subtotalCents).toBe(3000);
-    expect(r.totalCents).toBe(3630);
+    expect(r.subtotalCents).toBe(2479);
+    expect(r.totalCents).toBe(3000);
   });
 
   it("prices including tax: the invoice total is the price", () => {
@@ -76,7 +76,7 @@ describe("appointmentInvoiceLines: a visit of several services", () => {
       ["Corte", 1, 2000, 7, "svc-cut"],
       ["Mascarilla", 2, 400, 7, "svc-mask"],
     ]);
-    expect(calc.compute(lines).subtotalCents).toBe(7300);
+    expect(calc.compute(lines).totalCents).toBe(7300);
   });
 
   it("a cancelled service is not invoiced", () => {

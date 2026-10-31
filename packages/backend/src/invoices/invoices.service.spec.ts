@@ -237,15 +237,15 @@ describe("InvoiceService.fromAppointment", () => {
     return { m, svc, lastNumber };
   }
 
-  it("issues one invoice linked to the appointment, priced as before (21 % on top)", async () => {
+  it("issues one invoice linked to the appointment, priced at what the client paid (21 % included)", async () => {
     const { m, svc } = setup();
     const r = await svc.fromAppointment("appt-1");
     expect(r).toEqual({ id: "inv-1" });
     const inv = m.invoices[0];
     expect(inv.sourceType).toBe("appointment");
     expect(inv.sourceId).toBe("appt-1");
-    expect(inv.subtotalCents).toBe(3000);
-    expect(inv.totalCents).toBe(3630);
+    expect(inv.subtotalCents).toBe(2479);
+    expect(inv.totalCents).toBe(3000);
     expect(inv.recipientName).toBe("Ana López");
   });
 
@@ -308,6 +308,25 @@ describe("InvoiceService.fromAppointment", () => {
   it("uses the salon's rate (IGIC 7 %)", async () => {
     const { m, svc } = setup({}, { defaultTaxRate: 7 });
     await svc.fromAppointment("appt-1");
-    expect(m.invoices[0].totalCents).toBe(3210);
+    expect(m.invoices[0].totalCents).toBe(3000);
+    expect(m.invoices[0].subtotalCents).toBe(2804);
+  });
+});
+
+describe("InvoiceService.fromOrder", () => {
+  it("invoices a till sale at the price paid, tax included", async () => {
+    const m = makePrismaMock();
+    m.prisma.order.findUnique = async () => ({
+      id: "order-1",
+      tenantId: "tenant-1",
+      status: "completed",
+      items: [{ productId: "p-1", quantity: 2, unitPrice: new Prisma.Decimal("12.10"), product: { name: "Champú", taxRate: 21 } }],
+      client: null,
+      tenant: { name: "Salón Luna", fiscalSettings: { defaultTaxRate: 21 } },
+    });
+    const svc = new InvoiceService(m.prisma, new InvoiceCalculator(), {} as any);
+    await svc.fromOrder("order-1");
+    expect(m.invoices[0].totalCents).toBe(2420);
+    expect(m.invoices[0].subtotalCents).toBe(2000);
   });
 });
