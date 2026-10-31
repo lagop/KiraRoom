@@ -27,6 +27,8 @@ interface Client {
 interface CartItem {
   service: Service;
   quantity: number;
+  /** The appointment this line charges (the server prices it at what it still owes). */
+  _appointmentId?: string;
 }
 
 interface POSSummary {
@@ -561,8 +563,10 @@ export default function POSPage() {
     try {
       setProcessing(true);
 
+      // The server prices each line itself; name and price are only shown.
       const items = cart.map((item) => ({
         serviceId: item.service.id,
+        ...(item._appointmentId ? { appointmentId: item._appointmentId } : {}),
         name: item.service.name,
         price: Math.round(item.service.price * 100),
         quantity: item.quantity,

@@ -7,6 +7,7 @@ import type { Request } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { Public } from "../auth/decorators/public.decorator";
 import { ConsentService } from "./consent.service";
+import { CreateConsentFormDto, RevokeConsentDto, SignConsentDto, UpdateConsentFormDto } from "./consent.dto";
 import { Roles, SALON_TEAM, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 
 /** A client's choice about commercial communications. */
@@ -48,7 +49,7 @@ export class ConsentFormsController {
 
   @Post()
   @Roles(...SALON_MANAGERS)
-  create(@Req() req: AuthedRequest, @Body() body: any) {
+  create(@Req() req: AuthedRequest, @Body() body: CreateConsentFormDto) {
     return this.service.createForm(req.user.tenantId, body);
   }
 
@@ -57,7 +58,7 @@ export class ConsentFormsController {
   update(
     @Req() req: AuthedRequest,
     @Param("id", ParseUUIDPipe) id: string,
-    @Body() body: any,
+    @Body() body: UpdateConsentFormDto,
   ) {
     return this.service.updateForm(req.user.tenantId, id, body);
   }
@@ -89,10 +90,7 @@ export class ConsentController {
   @Post("sign")
   @Public()
   @Throttle({ default: { ttl: 60_000, limit: 30 } })
-  async sign(@Body() body: any, @Req() req: Request) {
-    if (!body?.tenantId || !body?.clientId || !body?.formId) {
-      throw new BadRequestException("tenantId, clientId and formId required");
-    }
+  async sign(@Body() body: SignConsentDto, @Req() req: Request) {
     const ip =
       (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
       req.socket?.remoteAddress ||
@@ -208,7 +206,7 @@ export class ConsentController {
   revoke(
     @Req() req: AuthedRequest,
     @Param("id", ParseUUIDPipe) id: string,
-    @Body() body: { reason?: string },
+    @Body() body: RevokeConsentDto,
   ) {
     return this.service.revoke(req.user.tenantId, id, body?.reason);
   }

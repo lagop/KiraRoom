@@ -11,28 +11,16 @@ import {
   marketingStateOf,
 } from "./marketing-consent";
 
-export interface ConsentFormField {
-  id: string;
-  type: "boolean" | "text" | "select" | "date" | "info";
-  label: string;
-  required?: boolean;
-  options?: string[];
-  helpText?: string;
-}
+import {
+  ConsentFormFieldDto as ConsentFormField,
+  CreateConsentFormDto as CreateConsentFormInput,
+  UpdateConsentFormDto as UpdateConsentFormInput,
+} from "./consent.dto";
 
-export interface CreateConsentFormInput {
-  name: string;
-  description?: string;
-  fields: ConsentFormField[];
-  serviceIds?: string[];
-}
+export type { ConsentFormField, CreateConsentFormInput, UpdateConsentFormInput };
 
-export interface UpdateConsentFormInput {
-  name?: string;
-  description?: string;
-  fields?: ConsentFormField[];
-  serviceIds?: string[];
-}
+/** A signature's answers go into a JSON column; a few KB is plenty. */
+const MAX_RESPONSES_BYTES = 20_000;
 
 @Injectable()
 export class ConsentService {
@@ -163,6 +151,16 @@ export class ConsentService {
     if (!input.signatureName || input.signatureName.trim().length < 2) {
       throw new BadRequestException("Typed signature name required");
     }
+    if (JSON.stringify(input.responses ?? {}).length > MAX_RESPONSES_BYTES) {
+      throw new BadRequestException("Responses too large");
+    }
+    // The route is public and takes the client from the body: the consent
+    // must at least be recorded against one of this salon's clients.
+    const client = await this.prisma.client.findFirst({
+      where: { id: input.clientId, tenantId: input.tenantId },
+      select: { id: true },
+    });
+    if (!client) throw new NotFoundException("Client not found");
     return this.prisma.consent.create({
       data: {
         tenantId: input.tenantId,

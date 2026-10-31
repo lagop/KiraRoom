@@ -16,17 +16,27 @@ import { splitTicket } from "../payments/appointment-payment";
 
 type Row = Record<string, any>;
 
+/** Euros, as Service.price and Product.price are stored. */
+const CATALOGUE = {
+  services: [
+    { id: "svc1", name: "Corte", price: 40 },
+    { id: "svc2", name: "Tinte", price: 25 },
+  ],
+  products: [{ id: "prod1", name: "Champú", price: 12, isActive: true }],
+};
+
 function apt(id: string, over: Row = {}): Row {
   return {
     id,
     tenantId: "t1",
     clientId: "c1",
     professionalId: "p-me",
+    serviceId: "svc1",
     status: "completed",
     paymentStatus: "pending",
     amountPaid: 0,
     totalAmount: 4000, // cents
-    service: { price: 40 },
+    service: { name: "Corte", price: 40 },
     ...over,
   };
 }
@@ -66,7 +76,18 @@ function till(appointments: Row[], opts: { loyalty?: Row; failUpdate?: boolean }
       ),
     },
     professional: { findFirst: jest.fn(async ({ where }: any) => (where.userId === "u-me" ? { id: "p-me" } : null)) },
-    client: { findFirst: jest.fn(), create: jest.fn() },
+    // The salon's catalogue: lines are priced from here, never from the body.
+    service: {
+      findMany: jest.fn(async ({ where }: any) =>
+        CATALOGUE.services.filter((x) => where.id.in.includes(x.id) && where.tenantId === "t1"),
+      ),
+    },
+    product: {
+      findMany: jest.fn(async ({ where }: any) =>
+        CATALOGUE.products.filter((x) => where.id.in.includes(x.id) && where.tenantId === "t1"),
+      ),
+    },
+    client: { findFirst: jest.fn(async ({ where }: any) => (where.id ? { id: where.id } : null)), create: jest.fn() },
     // A transaction: everything written inside it lands, or nothing does.
     $transaction: jest.fn(async (fn: any) => {
       const pending = { payments: [] as Row[], updates: [] as [string, Row][] };
@@ -123,12 +144,12 @@ describe("POS: charging an appointment", () => {
   });
 
   it("splits one ticket over several appointments, each with its own row", async () => {
-    const t = till([apt("a1"), apt("a2", { totalAmount: 2500, clientId: "c2" })]);
+    const t = till([apt("a1"), apt("a2", { totalAmount: 2500, clientId: "c2", serviceId: "svc2" })]);
     await t.service.processCheckout({
       tenantId: "t1",
       clientId: "c1",
       appointmentIds: ["a1", "a2"],
-      items: [item(4000), item(2500, "svc2"), { name: "Champú", price: 1200, quantity: 1 }],
+      items: [item(4000), item(2500, "svc2"), { productId: "prod1", quantity: 1 }],
       payments: [{ method: "cash", amount: 7700 }],
       actor: OWNER,
     } as any);
@@ -142,18 +163,66 @@ describe("POS: charging an appointment", () => {
     expect(t.committed.appointments.get("a2")).toMatchObject({ amountPaid: 2500, paymentStatus: "paid" });
   });
 
-  it("leaves an appointment the ticket does not cover partly paid, not paid", async () => {
+  it("prices the appointment at what it owes, not at the price the till sends", async () => {
     const t = till([apt("a1")]);
-    await t.service.processCheckout({
+    // A price typed lower at the till used to leave the visit partly paid
+    // for whatever the client said. The line is priced from the appointment.
+    await expect(
+      t.service.processCheckout({
+        tenantId: "t1",
+        clientId: "c1",
+        appointmentIds: ["a1"],
+        items: [item(1500)],
+        payments: [{ method: "cash", amount: 1500 }],
+        actor: OWNER,
+      } as any),
+    ).rejects.toThrow(/less than order total/);
+    expect(t.committed.payments).toHaveLength(0);
+  });
+
+  it("charges what is still owed after a deposit, matching the line by appointment id", async () => {
+    const t = till([apt("a1", { amountPaid: 1000 })]);
+    const out: any = await t.service.processCheckout({
       tenantId: "t1",
       clientId: "c1",
       appointmentIds: ["a1"],
-      // A price typed lower at the till: the appointment's own total decides.
-      items: [item(1500)],
-      payments: [{ method: "cash", amount: 1500 }],
+      items: [{ serviceId: "svc1", appointmentId: "a1", quantity: 1, price: 1 }],
+      payments: [{ method: "card", amount: 3000 }],
       actor: OWNER,
     } as any);
-    expect(t.committed.appointments.get("a1")).toMatchObject({ amountPaid: 1500, paymentStatus: "pending" });
+    expect(out.subtotal).toBe(3000);
+    expect(out.items).toEqual([{ serviceId: "svc1", appointmentId: "a1", name: "Corte", price: 3000, quantity: 1 }]);
+    expect(t.committed.appointments.get("a1")).toMatchObject({ amountPaid: 4000, paymentStatus: "paid" });
+  });
+
+  it("adds a line for an appointment the cart left out", async () => {
+    const t = till([apt("a1")]);
+    const out: any = await t.service.processCheckout({
+      tenantId: "t1",
+      clientId: "c1",
+      appointmentIds: ["a1"],
+      items: [item(1, "svc2")],
+      payments: [{ method: "cash", amount: 6500 }],
+      actor: OWNER,
+    } as any);
+    expect(out.items.map((i: Row) => [i.appointmentId ?? null, i.serviceId, i.price])).toEqual([
+      ["a1", "svc1", 4000],
+      [null, "svc2", 2500],
+    ]);
+  });
+
+  it("refuses a line that names an appointment not on the ticket", async () => {
+    const t = till([apt("a1")]);
+    await expect(
+      t.service.processCheckout({
+        tenantId: "t1",
+        clientId: "c1",
+        appointmentIds: ["a1"],
+        items: [item(4000), { serviceId: "svc1", appointmentId: "a-other", quantity: 1 }],
+        payments: [{ method: "cash", amount: 8000 }],
+        actor: OWNER,
+      } as any),
+    ).rejects.toThrow(/not on this ticket/);
   });
 
   it("takes the client's loyalty reward off the appointment: the rest pays it in full", async () => {

@@ -1,18 +1,12 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { Decimal } from "@prisma/client/runtime/library";
+import { PayCommissionDto } from "./dto/commission.dto";
 
 export interface CalculateCommissionDto {
   appointmentId: string;
   amount?: number;
   rate?: number;
-}
-
-export interface PayCommissionDto {
-  professionalId: string;
-  appointmentIds?: string[];
-  startDate?: Date;
-  endDate?: Date;
 }
 
 export interface CommissionSummary {

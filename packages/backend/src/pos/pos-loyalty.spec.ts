@@ -17,6 +17,7 @@ function pos(loyaltyOver: Record<string, any> = {}) {
           id,
           clientId: "c1",
           professionalId: "p1",
+          serviceId: "svc1",
           status: "completed",
           paymentStatus: "pending",
           amountPaid: 0,
@@ -26,7 +27,8 @@ function pos(loyaltyOver: Record<string, any> = {}) {
       ),
       updateMany: jest.fn(async () => ({ count: 1 })),
     },
-    client: { findFirst: jest.fn(), create: jest.fn() },
+    service: { findMany: jest.fn(async () => [{ id: "svc1", name: "Corte", price: 40 }]) },
+    client: { findFirst: jest.fn(async ({ where }: any) => (where.id ? { id: where.id } : null)), create: jest.fn() },
   };
   prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
   const loyalty: any = {

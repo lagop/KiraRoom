@@ -17,6 +17,15 @@ import { Feature } from "../common/decorators/feature.decorator";
 import { Public } from "../auth/decorators/public.decorator";
 import { AllowWhenReadOnly } from "../common/decorators/allow-when-read-only.decorator";
 import { ReadOnlyNoticeService } from "./read-only-notice.service";
+import {
+  AppointmentChargeDto,
+  CancelSubscriptionDto,
+  CreatePaymentBodyDto,
+  SubscriptionPlanDto,
+  UpdateLocationCountDto,
+  UpdatePaymentStatusDto,
+  WalletAmountDto,
+} from "./dto/payment-bodies.dto";
 
 @ApiTags("Payments")
 @Controller("payments")
@@ -127,25 +136,7 @@ export class PaymentsController {
   @ApiOperation({ summary: "Create a new payment" })
   async createPayment(
     @Req() req: any,
-    @Body()
-    body: {
-      amount: number;
-      clientId?: string;
-      appointmentId?: string;
-      type?: string;
-      stripePaymentId?: string;
-      isDeposit?: boolean;
-      depositAmount?: number;
-      remainingAmount?: number;
-      description?: string;
-      method?:
-        | "cash"
-        | "card"
-        | "bank_transfer"
-        | "wallet"
-        | "gift_card"
-        | "loyalty_points";
-    },
+    @Body() body: CreatePaymentBodyDto,
   ) {
     // Obtener professionalId para usuarios STAFF
     let professionalId = null;
@@ -179,12 +170,12 @@ export class PaymentsController {
   async updatePaymentStatus(
     @Req() req: any,
     @Param("id", ParseUUIDPipe) id: string,
-    @Body() body: { status: string },
+    @Body() body: UpdatePaymentStatusDto,
   ) {
     return this.paymentsService.updatePaymentStatus(
       req.user.tenantId,
       id,
-      body.status as "pending" | "paid" | "failed" | "refunded",
+      body.status,
     );
   }
 
@@ -253,7 +244,7 @@ export class PaymentsController {
   @AllowWhenReadOnly()
   @Roles("owner")
   @ApiOperation({ summary: "Create subscription checkout session" })
-  async createCheckout(@Req() req: any, @Body() body: { plan: string }) {
+  async createCheckout(@Req() req: any, @Body() body: SubscriptionPlanDto) {
     return this.subscriptionsService.createCheckoutSession(
       req.user.tenantId,
       body.plan,
@@ -264,7 +255,7 @@ export class PaymentsController {
   @AllowWhenReadOnly()
   @Roles("owner")
   @ApiOperation({ summary: "Change subscription plan" })
-  async changePlan(@Req() req: any, @Body() body: { plan: string }) {
+  async changePlan(@Req() req: any, @Body() body: SubscriptionPlanDto) {
     return this.subscriptionsService.changePlan(req.user.tenantId, body.plan);
   }
 
@@ -274,7 +265,7 @@ export class PaymentsController {
   @ApiOperation({ summary: "Cancel subscription" })
   async cancelSubscription(
     @Req() req: any,
-    @Body() body: { immediately?: boolean },
+    @Body() body: CancelSubscriptionDto,
   ) {
     const { newlyCancelled, ...result } = await this.subscriptionsService.cancelSubscription(
       req.user.tenantId,
@@ -315,7 +306,7 @@ export class PaymentsController {
   })
   async updateLocationCount(
     @Req() req: any,
-    @Body() body: { locationCount: number },
+    @Body() body: UpdateLocationCountDto,
   ) {
     return this.subscriptionsService.updateLocationCount(
       req.user.tenantId,
@@ -386,12 +377,12 @@ export class PaymentsController {
   async depositWallet(
     @Req() req: any,
     @Param("clientId") clientId: string,
-    @Body() body: { amount: number; description?: string },
+    @Body() body: WalletAmountDto,
   ) {
     return this.walletService.addFunds(
       req.user.tenantId,
       clientId,
-      body.amount,
+      Math.round(body.amount),
       body.description,
     );
   }
@@ -403,12 +394,12 @@ export class PaymentsController {
   async withdrawWallet(
     @Req() req: any,
     @Param("clientId") clientId: string,
-    @Body() body: { amount: number; description?: string },
+    @Body() body: WalletAmountDto,
   ) {
     return this.walletService.deductFunds(
       req.user.tenantId,
       clientId,
-      body.amount,
+      Math.round(body.amount),
       body.description,
     );
   }
@@ -447,7 +438,7 @@ export class PaymentsController {
   async processDeposit(
     @Req() req: any,
     @Param("appointmentId") appointmentId: string,
-    @Body() body: { amount: number; method: "card" | "cash" },
+    @Body() body: AppointmentChargeDto,
   ) {
     const tenantId = req.user.tenantId;
     return this.paymentsService.processDeposit(
@@ -464,7 +455,7 @@ export class PaymentsController {
   async collectBalance(
     @Req() req: any,
     @Param("appointmentId") appointmentId: string,
-    @Body() body: { amount: number; method: "card" | "cash" },
+    @Body() body: AppointmentChargeDto,
   ) {
     const tenantId = req.user.tenantId;
     return this.paymentsService.collectBalance(

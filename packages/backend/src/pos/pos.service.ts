@@ -8,34 +8,30 @@ import {
   recordAppointmentPayment,
   shareMethod,
   splitTicket,
+  appointmentOwedCents,
+  type PayableAppointment,
 } from '../payments/appointment-payment';
+import { CreatePosOrderDto, PosCartItemDto } from './dto/pos.dto';
 
-export interface CartItem {
+export { CreatePosOrderDto };
+
+/**
+ * A cart line as the server prices it: cents per unit, from the database
+ * (the service or product, or what the appointment still owes). The
+ * client sends only what is sold and how many.
+ */
+export interface PricedLine {
   serviceId?: string;
+  productId?: string;
+  appointmentId?: string;
   name: string;
   price: number;
   quantity: number;
 }
 
-export interface CreatePosOrderDto {
+/** The validated body plus the tenant and the actor, from the JWT. */
+export interface PosCheckout extends CreatePosOrderDto {
   tenantId: string;
-  clientId?: string;
-  clientInfo?: {
-    firstName: string;
-    lastName: string;
-    email?: string;
-    phone?: string;
-  };
-  items: CartItem[];
-  payments: {
-    method: 'card' | 'cash' | 'bank_transfer' | 'wallet' | 'gift_card';
-    amount: number;
-  }[];
-  notes?: string;
-  /** Appointments this ticket pays for (the till's "charge appointment" flow). */
-  appointmentIds?: string[];
-  /** A loyalty reward the client spends points on: comes off the total. */
-  loyaltyRewardId?: string;
   /** Who is at the till (from the JWT, never the body): staff charge their own appointments only. */
   actor?: { id: string; role: string };
 }
@@ -169,15 +165,12 @@ export class PosService {
   /**
    * Process a POS checkout/sale
    */
-  async processCheckout(dto: CreatePosOrderDto) {
-    const { tenantId, clientId, clientInfo, items } = dto;
+  async processCheckout(dto: PosCheckout) {
+    const { tenantId, clientId, clientInfo } = dto;
     const payments = dto.payments ?? [];
     // One id for the whole ticket, stamped on each of its payments, so the
     // loyalty points it earns or spends can be found again on a refund.
     const saleId = randomUUID();
-
-    // Calculate totals (amounts are in cents)
-    const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
     const appointmentIds = [...new Set(dto.appointmentIds ?? [])];
     // Checked before anything is spent or written: a cancelled or no-show
@@ -185,6 +178,18 @@ export class PosService {
     const appointments = appointmentIds.length
       ? await this.chargeableAppointments(tenantId, appointmentIds, dto.actor)
       : [];
+
+    // Priced here. The lines used to carry their own price from the
+    // client, so a ticket could be rung up for any amount.
+    const items = await this.priceLines(tenantId, dto.items ?? [], appointments);
+    const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+
+    if (clientId) await this.assertClient(tenantId, clientId);
+    // The wallet is a client's: without one nothing would be taken from it
+    // and the sale would still be recorded as paid.
+    if (!clientId && !clientInfo && payments.some((p) => p.method === 'wallet')) {
+      throw new BadRequestException('A wallet payment needs a client');
+    }
 
     let finalClientId = clientId;
 
@@ -203,7 +208,7 @@ export class PosService {
           data: {
             tenantId,
             firstName: clientInfo.firstName,
-            lastName: clientInfo.lastName,
+            lastName: clientInfo.lastName ?? '',
             email: clientInfo.email,
             phone: clientInfo.phone,
             status: 'active',
@@ -362,11 +367,12 @@ export class PosService {
         id: true,
         clientId: true,
         professionalId: true,
+        serviceId: true,
         status: true,
         paymentStatus: true,
         amountPaid: true,
         totalAmount: true,
-        service: { select: { price: true } },
+        service: { select: { name: true, price: true } },
       },
     });
     if (found.length !== ids.length) {
@@ -388,6 +394,82 @@ export class PosService {
   }
 
   /**
+   * Prices the cart from the database, in cents. Each appointment of the
+   * ticket gets one line at what it still owes (appointmentOwedCents, the
+   * figure the till shows): the line that names it (`appointmentId`), else
+   * the first line of its service, else a line added for it. Further units
+   * of that line, and every other line, are sold at the list price of the
+   * service or product.
+   */
+  private async priceLines(
+    tenantId: string,
+    lines: PosCartItemDto[],
+    appointments: Array<PayableAppointment & { serviceId?: string | null; service?: { name?: string; price: unknown } | null }>,
+  ): Promise<PricedLine[]> {
+    if (lines.some((l) => !l.serviceId === !l.productId)) {
+      throw new BadRequestException('Each cart line is one service or one product');
+    }
+    const pending = lines.map((l) => ({ ...l }));
+    const priced: PricedLine[] = [];
+    for (const apt of appointments) {
+      let at = pending.findIndex((l) => l.appointmentId === apt.id);
+      if (at < 0) at = pending.findIndex((l) => !l.appointmentId && !!l.serviceId && l.serviceId === apt.serviceId);
+      const line = at >= 0 ? pending.splice(at, 1)[0] : undefined;
+      priced.push({
+        ...(apt.serviceId ? { serviceId: apt.serviceId } : {}),
+        appointmentId: apt.id,
+        name: apt.service?.name ?? 'Cita',
+        price: appointmentOwedCents(apt),
+        quantity: 1,
+      });
+      if (line && line.quantity > 1) {
+        pending.push({ ...line, appointmentId: undefined, quantity: line.quantity - 1 });
+      }
+    }
+    if (pending.some((l) => l.appointmentId)) {
+      throw new BadRequestException('A cart line charges an appointment that is not on this ticket');
+    }
+
+    const serviceIds = [...new Set(pending.map((l) => l.serviceId).filter((id): id is string => !!id))];
+    const productIds = [...new Set(pending.map((l) => l.productId).filter((id): id is string => !!id))];
+    const services = serviceIds.length
+      ? await this.prisma.service.findMany({
+          where: { id: { in: serviceIds }, tenantId },
+          select: { id: true, name: true, price: true },
+        })
+      : [];
+    const products = productIds.length
+      ? await this.prisma.product.findMany({
+          where: { id: { in: productIds }, tenantId },
+          select: { id: true, name: true, price: true, isActive: true },
+        })
+      : [];
+    if (services.length !== serviceIds.length) throw new NotFoundException('Service not found');
+    if (products.length !== productIds.length) throw new NotFoundException('Product not found');
+    const inactive = products.find((p) => !p.isActive);
+    if (inactive) throw new BadRequestException(`Product ${inactive.name} is not available`);
+
+    const serviceById = new Map(services.map((x) => [x.id, x]));
+    const productById = new Map(products.map((x) => [x.id, x]));
+    for (const line of pending) {
+      const source = line.serviceId ? serviceById.get(line.serviceId)! : productById.get(line.productId as string)!;
+      priced.push({
+        ...(line.serviceId ? { serviceId: line.serviceId } : { productId: line.productId }),
+        name: source.name,
+        price: Math.round(Number(source.price) * 100),
+        quantity: line.quantity,
+      });
+    }
+    return priced;
+  }
+
+  /** 404 unless the client is one of this salon's. */
+  private async assertClient(tenantId: string, clientId: string): Promise<void> {
+    const client = await this.prisma.client.findFirst({ where: { id: clientId, tenantId }, select: { id: true } });
+    if (!client) throw new NotFoundException('Client not found');
+  }
+
+  /**
    * Process a quick sale (single item, immediate payment)
    */
   async quickSale(tenantId: string, serviceId: string, paymentMethod: 'cash' | 'card', clientId?: string) {
@@ -396,6 +478,7 @@ export class PosService {
     if (!service) {
       throw new NotFoundException('Service not found');
     }
+    if (clientId) await this.assertClient(tenantId, clientId);
 
     // Convert price to cents (same as checkout)
     const amount = Math.round(Number(service.price) * 100);

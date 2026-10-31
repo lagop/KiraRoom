@@ -6,6 +6,7 @@ import { Roles } from "../auth/decorators/roles.decorator";
 import {
   PlatformLlmConfigService,
   PlatformLlmConfigPublic } from "./platform-llm-config.service";
+import { AnthropicWorkspacesDto, UpdatePlatformLlmConfigDto } from "./platform-llm-config.dto";
 
 interface AuthedRequest {
   user: { id: string; tenantId: string; role: string };
@@ -38,13 +39,7 @@ export class PlatformLlmConfigController {
   @Roles("saas_owner")
   async update(
     @Req() req: AuthedRequest,
-    @Body() body: {
-      provider?: string;
-      apiKey?: string;
-      defaultModel?: string;
-      baseUrl?: string | null;
-      workspaceId?: string | null;
-    },
+    @Body() body: UpdatePlatformLlmConfigDto,
   ): Promise<PlatformLlmConfigPublic> {
     return this.service.updateConfig({
       provider: body.provider,
@@ -75,7 +70,7 @@ export class PlatformLlmConfigController {
   @Post("anthropic/workspaces")
   @Roles("saas_owner")
   async listAnthropicWorkspaces(
-    @Body() body: { apiKey: string },
+    @Body() body: AnthropicWorkspacesDto,
   ): Promise<{
     ok: boolean;
     workspaces: Array<{ id: string; name?: string; type?: string; default?: boolean }>;

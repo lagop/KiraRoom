@@ -9,12 +9,8 @@ import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { Roles } from "../auth/decorators/roles.decorator";
 import { UserRole } from "@prisma/client";
-import {
-  PromotionsService,
-  CreatePromotionDto,
-  UpdatePromotionDto,
-  ApplyPromotionDto,
-} from "./promotions.service";
+import { PromotionsService } from "./promotions.service";
+import { CreatePromotionDto, UpdatePromotionDto, ApplyPromotionDto } from "./dto/promotion.dto";
 import { Request } from "express";
 import { FeatureGuard } from "../common/guards/feature.guard";
 import { Feature } from "../common/decorators/feature.decorator";

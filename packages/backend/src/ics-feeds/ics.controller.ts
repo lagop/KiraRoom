@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Get, Param, Query, Res, Req, UseGuards, BadRequestException, NotFoundException, Logger } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, HttpCode, HttpStatus, Param, Query, Res, Req, UseGuards, BadRequestException, NotFoundException, Logger } from "@nestjs/common";
 import { ApiTags, ApiOperation } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
 import { createHmac, timingSafeEqual } from "crypto";
@@ -11,6 +11,23 @@ import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { UserRole } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
+
+/**
+ * The salon's feed-token version, kept in `Tenant.features.icsFeed.version`.
+ *
+ * Feed tokens are HMACs of a scope and never expired, so a leaked link was
+ * good forever. Rotating bumps this version and every token the salon has
+ * handed out stops verifying. A salon that never rotated has no key here and
+ * is at version 0, whose tokens are the old unversioned ones: calendars that
+ * are already subscribed keep working until the salon rotates.
+ *
+ * Anything that is not a non-negative integer reads as 0. Only the rotate
+ * endpoint writes the key.
+ */
+export function icsFeedVersion(features: unknown): number {
+  const version = (features as any)?.icsFeed?.version;
+  return Number.isSafeInteger(version) && version > 0 ? version : 0;
+}
 
 @ApiTags("ics-feeds")
 @Controller("ics")
@@ -38,22 +55,70 @@ export class IcsController {
     const tenantId: string = req.user.tenantId;
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
-      select: { slug: true },
+      select: { slug: true, features: true },
     });
     if (!tenant) throw new NotFoundException("Salon not found");
+    const version = icsFeedVersion(tenant.features);
+    const rotatedAt = (tenant.features as any)?.icsFeed?.rotatedAt ?? null;
     const professionals = await this.prisma.professional.findMany({
       where: { tenantId },
       select: { id: true, firstName: true, lastName: true },
       orderBy: { firstName: "asc" },
     });
     return {
-      salon: { slug: tenant.slug, token: IcsController.signToken(`salon:${tenant.slug}`, secret) },
+      version,
+      rotatedAt: version > 0 ? rotatedAt : null,
+      salon: { slug: tenant.slug, token: IcsController.signToken(`salon:${tenant.slug}`, secret, version) },
       professionals: professionals.map((p) => ({
         id: p.id,
         name: `${p.firstName} ${p.lastName}`.trim(),
-        token: IcsController.signToken(`professional:${p.id}`, secret),
+        token: IcsController.signToken(`professional:${p.id}`, secret, version),
       })),
     };
+  }
+
+  /**
+   * Revokes every feed link of the caller's salon (salon, professional and
+   * staff feeds) and returns the new ones.
+   *
+   * One atomic UPDATE: the version is incremented inside Postgres, so two
+   * clicks can never land on the same version, and the rest of `features` is
+   * left as it is. $queryRaw bypasses the tenant-scope extension, hence the
+   * explicit id filter.
+   *
+   * Known gap: the channel settings save `features` with a read-modify-write
+   * through Prisma. One that read `features` before this UPDATE and writes
+   * after it would put the old version back and revive the old links. The
+   * window is a few milliseconds and needs both saves at once from the same
+   * salon. A dedicated column (`Tenant.icsFeedVersion Int @default(0)`)
+   * would close it.
+   */
+  @Post("tokens/rotate")
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.owner, UserRole.admin)
+  @ApiOperation({ summary: "Revoke the salon's ICS feed links and issue new ones" })
+  async rotateTokens(@Req() req: any) {
+    const secret = this.config.get<string>("ICS_TOKEN_SECRET");
+    if (!secret) throw new BadRequestException("ICS_TOKEN_SECRET not configured");
+    const tenantId: string = req.user.tenantId;
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      UPDATE "tenants"
+      SET "features" = jsonb_set(
+            CASE WHEN jsonb_typeof("features") = 'object' THEN "features" ELSE '{}'::jsonb END,
+            '{icsFeed}',
+            jsonb_build_object(
+              'version', COALESCE(("features"->'icsFeed'->>'version')::int, 0) + 1,
+              'rotatedAt', to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+            ),
+            true
+          ),
+          "updatedAt" = NOW()
+      WHERE "id" = ${tenantId}
+      RETURNING "id"`;
+    if (rows.length === 0) throw new NotFoundException("Salon not found");
+    this.logger.log(`ICS feed links rotated for tenant ${tenantId}`);
+    return this.tokens(req);
   }
 
   @Get("professional/:id")
@@ -65,11 +130,12 @@ export class IcsController {
     @Query("token") token: string,
     @Res() res: Response,
   ) {
-    this.verifyToken(`professional:${id}`, token);
+    this.requireToken(token);
     const professional = await this.prisma.professional.findUnique({
       where: { id },
       include: { tenant: true },
     });
+    this.verifyToken(`professional:${id}`, token, professional ? icsFeedVersion(professional.tenant?.features) : null);
     if (!professional) throw new NotFoundException("Professional not found");
     const appointments = await this.prisma.appointment.findMany({
       where: {
@@ -94,11 +160,12 @@ export class IcsController {
     @Query("token") token: string,
     @Res() res: Response,
   ) {
-    this.verifyToken(`staff:${id}`, token);
+    this.requireToken(token);
     const user = await this.prisma.user.findUnique({
       where: { id },
       include: { professional: true, tenant: true },
     });
+    this.verifyToken(`staff:${id}`, token, user?.tenant ? icsFeedVersion(user.tenant.features) : null);
     if (!user || !user.tenant) throw new NotFoundException("Staff not found");
     // The link lives on Professional.userId; User.professionalId is never set.
     const profIds = user.professional ? [user.professional.id] : [];
@@ -127,8 +194,9 @@ export class IcsController {
     @Query("token") token: string,
     @Res() res: Response,
   ) {
-    this.verifyToken(`salon:${slug}`, token);
+    this.requireToken(token);
     const tenant = await this.prisma.tenant.findUnique({ where: { slug } });
+    this.verifyToken(`salon:${slug}`, token, tenant ? icsFeedVersion(tenant.features) : null);
     if (!tenant) throw new NotFoundException("Salon not found");
     const appointments = await this.prisma.appointment.findMany({
       where: {
@@ -143,15 +211,34 @@ export class IcsController {
     return this.send(res, this.buildEvents(appointments, tenant), `salon-${slug}.ics`);
   }
 
-  static signToken(scope: string, secret: string): string {
-    return createHmac("sha256", secret).update(scope).digest("hex").slice(0, 32);
+  /**
+   * Version 0 signs the bare scope, exactly as before versions existed, so
+   * links handed out earlier keep verifying. Later versions sign
+   * `v<n>:<scope>`; every scope starts with a word (salon:, professional:,
+   * staff:), so no versioned input can equal an unversioned one.
+   */
+  static signToken(scope: string, secret: string, version = 0): string {
+    const input = version > 0 ? `v${version}:${scope}` : scope;
+    return createHmac("sha256", secret).update(input).digest("hex").slice(0, 32);
   }
 
-  private verifyToken(scope: string, token: string) {
-    const secret = this.config.get<string>("ICS_TOKEN_SECRET");
-    if (!secret) throw new BadRequestException("ICS_TOKEN_SECRET not configured");
+  private requireToken(token: string) {
+    if (!this.config.get<string>("ICS_TOKEN_SECRET")) {
+      throw new BadRequestException("ICS_TOKEN_SECRET not configured");
+    }
     if (!token) throw new BadRequestException("token query param required");
-    const expected = Buffer.from(IcsController.signToken(scope, secret));
+  }
+
+  /**
+   * `version` is the owning salon's current feed version, or null when the
+   * feed's entity does not exist. A missing entity answers like a bad token,
+   * so the feeds do not say which ids exist.
+   */
+  private verifyToken(scope: string, token: string, version: number | null = 0) {
+    this.requireToken(token);
+    const secret = this.config.get<string>("ICS_TOKEN_SECRET") as string;
+    if (version === null) throw new BadRequestException("Invalid token");
+    const expected = Buffer.from(IcsController.signToken(scope, secret, version));
     const given = Buffer.from(String(token));
     // Constant time: a plain !== leaks how many leading characters match.
     if (given.length !== expected.length || !timingSafeEqual(given, expected)) {
