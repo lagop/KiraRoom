@@ -6,10 +6,11 @@ import {
   Eye,
   Loader2,
   Save,
+  UserX,
   XCircle,
 } from "lucide-react";
 import { AppointmentStatusBadge } from "../primitives/AppointmentStatusBadge";
-import { formatDateTimeString } from "../../appointment-drawer.utils";
+import { formatDateTimeString, statusActions } from "../../appointment-drawer.utils";
 import type { Appointment, AppointmentStatus } from "../types";
 
 /**
@@ -21,9 +22,10 @@ import type { Appointment, AppointmentStatus } from "../types";
  *   1. **Status pill** + "Created at" timestamp (always visible).
  *   2. **Edit / Save / Cancel** buttons — toggle between view and
  *      edit mode, save triggers `handleUpdate()`.
- *   3. **Status change** buttons — `pending → confirmed | cancelled`,
- *      `confirmed → in_progress`, `in_progress → completed`. All
- *      hidden while `updating === true`.
+ *   3. **Status change** buttons — what `statusActions()` offers for
+ *      the status (the server's transition table decides): the next
+ *      step, "No se presentó", "Cancelar". All hidden while
+ *      `updating === true`.
  *
  * The section is **not** in charge of the edit form body itself
  * (Schedule / Service / Add-ons / Recurrence cards). Those stay in
@@ -51,8 +53,22 @@ export interface EditModeActionsProps {
     cancel: string;
     start: string;
     complete: string;
+    noShow: string;
   };
 }
+
+const STATUS_BUTTONS: Partial<
+  Record<
+    AppointmentStatus,
+    { icon: React.ReactNode; className: string; label: keyof EditModeActionsProps["labels"] }
+  >
+> = {
+  confirmed: { icon: <CheckCircle className="w-3 h-3 mr-1" />, className: "bg-green-600 hover:bg-green-700", label: "confirm" },
+  in_progress: { icon: <Clock className="w-3 h-3 mr-1" />, className: "bg-blue-600 hover:bg-blue-700", label: "start" },
+  completed: { icon: <CheckCircle className="w-3 h-3 mr-1" />, className: "bg-green-600 hover:bg-green-700", label: "complete" },
+  no_show: { icon: <UserX className="w-3 h-3 mr-1" />, className: "bg-gray-600 hover:bg-gray-700", label: "noShow" },
+  cancelled: { icon: <XCircle className="w-3 h-3 mr-1" />, className: "bg-red-600 hover:bg-red-700", label: "cancel" },
+};
 
 export function EditModeActions({
   appointment,
@@ -123,46 +139,21 @@ export function EditModeActions({
             </span>
           ) : (
             <>
-              {appointment.status === "pending" && (
-                <>
+              {statusActions(appointment.status).map((to) => {
+                const button = STATUS_BUTTONS[to];
+                if (!button) return null;
+                return (
                   <button
+                    key={to}
                     type="button"
-                    onClick={() => onStatusChange("confirmed")}
-                    className="inline-flex items-center px-2 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700 transition-colors"
+                    onClick={() => onStatusChange(to)}
+                    className={`inline-flex items-center px-2 py-1 ${button.className} text-white text-xs rounded transition-colors`}
                   >
-                    <CheckCircle className="w-3 h-3 mr-1" />
-                    {labels.confirm}
+                    {button.icon}
+                    {labels[button.label]}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => onStatusChange("cancelled")}
-                    className="inline-flex items-center px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700 transition-colors"
-                  >
-                    <XCircle className="w-3 h-3 mr-1" />
-                    {labels.cancel}
-                  </button>
-                </>
-              )}
-              {appointment.status === "confirmed" && (
-                <button
-                  type="button"
-                  onClick={() => onStatusChange("in_progress")}
-                  className="inline-flex items-center px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 transition-colors"
-                >
-                  <Clock className="w-3 h-3 mr-1" />
-                  {labels.start}
-                </button>
-              )}
-              {appointment.status === "in_progress" && (
-                <button
-                  type="button"
-                  onClick={() => onStatusChange("completed")}
-                  className="inline-flex items-center px-2 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700 transition-colors"
-                >
-                  <CheckCircle className="w-3 h-3 mr-1" />
-                  {labels.complete}
-                </button>
-              )}
+                );
+              })}
             </>
           )}
         </div>

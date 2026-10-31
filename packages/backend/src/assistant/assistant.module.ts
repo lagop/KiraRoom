@@ -5,6 +5,7 @@ import { VirtualReceptionistModule } from '../virtual-receptionist/virtual-recep
 import { PlatformModule } from '../platform/platform.module';
 import { FeatureFlagModule } from '../common/feature-flags/feature-flag.module';
 import { WaitListModule } from '../wait-list/wait-list.module';
+import { AppointmentsModule } from '../appointments/appointments.module';
 import { AssistantController } from './assistant.controller';
 import { AssistantService } from './assistant.service';
 import { AssistantGateway } from './assistant.gateway';
@@ -25,7 +26,9 @@ import { AssistantSoftLaunchGuard } from './assistant-soft-launch.guard';
 @Module({
   // WaitListModule: close_waitlist_slot sends the notices through the
   // wait-list's own "Avisar" path.
-  imports: [ConfigModule, PrismaModule, VirtualReceptionistModule, PlatformModule, FeatureFlagModule, WaitListModule],
+  // AppointmentsModule: mark_no_show changes the status through the
+  // appointment's own path (transition table, notice, activity log).
+  imports: [ConfigModule, PrismaModule, VirtualReceptionistModule, PlatformModule, FeatureFlagModule, WaitListModule, AppointmentsModule],
   controllers: [AssistantController],
   providers: [
     AssistantService,

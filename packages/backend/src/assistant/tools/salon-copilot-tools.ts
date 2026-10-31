@@ -1,6 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { HttpException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { WaitListService, NotifyResult } from '../../wait-list/wait-list.service';
+import { AppointmentsService } from '../../appointments/appointments.service';
+import { canTransition, transitionRefusal } from '../../appointments/appointment-status';
 
 /**
  * P2A-staff-copilot: tools the in-app copilot exposes to the LLM.
@@ -304,6 +306,9 @@ export class SalonCopilotToolsService {
     // resolves it from WaitListModule (no @Optional: a missing provider
     // must fail the boot, not silently skip the notices).
     private readonly waitList?: WaitListService,
+    // mark_no_show takes the appointment's own status path. Same rule:
+    // resolved from AppointmentsModule, optional only for the specs.
+    private readonly appointments?: AppointmentsService,
   ) {}
 
   async execute(
@@ -1171,22 +1176,32 @@ private async rescheduleAppointment(
     if (appt.tenantId !== ctx.tenantId) {
       return { error: 'forbidden', message: 'La cita no pertenece a tu salón.' };
     }
-    if (appt.status === 'no_show' || appt.status === 'completed' || appt.status === 'cancelled') {
-      return { error: 'invalid_status', message: `La cita ya está en estado ${appt.status}.` };
+    // The appointments' transition table decides, here as in the panel.
+    if (!canTransition(appt.status, 'no_show')) {
+      return { error: 'invalid_status', message: transitionRefusal(appt.status, 'no_show') };
     }
     if (applyFee && (Number.isNaN(feeAmount) || feeAmount <= 0)) {
       return { error: 'invalid_feeAmount' };
     }
+    if (!this.appointments) return { error: 'unavailable' };
 
-    const updated = await this.prisma.appointment.update({
-      where: { id: appointmentId },
-      data: {
-        status: 'no_show',
-        ...(applyFee ? { discount: { noShowFee: feeAmount } as any } : {}),
-        updatedAt: new Date(),
-      },
-      select: { id: true, status: true },
-    });
+    // The same path as the panel's "No se presentó": checked against the
+    // table again at the write, followed by the no-show notice and the
+    // activity entry. It used to be a bare status write.
+    let updated: { id: string; status: string };
+    try {
+      updated = await this.appointments.changeStatus(
+        { id: ctx.userId, tenantId: ctx.tenantId, role: ctx.role },
+        appointmentId,
+        'no_show',
+        applyFee ? { data: { discount: { noShowFee: feeAmount } } } : {},
+      );
+    } catch (err) {
+      if (err instanceof HttpException) {
+        return { error: 'invalid_status', message: err.message };
+      }
+      throw err;
+    }
 
     return {
       ok: true,

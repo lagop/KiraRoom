@@ -14,6 +14,13 @@ import * as path from "path";
 import {
   addMinutesToTime,
   appointmentEditHref,
+  asksFirst,
+  canChangeStatus,
+  statusLabelKey,
+  NEXT_STATUSES,
+  sendStatusChange,
+  serverMessage,
+  statusActions,
   drawerTargetFromQuery,
   calculateTotalDuration,
   formatDateString,
@@ -285,6 +292,72 @@ checkTrue(
   "no link to the non-existent /edit page is left in the detail page",
   !fs.readFileSync(path.join(__dirname, "..", "[id]", "page.tsx"), "utf8").includes("/edit`"),
 );
+
+// ----- Status changes -----
+
+console.log("\nStatus changes");
+
+checkTrue("completed and cancelled offer nothing", statusActions("completed").length === 0 && statusActions("cancelled").length === 0);
+check("pending: confirm, no-show, cancel", statusActions("pending"), ["confirmed", "no_show", "cancelled"]);
+check("confirmed: start, no-show, cancel", statusActions("confirmed"), ["in_progress", "no_show", "cancelled"]);
+check("in progress: complete or cancel, not a no-show", statusActions("in_progress"), ["completed", "cancelled"]);
+check("a no-show can be confirmed again (arrived late)", statusActions("no_show"), ["confirmed"]);
+checkTrue("every button is one the table allows", (["pending", "confirmed", "in_progress", "no_show"] as const).every((from) => statusActions(from).every((to) => canChangeStatus(from, to))));
+checkTrue("an unknown status offers nothing", statusActions("archived").length === 0);
+
+{
+  const calls: string[] = [];
+  const api = {
+    cancelAppointment: (id: string, reason?: string) => (calls.push(`cancel ${id} ${reason ?? "-"}`), Promise.resolve()),
+    completeAppointment: (id: string) => (calls.push(`complete ${id}`), Promise.resolve()),
+    markAppointmentNoShow: (id: string) => (calls.push(`no-show ${id}`), Promise.resolve()),
+    updateAppointment: (id: string, data: { status: string }) => (calls.push(`patch ${id} ${data.status}`), Promise.resolve()),
+  };
+  void sendStatusChange(api, "a1", "cancelled", "  Enferma ");
+  void sendStatusChange(api, "a1", "cancelled", "   ");
+  void sendStatusChange(api, "a1", "completed");
+  void sendStatusChange(api, "a1", "no_show");
+  void sendStatusChange(api, "a1", "confirmed");
+  void sendStatusChange(api, "a1", "in_progress");
+  check("each change goes to the route that owns it", calls, [
+    "cancel a1 Enferma",
+    "cancel a1 -",
+    "complete a1",
+    "no-show a1",
+    "patch a1 confirmed",
+    "patch a1 in_progress",
+  ]);
+}
+
+checkTrue("cancel, no-show and complete are asked first", asksFirst("cancelled") && asksFirst("no_show") && asksFirst("completed"));
+checkTrue("confirm and start are not", !asksFirst("confirmed") && !asksFirst("in_progress"));
+{
+  const es = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "..", "..", "messages", "es.json"), "utf8"));
+  const en = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "..", "..", "messages", "en.json"), "utf8"));
+  const has = (json: any, key: string) => typeof key.split(".").reduce((o, k) => o?.[k], json) === "string";
+  checkTrue("every status badge label exists in es and en", Object.keys(NEXT_STATUSES).every((s) => has(es, statusLabelKey(s)!) && has(en, statusLabelKey(s)!)));
+  check("an unknown status has no label key", statusLabelKey("archived"), null);
+  checkTrue("the completion dialog's copy exists in es and en", ["complete_confirm", "complete_notice", "mark_completed", "not_yet"].every((k) => has(es, `appointments.${k}`) && has(en, `appointments.${k}`)));
+  checkTrue("and it warns about the invoice", /factura/.test(es.appointments.complete_notice));
+}
+check("the server's reason reaches the toast", serverMessage(new Error("Una cita cancelada no puede pasar a completada.")), "Una cita cancelada no puede pasar a completada.");
+check("no reason, no description", serverMessage(new Error("  ")), undefined);
+check("not an error, no description", serverMessage("boom"), undefined);
+
+// The panel's copy of the transition table must match the server's.
+{
+  const backendTable = path.join(__dirname, "..", "..", "..", "..", "..", "backend", "src", "appointments", "appointment-status.ts");
+  if (fs.existsSync(backendTable)) {
+    const src = fs.readFileSync(backendTable, "utf8");
+    const server: Record<string, string[]> = {};
+    for (const m of src.matchAll(/\[AppointmentStatus\.(\w+)\]:\s*\[([^\]]*)\]/g)) {
+      server[m[1]] = [...m[2].matchAll(/AppointmentStatus\.(\w+)/g)].map((x) => x[1]);
+    }
+    check("same transition table as the server", server, NEXT_STATUSES);
+  } else {
+    console.log("  - server table not found; skipped the comparison");
+  }
+}
 
 // ----- Summary -----
 

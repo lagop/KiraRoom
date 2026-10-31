@@ -1,7 +1,9 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger, Optional } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import { assertCanReschedule, salonDayAndTime } from './reschedule-check';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { LoyaltyService } from '../loyalty/loyalty.service';
+import { AppointmentStatus } from '@prisma/client';
+import { AppointmentsService } from './appointments.service';
+import { canTransition } from './appointment-status';
 import { CreateAppointmentServiceDto, UpdateAppointmentServiceDto, AppointmentServiceFiltersDto, AppointmentServiceType, AppointmentServiceStatus } from './dto/appointment-services.dto';
 
 @Injectable()
@@ -10,7 +12,9 @@ export class AppointmentServicesService {
 
   constructor(
     private prisma: PrismaService,
-    @Optional() private readonly loyalty?: LoyaltyService,
+    // Optional only for the specs that build the service by hand; Nest
+    // provides it from this module.
+    private readonly appointments?: AppointmentsService,
   ) {}
 
   async create(createDto: CreateAppointmentServiceDto) {
@@ -311,20 +315,30 @@ export class AppointmentServicesService {
       },
     });
 
-    if (pendingServices === 0) {
-      // All services completed, update appointment
-      const done = await this.prisma.appointment.update({
-        where: { id: appointmentId },
-        data: {
-          status: 'completed',
-          completionTime: new Date(),
-        },
-      });
-      this.logger.log(`All services completed for appointment ${appointmentId}, marking appointment as completed`);
-      // Loyalty points, if it is also paid. Never fails the status change.
-      await this.loyalty?.settleAppointment(done.tenantId, appointmentId).catch((err) =>
-        this.logger.warn(`loyalty for appointment ${appointmentId} failed: ${(err as Error).message}`),
+    if (pendingServices > 0) return;
+
+    // Every service is done, so the visit is: completed by the same path as
+    // the panel's "Completar" (notice, invoice, cadence, points). It used
+    // to be a bare status write: no invoice, and a cancelled visit could
+    // become completed. Only when the transition table allows it -- a
+    // completed visit is not completed (and invoiced) twice.
+    const appointment = await this.prisma.appointment.findUnique({
+      where: { id: appointmentId },
+      select: { status: true, tenantId: true },
+    });
+    if (!appointment || !this.appointments) return;
+    if (!canTransition(appointment.status, AppointmentStatus.completed)) return;
+    try {
+      await this.appointments.changeStatus(
+        { role: 'system', tenantId: appointment.tenantId },
+        appointmentId,
+        AppointmentStatus.completed,
       );
+      this.logger.log(`All services completed for appointment ${appointmentId}, marking appointment as completed`);
+    } catch (err) {
+      // Consent forms still unsigned, or the status changed meanwhile: the
+      // service is done, the visit stays as it is for the team to finish.
+      this.logger.warn(`appointment ${appointmentId} not completed with its services: ${(err as Error).message}`);
     }
   }
 
