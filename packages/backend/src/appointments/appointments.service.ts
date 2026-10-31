@@ -36,7 +36,7 @@ import { NotificationType } from "../notifications/dto";
 import { TranslationsService } from "../translations/translations.service";
 import { ConsentService } from "../consent/consent.service";
 import { salonInstant } from "./salon-time";
-import { assertCanReschedule, salonDayAndTime } from "./reschedule-check";
+import { assertCanBook, assertCanReschedule, salonDayAndTime } from "./reschedule-check";
 import {
   MoveScope,
   VisitService,
@@ -50,7 +50,7 @@ import {
 import { appointmentLocationId } from "../multi-location/appointment-location";
 import { normalizePhone, phoneKey } from "../common/phone";
 import { isReadOnlyStatus } from "../common/guards/read-only-tenant.guard";
-import type { OnlineBookingDto } from "./dto/book-appointment.dto";
+import type { OnlineBookingDto, StaffBookingDto } from "./dto/book-appointment.dto";
 import { UpdateAppointmentDto } from "./dto/update-appointment.dto";
 import { appointmentDeleteBlocker, deleteAppointmentRow } from "./appointment-delete";
 import { isForeignKeyViolation } from "../common/prisma/history-deletes";
@@ -91,11 +91,14 @@ export interface CreateAppointmentDto {
   widgetInstanceId?: string;
 }
 
+/**
+ * req.user for the team. It carries no professional id: a professional's
+ * own record is the one whose userId is theirs (see ownProfessionalId).
+ */
 export interface AuthenticatedUser {
   id: string;
   tenantId: string;
   role: string;
-  professionalId?: string;
 }
 
 export { UpdateAppointmentDto };
@@ -431,6 +434,7 @@ export class AppointmentsService {
   private async findOrCreateClient(
     tenantId: string,
     info: { firstName: string; lastName: string; email?: string; phone?: string },
+    db: any = this.prisma,
   ): Promise<string> {
     const email = info.email?.trim() || undefined;
     const phone = info.phone?.trim() || undefined;
@@ -441,40 +445,40 @@ export class AppointmentsService {
     }
 
     let existing = email
-      ? await this.prisma.client.findFirst({ where: { email, tenantId } })
+      ? await db.client.findFirst({ where: { email, tenantId } })
       : null;
     if (!existing && phone) {
       // Stored numbers are in whatever format they were typed ("600 111
       // 222", "+34600111222"): compare their last nine digits in SQL.
       const key = phoneKey(phone);
-      const rows = key.length === 9
-        ? await this.prisma.$queryRaw<Array<{ id: string }>>`
+      const rows: Array<{ id: string }> = key.length === 9
+        ? await db.$queryRaw`
             SELECT id FROM clients
             WHERE "tenantId" = ${tenantId}
               AND right(regexp_replace(coalesce(phone, ''), '\\D', '', 'g'), 9) = ${key}
             ORDER BY "createdAt" ASC
             LIMIT 1`
         : [];
-      existing = rows[0] ? await this.prisma.client.findFirst({ where: { id: rows[0].id, tenantId } }) : null;
+      existing = rows[0] ? await db.client.findFirst({ where: { id: rows[0].id, tenantId } }) : null;
     }
 
     if (existing) {
       const fill: Record<string, string> = {};
       if (email && !existing.email) fill.email = email;
-      if (phone && !existing.phone) fill.phone = await this.salonPhone(tenantId, phone);
+      if (phone && !existing.phone) fill.phone = await this.salonPhone(tenantId, phone, db);
       if (Object.keys(fill).length > 0) {
-        await this.prisma.client.update({ where: { id: existing.id }, data: fill });
+        await db.client.update({ where: { id: existing.id }, data: fill });
       }
       return existing.id;
     }
 
-    const created = await this.prisma.client.create({
+    const created = await db.client.create({
       data: {
         tenantId,
         firstName: info.firstName,
         lastName: info.lastName,
         email: email ?? null,
-        phone: phone ? await this.salonPhone(tenantId, phone) : null,
+        phone: phone ? await this.salonPhone(tenantId, phone, db) : null,
         status: "active",
       },
     });
@@ -482,16 +486,38 @@ export class AppointmentsService {
   }
 
   /** A client's phone in international form, using the salon's country. */
-  private async salonPhone(tenantId: string, phone: string): Promise<string> {
-    const tenant = await this.prisma.tenant.findUnique({
+  private async salonPhone(tenantId: string, phone: string, db: any = this.prisma): Promise<string> {
+    const tenant = await db.tenant.findUnique({
       where: { id: tenantId },
       select: { country: true },
     });
     return normalizePhone(phone, tenant?.country ?? "ES");
   }
 
-  /** Validate and insert. No side effects beyond creating the client. */
-  private async insertAppointment(createAppointmentDto: CreateAppointmentDto, tenantId: string) {
+  /**
+   * Validate and insert. No side effects beyond creating the client.
+   *
+   * `visit`: a panel booking passes its transaction (`db`), so the client,
+   * the appointment and its service rows are written together or not at
+   * all; the visit's length when it has several services; and those rows,
+   * already timed.
+   */
+  private async insertAppointment(
+    createAppointmentDto: CreateAppointmentDto & { commissionRate?: number },
+    tenantId: string,
+    visit: {
+      db?: any;
+      duration?: number;
+      services?: Array<{
+        serviceId: string;
+        professionalId: string;
+        isParallel: boolean;
+        scheduledStart: Date;
+        scheduledEnd: Date;
+      }>;
+    } = {},
+  ) {
+    const db = visit.db ?? this.prisma;
     if (!createAppointmentDto.professionalId) {
       throw new BadRequestException("Professional ID is required");
     }
@@ -499,7 +525,7 @@ export class AppointmentsService {
     // A salon without an active plan (trial ended, cancelled, suspended) is
     // read-only: no new appointments from its page, its widget or the
     // receptionist either. ReadOnlyTenantGuard covers the team's own routes.
-    const tenant = await this.prisma.tenant.findUnique({
+    const tenant = await db.tenant.findUnique({
       where: { id: tenantId },
       select: { subscriptionStatus: true },
     });
@@ -512,14 +538,14 @@ export class AppointmentsService {
 
     // Professional and service first: a booking that fails on them must not
     // leave a new client record behind.
-    const professional = await this.prisma.professional.findFirst({
+    const professional = await db.professional.findFirst({
       where: { id: createAppointmentDto.professionalId, tenantId: tenantId },
     });
     if (!professional) {
       throw new NotFoundException("Profesional no encontrado");
     }
 
-    const service = await this.prisma.service.findFirst({
+    const service = await db.service.findFirst({
       where: { id: createAppointmentDto.serviceId, tenantId: tenantId },
     });
     if (!service) {
@@ -530,7 +556,7 @@ export class AppointmentsService {
 
     // Find or create client if clientInfo provided
     if (!clientId && createAppointmentDto.clientInfo) {
-      clientId = await this.findOrCreateClient(tenantId, createAppointmentDto.clientInfo);
+      clientId = await this.findOrCreateClient(tenantId, createAppointmentDto.clientInfo, db);
     }
 
     if (!clientId) {
@@ -538,25 +564,23 @@ export class AppointmentsService {
     }
 
     // The client must belong to the same salon as the appointment.
-    const client = await this.prisma.client.findFirst({
+    const client = await db.client.findFirst({
       where: { id: clientId, tenantId },
     });
     if (!client) {
       throw new NotFoundException("Cliente no encontrado");
     }
 
-    // Calculate end time
-    const endTime = this.calculateEndTime(
-      createAppointmentDto.scheduledTime,
-      service.duration,
-    );
+    // A visit of several services lasts from its first to its last service.
+    const duration = visit.duration ?? service.duration;
+    const endTime = this.calculateEndTime(createAppointmentDto.scheduledTime, duration);
 
-    const tenantRow = await this.prisma.tenant.findUnique({
+    const tenantRow = await db.tenant.findUnique({
       where: { id: tenantId },
       select: { timezone: true },
     });
     // Which of the salon's locations: the consolidated report reads it.
-    const locationId = await appointmentLocationId(this.prisma, tenantId, professional.id);
+    const locationId = await appointmentLocationId(db, tenantId, professional.id);
 
     // Convert scheduledDate to Date if it's a string
     const scheduledDate =
@@ -566,7 +590,7 @@ export class AppointmentsService {
 
     // Create appointment
     const dto = createAppointmentDto as any;
-    return this.prisma.appointment.create({
+    const appointment = await db.appointment.create({
       data: {
         tenantId: tenantId,
         clientId: clientId,
@@ -581,7 +605,7 @@ export class AppointmentsService {
           dto.scheduledTime,
           tenantRow?.timezone || "Europe/Madrid",
         ),
-        duration: service.duration,
+        duration,
         endTime: endTime,
         status: AppointmentStatus.pending,
         price: service.price,
@@ -604,6 +628,22 @@ export class AppointmentsService {
         tenant: true,
       },
     });
+
+    // In the order given: which service comes first is the visit's flow.
+    if (visit.services?.length) {
+      await db.appointmentService.createMany({
+        data: visit.services.map((row, order) => ({
+          appointmentId: appointment.id,
+          serviceId: row.serviceId,
+          professionalId: row.professionalId,
+          isParallel: row.isParallel,
+          order,
+          scheduledStart: row.scheduledStart,
+          scheduledEnd: row.scheduledEnd,
+        })),
+      });
+    }
+    return appointment;
   }
 
   /** Notifications, rebooking cleanup and telemetry for a new appointment. */
@@ -644,36 +684,160 @@ export class AppointmentsService {
     return notified;
   }
 
-  async createByStaff(
-    createAppointmentDto: CreateAppointmentDto,
-    user: AuthenticatedUser,
-  ) {
-    // A professional books on their own agenda, or on a colleague's when the
-    // salon allows it (Configuración → Asignación profesional). The setting
-    // was saved and the booking form honoured it, but this always refused.
-    if (user.role === "staff" && createAppointmentDto.professionalId !== user.professionalId) {
-      const tenant = await this.prisma.tenant.findUnique({
-        where: { id: user.tenantId },
-        select: { allowProfessionalCrossBooking: true },
-      });
-      if (!tenant?.allowProfessionalCrossBooking) {
-        throw new ForbiddenException(
-          "Los profesionales solo pueden crear citas para sí mismos",
-        );
+  /**
+   * An appointment booked from the panel by the salon's team.
+   *
+   * - The salon is the caller's, from the token.
+   * - A professional (role staff) books on their own agenda: their
+   *   professional is the one whose userId is theirs (the token carries no
+   *   professional id, and comparing with one that was never set refused
+   *   every booking). A colleague's agenda only when the salon allows
+   *   cross-booking (Configuración → Asignación profesional).
+   * - Owners and managers book for any professional of the salon, and may
+   *   set the commission.
+   * - A visit of several services is one request: the appointment and its
+   *   service rows are written in one transaction, so a failure leaves
+   *   nothing behind and a retry cannot book it twice.
+   * - Under the same per-salon, per-day advisory lock as online bookings,
+   *   every service must fit its professional's agenda (assertCanBook): an
+   *   overlap is always refused; the past and the hours only an owner or
+   *   manager may override, after confirming (allowOutsideHours).
+   */
+  async createByStaff(dto: StaffBookingDto, user: AuthenticatedUser) {
+    const tenantId = user.tenantId;
+    const manager = user.role === "owner" || user.role === "admin";
+    let professionalId = dto.professionalId || undefined;
+    const requested = (dto.services ?? []).map((s) => ({
+      serviceId: s.serviceId,
+      professionalId: s.professionalId || undefined,
+      isParallel: !!s.isParallel,
+    }));
+
+    if (user.role === "staff") {
+      const own = await this.ownProfessionalId(user);
+      if (!own) {
+        throw new ForbiddenException("Tu usuario no está vinculado a ningún profesional del salón.");
+      }
+      professionalId = professionalId ?? own;
+      const forColleague = [professionalId, ...requested.map((r) => r.professionalId)].some(
+        (id) => id !== undefined && id !== own,
+      );
+      if (forColleague) {
+        const tenant = await this.prisma.tenant.findUnique({
+          where: { id: tenantId },
+          select: { allowProfessionalCrossBooking: true },
+        });
+        if (!tenant?.allowProfessionalCrossBooking) {
+          throw new ForbiddenException("Los profesionales solo pueden crear citas para sí mismos");
+        }
       }
     }
+    if (!professionalId) throw new BadRequestException("Elige un profesional");
+    const rows = requested.map((r) => ({ ...r, professionalId: r.professionalId ?? professionalId! }));
 
-    // The commission is the salon's term: a professional booking with
-    // `commissionRate: 100` set their own pay.
-    if (user.role === "staff") {
-      const { commissionRate: _ignored, ...rest } = createAppointmentDto as CreateAppointmentDto & {
-        commissionRate?: number;
-      };
-      createAppointmentDto = rest;
-    }
+    // Every id the visit points at is this salon's; durations for the timing.
+    await this.assertSalonRecords(tenantId, {
+      serviceIds: [dto.serviceId, ...rows.map((r) => r.serviceId)],
+      professionalIds: [professionalId, ...rows.map((r) => r.professionalId)],
+      clientIds: [dto.clientId],
+    });
+    const serviceIds = [...new Set([dto.serviceId, ...rows.map((r) => r.serviceId)])];
+    const [tenantRow, catalog] = await Promise.all([
+      this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } }),
+      this.prisma.service.findMany({
+        where: { tenantId, id: { in: serviceIds } },
+        select: { id: true, duration: true },
+      }),
+    ]);
+    const timeZone = tenantRow?.timezone || "Europe/Madrid";
+    const minutes = (serviceId: string) => catalog.find((s) => s.id === serviceId)?.duration ?? 0;
 
-    // The staff member's own salon, from the token.
-    return this.create(createAppointmentDto, user.tenantId);
+    const day = String(dto.scheduledDate).slice(0, 10);
+    const start = salonInstant(day, dto.scheduledTime, timeZone);
+    // Where each service falls, as the calendar draws a visit: serial ones
+    // one after another from the start, parallel ones with the start.
+    const visit: VisitService[] = rows.length
+      ? currentVisitSchedule({
+          appointmentStart: start,
+          appointmentProfessionalId: professionalId,
+          services: rows.map((r, i) => ({
+            id: String(i),
+            professionalId: r.professionalId,
+            scheduledStart: null,
+            scheduledEnd: null,
+            isParallel: r.isParallel,
+            durationMinutes: minutes(r.serviceId),
+          })),
+        })
+      : [{
+          id: "0",
+          professionalId,
+          start,
+          end: new Date(start.getTime() + minutes(dto.serviceId) * 60_000),
+          isParallel: false,
+        }];
+    const span = visitSpan(visit);
+
+    const { services: _rows, allowOutsideHours, commissionRate, ...booking } = dto;
+    const appointment = await this.prisma.$transaction(
+      async (tx: any) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`booking:${tenantId}:${day}`}))`;
+        for (const s of visit) {
+          const at = salonDayAndTime(s.start, timeZone);
+          await assertCanBook(
+            tx,
+            {
+              tenantId,
+              professionalId: s.professionalId,
+              day: at.day,
+              time: at.time,
+              durationMinutes: Math.round((s.end.getTime() - s.start.getTime()) / 60_000),
+            },
+            // A professional's bookings stay inside the hours.
+            { allowOutsideHours: manager && allowOutsideHours === true },
+          );
+        }
+        return this.insertAppointment(
+          {
+            ...booking,
+            professionalId: professionalId!,
+            source: AppointmentSource.staff,
+            // The commission is the salon's term: a professional booking with
+            // `commissionRate: 100` set their own pay. Unset, the
+            // professional's or the service's default applies.
+            commissionRate: manager ? commissionRate : undefined,
+          },
+          tenantId,
+          {
+            db: tx,
+            duration: rows.length
+              ? Math.round((span.end.getTime() - span.start.getTime()) / 60_000)
+              : undefined,
+            services: rows.length
+              ? rows.map((r, i) => ({
+                  ...r,
+                  scheduledStart: visit[i].start,
+                  scheduledEnd: visit[i].end,
+                }))
+              : undefined,
+          },
+        );
+      },
+      { timeout: 15_000 },
+    );
+
+    // After the commit: notifications never run for a booking that rolled back.
+    await this.afterAppointmentCreated(appointment);
+    return appointment;
+  }
+
+  /** The caller's own professional record, or null when the account has none. */
+  private async ownProfessionalId(user: { id: string; tenantId: string }): Promise<string | null> {
+    const own = await this.prisma.professional.findFirst({
+      where: { userId: user.id, tenantId: user.tenantId },
+      select: { id: true },
+    });
+    return own?.id ?? null;
   }
 
   async findAll(user: any, filters?: AppointmentFiltersDto) {

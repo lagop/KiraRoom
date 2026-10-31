@@ -1,6 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { Type } from "class-transformer";
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  IsArray,
   IsBoolean,
   IsDefined,
   IsEmail,
@@ -18,6 +21,7 @@ import {
   ValidateNested,
 } from "class-validator";
 import { PHONE_PATTERN } from "../../common/phone";
+import { AppointmentServiceItemDto } from "./update-appointment.dto";
 
 /**
  * Request bodies for POST /appointments (public) and POST /appointments/staff.
@@ -148,9 +152,15 @@ export class OnlineBookingDto extends BookingSlotDto {
 
 /** POST /appointments/staff: the dashboard. */
 export class StaffBookingDto extends BookingSlotDto {
-  @ApiProperty()
+  /**
+   * Required from an owner or manager. A professional books on their own
+   * agenda: the server fills it in, and refuses a colleague's unless the salon
+   * allows cross-booking.
+   */
+  @ApiPropertyOptional()
   @IsUUID()
-  professionalId!: string;
+  @IsOptional()
+  professionalId?: string;
 
   /** An existing client of the salon, or clientInfo to find or create one. */
   @ApiPropertyOptional()
@@ -192,4 +202,30 @@ export class StaffBookingDto extends BookingSlotDto {
   @IsNumber()
   @IsOptional()
   duration?: number;
+
+  /**
+   * A visit of several services, in order, created with the appointment in
+   * one transaction. Each row's professional defaults to the appointment's;
+   * the server times the rows from the start and each service's duration
+   * (parallel rows start with the visit). It used to take a second request,
+   * and when that one failed the appointment stayed half-made.
+   */
+  @ApiPropertyOptional({ type: [AppointmentServiceItemDto] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(20)
+  @ValidateNested({ each: true })
+  @Type(() => AppointmentServiceItemDto)
+  services?: AppointmentServiceItemDto[];
+
+  /**
+   * Book even though it is in the past or outside the professional's or the
+   * salon's hours (a walk-in, a visit entered afterwards). Owner or manager
+   * only, after the panel asked them to confirm; never past an overlap.
+   */
+  @ApiPropertyOptional()
+  @IsBoolean()
+  @IsOptional()
+  allowOutsideHours?: boolean;
 }

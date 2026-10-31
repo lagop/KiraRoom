@@ -41,8 +41,10 @@ function build({
   const created: any[] = [];
   const locks: string[] = [];
   const prisma: any = {
+    // Staff bookings read and write through the transaction; online ones
+    // only take the lock in it.
     $transaction: jest.fn(async (fn: any) =>
-      fn({ $executeRaw: async (_s: TemplateStringsArray, key: string) => { locks.push(key); return 0; } }),
+      fn({ ...prisma, $executeRaw: async (_s: TemplateStringsArray, key: string) => { locks.push(key); return 0; } }),
     ),
     tenant: { findUnique: async () => ({ timezone: "Europe/Madrid", country: "ES", subscriptionStatus }) },
     // findOrCreateClient's phone lookup: tenant and last nine digits.
@@ -65,6 +67,8 @@ function build({
         [PRO, PRO_2]
           .filter((p) => !where.id?.in || where.id.in.includes(p.id))
           .map((p) => ({ id: p.id, services: offering.includes(p.id) ? [{ serviceId: SERVICE_ID }] : [] })),
+      count: async ({ where }: any) =>
+        [PRO, PRO_2].filter((p) => p.tenantId === where.tenantId && where.id.in.includes(p.id)).length,
     },
     // Where each professional works (active locations of the salon only).
     professionalLocation: {
@@ -80,6 +84,10 @@ function build({
           ? { id: SERVICE_ID, duration: 30, price: 20, currency: "EUR", minAdvanceBooking, maxAdvanceBooking }
           : null,
       ),
+      findMany: async ({ where }: any) =>
+        where.tenantId === "tenant-b" ? [{ id: SERVICE_ID, duration: 30 }] : [],
+      count: async ({ where }: any) =>
+        where.tenantId === "tenant-b" ? where.id.in.filter((id: string) => id === SERVICE_ID).length : 0,
     },
     client: {
       findFirst: jest.fn(async ({ where }: any) => {
@@ -103,8 +111,12 @@ function build({
         Object.assign(row, data);
         return row;
       }),
+      count: async ({ where }: any) =>
+        existingClients.filter((c) => c.tenantId === where.tenantId && where.id.in.includes(c.id)).length,
     },
     appointment: {
+      // The professional's other appointments that day: none here.
+      findMany: jest.fn(async () => []),
       create: jest.fn(async ({ data }: any) => {
         created.push(data);
         return { id: "apt-1", ...data };
@@ -326,8 +338,10 @@ describe("staff booking", () => {
     expect(created[0].tenantId).toBe("tenant-b");
   });
 
-  it("does not require the slot to be free: staff may book over the grid", async () => {
-    // A deliberate difference: the salon can squeeze someone in by hand.
+  it("does not require an online slot: staff may book off the grid", async () => {
+    // A deliberate difference: the salon can squeeze someone in by hand, on
+    // any minute and inside the online notice. An overlap with another
+    // appointment of the professional is refused: see staff-create.spec.ts.
     const { service, created } = build({
       freeTimes: {},
       existingClients: [{ id: "c1", email: "x@mail.test", tenantId: "tenant-b" }],
