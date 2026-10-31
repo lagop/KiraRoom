@@ -2759,7 +2759,10 @@ model Invoice {
   issuerTaxIdAtIssue   String?
   issuerNameAtIssue    String?
 
-  /// Metadata
+  /// Metadata. What the invoice was issued for: an appointment's invoice has
+  /// sourceType "appointment" and sourceId = the appointment's id. Unique per
+  /// tenant (see @@unique below), so one source document gets one invoice.
+  /// A manual invoice has no sourceId, and NULLs never collide.
   sourceType InvoiceSource
   sourceId   String?
   notes      String?
@@ -2770,6 +2773,7 @@ model Invoice {
   lines     InvoiceLine[]
 
   @@unique([tenantId, series, number])
+  @@unique([tenantId, sourceType, sourceId])
   @@index([tenantId, issueDate])
   @@index([tenantId, status])
   @@index([fiscalStatus])

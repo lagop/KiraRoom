@@ -12,11 +12,7 @@ function makePrismaMock() {
   const tenant = { id: "tenant-1", name: "Salon Test", fiscalMode: "none" as any, fiscalSettings: {} };
   const invoices = new Map<string, any>();
   const sequences = new Map<string, any>();
-  return {
-    tenant,
-    invoices,
-    sequences,
-    prisma: {
+  const prisma: any = {
       tenant: { findUnique: async () => tenant },
       invoice: {
         findUnique: async (args: any) => {
@@ -62,8 +58,10 @@ function makePrismaMock() {
       },
       accountingConnection: { findUnique: async () => null },
       accountingsyncLog: { create: async () => ({}) },
-    } as any,
   };
+  // Invoice number and invoice are created in one transaction.
+  prisma.$transaction = async (fn: any) => fn(prisma);
+  return { tenant, invoices, sequences, prisma };
 }
 
 function seedInvoice(m: any, overrides: any = {}) {

@@ -9,7 +9,8 @@ import { PrismaService } from "../common/prisma/prisma.service";
 import { InvoiceCalculator } from "./invoice-calculator.service";
 import { FiscalService } from "./fiscal/fiscal.service";
 import { AccountingService, cancelNeedsMirror } from "../accounting/accounting.service";
-import { FiscalMode, InvoiceSource, InvoiceStatus } from "@prisma/client";
+import { FiscalMode, InvoiceSource, InvoiceStatus, Prisma } from "@prisma/client";
+import { appointmentInvoiceLine } from "./appointment-invoice-pricing";
 
 interface CreateInvoiceInput {
   tenantId: string;
@@ -28,8 +29,14 @@ interface CreateInvoiceInput {
     taxRate: number;
     productId?: string;
     serviceId?: string;
+    taxIncluded?: boolean;
   }>;
   notes?: string;
+  /**
+   * What the invoice is for (an appointment, an order). Unique per tenant:
+   * a second invoice for the same source fails with P2002. Omitted: manual.
+   */
+  source?: { type: InvoiceSource; id: string };
 }
 
 @Injectable()
@@ -59,10 +66,14 @@ export class InvoiceService {
     const series = input.series ?? (settings.defaultSeries as string) ?? "A";
     const issueDate = input.issueDate ?? new Date();
     const year = issueDate.getFullYear();
-    const number = await this.allocateNumber(input.tenantId, series, year);
     const fiscalMode = tenant.fiscalMode;
 
-    const invoice = await this.prisma.invoice.create({
+    // Number and invoice in one transaction: when the insert fails (a source
+    // that already has its invoice, see fromAppointment) the number is given
+    // back, so the series stays correlative with no gaps.
+    const invoice = await this.prisma.$transaction(async (tx) => {
+      const number = await this.allocateNumber(input.tenantId, series, year, tx);
+      return tx.invoice.create({
       data: {
         tenantId: input.tenantId,
         series,
@@ -81,7 +92,8 @@ export class InvoiceService {
         fiscalMode,
         fiscalStatus:
           fiscalMode === FiscalMode.none ? "not_required" : "pending",
-        sourceType: InvoiceSource.manual,
+        sourceType: input.source?.type ?? InvoiceSource.manual,
+        sourceId: input.source?.id,
         notes: input.notes,
         lines: {
           create: computation.lines.map((l) => ({
@@ -97,6 +109,7 @@ export class InvoiceService {
           })),
         },
       },
+    });
     });
 
     // Fire fiscal dispatch in the background. Failures don't roll back the
@@ -132,9 +145,10 @@ export class InvoiceService {
     tenantId: string,
     series: string,
     year: number,
+    db: Prisma.TransactionClient = this.prisma,
   ): Promise<string> {
     // First call creates the row at 0; subsequent calls increment.
-    await this.prisma.fiscalSequence.upsert({
+    await db.fiscalSequence.upsert({
       where: {
         tenantId_series_year: { tenantId, series, year },
       },
@@ -147,11 +161,11 @@ export class InvoiceService {
       update: {},
     });
 
-    // Increment and read the new value atomically. We use update + select
-    // returning rather than $transaction to keep this readable; under
-    // heavy contention the worst case is a duplicate number, which the
-    // unique index on Invoice(tenantId, series, number) will reject.
-    const updated = await this.prisma.fiscalSequence.update({
+    // Increment and read the new value atomically. Called with create()'s
+    // transaction, the row stays locked until the invoice commits (or rolls
+    // back, returning the number); the unique index on
+    // Invoice(tenantId, series, number) remains the last line of defence.
+    const updated = await db.fiscalSequence.update({
       where: { tenantId_series_year: { tenantId, series, year } },
       data: { lastNumber: { increment: 1 } },
     });
@@ -360,9 +374,15 @@ export class InvoiceService {
   }
 
   /**
-   * Convert a paid appointment into an invoice. Tenant opt-in via
+   * Convert a completed appointment into an invoice. Tenant opt-in via
    * `fiscalSettings.autoInvoiceAppointments`. Skipped for tenants that
    * opted out.
+   *
+   * Idempotent: an appointment gets one invoice, ever. The invoice carries
+   * sourceType "appointment" + sourceId, unique per tenant in the database,
+   * so completing twice, or two completions at once, return the invoice
+   * already issued instead of a second one (an issued invoice cannot simply
+   * be withdrawn: with VERI*FACTU it is already chained and sent).
    */
   async fromAppointment(appointmentId: string): Promise<{ id: string } | null> {
     const appt = await this.prisma.appointment.findUnique({
@@ -374,28 +394,47 @@ export class InvoiceService {
       },
     });
     if (!appt) return null;
+
+    const existing = await this.appointmentInvoice(appt.tenantId, appt.id);
+    if (existing) return existing;
+
     if (appt.status !== "completed") return null;
     const settings =
       (appt.tenant.fiscalSettings as Record<string, unknown>) ?? {};
     if (!settings.autoInvoiceAppointments) return null;
 
-    return this.create({
-      tenantId: appt.tenantId,
-      recipientType: appt.client ? "client" : "tenant",
-      recipientId: appt.client?.id,
-      recipientName: appt.client
-        ? `${appt.client.firstName} ${appt.client.lastName}`
-        : appt.tenantId,
-      lines: [
-        {
-          description: appt.service?.name ?? "Servicio",
-          quantity: 1,
-          unitPriceCents: Math.round(Number(appt.price) * 100),
-          taxRate: 21,
-          serviceId: appt.serviceId,
-        },
-      ],
-      notes: `Generada desde cita ${appt.id}`,
+    try {
+      return await this.create({
+        tenantId: appt.tenantId,
+        recipientType: appt.client ? "client" : "tenant",
+        recipientId: appt.client?.id,
+        recipientName: appt.client
+          ? `${appt.client.firstName} ${appt.client.lastName}`
+          : appt.tenantId,
+        lines: [appointmentInvoiceLine(appt, settings)],
+        notes: `Generada desde cita ${appt.id}`,
+        source: { type: InvoiceSource.appointment, id: appt.id },
+      });
+    } catch (err) {
+      // Lost the race to a concurrent call: its invoice is the one. Our
+      // transaction rolled back, number included.
+      if (isUniqueViolation(err)) {
+        const winner = await this.appointmentInvoice(appt.tenantId, appt.id);
+        if (winner) return winner;
+      }
+      throw err;
+    }
+  }
+
+  /** The invoice issued for an appointment, if any (cancelled ones included). */
+  private appointmentInvoice(tenantId: string, appointmentId: string): Promise<{ id: string } | null> {
+    return this.prisma.invoice.findFirst({
+      where: { tenantId, sourceType: InvoiceSource.appointment, sourceId: appointmentId },
+      select: { id: true },
     });
   }
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  return err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002";
 }
