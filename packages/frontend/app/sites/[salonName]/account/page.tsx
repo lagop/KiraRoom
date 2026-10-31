@@ -4,7 +4,14 @@ import { useState, useEffect } from "react";
 import { Calendar, Star, ChevronRight } from "lucide-react";
 import apiClient from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useTenantTranslations } from "@/lib/use-translation";
+import {
+  appointmentDay,
+  compareAppointmentsAsc,
+  formatBookingDate,
+  localDateString,
+} from "@/lib/public-booking";
 import { ChatWidget } from "@/src/components/virtual-receptionist";
 import { MyLoyaltyCard } from "@/components/loyalty/my-loyalty-card";
 
@@ -62,6 +69,9 @@ export default function AccountPage({
   const [services, setServices] = useState<Service[]>([]);
   const [professionals, setProfessionals] = useState<Professional[]>([]);
   const [visiblePastAppointments, setVisiblePastAppointments] = useState(3);
+  // The appointment waiting for "¿Cancelar?" to be confirmed.
+  const [toCancel, setToCancel] = useState<Appointment | null>(null);
+  const [cancelling, setCancelling] = useState(false);
 
   // Check if user is already logged in
   useEffect(() => {
@@ -141,10 +151,42 @@ export default function AccountPage({
     }
   };
 
-  const handleRepeatAppointment = (appointment: Appointment) => {
-    // Redirect to new-appointment page with pre-filled data
-    window.location.href = `/${params.salonName}/account/new-appointment?serviceId=${appointment.serviceId}&professionalId=${appointment.professionalId}`;
+  const confirmCancel = async () => {
+    if (!toCancel) return;
+    setCancelling(true);
+    try {
+      await handleCancelAppointment(toCancel.id);
+    } finally {
+      setCancelling(false);
+      setToCancel(null);
+    }
   };
+
+  const handleRepeatAppointment = (appointment: Appointment) => {
+    // Redirect to new-appointment page with pre-filled data. Under /sites/:
+    // "/<slug>/account/..." is no route of this app and answered 404.
+    window.location.href = `/sites/${params.salonName}/account/new-appointment?serviceId=${appointment.serviceId}&professionalId=${appointment.professionalId}`;
+  };
+
+  // Upcoming and past split on the client's calendar day, not UTC's.
+  const today = localDateString();
+  const isPast = (apt: Appointment) => appointmentDay(apt.scheduledDate) < today;
+  const upcomingAppointments = appointments
+    .filter(
+      (apt) =>
+        (apt.status === "pending" || apt.status === "confirmed") && !isPast(apt),
+    )
+    // Soonest first by day AND time: two on one day came in whatever order.
+    .sort(compareAppointmentsAsc);
+  const pastAppointments = appointments
+    .filter(
+      (apt) =>
+        apt.status === "completed" ||
+        apt.status === "cancelled" ||
+        apt.status === "no_show" ||
+        isPast(apt),
+    )
+    .sort((a, b) => compareAppointmentsAsc(b, a));
 
   const getServiceName = (serviceId: string) => {
     const service = services.find((s) => s.id === serviceId);
@@ -156,16 +198,8 @@ export default function AccountPage({
     return pro ? `${pro.firstName} ${pro.lastName}` : "Profesional";
   };
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    const options: Intl.DateTimeFormatOptions = {
-      weekday: "long",
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-    };
-    return date.toLocaleDateString("es-ES", options);
-  };
+  // The calendar day as stored, not shifted by the browser's timezone.
+  const formatDate = (dateString: string) => formatBookingDate(dateString);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -224,31 +258,9 @@ export default function AccountPage({
           <div className="flex items-center justify-center py-8">
             <div className="animate-spin w-8 h-8 border-4 border-purple-500 border-t-transparent rounded-full"></div>
           </div>
-        ) : appointments.filter((apt) => {
-            const isPastDate =
-              new Date(apt.scheduledDate) <
-              new Date(new Date().toISOString().split("T")[0]);
-            return (
-              (apt.status === "pending" || apt.status === "confirmed") &&
-              !isPastDate
-            );
-          }).length > 0 ? (
+        ) : upcomingAppointments.length > 0 ? (
           <div className="space-y-4">
-            {appointments
-              .filter((apt) => {
-                const isPastDate =
-                  new Date(apt.scheduledDate) <
-                  new Date(new Date().toISOString().split("T")[0]);
-                return (
-                  (apt.status === "pending" || apt.status === "confirmed") &&
-                  !isPastDate
-                );
-              })
-              .sort(
-                (a, b) =>
-                  new Date(a.scheduledDate).getTime() -
-                  new Date(b.scheduledDate).getTime(),
-              )
+            {upcomingAppointments
               .map((appointment) => (
                 <div
                   key={appointment.id}
@@ -285,7 +297,8 @@ export default function AccountPage({
                       <span>Repetir</span>
                     </button>
                     <button
-                      onClick={() => handleCancelAppointment(appointment.id)}
+                      // One tap used to cancel at once, no question asked.
+                      onClick={() => setToCancel(appointment)}
                       className="flex items-center space-x-2 px-3 py-1.5 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm"
                     >
                       <span>Cancelar</span>
@@ -304,7 +317,7 @@ export default function AccountPage({
               ¡Reserva tu próxima cita para disfrutar de nuestros servicios!
             </p>
             <a
-              href={`/${params.salonName}`}
+              href={`/sites/${params.salonName}`}
               className="inline-flex items-center space-x-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
             >
               <span>Reservar Ahora</span>
@@ -324,35 +337,9 @@ export default function AccountPage({
           <div className="flex items-center justify-center py-8">
             <div className="animate-spin w-8 h-8 border-4 border-purple-500 border-t-transparent rounded-full"></div>
           </div>
-        ) : appointments.filter((apt) => {
-            const isPastDate =
-              new Date(apt.scheduledDate) <
-              new Date(new Date().toISOString().split("T")[0]);
-            return (
-              apt.status === "completed" ||
-              apt.status === "cancelled" ||
-              apt.status === "no_show" ||
-              isPastDate
-            );
-          }).length > 0 ? (
+        ) : pastAppointments.length > 0 ? (
           <div className="space-y-4">
-            {appointments
-              .filter((apt) => {
-                const isPastDate =
-                  new Date(apt.scheduledDate) <
-                  new Date(new Date().toISOString().split("T")[0]);
-                return (
-                  apt.status === "completed" ||
-                  apt.status === "cancelled" ||
-                  apt.status === "no_show" ||
-                  isPastDate
-                );
-              })
-              .sort(
-                (a, b) =>
-                  new Date(b.scheduledDate).getTime() -
-                  new Date(a.scheduledDate).getTime(),
-              )
+            {pastAppointments
               .slice(0, visiblePastAppointments)
               .map((appointment) => (
                 <div
@@ -396,17 +383,6 @@ export default function AccountPage({
               ))}
             {/* Load more button */}
             {(() => {
-              const pastAppointments = appointments.filter((apt) => {
-                const isPastDate =
-                  new Date(apt.scheduledDate) <
-                  new Date(new Date().toISOString().split("T")[0]);
-                return (
-                  apt.status === "completed" ||
-                  apt.status === "cancelled" ||
-                  apt.status === "no_show" ||
-                  isPastDate
-                );
-              });
               if (pastAppointments.length > visiblePastAppointments) {
                 return (
                   <button
@@ -435,7 +411,7 @@ export default function AccountPage({
               reserva.
             </p>
             <a
-              href={`/${params.salonName}`}
+              href={`/sites/${params.salonName}`}
               className="inline-flex items-center space-x-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
             >
               <span>Reservar Ahora</span>
@@ -444,6 +420,22 @@ export default function AccountPage({
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={!!toCancel}
+        title="¿Cancelar esta cita?"
+        description={
+          toCancel
+            ? `${getServiceName(toCancel.serviceId)}, ${formatDate(toCancel.scheduledDate)} a las ${toCancel.scheduledTime}. El salón dejará libre esa hora.`
+            : undefined
+        }
+        confirmLabel="Sí, cancelar la cita"
+        cancelLabel="No, mantenerla"
+        destructive
+        loading={cancelling}
+        onCancel={() => setToCancel(null)}
+        onConfirm={confirmCancel}
+      />
 
       {/* Virtual Receptionist Widget */}
       <ChatWidget

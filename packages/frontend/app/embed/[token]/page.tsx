@@ -10,6 +10,12 @@ import {
   Check,
   AlertCircle,
 } from "lucide-react";
+import { formatPrice } from "@/lib/salon-seo";
+import {
+  bookingErrorMessage,
+  localDateString,
+  privacyPolicyUrl,
+} from "@/lib/public-booking";
 
 interface WidgetConfig {
   tenant: {
@@ -68,6 +74,11 @@ export default function EmbedWidgetPage() {
   const [professionalId, setProfessionalId] = useState("");
   const [date, setDate] = useState("");
   const [slots, setSlots] = useState<Slot[]>([]);
+  const [slotsLoading, setSlotsLoading] = useState(false);
+  // Bumped to ask for the slots again (after a failed booking).
+  const [slotsRefresh, setSlotsRefresh] = useState(0);
+  // The visitor's calendar day, set after mount (not the server's UTC one).
+  const [today, setToday] = useState("");
   const [time, setTime] = useState("");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -89,10 +100,23 @@ export default function EmbedWidgetPage() {
   }, [token]);
 
   useEffect(() => {
+    setToday(localDateString());
+  }, []);
+
+  // A time belongs to the service, professional and day it was offered for:
+  // changing any of them drops it, or the old time went out with the new ones.
+  useEffect(() => {
+    setTime("");
+  }, [serviceId, professionalId, date]);
+
+  useEffect(() => {
+    setSlots([]);
     if (!config || !serviceId || !date) {
-      setSlots([]);
+      setSlotsLoading(false);
       return;
     }
+    let cancelled = false;
+    setSlotsLoading(true);
     const params = new URLSearchParams({
       tenantId: config.tenant.id,
       date,
@@ -104,15 +128,27 @@ export default function EmbedWidgetPage() {
     if (professionalId) params.append("professionalId", professionalId);
     fetch(`${API}/appointments/available-slots?${params.toString()}`)
       .then(async (r) => (r.ok ? r.json() : []))
-      .then((data: Slot[]) =>
-        setSlots(data.filter((s: any) => s.isAvailable ?? s.available ?? true)),
-      )
-      .catch(() => setSlots([]));
-  }, [config, serviceId, professionalId, date]);
+      .then((data: Slot[]) => {
+        if (cancelled) return;
+        const free = data.filter((s: any) => s.isAvailable ?? s.available ?? true);
+        setSlots(free);
+        // Keep a picked time only while it is still free.
+        setTime((prev) => (prev && !free.some((s) => s.time === prev) ? "" : prev));
+      })
+      .catch(() => {
+        if (!cancelled) setSlots([]);
+      })
+      .finally(() => {
+        if (!cancelled) setSlotsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [config, serviceId, professionalId, date, slotsRefresh]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!config) return;
+    if (!config || !time) return;
     setSubmitting(true);
     setBookingError(null);
     try {
@@ -138,13 +174,17 @@ export default function EmbedWidgetPage() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.message ?? `HTTP ${res.status}`);
+        // In Spanish, without NestJS's field path ("clientInfo.").
+        throw new Error(bookingErrorMessage(err.message) || `HTTP ${res.status}`);
       }
       const appt = await res.json();
       setBookingId(appt.id);
       setStep("done");
     } catch (err: any) {
-      setBookingError(err.message ?? "Error");
+      setBookingError(err.message || "No se pudo reservar la cita. Inténtalo de nuevo.");
+      // The slot may have been taken meanwhile: ask again, and a time no
+      // longer free is dropped (see the slots effect).
+      setSlotsRefresh((n) => n + 1);
     } finally {
       setSubmitting(false);
     }
@@ -219,7 +259,7 @@ export default function EmbedWidgetPage() {
                         {s.duration} min
                       </span>
                       <span className="font-semibold text-purple-600">
-                        {Number(s.price).toFixed(2)} {s.currency}
+                        {formatPrice(Number(s.price), s.currency || config.tenant.currency)}
                       </span>
                     </div>
                   </button>
@@ -266,15 +306,17 @@ export default function EmbedWidgetPage() {
                 <input
                   type="date"
                   value={date}
-                  min={new Date().toISOString().slice(0, 10)}
+                  min={today || undefined}
                   onChange={(e) => setDate(e.target.value)}
                   className="w-full md:w-1/3 border border-gray-300 rounded-lg px-3 py-2"
                 />
                 {date && (
                   <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-3">
                     {slots.length === 0 && (
-                      <div className="col-span-full text-sm text-gray-500">
-                        No hay huecos disponibles este día.
+                      <div className="col-span-full text-sm text-gray-500" aria-live="polite">
+                        {slotsLoading
+                          ? "Buscando horas libres…"
+                          : "No hay huecos disponibles este día. Prueba con otra fecha u otro profesional."}
                       </div>
                     )}
                     {slots.map((slot) => (
@@ -303,8 +345,13 @@ export default function EmbedWidgetPage() {
         {step === "details" && (
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 text-sm">
-              <strong>{selectedService?.name}</strong> · {time} · {date}
+              <strong>{selectedService?.name}</strong> · {time || "--:--"} · {date}
             </div>
+            {!time && (
+              <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+                Esa hora ya no está libre. Vuelve atrás y elige otra.
+              </div>
+            )}
             <input
               required
               placeholder="Nombre completo"
@@ -349,12 +396,26 @@ export default function EmbedWidgetPage() {
               </button>
               <button
                 type="submit"
-                disabled={submitting}
+                disabled={submitting || !time}
                 className="flex-1 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 disabled:opacity-50"
               >
                 {submitting ? "Enviando…" : "Confirmar reserva"}
               </button>
             </div>
+            {/* Who uses these details and what for (RGPD art. 13). */}
+            <p className="text-xs text-gray-500">
+              {config.tenant.name} usará tu nombre, teléfono y email solo para
+              gestionar tu cita y enviarte avisos sobre ella (confirmación,
+              recordatorios y cambios).{" "}
+              <a
+                href={privacyPolicyUrl()}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-purple-700"
+              >
+                Política de privacidad
+              </a>
+            </p>
           </form>
         )}
 

@@ -23,6 +23,17 @@ import {
   openingHoursRows,
   type PublicSalonPage,
 } from "@/lib/salon-seo";
+import {
+  bookingDateFromQuery,
+  bookingErrorMessage,
+  formatBookingDate,
+  isClosedDay,
+  isOfferedTime,
+  localDateString,
+  localTomorrow,
+  privacyPolicyUrl,
+  slotsState,
+} from "@/lib/public-booking";
 import LoginModal from "./components/login-modal";
 import PublicReviewsSection from "./components/public-reviews";
 import { ChatWidget } from "@/src/components/virtual-receptionist";
@@ -151,6 +162,13 @@ export default function SalonBookingPage({
   const services = initial.services;
   const hoursRows = openingHoursRows(initialData.openingHours);
   const [availableSlots, setAvailableSlots] = useState<AvailableTimeSlot[]>([]);
+  const [slotsLoading, setSlotsLoading] = useState(false);
+  // Bumped to ask the server for the slots again (after a failed booking).
+  const [slotsRefresh, setSlotsRefresh] = useState(0);
+  // The visitor's own calendar day, set after mount: the server renders in
+  // UTC and this page is cached for minutes, so a server-side "today" could
+  // be the wrong day.
+  const [today, setToday] = useState("");
   const [bookingData, setBookingData] = useState<BookingData>({
     clientName: "",
     clientEmail: "",
@@ -188,7 +206,9 @@ export default function SalonBookingPage({
     const q = new URLSearchParams(window.location.search);
     const serviceId = q.get("serviceId") || "";
     const professionalId = q.get("professionalId") || "";
-    const date = /^d{4}-d{2}-d{2}$/.test(q.get("date") || "") ? (q.get("date") as string) : "";
+    // The pattern was written without backslashes (/^d{4}-d{2}-d{2}$/), so
+    // it matched "dddd-dd-dd" and never a date: every link lost its day.
+    const date = bookingDateFromQuery(q.get("date"));
     if (serviceId || professionalId || date) {
       setBookingData((prev) => ({
         ...prev,
@@ -229,33 +249,39 @@ export default function SalonBookingPage({
       clientPhone: "",
     }));
     toast({
-      title: "Logged out",
-      description: "You have been successfully logged out.",
+      title: t("bookingPublic.logged_out"),
+      description: t("bookingPublic.logged_out_desc"),
     });
   };
 
-  // Set default date to today + 1 day
+  // Default date: tomorrow, in the visitor's calendar. toISOString() gave
+  // the UTC day, which after midnight in Spain was still today.
   useEffect(() => {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    setToday(localDateString());
     setBookingData((prev) => ({
       ...prev,
       // A date from the link (see above) wins.
-      date: prev.date || tomorrow.toISOString().split("T")[0],
+      date: prev.date || localTomorrow(),
     }));
   }, []);
 
   // Fetch available time slots
   useEffect(() => {
+    // The list on screen belongs to the previous service, professional or
+    // day: drop it now, so nothing from it can be picked or sent while the
+    // new one loads.
+    setAvailableSlots([]);
+    let cancelled = false;
+
     const fetchAvailableSlots = async () => {
       // Only fetch slots if service and professional are selected
       if (!bookingData.professionalId || !bookingData.serviceId) {
-        setAvailableSlots([]);
+        setSlotsLoading(false);
         return;
       }
 
       if (!salonData?.id || !bookingData.date) {
-        setAvailableSlots([]);
+        setSlotsLoading(false);
         return;
       }
 
@@ -277,28 +303,46 @@ export default function SalonBookingPage({
           bookingData.date,
         );
 
-        setAvailableSlots(
-          slots.map((slot) => ({
-            time: slot.time,
-            available: slot.isAvailable,
-          })),
+        // An answer for inputs the client has since changed is not hers.
+        if (cancelled) return;
+        const offered = slots.map((slot) => ({
+          time: slot.time,
+          available: slot.isAvailable,
+        }));
+        setAvailableSlots(offered);
+        // A time picked earlier stays only if this list still offers it
+        // (after a failed booking the slot may have been taken).
+        setBookingData((prev) =>
+          prev.time && !isOfferedTime(prev.time, offered)
+            ? { ...prev, time: "" }
+            : prev,
         );
       } catch (error) {
+        if (cancelled) return;
         console.error("Error fetching available slots:", error);
         toast({
           title: "Error",
-          description: "No se pudo cargar los horarios disponibles",
+          description: "No se pudieron cargar los horarios disponibles",
           variant: "destructive",
         });
+      } finally {
+        if (!cancelled) setSlotsLoading(false);
       }
     };
+
+    setSlotsLoading(
+      !!(bookingData.professionalId && bookingData.serviceId && bookingData.date),
+    );
 
     // Debounce fetching slots
     const timer = setTimeout(() => {
       fetchAvailableSlots();
     }, 500);
 
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
     // The date belongs here: with invented slots it made no difference, so
     // picking another day never refetched anything.
   }, [
@@ -306,6 +350,7 @@ export default function SalonBookingPage({
     bookingData.serviceId,
     bookingData.date,
     salonData?.id,
+    slotsRefresh,
   ]);
 
   const handleInputChange = (
@@ -333,6 +378,18 @@ export default function SalonBookingPage({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Only a time the server offered for the inputs on screen. A time picked
+    // before changing the professional or the day used to stay selected and
+    // go out with the new ones.
+    if (!isOfferedTime(bookingData.time, availableSlots)) {
+      setBookingData((prev) => ({ ...prev, time: "" }));
+      toast({
+        title: t("bookingPublic.select_time"),
+        description: t("bookingPublic.slot_gone"),
+        variant: "destructive",
+      });
+      return;
+    }
     setLoading(true);
 
     try {
@@ -385,7 +442,7 @@ export default function SalonBookingPage({
         description: t("bookingPublic.booking_confirmed"),
       });
 
-      // Reset form
+      // Reset form, with tomorrow as the date again
       setBookingData({
         clientName: currentUser
           ? `${currentUser.firstName} ${currentUser.lastName}`
@@ -394,17 +451,9 @@ export default function SalonBookingPage({
         clientPhone: currentUser ? currentUser.phone || "" : "",
         serviceId: "",
         professionalId: "",
-        date: "",
+        date: localTomorrow(),
         time: "",
       });
-
-      // Set default date to tomorrow again
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      setBookingData((prev) => ({
-        ...prev,
-        date: tomorrow.toISOString().split("T")[0],
-      }));
     } catch (error) {
       console.error("Error booking appointment:", error);
       // Pass the server's reason through. The slot may have been taken while
@@ -413,29 +462,21 @@ export default function SalonBookingPage({
       toast({
         title: "Error",
         description:
-          error instanceof Error && error.message
-            ? error.message
-            : "No se pudo reservar la cita. Por favor, intenta nuevamente.",
+          (error instanceof Error && bookingErrorMessage(error.message)) ||
+          t("bookingPublic.booking_failed"),
         variant: "destructive",
       });
+      // Ask for the slots again: the one she picked may be gone, and the
+      // list on screen would go on offering it.
+      setSlotsRefresh((n) => n + 1);
     } finally {
       setLoading(false);
     }
   };
 
-  const formatDate = (dateString: string) => {
-    if (!dateString) return "";
-
-    const date = new Date(dateString);
-    const options: Intl.DateTimeFormatOptions = {
-      weekday: "long",
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-    };
-
-    return date.toLocaleDateString("es-ES", options);
-  };
+  // From the date's own parts: new Date("2026-11-01") is UTC midnight, the
+  // day before west of Greenwich.
+  const formatDate = (dateString: string) => formatBookingDate(dateString);
 
   // Filter professionals based on selected service
   // Which professionals can perform the chosen service.
@@ -464,28 +505,28 @@ export default function SalonBookingPage({
       ? professionals
       : linkedProfessionals;
 
-  // Filter available dates based on salon settings
+  // This refused every Sunday, for every salon, whatever its hours -- and
+  // read the weekday from a UTC date, so west of Greenwich it refused
+  // Mondays. The day is taken as picked; the server's slots say what is
+  // free, and the salon's recorded hours only choose the message when
+  // nothing is (see isClosedDay: a professional with no schedule recorded
+  // is bookable any day, so the hours cannot veto a day on their own).
   const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedDate = new Date(e.target.value);
-    const dayOfWeek = selectedDate.getDay();
-
-    // Salon is open Monday-Saturday (1-6)
-    if (dayOfWeek === 0) {
-      // Sunday
-      toast({
-        title: t("bookingPublic.dateUnavailable"),
-        description: t("bookingPublic.salonClosedSunday"),
-        variant: "destructive",
-      });
-      setAvailableSlots([]);
-      return;
-    }
-
     setBookingData((prev) => ({
       ...prev,
       date: e.target.value,
+      time: "",
     }));
   };
+
+  const slotsView = slotsState({
+    serviceId: bookingData.serviceId,
+    professionalId: bookingData.professionalId,
+    date: bookingData.date,
+    loading: slotsLoading,
+    slots: availableSlots,
+    closed: isClosedDay(bookingData.date, initialData.openingHours),
+  });
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 via-white to-pink-50">
@@ -647,7 +688,7 @@ export default function SalonBookingPage({
                             onChange={handleInputChange}
                             required
                             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors"
-                            placeholder="+34 123 456 789"
+                            placeholder="+34 600 123 456"
                           />
                         </div>
                       )}
@@ -669,7 +710,7 @@ export default function SalonBookingPage({
                         onChange={handleInputChange}
                         required
                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors"
-                        placeholder="John Doe"
+                        placeholder={t("bookingPublic.name_placeholder")}
                       />
                     </div>
 
@@ -690,7 +731,7 @@ export default function SalonBookingPage({
                         value={bookingData.clientEmail}
                         onChange={handleInputChange}
                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors"
-                        placeholder="john@example.com"
+                        placeholder={t("bookingPublic.email_placeholder")}
                       />
                     </div>
 
@@ -709,7 +750,7 @@ export default function SalonBookingPage({
                         onChange={handleInputChange}
                         required
                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors"
-                        placeholder="+34 123 456 789"
+                        placeholder="+34 600 123 456"
                       />
                     </div>
                   </div>
@@ -757,6 +798,11 @@ export default function SalonBookingPage({
                           setBookingData((prev) => ({
                             ...prev,
                             professionalId: professional.id,
+                            // Her times, not the previous professional's.
+                            time:
+                              prev.professionalId === professional.id
+                                ? prev.time
+                                : "",
                           }))
                         }
                         className={`p-4 border rounded-lg transition-colors text-left ${
@@ -811,7 +857,7 @@ export default function SalonBookingPage({
                   value={bookingData.date}
                   onChange={handleDateChange}
                   required
-                  min={new Date().toISOString().split("T")[0]}
+                  min={today || undefined}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors"
                 />
 
@@ -829,9 +875,7 @@ export default function SalonBookingPage({
                   {t("bookingPublic.select_time")}
                 </h3>
 
-                {bookingData.professionalId &&
-                bookingData.serviceId &&
-                availableSlots.length > 0 ? (
+                {slotsView === "ready" ? (
                   <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
                     {availableSlots.map((slot, index) => (
                       <button
@@ -857,17 +901,17 @@ export default function SalonBookingPage({
                     ))}
                   </div>
                 ) : (
-                  <div className="text-center py-8 text-gray-500">
-                    {t("bookingPublic.select_service_first")}
+                  <div className="text-center py-8 text-gray-500" aria-live="polite">
+                    {t(`bookingPublic.${slotsView}`)}
                   </div>
                 )}
               </div>
 
               {/* Submit Button */}
-              <div className="pt-4">
+              <div className="pt-4 space-y-3">
                 <button
                   type="submit"
-                  disabled={loading || !bookingData.time}
+                  disabled={loading || !isOfferedTime(bookingData.time, availableSlots)}
                   className="w-full px-6 py-3 bg-purple-600 text-white font-medium rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
                 >
                   {loading ? (
@@ -882,6 +926,19 @@ export default function SalonBookingPage({
                     </>
                   )}
                 </button>
+                {/* The form asks for name, phone and email: say who uses
+                    them and what for (RGPD art. 13), where they are given. */}
+                <p className="text-xs text-gray-500 text-center">
+                  {t("bookingPublic.privacy_notice", { salon: salonData.name })}{" "}
+                  <a
+                    href={privacyPolicyUrl()}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline hover:text-purple-700"
+                  >
+                    {t("bookingPublic.privacy_link")}
+                  </a>
+                </p>
               </div>
             </form>
           </div>

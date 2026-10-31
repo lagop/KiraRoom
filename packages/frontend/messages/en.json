@@ -1930,7 +1930,10 @@
         "description": "Know your business performance at all times."
       }
     },
-    "create_account": "Create a free account"
+    "create_account": "Create a free account",
+    "failed": "Could not sign in",
+    "invalid_credentials": "Wrong email or password",
+    "server_error": "Server error. Please try again later."
   },
   "bookingPublic": {
     "title": "Book an appointment",
@@ -1949,8 +1952,18 @@
     "select_time": "Choose a time",
     "confirm_booking": "Confirm booking",
     "booking_confirmed": "Booking confirmed",
-    "dateUnavailable": "Date not available",
-    "salonClosedSunday": "The salon is closed on Sundays"
+    "select_professional_first": "Choose a professional to see the free times",
+    "loading_slots": "Looking for free times…",
+    "no_slots": "No free times left on this day. Try another date or another professional.",
+    "closed_day": "The salon is closed on this day. Choose another date.",
+    "slot_gone": "That time is no longer free. Choose another one.",
+    "name_placeholder": "Full name",
+    "email_placeholder": "you@email.com",
+    "privacy_notice": "{salon} will use your name, phone and email only to manage your appointment and send you notices about it (confirmation, reminders and changes).",
+    "privacy_link": "Privacy policy",
+    "logged_out": "Signed out",
+    "logged_out_desc": "You have signed out.",
+    "booking_failed": "The appointment could not be booked. Please try again."
   },
   "sites": {
     "notFoundTitle": "Salon not found",
