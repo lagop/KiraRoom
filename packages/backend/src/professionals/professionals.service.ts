@@ -3,6 +3,7 @@ import { PrismaService } from "../common/prisma/prisma.service";
 import { deleteProfessionalKeepingHistory } from "../common/prisma/history-deletes";
 import { CreateProfessionalDto, UpdateProfessionalDto } from "./dto";
 import { assertProfessionalSlot } from "./professional-limit";
+import { commissionRateUpdate, optionalDateUpdate } from "./optional-fields";
 
 /**
  * What anyone may see about a professional: what the salon's public site
@@ -48,9 +49,8 @@ export class ProfessionalsService {
         isActive: createProfessionalDto.isActive ?? true,
         isOwner: createProfessionalDto.isOwner ?? false,
         position: createProfessionalDto.position,
-        commissionRate: createProfessionalDto.commissionRate
-          ? parseFloat(createProfessionalDto.commissionRate)
-          : null,
+        // 0 is a rate: only "not given" (or null) means none.
+        commissionRate: commissionRateUpdate(createProfessionalDto.commissionRate) ?? null,
         hireDate: createProfessionalDto.hireDate
           ? new Date(createProfessionalDto.hireDate)
           : new Date(),
@@ -177,15 +177,12 @@ export class ProfessionalsService {
         isActive: updateProfessionalDto.isActive,
         isOwner: updateProfessionalDto.isOwner,
         position: updateProfessionalDto.position,
-        commissionRate: updateProfessionalDto.commissionRate
-          ? parseFloat(updateProfessionalDto.commissionRate)
-          : null,
+        // Left out: kept; null: cleared; 0: a rate of 0 (optional-fields.ts).
+        commissionRate: commissionRateUpdate(updateProfessionalDto.commissionRate),
         hireDate: updateProfessionalDto.hireDate
           ? new Date(updateProfessionalDto.hireDate)
           : undefined,
-        terminationDate: updateProfessionalDto.terminationDate
-          ? new Date(updateProfessionalDto.terminationDate)
-          : undefined,
+        terminationDate: optionalDateUpdate(updateProfessionalDto.terminationDate),
         workingHours: updateProfessionalDto.workingHours,
         availability: updateProfessionalDto.availability,
         settings: updateProfessionalDto.settings,
