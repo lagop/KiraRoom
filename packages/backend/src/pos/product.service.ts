@@ -3,6 +3,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { StripeService } from '../payments/services/stripe.service';
 import { WalletService } from '../payments/services/wallet.service';
 import { CreateProductDto, UpdateProductDto } from './dto/pos.dto';
+import { CLIENT_POS_SELECT } from '../clients/client-select';
 
 export { CreateProductDto, UpdateProductDto };
 
@@ -362,7 +363,7 @@ export class ProductService {
             product: true,
           },
         },
-        client: true,
+        client: { select: CLIENT_POS_SELECT },
       },
     });
 
@@ -403,7 +404,7 @@ export class ProductService {
     return this.prisma.order.findMany({
       where,
       include: {
-        client: true,
+        client: { select: CLIENT_POS_SELECT },
         items: {
           include: {
             product: true,
@@ -418,7 +419,7 @@ export class ProductService {
     return this.prisma.order.findUnique({
       where: { id },
       include: {
-        client: true,
+        client: { select: CLIENT_POS_SELECT },
         items: {
           include: {
             product: true,

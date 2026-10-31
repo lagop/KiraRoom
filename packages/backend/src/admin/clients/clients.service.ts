@@ -1,38 +1,33 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { deleteClientKeepingHistory } from '../../common/prisma/history-deletes';
 import { CreateClientDto, UpdateClientDto } from './dto';
-import { Client, ClientStatus } from '@prisma/client';
+import { ClientStatus } from '@prisma/client';
+import {
+  CLIENT_APPOINTMENTS_LIMIT,
+  CLIENT_APPOINTMENTS_SELECT,
+  CLIENT_DETAIL_SELECT,
+  CLIENT_LIST_SELECT,
+} from '../../clients/client-select';
+import {
+  buildClientCreateData,
+  buildClientUpdateData,
+  rethrowClientWriteError,
+} from '../../clients/client-write';
 
 @Injectable()
 export class AdminClientsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(createClientDto: CreateClientDto) {
+  async create(tenantId: string, createClientDto: CreateClientDto) {
+    const data = buildClientCreateData(tenantId, {
+      ...createClientDto,
+      preferredLanguage: createClientDto.preferredLanguage || 'es',
+    });
     try {
-      const client = await this.prisma.client.create({
-        data: {
-          tenantId: createClientDto.tenantId,
-          firstName: createClientDto.firstName,
-          lastName: createClientDto.lastName,
-          email: createClientDto.email,
-          phone: createClientDto.phone,
-          dateOfBirth: createClientDto.dateOfBirth,
-          gender: createClientDto.gender,
-          status: createClientDto.status || ClientStatus.active,
-          preferredLanguage: createClientDto.preferredLanguage || 'es',
-          notes: createClientDto.notes,
-          allergies: createClientDto.allergies,
-          medicalConditions: createClientDto.medicalConditions,
-          tags: createClientDto.tags,
-        },
-      });
-      return client;
+      return await this.prisma.client.create({ data, select: CLIENT_DETAIL_SELECT });
     } catch (error) {
-      if (error.code === 'P2002') {
-        throw new BadRequestException('Client with this email already exists');
-      }
-      throw new BadRequestException('Failed to create client');
+      rethrowClientWriteError(error);
     }
   }
 
@@ -59,7 +54,8 @@ export class AdminClientsService {
         orderBy: { createdAt: 'desc' },
         // Only the counter: `include: { appointments: true }` dragged every
         // historical appointment of every row into a paginated list.
-        include: {
+        select: {
+          ...CLIENT_LIST_SELECT,
           _count: { select: { appointments: true } },
         },
       }),
@@ -76,56 +72,46 @@ export class AdminClientsService {
   }
 
   async findOne(tenantId: string, id: string) {
-    const client = await this.prisma.client.findUnique({
+    const client = await this.prisma.client.findFirst({
       where: { id, tenantId },
-      include: {
+      select: {
+        ...CLIENT_DETAIL_SELECT,
         appointments: {
-          include: {
-            service: true,
-            professional: true,
-          },
+          select: CLIENT_APPOINTMENTS_SELECT,
+          orderBy: [{ scheduledDate: 'desc' }, { scheduledTime: 'desc' }],
+          take: CLIENT_APPOINTMENTS_LIMIT,
         },
       },
     });
 
     if (!client) {
-      throw new NotFoundException('Client not found');
+      throw new NotFoundException('Cliente no encontrado');
     }
 
     return client;
   }
 
   async update(tenantId: string, id: string, updateClientDto: UpdateClientDto) {
+    const current = await this.prisma.client.findFirst({
+      where: { id, tenantId },
+      select: { taxId: true, taxIdType: true },
+    });
+    if (!current) {
+      throw new NotFoundException('Cliente no encontrado');
+    }
+
+    const data = buildClientUpdateData(updateClientDto, current);
     try {
-      // Convert dateOfBirth string to proper DateTime format for Prisma
-      const data: any = {
-        firstName: updateClientDto.firstName,
-        lastName: updateClientDto.lastName,
-        email: updateClientDto.email,
-        phone: updateClientDto.phone,
-        dateOfBirth: updateClientDto.dateOfBirth ? new Date(updateClientDto.dateOfBirth) : undefined,
-        gender: updateClientDto.gender,
-        status: updateClientDto.status,
-        preferredLanguage: updateClientDto.preferredLanguage,
-        notes: updateClientDto.notes,
-        allergies: updateClientDto.allergies,
-        medicalConditions: updateClientDto.medicalConditions,
-        tags: updateClientDto.tags,
-      };
-      
-      const client = await this.prisma.client.update({
+      return await this.prisma.client.update({
         where: { id, tenantId },
         data,
+        select: CLIENT_DETAIL_SELECT,
       });
-      return client;
     } catch (error) {
-      if (error.code === 'P2025') {
-        throw new NotFoundException('Client not found');
+      if ((error as { code?: string })?.code === 'P2025') {
+        throw new NotFoundException('Cliente no encontrado');
       }
-      if (error.code === 'P2002') {
-        throw new BadRequestException('Client with this email already exists');
-      }
-      throw new BadRequestException('Failed to update client');
+      rethrowClientWriteError(error);
     }
   }
 
@@ -135,7 +121,7 @@ export class AdminClientsService {
   }
 
   async search(tenantId: string, query: string) {
-    const clients = await this.prisma.client.findMany({
+    return this.prisma.client.findMany({
       where: {
         tenantId,
         OR: [
@@ -147,8 +133,7 @@ export class AdminClientsService {
       },
       take: 10,
       orderBy: { lastName: 'asc' },
+      select: CLIENT_LIST_SELECT,
     });
-
-    return clients;
   }
 }

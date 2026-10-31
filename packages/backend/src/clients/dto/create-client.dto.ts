@@ -4,8 +4,15 @@ import {
   IsEmail,
   IsOptional,
   IsDateString,
-  IsEnum,
+  IsIn,
+  IsNotEmpty,
 } from 'class-validator';
+import { ClientStatus, Gender, NifType } from '@prisma/client';
+
+/** The enums as the database has them: anything else is a 400, not a 500. */
+export const CLIENT_STATUSES = Object.values(ClientStatus);
+export const CLIENT_GENDERS = Object.values(Gender);
+export const CLIENT_TAX_ID_TYPES = Object.values(NifType);
 
 export class CreateClientDto {
   /** Ignored: the controller sets it from the caller's token. */
@@ -16,51 +23,68 @@ export class CreateClientDto {
 
   @ApiProperty({ description: 'First name' })
   @IsString()
+  @IsNotEmpty()
   firstName: string;
 
   @ApiProperty({ description: 'Last name' })
   @IsString()
+  @IsNotEmpty()
   lastName: string;
 
   @ApiProperty({ description: 'Email address', required: false })
   @IsEmail()
   @IsOptional()
-  email?: string;
+  email?: string | null;
 
   @ApiProperty({ description: 'Phone number', required: false })
   @IsString()
   @IsOptional()
-  phone?: string;
+  phone?: string | null;
 
   @ApiProperty({ description: 'Date of birth', required: false })
   @IsDateString()
   @IsOptional()
-  dateOfBirth?: string;
+  dateOfBirth?: string | null;
 
-  @ApiProperty({ description: 'Gender', required: false, enum: ['male', 'female', 'other'] })
-  @IsString()
+  @ApiProperty({ description: 'Gender', required: false, enum: CLIENT_GENDERS })
+  @IsIn(CLIENT_GENDERS)
   @IsOptional()
-  gender?: 'male' | 'female' | 'other';
+  gender?: Gender | null;
 
   @ApiProperty({ description: 'Profile image URL', required: false })
   @IsString()
   @IsOptional()
-  profileImage?: string;
+  profileImage?: string | null;
+
+  @ApiProperty({ description: 'Notes about the client', required: false })
+  @IsString()
+  @IsOptional()
+  notes?: string | null;
 
   @ApiProperty({
-    description: 'Spanish tax ID (NIF/CIF/NIE). Invalid formats are rejected with 400.',
+    description: 'Client status (defaults to active; staff always create active clients)',
+    required: false,
+    enum: CLIENT_STATUSES,
+  })
+  @IsIn(CLIENT_STATUSES)
+  @IsOptional()
+  status?: ClientStatus;
+
+  @ApiProperty({
+    description:
+      'Tax ID. NIF/CIF/NIE are checked and normalized (400 when malformed); passport/other are stored as typed.',
     required: false,
   })
   @IsString()
   @IsOptional()
-  taxId?: string;
+  taxId?: string | null;
 
   @ApiProperty({
     description: 'Classification of taxId. AEAT rejects mismatched values.',
     required: false,
-    enum: ['nif', 'cif', 'nie', 'passport', 'other'],
+    enum: CLIENT_TAX_ID_TYPES,
   })
   @IsOptional()
-  @IsEnum(['nif', 'cif', 'nie', 'passport', 'other'])
-  taxIdType?: 'nif' | 'cif' | 'nie' | 'passport' | 'other';
+  @IsIn(CLIENT_TAX_ID_TYPES)
+  taxIdType?: NifType | null;
 }

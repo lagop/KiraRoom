@@ -3,13 +3,37 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
+  ForbiddenException,
 } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import * as bcrypt from "bcryptjs";
 import { hashPassword } from "../saas/saas.helpers";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { CreateClientDto, UpdateClientDto, UpdateMyProfileDto, ChangeMyPasswordDto } from "./dto";
-import { validateNif } from "../common/validation/nif.validator";
 import { deleteClientKeepingHistory } from "../common/prisma/history-deletes";
+import {
+  CLIENT_APPOINTMENTS_LIMIT,
+  CLIENT_APPOINTMENTS_SELECT,
+  CLIENT_DETAIL_SELECT,
+  CLIENT_LIST_SELECT,
+} from "./client-select";
+import {
+  buildClientCreateData,
+  buildClientUpdateData,
+  rethrowClientWriteError,
+  CLIENT_EMAIL_TAKEN,
+} from "./client-write";
+
+/**
+ * Whose clients a caller may reach. Owner/admin: {} (the whole salon).
+ * Staff: their professional id (see ClientsController.scopeFor).
+ */
+export interface ClientScope {
+  professionalId?: string;
+}
+
+export const STAFF_MAY_NOT_CHANGE =
+  "Solo el propietario o un administrador pueden cambiar el email o el estado de un cliente";
 
 export interface ClientFilters {
   gender?: "male" | "female" | "other";
@@ -29,55 +53,31 @@ export interface ClientFilters {
 export class ClientsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(createClientDto: CreateClientDto) {
-    // Validate NIF format — AEAT / hacienda rejects malformed identifiers.
-    if (createClientDto.taxId) {
-      const v = validateNif(createClientDto.taxId);
-      if (!v.valid) {
-        throw new BadRequestException(
-          `taxId invalid (${v.error}): expected NIF/CIF/NIE in canonical form`,
-        );
-      }
-      createClientDto.taxId = v.normalized ?? createClientDto.taxId;
+  async create(tenantId: string, dto: CreateClientDto) {
+    const data = buildClientCreateData(tenantId, dto);
+    try {
+      return await this.prisma.client.create({ data, select: CLIENT_DETAIL_SELECT });
+    } catch (error) {
+      rethrowClientWriteError(error);
     }
-    return this.prisma.client.create({
-      data: {
-        tenantId: createClientDto.tenantId,
-        firstName: createClientDto.firstName,
-        lastName: createClientDto.lastName,
-        email: createClientDto.email,
-        phone: createClientDto.phone,
-        dateOfBirth: createClientDto.dateOfBirth
-          ? new Date(createClientDto.dateOfBirth)
-          : null,
-        gender: createClientDto.gender,
-        profileImage: createClientDto.profileImage,
-        taxId: createClientDto.taxId,
-        taxIdType: createClientDto.taxIdType,
-        status: "active",
-      },
+  }
+
+  /**
+   * The panel's client list. `scope.professionalId` (staff) narrows it to
+   * the clients with at least one appointment with that professional.
+   */
+  async findAll(tenantId: string, scope: ClientScope = {}) {
+    return this.prisma.client.findMany({
+      where: { tenantId, ...this.scopeWhere(scope) },
+      select: CLIENT_LIST_SELECT,
     });
   }
 
-  async findAll(tenantId?: string, professionalId?: string) {
-    const where: any = {};
-
-    if (tenantId) {
-      where.tenantId = tenantId;
-    }
-
-    // Si se especifica professionalId (para Staff), filtrar solo clientes que tienen citas con ese profesional
-    if (professionalId) {
-      where.appointments = {
-        some: {
-          professionalId: professionalId,
-        },
-      };
-    }
-
-    return this.prisma.client.findMany({
-      where,
-    });
+  /** Staff see only the clients they have served or will serve. */
+  private scopeWhere(scope: ClientScope): Prisma.ClientWhereInput {
+    return scope.professionalId
+      ? { appointments: { some: { professionalId: scope.professionalId } } }
+      : {};
   }
 
   async findAllWithFilters(tenantId: string, filters: ClientFilters) {
@@ -179,58 +179,87 @@ export class ClientsService {
 
     return this.prisma.client.findMany({
       where,
+      select: CLIENT_LIST_SELECT,
     });
   }
 
-  async findOne(tenantId: string, id: string) {
-    const client = await this.prisma.client.findUnique({
-      where: { id, tenantId },
+  /**
+   * One client's file: her details (health data included), and her visits
+   * with what each one cost. Staff (`scope.professionalId`) only reach
+   * clients they have an appointment with; any other id is a 404, as if
+   * it did not exist.
+   */
+  async findOne(tenantId: string, id: string, scope: ClientScope = {}) {
+    const client = await this.prisma.client.findFirst({
+      where: { id, tenantId, ...this.scopeWhere(scope) },
+      select: {
+        ...CLIENT_DETAIL_SELECT,
+        appointments: {
+          select: CLIENT_APPOINTMENTS_SELECT,
+          orderBy: [{ scheduledDate: "desc" }, { scheduledTime: "desc" }],
+          take: CLIENT_APPOINTMENTS_LIMIT,
+        },
+      },
     });
 
     if (!client) {
-      throw new NotFoundException(`Client with ID ${id} not found`);
+      throw new NotFoundException("Cliente no encontrado");
     }
 
     return client;
   }
 
-  async update(tenantId: string, id: string, updateClientDto: UpdateClientDto) {
-    const client = await this.prisma.client.findUnique({
+  /** A client reading her own record: her details, no visit list. */
+  async findSelfRecord(tenantId: string, id: string) {
+    const client = await this.prisma.client.findFirst({
       where: { id, tenantId },
+      select: CLIENT_DETAIL_SELECT,
+    });
+    if (!client) throw new NotFoundException("Cliente no encontrado");
+    return client;
+  }
+
+  /**
+   * Staff (`scope.professionalId`) may edit their own clients (see
+   * findOne) but not change their email (it is how she signs in) or her
+   * status (blocking is the manager's call): 403 when either differs from
+   * what is stored. Sending the stored value back is fine.
+   */
+  async update(
+    tenantId: string,
+    id: string,
+    updateClientDto: UpdateClientDto,
+    scope: ClientScope = {},
+  ) {
+    const client = await this.prisma.client.findFirst({
+      where: { id, tenantId, ...this.scopeWhere(scope) },
+      select: { email: true, status: true, taxId: true, taxIdType: true },
     });
 
     if (!client) {
-      throw new NotFoundException(`Client with ID ${id} not found`);
+      throw new NotFoundException("Cliente no encontrado");
     }
 
-    // Validate NIF format when supplied.
-    if (updateClientDto.taxId) {
-      const v = validateNif(updateClientDto.taxId);
-      if (!v.valid) {
-        throw new BadRequestException(
-          `taxId invalid (${v.error}): expected NIF/CIF/NIE in canonical form`,
-        );
+    if (scope.professionalId) {
+      const email = updateClientDto.email === undefined ? undefined : updateClientDto.email?.trim() || null;
+      if (email !== undefined && email !== client.email) {
+        throw new ForbiddenException(STAFF_MAY_NOT_CHANGE);
       }
-      updateClientDto.taxId = v.normalized ?? updateClientDto.taxId;
+      if (updateClientDto.status !== undefined && updateClientDto.status !== client.status) {
+        throw new ForbiddenException(STAFF_MAY_NOT_CHANGE);
+      }
     }
 
-    return this.prisma.client.update({
-      where: { id, tenantId },
-      data: {
-        firstName: updateClientDto.firstName,
-        lastName: updateClientDto.lastName,
-        email: updateClientDto.email,
-        phone: updateClientDto.phone,
-        preferredLanguage: updateClientDto.preferredLanguage,
-        preferredServices: updateClientDto.preferredServices,
-        preferredProfessionals: updateClientDto.preferredProfessionals,
-        preferredTimes: updateClientDto.preferredTimes,
-        communicationPreferences: updateClientDto.communicationPreferences,
-        status: updateClientDto.status,
-        taxId: updateClientDto.taxId,
-        taxIdType: updateClientDto.taxIdType,
-      },
-    });
+    const data = buildClientUpdateData(updateClientDto, client);
+    try {
+      return await this.prisma.client.update({
+        where: { id, tenantId },
+        data,
+        select: CLIENT_DETAIL_SELECT,
+      });
+    } catch (error) {
+      rethrowClientWriteError(error);
+    }
   }
 
   /** History survives the delete: see common/prisma/history-deletes.ts. */
@@ -317,7 +346,7 @@ export class ClientsService {
     } catch (error: any) {
       if (error?.code === "P2002") {
         // @@unique([tenantId, email])
-        throw new ConflictException("Ese email ya está en uso en este salón");
+        throw new ConflictException(CLIENT_EMAIL_TAKEN);
       }
       if (error?.code === "P2025") {
         throw new NotFoundException("Cliente no encontrado");
