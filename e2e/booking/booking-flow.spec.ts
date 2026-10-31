@@ -141,11 +141,11 @@ test("a client books online and the salon completes and invoices the visit", asy
     expect(pro.ok(), await pro.text()).toBeTruthy();
     professionalId = (await pro.json()).id;
 
-    // Invoice every completed appointment, at 21 % (the price is the base,
-    // the tax goes on top: appointment-invoice-pricing.ts).
+    // Invoice every completed appointment, at 21 %, with the tax inside the
+    // price the client was shown (salon-tax-settings.ts).
     const fiscal = await api.patch(`${API_URL}/invoices/settings/fiscal`, {
       headers: auth,
-      data: { autoInvoiceAppointments: true, defaultTaxRate: 21 },
+      data: { autoInvoiceAppointments: true, defaultTaxRate: 21, pricesIncludeTax: true },
     });
     expect(fiscal.ok(), await fiscal.text()).toBeTruthy();
 
@@ -276,8 +276,8 @@ test("a client books online and the salon completes and invoices the visit", asy
         { timeout: 20_000 },
       )
       .toBe(true);
-    // 30,00 EUR + 21 % IVA = 36,30 EUR.
-    expect(invoice).toMatchObject({ subtotalCents: 3000, totalCents: 3630 });
+    // The 30,00 EUR the client was shown: 24,79 + 5,21 IVA.
+    expect(invoice).toMatchObject({ subtotalCents: 2479, totalCents: 3000 });
   });
 
   await api!.dispose();
