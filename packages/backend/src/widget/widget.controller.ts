@@ -9,26 +9,17 @@ import type { Request, Response } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { Public } from "../auth/decorators/public.decorator";
 import { WidgetService } from "./widget.service";
+import { CreateWidgetDto, MAX_WIDGET_THEME_BYTES, UpdateWidgetDto } from "./widget.dto";
 import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 
 interface AuthedRequest extends Request {
   user: { id: string; tenantId: string; role: string };
 }
 
-class CreateWidgetDto {
-  name: string;
-  allowedOrigins?: string[];
-  services?: string[];
-  professionals?: string[];
-  theme?: Record<string, unknown>;
-}
-
-class UpdateWidgetDto {
-  name?: string;
-  allowedOrigins?: string[];
-  services?: string[];
-  professionals?: string[];
-  theme?: Record<string, unknown>;
+function assertThemeSize(theme: unknown): void {
+  if (theme && JSON.stringify(theme).length > MAX_WIDGET_THEME_BYTES) {
+    throw new BadRequestException("theme too large");
+  }
 }
 
 @ApiTags("widget")
@@ -52,6 +43,7 @@ export class WidgetController {
   @Roles(...SALON_MANAGERS)
   async create(@Req() req: AuthedRequest, @Body() body: CreateWidgetDto) {
     if (!body?.name) throw new BadRequestException("name is required");
+    assertThemeSize(body.theme);
     const created = await this.widgetService.create(req.user.tenantId, body);
     return {
       id: created.id,
@@ -75,6 +67,7 @@ export class WidgetController {
     @Param("id", ParseUUIDPipe) id: string,
     @Body() body: UpdateWidgetDto,
   ) {
+    assertThemeSize(body.theme);
     return this.widgetService.update(req.user.tenantId, id, body);
   }
 

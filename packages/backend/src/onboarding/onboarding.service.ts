@@ -207,7 +207,7 @@ export class OnboardingService {
       throw new NotFoundException("Tenant not found");
     }
     // Checked before writing anything, so a bad date does not leave the
-    // other steps half saved. (The body is a plain type: no ValidationPipe.)
+    // other steps half saved. (The controller validates the body too.)
     const ap0 = payload.firstAppointment;
     if (
       ap0 &&

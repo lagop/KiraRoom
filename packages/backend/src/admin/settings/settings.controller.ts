@@ -10,6 +10,13 @@ import { Roles } from "../../auth/decorators/roles.decorator";
 import { UserRole } from "@prisma/client";
 import { AdminSettingsService } from "./settings.service";
 import { Request } from "express";
+import { IsBoolean } from "class-validator";
+
+/** Was an inline type: a non-boolean reached the tenant update. */
+export class ProfessionalCrossBookingDto {
+  @IsBoolean()
+  allowProfessionalCrossBooking!: boolean;
+}
 
 interface AuthenticatedRequest extends Request {
   user: {
@@ -46,7 +53,7 @@ export class AdminSettingsController {
   @ApiResponse({ status: 404, description: "Tenant not found" })
   async updateProfessionalCrossBooking(
     @Req() req: AuthenticatedRequest,
-    @Body() body: { allowProfessionalCrossBooking: boolean },
+    @Body() body: ProfessionalCrossBookingDto,
   ) {
     return this.adminSettingsService.updateProfessionalCrossBooking(
       req.user.tenantId,

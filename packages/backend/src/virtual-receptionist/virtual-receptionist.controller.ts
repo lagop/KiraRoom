@@ -1,5 +1,5 @@
 import { Throttle } from "@nestjs/throttler";
-import { ParseUUIDPipe, Controller, Post, Req, Get, Put, Delete, Body, Param, Query, UseGuards, UsePipes, ValidationPipe, Logger } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Post, Req, Get, Put, Delete, Body, Param, Query, UseGuards, Logger } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
 import { Roles, SALON_MANAGERS, SALON_TEAM } from "../auth/decorators/roles.decorator";
@@ -14,16 +14,16 @@ import { LLMService } from './services/llm.service';
 import { ReceptionistStatsService } from './services/receptionist-stats.service';
 import { PublicChatAccessService } from './public-chat/public-chat-access.service';
 import { PublicChatMessageDto } from './public-chat/public-chat-message.dto';
+import { SendMessageDto, MessageResponseDto } from '@kira/shared';
 import {
-  SendMessageDto,
-  MessageResponseDto,
-  CreateConversationDto,
-  UpdateConversationDto,
-  CreateFAQItem,
-  UpdateFAQItem,
-  CreateLLMProviderConfig,
-  UpdateLLMProviderConfig,
-} from '@kira/shared';
+  CreateConversationBodyDto,
+  CreateFaqItemDto,
+  CreateLlmProviderConfigDto,
+  TestLlmProviderDto,
+  UpdateConversationBodyDto,
+  UpdateFaqItemDto,
+  UpdateLlmProviderConfigDto,
+} from './dto/receptionist-bodies.dto';
 import { FeatureGuard } from '../common/guards/feature.guard';
 import { Feature } from '../common/decorators/feature.decorator';
 import { SaasOwner } from "../saas/decorators/saas-owner.decorator";
@@ -58,7 +58,7 @@ export class VirtualReceptionistController {
   @Post('llm-config')
   @ApiOperation({ summary: 'Create LLM provider configuration' })
   @SaasOwner()
-  async createLLMConfig(@Body(new ValidationPipe()) config: CreateLLMProviderConfig) {
+  async createLLMConfig(@Body() config: CreateLlmProviderConfigDto) {
     this.logger.log('Creating LLM provider configuration');
     return this.llmService.createProviderConfig(config);
   }
@@ -84,7 +84,7 @@ export class VirtualReceptionistController {
   @SaasOwner()
   async updateLLMConfig(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body(new ValidationPipe()) config: UpdateLLMProviderConfig,
+    @Body() config: UpdateLlmProviderConfigDto,
   ) {
     this.logger.log(`Updating LLM provider configuration: ${id}`);
     return this.llmService.updateProviderConfig(id, config);
@@ -102,9 +102,16 @@ export class VirtualReceptionistController {
   @Post('conversations')
   @ApiOperation({ summary: 'Create new conversation' })
   @Roles(...SALON_MANAGERS)
-  async createConversation(@Body(new ValidationPipe()) data: CreateConversationDto) {
-    this.logger.log(`Creating new conversation: ${data.clientId} - ${data.salonId}`);
-    return this.conversationService.createConversation(data);
+  async createConversation(@CurrentUser() user: any, @Body() data: CreateConversationBodyDto) {
+    this.logger.log(`Creating new conversation: ${data.clientId} - ${user.tenantId}`);
+    // The caller's salon: the body used to name salonId and tenantId.
+    return this.conversationService.createConversation({
+      clientId: data.clientId,
+      salonId: user.tenantId,
+      tenantId: user.tenantId,
+      channel: data.channel,
+      metadata: data.metadata,
+    });
   }
 
   @Get('conversations/:id')
@@ -128,10 +135,14 @@ export class VirtualReceptionistController {
   @Roles(...SALON_MANAGERS)
   async updateConversation(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body(new ValidationPipe()) data: UpdateConversationDto,
+    @Body() data: UpdateConversationBodyDto,
   ) {
     this.logger.log(`Updating conversation: ${id}`);
-    return this.conversationService.updateConversation(id, data);
+    return this.conversationService.updateConversation(id, {
+      ...(data.status !== undefined && { status: data.status }),
+      ...(data.handoffUserId !== undefined && { handoffUserId: data.handoffUserId }),
+      ...(data.handoffAt !== undefined && { handoffAt: data.handoffAt }),
+    });
   }
 
   @Delete('conversations/:id')
@@ -187,9 +198,15 @@ export class VirtualReceptionistController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.owner, UserRole.admin)
   @ApiOperation({ summary: 'Create FAQ item' })
-  async createFAQ(@CurrentUser() user: any, @Body(new ValidationPipe()) faq: CreateFAQItem) {
+  async createFAQ(@CurrentUser() user: any, @Body() faq: CreateFaqItemDto) {
     this.logger.log('Creating FAQ item');
-    return this.faqService.createFAQ(user.tenantId, faq);
+    return this.faqService.createFAQ(user.tenantId, {
+      question: faq.question,
+      answer: faq.answer,
+      category: faq.category,
+      keywords: faq.keywords ?? [],
+      priority: faq.priority ?? 5,
+    });
   }
 
   @Get('faqs')
@@ -214,9 +231,17 @@ export class VirtualReceptionistController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.owner, UserRole.admin)
   @ApiOperation({ summary: 'Update FAQ item' })
-  async updateFAQ(@CurrentUser() user: any, @Param('id') id: string, @Body(new ValidationPipe()) faq: UpdateFAQItem) {
+  async updateFAQ(@CurrentUser() user: any, @Param('id') id: string, @Body() faq: UpdateFaqItemDto) {
     this.logger.log(`Updating FAQ item: ${id}`);
-    return this.faqService.updateFAQ(user.tenantId, id, faq);
+    // Only the fields sent: the FAQ is merged in memory, where an
+    // undefined would overwrite the stored value.
+    return this.faqService.updateFAQ(user.tenantId, id, {
+      ...(faq.question !== undefined && { question: faq.question }),
+      ...(faq.answer !== undefined && { answer: faq.answer }),
+      ...(faq.category !== undefined && { category: faq.category }),
+      ...(faq.keywords !== undefined && { keywords: faq.keywords }),
+      ...(faq.priority !== undefined && { priority: faq.priority }),
+    });
   }
 
   @Delete('faqs/:id')
@@ -246,7 +271,7 @@ export class VirtualReceptionistController {
   @Post('llm/test')
   @ApiOperation({ summary: 'Test LLM provider connection' })
   @SaasOwner()
-  async testLLMProvider(@Body() data: { provider: string; apiKey: string; model?: string }) {
+  async testLLMProvider(@Body() data: TestLlmProviderDto) {
     this.logger.log(`Testing LLM provider: ${data.provider}`);
     return this.llmService.testProvider(data);
   }
