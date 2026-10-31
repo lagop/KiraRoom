@@ -38,7 +38,7 @@ interface Row {
 function build(opts: {
   professionals: Array<{ id: string; workingHours?: unknown }>;
   timeOff?: Row[];
-  openingHours?: { open?: string; close?: string };
+  openingHours?: unknown;
   duration?: number;
 }) {
   const timeOff = (opts.timeOff ?? []).map((r) => ({
@@ -228,10 +228,20 @@ describe("the candidate slot grid", () => {
     expect(anySlots).toEqual(slots);
   });
 
-  it("reaches a shift before the salon's configured opening", async () => {
+  it("reaches a shift before the default grid when the salon set no hours", async () => {
+    const early = [{ day: "monday", openTime: "07:00", closeTime: "12:00" }];
+    const slots = await named({ professionals: [{ id: ANA, workingHours: early }] });
+    expect(slots[0]).toBe("07:00");
+  });
+
+  it("but not before the salon opens when it set its hours (the legacy { open, close } too)", async () => {
+    // The pair was already a limit for the panel (reschedule-check.ts); online
+    // it only drew the grid, so 07:00 was offered and staff could not book it.
+    // Now both read it as the salon's hours every day (salonWindowsFor).
     const early = [{ day: "monday", openTime: "07:00", closeTime: "12:00" }];
     const slots = await named({ professionals: [{ id: ANA, workingHours: early }], openingHours: { open: "09:00", close: "20:00" } });
-    expect(slots[0]).toBe("07:00");
+    expect(slots[0]).toBe("09:00");
+    expect(slots[slots.length - 1]).toBe("11:00");
   });
 
   it("offers the start of a shift off the half hour, then the half hours", async () => {

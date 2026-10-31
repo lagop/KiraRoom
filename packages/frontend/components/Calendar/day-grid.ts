@@ -12,6 +12,7 @@
  */
 import { addDays, format } from "date-fns";
 import { calendarLabel, type TimeOff } from "../../lib/time-off";
+import { salonWindowsOn } from "../../lib/salon-hours";
 
 /** 15 minutes of grid. */
 export const SLOT_HEIGHT = 24;
@@ -67,24 +68,22 @@ export interface WorkingHoursEntry {
 /**
  * The hours the grid draws for `day`.
  *
- * The salon's opening hours (Tenant.openingHours, one `{ open, close }` for
- * the week) and each professional's working hours for that weekday, when
+ * The salon's opening hours that weekday (Tenant.openingHours, read by
+ * lib/salon-hours.ts: its week with shifts, or a legacy `{ open, close }`
+ * every day) and each professional's working hours for that weekday, when
  * there are any; 08:00 to 20:00 otherwise. Then widened to cover every
  * appointment of the day, so none is ever drawn off the grid.
  */
 export function gridHours(input: {
   day: string;
-  openingHours?: { open?: unknown; close?: unknown } | null;
+  openingHours?: unknown;
   workingHours?: unknown[][];
   /** Appointments of the day as minutes since the salon's midnight. */
   appointments?: { start: number; end: number }[];
 }): HoursRange {
-  const windows: { start: number; end: number }[] = [];
-  const open = minutesOf(input.openingHours?.open);
-  const close = minutesOf(input.openingHours?.close);
-  if (open !== null && close !== null && close > open) windows.push({ start: open, end: close });
-
   const weekday = WEEKDAYS[dateOfDay(input.day).getDay()];
+  const windows: { start: number; end: number }[] = [...(salonWindowsOn(input.openingHours, weekday) ?? [])];
+
   for (const entries of input.workingHours ?? []) {
     if (!Array.isArray(entries)) continue;
     for (const entry of entries as WorkingHoursEntry[]) {
@@ -161,12 +160,22 @@ export function shiftsOn(day: string, workingHours: unknown): MinuteRange[] | un
  * between shifts (the lunch of a split day), so the calendar shows the same
  * hours online booking offers.
  *
- * Nothing is shaded when no schedule is recorded: online booking puts no
- * limit on those professionals either, and greying their whole day would say
- * the opposite. A day off is shaded entirely.
+ * The salon's own hours count too, as they do for online booking: a
+ * professional is bookable where their shifts and the salon's hours meet
+ * (either one alone when only one is recorded), so the salon's lunch, the
+ * time before it opens and a weekday it is closed are shaded in every column.
+ *
+ * Nothing is shaded when neither is recorded: online booking puts no limit on
+ * those professionals either, and greying their whole day would say the
+ * opposite. A day off is shaded entirely.
  */
-export function offShiftBands(day: string, workingHours: unknown, range: HoursRange): MinuteRange[] {
-  const shifts = shiftsOn(day, workingHours);
+export function offShiftBands(
+  day: string,
+  workingHours: unknown,
+  range: HoursRange,
+  openingHours?: unknown,
+): MinuteRange[] {
+  const shifts = bookableOn(shiftsOn(day, workingHours), salonWindowsOn(openingHours, WEEKDAYS[dateOfDay(day).getDay()]));
   if (!shifts) return [];
   const top = range.startHour * 60;
   const bottom = range.endHour * 60;
@@ -178,6 +187,27 @@ export function offShiftBands(day: string, workingHours: unknown, range: HoursRa
   }
   if (cursor < bottom) bands.push({ start: cursor, end: bottom });
   return bands.filter((b) => b.end > b.start);
+}
+
+/**
+ * Where a professional is bookable: their shifts within the salon's hours,
+ * the same reading as the server's bookableWindows (working-hours.ts).
+ */
+function bookableOn(
+  shifts: MinuteRange[] | undefined,
+  salon: MinuteRange[] | undefined,
+): MinuteRange[] | undefined {
+  if (!salon) return shifts;
+  if (!shifts) return salon;
+  const out: MinuteRange[] = [];
+  for (const a of shifts) {
+    for (const b of salon) {
+      const start = Math.max(a.start, b.start);
+      const end = Math.min(a.end, b.end);
+      if (end > start) out.push({ start, end });
+    }
+  }
+  return out.sort((x, y) => x.start - y.start);
 }
 
 /** A stretch of a column covered by time off or a salon closure. */
@@ -218,6 +248,14 @@ export function timeOffBands(
   }
   // The salon's first, so its label is the one on top when they overlap.
   return bands.sort((a, b) => Number(b.salon) - Number(a.salon) || a.start - b.start);
+}
+
+/**
+ * Whether `day` is a weekday the salon's own hours leave closed (none that
+ * day while other days have some). The calendar says so above the grid.
+ */
+export function salonClosedWeekday(day: string, openingHours: unknown): boolean {
+  return salonWindowsOn(openingHours, WEEKDAYS[dateOfDay(day).getDay()])?.length === 0;
 }
 
 /** The salon's all-day closure on `day`, if any: the calendar says so above the grid. */

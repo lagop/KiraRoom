@@ -16,6 +16,8 @@ interface TimeGridProps {
   appointments: Appointment[];
   /** The day's time off and closures. */
   timeOff?: TimeOff[];
+  /** Tenant.openingHours, for the shading outside the salon's hours. */
+  openingHours?: unknown;
   draggingId?: string | null;
   onAppointmentClick?: (appointmentId: string) => void;
   onSlotClick?: (data: SlotClickData) => void;
@@ -51,6 +53,7 @@ export const TimeGrid: React.FC<TimeGridProps> = ({
   professionals,
   appointments,
   timeOff = [],
+  openingHours,
   draggingId,
   onAppointmentClick,
   onSlotClick,
@@ -103,6 +106,7 @@ export const TimeGrid: React.FC<TimeGridProps> = ({
                 (a) => a.professionalId === professional.id
               )}
               timeOff={timeOff}
+              openingHours={openingHours}
               draggingId={draggingId}
               onAppointmentClick={onAppointmentClick}
               onSlotClick={onSlotClick}

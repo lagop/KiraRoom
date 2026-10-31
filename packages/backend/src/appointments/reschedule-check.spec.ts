@@ -1,5 +1,5 @@
 import { ConflictException, ForbiddenException, NotFoundException } from "@nestjs/common";
-import { assertCanReschedule, rescheduleProblem, salonDayAndTime } from "./reschedule-check";
+import { OUTSIDE_HOURS, assertCanBook, assertCanReschedule, rescheduleProblem, salonDayAndTime } from "./reschedule-check";
 import { AppointmentsService } from "./appointments.service";
 import { AppointmentServicesService } from "./appointment-services.service";
 
@@ -50,8 +50,26 @@ describe("rescheduleProblem", () => {
 
   it("outside the salon's hours when it set them", () => {
     expect(
-      rescheduleProblem({ ...base, professionalShifts: undefined, startMinutes: 7 * 60, salonWindow: { startMinutes: 9 * 60, endMinutes: 20 * 60 } }),
-    ).toMatch(/fuera del horario del salón/);
+      rescheduleProblem({ ...base, professionalShifts: undefined, startMinutes: 7 * 60, salonShifts: [{ startMinutes: 9 * 60, endMinutes: 20 * 60 }] }),
+    ).toBe("Está fuera del horario del salón (09:00–20:00).");
+  });
+
+  it("a day the salon does not open", () => {
+    expect(rescheduleProblem({ ...base, salonShifts: [] })).toBe("El salón está cerrado ese día.");
+    // Not a reason the owner cannot override: it is one of "the hours".
+    expect(rescheduleProblem({ ...base, salonShifts: [], skipHours: true })).toBeNull();
+  });
+
+  it("inside the professional's shift but in the salon's lunch gap", () => {
+    // Ana works 09:00–17:00; the salon opens 10:00–14:00 and 17:00–20:00.
+    const salonShifts = [
+      { startMinutes: 10 * 60, endMinutes: 14 * 60 },
+      { startMinutes: 17 * 60, endMinutes: 20 * 60 },
+    ];
+    expect(rescheduleProblem({ ...base, salonShifts, startMinutes: 13 * 60 })).toBeNull();
+    expect(rescheduleProblem({ ...base, salonShifts, startMinutes: 14 * 60 })).toBe(
+      "Está fuera del horario del salón (10:00–14:00 y 17:00–20:00).",
+    );
   });
 
   it("in the past", () => {
@@ -135,6 +153,50 @@ describe("assertCanReschedule", () => {
     const err = await at("13:30");
     expect(err).toBeInstanceOf(ConflictException);
     expect(err.message).toBe("Está fuera del horario de Ana (10:00–14:00 y 17:00–20:00).");
+  });
+
+  describe("the salon's own hours (Tenant.openingHours)", () => {
+    const at = (openingHours: unknown, time: string, day = DAY) =>
+      assertCanReschedule(prismaWith({ openingHours, workingHours: [] }), { ...target, day, time }, NOW).then(
+        () => null,
+        (e: Error) => e.message,
+      );
+    const SALON_WEEK = [
+      { day: "monday", openTime: "10:00", closeTime: "14:00" },
+      { day: "monday", openTime: "17:00", closeTime: "20:00" },
+      { day: "saturday", openTime: "10:00", closeTime: "14:00" },
+    ];
+
+    it("the week, with its shifts", async () => {
+      expect(await at(SALON_WEEK, "13:00")).toBeNull();
+      expect(await at(SALON_WEEK, "14:00")).toBe("Está fuera del horario del salón (10:00–14:00 y 17:00–20:00).");
+      expect(await at(SALON_WEEK, "17:00")).toBeNull();
+      // Tuesday has no hours: the salon is closed.
+      expect(await at(SALON_WEEK, "11:00", "2026-11-03")).toBe("El salón está cerrado ese día.");
+    });
+
+    it("the legacy { open, close }: that window every day", async () => {
+      expect(await at({ open: "09:00", close: "20:00" }, "08:00")).toBe("Está fuera del horario del salón (09:00–20:00).");
+      expect(await at({ open: "09:00", close: "20:00" }, "11:00", "2026-11-08")).toBeNull(); // a Sunday
+    });
+
+    it("nothing recorded is no salon limit", async () => {
+      expect(await at({}, "07:00")).toBeNull();
+      expect(await at([], "07:00")).toBeNull();
+    });
+
+    it("a new appointment outside them is OUTSIDE_HOURS, which an owner may confirm", async () => {
+      const booking = { tenantId: TENANT, professionalId: "p1", day: "2026-11-03", time: "11:00", durationMinutes: 60 };
+      const refused = await assertCanBook(prismaWith({ openingHours: SALON_WEEK, workingHours: [] }), booking, { now: NOW }).catch(
+        (e) => e,
+      );
+      expect(refused).toBeInstanceOf(ConflictException);
+      expect(refused.getResponse()).toMatchObject({ code: OUTSIDE_HOURS, message: "El salón está cerrado ese día." });
+      // allowOutsideHours is granted only to owners and managers (createByStaff).
+      await expect(
+        assertCanBook(prismaWith({ openingHours: SALON_WEEK, workingHours: [] }), booking, { now: NOW, allowOutsideHours: true }),
+      ).resolves.toBeUndefined();
+    });
   });
 
   it("the salon's day and clock for a stored instant", () => {

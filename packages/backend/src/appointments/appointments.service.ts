@@ -14,8 +14,10 @@ import {
   candidateStarts,
   clockOf as clockOfMinutes,
   workingWindowsFor,
+  bookableWindows,
   fitsInShifts,
   minutesOf,
+  salonWindowsFor,
   subtractWindows,
 } from "./working-hours";
 import { availableWindows, dayBlocks, salonClosedOn } from "../time-off/time-off-rules";
@@ -157,6 +159,13 @@ export interface PendingPaymentFiltersDto {
   dateTo?: string;
   status?: string;
 }
+
+/**
+ * The candidate slots of a salon that recorded no hours of its own:
+ * 09:00–20:00. It was hardcoded to 09:00–18:00 once, which made the
+ * suggestion engine return nothing past 17:30.
+ */
+const DEFAULT_SLOT_GRID: ShiftWindow = { startMinutes: 9 * 60, endMinutes: 20 * 60 };
 
 @Injectable()
 export class AppointmentsService {
@@ -2495,30 +2504,44 @@ export class AppointmentsService {
     // closures, and a professional away all day has no shifts left.
     const timeOff = await timeOffBetween(this.prisma as any, tenantId, dateString);
     if (salonClosedOn(timeOff, dateString)) return [];
+    // The salon's own hours that weekday (working-hours.ts salonWindowsFor):
+    // none recorded imposes nothing, a weekday without hours is closed --
+    // whoever has a shift then -- and otherwise a professional is bookable
+    // only where their shifts and the salon's hours meet (bookableWindows).
+    // An owner can still book outside them from the panel (assertCanBook).
+    const salonHours = salonWindowsFor(tenant.openingHours, date);
+    if (salonHours && salonHours.length === 0) return [];
     const salonBlocked = dayBlocks(timeOff, dateString, null);
     const windowsOf = (p: { id: string; workingHours?: unknown }) =>
-      availableWindows(workingWindowsFor(p.workingHours, date), dayBlocks(timeOff, dateString, p.id));
+      availableWindows(
+        bookableWindows(workingWindowsFor(p.workingHours, date), salonHours),
+        dayBlocks(timeOff, dateString, p.id),
+      );
     const relevantRows: Array<{ id: string; workingHours?: unknown }> =
       professionalsToCheck.length > 0 ? professionalRows : anyProfessionalRows;
     const windowsById = new Map(relevantRows.map((p) => [p.id, windowsOf(p)]));
 
-    // Candidate slots: the salon's configured hours (09:00–20:00 when it set
-    // none) in half hours -- previously hardcoded 9:00–18:00, which made the
-    // suggestion engine miss every appointment past 17:30 -- plus every
-    // stretch the professionals asked about can work: a shift from 20:00 to
-    // 22:00, or the 10:15 start of one, is a candidate too (candidateStarts).
-    const openingHours = (tenant.openingHours as { open?: string; close?: string }) ?? {};
-    const base = this.openingRange(openingHours.open ?? "09:00", openingHours.close ?? "20:00");
+    // Candidate slots: the salon's hours that day, from its first opening to
+    // its last closing (09:00–20:00 when it set none) in half hours --
+    // previously hardcoded 9:00–18:00, which made the suggestion engine miss
+    // every appointment past 17:30 -- plus every stretch the professionals
+    // asked about can be booked in: a shift from 20:00 to 22:00, or the 10:15
+    // start of one, is a candidate too (candidateStarts).
+    const base: ShiftWindow = salonHours
+      ? { startMinutes: salonHours[0].startMinutes, endMinutes: salonHours[salonHours.length - 1].endMinutes }
+      : DEFAULT_SLOT_GRID;
+    const salonOpen = salonHours ?? [base];
     const stretches: ShiftWindow[] = relevantRows.length
       ? relevantRows.flatMap((p) => {
-          // No schedule recorded: the salon's hours bound the grid, and a
-          // block ending inside them starts a slot.
-          if (workingWindowsFor(p.workingHours, date) === undefined) {
+          // No schedule recorded at all (neither theirs nor the salon's):
+          // the default hours bound the grid, and a block ending inside them
+          // starts a slot.
+          if (bookableWindows(workingWindowsFor(p.workingHours, date), salonHours) === undefined) {
             return subtractWindows([base], dayBlocks(timeOff, dateString, p.id).windows);
           }
           return windowsById.get(p.id) ?? [];
         })
-      : subtractWindows([base], salonBlocked.windows);
+      : subtractWindows(salonOpen, salonBlocked.windows);
     const timeSlots = candidateStarts(base, stretches).map((m) => ({ time: clockOfMinutes(m) }));
 
     // Get existing appointments for the date and professionals
@@ -2608,8 +2631,9 @@ export class AppointmentsService {
 
         if (anyProfessionalRows.length === 0) {
           // No professionals recorded at all: impose no shift limit, and the
-          // salon is free when nothing overlaps -- and it is not closed then.
-          const open = availableWindows(undefined, salonBlocked);
+          // salon is free when nothing overlaps -- inside its hours when it
+          // set them, and not while it is closed.
+          const open = availableWindows(salonHours, salonBlocked);
           isAvailable =
             (!open || (slotMinutes !== null && fitsInShifts(slotMinutes, serviceDuration, open))) &&
             !busy.some(overlaps);
@@ -2659,31 +2683,6 @@ export class AppointmentsService {
     };
     const now = Date.now();
     return free.filter((slot) => this.fitsOnlineWindow(dateString, slot.time, window, now) === "ok");
-  }
-
-  /**
-   * The salon's `open`–`close` in minutes, 09:00–20:00 by default: the base
-   * of the candidate slots (candidateStarts). It was hardcoded to
-   * 09:00–18:00 once, which made the suggestion engine return nothing past
-   * 17:30 regardless of the tenant's configured `openingHours`.
-   */
-  private openingRange(open: string, close: string): ShiftWindow {
-    let startMinutes = this.parseHhmmToMinutes(open);
-    let endMinutes = this.parseHhmmToMinutes(close);
-    if (!Number.isFinite(startMinutes) || startMinutes < 0) startMinutes = 9 * 60;
-    if (!Number.isFinite(endMinutes) || endMinutes <= startMinutes) {
-      endMinutes = startMinutes + 11 * 60; // 11h window fallback
-    }
-    return { startMinutes, endMinutes };
-  }
-
-  private parseHhmmToMinutes(value: string): number {
-    const m = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
-    if (!m) return Number.NaN;
-    const hh = parseInt(m[1], 10);
-    const mm = parseInt(m[2], 10);
-    if (hh < 0 || hh > 24 || mm < 0 || mm >= 60) return Number.NaN;
-    return hh * 60 + mm;
   }
 
   /**

@@ -1,7 +1,7 @@
 ﻿import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { LLMProviderFactory } from '../factories/llm-provider.factory';
-import { salonShiftsFrom } from '../../appointments/working-hours';
+import { salonOpenShifts } from '../../appointments/working-hours';
 import { salonClock } from '../prompts/clock';
 import { PlatformLlmConfigService } from '../../platform/platform-llm-config.service';
 import { LLMProvider, LLMGenerationConfig, LLMCompletion } from '@kira/shared';
@@ -123,7 +123,6 @@ interface SalonContext {
   language?: string;
   cancellationPolicy?: string;
   minCancelHours?: number;
-  openingHours?: Record<string, { start: string; end: string }>;
   // Populated by FAQService (in-memory default set today). Capped
   // in buildSystemPrompt() to keep the prompt under ~2k tokens.
   faqs?: Array<{ question: string; answer: string }>;
@@ -530,8 +529,6 @@ export class LLMService {
         cancellationPolicy: (tenant as any).cancellationPolicy || undefined,
         // @ts-ignore - New fields from migration
         minCancelHours: (tenant as any).minCancelHours || 24,
-        // @ts-ignore - New fields from migration
-        openingHours: (tenant as any).openingHours || undefined,
         // P2A-receptionist-advanced -- persona is gated on the advanced
         // feature. The base system prompt already gives Kira a default
         // voice; only when the tenant has advanced unlocked AND a
@@ -564,8 +561,9 @@ export class LLMService {
         faqs: (await this.faqService
           .getFAQs(tenant.id)
           .catch(() => [])) as Array<{ question: string; answer: string }>,
-        // The salon's real week, derived from the schedules the onboarding
-        // wizard writes onto each professional. This used to be hardcoded to
+        // The salon's real week: its own opening hours when the owner set
+        // them (settings), else derived from its professionals' schedules.
+        // This used to be hardcoded to
         // Monday-Friday 09:00-18:00 and Saturday 09:00-14:00 for every salon,
         // which flatly contradicted what check_availability computes from the
         // same schedules: the prompt told the model the salon opened on
@@ -573,7 +571,7 @@ export class LLMService {
         // Every stretch of the day, so a salon that closes from 14:00 to
         // 17:00 is not described as open straight through.
         workingHours: Object.fromEntries(
-          Object.entries(salonShiftsFrom(tenant.professionals)).map(
+          Object.entries(salonOpenShifts(tenant.openingHours, tenant.professionals)).map(
             ([day, stretches]) => [
               day,
               stretches.map((w) => ({ start: w.openTime, end: w.closeTime })),
@@ -684,8 +682,7 @@ export class LLMService {
 
     const baseSystem = getSystemPrompt(language, salonName, assistantName);
 
-    const workingHours: Record<string, DayHours | DayHours[]> =
-      context.workingHours ?? context.openingHours ?? {};
+    const workingHours: Record<string, DayHours | DayHours[]> = context.workingHours ?? {};
 
     const faqs = (context.faqs ?? [])
       .slice(0, 20)

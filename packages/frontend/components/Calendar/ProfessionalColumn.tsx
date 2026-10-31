@@ -24,6 +24,8 @@ interface ProfessionalColumnProps {
   appointments: Appointment[];
   /** The day's time off and closures; the column picks its own and the salon's. */
   timeOff?: TimeOff[];
+  /** Tenant.openingHours: the salon's own hours, shaded outside like a shift. */
+  openingHours?: unknown;
   draggingId?: string | null;
   onAppointmentClick?: (appointmentId: string) => void;
   onSlotClick?: (data: SlotClickData) => void;
@@ -41,6 +43,7 @@ export const ProfessionalColumn: React.FC<ProfessionalColumnProps> = ({
   hours,
   appointments,
   timeOff,
+  openingHours,
   draggingId,
   onAppointmentClick,
   onSlotClick,
@@ -69,12 +72,12 @@ export const ProfessionalColumn: React.FC<ProfessionalColumnProps> = ({
     return { active, released, lanes, maxLanes };
   }, [appointments]);
 
-  // Time outside this professional's shifts, the lunch gap of a split day
-  // included. Shaded, not blocked: an owner may still book a walk-in there
-  // (the server asks them to confirm it).
+  // Time outside this professional's shifts or the salon's hours, the lunch
+  // gap of a split day included. Shaded, not blocked: an owner may still book
+  // a walk-in there (the server asks them to confirm it).
   const offShift = useMemo(
-    () => offShiftBands(localDay(date), professional.workingHours, hours),
-    [date, professional.workingHours, hours],
+    () => offShiftBands(localDay(date), professional.workingHours, hours, openingHours),
+    [date, professional.workingHours, hours, openingHours],
   );
 
   // Time off and salon closures, labelled. Shaded like the time outside a shift,
@@ -95,6 +98,7 @@ export const ProfessionalColumn: React.FC<ProfessionalColumnProps> = ({
   return (
     <div
       ref={setNodeRef}
+      data-test="professional-column"
       className="flex-1 border-r last:border-r-0 relative"
       style={{ minWidth: Math.max(COLUMN_MIN_WIDTH, maxLanes * LANE_MIN_WIDTH) }}
     >

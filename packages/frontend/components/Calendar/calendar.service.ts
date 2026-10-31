@@ -34,18 +34,20 @@ export const fetchCalendarData = async (day: string) => {
 export interface SalonSettings {
   /** The salon's own zone (Tenant.timezone): the calendar draws its clock. */
   timeZone: string;
-  /** Tenant.openingHours: one `{ open, close }` for the week, when set. */
-  openingHours: { open?: unknown; close?: unknown } | null;
+  /**
+   * Tenant.openingHours as stored: the salon's week, a legacy `{ open, close }`
+   * or nothing. Read with lib/salon-hours.ts.
+   */
+  openingHours: unknown;
 }
 
 /** What the calendar needs from the salon, asked for once. */
 export const fetchSalonSettings = async (): Promise<SalonSettings> => {
   try {
     const tenant = await apiClient.getTenant();
-    const hours = tenant.openingHours;
     return {
       timeZone: tenant.timezone || FALLBACK_SALON_TIMEZONE,
-      openingHours: hours && typeof hours === 'object' ? (hours as SalonSettings['openingHours']) : null,
+      openingHours: tenant.openingHours ?? null,
     };
   } catch (error) {
     console.error('Error fetching the salon settings:', error);

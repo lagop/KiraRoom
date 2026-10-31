@@ -131,6 +131,40 @@ describe("PublicSiteService.getPage", () => {
     expect(page.address).toEqual({ street: "Calle Mayor 1", city: "Madrid", state: "Madrid", postalCode: "28013", country: "ES" });
   });
 
+  it("shows the salon's own hours when it set them, not its professionals'", async () => {
+    const { svc } = makeService({
+      tenant: {
+        openingHours: [
+          { day: "monday", openTime: "10:00", closeTime: "14:00" },
+          { day: "monday", openTime: "17:00", closeTime: "20:00" },
+          { day: "friday", openTime: "10:00", closeTime: "14:00" },
+        ],
+      },
+    });
+    const page = await svc.getPage("salon-luna");
+    expect(page.openingShifts).toEqual({
+      monday: [
+        { openTime: "10:00", closeTime: "14:00" },
+        { openTime: "17:00", closeTime: "20:00" },
+      ],
+      friday: [{ openTime: "10:00", closeTime: "14:00" }],
+    });
+    expect(page.openingHours).toEqual({
+      monday: { openTime: "10:00", closeTime: "20:00" },
+      friday: { openTime: "10:00", closeTime: "14:00" },
+    });
+    // Saturday is Ana's, not the salon's: not an open day. And the stored
+    // value never leaves as it is.
+    expect(page.openingShifts).not.toHaveProperty("saturday");
+    expect(Array.isArray(page.openingHours)).toBe(false);
+  });
+
+  it("reads the legacy { open, close } as every day", async () => {
+    const page = await makeService({ tenant: { openingHours: { open: "09:00", close: "20:00" } } }).svc.getPage("x");
+    expect(Object.keys(page.openingHours)).toHaveLength(7);
+    expect(page.openingHours.sunday).toEqual({ openTime: "09:00", closeTime: "20:00" });
+  });
+
   it("selects only public fields and only live rows", async () => {
     const { svc, prisma } = makeService();
     await svc.getPage("salon-luna");

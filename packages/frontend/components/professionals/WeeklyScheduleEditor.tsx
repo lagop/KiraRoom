@@ -20,24 +20,53 @@ interface WeeklyScheduleEditorProps {
   onChange: (next: WeeklySchedule) => void;
   disabled?: boolean;
   className?: string;
+  /** Whose week it is: only the wording changes. A professional's by default. */
+  variant?: "professional" | "salon";
+  /** Replaces the whole-week problem (no day on) with the caller's own words. */
+  weekProblem?: string | null;
 }
 
+const COPY = {
+  professional: {
+    hint: "Marca los días que trabaja. Si para a comer, añade un segundo tramo.",
+    on: "trabaja",
+    off: "libre",
+    offLabel: "Libre",
+  },
+  salon: {
+    hint: "Marca los días que abre el salón. Si cierra a mediodía, añade un segundo tramo.",
+    on: "abierto",
+    off: "cerrado",
+    offLabel: "Cerrado",
+  },
+} as const;
+
 /**
- * A professional's week: per day, whether they work and in which shifts. A
- * split day (jornada partida, 10:00–14:00 and 17:00–20:00) is two shifts.
+ * A week of shifts: per day, whether it is on and in which shifts. A split
+ * day (jornada partida, 10:00–14:00 and 17:00–20:00) is two shifts. Used for
+ * a professional's schedule and for the salon's own opening hours (settings).
  *
  * Problems are shown next to the day they are on as they happen; the parent
  * runs `hasProblems` from lib/weekly-schedule before saving, and the server
  * refuses the same things again.
  */
-export function WeeklyScheduleEditor({ value, onChange, disabled, className }: WeeklyScheduleEditorProps) {
+export function WeeklyScheduleEditor({
+  value,
+  onChange,
+  disabled,
+  className,
+  variant = "professional",
+  weekProblem,
+}: WeeklyScheduleEditorProps) {
   const problems = scheduleProblems(value);
+  const copy = COPY[variant];
+  const wholeWeekProblem = problems.week && weekProblem !== undefined ? weekProblem : problems.week;
 
   return (
     <div className={cn("space-y-3", className)}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-gray-500">
-          Marca los días que trabaja. Si para a comer, añade un segundo tramo.
+          {copy.hint}
         </p>
         <button
           type="button"
@@ -54,7 +83,7 @@ export function WeeklyScheduleEditor({ value, onChange, disabled, className }: W
         {WEEK_DAYS.map(({ key, label }) => {
           const day = value[key];
           const problem = problems.days[key];
-          const switchId = `works-${key}`;
+          const switchId = variant === "salon" ? `salon-open-${key}` : `works-${key}`;
           return (
             <li key={key} className="flex flex-col gap-2 p-3 sm:flex-row sm:items-start">
               <div className="flex w-40 shrink-0 items-center gap-3 pt-1">
@@ -63,7 +92,7 @@ export function WeeklyScheduleEditor({ value, onChange, disabled, className }: W
                   type="button"
                   role="switch"
                   aria-checked={day.works}
-                  aria-label={`${label}: ${day.works ? "trabaja" : "libre"}`}
+                  aria-label={`${label}: ${day.works ? copy.on : copy.off}`}
                   onClick={() => onChange(toggleDay(value, key))}
                   disabled={disabled}
                   className={cn(
@@ -85,7 +114,7 @@ export function WeeklyScheduleEditor({ value, onChange, disabled, className }: W
 
               <div className="flex-1 space-y-2">
                 {!day.works ? (
-                  <p className="pt-1 text-sm text-gray-400">Libre</p>
+                  <p className="pt-1 text-sm text-gray-400">{copy.offLabel}</p>
                 ) : (
                   <>
                     {day.shifts.map((shift, index) => (
@@ -148,9 +177,9 @@ export function WeeklyScheduleEditor({ value, onChange, disabled, className }: W
         })}
       </ul>
 
-      {problems.week && (
+      {wholeWeekProblem && (
         <p role="alert" className="text-sm text-red-600">
-          {problems.week}
+          {wholeWeekProblem}
         </p>
       )}
     </div>

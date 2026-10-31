@@ -501,8 +501,32 @@ describe('SalonToolsService (L-4)', () => {
       });
       expect('error' in result).toBe(false);
       if (!('error' in result)) {
-        expect(result.openingHours).toEqual({ open: '09:00', close: '20:00' });
+        // The legacy { open, close } is that window every day.
+        expect(result.openingHours?.monday).toEqual(['09:00–20:00']);
+        expect(result.openingHours?.sunday).toEqual(['09:00–20:00']);
       }
+    });
+
+    it("gives the salon's week with its shifts and closed days", async () => {
+      const split = makePrisma([], [], {
+        ...SAMPLE_TENANT,
+        openingHours: [
+          { day: 'monday', openTime: '10:00', closeTime: '14:00' },
+          { day: 'monday', openTime: '17:00', closeTime: '20:00' },
+        ],
+      });
+      const result = await svc.getSalonInfo({ prisma: split, tenantId: TENANT_ID });
+      expect('error' in result).toBe(false);
+      if (!('error' in result)) {
+        expect(result.openingHours?.monday).toEqual(['10:00–14:00', '17:00–20:00']);
+        expect(result.openingHours?.sunday).toEqual([]);
+      }
+    });
+
+    it('says null when neither the salon nor anyone has hours', async () => {
+      const none = makePrisma([], [], { ...SAMPLE_TENANT, openingHours: {} });
+      const result = await svc.getSalonInfo({ prisma: none, tenantId: TENANT_ID });
+      expect('error' in result ? undefined : result.openingHours).toBeNull();
     });
 
     it('returns an error envelope when the tenant is missing', async () => {
