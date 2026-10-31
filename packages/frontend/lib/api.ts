@@ -1,6 +1,7 @@
 ﻿// Next.js API Client for Kira Room
 
 import type { TaxRegime } from "@kira/shared";
+import type { PublicSalonPage } from "./salon-seo";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1";
@@ -2520,6 +2521,11 @@ class ApiClient implements ApiClientInterface {
     description: string | null;
   }> {
     return this.request(`/public-site/tenant/${encodeURIComponent(slug)}`);
+  }
+
+  // Everything the salon's public page shows, opening hours included (no auth).
+  async getPublicSalonPage(slug: string): Promise<PublicSalonPage> {
+    return this.request<PublicSalonPage>(`/public-site/page/${encodeURIComponent(slug)}`);
   }
 
   // The salon's own domain (bring-your-own; nothing is bought here).

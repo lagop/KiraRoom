@@ -33,16 +33,24 @@ import { PHONE_PATTERN } from "../../common/phone";
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 
+// Messages in Spanish: the booking forms show them to the client as they
+// arrive, and "phone must be a phone number" reached people booking a
+// haircut. NestJS puts a nested field's path in front ("clientInfo."); the
+// frontend strips it (lib/public-booking.ts, bookingErrorMessage).
+const PHONE_INVALID = "Introduce un teléfono válido (al menos 9 cifras)";
+const PHONE_TOO_LONG = "El teléfono es demasiado largo";
+const EMAIL_INVALID = "Introduce un email válido";
+
 class ClientNameDto {
   @ApiProperty()
-  @IsString()
-  @MinLength(1)
-  @MaxLength(100)
+  @IsString({ message: "Escribe tu nombre" })
+  @MinLength(1, { message: "Escribe tu nombre" })
+  @MaxLength(100, { message: "El nombre es demasiado largo (máximo 100 caracteres)" })
   firstName!: string;
 
   @ApiProperty()
-  @IsString()
-  @MaxLength(100)
+  @IsString({ message: "Los apellidos no son válidos" })
+  @MaxLength(100, { message: "Los apellidos son demasiado largos (máximo 100 caracteres)" })
   lastName!: string;
 }
 
@@ -54,13 +62,13 @@ class ClientNameDto {
 export class BookingClientInfoDto extends ClientNameDto {
   @ApiPropertyOptional()
   @ValidateIf((o) => !!o.email || !o.phone)
-  @IsEmail()
+  @IsEmail({}, { message: EMAIL_INVALID })
   email?: string;
 
   @ApiPropertyOptional()
   @ValidateIf((o) => !!o.phone || !o.email)
-  @Matches(PHONE_PATTERN, { message: "phone must be a phone number" })
-  @MaxLength(30)
+  @Matches(PHONE_PATTERN, { message: PHONE_INVALID })
+  @MaxLength(30, { message: PHONE_TOO_LONG })
   phone?: string;
 }
 
@@ -72,39 +80,39 @@ export class BookingClientInfoDto extends ClientNameDto {
  */
 export class OnlineClientInfoDto extends ClientNameDto {
   @ApiProperty()
-  @IsDefined({ message: "phone is required" })
-  @Matches(PHONE_PATTERN, { message: "phone must be a phone number" })
-  @MaxLength(30)
+  @IsDefined({ message: "El teléfono es obligatorio" })
+  @Matches(PHONE_PATTERN, { message: PHONE_INVALID })
+  @MaxLength(30, { message: PHONE_TOO_LONG })
   phone!: string;
 
   @ApiPropertyOptional()
   @ValidateIf((o) => o.email !== undefined && o.email !== null && o.email !== "")
-  @IsEmail()
+  @IsEmail({}, { message: EMAIL_INVALID })
   email?: string;
 }
 
 class BookingSlotDto {
   @ApiProperty()
-  @IsUUID()
+  @IsUUID(undefined, { message: "Elige un servicio" })
   serviceId!: string;
 
   @ApiProperty({ example: "2026-10-01" })
-  @Matches(DATE, { message: "scheduledDate must be YYYY-MM-DD" })
+  @Matches(DATE, { message: "Elige una fecha válida" })
   scheduledDate!: string;
 
   @ApiProperty({ example: "10:30" })
-  @Matches(TIME, { message: "scheduledTime must be HH:MM" })
+  @Matches(TIME, { message: "Elige una hora válida" })
   scheduledTime!: string;
 
   @ApiPropertyOptional()
-  @IsString()
-  @MaxLength(2000)
+  @IsString({ message: "Las notas no son válidas" })
+  @MaxLength(2000, { message: "Las notas son demasiado largas (máximo 2000 caracteres)" })
   @IsOptional()
   notes?: string;
 
   /** Ignored: the server decides the salon. Accepted so old clients validate. */
   @ApiPropertyOptional({ description: "Ignored" })
-  @IsString()
+  @IsString({ message: "El salón no es válido" })
   @IsOptional()
   tenantId?: string;
 }
@@ -117,23 +125,23 @@ export class OnlineBookingDto extends BookingSlotDto {
    */
   @ApiPropertyOptional()
   @ValidateIf((o) => o.professionalId !== undefined && o.professionalId !== "")
-  @IsUUID()
+  @IsUUID(undefined, { message: "Elige un profesional" })
   professionalId?: string;
 
   /** Who is booking. No clientId here: an anonymous caller cannot book as an existing client. */
   @ApiProperty({ type: OnlineClientInfoDto })
-  @IsDefined()
-  @ValidateNested()
+  @IsDefined({ message: "Faltan tus datos de contacto" })
+  @ValidateNested({ message: "Tus datos de contacto no son válidos" })
   @Type(() => OnlineClientInfoDto)
   clientInfo!: OnlineClientInfoDto;
 
   @ApiPropertyOptional({ enum: ["online", "widget"] })
-  @IsIn(["online", "widget"])
+  @IsIn(["online", "widget"], { message: "El origen de la reserva no es válido" })
   @IsOptional()
   source?: "online" | "widget";
 
   @ApiPropertyOptional()
-  @IsUUID()
+  @IsUUID(undefined, { message: "El widget de reservas no es válido" })
   @IsOptional()
   widgetInstanceId?: string;
 }

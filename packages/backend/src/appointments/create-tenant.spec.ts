@@ -377,6 +377,30 @@ describe("request validation", () => {
     expect(errors(StaffBookingDto, { ...BOOKING, clientInfo: undefined })).toEqual(["clientId"]);
     expect(errors(StaffBookingDto, { ...BOOKING, clientInfo: undefined, clientId: PRO.id })).toEqual([]);
   });
+
+  // The booking forms show these to the client as they arrive.
+  it("explains a public booking's mistakes in Spanish", () => {
+    const messages = (body: object): string[] => {
+      const collect = (es: any[]): string[] =>
+        es.flatMap((e) => [...Object.values<string>(e.constraints ?? {}), ...collect(e.children ?? [])]);
+      return collect(validateSync(plainToInstance(OnlineBookingDto, body) as object, { whitelist: true })).sort();
+    };
+    expect(messages({ ...BOOKING, clientInfo: { firstName: "A", lastName: "B", phone: "12345" } })).toEqual([
+      "Introduce un teléfono válido (al menos 9 cifras)",
+    ]);
+    expect(messages({ ...BOOKING, clientInfo: { firstName: "A", lastName: "B", email: "a@mail.test" } })).toContain(
+      "El teléfono es obligatorio",
+    );
+    expect(messages({ ...BOOKING, clientInfo: { firstName: "A", lastName: "B", phone: "600111222", email: "a@" } })).toEqual([
+      "Introduce un email válido",
+    ]);
+    expect(messages({ ...BOOKING, clientInfo: undefined })).toEqual(["Faltan tus datos de contacto"]);
+    expect(messages({ ...BOOKING, scheduledDate: "tomorrow", scheduledTime: "25:00" })).toEqual([
+      "Elige una fecha válida",
+      "Elige una hora válida",
+    ]);
+    expect(messages({ ...BOOKING, serviceId: undefined })).toEqual(["Elige un servicio"]);
+  });
 });
 
 /**

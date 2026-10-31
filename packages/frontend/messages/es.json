@@ -1989,7 +1989,10 @@
         "description": "Conoce el rendimiento de tu negocio en todo momento."
       }
     },
-    "create_account": "Crear cuenta gratis"
+    "create_account": "Crear cuenta gratis",
+    "failed": "No se pudo iniciar sesión",
+    "invalid_credentials": "Email o contraseña incorrectos",
+    "server_error": "Error del servidor. Inténtalo de nuevo más tarde."
   },
   "bookingPublic": {
     "title": "Reservar cita",
@@ -2008,8 +2011,18 @@
     "select_time": "Selecciona una hora",
     "confirm_booking": "Confirmar reserva",
     "booking_confirmed": "Reserva confirmada",
-    "dateUnavailable": "Día no disponible",
-    "salonClosedSunday": "El salón está cerrado los domingos"
+    "select_professional_first": "Elige un profesional para ver las horas libres",
+    "loading_slots": "Buscando horas libres…",
+    "no_slots": "No quedan horas libres este día. Prueba con otra fecha u otro profesional.",
+    "closed_day": "El salón no abre este día. Elige otra fecha.",
+    "slot_gone": "Esa hora ya no está libre. Elige otra.",
+    "name_placeholder": "Nombre y apellidos",
+    "email_placeholder": "tu@email.com",
+    "privacy_notice": "{salon} usará tu nombre, teléfono y email solo para gestionar tu cita y enviarte avisos sobre ella (confirmación, recordatorios y cambios).",
+    "privacy_link": "Política de privacidad",
+    "logged_out": "Sesión cerrada",
+    "logged_out_desc": "Has cerrado sesión correctamente.",
+    "booking_failed": "No se pudo reservar la cita. Por favor, inténtalo de nuevo."
   },
   "sites": {
     "notFoundTitle": "Salón no encontrado",

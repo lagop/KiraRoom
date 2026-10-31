@@ -38,7 +38,7 @@ export default function AccountLayout({
         setCurrentUser(JSON.parse(userStr));
       } else {
         // Redirect to login if not logged in
-        window.location.href = `/${params.salonName}`;
+        window.location.href = `/sites/${params.salonName}`;
       }
     }
   }, [params.salonName]);

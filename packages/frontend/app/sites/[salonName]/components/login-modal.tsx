@@ -77,16 +77,20 @@ export default function LoginModal({
       onClose();
     } catch (err) {
       // Handle login errors with user-friendly messages
-      let errorMessage = "Login failed";
+      let errorMessage = t("login.failed");
 
       if (err instanceof Error) {
         if (
+          // A wrong password comes back as the server's English "Invalid
+          // credentials". Other 401s (a deactivated account) already explain
+          // themselves in Spanish and pass through below.
+          err.message === "Invalid credentials" ||
           err.message.includes("401") ||
           err.message.includes("Unauthorized")
         ) {
-          errorMessage = "Invalid email or password";
+          errorMessage = t("login.invalid_credentials");
         } else if (err.message.includes("500")) {
-          errorMessage = "Server error. Please try again later";
+          errorMessage = t("login.server_error");
         } else {
           errorMessage = err.message;
         }

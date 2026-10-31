@@ -5,6 +5,27 @@ import { useSearchParams } from 'next/navigation';
 import { Calendar, Clock, Scissors, User, ChevronRight } from 'lucide-react';
 import apiClient from '@/lib/api';
 import { useToast } from '@/components/ui/use-toast';
+import { formatPrice, type PublicSalonPage } from '@/lib/salon-seo';
+import {
+  bookingDateFromQuery,
+  bookingErrorMessage,
+  isClosedDay,
+  isOfferedTime,
+  localDateString,
+  localTomorrow,
+  privacyPolicyUrl,
+  slotsState,
+  type SlotsState,
+} from '@/lib/public-booking';
+
+/** What the time picker says when it has no time to offer. */
+const SLOTS_MESSAGE: Record<Exclude<SlotsState, 'ready'>, string> = {
+  select_service_first: 'Selecciona primero un servicio',
+  select_professional_first: 'Elige un profesional para ver las horas libres',
+  loading_slots: 'Buscando horas libres…',
+  closed_day: 'El salón no abre este día. Elige otra fecha.',
+  no_slots: 'No quedan horas libres este día. Prueba con otra fecha u otro profesional.',
+};
 
 interface BookingData {
   clientName: string;
@@ -19,6 +40,8 @@ interface BookingData {
 interface SalonData {
   id: string;
   name: string;
+  currency: string;
+  openingHours: PublicSalonPage['openingHours'];
 }
 
 interface Professional {
@@ -70,6 +93,11 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
   const [professionals, setProfessionals] = useState<Professional[]>([]);
   const [services, setServices] = useState<Service[]>([]);
   const [availableSlots, setAvailableSlots] = useState<AvailableTimeSlot[]>([]);
+  const [slotsLoading, setSlotsLoading] = useState(false);
+  // Bumped to ask the server for the slots again (after a failed booking).
+  const [slotsRefresh, setSlotsRefresh] = useState(0);
+  // The client's own calendar day, set after mount (the server renders in UTC).
+  const [today, setToday] = useState('');
   const [showAllServices, setShowAllServices] = useState(false);
   const [showAllProfessionals, setShowAllProfessionals] = useState(false);
   const [bookingData, setBookingData] = useState<BookingData>({
@@ -83,15 +111,20 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
   });
   const [currentUser, setCurrentUser] = useState<UserData | null>(null);
   
-  // Pre-fill service and professional from URL params
+  // Pre-fill service, professional and day from URL params. "Repetir" sends
+  // serviceId and professionalId; the rebooking reminder email sends
+  // ?service=; a wait-list style link may carry ?date=.
   useEffect(() => {
-    const serviceId = searchParams?.get('serviceId');
+    const serviceId = searchParams?.get('serviceId') || searchParams?.get('service');
     const professionalId = searchParams?.get('professionalId');
-    if (serviceId || professionalId) {
+    const date = bookingDateFromQuery(searchParams?.get('date'));
+    if (serviceId || professionalId || date) {
       setBookingData(prev => ({
         ...prev,
         serviceId: serviceId || prev.serviceId,
         professionalId: professionalId || prev.professionalId,
+        date: date || prev.date,
+        time: '',
       }));
     }
   }, [searchParams]);
@@ -114,13 +147,13 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
     }
   }, []);
 
-  // Set default date to today + 1 day
+  // Default date: tomorrow in the client's calendar (toISOString() gave the
+  // UTC day, still today after midnight in Spain). A date from the link wins.
   useEffect(() => {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    setToday(localDateString());
     setBookingData(prev => ({
       ...prev,
-      date: tomorrow.toISOString().split('T')[0],
+      date: prev.date || localTomorrow(),
     }));
   }, []);
 
@@ -134,8 +167,15 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
         // tenant from whichever professional the API listed first -- and
         // that list was every salon's -- then filled in an invented name,
         // address, phone and email.
-        const tenant = await apiClient.getPublicTenant(params.salonName);
-        setSalonData({ id: tenant.id, name: tenant.name });
+        // The page's data rather than the bare tenant: it carries the
+        // salon's currency and opening hours too.
+        const tenant = await apiClient.getPublicSalonPage(params.salonName);
+        setSalonData({
+          id: tenant.id,
+          name: tenant.name,
+          currency: tenant.currency || 'EUR',
+          openingHours: tenant.openingHours ?? {},
+        });
 
         const [professionalsData, servicesData] = await Promise.all([
           apiClient.getProfessionalsPublic(tenant.id),
@@ -160,14 +200,16 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
 
   // Fetch available time slots
   useEffect(() => {
+    // The list on screen belongs to the previous inputs: drop it, so nothing
+    // from it can be picked or sent while the new one loads.
+    setAvailableSlots([]);
+    let cancelled = false;
+    const wanted = !!(salonData && bookingData.professionalId && bookingData.serviceId && bookingData.date);
+    setSlotsLoading(wanted);
+
     const fetchAvailableSlots = async () => {
       // Only fetch slots if service and professional are selected
-      if (!bookingData.professionalId || !bookingData.serviceId || !bookingData.date) {
-        setAvailableSlots([]);
-        return;
-      }
-
-      if (!salonData) return;
+      if (!wanted || !salonData) return;
 
       try {
         // The server's slots: on the professional's shift, inside opening
@@ -179,16 +221,23 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
           bookingData.serviceId,
           bookingData.date,
         );
-        setAvailableSlots(
-          slots.map((slot) => ({ time: slot.time, available: slot.isAvailable })),
+        if (cancelled) return;
+        const offered = slots.map((slot) => ({ time: slot.time, available: slot.isAvailable }));
+        setAvailableSlots(offered);
+        // A time picked earlier stays only while this list still offers it.
+        setBookingData(prev =>
+          prev.time && !isOfferedTime(prev.time, offered) ? { ...prev, time: '' } : prev,
         );
       } catch (error) {
+        if (cancelled) return;
         console.error('Error fetching available slots:', error);
         toast({
           title: 'Error',
-          description: 'No se pudo cargar los horarios disponibles',
+          description: 'No se pudieron cargar los horarios disponibles',
           variant: 'destructive',
         });
+      } finally {
+        if (!cancelled) setSlotsLoading(false);
       }
     };
 
@@ -197,8 +246,11 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
       fetchAvailableSlots();
     }, 300);
 
-    return () => clearTimeout(timer);
-  }, [salonData, bookingData.professionalId, bookingData.serviceId, bookingData.date]);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [salonData, bookingData.professionalId, bookingData.serviceId, bookingData.date, slotsRefresh]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
@@ -233,6 +285,16 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Only a time the server offered for the inputs on screen.
+    if (!isOfferedTime(bookingData.time, availableSlots)) {
+      setBookingData(prev => ({ ...prev, time: '' }));
+      toast({
+        title: 'Selecciona una hora',
+        description: 'Esa hora ya no está libre. Elige otra.',
+        variant: 'destructive',
+      });
+      return;
+    }
     setLoading(true);
 
     try {
@@ -262,31 +324,30 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
         description: 'Tu cita ha sido reservada exitosamente.',
       });
       
-      // Reset form
+      // Reset form, with tomorrow as the date again
       setBookingData({
         clientName: currentUser ? `${currentUser.firstName} ${currentUser.lastName}` : '',
         clientEmail: currentUser ? currentUser.email : '',
         clientPhone: currentUser ? (currentUser.phone || '') : '',
         serviceId: '',
         professionalId: '',
-        date: '',
+        date: localTomorrow(),
         time: '',
       });
-      
-      // Set default date to tomorrow again
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      setBookingData(prev => ({
-        ...prev,
-        date: tomorrow.toISOString().split('T')[0],
-      }));
     } catch (error) {
       console.error('Error booking appointment:', error);
+      // The server's reason when it gives one (the slot was taken, the
+      // phone is not valid...): "try again" alone does not say whether
+      // trying again would help.
       toast({
         title: 'Error',
-        description: 'No se pudo reservar la cita. Por favor, intenta nuevamente.',
+        description:
+          (error instanceof Error && bookingErrorMessage(error.message)) ||
+          'No se pudo reservar la cita. Por favor, inténtalo de nuevo.',
         variant: 'destructive',
       });
+      // Ask for the slots again: the one picked may be gone.
+      setSlotsRefresh(n => n + 1);
     } finally {
       setLoading(false);
     }
@@ -314,44 +375,39 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
       )
     : professionals;
 
-  // Filter available dates based on salon settings
+  // This refused every Sunday for every salon, whatever its hours, and read
+  // the weekday from a UTC date (west of Greenwich, Mondays). The server's
+  // slots say what is free; the salon's recorded hours only choose the
+  // message when nothing is (see isClosedDay).
   const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedDate = new Date(e.target.value);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0); // Reset time to start of day for comparison
-    
-    // Check if date is in the past
-    if (selectedDate < today) {
+    const value = e.target.value;
+    // Both YYYY-MM-DD, local calendar: the string order is the date order.
+    if (value && value < localDateString()) {
       toast({
         title: 'Fecha no disponible',
         description: 'No puedes seleccionar una fecha pasada',
         variant: 'destructive',
       });
-      setAvailableSlots([]);
       return;
     }
-    
-    const dayOfWeek = selectedDate.getDay();
-    
-    // Salon is open Monday-Saturday (1-6)
-    if (dayOfWeek === 0) { // Sunday
-      toast({
-        title: 'Día no disponible',
-        description: 'El salón está cerrado los domingos',
-        variant: 'destructive',
-      });
-      setAvailableSlots([]);
-      return;
-    }
-    
+
     // Clear time slots and selected time when date changes
     setAvailableSlots([]);
     setBookingData(prev => ({
       ...prev,
-      date: e.target.value,
+      date: value,
       time: '',
     }));
   };
+
+  const slotsView = slotsState({
+    serviceId: bookingData.serviceId,
+    professionalId: bookingData.professionalId,
+    date: bookingData.date,
+    loading: slotsLoading,
+    slots: availableSlots,
+    closed: isClosedDay(bookingData.date, salonData?.openingHours),
+  });
 
   if (loading && !salonData) {
     return (
@@ -425,7 +481,7 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
                   onChange={handleInputChange}
                   required
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors"
-                  placeholder="John Doe"
+                  placeholder="Nombre y apellidos"
                 />
               </div>
               <div>
@@ -439,7 +495,7 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
                   value={bookingData.clientEmail}
                   onChange={handleInputChange}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors"
-                  placeholder="john@example.com"
+                  placeholder="tu@email.com"
                 />
               </div>
               <div>
@@ -454,7 +510,7 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
                   onChange={handleInputChange}
                   required
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors"
-                  placeholder="+34 123 456 789"
+                  placeholder="+34 600 123 456"
                 />
               </div>
             </div>
@@ -478,7 +534,7 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
             <option value="">-- Selecciona un servicio --</option>
             {services.map(service => (
               <option key={service.id} value={service.id}>
-                {service.name} - {service.price}€ ({service.duration} min)
+                {service.name} - {formatPrice(Number(service.price), salonData?.currency)} ({service.duration} min)
               </option>
             ))}
           </select>
@@ -561,7 +617,7 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
             name="date"
             value={bookingData.date}
             onChange={handleDateChange}
-            min={new Date().toISOString().split('T')[0]}
+            min={today || undefined}
             required
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors"
           />
@@ -573,6 +629,11 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
             <Clock className="w-5 h-5 mr-2 text-purple-600" />
             Selecciona un horario
           </h3>
+          {slotsView !== 'ready' ? (
+            <p className="text-gray-500 text-center py-4" aria-live="polite">
+              {SLOTS_MESSAGE[slotsView]}
+            </p>
+          ) : (
           <div className="grid grid-cols-4 gap-2">
             {availableSlots.map(slot => (
               <button
@@ -592,13 +653,14 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
               </button>
             ))}
           </div>
+          )}
         </div>
 
         {/* Step 6: Submit */}
-        <div className="text-center">
+        <div className="text-center space-y-3">
           <button
             type="submit"
-            disabled={loading || !bookingData.time}
+            disabled={loading || !isOfferedTime(bookingData.time, availableSlots)}
             className="inline-flex items-center space-x-2 px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50"
           >
             {loading ? (
@@ -606,6 +668,19 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
             ) : null}
             <span>{loading ? 'Reservando...' : 'Reservar Cita'}</span>
           </button>
+          {/* Who uses the details on this form and what for (RGPD art. 13). */}
+          <p className="text-xs text-gray-500">
+            {salonData?.name || 'El salón'} usará tu nombre, teléfono y email solo para gestionar tu
+            cita y enviarte avisos sobre ella (confirmación, recordatorios y cambios).{' '}
+            <a
+              href={privacyPolicyUrl()}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-purple-700"
+            >
+              Política de privacidad
+            </a>
+          </p>
         </div>
       </form>
     </div>

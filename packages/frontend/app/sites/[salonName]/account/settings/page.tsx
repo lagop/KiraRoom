@@ -243,7 +243,7 @@ export default function SettingsPage({ params }: { params: { salonName: string }
     if (typeof window !== 'undefined') {
       localStorage.removeItem('user');
     }
-    window.location.href = `/${params.salonName}`;
+    window.location.href = `/sites/${params.salonName}`;
   };
 
   const closePasswordModal = () => {
