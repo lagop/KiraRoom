@@ -1,8 +1,14 @@
-import { Injectable, NotFoundException, BadRequestException, Logger, Optional } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger, Optional } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { WalletService } from '../payments/services/wallet.service';
 import { LoyaltyService } from '../loyalty/loyalty.service';
+import {
+  assertChargeable,
+  recordAppointmentPayment,
+  shareMethod,
+  splitTicket,
+} from '../payments/appointment-payment';
 
 export interface CartItem {
   serviceId?: string;
@@ -30,6 +36,8 @@ export interface CreatePosOrderDto {
   appointmentIds?: string[];
   /** A loyalty reward the client spends points on: comes off the total. */
   loyaltyRewardId?: string;
+  /** Who is at the till (from the JWT, never the body): staff charge their own appointments only. */
+  actor?: { id: string; role: string };
 }
 
 @Injectable()
@@ -172,14 +180,11 @@ export class PosService {
     const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
     const appointmentIds = [...new Set(dto.appointmentIds ?? [])];
-    if (appointmentIds.length > 0) {
-      const found = await this.prisma.appointment.count({
-        where: { id: { in: appointmentIds }, tenantId },
-      });
-      if (found !== appointmentIds.length) {
-        throw new NotFoundException('Appointment not found');
-      }
-    }
+    // Checked before anything is spent or written: a cancelled or no-show
+    // visit, or one already paid, refuses the whole ticket with a 409.
+    const appointments = appointmentIds.length
+      ? await this.chargeableAppointments(tenantId, appointmentIds, dto.actor)
+      : [];
 
     let finalClientId = clientId;
 
@@ -235,45 +240,70 @@ export class PosService {
       throw new BadRequestException('Payment amount is less than order total');
     }
 
-    // Process payments
-    const paymentRecords = [];
+    // Each appointment gets the part of the ticket that pays for it, as its
+    // own payment row (Payment.appointmentId): the reward first, then the
+    // money. It used to be one row with the ids only in its metadata, and a
+    // second call from the panel marked the appointment paid for any amount.
+    const { rows, shares } = splitTicket(appointments, payments, loyaltyDiscount);
+
+    // "Card" at the till is the salon's own card terminal: the money is
+    // already taken when the sale is recorded. It used to create a Stripe
+    // PaymentIntent for 100 times the amount (cents passed to a method that
+    // multiplied by 100), with the platform's Stripe account when the salon
+    // had none, which nobody ever confirmed: the sale stayed "pending" and
+    // out of the day's card total.
+    const walletTaken: number[] = [];
+    let paymentRecords: any[] = [];
     try {
       for (const payment of payments) {
-        // "Card" at the till is the salon's own card terminal: the money is
-        // already taken when the sale is recorded. It used to create a Stripe
-        // PaymentIntent for 100 times the amount (cents passed to a method that
-        // multiplied by 100), with the platform's Stripe account when the salon
-        // had none, which nobody ever confirmed: the sale stayed "pending" and
-        // out of the day's card total.
-
-        // Process wallet payments
         if (payment.method === 'wallet' && finalClientId) {
           await this.walletService.deductFunds(tenantId, finalClientId, payment.amount, 'POS Payment');
+          walletTaken.push(payment.amount);
         }
-
-        // Create payment record
-        const paymentRecord = await this.prisma.payment.create({
-          data: {
-            tenantId,
-            clientId: finalClientId,
-            amount: payment.amount,
-            currency: 'EUR',
-            type: 'service',
-            status: 'paid',
-            method: payment.method as any,
-            description: `POS Sale: ${items.map(i => i.name).join(', ')}`,
-            metadata: {
-              posSaleId: saleId,
-              ...(appointmentIds.length ? { appointmentIds } : {}),
-              ...(loyaltyDiscount ? { loyaltyDiscount, loyaltyRewardId: dto.loyaltyRewardId } : {}),
-            },
-          },
-        });
-        paymentRecords.push(paymentRecord);
       }
+
+      const write = async (db: any) => {
+        const created: any[] = [];
+        for (const row of rows) {
+          created.push(
+            await db.payment.create({
+              data: {
+                tenantId,
+                clientId: row.appointment?.clientId ?? finalClientId,
+                ...(row.appointment ? { appointmentId: row.appointment.id } : {}),
+                amount: row.amount,
+                currency: 'EUR',
+                type: row.appointment ? 'appointment' : 'service',
+                status: 'paid',
+                method: row.method as any,
+                description: `POS Sale: ${items.map(i => i.name).join(', ')}`,
+                metadata: {
+                  posSaleId: saleId,
+                  ...(appointmentIds.length ? { appointmentIds } : {}),
+                  ...(loyaltyDiscount ? { loyaltyDiscount, loyaltyRewardId: dto.loyaltyRewardId } : {}),
+                },
+              },
+            }),
+          );
+        }
+        // Same transaction: an appointment is paid if and only if the
+        // payments that pay it are recorded.
+        for (const share of shares) {
+          await recordAppointmentPayment(db, share.appointment, share.fromDiscount + share.fromMoney, shareMethod(share));
+        }
+        return created;
+      };
+      paymentRecords = appointments.length
+        ? await this.prisma.$transaction((tx) => write(tx))
+        : await write(this.prisma);
     } catch (err) {
-      // Nothing was sold: give the points back.
+      // Nothing was sold: give the points and the wallet money back.
       if (pointsSpent) await this.loyalty?.cancelSaleRedemption(tenantId, saleId, 'Venta no completada');
+      for (const amount of walletTaken) {
+        await this.walletService
+          .addFunds(tenantId, finalClientId as string, amount, 'Devolución: venta no completada')
+          .catch((e: Error) => this.logger.error(`wallet refund for failed sale ${saleId} failed: ${e.message}`));
+      }
       throw err;
     }
 
@@ -313,6 +343,48 @@ export class PosService {
       status: 'completed',
       createdAt: new Date().toISOString(),
     };
+  }
+
+  /**
+   * The appointments a ticket pays for, in the order given: each one of this
+   * salon, chargeable (assertChargeable: not cancelled, not a no-show, not
+   * already paid) and, for a staff member, on their own agenda -- the same
+   * appointments the till lists for them.
+   */
+  private async chargeableAppointments(
+    tenantId: string,
+    ids: string[],
+    actor?: { id: string; role: string },
+  ) {
+    const found = await this.prisma.appointment.findMany({
+      where: { id: { in: ids }, tenantId },
+      select: {
+        id: true,
+        clientId: true,
+        professionalId: true,
+        status: true,
+        paymentStatus: true,
+        amountPaid: true,
+        totalAmount: true,
+        service: { select: { price: true } },
+      },
+    });
+    if (found.length !== ids.length) {
+      throw new NotFoundException('Appointment not found');
+    }
+    if (actor?.role === 'staff') {
+      const own = await this.prisma.professional.findFirst({
+        where: { userId: actor.id, tenantId },
+        select: { id: true },
+      });
+      if (!own || found.some((a) => a.professionalId !== own.id)) {
+        throw new ForbiddenException('Solo puedes cobrar tus propias citas.');
+      }
+    }
+    const byId = new Map(found.map((a) => [a.id, a]));
+    const ordered = ids.map((id) => byId.get(id)!);
+    ordered.forEach(assertChargeable);
+    return ordered;
   }
 
   /**

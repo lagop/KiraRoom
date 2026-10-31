@@ -421,15 +421,18 @@ export class LoyaltyService {
       },
     });
     if (!apt?.clientId || apt.status !== "completed") return null;
+    // Paid means a payment recorded against the appointment (the till, the
+    // payments screen, Stripe). The appointment's paymentStatus flag alone
+    // used to be enough, and staff could set it by hand, for any amount.
     const moneyRows = (apt.payments ?? []).filter((p) => p.method !== "loyalty_points");
-    const paid = apt.paymentStatus === "paid" || moneyRows.length > 0;
-    if (!paid) return null;
+    if (moneyRows.length === 0) return null;
+    const moneyCents = moneyRows.reduce((s, p) => s + p.amount, 0);
 
     const member = await this.memberForEarning(tenantId, program, apt.clientId);
     if (!member) return null;
 
     let basis = Number(apt.amountPaid ?? 0);
-    if (!(basis > 0)) basis = moneyRows.reduce((s, p) => s + p.amount, 0);
+    if (!(basis > 0)) basis = moneyCents;
     if (!(basis > 0)) basis = Number(apt.totalAmount ?? 0);
     if (!(basis > 0)) basis = Math.round(Number(apt.service?.price ?? 0) * 100);
     // The part paid with points is not money spent: it earns nothing.
@@ -438,6 +441,8 @@ export class LoyaltyService {
       _sum: { valueReceived: true },
     });
     basis = Math.max(0, Math.round(basis - (discounted._sum.valueReceived ?? 0)));
+    // Never more than the money actually recorded for it.
+    basis = Math.min(basis, moneyCents);
 
     const points = this.pointsFor(program, basis, member.tier?.pointsMultiplier ?? 1);
     if (points <= 0) return { awarded: 0 };

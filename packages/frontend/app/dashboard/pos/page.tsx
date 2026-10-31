@@ -538,7 +538,8 @@ export default function POSPage() {
       service: {
         id: appointment.service.id,
         name: `${appointment.service.name} (${appointment.client.firstName} ${appointment.client.lastName})`,
-        price: appointment.totalAmount / 100, // Convert from cents
+        // What is still owed (a deposit or earlier payment already counts), cents to euros
+        price: (appointment.amountDue ?? appointment.totalAmount) / 100,
         category: "other" as any,
         duration: appointment.service.duration || 60,
       },
@@ -547,7 +548,7 @@ export default function POSPage() {
     }));
     setCart(newCartItems);
 
-    const totalAmount = appointments.reduce((sum: number, a: any) => sum + a.totalAmount / 100, 0);
+    const totalAmount = appointments.reduce((sum: number, a: any) => sum + (a.amountDue ?? a.totalAmount) / 100, 0);
     toast({
       title: t("pos.appointments_selected") || `${appointments.length} appointments selected`,
       description: `${appointments.map((a: any) => `${a.client.firstName} ${a.client.lastName}`).join(", ")} — ${formatCurrency(totalAmount)}`,
@@ -559,12 +560,6 @@ export default function POSPage() {
 
     try {
       setProcessing(true);
-
-      // Calculate total across all appointments (in cents)
-      const totalAmountCents = selectedAppointments.reduce(
-        (sum, apt) => sum + apt.totalAmount,
-        0
-      );
 
       const items = cart.map((item) => ({
         serviceId: item.service.id,
@@ -581,23 +576,15 @@ export default function POSPage() {
         payments: [
           {
             method: selectedPaymentMethod,
-            amount: Math.max(0, totalAmountCents - Math.round(loyaltyDiscount() * 100)),
-            type: "appointment" as const,
-            isDeposit: false,
+            // The whole cart (appointments and anything added) less the reward.
+            amount: Math.round(amountDue() * 100),
           },
         ],
       };
 
-      const result = await apiClient.posCheckout(checkoutData);
-
-      // Update payment status for each appointment
-      for (const apt of selectedAppointments) {
-        await apiClient.updateAppointmentPayment(apt.id, {
-          status: "paid",
-          amountPaid: apt.totalAmount,
-          paymentMethod: selectedPaymentMethod,
-        });
-      }
+      // One call: the server records each appointment's payment and marks it
+      // paid in the same transaction, and refuses cancelled or no-show ones.
+      await apiClient.posCheckout(checkoutData);
 
       toast({
         title: t("pos.payment_completed"),

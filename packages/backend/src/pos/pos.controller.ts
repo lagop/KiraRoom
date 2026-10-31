@@ -50,8 +50,12 @@ export class PosController {
     @Req() req: any,
     @Body() dto: CreatePosOrderDto,
   ) {
-    // Override tenantId from JWT token for security
-    const checkoutData = { ...dto, tenantId: req.user.tenantId };
+    // Tenant and actor from the JWT token, never from the body.
+    const checkoutData = {
+      ...dto,
+      tenantId: req.user.tenantId,
+      actor: { id: req.user.id, role: req.user.role },
+    };
     return this.posService.processCheckout(checkoutData);
   }
 

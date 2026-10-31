@@ -10,9 +10,25 @@ import { PosService } from "./pos.service";
 function pos(loyaltyOver: Record<string, any> = {}) {
   const prisma: any = {
     payment: { create: jest.fn(async ({ data }: any) => ({ id: `p${Math.random()}`, ...data })) },
-    appointment: { count: jest.fn(async ({ where }: any) => where.id.in.length) },
+    // Appointments of this salon, not yet paid, 20 EUR each (cents).
+    appointment: {
+      findMany: jest.fn(async ({ where }: any) =>
+        where.id.in.map((id: string) => ({
+          id,
+          clientId: "c1",
+          professionalId: "p1",
+          status: "completed",
+          paymentStatus: "pending",
+          amountPaid: 0,
+          totalAmount: 2000,
+          service: { price: 20 },
+        })),
+      ),
+      updateMany: jest.fn(async () => ({ count: 1 })),
+    },
     client: { findFirst: jest.fn(), create: jest.fn() },
   };
+  prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
   const loyalty: any = {
     redeemAtSale: jest.fn(async () => ({ discountCents: 1000, pointsSpent: 100, rewardName: "10 EUR", redemptionId: "r1" })),
     cancelSaleRedemption: jest.fn(async () => undefined),
@@ -73,7 +89,7 @@ describe("POS and loyalty", () => {
 
   it("refuses appointments of another salon", async () => {
     const { service, prisma } = pos();
-    prisma.appointment.count = jest.fn(async () => 0);
+    prisma.appointment.findMany = jest.fn(async () => []);
     await expect(
       service.processCheckout({
         tenantId: "t1",

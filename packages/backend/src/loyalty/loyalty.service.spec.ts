@@ -164,7 +164,8 @@ function paidVisit(over: Row = {}) {
     amountPaid: 4550, // 45,50 EUR, in cents
     totalAmount: 4550,
     service: { price: 45.5 },
-    payments: [],
+    // The payment recorded against it (the till, the payments screen...).
+    payments: [{ amount: 4550, method: "cash" }],
     ...over,
   };
 }
@@ -189,8 +190,28 @@ describe("LoyaltyService: earning", () => {
     expect(await db.service.settleAppointment("t1", "a1")).toBeNull();
     db.appointments[0].status = "completed";
     db.appointments[0].paymentStatus = "pending";
+    db.appointments[0].payments = [];
     expect(await db.service.settleAppointment("t1", "a1")).toBeNull();
     expect(db.txs).toHaveLength(0);
+  });
+
+  it("a payment status set by hand, with no payment recorded, earns nothing", async () => {
+    const db = fakeDb();
+    await db.service.enroll("t1", "c1", "staff");
+    // What PATCH /appointments/:id/payment used to be enough for.
+    db.appointments.push(paidVisit({ payments: [], amountPaid: 99900 }));
+    expect(await db.service.settleAppointment("t1", "a1")).toBeNull();
+    // Points paid with points are not money either.
+    db.appointments[0].payments = [{ amount: 4550, method: "loyalty_points" }];
+    expect(await db.service.settleAppointment("t1", "a1")).toBeNull();
+    expect(db.txs).toHaveLength(0);
+  });
+
+  it("earns on the money recorded, not on a paid amount typed higher", async () => {
+    const db = fakeDb();
+    await db.service.enroll("t1", "c1", "staff");
+    db.appointments.push(paidVisit({ amountPaid: 4550, payments: [{ amount: 1000, method: "card" }] }));
+    expect(await db.service.settleAppointment("t1", "a1")).toEqual({ awarded: 10 });
   });
 
   it("a non-member earns nothing unless the salon auto-enrols, then joins with the welcome points", async () => {

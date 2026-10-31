@@ -113,11 +113,13 @@ export default function AppointmentSelector({
         endDate: dateTo,
       });
 
-      // Filter appointments that need payment
+      // Filter appointments that need payment. Cancelled and no-show visits
+      // are not charged (the server refuses them with a 409).
       const pendingPayment = (data as any[]).filter(
         (apt) =>
           apt.paymentStatus !== "paid" &&
-          apt.status !== "cancelled"
+          apt.status !== "cancelled" &&
+          apt.status !== "no_show"
       );
 
       setAppointments(pendingPayment);

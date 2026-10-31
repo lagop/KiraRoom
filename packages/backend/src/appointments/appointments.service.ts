@@ -52,6 +52,8 @@ import { normalizePhone, phoneKey } from "../common/phone";
 import { isReadOnlyStatus } from "../common/guards/read-only-tenant.guard";
 import type { OnlineBookingDto, StaffBookingDto } from "./dto/book-appointment.dto";
 import { UpdateAppointmentDto } from "./dto/update-appointment.dto";
+import type { UpdateAppointmentPaymentDto } from "./dto/update-appointment-payment.dto";
+import { appointmentTotalCents, assertVisitChargeable } from "../payments/appointment-payment";
 import { appointmentDeleteBlocker, deleteAppointmentRow } from "./appointment-delete";
 import { isForeignKeyViolation } from "../common/prisma/history-deletes";
 import {
@@ -1624,19 +1626,41 @@ export class AppointmentsService {
     return appointments.map((apt: any) => this.enrichAppointment(apt));
   }
 
+  /**
+   * `PATCH /appointments/:id/payment`: the owner or a manager correcting how
+   * an appointment stands. The till records real payments itself (POST
+   * /pos/checkout); this writes no payment, so it earns no points either --
+   * LoyaltyService.settleAppointment counts payments, not this flag.
+   */
   async updatePaymentStatus(
     user: any,
     id: string,
-    data: { status: string; amountPaid: number; paymentMethod: string },
+    data: UpdateAppointmentPaymentDto,
   ) {
+    // The controller already says so; checked here too, since a staff
+    // member used this to mark their own appointments paid for any amount.
+    if (user?.role !== "owner" && user?.role !== "admin") {
+      throw new ForbiddenException("Solo la dueña o un encargado pueden corregir el pago de una cita.");
+    }
     const appointment = await this.findOne(user, id);
+
+    // amountPaid is in cents, the unit of the column. There is no tip
+    // field: nothing above the appointment's total is accepted.
+    const total = appointmentTotalCents(appointment);
+    if (data.amountPaid > total) {
+      const euros = (c: number) => `${(c / 100).toFixed(2).replace(".", ",")} €`;
+      throw new BadRequestException(
+        `El importe pagado (${euros(data.amountPaid)}) no puede superar el total de la cita (${euros(total)}).`,
+      );
+    }
+    if (data.status === PaymentStatus.paid) assertVisitChargeable(appointment);
 
     const updatedAppointment = await this.prisma.appointment.update({
       where: { id },
       data: {
-        paymentStatus: data.status as PaymentStatus,
+        paymentStatus: data.status,
         amountPaid: data.amountPaid,
-        paymentMethod: data.paymentMethod,
+        ...(data.paymentMethod ? { paymentMethod: data.paymentMethod } : {}),
         updatedAt: new Date(),
       },
       include: {
@@ -1647,7 +1671,8 @@ export class AppointmentsService {
       },
     });
 
-    // Paid: points once the visit is also completed. Refunded: back they go.
+    // Refunded: the points go back. Paid: points only from recorded
+    // payments, once the visit is also completed.
     await this.loyaltyAfterStatus(updatedAppointment.tenantId, id);
 
     return this.enrichAppointment(updatedAppointment);

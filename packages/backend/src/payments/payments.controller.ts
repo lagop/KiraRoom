@@ -202,11 +202,13 @@ export class PaymentsController {
   @ApiOperation({ summary: "Get payments by client" })
   async getPaymentsByClient(
     @Req() req: any,
-    @Param("clientId") clientId: string,
+    @Param("clientId", ParseUUIDPipe) clientId: string,
   ) {
+    // (tenantId, clientId): the two were swapped, so the history filtered on
+    // the client's id as the salon and was always empty.
     return this.paymentsService.getPaymentsByClient(
-      clientId,
       req.user.tenantId,
+      clientId,
     );
   }
 
