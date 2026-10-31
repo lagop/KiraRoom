@@ -78,15 +78,16 @@ export class UpdateConsentFormDto {
 }
 
 /**
- * Body of the public `POST /consent/sign`. Was `any`; the service checks
- * the form and the client belong to the salon, and caps `responses`.
+ * Body of `POST /consent/sign`. The salon comes from the session, never
+ * from the body. A team member names the client (a signature taken in the
+ * salon) and types her name; a signed-in client signs for herself, so her
+ * id comes from the token and her name is the default signature. The
+ * service checks the form, client, appointment and service belong to the
+ * salon, and caps `responses`.
  */
 export class SignConsentDto {
-  @IsUUID()
-  tenantId!: string;
-
-  @IsUUID()
-  clientId!: string;
+  @IsOptional() @IsUUID()
+  clientId?: string;
 
   @IsUUID()
   formId!: string;
@@ -94,8 +95,8 @@ export class SignConsentDto {
   @IsOptional() @IsObject()
   responses?: Record<string, unknown>;
 
-  @IsString() @MinLength(2) @MaxLength(200)
-  signatureName!: string;
+  @IsOptional() @IsString() @MinLength(2) @MaxLength(200)
+  signatureName?: string;
 
   @IsOptional() @IsUUID()
   appointmentId?: string;

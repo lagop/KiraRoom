@@ -45,17 +45,23 @@ describe("consent bodies", () => {
     expect(await update({ name: "Nuevo nombre" })).toEqual({ name: "Nuevo nombre" });
   });
 
-  it("a public signature names ids, not filters, and a real signature", async () => {
+  it("a signature names ids, not filters, and a real signature; never the salon", async () => {
     const sign = bodyParser(ConsentController, "sign");
     const body = {
-      tenantId: uuid(1),
       clientId: uuid(2),
       formId: uuid(3),
       responses: { f_2: true },
       signatureName: "Ana López",
+      appointmentId: uuid(4),
+      serviceId: uuid(5),
     };
-    expect(await sign(body)).toEqual(body);
+    expect({ ...(await sign(body)) }).toEqual(body);
+    // The salon is the session's: a tenantId in the body is dropped.
+    expect((await sign({ ...body, tenantId: uuid(1) })).tenantId).toBeUndefined();
+    // A signed-in client names neither herself nor a signature.
+    expect({ ...(await sign({ formId: uuid(3) })) }).toEqual({ formId: uuid(3) });
     await expect(sign({ ...body, clientId: { not: "" } })).rejects.toBeDefined();
+    await expect(sign({ ...body, appointmentId: "apt-1" })).rejects.toBeDefined();
     await expect(sign({ ...body, signatureName: "A" })).rejects.toBeDefined();
     await expect(sign({ ...body, responses: "yes" })).rejects.toBeDefined();
   });

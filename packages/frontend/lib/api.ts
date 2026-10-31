@@ -4762,12 +4762,16 @@ class ApiClient implements ApiClientInterface {
   async deleteConsentForm(id: string): Promise<{ deleted: boolean }> {
     return this.request(`/consent-forms/${id}`, { method: "DELETE" });
   }
+  /**
+   * Records a signed consent; needs a session. The salon comes from the
+   * session. From the panel, name the client and the name she signed with;
+   * a signed-in client signs for herself (no clientId, her name by default).
+   */
   async signConsent(input: {
-    tenantId: string;
-    clientId: string;
+    clientId?: string;
     formId: string;
     responses: Record<string, unknown>;
-    signatureName: string;
+    signatureName?: string;
     appointmentId?: string;
     serviceId?: string;
   }): Promise<Consent> {
