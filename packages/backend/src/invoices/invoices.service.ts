@@ -10,7 +10,7 @@ import { InvoiceCalculator } from "./invoice-calculator.service";
 import { FiscalService } from "./fiscal/fiscal.service";
 import { AccountingService, cancelNeedsMirror } from "../accounting/accounting.service";
 import { FiscalMode, InvoiceSource, InvoiceStatus, Prisma } from "@prisma/client";
-import { appointmentInvoiceLines, SALON_PRICES_INCLUDE_TAX } from "./appointment-invoice-pricing";
+import { appointmentInvoiceLines } from "./appointment-invoice-pricing";
 import { addonServices } from "../appointments/visit-sync";
 
 interface CreateInvoiceInput {
@@ -352,8 +352,6 @@ export class InvoiceService {
       quantity: Number(it.quantity),
       unitPriceCents: Math.round(Number(it.unitPrice) * 100),
       taxRate: Number(it.product?.taxRate ?? defaultTaxRate),
-      // A till price is final, like a service price (SALON_PRICES_INCLUDE_TAX).
-      taxIncluded: SALON_PRICES_INCLUDE_TAX,
       productId: it.productId,
     }));
 
