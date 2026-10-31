@@ -17,6 +17,8 @@ const API_URL = process.env.API_URL ?? "http://localhost:3001/api/v1";
 
 export default defineConfig({
   testDir: "./e2e",
+  // Its own config (npm run test:e2e): e2e/booking/playwright.config.ts.
+  testIgnore: "booking/**",
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,

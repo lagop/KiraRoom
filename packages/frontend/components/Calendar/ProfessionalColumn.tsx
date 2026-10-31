@@ -98,6 +98,7 @@ export const ProfessionalColumn: React.FC<ProfessionalColumnProps> = ({
   return (
     <div
       ref={setNodeRef}
+      data-test="professional-column"
       className="flex-1 border-r last:border-r-0 relative"
       style={{ minWidth: Math.max(COLUMN_MIN_WIDTH, maxLanes * LANE_MIN_WIDTH) }}
     >
