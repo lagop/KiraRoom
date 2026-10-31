@@ -770,6 +770,7 @@ export default function SalonBookingPage({
 
                 <select
                   id="serviceId"
+                  data-test="booking-service"
                   name="serviceId"
                   value={bookingData.serviceId}
                   onChange={handleInputChange}
@@ -857,6 +858,7 @@ export default function SalonBookingPage({
                 <input
                   type="date"
                   id="date"
+                  data-test="booking-date"
                   name="date"
                   value={bookingData.date}
                   onChange={handleDateChange}
