@@ -15,6 +15,7 @@ import { Professional, UserRole } from "@prisma/client";
 import * as bcrypt from "bcryptjs";
 import { assertProfessionalSlot } from "../../professionals/professional-limit";
 import { commissionRateUpdate } from "../../professionals/optional-fields";
+import { CLIENT_POS_SELECT } from "../../clients/client-select";
 
 @Injectable()
 export class AdminProfessionalsService {
@@ -152,7 +153,7 @@ export class AdminProfessionalsService {
         appointments: {
           include: {
             service: true,
-            client: true,
+            client: { select: CLIENT_POS_SELECT },
           },
           orderBy: { scheduledDate: "desc" },
           take: 50,

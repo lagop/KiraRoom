@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { ArrowLeft, Save, Loader2, AlertCircle } from 'lucide-react';
 import Link from 'next/link';
 import apiClient from '@/lib/api';
+import type { CreateClientPayload } from '@/lib/client-form';
 
 interface ClientFormData {
   firstName: string;
@@ -70,7 +71,7 @@ export function ClientForm({ initialData, clientId }: ClientFormProps) {
         }
       }
       
-      const data: Record<string, any> = {
+      const data: CreateClientPayload & { tenantId?: string } = {
         tenantId,
         firstName: formData.firstName,
         lastName: formData.lastName,
@@ -88,9 +89,9 @@ export function ClientForm({ initialData, clientId }: ClientFormProps) {
       }
 
       if (isEdit && clientId) {
-        await (apiClient as any).updateClient(clientId, data);
+        await apiClient.updateClient(clientId, data);
       } else {
-        await (apiClient as any).createClient(data);
+        await apiClient.createClient(data);
       }
       
       setSuccess(true);
