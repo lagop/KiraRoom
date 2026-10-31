@@ -21,6 +21,8 @@ import {
   sendStatusChange,
   serverMessage,
   statusActions,
+  buildStaffBookingPayload,
+  staffOwnCatalog,
   drawerTargetFromQuery,
   calculateTotalDuration,
   formatDateString,
@@ -358,6 +360,113 @@ check("not an error, no description", serverMessage("boom"), undefined);
     console.log("  - server table not found; skipped the comparison");
   }
 }
+// ----- staffOwnCatalog: what a professional books with -----
+
+console.log("\n=== staffOwnCatalog ===");
+{
+  const pros = [
+    { id: "p-ana", userId: "u-ana", firstName: "Ana", services: [{ serviceId: "cut" }] },
+    { id: "p-bea", userId: "u-bea", firstName: "Bea", services: [{ serviceId: "colour" }] },
+    { id: "p-eva", userId: null, firstName: "Eva", services: [] },
+  ];
+  const svcs = [{ id: "cut" }, { id: "colour" }, { id: "nails" }];
+  const own = staffOwnCatalog("u-ana", pros, svcs);
+  check("finds the caller's professional by their login", own?.me.id, "p-ana");
+  check("only themself to book on", own?.professionals.map((p) => p.id), ["p-ana"]);
+  check("only the services they perform", own?.services.map((s) => s.id), ["cut"]);
+  check(
+    "every service when none is linked to them",
+    staffOwnCatalog("u-eva", [{ ...pros[2], userId: "u-eva" }], svcs)?.services.length,
+    3,
+  );
+  check("null for an account with no professional", staffOwnCatalog("u-nobody", pros, svcs), null);
+  check("null without a user id", staffOwnCatalog(undefined, pros, svcs), null);
+}
+
+// ----- buildStaffBookingPayload: one request for the whole visit -----
+
+console.log("\n=== buildStaffBookingPayload ===");
+{
+  const form = {
+    clientId: "c1",
+    serviceId: "",
+    professionalId: "",
+    date: "2026-12-07",
+    time: "10:00",
+    notes: "",
+    selectedServices: [] as Array<{ serviceId: string; professionalId?: string; isParallel?: boolean }>,
+    depositRequired: false,
+    depositAmount: 0,
+  };
+
+  check(
+    "a professional's single service: their own professional, no commission",
+    buildStaffBookingPayload({
+      ...form,
+      role: "staff",
+      ownProfessionalId: "p-ana",
+      selectedServices: [{ serviceId: "cut", professionalId: "p-ana" }],
+      commissionRate: 100,
+    }),
+    { clientId: "c1", serviceId: "cut", professionalId: "p-ana", scheduledDate: "2026-12-07", scheduledTime: "10:00" },
+  );
+
+  const visit = buildStaffBookingPayload({
+    ...form,
+    role: "owner",
+    selectedServices: [
+      { serviceId: "colour", professionalId: "p-bea" },
+      { serviceId: "cut" },
+      { serviceId: "nails", isParallel: true },
+    ],
+    autoAssign: { cut: "p-ana" },
+  });
+  check("several services go in the same request, in order", visit?.services, [
+    { serviceId: "colour", professionalId: "p-bea", isParallel: false },
+    { serviceId: "cut", professionalId: "p-ana", isParallel: false },
+    { serviceId: "nails", professionalId: "p-bea", isParallel: true },
+  ]);
+  check("the appointment is the first service's", [visit?.serviceId, visit?.professionalId], ["colour", "p-bea"]);
+  checkTrue("no timing sent: the server times the rows", !JSON.stringify(visit).includes("scheduledStart"));
+
+  check(
+    "the commission is sent only when an owner typed one",
+    [
+      buildStaffBookingPayload({ ...form, role: "owner", serviceId: "cut", professionalId: "p-ana" })?.commissionRate,
+      buildStaffBookingPayload({ ...form, role: "owner", serviceId: "cut", professionalId: "p-ana", commissionRate: 0 })?.commissionRate,
+      buildStaffBookingPayload({ ...form, role: "admin", serviceId: "cut", professionalId: "p-ana", commissionRate: 35 })?.commissionRate,
+    ],
+    [undefined, 0, 35],
+  );
+  check(
+    "the deposit in cents, only when asked for",
+    buildStaffBookingPayload({ ...form, role: "owner", serviceId: "cut", professionalId: "p-ana", depositRequired: true, depositAmount: 12.5 })?.depositAmount,
+    1250,
+  );
+  check(
+    "a confirmed booking outside hours says so",
+    buildStaffBookingPayload({ ...form, role: "owner", serviceId: "cut", professionalId: "p-ana", allowOutsideHours: true })?.allowOutsideHours,
+    true,
+  );
+  check(
+    "an owner has to choose a professional",
+    buildStaffBookingPayload({ ...form, role: "owner", serviceId: "cut" }),
+    null,
+  );
+  check("a client, a service, a day and a time are needed", [
+    buildStaffBookingPayload({ ...form, role: "staff", clientId: "", serviceId: "cut" }),
+    buildStaffBookingPayload({ ...form, role: "staff" }),
+    buildStaffBookingPayload({ ...form, role: "staff", serviceId: "cut", time: "" }),
+  ], [null, null, null]);
+}
+checkTrue(
+  "the drawer no longer adds the services in a second request",
+  !fs.readFileSync(path.join(__dirname, "appointment-drawer", "appointment-drawer.tsx"), "utf8").includes("bulkCreateAppointmentServices"),
+);
+checkTrue(
+  "the drawer no longer reads /admin/professionals for a professional's services",
+  !fs.readFileSync(path.join(__dirname, "appointment-drawer", "hooks", "useAppointmentCatalog.ts"), "utf8").includes("getProfessional("),
+);
 
 // ----- Summary -----
 

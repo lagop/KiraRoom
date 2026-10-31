@@ -35,8 +35,9 @@ import {
   DrawerDescription,
 } from "@/components/ui/drawer";
 import { Button } from "@/src/components/ui/Button";
+import { ConfirmDialog } from "@/src/components/ui/ConfirmDialog";
 //import apiClient from '@/lib/api';
-import apiClient from "@/lib/api"
+import apiClient, { ApiError } from "@/lib/api"
 import { useTranslations } from "@/lib/use-translation";
 import { useToast } from "@/components/ui/use-toast";
 import { ServiceTimeline } from "@/components/Calendar/ServiceTimeline";
@@ -58,6 +59,7 @@ import {
 // from Node. The drawer bridges these into React state.
 import {
   addMinutesToTime,
+  buildStaffBookingPayload,
   calculateTotalDuration,
   formatDateString,
   formatDateTimeString,
@@ -118,6 +120,10 @@ export function AppointmentDrawer({
   const [editMode, setEditMode] = useState(false);
   const [notesEditMode, setNotesEditMode] = useState(false);
   const [isCreatingNew, setIsCreatingNew] = useState(false);
+  // The server's reason when a new appointment is in the past or outside
+  // the hours: an owner or manager may confirm it (a walk-in, a visit
+  // entered afterwards).
+  const [outsideHoursReason, setOutsideHoursReason] = useState<string | null>(null);
 
   // State management for edit mode (activity expanded flag — moves to
 
@@ -323,101 +329,40 @@ useEffect(() => {
     professionals,
   ]);
 
-  const handleCreateAppointment = async () => {
-    const hasMultipleServices = selectedServices.length > 0;
-
-    // Resolve auto-assigned services using the same mapping the scheduler picked
-    const resolvedSelectedServices = selectedServices.map((svc) => {
-      if (svc.professionalId) return svc;
-      const resolved = autoAssignMap[svc.serviceId];
-      return { ...svc, professionalId: resolved || "" };
+  const handleCreateAppointment = async (allowOutsideHours = false) => {
+    // One request for the whole visit: the server creates the appointment
+    // and its services together, times them, and checks the agenda. It used
+    // to be two calls, and a failed second one left a half-made appointment
+    // that a retry booked twice.
+    const payload = buildStaffBookingPayload({
+      role: currentUser?.role,
+      ownProfessionalId: currentUser?.professionalId,
+      clientId: newAppointment.clientId,
+      serviceId: newAppointment.serviceId,
+      professionalId: newAppointment.professionalId,
+      date: newAppointment.date,
+      time: newAppointment.time,
+      notes: newAppointment.notes,
+      selectedServices,
+      autoAssign: autoAssignMap,
+      depositRequired: newAppointment.depositRequired,
+      depositAmount: newAppointment.depositAmount,
+      commissionRate: newAppointment.commissionRate,
+      allowOutsideHours,
     });
-
-    const serviceId = hasMultipleServices
-      ? resolvedSelectedServices[0].serviceId
-      : newAppointment.serviceId;
-
-    const selectedProfessionalId = hasMultipleServices
-      ? resolvedSelectedServices.find((s) => s.professionalId)?.professionalId ||
-        newAppointment.professionalId
-      : newAppointment.professionalId;
-
-    if (
-      !newAppointment.clientId ||
-      !serviceId ||
-      (!selectedSuggestion && (!newAppointment.date || !newAppointment.time || !selectedProfessionalId))
-    ) {
+    if (!payload) {
       toast({ title: t("appointments.drawer.selectSuggestionOrDate"), variant: "destructive" });
       return;
     }
 
     setUpdating(true);
     try {
-      const totalPrice = getTotalPrice(selectedServices, services, newAppointment.serviceId);
-      const totalDuration = getTotalDuration(selectedServices, services, newAppointment.serviceId);
-
-      const appointmentData = {
-        clientId: newAppointment.clientId,
-        serviceId: serviceId,
-        professionalId: selectedProfessionalId,
-        scheduledDate: newAppointment.date,
-        scheduledTime: newAppointment.time,
-        notes: newAppointment.notes,
-        depositRequired: newAppointment.depositRequired,
-        depositAmount: newAppointment.depositRequired
-          ? Math.round(newAppointment.depositAmount * 100)
-          : undefined,
-        price: Math.round(totalPrice * 100), // Convert to cents like POS
-        duration: totalDuration,
-        // Commission rate (admin/owner only - only send if set)
-        ...(newAppointment.commissionRate !== undefined &&
-          newAppointment.commissionRate !== null && {
-            commissionRate: newAppointment.commissionRate,
-          }),
-      };
-
       // Every dashboard role books through /appointments/staff: the salon
       // comes from the token, and the salon may book outside the online grid.
       // The public POST /appointments is for clients and checks the slot.
-      const appointment = await apiClient.createAppointmentByStaff(appointmentData);
+      await apiClient.createAppointmentByStaff(payload);
 
-      // If multiple services, create them via bulk API
-      if (hasMultipleServices) {
-        // The appointment's start on the salon's clock, as the server reads
-        // its day and time (the browser's clock put every service an hour
-        // off from the Canaries on Madrid time).
-        const appointmentStart = salonInstant(newAppointment.date, newAppointment.time, timezone);
-        let currentTime = appointmentStart.getTime();
-
-        const servicesToCreate = resolvedSelectedServices.map((sel, index) => {
-          const service = services.find((s) => s.id === sel.serviceId);
-          const duration = service?.duration || 0;
-
-          // Calculate start and end times
-          const startDateTime = new Date(currentTime);
-          const endDateTime = new Date(currentTime + duration * 60000);
-
-          // Only advance current time for serial services
-          if (!sel.isParallel) {
-            currentTime += duration * 60000;
-          }
-
-          return {
-            serviceId: sel.serviceId,
-            professionalId: sel.professionalId || newAppointment.professionalId,
-            isParallel: sel.isParallel,
-            order: index,
-            scheduledStart: startDateTime.toISOString(),
-            scheduledEnd: endDateTime.toISOString(),
-          };
-        });
-
-        await apiClient.bulkCreateAppointmentServices(
-          appointment.id,
-          servicesToCreate,
-        );
-      }
-
+      setOutsideHoursReason(null);
       // Reset form
       setNewAppointment({
         clientId: "",
@@ -428,7 +373,7 @@ useEffect(() => {
         notes: "",
         depositRequired: false,
         depositAmount: 0,
-        commissionRate: 0,
+        commissionRate: undefined,
       });
       setSelectedServices([]);
       setAutoAssignMap({});
@@ -448,7 +393,18 @@ useEffect(() => {
       }
     } catch (error) {
       console.error("Error creating appointment:", error);
-      toast({ title: t("appointments.drawer.failedToCreate"), variant: "destructive" });
+      const manager = currentUser?.role === "owner" || currentUser?.role === "admin";
+      if (error instanceof ApiError && error.code === "OUTSIDE_HOURS" && manager && !allowOutsideHours) {
+        setOutsideHoursReason(error.message);
+        return;
+      }
+      setOutsideHoursReason(null);
+      // The server says why (taken slot, outside the hours, not your agenda).
+      toast({
+        title: t("appointments.drawer.failedToCreate"),
+        description: error instanceof ApiError ? error.message : undefined,
+        variant: "destructive",
+      });
     } finally {
       setUpdating(false);
     }
@@ -1130,6 +1086,7 @@ useEffect(() => {
                 </div>
 
                 {/* Commission Rate (Admin/Owner only) */}
+                {currentUser?.role !== "staff" && (
                 <div className="mt-4">
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     {t("appointments.commission_rate")} (%)
@@ -1138,11 +1095,13 @@ useEffect(() => {
                     type="number"
                     min="0"
                     max="100"
-                    value={newAppointment.commissionRate}
+                    value={newAppointment.commissionRate ?? ""}
                     onChange={(e) =>
                       setNewAppointment({
                         ...newAppointment,
-                        commissionRate: parseInt(e.target.value) || 0,
+                        // Empty: the professional's or the service's default.
+                        commissionRate:
+                          e.target.value === "" ? undefined : Number(e.target.value),
                       })
                     }
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
@@ -1152,6 +1111,7 @@ useEffect(() => {
                     {t("appointments.commission_rate_description")}
                   </p>
                 </div>
+                )}
               </div>
 
               {/* Actions */}
@@ -1165,7 +1125,7 @@ useEffect(() => {
                 </button>
                 <button
                   type="button"
-                  onClick={handleCreateAppointment}
+                  onClick={() => handleCreateAppointment()}
                   disabled={updating}
                   className="inline-flex items-center px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
                 >
@@ -1920,6 +1880,22 @@ useEffect(() => {
             </div>
           )}
         </div>
+        {/* Inside the drawer: the drawer is modal, so a dialog outside it
+            could not be clicked. */}
+        <ConfirmDialog
+          open={outsideHoursReason !== null}
+          title={t("appointments.drawer.outsideHoursTitle")}
+          description={
+            <>
+              {outsideHoursReason}{" "}
+              {t("appointments.drawer.outsideHoursDescription")}
+            </>
+          }
+          confirmLabel={t("appointments.drawer.outsideHoursConfirm")}
+          loading={updating}
+          onCancel={() => setOutsideHoursReason(null)}
+          onConfirm={() => handleCreateAppointment(true)}
+        />
       </DrawerContent>
     </Drawer>
   );

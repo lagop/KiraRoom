@@ -38,7 +38,8 @@ export interface NewAppointmentForm {
   notes: string;
   depositRequired: boolean;
   depositAmount: number;
-  commissionRate: number;
+  /** Unset: the professional's or the service's default applies. */
+  commissionRate?: number;
 }
 
 export interface DateTimePreference {
@@ -89,7 +90,7 @@ const EMPTY_NEW_APPOINTMENT: NewAppointmentForm = {
   notes: "",
   depositRequired: false,
   depositAmount: 0,
-  commissionRate: 0,
+  commissionRate: undefined,
 };
 
 const EMPTY_DATE_TIME_PREFERENCE: DateTimePreference = {
