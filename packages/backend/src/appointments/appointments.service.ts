@@ -610,6 +610,30 @@ export class AppointmentsService {
         ? new Date(createAppointmentDto.scheduledDate)
         : createAppointmentDto.scheduledDate;
 
+    // A visit of several services costs all of them (visit-totals.ts); it
+    // was charged its first service only.
+    let priceCents = Math.round(Number(service.price) * 100);
+    if (visit.services?.length) {
+      const priced: Array<{ id: string; duration: number; price: unknown }> = await db.service.findMany({
+        where: { tenantId, id: { in: [...new Set(visit.services.map((r) => r.serviceId))] } },
+        select: { id: true, duration: true, price: true },
+      });
+      priceCents = visitTotals({
+        start: visit.services[0].scheduledStart,
+        professionalId: professional.id,
+        mainService: service,
+        rows: visit.services.map((r, i) => ({
+          id: String(i),
+          serviceId: r.serviceId,
+          professionalId: r.professionalId,
+          scheduledStart: r.scheduledStart,
+          scheduledEnd: r.scheduledEnd,
+          isParallel: r.isParallel,
+          service: priced.find((p) => p.id === r.serviceId) ?? null,
+        })),
+      }).totalCents;
+    }
+
     // Create appointment
     const dto = createAppointmentDto as any;
     const appointment = await db.appointment.create({
@@ -630,8 +654,8 @@ export class AppointmentsService {
         duration,
         endTime: endTime,
         status: AppointmentStatus.pending,
-        price: service.price,
-        totalAmount: Math.round(Number(service.price) * 100), // Store in cents
+        price: priceCents / 100,
+        totalAmount: priceCents, // Store in cents
         currency: service.currency,
         paymentStatus: PaymentStatus.pending,
         notes: dto.notes || null,

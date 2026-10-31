@@ -1,7 +1,7 @@
 import { ConflictException } from "@nestjs/common";
 import { AppointmentsService } from "./appointments.service";
 import { AppointmentServicesService } from "./appointment-services.service";
-import { assertCanReschedule } from "./reschedule-check";
+import { SCHEDULE_CONFLICT, assertCanBook, assertCanReschedule } from "./reschedule-check";
 import { SalonCopilotToolsService } from "../assistant/tools/salon-copilot-tools";
 
 /**
@@ -583,5 +583,14 @@ describe("lists", () => {
     expect(prisma.appointment.findMany.mock.calls[0][0].where.scheduledDate).toBeUndefined();
     await svc.findAll(owner, { startDate: "2020-01-01" as any });
     expect(prisma.appointment.findMany.mock.calls[1][0].where.scheduledDate).toEqual({ gte: new Date("2020-01-01") });
+  });
+});
+
+describe("a new booking's check counts other visits' services too", () => {
+  it("booking Bea on top of the rinse she does in Ana's visit is a schedule conflict", async () => {
+    const prisma = salonReads([colourWithRinse()]);
+    await expect(
+      assertCanBook(prisma as any, { tenantId: TENANT, professionalId: "bea", day: DAY, time: "11:00", durationMinutes: 30 }),
+    ).rejects.toMatchObject({ response: { code: SCHEDULE_CONFLICT, message: "Bea ya tiene una cita con Lucía Pérez a las 11:00." } });
   });
 });

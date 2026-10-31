@@ -10,7 +10,8 @@ import { InvoiceCalculator } from "./invoice-calculator.service";
 import { FiscalService } from "./fiscal/fiscal.service";
 import { AccountingService, cancelNeedsMirror } from "../accounting/accounting.service";
 import { FiscalMode, InvoiceSource, InvoiceStatus, Prisma } from "@prisma/client";
-import { appointmentInvoiceLine } from "./appointment-invoice-pricing";
+import { appointmentInvoiceLines } from "./appointment-invoice-pricing";
+import { addonServices } from "../appointments/visit-sync";
 
 interface CreateInvoiceInput {
   tenantId: string;
@@ -391,6 +392,8 @@ export class InvoiceService {
         client: true,
         service: true,
         tenant: { select: { fiscalSettings: true } },
+        // Every service of the visit, for one line each.
+        services: { include: { service: true }, orderBy: [{ order: "asc" }, { createdAt: "asc" }, { id: "asc" }] },
       },
     });
     if (!appt) return null;
@@ -411,7 +414,10 @@ export class InvoiceService {
         recipientName: appt.client
           ? `${appt.client.firstName} ${appt.client.lastName}`
           : appt.tenantId,
-        lines: [appointmentInvoiceLine(appt, settings)],
+        lines: appointmentInvoiceLines(
+          { ...appt, addons: await addonServices(this.prisma, appt.tenantId, (appt as any).addons) },
+          settings,
+        ),
         notes: `Generada desde cita ${appt.id}`,
         source: { type: InvoiceSource.appointment, id: appt.id },
       });
