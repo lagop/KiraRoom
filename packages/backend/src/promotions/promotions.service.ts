@@ -1,42 +1,14 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { CreatePromotionDto, UpdatePromotionDto, ApplyPromotionDto } from './dto/promotion.dto';
 
-export interface CreatePromotionDto {
-  name: string;
-  description?: string;
-  code: string;
-  type: 'PERCENTAGE' | 'FIXED' | 'BUY_X_GET_Y';
-  value: number;
-  minOrderValue?: number;
-  maxUses?: number;
-  maxUsesPerClient?: number;
-  startDate: string;
-  endDate?: string;
-  serviceIds?: string[];
-  productIds?: string[];
-}
+export { CreatePromotionDto, UpdatePromotionDto, ApplyPromotionDto };
 
-export interface UpdatePromotionDto {
-  name?: string;
-  description?: string;
-  type?: 'PERCENTAGE' | 'FIXED' | 'BUY_X_GET_Y';
-  value?: number;
-  minOrderValue?: number;
-  maxUses?: number;
-  maxUsesPerClient?: number;
-  startDate?: string;
-  endDate?: string;
-  isActive?: boolean;
-  serviceIds?: string[];
-  productIds?: string[];
-}
-
-export interface ApplyPromotionDto {
-  code: string;
-  clientId: string;
-  orderValue: number;
-  serviceIds?: string[];
-  productIds?: string[];
+/** A percentage over 100 would pay the client to come. */
+function assertValue(type: string, value: number | undefined) {
+  if (type === 'PERCENTAGE' && value !== undefined && value !== null && Number(value) > 100) {
+    throw new BadRequestException('A percentage discount cannot exceed 100');
+  }
 }
 
 @Injectable()
@@ -47,6 +19,8 @@ export class PromotionsService {
    * Create a new promotion
    */
   async create(tenantId: string, dto: CreatePromotionDto) {
+    assertValue(dto.type, dto.value);
+
     // Check if code already exists for this tenant
     const existing = await this.prisma.promotion.findFirst({
       where: { 
@@ -113,6 +87,9 @@ export class PromotionsService {
     if (!promotion) {
       throw new NotFoundException('Promotion not found');
     }
+    if (dto.type !== undefined || dto.value !== undefined) {
+      assertValue(dto.type ?? promotion.type, dto.value ?? Number(promotion.value));
+    }
 
     return this.prisma.promotion.update({
       where: { id },
@@ -161,6 +138,15 @@ export class PromotionsService {
 
     if (!promotion) {
       throw new BadRequestException('Invalid promotion code');
+    }
+
+    // The usage is recorded against this client: it must be one of the salon's.
+    const client = await this.prisma.client.findFirst({
+      where: { id: dto.clientId, tenantId },
+      select: { id: true },
+    });
+    if (!client) {
+      throw new NotFoundException('Client not found');
     }
 
     if (!promotion.isActive) {
