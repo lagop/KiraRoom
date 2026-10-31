@@ -46,6 +46,8 @@ function build({
   const created: any[] = [];
   const locks: string[] = [];
   const prisma: any = {
+    // No time off recorded (time-off-query.ts).
+    timeOff: { findMany: jest.fn(async () => []) },
     // Staff bookings read and write through the transaction; online ones
     // only take the lock in it.
     $transaction: jest.fn(async (fn: any) =>

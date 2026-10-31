@@ -138,6 +138,7 @@ model Tenant {
   customDomain                  CustomDomain?
   whatsappCampaigns             WhatsAppCampaign[]
   invites                       TenantInvite[]
+  timeOff                       TimeOff[]
 
   /// Bug reports submitted from the in-app "Ã°Å¸ÂÅ¾ Report a bug" widget.
   /// Anonymous reports (no user, no tenant) are stored with both FKs null.
@@ -579,6 +580,7 @@ model Professional {
   appointments        Appointment[]
   appointmentServices AppointmentService[]
   locations           ProfessionalLocation[]
+  timeOff             TimeOff[]
   user                User?                  @relation(fields: [userId], references: [id], onDelete: SetNull)
   tenant              Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -3321,4 +3323,47 @@ model TenantLlmUsage {
   @@unique([tenantId, period, provider, model])
   @@index([period])
   @@map("tenant_llm_usage")
+}
+
+/// Time a professional is away (vacation, a day off, sick leave, a few hours
+/// for an appointment of their own), or, with no professional, days or hours
+/// the whole salon is closed (bank holidays, closures).
+///
+/// Dates are the salon's calendar days and times its clock, the same way an
+/// appointment's scheduledDate + scheduledTime are: no timezone math. Both
+/// times null means all day; set, the block is those hours of one day.
+/// Availability, booking, moves, the calendar and the receptionist read it
+/// (time-off/time-off-rules.ts). Nothing booked is cancelled by it: the
+/// salon is shown the clashes and decides.
+model TimeOff {
+  id             String        @id @default(uuid())
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  tenantId       String
+  /// Null: the whole salon is closed (kind is then always closure).
+  professionalId String?
+  kind           TimeOffKind
+  startDate      DateTime      @db.Date
+  /// Inclusive.
+  endDate        DateTime      @db.Date
+  /// "HH:MM"; with endTime, only on a single day.
+  startTime      String?
+  endTime        String?
+  note           String?       @db.VarChar(200)
+  /// Who recorded it (a user id). Not a relation: the record outlives the account.
+  createdById    String?
+  tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  professional   Professional? @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, startDate, endDate])
+  @@index([professionalId])
+  @@map("time_off")
+}
+
+enum TimeOffKind {
+  vacation
+  day_off
+  sick_leave
+  closure
+  other
 }

@@ -24,6 +24,7 @@ import { WaitListModule } from "./wait-list/wait-list.module";
 import { UpsellModule } from "./upsell/upsell.module";
 import { MessageBundlesModule } from "./message-bundles/message-bundles.module";
 import { ProfessionalsModule } from "./professionals/professionals.module";
+import { TimeOffModule } from "./time-off/time-off.module";
 import { PublicViewerModule } from "./common/tenancy/public-viewer.service";
 import { PaymentsModule } from "./payments/payments.module";
 import { PosModule } from "./pos/pos.module";
@@ -166,6 +167,7 @@ import { PublicModule } from "./public-site/public.module";
     MessageBundlesModule,
     // Professionals module
     ProfessionalsModule,
+    TimeOffModule,
     PublicViewerModule,
 
     // Payments module

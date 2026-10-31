@@ -62,6 +62,8 @@ function build({
   const locks: string[] = [];
 
   const reads = {
+    // No time off recorded (time-off-query.ts).
+    timeOff: { findMany: jest.fn(async () => []) },
     tenant: {
       findUnique: jest.fn(async () => ({
         timezone: "Europe/Madrid",

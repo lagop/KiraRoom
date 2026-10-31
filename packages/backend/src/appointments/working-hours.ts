@@ -81,7 +81,7 @@ export interface ShiftWindow {
  * outside every shift.
  *
  * Windows in, windows out, so that blocked intervals (time off, salon
- * closures) can later be taken out of the result the same way.
+ * closures) are taken out of the result the same way (subtractWindows).
  */
 export function mergeWindows(windows: ReadonlyArray<ShiftWindow>): ShiftWindow[] {
   const sorted = [...windows].sort(
@@ -97,6 +97,56 @@ export function mergeWindows(windows: ReadonlyArray<ShiftWindow>): ShiftWindow[]
     }
   }
   return out;
+}
+
+/**
+ * `shifts` with every `blocked` stretch taken out: what is left of a day once
+ * time off or a salon closure is removed from it. Sorted and merged like
+ * mergeWindows; a shift cut in two by a block becomes two windows, so
+ * fitsInShifts refuses a service that would run across the block.
+ */
+export function subtractWindows(
+  shifts: ReadonlyArray<ShiftWindow>,
+  blocked: ReadonlyArray<ShiftWindow>,
+): ShiftWindow[] {
+  const cuts = mergeWindows(blocked.filter((b) => b.endMinutes > b.startMinutes));
+  const out: ShiftWindow[] = [];
+  for (const shift of mergeWindows(shifts)) {
+    let start = shift.startMinutes;
+    for (const cut of cuts) {
+      if (cut.endMinutes <= start || cut.startMinutes >= shift.endMinutes) continue;
+      if (cut.startMinutes > start) out.push({ startMinutes: start, endMinutes: cut.startMinutes });
+      start = Math.max(start, cut.endMinutes);
+    }
+    if (start < shift.endMinutes) out.push({ startMinutes: start, endMinutes: shift.endMinutes });
+  }
+  return out;
+}
+
+/**
+ * The candidate start times (minutes) availability checks for a day: every
+ * `step` from the salon's `base` window, as before, plus every window someone
+ * can work in -- its start, then the `step` marks of the clock inside it.
+ *
+ * The grid used to be the salon's opening hours or 09:00–20:00 alone, so a
+ * shift from 20:00 to 22:00 offered nothing, and one starting at 10:15 never
+ * offered 10:15 (10:00 was outside it, 10:30 the first slot). Whether a
+ * candidate is bookable is still decided by the caller (fitsInShifts, busy
+ * time); this only decides what is asked.
+ */
+export function candidateStarts(
+  base: ShiftWindow,
+  windows: ReadonlyArray<ShiftWindow>,
+  step = 30,
+): number[] {
+  const starts = new Set<number>();
+  for (let m = base.startMinutes; m + step <= base.endMinutes; m += step) starts.add(m);
+  for (const w of windows) {
+    if (w.endMinutes <= w.startMinutes) continue;
+    starts.add(w.startMinutes);
+    for (let m = Math.ceil(w.startMinutes / step) * step; m < w.endMinutes; m += step) starts.add(m);
+  }
+  return [...starts].filter((m) => m >= 0 && m < 24 * 60).sort((a, b) => a - b);
 }
 
 /** The valid shifts among `entries` on weekday `day` ("monday"...), merged. */

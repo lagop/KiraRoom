@@ -87,6 +87,8 @@ describe("rescheduleProblem", () => {
 
 function prismaWith(opts: { others?: any[]; workingHours?: unknown; openingHours?: unknown }) {
   return {
+    // No time off recorded (time-off-query.ts).
+    timeOff: { findMany: jest.fn(async () => []) },
     tenant: { findUnique: jest.fn(async () => ({ openingHours: opts.openingHours ?? {}, timezone: "Europe/Madrid" })) },
     professional: { findFirst: jest.fn(async () => ({ firstName: "Ana", lastName: "Prueba", workingHours: opts.workingHours ?? MON_9_TO_17 })) },
     appointment: { findMany: jest.fn(async () => opts.others ?? []) },

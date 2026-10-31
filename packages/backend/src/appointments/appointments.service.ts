@@ -10,10 +10,16 @@ import {
 } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import {
+  ShiftWindow,
+  candidateStarts,
+  clockOf as clockOfMinutes,
   workingWindowsFor,
   fitsInShifts,
   minutesOf,
+  subtractWindows,
 } from "./working-hours";
+import { availableWindows, dayBlocks, salonClosedOn } from "../time-off/time-off-rules";
+import { timeOffBetween } from "../time-off/time-off-query";
 import { ProductEventsService, PRODUCT_EVENTS } from "../common/telemetry/product-events.service";
 import {
   AppointmentStatus,
@@ -2481,20 +2487,42 @@ export class AppointmentsService {
       serviceRow = service as any;
     }
 
-    // Generate time slots for the day using the tenant's configured
-    // working hours. Previously this was hardcoded 9:00–18:00, which
-    // made the suggestion engine miss every appointment past 17:30
-    // regardless of the salon's actual closing time.
+    const dateString = date.toISOString().split('T')[0];
+
+    // Time off and closures (time-off-rules.ts). A day the whole salon is
+    // closed has nothing to offer, whoever is asked for; otherwise each
+    // professional's shifts lose their own blocks and the salon's partial
+    // closures, and a professional away all day has no shifts left.
+    const timeOff = await timeOffBetween(this.prisma as any, tenantId, dateString);
+    if (salonClosedOn(timeOff, dateString)) return [];
+    const salonBlocked = dayBlocks(timeOff, dateString, null);
+    const windowsOf = (p: { id: string; workingHours?: unknown }) =>
+      availableWindows(workingWindowsFor(p.workingHours, date), dayBlocks(timeOff, dateString, p.id));
+    const relevantRows: Array<{ id: string; workingHours?: unknown }> =
+      professionalsToCheck.length > 0 ? professionalRows : anyProfessionalRows;
+    const windowsById = new Map(relevantRows.map((p) => [p.id, windowsOf(p)]));
+
+    // Candidate slots: the salon's configured hours (09:00–20:00 when it set
+    // none) in half hours -- previously hardcoded 9:00–18:00, which made the
+    // suggestion engine miss every appointment past 17:30 -- plus every
+    // stretch the professionals asked about can work: a shift from 20:00 to
+    // 22:00, or the 10:15 start of one, is a candidate too (candidateStarts).
     const openingHours = (tenant.openingHours as { open?: string; close?: string }) ?? {};
-    const timeSlots = this.generateTimeSlots(
-      openingHours.open ?? "09:00",
-      openingHours.close ?? "20:00",
-      30,
-    );
+    const base = this.openingRange(openingHours.open ?? "09:00", openingHours.close ?? "20:00");
+    const stretches: ShiftWindow[] = relevantRows.length
+      ? relevantRows.flatMap((p) => {
+          // No schedule recorded: the salon's hours bound the grid, and a
+          // block ending inside them starts a slot.
+          if (workingWindowsFor(p.workingHours, date) === undefined) {
+            return subtractWindows([base], dayBlocks(timeOff, dateString, p.id).windows);
+          }
+          return windowsById.get(p.id) ?? [];
+        })
+      : subtractWindows([base], salonBlocked.windows);
+    const timeSlots = candidateStarts(base, stretches).map((m) => ({ time: clockOfMinutes(m) }));
 
     // Get existing appointments for the date and professionals
     // Use date range to avoid timezone issues with date comparison
-    const dateString = date.toISOString().split('T')[0];
     const startOfDay = new Date(dateString + 'T00:00:00.000Z');
     const endOfDay = new Date(dateString + 'T23:59:59.999Z');
 
@@ -2538,12 +2566,12 @@ export class AppointmentsService {
           // limit, so salons that never filled it in keep working.
           // With a split day the service has to fit inside one shift: 13:30
           // for an hour runs into the lunch gap of a 10:00–14:00 morning.
-          const row = professionalRows.find((p) => p.id === profId);
-          const shifts = workingWindowsFor(row?.workingHours, date);
+          // Time off is already out of these windows (windowsOf).
+          const shifts = windowsById.get(profId);
           const slotMinutes = minutesOf(slot.time);
 
           if (shifts && shifts.length === 0) {
-            // Has a schedule and does not work this weekday.
+            // Has a schedule and does not work this weekday, or is away all day.
             isAvailable = false;
             break;
           }
@@ -2580,15 +2608,18 @@ export class AppointmentsService {
 
         if (anyProfessionalRows.length === 0) {
           // No professionals recorded at all: impose no shift limit, and the
-          // salon is free when nothing overlaps.
-          isAvailable = !busy.some(overlaps);
+          // salon is free when nothing overlaps -- and it is not closed then.
+          const open = availableWindows(undefined, salonBlocked);
+          isAvailable =
+            (!open || (slotMinutes !== null && fitsInShifts(slotMinutes, serviceDuration, open))) &&
+            !busy.some(overlaps);
         } else {
           // Somebody who is on shift for the whole slot AND has nothing of
           // their own overlapping it. This used to ask "is anyone on shift"
           // and then "does ANY appointment overlap" -- so one stylist's 11:00
           // took 10:30 away from the four who were free.
           isAvailable = anyProfessionalRows.some((p) => {
-            const shifts = workingWindowsFor(p.workingHours, date);
+            const shifts = windowsById.get(p.id);
             if (
               shifts &&
               !(slotMinutes !== null && fitsInShifts(slotMinutes, serviceDuration, shifts))
@@ -2631,39 +2662,19 @@ export class AppointmentsService {
   }
 
   /**
-   * Generate candidate half-hour slots from `open` to `close` for a
-   * given salon. Defaults to 09:00–20:00, 30-minute increments.
-   *
-   * The previous version was hardcoded to 09:00–18:00, which made the
-   * suggestion engine return nothing past 17:30 regardless of the
-   * tenant's configured `openingHours` (or the dashboard's
-   * `salonHours.close`).
+   * The salon's `open`–`close` in minutes, 09:00–20:00 by default: the base
+   * of the candidate slots (candidateStarts). It was hardcoded to
+   * 09:00–18:00 once, which made the suggestion engine return nothing past
+   * 17:30 regardless of the tenant's configured `openingHours`.
    */
-  private generateTimeSlots(
-    open: string = "09:00",
-    close: string = "20:00",
-    incrementMinutes: number = 30,
-  ): { time: string }[] {
-    const slots: { time: string }[] = [];
+  private openingRange(open: string, close: string): ShiftWindow {
     let startMinutes = this.parseHhmmToMinutes(open);
     let endMinutes = this.parseHhmmToMinutes(close);
     if (!Number.isFinite(startMinutes) || startMinutes < 0) startMinutes = 9 * 60;
     if (!Number.isFinite(endMinutes) || endMinutes <= startMinutes) {
       endMinutes = startMinutes + 11 * 60; // 11h window fallback
     }
-
-    // Inclusive of the last slot that still has room for a 30-min
-    // appointment so the user never sees a suggestion that would be
-    // pruned by duration-overlap downstream.
-    const lastStartMinute = endMinutes - incrementMinutes;
-
-    for (let minute = startMinutes; minute <= lastStartMinute; minute += incrementMinutes) {
-      const hh = Math.floor(minute / 60).toString().padStart(2, "0");
-      const mm = (minute % 60).toString().padStart(2, "0");
-      slots.push({ time: `${hh}:${mm}` });
-    }
-
-    return slots;
+    return { startMinutes, endMinutes };
   }
 
   private parseHhmmToMinutes(value: string): number {

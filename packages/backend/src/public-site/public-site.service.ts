@@ -4,6 +4,7 @@ import { PrismaService } from "../common/prisma/prisma.service";
 import { salonShiftsFrom, salonWeekFrom, SalonDayWindow } from "../appointments/working-hours";
 import { normalizeDomain } from "../web-domain/custom-domain";
 import { WebDomainService } from "../web-domain/web-domain.service";
+import { MAX_SPAN_DAYS, dateOfDay, daysOf } from "../time-off/time-off-rules";
 
 /**
  * Salons whose page is worth listing in the sitemap. A cancelled or
@@ -60,7 +61,11 @@ export class PublicSiteService {
     });
     if (!tenant) throw new NotFoundException("Salon not found");
 
-    const [services, professionals] = await Promise.all([
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: tenant.timezone || "Europe/Madrid" }).format(
+      new Date(),
+    );
+    const horizon = new Date(dateOfDay(today)!.getTime() + MAX_SPAN_DAYS * 86_400_000);
+    const [services, professionals, closures] = await Promise.all([
       this.prisma.service.findMany({
         where: { tenantId: tenant.id, isActive: true },
         select: {
@@ -95,7 +100,25 @@ export class PublicSiteService {
         },
         orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
       }),
+      // Whole days the salon is closed, from today on. Only the dates: never
+      // a closure's note, nor anything about a professional's time off.
+      this.prisma.timeOff.findMany({
+        where: {
+          tenantId: tenant.id,
+          professionalId: null,
+          startTime: null,
+          endDate: { gte: dateOfDay(today)! },
+          startDate: { lte: horizon },
+        },
+        select: { professionalId: true, kind: true, startDate: true, endDate: true },
+      }),
     ]);
+    const horizonDay = horizon.toISOString().slice(0, 10);
+    const closedDays = [
+      ...new Set(
+        closures.flatMap((c) => daysOf(c).filter((day) => day >= today && day <= horizonDay)),
+      ),
+    ].sort();
 
     // openingHours keeps one window per day (earliest to latest) for pages
     // and widgets built before split shifts; openingShifts has the gaps, so
@@ -130,6 +153,9 @@ export class PublicSiteService {
       professionals: professionals.map(({ workingHours: _wh, ...p }) => p),
       openingHours,
       openingShifts,
+      // "YYYY-MM-DD" days the salon is closed all day (holidays, closures),
+      // so the booking page can say so instead of "no times left".
+      closedDays,
       customDomain: this.liveDomain(tenant.customDomain),
       // salon-lucia.kiraroom.net, once subdomains serve over HTTPS.
       subdomainHost: this.webDomain.liveSubdomain(tenant.slug),

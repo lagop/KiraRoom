@@ -37,6 +37,8 @@ function selectKeys(select: any, prefix = ""): string[] {
 
 function makeService({ tlsReady = false, subdomains = false, tenant = {} as any } = {}) {
   const prisma = {
+    // No time off recorded (time-off-query.ts).
+    timeOff: { findMany: jest.fn(async () => []) },
     tenant: {
       findFirst: jest.fn(async () =>
         tenant === null
