@@ -24,6 +24,7 @@ import { getCurrentUser } from "@/lib/utils";
 import { useTranslations } from "@/lib/use-translation";
 import { SALON_TIMEZONES, DEFAULT_SALON_TIMEZONE, type SalonAddress } from "@kira/shared";
 import { CanaryTimezoneHint } from "@/components/settings/CanaryTimezoneHint";
+import Link from "next/link";
 
 const defaultSettingsData = {
   general: [
@@ -254,13 +255,6 @@ const defaultSettingsData = {
       type: "number",
       value: "15",
       description: "Porcentaje adicional por servicios especiales",
-    },
-    {
-      id: "taxRate",
-      label: "Tasa de impuestos",
-      type: "number",
-      value: "21",
-      description: "Tasa de impuestos aplicada a los servicios",
     },
   ],
   users: [
@@ -875,7 +869,18 @@ export default function SettingsPage() {
           )}
 
           {activeTab === "payments" ? (
-            <StripeSettingsContent />
+            <>
+              {/* The tax is the salon's own fiscal setting, saved there; the
+                  "Tasa de impuestos" field that stood here was never saved. */}
+              <p className="mb-6 rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
+                {t("settings.tax_moved")}{" "}
+                <Link href="/dashboard/settings/fiscal" className="font-medium text-purple-600 hover:text-purple-700">
+                  {t("invoices.fiscalSettings.title")}
+                </Link>
+                .
+              </p>
+              <StripeSettingsContent />
+            </>
           ) : (defaultSettingsData as any)[activeTab] ? (
             <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
               {(defaultSettingsData as any)[activeTab].map((field: any) => (

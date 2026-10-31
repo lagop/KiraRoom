@@ -9,6 +9,7 @@ import {
 import apiClient, { FiscalSettings } from "@/lib/api";
 import { Loader2, Save, Upload, ShieldOff } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
+import { pricesTaxExampleMessage } from "@/lib/prices-tax-example";
 import {
   TAX_REGIMES,
   TAX_REGIME_LABELS,
@@ -48,6 +49,7 @@ export default function FiscalSettingsPage() {
     autoInvoiceAppointments: boolean;
     diputacion: "bizkaia" | "gipuzkoa" | "alava" | null;
     taxRegime: TaxRegime;
+    pricesIncludeTax: boolean;
     tenantNif: string;
     taxIdType: "nif" | "cif" | "nie" | "passport" | "other";
     legalName: string;
@@ -58,6 +60,7 @@ export default function FiscalSettingsPage() {
     autoInvoiceAppointments: false,
     diputacion: null,
     taxRegime: "iva",
+    pricesIncludeTax: false,
     tenantNif: "",
     taxIdType: "nif",
     legalName: "",
@@ -75,6 +78,8 @@ export default function FiscalSettingsPage() {
         diputacion:
           (fs.diputacion as "bizkaia" | "gipuzkoa" | "alava" | null) ?? null,
         taxRegime: taxRegimeOf(fs),
+        // Missing (a salon from before the setting): tax on top, as always.
+        pricesIncludeTax: fs.pricesIncludeTax === true,
         tenantNif:
           (fs.tenantNif as string) ??
           (settings.data.taxId as string | undefined) ??
@@ -95,6 +100,14 @@ export default function FiscalSettingsPage() {
       </div>
     );
   }
+
+  // "Un servicio de 30,00 € se factura como 24,79 € + 5,21 € de IVA", at
+  // the rate and regime selected above, before saving.
+  const priceExample = pricesTaxExampleMessage(
+    draft.defaultTaxRate,
+    draft.pricesIncludeTax,
+    TAX_REGIME_LABELS[draft.taxRegime],
+  );
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -267,6 +280,27 @@ export default function FiscalSettingsPage() {
                 className="mt-1 block w-32 rounded-md border border-gray-300 px-3 py-2 text-sm"
               />
             </div>
+          </div>
+
+          <div>
+            <label className="flex items-center gap-2 text-sm font-medium text-gray-900">
+              <input
+                type="checkbox"
+                checked={draft.pricesIncludeTax}
+                onChange={(e) =>
+                  setDraft((d) => ({
+                    ...d,
+                    pricesIncludeTax: e.target.checked,
+                  }))
+                }
+                className="h-4 w-4 rounded border-gray-300 text-violet-600"
+              />
+              <span>{t("invoices.fiscalSettings.pricesIncludeTax")}</span>
+            </label>
+            <p className="mt-1 pl-6 text-xs text-gray-500">
+              {t(priceExample.key, priceExample.params)}.{" "}
+              {t("invoices.fiscalSettings.pricesIncludeTaxHint")}
+            </p>
           </div>
 
           <label className="flex items-center gap-2 text-sm">

@@ -52,6 +52,8 @@ export class InvoicePdfService {
     };
     lines: InvoiceLine[];
     taxBreakdown: Array<{ rate: number; baseCents: number; taxCents: number }>;
+    /** IVA, IGIC or IPSI, from the salon's regime. Default IVA. */
+    taxLabel?: string;
   }): Promise<Buffer> {
     if (this.shouldSkipPuppeteer()) {
       this.logger.debug(
@@ -128,6 +130,7 @@ export class InvoicePdfService {
     invoice: any;
     lines: InvoiceLine[];
     taxBreakdown: Array<{ rate: number; baseCents: number; taxCents: number }>;
+    taxLabel?: string;
   }): Promise<Buffer> {
     const qrPng = input.invoice.fiscalQrUrl
       ? await QRCode.toBuffer(input.invoice.fiscalQrUrl, {
@@ -149,7 +152,7 @@ export class InvoicePdfService {
       "Detalle:",
       ...input.lines.map(
         (l) =>
-          `  - ${l.description} x${l.quantity} @ ${(l.unitPriceCents * (1 - (l.discountPct ?? 0) / 100)) / 100} = ${l.totalCents / 100} (${l.taxRate}% IVA)`,
+          `  - ${l.description} x${l.quantity} @ ${(l.unitPriceCents * (1 - (l.discountPct ?? 0) / 100)) / 100} = ${l.totalCents / 100} (${l.taxRate}% ${input.taxLabel || "IVA"})`,
       ),
       "",
       `Subtotal: ${input.invoice.subtotalCents / 100}`,
