@@ -38,6 +38,8 @@ function setup({
   // Online bookings in the last 24 hours, as the client rows the limit reads.
   recentClients = [] as Array<{ email?: string | null; phone?: string | null }>,
   book = async () => ({ id: "apt-1", service: { name: "Corte" }, professional: { firstName: "Ana", lastName: "García" } }) as any,
+  // The salon's "bookable online" switch for the service.
+  onlineBookable = true,
 } = {}) {
   let context: Record<string, unknown> = {};
   let userTurns = 1;
@@ -50,8 +52,25 @@ function setup({
     chatMessage: { count: async () => userTurns },
     appointment: { findMany: async () => recentClients.map((client) => ({ client })) },
     service: {
-      findFirst: async () => ({ name: "Masaje Relajante", duration: 60, price: 55, currency: "EUR" }),
-      findMany: async () => [{ id: SERVICE, name: "Masaje Relajante" }],
+      findFirst: async () => ({
+        name: "Masaje Relajante",
+        duration: 60,
+        price: 55,
+        currency: "EUR",
+        isOnlineBookable: onlineBookable,
+      }),
+      findMany: async () => [
+        {
+          id: SERVICE,
+          name: "Masaje Relajante",
+          description: null,
+          category: "MASSAGE",
+          duration: 60,
+          price: 55,
+          currency: "EUR",
+          isOnlineBookable: onlineBookable,
+        },
+      ],
     },
     professional: {
       findFirst: async ({ where }: any) => NAMES[where.id] ?? null,
@@ -222,6 +241,34 @@ describe("what a proposal checks", () => {
     say("sí");
     await run("create_appointment");
     expect(booked[0][1].clientInfo.phone).toBe("+34600111222");
+  });
+});
+
+describe("a service the salon does not take online", () => {
+  it("is listed as such, offers no times and is not proposed nor booked", async () => {
+    const { run, say, booked, appointmentsService } = setup({ onlineBookable: false });
+
+    const list: any = await run("list_services");
+    expect(list.services[0]).toMatchObject({ id: SERVICE, onlineBookable: false });
+
+    expect(await run("check_availability", { serviceId: SERVICE, date: "2026-10-05" })).toMatchObject({
+      error: "not_bookable_online",
+    });
+    expect(await run("propose_appointment", DETAILS)).toMatchObject({ proposed: false, error: "not_bookable_online" });
+    expect(appointmentsService.getAvailableSlots).not.toHaveBeenCalled();
+
+    say("sí");
+    expect(await run("create_appointment")).toMatchObject({ created: false, error: "nothing_proposed" });
+    expect(booked).toHaveLength(0);
+  });
+
+  it("one that is, as before", async () => {
+    const { run } = setup();
+    const list: any = await run("list_services");
+    expect(list.services[0]).toMatchObject({ id: SERVICE, onlineBookable: true });
+    expect(await run("check_availability", { serviceId: SERVICE, date: "2026-10-05" })).toMatchObject({
+      slots: ["10:00"],
+    });
   });
 });
 

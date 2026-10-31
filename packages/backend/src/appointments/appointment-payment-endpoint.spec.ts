@@ -125,7 +125,7 @@ describe("PATCH /appointments/:id/payment: who and how much", () => {
     await svc.updatePaymentStatus(OWNER, "a1", { status: "paid", amountPaid: 4550, paymentMethod: "cash" } as any);
     expect(prisma.appointment.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: "a1" },
+        where: { id: "a1", tenantId: TENANT },
         data: expect.objectContaining({ paymentStatus: "paid", amountPaid: 4550, paymentMethod: "cash" }),
       }),
     );

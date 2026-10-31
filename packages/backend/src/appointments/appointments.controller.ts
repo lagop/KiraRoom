@@ -15,6 +15,7 @@ import {
 // only validates (and strips unknown keys from) a class.
 import { UpdateAppointmentDto } from "./dto/update-appointment.dto";
 import { UpdateAppointmentPaymentDto } from "./dto/update-appointment-payment.dto";
+import { CancelAppointmentDto, CompleteAppointmentDto } from "./dto/appointment-status.dto";
 import { AvailableSlotsDto } from "./dto/available-slots.dto";
 import { OnlineBookingDto, StaffBookingDto } from "./dto/book-appointment.dto";
 import { PublicViewerService } from "../common/tenancy/public-viewer.service";
@@ -183,9 +184,9 @@ export class AppointmentsController {
   async cancel(
     @Req() req: any,
     @Param("id", ParseUUIDPipe) id: string,
-    @Body("reason") reason?: string,
+    @Body() body: CancelAppointmentDto,
   ) {
-    return this.appointmentsService.cancel(req.user, id, reason);
+    return this.appointmentsService.cancel(req.user, id, body?.reason);
   }
 
   @Put(":id/complete")
@@ -196,9 +197,9 @@ export class AppointmentsController {
   async complete(
     @Req() req: any,
     @Param("id", ParseUUIDPipe) id: string,
-    @Body("notes") notes?: string,
+    @Body() body: CompleteAppointmentDto,
   ) {
-    return this.appointmentsService.complete(req.user, id, notes);
+    return this.appointmentsService.complete(req.user, id, body?.notes);
   }
 
   @Put(":id/no-show")

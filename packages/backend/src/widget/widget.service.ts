@@ -107,10 +107,13 @@ export class WidgetService {
         specialties: true,
       },
     });
+    // Only what can be booked from here: a service the salon takes by phone
+    // only (isOnlineBookable off) is refused at booking (bookOnline).
     const allServices = await this.prisma.service.findMany({
       where: {
         tenantId: widget.tenantId,
         isActive: true,
+        isOnlineBookable: true,
         ...(widget.services.length > 0
           ? { id: { in: widget.services } }
           : {}),

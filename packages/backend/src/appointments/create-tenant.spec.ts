@@ -17,8 +17,10 @@ import { phoneKey } from "../common/phone";
  * past day, or a slot already taken.
  */
 
-const PRO = { id: "11111111-1111-4111-8111-111111111111", tenantId: "tenant-b", firstName: "Ana" };
-const PRO_2 = { id: "22222222-2222-4222-8222-222222222222", tenantId: "tenant-b", firstName: "Bea" };
+const PRO = { id: "11111111-1111-4111-8111-111111111111", tenantId: "tenant-b", firstName: "Ana", isActive: true };
+const PRO_2 = { id: "22222222-2222-4222-8222-222222222222", tenantId: "tenant-b", firstName: "Bea", isActive: true };
+/** Another salon's widget: a real id, of another salon. */
+const FOREIGN_WIDGET_ID = "55555555-5555-4555-8555-555555555555";
 const SERVICE_ID = "33333333-3333-4333-8333-333333333333";
 const WIDGET_ID = "44444444-4444-4444-8444-444444444444";
 
@@ -36,6 +38,9 @@ function build({
   maxAdvanceBooking = 30,
   locationLinks = [] as Array<{ professionalId: string; locationId: string; isPrimary: boolean }>,
   subscriptionStatus = "active",
+  isOnlineBookable = true,
+  serviceActive = true,
+  inactiveProfessionals = [] as string[],
 } = {}) {
   const clientLookups: any[] = [];
   const created: any[] = [];
@@ -57,10 +62,17 @@ function build({
     widgetInstance: {
       findUnique: async ({ where }: any) =>
         where.id === WIDGET_ID ? { tenantId: "tenant-b", professionals: widgetProfessionals } : null,
+      findFirst: jest.fn(async ({ where }: any) => {
+        const all = [
+          { id: WIDGET_ID, tenantId: "tenant-b" },
+          { id: FOREIGN_WIDGET_ID, tenantId: "tenant-a" },
+        ];
+        return all.find((w) => w.id === where.id && w.tenantId === where.tenantId) ?? null;
+      }),
     },
     professional: {
       findFirst: jest.fn(async ({ where }: any) => {
-        const all = [PRO, PRO_2];
+        const all = [PRO, PRO_2].map((p) => ({ ...p, isActive: !inactiveProfessionals.includes(p.id) }));
         return all.find((p) => p.id === where.id && (!where.tenantId || where.tenantId === p.tenantId)) ?? null;
       }),
       findMany: async ({ where }: any) =>
@@ -81,7 +93,16 @@ function build({
     service: {
       findFirst: jest.fn(async ({ where }: any) =>
         where.tenantId === "tenant-b"
-          ? { id: SERVICE_ID, duration: 30, price: 20, currency: "EUR", minAdvanceBooking, maxAdvanceBooking }
+          ? {
+              id: SERVICE_ID,
+              duration: 30,
+              price: 20,
+              currency: "EUR",
+              minAdvanceBooking,
+              maxAdvanceBooking,
+              isActive: serviceActive,
+              isOnlineBookable,
+            }
           : null,
       ),
       findMany: async ({ where }: any) =>
@@ -204,18 +225,49 @@ describe("online booking: who and where", () => {
     expect(prisma.client.create).not.toHaveBeenCalled();
   });
 
-  it("fills in the email of a client found by phone, and never overwrites one", async () => {
+  it("never changes an existing client's contact details from a public booking", async () => {
+    // Matched by one detail, the booking is hers; the other detail on the
+    // form is not written onto her record, missing or different: her notices
+    // would go to whoever typed it.
+    const existingClients: any[] = [
+      { id: "no-email", email: null, phone: "600111222", tenantId: "tenant-b" },
+      { id: "has-email", email: "old@mail.test", phone: "611222333", tenantId: "tenant-b" },
+      { id: "no-phone", email: "eva@mail.test", phone: null, tenantId: "tenant-b" },
+    ];
+    const { service, prisma, created } = build({ existingClients });
+
+    await service.createOnline(BOOKING as any);
+    await service.createOnline({ ...BOOKING, clientInfo: { firstName: "B", lastName: "C", email: "new@mail.test", phone: "611 222 333" } } as any);
+    await service.createOnline({ ...BOOKING, clientInfo: { firstName: "E", lastName: "V", email: "eva@mail.test", phone: "699 888 777" } } as any);
+
+    expect(created.map((a) => a.clientId)).toEqual(["no-email", "has-email", "no-phone"]);
+    expect(prisma.client.update).not.toHaveBeenCalled();
+    expect(prisma.client.create).not.toHaveBeenCalled();
+    expect(existingClients.map((c) => [c.email, c.phone])).toEqual([
+      [null, "600111222"],
+      ["old@mail.test", "611222333"],
+      ["eva@mail.test", null],
+    ]);
+  });
+
+  it("a booking by the team still fills in a missing detail, and never overwrites one", async () => {
     const { service, prisma } = build({
       existingClients: [
         { id: "no-email", email: null, phone: "600111222", tenantId: "tenant-b" },
         { id: "has-email", email: "old@mail.test", phone: "611222333", tenantId: "tenant-b" },
       ],
     });
+    const owner = { id: "u1", role: "owner", tenantId: "tenant-b" };
 
-    await service.createOnline(BOOKING as any);
-    await service.createOnline({ ...BOOKING, clientInfo: { firstName: "B", lastName: "C", email: "new@mail.test", phone: "611 222 333" } } as any);
+    await service.createByStaff(BOOKING as any, owner);
+    await service.createByStaff(
+      { ...BOOKING, clientInfo: { firstName: "B", lastName: "C", email: "new@mail.test", phone: "611 222 333" } } as any,
+      owner,
+    );
 
-    expect(prisma.client.update.mock.calls).toEqual([[{ where: { id: "no-email" }, data: { email: "ana@mail.test" } }]]);
+    expect(prisma.client.update.mock.calls).toEqual([
+      [{ where: { id: "no-email", tenantId: "tenant-b" }, data: { email: "ana@mail.test" } }],
+    ]);
   });
 
   it("stores a new client's phone in international form", async () => {
@@ -296,6 +348,61 @@ describe("online booking: the slot", () => {
 
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     expect(locks).toEqual([`booking:tenant-b:${BOOKING.scheduledDate}`]);
+  });
+});
+
+describe("online booking: only what the salon offers online", () => {
+  it("refuses a service the salon marked not bookable online, before anything is written", async () => {
+    const { service, created, prisma } = build({ isOnlineBookable: false });
+
+    const refused = service.createOnline(BOOKING as any);
+    await expect(refused).rejects.toThrow(ForbiddenException);
+    await expect(refused).rejects.toMatchObject({ response: { code: "SERVICE_NOT_BOOKABLE_ONLINE" } });
+    expect(created).toHaveLength(0);
+    expect(prisma.client.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses it from the receptionist too (bookOnline)", async () => {
+    const { service, created } = build({ isOnlineBookable: false });
+    await expect(service.bookOnline("tenant-b", BOOKING as any)).rejects.toThrow(ForbiddenException);
+    expect(created).toHaveLength(0);
+  });
+
+  it("refuses an inactive service and an inactive professional", async () => {
+    const off = build({ serviceActive: false });
+    await expect(off.service.bookOnline("tenant-b", BOOKING as any)).rejects.toThrow(NotFoundException);
+
+    // The receptionist names the professional itself: bookOnline checks it.
+    const gone = build({ inactiveProfessionals: [PRO.id] });
+    await expect(gone.service.bookOnline("tenant-b", BOOKING as any)).rejects.toThrow(NotFoundException);
+    expect(off.created).toHaveLength(0);
+    expect(gone.created).toHaveLength(0);
+  });
+
+  it("the team still books a service that is not bookable online", async () => {
+    const { service, created } = build({
+      isOnlineBookable: false,
+      existingClients: [{ id: "c1", email: "x@mail.test", tenantId: "tenant-b" }],
+    });
+    await service.createByStaff(
+      { ...BOOKING, clientInfo: undefined, clientId: "c1" } as any,
+      { id: "u1", role: "owner", tenantId: "tenant-b" },
+    );
+    expect(created).toHaveLength(1);
+  });
+
+  it("refuses another salon's widget named with a professional", async () => {
+    const { service, created } = build();
+    await expect(
+      service.createOnline({ ...BOOKING, widgetInstanceId: FOREIGN_WIDGET_ID } as any),
+    ).rejects.toThrow(NotFoundException);
+    expect(created).toHaveLength(0);
+  });
+
+  it("keeps its own widget's attribution", async () => {
+    const { service, created } = build();
+    await service.createOnline({ ...BOOKING, widgetInstanceId: WIDGET_ID } as any);
+    expect(created[0]).toMatchObject({ tenantId: "tenant-b", widgetInstanceId: WIDGET_ID });
   });
 });
 

@@ -163,7 +163,7 @@ describe("moving one service of a multi-service appointment (PUT /appointment-se
       // The visit's totals are synced after the save (visit-sync.ts).
       appointment: { ...base.appointment, findUnique: jest.fn(async () => null) },
       appointmentService: {
-        findUnique: jest.fn(async () => current),
+        findFirst: jest.fn(async () => current),
         update: jest.fn(async () => ({ id: "s1" })),
       },
     };

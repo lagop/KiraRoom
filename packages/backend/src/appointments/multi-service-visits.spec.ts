@@ -244,7 +244,11 @@ describe("editing a visit's services (the form resends them all)", () => {
   it("dropping a pending one removes that row only", async () => {
     const { svc, writes } = editHarness(visit());
     await svc.update(owner, "visit-1", { services: [{ serviceId: "s-colour", professionalId: "ana" }] } as any);
-    expect(writes.find(([k]) => k === "deleteMany")[1].where).toEqual({ id: { in: ["r2"] }, appointmentId: "visit-1" });
+    expect(writes.find(([k]) => k === "deleteMany")[1].where).toEqual({
+      id: { in: ["r2"] },
+      appointmentId: "visit-1",
+      appointment: { tenantId: owner.tenantId },
+    });
     const data = writes.find(([k]) => k === "appointment")[1].data;
     // Back to the colour alone: 60 minutes, as stored, and its price.
     expect(data).not.toHaveProperty("duration");
@@ -500,7 +504,11 @@ describe("the services' own endpoints keep the appointment's totals", () => {
       services: [],
     };
     const prisma: any = {
-      appointment: { findUnique: jest.fn(async () => appointment), update: jest.fn(async () => appointment) },
+      appointment: {
+        findUnique: jest.fn(async () => appointment),
+        findFirst: jest.fn(async () => appointment),
+        update: jest.fn(async () => appointment),
+      },
       service: { count: jest.fn(async ({ where }: any) => where.id.in.length), findMany: jest.fn(async () => []) },
       professional: { count: jest.fn(async ({ where }: any) => where.id.in.length) },
       appointmentService: { create: jest.fn((a: any) => a) },
@@ -516,7 +524,7 @@ describe("the services' own endpoints keep the appointment's totals", () => {
     await svc.bulkCreate("visit-1", [
       { appointmentId: "visit-1", serviceId: "s-colour", professionalId: "ana" },
       { appointmentId: "visit-1", serviceId: "s-rinse", professionalId: "bea" },
-    ] as any);
+    ] as any, owner);
     expect(prisma.appointment.update).toHaveBeenCalledWith({
       where: { id: "visit-1" },
       data: { duration: 75, endTime: "11:15", price: 55, totalAmount: 5500 },
@@ -526,12 +534,12 @@ describe("the services' own endpoints keep the appointment's totals", () => {
   it("a completed service cannot be removed", async () => {
     const prisma: any = {
       appointmentService: {
-        findUnique: jest.fn(async () => ({ id: "r1", appointmentId: "visit-1", status: "completed" })),
+        findFirst: jest.fn(async () => ({ id: "r1", appointmentId: "visit-1", status: "completed" })),
         delete: jest.fn(),
       },
     };
     const svc = new AppointmentServicesService(prisma);
-    await expect(svc.remove("r1")).rejects.toBeInstanceOf(ConflictException);
+    await expect(svc.remove("r1", owner)).rejects.toBeInstanceOf(ConflictException);
     expect(prisma.appointmentService.delete).not.toHaveBeenCalled();
   });
 });

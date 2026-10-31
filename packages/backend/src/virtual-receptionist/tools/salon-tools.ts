@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AppointmentsService } from '../../appointments/appointments.service';
-import { confirmAppointment, proposeAppointment } from './receptionist-booking';
+import { confirmAppointment, notBookableOnline, proposeAppointment } from './receptionist-booking';
 import { resolveIds } from './resolve-ids';
 
 /**
@@ -42,7 +42,9 @@ export const SALON_TOOLS = [
     description:
       'List the salon\'s active services. Use this whenever the user asks about ' +
       'the catalog, available services, or wants to see prices. Returns up to 25 ' +
-      'services. For exact price / duration of one service, prefer `get_service`.',
+      'services. For exact price / duration of one service, prefer `get_service`. ' +
+      'A service with onlineBookable: false is not booked by chat: the client books it ' +
+      'by calling the salon.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -229,6 +231,7 @@ export class SalonToolsService {
       durationMinutes: number;
       price: string;
       currency: string;
+      onlineBookable: boolean;
     }>;
     totalMatching: number;
     note?: string;
@@ -257,6 +260,7 @@ export class SalonToolsService {
         duration: true,
         price: true,
         currency: true,
+        isOnlineBookable: true,
       },
     });
 
@@ -292,6 +296,7 @@ export class SalonToolsService {
           durationMinutes: s.duration,
           price: Number(s.price).toFixed(2),
           currency: s.currency,
+          onlineBookable: s.isOnlineBookable !== false,
         })),
         totalMatching: 0,
         note:
@@ -309,6 +314,7 @@ export class SalonToolsService {
         durationMinutes: s.duration,
         price: Number(s.price).toFixed(2),
         currency: s.currency,
+        onlineBookable: s.isOnlineBookable !== false,
       })),
       totalMatching: filtered.length,
       ...(input.audience
@@ -465,6 +471,9 @@ export class SalonToolsService {
     if (Number.isNaN(date.getTime())) {
       return { error: 'invalid_date', date: input.date };
     }
+    // Not offered online: no times for it, and the model is told why.
+    const closed = await notBookableOnline(ctx, input.serviceId);
+    if (closed) return { ...closed, date: input.date };
     try {
       // Only what a booking will accept: not inside the service's minimum
       // notice, not beyond its maximum advance, not in the past.
