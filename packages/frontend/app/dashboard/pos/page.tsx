@@ -6,7 +6,15 @@ import { useTranslations } from "@/lib/use-translation";
 import { useToast, toast } from "@/components/ui/use-toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import AppointmentSelector from "./components/appointment-selector";
+import DiscountEditor from "./components/discount-editor";
 import type { ClientLoyaltySummary } from "@/lib/api";
+import {
+  applyDiscounts,
+  discountProblem,
+  formatEuros,
+  staffLimitProblem,
+  type DiscountSpec,
+} from "@/lib/pos-discounts";
 
 interface Service {
   id: string;
@@ -29,6 +37,8 @@ interface CartItem {
   quantity: number;
   /** The appointment this line charges (the server prices it at what it still owes). */
   _appointmentId?: string;
+  /** A discount on this line: only its kind, value and reason go to the server. */
+  discount?: DiscountSpec;
 }
 
 interface POSSummary {
@@ -130,23 +140,108 @@ export default function POSPage() {
       .catch(() => setLoyalty(null)); // no plan / no programme: nothing to show
   }, [selectedClient?.id]);
 
-  // Same rule as the server (LoyaltyService.discountFor), in euros, so the
-  // amount charged is what the client really pays.
-  const loyaltyDiscount = (): number => {
+  // Manual discounts: one for the whole ticket (the lines carry their own),
+  // and how far staff may go (the salon's setting; the server enforces it).
+  const [orderDiscount, setOrderDiscount] = useState<DiscountSpec | undefined>(undefined);
+  const [maxStaffDiscount, setMaxStaffDiscount] = useState(0);
+  const [showDiscountSettings, setShowDiscountSettings] = useState(false);
+  const [staffLimitInput, setStaffLimitInput] = useState("0");
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [confirmingDiscount, setConfirmingDiscount] = useState(false);
+
+  useEffect(() => {
+    apiClient
+      .getPosSettings()
+      .then((s) => {
+        setMaxStaffDiscount(s.maxStaffDiscountPercent);
+        setStaffLimitInput(String(s.maxStaffDiscountPercent));
+      })
+      .catch(() => setMaxStaffDiscount(0));
+  }, []);
+
+  // The ticket as the server will price it, in cents: the lines, their
+  // discounts, the ticket's discount (lib/pos-discounts.ts). Display only.
+  const ticketLines = cart.map((item) => ({
+    price: Math.round(item.service.price * 100),
+    quantity: item.quantity,
+    discount: item.discount,
+  }));
+  const ticket = applyDiscounts(ticketLines, orderDiscount);
+
+  // Same rule as the server (LoyaltyService.discountFor), in cents, on what
+  // is left after the till's discounts, so the amount charged is what the
+  // client really pays.
+  const loyaltyDiscountCents = (): number => {
     const reward = loyalty?.rewards.find((r) => r.id === rewardId);
     if (!reward) return 0;
-    const subtotal = calculateTotal();
+    const base = ticket.totalCents;
     let d = 0;
     if (reward.type === "discount") {
-      if (reward.discountPercent) d = Math.round(subtotal * reward.discountPercent) / 100;
-      else if (reward.discountAmount) d = reward.discountAmount / 100;
+      if (reward.discountPercent) d = Math.round((base * reward.discountPercent) / 100);
+      else if (reward.discountAmount) d = reward.discountAmount;
     } else if (reward.type === "free_service") {
-      const item = cart.find((i) => i.service.id === reward.freeServiceId);
-      d = item ? item.service.price : 0;
+      const at = cart.findIndex((i) => i.service.id === reward.freeServiceId);
+      d = at >= 0 ? Math.floor(ticket.lines[at].netCents / cart[at].quantity) : 0;
     }
-    return Math.max(0, Math.min(d, subtotal));
+    return Math.max(0, Math.min(d, base));
   };
-  const amountDue = () => Math.max(0, calculateTotal() - loyaltyDiscount());
+  const amountDueCents = () => Math.max(0, ticket.totalCents - loyaltyDiscountCents());
+
+  // Why the server would refuse the ticket's discounts, said before charging.
+  const canDiscount = isAdmin || maxStaffDiscount > 0;
+  const discountIssue = (): string | null => {
+    for (let i = 0; i < cart.length; i++) {
+      const d = cart[i].discount;
+      if (d) {
+        const problem = discountProblem(d, ticket.lines[i].grossCents, "la línea");
+        if (problem) return `${cart[i].service.name}: ${problem}`;
+      }
+    }
+    if (orderDiscount) {
+      const problem = discountProblem(orderDiscount, ticket.orderBaseCents, "el ticket");
+      if (problem) return problem;
+    }
+    return isAdmin ? null : staffLimitProblem(ticketLines, orderDiscount, maxStaffDiscount);
+  };
+  const issue = discountIssue();
+  const discountReasons = [
+    ...new Set([...cart.map((i) => i.discount?.reason), orderDiscount?.reason].filter((r): r is string => !!r)),
+  ];
+
+  const setLineDiscount = (index: number, discount: DiscountSpec | undefined) => {
+    setCart((current) => current.map((item, i) => (i === index ? { ...item, discount } : item)));
+  };
+
+  // An emptied cart forgets the ticket's discount too.
+  useEffect(() => {
+    if (cart.length === 0) setOrderDiscount(undefined);
+  }, [cart.length]);
+
+  const saveStaffLimit = async () => {
+    const value = Number(staffLimitInput);
+    if (!Number.isInteger(value) || value < 0 || value > 100) {
+      toast({ title: "Límite no válido", description: "Escribe un porcentaje entero de 0 a 100.", variant: "destructive" });
+      return;
+    }
+    setSavingSettings(true);
+    try {
+      const saved = await apiClient.savePosSettings({ maxStaffDiscountPercent: value });
+      setMaxStaffDiscount(saved.maxStaffDiscountPercent);
+      setStaffLimitInput(String(saved.maxStaffDiscountPercent));
+      toast({
+        title: "Límite de descuento guardado",
+        description:
+          saved.maxStaffDiscountPercent === 0
+            ? "Solo la propietaria o un encargado pueden aplicar descuentos."
+            : `El personal puede descontar hasta un ${saved.maxStaffDiscountPercent} % por línea.`,
+      });
+      setShowDiscountSettings(false);
+    } catch (error: any) {
+      toast({ title: "No se pudo guardar el límite", description: error?.message, variant: "destructive" });
+    } finally {
+      setSavingSettings(false);
+    }
+  };
 
   // Appointment payment integration
   const [showAppointmentSelector, setShowAppointmentSelector] = useState(false);
@@ -375,11 +470,18 @@ export default function POSPage() {
     );
   };
 
-  const calculateTotal = () => {
-    return cart.reduce(
-      (sum, item) => sum + item.service.price * item.quantity,
-      0,
-    );
+  // A discounted ticket is confirmed first, in the panel's dialog.
+  const requestCheckout = () => {
+    if (cart.length === 0) return;
+    if (issue) {
+      toast({ title: "Revisa el descuento", description: issue, variant: "destructive" });
+      return;
+    }
+    if (ticket.discountCents > 0) {
+      setConfirmingDiscount(true);
+      return;
+    }
+    void processCheckout();
   };
 
   const processCheckout = async () => {
@@ -393,11 +495,12 @@ export default function POSPage() {
 
     try {
       setProcessing(true);
+      // What is sold, how many and any discount asked for: the server
+      // prices every line itself, never from here.
       const items = cart.map((item) => ({
         serviceId: item.service.id,
-        name: item.service.name,
-        price: Math.round(item.service.price * 100), // Convert to cents
         quantity: item.quantity,
+        ...(item.discount ? { discount: item.discount } : {}),
       }));
 
       const checkoutData = {
@@ -407,10 +510,11 @@ export default function POSPage() {
         payments: [
           {
             method: selectedPaymentMethod,
-            amount: Math.round(amountDue() * 100),
+            amount: amountDueCents(),
           },
         ],
         ...(rewardId ? { loyaltyRewardId: rewardId } : {}),
+        ...(orderDiscount ? { discount: orderDiscount } : {}),
       };
 
       console.log("Starting POS checkout with data:", checkoutData);
@@ -425,6 +529,7 @@ export default function POSPage() {
         title: t("pos.sale_completed"),
         description:
           t("pos.payment_completed") +
+          (result?.discount?.total ? ` · Descuento ${formatEuros(result.discount.total)}` : "") +
           (pts?.pointsSpent ? ` · Canjeados ${pts.pointsSpent} puntos` : "") +
           (pts?.pointsEarned ? ` · +${pts.pointsEarned} puntos` : ""),
       });
@@ -563,13 +668,13 @@ export default function POSPage() {
     try {
       setProcessing(true);
 
-      // The server prices each line itself; name and price are only shown.
+      // The server prices each line itself (an appointment at what it
+      // still owes); only what is sold and the discount asked for go.
       const items = cart.map((item) => ({
         serviceId: item.service.id,
         ...(item._appointmentId ? { appointmentId: item._appointmentId } : {}),
-        name: item.service.name,
-        price: Math.round(item.service.price * 100),
         quantity: item.quantity,
+        ...(item.discount ? { discount: item.discount } : {}),
       }));
 
       const checkoutData = {
@@ -577,11 +682,13 @@ export default function POSPage() {
         appointmentIds: selectedAppointments.map((apt: any) => apt.id),
         items,
         ...(rewardId ? { loyaltyRewardId: rewardId } : {}),
+        ...(orderDiscount ? { discount: orderDiscount } : {}),
         payments: [
           {
             method: selectedPaymentMethod,
-            // The whole cart (appointments and anything added) less the reward.
-            amount: Math.round(amountDue() * 100),
+            // The whole cart (appointments and anything added) less the
+            // discounts and the reward.
+            amount: amountDueCents(),
           },
         ],
       };
@@ -627,6 +734,16 @@ export default function POSPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-2xl font-bold truncate">{t("pos.title")}</h1>
         <div className="flex flex-wrap items-center gap-3">
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => setShowDiscountSettings((v) => !v)}
+              aria-expanded={showDiscountSettings}
+              className="px-4 py-2 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+            >
+              Descuentos del personal
+            </button>
+          )}
           <button
             onClick={() => setShowAppointmentSelector(true)}
             className="px-4 py-2 rounded-lg bg-purple-600 text-white hover:bg-purple-700"
@@ -635,6 +752,40 @@ export default function POSPage() {
           </button>
         </div>
       </div>
+
+      {isAdmin && showDiscountSettings && (
+        <div className="bg-white p-4 rounded-lg shadow max-w-xl">
+          <h2 className="text-lg font-semibold mb-1">Descuentos del personal</h2>
+          <p className="text-sm text-gray-500 mb-3">
+            La propietaria y los encargados pueden descontar siempre. El personal, como mucho este porcentaje en cada
+            línea (sumando el descuento de la línea y el del ticket). Con 0, el personal no puede aplicar descuentos.
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <label htmlFor="pos-staff-discount-limit" className="text-sm text-gray-700">
+              Máximo por línea
+            </label>
+            <input
+              id="pos-staff-discount-limit"
+              type="number"
+              min={0}
+              max={100}
+              step={1}
+              value={staffLimitInput}
+              onChange={(e) => setStaffLimitInput(e.target.value)}
+              className="w-24 px-3 py-2 border rounded-lg"
+            />
+            <span className="text-sm text-gray-700">%</span>
+            <button
+              type="button"
+              onClick={saveStaffLimit}
+              disabled={savingSettings}
+              className="ml-2 px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:bg-blue-300"
+            >
+              {savingSettings ? "Guardando…" : "Guardar"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {showAppointmentSelector && (
         <AppointmentSelector
@@ -852,10 +1003,10 @@ export default function POSPage() {
 
               {/* Cart Items */}
               <div className="space-y-2 mb-4">
-                {cart.map((item) => (
+                {cart.map((item, index) => (
                   <div
-                    key={item.service.id}
-                    className="flex items-center justify-between border-b pb-2"
+                    key={item._appointmentId ?? item.service.id}
+                    className="flex items-start justify-between border-b pb-2"
                   >
                     <div className="flex-1">
                       <div className="font-medium text-sm">
@@ -863,7 +1014,23 @@ export default function POSPage() {
                       </div>
                       <div className="text-xs text-gray-500">
                         {formatCurrency(item.service.price)} × {item.quantity}
+                        {ticket.lines[index] && ticket.lines[index].netCents !== ticket.lines[index].grossCents && (
+                          <span className="ml-1 text-gray-700">
+                            = <span className="line-through">{formatEuros(ticket.lines[index].grossCents)}</span>{" "}
+                            <strong>{formatEuros(ticket.lines[index].netCents)}</strong>
+                          </span>
+                        )}
                       </div>
+                      {canDiscount && ticket.lines[index] && (
+                        <DiscountEditor
+                          value={item.discount}
+                          baseCents={ticket.lines[index].grossCents}
+                          amountCents={ticket.lines[index].lineDiscountCents}
+                          scope="la línea"
+                          onChange={(d) => setLineDiscount(index, d)}
+                          disabled={processing}
+                        />
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
                       <button
@@ -926,18 +1093,54 @@ export default function POSPage() {
                 </div>
               )}
 
+              {/* Discount on the whole ticket */}
+              {canDiscount && cart.length > 0 && (
+                <div className="mb-3">
+                  <DiscountEditor
+                    value={orderDiscount}
+                    baseCents={ticket.orderBaseCents}
+                    amountCents={ticket.orderDiscountCents}
+                    scope="el ticket"
+                    onChange={setOrderDiscount}
+                    disabled={processing}
+                  />
+                  {!isAdmin && (
+                    <div className="mt-1 text-xs text-gray-500">
+                      Puedes descontar hasta un {maxStaffDiscount} % por línea.
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Total */}
               <div className="border-t pt-4">
+                {ticket.discountCents > 0 && (
+                  <>
+                    <div className="flex justify-between text-sm text-gray-600">
+                      <span>Subtotal</span>
+                      <span>{formatEuros(ticket.subtotalCents)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm text-rose-700">
+                      <span>Descuentos</span>
+                      <span>−{formatEuros(ticket.discountCents)}</span>
+                    </div>
+                  </>
+                )}
                 {rewardId && (
                   <div className="flex justify-between text-sm text-amber-700">
                     <span>Descuento por puntos</span>
-                    <span>-{formatCurrency(loyaltyDiscount())}</span>
+                    <span>−{formatEuros(loyaltyDiscountCents())}</span>
                   </div>
                 )}
                 <div className="flex justify-between text-lg font-bold">
                   <span>{t("pos.total")}</span>
-                  <span>{formatCurrency(amountDue())}</span>
+                  <span>{formatEuros(amountDueCents())}</span>
                 </div>
+                {issue && (
+                  <div role="alert" className="mt-2 rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">
+                    {issue}
+                  </div>
+                )}
               </div>
 
               {/* Payment Method Toggle */}
@@ -977,10 +1180,10 @@ export default function POSPage() {
 
         {/* Checkout Button */}
         <button
-          onClick={processCheckout}
-          disabled={cart.length === 0 || processing}
+          onClick={requestCheckout}
+          disabled={cart.length === 0 || processing || !!issue}
           className={`w-full py-3 rounded-lg font-semibold ${
-            cart.length === 0 || processing
+            cart.length === 0 || processing || issue
               ? "bg-gray-300 text-gray-500 cursor-not-allowed"
               : selectedPaymentMethod === "cash"
               ? "bg-green-600 text-white hover:bg-green-700"
@@ -1520,6 +1723,26 @@ export default function POSPage() {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={confirmingDiscount}
+        title={`¿Cobrar ${formatEuros(amountDueCents())} con un descuento de ${formatEuros(ticket.discountCents)}?`}
+        description={
+          <>
+            Subtotal {formatEuros(ticket.subtotalCents)}, descuento {formatEuros(ticket.discountCents)}.
+            {discountReasons.length > 0 && <> Motivo: {discountReasons.join(" · ")}.</>} El descuento queda
+            registrado a tu nombre.
+          </>
+        }
+        confirmLabel="Cobrar con descuento"
+        cancelLabel="Volver"
+        loading={processing}
+        onCancel={() => setConfirmingDiscount(false)}
+        onConfirm={() => {
+          setConfirmingDiscount(false);
+          void processCheckout();
+        }}
+      />
 
       <ConfirmDialog
         open={!!pendingVoid}

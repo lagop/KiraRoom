@@ -165,7 +165,8 @@ describe("POS pricing", () => {
       payments: [{ method: "cash", amount: 9250 }],
     } as any);
     expect(out.subtotal).toBe(2 * 4000 + 1250);
-    expect(out.items).toEqual([
+    // Lines also carry their discount amounts now (all 0 here).
+    expect(out.items).toMatchObject([
       { serviceId: "svc1", name: "Corte", price: 4000, quantity: 2 },
       { productId: "prod1", name: "Champú", price: 1250, quantity: 1 },
     ]);

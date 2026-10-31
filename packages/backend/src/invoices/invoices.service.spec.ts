@@ -374,6 +374,27 @@ describe("InvoiceService.fromOrder", () => {
     expect(m.invoices[0].subtotalCents).toBe(2000);
   });
 
+  it("the order's discount comes off its lines, tax on what is left, in both price modes", async () => {
+    const items = [
+      { quantity: 2, unitPrice: "10.00", product: { name: "Champú", taxRate: null } },
+      { quantity: 1, unitPrice: "20.00", product: { name: "Cepillo", taxRate: null } },
+    ];
+    for (const [settings, subtotal, total] of [
+      [{ defaultTaxRate: 21 }, 3600, 4356],
+      // Each 18,00 line: 14,88 + 3,12 (rounded per line).
+      [{ defaultTaxRate: 21, pricesIncludeTax: true }, 2976, 3600],
+    ] as const) {
+      const { m, svc } = setup(items as any, settings);
+      const order = await m.prisma.order.findUnique();
+      m.prisma.order.findUnique = async () => ({ ...order, discount: new Prisma.Decimal("4.00") });
+      await svc.fromOrder("order-1");
+      expect(m.invoices[0].subtotalCents).toBe(subtotal);
+      expect(m.invoices[0].totalCents).toBe(total);
+      // 4,00 shared in proportion: 2,00 on each 20,00 line, 10 % each.
+      expect(m.invoiceLines.map((l: any) => Number(l.discountPct))).toEqual([10, 10]);
+    }
+  });
+
   it("a product with its own rate (a fraction, 0.10) is invoiced at 10 %, not 0,10 %", async () => {
     const { m, svc } = setup(
       [
