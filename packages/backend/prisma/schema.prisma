@@ -667,6 +667,10 @@ model Appointment {
   reminder24hSent   Boolean @default(false)
   reminder1hSent    Boolean @default(false)
   reviewRequestSent Boolean @default(false)
+  /// Reminder sends that reached no channel. The scheduler retries on later
+  /// ticks up to a cap (MAX_REMINDER_ATTEMPTS in notifications.scheduler.ts).
+  reminder24hAttempts Int @default(0)
+  reminder1hAttempts  Int @default(0)
 
   /// P0 Ã¢â‚¬â€ Widget instance attribution
   widgetInstanceId String?
@@ -689,6 +693,9 @@ model Appointment {
   @@index([tenantId, clientId])
   @@index([status])
   @@index([paymentStatus])
+  /// Periodic jobs: the reminders select by startTime, the loyalty sweep by updatedAt.
+  @@index([startTime])
+  @@index([updatedAt])
   @@map("appointments")
 }
 

@@ -1,12 +1,78 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { AppointmentStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { realEmail } from '../common/placeholder-email';
 import { EmailService } from './services/email.service';
 import { SmsService } from './services/sms.service';
 import { WhatsAppService } from './services/whatsapp.service';
 import { NotificationsService } from './notifications.service';
 import { NotificationType } from './dto';
 import { WhatsAppTemplateService } from '../whatsapp/whatsapp-template.service';
+
+const MINUTE = 60 * 1000;
+const HOUR = 60 * MINUTE;
+
+/** Sends of one reminder that reached no channel are tried this many times in all. */
+export const MAX_REMINDER_ATTEMPTS = 3;
+
+/** Appointments taken per tick; the next tick picks up the rest. */
+const REMINDER_BATCH_SIZE = 500;
+
+const ACTIVE_STATUSES: AppointmentStatus[] = [AppointmentStatus.pending, AppointmentStatus.confirmed];
+
+/** What one channel did with a reminder: delivered, tried and failed, or not usable. */
+export type ChannelOutcome = 'sent' | 'failed' | 'skipped';
+
+interface ReminderKind {
+  hoursBefore: 24 | 1;
+  type: NotificationType;
+  sentField: 'reminder24hSent' | 'reminder1hSent';
+  attemptsField: 'reminder24hAttempts' | 'reminder1hAttempts';
+  /** Due once the appointment starts within this much of now. */
+  lead: number;
+  /** Neither sent nor retried when the appointment starts sooner than this. */
+  minLead: number;
+}
+
+/**
+ * Due from 24 h before the start. Below 2 h the 1-hour reminder takes over,
+ * so a late catch-up does not send both at once.
+ */
+export const REMINDER_24H: ReminderKind = {
+  hoursBefore: 24,
+  type: NotificationType.APPOINTMENT_REMINDER_24H,
+  sentField: 'reminder24hSent',
+  attemptsField: 'reminder24hAttempts',
+  lead: 24 * HOUR,
+  minLead: 2 * HOUR,
+};
+
+/** The job runs every 15 minutes, so this lands 55 to 70 minutes before. */
+export const REMINDER_1H: ReminderKind = {
+  hoursBefore: 1,
+  type: NotificationType.APPOINTMENT_REMINDER_1H,
+  sentField: 'reminder1hSent',
+  attemptsField: 'reminder1hAttempts',
+  lead: 70 * MINUTE,
+  minLead: 10 * MINUTE,
+};
+
+const reminderInclude = {
+  client: true,
+  professional: true,
+  service: true,
+  tenant: true,
+} satisfies Prisma.AppointmentInclude;
+
+type ReminderAppointment = Prisma.AppointmentGetPayload<{ include: typeof reminderInclude }>;
+
+/** Delivered when any channel delivered; failed when none did and one failed. */
+function combine(outcomes: ChannelOutcome[]): ChannelOutcome {
+  if (outcomes.includes('sent')) return 'sent';
+  if (outcomes.includes('failed')) return 'failed';
+  return 'skipped';
+}
 
 @Injectable()
 export class NotificationsScheduler {
@@ -27,7 +93,7 @@ export class NotificationsScheduler {
    * appointment is outside WhatsApp's 24-hour window and is refused); the
    * platform's Twilio sender otherwise, as before.
    */
-  private async sendWhatsAppReminder(appointment: any, hoursBefore: number): Promise<void> {
+  private async sendWhatsAppReminder(appointment: any, hoursBefore: number): Promise<ChannelOutcome> {
     const viaSalon = await this.whatsappTemplates.sendAppointmentReminder(appointment.tenantId, {
       phone: appointment.client.phone,
       clientName: appointment.client.firstName,
@@ -37,11 +103,15 @@ export class NotificationsScheduler {
       time: appointment.scheduledTime,
       country: appointment.tenant.country ?? undefined,
     });
-    if (viaSalon.sent) return;
+    if (viaSalon.sent) return 'sent';
+    // Not connected, or the template not approved: the salon has no WhatsApp
+    // for this. Any other reason is Meta refusing a send that was tried.
+    const salonUnavailable = viaSalon.reason === 'not_connected' || !!viaSalon.reason?.startsWith('template_');
     if (viaSalon.reason !== 'not_connected') {
       this.logger.log(`WhatsApp template not used for appointment ${appointment.id}: ${viaSalon.reason}`);
     }
-    await this.whatsappService.sendAppointmentReminder({
+    if (!this.whatsappService.isConfigured()) return salonUnavailable ? 'skipped' : 'failed';
+    const result = await this.whatsappService.sendAppointmentReminder({
       clientName: appointment.client.firstName,
       clientPhone: appointment.client.phone,
       serviceName: appointment.service.name,
@@ -50,261 +120,265 @@ export class NotificationsScheduler {
       time: appointment.scheduledTime,
       salonName: appointment.tenant.name,
     }, hoursBefore);
+    return result?.success ? 'sent' : 'failed';
   }
 
   /**
    * 24-Hour Reminder Cron Job
-   * Runs every hour to send reminders for appointments ~24 hours away
+   * Runs every hour. Takes every appointment whose reminder is due and not
+   * yet sent, not only those exactly 24 h away, so a tick missed during a
+   * deploy or restart is caught up on the next one.
    */
   @Cron(CronExpression.EVERY_HOUR)
-  async send24HourReminders() {
-    this.logger.log('Running 24-hour reminder job...');
-
-    try {
-      // Find appointments that are ~24 hours from now
-      const now = new Date();
-      const in24Hours = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-      const windowStart = new Date(in24Hours.getTime() - 30 * 60 * 1000); // 30 min window
-      const windowEnd = new Date(in24Hours.getTime() + 30 * 60 * 1000);
-
-      const appointments = await this.prisma.appointment.findMany({
-        where: {
-          startTime: { gte: windowStart, lte: windowEnd },
-          status: { in: ['confirmed', 'pending'] },
-          reminder24hSent: false,
-        },
-        include: {
-          client: true,
-          professional: true,
-          service: true,
-          tenant: true,
-        },
-      });
-
-      this.logger.log(`Found ${appointments.length} appointments for 24-hour reminders`);
-
-      let sentCount = 0;
-      let errorCount = 0;
-
-      for (const appointment of appointments) {
-        try {
-          // Check client notification preferences before sending
-          const canSendEmail = appointment.clientId && 
-            await this.notificationsService.shouldSendNotification(
-              appointment.clientId,
-              NotificationType.APPOINTMENT_REMINDER_24H,
-              'email'
-            );
-          const canSendSms = appointment.clientId && 
-            await this.notificationsService.shouldSendNotification(
-              appointment.clientId,
-              NotificationType.APPOINTMENT_REMINDER_24H,
-              'sms'
-            );
-
-          // Create in-app notification
-          await this.notificationsService.create({
-            tenantId: appointment.tenantId,
-            clientId: appointment.clientId,
-            type: NotificationType.APPOINTMENT_REMINDER_24H,
-            title: 'Recordatorio de cita',
-            message: `Tu cita de ${appointment.service.name} es mañana. ¡Te esperamos!`,
-            data: {
-              appointmentId: appointment.id,
-              serviceName: appointment.service.name,
-              professionalName: `${appointment.professional.firstName} ${appointment.professional.lastName}`,
-              scheduledDate: appointment.scheduledDate,
-              scheduledTime: appointment.scheduledTime,
-            },
-          });
-
-          // Send email reminder if client has email and has enabled email notifications
-          if (appointment.client.email && canSendEmail) {
-            try {
-              await this.emailService.sendAppointmentReminder({
-                clientName: `${appointment.client.firstName} ${appointment.client.lastName}`,
-                clientEmail: appointment.client.email,
-                serviceName: appointment.service.name,
-                professionalName: `${appointment.professional.firstName} ${appointment.professional.lastName}`,
-                date: appointment.scheduledDate.toISOString().split('T')[0],
-                time: appointment.scheduledTime,
-                salonName: appointment.tenant.name,
-                salonAddress: this.formatAddress(appointment.tenant),
-              }, 24);
-            } catch (emailError) {
-              this.logger.error(`Failed to send 24h email reminder for appointment ${appointment.id}: ${emailError.message}`);
-            }
-          } else if (appointment.client.email && !canSendEmail) {
-            this.logger.log(`Skipping 24h email reminder for appointment ${appointment.id}: client preferences disabled`);
-          }
-
-          // Send SMS reminder if client has phone and has enabled SMS notifications
-          if (appointment.client.phone && canSendSms) {
-            try {
-              await this.smsService.sendAppointmentReminder({
-                clientName: appointment.client.firstName,
-                clientPhone: appointment.client.phone,
-                serviceName: appointment.service.name,
-                professionalName: `${appointment.professional.firstName} ${appointment.professional.lastName}`,
-                date: appointment.scheduledDate.toISOString().split('T')[0],
-                time: appointment.scheduledTime,
-                salonName: appointment.tenant.name,
-              }, 24);
-            } catch (smsError) {
-              this.logger.error(`Failed to send 24h SMS reminder for appointment ${appointment.id}: ${smsError.message}`);
-            }
-          } else if (appointment.client.phone && !canSendSms) {
-            this.logger.log(`Skipping 24h SMS reminder for appointment ${appointment.id}: client preferences disabled`);
-          }
-
-          // Send WhatsApp reminder if client has phone and has enabled WhatsApp notifications
-          const canSendWhatsapp = appointment.clientId && 
-            await this.notificationsService.shouldSendNotification(
-              appointment.clientId,
-              NotificationType.APPOINTMENT_REMINDER_24H,
-              'whatsapp'
-            );
-          if (appointment.client.phone && canSendWhatsapp) {
-            try {
-              await this.sendWhatsAppReminder(appointment, 24);
-            } catch (whatsappError) {
-              this.logger.error(`Failed to send 24h WhatsApp reminder for appointment ${appointment.id}: ${whatsappError.message}`);
-            }
-          } else if (appointment.client.phone && !canSendWhatsapp) {
-            this.logger.log(`Skipping 24h WhatsApp reminder for appointment ${appointment.id}: client preferences disabled`);
-          }
-
-          // Mark reminder as sent
-          await this.prisma.appointment.update({
-            where: { id: appointment.id },
-            data: { reminder24hSent: true },
-          });
-
-          sentCount++;
-        } catch (error) {
-          this.logger.error(`Failed to send 24-hour reminder for appointment ${appointment.id}: ${error.message}`);
-          errorCount++;
-        }
-      }
-
-      this.logger.log(`24-hour reminder job completed: ${sentCount} sent, ${errorCount} errors`);
-    } catch (error) {
-      this.logger.error(`24-hour reminder job failed: ${error.message}`);
-    }
+  async send24HourReminders(now: Date = new Date()) {
+    return this.runReminders(REMINDER_24H, now);
   }
 
   /**
    * 1-Hour Reminder Cron Job
-   * Runs every 15 minutes to send reminders for appointments ~1 hour away
+   * Runs every 15 minutes. By SMS or WhatsApp; by email when the salon has
+   * neither for this client.
    */
   @Cron('*/15 * * * *')
-  async send1HourReminders() {
-    this.logger.log('Running 1-hour reminder job...');
+  async send1HourReminders(now: Date = new Date()) {
+    return this.runReminders(REMINDER_1H, now);
+  }
+
+  /**
+   * Appointments whose reminder is due: starting within `lead` (by the real
+   * UTC startTime) but not sooner than `minLead`, still pending or
+   * confirmed, not reminded, and with attempts left. One booked after the
+   * reminder's moment (e.g. this morning for this afternoon) gets none: the
+   * booking confirmation has just told the client.
+   */
+  async dueReminders(kind: ReminderKind, now: Date): Promise<ReminderAppointment[]> {
+    const due = await this.prisma.appointment.findMany({
+      where: {
+        startTime: {
+          gt: new Date(now.getTime() + kind.minLead),
+          lte: new Date(now.getTime() + kind.lead),
+        },
+        status: { in: ACTIVE_STATUSES },
+        [kind.sentField]: false,
+        [kind.attemptsField]: { lt: MAX_REMINDER_ATTEMPTS },
+      },
+      include: reminderInclude,
+      orderBy: { startTime: 'asc' },
+      take: REMINDER_BATCH_SIZE,
+    });
+    return due.filter((a) => a.createdAt.getTime() <= a.startTime!.getTime() - kind.lead);
+  }
+
+  private async runReminders(kind: ReminderKind, now: Date) {
+    const label = `${kind.hoursBefore}-hour`;
+    this.logger.log(`Running ${label} reminder job...`);
+    const counts = { sent: 0, failed: 0, skipped: 0 };
 
     try {
-      // Find appointments that are ~1 hour from now
-      const now = new Date();
-      const in1Hour = new Date(now.getTime() + 60 * 60 * 1000);
-      const windowStart = new Date(in1Hour.getTime() - 15 * 60 * 1000);
-      const windowEnd = new Date(in1Hour.getTime() + 15 * 60 * 1000);
-
-      const appointments = await this.prisma.appointment.findMany({
-        where: {
-          startTime: { gte: windowStart, lte: windowEnd },
-          status: { in: ['confirmed', 'pending'] },
-          reminder1hSent: false,
-        },
-        include: {
-          client: true,
-          professional: true,
-          service: true,
-          tenant: true,
-        },
-      });
-
-      this.logger.log(`Found ${appointments.length} appointments for 1-hour reminders`);
-
-      let sentCount = 0;
-      let errorCount = 0;
+      const appointments = await this.dueReminders(kind, now);
+      this.logger.log(`Found ${appointments.length} appointments for ${label} reminders`);
 
       for (const appointment of appointments) {
         try {
-          // Check client notification preferences before sending
-          const canSendSms = appointment.clientId && 
-            await this.notificationsService.shouldSendNotification(
-              appointment.clientId,
-              NotificationType.APPOINTMENT_REMINDER_1H,
-              'sms'
-            );
-
-          // Create in-app notification
-          await this.notificationsService.create({
-            tenantId: appointment.tenantId,
-            clientId: appointment.clientId,
-            type: NotificationType.APPOINTMENT_REMINDER_1H,
-            title: 'Tu cita es en 1 hora',
-            message: `Tu cita de ${appointment.service.name} comienza en 1 hora. ¡Prepárate!`,
-            data: {
-              appointmentId: appointment.id,
-              serviceName: appointment.service.name,
-              professionalName: `${appointment.professional.firstName} ${appointment.professional.lastName}`,
-              scheduledDate: appointment.scheduledDate,
-              scheduledTime: appointment.scheduledTime,
-            },
-          });
-
-          // Send SMS reminder (1-hour reminders are typically SMS only)
-          if (appointment.client.phone && canSendSms) {
-            try {
-              await this.smsService.sendAppointmentReminder({
-                clientName: appointment.client.firstName,
-                clientPhone: appointment.client.phone,
-                serviceName: appointment.service.name,
-                professionalName: `${appointment.professional.firstName} ${appointment.professional.lastName}`,
-                date: appointment.scheduledDate.toISOString().split('T')[0],
-                time: appointment.scheduledTime,
-                salonName: appointment.tenant.name,
-              }, 1);
-            } catch (smsError) {
-              this.logger.error(`Failed to send 1h SMS reminder for appointment ${appointment.id}: ${smsError.message}`);
-            }
-          } else if (appointment.client.phone && !canSendSms) {
-            this.logger.log(`Skipping 1h SMS reminder for appointment ${appointment.id}: client preferences disabled`);
-          }
-
-          // Send WhatsApp reminder if client has phone and has enabled WhatsApp notifications
-          const canSendWhatsapp = appointment.clientId && 
-            await this.notificationsService.shouldSendNotification(
-              appointment.clientId,
-              NotificationType.APPOINTMENT_REMINDER_1H,
-              'whatsapp'
-            );
-          if (appointment.client.phone && canSendWhatsapp) {
-            try {
-              await this.sendWhatsAppReminder(appointment, 1);
-            } catch (whatsappError) {
-              this.logger.error(`Failed to send 1h WhatsApp reminder for appointment ${appointment.id}: ${whatsappError.message}`);
-            }
-          } else if (appointment.client.phone && !canSendWhatsapp) {
-            this.logger.log(`Skipping 1h WhatsApp reminder for appointment ${appointment.id}: client preferences disabled`);
-          }
-
-          // Mark reminder as sent
-          await this.prisma.appointment.update({
-            where: { id: appointment.id },
-            data: { reminder1hSent: true },
-          });
-
-          sentCount++;
+          const outcome = await this.remind(appointment, kind);
+          if (outcome) counts[outcome]++;
         } catch (error) {
-          this.logger.error(`Failed to send 1-hour reminder for appointment ${appointment.id}: ${error.message}`);
-          errorCount++;
+          this.logger.error(`Failed to process ${label} reminder for appointment ${appointment.id}: ${error.message}`);
+          counts.failed++;
         }
       }
 
-      this.logger.log(`1-hour reminder job completed: ${sentCount} sent, ${errorCount} errors`);
+      this.logger.log(
+        `${label} reminder job completed: ${counts.sent} sent, ${counts.failed} failed, ${counts.skipped} without a channel`,
+      );
     } catch (error) {
-      this.logger.error(`1-hour reminder job failed: ${error.message}`);
+      this.logger.error(`${label} reminder job failed: ${error.message}`);
+    }
+    return counts;
+  }
+
+  /**
+   * Claims the reminder, sends it, and gives it back for a later tick when
+   * no channel delivered it.
+   *
+   * The claim is the review requests' one (ReviewsService.dispatchForTenant):
+   * the update that flips the flag wins, so with two backend instances, or a
+   * tick that overlaps the previous one, only one sends. It also matches the
+   * attempt count and start time it read, so a row released by a failed send,
+   * or moved meanwhile, is not taken on a stale read. The flag only stays set
+   * when a channel delivered (or none was usable); a failed send clears it
+   * again and counts the attempt. Returns null when another run had it.
+   */
+  async remind(appointment: ReminderAppointment, kind: ReminderKind): Promise<ChannelOutcome | null> {
+    const attempts = appointment[kind.attemptsField];
+    const claimed = await this.prisma.appointment.updateMany({
+      where: {
+        id: appointment.id,
+        [kind.sentField]: false,
+        [kind.attemptsField]: attempts,
+        startTime: appointment.startTime,
+        status: { in: ACTIVE_STATUSES },
+      },
+      data: { [kind.sentField]: true },
+    });
+    if (claimed.count !== 1) return null;
+
+    let outcome: ChannelOutcome;
+    try {
+      outcome = await this.deliver(appointment, kind, attempts === 0);
+    } catch (error) {
+      this.logger.error(`Failed to send ${kind.hoursBefore}h reminder for appointment ${appointment.id}: ${error.message}`);
+      outcome = 'failed';
+    }
+
+    if (outcome === 'failed') {
+      await this.prisma.appointment.update({
+        where: { id: appointment.id },
+        data: { [kind.sentField]: false, [kind.attemptsField]: { increment: 1 } },
+      });
+      if (attempts + 1 >= MAX_REMINDER_ATTEMPTS) {
+        this.logger.warn(
+          `${kind.hoursBefore}h reminder for appointment ${appointment.id} failed ${MAX_REMINDER_ATTEMPTS} times: giving up`,
+        );
+      }
+    } else if (outcome === 'skipped') {
+      this.logger.log(`No channel for the ${kind.hoursBefore}h reminder of appointment ${appointment.id}`);
+    }
+    return outcome;
+  }
+
+  private async deliver(
+    appointment: ReminderAppointment,
+    kind: ReminderKind,
+    firstAttempt: boolean,
+  ): Promise<ChannelOutcome> {
+    const professionalName = `${appointment.professional.firstName} ${appointment.professional.lastName}`;
+
+    // In-app, once: a retry is for the external channels.
+    if (firstAttempt) {
+      await this.notificationsService
+        .create({
+          tenantId: appointment.tenantId,
+          clientId: appointment.clientId,
+          type: kind.type,
+          ...(kind.hoursBefore === 1
+            ? {
+                title: 'Tu cita es en 1 hora',
+                message: `Tu cita de ${appointment.service.name} comienza en 1 hora. ¡Prepárate!`,
+              }
+            : {
+                title: 'Recordatorio de cita',
+                message: `Tu cita de ${appointment.service.name} es mañana. ¡Te esperamos!`,
+              }),
+          data: {
+            appointmentId: appointment.id,
+            serviceName: appointment.service.name,
+            professionalName,
+            scheduledDate: appointment.scheduledDate,
+            scheduledTime: appointment.scheduledTime,
+          },
+        })
+        .catch((error) =>
+          this.logger.error(`In-app ${kind.hoursBefore}h reminder for appointment ${appointment.id} failed: ${error.message}`),
+        );
+    }
+
+    const outcomes: ChannelOutcome[] = [];
+
+    // 24 h: by email as well as by phone. 1 h: by phone, email only as the
+    // fallback below.
+    if (kind.hoursBefore === 24) {
+      outcomes.push(await this.emailReminder(appointment, kind));
+    }
+
+    if (appointment.client.phone && (await this.allowed(appointment, kind, 'sms'))) {
+      outcomes.push(
+        this.smsService.isConfigured()
+          ? await this.attempt(appointment, kind, 'SMS', async () => {
+              const result = await this.smsService.sendAppointmentReminder({
+                clientName: appointment.client.firstName,
+                clientPhone: appointment.client.phone!,
+                serviceName: appointment.service.name,
+                professionalName,
+                date: appointment.scheduledDate.toISOString().split('T')[0],
+                time: appointment.scheduledTime,
+                salonName: appointment.tenant.name,
+              }, kind.hoursBefore);
+              return result?.success ? 'sent' : 'failed';
+            })
+          : 'skipped',
+      );
+    }
+
+    if (appointment.client.phone && (await this.allowed(appointment, kind, 'whatsapp'))) {
+      outcomes.push(
+        await this.attempt(appointment, kind, 'WhatsApp', () => this.sendWhatsAppReminder(appointment, kind.hoursBefore)),
+      );
+    }
+
+    // Production has neither SMS nor WhatsApp for most salons: the 1-hour
+    // reminder then goes by email rather than not at all.
+    if (kind.hoursBefore === 1 && !outcomes.some((o) => o !== 'skipped')) {
+      outcomes.push(await this.emailReminder(appointment, kind));
+    }
+
+    return combine(outcomes);
+  }
+
+  private async emailReminder(appointment: ReminderAppointment, kind: ReminderKind): Promise<ChannelOutcome> {
+    const email = realEmail(appointment.client.email);
+    if (!email || !this.emailService.isConfigured()) return 'skipped';
+    if (!(await this.allowed(appointment, kind, 'email'))) return 'skipped';
+    return this.attempt(appointment, kind, 'email', async () => {
+      const result = await this.emailService.sendAppointmentReminder({
+        clientName: `${appointment.client.firstName} ${appointment.client.lastName}`,
+        clientEmail: email,
+        serviceName: appointment.service.name,
+        professionalName: `${appointment.professional.firstName} ${appointment.professional.lastName}`,
+        date: appointment.scheduledDate.toISOString().split('T')[0],
+        time: appointment.scheduledTime,
+        salonName: appointment.tenant.name,
+        salonAddress: this.formatAddress(appointment.tenant),
+      }, kind.hoursBefore, {
+        // A retry after a send that timed out but went through is not delivered twice.
+        idempotencyKey: `appointment-reminder-${kind.hoursBefore}h-${appointment.id}-${appointment.startTime!.getTime()}`,
+      });
+      return result?.success ? 'sent' : 'failed';
+    });
+  }
+
+  /** The client's notification preferences for this reminder and channel. */
+  private async allowed(
+    appointment: ReminderAppointment,
+    kind: ReminderKind,
+    channel: 'email' | 'sms' | 'whatsapp',
+  ): Promise<boolean> {
+    const allowed =
+      !!appointment.clientId &&
+      (await this.notificationsService.shouldSendNotification(appointment.clientId, kind.type, channel));
+    if (!allowed) {
+      this.logger.log(`Skipping ${kind.hoursBefore}h ${channel} reminder for appointment ${appointment.id}: client preferences disabled`);
+    }
+    return allowed;
+  }
+
+  private async attempt(
+    appointment: ReminderAppointment,
+    kind: ReminderKind,
+    channel: string,
+    send: () => Promise<ChannelOutcome>,
+  ): Promise<ChannelOutcome> {
+    try {
+      const outcome = await send();
+      if (outcome === 'failed') {
+        this.logger.error(`Failed to send ${kind.hoursBefore}h ${channel} reminder for appointment ${appointment.id}`);
+      }
+      return outcome;
+    } catch (error) {
+      this.logger.error(
+        `Failed to send ${kind.hoursBefore}h ${channel} reminder for appointment ${appointment.id}: ${error.message}`,
+      );
+      return 'failed';
     }
   }
 
