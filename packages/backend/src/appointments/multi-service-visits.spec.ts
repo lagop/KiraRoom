@@ -43,6 +43,8 @@ const colourWithRinse = () => ({
 /** Reschedule-check reads: Madrid, Ana and Bea on Mondays, and these appointments. */
 function salonReads(appointments: any[]) {
   return {
+    // No time off recorded (time-off-query.ts).
+    timeOff: { findMany: jest.fn(async () => []) },
     tenant: { findUnique: jest.fn(async () => ({ id: TENANT, openingHours: {}, timezone: "Europe/Madrid" })) },
     professional: {
       findFirst: jest.fn(async (args: any) =>

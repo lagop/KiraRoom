@@ -37,6 +37,8 @@ function selectKeys(select: any, prefix = ""): string[] {
 
 function makeService({ tlsReady = false, subdomains = false, tenant = {} as any } = {}) {
   const prisma = {
+    // No time off recorded (time-off-query.ts).
+    timeOff: { findMany: jest.fn(async () => []) },
     tenant: {
       findFirst: jest.fn(async () =>
         tenant === null
@@ -151,6 +153,27 @@ describe("PublicSiteService.getPage", () => {
     expect(tenantArgs.where.deletedAt).toBeNull();
     expect(serviceArgs.where).toEqual({ tenantId: "t1", isActive: true });
     expect(proArgs.where).toEqual({ tenantId: "t1", isActive: true });
+  });
+
+  it("lists the days the salon is closed, from today on, as bare dates", async () => {
+    const { svc, prisma } = makeService();
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Madrid" }).format(new Date());
+    const at = (offset: number) => new Date(Date.parse(`${today}T00:00:00.000Z`) + offset * 86_400_000);
+    const day = (offset: number) => at(offset).toISOString().slice(0, 10);
+    prisma.timeOff.findMany.mockImplementation((async () => [
+      // Started yesterday: only today and tomorrow are still ahead.
+      { professionalId: null, kind: "closure", startDate: at(-1), endDate: at(1) },
+      { professionalId: null, kind: "closure", startDate: at(10), endDate: at(10) },
+    ]) as any);
+
+    const page = await svc.getPage("salon-luna");
+
+    expect(page.closedDays).toEqual([day(0), day(1), day(10)]);
+    const args = (prisma.timeOff.findMany.mock.calls[0] as any[])[0];
+    // The salon's whole-day closures only: no professional's time off, and
+    // nothing but dates leaves the database (no note).
+    expect(args.where).toMatchObject({ tenantId: "t1", professionalId: null, startTime: null });
+    expect(Object.keys(args.select)).not.toContain("note");
   });
 
   it("404s for an unknown or deleted salon", async () => {

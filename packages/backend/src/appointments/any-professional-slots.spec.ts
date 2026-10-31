@@ -12,6 +12,8 @@ const DAY = new Date("2026-10-01T00:00:00.000Z"); // a Thursday
 
 function build(professionals: Array<{ id: string; workingHours?: unknown }>, appointments: any[]) {
   const prisma: any = {
+    // No time off recorded (time-off-query.ts).
+    timeOff: { findMany: jest.fn(async () => []) },
     tenant: { findUnique: async () => ({ id: TENANT, openingHours: {}, timezone: "Europe/Madrid" }) },
     professional: {
       findMany: async () => professionals.map((p) => ({ tenantId: TENANT, isActive: true, workingHours: null, ...p })),

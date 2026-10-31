@@ -3,6 +3,8 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { AppointmentsService } from '../../appointments/appointments.service';
 import { confirmAppointment, notBookableOnline, proposeAppointment } from './receptionist-booking';
 import { resolveIds } from './resolve-ids';
+import { dayBlocks, salonClosedOn } from '../../time-off/time-off-rules';
+import { timeOffBetween } from '../../time-off/time-off-query';
 
 /**
  * Tools the Virtual Receptionist exposes to the LLM.
@@ -493,7 +495,7 @@ export class SalonToolsService {
         typeof s === 'string' ? s : s?.time,
       ).filter((t: unknown): t is string => typeof t === 'string');
       if (flat.length === 0) {
-        const why = await this.whyNoSlots(ctx, input.serviceId, input.date);
+        const why = await this.whyNoSlots(ctx, input.serviceId, input.date, input.professionalId);
         if (why) return { date: input.date, serviceId: input.serviceId, slots: [], ...why };
       }
       return { date: input.date, serviceId: input.serviceId, slots: flat as any };
@@ -506,16 +508,34 @@ export class SalonToolsService {
   }
 
   /**
-   * Why a day has no slots, when the reason is the online booking window.
-   * An empty list alone left the model guessing: asked for 15 December, it
-   * said its calendar "only reaches 13 October" -- the two-week date list in
-   * the prompt -- and suggested booking a nearer date and changing it later.
+   * Why a day has no slots, when the reason is a salon closure, the named
+   * professional's time off, or the online booking window. An empty list
+   * alone left the model guessing: asked for 15 December, it said its
+   * calendar "only reaches 13 October" -- the two-week date list in the
+   * prompt -- and suggested booking a nearer date and changing it later.
+   *
+   * Never the note or the kind of an absence: the client reads what the model
+   * makes of this, and why a stylist is away is not theirs to know.
    */
   private async whyNoSlots(
     ctx: SalonToolContext,
     serviceId: string,
     date: string,
+    professionalId?: string,
   ): Promise<{ reason: string; message: string } | null> {
+    const closures = await this.timeOffOn(ctx, date);
+    if (salonClosedOn(closures, date)) {
+      return {
+        reason: 'salon_closed',
+        message: `The salon is closed all day on ${date}. Tell the client it is closed that day and offer another day.`,
+      };
+    }
+    if (professionalId && dayBlocks(closures, date, professionalId).allDay) {
+      return {
+        reason: 'professional_unavailable',
+        message: `That professional is not available on ${date}. Offer another day, or another professional who does this service.`,
+      };
+    }
     const appointments = ctx.appointmentsService as any;
     if (typeof appointments?.onlineBookingWindow !== 'function') return null;
     const window = await appointments.onlineBookingWindow(ctx.tenantId, serviceId);
@@ -536,6 +556,17 @@ export class SalonToolsService {
       };
     }
     return null;
+  }
+
+  /** The salon's time off and closures on `date`; none when it cannot be read. */
+  private async timeOffOn(ctx: SalonToolContext, date: string) {
+    try {
+      return await timeOffBetween(ctx.prisma as any, ctx.tenantId, date);
+    } catch (err) {
+      // Only the explanation is lost: availability itself already read it.
+      this.logger.warn(`timeOffOn failed tenant=${ctx.tenantId} date=${date}: ${(err as Error).message}`);
+      return [];
+    }
   }
 
   /** Step 1 of booking; see receptionist-booking.ts. */

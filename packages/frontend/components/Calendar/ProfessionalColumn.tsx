@@ -12,14 +12,18 @@ import {
   localDay,
   minutesToTop,
   offShiftBands,
+  timeOffBands,
   type HoursRange,
 } from "./day-grid";
+import type { TimeOff } from "@/lib/time-off";
 
 interface ProfessionalColumnProps {
   professional: Professional;
   date: Date;
   hours: HoursRange;
   appointments: Appointment[];
+  /** The day's time off and closures; the column picks its own and the salon's. */
+  timeOff?: TimeOff[];
   draggingId?: string | null;
   onAppointmentClick?: (appointmentId: string) => void;
   onSlotClick?: (data: SlotClickData) => void;
@@ -36,6 +40,7 @@ export const ProfessionalColumn: React.FC<ProfessionalColumnProps> = ({
   date,
   hours,
   appointments,
+  timeOff,
   draggingId,
   onAppointmentClick,
   onSlotClick,
@@ -70,6 +75,13 @@ export const ProfessionalColumn: React.FC<ProfessionalColumnProps> = ({
   const offShift = useMemo(
     () => offShiftBands(localDay(date), professional.workingHours, hours),
     [date, professional.workingHours, hours],
+  );
+
+  // Time off and salon closures, labelled. Shaded like the time outside a shift,
+  // and as click-through: the server decides (an owner may confirm a walk-in).
+  const away = useMemo(
+    () => timeOffBands(localDay(date), professional.id, timeOff ?? [], hours),
+    [date, professional.id, timeOff, hours],
   );
 
   const { setNodeRef } = useDroppable({
@@ -116,6 +128,26 @@ export const ProfessionalColumn: React.FC<ProfessionalColumnProps> = ({
               height: ((band.end - band.start) / 15) * SLOT_HEIGHT,
             }}
           />
+        ))}
+        {away.map((band, i) => (
+          <div
+            key={`away-${i}`}
+            data-test="time-off"
+            title={band.label}
+            className={`absolute inset-x-0 pointer-events-none overflow-hidden border-y ${
+              band.salon ? "bg-amber-100/70 border-amber-200" : "bg-slate-200/70 border-slate-300"
+            }`}
+            style={{
+              top: minutesToTop(band.start, hours.startHour),
+              height: ((band.end - band.start) / 15) * SLOT_HEIGHT,
+              backgroundImage:
+                "repeating-linear-gradient(135deg, transparent 0 8px, rgba(100,116,139,0.12) 8px 16px)",
+            }}
+          >
+            <span className="block px-2 py-1 text-xs font-medium text-slate-700 truncate">
+              {band.label}
+            </span>
+          </div>
         ))}
         {released.map((appointment) => (
           <AppointmentBlock

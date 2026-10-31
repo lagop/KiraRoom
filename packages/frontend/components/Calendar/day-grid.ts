@@ -11,6 +11,7 @@
  * midnight it stands for, and moved with calendar arithmetic.
  */
 import { addDays, format } from "date-fns";
+import { calendarLabel, type TimeOff } from "../../lib/time-off";
 
 /** 15 minutes of grid. */
 export const SLOT_HEIGHT = 24;
@@ -177,6 +178,51 @@ export function offShiftBands(day: string, workingHours: unknown, range: HoursRa
   }
   if (cursor < bottom) bands.push({ start: cursor, end: bottom });
   return bands.filter((b) => b.end > b.start);
+}
+
+/** A stretch of a column covered by time off or a salon closure. */
+export interface TimeOffBand extends MinuteRange {
+  label: string;
+  /** The salon is closed (drawn across every column), not one person away. */
+  salon: boolean;
+}
+
+type CalendarTimeOff = Pick<TimeOff, "professionalId" | "kind" | "startDate" | "endDate" | "startTime" | "endTime" | "note">;
+
+/**
+ * The time off and closures to shade in a professional's column on `day`,
+ * clipped to the drawn hours: the salon's closures and the professional's own
+ * blocks, all day or their hours. Shaded, not blocked, like the time outside
+ * a shift: an owner may still book a walk-in there (the server asks them to
+ * confirm it), so clicks pass through.
+ */
+export function timeOffBands(
+  day: string,
+  professionalId: string,
+  blocks: ReadonlyArray<CalendarTimeOff>,
+  range: HoursRange,
+): TimeOffBand[] {
+  const top = range.startHour * 60;
+  const bottom = range.endHour * 60;
+  const bands: TimeOffBand[] = [];
+  for (const b of blocks) {
+    if (b.professionalId !== null && b.professionalId !== professionalId) continue;
+    if (!(b.startDate <= day && day <= b.endDate)) continue;
+    // No hours: the whole day. An unreadable hour is read as the day's edge.
+    const from = b.startTime ? (minutesOf(b.startTime) ?? 0) : 0;
+    const to = b.endTime ? (minutesOf(b.endTime) ?? 24 * 60) : 24 * 60;
+    const start = Math.max(top, from);
+    const end = Math.min(bottom, to);
+    if (end <= start) continue;
+    bands.push({ start, end, label: calendarLabel(b), salon: b.professionalId === null });
+  }
+  // The salon's first, so its label is the one on top when they overlap.
+  return bands.sort((a, b) => Number(b.salon) - Number(a.salon) || a.start - b.start);
+}
+
+/** The salon's all-day closure on `day`, if any: the calendar says so above the grid. */
+export function salonClosureOn<T extends CalendarTimeOff>(day: string, blocks: ReadonlyArray<T>): T | null {
+  return blocks.find((b) => b.professionalId === null && !b.startTime && b.startDate <= day && day <= b.endDate) ?? null;
 }
 
 /** Pixels from the top of the hours (below the professionals' row). */

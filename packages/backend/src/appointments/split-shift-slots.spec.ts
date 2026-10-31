@@ -25,6 +25,8 @@ function build(
   appointments: Array<{ professionalId: string; scheduledTime: string; duration: number }> = [],
 ) {
   const prisma: any = {
+    // No time off recorded (time-off-query.ts).
+    timeOff: { findMany: jest.fn(async () => []) },
     tenant: {
       // Wider than any shift, so only the shifts decide.
       findUnique: jest.fn(async () => ({

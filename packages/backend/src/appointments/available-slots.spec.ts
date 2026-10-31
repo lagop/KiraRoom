@@ -38,6 +38,8 @@ function build({
   }>,
 } = {}) {
   const prisma: any = {
+    // No time off recorded (time-off-query.ts).
+    timeOff: { findMany: jest.fn(async () => []) },
     tenant: {
       findUnique: jest.fn().mockResolvedValue({ id: TENANT_ID, openingHours }),
     },

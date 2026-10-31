@@ -97,6 +97,7 @@ export const DASHBOARD_NAV: NavEntry[] = [
       link("settings", "/dashboard/settings", "nav.settings_general", "sliders", { exact: true }),
       link("billing", "/dashboard/billing", "nav.billing", "euro", { exact: true }),
       link("salon", "/dashboard/settings/salon", "nav.salon", "store"),
+      link("closures", "/dashboard/settings/cierres", "nav.closures", "calendar-off"),
       link("domain", "/dashboard/settings/domain", "nav.domain", "globe"),
       link("security", "/dashboard/settings/seguridad", "nav.security", "shield"),
       link("rebooking", "/dashboard/settings/rebooking", "rebooking.settings.title", "repeat", { pro: true }),

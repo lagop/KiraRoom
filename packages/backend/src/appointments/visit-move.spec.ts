@@ -99,6 +99,8 @@ function salon(opts: { busy?: Record<string, Array<{ scheduledTime: string; dura
     appointment: { update: jest.fn(async (a: any) => (updates.push(["appointment", a]), { ...appointment, ...a.data })) },
   };
   const prisma: any = {
+    // No time off recorded (time-off-query.ts).
+    timeOff: { findMany: jest.fn(async () => []) },
     appointmentService: { findUnique: jest.fn(async () => ({ appointmentId: "a1" })) },
     appointment: {
       findFirst: jest.fn(async () => appointment),

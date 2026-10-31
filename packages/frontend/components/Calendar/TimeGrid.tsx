@@ -7,12 +7,15 @@ import { SlotClickData } from "./TimeSlot";
 import { pickedDay, salonClock } from "./salon-time";
 import { useSalonTimeZone } from "./SalonTimeZone";
 import { HEADER_HEIGHT, HOUR_HEIGHT, minutesToTop, type HoursRange } from "./day-grid";
+import type { TimeOff } from "@/lib/time-off";
 
 interface TimeGridProps {
   date: Date;
   hours: HoursRange;
   professionals: Professional[];
   appointments: Appointment[];
+  /** The day's time off and closures. */
+  timeOff?: TimeOff[];
   draggingId?: string | null;
   onAppointmentClick?: (appointmentId: string) => void;
   onSlotClick?: (data: SlotClickData) => void;
@@ -47,6 +50,7 @@ export const TimeGrid: React.FC<TimeGridProps> = ({
   hours: range,
   professionals,
   appointments,
+  timeOff = [],
   draggingId,
   onAppointmentClick,
   onSlotClick,
@@ -98,6 +102,7 @@ export const TimeGrid: React.FC<TimeGridProps> = ({
               appointments={appointments.filter(
                 (a) => a.professionalId === professional.id
               )}
+              timeOff={timeOff}
               draggingId={draggingId}
               onAppointmentClick={onAppointmentClick}
               onSlotClick={onSlotClick}

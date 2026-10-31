@@ -71,6 +71,8 @@ export interface PublicSalonPage {
    * the salon closes for lunch. Absent from servers older than split shifts.
    */
   openingShifts?: Record<string, Array<{ openTime: string; closeTime: string }>>;
+  /** "YYYY-MM-DD" days ahead the salon is closed all day. Absent from older servers. */
+  closedDays?: string[];
   /** Set only once the salon's own domain serves the page over HTTPS. */
   customDomain: string | null;
   /** salon-lucia.kiraroom.net, set only once subdomains serve over HTTPS. */

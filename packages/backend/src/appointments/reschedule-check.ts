@@ -11,6 +11,8 @@ import {
 } from "./working-hours";
 import { salonInstant } from "./salon-time";
 import { VISIT_ROW_ORDER, VISIT_ROW_SELECT, appointmentBusyBlocks } from "./visit-totals";
+import { timeOffProblem } from "../time-off/time-off-rules";
+import { timeOffBetween } from "../time-off/time-off-query";
 
 /**
  * Whether an appointment may be moved to a new day, time or professional:
@@ -23,8 +25,9 @@ import { VISIT_ROW_ORDER, VISIT_ROW_SELECT, appointmentBusyBlocks } from "./visi
  *
  * The same rules as online availability (getAvailableSlots), on 15-minute
  * steps rather than its 30-minute slots: the professional's schedule (none
- * recorded means no limit), the salon's opening hours when it set them, and
- * the professional's other appointments that day, cancelled ones aside.
+ * recorded means no limit), their time off and the salon's closures
+ * (time-off-rules.ts), the salon's opening hours when it set them, and the
+ * professional's other appointments that day, cancelled ones aside.
  *
  * "Other appointments" means every block of time the professional is busy:
  * their own appointments, and the services they do in a colleague's visit
@@ -69,6 +72,12 @@ export function rescheduleProblem(input: {
   professionalShifts: ShiftWindow[] | undefined;
   professionalName: string;
   salonWindow?: { startMinutes: number; endMinutes: number };
+  /**
+   * Why time off or a salon closure blocks this slot (timeOffProblem), if it
+   * does. One of "the hours": an owner may confirm a booking past it, as
+   * outside a shift; a move never.
+   */
+  timeOff?: string | null;
   others: Busy[];
   inPast: boolean;
   /** "create" for a new appointment: only changes the wording. */
@@ -84,6 +93,8 @@ export function rescheduleProblem(input: {
       : "No se puede mover una cita a un momento que ya ha pasado.";
   }
   if (startMinutes + durationMinutes > 24 * 60) return "La cita terminaría al día siguiente.";
+  // Before the shifts: "Ana está de vacaciones" says more than "no trabaja".
+  if (hours && input.timeOff) return input.timeOff;
   const shifts = input.professionalShifts;
   if (hours && shifts && shifts.length === 0) {
     return `${input.professionalName} no trabaja ese día.`;
@@ -115,6 +126,7 @@ type PrismaLike = {
   tenant: { findUnique: (args: any) => Promise<any> };
   professional: { findFirst: (args: any) => Promise<any> };
   appointment: { findMany: (args: any) => Promise<any[]> };
+  timeOff: { findMany: (args: any) => Promise<any[]> };
 };
 
 /**
@@ -176,10 +188,12 @@ export const OUTSIDE_HOURS = "OUTSIDE_HOURS";
 
 /**
  * Whether a new appointment fits the professional's agenda: the same rules as
- * a move. An overlap is always refused (409, code SCHEDULE_CONFLICT). The past
- * and the hours are refused with code OUTSIDE_HOURS unless
- * `allowOutsideHours`, which the caller grants only to owners and managers
- * who confirmed it (a walk-in, or entering yesterday's visit afterwards).
+ * a move. An overlap is always refused (409, code SCHEDULE_CONFLICT). The past,
+ * the hours, time off and salon closures are refused with code OUTSIDE_HOURS
+ * unless `allowOutsideHours`, which the caller grants only to owners and
+ * managers who confirmed it (a walk-in, or entering yesterday's visit
+ * afterwards). Online bookings and the receptionist never come through here:
+ * they book what getAvailableSlots offers, which never includes time off.
  *
  * "The past" allows a few minutes' grace: a walk-in entered as it starts
  * is a booking for now, not a catch-up entry.
@@ -221,20 +235,35 @@ async function scheduleCheckInput(
   const open = hours.open ? minutesOf(hours.open) : null;
   const close = hours.close ? minutesOf(hours.close) : null;
   const timeZone = tenant?.timezone || "Europe/Madrid";
-  const others = await professionalBusyTime(prisma, {
-    tenantId: target.tenantId,
-    professionalId: target.professionalId,
-    day: target.day,
-    timeZone,
-    excludeAppointmentId: target.appointmentId,
-  });
+  const [others, timeOff] = await Promise.all([
+    professionalBusyTime(prisma, {
+      tenantId: target.tenantId,
+      professionalId: target.professionalId,
+      day: target.day,
+      timeZone,
+      excludeAppointmentId: target.appointmentId,
+    }),
+    timeOffBetween(prisma, target.tenantId, target.day),
+  ]);
+  const startMinutes = minutesOf(target.time);
 
   return {
-    startMinutes: minutesOf(target.time),
+    startMinutes,
     durationMinutes: target.durationMinutes,
     professionalShifts: workingWindowsFor(professional.workingHours, new Date(`${target.day}T12:00:00.000Z`)),
     professionalName: professional.firstName,
     salonWindow: open !== null && close !== null && close > open ? { startMinutes: open, endMinutes: close } : undefined,
+    timeOff:
+      startMinutes === null
+        ? null
+        : timeOffProblem({
+            blocks: timeOff,
+            day: target.day,
+            professionalId: target.professionalId,
+            professionalName: professional.firstName,
+            startMinutes,
+            durationMinutes: target.durationMinutes,
+          }),
     others,
     inPast: minutesOf(target.time) !== null && salonInstant(target.day, target.time, timeZone) < now,
   };

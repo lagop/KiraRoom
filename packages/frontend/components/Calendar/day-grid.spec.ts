@@ -19,6 +19,8 @@ import {
   shiftsOn,
   dateOfDay,
   shiftDay,
+  salonClosureOn,
+  timeOffBands,
   visibleProfessionals,
 } from "./day-grid";
 
@@ -213,6 +215,65 @@ check(
     [{ start: 600, end: 840 }],
   ),
 );
+
+// Time off and salon closures: shaded in the columns, clicks still pass.
+console.log("time off bands");
+{
+  const range = { startHour: 9, endHour: 20 };
+  const block = (b: Record<string, unknown>) => ({
+    professionalId: "ana",
+    kind: "vacation" as const,
+    startDate: "2026-12-14",
+    endDate: "2026-12-14",
+    startTime: null as string | null,
+    endTime: null as string | null,
+    note: null as string | null,
+    ...b,
+  });
+  check(
+    "an all-day absence covers the whole drawn column, labelled by kind",
+    same(timeOffBands("2026-12-14", "ana", [block({})], range), [{ start: 540, end: 1200, label: "Vacaciones", salon: false }]),
+    timeOffBands("2026-12-14", "ana", [block({})], range),
+  );
+  check(
+    "a range covers its middle days and not the day after",
+    timeOffBands("2026-12-15", "ana", [block({ endDate: "2026-12-16", kind: "sick_leave" })], range)[0]?.label === "Baja" &&
+      timeOffBands("2026-12-17", "ana", [block({ endDate: "2026-12-16" })], range).length === 0,
+  );
+  check(
+    "a few hours shade only those hours",
+    same(timeOffBands("2026-12-14", "ana", [block({ kind: "other", startTime: "11:00", endTime: "12:30" })], range), [
+      { start: 660, end: 750, label: "Ausencia", salon: false },
+    ]),
+  );
+  check(
+    "hours outside the drawn grid are clipped to it",
+    same(timeOffBands("2026-12-14", "ana", [block({ kind: "other", startTime: "07:00", endTime: "10:00" })], range), [
+      { start: 540, end: 600, label: "Ausencia", salon: false },
+    ]) && timeOffBands("2026-12-14", "ana", [block({ kind: "other", startTime: "20:00", endTime: "22:00" })], range).length === 0,
+  );
+  check("a colleague's absence is not in Ana's column", timeOffBands("2026-12-14", "bea", [block({})], range).length === 0);
+  const closure = block({ professionalId: null, kind: "closure", note: "Navidad" });
+  check(
+    "a closure is in every column, with its note, before anyone's own block",
+    same(
+      timeOffBands("2026-12-14", "bea", [block({ professionalId: "bea" }), closure], range).map((b) => [b.label, b.salon]),
+      [
+        ["Salón cerrado — Navidad", true],
+        ["Vacaciones", false],
+      ],
+    ),
+  );
+  check(
+    "a closure without a note says only that",
+    timeOffBands("2026-12-14", "ana", [{ ...closure, note: null }], range)[0]?.label === "Salón cerrado",
+  );
+  check("the salon's all-day closure is found for the banner", salonClosureOn("2026-12-14", [block({}), closure]) === closure);
+  check(
+    "a partial closure is not a closed day",
+    salonClosureOn("2026-12-14", [{ ...closure, startTime: "14:00", endTime: "20:00" }]) === null,
+  );
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

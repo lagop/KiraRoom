@@ -21,6 +21,8 @@ function day(offset: number): Date {
 
 function build(service: Record<string, unknown> = {}) {
   const prisma: any = {
+    // No time off recorded (time-off-query.ts).
+    timeOff: { findMany: jest.fn(async () => []) },
     tenant: { findUnique: async () => ({ id: TENANT, openingHours: {}, timezone: "Europe/Madrid" }) },
     // No schedule recorded: no shift limit, so only the window decides.
     professional: { findMany: async () => [{ id: PRO, tenantId: TENANT, workingHours: null, isActive: true }] },

@@ -7,6 +7,8 @@ import {
   minutesOf,
   weekdayNameOf,
   parseWorkingHours,
+  subtractWindows,
+  candidateStarts,
 } from "./working-hours";
 
 /**
@@ -238,5 +240,71 @@ describe("fitsInWindow", () => {
     // A 30-minute cut fits at 17:30; a 90-minute colour does not.
     expect(fitsInWindow(1050, 30, monday)).toBe(true);
     expect(fitsInWindow(1050, 90, monday)).toBe(false);
+  });
+});
+
+describe("subtractWindows", () => {
+  const w = (a: string, b: string) => ({ startMinutes: minutesOf(a)!, endMinutes: minutesOf(b)! });
+
+  it("leaves the shifts as they are when nothing is blocked", () => {
+    expect(subtractWindows([w("10:00", "14:00")], [])).toEqual([w("10:00", "14:00")]);
+  });
+
+  it("cuts a block out of the middle of a shift, leaving two windows", () => {
+    expect(subtractWindows([w("09:00", "18:00")], [w("11:00", "12:30")])).toEqual([
+      w("09:00", "11:00"),
+      w("12:30", "18:00"),
+    ]);
+  });
+
+  it("trims a shift a block overlaps at either end", () => {
+    expect(subtractWindows([w("09:00", "14:00"), w("17:00", "20:00")], [w("08:00", "10:00"), w("19:00", "21:00")])).toEqual([
+      w("10:00", "14:00"),
+      w("17:00", "19:00"),
+    ]);
+  });
+
+  it("removes a shift a block covers entirely, and keeps the other one", () => {
+    expect(subtractWindows([w("10:00", "14:00"), w("17:00", "20:00")], [w("09:00", "15:00")])).toEqual([
+      w("17:00", "20:00"),
+    ]);
+  });
+
+  it("joins overlapping blocks before cutting, in any order", () => {
+    expect(subtractWindows([w("09:00", "18:00")], [w("12:00", "13:00"), w("10:00", "12:30")])).toEqual([
+      w("09:00", "10:00"),
+      w("13:00", "18:00"),
+    ]);
+  });
+
+  it("ignores an empty or inverted block", () => {
+    expect(subtractWindows([w("09:00", "18:00")], [w("12:00", "12:00"), w("13:00", "11:00")])).toEqual([
+      w("09:00", "18:00"),
+    ]);
+  });
+
+  it("a block touching a shift end to end takes nothing", () => {
+    expect(subtractWindows([w("10:00", "14:00")], [w("14:00", "16:00")])).toEqual([w("10:00", "14:00")]);
+  });
+});
+
+describe("candidateStarts", () => {
+  const w = (a: string, b: string) => ({ startMinutes: minutesOf(a)!, endMinutes: minutesOf(b)! });
+  const clocks = (ms: number[]) => ms.map((m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`);
+
+  it("is the salon window in half hours when nobody works outside it", () => {
+    expect(clocks(candidateStarts(w("09:00", "11:00"), [w("09:00", "10:00")]))).toEqual(["09:00", "09:30", "10:00", "10:30"]);
+  });
+
+  it("reaches a shift past the salon window", () => {
+    const starts = clocks(candidateStarts(w("09:00", "20:00"), [w("18:00", "22:00")]));
+    expect(starts).toContain("20:00");
+    expect(starts).toContain("21:30");
+    expect(starts).not.toContain("22:00");
+  });
+
+  it("starts a slot at a shift start off the half hour, then keeps to the half hours", () => {
+    const starts = clocks(candidateStarts(w("09:00", "10:00"), [w("10:15", "12:00")]));
+    expect(starts).toEqual(["09:00", "09:30", "10:15", "10:30", "11:00", "11:30"]);
   });
 });
