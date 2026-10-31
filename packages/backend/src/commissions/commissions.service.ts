@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { Decimal } from "@prisma/client/runtime/library";
 import { PayCommissionDto } from "./dto/commission.dto";
+import { effectiveCommissionRate, numberOrNull } from "./commission-rate";
 
 export interface CalculateCommissionDto {
   appointmentId: string;
@@ -57,13 +58,12 @@ export class CommissionsService {
     const amount = dto.amount ?? Number(appointment.totalAmount);
 
     // Use provided rate or professional's commission rate
-    const rate =
-      dto.rate ??
-      (appointment.commissionRate
-        ? Number(appointment.commissionRate)
-        : appointment.professional.commissionRate
-          ? Number(appointment.professional.commissionRate)
-          : 10); // Default 10%
+    // 0 is a rate: only a missing one falls through (commission-rate.ts).
+    const rate = effectiveCommissionRate(
+      dto.rate,
+      appointment.commissionRate,
+      appointment.professional.commissionRate,
+    );
 
     const commissionAmount = (amount * rate) / 100;
 
@@ -107,16 +107,12 @@ export class CommissionsService {
       throw new NotFoundException("Professional not found");
     }
 
-    const defaultRate = professional.commissionRate
-      ? Number(professional.commissionRate)
-      : 10;
+    const defaultRate = effectiveCommissionRate(professional.commissionRate);
 
     let totalCommission = 0;
 
     for (const appointment of appointments) {
-      const rate = appointment.commissionRate
-        ? Number(appointment.commissionRate)
-        : defaultRate;
+      const rate = effectiveCommissionRate(appointment.commissionRate, defaultRate);
       const amount = Number(appointment.totalAmount);
       const commissionAmount = (amount * rate) / 100;
 
@@ -167,21 +163,16 @@ export class CommissionsService {
       },
     });
 
-    const defaultRate = professional.commissionRate
-      ? Number(professional.commissionRate)
-      : 10;
+    const defaultRate = effectiveCommissionRate(professional.commissionRate);
 
     let pendingCommission = 0;
     let paidCommission = 0;
 
     const appointmentDetails = appointments.map((apt) => {
-      const rate = apt.commissionRate
-        ? Number(apt.commissionRate)
-        : defaultRate;
+      const rate = effectiveCommissionRate(apt.commissionRate, defaultRate);
       const amount = Number(apt.totalAmount);
-      const commissionAmount = apt.commissionAmount
-        ? Number(apt.commissionAmount)
-        : (amount * rate) / 100;
+      const commissionAmount =
+        numberOrNull(apt.commissionAmount) ?? (amount * rate) / 100;
 
       if (apt.commissionPaid) {
         paidCommission += commissionAmount;
@@ -299,9 +290,7 @@ export class CommissionsService {
       );
       try {
         // Get professional's commission rate
-        const defaultRate = professional.commissionRate
-          ? Number(professional.commissionRate)
-          : 10;
+        const defaultRate = effectiveCommissionRate(professional.commissionRate);
 
         // Get all appointments for this professional (completed and paid, not cancelled)
         const appointments = await this.prisma.appointment.findMany({
@@ -329,13 +318,10 @@ export class CommissionsService {
         let paidCommission = 0;
 
         const appointmentDetails = appointments.map((apt) => {
-          const rate = apt.commissionRate
-            ? Number(apt.commissionRate)
-            : defaultRate;
+          const rate = effectiveCommissionRate(apt.commissionRate, defaultRate);
           const amount = Number(apt.totalAmount);
-          const commissionAmount = apt.commissionAmount
-            ? Number(apt.commissionAmount)
-            : (amount * rate) / 100;
+          const commissionAmount =
+            numberOrNull(apt.commissionAmount) ?? (amount * rate) / 100;
 
           if (apt.commissionPaid) {
             paidCommission += commissionAmount;

@@ -16,6 +16,7 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateIf,
   ValidateNested,
 } from "class-validator";
 import { Type } from "class-transformer";
@@ -219,22 +220,35 @@ export class CancelInvoiceDto {
 /**
  * A line of a rectifying invoice. The quantity may be negative: a
  * rectification "por diferencias" credits part of the original.
+ *
+ * With `originalLineId` the line credits that line of the original: its
+ * description, price, discount and rate are taken from it (any sent are
+ * ignored) and `quantity` says how much of it, negative (minus the whole
+ * quantity: its exact amounts, negated). See rectification-lines.ts.
  */
 export class RectificationLineDto {
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  originalLineId?: string;
+
+  @ValidateIf((o: RectificationLineDto) => o.originalLineId === undefined || o.originalLineId === null)
   @IsString()
   @IsNotEmpty()
   @MaxLength(500)
-  description!: string;
+  description?: string;
 
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(-10_000)
   @Max(10_000)
   quantity!: number;
 
+  @ValidateIf((o: RectificationLineDto) => o.originalLineId === undefined || o.originalLineId === null)
   @IsInt()
   @Min(0)
   @Max(100_000_000)
-  unitPriceCents!: number;
+  unitPriceCents?: number;
 
   @IsOptional()
   @IsNumber()
@@ -242,25 +256,31 @@ export class RectificationLineDto {
   @Max(100)
   discountPct?: number;
 
+  @ValidateIf((o: RectificationLineDto) => o.originalLineId === undefined || o.originalLineId === null)
   @IsNumber()
   @Min(0)
   @Max(100)
-  taxRate!: number;
+  taxRate?: number;
 }
 
-/** Body of `POST /invoices/:id/rectify`. Was an inline type. */
+/**
+ * Body of `POST /invoices/:id/rectify`. Was an inline type. Without
+ * `lines`, the whole original is rectified: every line, its exact amounts
+ * negated, so the two invoices net to zero.
+ */
 export class RectifyInvoiceDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(500)
   reason!: string;
 
+  @IsOptional()
   @IsArray()
   @ArrayMinSize(1)
   @ArrayMaxSize(200)
   @ValidateNested({ each: true })
   @Type(() => RectificationLineDto)
-  lines!: RectificationLineDto[];
+  lines?: RectificationLineDto[];
 }
 
 /**

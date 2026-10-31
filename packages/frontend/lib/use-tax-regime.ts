@@ -9,6 +9,7 @@ import {
   DEFAULT_TAX_REGIME,
   type TaxRegime,
 } from "@kira/shared";
+import { salonDefaultTaxRate } from "./invoice-totals";
 
 /**
  * The tenant's indirect tax regime, for anything that has to name the tax or
@@ -23,6 +24,9 @@ import {
  *
  * Falls back to IVA while the request is in flight and if it fails: it is the
  * regime of most of the country, and a label is not worth a loading spinner.
+ *
+ * `defaultRate` is the salon's own fiscalSettings.defaultTaxRate when it set
+ * one, else its regime's default (21 IVA, 7 IGIC, 4 IPSI).
  *
  * `pricesIncludeTax` is the salon's "Mis precios ya incluyen el impuesto"
  * (fiscalSettings.pricesIncludeTax), read the way the server reads it
@@ -52,7 +56,10 @@ export function useTaxRegime(): {
   return {
     regime,
     label: TAX_REGIME_LABELS[regime],
-    defaultRate: TAX_REGIME_DEFAULT_RATE[regime],
+    defaultRate: salonDefaultTaxRate(
+      settings.data?.fiscalSettings?.defaultTaxRate,
+      TAX_REGIME_DEFAULT_RATE[regime],
+    ),
     pricesIncludeTax: settings.data
       ? settings.data.fiscalSettings?.pricesIncludeTax === true
       : undefined,

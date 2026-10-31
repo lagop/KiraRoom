@@ -115,10 +115,10 @@ export class InvoicesController {
     return this.invoices.emitRectification(
       this.requireTenantId(req),
       id,
-      // No taxIncluded: an invoice line is stored with its net unit price
-      // (the calculator splits a tax-included price before saving), so lines
-      // copied from the original are always priced without the tax.
-      body.lines.map((l) => ({
+      // Left out: the whole invoice. A line with originalLineId credits that
+      // line of the original, from its stored amounts (rectification-lines.ts).
+      body.lines?.map((l) => ({
+        originalLineId: l.originalLineId,
         description: l.description,
         quantity: l.quantity,
         unitPriceCents: l.unitPriceCents,

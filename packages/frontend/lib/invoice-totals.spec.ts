@@ -12,6 +12,8 @@ import {
   computeInvoiceLine,
   computeInvoiceTotals,
   pricesTaxHintKey,
+  salonDefaultTaxRate,
+  withDefaultTaxRate,
 } from "./invoice-totals";
 
 let pass = 0;
@@ -166,6 +168,30 @@ check("previews with this calculator", form.includes("computeInvoiceTotals("));
 check("sends taxIncluded on every line", /taxIncluded,\s*\n\s*};/.test(form));
 check("links to Ajustes fiscales", form.includes('href="/dashboard/settings/fiscal"'));
 check("cannot submit before the setting is known", form.includes("disabled={isSubmitting || !taxSettingKnown}"));
+
+console.log("the rate a line starts at");
+same("the salon's own default rate", salonDefaultTaxRate(10, 21), 10);
+same("0 is a rate the salon can set", salonDefaultTaxRate(0, 21), 0);
+same("none set: the regime's (IGIC 7)", salonDefaultTaxRate(undefined, 7), 7);
+same(
+  "not a number or negative: the regime's",
+  [salonDefaultTaxRate("21", 7), salonDefaultTaxRate(-1, 7), salonDefaultTaxRate(NaN, 7)],
+  [7, 7, 7],
+);
+const typed = [
+  { id: "1", taxRate: "21" },
+  { id: "2", taxRate: "15", taxRateEdited: true },
+  { id: "3", taxRate: "21" },
+];
+same(
+  "when the settings arrive, lines nobody typed a rate on take the salon's; a typed one stays",
+  withDefaultTaxRate(typed, 7).map((l) => l.taxRate),
+  ["7", "15", "7"],
+);
+const settled = withDefaultTaxRate(typed, 7);
+check("nothing to change: the same array, not a copy (no re-render)", withDefaultTaxRate(settled, 7) === settled);
+check("the form applies it once the settings load", form.includes("withDefaultTaxRate(current, defaultRate)"));
+check("typing a rate marks the line as edited", form.includes('field === "taxRate" ? { taxRateEdited: true } : {}'));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

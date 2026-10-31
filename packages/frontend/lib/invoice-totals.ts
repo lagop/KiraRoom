@@ -93,3 +93,30 @@ export function pricesTaxHintKey(pricesIncludeTax: boolean): string {
     ? "invoices.form.pricesIncludeTaxHint"
     : "invoices.form.pricesExcludeTaxHint";
 }
+
+/**
+ * The rate a new line starts at: the salon's own `fiscalSettings.defaultTaxRate`
+ * (Ajustes fiscales; 7 for a Canary salon on IGIC general), else the default
+ * of its regime (21 IVA, 7 IGIC, 4 IPSI). Not a number or negative: the
+ * regime's, like the server's salonTaxRate refuses those.
+ */
+export function salonDefaultTaxRate(defaultTaxRate: unknown, regimeDefault: number): number {
+  return typeof defaultTaxRate === "number" && Number.isFinite(defaultTaxRate) && defaultTaxRate >= 0
+    ? defaultTaxRate
+    : regimeDefault;
+}
+
+/**
+ * Lines whose rate the user has not typed take `rate`: the form starts with
+ * the regime fallback while the fiscal settings load, and switches to the
+ * salon's rate when they arrive. A rate the user edited is kept. Returns the
+ * same array when nothing changes, so a React state update is a no-op.
+ */
+export function withDefaultTaxRate<T extends { taxRate: string; taxRateEdited?: boolean }>(
+  lines: T[],
+  rate: number,
+): T[] {
+  const value = String(rate);
+  if (lines.every((line) => line.taxRateEdited || line.taxRate === value)) return lines;
+  return lines.map((line) => (line.taxRateEdited || line.taxRate === value ? line : { ...line, taxRate: value }));
+}

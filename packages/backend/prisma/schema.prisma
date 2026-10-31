@@ -2807,6 +2807,11 @@ model InvoiceLine {
   taxRate        Decimal @default(0)
   taxCents       Int
   totalCents     Int
+  /// The price was given with the tax included and split into base + tax
+  /// (InvoiceLineInput.taxIncluded); unitPriceCents is the net one either way.
+  /// A rectification crediting part of the line splits it the same way.
+  /// False on lines from before the column (not backfilled).
+  taxIncluded    Boolean @default(false)
   /// Trazabilidad
   productId      String?
   serviceId      String?

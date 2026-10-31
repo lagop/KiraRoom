@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -11,6 +11,7 @@ import { useTaxRegime } from "@/lib/use-tax-regime";
 import {
   computeInvoiceTotals,
   pricesTaxHintKey,
+  withDefaultTaxRate,
   type InvoiceLineAmountsInput,
 } from "@/lib/invoice-totals";
 
@@ -21,10 +22,13 @@ interface InvoiceLineForm {
   unitPrice: string;
   discountPct: string;
   taxRate: string;
+  /** The user typed this line's rate: the salon's default no longer replaces it. */
+  taxRateEdited?: boolean;
 }
 
-// The rate comes from the tenant's regime: 21 is the IVA general rate and is
-// wrong in the Canary Islands (IGIC) and in Ceuta and Melilla (IPSI).
+// The rate is the salon's default (Ajustes fiscales), else its regime's: 21 is
+// the IVA general rate and is wrong in the Canary Islands (IGIC) and in Ceuta
+// and Melilla (IPSI).
 const emptyLine = (id: string, defaultTaxRate: number): InvoiceLineForm => ({
   id,
   description: "",
@@ -95,6 +99,13 @@ export function InvoiceForm() {
     queryFn: () => apiClient.getClients(),
   });
 
+  // Lines start at the regime fallback while the settings load; once they
+  // arrive, the lines whose rate nobody typed take the salon's default.
+  useEffect(() => {
+    if (!taxSettingKnown) return;
+    setLines((current) => withDefaultTaxRate(current, defaultRate));
+  }, [taxSettingKnown, defaultRate]);
+
   const totals = useMemo(
     () => computeInvoiceTotals(lines.map((line) => lineAmounts(line, taxIncluded))),
     [lines, taxIncluded],
@@ -111,12 +122,18 @@ export function InvoiceForm() {
 
   const updateLine = (
     id: string,
-    field: keyof Omit<InvoiceLineForm, "id">,
+    field: keyof Omit<InvoiceLineForm, "id" | "taxRateEdited">,
     value: string,
   ) => {
     setLines((current) =>
       current.map((line) =>
-        line.id === id ? { ...line, [field]: value } : line,
+        line.id === id
+          ? {
+              ...line,
+              [field]: value,
+              ...(field === "taxRate" ? { taxRateEdited: true } : {}),
+            }
+          : line,
       ),
     );
   };
