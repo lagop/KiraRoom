@@ -3,9 +3,11 @@ import { format } from "date-fns";
 import { X, Search, CheckCircle, Loader2, Zap, DollarSign, Percent } from "lucide-react";
 import { SlotClickData } from "./TimeSlot";
 import { Professional } from "./types";
-import apiClient from "../../lib/api";
+import apiClient, { ApiError } from "../../lib/api";
+import { getCurrentUser } from "../../lib/utils";
 import { useToast } from "@/components/ui/use-toast";
 import { useTranslations } from "@/lib/use-translation";
+import { ConfirmDialog } from "@/src/components/ui/ConfirmDialog";
 
 interface ClientOption {
   id: string;
@@ -48,6 +50,9 @@ export const NewAppointmentPopover: React.FC<NewAppointmentPopoverProps> = ({
   const [commissionRate, setCommissionRate] = useState(0);
   const [loading, setLoading] = useState(false);
   const [fetching, setFetching] = useState(true);
+  // The server's reason when the slot is in the past or outside the hours:
+  // an owner or manager may confirm it (see the appointment drawer).
+  const [outsideHoursReason, setOutsideHoursReason] = useState<string | null>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const clientSearchRef = useRef<HTMLDivElement>(null);
 
@@ -117,7 +122,7 @@ export const NewAppointmentPopover: React.FC<NewAppointmentPopoverProps> = ({
     setShowClientSuggestions(false);
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (allowOutsideHours = false) => {
     if (!clientId || !serviceId) return;
 
     setLoading(true);
@@ -135,15 +140,28 @@ export const NewAppointmentPopover: React.FC<NewAppointmentPopoverProps> = ({
         depositRequired: depositRequired,
         depositAmount: depositRequired ? depositAmount : undefined,
         commissionRate: commissionRate !== 0 ? commissionRate : undefined,
+        ...(allowOutsideHours ? { allowOutsideHours: true } : {}),
       };
 
       // See appointment-drawer.tsx: every dashboard role books as staff.
       await apiClient.createAppointmentByStaff(appointmentData);
 
+      setOutsideHoursReason(null);
       onSuccess();
     } catch (err) {
       // It used to fail silently: the popover stayed open with no word why.
       console.error("Error creating appointment:", err);
+      const role = getCurrentUser()?.role;
+      if (
+        err instanceof ApiError &&
+        err.code === "OUTSIDE_HOURS" &&
+        (role === "owner" || role === "admin") &&
+        !allowOutsideHours
+      ) {
+        setOutsideHoursReason(err.message);
+        return;
+      }
+      setOutsideHoursReason(null);
       toast({
         title: t("appointments.calendarView.createFailed"),
         description: err instanceof Error ? err.message : undefined,
@@ -259,7 +277,7 @@ export const NewAppointmentPopover: React.FC<NewAppointmentPopoverProps> = ({
 
               <div className="flex gap-2 pt-1">
                 <button
-                  onClick={handleSubmit}
+                  onClick={() => handleSubmit()}
                   disabled={!clientId || !serviceId || loading}
                   className="flex-1 px-3 py-1.5 text-sm font-medium bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-1.5"
                 >
@@ -354,6 +372,23 @@ export const NewAppointmentPopover: React.FC<NewAppointmentPopoverProps> = ({
             </div>
           </>
         )}
+      </div>
+      {/* This layer lets clicks through to the calendar; the dialog takes them. */}
+      <div className="pointer-events-auto">
+        <ConfirmDialog
+          open={outsideHoursReason !== null}
+          title="¿Crear la cita fuera de horario?"
+          description={
+            <>
+              {outsideHoursReason} Puedes crearla igualmente, por ejemplo para una
+              clienta sin cita o una visita que apuntas después.
+            </>
+          }
+          confirmLabel="Crear igualmente"
+          loading={loading}
+          onCancel={() => setOutsideHoursReason(null)}
+          onConfirm={() => handleSubmit(true)}
+        />
       </div>
     </div>
   );

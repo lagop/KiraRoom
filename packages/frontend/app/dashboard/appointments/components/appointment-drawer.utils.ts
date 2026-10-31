@@ -444,3 +444,121 @@ export function serverMessage(error: unknown): string | undefined {
   const message = error instanceof Error ? error.message.trim() : "";
   return message || undefined;
 }
+
+/**
+ * What a professional (role `staff`) sees in the new-appointment form:
+ * their own professional record and the services they perform.
+ *
+ * The token carries no professional id, and the drawer used to look the
+ * professional up on /admin/professionals, which answers 403 to staff: the
+ * service list came out empty and the form said "Asignado a: undefined
+ * undefined". The salon's professionals list (/professionals, full rows for
+ * the salon's own team) carries each professional's `userId`, which is how
+ * the server also finds the caller's professional.
+ *
+ * A professional with no services linked sees every service, as the
+ * booking engine treats them as able to do any (findFreeProfessional).
+ * Null when the account is not linked to a professional of the salon.
+ */
+export function staffOwnCatalog<
+  P extends { id: string; userId?: string | null; services?: ReadonlyArray<{ serviceId: string }> },
+  S extends { id: string },
+>(
+  userId: string | undefined,
+  professionals: ReadonlyArray<P>,
+  services: ReadonlyArray<S>,
+): { me: P; professionals: P[]; services: S[] } | null {
+  if (!userId) return null;
+  const me = professionals.find((p) => p.userId === userId);
+  if (!me) return null;
+  const mine = new Set((me.services ?? []).map((s) => s.serviceId));
+  return {
+    me,
+    professionals: [me],
+    services: mine.size > 0 ? services.filter((s) => mine.has(s.id)) : [...services],
+  };
+}
+
+/** The body of POST /appointments/staff, built from the drawer's form. */
+export interface StaffBookingPayload {
+  clientId: string;
+  serviceId: string;
+  professionalId?: string;
+  scheduledDate: string;
+  scheduledTime: string;
+  notes?: string;
+  depositRequired?: boolean;
+  depositAmount?: number;
+  commissionRate?: number;
+  services?: Array<{ serviceId: string; professionalId?: string; isParallel: boolean }>;
+  allowOutsideHours?: true;
+}
+
+/**
+ * One request for the whole appointment. Multi-service bookings used to be
+ * two calls (the appointment, then its services): when the second failed
+ * the appointment stayed half-made, and retrying booked it twice. The
+ * server now creates the appointment and its service rows together and
+ * times the rows itself, from the start and each service's duration.
+ *
+ * - The commission goes only when an owner or manager typed one: sending
+ *   the form's 0 stored "no commission" instead of the default.
+ * - A professional's own bookings carry their professional id; the server
+ *   forces it anyway.
+ * - Null when the form lacks a client, a service, a day and time, or (for
+ *   an owner or manager) a professional.
+ */
+export function buildStaffBookingPayload(input: {
+  role?: string;
+  /** The caller's own professional, for staff. */
+  ownProfessionalId?: string;
+  clientId: string;
+  serviceId: string;
+  professionalId: string;
+  date: string;
+  time: string;
+  notes?: string;
+  selectedServices: ReadonlyArray<{ serviceId: string; professionalId?: string; isParallel?: boolean }>;
+  /** The professional the suggestion engine picked for each "auto-assign" service. */
+  autoAssign?: Record<string, string>;
+  depositRequired?: boolean;
+  /** In euros, as typed. */
+  depositAmount?: number;
+  commissionRate?: number | null;
+  allowOutsideHours?: boolean;
+}): StaffBookingPayload | null {
+  const staff = input.role === "staff";
+  const own = staff ? input.ownProfessionalId || undefined : undefined;
+  const rows = input.selectedServices.map((s) => ({
+    serviceId: s.serviceId,
+    professionalId: own ?? (s.professionalId || input.autoAssign?.[s.serviceId] || undefined),
+    isParallel: !!s.isParallel,
+  }));
+  const serviceId = rows[0]?.serviceId || input.serviceId;
+  const professionalId =
+    own ?? (rows.find((r) => r.professionalId)?.professionalId || input.professionalId || undefined);
+  if (!input.clientId || !serviceId || !input.date || !input.time) return null;
+  if (!staff && !professionalId) return null;
+
+  const manager = input.role === "owner" || input.role === "admin";
+  const commission = input.commissionRate;
+  return {
+    clientId: input.clientId,
+    serviceId,
+    ...(professionalId ? { professionalId } : {}),
+    scheduledDate: input.date,
+    scheduledTime: input.time,
+    ...(input.notes ? { notes: input.notes } : {}),
+    ...(input.depositRequired
+      ? { depositRequired: true, depositAmount: Math.round((input.depositAmount || 0) * 100) }
+      : {}),
+    ...(manager && typeof commission === "number" && Number.isFinite(commission)
+      ? { commissionRate: commission }
+      : {}),
+    // One service is the appointment itself; rows only for a visit of several.
+    ...(rows.length > 1
+      ? { services: rows.map((r) => ({ ...r, professionalId: r.professionalId || professionalId })) }
+      : {}),
+    ...(input.allowOutsideHours ? { allowOutsideHours: true as const } : {}),
+  };
+}

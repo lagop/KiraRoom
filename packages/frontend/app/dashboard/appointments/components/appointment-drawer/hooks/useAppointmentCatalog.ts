@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import apiClient from "../../../../../../lib/api";
 import { DEFAULT_SALON_TIMEZONE } from "@kira/shared";
 import { getCurrentUser } from "../../../../../../lib/utils";
+import { staffOwnCatalog } from "../../appointment-drawer.utils";
 
 /**
  * Loads the appointment-creation catalog (services, professionals,
@@ -18,6 +19,10 @@ import { getCurrentUser } from "../../../../../../lib/utils";
  * The hook exposes setters for everything the drawer still mutates
  * (e.g. `setTimezone` is irrelevant to the catalog but used by the
  * date-picker downstream).
+ *
+ * A professional (role `staff`) gets their own professional and the
+ * services they perform, and `currentUser` carries that professional's id
+ * and name: the token has neither. See staffOwnCatalog.
  */
 
 export interface CatalogService {
@@ -34,6 +39,8 @@ export interface CatalogProfessional {
   lastName: string;
   email: string;
   phone?: string;
+  /** The professional's panel login; present in the salon's own (staff) view. */
+  userId?: string | null;
   specialties: string[];
   profileImage?: string;
   services?: {
@@ -54,6 +61,7 @@ export interface CatalogClient {
 }
 
 export interface CatalogUser {
+  id?: string;
   role?: string;
   professionalId?: string;
   firstName?: string;
@@ -89,10 +97,10 @@ export interface UseAppointmentCatalogResult {
 export function useAppointmentCatalog(
   open: boolean,
 ): UseAppointmentCatalogResult {
-  const [services, setServices] = useState<CatalogService[]>([]);
-  const [professionals, setProfessionals] = useState<CatalogProfessional[]>([]);
+  const [allServices, setServices] = useState<CatalogService[]>([]);
+  const [allProfessionals, setProfessionals] = useState<CatalogProfessional[]>([]);
   const [clients, setClients] = useState<CatalogClient[]>([]);
-  const [currentUser, setCurrentUser] = useState<CatalogUser | null>(null);
+  const [user, setCurrentUser] = useState<CatalogUser | null>(null);
   const [allowProfessionalCrossBooking, setAllowProfessionalCrossBooking] =
     useState<boolean>(false);
   // Until the salon's own zone arrives: the zone a salon starts on, not
@@ -138,36 +146,11 @@ export function useAppointmentCatalog(
   const fetchServices = async () => {
     try {
       const data = (await apiClient.getServices()) as any;
-      let servicesData = data.data || data;
+      const servicesData = data.data || data;
 
-      // Filter services based on user role and tenant settings
-      if (currentUser?.role === "staff" && currentUser.professionalId) {
-        // For staff users, check tenant settings
-        if (!allowProfessionalCrossBooking) {
-          // If cross-booking is NOT allowed, show only their assigned services
-          try {
-            const professionalData = await apiClient.getProfessional(
-              currentUser.professionalId,
-            );
-            const assignedServiceIds =
-              professionalData.services?.map(
-                (ps: any) => ps.serviceId,
-              ) || [];
-
-            // Filter services to only include those assigned to this professional
-            servicesData = servicesData.filter((service: any) =>
-              assignedServiceIds.includes(service.id),
-            );
-          } catch (error) {
-            console.error("Error fetching professional services:", error);
-            // If we can't fetch professional services, show no services
-            servicesData = [];
-          }
-        }
-        // If cross-booking IS allowed, staff users see all services (no filtering)
-      }
-      // Owners and admins always see all services regardless of settings
-
+      // A professional's own services are picked out below, from their
+      // professional record (staffOwnCatalog). This used to fetch it from
+      // /admin/professionals, which refuses staff: the list came out empty.
       setServices(
         servicesData.map((s: any) => ({
           id: s.id,
@@ -231,10 +214,30 @@ export function useAppointmentCatalog(
 
   // Re-fetch services when user/setting/drawer-open changes (verbatim from line 852-856)
   useEffect(() => {
-    if (currentUser && open) {
+    if (user && open) {
       fetchServices();
     }
-  }, [currentUser, open, allowProfessionalCrossBooking]);
+  }, [user, open, allowProfessionalCrossBooking]);
+
+  // A professional books on their own agenda. Not linked to a professional
+  // of the salon: nothing to book with (the server refuses it too).
+  const { currentUser, professionals, services } = useMemo(() => {
+    if (user?.role !== "staff") {
+      return { currentUser: user, professionals: allProfessionals, services: allServices };
+    }
+    const own = staffOwnCatalog(user.id, allProfessionals, allServices);
+    if (!own) return { currentUser: user, professionals: [], services: [] };
+    return {
+      currentUser: {
+        ...user,
+        professionalId: own.me.id,
+        firstName: own.me.firstName,
+        lastName: own.me.lastName,
+      },
+      professionals: own.professionals,
+      services: own.services,
+    };
+  }, [user, allProfessionals, allServices]);
 
   return {
     services,

@@ -129,16 +129,18 @@ describe("what a professional may do with appointments", () => {
     expect(prisma.appointment.findMany).not.toHaveBeenCalled();
   });
 
+  // The booking itself (own agenda, checks, transaction): staff-create.spec.ts.
   it("booking on a colleague's agenda follows the salon's setting", async () => {
-    const staff = { id: "u1", role: "staff", tenantId: TENANT, professionalId: "p-me" } as any;
+    const staff = { id: "u1", role: "staff", tenantId: TENANT };
     const dto = { professionalId: "p-colleague" } as any;
 
-    const off = service({ crossBooking: false });
+    const off = service({ professional: { id: "p-me" }, crossBooking: false });
     await expect(off.svc.createByStaff(dto, staff)).rejects.toBeInstanceOf(ForbiddenException);
 
-    const on = service({ crossBooking: true });
-    const create = jest.spyOn(on.svc, "create").mockResolvedValue({ id: "a1" } as any);
-    await expect(on.svc.createByStaff(dto, staff)).resolves.toEqual({ id: "a1" });
-    expect(create).toHaveBeenCalledWith(dto, TENANT);
+    // Allowed: it goes on to check the colleague is of this salon.
+    const on = service({ professional: { id: "p-me" }, crossBooking: true });
+    const records = jest.spyOn(on.svc, "assertSalonRecords").mockRejectedValue(new Error("past the role check"));
+    await expect(on.svc.createByStaff(dto, staff)).rejects.toThrow("past the role check");
+    expect(records).toHaveBeenCalledWith(TENANT, expect.objectContaining({ professionalIds: ["p-colleague"] }));
   });
 });

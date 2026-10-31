@@ -100,7 +100,8 @@ export class IcsController {
       include: { professional: true, tenant: true },
     });
     if (!user || !user.tenant) throw new NotFoundException("Staff not found");
-    const profIds = user.professionalId ? [user.professionalId] : [];
+    // The link lives on Professional.userId; User.professionalId is never set.
+    const profIds = user.professional ? [user.professional.id] : [];
     const appointments = await this.prisma.appointment.findMany({
       where: {
         tenantId: user.tenantId,

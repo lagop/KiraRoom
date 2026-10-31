@@ -14,10 +14,13 @@ const REFRESH_TOKEN_KEY = "kira_refresh_token";
 // 404 (resource not found) from other failures instead of parsing message text.
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  /** The server's machine-readable reason, when it sends one (e.g. "OUTSIDE_HOURS"). */
+  code?: string;
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -631,6 +634,19 @@ export interface CreateAppointmentDto {
   depositRequired?: boolean;
   depositAmount?: number;
   commissionRate?: number;
+}
+
+/**
+ * POST /appointments/staff. A professional's own booking may leave out the
+ * professional (the server uses theirs). `services`: a visit of several,
+ * created with the appointment in one request; the server times them.
+ * `allowOutsideHours`: an owner or manager confirmed booking in the past or
+ * outside the hours (the server refuses with code OUTSIDE_HOURS otherwise).
+ */
+export interface StaffBookingRequest extends Omit<CreateAppointmentDto, "professionalId"> {
+  professionalId?: string;
+  services?: Array<{ serviceId: string; professionalId?: string; isParallel?: boolean }>;
+  allowOutsideHours?: boolean;
 }
 
 // Notification types
@@ -1813,7 +1829,7 @@ export interface ApiClientInterface {
 
   // Appointments
   createAppointmentByStaff(
-    appointment: CreateAppointmentDto,
+    appointment: StaffBookingRequest,
   ): Promise<Appointment>;
 }
 
@@ -1911,7 +1927,11 @@ class ApiClient implements ApiClientInterface {
       const message = Array.isArray(raw)
         ? raw.join(". ")
         : raw || `API Error: ${response.status} ${response.statusText}`;
-      throw new ApiError(message, response.status);
+      throw new ApiError(
+        message,
+        response.status,
+        typeof errorData.code === "string" ? errorData.code : undefined,
+      );
     }
     return response.json();
   }
@@ -2183,7 +2203,7 @@ class ApiClient implements ApiClientInterface {
   }
 
   async createAppointmentByStaff(
-    data: CreateAppointmentDto,
+    data: StaffBookingRequest,
   ): Promise<Appointment> {
     return this.request<Appointment>("/appointments/staff", {
       method: "POST",

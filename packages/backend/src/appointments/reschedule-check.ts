@@ -20,8 +20,8 @@ import { salonInstant } from "./salon-time";
 
 export interface RescheduleTarget {
   tenantId: string;
-  /** The appointment being moved: never a clash with itself. */
-  appointmentId: string;
+  /** The appointment being moved: never a clash with itself. Absent for a new one. */
+  appointmentId?: string;
   professionalId: string;
   /** YYYY-MM-DD, the salon's calendar day. */
   day: string;
@@ -32,7 +32,13 @@ export interface RescheduleTarget {
 
 type Busy = { scheduledTime: string; duration: number; clientName?: string | null };
 
-/** The reason a move cannot be made, in the words the salon reads; null when it can. */
+/**
+ * The reason a move cannot be made, in the words the salon reads; null when it can.
+ *
+ * `skipHours` leaves out the past and the working and opening hours, and
+ * keeps what is never allowed (a bad time, running into the next day, an
+ * overlap): an owner may book a walk-in outside hours, never a double booking.
+ */
 export function rescheduleProblem(input: {
   startMinutes: number | null;
   durationMinutes: number;
@@ -42,18 +48,26 @@ export function rescheduleProblem(input: {
   salonWindow?: { startMinutes: number; endMinutes: number };
   others: Busy[];
   inPast: boolean;
+  /** "create" for a new appointment: only changes the wording. */
+  action?: "move" | "create";
+  skipHours?: boolean;
 }): string | null {
   const { startMinutes, durationMinutes } = input;
+  const hours = !input.skipHours;
   if (startMinutes === null) return "La hora no es válida.";
-  if (input.inPast) return "No se puede mover una cita a un momento que ya ha pasado.";
+  if (hours && input.inPast) {
+    return input.action === "create"
+      ? "No se puede crear una cita en un momento que ya ha pasado."
+      : "No se puede mover una cita a un momento que ya ha pasado.";
+  }
   if (startMinutes + durationMinutes > 24 * 60) return "La cita terminaría al día siguiente.";
-  if (input.professionalWindow === null) {
+  if (hours && input.professionalWindow === null) {
     return `${input.professionalName} no trabaja ese día.`;
   }
-  if (input.professionalWindow && !fitsInWindow(startMinutes, durationMinutes, input.professionalWindow)) {
+  if (hours && input.professionalWindow && !fitsInWindow(startMinutes, durationMinutes, input.professionalWindow)) {
     return `Está fuera del horario de ${input.professionalName} (${clock(input.professionalWindow.startMinutes)}–${clock(input.professionalWindow.endMinutes)}).`;
   }
-  if (input.salonWindow && !fitsInWindow(startMinutes, durationMinutes, input.salonWindow)) {
+  if (hours && input.salonWindow && !fitsInWindow(startMinutes, durationMinutes, input.salonWindow)) {
     return `Está fuera del horario del salón (${clock(input.salonWindow.startMinutes)}–${clock(input.salonWindow.endMinutes)}).`;
   }
   const end = startMinutes + durationMinutes;
@@ -85,6 +99,46 @@ export async function assertCanReschedule(
   target: RescheduleTarget,
   now: Date = new Date(),
 ): Promise<void> {
+  const problem = rescheduleProblem(await scheduleCheckInput(prisma, target, now));
+  if (problem) throw new ConflictException(problem);
+}
+
+/** A new appointment overlaps another of the professional's (or cannot be at that time at all). */
+export const SCHEDULE_CONFLICT = "SCHEDULE_CONFLICT";
+/** A new appointment is in the past or outside the hours: an owner or manager may confirm it. */
+export const OUTSIDE_HOURS = "OUTSIDE_HOURS";
+
+/**
+ * Whether a new appointment fits the professional's agenda: the same rules as
+ * a move. An overlap is always refused (409, code SCHEDULE_CONFLICT). The past
+ * and the hours are refused with code OUTSIDE_HOURS unless
+ * `allowOutsideHours`, which the caller grants only to owners and managers
+ * who confirmed it (a walk-in, or entering yesterday's visit afterwards).
+ *
+ * "The past" allows a few minutes' grace: a walk-in entered as it starts
+ * is a booking for now, not a catch-up entry.
+ */
+export async function assertCanBook(
+  prisma: PrismaLike,
+  target: RescheduleTarget,
+  opts: { allowOutsideHours?: boolean; now?: Date } = {},
+): Promise<void> {
+  const now = (opts.now ?? new Date()).getTime() - PAST_GRACE_MINUTES * 60_000;
+  const input = { ...(await scheduleCheckInput(prisma, target, new Date(now))), action: "create" as const };
+  const clash = rescheduleProblem({ ...input, skipHours: true });
+  if (clash) throw new ConflictException({ code: SCHEDULE_CONFLICT, message: clash });
+  if (opts.allowOutsideHours) return;
+  const outside = rescheduleProblem(input);
+  if (outside) throw new ConflictException({ code: OUTSIDE_HOURS, message: outside });
+}
+
+const PAST_GRACE_MINUTES = 15;
+
+async function scheduleCheckInput(
+  prisma: PrismaLike,
+  target: RescheduleTarget,
+  now: Date,
+): Promise<Parameters<typeof rescheduleProblem>[0]> {
   const [tenant, professional, others] = await Promise.all([
     prisma.tenant.findUnique({
       where: { id: target.tenantId },
@@ -98,7 +152,7 @@ export async function assertCanReschedule(
       where: {
         tenantId: target.tenantId,
         professionalId: target.professionalId,
-        id: { not: target.appointmentId },
+        ...(target.appointmentId ? { id: { not: target.appointmentId } } : {}),
         scheduledDate: {
           gte: new Date(`${target.day}T00:00:00.000Z`),
           lte: new Date(`${target.day}T23:59:59.999Z`),
@@ -119,7 +173,7 @@ export async function assertCanReschedule(
   const close = hours.close ? minutesOf(hours.close) : null;
   const timeZone = tenant?.timezone || "Europe/Madrid";
 
-  const problem = rescheduleProblem({
+  return {
     startMinutes: minutesOf(target.time),
     durationMinutes: target.durationMinutes,
     professionalWindow: workingWindowFor(professional.workingHours, new Date(`${target.day}T12:00:00.000Z`)),
@@ -131,8 +185,7 @@ export async function assertCanReschedule(
       clientName: o.client ? `${o.client.firstName} ${o.client.lastName}`.trim() : null,
     })),
     inPast: minutesOf(target.time) !== null && salonInstant(target.day, target.time, timeZone) < now,
-  });
-  if (problem) throw new ConflictException(problem);
+  };
 }
 
 /** The salon's calendar day and clock for an instant (service rows store instants). */
