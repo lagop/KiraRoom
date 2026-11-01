@@ -80,6 +80,7 @@ import { priceIsFrozen } from "./visit-sync";
 import { bookedAddon, bookedService, bookedServiceName, snapshotAddons, snapshotOf, withBookedService } from "./appointment-snapshot";
 import { appointmentLocationId } from "../multi-location/appointment-location";
 import { assertProfessionalsAt, professionalsAt } from "../multi-location/professional-locations";
+import { bookingPlace } from "../multi-location/client-locations";
 import {
   clientEmailFilter,
   findClientIdByPhone,
@@ -2936,6 +2937,29 @@ export class AppointmentsService {
   }
 
   /**
+   * Where the appointment is, for the client's emails: its location's name
+   * and address (and phone) when the salon has two or more open locations
+   * (client-locations.ts, bookingPlace). Nothing otherwise, so a
+   * single-location salon's emails stay as they were. Never fails an email.
+   */
+  private async emailPlace(
+    appointment: any,
+  ): Promise<{ locationName?: string; salonAddress?: string; salonPhone?: string }> {
+    try {
+      const place = await bookingPlace(this.prisma as any, appointment?.tenantId, appointment?.locationId);
+      if (!place) return {};
+      return {
+        locationName: place.name,
+        ...(place.address ? { salonAddress: place.address } : {}),
+        ...(place.phone ? { salonPhone: place.phone } : {}),
+      };
+    } catch (err) {
+      this.logger.warn(`Location for the email not read: ${(err as Error).message}`);
+      return {};
+    }
+  }
+
+  /**
    * Send notifications when an appointment is created
    * Notifies: Client, Professional, Admin
    */
@@ -3016,6 +3040,8 @@ export class AppointmentsService {
             date: dateStr,
             time: appointment.scheduledTime,
             salonName,
+            // Which location and its address, when the salon has several.
+            ...(await this.emailPlace(appointment)),
           });
           if (sent?.success === false) {
             this.logger.warn(
@@ -3405,6 +3431,7 @@ export class AppointmentsService {
               date: dateStr,
               time: appointment.scheduledTime,
               salonName,
+              ...(await this.emailPlace(appointment)),
             },
             reason,
           );
@@ -3649,6 +3676,7 @@ export class AppointmentsService {
               date: newDateStr,
               time: appointment.scheduledTime,
               salonName,
+              ...(await this.emailPlace(appointment)),
             },
             oldDateStr,
             oldTime,
@@ -3982,6 +4010,8 @@ export class AppointmentsService {
             date: dateStr,
             time: appointment.scheduledTime,
             salonName,
+            // Which location and its address, when the salon has several.
+            ...(await this.emailPlace(appointment)),
           });
           this.logger.log(
             `Sent confirmation email to client ${appointment.clientId}`,
