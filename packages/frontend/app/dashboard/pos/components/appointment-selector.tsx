@@ -11,7 +11,10 @@ interface Appointment {
   status: string;
   paymentStatus: string;
   totalAmount: number;
+  /** What the visit costs at the till, tax included (the invoice total); cents. */
+  chargeTotal?: number;
   amountPaid: number;
+  /** What is still owed of chargeTotal (a deposit or earlier payment already counts); cents. */
   amountDue: number;
   depositRequired: boolean;
   depositAmount: number | null;
@@ -180,13 +183,11 @@ export default function AppointmentSelector({
     );
   };
 
-  const formatCurrency = (amount: number) => {
-    // Amount from API is already in cents, convert to dollars for display
-    return new Intl.NumberFormat("en-EU", {
-      style: "currency",
-      currency: "EUR",
-    }).format(amount / 100);
-  };
+  // Cents from the API, shown as euros the Spanish way.
+  const formatCurrency = (amount: number) =>
+    new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(amount / 100);
+  const totalOf = (a: Appointment) => a.chargeTotal ?? a.totalAmount;
+  const dueOf = (a: Appointment) => a.amountDue ?? totalOf(a);
 
   const toggleSelection = (appointment: Appointment) => {
     setSelectedAppointments((prev) => {
@@ -311,8 +312,13 @@ export default function AppointmentSelector({
                          <div className="mt-2 flex justify-between items-center">
                            <div className="text-sm">
                              <span className="font-medium">{t("pos.total")}:</span>{" "}
-                             {formatCurrency(appointment.totalAmount)}
+                             {formatCurrency(totalOf(appointment))}
                            </div>
+                           {dueOf(appointment) !== totalOf(appointment) && (
+                             <div className="text-sm font-semibold text-gray-900">
+                               {t("pos.amount_due")}: {formatCurrency(dueOf(appointment))}
+                             </div>
+                           )}
                          </div>
                          {appointment.depositPaid && (
                            <div className="text-sm text-green-600 mt-1">
@@ -333,7 +339,7 @@ export default function AppointmentSelector({
           {selectedAppointments.length > 0 && (
             <div className="mb-3 p-2 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
               {selectedAppointments.length} {selectedAppointments.length === 1 ? t("pos.appointment_selected").toLowerCase() : t("pos.appointments_selected")} —{" "}
-              {formatCurrency(selectedAppointments.reduce((sum, a) => sum + a.totalAmount, 0))} {t("pos.total").toLowerCase()}
+              {formatCurrency(selectedAppointments.reduce((sum, a) => sum + dueOf(a), 0))} {t("pos.amount_due").toLowerCase()}
             </div>
           )}
           <div className="flex justify-end gap-2">

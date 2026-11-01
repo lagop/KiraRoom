@@ -54,6 +54,7 @@ console.log("current page");
   check("the billing page opens Ajustes", activeGroup(nav, "/dashboard/billing") === "settings");
   check("a WhatsApp campaign opens Marketing", activeGroup(nav, "/dashboard/marketing/whatsapp/new") === "marketing");
   check("the till opens Caja y ventas", activeGroup(nav, "/dashboard/pos") === "sales");
+  check("the till's products open Caja y ventas, for managers only", activeGroup(nav, "/dashboard/pos/products") === "sales" && !ids(navFor("staff")).includes("pos-products") && ids(navFor("owner")).includes("pos-products"));
   check("a top-level page opens no group", activeGroup(nav, "/dashboard/appointments") === null);
   check("the requests page opens Equipo y servicios", activeGroup(nav, "/dashboard/solicitudes-ausencia") === "team");
 }

@@ -1812,7 +1812,8 @@
     "closures": "Closures & holidays",
     "my_time_off": "My time off",
     "time_off_requests": "Time off requests",
-    "account": "Your account"
+    "account": "Your account",
+    "pos_products": "Products"
   },
   "Failed to add points": "Failed to add points",
   "Failed to create professional": {
@@ -2087,7 +2088,9 @@
       "bank_transfer": "Bank Transfer",
       "card": "Card",
       "cash": "Cash",
-      "wallet": "Wallet"
+      "wallet": "Wallet",
+      "bizum": "Bizum",
+      "gift_card": "Gift card"
     },
     "pending": "Pending",
     "plan": "Plan",
@@ -2197,7 +2200,7 @@
     "status": "Status",
     "this_week": "This Week",
     "time": "Time",
-    "title": "Title",
+    "title": "Till",
     "today": "Today",
     "today_payments": "Today Payments",
     "today_sales": "Today Sales",
@@ -2208,7 +2211,10 @@
     "confirm_void_payment": "Void this {amount} payment?",
     "confirm_void_payment_description": "It is removed from the till records. Only pending or failed payments can be voided.",
     "void_payment": "Void payment",
-    "keep_payment": "Keep payment"
+    "keep_payment": "Keep payment",
+    "walk_in": "Walk-in client",
+    "products": "Products",
+    "own_sales_only": "You only see your own sales today."
   },
   "pos_today": "Pos Today",
   "pos_tomorrow": "Pos Tomorrow",

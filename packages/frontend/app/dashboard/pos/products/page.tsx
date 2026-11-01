@@ -3,14 +3,20 @@
 import { useState, useEffect } from 'react'
 import { apiClient } from '@/lib/api'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { toast } from '@/components/ui/use-toast'
 
+/**
+ * The products the till sells and their stock (owner and managers). Prices
+ * come back from the API as Decimal strings ("12.50"): always read them with
+ * Number() -- `price.toFixed` on a string crashed this page.
+ */
 interface Product {
   id: string
   name: string
   description?: string
   sku?: string
-  price: number
-  costPrice?: number
+  price: number | string
+  costPrice?: number | string | null
   quantity: number
   lowStockAlert: number
   category?: string
@@ -24,6 +30,11 @@ interface ProductCategory {
   description?: string
 }
 
+const euros = (value: number | string | null | undefined) =>
+  Number(value ?? 0).toLocaleString('es-ES', { style: 'currency', currency: 'EUR' })
+
+const errorText = (error: unknown) => (error instanceof Error ? error.message : 'Inténtalo de nuevo.')
+
 export default function ProductsPage() {
   const [products, setProducts] = useState<Product[]>([])
   const [categories, setCategories] = useState<ProductCategory[]>([])
@@ -33,6 +44,7 @@ export default function ProductsPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('')
   const [showLowStock, setShowLowStock] = useState(false)
+  const [saving, setSaving] = useState(false)
   // The product about to be deleted, confirmed in the panel's dialog.
   const [pendingDelete, setPendingDelete] = useState<Product | null>(null)
   const [deleting, setDeleting] = useState(false)
@@ -51,7 +63,7 @@ export default function ProductsPage() {
       setProducts(productsData)
       setCategories(categoriesData)
     } catch (error) {
-      console.error('Failed to load products:', error)
+      toast({ title: 'No se pudieron cargar los productos', description: errorText(error), variant: 'destructive' })
     } finally {
       setLoading(false)
     }
@@ -67,7 +79,7 @@ export default function ProductsPage() {
       })
       setProducts(data)
     } catch (error) {
-      console.error('Failed to search products:', error)
+      toast({ title: 'No se pudo buscar', description: errorText(error), variant: 'destructive' })
     } finally {
       setLoading(false)
     }
@@ -82,24 +94,30 @@ export default function ProductsPage() {
       sku: formData.get('sku') || undefined,
       price: parseFloat(formData.get('price') as string),
       costPrice: formData.get('costPrice') ? parseFloat(formData.get('costPrice') as string) : undefined,
-      quantity: parseInt(formData.get('quantity') as string),
-      lowStockAlert: parseInt(formData.get('lowStockAlert') as string) || 5,
+      // On an edit, a new quantity is logged as a stock count (the difference).
+      quantity: parseInt(formData.get('quantity') as string, 10),
+      lowStockAlert: parseInt(formData.get('lowStockAlert') as string, 10) || 5,
       category: formData.get('category') || undefined,
       trackInventory: true,
       isActive: true,
     }
 
+    setSaving(true)
     try {
       if (editingProduct) {
         await apiClient.updateProduct(editingProduct.id, productData)
+        toast({ title: 'Producto guardado' })
       } else {
         await apiClient.createProduct(productData)
+        toast({ title: 'Producto creado' })
       }
       setShowModal(false)
       setEditingProduct(null)
       loadData()
     } catch (error) {
-      console.error('Failed to save product:', error)
+      toast({ title: 'No se pudo guardar el producto', description: errorText(error), variant: 'destructive' })
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -107,10 +125,18 @@ export default function ProductsPage() {
     if (!pendingDelete) return
     setDeleting(true)
     try {
-      await apiClient.deleteProduct(pendingDelete.id)
+      const result = (await apiClient.deleteProduct(pendingDelete.id)) as unknown as { deactivated?: boolean } | undefined
+      toast(
+        result?.deactivated
+          ? {
+              title: 'Producto desactivado',
+              description: 'Tiene ventas o movimientos de stock: se ha retirado de la caja y su historial se conserva.',
+            }
+          : { title: 'Producto eliminado' },
+      )
       loadData()
     } catch (error) {
-      console.error('Failed to delete product:', error)
+      toast({ title: 'No se pudo eliminar el producto', description: errorText(error), variant: 'destructive' })
     } finally {
       setDeleting(false)
       setPendingDelete(null)
@@ -124,8 +150,8 @@ export default function ProductsPage() {
 
   return (
     <div className="p-6">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold">Products & Inventory</h1>
+      <div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center mb-6">
+        <h1 className="text-2xl font-bold">Productos y stock</h1>
         <button
           onClick={() => {
             setEditingProduct(null)
@@ -133,7 +159,7 @@ export default function ProductsPage() {
           }}
           className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
         >
-          Add Product
+          Añadir producto
         </button>
       </div>
 
@@ -142,7 +168,7 @@ export default function ProductsPage() {
         <div className="flex flex-wrap gap-4">
           <input
             type="text"
-            placeholder="Search products..."
+            placeholder="Buscar productos…"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="border rounded-lg px-4 py-2 flex-1 min-w-[200px]"
@@ -152,7 +178,7 @@ export default function ProductsPage() {
             onChange={(e) => setSelectedCategory(e.target.value)}
             className="border rounded-lg px-4 py-2"
           >
-            <option value="">All Categories</option>
+            <option value="">Todas las categorías</option>
             {categories.map(cat => (
               <option key={cat.id} value={cat.name}>{cat.name}</option>
             ))}
@@ -164,42 +190,42 @@ export default function ProductsPage() {
               onChange={(e) => setShowLowStock(e.target.checked)}
               className="rounded"
             />
-            Low Stock Only
+            Solo con poco stock
           </label>
           <button
             onClick={handleSearch}
             className="bg-gray-800 text-white px-4 py-2 rounded-lg hover:bg-gray-900"
           >
-            Search
+            Buscar
           </button>
         </div>
       </div>
 
       {/* Products Table */}
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <table className="w-full">
+      <div className="bg-white rounded-lg shadow overflow-x-auto">
+        <table className="w-full min-w-[640px]">
           <thead className="bg-gray-50">
             <tr>
-              <th className="px-4 py-3 text-left text-sm font-semibold">Product</th>
-              <th className="px-4 py-3 text-left text-sm font-semibold">SKU</th>
-              <th className="px-4 py-3 text-left text-sm font-semibold">Category</th>
-              <th className="px-4 py-3 text-right text-sm font-semibold">Price</th>
+              <th className="px-4 py-3 text-left text-sm font-semibold">Producto</th>
+              <th className="px-4 py-3 text-left text-sm font-semibold">Referencia</th>
+              <th className="px-4 py-3 text-left text-sm font-semibold">Categoría</th>
+              <th className="px-4 py-3 text-right text-sm font-semibold">Precio</th>
               <th className="px-4 py-3 text-right text-sm font-semibold">Stock</th>
-              <th className="px-4 py-3 text-center text-sm font-semibold">Status</th>
-              <th className="px-4 py-3 text-center text-sm font-semibold">Actions</th>
+              <th className="px-4 py-3 text-center text-sm font-semibold">Estado</th>
+              <th className="px-4 py-3 text-center text-sm font-semibold">Acciones</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
                 <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
-                  Loading...
+                  Cargando…
                 </td>
               </tr>
             ) : filteredProducts.length === 0 ? (
               <tr>
                 <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
-                  No products found
+                  No hay productos
                 </td>
               </tr>
             ) : (
@@ -215,7 +241,7 @@ export default function ProductsPage() {
                   </td>
                   <td className="px-4 py-3 text-sm">{product.sku || '-'}</td>
                   <td className="px-4 py-3 text-sm">{product.category || '-'}</td>
-                  <td className="px-4 py-3 text-right">€{product.price.toFixed(2)}</td>
+                  <td className="px-4 py-3 text-right">{euros(product.price)}</td>
                   <td className="px-4 py-3 text-right">
                     <span className={product.quantity <= product.lowStockAlert ? 'text-red-600 font-medium' : ''}>
                       {product.quantity}
@@ -225,10 +251,10 @@ export default function ProductsPage() {
                     <span className={`px-2 py-1 rounded-full text-xs ${
                       product.isActive ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
                     }`}>
-                      {product.isActive ? 'Active' : 'Inactive'}
+                      {product.isActive ? 'A la venta' : 'Desactivado'}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-center">
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
                     <button
                       onClick={() => {
                         setEditingProduct(product)
@@ -236,13 +262,13 @@ export default function ProductsPage() {
                       }}
                       className="text-blue-600 hover:text-blue-800 mr-3"
                     >
-                      Edit
+                      Editar
                     </button>
                     <button
                       onClick={() => setPendingDelete(product)}
                       className="text-red-600 hover:text-red-800"
                     >
-                      Delete
+                      Eliminar
                     </button>
                   </td>
                 </tr>
@@ -254,16 +280,17 @@ export default function ProductsPage() {
 
       {/* Modal */}
       {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
             <h2 className="text-xl font-bold mb-4">
-              {editingProduct ? 'Edit Product' : 'Add Product'}
+              {editingProduct ? 'Editar producto' : 'Añadir producto'}
             </h2>
             <form onSubmit={handleSave}>
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium mb-1">Name *</label>
+                  <label htmlFor="product-name" className="block text-sm font-medium mb-1">Nombre *</label>
                   <input
+                    id="product-name"
                     name="name"
                     required
                     defaultValue={editingProduct?.name}
@@ -271,8 +298,9 @@ export default function ProductsPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">Description</label>
+                  <label htmlFor="product-description" className="block text-sm font-medium mb-1">Descripción</label>
                   <textarea
+                    id="product-description"
                     name="description"
                     defaultValue={editingProduct?.description || ''}
                     className="w-full border rounded-lg px-3 py-2"
@@ -281,16 +309,18 @@ export default function ProductsPage() {
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium mb-1">SKU</label>
+                    <label htmlFor="product-sku" className="block text-sm font-medium mb-1">Referencia</label>
                     <input
+                      id="product-sku"
                       name="sku"
                       defaultValue={editingProduct?.sku || ''}
                       className="w-full border rounded-lg px-3 py-2"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium mb-1">Category</label>
+                    <label htmlFor="product-category" className="block text-sm font-medium mb-1">Categoría</label>
                     <input
+                      id="product-category"
                       name="category"
                       defaultValue={editingProduct?.category || ''}
                       className="w-full border rounded-lg px-3 py-2"
@@ -305,44 +335,53 @@ export default function ProductsPage() {
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium mb-1">Price (€) *</label>
+                    <label htmlFor="product-price" className="block text-sm font-medium mb-1">Precio (€) *</label>
                     <input
+                      id="product-price"
                       name="price"
                       type="number"
                       step="0.01"
+                      min="0"
                       required
-                      defaultValue={editingProduct?.price || ''}
+                      defaultValue={editingProduct ? Number(editingProduct.price) : ''}
                       className="w-full border rounded-lg px-3 py-2"
                     />
+                    <p className="mt-1 text-xs text-gray-500">Como los precios de tus servicios (con o sin IVA, según tu ajuste).</p>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium mb-1">Cost Price (€)</label>
+                    <label htmlFor="product-cost" className="block text-sm font-medium mb-1">Precio de coste (€)</label>
                     <input
+                      id="product-cost"
                       name="costPrice"
                       type="number"
                       step="0.01"
-                      defaultValue={editingProduct?.costPrice || ''}
+                      min="0"
+                      defaultValue={editingProduct?.costPrice != null ? Number(editingProduct.costPrice) : ''}
                       className="w-full border rounded-lg px-3 py-2"
                     />
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium mb-1">Quantity *</label>
+                    <label htmlFor="product-quantity" className="block text-sm font-medium mb-1">Unidades en stock *</label>
                     <input
+                      id="product-quantity"
                       name="quantity"
                       type="number"
+                      min="0"
                       required
-                      defaultValue={editingProduct?.quantity || 0}
+                      defaultValue={editingProduct?.quantity ?? 0}
                       className="w-full border rounded-lg px-3 py-2"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium mb-1">Low Stock Alert</label>
+                    <label htmlFor="product-low" className="block text-sm font-medium mb-1">Aviso de poco stock</label>
                     <input
+                      id="product-low"
                       name="lowStockAlert"
                       type="number"
-                      defaultValue={editingProduct?.lowStockAlert || 5}
+                      min="0"
+                      defaultValue={editingProduct?.lowStockAlert ?? 5}
                       className="w-full border rounded-lg px-3 py-2"
                     />
                   </div>
@@ -357,13 +396,14 @@ export default function ProductsPage() {
                   }}
                   className="px-4 py-2 border rounded-lg hover:bg-gray-50"
                 >
-                  Cancel
+                  Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  disabled={saving}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-blue-300"
                 >
-                  {editingProduct ? 'Update' : 'Create'}
+                  {saving ? 'Guardando…' : editingProduct ? 'Guardar' : 'Crear'}
                 </button>
               </div>
             </form>
@@ -374,6 +414,7 @@ export default function ProductsPage() {
       <ConfirmDialog
         open={!!pendingDelete}
         title={`¿Eliminar el producto «${pendingDelete?.name ?? ''}»?`}
+        description="Si ya se ha vendido o tiene movimientos de stock, se desactiva en lugar de borrarse: deja de salir en la caja y su historial se conserva."
         confirmLabel="Eliminar producto"
         destructive
         loading={deleting}
