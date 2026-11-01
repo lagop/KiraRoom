@@ -17,6 +17,7 @@ import { EmailService } from "../notifications/services/email.service";
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
 import { EmailSuppressionService } from "../email-campaigns/email-suppression.service";
 import { AuditLogService } from "../saas/audit-log.service";
+import { reviewEmailPoints } from "../loyalty/loyalty-client-points";
 import { WhatsAppTemplateService } from "../whatsapp/whatsapp-template.service";
 import { REVIEW_REQUEST } from "../whatsapp/whatsapp-templates";
 import { MARKETING_FIELD_ID, WHATSAPP_NOTICES_PURPOSE } from "../consent/marketing-consent";
@@ -813,6 +814,7 @@ export class ReviewsService {
       salonName: appt.tenant.name,
       reviewUrl: link,
       optOutUrl: `${link}?baja=1`,
+      loyalty: await this.loyaltyLine(appt.tenantId, appt.clientId),
     });
     if (!res.success) {
       await this.prisma.review.delete({ where: { id: review.id } });
@@ -867,6 +869,21 @@ export class ReviewsService {
     } catch (err) {
       return `check failed: ${(err as Error).message}`;
     }
+  }
+
+  /**
+   * Her points, for an optional line of the email: only when the salon's
+   * programme is on with "Mostrar puntos en el email tras la visita" (on by
+   * default) and she is a member with points (reviewEmailPoints). A failed
+   * read never stops the request.
+   */
+  private async loyaltyLine(tenantId: string, clientId: string | null) {
+    return reviewEmailPoints(this.prisma as any, tenantId, clientId, (t) =>
+      this.featureFlags.isFeatureUnlocked(t, "loyalty"),
+    ).catch((err: Error) => {
+      this.logger.warn(`Review request: loyalty line not read: ${err.message}`);
+      return null;
+    });
   }
 
   /**

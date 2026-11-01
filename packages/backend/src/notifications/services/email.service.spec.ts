@@ -787,3 +787,32 @@ describe("EmailService with the platform console's settings", () => {
     expect((service as any).client()).toBeNull();
   });
 });
+
+describe("EmailService.sendReviewRequest: the points line", () => {
+  const base = {
+    to: "clienta@example.com",
+    clientName: "Lucía",
+    serviceName: "Corte",
+    salonName: "Salón Luna",
+    reviewUrl: "https://app.example.test/public/r/tok",
+    optOutUrl: "https://app.example.test/public/r/tok?baja=1",
+  };
+
+  it("adds her balance and the expiry rule when given", async () => {
+    const { service, calls } = makeService();
+    await service.sendReviewRequest({
+      ...base,
+      loyalty: { balance: 1240, expiryRule: "Tus puntos caducan si pasan 12 meses sin visitas" },
+    });
+    expect(calls[0].text).toContain("Tienes 1240 puntos en Salón Luna.");
+    expect(calls[0].text).toContain("Tus puntos caducan si pasan 12 meses sin visitas.");
+    expect(calls[0].html).toContain("Tus puntos caducan si pasan 12 meses sin visitas.");
+  });
+
+  it("has no points line without them", async () => {
+    const { service, calls } = makeService();
+    await service.sendReviewRequest(base);
+    expect(calls[0].text).not.toMatch(/puntos/);
+    expect(calls[0].html).not.toMatch(/puntos/);
+  });
+});

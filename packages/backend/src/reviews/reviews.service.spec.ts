@@ -599,6 +599,49 @@ describe("ReviewsService panel", () => {
   });
 });
 
+describe("ReviewsService: the points line of the post-visit email", () => {
+  const withLoyalty = (program: Record<string, unknown> | null, member: Record<string, unknown> | null) => {
+    const s = setup();
+    Object.assign(s.prisma, {
+      loyaltyProgram: { findFirst: jest.fn(async () => program) },
+      loyaltyMember: { findUnique: jest.fn(async () => member) },
+      loyaltyTransaction: { findMany: jest.fn(async () => []) },
+    });
+    s.flags.isFeatureUnlocked = jest.fn(async () => true);
+    return s;
+  };
+
+  it("carries her balance when the salon shows points (the default) and she is a member", async () => {
+    const { service, email } = withLoyalty(
+      { id: "prog-1", isActive: true, pointsExpirationDays: 365, showPointsInReviewEmail: true },
+      { id: "m-1", currentPoints: 320, status: "active" },
+    );
+    await service.dispatchForTenant("t1", NOW);
+    expect(email.sendReviewRequest.mock.calls[0][0].loyalty).toEqual({
+      balance: 320,
+      expiryRule: "Tus puntos caducan si pasan 12 meses sin visitas",
+    });
+  });
+
+  it("none when the setting is off, she is not a member, or the programme cannot be read", async () => {
+    const off = withLoyalty(
+      { id: "prog-1", isActive: true, pointsExpirationDays: 365, showPointsInReviewEmail: false },
+      { id: "m-1", currentPoints: 320, status: "active" },
+    );
+    await off.service.dispatchForTenant("t1", NOW);
+    expect(off.email.sendReviewRequest.mock.calls[0][0].loyalty).toBeNull();
+
+    const notMember = withLoyalty({ id: "prog-1", isActive: true, pointsExpirationDays: 365 }, null);
+    await notMember.service.dispatchForTenant("t1", NOW);
+    expect(notMember.email.sendReviewRequest.mock.calls[0][0].loyalty).toBeNull();
+
+    // No loyalty tables in the mock: the request still goes, without the line.
+    const plain = setup();
+    expect((await plain.service.dispatchForTenant("t1", NOW)).sent).toBe(1);
+    expect(plain.email.sendReviewRequest.mock.calls[0][0].loyalty).toBeNull();
+  });
+});
+
 describe("ReviewsService — review requests by WhatsApp (utility template, Meta mocked)", () => {
   it("asks a client who asked for her appointment notices by WhatsApp, with the same tokenised link", async () => {
     const { service, prisma, email, whatsapp } = setup({ whatsappNotices: true });

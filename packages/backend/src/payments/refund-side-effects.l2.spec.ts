@@ -212,7 +212,7 @@ describe("refunds and their side effects (L2, real database)", () => {
     expect(linked.reduce((s: number, r: any) => s + r.amount, 0)).toBe(6600);
   }, 60_000);
 
-  it("partial refunds take back their share of the points with a ledger entry; the full refund the rest; never below zero", async () => {
+  it("partial refunds take back their share of the points with a ledger entry; the full refund the rest; below zero when they were spent already", async () => {
     if (!reachable) return;
     const start = await points();
     const sale: any = await pos.processCheckout({
@@ -238,7 +238,8 @@ describe("refunds and their side effects (L2, real database)", () => {
     await payments.refundPayment(tenantId, payment.id, { reason: "El resto" }, OWNER.id);
     expect(await points()).toBe(start);
 
-    // Never below zero: a client who already spent her points.
+    // A client who already spent her points goes below zero (audit L4):
+    // her next visits pay it off.
     const sale2: any = await pos.processCheckout({
       tenantId,
       actor: OWNER,
@@ -249,7 +250,7 @@ describe("refunds and their side effects (L2, real database)", () => {
     const [payment2] = await salePayments(sale2.saleId);
     await db.loyaltyMember.update({ where: { id: memberId }, data: { currentPoints: 5 } });
     await payments.refundPayment(tenantId, payment2.id, { amount: 1500, reason: "Parcial" }, OWNER.id);
-    expect(await points()).toBe(0);
+    expect(await points()).toBe(-10);
     await db.loyaltyMember.update({ where: { id: memberId }, data: { currentPoints: start } });
   }, 60_000);
 

@@ -161,3 +161,37 @@ describe("InvoiceEmailService", () => {
     expect(failing.audit.record).not.toHaveBeenCalled();
   });
 });
+
+describe("InvoiceEmailService: the till's points block", () => {
+  it("a till sale's invoice tells the client the points earned, her balance and the expiry rule", async () => {
+    const { service, sent, prisma } = setup({ invoice: { sourceType: "pos_sale", sourceId: "sale-1" } });
+    Object.assign(prisma as any, {
+      posSale: { findFirst: jest.fn(async () => ({ id: "sale-1", clientId: "client-1", lines: [{ appointmentId: "apt-1" }] })) },
+      loyaltyProgram: { findFirst: jest.fn(async () => ({ id: "prog-1", isActive: true, pointsExpirationDays: 365 })) },
+      loyaltyMember: { findUnique: jest.fn(async () => ({ id: "m-1", currentPoints: 245, status: "active" })) },
+      loyaltyTransaction: { findMany: jest.fn(async () => [{ points: 30 }]) },
+    });
+    await service.send(TENANT, "inv-1", ACTOR);
+    const mail = sent[0];
+    expect(mail.text).toContain("Puntos ganados con esta compra: 30 puntos");
+    expect(mail.text).toContain("Tu saldo de puntos: 245 puntos");
+    expect(mail.text).toContain("Tus puntos caducan si pasan 12 meses sin visitas.");
+    expect(mail.html).toContain("Tu saldo de puntos: 245 puntos");
+  });
+
+  it("any other invoice, or a client who is not a member, has no points block", async () => {
+    const plain = setup();
+    await plain.service.send(TENANT, "inv-1", ACTOR);
+    expect(plain.sent[0].text).not.toMatch(/puntos/i);
+
+    const notMember = setup({ invoice: { sourceType: "pos_sale", sourceId: "sale-1" } });
+    Object.assign(notMember.prisma as any, {
+      posSale: { findFirst: jest.fn(async () => ({ id: "sale-1", clientId: "client-1", lines: [] })) },
+      loyaltyProgram: { findFirst: jest.fn(async () => ({ id: "prog-1", isActive: true, pointsExpirationDays: 365 })) },
+      loyaltyMember: { findUnique: jest.fn(async () => null) },
+      loyaltyTransaction: { findMany: jest.fn(async () => []) },
+    });
+    await notMember.service.send(TENANT, "inv-1", ACTOR);
+    expect(notMember.sent[0].text).not.toMatch(/puntos/i);
+  });
+});

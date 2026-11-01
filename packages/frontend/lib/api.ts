@@ -3406,6 +3406,13 @@ class ApiClient implements ApiClientInterface {
     return this.request("/loyalty/tiers", { method: "POST", body: JSON.stringify(data) });
   }
 
+  async updateLoyaltyTier(
+    id: string,
+    data: Partial<{ name: string; minPoints: number; pointsMultiplier: number }>,
+  ): Promise<LoyaltyTier> {
+    return this.request(`/loyalty/tiers/${id}`, { method: "PUT", body: JSON.stringify(data) });
+  }
+
   async deleteLoyaltyTier(id: string): Promise<{ ok: boolean }> {
     return this.request(`/loyalty/tiers/${id}`, { method: "DELETE" });
   }
@@ -5843,6 +5850,10 @@ export interface LoyaltyProgramSettings {
   welcomePoints: number;
   autoEnroll: boolean;
   allowSelfEnroll: boolean;
+  /** Days without a paid visit after which the whole balance expires; null: never. */
+  pointsExpirationDays: number | null;
+  /** "Mostrar puntos en el email tras la visita". */
+  showPointsInReviewEmail: boolean;
 }
 
 export interface LoyaltyTier {
@@ -5861,6 +5872,8 @@ export interface LoyaltyRewardInput {
   /** Cents. */
   discountAmount?: number | null;
   freeServiceId?: string | null;
+  /** The product a product reward hands over (it leaves the stock). */
+  productId?: string | null;
   isActive?: boolean;
   /** How many times it can be redeemed in all; null: no limit. */
   maxRedemptions?: number | null;
@@ -5877,6 +5890,8 @@ export interface LoyaltyReward extends LoyaltyRewardInput {
 
 export interface LoyaltyProgram extends LoyaltyProgramSettings {
   id: string;
+  /** No points expire before this (the grace after expiry was switched on or shortened). */
+  pointsExpiryStartsAt?: string | null;
   tiers: LoyaltyTier[];
   rewards: LoyaltyReward[];
   _count: { members: number };
@@ -5963,7 +5978,8 @@ export interface PosSale {
   tendered: number;
   discount?: { lines: number; order: number; total: number };
   promotion?: PosPromotion | null;
-  loyalty?: { pointsEarned: number; pointsSpent: number; discount: number; rewardName?: string };
+  // gift: the zero-price line of a product or «otro regalo» reward, to hand over.
+  loyalty?: { pointsEarned: number; pointsSpent: number; discount: number; rewardName?: string; gift?: string | null };
   invoice: { id: string; series: string; number: string; full: boolean } | null;
   giftCards?: Array<{ id: string; code: string; amountCents: number; recipientEmail?: string; emailSent?: boolean }>;
   /** Visits whose loyalty reward their issued invoice could not take: a rectificativa to issue by hand. */
@@ -6015,6 +6031,8 @@ export interface PosReceipt {
   tenderedCents: number;
   changeCents: number;
   giftCards: Array<{ code: string; amountCents: number }>;
+  /** The client's points: earned on this sale, her balance, the expiry rule. Null: no member client. */
+  loyalty?: { pointsEarned: number; balance: number; expiryRule: string | null } | null;
 }
 
 export type CashMovementType = "in" | "out";
@@ -6146,7 +6164,11 @@ export interface PosSettings {
 
 export interface ClientLoyaltySummary {
   program: (LoyaltyProgramSettings & { id: string }) | null;
-  member: (LoyaltyMemberRow & { tier: { name: string } | null }) | null;
+  member: (LoyaltyMemberRow & {
+    tier: { name: string } | null;
+    /** When her balance expires if she does not come back; null: never, or nothing to lose. */
+    pointsExpireOn?: string | null;
+  }) | null;
   rewards: LoyaltyReward[];
   history: LoyaltyTransactionRow[];
 }

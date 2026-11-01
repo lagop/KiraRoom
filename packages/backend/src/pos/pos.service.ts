@@ -11,7 +11,9 @@ import { randomUUID } from 'crypto';
 import { Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { WalletService } from '../payments/services/wallet.service';
-import { LoyaltyService } from '../loyalty/loyalty.service';
+import { LoyaltyService, type RewardGift } from '../loyalty/loyalty.service';
+import { saleLoyaltyBlock } from '../loyalty/loyalty-client-points';
+import { LOYALTY_GIFT_KIND, giftInvoiceLine, giftLineOf, giftSaleLine, takeGiftFromStock, type GiftLine } from './pos-loyalty-gift';
 import { GiftCardsService } from '../gift-cards/gift-cards.service';
 import { refreshClientStats } from '../clients/client-stats';
 import { settleTenders, type Tender } from './pos-tenders';
@@ -722,6 +724,7 @@ export class PosService {
     let loyaltyDiscount = 0;
     let pointsSpent = 0;
     let rewardName: string | undefined;
+    let rewardGift: RewardGift | null = null;
     if (dto.loyaltyRewardId) {
       if (!this.loyalty) throw new BadRequestException('Los puntos no están disponibles ahora mismo.');
       const redeemed = await this.loyalty.redeemAtSale(tenantId, {
@@ -736,6 +739,7 @@ export class PosService {
       loyaltyDiscount = redeemed.discountCents;
       pointsSpent = redeemed.pointsSpent;
       rewardName = redeemed.rewardName;
+      rewardGift = redeemed.gift ?? null;
     }
     const giveBackPoints = async () => {
       if (pointsSpent) {
@@ -744,6 +748,17 @@ export class PosService {
           .catch((e: Error) => this.logger.error(`points of failed sale ${saleId} not given back: ${e.message}`));
       }
     };
+    // A product or "otro regalo" reward: a zero-price line on the sale (and
+    // the product out of stock, in the sale's transaction). pos-loyalty-gift.ts
+    let giftLine: GiftLine | null = null;
+    if (rewardGift) {
+      try {
+        giftLine = await giftLineOf(this.prisma, tenantId, rewardGift, salon.basis.ratePercent);
+      } catch (err) {
+        await giveBackPoints();
+        throw err;
+      }
+    }
     const total = ticket.totalCents + giftCardsCents - loyaltyDiscount;
 
     // What was handed over: the total exactly, or more in cash (the change
@@ -1046,6 +1061,9 @@ export class PosService {
           });
         }
 
+        // The loyalty gift's product, out of stock with its movement.
+        if (giftLine) await takeGiftFromStock(tx, tenantId, giftLine, saleId);
+
         // The discounts given, with the sale they belong to: the manual ones
         // and the promotion's (type promotion, its id and code).
         const recorded = [
@@ -1087,11 +1105,15 @@ export class PosService {
 
         // The sale's own invoice (series T, or a full one over 3.000 EUR).
         if (invoiceKind.kind !== 'none' && this.invoices) {
+          const invoiceLines = invoiceable.map((l) => invoiceLineOf(l, loyaltyOfLine.get(l) ?? 0, promotion?.code));
+          // The loyalty gift as a zero line. IVA treatment (autoconsumo)
+          // pending the salon's gestor: pos-loyalty-gift.ts.
+          const giftOnInvoice = giftLine ? giftInvoiceLine(giftLine, invoiceLines) : null;
           invoice = await this.invoices.issueSimplifiedInvoiceForSale(tx, {
             tenantId,
             saleId,
             paymentIds: created.map((p) => p.id),
-            lines: invoiceable.map((l) => invoiceLineOf(l, loyaltyOfLine.get(l) ?? 0, promotion?.code)),
+            lines: giftOnInvoice ? [...invoiceLines, giftOnInvoice] : invoiceLines,
             clientId: finalClientId ?? undefined,
             full: invoiceKind.kind === 'full',
           });
@@ -1147,6 +1169,7 @@ export class PosService {
             taxCents: 0,
             commissionBaseCents: 0,
           })),
+          ...(giftLine ? [giftSaleLine(giftLine, saleId, tenantId, items.length + soldCards.length)] : []),
         ];
         await tx.posSaleLine.createMany({ data: saleLines });
 
@@ -1169,7 +1192,13 @@ export class PosService {
             tendered: payments.reduce((s, p) => s + p.amount, 0),
             change,
             payments: created,
-            loyalty: { pointsEarned: 0, pointsSpent, discount: loyaltyDiscount, rewardName },
+            loyalty: {
+              pointsEarned: 0,
+              pointsSpent,
+              discount: loyaltyDiscount,
+              rewardName,
+              ...(giftLine ? { gift: giftLine.description } : {}),
+            },
             invoice: invoice
               ? { id: (invoice as SimplifiedSaleInvoice).id, series: (invoice as SimplifiedSaleInvoice).series, number: `${(invoice as SimplifiedSaleInvoice).series}${(invoice as SimplifiedSaleInvoice).number}`, full: invoiceKind.kind === 'full' }
               : null,
@@ -1936,7 +1965,8 @@ export class PosService {
     const taxLabel = taxLabelOf(settings);
     const breakdown = new Map<number, { rate: number; baseCents: number; taxCents: number }>();
     for (const l of lines) {
-      if (l.kind === 'gift_card') continue;
+      // A gift card is not taxed when sold; a loyalty gift is a zero line.
+      if (l.kind === 'gift_card' || l.kind === LOYALTY_GIFT_KIND) continue;
       const rate = Number(l.taxRate);
       const entry = breakdown.get(rate) ?? { rate, baseCents: 0, taxCents: 0 };
       entry.baseCents += l.totalCents - l.taxCents;
@@ -1998,6 +2028,22 @@ export class PosService {
         code: c.code,
         amountCents: c.amountCents,
       })),
+      // The client's points: earned on this sale, her balance and the
+      // expiry rule (audit L3: clients were never told). Null when the sale
+      // has no member client.
+      loyalty: await saleLoyaltyBlock(
+        this.prisma as any,
+        tenantId,
+        {
+          saleId: sale.id,
+          clientId: sale.clientId,
+          appointmentIds: [...new Set(lines.map((l) => l.appointmentId).filter((id): id is string => !!id))],
+        },
+        this.loyalty ? (t) => this.loyalty!.isUnlocked(t) : undefined,
+      ).catch((err: Error) => {
+        this.logger.warn(`receipt ${sale.id}: loyalty block not read: ${err.message}`);
+        return null;
+      }),
     };
   }
 

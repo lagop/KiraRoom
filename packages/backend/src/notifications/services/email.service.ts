@@ -1435,6 +1435,11 @@ export class EmailService {
     salonName: string;
     reviewUrl: string;
     optOutUrl: string;
+    /**
+     * The client's points ("Mostrar puntos en el email tras la visita"):
+     * shown when given (reviewEmailPoints decides).
+     */
+    loyalty?: { balance: number; expiryRule: string | null } | null;
   }): Promise<{ success: boolean; id?: string; error?: string; skipped?: boolean }> {
     if (await this.shouldSkipBouncedUser(data.to)) {
       return { success: false, skipped: true, error: "email_bounced" };
@@ -1466,6 +1471,7 @@ export class EmailService {
             </td></tr>
           </table>
           <p style="font-size:13px;color:#64748b;line-height:1.6;margin:0 0 8px 0;">El enlace caduca en 14 días.</p>
+          ${data.loyalty ? this.pointsBlockHtml(`Tienes ${this.pointsText(data.loyalty.balance)} en ${salon}.`, data.loyalty.expiryRule) : ""}
           <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">
           <p style="font-size:12px;color:#94a3b8;line-height:1.5;margin:0;">
             Te escribimos de parte de ${salon} por tu visita reciente.
@@ -1485,6 +1491,13 @@ export class EmailService {
       data.reviewUrl,
       ``,
       `El enlace caduca en 14 días.`,
+      ...(data.loyalty
+        ? [
+            ``,
+            `Tienes ${this.pointsText(data.loyalty.balance)} en ${data.salonName}.`,
+            ...(data.loyalty.expiryRule ? [`${data.loyalty.expiryRule}.`] : []),
+          ]
+        : []),
       ``,
       `Si no quieres recibir más peticiones de opinión: ${data.optOutUrl}`,
     ].join("\n");
@@ -1716,6 +1729,27 @@ export class EmailService {
    * (POST /invoices/:id/email). Signed with the salon's name; replies go to
    * the salon's own address when it has one. Transactional: no unsubscribe.
    */
+  /** "1 punto", "120 puntos", "-30 puntos". */
+  private pointsText(n: number): string {
+    return `${n.toLocaleString("es-ES")} ${Math.abs(n) === 1 ? "punto" : "puntos"}`;
+  }
+
+  /** The receipt's points lines: what the sale earned, the balance. */
+  private salePointsLines(l: { pointsEarned: number; balance: number }): string[] {
+    return [
+      ...(l.pointsEarned > 0 ? [`Puntos ganados con esta compra: ${this.pointsText(l.pointsEarned)}`] : []),
+      `Tu saldo de puntos: ${this.pointsText(l.balance)}`,
+    ];
+  }
+
+  /** A small boxed block with the points (`htmlBody` already escaped) and the expiry rule. */
+  private pointsBlockHtml(htmlBody: string, expiryRule: string | null): string {
+    const rule = expiryRule
+      ? `<div style="font-size:12px;color:#64748b;margin-top:4px;">${this.escapeHtml(expiryRule)}.</div>`
+      : "";
+    return `<div style="background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;padding:12px 16px;margin:0 0 20px 0;font-size:14px;line-height:1.6;color:#3b0764;">${htmlBody}${rule}</div>`;
+  }
+
   async sendInvoice(data: {
     to: string;
     recipientName: string;
@@ -1730,7 +1764,10 @@ export class EmailService {
     total: string;
     pdf: Buffer;
     filename: string;
+    /** A till sale's points (saleLoyaltyBlock): earned, balance, expiry rule. */
+    loyalty?: { pointsEarned: number; balance: number; expiryRule: string | null } | null;
   }): Promise<{ success: boolean; id?: string; error?: string }> {
+    const points = data.loyalty ? this.salePointsLines(data.loyalty) : [];
     const e = (v: unknown) => this.escapeHtml(v);
     const subject = `${data.title} ${data.number} de ${data.salonName}`;
     const greeting = data.recipientName ? `Hola ${e(data.recipientName)},` : "Hola,";
@@ -1766,6 +1803,7 @@ export class EmailService {
               </table>
             </td></tr>
           </table>
+          ${points.length ? this.pointsBlockHtml(points.map((l) => e(l)).join("<br>"), data.loyalty?.expiryRule ?? null) : ""}
           <p style="font-size:14px;line-height:1.6;margin:0;color:#475569;">
             Si tienes cualquier duda sobre esta factura, responde a este correo o ponte en contacto con ${e(data.salonName)}.
           </p>
@@ -1783,6 +1821,7 @@ export class EmailService {
       `Número: ${data.number}`,
       `Fecha: ${data.issueDate}`,
       `Total: ${data.total}`,
+      ...(points.length ? ["", ...points, ...(data.loyalty?.expiryRule ? [`${data.loyalty.expiryRule}.`] : [])] : []),
       "",
       `Si tienes cualquier duda sobre esta factura, responde a este correo o ponte en contacto con ${data.salonName}.`,
     ].join("\n");
