@@ -463,6 +463,97 @@ export interface AnalyticsProfessionalRow {
   noShowRate: number | null;
 }
 
+/**
+ * What an analytics request asks for: a named `range` (this_month,
+ * last_month, last_30_days, 3_months, 6_months, 12_months... cut to the plan
+ * by the API) or the last `months`; and, on Empresa, one `locationId`.
+ */
+export interface AnalyticsQuery {
+  range?: string;
+  months?: number;
+  locationId?: string | null;
+}
+
+function analyticsQuery(q: AnalyticsQuery & { days?: number }): string {
+  return paymentQuery({
+    range: q.range,
+    months: q.range ? undefined : q.months,
+    days: q.days,
+    locationId: q.locationId ?? undefined,
+  });
+}
+
+/** GET /analytics/overview `stats`. Cents; changes in percent, null with nothing to compare. */
+export interface AnalyticsStats {
+  /** The appointments' revenue ("Ingresos de citas"), VAT included. */
+  totalRevenue: number;
+  /** totalRevenue + tillSales.totalCents ("Ingresos + caja"). */
+  totalRevenueWithTill: number;
+  /** Booked in the period, cancelled ones excluded. */
+  totalAppointments: number;
+  /** The appointments behind totalRevenue and avgOrderValue. */
+  paidAppointments: number;
+  /** First completed visit in the period. */
+  newClients: number;
+  avgOrderValue: number;
+  revenueChange: number | null;
+  appointmentsChange: number | null;
+  clientsChange: number | null;
+  orderValueChange: number | null;
+}
+
+export interface AnalyticsOccupancy {
+  bookedMinutes: number;
+  availableMinutes: number;
+  rate: number | null;
+  professionalsWithSchedule: number;
+}
+
+/** GET /analytics/overview. Money in cents; months "YYYY-MM", days "YYYY-MM-DD". */
+export interface AnalyticsOverviewResponse {
+  period: { start: string; end: string };
+  previousPeriod: { start: string; end: string };
+  /** The named range asked for; null when asked by months. */
+  range: string | null;
+  /** The location the figures are cut to (Empresa); null for the whole salon. */
+  location: { id: string; name: string } | null;
+  timezone: string;
+  currencyUnit: "cents";
+  stats: AnalyticsStats;
+  /** Closed appointments of the period up to yesterday. */
+  rates: AnalyticsAppointmentRates;
+  /** With a location: only its professionals' services (products have no location). */
+  tillSales: AnalyticsTillSales;
+  occupancy: AnalyticsOccupancy;
+  revenueData: { month: string; revenue: number }[];
+  servicePopularity: { name: string; count: number; percentage: number }[];
+  appointmentStatus: { status: string; name: string; count: number; color: string }[];
+  topServices: { name: string; count: number; revenue: number }[];
+  topProfessionals: AnalyticsProfessionalRow[];
+  dailyMetrics: { date: string; appointments: number; revenue: number }[];
+}
+
+/** GET /analytics/client-insights. */
+export interface AnalyticsClientInsights {
+  period: { start: string; end: string };
+  /** First completed visit in the period. */
+  newClients: number;
+  /** Distinct clients with a completed appointment in the period. */
+  clientsServed: number;
+  /** Served and came back in the period, or had come before. */
+  returningClients: number;
+  totalAppointments: number;
+  /** returningClients / clientsServed, percent. */
+  retentionRate: number;
+}
+
+/** GET /locations (Multi-local): the salon's locations. */
+export interface SalonLocation {
+  id: string;
+  name: string;
+  isActive: boolean;
+}
+
 export interface ReviewAnalytics {
   /** Every answered rating but the rejected ones, as on the salon's site. */
   averageRating: number;
@@ -3620,11 +3711,19 @@ class ApiClient implements ApiClientInterface {
   }
 
   // Analytics
-  async getAnalyticsOverview(months: number = 6): Promise<any> {
-    return this.request<any>(`/analytics/overview?months=${months}`);
+  /**
+   * The overview: the last `months` (a number, as the dashboard home asks) or
+   * an AnalyticsQuery with a named range and, on Empresa, a location.
+   */
+  async getAnalyticsOverview(window: number | AnalyticsQuery = 6): Promise<AnalyticsOverviewResponse> {
+    const q = analyticsQuery(typeof window === "number" ? { months: window } : window);
+    return this.request<AnalyticsOverviewResponse>(`/analytics/overview?${q}`);
   }
 
-  async getAppointmentStatusesEvolution(months: number = 6): Promise<
+  async getAppointmentStatusesEvolution(
+    months: number = 6,
+    locationId?: string | null,
+  ): Promise<
     {
       period: string;
       Completed: number;
@@ -3636,23 +3735,30 @@ class ApiClient implements ApiClientInterface {
     }[]
   > {
     return this.request(
-      `/analytics/appointment-statuses-evolution?months=${months}`,
+      `/analytics/appointment-statuses-evolution?${analyticsQuery({ months, locationId })}`,
     );
   }
 
-  async getAppointmentStatusByDays(days: number = 7): Promise<
+  async getAppointmentStatusByDays(
+    days: number = 7,
+    locationId?: string | null,
+  ): Promise<
     {
       name: string;
       count: number;
       color: string;
     }[]
   > {
-    return this.request(`/analytics/appointment-status-by-days?days=${days}`);
+    return this.request(`/analytics/appointment-status-by-days?${analyticsQuery({ days, locationId })}`);
   }
 
   /** The one definition of the closing rates: the last `days` days, or `months` months with byMonth. */
-  async getAppointmentRates(window: { days?: number; months?: number } = {}): Promise<AnalyticsAppointmentRatesResponse> {
-    const q = window.months ? `months=${window.months}` : `days=${window.days ?? 7}`;
+  async getAppointmentRates(
+    window: { days?: number; months?: number; locationId?: string | null } = {},
+  ): Promise<AnalyticsAppointmentRatesResponse> {
+    const q = window.months
+      ? analyticsQuery({ months: window.months, locationId: window.locationId })
+      : analyticsQuery({ days: window.days ?? 7, locationId: window.locationId });
     return this.request<AnalyticsAppointmentRatesResponse>(`/analytics/appointment-rates?${q}`);
   }
 
@@ -3668,15 +3774,36 @@ class ApiClient implements ApiClientInterface {
     return this.request("/analytics/features");
   }
 
-  async getProfessionalPerformance(range?: string): Promise<any> {
-    const queryParams = range ? `?range=${range}` : "";
-    return this.request<any>(
-      `/analytics/professional-performance${queryParams}`,
-    );
+  /** Per professional over a named range (Pro), optionally one location (Empresa). */
+  async getProfessionalPerformance(
+    range?: string,
+    locationId?: string | null,
+  ): Promise<AnalyticsProfessionalRow[]> {
+    const q = analyticsQuery({ range, locationId });
+    return this.request<AnalyticsProfessionalRow[]>(`/analytics/professional-performance${q ? `?${q}` : ""}`);
   }
 
-  async getClientInsights(months: number = 6): Promise<any> {
-    return this.request<any>(`/analytics/client-insights?months=${months}`);
+  async getClientInsights(window: number | AnalyticsQuery = 6): Promise<AnalyticsClientInsights> {
+    const q = analyticsQuery(typeof window === "number" ? { months: window } : window);
+    return this.request<AnalyticsClientInsights>(`/analytics/client-insights?${q}`);
+  }
+
+  /** The salon's locations (Multi-local, owner and admin). */
+  async getLocations(): Promise<SalonLocation[]> {
+    return this.request<SalonLocation[]>("/locations");
+  }
+
+  /**
+   * The appointments of a period as a CSV (owner/admin): salon days, both
+   * inclusive. A file download needs the bearer token, so it cannot be a
+   * plain link.
+   */
+  async downloadAppointmentsCsv(dateFrom: string, dateTo: string): Promise<{ blob: Blob; filename: string }> {
+    const qs = new URLSearchParams({ dateFrom, dateTo });
+    return this.downloadWithToken(
+      `${API_BASE_URL}/exports/appointments.csv?${qs}`,
+      `citas_${dateFrom}_${dateTo}.csv`,
+    );
   }
 
   /** Per-location KPIs (plan Empresa). Money in cents. */

@@ -23,6 +23,7 @@ import {
   Hourglass,
   LogOut,
   LucideIcon,
+  MapPin,
   Mail,
   Megaphone,
   MessageCircle,
@@ -86,6 +87,7 @@ const ICONS: Record<string, LucideIcon> = {
   scroll: ScrollText,
   calculator: Calculator,
   code: Code,
+  "map-pin": MapPin,
 };
 
 /** A count next to a link: requests waiting for an answer. */
@@ -214,6 +216,7 @@ export function DashboardSidebar({
             </span>
           )}
           {!effectiveCollapsed && item.pro && <ProBadge />}
+          {!effectiveCollapsed && item.empresa && <ProBadge plan="empresa" />}
           {!effectiveCollapsed && badge && <CountBadge value={badge} label={label} />}
         </Link>
       </li>

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { BarChart3, Info, Loader2 } from "lucide-react";
 import apiClient from "../../../lib/api";
-import { formatCents, formatPeriod, formatRate } from "@/lib/analytics-format";
+import { ANALYTICS_RANGES, formatCents, formatPeriod, formatRate } from "@/lib/analytics-format";
 
 /**
  * The consolidated report (GET /multi-location/consolidated) existed in the
@@ -47,14 +47,8 @@ interface Report {
   unassigned: { revenue: number; appointments: number };
 }
 
-export const CONSOLIDATED_RANGES = [
-  "this_month",
-  "last_month",
-  "last_30_days",
-  "3_months",
-  "6_months",
-  "12_months",
-] as const;
+/** The same period presets as Analítica (and the API's range ids). */
+export const CONSOLIDATED_RANGES = ANALYTICS_RANGES;
 
 type T = (key: string, params?: Record<string, any>) => string;
 

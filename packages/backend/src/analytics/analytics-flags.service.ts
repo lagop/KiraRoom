@@ -66,6 +66,14 @@ export class AnalyticsFlagsService {
     return Math.min(months, await this.getMaxMonths(tenantId));
   }
 
+  /**
+   * Whether the page may be cut to one location (Empresa, D12): the plan
+   * feature of Multi-local's consolidated report, whose figures it matches.
+   */
+  async hasLocationFilter(tenantId: string): Promise<boolean> {
+    return this.featureFlags.isEnabled(tenantId, "consolidated_reports");
+  }
+
   async getFeatureFlags(tenantId: string, role: string): Promise<AnalyticsFeatureFlags> {
     const { plan, advanced } = await this.entitlement(tenantId);
     const manager = (SALON_MANAGERS as string[]).includes(role);

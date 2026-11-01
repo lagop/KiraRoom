@@ -5,18 +5,19 @@ import {
   EVOLUTION_STATUSES,
   barWidth,
   describeSeries,
+  rateSeries,
   stackedEvolution,
-  statusShareSeries,
   type EvolutionStatus,
+  type MonthRates,
 } from "@/lib/analytics-charts";
 import { formatMonth, formatMonthRange, formatRate } from "@/lib/analytics-format";
 import type { EvolutionRow, Translate } from "../analytics-types";
 import { STATUS_COLORS, statusLabel } from "./status";
 import { Bar, ChartCard, EmptyState, InlineError, LoadingBlock } from "./ui";
 
-interface EvolutionProps {
+interface EvolutionProps<Row = EvolutionRow> {
   t: Translate;
-  rows: EvolutionRow[];
+  rows: Row[];
   /** Translated failure of the latest request, if it failed. */
   error: string | null;
   /** True only while nothing is on screen yet. */
@@ -125,15 +126,24 @@ export function StatusEvolution({ t, rows, error, loading, refreshing, onRetry }
   );
 }
 
-/** One status's share of the three, month by month, with a status picker. */
-export function StatusPercentage({ t, rows, error, loading, refreshing, onRetry }: EvolutionProps) {
+/**
+ * One status's rate month by month (the API's closing rates: closed
+ * appointments up to yesterday, as in Datos clave), with a status picker.
+ */
+export function StatusPercentage({ t, rows, error, loading, refreshing, onRetry }: EvolutionProps<MonthRates>) {
   const [status, setStatus] = useState<EvolutionStatus>("Completed");
-  const series = statusShareSeries(rows, status);
-  const max = Math.max(...series.map((d) => d.percentage), 1);
+  const series = rateSeries(rows, status);
+  const max = Math.max(...series.map((d) => d.rate ?? 0), 1);
   const title = t("analytics.percentage_evolution");
 
   return (
-    <ChartCard title={title} headingId="analytics-percentage-heading" busy={refreshing} busyLabel={t("analytics.updating")}>
+    <ChartCard
+      title={title}
+      headingId="analytics-percentage-heading"
+      busy={refreshing}
+      busyLabel={t("analytics.updating")}
+      subtitle={<p className="text-xs text-gray-400 mt-1">{t("analytics.rates_note")}</p>}
+    >
       {/* Pills that wrap: three px-4 buttons did not fit a phone. */}
       <div
         role="group"
@@ -167,7 +177,7 @@ export function StatusPercentage({ t, rows, error, loading, refreshing, onRetry 
           aria-label={`${title}, ${statusLabel(t, status)}: ${describeSeries(
             series,
             (d) => formatMonth(d.period, { withYear: true }),
-            (d) => formatRate(d.percentage),
+            (d) => formatRate(d.rate),
           )}`}
         >
           {series.map((item) => (
@@ -176,9 +186,9 @@ export function StatusPercentage({ t, rows, error, loading, refreshing, onRetry 
                 {formatMonth(item.period)}
               </span>
               <div className="flex-1 mx-3">
-                <Bar width={barWidth(item.percentage, max)} color={STATUS_COLORS[status]} size="h-6" square />
+                <Bar width={barWidth(item.rate ?? 0, max)} color={STATUS_COLORS[status]} size="h-6" square />
               </div>
-              <span className="w-16 text-xs font-medium text-gray-900 text-right">{formatRate(item.percentage)}</span>
+              <span className="w-16 text-xs font-medium text-gray-900 text-right">{formatRate(item.rate)}</span>
             </div>
           ))}
         </div>

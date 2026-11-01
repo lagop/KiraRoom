@@ -60,25 +60,9 @@ export function donutSegments(items: ReadonlyArray<StatusCount>): {
   return { total, segments };
 }
 
-/**
- * Whole-percent share of each status ("Completed" → 50), null when there is
- * nothing to divide by. One pass, instead of a find() per rate.
- */
-export function statusShares(items: ReadonlyArray<StatusCount>): {
-  total: number;
-  share: (name: string) => number | null;
-} {
-  const counts = new Map<string, number>();
-  let total = 0;
-  for (const s of items) {
-    counts.set(s.name, (counts.get(s.name) ?? 0) + s.count);
-    total += s.count;
-  }
-  return {
-    total,
-    share: (name) =>
-      total > 0 ? Math.round(((counts.get(name) ?? 0) / total) * 100) : null,
-  };
+/** How many appointments a status breakdown holds. */
+export function statusTotal(items: ReadonlyArray<StatusCount>): number {
+  return items.reduce((sum, s) => sum + Math.max(0, s.count), 0);
 }
 
 export interface StackedColumn {
@@ -105,16 +89,34 @@ export function stackedEvolution(rows: ReadonlyArray<EvolutionRow>): StackedColu
   });
 }
 
-/** Month by month, the share of one status among the three, in percent. */
-export function statusShareSeries(
-  rows: ReadonlyArray<EvolutionRow>,
+/**
+ * One month of the API's closing rates (GET /analytics/appointment-rates
+ * byMonth): closed appointments up to yesterday, null when none closed.
+ */
+export interface MonthRates {
+  month: string;
+  closed: number;
+  completionRate: number | null;
+  cancellationRate: number | null;
+  noShowRate: number | null;
+}
+
+const RATE_OF: Record<EvolutionStatus, "completionRate" | "cancellationRate" | "noShowRate"> = {
+  Completed: "completionRate",
+  Cancelled: "cancellationRate",
+  "No Show": "noShowRate",
+};
+
+/**
+ * Month by month, one status's rate as the API measures it (the same
+ * definition as the insights). The page used to divide its own counts, which
+ * included today's appointments, so the chart and the insights disagreed.
+ */
+export function rateSeries(
+  months: ReadonlyArray<MonthRates>,
   status: EvolutionStatus,
-): { period: string; count: number; percentage: number }[] {
-  return rows.map((r) => {
-    const total = EVOLUTION_STATUSES.reduce((s, k) => s + (r[k] || 0), 0);
-    const count = r[status] || 0;
-    return { period: r.period, count, percentage: total > 0 ? (count / total) * 100 : 0 };
-  });
+): { period: string; closed: number; rate: number | null }[] {
+  return months.map((m) => ({ period: m.month, closed: m.closed, rate: m[RATE_OF[status]] }));
 }
 
 /** Bar width in percent of the largest value (0 when every value is 0). */

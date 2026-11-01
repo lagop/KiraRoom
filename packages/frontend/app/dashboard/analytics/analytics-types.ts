@@ -1,80 +1,39 @@
 /**
  * The shapes the analytics page reads from the API (backend
- * analytics.service.ts). Money is in cents everywhere (lib/analytics-format).
+ * analytics.service.ts, typed in lib/api.ts). Money is in cents everywhere
+ * (lib/analytics-format).
  */
 
+import type {
+  AnalyticsAppointmentRates,
+  AnalyticsAppointmentRatesResponse,
+  AnalyticsClientInsights,
+  AnalyticsOccupancy,
+  AnalyticsOverviewResponse,
+  AnalyticsProfessionalRow,
+  AnalyticsStats,
+  AnalyticsTillSales,
+  SalonLocation,
+} from "@/lib/api";
+import type { AnalyticsRange } from "@/lib/analytics-format";
 import type { DailyPoint, EvolutionRow, StatusCount } from "@/lib/analytics-charts";
 
-export type { DailyPoint, EvolutionRow, StatusCount };
+export type { AnalyticsRange, DailyPoint, EvolutionRow, StatusCount };
 
-export interface DashboardStats {
-  totalRevenue: number;
-  /** Booked in the period, cancelled ones excluded. */
-  totalAppointments: number;
-  /** The appointments behind totalRevenue and avgOrderValue. */
-  paidAppointments?: number;
-  newClients: number;
-  avgOrderValue: number;
-  /** Percent against the previous period; null when it had nothing to compare with. */
-  revenueChange: number | null;
-  appointmentsChange: number | null;
-  clientsChange: number | null;
-  orderValueChange: number | null;
-}
+export type DashboardStats = AnalyticsStats;
+export type AppointmentRates = AnalyticsAppointmentRates;
+export type MonthlyRates = NonNullable<AnalyticsAppointmentRatesResponse["byMonth"]>[number];
+export type TillSales = AnalyticsTillSales;
+export type Occupancy = AnalyticsOccupancy;
+export type AnalyticsOverview = AnalyticsOverviewResponse;
+export type ProfessionalPerformance = AnalyticsProfessionalRow;
+export type ClientInsights = AnalyticsClientInsights;
+export type { SalonLocation };
 
-export interface RevenueDataPoint {
-  /** "YYYY-MM" */
-  month: string;
-  revenue: number;
-}
-
-export interface ServicePopularity {
-  name: string;
-  count: number;
-  percentage: number;
-}
-
+export type RevenueDataPoint = AnalyticsOverviewResponse["revenueData"][number];
+export type ServicePopularity = AnalyticsOverviewResponse["servicePopularity"][number];
 /** Bookings and paid revenue per service, by revenue. */
-export interface TopService {
-  name: string;
-  count: number;
-  revenue: number;
-}
-
-export interface Occupancy {
-  bookedMinutes: number;
-  availableMinutes: number;
-  rate: number | null;
-  professionalsWithSchedule: number;
-}
-
-export interface AnalyticsOverview {
-  period?: { start: string; end: string };
-  occupancy?: Occupancy;
-  stats: DashboardStats;
-  revenueData: RevenueDataPoint[];
-  servicePopularity: ServicePopularity[];
-  topServices?: TopService[];
-  dailyMetrics?: DailyPoint[];
-}
-
-export interface ProfessionalPerformance {
-  id: string;
-  name: string;
-  firstName: string;
-  lastName: string;
-  profileImage: string | null;
-  appointments: number;
-  revenue: number;
-}
-
-export interface ClientInsights {
-  newClients: number;
-  clientsServed: number;
-  returningClients: number;
-  totalAppointments: number;
-  retentionRate: number;
-}
+export type TopService = AnalyticsOverviewResponse["topServices"][number];
 
 /** From /analytics/features: the effective plan (a trial counts as Pro). */
 export interface AnalyticsFeatureFlags {

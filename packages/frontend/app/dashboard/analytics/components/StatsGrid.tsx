@@ -1,8 +1,8 @@
 "use client";
 
-import { Calendar, DollarSign, TrendingUp, Users, type LucideIcon } from "lucide-react";
+import { Calendar, DollarSign, ShoppingBag, TrendingUp, Users, Wallet, type LucideIcon } from "lucide-react";
 import { formatCents, formatPercentChange } from "@/lib/analytics-format";
-import type { DashboardStats, Translate } from "../analytics-types";
+import type { DashboardStats, TillSales, Translate } from "../analytics-types";
 import { InfoHint } from "./ui";
 
 type ChangeType = "positive" | "negative" | "neutral";
@@ -29,7 +29,7 @@ export function StatsGrid({ t, stats }: { t: Translate; stats: DashboardStats })
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
       <StatCard
         t={t}
-        title={t("analytics.total_revenue")}
+        title={t("analytics.appointment_revenue")}
         value={formatCents(stats.totalRevenue)}
         hint={t("analytics.revenue_hint")}
         detail={paidLine}
@@ -65,6 +65,58 @@ export function StatsGrid({ t, stats }: { t: Translate; stats: DashboardStats })
   );
 }
 
+/**
+ * S6: what the till sold without an appointment (products and services, VAT
+ * included, net of refunds), and "Ingresos + caja", the appointments'
+ * revenue and the till together. Ingresos de citas stays on its own card.
+ * With a location chosen, the till holds only its professionals' services.
+ */
+export function TillSalesRow({
+  t,
+  stats,
+  tillSales,
+  byLocation,
+}: {
+  t: Translate;
+  stats: DashboardStats;
+  tillSales: TillSales;
+  byLocation: boolean;
+}) {
+  const parts = [
+    `${t("analytics.till_services")}: ${formatCents(tillSales.servicesCents)}`,
+    ...(byLocation ? [] : [`${t("analytics.till_products")}: ${formatCents(tillSales.productsCents)}`]),
+  ];
+  const refunds =
+    tillSales.refundedCents > 0 ? t("analytics.till_refunded", { amount: formatCents(tillSales.refundedCents) }) : null;
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <StatCard
+        t={t}
+        title={t("analytics.till_sales")}
+        value={formatCents(tillSales.totalCents)}
+        hint={byLocation ? t("analytics.till_sales_location_hint") : t("analytics.till_sales_hint")}
+        detail={[parts.join(" · "), t("analytics.till_sales_count", { sales: tillSales.sales })].join(" · ")}
+        icon={ShoppingBag}
+        change={refunds ?? ""}
+        changeType="neutral"
+      />
+      <StatCard
+        t={t}
+        title={t("analytics.revenue_with_till")}
+        value={formatCents(stats.totalRevenueWithTill)}
+        hint={t("analytics.revenue_with_till_hint")}
+        detail={t("analytics.revenue_with_till_detail", {
+          appointments: formatCents(stats.totalRevenue),
+          till: formatCents(tillSales.totalCents),
+        })}
+        icon={Wallet}
+        change=""
+        changeType="neutral"
+      />
+    </div>
+  );
+}
+
 export function StatCard({
   t,
   title,
@@ -79,6 +131,7 @@ export function StatCard({
   title: string;
   value: string;
   icon: LucideIcon;
+  /** The comparison line; empty for none. */
   change: string;
   /** "neutral" when there is nothing to compare with. */
   changeType: ChangeType;
@@ -103,7 +156,7 @@ export function StatCard({
       </div>
       <div className="text-2xl font-bold text-gray-900">{value}</div>
       {detail && <div className="text-xs text-gray-500 mt-1">{detail}</div>}
-      <div className={`text-sm mt-2 ${tone.text}`}>{change}</div>
+      {change && <div className={`text-sm mt-2 ${tone.text}`}>{change}</div>}
     </div>
   );
 }

@@ -9,7 +9,7 @@ import { useTranslations } from "@/lib/use-translation";
 import { useFeatureAccess } from "@/hooks/useFeatureAccess";
 import { getCurrentUser } from "@/lib/utils";
 import { isManager } from "@/lib/dashboard-nav";
-import { formatPeriod } from "@/lib/analytics-format";
+import { clampRange, formatPeriod, type AnalyticsRange } from "@/lib/analytics-format";
 import type { ProfessionalRange, Tab, Translate } from "./analytics-types";
 import { useAnalyticsData, type Resource } from "./use-analytics-data";
 import { AdvancedAnalyticsGate } from "./components/AdvancedAnalyticsGate";
@@ -21,7 +21,8 @@ import { PeriodSelector } from "./components/PeriodSelector";
 import { ProfessionalsTab } from "./components/ProfessionalsTab";
 import { RevenueChart } from "./components/RevenueChart";
 import { ServicePopularityCard, TopServicesCard } from "./components/ServiceCharts";
-import { StatsGrid } from "./components/StatsGrid";
+import { StatsGrid, TillSalesRow } from "./components/StatsGrid";
+import { ExportMenu, LocationSelector } from "./components/Toolbar";
 import { StatusEvolution, StatusPercentage } from "./components/StatusEvolution";
 import { AppointmentStatusCard } from "./components/StatusDonut";
 import { InlineError, InlineSpinner } from "./components/ui";
@@ -58,7 +59,9 @@ export default function AnalyticsPage() {
     if (role !== undefined && !isManager(role)) router.replace("/dashboard");
   }, [role, router]);
 
-  const [timeRange, setTimeRange] = useState<number>(3);
+  const [range, setRange] = useState<AnalyticsRange>("3_months");
+  // Empresa: the whole salon (null) or one of its locations.
+  const [locationId, setLocationId] = useState<string | null>(null);
   const [professionalRange, setProfessionalRange] = useState<ProfessionalRange>("this_month");
   const [activeTab, setActiveTab] = useState<Tab>("overview");
   // The advanced tabs load the first time they are opened, then keep their data.
@@ -68,17 +71,24 @@ export default function AnalyticsPage() {
     if (tab !== "overview") setOpened((o) => (o[tab] ? o : { ...o, [tab]: true }));
   };
 
-  const { features, maxMonths, isAdvanced, overview, evolution, statusByDays, professionals, clients } =
-    useAnalyticsData({ enabled: manager, timeRange, professionalRange, opened });
-
-  // Empresa: the per-location figures live in Multi-local's consolidated report.
+  // Empresa: a location filter here, and Multi-local's consolidated report.
   const multiLocation = useFeatureAccess("consolidated_reports").enabled;
+
+  const { features, maxMonths, isAdvanced, locations, overview, evolution, monthlyRates, statusByDays, professionals, clients } =
+    useAnalyticsData({
+      enabled: manager,
+      range,
+      professionalRange,
+      locationId: multiLocation ? locationId : null,
+      locationsEnabled: multiLocation,
+      opened,
+    });
 
   // A plan with fewer months than the selection (e.g. after a downgrade).
   const planMonths = features.data?.maxMonths;
   useEffect(() => {
-    if (planMonths && timeRange > planMonths) setTimeRange(planMonths);
-  }, [planMonths, timeRange]);
+    if (planMonths && clampRange(range, planMonths) !== range) setRange(clampRange(range, planMonths));
+  }, [planMonths, range]);
 
   const errorOf = (r: Resource<unknown>) => (r.error ? errorText(r.error, t) : null);
 
@@ -103,6 +113,7 @@ export default function AnalyticsPage() {
     !evolution.data && !evolution.error && (evolution.loading || (!features.data && !features.error));
   const evolutionRefreshing = evolution.loading && !!evolution.data;
   const evolutionError = errorOf(evolution);
+  const ratesPending = !monthlyRates.data && !monthlyRates.error && (monthlyRates.loading || !features.data);
 
   return (
     <div className="space-y-6">
@@ -117,11 +128,15 @@ export default function AnalyticsPage() {
           {showPagePeriod && data?.period && (
             <p className="text-xs text-gray-400 mt-1 flex items-center gap-2">
               {t("analytics.period_label")}: {formatPeriod(data.period)}
+              {data.location && ` · ${data.location.name}`}
               {refreshingOverview && <InlineSpinner label={t("analytics.updating")} />}
             </p>
           )}
         </div>
         <div className="flex flex-wrap items-center gap-3">
+          {multiLocation && (
+            <LocationSelector t={t} locations={locations.data ?? []} value={locationId} onChange={setLocationId} />
+          )}
           {multiLocation && (
             <Link
               href="/dashboard/multi-location"
@@ -140,13 +155,16 @@ export default function AnalyticsPage() {
               {t("analytics.upgrade_to_pro")}
             </Link>
           )}
+          {showPagePeriod && data?.period && (
+            <ExportMenu t={t} period={data.period} filteredByLocation={!!data.location} />
+          )}
           {showPagePeriod && (
             <PeriodSelector
               t={t}
-              value={timeRange}
+              value={range}
               maxMonths={maxMonths}
               showPlanNote={!!features.data}
-              onChange={setTimeRange}
+              onChange={setRange}
             />
           )}
         </div>
@@ -179,6 +197,9 @@ export default function AnalyticsPage() {
             aria-busy={refreshingOverview || undefined}
           >
             <StatsGrid t={t} stats={stats} />
+            {data.tillSales && (
+              <TillSalesRow t={t} stats={stats} tillSales={data.tillSales} byLocation={!!data.location} />
+            )}
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <RevenueChart t={t} rows={data.revenueData ?? []} isAdvanced={isAdvanced} />
@@ -201,11 +222,11 @@ export default function AnalyticsPage() {
               />
               <StatusPercentage
                 t={t}
-                rows={evolutionRows}
-                error={evolutionError}
-                loading={evolutionPending}
-                refreshing={evolutionRefreshing}
-                onRetry={evolution.reload}
+                rows={monthlyRates.data ?? []}
+                error={errorOf(monthlyRates)}
+                loading={ratesPending}
+                refreshing={monthlyRates.loading && !!monthlyRates.data}
+                onRetry={monthlyRates.reload}
               />
             </div>
 
@@ -217,7 +238,14 @@ export default function AnalyticsPage() {
                 error={errorOf(statusByDays)}
                 onRetry={statusByDays.reload}
               />
-              <KeyInsights t={t} last7={last7} last14={last14} occupancy={data.occupancy} period={data.period} />
+              <KeyInsights
+                t={t}
+                rates={data.rates}
+                last7={last7}
+                last14={last14}
+                occupancy={data.occupancy}
+                period={data.period}
+              />
             </div>
           </div>
         )}

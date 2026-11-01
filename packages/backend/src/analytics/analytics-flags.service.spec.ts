@@ -149,15 +149,15 @@ describe("AnalyticsController uses the effective plan", () => {
       tenantRow({ subscriptionStatus: "trialing", trialEnd: new Date(Date.now() + DAY) }),
     );
     await expect(ctl.getClientInsights(req, "12")).resolves.toEqual({});
-    expect(analytics.getClientInsights).toHaveBeenCalledWith("t1", 6);
+    expect(analytics.getClientInsights).toHaveBeenCalledWith("t1", 6, undefined);
   });
 
   it("cuts overview and evolution months to the plan", async () => {
     const { ctl, analytics } = controller(tenantRow({ plan: "esencial" }));
     await ctl.getOverview(req, "12");
     await ctl.getAppointmentStatusesEvolution(req, "12");
-    expect(analytics.getOverview).toHaveBeenCalledWith("t1", 3);
-    expect(analytics.getAppointmentStatusesEvolution).toHaveBeenCalledWith("t1", 3);
+    expect(analytics.getOverview).toHaveBeenCalledWith("t1", 3, undefined);
+    expect(analytics.getAppointmentStatusesEvolution).toHaveBeenCalledWith("t1", 3, undefined);
   });
 
   it("cuts the professionals' range to the plan", async () => {
@@ -167,6 +167,7 @@ describe("AnalyticsController uses the effective plan", () => {
       "t1",
       { start: "2026-06-01", end: "2026-11-01" },
       10,
+      undefined,
     );
   });
 

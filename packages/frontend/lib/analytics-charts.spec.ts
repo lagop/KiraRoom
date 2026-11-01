@@ -21,9 +21,9 @@ import {
   donutSegments,
   linePoints,
   pathFrom,
+  rateSeries,
   stackedEvolution,
-  statusShareSeries,
-  statusShares,
+  statusTotal,
 } from "./analytics-charts";
 
 let pass = 0;
@@ -66,18 +66,16 @@ console.log("\n[donutSegments]");
   check("nothing booked draws empty arcs", donutSegments([{ name: "Pending", count: 0 }]).segments[0].percentage, 0);
 }
 
-console.log("\n[statusShares]");
-{
-  const { total, share } = statusShares([
+console.log("\n[statusTotal]");
+check(
+  "sums the counts",
+  statusTotal([
     { name: "Completed", count: 2 },
-    { name: "Cancelled", count: 1 },
     { name: "Pending", count: 1 },
-  ]);
-  check("total", total, 4);
-  check("completed", share("Completed"), 50);
-  check("absent status is 0", share("No Show"), 0);
-  check("no appointments: unmeasured", statusShares([]).share("Completed"), null);
-}
+  ]),
+  3,
+);
+check("nothing booked", statusTotal([]), 0);
 
 console.log("\n[stackedEvolution]");
 {
@@ -92,20 +90,26 @@ console.log("\n[stackedEvolution]");
   check("empty months do not divide by 0", stackedEvolution([{ period: "2026-10", Completed: 0, Cancelled: 0, "No Show": 0 }])[0].segments[0].height, 0);
 }
 
-console.log("\n[statusShareSeries]");
+console.log("\n[rateSeries]");
 check(
-  "share of one status per month",
-  statusShareSeries(
+  "the API's rate of one status per month, null when nothing closed",
+  rateSeries(
     [
-      { period: "2026-09", Completed: 3, Cancelled: 1, "No Show": 0 },
-      { period: "2026-10", Completed: 0, Cancelled: 0, "No Show": 0 },
+      { month: "2026-09", closed: 4, completionRate: 75, cancellationRate: 25, noShowRate: 0 },
+      { month: "2026-10", closed: 0, completionRate: null, cancellationRate: null, noShowRate: null },
     ],
     "Cancelled",
   ),
   [
-    { period: "2026-09", count: 1, percentage: 25 },
-    { period: "2026-10", count: 0, percentage: 0 },
+    { period: "2026-09", closed: 4, rate: 25 },
+    { period: "2026-10", closed: 0, rate: null },
   ],
+);
+check(
+  "no show reads noShowRate",
+  rateSeries([{ month: "2026-09", closed: 4, completionRate: 50, cancellationRate: 25, noShowRate: 25 }], "No Show")[0]
+    .rate,
+  25,
 );
 
 console.log("\n[barWidth]");

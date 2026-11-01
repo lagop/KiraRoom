@@ -3,13 +3,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import apiClient from "@/lib/api";
 import { createLatestGuard } from "@/lib/analytics-charts";
+import { evolutionMonthsFor } from "@/lib/analytics-format";
 import type {
   AnalyticsFeatureFlags,
   AnalyticsOverview,
+  AnalyticsRange,
   ClientInsights,
   EvolutionRow,
+  MonthlyRates,
   ProfessionalPerformance,
   ProfessionalRange,
+  SalonLocation,
   StatusCount,
 } from "./analytics-types";
 
@@ -74,8 +78,12 @@ export function useAsyncResource<T>(
 export interface AnalyticsInputs {
   /** False until the role is known to be owner or admin: nothing is requested before. */
   enabled: boolean;
-  timeRange: number;
+  range: AnalyticsRange;
   professionalRange: ProfessionalRange;
+  /** Empresa's location filter; null for the whole salon. */
+  locationId: string | null;
+  /** Empresa: the salon's locations are loaded for the filter. */
+  locationsEnabled: boolean;
   /** Tabs opened at least once: theirs are the only advanced requests made. */
   opened: { professionals: boolean; clients: boolean };
 }
@@ -83,9 +91,17 @@ export interface AnalyticsInputs {
 /**
  * Every request of the analytics page, each keyed by the inputs it really
  * depends on: the period does not refetch the plan or the Profesionales
- * tab, and switching tabs back and forth does not refetch at all.
+ * tab, and switching tabs back and forth does not refetch at all. The
+ * location filter applies to every figure.
  */
-export function useAnalyticsData({ enabled, timeRange, professionalRange, opened }: AnalyticsInputs) {
+export function useAnalyticsData({
+  enabled,
+  range,
+  professionalRange,
+  locationId,
+  locationsEnabled,
+  opened,
+}: AnalyticsInputs) {
   const features = useAsyncResource<AnalyticsFeatureFlags>(
     enabled ? "features" : null,
     () => apiClient.getAnalyticsFeatures(),
@@ -93,29 +109,45 @@ export function useAnalyticsData({ enabled, timeRange, professionalRange, opened
   );
   const maxMonths = features.data?.maxMonths ?? 3;
   const isAdvanced = !!features.data?.hasAdvancedAnalytics;
+  const loc = locationId ?? "all";
+
+  const locations = useAsyncResource<SalonLocation[]>(
+    enabled && locationsEnabled ? "locations" : null,
+    () => apiClient.getLocations(),
+    "locations",
+  );
 
   const overview = useAsyncResource<AnalyticsOverview>(
-    enabled ? `overview:${timeRange}` : null,
-    () => apiClient.getAnalyticsOverview(timeRange),
+    enabled ? `overview:${range}:${loc}` : null,
+    () => apiClient.getAnalyticsOverview({ range, locationId }),
     "analytics",
   );
 
-  // The evolution follows the selected period (the API cuts it to the plan).
-  const evolutionMonths = Math.min(timeRange, maxMonths);
+  // The evolution follows the selected period, cut to the plan (3 months
+  // for the short presets: one bar shows no trend).
+  const evolutionMonths = evolutionMonthsFor(range, maxMonths);
+  const evolutionKey = enabled && features.data ? `${evolutionMonths}:${loc}` : null;
   const evolution = useAsyncResource<EvolutionRow[]>(
-    enabled && features.data ? `evolution:${evolutionMonths}` : null,
-    () => apiClient.getAppointmentStatusesEvolution(evolutionMonths),
+    evolutionKey && `evolution:${evolutionKey}`,
+    () => apiClient.getAppointmentStatusesEvolution(evolutionMonths, locationId),
     "statuses evolution",
+  );
+  // The percentage chart reads the API's closing rates per month: the
+  // insights' definition (closed appointments up to yesterday).
+  const monthlyRates = useAsyncResource<MonthlyRates[]>(
+    evolutionKey && `rates:${evolutionKey}`,
+    async () => (await apiClient.getAppointmentRates({ months: evolutionMonths, locationId })).byMonth ?? [],
+    "monthly rates",
   );
 
   // Two calls: the endpoint returns counts only, so the last 7 days cannot
   // be cut out of the last 14 here.
   const statusByDays = useAsyncResource<{ last7: StatusCount[]; last14: StatusCount[] }>(
-    enabled ? "status-by-days" : null,
+    enabled ? `status-by-days:${loc}` : null,
     async () => {
       const [last7, last14] = await Promise.all([
-        apiClient.getAppointmentStatusByDays(7),
-        apiClient.getAppointmentStatusByDays(14),
+        apiClient.getAppointmentStatusByDays(7, locationId),
+        apiClient.getAppointmentStatusByDays(14, locationId),
       ]);
       return { last7, last14 };
     },
@@ -123,14 +155,14 @@ export function useAnalyticsData({ enabled, timeRange, professionalRange, opened
   );
 
   const professionals = useAsyncResource<ProfessionalPerformance[]>(
-    enabled && isAdvanced && opened.professionals ? `professionals:${professionalRange}` : null,
-    () => apiClient.getProfessionalPerformance(professionalRange),
+    enabled && isAdvanced && opened.professionals ? `professionals:${professionalRange}:${loc}` : null,
+    () => apiClient.getProfessionalPerformance(professionalRange, locationId),
     "professionals data",
   );
 
   const clients = useAsyncResource<ClientInsights>(
-    enabled && isAdvanced && opened.clients ? `clients:${timeRange}` : null,
-    () => apiClient.getClientInsights(timeRange),
+    enabled && isAdvanced && opened.clients ? `clients:${range}:${loc}` : null,
+    () => apiClient.getClientInsights({ range, locationId }),
     "clients data",
   );
 
@@ -138,8 +170,10 @@ export function useAnalyticsData({ enabled, timeRange, professionalRange, opened
     features,
     maxMonths,
     isAdvanced,
+    locations,
     overview,
     evolution,
+    monthlyRates,
     statusByDays,
     professionals,
     clients,
