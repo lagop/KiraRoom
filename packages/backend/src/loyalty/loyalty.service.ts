@@ -15,10 +15,12 @@ import {
   LoyaltyRewardDto,
   LoyaltyTierDto,
   UpdateLoyaltyRewardDto,
+  UpdateLoyaltyTierDto,
   discountValueProblem,
 } from "./loyalty.dto";
+import { expiryRun, graceAfterChange } from "./loyalty-expiry";
 
-type TxType = "earn" | "redeem" | "reversal" | "redeem_reversal" | "welcome" | "adjust";
+type TxType = "earn" | "redeem" | "reversal" | "redeem_reversal" | "welcome" | "adjust" | "expire";
 
 interface PointsChange {
   type: TxType;
@@ -30,11 +32,14 @@ interface PointsChange {
   metadata?: Record<string, unknown>;
   actorId?: string | null;
   /**
-   * For a negative change: "strict" refuses when the balance is short (a
-   * redemption), "clamp" takes what is there (a reversal after the client
-   * already spent the points: the balance never goes below zero).
+   * For a negative change: "strict" (the default) refuses when the balance
+   * is short -- a redemption, a manual deduction; "allowNegative" takes it
+   * all, the balance going below zero -- a reversal of points the client
+   * already spent (earn, redeem, refund). The reward stays used; her next
+   * earnings pay the debt off, and she cannot redeem meanwhile. Reversals
+   * used to stop at zero, so earn, spend, refund kept the reward for free.
    */
-  shortfall?: "strict" | "clamp";
+  shortfall?: "strict" | "allowNegative";
 }
 
 export interface SaleItem {
@@ -46,6 +51,43 @@ export interface SaleItem {
 const HISTORY_LIMIT = 30;
 const SWEEP_LOOKBACK_MS = 3 * 24 * 60 * 60 * 1000;
 const SWEEP_BATCH = 1000;
+const MEMBER_BATCH = 500;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * A reward handed over at the desk rather than taken off the ticket: a
+ * product of the catalogue (its stock goes down) or "otro regalo" (a
+ * description only). The till records it as a zero-price line.
+ */
+export interface RewardGift {
+  kind: "product" | "other";
+  /** The product given (kind "product"). */
+  productId: string | null;
+  /** What the line says: the reward's description, else its name. */
+  description: string;
+}
+
+/**
+ * The gift of a product or "otro regalo" (voucher) reward, else null. A
+ * product reward with no product chosen (made before rewards could name
+ * one) is recorded as "otro regalo": a line without a stock movement.
+ */
+export function giftOf(reward: {
+  type: string;
+  name: string;
+  description?: string | null;
+  productId?: string | null;
+}): RewardGift | null {
+  if (reward.type !== "product" && reward.type !== "voucher") return null;
+  const description = (reward.description?.trim() || reward.name).slice(0, 160);
+  if (reward.type === "product" && reward.productId) {
+    return { kind: "product", productId: reward.productId, description };
+  }
+  return { kind: "other", productId: null, description };
+}
+
+/** The member changed between the expiry's read and its write: skipped. */
+class ExpiryRaced extends Error {}
 
 /** A Prisma unique-constraint violation: the change was applied before. */
 function isDuplicate(err: unknown): boolean {
@@ -109,7 +151,17 @@ export class LoyaltyService {
       welcomePoints: dto.welcomePoints,
       autoEnroll: dto.autoEnroll,
       allowSelfEnroll: dto.allowSelfEnroll,
+      pointsExpirationDays: dto.pointsExpirationDays,
+      showPointsInReviewEmail: dto.showPointsInReviewEmail,
     };
+    // Expiry switched on or shortened: nothing expires for 30 days, so no
+    // member loses points the night after the change.
+    const before = await this.prisma.loyaltyProgram.findFirst({
+      where: { tenantId },
+      select: { pointsExpirationDays: true, pointsExpiryStartsAt: true },
+    });
+    const grace = before ? graceAfterChange(before, dto.pointsExpirationDays) : undefined;
+    if (grace !== undefined) (data as Record<string, unknown>).pointsExpiryStartsAt = grace;
     await this.prisma.loyaltyProgram.upsert({
       where: { tenantId },
       create: { tenantId, ...data, name: dto.name || "Programa de fidelización" },
@@ -127,6 +179,7 @@ export class LoyaltyService {
   async createReward(tenantId: string, dto: LoyaltyRewardDto) {
     const program = await this.requireProgram(tenantId);
     await this.checkFreeService(tenantId, dto.type, dto.freeServiceId);
+    await this.checkProduct(tenantId, dto.type, dto.productId, true);
     const value = this.checkDiscountValue(dto.type, dto.discountPercent, dto.discountAmount);
     return this.prisma.loyaltyReward.create({
       data: {
@@ -137,6 +190,7 @@ export class LoyaltyService {
         pointsCost: dto.pointsCost,
         ...value,
         freeServiceId: dto.freeServiceId ?? null,
+        productId: dto.type === "product" ? dto.productId ?? null : null,
         isActive: dto.isActive ?? true,
         maxRedemptions: dto.maxRedemptions ?? null,
         expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
@@ -152,6 +206,10 @@ export class LoyaltyService {
     const reward = await this.ownReward(tenantId, id);
     const type = dto.type ?? reward.type;
     await this.checkFreeService(tenantId, type, dto.freeServiceId ?? reward.freeServiceId);
+    // Only when the edit is about it: switching a reward off sends neither.
+    if (dto.type !== undefined || dto.productId !== undefined) {
+      await this.checkProduct(tenantId, type, dto.productId !== undefined ? dto.productId : reward.productId, true);
+    }
     const touchesValue = dto.type !== undefined || dto.discountPercent !== undefined || dto.discountAmount !== undefined;
     const value = touchesValue
       ? this.checkDiscountValue(
@@ -177,6 +235,9 @@ export class LoyaltyService {
         pointsCost: dto.pointsCost,
         ...value,
         freeServiceId: dto.freeServiceId,
+        ...(dto.type !== undefined || dto.productId !== undefined
+          ? { productId: type === "product" ? (dto.productId !== undefined ? dto.productId : reward.productId) ?? null : null }
+          : {}),
         isActive: dto.isActive,
         ...(dto.maxRedemptions !== undefined ? { maxRedemptions: dto.maxRedemptions } : {}),
         ...(dto.expiresAt !== undefined ? { expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null } : {}),
@@ -223,6 +284,20 @@ export class LoyaltyService {
     return reward;
   }
 
+  /**
+   * A product reward names the product handed over: the till takes it out
+   * of stock when it is redeemed (a zero-price line, "regalo fidelidad").
+   */
+  private async checkProduct(tenantId: string, type: string, productId: string | null | undefined, required: boolean) {
+    if (type !== "product") return;
+    if (!productId) {
+      if (required) throw new BadRequestException("Elige el producto que regala la recompensa");
+      return;
+    }
+    const product = await this.prisma.product.findFirst({ where: { id: productId, tenantId }, select: { id: true } });
+    if (!product) throw new BadRequestException("Ese producto no es de este salón");
+  }
+
   private async checkFreeService(tenantId: string, type: string, serviceId?: string | null) {
     if (type !== "free_service") return;
     if (!serviceId) throw new BadRequestException("Elige el servicio que regala la recompensa");
@@ -230,10 +305,15 @@ export class LoyaltyService {
     if (!service) throw new BadRequestException("Ese servicio no es de este salón");
   }
 
+  /**
+   * A new level. The members it reaches (by the most points they ever
+   * accumulated) move up to it now; nobody moves down (retierProgram).
+   */
   async createTier(tenantId: string, dto: LoyaltyTierDto) {
     const program = await this.requireProgram(tenantId);
+    let tier;
     try {
-      return await this.prisma.loyaltyTier.create({
+      tier = await this.prisma.loyaltyTier.create({
         data: {
           programId: program.id,
           name: dto.name,
@@ -246,13 +326,71 @@ export class LoyaltyService {
       if (isDuplicate(err)) throw new ConflictException(`Ya hay un nivel llamado «${dto.name}». Elige otro nombre.`);
       throw err;
     }
+    await this.retierProgram(program.id);
+    return tier;
   }
 
+  /** Edits a level; members move up to what it now reaches, never down. */
+  async updateTier(tenantId: string, id: string, dto: UpdateLoyaltyTierDto) {
+    const tier = await this.prisma.loyaltyTier.findFirst({ where: { id, program: { tenantId } } });
+    if (!tier) throw new NotFoundException("Nivel no encontrado");
+    let updated;
+    try {
+      updated = await this.prisma.loyaltyTier.update({
+        where: { id },
+        data: { name: dto.name, minPoints: dto.minPoints, pointsMultiplier: dto.pointsMultiplier },
+      });
+    } catch (err) {
+      if (isDuplicate(err)) throw new ConflictException(`Ya hay un nivel llamado «${dto.name}». Elige otro nombre.`);
+      throw err;
+    }
+    await this.retierProgram(tier.programId);
+    return updated;
+  }
+
+  /**
+   * Removes a level. Its members (left with none: onDelete SetNull) take the
+   * highest level that remains within their reach.
+   */
   async deleteTier(tenantId: string, id: string) {
     const tier = await this.prisma.loyaltyTier.findFirst({ where: { id, program: { tenantId } } });
     if (!tier) throw new NotFoundException("Nivel no encontrado");
     await this.prisma.loyaltyTier.delete({ where: { id } });
+    await this.retierProgram(tier.programId);
     return { ok: true };
+  }
+
+  /**
+   * Levels never go down (owner decision 2026-11-02): every member of the
+   * programme is moved UP to the highest level their peak lifetime points
+   * reach, and nobody is moved down. In batches, level by level from the
+   * lowest, so a member ends on the highest one that applies.
+   */
+  async retierProgram(programId: string): Promise<number> {
+    const tiers = await this.prisma.loyaltyTier.findMany({
+      where: { programId },
+      orderBy: { minPoints: "asc" },
+      select: { id: true, minPoints: true },
+    });
+    let moved = 0;
+    for (const tier of tiers) {
+      const below = {
+        programId,
+        peakLifetimePoints: { gte: tier.minPoints },
+        OR: [{ tierId: null }, { tier: { minPoints: { lt: tier.minPoints } } }],
+      };
+      for (;;) {
+        const batch = await this.prisma.loyaltyMember.findMany({ where: below, select: { id: true }, take: MEMBER_BATCH });
+        if (batch.length === 0) break;
+        const { count } = await this.prisma.loyaltyMember.updateMany({
+          where: { ...below, id: { in: batch.map((m) => m.id) } },
+          data: { tierId: tier.id },
+        });
+        moved += count;
+        if (count === 0) break;
+      }
+    }
+    return moved;
   }
 
   // --------------------------------------------------------------- members
@@ -320,7 +458,8 @@ export class LoyaltyService {
     if (!member) {
       try {
         member = await this.prisma.loyaltyMember.create({
-          data: { clientId, programId: program.id, enrolledVia: via },
+          // Signing up starts the expiry clock.
+          data: { clientId, programId: program.id, enrolledVia: via, pointsRenewedAt: new Date() },
         });
       } catch (err) {
         // Two hooks enrolling the same client at once: the other one won.
@@ -367,17 +506,37 @@ export class LoyaltyService {
     const { rewards, ...programFields } = program;
     return {
       program: programFields,
-      member,
+      member: member ? { ...member, pointsExpireOn: this.expiryDateOf(program, member) } : null,
       rewards: rewards.map((r) => ({
         ...r,
+        // A negative balance (a refund of points already spent) redeems nothing.
         redeemable:
           !!member &&
           program.isActive &&
+          member.currentPoints >= 0 &&
           member.currentPoints >= r.pointsCost &&
           member.currentPoints >= program.minPointsRedemption,
       })),
       history,
     };
+  }
+
+  /**
+   * When the member's balance expires if she does not come back: her last
+   * visit plus the programme's period, never before the grace. Null when
+   * points never expire or there is nothing to lose.
+   */
+  private expiryDateOf(
+    program: { pointsExpirationDays?: number | null; pointsExpiryStartsAt?: Date | null },
+    member: { currentPoints: number; pointsRenewedAt?: Date | null; joinedAt?: Date | null },
+  ): Date | null {
+    const days = program.pointsExpirationDays;
+    if (!days || member.currentPoints <= 0) return null;
+    const from = member.pointsRenewedAt ?? member.joinedAt;
+    if (!from) return null;
+    const at = new Date(new Date(from).getTime() + days * DAY_MS);
+    const grace = program.pointsExpiryStartsAt ? new Date(program.pointsExpiryStartsAt) : null;
+    return grace && grace > at ? grace : at;
   }
 
   async adjust(tenantId: string, memberId: string, dto: AdjustPointsDto, actorId?: string) {
@@ -425,21 +584,34 @@ export class LoyaltyService {
         totalAmount: true,
         servicePrice: true,
         discount: true,
+        startTime: true,
+        completionTime: true,
         service: { select: { price: true } },
         payments: { where: { status: "paid" }, select: { amount: true, method: true } },
       },
     });
     if (!apt?.clientId || apt.status !== "completed") return null;
     if (apt.paymentStatus !== "paid") return null;
+    // A completed, paid visit renews all her points (they expire after
+    // pointsExpirationDays without one), from when the visit was: a hook
+    // called again months later does not stretch it.
+    const now = Date.now();
+    const visitMs = (apt.completionTime ?? apt.startTime)?.getTime?.() ?? now;
+    const renewAt = new Date(Math.min(now, visitMs));
     // Paid means a payment recorded against the appointment (the till, the
     // payments screen, Stripe). The appointment's paymentStatus flag alone
     // used to be enough, and staff could set it by hand, for any amount.
     const moneyRows = (apt.payments ?? []).filter((p) => p.method !== "loyalty_points");
-    if (moneyRows.length === 0) return null;
+    if (moneyRows.length === 0) {
+      // Paid in full with points (a free service): no points, but a visit.
+      await this.renewExisting(program.id, apt.clientId, renewAt);
+      return null;
+    }
     const moneyCents = moneyRows.reduce((s, p) => s + p.amount, 0);
 
     const member = await this.memberForEarning(tenantId, program, apt.clientId);
     if (!member) return null;
+    await this.renewMember(member.id, renewAt);
 
     let basis = Number(apt.amountPaid ?? 0);
     if (!(basis > 0)) basis = moneyCents;
@@ -495,7 +667,7 @@ export class LoyaltyService {
       source: "appointment",
       sourceId: appointmentId,
       description: reason,
-      shortfall: "clamp",
+      shortfall: "allowNegative",
     }, -Math.max(0, basis - back.cents));
     return taken ?? 0;
   }
@@ -542,6 +714,8 @@ export class LoyaltyService {
     if (program.earnMode === "per_visit" && !args.isVisit) return 0;
     const member = await this.memberForEarning(tenantId, program, args.clientId);
     if (!member) return 0;
+    // A purchase at the salon renews her points too (she came in).
+    await this.renewMember(member.id, new Date());
     const points = this.pointsFor(program, args.basisCents, member.tier?.pointsMultiplier ?? 1);
     if (points <= 0) return 0;
     const applied = await this.applyChange(tenantId, program.id, member.id, args.clientId, {
@@ -596,7 +770,8 @@ export class LoyaltyService {
     });
     if (stillPaid === 0) {
       // The whole sale given back: what is left of its points (a refund
-      // that found the balance short took less than its share) goes too.
+      // from before balances could go negative may have taken less than
+      // its share) goes too, and the points spent on it come back.
       await this.reverseSale(tenantId, saleId);
       await this.cancelSaleRedemption(tenantId, saleId, "Devolución de la compra");
     }
@@ -620,7 +795,7 @@ export class LoyaltyService {
       sourceId: saleId,
       description: "Devolución de la compra",
       metadata: { posSaleId: saleId },
-      shortfall: "clamp",
+      shortfall: "allowNegative",
     }, -Math.max(0, basis - back.cents));
     return taken ?? 0;
   }
@@ -649,9 +824,10 @@ export class LoyaltyService {
    *
    * Its share is points x refunded / the cents that earned them, rounded,
    * never more than is left to take back of it (so a later full refund
-   * takes back only what remains), and never the member's balance below
-   * zero ("clamp"). One ledger entry per refund (source "refund", the
-   * refund's id: a retry is a no-op).
+   * takes back only what remains). When she has spent the points already,
+   * the balance goes negative ("allowNegative"): it used to stop at zero,
+   * and earn, spend, refund kept the reward for free. One ledger entry per
+   * refund (source "refund", the refund's id: a retry is a no-op).
    */
   private async takeBackRefund(
     tenantId: string,
@@ -693,7 +869,7 @@ export class LoyaltyService {
       sourceId: refund.id,
       description,
       metadata: { ...of.key, paymentId: payment.id, refundCents: refund.amount },
-      shortfall: "clamp",
+      shortfall: "allowNegative",
     }, -Math.min(refund.amount, basis));
     return taken ?? 0;
   }
@@ -716,7 +892,14 @@ export class LoyaltyService {
       appointmentId?: string | null;
       actorId?: string | null;
     },
-  ): Promise<{ discountCents: number; pointsSpent: number; rewardName: string; redemptionId: string }> {
+  ): Promise<{
+    discountCents: number;
+    pointsSpent: number;
+    rewardName: string;
+    redemptionId: string;
+    /** A product or "otro regalo" handed over: the till records it as a zero-price line (RewardGift). */
+    gift: RewardGift | null;
+  }> {
     const { program, member, reward, discountCents } = await this.checkRedemption(tenantId, args);
     // The reward's limit, claimed in one conditional write: two tills
     // redeeming its last use at once cannot both get it (the check above
@@ -763,7 +946,13 @@ export class LoyaltyService {
         posSaleId: args.saleId,
       },
     });
-    return { discountCents, pointsSpent: reward.pointsCost, rewardName: reward.name, redemptionId: redemption.id };
+    return {
+      discountCents,
+      pointsSpent: reward.pointsCost,
+      rewardName: reward.name,
+      redemptionId: redemption.id,
+      gift: giftOf(reward),
+    };
   }
 
   /**
@@ -794,6 +983,13 @@ export class LoyaltyService {
       where: { id: args.rewardId, programId: program.id, isActive: true },
     });
     if (!reward) throw new NotFoundException("Recompensa no encontrada o desactivada");
+    // A negative balance (a refund took back points already spent) is a
+    // debt: her next visits pay it off before she can redeem again.
+    if (member.currentPoints < 0) {
+      throw new BadRequestException(
+        `Tiene un saldo de puntos negativo (${member.currentPoints}): no puede canjear hasta recuperarlo con sus próximas visitas`,
+      );
+    }
     if (reward.expiresAt && reward.expiresAt.getTime() < Date.now()) {
       throw new BadRequestException("Esta recompensa ha caducado");
     }
@@ -920,6 +1116,149 @@ export class LoyaltyService {
     return { settled, reversed };
   }
 
+  // ---------------------------------------------------------------- expiry
+
+  /**
+   * Points expire after `pointsExpirationDays` (12 months by default) with
+   * no paid visit or purchase (owner decision 2026-11-02; audit L8: they
+   * never did). Once a day per salon, from 03:00 in its timezone (the
+   * hourly ticks before that, and after the day's run, find nothing): every
+   * member whose last visit is before the day's cutoff loses the whole
+   * balance, as one "Caducidad" ledger entry keyed by member and salon day,
+   * so a second tick or a second instance is a no-op. Nothing expires
+   * during the grace (pointsExpiryStartsAt: deploy + 30 days, or 30 days
+   * after the salon switched expiry on or shortened it).
+   */
+  @Cron("0 20 * * * *")
+  async expireInactivePoints(now: Date = new Date()): Promise<{ members: number; points: number }> {
+    let members = 0;
+    let points = 0;
+    try {
+      const programs = await this.prisma.loyaltyProgram.findMany({
+        where: {
+          isActive: true,
+          pointsExpirationDays: { not: null },
+          OR: [{ pointsExpiryStartsAt: null }, { pointsExpiryStartsAt: { lte: now } }],
+        },
+        select: { id: true, tenantId: true, pointsExpirationDays: true, tenant: { select: { timezone: true } } },
+      });
+      for (const program of programs) {
+        try {
+          const out = await this.expireProgram(program, now);
+          members += out.members;
+          points += out.points;
+        } catch (err) {
+          this.logger.warn(`loyalty expiry of programme ${program.id} failed: ${(err as Error).message}`);
+        }
+      }
+    } catch (err) {
+      this.logger.warn(`loyalty expiry failed: ${(err as Error).message}`);
+    }
+    if (members) this.logger.log(`loyalty expiry: ${members} member(s), ${points} point(s)`);
+    return { members, points };
+  }
+
+  private async expireProgram(
+    program: { id: string; tenantId: string; pointsExpirationDays: number | null; tenant?: { timezone: string | null } | null },
+    now: Date,
+  ): Promise<{ members: number; points: number }> {
+    const days = program.pointsExpirationDays;
+    if (!days || days <= 0) return { members: 0, points: 0 };
+    const run = expiryRun(now, program.tenant?.timezone, days);
+    if (!run) return { members: 0, points: 0 };
+    // The plan no longer includes loyalty: the salon cannot see or use the
+    // points, so they are not taken either.
+    const unlocked = await this.flags.isFeatureUnlocked(program.tenantId, "loyalty").catch(() => false);
+    if (!unlocked) return { members: 0, points: 0 };
+
+    const inactive = {
+      programId: program.id,
+      currentPoints: { gt: 0 },
+      OR: [
+        { pointsRenewedAt: { lt: run.cutoff } },
+        { pointsRenewedAt: null, joinedAt: { lt: run.cutoff } },
+      ],
+    };
+    let members = 0;
+    let points = 0;
+    let after: string | undefined;
+    for (;;) {
+      const batch = await this.prisma.loyaltyMember.findMany({
+        where: { ...inactive, ...(after ? { id: { gt: after } } : {}) },
+        select: { id: true, clientId: true, currentPoints: true, pointsRenewedAt: true, joinedAt: true },
+        orderBy: { id: "asc" },
+        take: MEMBER_BATCH,
+      });
+      if (batch.length === 0) break;
+      after = batch[batch.length - 1].id;
+      for (const m of batch) {
+        const taken = await this.expireMember(program.tenantId, program.id, m, run, days).catch((err) => {
+          this.logger.warn(`loyalty expiry of member ${m.id} failed: ${(err as Error).message}`);
+          return 0;
+        });
+        if (taken > 0) {
+          members++;
+          points += taken;
+        }
+      }
+      if (batch.length < MEMBER_BATCH) break;
+    }
+    return { members, points };
+  }
+
+  /**
+   * One member's balance expires: the ledger entry (unique per member and
+   * day) and the zero balance in one transaction, the balance written only
+   * if it is still what was read and she has still not been back (a visit
+   * or a sale in between wins). Returns the points taken, 0 if none.
+   */
+  private async expireMember(
+    tenantId: string,
+    programId: string,
+    m: { id: string; clientId: string; currentPoints: number; pointsRenewedAt: Date | null; joinedAt: Date },
+    run: { day: string; cutoff: Date },
+    days: number,
+  ): Promise<number> {
+    const balance = m.currentPoints;
+    if (!(balance > 0)) return 0;
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        await tx.loyaltyTransaction.create({
+          data: {
+            tenantId,
+            programId,
+            memberId: m.id,
+            type: "expire",
+            points: -balance,
+            source: "expiry",
+            sourceId: run.day,
+            description: "Caducidad",
+            metadata: {
+              days,
+              lastVisitAt: new Date(m.pointsRenewedAt ?? m.joinedAt).toISOString(),
+            } as Prisma.InputJsonValue,
+          },
+        });
+        const { count } = await tx.loyaltyMember.updateMany({
+          where: {
+            id: m.id,
+            currentPoints: balance,
+            OR: [{ pointsRenewedAt: { lt: run.cutoff } }, { pointsRenewedAt: null, joinedAt: { lt: run.cutoff } }],
+          },
+          // Expiry is not activity, and the points accumulated (the level) stay.
+          data: { currentPoints: 0 },
+        });
+        if (count !== 1) throw new ExpiryRaced();
+        await tx.client.update({ where: { id: m.clientId }, data: { loyaltyPoints: 0 } });
+        return balance;
+      });
+    } catch (err) {
+      // Done today already, or she came back meanwhile: nothing to take.
+      if (isDuplicate(err) || err instanceof ExpiryRaced) return 0;
+      throw err;
+    }
+  }
+
   // -------------------------------------------------------------- internals
 
   /** Which of these appointments already have a movement of this type. */
@@ -930,6 +1269,11 @@ export class LoyaltyService {
       select: { sourceId: true },
     });
     return new Set(rows.map((r) => r.sourceId as string));
+  }
+
+  /** Whether the salon's plan includes loyalty (the receipt's points block asks). */
+  isUnlocked(tenantId: string): Promise<boolean> {
+    return this.flags.isFeatureUnlocked(tenantId, "loyalty").catch(() => false);
   }
 
   /** The programme, if the salon has one switched on and its plan includes it. */
@@ -969,10 +1313,31 @@ export class LoyaltyService {
   }
 
   /**
+   * Renews the member's points from `at` (a paid visit or purchase): the
+   * later of what is stored and `at`, so an old visit settled late never
+   * moves it back.
+   */
+  private async renewMember(memberId: string, at: Date): Promise<void> {
+    await this.prisma.loyaltyMember.updateMany({
+      where: { id: memberId, OR: [{ pointsRenewedAt: null }, { pointsRenewedAt: { lt: at } }] },
+      data: { pointsRenewedAt: at },
+    });
+  }
+
+  /** renewMember for a client who is a member already (no sign-up). */
+  private async renewExisting(programId: string, clientId: string, at: Date): Promise<void> {
+    const member = await this.prisma.loyaltyMember.findUnique({
+      where: { clientId_programId: { clientId, programId } },
+      select: { id: true },
+    });
+    if (member) await this.renewMember(member.id, at);
+  }
+
+  /**
    * Records one movement and updates the member's counters in a single
-   * transaction. Returns the points actually moved (a clamped reversal can
-   * move fewer), or null when this exact movement was recorded before.
-   * `spentCents` keeps the member's total spend in step with earn/reversal.
+   * transaction. Returns the points moved, or null when this exact movement
+   * was recorded before. `spentCents` keeps the member's total spend in
+   * step with earn/reversal.
    */
   private async applyChange(
     tenantId: string,
@@ -982,17 +1347,15 @@ export class LoyaltyService {
     change: PointsChange,
     spentCents = 0,
   ): Promise<number | null> {
+    const mayGoNegative = change.shortfall === "allowNegative";
     try {
       return await this.prisma.$transaction(async (tx) => {
-        let points = change.points;
-        if (points < 0) {
+        const points = change.points;
+        if (points < 0 && !mayGoNegative) {
           const m = await tx.loyaltyMember.findUnique({ where: { id: memberId }, select: { currentPoints: true } });
           const balance = m?.currentPoints ?? 0;
           if (-points > balance) {
-            if (change.shortfall === "strict") {
-              throw new BadRequestException(`Puntos insuficientes (tiene ${balance})`);
-            }
-            points = -balance;
+            throw new BadRequestException(`Puntos insuficientes (tiene ${balance})`);
           }
         }
         await tx.loyaltyTransaction.create({
@@ -1025,33 +1388,50 @@ export class LoyaltyService {
         const updated = await tx.loyaltyMember.update({ where: { id: memberId }, data });
 
         // Strict debits are re-checked after the write: two tills spending
-        // the same points at once cannot both succeed.
-        if (updated.currentPoints < 0) {
+        // the same points at once cannot both succeed. Only a reversal may
+        // leave the balance below zero.
+        if (points < 0 && !mayGoNegative && updated.currentPoints < 0) {
           throw new BadRequestException("Puntos insuficientes");
         }
 
         // The client record carries a copy that campaigns and lists read.
         await tx.client.update({ where: { id: clientId }, data: { loyaltyPoints: updated.currentPoints } });
 
-        // The level, from the programme's levels as they are now, after
-        // every movement: a refund or a cancellation that takes back the
-        // points that reached a level takes the level back too, and a level
-        // created or removed since counts from the next movement. Levels
-        // still follow the points accumulated (lifetimePoints), which only
-        // a reversal of earned points lowers; spending never does.
-        const tier = await tx.loyaltyTier.findFirst({
-          where: { programId, minPoints: { lte: updated.lifetimePoints } },
-          orderBy: { minPoints: "desc" },
-          select: { id: true },
-        });
-        if ((tier?.id ?? null) !== (updated.tierId ?? null)) {
-          await tx.loyaltyMember.update({ where: { id: memberId }, data: { tierId: tier?.id ?? null } });
-        }
+        await this.raiseTier(tx, programId, updated);
         return points;
       });
     } catch (err) {
       if (isDuplicate(err)) return null;
       throw err;
     }
+  }
+
+  /**
+   * Levels never go down (owner decision 2026-11-02). The level follows the
+   * most points the member ever accumulated (peakLifetimePoints, kept
+   * here): an earning can raise it; a reversal, a negative adjustment or a
+   * level edited since never lowers it (#219 recalculated it both ways, and
+   * could leave a member with none).
+   */
+  private async raiseTier(
+    tx: Prisma.TransactionClient,
+    programId: string,
+    member: { id: string; lifetimePoints: number; peakLifetimePoints?: number | null; tierId: string | null },
+  ): Promise<void> {
+    const peak = Math.max(member.peakLifetimePoints ?? 0, member.lifetimePoints);
+    if (peak !== (member.peakLifetimePoints ?? 0)) {
+      await tx.loyaltyMember.update({ where: { id: member.id }, data: { peakLifetimePoints: peak } });
+    }
+    const reached = await tx.loyaltyTier.findFirst({
+      where: { programId, minPoints: { lte: peak } },
+      orderBy: { minPoints: "desc" },
+      select: { id: true, minPoints: true },
+    });
+    if (!reached || reached.id === member.tierId) return;
+    if (member.tierId) {
+      const current = await tx.loyaltyTier.findUnique({ where: { id: member.tierId }, select: { minPoints: true } });
+      if (current && current.minPoints >= reached.minPoints) return;
+    }
+    await tx.loyaltyMember.update({ where: { id: member.id }, data: { tierId: reached.id } });
   }
 }

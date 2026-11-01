@@ -9,10 +9,13 @@ import apiClient, {
   LoyaltyProgramSettings,
   LoyaltyReward,
   LoyaltyRewardInput,
+  LoyaltyTier,
 } from "@/lib/api";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/components/ui/use-toast";
 import { EMPTY_REWARD_FORM, RewardForm, adjustmentOf, rewardFormOf, rewardPayload } from "@/lib/loyalty-rewards";
+import { balanceClass, expiryMonths, expiryOptions, expiryRuleText, isNegativeBalance } from "@/lib/loyalty-points";
+import { useTranslations } from "@/lib/use-translation";
 
 /**
  * The salon's loyalty programme. One per salon: how points are earned
@@ -35,6 +38,8 @@ const DEFAULTS: LoyaltyProgramSettings = {
   welcomePoints: 0,
   autoEnroll: true,
   allowSelfEnroll: true,
+  pointsExpirationDays: 365,
+  showPointsInReviewEmail: true,
 };
 
 const REWARD_TYPES: Record<LoyaltyRewardInput["type"], string> = {
@@ -55,6 +60,7 @@ function errorText(err: unknown): string {
 }
 
 export default function LoyaltyPage() {
+  const t = useTranslations();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [program, setProgram] = useState<LoyaltyProgram | null>(null);
@@ -80,6 +86,8 @@ export default function LoyaltyPage() {
           welcomePoints: program.welcomePoints,
           autoEnroll: program.autoEnroll,
           allowSelfEnroll: program.allowSelfEnroll,
+          pointsExpirationDays: program.pointsExpirationDays ?? null,
+          showPointsInReviewEmail: program.showPointsInReviewEmail ?? true,
         });
       }
       setError(null);
@@ -288,6 +296,56 @@ export default function LoyaltyPage() {
                   site any more, so there is nowhere for them to do it. */}
             </fieldset>
 
+            {/* Points expire after a period with no visit (owner decision
+                2026-11-02); every paid visit renews all of them. */}
+            <fieldset className="space-y-2">
+              <legend className="text-sm font-medium text-gray-700">{t("loyalty.expiry_label")}</legend>
+              <select
+                aria-label={t("loyalty.expiry_label")}
+                value={form.pointsExpirationDays === null ? "" : String(form.pointsExpirationDays)}
+                onChange={(e) =>
+                  setForm({ ...form, pointsExpirationDays: e.target.value === "" ? null : Number(e.target.value) })
+                }
+                className="w-full max-w-xs px-3 py-2 border border-gray-300 rounded-md text-sm"
+              >
+                {expiryOptions(form.pointsExpirationDays).map((days) => (
+                  <option key={days ?? "never"} value={days === null ? "" : String(days)}>
+                    {days === null
+                      ? t("loyalty.expiry_never")
+                      : expiryMonths(days) !== null
+                        ? t("loyalty.expiry_months", { months: expiryMonths(days) })
+                        : t("loyalty.expiry_days", { days })}
+                  </option>
+                ))}
+              </select>
+              <p className="text-sm text-gray-500">{t("loyalty.expiry_help")}</p>
+              {expiryRuleText(form.pointsExpirationDays) && (
+                <p className="text-sm text-gray-700">
+                  {t("loyalty.expiry_rule_shown", { rule: expiryRuleText(form.pointsExpirationDays) })}
+                </p>
+              )}
+              {program?.pointsExpiryStartsAt && new Date(program.pointsExpiryStartsAt).getTime() > Date.now() && (
+                <p className="text-xs text-gray-500">
+                  {t("loyalty.expiry_grace_until", {
+                    date: new Date(program.pointsExpiryStartsAt).toLocaleDateString("es-ES"),
+                  })}
+                </p>
+              )}
+            </fieldset>
+
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={form.showPointsInReviewEmail}
+                onChange={(e) => setForm({ ...form, showPointsInReviewEmail: e.target.checked })}
+              />
+              <span>
+                {t("loyalty.review_email_points")}
+                <span className="block text-gray-500">{t("loyalty.review_email_points_help")}</span>
+              </span>
+            </label>
+
             <div className="flex items-center gap-3">
               <button
                 type="submit"
@@ -321,6 +379,7 @@ function RewardsSection({
 }) {
   const { toast } = useToast();
   const [services, setServices] = useState<Array<{ id: string; name: string }>>([]);
+  const [products, setProducts] = useState<Array<{ id: string; name: string }>>([]);
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState<RewardForm>(EMPTY_REWARD_FORM);
   const [creating, setCreating] = useState(false);
@@ -338,9 +397,15 @@ function RewardsSection({
       .getServices()
       .then((s: any[]) => setServices(s.map((x) => ({ id: x.id, name: x.name }))))
       .catch(() => setServices([]));
+    // The products a product reward can hand over (it takes one out of stock).
+    apiClient
+      .getPosSaleProducts()
+      .then((p) => setProducts(p.map((x) => ({ id: x.id, name: x.name }))))
+      .catch(() => setProducts([]));
   }, []);
 
   const serviceName = useMemo(() => new Map(services.map((s) => [s.id, s.name])), [services]);
+  const productName = useMemo(() => new Map(products.map((p) => [p.id, p.name])), [products]);
 
   const performDelete = async () => {
     if (!pendingDelete) return;
@@ -365,6 +430,10 @@ function RewardsSection({
       else what = "Descuento";
     } else if (r.type === "free_service") {
       what = `Gratis: ${serviceName.get(r.freeServiceId ?? "") ?? "servicio"}`;
+    } else if (r.type === "product" && r.productId) {
+      what = `Regalo: ${productName.get(r.productId) ?? "producto"}`;
+    } else if (r.type === "voucher" && r.description) {
+      what = `Regalo: ${r.description}`;
     }
     const used = r.maxRedemptions
       ? `canjeada ${r.currentRedemptions ?? 0} de ${r.maxRedemptions} veces`
@@ -440,7 +509,7 @@ function RewardsSection({
 
       {adding && (
         <form onSubmit={create} className="rounded-md border border-gray-200 p-4">
-          <RewardFields form={draft} onChange={setDraft} services={services} />
+          <RewardFields form={draft} onChange={setDraft} services={services} products={products} />
           <div className="mt-3 flex justify-end gap-2">
             <button type="button" onClick={() => setAdding(false)} className="px-3 py-1.5 border rounded-md text-sm">
               Cancelar
@@ -506,7 +575,7 @@ function RewardsSection({
       {editing && (
         <Modal title={`Editar «${editing.name}»`} onClose={() => !savingEdit && setEditing(null)}>
           <form onSubmit={saveEdit} className="space-y-3">
-            <RewardFields form={editForm} onChange={setEditForm} services={services} showActive />
+            <RewardFields form={editForm} onChange={setEditForm} services={services} products={products} showActive />
             {editError && (
               <p role="alert" className="rounded-md border border-red-200 bg-red-50 p-2 text-sm text-red-700">
                 {editError}
@@ -552,13 +621,16 @@ function RewardFields({
   form,
   onChange,
   services,
+  products,
   showActive,
 }: {
   form: RewardForm;
   onChange: (f: RewardForm) => void;
   services: Array<{ id: string; name: string }>;
+  products: Array<{ id: string; name: string }>;
   showActive?: boolean;
 }) {
+  const t = useTranslations();
   const set = (patch: Partial<RewardForm>) => onChange({ ...form, ...patch });
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -658,10 +730,37 @@ function RewardFields({
           ))}
         </select>
       )}
-      {(form.type === "product" || form.type === "voucher") && (
-        <p className="text-xs text-gray-500 sm:col-span-2">
-          Se entrega en el mostrador: el canje descuenta los puntos pero no cambia el importe del ticket.
-        </p>
+      {form.type === "product" && (
+        <div className="space-y-1 sm:col-span-2">
+          <select
+            required
+            aria-label={t("loyalty.choose_product")}
+            value={form.productId}
+            onChange={(e) => set({ productId: e.target.value })}
+            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+          >
+            <option value="">{t("loyalty.choose_product")}</option>
+            {products.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-gray-500">{t("loyalty.product_gift_help")}</p>
+        </div>
+      )}
+      {form.type === "voucher" && (
+        <label className="block text-sm sm:col-span-2">
+          <span className="font-medium text-gray-700">{t("loyalty.gift_description")}</span>
+          <input
+            maxLength={1000}
+            placeholder={t("loyalty.gift_description_placeholder")}
+            value={form.description}
+            onChange={(e) => set({ description: e.target.value })}
+            className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md"
+          />
+          <span className="mt-1 block text-xs text-gray-500">{t("loyalty.other_gift_help")}</span>
+        </label>
       )}
 
       <label className="block text-sm">
@@ -735,9 +834,43 @@ function TiersSection({
   onChange: () => void;
   onError: (e: string | null) => void;
 }) {
+  const t = useTranslations();
+  const { toast } = useToast();
   const [name, setName] = useState("");
   const [minPoints, setMinPoints] = useState(500);
   const [multiplier, setMultiplier] = useState(1.5);
+  // The level being edited, in its own dialog.
+  const [editing, setEditing] = useState<LoyaltyTier | null>(null);
+  const [edit, setEdit] = useState({ name: "", minPoints: "0", multiplier: "1" });
+  const [editError, setEditError] = useState<string | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  const openEdit = (tier: LoyaltyTier) => {
+    setEditing(tier);
+    setEdit({ name: tier.name, minPoints: String(tier.minPoints), multiplier: String(tier.pointsMultiplier) });
+    setEditError(null);
+  };
+
+  const saveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editing) return;
+    const min = Number(edit.minPoints);
+    const mult = Number(edit.multiplier.replace(",", "."));
+    if (!edit.name.trim()) return setEditError("Ponle un nombre al nivel.");
+    if (!Number.isInteger(min) || min < 0) return setEditError("Los puntos deben ser un número entero desde 0.");
+    if (!(mult >= 1 && mult <= 10)) return setEditError("El multiplicador va de 1 a 10.");
+    setSavingEdit(true);
+    try {
+      await apiClient.updateLoyaltyTier(editing.id, { name: edit.name.trim(), minPoints: min, pointsMultiplier: mult });
+      setEditing(null);
+      toast({ title: t("loyalty.tier_saved") });
+      onChange();
+    } catch (err) {
+      setEditError(errorText(err));
+    } finally {
+      setSavingEdit(false);
+    }
+  };
 
   const add = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -753,36 +886,104 @@ function TiersSection({
 
   return (
     <section className="bg-white rounded-lg shadow p-6 space-y-4">
-      <h2 className="text-lg font-semibold text-gray-900">Niveles (opcional)</h2>
-      <p className="text-sm text-gray-500">
-        Un socio sube de nivel al acumular puntos, y desde ese nivel gana más puntos por visita o por
-        euro. Canjear puntos no le baja de nivel; si se devuelve un pago o se cancela una cita, los
-        puntos que se le restan cuentan.
-      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="text-lg font-semibold text-gray-900">Niveles (opcional)</h2>
+        <span className="rounded-full bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-700">
+          {t("loyalty.tiers_never_down")}
+        </span>
+      </div>
+      <p className="text-sm text-gray-500">{t("loyalty.tiers_help")}</p>
       {program.tiers.length > 0 && (
         <ul className="divide-y divide-gray-100">
-          {program.tiers.map((t) => (
-            <li key={t.id} className="flex items-center justify-between py-2 text-sm">
+          {program.tiers.map((tier) => (
+            <li key={tier.id} className="flex items-center justify-between gap-3 py-2 text-sm">
               <span>
-                <strong>{t.name}</strong> · desde {t.minPoints} puntos acumulados · ×{t.pointsMultiplier}
+                <strong>{tier.name}</strong> · desde {tier.minPoints} puntos acumulados · ×{tier.pointsMultiplier}
               </span>
-              <button
-                aria-label="Borrar nivel"
-                onClick={async () => {
-                  try {
-                    await apiClient.deleteLoyaltyTier(t.id);
-                    onChange();
-                  } catch (err) {
-                    onError(errorText(err));
-                  }
-                }}
-                className="text-red-600 hover:text-red-800"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
+              <span className="flex items-center gap-3">
+                <button
+                  aria-label={`${t("loyalty.tier_edit")} ${tier.name}`}
+                  onClick={() => openEdit(tier)}
+                  className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800"
+                >
+                  <Pencil className="w-4 h-4" /> Editar
+                </button>
+                <button
+                  aria-label="Borrar nivel"
+                  onClick={async () => {
+                    try {
+                      await apiClient.deleteLoyaltyTier(tier.id);
+                      onChange();
+                    } catch (err) {
+                      onError(errorText(err));
+                    }
+                  }}
+                  className="text-red-600 hover:text-red-800"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </span>
             </li>
           ))}
         </ul>
+      )}
+      {editing && (
+        <Modal title={t("loyalty.tier_edit_title", { name: editing.name })} onClose={() => !savingEdit && setEditing(null)}>
+          <form onSubmit={saveEdit} className="space-y-3 text-sm">
+            <label className="block">
+              <span className="font-medium text-gray-700">{t("loyalty.tier_name")}</span>
+              <input
+                required
+                maxLength={60}
+                value={edit.name}
+                onChange={(e) => setEdit({ ...edit, name: e.target.value })}
+                className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md"
+              />
+            </label>
+            <label className="block">
+              <span className="font-medium text-gray-700">{t("loyalty.tier_min_points")}</span>
+              <input
+                type="number"
+                min={0}
+                required
+                value={edit.minPoints}
+                onChange={(e) => setEdit({ ...edit, minPoints: e.target.value })}
+                className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md"
+              />
+            </label>
+            <label className="block">
+              <span className="font-medium text-gray-700">{t("loyalty.tier_multiplier")}</span>
+              <input
+                type="number"
+                min={1}
+                max={10}
+                step={0.1}
+                required
+                value={edit.multiplier}
+                onChange={(e) => setEdit({ ...edit, multiplier: e.target.value })}
+                className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md"
+              />
+            </label>
+            <p className="text-xs text-gray-500">{t("loyalty.tiers_never_down")}.</p>
+            {editError && (
+              <p role="alert" className="rounded-md border border-red-200 bg-red-50 p-2 text-red-700">
+                {editError}
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setEditing(null)} disabled={savingEdit} className="px-3 py-1.5 border rounded-md">
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                disabled={savingEdit}
+                className="px-3 py-1.5 bg-blue-600 text-white rounded-md disabled:opacity-50"
+              >
+                {savingEdit ? t("loyalty.saving") : t("loyalty.save")}
+              </button>
+            </div>
+          </form>
+        </Modal>
       )}
       <form onSubmit={add} className="flex flex-wrap items-center gap-2 text-sm">
         <input
@@ -819,6 +1020,7 @@ function TiersSection({
 }
 
 function MembersSection({ onError }: { onError: (e: string | null) => void }) {
+  const t = useTranslations();
   const [members, setMembers] = useState<LoyaltyMemberRow[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
@@ -936,7 +1138,15 @@ function MembersSection({ onError }: { onError: (e: string | null) => void }) {
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <Star className="w-4 h-4 inline text-yellow-500 mr-1" />
-                      <strong>{m.currentPoints}</strong>
+                      <strong
+                        className={balanceClass(m.currentPoints)}
+                        title={isNegativeBalance(m.currentPoints) ? t("loyalty.negative_balance_help") : undefined}
+                      >
+                        {m.currentPoints}
+                      </strong>
+                      {isNegativeBalance(m.currentPoints) && (
+                        <span className="ml-1 text-xs text-red-700">{t("loyalty.negative_balance")}</span>
+                      )}
                       {m.tier && <span className="ml-2 text-xs text-gray-500">{m.tier.name}</span>}
                     </td>
                     <td className="px-4 py-3">{m.lifetimePoints}</td>

@@ -60,8 +60,37 @@ function fakeDb(opts: { program?: Partial<Row>; unlocked?: boolean } = {}) {
       return row[k] === v;
     });
 
+  // A Prisma-like where for members: equality, null, gt/gte/lt/in, OR, and
+  // the tier relation (tier.minPoints).
+  const cmp = (val: any, cond: any): boolean => {
+    if (cond === null) return val === null || val === undefined;
+    if (cond instanceof Date) return val instanceof Date && val.getTime() === cond.getTime();
+    if (cond && typeof cond === "object" && !Array.isArray(cond)) {
+      const v = val instanceof Date ? val.getTime() : val;
+      const at = (x: any) => (x instanceof Date ? x.getTime() : x);
+      if ("gt" in cond && !(v != null && v > at(cond.gt))) return false;
+      if ("gte" in cond && !(v != null && v >= at(cond.gte))) return false;
+      if ("lt" in cond && !(v != null && v < at(cond.lt))) return false;
+      if ("lte" in cond && !(v != null && v <= at(cond.lte))) return false;
+      if ("in" in cond && !cond.in.includes(val)) return false;
+      if ("not" in cond && val === cond.not) return false;
+      return true;
+    }
+    return val === cond;
+  };
+  const memberMatch = (m: Row, where: Row): boolean =>
+    Object.entries(where ?? {}).every(([k, cond]) => {
+      if (k === "OR") return (cond as Row[]).some((w) => memberMatch(m, w));
+      if (k === "tier") {
+        const t = tiers.find((x) => x.id === m.tierId);
+        return !!t && cmp(t.minPoints, (cond as any).minPoints);
+      }
+      return cmp(m[k], cond);
+    });
+
   const prisma: any = {
     loyaltyProgram: {
+      findMany: jest.fn(async () => [{ ...program, tenant: { timezone: "Europe/Madrid" } }]),
       findFirst: jest.fn(async ({ where }: any) =>
         where.tenantId === program.tenantId && (where.isActive === undefined || where.isActive === program.isActive)
           ? program
@@ -84,12 +113,23 @@ function fakeDb(opts: { program?: Partial<Row>; unlocked?: boolean } = {}) {
           totalRedeemed: 0,
           totalSpent: 0,
           tierId: null,
+          peakLifetimePoints: 0,
+          joinedAt: new Date(),
           ...data,
         };
         members.push(m);
         return m;
       }),
       update: jest.fn(async ({ where, data }: any) => inc(members.find((m) => m.id === where.id)!, data)),
+      updateMany: jest.fn(async ({ where, data }: any) => {
+        const hit = members.filter((m) => memberMatch(m, where));
+        hit.forEach((m) => inc(m, data));
+        return { count: hit.length };
+      }),
+      findMany: jest.fn(async ({ where, take }: any) => {
+        const rows = members.filter((m) => memberMatch(m, where)).sort((a, b) => (a.id < b.id ? -1 : 1));
+        return take ? rows.slice(0, take) : rows;
+      }),
     },
     loyaltyTransaction: {
       create: jest.fn(async ({ data }: any) => {
@@ -113,10 +153,23 @@ function fakeDb(opts: { program?: Partial<Row>; unlocked?: boolean } = {}) {
     },
     loyaltyTier: {
       findFirst: jest.fn(async ({ where }: any) => {
+        if (where.id) return tiers.find((t) => t.id === where.id) ?? null;
         const fit = tiers
           .filter((t) => t.programId === where.programId && t.minPoints <= where.minPoints.lte)
           .sort((a, b) => b.minPoints - a.minPoints);
         return fit[0] ?? null;
+      }),
+      findUnique: jest.fn(async ({ where }: any) => tiers.find((t) => t.id === where.id) ?? null),
+      findMany: jest.fn(async ({ where }: any) =>
+        tiers.filter((t) => t.programId === where.programId).sort((a, b) => a.minPoints - b.minPoints),
+      ),
+      update: jest.fn(async ({ where, data }: any) => inc(tiers.find((t) => t.id === where.id)!, data)),
+      delete: jest.fn(async ({ where }: any) => {
+        const i = tiers.findIndex((t) => t.id === where.id);
+        const [t] = tiers.splice(i, 1);
+        // onDelete: SetNull
+        members.filter((m) => m.tierId === t.id).forEach((m) => (m.tierId = null));
+        return t;
       }),
       create: jest.fn(async ({ data }: any) => {
         if (tiers.some((t) => t.programId === data.programId && t.name === data.name)) {
@@ -281,7 +334,7 @@ describe("LoyaltyService: earning", () => {
 });
 
 describe("LoyaltyService: reversal", () => {
-  it("a cancelled appointment gives its points back once, and never below zero", async () => {
+  it("a cancelled appointment gives its points back once, the balance going negative if she spent them", async () => {
     const db = fakeDb();
     await db.service.enroll("t1", "c1", "staff");
     db.appointments.push(paidVisit());
@@ -289,9 +342,10 @@ describe("LoyaltyService: reversal", () => {
     // The client already spent 30 of the 45 points.
     db.member()!.currentPoints = 15;
 
-    expect(await db.service.reverseAppointment("t1", "a1", "Cita cancelada")).toBe(-15);
+    // All 45 come back (it used to stop at 0, and she kept the reward free).
+    expect(await db.service.reverseAppointment("t1", "a1", "Cita cancelada")).toBe(-45);
     expect(await db.service.reverseAppointment("t1", "a1", "Cita cancelada")).toBe(0);
-    expect(db.member()!.currentPoints).toBe(0);
+    expect(db.member()!.currentPoints).toBe(-30);
   });
 
   it("a refunded till payment takes back its share of the sale", async () => {
@@ -335,25 +389,25 @@ describe("LoyaltyService: reversal", () => {
     expect(await db.service.onPartialRefund("t1", { id: "p1", appointmentId: "a1" }, { id: "r2", amount: 1000 })).toBe(0);
   });
 
-  it("partial refunds of a sale never take more than it earned, nor the balance below zero", async () => {
+  it("partial refunds of a sale never take more than it earned; a short balance goes negative", async () => {
     const db = fakeDb();
     await db.service.enroll("t1", "c1", "staff");
     await db.service.earnForSale("t1", { clientId: "c1", saleId: "s1", basisCents: 6000, isVisit: true });
     const payment = { id: "p1", metadata: { posSaleId: "s1" } };
     // 20,00 of 60,00: 20 points.
     expect(await db.service.onPartialRefund("t1", payment, { id: "r1", amount: 2000 })).toBe(-20);
-    // The client spent most of what is left: a refund worth 30 takes the 5 there are.
+    // The client spent most of what is left: a refund worth 30 takes 30 all the same.
     db.member()!.currentPoints = 5;
-    expect(await db.service.onPartialRefund("t1", payment, { id: "r2", amount: 3000 })).toBe(-5);
-    expect(db.member()!.currentPoints).toBe(0);
+    expect(await db.service.onPartialRefund("t1", payment, { id: "r2", amount: 3000 })).toBe(-30);
+    expect(db.member()!.currentPoints).toBe(-25);
 
-    // The rest of the payment (10,00) refunded: its share, 10; and, the whole
-    // sale now given back, what is left of its 60 (the 25 the short balance
-    // kept back): 35 now, 60 in all, never more.
-    db.member()!.currentPoints = 100;
+    // The rest of the payment (10,00) refunded: its share, 10, which is all
+    // that is left of the 60: never more than the sale earned.
     db.payments.push({ id: "p1", tenantId: "t1", status: "refunded", metadata: { posSaleId: "s1" } });
     await db.service.onPaymentRefunded("t1", { id: "p1", amount: 6000, metadata: { posSaleId: "s1" } }, { id: "r3", amount: 1000 });
-    expect(db.member()!.currentPoints).toBe(65);
+    expect(db.member()!.currentPoints).toBe(-35);
+    const back = db.txs.filter((t) => t.type === "reversal").reduce((s, t) => s - t.points, 0);
+    expect(back).toBe(60);
   });
 
   it("a products-only ticket earns nothing in per-visit mode", async () => {
@@ -572,36 +626,90 @@ describe("LoyaltyService: a visit earns once it is paid in full", () => {
   });
 });
 
-describe("LoyaltyService: levels follow every movement", () => {
-  it("a refund that takes back the points that reached a level takes the level back; spending does not", async () => {
-    const db = fakeDb();
+describe("LoyaltyService: levels never go down", () => {
+  const oroVisit = (db: ReturnType<typeof fakeDb>) => {
     db.tiers.push({ id: "bronce", programId: "prog1", name: "Bronce", minPoints: 0 });
     db.tiers.push({ id: "oro", programId: "prog1", name: "Oro", minPoints: 50 });
-    await db.service.enroll("t1", "c1", "staff");
     db.appointments.push(paidVisit({ amountPaid: 6000, totalAmount: 6000, payments: [{ amount: 6000, method: "card" }] }));
+  };
+
+  it("an earning raises the level; spending, a refund, a cancellation or a negative adjustment never lower it", async () => {
+    const db = fakeDb();
+    oroVisit(db);
+    await db.service.enroll("t1", "c1", "staff");
     await db.service.settleAppointment("t1", "a1");
     expect(db.member()!.tierId).toBe("oro");
+    expect(db.member()!.peakLifetimePoints).toBe(60);
 
-    // Spent at the till: still Oro (levels follow the points accumulated).
     db.rewards.push({ id: "rw1", programId: "prog1", name: "Corte", type: "discount", discountPercent: 10, discountAmount: null, freeServiceId: null, pointsCost: 40, isActive: true, currentRedemptions: 0, maxRedemptions: null, expiresAt: null });
     await db.service.redeemAtSale("t1", { clientId: "c1", rewardId: "rw1", saleId: "s9", items: [], subtotalCents: 4000 });
     expect(db.member()!.tierId).toBe("oro");
 
-    // 20,00 of the 60,00 refunded: 40 accumulated, below Oro.
+    // 20,00 of the 60,00 refunded: 40 accumulated, below Oro: still Oro (#219 took it back).
     await db.service.onPartialRefund("t1", { id: "p1", appointmentId: "a1" }, { id: "r1", amount: 2000 });
     expect(db.member()!.lifetimePoints).toBe(40);
-    expect(db.member()!.tierId).toBe("bronce");
+    expect(db.member()!.tierId).toBe("oro");
+    // The whole visit reversed: 0 accumulated, and a negative balance. Still Oro.
+    await db.service.reverseAppointment("t1", "a1", "Cita cancelada");
+    expect(db.member()!.lifetimePoints).toBe(0);
+    expect(db.member()!.currentPoints).toBe(-40);
+    expect(db.member()!.tierId).toBe("oro");
+    expect(db.member()!.peakLifetimePoints).toBe(60);
   });
 
-  it("a level created after the points counts from the next movement", async () => {
+  it("a level created later reaches the members it applies to at once, upwards only", async () => {
     const db = fakeDb();
     await db.service.enroll("t1", "c1", "staff");
     db.appointments.push(paidVisit({ amountPaid: 6000, totalAmount: 6000, payments: [{ amount: 6000, method: "card" }] }));
     await db.service.settleAppointment("t1", "a1");
     expect(db.member()!.tierId).toBeNull();
-    db.tiers.push({ id: "plata", programId: "prog1", name: "Plata", minPoints: 30 });
-    await db.service.adjust("t1", db.member()!.id, { points: -5, reason: "Corrección" });
-    expect(db.member()!.tierId).toBe("plata");
+    // The visit is refunded: 0 accumulated now, but she reached 60 once.
+    await db.service.reverseAppointment("t1", "a1", "Cita cancelada");
+
+    await db.service.createTier("t1", { name: "Plata", minPoints: 30, pointsMultiplier: 1.2 });
+    const plata = db.tiers.find((t) => t.name === "Plata")!;
+    expect(db.member()!.tierId).toBe(plata.id);
+    // A higher level she never reached: nothing changes.
+    await db.service.createTier("t1", { name: "Oro", minPoints: 100, pointsMultiplier: 1.5 });
+    expect(db.member()!.tierId).toBe(plata.id);
+  });
+
+  it("editing a level moves members up to it, never down", async () => {
+    const db = fakeDb();
+    oroVisit(db);
+    await db.service.enroll("t1", "c1", "staff");
+    await db.service.settleAppointment("t1", "a1");
+    expect(db.member()!.tierId).toBe("oro");
+
+    // A Platino she has not reached, then lowered to 60: she reached 60, so up she goes.
+    await db.service.createTier("t1", { name: "Platino", minPoints: 1000, pointsMultiplier: 2 });
+    const platino = db.tiers.find((t) => t.name === "Platino")!;
+    expect(db.member()!.tierId).toBe("oro");
+    await db.service.updateTier("t1", platino.id, { minPoints: 60 });
+    expect(db.member()!.tierId).toBe(platino.id);
+    // Platino now needs 500: she keeps it.
+    await db.service.updateTier("t1", platino.id, { minPoints: 500 });
+    expect(db.member()!.tierId).toBe(platino.id);
+  });
+
+  it("a member of a deleted level takes the highest one left within her reach", async () => {
+    const db = fakeDb();
+    oroVisit(db);
+    await db.service.enroll("t1", "c1", "staff");
+    await db.service.settleAppointment("t1", "a1");
+    await db.service.deleteTier("t1", "oro");
+    expect(db.member()!.tierId).toBe("bronce");
+  });
+
+  it("re-tiers a programme in batches", async () => {
+    const db = fakeDb();
+    for (let i = 0; i < 1200; i++) {
+      db.members.push({ id: `m${String(i).padStart(5, "0")}`, programId: "prog1", clientId: `c${i}`, tierId: null, peakLifetimePoints: i % 2 ? 100 : 10, lifetimePoints: 0, currentPoints: 0 });
+    }
+    await db.service.createTier("t1", { name: "Plata", minPoints: 50, pointsMultiplier: 1.2 });
+    const plata = db.tiers.find((t) => t.name === "Plata")!;
+    expect(db.members.filter((m) => m.tierId === plata.id)).toHaveLength(600);
+    expect(db.prisma.loyaltyMember.findMany.mock.calls.every((c: any[]) => c[0].take === 500)).toBe(true);
   });
 
   it("a second level with the same name is a 409 in Spanish, not a 500", async () => {
@@ -672,5 +780,184 @@ describe("LoyaltyService: rewards", () => {
     });
     await expect(redeem("c1", "s3")).rejects.toThrow(/insuficientes/);
     expect(db.rewards[0].currentRedemptions).toBe(1);
+  });
+});
+
+describe("LoyaltyService: a negative balance after earn, redeem, refund", () => {
+  const discount = { programId: "prog1", type: "discount", discountPercent: 10, discountAmount: null, freeServiceId: null, isActive: true, currentRedemptions: 0, maxRedemptions: null, expiresAt: null };
+
+  it("earn 45, spend 40, refund the visit: -40; she cannot redeem; her next visits pay it off", async () => {
+    const db = fakeDb();
+    await db.service.enroll("t1", "c1", "staff");
+    db.appointments.push(paidVisit());
+    await db.service.settleAppointment("t1", "a1");
+    db.rewards.push({ ...discount, id: "rw1", name: "10 %", pointsCost: 40 });
+    db.rewards.push({ ...discount, id: "rw0", name: "Casi nada", pointsCost: 1 });
+    await db.service.redeemAtSale("t1", { clientId: "c1", rewardId: "rw1", saleId: "s1", items: [], subtotalCents: 4000 });
+    expect(db.member()!.currentPoints).toBe(5);
+
+    db.appointments[0].paymentStatus = "refunded";
+    await db.service.onPaymentRefunded("t1", { id: "p1", amount: 4550, appointmentId: "a1" }, { id: "rf1", amount: 4550 });
+    expect(db.member()!.currentPoints).toBe(-40);
+
+    // Not even a 1-point reward.
+    const err = await db.service
+      .redeemAtSale("t1", { clientId: "c1", rewardId: "rw0", saleId: "s2", items: [], subtotalCents: 1000 })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(BadRequestException);
+    expect(err.message).toMatch(/saldo de puntos negativo \(-40\)/);
+    expect(db.txs.some((t) => t.sourceId === "s2")).toBe(false);
+
+    // 60 EUR later: +60, 20 left.
+    db.appointments.push(paidVisit({ id: "a2", amountPaid: 6000, totalAmount: 6000, payments: [{ amount: 6000, method: "card" }] }));
+    await db.service.settleAppointment("t1", "a2");
+    expect(db.member()!.currentPoints).toBe(20);
+  });
+
+  it("only reversals go negative: a spend or a manual deduction beyond the balance still fails", async () => {
+    const db = fakeDb();
+    await db.service.enroll("t1", "c1", "staff");
+    await db.service.earnForSale("t1", { clientId: "c1", saleId: "s0", basisCents: 3000, isVisit: true });
+    const err = await db.service.adjust("t1", db.member()!.id, { points: -31, reason: "x" }).catch((e) => e);
+    expect(err).toBeInstanceOf(BadRequestException);
+    expect(db.member()!.currentPoints).toBe(30);
+
+    // Two tills spending at once: the post-write check refuses the second.
+    db.rewards.push({ ...discount, id: "rw1", name: "10 %", pointsCost: 20 });
+    const realUpdate = db.prisma.loyaltyMember.update;
+    db.prisma.loyaltyMember.update = jest.fn(async (args: any) => {
+      // The other till's spend lands between this one's check and its write.
+      if (args.data?.currentPoints?.increment === -20 && db.member()!.currentPoints === 30) db.member()!.currentPoints -= 20;
+      return realUpdate(args);
+    });
+    const raced = await db.service
+      .redeemAtSale("t1", { clientId: "c1", rewardId: "rw1", saleId: "s1", items: [], subtotalCents: 1000 })
+      .catch((e) => e);
+    expect(raced).toBeInstanceOf(BadRequestException);
+    expect(raced.message).toMatch(/Puntos insuficientes/);
+  });
+
+  it("the client's file and the till see no reward as redeemable with a negative balance", async () => {
+    const db = fakeDb();
+    await db.service.enroll("t1", "c1", "staff");
+    db.member()!.currentPoints = -10;
+    db.prisma.loyaltyProgram.findFirst = jest.fn(async () => ({ ...db.program, rewards: [{ ...discount, id: "rw0", name: "Gratis", pointsCost: 0 }] }));
+    db.prisma.loyaltyTransaction.findMany = jest.fn(async () => []);
+    const summary = await db.service.clientSummary("t1", "c1");
+    expect(summary.rewards[0].redeemable).toBe(false);
+    expect(summary.member!.currentPoints).toBe(-10);
+  });
+});
+
+describe("LoyaltyService: points expire after 12 months without a visit", () => {
+  // 2027-06-15 10:00 in Madrid (UTC+2).
+  const NOW = new Date("2027-06-15T08:00:00Z");
+  const daysAgo = (n: number) => new Date(NOW.getTime() - n * 864e5);
+
+  it("expires the whole balance of a member with no visit for 365 days, once per day, as «Caducidad»", async () => {
+    const db = fakeDb({ program: { pointsExpirationDays: 365, pointsExpiryStartsAt: null } });
+    await db.service.enroll("t1", "old", "staff");
+    await db.service.enroll("t1", "recent", "staff");
+    const old = db.member("old")!;
+    const recent = db.member("recent")!;
+    Object.assign(old, { currentPoints: 120, lifetimePoints: 300, peakLifetimePoints: 300, pointsRenewedAt: daysAgo(400) });
+    Object.assign(recent, { currentPoints: 80, pointsRenewedAt: daysAgo(300) });
+
+    expect(await db.service.expireInactivePoints(NOW)).toEqual({ members: 1, points: 120 });
+    expect(old.currentPoints).toBe(0);
+    // The points accumulated (the level) stay.
+    expect(old.lifetimePoints).toBe(300);
+    expect(recent.currentPoints).toBe(80);
+    expect(db.txs.find((t) => t.type === "expire")).toMatchObject({
+      memberId: old.id,
+      points: -120,
+      source: "expiry",
+      sourceId: "2027-06-15",
+      description: "Caducidad",
+    });
+    // The next tick the same day, or a second instance: nothing more.
+    old.currentPoints = 10;
+    expect(await db.service.expireInactivePoints(new Date(NOW.getTime() + 3600e3))).toEqual({ members: 0, points: 0 });
+    expect(old.currentPoints).toBe(10);
+  });
+
+  it("does not run before 03:00 in the salon, nor for a negative or zero balance, nor without the plan", async () => {
+    const db = fakeDb({ program: { pointsExpirationDays: 365, pointsExpiryStartsAt: null } });
+    await db.service.enroll("t1", "c1", "staff");
+    Object.assign(db.member()!, { currentPoints: 50, pointsRenewedAt: daysAgo(500) });
+    // 02:30 in Madrid.
+    expect(await db.service.expireInactivePoints(new Date("2027-06-15T00:30:00Z"))).toEqual({ members: 0, points: 0 });
+
+    db.member()!.currentPoints = -20;
+    expect(await db.service.expireInactivePoints(NOW)).toEqual({ members: 0, points: 0 });
+    expect(db.member()!.currentPoints).toBe(-20);
+
+    const locked = fakeDb({ program: { pointsExpirationDays: 365 }, unlocked: false });
+    await locked.service.enroll("t1", "c1", "staff");
+    Object.assign(locked.member()!, { currentPoints: 50, pointsRenewedAt: daysAgo(500) });
+    expect(await locked.service.expireInactivePoints(NOW)).toEqual({ members: 0, points: 0 });
+  });
+
+  it("the grace: the programmes still in it are not asked for", async () => {
+    const db = fakeDb({ program: { pointsExpirationDays: 365 } });
+    await db.service.expireInactivePoints(NOW);
+    expect(db.prisma.loyaltyProgram.findMany.mock.calls[0][0].where).toMatchObject({
+      isActive: true,
+      pointsExpirationDays: { not: null },
+      OR: [{ pointsExpiryStartsAt: null }, { pointsExpiryStartsAt: { lte: NOW } }],
+    });
+  });
+
+  it("a completed, paid visit renews all her points, from when the visit was", async () => {
+    const db = fakeDb();
+    await db.service.enroll("t1", "c1", "staff");
+    const visitAt = new Date(Date.now() - 2 * 864e5);
+    db.member()!.pointsRenewedAt = new Date(Date.now() - 400 * 864e5);
+    db.appointments.push(paidVisit({ completionTime: visitAt }));
+    await db.service.settleAppointment("t1", "a1");
+    expect(db.member()!.pointsRenewedAt).toEqual(visitAt);
+    // An older visit settled late does not move it back.
+    db.appointments.push(paidVisit({ id: "a0", completionTime: new Date(Date.now() - 30 * 864e5) }));
+    await db.service.settleAppointment("t1", "a0");
+    expect(db.member()!.pointsRenewedAt).toEqual(visitAt);
+  });
+
+  it("a visit paid in full with points (a free service) renews them too", async () => {
+    const db = fakeDb();
+    await db.service.enroll("t1", "c1", "staff");
+    db.member()!.pointsRenewedAt = new Date(Date.now() - 400 * 864e5);
+    const visitAt = new Date(Date.now() - 3600e3);
+    db.appointments.push(paidVisit({ payments: [], completionTime: visitAt }));
+    expect(await db.service.settleAppointment("t1", "a1")).toBeNull();
+    expect(db.member()!.pointsRenewedAt).toEqual(visitAt);
+  });
+
+  it("switching expiry on or shortening it gives 30 days of grace; lengthening it does not", async () => {
+    const db = fakeDb({ program: { pointsExpirationDays: null, pointsExpiryStartsAt: null } });
+    db.prisma.loyaltyProgram.upsert = jest.fn(async ({ update }: any) => Object.assign(db.program, update));
+    db.prisma.loyaltyProgram.findFirst = jest.fn(async () => db.program);
+    await db.service.saveProgram("t1", { pointsExpirationDays: 365 } as any);
+    const grace = db.program.pointsExpiryStartsAt as Date;
+    expect(grace.getTime()).toBeGreaterThan(Date.now() + 29 * 864e5);
+    db.program.pointsExpiryStartsAt = null;
+    await db.service.saveProgram("t1", { pointsExpirationDays: 730 } as any);
+    expect(db.program.pointsExpiryStartsAt).toBeNull();
+    await db.service.saveProgram("t1", { pointsExpirationDays: 180 } as any);
+    expect(db.program.pointsExpiryStartsAt).not.toBeNull();
+  });
+});
+
+describe("LoyaltyService: product rewards name their product", () => {
+  it("a product reward needs a product of the salon", async () => {
+    const db = fakeDb();
+    db.prisma.product = { findFirst: jest.fn(async ({ where }: any) => (where.id === "prod1" && where.tenantId === "t1" ? { id: "prod1" } : null)) };
+    const missing = await db.service.createReward("t1", { name: "Champú", type: "product", pointsCost: 100 } as any).catch((e) => e);
+    expect(missing.message).toMatch(/Elige el producto/);
+    const foreign = await db.service
+      .createReward("t1", { name: "Champú", type: "product", pointsCost: 100, productId: "other" } as any)
+      .catch((e) => e);
+    expect(foreign.message).toMatch(/no es de este salón/);
+    const ok = await db.service.createReward("t1", { name: "Champú", type: "product", pointsCost: 100, productId: "prod1" } as any);
+    expect(ok.productId).toBe("prod1");
   });
 });

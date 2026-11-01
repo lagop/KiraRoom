@@ -24,6 +24,7 @@ import {
   LoyaltyRewardDto,
   LoyaltyTierDto,
   UpdateLoyaltyRewardDto,
+  UpdateLoyaltyTierDto,
 } from "./loyalty.dto";
 
 /**
@@ -75,6 +76,17 @@ export class LoyaltyController {
   @Roles(...SALON_MANAGERS)
   createTier(@Req() req: any, @Body() dto: LoyaltyTierDto) {
     return this.loyalty.createTier(req.user.tenantId, dto);
+  }
+
+  /** Members move up to what the level now reaches; levels never go down. */
+  @Put("tiers/:id")
+  @Roles(...SALON_MANAGERS)
+  updateTier(
+    @Req() req: any,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() dto: UpdateLoyaltyTierDto,
+  ) {
+    return this.loyalty.updateTier(req.user.tenantId, id, dto);
   }
 
   @Delete("tiers/:id")

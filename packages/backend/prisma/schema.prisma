@@ -1545,8 +1545,18 @@ model LoyaltyProgram {
   /// Welcome bonus
   welcomePoints Int @default(0)
 
-  /// Expiration
-  pointsExpirationDays Int? /// Points expire after X days
+  /// Expiration: a member's whole balance expires after this many days
+  /// with no paid visit or purchase (LoyaltyMember.pointsRenewedAt); null:
+  /// points never expire.
+  pointsExpirationDays Int?      @default(365)
+  /// No points expire before this moment: the grace given when expiry was
+  /// introduced (deploy + 30 days), and again when it is switched on or
+  /// shortened.
+  pointsExpiryStartsAt DateTime?
+
+  /// "Mostrar puntos en el email tras la visita": the client's balance in
+  /// the post-visit review request.
+  showPointsInReviewEmail Boolean @default(true)
 
   /// Relations
   tenant  Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1595,6 +1605,11 @@ model LoyaltyMember {
 
   /// Stats
   lifetimePoints Int   @default(0)
+  /// The most lifetimePoints have ever been. The tier follows it: levels
+  /// never go down, not even when a reversal lowers lifetimePoints.
+  peakLifetimePoints Int @default(0)
+  /// Can be negative: a refund that takes back points already spent
+  /// (earn, redeem, refund). Later earnings pay it off; no redeeming meanwhile.
   currentPoints  Int   @default(0)
   totalEarned    Int   @default(0)
   totalRedeemed  Int   @default(0)
@@ -1604,6 +1619,9 @@ model LoyaltyMember {
   status         LoyaltyMemberStatus @default(active)
   joinedAt       DateTime            @default(now())
   lastActivityAt DateTime?
+  /// The last paid visit or purchase (or the sign-up): the balance expires
+  /// LoyaltyProgram.pointsExpirationDays after it.
+  pointsRenewedAt DateTime?
   /// How the client joined: "staff", "auto" (first paid visit) or "portal".
   enrolledVia    String?
 
@@ -1613,6 +1631,7 @@ model LoyaltyMember {
   transactions     LoyaltyTransaction[]
 
   @@unique([clientId, programId])
+  @@index([programId, pointsRenewedAt])
   @@map("loyalty_members")
 }
 
@@ -1692,11 +1711,11 @@ model LoyaltyTransaction {
   memberId  String
   member    LoyaltyMember  @relation(fields: [memberId], references: [id], onDelete: Cascade)
 
-  /// earn | redeem | reversal | redeem_reversal | welcome | adjust
+  /// earn | redeem | reversal | redeem_reversal | welcome | adjust | expire
   type        String
   /// Signed: positive adds to the balance, negative takes from it.
   points      Int
-  /// appointment | pos_sale | payment | enrollment | manual
+  /// appointment | pos_sale | payment | refund | enrollment | manual | expiry
   source      String
   sourceId    String?
   description String?
@@ -3692,7 +3711,7 @@ model PosSaleLine {
   saleId              String
   tenantId            String
   lineIndex           Int
-  /// appointment | service | product | gift_card
+  /// appointment | service | product | gift_card | loyalty_gift (a reward handed over, price 0)
   kind                String    @db.VarChar(20)
   serviceId           String?
   productId           String?

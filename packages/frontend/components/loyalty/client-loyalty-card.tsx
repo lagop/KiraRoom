@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Star, Loader2 } from "lucide-react";
 import apiClient, { ClientLoyaltySummary } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
+import { balanceClass, isNegativeBalance } from "@/lib/loyalty-points";
+import { useTranslations } from "@/lib/use-translation";
 
 const TYPE_LABEL: Record<string, string> = {
   earn: "Ganados",
@@ -12,6 +14,7 @@ const TYPE_LABEL: Record<string, string> = {
   reversal: "Devueltos",
   redeem_reversal: "Canje anulado",
   adjust: "Ajuste",
+  expire: "Caducados",
 };
 
 /**
@@ -23,6 +26,7 @@ export function ClientLoyaltyCard({ clientId }: { clientId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const { toast } = useToast();
+  const t = useTranslations();
 
   const load = useCallback(async () => {
     try {
@@ -83,10 +87,21 @@ export function ClientLoyaltyCard({ clientId }: { clientId: string }) {
         <>
           <p className="text-sm">
             <Star className="mr-1 inline h-4 w-4 text-yellow-500" />
-            <strong className="text-lg">{data.member.currentPoints}</strong> puntos
+            <strong className={`text-lg ${balanceClass(data.member.currentPoints)}`}>{data.member.currentPoints}</strong> puntos
             {data.member.tier && <span className="ml-2 text-gray-500">· {data.member.tier.name}</span>}
             <span className="ml-2 text-gray-500">· {data.member.lifetimePoints} acumulados</span>
           </p>
+          {isNegativeBalance(data.member.currentPoints) && (
+            <p role="note" className="rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700">
+              <strong>{t("loyalty.negative_balance")}.</strong> {t("loyalty.negative_balance_help")}
+            </p>
+          )}
+          {data.member.pointsExpireOn && data.member.currentPoints > 0 && (
+            <p className="text-xs text-gray-500">
+              {t("loyalty.expires_on", { date: new Date(data.member.pointsExpireOn).toLocaleDateString("es-ES") })}
+            </p>
+          )}
+          {data.member.tier && <p className="text-xs text-gray-500">{t("loyalty.tiers_never_down")}.</p>}
           {data.rewards.length > 0 && (
             <p className="text-xs text-gray-500">
               Puede canjear en caja:{" "}
@@ -98,7 +113,7 @@ export function ClientLoyaltyCard({ clientId }: { clientId: string }) {
               {data.history.slice(0, 10).map((h) => (
                 <li key={h.id} className="flex justify-between py-1.5">
                   <span>
-                    {TYPE_LABEL[h.type] ?? h.type}
+                    {h.type === "expire" ? t("loyalty.history_expire") : TYPE_LABEL[h.type] ?? h.type}
                     {h.description ? ` · ${h.description}` : ""}
                   </span>
                   <span className={h.points >= 0 ? "text-green-700" : "text-red-700"}>

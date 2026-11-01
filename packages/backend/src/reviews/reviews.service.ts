@@ -17,6 +17,7 @@ import { EmailService } from "../notifications/services/email.service";
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
 import { EmailSuppressionService } from "../email-campaigns/email-suppression.service";
 import { AuditLogService } from "../saas/audit-log.service";
+import { reviewEmailPoints } from "../loyalty/loyalty-client-points";
 import {
   LEGACY_REJECTION_REASON,
   LISTABLE_CONSENTS,
@@ -724,6 +725,7 @@ export class ReviewsService {
       salonName: appt.tenant.name,
       reviewUrl: link,
       optOutUrl: `${link}?baja=1`,
+      loyalty: await this.loyaltyLine(appt.tenantId, appt.clientId),
     });
     if (!res.success) {
       await this.prisma.review.delete({ where: { id: review.id } });
@@ -738,6 +740,21 @@ export class ReviewsService {
     }
     this.logger.log(`Review request for appointment ${appt.id} sent by email`);
     return "sent";
+  }
+
+  /**
+   * Her points, for an optional line of the email: only when the salon's
+   * programme is on with "Mostrar puntos en el email tras la visita" (on by
+   * default) and she is a member with points (reviewEmailPoints). A failed
+   * read never stops the request.
+   */
+  private async loyaltyLine(tenantId: string, clientId: string | null) {
+    return reviewEmailPoints(this.prisma as any, tenantId, clientId, (t) =>
+      this.featureFlags.isFeatureUnlocked(t, "loyalty"),
+    ).catch((err: Error) => {
+      this.logger.warn(`Review request: loyalty line not read: ${err.message}`);
+      return null;
+    });
   }
 
   /**

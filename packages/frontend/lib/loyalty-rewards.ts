@@ -8,6 +8,8 @@
  *   - A limit of uses and an expiry date are optional: empty means none.
  *     The expiry is the end of that day, in the salon's browser.
  *   - A manual adjustment is an amount, a sign (add or take) and a reason.
+ *   - A product reward names the product handed over (it leaves the stock
+ *     when redeemed); "otro regalo" (voucher) is described in words.
  */
 import type { LoyaltyReward, LoyaltyRewardInput } from "./api";
 
@@ -25,6 +27,10 @@ export interface RewardForm {
   /** Euros, "5" or "5,50". */
   euros: string;
   freeServiceId: string;
+  /** The product a product reward hands over. */
+  productId: string;
+  /** What the ticket says for "otro regalo" (optional; else the name). */
+  description: string;
   isActive: boolean;
   /** Empty: no limit. */
   maxRedemptions: string;
@@ -40,6 +46,8 @@ export const EMPTY_REWARD_FORM: RewardForm = {
   percent: "10",
   euros: "",
   freeServiceId: "",
+  productId: "",
+  description: "",
   isActive: true,
   maxRedemptions: "",
   expiresOn: "",
@@ -66,6 +74,8 @@ export function rewardFormOf(r: LoyaltyReward): RewardForm {
     percent: r.discountPercent && r.discountPercent > 0 ? String(r.discountPercent) : "",
     euros: amount > 0 ? (amount / 100).toFixed(2).replace(".", ",") : "",
     freeServiceId: r.freeServiceId ?? "",
+    productId: r.productId ?? "",
+    description: r.description ?? "",
     isActive: r.isActive,
     maxRedemptions: r.maxRedemptions ? String(r.maxRedemptions) : "",
     expiresOn: dayOf(r.expiresAt),
@@ -113,6 +123,13 @@ export function rewardPayload(
   if (f.type === "free_service" && !f.freeServiceId) {
     return { ok: false, error: "Elige el servicio que regala la recompensa." };
   }
+  if (f.type === "product" && !f.productId) {
+    return { ok: false, error: "Elige el producto que regala la recompensa." };
+  }
+  const description = f.description.trim();
+  if (description.length > 1000) {
+    return { ok: false, error: "La descripción admite como mucho 1000 caracteres." };
+  }
 
   let maxRedemptions: number | null = null;
   if (f.maxRedemptions.trim()) {
@@ -141,6 +158,8 @@ export function rewardPayload(
       discountPercent: discountPercent ?? 0,
       discountAmount: discountAmount ?? 0,
       freeServiceId: f.type === "free_service" ? f.freeServiceId : null,
+      productId: f.type === "product" ? f.productId : null,
+      description,
       isActive: f.isActive,
       maxRedemptions,
       expiresAt,

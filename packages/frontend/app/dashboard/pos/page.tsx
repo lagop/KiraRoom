@@ -15,6 +15,7 @@ import SaleReceipt from "./components/sale-receipt";
 import GiftCardSaleDialog from "./components/gift-card-sale-dialog";
 import CashDrawer from "./components/cash-drawer";
 import { drawerProblem } from "@/lib/cash-session";
+import { balanceClass, isNegativeBalance } from "@/lib/loyalty-points";
 import { applyDiscounts, discountProblem, staffLimitProblem, type DiscountSpec } from "@/lib/pos-discounts";
 import {
   TENDER_LABELS,
@@ -492,6 +493,7 @@ export default function POSPage() {
         (result.discount?.total ? ` · Descuento ${formatEuros(result.discount.total)}` : "") +
         (pts?.pointsSpent ? ` · Canjeados ${pts.pointsSpent} puntos` : "") +
         (pts?.pointsEarned ? ` · +${pts.pointsEarned} puntos` : "") +
+        (pts?.gift ? ` · Entrega: ${pts.gift}` : "") +
         (result.giftCards?.some((g) => g.emailSent) ? " · Tarjeta regalo enviada por email" : "");
       // A loyalty reward a visit's issued invoice could not take: the owner
       // credits it by hand (also flagged on the payment, in Pagos). One toast
@@ -975,8 +977,14 @@ export default function POSPage() {
               {loyalty?.member && (
                 <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-sm">
                   <div className="mb-1">
-                    Puntos: <strong>{loyalty.member.currentPoints}</strong>
+                    Puntos: <strong className={balanceClass(loyalty.member.currentPoints)}>{loyalty.member.currentPoints}</strong>
                   </div>
+                  {isNegativeBalance(loyalty.member.currentPoints) && (
+                    <div role="note" className="mb-1 text-xs text-red-700">
+                      <strong>{t("pos.loyalty_negative", { points: loyalty.member.currentPoints })}.</strong>{" "}
+                      {t("pos.loyalty_negative_help")}
+                    </div>
+                  )}
                   {loyalty.rewards.some((r) => r.redeemable) ? (
                     <select value={rewardId} onChange={(e) => setRewardId(e.target.value)} className="w-full rounded border px-2 py-1">
                       <option value="">No canjear puntos</option>

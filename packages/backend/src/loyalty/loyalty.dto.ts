@@ -96,6 +96,17 @@ export class LoyaltyProgramSettingsDto {
 
   @IsOptional() @IsBoolean()
   allowSelfEnroll?: boolean;
+
+  /**
+   * Days without a paid visit after which the whole balance expires; null:
+   * points never expire. 30 days to 5 years.
+   */
+  @IsOptional() @IsInt() @Min(30) @Max(1825)
+  pointsExpirationDays?: number | null;
+
+  /** "Mostrar puntos en el email tras la visita". */
+  @IsOptional() @IsBoolean()
+  showPointsInReviewEmail?: boolean;
 }
 
 export class LoyaltyRewardDto {
@@ -123,6 +134,10 @@ export class LoyaltyRewardDto {
   /** The service a free_service reward pays for. */
   @IsOptional() @IsUUID()
   freeServiceId?: string;
+
+  /** The product a product reward hands over (it leaves the stock when redeemed). */
+  @IsOptional() @IsUUID()
+  productId?: string | null;
 
   @IsOptional() @IsBoolean()
   isActive?: boolean;
@@ -159,6 +174,9 @@ export class UpdateLoyaltyRewardDto {
   @IsOptional() @IsUUID()
   freeServiceId?: string;
 
+  @IsOptional() @IsUUID()
+  productId?: string | null;
+
   @IsOptional() @IsBoolean()
   isActive?: boolean;
 
@@ -181,6 +199,18 @@ export class LoyaltyTierDto {
   /** 1.5 = 50 % more points per visit or euro. */
   @IsNumber() @Min(1) @Max(10)
   pointsMultiplier!: number;
+}
+
+/** An edit of a level: what is sent changes. */
+export class UpdateLoyaltyTierDto {
+  @IsOptional() @IsString() @MaxLength(60)
+  name?: string;
+
+  @IsOptional() @IsInt() @Min(0) @Max(100000000)
+  minPoints?: number;
+
+  @IsOptional() @IsNumber() @Min(1) @Max(10)
+  pointsMultiplier?: number;
 }
 
 export class EnrollMemberDto {

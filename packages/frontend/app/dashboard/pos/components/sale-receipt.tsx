@@ -159,6 +159,17 @@ export default function SaleReceipt({ saleId, clientEmail, canEmail, onClose }: 
                   ))}
                 </>
               )}
+              {/* Loyalty points: earned on this sale, the balance now, the expiry rule. */}
+              {receipt.loyalty && (
+                <>
+                  <div className="my-2 border-t border-dashed" />
+                  {receipt.loyalty.pointsEarned > 0 && <div>Puntos ganados: +{receipt.loyalty.pointsEarned}</div>}
+                  <div className={receipt.loyalty.balance < 0 ? "text-red-700" : undefined}>
+                    Saldo de puntos: {receipt.loyalty.balance}
+                  </div>
+                  {receipt.loyalty.expiryRule && <div className="text-xs">{receipt.loyalty.expiryRule}</div>}
+                </>
+              )}
               <div className="mt-3 text-center text-xs">Gracias por tu visita</div>
             </>
           )}

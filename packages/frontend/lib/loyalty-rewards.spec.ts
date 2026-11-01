@@ -34,7 +34,7 @@ console.log("discount value");
   check("0,00 EUR is refused", !zeroAmt.ok && /mayor que 0/.test(zeroAmt.error), zeroAmt);
   const emptyAmt = rewardPayload(form({ discountKind: "amount", euros: "" }));
   check("an empty amount is refused", !emptyAmt.ok, emptyAmt);
-  const gift = rewardPayload(form({ type: "product", percent: "10", euros: "5" }));
+  const gift = rewardPayload(form({ type: "product", productId: "p1", percent: "10", euros: "5" }));
   check("other types send no discount", gift.ok && gift.body.discountPercent === 0 && gift.body.discountAmount === 0, gift);
   check("euros parse with a comma or a dot", centsOf("5,5") === 550 && centsOf("5.25") === 525 && Number.isNaN(centsOf("5,555")));
 }
@@ -87,6 +87,26 @@ console.log("manual adjustment");
   check("taking more than the balance is refused", !adjustmentOf("40", "take", "Error", 30).ok);
   check("a reason is required", !adjustmentOf("10", "add", "  ", 0).ok);
   check("the amount is a whole number above 0", !adjustmentOf("0", "add", "x", 0).ok && !adjustmentOf("1.5", "add", "x", 0).ok && !adjustmentOf("-5", "add", "x", 0).ok);
+  check("nothing can be taken from a negative balance", !adjustmentOf("1", "take", "x", -10).ok);
+  check("points can be added to a negative balance", adjustmentOf("15", "add", "Compensación", -10).ok);
+}
+
+console.log("product and «otro regalo» rewards");
+{
+  const noProduct = rewardPayload(form({ type: "product" }));
+  check("a product reward needs its product", !noProduct.ok && /Elige el producto/.test(noProduct.error), noProduct);
+  const product = rewardPayload(form({ type: "product", productId: "p1" }));
+  check("a product reward sends its product", product.ok && product.body.productId === "p1", product);
+  const other = rewardPayload(form({ type: "voucher", productId: "p1", description: "  Neceser de viaje  " }));
+  check(
+    "«otro regalo» sends no product, and its description trimmed",
+    other.ok && other.body.productId === null && other.body.description === "Neceser de viaje",
+    other,
+  );
+  const discount = rewardPayload(form({ productId: "p1" }));
+  check("a discount sends no product", discount.ok && discount.body.productId === null, discount);
+  const edited = rewardFormOf({ id: "r1", name: "Champú", type: "product", pointsCost: 100, productId: "p1", description: "Champú 250 ml", isActive: true, currentRedemptions: 0 } as any);
+  check("an existing product reward loads its product and description", edited.productId === "p1" && edited.description === "Champú 250 ml", edited);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
