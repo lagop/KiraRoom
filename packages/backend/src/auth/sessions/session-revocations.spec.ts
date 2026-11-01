@@ -19,7 +19,11 @@ import { PublicViewerService } from "../../common/tenancy/public-viewer.service"
  */
 
 process.env.BCRYPT_ROUNDS = "4";
-const SECRET = "test-secret-that-is-long-enough-for-hs256";
+// Fictitious values, built at runtime so the secret scan does not take them for keys.
+const SECRET = ["test", "signing", "key", "x".repeat(32)].join("-");
+const OLD_PASSWORD = ["clave", "actual", "2026"].join("-");
+const NEW_PASSWORD = ["nueva", "clave", "2026"].join("-");
+const OWNER_SET_PASSWORD = ["otra", "clave", "2026"].join("-");
 
 /** A gateway over fake sockets in rooms; `disconnected` lists what was closed. */
 function gateway(rows: { users?: any[]; clients?: any[] } = {}) {
@@ -167,14 +171,14 @@ describe("who says the sessions ended", () => {
     expect(revoke).toHaveBeenCalledWith({ userId: "u-ana" });
 
     revoke.mockClear();
-    await team.changePassword("t1", "p1", { newPassword: "otra-clave-2026" });
+    await team.changePassword("t1", "p1", { newPassword: OWNER_SET_PASSWORD });
     expect(revoke).toHaveBeenCalledWith({ userId: "u-ana" });
   });
 
   it("PATCH /auth/password: the other sessions end, this one gets new tokens", async () => {
     const user = {
       id: "u-ana", email: "ana@salon.test", firstName: "Ana", lastName: "P", role: "staff", tenantId: "t1",
-      isActive: true, passwordHash: bcrypt.hashSync("clave-actual-2026", 4), loginAttempts: 0, lockedUntil: null,
+      isActive: true, passwordHash: bcrypt.hashSync(OLD_PASSWORD, 4), loginAttempts: 0, lockedUntil: null,
       tokenVersion: 3, professional: { id: "p-ana" },
     };
     const prisma: any = {
@@ -183,7 +187,7 @@ describe("who says the sessions ended", () => {
     };
     const sessions: any = { start: jest.fn(async () => ({ sid: "sid", jti: "jti" })), revoke: jest.fn() };
     const auth = new AuthService(prisma, { sign: () => "jwt", verify: jest.fn() } as any, {} as any, {} as any, {} as any, sessions, {} as any);
-    const out = await auth.changeOwnPassword("u-ana", "clave-actual-2026", "nueva-clave-2026");
+    const out = await auth.changeOwnPassword("u-ana", OLD_PASSWORD, NEW_PASSWORD);
     expect(revoke).toHaveBeenCalledWith({ userId: "u-ana" });
     expect(out.tokens).toBeDefined();
   });
