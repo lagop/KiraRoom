@@ -443,13 +443,16 @@ describe("a payment marking its appointment", () => {
     };
   }
 
-  it("completes a confirmed appointment, over the status it read", async () => {
+  it("completes a confirmed appointment, over the status it read, stamping the completion time", async () => {
     const prisma = db(S.confirmed);
     expect(await applyStatusIfAllowed(prisma as any, "apt-1", S.completed)).toBe(true);
     expect(prisma.appointment.updateMany).toHaveBeenCalledWith({
       where: { id: "apt-1", status: S.confirmed },
-      data: { status: S.completed },
+      data: { status: S.completed, completionTime: expect.any(Date) },
     });
+    const cancel = db(S.confirmed);
+    await applyStatusIfAllowed(cancel as any, "apt-1", S.cancelled);
+    expect((cancel.appointment.updateMany.mock.calls as any[])[0][0].data).toEqual({ status: S.cancelled });
   });
 
   it("leaves a completed, cancelled or no-show appointment as it is", async () => {
@@ -473,9 +476,27 @@ describe("a payment marking its appointment", () => {
     await new PaymentsService(prisma as any).createPayment("t1", null, paid);
     expect(prisma.payment.create).toHaveBeenCalled();
     expect(prisma.appointment.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { status: S.completed } }),
+      expect.objectContaining({ data: { status: S.completed, completionTime: expect.any(Date) } }),
     );
     expect(prisma.appointment.update).not.toHaveBeenCalled();
+  });
+
+  it("PaymentsService: with the agenda available, completes through changeStatus (completion time, notices, invoice)", async () => {
+    const prisma = db(S.confirmed);
+    const agenda = { changeStatus: jest.fn(async () => ({})) };
+    const moduleRef: any = { get: jest.fn(() => agenda) };
+    await new PaymentsService(prisma as any, undefined, undefined, undefined, moduleRef).createPayment("t1", null, paid);
+    expect(agenda.changeStatus).toHaveBeenCalledWith({ role: "system", tenantId: "t1" }, "apt-1", S.completed);
+    expect(prisma.appointment.updateMany).not.toHaveBeenCalled();
+
+    const cancelled = db(S.cancelled);
+    const agenda2 = { changeStatus: jest.fn() };
+    await new PaymentsService(cancelled as any, undefined, undefined, undefined, { get: () => agenda2 } as any).createPayment(
+      "t1",
+      null,
+      paid,
+    );
+    expect(agenda2.changeStatus).not.toHaveBeenCalled();
   });
 
   it("PaymentsService: a payment on a cancelled appointment is recorded and the appointment stays cancelled", async () => {

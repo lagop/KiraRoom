@@ -1416,7 +1416,7 @@ export class EmailService {
           <p style="font-size:13px;color:#64748b;line-height:1.6;margin:0 0 8px 0;">El enlace caduca en 14 días.</p>
           <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">
           <p style="font-size:12px;color:#94a3b8;line-height:1.5;margin:0;">
-            Te escribimos de parte de ${salon} porque acabas de visitarle.
+            Te escribimos de parte de ${salon} por tu visita reciente.
             <a href="${this.escapeHtml(data.optOutUrl)}" style="color:#94a3b8;">No quiero recibir más peticiones de opinión</a>.
           </p>
         </td></tr>

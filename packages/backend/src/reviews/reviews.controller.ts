@@ -32,6 +32,7 @@ import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { Public } from "../auth/decorators/public.decorator";
 import { ReviewsService } from "./reviews.service";
 import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
+import { REVIEW_REJECTION_REASONS } from "./review-rules";
 
 interface AuthedRequest extends Request {
   user: { id: string; tenantId: string; role: string };
@@ -40,6 +41,13 @@ interface AuthedRequest extends Request {
 export class ModerateReviewDto {
   @IsIn(["approve", "reject"])
   action!: "approve" | "reject";
+
+  /** Required to reject or hide: one of REVIEW_REJECTION_REASONS (review-rules.ts). */
+  @ValidateIf((o) => o.action === "reject")
+  @IsIn([...REVIEW_REJECTION_REASONS], {
+    message: "Elige el motivo: insultos o contenido ofensivo, datos personales, no habla del servicio, o spam o duplicada",
+  })
+  reason?: string;
 }
 
 export class UpdateReviewSettingsDto {
@@ -72,6 +80,11 @@ export class SubmitReviewDto {
   @IsString()
   @MaxLength(2000)
   comment?: string;
+
+  /** The unticked box: "Pueden mostrar mi opinión en su web con mi nombre e inicial". */
+  @IsOptional()
+  @IsBoolean()
+  publishConsent?: boolean;
 }
 
 const STATUSES = Object.values(ReviewStatus) as string[];
@@ -116,10 +129,13 @@ export class ReviewsController {
   @Roles(...SALON_MANAGERS)
   moderate(
     @Req() req: AuthedRequest,
-    @Param("id") id: string,
+    @Param("id", ParseUUIDPipe) id: string,
     @Body() body: ModerateReviewDto,
   ) {
-    return this.service.moderate(req.user.tenantId, id, body.action);
+    return this.service.moderate(req.user.tenantId, id, body.action, body.reason, {
+      id: req.user.id,
+      role: req.user.role,
+    });
   }
 }
 

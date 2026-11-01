@@ -5,6 +5,14 @@ import Link from "next/link";
 import { Star, Filter, ExternalLink, AlertCircle, CheckCircle2 } from "lucide-react";
 import apiClient, { Review, ReviewAnalytics, ReviewSettings } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import {
+  LEGACY_REJECTION_REASON,
+  REJECTION_REASONS,
+  moderationLine,
+  publicVisibilityNote,
+  requestsHeadline,
+} from "@/lib/reviews";
 
 const STATUS_LABEL: Record<Review["status"], string> = {
   pending: "Sin responder",
@@ -27,6 +35,10 @@ export default function ReviewsDashboardPage() {
   const [rating, setRating] = useState<number | "all">("all");
   const [status, setStatus] = useState<string>("");
   const [loading, setLoading] = useState(true);
+  // The review about to be rejected or hidden, and the reason picked for it.
+  const [rejecting, setRejecting] = useState<Review | null>(null);
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -58,13 +70,40 @@ export default function ReviewsDashboardPage() {
       .catch(() => setSettings(null));
   }, []);
 
-  async function moderate(id: string, action: "approve" | "reject") {
+  const reasons = settings?.policy.rejectionReasons?.length ? settings.policy.rejectionReasons : REJECTION_REASONS;
+  const graceDays = settings?.policy.moderationGraceDays ?? 7;
+
+  async function approve(id: string) {
     try {
-      await apiClient.moderateReview(id, action);
-      toast({ title: action === "approve" ? "Aprobada" : "Rechazada" });
+      await apiClient.moderateReview(id, "approve");
+      toast({ title: "Aprobada" });
       await load();
     } catch (err: any) {
       toast({ title: err?.message ?? "Error", variant: "destructive" });
+    }
+  }
+
+  function askReject(r: Review) {
+    setReason(r.moderationReason && r.moderationReason !== LEGACY_REJECTION_REASON ? r.moderationReason : "");
+    setRejecting(r);
+  }
+
+  async function confirmReject() {
+    if (!rejecting) return;
+    if (!reason) {
+      toast({ title: "Elige el motivo", variant: "destructive" });
+      return;
+    }
+    setSaving(true);
+    try {
+      await apiClient.moderateReview(rejecting.id, "reject", reason);
+      toast({ title: rejecting.status === "published" ? "Ocultada" : "Rechazada" });
+      setRejecting(null);
+      await load();
+    } catch (err: any) {
+      toast({ title: err?.message ?? "Error", variant: "destructive" });
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -72,14 +111,38 @@ export default function ReviewsDashboardPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900 truncate">Reseñas</h1>
-        <p className="text-gray-500 mt-1">
-          Después de cada cita, KiraRoom pide su opinión a la clienta. Tú
-          moderas lo que llega; las aprobadas se ven en tu página de reservas.
-        </p>
+        <p className="text-gray-500 mt-1">{requestsHeadline(settings)}</p>
       </div>
 
       {settings && (
         <SettingsCard settings={settings} onSaved={setSettings} />
+      )}
+
+      <div className="bg-white border border-gray-200 rounded-xl p-4 text-sm text-gray-600 space-y-1">
+        <div className="font-medium text-gray-900">Cómo se publican</div>
+        <p>
+          Tu web dice que se publican todas las opiniones de clientas con una cita completada, positivas y negativas,
+          salvo las que incumplen estas normas. Por eso solo puedes rechazar u ocultar una por uno de estos motivos:{" "}
+          {reasons.map((r) => r.label.toLowerCase()).join(", ")}. Queda registrado quién lo hizo y cuándo.
+        </p>
+        <p>
+          Si no revisas una opinión en {graceDays} días, se publica sola. La media cuenta todas las valoraciones salvo
+          las rechazadas; las de clientas que no dieron permiso para mostrarlas cuentan sin nombre ni comentario.
+        </p>
+      </div>
+
+      {analytics && (analytics.legacyRejections ?? 0) > 0 && (
+        <div className="flex items-start gap-2 text-sm bg-amber-50 text-amber-800 p-3 rounded-xl">
+          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+          <span>
+            Tienes {analytics.legacyRejections}{" "}
+            {analytics.legacyRejections === 1 ? "reseña rechazada" : "reseñas rechazadas"} antes de que hubiera
+            motivos. Revísalas: apruébalas o elige el motivo por el que no se publican.{" "}
+            <button type="button" className="underline" onClick={() => setStatus("rejected")}>
+              Ver rechazadas
+            </button>
+          </span>
+        </div>
       )}
 
       {analytics && (
@@ -87,7 +150,7 @@ export default function ReviewsDashboardPage() {
           <Card
             label="Valoración media"
             value={analytics.total ? analytics.averageRating.toFixed(1) : "—"}
-            hint={`${analytics.total} reseña${analytics.total === 1 ? "" : "s"}`}
+            hint={`${analytics.total} valoraci${analytics.total === 1 ? "ón" : "ones"}, sin contar las rechazadas`}
           />
           <Card
             label="Peticiones enviadas"
@@ -166,75 +229,120 @@ export default function ReviewsDashboardPage() {
           </div>
         ) : (
           <div className="divide-y">
-            {reviews.map((r) => (
-              <div key={r.id} className="py-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-3">
-                {r.status !== "pending" && (
-                  <div className="flex shrink-0">
-                    {[1, 2, 3, 4, 5].map((n) => (
-                      <Star
-                        key={n}
-                        className={`w-4 h-4 ${
-                          n <= r.rating ? "fill-yellow-400 text-yellow-400" : "text-gray-200"
-                        }`}
-                      />
-                    ))}
-                  </div>
-                )}
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm text-gray-900">
-                    {r.clientName ?? "Clienta"}
-                    {r.serviceName && <span className="text-gray-500"> · {r.serviceName}</span>}
-                    {r.professionalName && <span className="text-gray-500"> · {r.professionalName}</span>}
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    {new Date(r.submittedAt ?? r.createdAt).toLocaleString("es-ES")}
-                    {SOURCE_LABEL[r.source] && ` · pedida por ${SOURCE_LABEL[r.source]}`}
-                    <span className="ml-2 text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-700">
-                      {STATUS_LABEL[r.status] ?? r.status}
-                    </span>
-                    {r.googleLinkClickedAt && (
-                      <span className="ml-2 text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">
-                        Abrió Google
+            {reviews.map((r) => {
+              const legacy = r.status === "rejected" && r.moderationReason === LEGACY_REJECTION_REASON;
+              const line = moderationLine(r);
+              const visibility = publicVisibilityNote(r);
+              return (
+                <div key={r.id} className="py-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-3">
+                  {r.status !== "pending" && (
+                    <div className="flex shrink-0">
+                      {[1, 2, 3, 4, 5].map((n) => (
+                        <Star
+                          key={n}
+                          className={`w-4 h-4 ${
+                            n <= r.rating ? "fill-yellow-400 text-yellow-400" : "text-gray-200"
+                          }`}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm text-gray-900">
+                      {r.clientName ?? "Clienta"}
+                      {r.serviceName && <span className="text-gray-500"> · {r.serviceName}</span>}
+                      {r.professionalName && <span className="text-gray-500"> · {r.professionalName}</span>}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {new Date(r.submittedAt ?? r.createdAt).toLocaleString("es-ES")}
+                      {SOURCE_LABEL[r.source] && ` · pedida por ${SOURCE_LABEL[r.source]}`}
+                      <span className="ml-2 text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-700">
+                        {STATUS_LABEL[r.status] ?? r.status}
                       </span>
+                      {legacy && (
+                        <span className="ml-2 text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">
+                          Sin motivo (anterior)
+                        </span>
+                      )}
+                      {r.googleLinkClickedAt && (
+                        <span className="ml-2 text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">
+                          Abrió Google
+                        </span>
+                      )}
+                    </div>
+                    {r.comment && <div className="text-sm text-gray-700 mt-1">{r.comment}</div>}
+                    {line && (
+                      <div className={`text-xs mt-1 ${legacy ? "text-amber-800" : "text-gray-500"}`}>{line}</div>
+                    )}
+                    {visibility && <div className="text-xs text-gray-500 mt-1">{visibility}</div>}
+                    {r.status === "moderation" && (
+                      <div className="text-xs text-gray-500 mt-1">
+                        Si no la revisas, se publicará sola a los {graceDays} días de recibirla.
+                      </div>
                     )}
                   </div>
-                  {r.comment && <div className="text-sm text-gray-700 mt-1">{r.comment}</div>}
+                  {r.status !== "pending" && (
+                    <div className="flex gap-2 shrink-0">
+                      {r.status !== "published" && (
+                        <button
+                          onClick={() => approve(r.id)}
+                          className="text-xs text-green-700 hover:bg-green-50 px-2 py-1 rounded"
+                        >
+                          Aprobar
+                        </button>
+                      )}
+                      {(r.status !== "rejected" || legacy) && (
+                        <button
+                          onClick={() => askReject(r)}
+                          className="text-xs text-red-700 hover:bg-red-50 px-2 py-1 rounded"
+                        >
+                          {legacy ? "Elegir motivo" : r.status === "published" ? "Ocultar" : "Rechazar"}
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
-                {r.status !== "pending" && (
-                  <div className="flex gap-2 shrink-0">
-                    {r.status !== "published" && (
-                      <button
-                        onClick={() => moderate(r.id, "approve")}
-                        className="text-xs text-green-700 hover:bg-green-50 px-2 py-1 rounded"
-                      >
-                        Aprobar
-                      </button>
-                    )}
-                    {r.status !== "rejected" && (
-                      <button
-                        onClick={() => moderate(r.id, "reject")}
-                        className="text-xs text-red-700 hover:bg-red-50 px-2 py-1 rounded"
-                      >
-                        {r.status === "published" ? "Ocultar" : "Rechazar"}
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={!!rejecting}
+        title={rejecting?.status === "published" ? "¿Ocultar esta reseña?" : "¿Rechazar esta reseña?"}
+        description={
+          <div className="space-y-2 text-left">
+            <p>
+              Solo puedes hacerlo si incumple las normas que tu web publica. No se mostrará ni contará en la media, y
+              quedará registrado el motivo, quién lo hizo y cuándo.
+            </p>
+            <label className="block text-sm font-medium text-gray-700" htmlFor="review-reject-reason">
+              Motivo
+            </label>
+            <select
+              id="review-reject-reason"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
+            >
+              <option value="">— Elige el motivo —</option>
+              {reasons.map((r) => (
+                <option key={r.key} value={r.key}>
+                  {r.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        }
+        confirmLabel={rejecting?.status === "published" ? "Ocultar" : "Rechazar"}
+        destructive
+        loading={saving}
+        onCancel={() => setRejecting(null)}
+        onConfirm={confirmReject}
+      />
     </div>
   );
-}
-
-function whatsappLabel(status: string): string {
-  if (status === "not_connected") return "WhatsApp: no conectado";
-  if (status === "APPROVED") return "WhatsApp: plantilla aprobada";
-  if (status === "NOT_SUBMITTED") return "WhatsApp: plantilla sin enviar a Meta (Ajustes > WhatsApp)";
-  if (status === "unknown") return "WhatsApp: estado desconocido";
-  return `WhatsApp: plantilla ${status.toLowerCase()}`;
 }
 
 function SettingsCard({
@@ -262,8 +370,6 @@ function SettingsCard({
     }
   }
 
-  const noChannel = !settings.channels.email && !settings.channels.sms && settings.channels.whatsapp !== "APPROVED";
-
   return (
     <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-4">
       <h2 className="font-semibold text-gray-900">Configuración</h2>
@@ -271,11 +377,12 @@ function SettingsCard({
       <div className="space-y-2">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <div className="text-sm font-medium text-gray-900">Pedir opinión después de cada cita</div>
+            <div className="text-sm font-medium text-gray-900">Pedir opinión tras la cita</div>
             <p className="text-xs text-gray-500">
-              {settings.policy.delayHours} horas después de marcar la cita como completada, por email
-              (o WhatsApp/SMS si la clienta lo tiene activado). Como mucho una vez cada{" "}
-              {settings.policy.clientCooldownDays} días por clienta, y nunca a quien haya dicho que no.
+              Por email, {settings.policy.delayHours} horas después de marcar la cita como completada y entre las 9:00 y
+              las 21:00 de tu salón (solo citas de los últimos {Math.round((settings.policy.windowHours ?? 72) / 24)}{" "}
+              días). Como mucho una vez cada {settings.policy.clientCooldownDays} días por clienta, y nunca a quien haya
+              dicho que no o cuyo email haya rebotado o se haya dado de baja.
             </p>
           </div>
           <label className="inline-flex items-center gap-2 text-sm shrink-0">
@@ -299,27 +406,20 @@ function SettingsCard({
             </span>
           </div>
         )}
-        {settings.addOnActive && settings.autoRequestsEnabled && noChannel && (
+        {settings.addOnActive && settings.autoRequestsEnabled && !settings.channels.email && (
           <div className="flex items-start gap-2 text-xs bg-amber-50 text-amber-800 p-2 rounded">
             <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>
-              Ahora mismo no hay ningún canal de envío disponible, así que no se enviará nada.
-            </span>
+            <span>El envío de emails no está configurado, así que ahora mismo no se enviará nada.</span>
           </div>
         )}
-        <ul className="text-xs text-gray-600 flex flex-wrap gap-x-4 gap-y-1">
-          <li>Email: {settings.channels.email ? "disponible" : "no configurado"}</li>
-          <li>SMS: {settings.channels.sms ? "disponible" : "no configurado"}</li>
-          <li>{whatsappLabel(settings.channels.whatsapp)}</li>
-        </ul>
       </div>
 
       <div className="space-y-2 border-t pt-4">
         <div className="text-sm font-medium text-gray-900">Tu ficha de Google</div>
         <p className="text-xs text-gray-500">
-          Tras valorar, la clienta ve un botón para dejar también su reseña en Google. Pega aquí el
-          Place ID de tu negocio (búscalo en el «Place ID Finder» de Google) o el enlace «Pedir
-          reseñas» de tu perfil de empresa en Google.
+          Tras valorar, la clienta ve un botón para dejar también su reseña en Google, sea cual sea su valoración. Pega
+          aquí el Place ID de tu negocio (búscalo en el «Place ID Finder» de Google) o el enlace «Pedir reseñas» de tu
+          perfil de empresa en Google. Si rellenas los dos, se usa el Place ID.
         </p>
         <div className="grid gap-2 sm:grid-cols-2">
           <input

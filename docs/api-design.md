@@ -697,14 +697,13 @@ Implements 5 priority gaps from the Booksy/Treatwell gap analysis:
 
 | Method | Endpoint | Auth | Notes |
 |---|---|---|---|
-| GET | `/widget/instances` | JWT | List tenant widgets |
+| GET | `/widget/instances` | JWT | List tenant widgets (with the full token) |
 | POST | `/widget/instances` | JWT | Create (returns token once) |
 | PATCH | `/widget/instances/:id` | JWT | Whitelist / theme |
 | DELETE | `/widget/instances/:id` | JWT | Revoke |
-| GET | `/embed/:token` | Public | Widget config + CSP `frame-ancestors` |
-| GET | `/qr/salon/:slug` | Public | PNG/SVG, `Cache-Control: public, max-age=3600` |
-| GET | `/qr/professional/:id` | Public | Pre-filtered agenda |
-| GET | `/qr/service/:id` | Public | Pre-filtered service |
+| GET | `/embed/:token` | Public | Widget config |
+| GET | `/embed/:token/frame-ancestors` | Public | Allowed https origins; the Next middleware turns them into the `/embed/[token]` page's CSP `frame-ancestors` |
+| GET | `/qr/share` | JWT | Salon address, name and logo; QR codes are drawn in the browser |
 
 ### Import CSV + ICS feeds (Phase 1)
 
@@ -790,6 +789,5 @@ All enforced via `@Throttle({ ttl, limit })` from `@nestjs/throttler`:
 | `/public/r/:token` GET | 60s | 60 |
 | `/public/r/:token` POST | 60s | 3 |
 | `/consent/sign` | 60s | 30 |
-| `/qr/*` | 60s | 120 |
 | `/ics/*` | 60s | 120 |
 | `/webhooks/meta/whatsapp` POST | 1s | 50 |

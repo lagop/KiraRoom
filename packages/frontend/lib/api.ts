@@ -268,6 +268,7 @@ interface LoginResponse {
 export interface WidgetInstance {
   id: string;
   name: string;
+  /** The whole token: the embed code is built from it. */
   token?: string;
   allowedOrigins: string[];
   services: string[];
@@ -392,10 +393,23 @@ export interface Review {
   clientName?: string | null;
   professionalName?: string | null;
   serviceName?: string | null;
+  /** Why it was rejected (a listed reason, or "legacy_unspecified"), who and when it was moderated. */
+  moderationReason?: string | null;
+  moderationReasonLabel?: string | null;
+  moderatedById?: string | null;
+  moderatedByName?: string | null;
+  moderatedAt?: string | null;
+  /** granted | declined | legacy | anonymised: whether it may be listed on the salon's site. */
+  publishConsent?: string;
 }
 export interface ReviewAnalytics {
+  /** Every answered rating but the rejected ones, as on the salon's site. */
   averageRating: number;
   total: number;
+  answered?: number;
+  rejected?: number;
+  /** Rejected before a reason was required: worth looking at again. */
+  legacyRejections?: number;
   distribution: number[];
   topPerformers: Array<{
     professionalId: string;
@@ -414,14 +428,20 @@ export interface ReviewSettings {
   autoRequestsEnabled: boolean;
   /** The google_reviews_auto add-on (or a plan with it) is active. */
   addOnActive: boolean;
+  /** Requests go by email only. */
   channels: {
     email: boolean;
-    sms: boolean;
-    /** "not_connected", "NOT_SUBMITTED", or Meta's template status (APPROVED, PENDING...). */
-    whatsapp: string;
   };
   googleApi: { available: boolean };
-  policy: { delayHours: number; clientCooldownDays: number; tokenTtlDays: number };
+  policy: {
+    delayHours: number;
+    windowHours?: number;
+    clientCooldownDays: number;
+    tokenTtlDays: number;
+    moderationGraceDays?: number;
+    /** The only reasons a review can be rejected or hidden for. */
+    rejectionReasons?: Array<{ key: string; label: string }>;
+  };
 }
 
 /** GET /virtual-receptionist/channels/config. Never carries a token. */
@@ -5124,10 +5144,10 @@ class ApiClient implements ApiClientInterface {
     const q = params.toString();
     return this.request(`/reviews${q ? `?${q}` : ""}`);
   }
-  async moderateReview(id: string, action: "approve" | "reject"): Promise<Review> {
+  async moderateReview(id: string, action: "approve" | "reject", reason?: string): Promise<Review> {
     return this.request(`/reviews/${id}/moderate`, {
       method: "POST",
-      body: JSON.stringify({ action }),
+      body: JSON.stringify(action === "reject" ? { action, reason } : { action }),
     });
   }
   async getReviewSettings(): Promise<ReviewSettings> {

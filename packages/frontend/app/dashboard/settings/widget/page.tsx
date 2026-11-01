@@ -133,8 +133,12 @@ export default function WidgetSettingsPage() {
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Widget de reservas</h1>
         <p className="text-gray-500 mt-1">
-          Pega este iframe en tu web, Instagram bio o landing para que los clientes
-          reserven directamente.
+          Pega este código en tu web para que tus clientas reserven sin salir de ella. Para Instagram o
+          WhatsApp usa el enlace de tu página de reservas, en{" "}
+          <a href="/dashboard/compartir" className="text-purple-600 hover:underline">
+            Comparte tu página
+          </a>
+          .
         </p>
       </div>
 
@@ -154,7 +158,7 @@ export default function WidgetSettingsPage() {
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Orígenes permitidos (uno por línea, vacío = todos)
+              Webs donde se puede mostrar (una por línea; vacío = cualquiera)
             </label>
             <textarea
               value={allowedOriginsText}
@@ -163,6 +167,10 @@ export default function WidgetSettingsPage() {
               placeholder={"https://misalon.com\nhttps://misalon.es"}
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
             />
+            <p className="mt-1 text-xs text-gray-500">
+              Solo direcciones https, sin ruta (https://misalon.com). Con la lista vacía, el widget se puede
+              insertar en cualquier web.
+            </p>
           </div>
         </div>
         <div className="flex justify-end mt-4">

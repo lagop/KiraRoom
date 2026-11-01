@@ -10,20 +10,12 @@ import {
   Matches,
   MaxLength,
 } from "class-validator";
+import { WIDGET_ORIGIN_RE as ORIGIN, normalizeWidgetOrigin } from "./frame-origins";
 
-/**
- * An origin as CSP `frame-ancestors` takes it: scheme, host (optionally
- * `*.` for subdomains) and port, nothing else. The list is joined into
- * that header, so a `;` or a space in an entry would add directives.
- */
-const ORIGIN = /^https?:\/\/(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)*(:\d{1,5})?$/i;
-
-/** "https://misalon.com/ " -> "https://misalon.com": what people paste. */
+/** "https://MiSalon.com/ " -> "https://misalon.com": what people paste (frame-origins.ts). */
 const normalizeOrigins = () =>
   Transform(({ value }) =>
-    Array.isArray(value)
-      ? value.map((v) => (typeof v === "string" ? v.trim().replace(/\/+$/, "") : v))
-      : value,
+    Array.isArray(value) ? value.map((v) => (typeof v === "string" ? normalizeWidgetOrigin(v) : v)) : value,
   );
 
 /** The theme is stored as JSON and served on every public embed. */
@@ -39,7 +31,7 @@ export class CreateWidgetDto {
   name!: string;
 
   @IsOptional() @normalizeOrigins() @IsArray() @ArrayMaxSize(20)
-  @Matches(ORIGIN, { each: true, message: "each allowed origin must look like https://misalon.com" })
+  @Matches(ORIGIN, { each: true, message: "Cada origen permitido tiene que ser una dirección https, como https://misalon.com" })
   @MaxLength(253, { each: true })
   allowedOrigins?: string[];
 
@@ -59,7 +51,7 @@ export class UpdateWidgetDto {
   name?: string;
 
   @IsOptional() @normalizeOrigins() @IsArray() @ArrayMaxSize(20)
-  @Matches(ORIGIN, { each: true, message: "each allowed origin must look like https://misalon.com" })
+  @Matches(ORIGIN, { each: true, message: "Cada origen permitido tiene que ser una dirección https, como https://misalon.com" })
   @MaxLength(253, { each: true })
   allowedOrigins?: string[];
 

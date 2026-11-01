@@ -705,7 +705,13 @@ model Appointment {
   /// Reminder tracking flags
   reminder24hSent   Boolean @default(false)
   reminder1hSent    Boolean @default(false)
+  /// Set only once the review request reached the client.
   reviewRequestSent Boolean @default(false)
+  /// Review request tries that did not send (provider error). Retried on
+  /// later ticks, in the salon's sending hours, up to MAX_REQUEST_ATTEMPTS
+  /// (reviews.service.ts); a request that can never go (no email, opted out,
+  /// suppressed address) is set straight to the cap.
+  reviewRequestAttempts Int @default(0)
   /// Reminder sends that reached no channel. The scheduler retries on later
   /// ticks up to a cap (MAX_REMINDER_ATTEMPTS in notifications.scheduler.ts).
   reminder24hAttempts Int @default(0)
@@ -2524,6 +2530,24 @@ model Review {
   /// screen. Whether they then posted on Google is not knowable without the
   /// Business Profile API, so nothing claims they did.
   googleLinkClickedAt  DateTime?
+  /// Why the salon rejected or hid it: one of REVIEW_REJECTION_REASONS
+  /// (reviews/review-rules.ts), or "legacy_unspecified" for rejections from
+  /// before reasons were required. Cleared on approval. Who (User id) and
+  /// when it was last moderated.
+  moderationReason     String?
+  moderatedById        String?
+  moderatedAt          DateTime?
+  /// Whether the client let the salon show it on its site with her name and
+  /// initial: "granted" | "declined" | "legacy" (answered under the old
+  /// notice) | "anonymised". Only granted and legacy are listed publicly;
+  /// every answered rating not rejected counts in the average, anonymously.
+  /// The version names the checkbox text she saw.
+  publishConsent        String    @default("legacy")
+  publishConsentVersion String?
+  publishConsentAt      DateTime?
+  /// Resend id of the request email: a hard bounce or complaint on it puts
+  /// the address on the salon's suppression list.
+  requestMessageId     String?      @unique
   tenant               Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, createdAt])

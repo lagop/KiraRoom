@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { EmailSuppressionService } from "./email-suppression.service";
+import { suppressFromReviewRequestEvent } from "../reviews/review-email-events";
 
 /**
  * What Resend posts to the webhook (resend.com/docs/webhooks). Only the
@@ -77,6 +78,11 @@ export class ResendEventsService {
     if (recipient) {
       await this.handleCampaignEvent(event, eventId, recipient);
     } else {
+      // A review request that bounced or drew a complaint: the salon stops
+      // asking that address (reviews/review-email-events.ts).
+      await suppressFromReviewRequestEvent(this.prisma, this.suppressions, event).catch((err) =>
+        this.logger.warn(`Review request suppression for ${emailId} failed: ${err.message}`),
+      );
       await this.handleTransactionalEvent(event, emailId);
     }
   }

@@ -153,7 +153,8 @@ function chunks<T>(items: T[], size = CHUNK): T[][] {
  * name replaced, IP hash cleared; the form version and dates stay as the
  * record that a consent was signed), free-text notes on her appointments
  * and orders, the recipient name / email / message on gift cards given to
- * her, review links (her reviews stay, now under the anonymised name).
+ * her, her reviews (the comment goes and the review is never listed again;
+ * only the rating stays, counted anonymously in the salon's average).
  *
  * Kept: appointments, payments, orders, invoices (with their own recipient
  * snapshot), loyalty and wallet balances, promotion usage, and the salon's
@@ -222,12 +223,14 @@ export async function anonymizeClients(
       where: { clientId: inIds, campaign: { tenantId } },
     });
 
-    // Reviews: a request she never answered goes; what she wrote stays,
-    // under the anonymised name, and its link stops working.
+    // Reviews: a request she never answered goes. Of what she answered only
+    // the rating stays, counted anonymously in the average: the comment
+    // goes, the review is never listed on the salon's site again, and its
+    // link stops working.
     await tx.review.deleteMany({ where: { tenantId, clientId: inIds, status: "pending" } });
     await tx.review.updateMany({
       where: { tenantId, clientId: inIds },
-      data: { reviewToken: null, reviewTokenExpiresAt: null },
+      data: { reviewToken: null, reviewTokenExpiresAt: null, comment: null, publishConsent: "anonymised" },
     });
 
     // Visits and purchases stay (the salon's records); free text about her goes.

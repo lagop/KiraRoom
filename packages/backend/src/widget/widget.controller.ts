@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Get, Post, Patch, Delete, Body, Param, Req, Res, Headers, UseGuards, BadRequestException } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Patch, Delete, Body, Param, Req, Res, UseGuards, BadRequestException } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
@@ -93,15 +93,22 @@ export class EmbedController {
   async getConfig(@Param("token") token: string, @Res() res: Response) {
     const widget = await this.widgetService.findByToken(token);
     const data = await this.widgetService.getPublicConfig(widget.id);
-    const allowedOrigins = (widget.allowedOrigins ?? []) as string[];
-    const ancestors =
-      allowedOrigins.length > 0 ? allowedOrigins.join(" ") : "*";
-    res.setHeader(
-      "Content-Security-Policy",
-      `frame-ancestors ${ancestors}`,
-    );
-    res.setHeader("X-Frame-Options", "ALLOWALL");
+    // Which sites may frame the widget is said by the embed PAGE
+    // (frontend middleware, from frameAncestors below): a frame-ancestors
+    // header on this JSON restricted nothing.
     res.setHeader("Cache-Control", "public, max-age=30");
     return res.json(data);
+  }
+
+  /**
+   * The allowed origins, for the frontend's embed page header. Asked by
+   * the Next server (cached there for a minute), so the limit is high.
+   */
+  @Get(":token/frame-ancestors")
+  @Public()
+  @Throttle({ default: { ttl: 60_000, limit: 600 } })
+  @ApiOperation({ summary: "Sites allowed to frame the widget (public)" })
+  async frameAncestors(@Param("token") token: string) {
+    return this.widgetService.frameAncestors(token);
   }
 }

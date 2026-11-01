@@ -7,18 +7,21 @@ import {
   ReviewsAnalyticsController,
 } from "./reviews.controller";
 import { NotificationsModule } from "../notifications/notifications.module";
-import { WhatsAppMessagingModule } from "../whatsapp/whatsapp-messaging.module";
+import { EmailCampaignsModule } from "../email-campaigns/email-campaigns.module";
+import { AuditLogService } from "../saas/audit-log.service";
 
 @Module({
   // FeatureFlagService comes from the global FeatureFlagModule.
-  imports: [NotificationsModule, WhatsAppMessagingModule],
+  // EmailCampaignsModule: the salon's email suppression list.
+  imports: [NotificationsModule, EmailCampaignsModule],
   controllers: [
     ReviewsController,
     ReviewsPublicController,
     ReviewsPublicListController,
     ReviewsAnalyticsController,
   ],
-  providers: [ReviewsService],
+  // Moderation is audit-logged.
+  providers: [ReviewsService, AuditLogService],
   exports: [ReviewsService],
 })
 export class ReviewsModule {}

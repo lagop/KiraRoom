@@ -10,6 +10,8 @@ import {
   isPrintFormat,
   PRINT_FORMATS,
   printHeadline,
+  printedCodesNote,
+  qrServices,
   qrTargetUrl,
   shareFileName,
   shareMessage,
@@ -63,6 +65,26 @@ check("headline for a service", printHeadline({ service: "Corte de pelo" }) === 
 
 check("file names are plain", shareFileName("Salón-Lucía", "qr", "png", "Ana García") === "qr-salon-lucia-ana-garcia.png", shareFileName("Salón-Lucía", "qr", "png", "Ana García"));
 check("and without a suffix", shareFileName("salon-lucia", "redes", "png") === "redes-salon-lucia.png");
+
+check(
+  "QR codes only for services bookable online",
+  qrServices([
+    { id: "a", isActive: true, isOnlineBookable: true },
+    { id: "b", isActive: true, isOnlineBookable: false },
+    { id: "c", isActive: false, isOnlineBookable: true },
+    { id: "d" },
+  ])
+    .map((s: any) => s.id)
+    .join() === "a,d",
+);
+check(
+  "own domain: printed codes depend on keeping it",
+  /mientras mantengas ese dominio/.test(printedCodesNote({ url: "https://reservas.salonlucia.es", ownDomain: true })),
+);
+check(
+  "KiraRoom address: printed codes keep working",
+  /seguirán funcionando/.test(printedCodesNote({ url: "https://salon-lucia.kiraroom.net", ownDomain: false })),
+);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

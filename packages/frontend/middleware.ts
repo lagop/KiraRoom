@@ -9,6 +9,7 @@ import {
   subdomainRedirectFor,
 } from "./lib/custom-domain-host";
 import { retiredClientAreaRedirect } from "./lib/client-area-redirect";
+import { embedToken, frameAncestorsHeader } from "./lib/embed-frame";
 
 // All authentication for `/saas/*` is enforced server-side by the NestJS
 // `SaasOwnerGuard` on the corresponding API endpoints. This middleware is
@@ -82,6 +83,34 @@ async function slugForHost(host: string): Promise<string | null> {
 }
 
 /**
+ * The booking widget page's frame-ancestors header, per widget token,
+ * from its allowed origins (lib/embed-frame.ts). Cached a minute, so a
+ * change in the panel shows soon; API trouble is not cached and sends no
+ * header (the page then frames anywhere, as with an empty list).
+ */
+const EMBED_TTL_MS = 60_000;
+const embedCache = new Map<string, { header: string | null; expires: number }>();
+
+async function embedFrameHeader(token: string): Promise<string | null> {
+  const now = Date.now();
+  const cached = embedCache.get(token);
+  if (cached && cached.expires > now) return cached.header;
+  try {
+    const res = await fetch(`${API_URL}/embed/${encodeURIComponent(token)}/frame-ancestors`, {
+      headers: { accept: "application/json" },
+      cache: "no-store",
+    });
+    if (!res.ok) return cached?.header ?? null;
+    const header = frameAncestorsHeader(await res.json());
+    if (embedCache.size >= MAX_ENTRIES) embedCache.clear();
+    embedCache.set(token, { header, expires: now + EMBED_TTL_MS });
+    return header;
+  } catch {
+    return cached?.header ?? null;
+  }
+}
+
+/**
  * The clients' old sign-in area (lib/client-area-redirect.ts) sends them to
  * the booking page; null when the path is not part of it.
  */
@@ -98,6 +127,16 @@ function clientAreaRedirect(request: NextRequest, onSalonHost: boolean): NextRes
 
 export async function middleware(request: NextRequest) {
   const host = bareHost(request.headers.get("host"));
+
+  // /embed/<token>: the salon's booking widget, framed on its own site.
+  // Only the sites it allowed may frame it.
+  const widgetToken = embedToken(request.nextUrl.pathname);
+  if (widgetToken) {
+    const response = NextResponse.next();
+    const header = await embedFrameHeader(widgetToken);
+    if (header) response.headers.set("Content-Security-Policy", header);
+    return response;
+  }
 
   // salon-lucia.kiraroom.net: the host names the salon.
   const subdomainSlug = salonSlugForSubdomain(host, SUBDOMAIN_BASE);

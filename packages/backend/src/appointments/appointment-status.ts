@@ -131,7 +131,8 @@ export async function applyStatusIfAllowed(
   if (!current || !canTransition(current.status, to)) return false;
   const { count } = await prisma.appointment.updateMany({
     where: { id: appointmentId, status: current.status },
-    data: { status: to },
+    // The review request is timed from the completion.
+    data: to === AppointmentStatus.completed ? { status: to, completionTime: new Date() } : { status: to },
   });
   return count === 1;
 }
