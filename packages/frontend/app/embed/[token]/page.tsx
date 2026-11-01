@@ -30,6 +30,11 @@ interface WidgetConfig {
     timezone: string;
     currency: string;
     language: string;
+    /**
+     * The tax the service prices include (IVA, IGIC, IPSI): prices are
+     * final. Absent from servers older than final prices.
+     */
+    taxLabel?: string;
   };
   widget: {
     id: string;
@@ -277,6 +282,11 @@ export default function EmbedWidgetPage() {
                   </button>
                 ))}
               </div>
+              {config.tenant.taxLabel && (
+                <p data-test="widget-tax-included" className="mt-2 text-xs text-gray-500">
+                  Precios con {config.tenant.taxLabel} incluido
+                </p>
+              )}
             </div>
 
             <div>

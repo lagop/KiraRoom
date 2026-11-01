@@ -34,11 +34,17 @@ import { salonDefaultTaxRate } from "./invoice-totals";
  * missing is false. It is `undefined` while the settings are loading or when
  * they could not be loaded: unlike a label, it changes the amounts of an
  * invoice, so a caller that issues one has to wait for it instead of guessing.
+ *
+ * `serverRate` is the rate the server applies to the salon's catalogue, on
+ * appointment invoices and on the prices clients see (backend
+ * salon-tax-settings.ts salonTaxRate): defaultTaxRate when set, else 21,
+ * whatever the regime. Use it to predict those amounts.
  */
 export function useTaxRegime(): {
   regime: TaxRegime;
   label: string;
   defaultRate: number;
+  serverRate: number;
   pricesIncludeTax: boolean | undefined;
   isLoading: boolean;
   isError: boolean;
@@ -60,6 +66,7 @@ export function useTaxRegime(): {
       settings.data?.fiscalSettings?.defaultTaxRate,
       TAX_REGIME_DEFAULT_RATE[regime],
     ),
+    serverRate: salonDefaultTaxRate(settings.data?.fiscalSettings?.defaultTaxRate, 21),
     pricesIncludeTax: settings.data
       ? settings.data.fiscalSettings?.pricesIncludeTax === true
       : undefined,

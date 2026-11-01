@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { deleteServiceKeepingHistory } from '../common/prisma/history-deletes';
 import { CreateServiceDto, UpdateServiceDto } from './dto';
+import { publicPrice, publicPriceSettings, PublicPriceSettings } from '../common/public-price';
 
 /** By category, then by name: the order the panel and the pickers list them. */
 const SERVICE_ORDER = [{ category: 'asc' as const }, { name: 'asc' as const }];
@@ -22,6 +23,20 @@ export const PUBLIC_SERVICE_SELECT = {
   isActive: true,
   isOnlineBookable: true,
 } as const;
+
+/**
+ * The public projection with the price a client pays: tax included, as a
+ * number (36.3 for a 30.00 net service at 21 %), and `taxLabel` naming the
+ * tax it includes. The salon's own staff get the catalogue price as entered.
+ * Bookings never take a price from here: the server prices them from the
+ * catalogue.
+ */
+function withPublicPrice<T extends { price: unknown }>(
+  service: T,
+  prices: PublicPriceSettings,
+): Omit<T, 'price'> & { price: number; taxLabel: string } {
+  return { ...service, price: publicPrice(service.price, prices), taxLabel: prices.taxLabel };
+}
 
 @Injectable()
 export class ServicesService {
@@ -61,11 +76,15 @@ export class ServicesService {
    */
   async findAll(tenantId: string, viewer: { staff: boolean } = { staff: true }) {
     if (!viewer.staff) {
-      return this.prisma.service.findMany({
-        where: { tenantId, ...PUBLIC_SERVICE_WHERE },
-        select: PUBLIC_SERVICE_SELECT,
-        orderBy: SERVICE_ORDER,
-      });
+      const [services, prices] = await Promise.all([
+        this.prisma.service.findMany({
+          where: { tenantId, ...PUBLIC_SERVICE_WHERE },
+          select: PUBLIC_SERVICE_SELECT,
+          orderBy: SERVICE_ORDER,
+        }),
+        this.publicPrices(tenantId),
+      ]);
+      return services.map((s) => withPublicPrice(s, prices));
     }
     return this.prisma.service.findMany({
       where: { tenantId },
@@ -88,16 +107,28 @@ export class ServicesService {
 
   /** findOne for someone outside the salon, by findAll's public rules. */
   async findPublicOne(tenantId: string, id: string) {
-    const service = await this.prisma.service.findFirst({
-      where: { id, tenantId, ...PUBLIC_SERVICE_WHERE },
-      select: PUBLIC_SERVICE_SELECT,
-    });
+    const [service, prices] = await Promise.all([
+      this.prisma.service.findFirst({
+        where: { id, tenantId, ...PUBLIC_SERVICE_WHERE },
+        select: PUBLIC_SERVICE_SELECT,
+      }),
+      this.publicPrices(tenantId),
+    ]);
 
     if (!service) {
       throw new NotFoundException(`Service with ID ${id} not found`);
     }
 
-    return service;
+    return withPublicPrice(service, prices);
+  }
+
+  /** How this salon's catalogue prices become what clients pay (common/public-price.ts). */
+  private async publicPrices(tenantId: string): Promise<PublicPriceSettings> {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { fiscalSettings: true },
+    });
+    return publicPriceSettings(tenant?.fiscalSettings);
   }
 
   async update(tenantId: string, id: string, updateServiceDto: UpdateServiceDto) {

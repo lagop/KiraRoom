@@ -127,6 +127,14 @@ check("offers with prices", ld.hasOfferCatalog.itemListElement.map((o: any) => [
   ["Corte", "18.50"],
   ["Tinte", "45.00"],
 ]);
+check("an older server's prices say nothing about tax", "priceSpecification" in ld.hasOfferCatalog.itemListElement[0], false);
+const ldTax = salonJsonLd({ ...PAGE, taxLabel: "IVA" }, "https://app.kiraroom.net/sites/salon-luna") as any;
+check("final prices are marked tax included", ldTax.hasOfferCatalog.itemListElement[0].priceSpecification, {
+  "@type": "PriceSpecification",
+  price: "18.50",
+  priceCurrency: "EUR",
+  valueAddedTaxIncluded: true,
+});
 check("team", ld.employee, [{ "@type": "Person", name: "Ana García", jobTitle: "Estilista" }]);
 check("no data: image", "image" in ld, false);
 
