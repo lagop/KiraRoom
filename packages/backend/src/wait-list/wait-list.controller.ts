@@ -33,6 +33,7 @@ import {
 export class WaitListController {
   constructor(private readonly svc: WaitListService) {}
 
+  /** Owner and admin see the clients' email and phone; staff only who is waiting. */
   @Get()
   @Roles(...SALON_TEAM)
   list(
@@ -44,7 +45,7 @@ export class WaitListController {
     return this.svc.list(req.user.tenantId, {
       status: valid ? (status as WaitListStatus) : undefined,
       serviceId,
-    });
+    }, { role: req.user.role });
   }
 
   @Get('settings')
