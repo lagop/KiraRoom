@@ -177,7 +177,7 @@ describe("POST /invoices/:id/rectify body", () => {
 
   it("the controller passes it on, left out as left out (the service applies the salon's)", async () => {
     const emit = jest.fn(async () => ({ id: "inv-2" }));
-    const ctl = new InvoicesController({ emitRectification: emit } as any, {} as any, {} as any, {} as any);
+    const ctl = new InvoicesController({ emitRectification: emit } as any, {} as any, {} as any, {} as any, {} as any);
     const free = { description: "Ajuste", quantity: -1, unitPriceCents: 500, taxRate: 21 };
     await ctl.rectify({ user: { tenantId: "tenant-1" } } as any, "inv-1", {
       reason: "x",

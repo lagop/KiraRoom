@@ -18,11 +18,14 @@ import { fiscalSubmissionAvailable, FISCAL_SUBMISSION_UNAVAILABLE } from "./fisc
 import type { Response } from "express";
 import { Request } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
-import { Roles, SALON_TEAM } from "../auth/decorators/roles.decorator";
+import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { UserRole, InvoiceSource, FiscalMode } from "@prisma/client";
 import { InvoiceService } from "./invoices.service";
-import { InvoicePdfService } from "./pdf/invoice-pdf.service";
+import { InvoiceRenderService } from "./pdf/invoice-render.service";
+import { InvoiceEmailService } from "./invoice-email.service";
+import { SendInvoiceEmailDto } from "./dto/send-invoice-email.dto";
+import { Throttle } from "@nestjs/throttler";
 import { FiscalCertificateService } from "./fiscal/fiscal-certificate.service";
 import {
   CancelInvoiceDto,
@@ -33,10 +36,11 @@ import {
   UploadCertificateDto,
 } from "./dto/invoice.dto";
 import { PrismaService } from "../common/prisma/prisma.service";
+import { RESERVED_SERIES } from "./invoice-numbering";
 import { taxLabelOf, taxRegimeOf, TAX_REGIME_DEFAULT_RATE } from "@kira/shared";
 
 interface AuthedRequest extends Request {
-  user: { tenantId?: string };
+  user: { tenantId?: string; id?: string; role?: UserRole; impersonatedBy?: string };
 }
 
 @Controller("invoices")
@@ -44,13 +48,16 @@ interface AuthedRequest extends Request {
 export class InvoicesController {
   constructor(
     private readonly invoices: InvoiceService,
-    private readonly pdf: InvoicePdfService,
+    private readonly render: InvoiceRenderService,
     private readonly certs: FiscalCertificateService,
     private readonly prisma: PrismaService,
+    private readonly invoiceEmail: InvoiceEmailService,
   ) {}
 
+  // Owner and admin only, like the rest of the invoice routes: invoices
+  // carry the clients' NIFs and the salon's takings, which staff do not see.
   @Get()
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
+  @Roles(...SALON_MANAGERS)
   list(@Req() req: AuthedRequest, @Query() q: ListInvoicesQueryDto) {
     return this.invoices.list(this.requireTenantId(req), q);
   }
@@ -64,7 +71,7 @@ export class InvoicesController {
   }
 
   @Get(":id")
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
+  @Roles(...SALON_MANAGERS)
   findOne(@Req() req: AuthedRequest, @Param("id", ParseUUIDPipe) id: string) {
     return this.invoices.findOne(this.requireTenantId(req), id);
   }
@@ -72,7 +79,7 @@ export class InvoicesController {
   @Post()
   @Roles(UserRole.owner, UserRole.admin)
   create(@Req() req: AuthedRequest, @Body() dto: CreateInvoiceDto) {
-    return this.invoices.create({
+    return this.invoices.createManual({
       ...dto,
       tenantId: this.requireTenantId(req),
       issueDate: dto.issueDate ? new Date(dto.issueDate) : undefined,
@@ -141,78 +148,70 @@ export class InvoicesController {
     return this.invoices.resendFiscal(this.requireTenantId(req), id);
   }
 
-  @Post("from-order/:orderId")
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  fromOrder(@Req() req: AuthedRequest, @Param("orderId") orderId: string) {
-    void req;
-    return this.invoices.fromOrder(orderId);
-  }
+  // POST /invoices/from-order/:orderId is gone: nothing called it, it issued
+  // a new invoice on every call and any staff member could use it. The till
+  // issues its simplified invoices from inside the sale
+  // (InvoiceService.issueSimplifiedInvoiceForSale).
 
+  /**
+   * Invoices a completed appointment of this salon now, whatever the
+   * automatic-invoicing setting: the way to invoice it again after its
+   * invoice was cancelled. Its live invoice when it has one.
+   */
   @Post("from-appointment/:appointmentId")
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
+  @Roles(UserRole.owner, UserRole.admin)
   fromAppointment(
     @Req() req: AuthedRequest,
-    @Param("appointmentId") appointmentId: string,
+    @Param("appointmentId", ParseUUIDPipe) appointmentId: string,
   ) {
-    void req;
-    return this.invoices.fromAppointment(appointmentId);
+    return this.invoices.fromAppointment(appointmentId, {
+      tenantId: this.requireTenantId(req),
+      requested: true,
+    });
   }
 
+  /**
+   * The invoice's PDF: issuer with razón social, NIF and address (as they
+   * were at issue when the invoice snapshotted them), recipient, lines, tax
+   * breakdown and totals (InvoiceRenderService). The panel downloads it with
+   * fetch and the bearer token: a plain link carried no token and got 401.
+   */
   @Get(":id/pdf")
-  @Header("Content-Type", "application/pdf")
-  @Roles(...SALON_TEAM)
+  @Roles(...SALON_MANAGERS)
   async pdfStream(
     @Req() req: AuthedRequest,
     @Param("id", ParseUUIDPipe) id: string,
     @Res() res: Response,
   ) {
-    const tenantId = this.requireTenantId(req);
-    const invoice = await this.invoices.findOne(tenantId, id);
-    const tenant = await this.prisma.tenant.findUnique({
-      where: { id: tenantId },
-    });
-    if (!tenant) throw new BadRequestException("Tenant not found");
-    const lines = invoice.lines.map((l) => ({
-      description: l.description,
-      quantity: Number(l.quantity),
-      unitPriceCents: l.unitPriceCents,
-      discountPct: Number(l.discountPct),
-      taxRate: Number(l.taxRate),
-      totalCents: l.totalCents,
-    }));
-    const buf = await this.pdf.generate({
-invoice: {
-        series: invoice.series,
-        number: invoice.number,
-        issueDate: invoice.issueDate.toISOString(),
-        recipientName: invoice.recipientName,
-        recipientTaxId: invoice.recipientTaxId,
-        recipientAddress: invoice.recipientAddress as any,
-        subtotalCents: invoice.subtotalCents,
-        totalCents: invoice.totalCents,
-        currency: invoice.currency,
-fiscalQrUrl: invoice.fiscalQrUrl,
-        fiscalReference: invoice.fiscalReference,
-      },
-      lines,
-      taxBreakdown: (invoice.taxBreakdown as any[]) ?? [],
-      // IGIC for a Canarian salon, IPSI in Ceuta and Melilla: not always IVA.
-      taxLabel: taxLabelOf(tenant.fiscalSettings),
-      tenant: {
-        name: tenant.name,
-        taxId: null, // would come from Tenant settings
-        address: null,
-        email: tenant.email,
-        phone: tenant.phone,
-      },
-    });
-    res.setHeader("Content-Disposition", `inline; filename="invoice-${invoice.series}${invoice.number}.pdf"`);
-    res.send(buf);
+    const { pdf, filename } = await this.render.render(this.requireTenantId(req), id);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.send(pdf);
+  }
+
+  /** Sends the PDF to the client's email, or to `to`. Logged in the audit log. */
+  @Post(":id/email")
+  @Roles(...SALON_MANAGERS)
+  @Throttle({ default: { ttl: 600_000, limit: 10 } }) // 10 emails per 10 min
+  email(
+    @Req() req: AuthedRequest,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() dto: SendInvoiceEmailDto,
+  ) {
+    const user = req.user;
+    if (!user?.id || !user.role) throw new BadRequestException("Missing user on authenticated request");
+    return this.invoiceEmail.send(
+      this.requireTenantId(req),
+      id,
+      { id: user.id, role: user.role, impersonatedBy: user.impersonatedBy },
+      dto.to,
+    );
   }
 
   @Get(":id/xml")
   @Header("Content-Type", "application/xml")
-  @Roles(...SALON_TEAM)
+  @Roles(...SALON_MANAGERS)
   async xml(
     @Req() req: AuthedRequest,
     @Param("id", ParseUUIDPipe) id: string,
@@ -224,7 +223,7 @@ fiscalQrUrl: invoice.fiscalQrUrl,
     }
     res.setHeader(
       "Content-Disposition",
-      `inline; filename="invoice-${invoice.series}${invoice.number}.xml"`,
+      `attachment; filename="factura-${invoice.series}${invoice.number}.xml"`,
     );
     res.send(invoice.fiscalXml);
   }
@@ -249,6 +248,11 @@ fiscalQrUrl: invoice.fiscalQrUrl,
     @Body() dto: UpdateTenantFiscalSettingsDto,
   ) {
     const tenantId = this.requireTenantId(req);
+    if (dto.defaultSeries !== undefined && RESERVED_SERIES.includes(dto.defaultSeries.trim().toUpperCase())) {
+      throw new BadRequestException(
+        `La serie "${dto.defaultSeries}" está reservada: R es la de las rectificativas y T la de los tickets. Usa otra serie.`,
+      );
+    }
     if (dto.fiscalMode && dto.fiscalMode !== FiscalMode.none && !fiscalSubmissionAvailable()) {
       throw new ConflictException(FISCAL_SUBMISSION_UNAVAILABLE);
     }

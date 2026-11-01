@@ -154,6 +154,13 @@ export class FiscalService {
       // No-op — local cancel already handled by InvoiceService.cancel.
       return true;
     }
+    // As dispatchInvoice: the transports are stubs that answer "accepted"
+    // (fiscal-availability.ts), so nothing is signed or sent and the
+    // anulation stays pending ("[fiscal pending]" in the invoice's notes).
+    if (!fiscalSubmissionAvailable()) {
+      this.logger.warn(`Invoice ${invoiceId} anulation not sent (${mode}): fiscal submission is not available yet`);
+      return false;
+    }
     const settings = (invoice.tenant.fiscalSettings as Record<string, unknown>) ?? {};
     const tenantNif = (settings.tenantNif as string) ?? invoice.issuerTaxIdAtIssue ?? "";
 

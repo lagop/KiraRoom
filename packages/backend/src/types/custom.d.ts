@@ -11,6 +11,11 @@ declare module "qrcode" {
     text: string,
     opts?: { errorCorrectionLevel?: "L" | "M" | "Q" | "H"; width?: number }
   ): Promise<string>;
+  /** The symbol itself: `modules.data[row * size + col]` is 1 for a dark module. */
+  export function create(
+    text: string,
+    opts?: { errorCorrectionLevel?: "L" | "M" | "Q" | "H" }
+  ): { modules: { size: number; data: Uint8Array }; version: number };
 }
 
 declare module "ics" {

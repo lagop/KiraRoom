@@ -42,9 +42,9 @@ describe("POST /invoices body: taxIncluded per line", () => {
 
 describe("InvoicesController.create passes it on", () => {
   function controller() {
-    const create = jest.fn(async (_input: Parameters<InvoiceService["create"]>[0]) => ({ id: "inv-1" }));
-    const invoices = { create } as unknown as InvoiceService;
-    const ctl = new InvoicesController(invoices, {} as any, {} as any, {} as any);
+    const create = jest.fn(async (_input: Parameters<InvoiceService["createManual"]>[0]) => ({ id: "inv-1" }));
+    const invoices = { createManual: create } as unknown as InvoiceService;
+    const ctl = new InvoicesController(invoices, {} as any, {} as any, {} as any, {} as any);
     const req = { user: { tenantId: "tenant-1" } } as any;
     return { ctl, req, create };
   }
@@ -69,10 +69,7 @@ describe("InvoiceService.create with a tax-included line", () => {
   function service(fiscalSettings: Record<string, unknown> = { defaultSeries: "A", defaultTaxRate: 21, pricesIncludeTax: true }) {
     const invoiceCreate = jest.fn(async (args: any) => ({ id: "inv-1", ...args.data }));
     const tx: any = {
-      fiscalSequence: {
-        upsert: jest.fn(async () => ({})),
-        update: jest.fn(async () => ({ lastNumber: 1 })),
-      },
+      $queryRaw: jest.fn(async () => [{ lastNumber: 1 }]),
       invoice: { create: invoiceCreate },
     };
     const prisma: any = {
@@ -112,7 +109,7 @@ describe("a line sent without taxIncluded follows the salon (POST /invoices)", (
   function issue(fiscalSettings: Record<string, unknown>, extra: Record<string, unknown> = {}) {
     const invoiceCreate = jest.fn(async (args: any) => ({ id: "inv-1", ...args.data }));
     const tx: any = {
-      fiscalSequence: { upsert: jest.fn(async () => ({})), update: jest.fn(async () => ({ lastNumber: 1 })) },
+      $queryRaw: jest.fn(async () => [{ lastNumber: 1 }]),
       invoice: { create: invoiceCreate },
     };
     const prisma: any = {
@@ -121,7 +118,7 @@ describe("a line sent without taxIncluded follows the salon (POST /invoices)", (
       $transaction: async (fn: any) => fn(tx),
     };
     const svc = new InvoiceService(prisma, new InvoiceCalculator(), {} as any);
-    const ctl = new InvoicesController(svc, {} as any, {} as any, {} as any);
+    const ctl = new InvoicesController(svc, {} as any, {} as any, {} as any, {} as any);
     return ctl
       .create({ user: { tenantId: "tenant-1" } } as any, { recipientName: "Ana Prueba", lines: [{ ...line, ...extra }] } as any)
       .then(() => invoiceCreate.mock.calls[0][0].data);
@@ -149,7 +146,7 @@ describe("a line sent without taxIncluded follows the salon (POST /invoices)", (
   it("only POST /invoices: other callers that leave it out keep the tax on top", async () => {
     const invoiceCreate = jest.fn(async (args: any) => ({ id: "inv-1", ...args.data }));
     const tx: any = {
-      fiscalSequence: { upsert: jest.fn(async () => ({})), update: jest.fn(async () => ({ lastNumber: 1 })) },
+      $queryRaw: jest.fn(async () => [{ lastNumber: 1 }]),
       invoice: { create: invoiceCreate },
     };
     const prisma: any = {

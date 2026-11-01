@@ -96,7 +96,7 @@ describe("PATCH /invoices/settings/fiscal: pricesIncludeTax", () => {
     const prisma = {
       tenant: { findUnique: jest.fn(async () => ({ fiscalSettings })), update },
     };
-    const controller = new InvoicesController({} as any, {} as any, {} as any, prisma as any);
+    const controller = new InvoicesController({} as any, {} as any, {} as any, prisma as any, {} as any);
     const req = { user: { tenantId: "tenant-1" } } as any;
     return { controller, req, update };
   }

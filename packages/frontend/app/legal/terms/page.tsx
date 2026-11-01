@@ -5,7 +5,7 @@ export default function TermsPage() {
         Términos del Servicio
       </h1>
       <p style={{ color: "#64748b", marginBottom: 16 }}>
-        Última actualización: 17 de julio de 2026
+        Última actualización: 1 de noviembre de 2026
       </p>
 
       <Section title="1. Aceptación">
@@ -24,8 +24,7 @@ export default function TermsPage() {
         </p>
         <ul>
           <li>Agenda de citas y gestión de profesionales y servicios.</li>
-          <li>Emisión de facturas conformes a la normativa española.</li>
-          <li>Remisión a la AEAT (Verifactu, SII) o a las diputaciones forales (TicketBAI).</li>
+          <li>Emisión de facturas con numeración correlativa y facturas rectificativas.</li>
           <li>Sincronización opcional con software contable (Holded, Sage, A3, NCS).</li>
           <li>Recordatorios automáticos por email/WhatsApp.</li>
           <li>Panel SaaS para multi-tenant y multi-localización.</li>
