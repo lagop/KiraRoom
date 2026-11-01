@@ -66,6 +66,12 @@ console.log("plan badges");
   // Not in Esencial (PLAN_MATRIX, backend subscriptions.service.ts): the menu says so.
   check("Promociones and Fidelización show the Pro badge", pro.includes("promotions") && pro.includes("loyalty"), pro);
   check("gift cards keep theirs", pro.includes("gift-cards"), pro);
+  const empresa = links(DASHBOARD_NAV).filter((l) => l.empresa).map((l) => l.id);
+  check("Multi-local is in Ajustes with the Empresa badge", empresa.join() === "multi-location", empresa);
+  check(
+    "Multi-local opens Ajustes, for managers only",
+    activeGroup(DASHBOARD_NAV, "/dashboard/multi-location") === "settings" && !ids(navFor("staff")).includes("multi-location"),
+  );
 }
 
 console.log("every link has its translation and its page");

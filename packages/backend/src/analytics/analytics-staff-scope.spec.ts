@@ -58,7 +58,7 @@ describe("Analítica is for managers only", () => {
     const req = { user: { id: "u1", tenantId: "t1", role: "owner", userId: "u1" } } as any;
     await ctl.getOverview(req, "3");
     await ctl.getAppointmentStatusByDays(req, "7");
-    expect(analytics.getOverview).toHaveBeenCalledWith("t1", 3);
-    expect(analytics.getAppointmentStatusByDays).toHaveBeenCalledWith("t1", 7);
+    expect(analytics.getOverview).toHaveBeenCalledWith("t1", 3, undefined);
+    expect(analytics.getAppointmentStatusByDays).toHaveBeenCalledWith("t1", 7, undefined);
   });
 });

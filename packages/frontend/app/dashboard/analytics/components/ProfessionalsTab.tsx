@@ -1,14 +1,20 @@
 "use client";
 
 import { barWidth, describeSeries } from "@/lib/analytics-charts";
-import { formatCents } from "@/lib/analytics-format";
+import { formatCents, formatRate } from "@/lib/analytics-format";
 import type { ProfessionalPerformance, ProfessionalRange, Translate } from "../analytics-types";
 import { ProfessionalRangeSelector } from "./PeriodSelector";
 import { Bar, ChartCard, EmptyState, InlineError, LoadingBlock } from "./ui";
 
 const fullName = (p: ProfessionalPerformance) => `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim() || p.name;
 
-/** Profesionales (Pro): revenue per professional over the tab's own range. */
+/**
+ * Profesionales (Pro): what each professional brought in over the tab's own
+ * range, "cobrado, IVA incluido" (their share of the visits plus the
+ * services they did at the till without an appointment), and how their
+ * appointments closed. Comisiones works on the commission base, so its
+ * figures differ (D6).
+ */
 export function ProfessionalsTab({
   t,
   rows,
@@ -31,7 +37,7 @@ export function ProfessionalsTab({
   const title = t("analytics.professional_performance");
   const list = rows ?? [];
   const top = list.slice(0, 5);
-  const max = Math.max(...list.map((p) => p.revenue), 1);
+  const max = Math.max(...list.map((p) => p.revenueCents), 1);
 
   return (
     <ChartCard
@@ -40,6 +46,7 @@ export function ProfessionalsTab({
       busy={loading && list.length > 0}
       busyLabel={t("analytics.updating")}
       aside={<ProfessionalRangeSelector t={t} value={range} maxMonths={maxMonths} onChange={onRangeChange} />}
+      subtitle={<p className="text-xs text-gray-500 mt-1">{t("analytics.professionals_note")}</p>}
     >
       {error ? (
         <InlineError message={error} retryLabel={t("analytics.retry")} onRetry={onRetry} />
@@ -50,7 +57,7 @@ export function ProfessionalsTab({
           <div
             className="space-y-4"
             role="img"
-            aria-label={`${title}: ${describeSeries(top, fullName, (p) => formatCents(p.revenue))}`}
+            aria-label={`${title}, ${t("analytics.charged_vat")}: ${describeSeries(top, fullName, (p) => formatCents(p.revenueCents))}`}
           >
             {top.map((professional) => (
               // Phones: name and amount on one line, the bar under them.
@@ -60,11 +67,11 @@ export function ProfessionalsTab({
                     {fullName(professional)}
                   </span>
                   <span className="whitespace-nowrap text-sm font-medium text-gray-900 sm:order-last sm:w-24 sm:flex-shrink-0 sm:text-right">
-                    {formatCents(professional.revenue)}
+                    {formatCents(professional.revenueCents)}
                   </span>
                 </div>
                 <div className="mt-1 sm:mt-0 sm:mx-4 sm:flex-1">
-                  <Bar width={barWidth(professional.revenue, max)} size="h-6" />
+                  <Bar width={barWidth(professional.revenueCents, max)} size="h-6" />
                 </div>
               </div>
             ))}
@@ -132,10 +139,27 @@ function ProfessionalCard({
           <dd className="text-2xl font-bold text-indigo-600">{professional.appointments}</dd>
         </div>
         <div className="bg-green-50 rounded-lg p-3 text-center flex flex-col-reverse">
-          <dt className="text-xs text-green-700">{t("analytics.revenue")}</dt>
-          <dd className="text-2xl font-bold text-green-600 break-words">{formatCents(professional.revenue)}</dd>
+          <dt className="text-xs text-green-700">{t("analytics.charged_vat")}</dt>
+          <dd className="text-2xl font-bold text-green-600 break-words">{formatCents(professional.revenueCents)}</dd>
+        </div>
+        {professional.tillServicesCents > 0 && (
+          <div className="col-span-2 flex items-baseline justify-between gap-2 text-xs text-gray-600">
+            <dt>{t("analytics.till_services_professional")}</dt>
+            <dd className="font-medium text-gray-900 whitespace-nowrap">{formatCents(professional.tillServicesCents)}</dd>
+          </div>
+        )}
+        <div className="col-span-2 flex items-baseline justify-between gap-2 text-xs text-gray-600">
+          <dt>{t("analytics.cancellation_rate")}</dt>
+          <dd className="font-medium text-gray-900">{formatRate(professional.cancellationRate)}</dd>
+        </div>
+        <div className="col-span-2 flex items-baseline justify-between gap-2 text-xs text-gray-600">
+          <dt>{t("analytics.no_show_rate")}</dt>
+          <dd className="font-medium text-gray-900">{formatRate(professional.noShowRate)}</dd>
         </div>
       </dl>
+      <p className="mt-2 text-xs text-gray-400">
+        {t("analytics.professional_closed", { closed: professional.closedAppointments })}
+      </p>
     </li>
   );
 }

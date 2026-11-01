@@ -40,6 +40,8 @@ export function ClientsTab({
             badge={<span className="text-xs bg-indigo-100 text-indigo-800 px-2 py-1 rounded-full">{t("analytics.new")}</span>}
             value={insights.newClients}
             label={t("analytics.new_clients")}
+            hint={t("analytics.new_clients_hint")}
+            hintLabel={t("analytics.what_counts", { metric: t("analytics.new_clients") })}
           />
           {/* Recurring = served in the period (≥1 completed appointment) and
               came back within it or had come before (API: clientRetention). */}

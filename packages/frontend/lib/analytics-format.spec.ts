@@ -22,7 +22,12 @@ import {
   formatPercentChange,
   formatPeriod,
   formatRate,
-  periodOptions,
+  ANALYTICS_RANGES,
+  clampRange,
+  evolutionMonthsFor,
+  isAnalyticsRange,
+  rangeLabelKey,
+  rangeOptions,
   weekOverWeekChange,
 } from "./analytics-format";
 
@@ -87,11 +92,39 @@ check("negative", plain(formatPercentChange(-3.25)), "-3,3 %");
 check("no change", plain(formatPercentChange(0)), "0 %");
 check("nothing to compare with is a dash, not +0 %", formatPercentChange(null), "—");
 
-console.log("\n[periodOptions]");
-check("Esencial: 3 months", periodOptions(3), [3]);
-check("Pro: up to 6", periodOptions(6), [3, 6]);
-check("Empresa: up to 12", periodOptions(12), [3, 6, 12]);
-check("unknown plan: 3", periodOptions(undefined), [3]);
+console.log("\n[period presets]");
+check("Esencial: the short presets and 3 months", rangeOptions(3), ["this_month", "last_month", "last_30_days", "3_months"]);
+check("Pro: up to 6 months", rangeOptions(6).slice(-2), ["3_months", "6_months"]);
+check("Empresa: all of them", rangeOptions(12), [...ANALYTICS_RANGES]);
+check("unknown plan: as Esencial", rangeOptions(undefined), rangeOptions(3));
+check("a range the plan shows stays", clampRange("last_month", 3), "last_month");
+check("after a downgrade, the plan's longest", clampRange("12_months", 6), "6_months");
+check("evolution: the preset's months", evolutionMonthsFor("6_months", 12), 6);
+check("evolution: short presets show 3 months", evolutionMonthsFor("this_month", 12), 3);
+check("evolution: never more than the plan", evolutionMonthsFor("12_months", 6), 6);
+check("labels", ["this_month", "last_30_days", "12_months"].map(rangeLabelKey), [
+  "analytics.this_month",
+  "analytics.last_30_days",
+  "analytics.last_12_months",
+]);
+check(
+  "only the presets are ranges",
+  [isAnalyticsRange("3_months"), isAnalyticsRange("forever"), isAnalyticsRange(3)],
+  [true, false, false],
+);
+// The same ids as Multi-local's consolidated report.
+const consolidated = fs.readFileSync(
+  path.join(__dirname, "../app/dashboard/multi-location/consolidated-report.tsx"),
+  "utf8",
+);
+check("consolidated report reuses the presets", /CONSOLIDATED_RANGES = ANALYTICS_RANGES/.test(consolidated), true);
+for (const lang of ["es", "en"]) {
+  const messages = JSON.parse(fs.readFileSync(path.join(__dirname, `../messages/${lang}.json`), "utf8"));
+  for (const r of ANALYTICS_RANGES) {
+    const key = rangeLabelKey(r).split(".")[1];
+    check(`${lang}: label of ${r}`, typeof messages.analytics[key], "string");
+  }
+}
 
 console.log("\n[analytics page leftovers]");
 // The page and the components it was split into.

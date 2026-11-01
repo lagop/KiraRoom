@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import {
   AnalyticsAppointment,
@@ -22,14 +22,21 @@ import {
   newClientCount,
   occupancy,
   percentChange,
-  previousPeriod,
+  PeriodWindow,
   salonToday,
   scheduledDateRange,
   servicePopularity,
   summarize,
   topProfessionals,
   topServices,
+  windowPeriods,
 } from "./analytics-metrics";
+import {
+  LocationScope,
+  appointmentLocationWhere,
+  locationScopeOf,
+  tillLocationWhere,
+} from "./analytics-location";
 import { timeOffBetween } from "../time-off/time-off-query";
 import { VISIT_ROW_ORDER, VISIT_ROW_SELECT } from "../appointments/visit-totals";
 import { REFUNDABLE_KINDS, centsLeft } from "../payments/refund-lines";
@@ -89,6 +96,14 @@ export interface AppointmentStatusData {
 export interface AnalyticsOverview {
   period: SalonPeriod;
   previousPeriod: SalonPeriod;
+  /** The named range asked for (`range`), null when asked by `months`. */
+  range: string | null;
+  /**
+   * The location the figures are cut to (Empresa, `locationId`), null for the
+   * whole salon. With one, tillSales holds only the services its
+   * professionals did (products have no location).
+   */
+  location: { id: string; name: string } | null;
   timezone: string;
   currencyUnit: "cents";
   stats: DashboardStats;
@@ -193,10 +208,27 @@ export class AnalyticsService {
     return { today: salonToday(timezone), timezone };
   }
 
-  /** Appointments scheduled in the period, with what every metric needs. */
-  async loadAppointments(tenantId: string, period: SalonPeriod): Promise<AnalyticsAppointment[]> {
+  /**
+   * The scope of one of the salon's locations (Empresa's location filter):
+   * 404 when the location is not this salon's.
+   */
+  async locationScope(tenantId: string, locationId: string): Promise<LocationScope> {
+    const [location, active, links] = await Promise.all([
+      this.prisma.location.findFirst({ where: { id: locationId, tenantId }, select: { id: true, name: true } }),
+      this.prisma.location.findMany({ where: { tenantId, isActive: true }, select: { id: true } }),
+      this.prisma.professionalLocation.findMany({
+        where: { location: { tenantId } },
+        select: { professionalId: true, locationId: true, isPrimary: true },
+      }),
+    ]);
+    if (!location) throw new NotFoundException("Local no encontrado");
+    return locationScopeOf(location, links, active.map((l) => l.id));
+  }
+
+  /** Appointments scheduled in the period (of the location, with a scope), with what every metric needs. */
+  async loadAppointments(tenantId: string, period: SalonPeriod, scope?: LocationScope): Promise<AnalyticsAppointment[]> {
     const rows = await this.prisma.appointment.findMany({
-      where: { tenantId, scheduledDate: scheduledDateRange(period) },
+      where: { tenantId, scheduledDate: scheduledDateRange(period), ...appointmentLocationWhere(scope) },
       select: ANALYTICS_APPOINTMENT_SELECT,
     });
     return rows as unknown as AnalyticsAppointment[];
@@ -230,9 +262,10 @@ export class AnalyticsService {
     return newClientCount(served, await this.servedBefore(tenantId, served, period.start));
   }
 
-  private async activeProfessionals(tenantId: string) {
+  /** Active professionals (those working at the location, with a scope): occupancy's working time. */
+  private async activeProfessionals(tenantId: string, scope?: LocationScope) {
     return this.prisma.professional.findMany({
-      where: { tenantId, isActive: true },
+      where: { tenantId, isActive: true, ...(scope ? { id: { in: scope.professionalIds } } : {}) },
       select: { id: true, workingHours: true },
     });
   }
@@ -243,13 +276,14 @@ export class AnalyticsService {
    * (REFUNDABLE_KINDS, what the till itself sells), each with what is left
    * of it after refunds (centsLeft). A visit charged at the till is a line
    * of kind "appointment" and is the appointment's revenue; gift cards sold
-   * are counted when they pay for something.
+   * are counted when they pay for something. With a location, only the
+   * services its professionals did (tillLocationWhere).
    */
-  private async tillLines(tenantId: string, period: SalonPeriod, timezone: string) {
+  private async tillLines(tenantId: string, period: SalonPeriod, timezone: string, scope?: LocationScope) {
     const lines = await this.prisma.posSaleLine.findMany({
       where: {
         tenantId,
-        kind: { in: [...REFUNDABLE_KINDS] },
+        ...tillLocationWhere(scope, REFUNDABLE_KINDS),
         appointmentId: null,
         createdAt: instantRange(period, timezone),
       },
@@ -311,20 +345,21 @@ export class AnalyticsService {
   /**
    * The overview for the last `months` calendar months of the salon (this
    * month so far included), compared with the same days `months` months
-   * earlier.
+   * earlier; or for a named range (`{ range, maxMonths }`, compared as
+   * comparisonPeriod says). With a scope, only that location's appointments,
+   * professionals and till services.
    */
-  async getOverview(tenantId: string, months: number = 6): Promise<AnalyticsOverview> {
+  async getOverview(tenantId: string, window: PeriodWindow = 6, scope?: LocationScope): Promise<AnalyticsOverview> {
     const { today, timezone } = await this.todayFor(tenantId);
-    const period = lastMonthsPeriod(today, months);
-    const previous = previousPeriod(period, months);
+    const { period, previous } = windowPeriods(window, today);
 
     const [current, before, professionals, timeOff, till] = await Promise.all([
-      this.loadAppointments(tenantId, period),
-      this.loadAppointments(tenantId, previous),
-      this.activeProfessionals(tenantId),
+      this.loadAppointments(tenantId, period, scope),
+      this.loadAppointments(tenantId, previous, scope),
+      this.activeProfessionals(tenantId, scope),
       // Closures and absences come out of working time (see occupancy).
       timeOffBetween(this.prisma as any, tenantId, period.start, period.end),
-      this.tillLines(tenantId, period, timezone),
+      this.tillLines(tenantId, period, timezone, scope),
     ]);
     const tillServices = till.filter((l) => l.kind === "service");
     const [newClients, previousNewClients, professionalRows] = await Promise.all([
@@ -340,6 +375,8 @@ export class AnalyticsService {
     return {
       period,
       previousPeriod: previous,
+      range: typeof window === "number" ? null : window.range,
+      location: scope ? { id: scope.locationId, name: scope.name } : null,
       timezone,
       currencyUnit: "cents",
       stats: {
@@ -380,12 +417,12 @@ export class AnalyticsService {
   }
 
   /** Status breakdown of the last `days` salon days, today included. */
-  async getAppointmentStatusByDays(tenantId: string, days: number): Promise<AppointmentStatusData[]> {
+  async getAppointmentStatusByDays(tenantId: string, days: number, scope?: LocationScope): Promise<AppointmentStatusData[]> {
     const { today } = await this.todayFor(tenantId);
     const n = Math.max(1, Math.min(366, Math.floor(days) || 7));
     const period = { start: addDays(today, -(n - 1)), end: today };
     const rows = await this.prisma.appointment.findMany({
-      where: { tenantId, scheduledDate: scheduledDateRange(period) },
+      where: { tenantId, scheduledDate: scheduledDateRange(period), ...appointmentLocationWhere(scope) },
       select: { status: true },
     });
     return this.statusBreakdown(rows);
@@ -400,6 +437,7 @@ export class AnalyticsService {
   async getAppointmentRates(
     tenantId: string,
     window: { days?: number; months?: number },
+    scope?: LocationScope,
   ): Promise<{ period: SalonPeriod } & AppointmentRates & { byMonth?: Array<{ month: string } & AppointmentRates> }> {
     const { today } = await this.todayFor(tenantId);
     let period: SalonPeriod;
@@ -414,6 +452,7 @@ export class AnalyticsService {
         tenantId,
         scheduledDate: scheduledDateRange(period),
         status: { in: ["completed", "cancelled", "no_show"] },
+        ...appointmentLocationWhere(scope),
       },
       select: { status: true, scheduledDate: true },
     });
@@ -429,11 +468,12 @@ export class AnalyticsService {
   async getAppointmentStatusesEvolution(
     tenantId: string,
     months: number = 6,
+    scope?: LocationScope,
   ): Promise<Array<{ period: string } & Record<string, number | string>>> {
     const { today } = await this.todayFor(tenantId);
     const period = lastMonthsPeriod(today, months);
     const rows = await this.prisma.appointment.findMany({
-      where: { tenantId, scheduledDate: scheduledDateRange(period) },
+      where: { tenantId, scheduledDate: scheduledDateRange(period), ...appointmentLocationWhere(scope) },
       select: { status: true, scheduledDate: true },
     });
     return monthlyStatusCounts(rows, period);
@@ -444,11 +484,16 @@ export class AnalyticsService {
    * share of the appointments' revenue plus the services they did that the
    * till sold without an appointment, and how their appointments closed.
    */
-  async getTopProfessionals(tenantId: string, period: SalonPeriod, limit: number): Promise<ProfessionalRow[]> {
+  async getTopProfessionals(
+    tenantId: string,
+    period: SalonPeriod,
+    limit: number,
+    scope?: LocationScope,
+  ): Promise<ProfessionalRow[]> {
     const { today, timezone } = await this.todayFor(tenantId);
     const [rows, till] = await Promise.all([
-      this.loadAppointments(tenantId, period),
-      this.tillLines(tenantId, period, timezone),
+      this.loadAppointments(tenantId, period, scope),
+      this.tillLines(tenantId, period, timezone, scope),
     ]);
     return this.professionalRows(
       tenantId,
@@ -460,22 +505,27 @@ export class AnalyticsService {
   }
 
   /**
-   * New, served and recurring clients over the last `months` salon months.
-   * "Recurring" is defined in clientRetention(); it replaces an estimate of
-   * 40 % of the appointment count that the panel showed as a measurement.
+   * New, served and recurring clients over the last `months` salon months
+   * (or a named range). "Recurring" is defined in clientRetention(); it
+   * replaces an estimate of 40 % of the appointment count that the panel
+   * showed as a measurement. With a scope, the clients served at that
+   * location; whether they had come before (new, recurring) is still asked of
+   * the whole salon: a client new to this location who had been served at
+   * another is not a new client.
    */
-  async getClientInsights(tenantId: string, months: number): Promise<ClientInsights> {
+  async getClientInsights(tenantId: string, window: PeriodWindow, scope?: LocationScope): Promise<ClientInsights> {
     const { today } = await this.todayFor(tenantId);
-    const period = lastMonthsPeriod(today, months);
+    const { period } = windowPeriods(window, today);
     const range = scheduledDateRange(period);
+    const where = appointmentLocationWhere(scope);
 
     const [completed, totalAppointments] = await Promise.all([
       this.prisma.appointment.findMany({
-        where: { tenantId, status: "completed", scheduledDate: range },
+        where: { tenantId, status: "completed", scheduledDate: range, ...where },
         select: { clientId: true },
       }),
       this.prisma.appointment.count({
-        where: { tenantId, scheduledDate: range, status: { not: "cancelled" } },
+        where: { tenantId, scheduledDate: range, status: { not: "cancelled" }, ...where },
       }),
     ]);
 

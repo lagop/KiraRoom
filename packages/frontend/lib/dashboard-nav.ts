@@ -22,6 +22,8 @@ export interface NavLink {
   staffOnly?: boolean;
   /** Shows the Pro badge. */
   pro?: boolean;
+  /** Shows the Empresa badge (the page itself shows the upgrade card on other plans). */
+  empresa?: boolean;
   /** Shows a count the sidebar reads (e.g. requests waiting for an answer). */
   badge?: NavBadge;
 }
@@ -113,6 +115,8 @@ export const DASHBOARD_NAV: NavEntry[] = [
       link("settings", "/dashboard/settings", "nav.settings_general", "sliders", { exact: true }),
       link("billing", "/dashboard/billing", "nav.billing", "euro", { exact: true }),
       link("salon", "/dashboard/settings/salon", "nav.salon", "store"),
+      // Locations and the consolidated report (Empresa), also linked from Analítica.
+      link("multi-location", "/dashboard/multi-location", "nav.multi_location", "map-pin", { empresa: true }),
       link("closures", "/dashboard/settings/cierres", "nav.closures", "calendar-off"),
       link("domain", "/dashboard/settings/domain", "nav.domain", "globe"),
       // The booking widget for the salon's own website (also linked from Compartir).

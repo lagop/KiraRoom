@@ -1,20 +1,16 @@
 "use client";
 
-import { periodOptions } from "@/lib/analytics-format";
+import { rangeLabelKey, rangeOptions, type AnalyticsRange } from "@/lib/analytics-format";
 import type { ProfessionalRange, Translate } from "../analytics-types";
 
 const SELECT_CLASS =
   "text-sm border border-gray-300 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500";
 
-export function periodLabel(t: Translate, months: number): string {
-  return months === 12
-    ? t("analytics.last_12_months")
-    : months === 6
-      ? t("analytics.last_6_months")
-      : t("analytics.last_3_months");
-}
-
-/** The page's history selector (Resumen and Clientas), up to the plan's months. */
+/**
+ * The page's period (Resumen and Clientas): this month, last month, the
+ * last 30 days and 3 / 6 / 12 months, as the plan allows. The same presets as
+ * Multi-local's consolidated report.
+ */
 export function PeriodSelector({
   t,
   value,
@@ -23,11 +19,11 @@ export function PeriodSelector({
   onChange,
 }: {
   t: Translate;
-  value: number;
+  value: AnalyticsRange;
   maxMonths: number;
   /** "Tu plan muestra hasta N meses", once the plan is known. */
   showPlanNote: boolean;
-  onChange: (months: number) => void;
+  onChange: (range: AnalyticsRange) => void;
 }) {
   return (
     <div className="flex flex-col items-start sm:items-end">
@@ -37,12 +33,12 @@ export function PeriodSelector({
       <select
         id="analytics-period"
         value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
+        onChange={(e) => onChange(e.target.value as AnalyticsRange)}
         className={SELECT_CLASS}
       >
-        {periodOptions(maxMonths).map((months) => (
-          <option key={months} value={months}>
-            {periodLabel(t, months)}
+        {rangeOptions(maxMonths).map((range) => (
+          <option key={range} value={range}>
+            {t(rangeLabelKey(range))}
           </option>
         ))}
       </select>

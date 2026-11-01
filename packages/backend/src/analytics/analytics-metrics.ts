@@ -202,6 +202,64 @@ export function rangePeriod(range: string | undefined, today: string, maxMonths 
 }
 
 /**
+ * A `range` query value as a RangeKey ("1_year" is the old name of
+ * "12_months"); null for anything else, so an endpoint can answer 400 instead
+ * of quietly showing this month.
+ */
+export function parseRangeKey(range: string | undefined | null): RangeKey | null {
+  if (typeof range !== "string") return null;
+  const key = range === "1_year" ? "12_months" : range;
+  return (RANGE_KEYS as readonly string[]).includes(key) ? (key as RangeKey) : null;
+}
+
+/** The months of an "N_months" range after the plan's limit; null for the others. */
+function rangeMonths(range: RangeKey, maxMonths: number): number | null {
+  const m = /^(\d+)_months$/.exec(range);
+  return m ? Math.max(1, Math.min(Number(m[1]), maxMonths)) : null;
+}
+
+/**
+ * What a named range is compared with ("vs. mismo período anterior"):
+ * - this month so far: the same days of last month (previousPeriod);
+ * - last month: the whole month before it (September against all of August,
+ *   not 1-30 August);
+ * - the last N months: the same days N months earlier (N after the plan's cut);
+ * - a week: the same weekdays a week earlier;
+ * - today and the last 30 days: the equally long run of days just before.
+ */
+export function comparisonPeriod(range: RangeKey, period: SalonPeriod, maxMonths = 12): SalonPeriod {
+  const months = rangeMonths(range, maxMonths);
+  if (months) return previousPeriod(period, months);
+  switch (range) {
+    case "this_month":
+      return previousPeriod(period, 1);
+    case "last_month":
+      return { start: monthStart(period.start, -1), end: addDays(period.start, -1) };
+    case "this_week":
+    case "last_week":
+      return { start: addDays(period.start, -7), end: addDays(period.end, -7) };
+    default:
+      return previousPeriod(period);
+  }
+}
+
+/**
+ * What an analytics request asks for: the last N months (the old `months`
+ * parameter, already cut to the plan) or a named range with the plan's limit.
+ */
+export type PeriodWindow = number | { range: RangeKey; maxMonths: number };
+
+/** The period of a window and the one it is compared with. */
+export function windowPeriods(window: PeriodWindow, today: string): { period: SalonPeriod; previous: SalonPeriod } {
+  if (typeof window === "number") {
+    const period = lastMonthsPeriod(today, window);
+    return { period, previous: previousPeriod(period, window) };
+  }
+  const period = rangePeriod(window.range, today, window.maxMonths);
+  return { period, previous: comparisonPeriod(window.range, period, window.maxMonths) };
+}
+
+/**
  * A real calendar day as "YYYY-MM-DD", years 2000-2100 only; null otherwise.
  * The round trip rejects days that do not exist: Date reads 2026-02-31 as
  * 3 March.

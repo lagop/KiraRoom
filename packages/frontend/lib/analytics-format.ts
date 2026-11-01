@@ -92,10 +92,62 @@ export function formatMonthRange(first: string, last: string): string {
   return `${formatMonth(first, { withYear: !sameYear })} – ${formatMonth(last, { withYear: true })}`;
 }
 
-/** The history options of the period selector, up to the plan's months. */
-export function periodOptions(maxMonths: number | null | undefined): number[] {
-  const max = Math.max(3, Number(maxMonths) || 3);
-  return [3, 6, 12].filter((m) => m <= max);
+/**
+ * The page's period presets: the same range ids as Multi-local's consolidated
+ * report and the API's `range` (backend rangePeriod), so both screens speak
+ * of the same periods.
+ */
+export const ANALYTICS_RANGES = [
+  "this_month",
+  "last_month",
+  "last_30_days",
+  "3_months",
+  "6_months",
+  "12_months",
+] as const;
+export type AnalyticsRange = (typeof ANALYTICS_RANGES)[number];
+
+export function isAnalyticsRange(value: unknown): value is AnalyticsRange {
+  return typeof value === "string" && (ANALYTICS_RANGES as readonly string[]).includes(value);
+}
+
+/** Months of history a range reaches back: 1-2 for the short ones, N for "N_months". */
+export function rangeHistoryMonths(range: AnalyticsRange): number {
+  const m = /^(\d+)_months$/.exec(range);
+  if (m) return Number(m[1]);
+  return range === "this_month" ? 1 : 2;
+}
+
+function planMonths(maxMonths: number | null | undefined): number {
+  return Math.max(3, Number(maxMonths) || 3);
+}
+
+/** The presets the plan can show (Esencial 3 months, Pro 6, Empresa 12). */
+export function rangeOptions(maxMonths: number | null | undefined): AnalyticsRange[] {
+  const max = planMonths(maxMonths);
+  return ANALYTICS_RANGES.filter((r) => rangeHistoryMonths(r) <= max);
+}
+
+/** `range` when the plan shows it, else its longest preset (e.g. after a downgrade). */
+export function clampRange(range: AnalyticsRange, maxMonths: number | null | undefined): AnalyticsRange {
+  const options = rangeOptions(maxMonths);
+  return options.includes(range) ? range : options[options.length - 1];
+}
+
+/**
+ * Months of the status evolution charts for a preset: the preset's months, or
+ * 3 for the short ones (one bar says nothing about a trend); never more than
+ * the plan.
+ */
+export function evolutionMonthsFor(range: AnalyticsRange, maxMonths: number | null | undefined): number {
+  const m = /^(\d+)_months$/.exec(range);
+  return Math.min(m ? Number(m[1]) : 3, planMonths(maxMonths));
+}
+
+/** The translation key of a preset's label. */
+export function rangeLabelKey(range: string): string {
+  const m = /^(\d+)_months$/.exec(range);
+  return m ? `analytics.last_${m[1]}_months` : `analytics.${range}`;
 }
 
 /** "12 oct" for a "YYYY-MM-DD" day; "12 oct 2026" with `withYear`. */
