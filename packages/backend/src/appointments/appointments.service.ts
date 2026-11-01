@@ -44,6 +44,7 @@ import {
 import { NotificationType } from "../notifications/dto";
 import { TranslationsService } from "../translations/translations.service";
 import { ConsentService } from "../consent/consent.service";
+import { refreshClientStats } from "../clients/client-stats";
 import { salonInstant } from "./salon-time";
 import { assertCanBook, assertCanReschedule, salonDayAndTime } from "./reschedule-check";
 import {
@@ -1840,6 +1841,12 @@ export class AppointmentsService {
 
     // Points: completed and paid earns, cancelled gives them back.
     await this.loyaltyAfterStatus(updated.tenantId, id);
+
+    // Her visits (count, first, last, average) follow her completed
+    // appointments (client-stats.ts).
+    if (to === AppointmentStatus.completed || from === AppointmentStatus.completed) {
+      await refreshClientStats(this.prisma, updated.tenantId, [updated.clientId]);
+    }
   }
 
   /**

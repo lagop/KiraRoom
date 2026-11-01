@@ -9,6 +9,7 @@ import { PrismaService } from "../common/prisma/prisma.service";
 import { LoyaltyService } from "../loyalty/loyalty.service";
 import { AppointmentStatus } from "@prisma/client";
 import { applyStatusIfAllowed } from "../appointments/appointment-status";
+import { refreshClientStats } from "../clients/client-stats";
 
 @Injectable()
 export class PaymentsService {
@@ -53,6 +54,15 @@ export class PaymentsService {
     if (!changed) {
       this.logger.log(`appointment ${appointmentId} not marked ${to} by its payment: status does not allow it`);
     }
+  }
+
+  /**
+   * The client's spend (and, when the payment completed her appointment,
+   * her visits) follow what was recorded: client-stats.ts. Never fails the
+   * payment.
+   */
+  private async clientStatsAfter(tenantId: string, clientId: string | null | undefined) {
+    await refreshClientStats(this.prisma, tenantId, [clientId]);
   }
 
   async getPayments(
@@ -274,6 +284,7 @@ export class PaymentsService {
     }
 
     await this.loyaltyAfter(tenantId, payment);
+    await this.clientStatsAfter(tenantId, clientId);
 
     return payment;
   }
@@ -303,7 +314,10 @@ export class PaymentsService {
       await this.markAppointment(payment.appointmentId, AppointmentStatus.completed);
     }
 
-    if (status !== payment.status) await this.loyaltyAfter(tenantId, updatedPayment);
+    if (status !== payment.status) {
+      await this.loyaltyAfter(tenantId, updatedPayment);
+      await this.clientStatsAfter(tenantId, payment.clientId);
+    }
 
     return updatedPayment;
   }
@@ -371,6 +385,7 @@ export class PaymentsService {
     }
 
     await this.loyaltyAfter(tenantId, updatedPayment);
+    await this.clientStatsAfter(tenantId, payment.clientId);
 
     return updatedPayment;
   }
@@ -520,6 +535,7 @@ export class PaymentsService {
     }
 
     await this.loyaltyAfter(tenantId, updatedPayment);
+    await this.clientStatsAfter(tenantId, payment.clientId);
 
     return updatedPayment;
   }
@@ -562,6 +578,7 @@ export class PaymentsService {
         depositAmount: amount,
       },
     });
+    await this.clientStatsAfter(tenantId, appointment.clientId);
 
     return payment;
   }
@@ -598,6 +615,7 @@ export class PaymentsService {
 
     // Update appointment status to completed
     await this.markAppointment(appointmentId, AppointmentStatus.completed);
+    await this.clientStatsAfter(tenantId, appointment.clientId);
 
     return payment;
   }

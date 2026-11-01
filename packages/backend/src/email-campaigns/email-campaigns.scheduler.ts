@@ -143,7 +143,11 @@ export class EmailCampaignsScheduler {
 
     // Find clients who:
     // 1. Are from the same tenant
-    // 2. Have no visit in the last X days OR have never visited
+    // 2. Came at least once (a completed visit) and not in the last X days.
+    //    A client who never came is not one to win back: the owner's rule
+    //    is that campaigns go only to clients with a completed visit. (A
+    //    null lastVisit used to count as inactive, and since nothing filled
+    //    it in, every client was.)
     // 3. Have an email address
     // 4. Haven't received a re-engagement email in the last 30 days
     const clients = await this.prisma.client.findMany({
@@ -151,10 +155,7 @@ export class EmailCampaignsScheduler {
         tenantId: campaign.tenantId,
         email: { not: null },
         status: 'active',
-        OR: [
-          { lastVisit: { lt: thresholdDate } },
-          { lastVisit: null },
-        ],
+        lastVisit: { lt: thresholdDate },
       },
     });
 

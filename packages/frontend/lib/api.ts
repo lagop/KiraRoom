@@ -299,6 +299,8 @@ export interface ImportCommitResult {
   errorRows: number;
   skippedRows: number;
   newClients?: number;
+  /** Clients: refusals of advertising recorded from the file. */
+  marketingRefusals?: number;
 }
 export interface ImportJob {
   id: string;
