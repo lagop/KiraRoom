@@ -39,6 +39,7 @@ import {
 import {
   bookingLocations,
   chosenLocation,
+  confirmedPlace,
   locationForProfessional,
   locationFromQuery,
   locationReady,
@@ -416,7 +417,7 @@ export default function SalonBookingPage({
 
       const [firstName, ...restOfName] = bookingData.clientName.trim().split(" ");
 
-      await apiClient.createAppointment({
+      const booked = await apiClient.createAppointment({
         tenantId: salonData.id,
         // The public endpoint takes no clientId (an anonymous caller must not
         // book as someone else): it finds or creates the client by email or
@@ -443,7 +444,7 @@ export default function SalonBookingPage({
 
       // Only now. The confirmation has to mean the appointment exists. At
       // one of several locations it says which one and where it is.
-      const place = chosenLocation(locations, bookingData.locationId);
+      const place = confirmedPlace(locations, bookingData.locationId, booked);
       toast({
         title: t("bookingPublic.booking_confirmed"),
         description: place

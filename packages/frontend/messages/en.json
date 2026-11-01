@@ -1346,6 +1346,13 @@
       "deleteConfirmTitle": "Delete this appointment?",
       "deleteConfirmDescription": "The appointment will disappear from the diary. If the client is not coming, cancel it instead: it stays in their history.",
       "deleteConfirm": "Delete appointment"
+    },
+    "locations": {
+      "label": "Location",
+      "all": "All locations",
+      "professionalsMain": "The professional's main location",
+      "bookedAt": "It will be booked at {location}",
+      "onlyHere": "Only this location's professionals are shown."
     }
   },
   "settings": {

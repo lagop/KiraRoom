@@ -80,7 +80,12 @@ import { priceIsFrozen } from "./visit-sync";
 import { bookedAddon, bookedService, bookedServiceName, snapshotAddons, snapshotOf, withBookedService } from "./appointment-snapshot";
 import { appointmentLocationId } from "../multi-location/appointment-location";
 import { assertProfessionalsAt, professionalsAt } from "../multi-location/professional-locations";
-import { bookingPlace } from "../multi-location/client-locations";
+import {
+  bookingPlace,
+  clientLocations,
+  formatLocationAddress,
+  professionalLocationsOf,
+} from "../multi-location/client-locations";
 import {
   clientEmailFilter,
   findClientIdByPhone,
@@ -869,6 +874,8 @@ export class AppointmentsService {
         professional: true,
         service: true,
         tenant: true,
+        // Where it is (multi-local): the public booking's answer names it.
+        salonLocation: { select: { id: true, name: true, street: true, city: true, state: true, postalCode: true } },
       },
     });
 
@@ -1406,6 +1413,24 @@ export class AppointmentsService {
             .catch(() => false)
         : false;
       if (!stays) {
+        updateData.locationId = await appointmentLocationId(this.prisma as any, user.tenantId, target.professionalId);
+      }
+    }
+    // A location picked in the panel (multi-local): every professional of
+    // the visit must work there. Empty: back to the professional's own.
+    if (dto.locationId !== undefined) {
+      if (dto.locationId) {
+        const rowProfessionals = dto.services
+          ? dto.services.map((s) => s.professionalId)
+          : (((appointment as any).services ?? []) as Array<{ professionalId?: string | null }>).map(
+              (r) => r.professionalId,
+            );
+        await assertProfessionalsAt(this.prisma as any, user.tenantId, dto.locationId, [
+          target.professionalId,
+          ...rowProfessionals,
+        ]);
+        updateData.locationId = dto.locationId;
+      } else {
         updateData.locationId = await appointmentLocationId(this.prisma as any, user.tenantId, target.professionalId);
       }
     }
@@ -2934,6 +2959,30 @@ export class AppointmentsService {
     };
     const now = Date.now();
     return free.filter((slot) => this.fitsOnlineWindow(dateString, slot.time, window, now) === "ok");
+  }
+
+  /**
+   * The locations the panel books at and filters the agenda by
+   * (multi-local; client-locations.ts): none unless the salon has two or
+   * more with someone to book, and where each active professional works.
+   */
+  async bookingLocations(tenantId: string): Promise<{
+    locations: Array<{ id: string; name: string; slug: string; address: string; phone: string | null }>;
+    professionals: Array<{ id: string; locationIds: string[]; primaryLocationId: string | null }>;
+  }> {
+    const { locations, links } = await clientLocations(this.prisma as any, tenantId);
+    if (locations.length === 0) return { locations: [], professionals: [] };
+    const ids = [...new Set(links.map((l) => l.professionalId))];
+    return {
+      locations: locations.map((l) => ({
+        id: l.id,
+        name: l.name,
+        slug: l.slug,
+        address: formatLocationAddress(l),
+        phone: l.phone,
+      })),
+      professionals: ids.map((id) => ({ id, ...professionalLocationsOf(id, locations, links) })),
+    };
   }
 
   /**

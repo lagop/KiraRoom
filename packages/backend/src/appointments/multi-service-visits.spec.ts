@@ -711,3 +711,57 @@ describe("an edit keeps what the visit was booked at", () => {
     expect(shown.service).toMatchObject({ id: "s-cut", name: "Corte", price: "20", duration: 30 });
   });
 });
+
+describe("the panel picks the location of a visit (multi-local)", () => {
+  /** Centro: Ana and Bea; Norte: Ana only (her home is Centro). */
+  const located = (appointment: any) => {
+    const h = editHarness({ ...appointment, locationId: "l-centro" });
+    const staff: Record<string, string[]> = { "l-centro": ["ana", "bea"], "l-norte": ["ana"] };
+    h.prisma.location = {
+      findFirst: jest.fn(async ({ where }: any) => (staff[where.id] && where.tenantId === TENANT ? { id: where.id } : null)),
+    };
+    h.prisma.professionalLocation = {
+      findMany: jest.fn(async ({ where }: any) =>
+        where.locationId
+          ? (staff[where.locationId] ?? []).map((professionalId) => ({ professionalId }))
+          : [{ professionalId: where.professionalId, locationId: "l-centro", isPrimary: true }],
+      ),
+    };
+    return h;
+  };
+  const anaAlone = () => ({ ...colourWithRinse(), services: [colourWithRinse().services[0]] });
+
+  it("a location where everyone of the visit works is saved", async () => {
+    const { svc, writes } = located(anaAlone());
+    await svc.update(owner, "visit-1", { locationId: "l-norte" } as any);
+    const [, appt] = writes.find(([k]) => k === "appointment");
+    expect(appt.data.locationId).toBe("l-norte");
+  });
+
+  it("refused when someone of the visit does not work there", async () => {
+    const { svc, writes } = located(colourWithRinse()); // Bea does the rinse, and is not at Norte
+    const err = await svc.update(owner, "visit-1", { locationId: "l-norte" } as any).catch((e) => e);
+    expect(err.status).toBe(400);
+    expect(writes.find(([k]) => k === "appointment")).toBeUndefined();
+  });
+
+  it("another salon's location is not found", async () => {
+    const { svc } = located(anaAlone());
+    const err = await svc.update(owner, "visit-1", { locationId: "l-elsewhere" } as any).catch((e) => e);
+    expect(err.status).toBe(404);
+  });
+
+  it("emptied: back to the professional's own location", async () => {
+    const { svc, writes } = located(anaAlone());
+    await svc.update(owner, "visit-1", { locationId: null } as any);
+    const [, appt] = writes.find(([k]) => k === "appointment");
+    expect(appt.data.locationId).toBe("l-centro");
+  });
+
+  it("not sent: the location is left as it is", async () => {
+    const { svc, writes } = located(anaAlone());
+    await svc.update(owner, "visit-1", { notes: "x" } as any);
+    const [, appt] = writes.find(([k]) => k === "appointment");
+    expect(appt.data).not.toHaveProperty("locationId");
+  });
+});
