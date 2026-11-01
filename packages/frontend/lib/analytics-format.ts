@@ -97,3 +97,19 @@ export function periodOptions(maxMonths: number | null | undefined): number[] {
   const max = Math.max(3, Number(maxMonths) || 3);
   return [3, 6, 12].filter((m) => m <= max);
 }
+
+/** "12 oct" for a "YYYY-MM-DD" day; "12 oct 2026" with `withYear`. */
+export function formatDay(day: string, opts: { withYear?: boolean } = {}): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(day ?? "");
+  if (!m) return day ?? "";
+  const date = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  if (Number.isNaN(date.getTime())) return day;
+  return new Intl.DateTimeFormat("es-ES", {
+    day: "numeric",
+    month: "short",
+    ...(opts.withYear ? { year: "numeric" } : {}),
+    timeZone: "UTC",
+  })
+    .format(date)
+    .replace(".", "");
+}
