@@ -487,8 +487,11 @@ export class VirtualReceptionistService {
               `${i + 1}. ${s.serviceName} (${s.duration} min) — ${s.price.toFixed(2)}€`,
           )
           .join('\n');
+        // The prices are final (upsell.service.ts): say once the tax is in them.
+        const taxNote = suggestions[0].taxLabel ? `Precios con ${suggestions[0].taxLabel} incluido.\n` : '';
         return (
           `${greeting}Claro, además del servicio que ya conoces te pueden interesar:\n${list}\n` +
+          taxNote +
           `Si quieres reservar uno solo dime cuál y te busco hueco.`
         );
       }

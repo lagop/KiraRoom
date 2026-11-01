@@ -40,6 +40,8 @@ function setup({
   book = async () => ({ id: "apt-1", service: { name: "Corte" }, professional: { firstName: "Ana", lastName: "García" } }) as any,
   // The salon's "bookable online" switch for the service.
   onlineBookable = true,
+  // A salon from before "Mis precios ya incluyen el impuesto": net catalogue.
+  fiscalSettings = { pricesIncludeTax: false, defaultTaxRate: 21 } as Record<string, unknown>,
 } = {}) {
   let context: Record<string, unknown> = {};
   let userTurns = 1;
@@ -50,6 +52,7 @@ function setup({
       update: async ({ data }: any) => { context = data.context; },
     },
     chatMessage: { count: async () => userTurns },
+    tenant: { findUnique: async () => ({ fiscalSettings }) },
     appointment: { findMany: async () => recentClients.map((client) => ({ client })) },
     service: {
       findFirst: async () => ({
@@ -189,6 +192,20 @@ describe("the professional in the summary is the one booked", () => {
       date: "2026-10-05",
       time: "10:00",
     });
+  });
+
+  it("quotes the price the client pays, tax included, as list_services does", async () => {
+    // 55,00 net + 21 % IVA: what the invoice of this visit comes to.
+    const net: any = await setup().run("propose_appointment", DETAILS);
+    expect(net.summary.price).toBe("66.55 EUR (IVA incluido)");
+    const listed: any = await setup().run("list_services");
+    expect(listed.services[0].price).toBe("66.55");
+
+    // A catalogue written with the IGIC inside is quoted as it is.
+    const canary: any = await setup({
+      fiscalSettings: { pricesIncludeTax: true, defaultTaxRate: 7, taxRegime: "igic" },
+    }).run("propose_appointment", DETAILS);
+    expect(canary.summary.price).toBe("55.00 EUR (IGIC incluido)");
   });
 
   it("assigns 'whoever is free' at proposal time, and books that same professional", async () => {

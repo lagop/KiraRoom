@@ -42,6 +42,8 @@ interface SalonData {
   name: string;
   currency: string;
   openingHours: PublicSalonPage['openingHours'];
+  /** The tax the prices include (IVA, IGIC, IPSI); absent from older servers. */
+  taxLabel?: string;
 }
 
 interface Professional {
@@ -175,6 +177,7 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
           name: tenant.name,
           currency: tenant.currency || 'EUR',
           openingHours: tenant.openingHours ?? {},
+          taxLabel: tenant.taxLabel,
         });
 
         const [professionalsData, servicesData] = await Promise.all([
@@ -539,6 +542,10 @@ export default function NewAppointmentPage({ params }: { params: { salonName: st
               </option>
             ))}
           </select>
+          {/* Final prices: the server adds the tax to a catalogue written without it. */}
+          {salonData?.taxLabel && (
+            <p className="text-xs text-gray-500">Precios con {salonData.taxLabel} incluido</p>
+          )}
         </div>
 
         {/* Step 3: Professional Selection */}

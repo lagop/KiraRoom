@@ -6,6 +6,7 @@ import { normalizeDomain } from "../web-domain/custom-domain";
 import { WebDomainService } from "../web-domain/web-domain.service";
 import { MAX_SPAN_DAYS, dateOfDay, daysOf } from "../time-off/time-off-rules";
 import { salonWhatsAppConnected } from "../consent/client-notices";
+import { publicPrice, publicPriceSettings } from "../common/public-price";
 
 /**
  * Salons whose page is worth listing in the sitemap. A cancelled or
@@ -62,6 +63,8 @@ export class PublicSiteService {
         language: true,
         // Read into openingHours/openingShifts below, never sent as stored.
         openingHours: true,
+        // Read for the prices (common/public-price.ts), never sent.
+        fiscalSettings: true,
         updatedAt: true,
         customDomain: { select: { domain: true, verifiedAt: true } },
       },
@@ -137,6 +140,7 @@ export class PublicSiteService {
     // can say so.
     const openingHours: Record<string, SalonDayWindow> = salonOpenWeek(tenant.openingHours, professionals);
     const openingShifts: Record<string, SalonDayWindow[]> = salonOpenShifts(tenant.openingHours, professionals);
+    const prices = publicPriceSettings(tenant.fiscalSettings);
 
     return {
       id: tenant.id,
@@ -161,7 +165,12 @@ export class PublicSiteService {
       timezone: tenant.timezone,
       language: tenant.language,
       updatedAt: tenant.updatedAt,
-      services: services.map((s) => ({ ...s, price: Number(s.price) })),
+      // The final price, tax included, whichever way the salon writes its
+      // catalogue: 36.30 for a 30.00 net service at 21 % IVA.
+      services: services.map((s) => ({ ...s, price: publicPrice(s.price, prices) })),
+      // The tax those prices include (IVA, IGIC, IPSI), so the page can say
+      // "IVA incluido" once, next to the price list.
+      taxLabel: prices.taxLabel,
       // workingHours is summarised into openingHours rather than exposed
       // per person.
       professionals: professionals.map(({ workingHours: _wh, ...p }) => p),

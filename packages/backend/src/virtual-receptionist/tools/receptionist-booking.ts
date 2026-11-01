@@ -3,6 +3,8 @@ import { plainToInstance } from 'class-transformer';
 import { validateSync, ValidationError } from 'class-validator';
 import { OnlineBookingDto } from '../../appointments/dto/book-appointment.dto';
 import type { SalonToolContext } from './salon-tools';
+import { clientPrices, clientPriceText } from './client-prices';
+import { taxIncludedNote } from '../../common/public-price';
 import { samePhone } from '../../common/phone';
 
 /**
@@ -272,6 +274,8 @@ export async function proposeAppointment(
     };
   }
 
+  // What the client will pay, tax included, as list_services quoted it.
+  const prices = await clientPrices(ctx);
   const state = await readState(ctx);
   state.pendingBooking = { ...details, proposedAtUserTurn: await userTurns(ctx) };
   await writeState(ctx, state);
@@ -282,7 +286,7 @@ export async function proposeAppointment(
     summary: {
       service: service.name,
       durationMinutes: service.duration,
-      price: `${Number(service.price).toFixed(2)} ${service.currency}`,
+      price: `${clientPriceText(service.price, prices)} ${service.currency} (${taxIncludedNote(prices)})`,
       professional: `${professional.firstName} ${professional.lastName}`.trim(),
       date: details.date,
       time: details.time,

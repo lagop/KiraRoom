@@ -16,6 +16,11 @@ export interface PublicSalonService {
   name: string;
   description: string | null;
   duration: number;
+  /**
+   * What the client pays, tax included: the server adds the salon's IVA
+   * (IGIC, IPSI) when its catalogue is written without it
+   * (backend common/public-price.ts).
+   */
   price: number;
   currency: string;
   category: string;
@@ -88,6 +93,12 @@ export interface PublicSalonPage {
    * "Recibir los avisos de mi cita por WhatsApp". Absent from older servers.
    */
   whatsappNotices?: boolean;
+  /**
+   * The tax the service prices include: IVA, IGIC (Canarias) or IPSI (Ceuta
+   * y Melilla). The page says "Precios con IVA incluido" once. Absent from
+   * servers older than final prices.
+   */
+  taxLabel?: string;
 }
 
 /** Public base URL of the app (where /sites/<slug> lives). */
@@ -296,6 +307,17 @@ export function salonJsonLd(page: PublicSalonPage, url: string): Record<string, 
         "@type": "Offer",
         price: Number(s.price).toFixed(2),
         priceCurrency: s.currency || page.currency,
+        // The final price, tax included, said the way schema.org says it.
+        ...(page.taxLabel
+          ? {
+              priceSpecification: {
+                "@type": "PriceSpecification",
+                price: Number(s.price).toFixed(2),
+                priceCurrency: s.currency || page.currency,
+                valueAddedTaxIncluded: true,
+              },
+            }
+          : {}),
         itemOffered: {
           "@type": "Service",
           name: s.name,
