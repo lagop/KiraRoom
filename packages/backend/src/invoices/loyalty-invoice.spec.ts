@@ -3,6 +3,7 @@ import { appointmentInvoiceLines, loyaltyDiscountCents, withoutLoyalty } from ".
 import { InvoiceCalculator } from "./invoice-calculator.service";
 import { visitChargeCents, visitDiscountInCatalogue } from "../payments/appointment-charge";
 import { buildInvoiceDocument, discountLabel } from "./pdf/invoice-document";
+import { amountCreditLines } from "./rectification-lines";
 
 /**
  * The loyalty reward on the invoice (owner decision 2026-11-02): a discount
@@ -105,6 +106,100 @@ describe("a visit's invoice with the loyalty reward", () => {
     expect(catalogueCents).toBe(413);
     const lines = appointmentInvoiceLines({ ...one, discount: { loyalty: { catalogueCents } } }, TAX_ON_TOP);
     expect(Math.abs(calc.compute(lines).totalCents - 3130)).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("prices as the base: the reward's invoice comes to the money charged, to the cent", () => {
+  // Rates in use in Spain (IVA, IGIC, IPSI); prices and rewards chosen to round every way.
+  const RATES = [21, 10, 4, 7, 9.5, 3, 5, 15];
+  const PRICES = [99, 333, 1001, 1999, 2475, 3000, 4567, 9999];
+  const REWARDS = [1, 7, 99, 250, 333, 500, 1234, 2999];
+  const euros = (cents: number) => (cents / 100).toFixed(2);
+
+  /** A visit of one service, or of two (each with its own price). */
+  const visits = () =>
+    PRICES.flatMap((a, i) => {
+      const b = PRICES[(i + 3) % PRICES.length];
+      return [
+        { price: a / 100, totalAmount: a, serviceId: "svc-1", service: { name: "Corte", price: euros(a) } },
+        {
+          price: (a + b) / 100,
+          totalAmount: a + b,
+          serviceId: "svc-1",
+          service: { name: "Corte", price: euros(a) },
+          services: [row("r1", "svc-1", "Corte", euros(a)), row("r2", "svc-2", "Peinado", euros(b))],
+        },
+      ];
+    });
+
+  /**
+   * Every case: the money before the reward, the reward and its cut of the
+   * base (as the till works it out). A reward too small to cut a cent of
+   * base (1 cent at 10 %) never reaches the invoice (pos.service.ts skips it).
+   */
+  const cases = () =>
+    RATES.flatMap((rate) =>
+      visits().flatMap((v) => {
+        const fiscal = { pricesIncludeTax: false, defaultTaxRate: rate };
+        const before = visitChargeCents(v, fiscal);
+        return REWARDS.filter((money) => money < before)
+          .map((money) => ({ v, fiscal, before, money, catalogueCents: visitDiscountInCatalogue(v, fiscal, money).catalogueCents }))
+          .filter((c) => c.catalogueCents > 0);
+      }),
+    );
+
+  it("its invoice, issued later: total = money before the reward less the reward, for every price, rate and reward", () => {
+    let rounded = 0;
+    const off: string[] = [];
+    for (const c of cases()) {
+      const lines = appointmentInvoiceLines({ ...c.v, discount: { loyalty: { catalogueCents: c.catalogueCents, moneyCents: c.money } } }, c.fiscal);
+      const r = calc.compute(lines);
+      if (r.totalCents !== c.before - c.money) off.push(`${c.fiscal.defaultTaxRate}% ${c.v.totalAmount} -${c.money}: ${r.totalCents}`);
+      if (lines.some((l) => l.roundingCents)) rounded++;
+      // Base + tax still adds up, and the tax is never more than a cent or two off base x rate.
+      expect(r.subtotalCents + r.taxBreakdown.reduce((t, b) => t + b.taxCents, 0)).toBe(r.totalCents);
+      for (const l of r.lines) {
+        expect(Math.abs(l.taxCents - Math.round((l.totalCents - l.taxCents) * (l.taxRate / 100)))).toBeLessThanOrEqual(lines.length + 1);
+      }
+    }
+    expect(off).toEqual([]);
+    // The cases do exercise the remainder (it is not always zero).
+    expect(rounded).toBeGreaterThan(0);
+  });
+
+  it("the rectificativa of an invoice issued before: credits exactly the reward's money", () => {
+    const off: string[] = [];
+    let wasOff = 0;
+    for (const c of cases()) {
+      const issued = calc.compute(appointmentInvoiceLines(c.v, c.fiscal));
+      const stored = issued.lines.map((l, i) => ({ ...l, id: `line-${i}` }));
+      const credit = amountCreditLines(stored, c.catalogueCents, { invoiceTotalCents: issued.totalCents }, c.money);
+      const credited = -credit.reduce((t, l) => t + (l.fixed?.totalCents ?? 0), 0);
+      const byBase = amountCreditLines(stored, c.catalogueCents, { invoiceTotalCents: issued.totalCents });
+      if (-byBase.reduce((t, l) => t + (l.fixed?.totalCents ?? 0), 0) !== c.money) wasOff++;
+      if (credited !== c.money) off.push(`${c.fiscal.defaultTaxRate}% ${c.v.totalAmount} -${c.money}: ${credited}`);
+      // Never more tax or total off a line than it had.
+      credit.forEach((l) => {
+        const line = stored.find((x) => x.id === l.rectifiesLineId)!;
+        expect(-l.fixed!.taxCents).toBeGreaterThanOrEqual(0);
+        expect(-l.fixed!.taxCents).toBeLessThanOrEqual(line.taxCents);
+        expect(-l.fixed!.totalCents).toBeLessThanOrEqual(line.totalCents);
+      });
+    }
+    expect(off).toEqual([]);
+    // By the base alone it would have been a cent off in some of them.
+    expect(wasOff).toBeGreaterThan(0);
+  });
+
+  it("without the money it stands for (records from before), or with the tax in the prices: no remainder to place", () => {
+    for (const c of cases()) {
+      const lines = appointmentInvoiceLines({ ...c.v, discount: { loyalty: { catalogueCents: c.catalogueCents } } }, c.fiscal);
+      expect(lines.some((l) => l.roundingCents)).toBe(false);
+    }
+    const included = { pricesIncludeTax: true, defaultTaxRate: 21 };
+    const lines = appointmentInvoiceLines(visit({ discount: { loyalty: { catalogueCents: 1001, moneyCents: 1001 } } }), included);
+    expect(lines.some((l) => l.roundingCents)).toBe(false);
+    expect(calc.compute(lines).totalCents).toBe(6500 - 1001);
   });
 });
 

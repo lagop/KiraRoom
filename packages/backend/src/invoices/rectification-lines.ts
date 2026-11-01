@@ -185,11 +185,19 @@ export function rectificationLines(
  * lines in proportion to what is left of each, in each line's own terms
  * (largest remainder, so the shares add up exactly), and credited from each
  * line as an amount (see above). Refused past what is left.
+ *
+ * `moneyCents`: the money the credit stands for, when it is known (a
+ * loyalty reward given at the till). On lines whose prices are the base the
+ * credited tax rounds per line, so the rectificativa can land a cent off
+ * it: the remainder goes on the tax of the last line that can take it
+ * (never more tax or total than is left of that line), so it credits that
+ * money exactly. Tax-included lines are exact already.
  */
 export function amountCreditLines(
   original: StoredInvoiceLine[],
   amountCents: number,
   context: RectificationContext = {},
+  moneyCents?: number,
 ): InvoiceLineInput[] {
   assertCents(amountCents);
   const state = creditState(original, context);
@@ -205,8 +213,29 @@ export function amountCreditLines(
   }
   const shares = allocateCents(amountCents, open.map(priceLeft));
   const lines = open.flatMap((r, i) => (shares[i] > 0 ? [amountCredit(r, shares[i])] : []));
+  if (moneyCents !== undefined) creditMoneyExactly(state, lines, moneyCents);
   assertWithinInvoice(state, lines);
   return lines;
+}
+
+/** amountCreditLines' `moneyCents`: the rounding remainder on the tax of the last line that can take it. */
+function creditMoneyExactly(state: CreditState, lines: InvoiceLineInput[], moneyCents: number): void {
+  const credited = -lines.reduce((s, l) => s + (l.fixed?.totalCents ?? 0), 0);
+  const remainder = Math.round(moneyCents) - credited;
+  // Only rounding: a cent per line at most, and one for the shares.
+  if (remainder === 0 || Math.abs(remainder) > lines.length + 1) return;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i];
+    const r = l.rectifiesLineId ? state.lines.get(l.rectifiesLineId) : undefined;
+    if (!r || !l.fixed || r.line.taxIncluded === true) continue;
+    const tax = -l.fixed.taxCents + remainder;
+    // r holds what is left of the line after this credit.
+    if (tax < 0 || r.taxCents - remainder < 0 || r.totalCents - remainder < 0) continue;
+    l.fixed = { taxCents: 0 - tax, totalCents: l.fixed.totalCents - remainder };
+    r.taxCents -= remainder;
+    r.totalCents -= remainder;
+    return;
+  }
 }
 
 function creditState(original: StoredInvoiceLine[], context: RectificationContext): CreditState {

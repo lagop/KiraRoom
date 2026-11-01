@@ -19,6 +19,7 @@ import {
   PAYMENT_METHOD_LABELS,
   PAYMENT_STATUS_LABELS,
   formatEuros,
+  loyaltyNotOnInvoice,
   methodLabel,
   parseEurosToCents,
   paymentConcept,
@@ -392,6 +393,7 @@ export default function PaymentsPage() {
                       const refunded = payment.refundedAmount ?? 0;
                       const partly = payment.status === "paid" && refunded > 0;
                       const canRefund = manager && refundableCents(payment) > 0;
+                      const offInvoice = loyaltyNotOnInvoice(payment);
                       return (
                         <tr key={payment.id} className="hover:bg-gray-50">
                           <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-700">
@@ -402,8 +404,22 @@ export default function PaymentsPage() {
                               ? `${payment.client.firstName} ${payment.client.lastName}`.trim()
                               : "—"}
                           </td>
-                          <td className="max-w-xs truncate px-4 py-3 text-sm text-gray-600" title={paymentConcept(payment)}>
-                            {paymentConcept(payment)}
+                          <td className="max-w-xs px-4 py-3 text-sm text-gray-600">
+                            <div className="truncate" title={paymentConcept(payment)}>
+                              {paymentConcept(payment)}
+                            </div>
+                            {offInvoice && (
+                              <Link
+                                href="/dashboard/billing/invoices"
+                                role="alert"
+                                className="mt-1 block whitespace-normal rounded bg-amber-50 px-2 py-1 text-xs text-amber-800 hover:underline"
+                              >
+                                {t("payments.loyalty_not_on_invoice", {
+                                  amount: formatEuros(offInvoice.amountCents),
+                                  invoice: offInvoice.invoice,
+                                })}
+                              </Link>
+                            )}
                           </td>
                           <td className="whitespace-nowrap px-4 py-3 text-sm font-medium text-gray-900">
                             {formatEuros(payment.amount)}

@@ -6,6 +6,7 @@
 import {
   PAYMENT_STATUS_LABELS,
   formatEuros,
+  loyaltyNotOnInvoice,
   methodLabel,
   parseEurosToCents,
   paymentConcept,
@@ -78,6 +79,10 @@ const corte = { ...champu, id: "l2", kind: "service", description: "Corte", quan
 const picked = pickedLines([champu, corte], { l1: 2, l2: 0 });
 check("picked lines: only those with units, and their value", picked.lines.length === 1 && picked.lines[0].quantity === 2 && picked.valueCents === 667);
 check("never more units than are left", pickedLines([champu], { l1: 9 }).lines[0].quantity === 3);
+
+const flagged = loyaltyNotOnInvoice({ metadata: { posSaleId: "s1", loyaltyNotOnInvoice: { invoiceId: "inv-1", invoice: "A000012", amountCents: 500 } } });
+check("a reward left off the invoice is read from the payment", flagged?.invoice === "A000012" && flagged.amountCents === 500 && flagged.invoiceId === "inv-1");
+check("no flag, or a broken one: nothing to warn about", loyaltyNotOnInvoice({ metadata: { posSaleId: "s1" } }) === null && loyaltyNotOnInvoice({ metadata: { loyaltyNotOnInvoice: { amountCents: 5 } } }) === null && loyaltyNotOnInvoice({}) === null);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
