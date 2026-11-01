@@ -2464,7 +2464,11 @@
     "privacy_link": "Política de privacidad",
     "logged_out": "Sesión cerrada",
     "logged_out_desc": "Has cerrado sesión correctamente.",
-    "booking_failed": "No se pudo reservar la cita. Por favor, inténtalo de nuevo."
+    "booking_failed": "No se pudo reservar la cita. Por favor, inténtalo de nuevo.",
+    "step_location": "Elige el local",
+    "select_location": "Selecciona un local",
+    "booked_at": "Te esperamos en {location}.",
+    "booked_at_address": "Te esperamos en {location}: {address}."
   },
   "sites": {
     "notFoundTitle": "Salón no encontrado",

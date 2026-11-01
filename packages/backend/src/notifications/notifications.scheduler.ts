@@ -10,6 +10,7 @@ import { NotificationsService } from './notifications.service';
 import { NotificationType } from './dto';
 import { WhatsAppTemplateService } from '../whatsapp/whatsapp-template.service';
 import { withBookedService } from '../appointments/appointment-snapshot';
+import { bookingPlace } from '../multi-location/client-locations';
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -335,6 +336,10 @@ export class NotificationsScheduler {
     if (!email || !this.emailService.isConfigured()) return 'skipped';
     if (!(await this.allowed(appointment, kind, 'email'))) return 'skipped';
     return this.attempt(appointment, kind, 'email', async () => {
+      // At one of several locations: that one's name and address, not the salon's.
+      const place = await bookingPlace(this.prisma as any, appointment.tenantId, appointment.locationId).catch(
+        () => null,
+      );
       const result = await this.emailService.sendAppointmentReminder({
         clientName: `${appointment.client.firstName} ${appointment.client.lastName}`,
         clientEmail: email,
@@ -343,7 +348,8 @@ export class NotificationsScheduler {
         date: appointment.scheduledDate.toISOString().split('T')[0],
         time: appointment.scheduledTime,
         salonName: appointment.tenant.name,
-        salonAddress: this.formatAddress(appointment.tenant),
+        salonAddress: place?.address || this.formatAddress(appointment.tenant),
+        ...(place ? { locationName: place.name } : {}),
       }, kind.hoursBefore, {
         // A retry after a send that timed out but went through is not delivered twice.
         idempotencyKey: `appointment-reminder-${kind.hoursBefore}h-${appointment.id}-${appointment.startTime!.getTime()}`,

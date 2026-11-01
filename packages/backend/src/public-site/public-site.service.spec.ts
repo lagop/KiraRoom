@@ -35,8 +35,17 @@ function selectKeys(select: any, prefix = ""): string[] {
   );
 }
 
-function makeService({ tlsReady = false, subdomains = false, tenant = {} as any } = {}) {
+function makeService({
+  tlsReady = false,
+  subdomains = false,
+  tenant = {} as any,
+  locations = [] as any[],
+  links = [] as any[],
+} = {}) {
   const prisma = {
+    // The salon's open locations and who works at each (client-locations.ts).
+    location: { findMany: jest.fn(async () => locations) },
+    professionalLocation: { findMany: jest.fn(async () => links) },
     // No time off recorded (time-off-query.ts).
     timeOff: { findMany: jest.fn(async () => []) },
     tenant: {
@@ -254,6 +263,61 @@ describe("PublicSiteService.getPage", () => {
     // nothing but dates leaves the database (no note).
     expect(args.where).toMatchObject({ tenantId: "t1", professionalId: null, startTime: null, status: "approved" });
     expect(Object.keys(args.select)).not.toContain("note");
+  });
+
+  describe("locations (multi-local)", () => {
+    const CENTRO = {
+      id: "l-centro",
+      name: "Centro",
+      slug: "centro",
+      street: "Calle Mayor 1",
+      city: "Madrid",
+      state: "Madrid",
+      postalCode: "28013",
+      phone: "+34 910 000 001",
+    };
+    const NORTE = { ...CENTRO, id: "l-norte", name: "Norte", slug: "norte", street: "Av. Norte 5", postalCode: "28035", phone: null };
+
+    it("a salon with one location: no locations, professionals as before", async () => {
+      const page = await makeService({
+        locations: [CENTRO],
+        links: [{ professionalId: "p1", locationId: "l-centro", isPrimary: true }],
+      }).svc.getPage("x");
+      expect(page.locations).toEqual([]);
+      expect(page.professionals[0]).not.toHaveProperty("locationIds");
+    });
+
+    it("two locations to book at: each with its address, each professional with theirs", async () => {
+      const { svc, prisma } = makeService({
+        locations: [CENTRO, NORTE],
+        links: [
+          { professionalId: "p1", locationId: "l-centro", isPrimary: false },
+          { professionalId: "p1", locationId: "l-norte", isPrimary: true },
+        ],
+      });
+      const page = await svc.getPage("x");
+      expect(page.locations).toEqual([
+        { id: "l-centro", name: "Centro", slug: "centro", address: "Calle Mayor 1, 28013 Madrid", phone: "+34 910 000 001" },
+        { id: "l-norte", name: "Norte", slug: "norte", address: "Av. Norte 5, 28035 Madrid", phone: null },
+      ]);
+      expect(page.professionals[0]).toMatchObject({ locationIds: ["l-centro", "l-norte"], primaryLocationId: "l-norte" });
+      // Only this salon's open locations, and links of its active professionals.
+      const locArgs = (prisma.location.findMany.mock.calls[0] as any[])[0];
+      expect(locArgs.where).toEqual({ tenantId: "t1", isActive: true });
+      const linkArgs = (prisma.professionalLocation.findMany.mock.calls[0] as any[])[0];
+      expect(linkArgs.where).toEqual({
+        location: { tenantId: "t1", isActive: true },
+        professional: { tenantId: "t1", isActive: true },
+      });
+    });
+
+    it("a second location with nobody assigned is no choice: the page stays single-location", async () => {
+      const page = await makeService({
+        locations: [CENTRO, NORTE],
+        links: [{ professionalId: "p1", locationId: "l-centro", isPrimary: true }],
+      }).svc.getPage("x");
+      expect(page.locations).toEqual([]);
+    });
   });
 
   it("404s for an unknown or deleted salon", async () => {

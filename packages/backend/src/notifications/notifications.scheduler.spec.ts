@@ -377,3 +377,31 @@ describe("reminders name the service as it was booked", () => {
     expect(names).toEqual(["Corte", "Tinte"]);
   });
 });
+
+describe("reminder emails at a salon with several locations", () => {
+  const CENTRO = { id: "l-centro", name: "Centro", slug: "centro", street: "Calle Mayor 1", city: "Madrid", state: "Madrid", postalCode: "28013", phone: null };
+  const NORTE = { id: "l-norte", name: "Norte", slug: "norte", street: "Av. Norte 5", city: "Madrid", state: "Madrid", postalCode: "28035", phone: null };
+  const tenant = { name: "Salón", street: "Calle Sede 9", city: "Madrid", country: "ES" };
+
+  it("names the appointment's location and gives its address, not the salon's", async () => {
+    const prisma: any = makePrisma([appointment({ locationId: "l-norte", tenant })]);
+    prisma.location = { findMany: jest.fn(async () => [CENTRO, NORTE]) };
+    const { scheduler, email } = makeScheduler(prisma);
+    await scheduler.send24HourReminders(NOW);
+    expect(email.sendAppointmentReminder.mock.calls[0][0]).toMatchObject({
+      locationName: "Norte",
+      salonAddress: "Av. Norte 5, 28035 Madrid",
+    });
+    expect(prisma.location.findMany.mock.calls[0][0].where).toEqual({ tenantId: "t1", isActive: true });
+  });
+
+  it("a salon with one location: the salon's address, no location named", async () => {
+    const prisma: any = makePrisma([appointment({ locationId: "l-centro", tenant })]);
+    prisma.location = { findMany: jest.fn(async () => [CENTRO]) };
+    const { scheduler, email } = makeScheduler(prisma);
+    await scheduler.send24HourReminders(NOW);
+    const sent: any = email.sendAppointmentReminder.mock.calls[0][0];
+    expect(sent.salonAddress).toBe("Calle Sede 9, Madrid, ES");
+    expect(sent).not.toHaveProperty("locationName");
+  });
+});
