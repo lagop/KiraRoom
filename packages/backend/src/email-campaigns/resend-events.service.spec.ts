@@ -23,6 +23,8 @@ function fakePrisma() {
     suppressions: [] as Row[],
     users: [] as Row[],
     deliveries: [] as Row[],
+    tenants: [{ id: "tenant-a" }, { id: "tenant-b" }] as Row[],
+    clients: [] as Row[],
   };
 
   const matches = (row: Row, where: Row) =>
@@ -81,6 +83,16 @@ function fakePrisma() {
         const hit = db.deliveries.filter((x) => matches(x, where));
         hit.forEach((x) => Object.assign(x, data));
         return { count: hit.length };
+      },
+    },
+    tenant: {
+      findUnique: async ({ where }: any) => db.tenants.find((t) => t.id === where.id) ?? null,
+    },
+    client: {
+      findMany: async ({ where }: any) => {
+        const wanted = String(where.email.equals).toLowerCase();
+        const ids = [...new Set(db.clients.filter((c) => c.email.toLowerCase() === wanted).map((c) => c.tenantId))];
+        return ids.slice(0, where.take ?? ids.length).map((tenantId) => ({ tenantId }));
       },
     },
     user: {
@@ -195,6 +207,38 @@ describe("ResendEventsService", () => {
     expect(db.users[0].emailBouncedAt).toBeInstanceOf(Date);
     expect(db.deliveries[0].status).toBe("BOUNCED");
     expect(db.campaigns[0].bounces).toBe(0);
+  });
+
+  describe("a spam complaint on an email with no recipient row", () => {
+    // A deleted campaign, or an older re-engagement email whose row now
+    // carries a newer id: the complaint used to change nothing.
+    it("suppresses the address for the salon named in the email's tags", async () => {
+      const { send, db } = setup();
+      db.clients.push({ tenantId: "tenant-a", email: "queja@example.test" }, { tenantId: "tenant-b", email: "queja@example.test" });
+      await send("email.complained", "re_old", { to: ["Queja@Example.test"], tags: { tenant_id: "tenant-b", campaign_id: "x" } });
+      expect(db.suppressions).toEqual([expect.objectContaining({ tenantId: "tenant-b", email: "queja@example.test", reason: "complaint" })]);
+    });
+
+    it("reads tags sent as a list too", async () => {
+      const { send, db } = setup();
+      await send("email.complained", "re_old", { to: ["queja@example.test"], tags: [{ name: "tenant_id", value: "tenant-a" }] });
+      expect(db.suppressions).toEqual([expect.objectContaining({ tenantId: "tenant-a", reason: "complaint" })]);
+    });
+
+    it("without tags, uses the one salon that has this client", async () => {
+      const { send, db } = setup();
+      db.clients.push({ tenantId: "tenant-b", email: "queja@example.test" });
+      await send("email.complained", "re_old", { to: ["queja@example.test"] });
+      expect(db.suppressions).toEqual([expect.objectContaining({ tenantId: "tenant-b", reason: "complaint" })]);
+    });
+
+    it("guesses nothing when several salons have that client, or a tag names no salon", async () => {
+      const { send, db } = setup();
+      db.clients.push({ tenantId: "tenant-a", email: "queja@example.test" }, { tenantId: "tenant-b", email: "queja@example.test" });
+      await send("email.complained", "re_old", { to: ["queja@example.test"] });
+      await send("email.complained", "re_old2", { to: ["queja@example.test"], tags: { tenant_id: "no-such-salon" } });
+      expect(db.suppressions).toEqual([]);
+    });
   });
 
   it("ignores event types it does not track", async () => {

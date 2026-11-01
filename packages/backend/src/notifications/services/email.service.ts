@@ -4,7 +4,7 @@ import { Resend } from "resend";
 import { TranslationsService } from "../../translations/translations.service";
 import { PrismaService } from "../../common/prisma/prisma.service";
 import { PlatformEmailConfigService } from "../../platform/platform-email-config.service";
-import { EmailSettings, senderDomain } from "../../platform/email-settings";
+import { EmailSettings, senderDomain, senderWithName } from "../../platform/email-settings";
 import { isPlaceholderEmail } from "../../common/placeholder-email";
 import { escapeHtml } from "../../common/html-escape";
 
@@ -52,6 +52,42 @@ export interface EmailOptions {
   idempotencyKey?: string;
   /** Files attached to the email (an invoice's PDF). */
   attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>;
+  /**
+   * The display name in front of the platform's sender address (a salon's
+   * name on its campaigns). The address itself never changes. Cleaned of
+   * quotes and line breaks (senderWithName).
+   */
+  fromName?: string;
+  /**
+   * Resend tags, returned with every webhook event for this email: how a
+   * late complaint finds the salon it was about (ResendEventsService).
+   * Names and values: ASCII letters, digits, "_" and "-".
+   */
+  tags?: Array<{ name: string; value: string }>;
+}
+
+/** What a send returned. */
+export interface EmailSendResult {
+  success: boolean;
+  id?: string;
+  error?: string;
+  /** The provider's HTTP status, when it answered with an error. */
+  statusCode?: number | null;
+  /**
+   * Whether trying again later may work: a rate limit (429), a provider
+   * error (5xx), no answer at all (timeout, network). A refused address or
+   * a bad request is not.
+   */
+  retryable?: boolean;
+}
+
+/** Resend errors worth retrying, by their status or name. */
+export function isRetryableSendError(error: { statusCode?: number | null; name?: string } | null | undefined): boolean {
+  if (!error) return false;
+  const status = error.statusCode ?? null;
+  if (status === null) return true; // no HTTP answer: network or timeout
+  if (status === 429 || status >= 500) return true;
+  return error.name === "concurrent_idempotent_requests";
 }
 
 export interface BatchEmailOptions {
@@ -177,9 +213,7 @@ export class EmailService {
   /**
    * Send raw email
    */
-  async sendEmail(
-    options: EmailOptions,
-  ): Promise<{ success: boolean; id?: string; error?: string }> {
+  async sendEmail(options: EmailOptions): Promise<EmailSendResult> {
     const resend = this.client();
     if (!resend) {
       this.logger.warn("Email service not configured - skipping email send");
@@ -192,7 +226,7 @@ export class EmailService {
       return { success: false, error: "No deliverable recipient" };
     }
 
-    const from = this.fromAddress();
+    const from = options.fromName ? senderWithName(options.fromName, this.fromAddress()) : this.fromAddress();
 
     const headers = this.buildHeaders(options, from);
 
@@ -208,6 +242,7 @@ export class EmailService {
             replyTo: options.replyTo,
             headers,
             ...(options.attachments?.length ? { attachments: options.attachments } : {}),
+            ...(options.tags?.length ? { tags: options.tags } : {}),
           },
           options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : undefined,
         ),
@@ -216,15 +251,22 @@ export class EmailService {
 
       if (error) {
         this.logger.error(`Failed to send email: ${error.message}`);
-        return { success: false, error: error.message };
+        const statusCode = (error as { statusCode?: number | null }).statusCode ?? null;
+        return {
+          success: false,
+          error: error.message,
+          statusCode,
+          retryable: isRetryableSendError({ statusCode, name: (error as { name?: string }).name }),
+        };
       }
 
       this.logger.log(`Email sent successfully: ${data?.id}`);
       return { success: true, id: data?.id };
     } catch (err) {
+      // A timeout or a network failure: the provider never answered.
       const errorMessage = err instanceof Error ? err.message : "Unknown error";
       this.logger.error(`Failed to send email: ${errorMessage}`);
-      return { success: false, error: errorMessage };
+      return { success: false, error: errorMessage, retryable: true };
     }
   }
 

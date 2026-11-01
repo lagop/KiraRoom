@@ -34,7 +34,7 @@ export class CreatePromotionDto {
   @IsOptional() @IsString() @MaxLength(2000)
   description?: string | null;
 
-  @IsString() @MaxLength(50) @Matches(CODE, { message: "code must not contain spaces" })
+  @IsString() @MaxLength(50) @Matches(CODE, { message: "El código no puede tener espacios." })
   code!: string;
 
   @IsEnum(PromotionType)
@@ -97,7 +97,7 @@ export class UpdatePromotionDto {
 
 /** Body of `POST /promotions/apply`. */
 export class ApplyPromotionDto {
-  @IsString() @MaxLength(50) @Matches(CODE, { message: "code must not contain spaces" })
+  @IsString() @MaxLength(50) @Matches(CODE, { message: "El código no puede tener espacios." })
   code!: string;
 
   @IsUUID()
