@@ -37,7 +37,7 @@ function consentRows(accepted: string[]) {
   );
 }
 
-function setup(opts: { campaign?: any; accepted?: string[]; templates?: any } = {}) {
+function setup(opts: { campaign?: any; accepted?: string[]; templates?: any; connection?: any } = {}) {
   const prisma: any = {
     whatsAppCampaign: {
       findFirst: jest.fn(async ({ where }: any) =>
@@ -48,6 +48,15 @@ function setup(opts: { campaign?: any; accepted?: string[]; templates?: any } = 
       update: jest.fn(async ({ data }: any) => ({ ...opts.campaign, ...data })),
       updateMany: jest.fn(async () => ({ count: 1 })),
       delete: jest.fn(async () => ({})),
+      // B3: the status re-read before each send.
+      findUnique: jest.fn(async () => ({ status: opts.campaign?.status ?? "sending" })),
+    },
+    whatsAppConnection: {
+      findUnique: jest.fn(async () =>
+        opts.connection === undefined
+          ? { isActive: true, phoneNumberId: "pn1", tokenExpiresAt: null }
+          : opts.connection,
+      ),
     },
     whatsAppCampaignRecipient: {
       findMany: jest.fn(async () => []),
@@ -62,6 +71,7 @@ function setup(opts: { campaign?: any; accepted?: string[]; templates?: any } = 
     createTemplate: jest.fn(async () => ({ status: "PENDING" })),
     templateReview: jest.fn(async () => ({ status: "PENDING" })),
     sendApprovedTemplate: jest.fn(async () => ({ sent: true, messageId: "wamid.1" })),
+    deleteTemplate: jest.fn(async () => ({ deleted: true })),
     ...opts.templates,
   };
   const service = new WhatsAppCampaignsService(prisma, templates);
@@ -222,14 +232,15 @@ describe("WhatsAppCampaignsService — dispatcher", () => {
     expect(prisma.whatsAppCampaignRecipient.update).not.toHaveBeenCalled();
   });
 
-  it("fails the campaign, saying why, when WhatsApp was disconnected", async () => {
+  it("pauses the campaign, saying why, when WhatsApp was disconnected mid-batch", async () => {
     const { service, prisma, templates } = sending();
     templates.sendApprovedTemplate.mockResolvedValueOnce({ sent: false, reason: "not_connected" });
     await service.sendBatches(NOON);
-    expect(prisma.whatsAppCampaign.update.mock.calls[0][0].data).toMatchObject({
-      status: "failed",
-      lastError: expect.stringContaining("desconectó"),
+    expect(prisma.whatsAppCampaign.updateMany).toHaveBeenCalledWith({
+      where: { id: ID, status: "sending" },
+      data: { status: "paused", lastError: expect.stringContaining("desconectado") },
     });
+    expect(prisma.whatsAppCampaignRecipient.update).not.toHaveBeenCalled();
   });
 
   it("records other refusals as failures and goes on", async () => {
@@ -261,18 +272,225 @@ describe("WhatsAppCampaignsService — dispatcher", () => {
     expect(prisma.whatsAppCampaign.updateMany).not.toHaveBeenCalled();
   });
 
-  it("completes the campaign with its counts when nobody is pending", async () => {
+  it("completes the campaign when nobody is pending, without freezing its counts", async () => {
     const { service, prisma } = setup({ campaign: campaignRow({ status: "sending", tenant: { country: "ES" } }) });
-    prisma.whatsAppCampaignRecipient.groupBy.mockResolvedValueOnce([
-      { status: "sent", _count: { _all: 2 } },
-      { status: "delivered", _count: { _all: 3 } },
-      { status: "read", _count: { _all: 1 } },
-      { status: "opted_out", _count: { _all: 1 } },
-    ]);
     await service.sendBatches(NOON);
     expect(prisma.whatsAppCampaign.updateMany.mock.calls[0][0]).toEqual({
       where: { id: ID, status: "sending" },
-      data: expect.objectContaining({ status: "completed", sent: 6, delivered: 4, read: 1, failed: 0, optedOut: 1 }),
+      data: { status: "completed", completedAt: expect.any(Date) },
     });
+  });
+});
+
+describe("WhatsAppCampaignsService — account-level Meta errors pause the campaign (M9)", () => {
+  function sendingCampaign(over: { connection?: any } = {}) {
+    const ctx = setup({
+      campaign: campaignRow({ status: "sending", templateId: "kr_promo_x_1", tenant: { country: "ES" } }),
+      accepted: ["c1", "c2"],
+      connection: over.connection,
+    });
+    ctx.prisma.whatsAppCampaignRecipient.findMany.mockResolvedValueOnce([
+      { id: "r1", clientId: "c1", phone: "600111222" },
+      { id: "r2", clientId: "c2", phone: "600222333" },
+    ]);
+    ctx.prisma.client.findMany.mockResolvedValueOnce([
+      { id: "c1", firstName: "Ana", status: "active", communicationPreferences: {} },
+      { id: "c2", firstName: "Eva", status: "active", communicationPreferences: {} },
+    ]);
+    return ctx;
+  }
+
+  it.each([
+    ["meta_190", /caducado/], // token expired or invalid
+    ["meta_131042", /método de pago/], // payment problem
+    ["meta_132015", /pausado la plantilla/], // template paused
+    ["meta_132016", /desactivado la plantilla/], // template disabled
+    ["meta_368", /restringido o bloqueado/], // number blocked for policy
+    ["meta_131031", /restringido o bloqueado/], // account locked
+  ])("%s: pauses with the reason in Spanish and leaves everyone pending", async (reason, text) => {
+    const { service, prisma, templates } = sendingCampaign();
+    templates.sendApprovedTemplate.mockResolvedValueOnce({ sent: false, reason });
+    await service.sendBatches(NOON);
+
+    expect(templates.sendApprovedTemplate).toHaveBeenCalledTimes(1);
+    expect(prisma.whatsAppCampaign.updateMany).toHaveBeenCalledWith({
+      where: { id: ID, status: "sending" },
+      data: { status: "paused", lastError: expect.stringMatching(text) },
+    });
+    // Neither the client whose send hit the error nor the rest are failed.
+    expect(prisma.whatsAppCampaignRecipient.update).not.toHaveBeenCalled();
+  });
+
+  it("checks the token expiry before a batch and sends nothing when it has passed", async () => {
+    const { service, prisma, templates } = sendingCampaign({
+      connection: { isActive: true, phoneNumberId: "pn1", tokenExpiresAt: new Date(NOON.getTime() - 1000) },
+    });
+    await service.sendBatches(NOON);
+    expect(templates.sendApprovedTemplate).not.toHaveBeenCalled();
+    expect(prisma.whatsAppCampaign.updateMany).toHaveBeenCalledWith({
+      where: { id: ID, status: "sending" },
+      data: { status: "paused", lastError: expect.stringContaining("caducado") },
+    });
+  });
+
+  it("a token that expires later does not stop the batch", async () => {
+    const { service, templates } = sendingCampaign({
+      connection: { isActive: true, phoneNumberId: "pn1", tokenExpiresAt: new Date(NOON.getTime() + 86_400_000) },
+    });
+    await service.sendBatches(NOON);
+    expect(templates.sendApprovedTemplate).toHaveBeenCalledTimes(2);
+  });
+
+  it("a per-client error (not on WhatsApp) still only fails that client", async () => {
+    const { service, prisma, templates } = sendingCampaign();
+    templates.sendApprovedTemplate.mockResolvedValueOnce({ sent: false, reason: "meta_131026" });
+    await service.sendBatches(NOON);
+    expect(prisma.whatsAppCampaign.updateMany).not.toHaveBeenCalled();
+    expect(templates.sendApprovedTemplate).toHaveBeenCalledTimes(2);
+  });
+
+  function paused(over: { templates?: any; connection?: any } = {}) {
+    return setup({
+      campaign: campaignRow({ status: "paused", templateId: "kr_promo_x_1", templateStatus: "APPROVED", lastError: "x" }),
+      templates: { templateReview: jest.fn(async () => ({ status: "APPROVED" })), ...over.templates },
+      connection: over.connection,
+    });
+  }
+
+  it("Reanudar: back to sending once the template is approved and the connection valid", async () => {
+    const { service, prisma } = paused();
+    await service.resume("t1", ID);
+    expect(prisma.whatsAppCampaign.updateMany).toHaveBeenCalledWith({
+      where: { id: ID, tenantId: "t1", status: "paused" },
+      data: { status: "sending", lastError: null, templateStatus: "APPROVED" },
+    });
+  });
+
+  it("Reanudar refuses while the token is still expired", async () => {
+    const { service, prisma } = paused({
+      connection: { isActive: true, phoneNumberId: "pn1", tokenExpiresAt: new Date(Date.now() - 1000) },
+    });
+    await expect(service.resume("t1", ID)).rejects.toThrow(/caducado/);
+    expect(prisma.whatsAppCampaign.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("Reanudar refuses while Meta keeps the template paused, and records its status", async () => {
+    const { service, prisma } = paused({ templates: { templateReview: jest.fn(async () => ({ status: "PAUSED" })) } });
+    await expect(service.resume("t1", ID)).rejects.toThrow(/en pausa/);
+    expect(prisma.whatsAppCampaign.update).toHaveBeenCalledWith({ where: { id: ID }, data: { templateStatus: "PAUSED" } });
+    expect(prisma.whatsAppCampaign.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("Reanudar only applies to a paused campaign of the salon", async () => {
+    const { service } = setup({ campaign: campaignRow({ status: "sending" }) });
+    await expect(service.resume("t1", ID)).rejects.toBeInstanceOf(ConflictException);
+    const other = setup({ campaign: campaignRow({ status: "paused", tenantId: "other" }) });
+    await expect(other.service.resume("t1", ID)).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it("a paused campaign can be cancelled", async () => {
+    const { service, prisma } = paused();
+    await service.cancel("t1", ID);
+    expect(prisma.whatsAppCampaign.update.mock.calls[0][0].data).toMatchObject({ status: "cancelled" });
+  });
+});
+
+describe("WhatsAppCampaignsService — counts worked out when read (M10)", () => {
+  it("list adds each campaign's counts from its recipients", async () => {
+    const { service, prisma } = setup({ campaign: campaignRow({ status: "completed", delivered: 0, read: 0 }) });
+    prisma.whatsAppCampaignRecipient.groupBy.mockResolvedValueOnce([
+      { campaignId: ID, status: "sent", _count: { _all: 2 } },
+      { campaignId: ID, status: "delivered", _count: { _all: 3 } },
+      { campaignId: ID, status: "read", _count: { _all: 1 } },
+      { campaignId: ID, status: "failed", _count: { _all: 2 } },
+      { campaignId: ID, status: "opted_out", _count: { _all: 1 } },
+    ]);
+    const [row] = (await service.list("t1")) as any[];
+    expect(prisma.whatsAppCampaignRecipient.groupBy.mock.calls[0][0]).toMatchObject({
+      by: ["campaignId", "status"],
+      where: { campaignId: { in: [ID] } },
+    });
+    expect(row).toMatchObject({ sent: 6, delivered: 4, read: 1, failed: 2, optedOut: 1, pending: 0 });
+  });
+
+  it("get does the same for one campaign", async () => {
+    const { service, prisma } = setup({ campaign: campaignRow({ status: "sending" }) });
+    prisma.whatsAppCampaignRecipient.groupBy.mockResolvedValueOnce([
+      { status: "read", _count: { _all: 2 } },
+      { status: "pending", _count: { _all: 5 } },
+    ]);
+    expect(await service.get("t1", ID)).toMatchObject({ sent: 2, delivered: 2, read: 2, pending: 5 });
+  });
+});
+
+describe("WhatsAppCampaignsService — cancelling mid-batch (B3)", () => {
+  it("re-reads the status before each send and stops once the campaign was cancelled", async () => {
+    const { service, prisma, templates } = setup({
+      campaign: campaignRow({ status: "sending", templateId: "kr_promo_x_1", tenant: { country: "ES" } }),
+      accepted: ["c1", "c2"],
+    });
+    prisma.whatsAppCampaignRecipient.findMany.mockResolvedValueOnce([
+      { id: "r1", clientId: "c1", phone: "600111222" },
+      { id: "r2", clientId: "c2", phone: "600222333" },
+    ]);
+    prisma.client.findMany.mockResolvedValueOnce([
+      { id: "c1", firstName: "Ana", status: "active", communicationPreferences: {} },
+      { id: "c2", firstName: "Eva", status: "active", communicationPreferences: {} },
+    ]);
+    prisma.whatsAppCampaign.findUnique
+      .mockResolvedValueOnce({ status: "sending" })
+      .mockResolvedValueOnce({ status: "cancelled" });
+    await service.sendBatches(NOON);
+    expect(templates.sendApprovedTemplate).toHaveBeenCalledTimes(1);
+    expect(prisma.whatsAppCampaignRecipient.update).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("WhatsAppCampaignsService — Meta templates are cleaned up (B4)", () => {
+  it("deleting a campaign deletes its template from Meta", async () => {
+    const { service, prisma, templates } = setup({
+      campaign: campaignRow({ status: "completed", templateId: "kr_promo_x_1" }),
+    });
+    expect(await service.remove("t1", ID)).toEqual({ deleted: true });
+    expect(prisma.whatsAppCampaign.delete).toHaveBeenCalledWith({ where: { id: ID } });
+    expect(templates.deleteTemplate).toHaveBeenCalledWith("t1", "kr_promo_x_1");
+  });
+
+  it("a draft never submitted has no template to delete", async () => {
+    const { service, templates } = setup({ campaign: campaignRow() });
+    await service.remove("t1", ID);
+    expect(templates.deleteTemplate).not.toHaveBeenCalled();
+  });
+
+  it("a failed deletion at Meta is logged, and the campaign is still deleted", async () => {
+    const { service, prisma } = setup({
+      campaign: campaignRow({ status: "cancelled", templateId: "kr_promo_x_1" }),
+      templates: { deleteTemplate: jest.fn(async () => ({ deleted: false, error: "Meta down" })) },
+    });
+    expect(await service.remove("t1", ID)).toEqual({ deleted: true });
+    expect(prisma.whatsAppCampaign.delete).toHaveBeenCalled();
+    expect((service as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining("Meta down"));
+  });
+
+  it("even a deletion that throws does not fail the request", async () => {
+    const { service } = setup({
+      campaign: campaignRow({ status: "cancelled", templateId: "kr_promo_x_1" }),
+      templates: { deleteTemplate: jest.fn(async () => Promise.reject(new Error("boom"))) },
+    });
+    await expect(service.remove("t1", ID)).resolves.toEqual({ deleted: true });
+  });
+
+  it("resubmitting a rejected campaign deletes the rejected template it replaces", async () => {
+    const { service, templates } = setup({
+      campaign: campaignRow({ templateId: "kr_promo_3f2a9c1e77b1_1", templateStatus: "REJECTED" }),
+    });
+    await service.submit("t1", ID);
+    expect(templates.deleteTemplate).toHaveBeenCalledWith("t1", "kr_promo_3f2a9c1e77b1_1");
+  });
+
+  it("a first submission deletes nothing", async () => {
+    const { service, templates } = setup({ campaign: campaignRow() });
+    await service.submit("t1", ID);
+    expect(templates.deleteTemplate).not.toHaveBeenCalled();
   });
 });

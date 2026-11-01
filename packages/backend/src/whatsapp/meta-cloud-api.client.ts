@@ -157,6 +157,17 @@ export class MetaCloudApiClient {
     return (await resp.json()) as any;
   }
 
+  /** Deletes a template (every language of it) from the salon's WhatsApp Business account. */
+  async deleteTemplate(
+    accessToken: string,
+    wabaId: string,
+    name: string,
+  ): Promise<{ success?: boolean; error?: { code: number; message: string } }> {
+    const url = `${this.baseUrl()}/${wabaId}/message_templates?name=${encodeURIComponent(name)}`;
+    const resp = await fetch(url, { method: "DELETE", headers: { Authorization: `Bearer ${accessToken}` } });
+    return (await resp.json()) as any;
+  }
+
   /** One template by name, with Meta's review status and rejection reason. */
   async findTemplate(
     accessToken: string,
