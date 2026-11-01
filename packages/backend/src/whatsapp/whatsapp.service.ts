@@ -3,12 +3,27 @@ import { PrismaService } from "../common/prisma/prisma.service";
 import { MetaCloudApiClient } from "./meta-cloud-api.client";
 import { ConfigService } from "@nestjs/config";
 import { createHmac, timingSafeEqual } from "crypto";
-import { WhatsAppRecipientStatus } from "@prisma/client";
+import { WhatsAppCampaignStatus, WhatsAppRecipientStatus } from "@prisma/client";
+import { accountLevelReason } from "./campaigns/meta-account-errors";
 import { ConsentService } from "../consent/consent.service";
 import { phoneKey } from "../common/phone";
 import { optOutIntent } from "./opt-out-words";
 import { WhatsAppReceptionistService } from "./whatsapp-receptionist.service";
 import { WhatsAppTemplateService } from "./whatsapp-template.service";
+
+/** A campaign message's progress, in order. */
+const DELIVERY_STEPS: WhatsAppRecipientStatus[] = [
+  WhatsAppRecipientStatus.pending,
+  WhatsAppRecipientStatus.sent,
+  WhatsAppRecipientStatus.delivered,
+  WhatsAppRecipientStatus.read,
+];
+
+/** Meta's status timestamp (Unix seconds, as a string), or now. */
+function metaTime(timestamp: unknown): Date {
+  const seconds = Number(timestamp);
+  return Number.isFinite(seconds) && seconds > 0 ? new Date(seconds * 1000) : new Date();
+}
 
 interface BucketState {
   capacity: number;
@@ -248,33 +263,8 @@ export class WhatsAppService {
     // Message status updates
     const statuses = value.statuses ?? [];
     for (const s of statuses) {
-      const id = s.id;
-      if (!id) continue;
-      const recipient = await this.prisma.whatsAppCampaignRecipient.findFirst({
-        where: { messageId: id },
-        include: { campaign: true },
-      });
-      if (!recipient) continue;
-      const updates: any = {};
-      if (s.status === "sent") {
-        updates.status = WhatsAppRecipientStatus.sent;
-        updates.sentAt = new Date();
-      } else if (s.status === "delivered") {
-        updates.status = WhatsAppRecipientStatus.delivered;
-        updates.deliveredAt = new Date();
-      } else if (s.status === "read") {
-        updates.status = WhatsAppRecipientStatus.read;
-        updates.readAt = new Date();
-      } else if (s.status === "failed") {
-        updates.status = WhatsAppRecipientStatus.failed;
-        updates.externalError = JSON.stringify(s.errors ?? []);
-      }
-      if (Object.keys(updates).length > 0) {
-        await this.prisma.whatsAppCampaignRecipient.update({
-          where: { id: recipient.id },
-          data: updates,
-        });
-      }
+      if (!s?.id) continue;
+      await this.applyMessageStatus(s);
     }
     // Quality / template status updates
     if (change.field === "message_template_status_update" && value.event) {
@@ -287,6 +277,69 @@ export class WhatsAppService {
         data: { qualityScore: value.quality_score },
       });
     }
+  }
+
+  /**
+   * One of Meta's delivery statuses for a campaign message. Meta does not
+   * promise the order they arrive in, so a status only moves forward
+   * (pending < sent < delivered < read) and an older one is ignored: a late
+   * "delivered" no longer turns a "read" back. "failed" is terminal, and is
+   * only taken while the message was not yet known to have arrived.
+   *
+   * A failure about the salon's account or the template (payment, token,
+   * paused template...: meta-account-errors.ts) pauses the campaign, and the
+   * message goes back to pending so "Reanudar" sends it again.
+   */
+  private async applyMessageStatus(s: any): Promise<void> {
+    const recipient = await this.prisma.whatsAppCampaignRecipient.findFirst({
+      where: { messageId: s.id },
+      select: { id: true, campaignId: true, campaign: { select: { status: true } } },
+    });
+    if (!recipient) return;
+    const at = metaTime(s.timestamp);
+
+    if (s.status === "failed") {
+      const code = s.errors?.[0]?.code;
+      const accountReason = accountLevelReason(code === undefined || code === null ? null : Number(code));
+      const campaignStatus = recipient.campaign?.status;
+      if (
+        accountReason &&
+        (campaignStatus === WhatsAppCampaignStatus.sending || campaignStatus === WhatsAppCampaignStatus.paused)
+      ) {
+        await this.prisma.whatsAppCampaignRecipient.updateMany({
+          where: { id: recipient.id, status: WhatsAppRecipientStatus.sent },
+          data: { status: WhatsAppRecipientStatus.pending, externalError: `meta_${code}` },
+        });
+        await this.prisma.whatsAppCampaign.updateMany({
+          where: { id: recipient.campaignId, status: WhatsAppCampaignStatus.sending },
+          data: { status: WhatsAppCampaignStatus.paused, lastError: accountReason },
+        });
+        this.logger.warn(`WhatsApp campaign ${recipient.campaignId}: paused by a delivery failure (meta_${code})`);
+        return;
+      }
+      await this.prisma.whatsAppCampaignRecipient.updateMany({
+        where: {
+          id: recipient.id,
+          status: { in: [WhatsAppRecipientStatus.pending, WhatsAppRecipientStatus.sent] },
+        },
+        data: { status: WhatsAppRecipientStatus.failed, externalError: JSON.stringify(s.errors ?? []) },
+      });
+      return;
+    }
+
+    const target = DELIVERY_STEPS.find((step) => step === s.status);
+    if (!target) return;
+    const earlier = DELIVERY_STEPS.slice(0, DELIVERY_STEPS.indexOf(target));
+    const data =
+      target === WhatsAppRecipientStatus.sent
+        ? { status: target, sentAt: at }
+        : target === WhatsAppRecipientStatus.delivered
+          ? { status: target, deliveredAt: at }
+          : { status: target, readAt: at };
+    await this.prisma.whatsAppCampaignRecipient.updateMany({
+      where: { id: recipient.id, status: { in: earlier } },
+      data,
+    });
   }
 
   /**

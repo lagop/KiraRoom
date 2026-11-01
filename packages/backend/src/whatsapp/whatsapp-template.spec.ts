@@ -268,3 +268,31 @@ describe("NotificationsScheduler WhatsApp reminder", () => {
     expect(await scheduler({ sent: false, reason: "meta_131026" }, false).sendWhatsAppReminder(appointment, 1)).toBe("failed");
   });
 });
+
+describe("WhatsAppTemplateService.deleteTemplate (B4)", () => {
+  it("deletes a campaign's template through the Meta client, with the salon's token and account", async () => {
+    const { service, meta } = setup();
+    meta.deleteTemplate = jest.fn(async () => ({ success: true }));
+    expect(await service.deleteTemplate("t1", "kr_promo_x_1")).toEqual({ deleted: true });
+    expect(meta.deleteTemplate).toHaveBeenCalledWith("token", "waba1", "kr_promo_x_1");
+  });
+
+  it("says why when Meta refuses, without throwing", async () => {
+    const { service, meta } = setup();
+    meta.deleteTemplate = jest.fn(async () => ({ error: { code: 100, message: "Template not found" } }));
+    expect(await service.deleteTemplate("t1", "kr_promo_x_1")).toEqual({ deleted: false, error: "Template not found" });
+  });
+
+  it("a network error is reported, not thrown", async () => {
+    const { service, meta } = setup();
+    meta.deleteTemplate = jest.fn(async () => Promise.reject(new Error("ECONNRESET")));
+    expect(await service.deleteTemplate("t1", "kr_promo_x_1")).toEqual({ deleted: false, error: "ECONNRESET" });
+  });
+
+  it("without a connected account there is nothing to call", async () => {
+    const { service, meta } = setup({ connection: null });
+    meta.deleteTemplate = jest.fn();
+    expect(await service.deleteTemplate("t1", "kr_promo_x_1")).toEqual({ deleted: false, error: "not_connected" });
+    expect(meta.deleteTemplate).not.toHaveBeenCalled();
+  });
+});

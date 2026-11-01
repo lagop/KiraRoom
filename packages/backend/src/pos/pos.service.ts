@@ -1104,23 +1104,30 @@ export class PosService {
       emailed[card.id] = (await this.giftCards!.sendCardEmail(tenantId, card.id)).sent;
     }
 
-    // Points for the sale. An appointment's ticket earns through the
-    // appointment instead (once it is completed and paid), never both. A
-    // gift card earns when it is spent, not when it is sold.
+    // Points for the sale. Each appointment earns through itself (once it
+    // is completed and paid, for its own client); the ticket's other lines
+    // (products, walk-in services) earn as the sale, for the sale's client,
+    // on what they were paid net of their share of the reward: the money
+    // rows with no appointment (serviceCents + productCents). Products on a
+    // visit's ticket used to earn nothing. In per-visit mode they add no
+    // visit when the client already has one on the ticket. A gift card
+    // earns when it is spent, not when it is sold.
     let pointsEarned = 0;
     if (this.loyalty) {
       try {
-        if (appointmentIds.length > 0) {
-          for (const id of appointmentIds) {
-            const r = await this.loyalty.settleAppointment(tenantId, id);
-            pointsEarned += r?.awarded ?? 0;
-          }
-        } else {
-          pointsEarned = await this.loyalty.earnForSale(tenantId, {
+        for (const id of appointmentIds) {
+          const r = await this.loyalty.settleAppointment(tenantId, id);
+          pointsEarned += r?.awarded ?? 0;
+        }
+        const ownLinesCents = serviceCents + productCents;
+        if (ownLinesCents > 0) {
+          pointsEarned += await this.loyalty.earnForSale(tenantId, {
             clientId: finalClientId,
             saleId,
-            basisCents: total - giftCardsCents,
-            isVisit: items.some((i) => !!i.serviceId),
+            basisCents: ownLinesCents,
+            isVisit:
+              items.some((i) => !!i.serviceId && !i.appointmentId) &&
+              !appointments.some((a) => a.clientId === finalClientId),
           });
         }
       } catch (err) {
