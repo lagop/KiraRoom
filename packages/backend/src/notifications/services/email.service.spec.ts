@@ -17,7 +17,7 @@
  * changed.
  */
 
-import { EmailService, EMAIL_SEND_TIMEOUT_MS } from "./email.service";
+import { EmailService, EMAIL_SEND_TIMEOUT_MS, isRetryableSendError } from "./email.service";
 import { isPlaceholderEmail, placeholderEmail, realEmail } from "../../common/placeholder-email";
 
 // ────────────────────── mock helpers
@@ -651,6 +651,42 @@ describe("EmailService.sendEmail (low-level)", () => {
     expect(calls[0].to).toEqual(["a@example.com"]);
   });
 
+  it("sends under a display name in front of the platform's address, cleaned of quotes and line breaks", async () => {
+    const { service, calls } = makeService();
+    await service.sendEmail({ to: "a@example.com", subject: "X", html: "<p>X</p>", fromName: 'Salón "Lucía"\r\nBcc: otra@example.test' });
+    expect(calls[0].from).toBe('"Salón Lucía Bcc: otra@example.test" <hola@kiraroom.com>');
+    await service.sendEmail({ to: "a@example.com", subject: "X", html: "<p>X</p>" });
+    expect(calls[1].from).toBe("KiraRoom <hola@kiraroom.com>");
+  });
+
+  it("passes tags to Resend, and sends none when there are none", async () => {
+    const { service, calls } = makeService();
+    await service.sendEmail({ to: "a@example.com", subject: "X", html: "<p>X</p>", tags: [{ name: "tenant_id", value: "t1" }] });
+    await service.sendEmail({ to: "a@example.com", subject: "X", html: "<p>X</p>" });
+    expect(calls[0].tags).toEqual([{ name: "tenant_id", value: "t1" }]);
+    expect(calls[1]).not.toHaveProperty("tags");
+  });
+
+  it("says whether a failed send is worth retrying", async () => {
+    const limited = makeService({ resendError: { message: "Too many requests", statusCode: 429, name: "rate_limit_exceeded" } as any });
+    expect(await limited.service.sendEmail({ to: "a@example.com", subject: "X", html: "<p>X</p>" })).toMatchObject({
+      success: false,
+      statusCode: 429,
+      retryable: true,
+    });
+    const refused = makeService({ resendError: { message: "Invalid to field", statusCode: 422, name: "validation_error" } as any });
+    expect(await refused.service.sendEmail({ to: "a@example.com", subject: "X", html: "<p>X</p>" })).toMatchObject({
+      success: false,
+      statusCode: 422,
+      retryable: false,
+    });
+    expect(isRetryableSendError({ statusCode: 503 })).toBe(true);
+    expect(isRetryableSendError({ statusCode: null })).toBe(true);
+    expect(isRetryableSendError({ statusCode: 409, name: "concurrent_idempotent_requests" })).toBe(true);
+    expect(isRetryableSendError({ statusCode: 409, name: "invalid_idempotent_request" })).toBe(false);
+    expect(isRetryableSendError({ statusCode: 403 })).toBe(false);
+  });
+
   it("passes the idempotency key to Resend", async () => {
     const { service, resend } = makeService();
     const send = jest.spyOn(resend.emails, "send");
@@ -668,6 +704,7 @@ describe("EmailService.sendEmail (low-level)", () => {
       const sent = await pending;
       expect(sent.success).toBe(false);
       expect(sent.error).toMatch(/did not answer/);
+      expect(sent.retryable).toBe(true);
     } finally {
       jest.useRealTimers();
     }
