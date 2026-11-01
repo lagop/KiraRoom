@@ -25,3 +25,12 @@ acfa4b9bb2f2d07bd97a7ae2f09e7de6693c579c:packages/backend/src/appointments/updat
 36ea6fea302531d04744cffe4a60da4038799ff4:packages/backend/src/payments/payments-screen.spec.ts:stripe-access-token:444
 36ea6fea302531d04744cffe4a60da4038799ff4:packages/backend/src/payments/payments-screen.spec.ts:stripe-access-token:468
 36ea6fea302531d04744cffe4a60da4038799ff4:packages/backend/src/payments/payments-screen.spec.ts:generic-api-key:451
+
+# Fictitious JWT signing key and test password in the session revocation spec
+# (#214, first commits and merges); the spec now builds them at runtime.
+c056c48bc0f5868ef92956aa94fec7f21f2a7cf1:packages/backend/src/auth/sessions/session-revocations.spec.ts:generic-api-key:22
+c056c48bc0f5868ef92956aa94fec7f21f2a7cf1:packages/backend/src/auth/sessions/session-revocations.spec.ts:generic-api-key:170
+8139dab26ca54f0560310b0f673d554294020249:packages/backend/src/auth/sessions/session-revocations.spec.ts:generic-api-key:22
+8139dab26ca54f0560310b0f673d554294020249:packages/backend/src/auth/sessions/session-revocations.spec.ts:generic-api-key:170
+92e0543c38aa11063adb19c21848dc9ba52b4bdb:packages/backend/src/auth/sessions/session-revocations.spec.ts:generic-api-key:22
+92e0543c38aa11063adb19c21848dc9ba52b4bdb:packages/backend/src/auth/sessions/session-revocations.spec.ts:generic-api-key:170

@@ -165,6 +165,7 @@ export class MultiLocationService {
           professionalId: true,
           serviceId: true,
           locationId: true,
+          serviceName: true,
           service: { select: { name: true } },
         },
       }),

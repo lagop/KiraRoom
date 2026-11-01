@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsEmail, IsOptional, IsDateString, IsArray, IsNumber, IsBoolean, IsUUID, Min, Max } from 'class-validator';
+import { IsString, IsEmail, IsOptional, IsDateString, IsArray, IsNumber, IsBoolean, IsUUID, Min, Max, ArrayMaxSize, ValidateIf } from 'class-validator';
 import { IsWorkingHours } from '../../../professionals/working-hours-input';
 
 export class CreateProfessionalDto {
@@ -112,4 +112,22 @@ export class CreateProfessionalDto {
   @IsString({ each: true })
   @IsOptional()
   serviceIds?: string[];
+
+  /**
+   * The salon's locations the professional works at (plan with multi-local).
+   * Left out: not touched. An empty list: none. Their hours are the same at
+   * every one of them (professional-locations.ts).
+   */
+  @ApiProperty({ description: 'Locations the professional works at', type: [String], required: false })
+  @IsArray()
+  @ArrayMaxSize(50)
+  @IsUUID(undefined, { each: true, message: 'Alguno de los locales elegidos no es válido.' })
+  @IsOptional()
+  locationIds?: string[];
+
+  /** Which of locationIds is their main one; the first when left out. */
+  @ApiProperty({ description: 'Main location (one of locationIds)', required: false })
+  @ValidateIf((o) => o.primaryLocationId !== undefined && o.primaryLocationId !== null && o.primaryLocationId !== '')
+  @IsUUID(undefined, { message: 'El local principal no es válido.' })
+  primaryLocationId?: string | null;
 }

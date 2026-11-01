@@ -91,9 +91,17 @@ function build({
     // Where each professional works (active locations of the salon only).
     professionalLocation: {
       findMany: jest.fn(async ({ where }: any) =>
-        where.location?.tenantId === "tenant-b"
-          ? locationLinks.filter((l) => l.professionalId === where.professionalId)
-          : [],
+        where.locationId
+          ? locationLinks.filter((l) => l.locationId === where.locationId)
+          : where.location?.tenantId === "tenant-b"
+            ? locationLinks.filter((l) => l.professionalId === where.professionalId)
+            : [],
+      ),
+    },
+    // The salon's open locations: those its professionals are linked to.
+    location: {
+      findFirst: jest.fn(async ({ where }: any) =>
+        where.tenantId === "tenant-b" && locationLinks.some((l) => l.locationId === where.id) ? { id: where.id } : null,
       ),
     },
     service: {
@@ -101,6 +109,7 @@ function build({
         where.tenantId === "tenant-b"
           ? {
               id: SERVICE_ID,
+              name: "Corte",
               duration: 30,
               price: 20,
               currency: "EUR",
@@ -728,5 +737,115 @@ describe("online booking: a client the salon blocked", () => {
     const { service, created } = build({ existingClients: [{ ...blocked()[0], status: "inactive" }] });
     await service.createOnline(BOOKING as any);
     expect(created[0].clientId).toBe("blocked-ana");
+  });
+});
+
+/**
+ * Every booking keeps the service as it was booked (appointment-snapshot.ts):
+ * the site, the widget, the virtual receptionist and the wait list's offer
+ * (which books through the site) all go through insertAppointment.
+ */
+describe("the booked service is kept on the appointment", () => {
+  const SNAPSHOT = { serviceName: "Corte", servicePrice: 20, serviceDuration: 30 };
+
+  it("from the booking site", async () => {
+    const { service, created } = build();
+    await service.createOnline(BOOKING as any);
+    expect(created[0]).toMatchObject(SNAPSHOT);
+  });
+
+  it("from the widget's any professional", async () => {
+    const { service, created } = build();
+    await service.createOnline({ ...BOOKING, professionalId: "", widgetInstanceId: WIDGET_ID, source: "widget" } as any);
+    expect(created[0]).toMatchObject(SNAPSHOT);
+  });
+
+  it("from the virtual receptionist (bookOnline)", async () => {
+    const { service, created } = build();
+    await service.bookOnline("tenant-b", BOOKING as any);
+    expect(created[0]).toMatchObject(SNAPSHOT);
+  });
+
+  it("from the panel", async () => {
+    const { service, created } = build({ existingClients: [{ id: "c1", email: "x@mail.test", tenantId: "tenant-b" }] });
+    await service.createByStaff(
+      { ...BOOKING, scheduledDate: "2026-12-01", clientInfo: undefined, clientId: "c1" } as any,
+      { id: "u1", role: "owner", tenantId: "tenant-b" },
+    );
+    expect(created[0]).toMatchObject(SNAPSHOT);
+  });
+});
+
+/**
+ * A booking at one of the salon's locations (multi-local): only the
+ * professionals who work there, and the appointment is that location's.
+ */
+describe("booking at a location", () => {
+  const LOC_A = "55555555-5555-4555-8555-555555555555";
+  const LOC_B = "66666666-6666-4666-8666-666666666666";
+  const links = [
+    { professionalId: PRO.id, locationId: LOC_A, isPrimary: true },
+    { professionalId: PRO.id, locationId: LOC_B, isPrimary: false },
+    { professionalId: PRO_2.id, locationId: LOC_B, isPrimary: true },
+  ];
+
+  it("is that location's, not the professional's primary one", async () => {
+    const { service, created } = build({ locationLinks: links });
+    await service.createOnline({ ...BOOKING, locationId: LOC_B } as any);
+    expect(created[0].locationId).toBe(LOC_B);
+  });
+
+  it("refuses a professional who does not work there, before anything is written", async () => {
+    const { service, created } = build({ locationLinks: links });
+    await expect(
+      service.createOnline({ ...BOOKING, professionalId: PRO_2.id, locationId: LOC_A } as any),
+    ).rejects.toThrow(BadRequestException);
+    expect(created).toHaveLength(0);
+  });
+
+  it("refuses a location that is not the salon's, or is closed", async () => {
+    const { service, created } = build({ locationLinks: links });
+    await expect(
+      service.createOnline({ ...BOOKING, locationId: "77777777-7777-4777-8777-777777777777" } as any),
+    ).rejects.toThrow(NotFoundException);
+    expect(created).toHaveLength(0);
+  });
+
+  it("the widget's any professional picks among those who work there", async () => {
+    // Ana works at both and is busy at 10:00; Bea works at B only. At B the
+    // widget gives Bea; at A nobody free works there (Bea is not considered).
+    const onlyBeaFreeAtB = build({ locationLinks: links, freeTimes: { [PRO.id]: [], [PRO_2.id]: ["10:00"] } });
+    await onlyBeaFreeAtB.service.createOnline({
+      ...BOOKING, professionalId: "", widgetInstanceId: WIDGET_ID, source: "widget", locationId: LOC_B,
+    } as any);
+    expect(onlyBeaFreeAtB.created[0]).toMatchObject({ professionalId: PRO_2.id, locationId: LOC_B });
+
+    const nobodyAtA = build({ locationLinks: links, freeTimes: { [PRO.id]: [], [PRO_2.id]: ["10:00"] } });
+    await expect(
+      nobodyAtA.service.createOnline({
+        ...BOOKING, professionalId: "", widgetInstanceId: WIDGET_ID, source: "widget", locationId: LOC_A,
+      } as any),
+    ).rejects.toThrow(ConflictException);
+  });
+
+  it("from the panel too: every professional of the visit must work there", async () => {
+    const { service, created } = build({
+      locationLinks: links,
+      existingClients: [{ id: "c1", email: "x@mail.test", tenantId: "tenant-b" }],
+    });
+    await expect(
+      service.createByStaff(
+        { ...BOOKING, professionalId: PRO_2.id, locationId: LOC_A, clientInfo: undefined, clientId: "c1" } as any,
+        { id: "u1", role: "owner", tenantId: "tenant-b" },
+      ),
+    ).rejects.toThrow(BadRequestException);
+    expect(created).toHaveLength(0);
+  });
+
+  it("validates the location id in both bodies", () => {
+    const online = plainToInstance(OnlineBookingDto, { ...BOOKING, locationId: "nope" });
+    expect(validateSync(online).map((e) => e.property)).toContain("locationId");
+    const staff = plainToInstance(StaffBookingDto, { ...BOOKING, clientInfo: undefined, clientId: SERVICE_ID, locationId: LOC_A });
+    expect(validateSync(staff)).toEqual([]);
   });
 });

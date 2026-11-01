@@ -1,6 +1,7 @@
 import { VisitService, currentVisitSchedule, visitSpan } from "./visit-move";
 import { minutesOf } from "./working-hours";
 import { salonInstant } from "./salon-time";
+import { AddonSnapshot, SNAPSHOT_SELECT, ServiceSnapshotColumns, bookedService } from "./appointment-snapshot";
 
 /**
  * What a visit (an appointment with one or more services) adds up to: how
@@ -34,7 +35,16 @@ export interface VisitRow {
   /** active | processing | continuation */
   type?: string | null;
   status?: string | null;
-  service?: { duration?: number | null; price?: unknown; bufferTime?: number | null } | null;
+  /** What the service was when it was added to the visit (appointment-snapshot.ts). */
+  serviceName?: ServiceSnapshotColumns["serviceName"];
+  servicePrice?: ServiceSnapshotColumns["servicePrice"];
+  serviceDuration?: ServiceSnapshotColumns["serviceDuration"];
+  service?: { name?: string | null; duration?: number | null; price?: unknown; bufferTime?: number | null } | null;
+}
+
+/** A row's service as it was booked: its snapshot, else the live one. */
+export function rowService(row: VisitRow): { name?: string | null; duration?: number | null; price?: unknown; bufferTime?: number | null } | null {
+  return bookedService(row);
 }
 
 /** The columns of a row these functions need, for Prisma selects. */
@@ -47,7 +57,8 @@ export const VISIT_ROW_SELECT = {
   isParallel: true,
   type: true,
   status: true,
-  service: { select: { duration: true, price: true, bufferTime: true } },
+  ...SNAPSHOT_SELECT,
+  service: { select: { name: true, duration: true, price: true, bufferTime: true } },
 } as const;
 
 /** The order a visit's rows are read in: the order the salon gave them. */
@@ -116,7 +127,7 @@ export function visitSchedule(start: Date, professionalId: string, rows: VisitRo
       scheduledStart: r.scheduledStart,
       scheduledEnd: r.scheduledEnd,
       isParallel: !!r.isParallel,
-      durationMinutes: Number(r.service?.duration) || 0,
+      durationMinutes: Number(rowService(r)?.duration) || 0,
     })),
   });
 }
@@ -147,10 +158,7 @@ export function layoutVisit(start: Date, services: VisitService[]): VisitService
 /*  Add-ons                                                                   */
 /* -------------------------------------------------------------------------- */
 
-export interface AddonLine {
-  addonId: string;
-  quantity: number;
-}
+export type AddonLine = AddonSnapshot;
 
 /**
  * The add-ons column as a plain list. Edits stored it as `{"set": [...]}`
@@ -173,7 +181,16 @@ export function normalizeAddons(raw: unknown): AddonLine[] {
     const id = (item as any).addonId ?? (item as any).serviceId;
     if (typeof id !== "string" || !id) continue;
     const q = Number((item as any).quantity ?? 1);
-    out.push({ addonId: id, quantity: Number.isFinite(q) && q >= 1 ? Math.floor(q) : 1 });
+    const line: AddonLine = { addonId: id, quantity: Number.isFinite(q) && q >= 1 ? Math.floor(q) : 1 };
+    // What it was added at (appointment-snapshot.ts), when stored.
+    const price = Number((item as any).price);
+    if ((item as any).price !== undefined && (item as any).price !== null && Number.isFinite(price)) {
+      line.price = price;
+      const minutes = Number((item as any).duration);
+      if (Number.isFinite(minutes)) line.duration = minutes;
+      if (typeof (item as any).name === "string") line.name = (item as any).name;
+    }
+    out.push(line);
   }
   return out;
 }
@@ -214,7 +231,7 @@ export function visitTotals(input: {
     const span = visitSpan(schedule);
     start = span.start;
     minutes = Math.round((span.end.getTime() - span.start.getTime()) / 60_000);
-    servicesCents = live.filter((r) => !freesProfessional(r)).reduce((sum, r) => sum + toCents(r.service?.price), 0);
+    servicesCents = live.filter((r) => !freesProfessional(r)).reduce((sum, r) => sum + toCents(rowService(r)?.price), 0);
   } else {
     minutes = Number(input.mainService?.duration) || 0;
     servicesCents = toCents(input.mainService?.price);
@@ -432,9 +449,9 @@ export function visitLines(input: {
   const lines: VisitLine[] =
     live.length > 0
       ? live.map((r) => ({
-          description: r.service?.name || "Servicio",
+          description: rowService(r)?.name || "Servicio",
           quantity: 1,
-          unitPriceCents: toCents(r.service?.price),
+          unitPriceCents: toCents(rowService(r)?.price),
           serviceId: r.serviceId,
         }))
       : input.rows.filter(isLiveRow).length > 0

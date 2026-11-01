@@ -215,7 +215,19 @@ describe("editing a visit's services (the form resends them all)", () => {
     expect(writes.filter(([k]) => k === "deleteMany")).toEqual([]);
     expect(writes.filter(([k]) => k === "update")).toEqual([]); // r1 and r2 untouched
     const created = writes.filter(([k]) => k === "create").map(([, a]) => a.data);
-    expect(created).toEqual([{ appointmentId: "visit-1", serviceId: "s-mask", professionalId: "ana", isParallel: false, order: 2 }]);
+    // The new row keeps the service as it is now (appointment-snapshot.ts).
+    expect(created).toEqual([
+      {
+        appointmentId: "visit-1",
+        serviceId: "s-mask",
+        professionalId: "ana",
+        isParallel: false,
+        order: 2,
+        serviceName: "Mascarilla",
+        servicePrice: "8",
+        serviceDuration: 15,
+      },
+    ]);
     const [, appt] = writes.find(([k]) => k === "appointment");
     // 10:00-11:00 colour, 11:00-11:30 cut, 11:30-11:45 mask.
     expect(appt.data).toMatchObject({ duration: 105, endTime: "11:45", price: 73, totalAmount: 7300 });
@@ -277,7 +289,8 @@ describe("editing a visit's services (the form resends them all)", () => {
     const { svc, writes } = editHarness(single, [{ id: "s-mask", name: "Mascarilla", duration: 15, price: "8" }]);
     await svc.update(owner, "visit-1", { addons: [{ addonId: "s-mask", quantity: 2 }] } as any);
     const [, appt] = writes.find(([k]) => k === "appointment");
-    expect(appt.data.addons).toEqual([{ addonId: "s-mask", quantity: 2 }]);
+    // With what the add-on cost when it was added (appointment-snapshot.ts).
+    expect(appt.data.addons).toEqual([{ addonId: "s-mask", quantity: 2, name: "Mascarilla", price: 8, duration: 15 }]);
     expect(appt.data).toMatchObject({ duration: 90, price: 61, totalAmount: 6100 });
   });
 
@@ -511,7 +524,12 @@ describe("the services' own endpoints keep the appointment's totals", () => {
         findFirst: jest.fn(async () => appointment),
         update: jest.fn(async () => appointment),
       },
-      service: { count: jest.fn(async ({ where }: any) => where.id.in.length), findMany: jest.fn(async () => []) },
+      service: {
+        count: jest.fn(async ({ where }: any) => where.id.in.length),
+        findMany: jest.fn(async ({ where }: any) =>
+          where.id.in.map((id: string) => ({ id, name: id, price: id === "s-colour" ? "45" : "10", duration: id === "s-colour" ? 60 : 15 })),
+        ),
+      },
       professional: { count: jest.fn(async ({ where }: any) => where.id.in.length) },
       appointmentService: { create: jest.fn((a: any) => a) },
       $transaction: jest.fn(async (ops: any[]) => {
@@ -602,5 +620,94 @@ describe("a new booking's check counts other visits' services too", () => {
     await expect(
       assertCanBook(prisma as any, { tenantId: TENANT, professionalId: "bea", day: DAY, time: "11:00", durationMinutes: 30 }),
     ).rejects.toMatchObject({ response: { code: SCHEDULE_CONFLICT, message: "Bea ya tiene una cita con Lucía Pérez a las 11:00." } });
+  });
+});
+
+/**
+ * What an appointment was booked at stays (appointment-snapshot.ts): the
+ * catalog's service changed price and length since, and editing the visit
+ * used to re-price it at the new figures.
+ */
+describe("an edit keeps what the visit was booked at", () => {
+  /** Booked a cut at 20 EUR / 30 min; the catalog now says 26 EUR / 45 min. */
+  const booked = () => ({
+    id: "apt-1",
+    tenantId: TENANT,
+    clientId: "c1",
+    serviceId: "s-cut",
+    professionalId: "ana",
+    scheduledDate: DATE,
+    scheduledTime: "10:00",
+    startTime: at("10:00"),
+    duration: 30,
+    endTime: "10:30",
+    price: "20",
+    totalAmount: 2000,
+    status: "confirmed",
+    paymentStatus: "pending",
+    addons: [{ addonId: "s-mask", quantity: 1, name: "Mascarilla", price: 5, duration: 10 }],
+    serviceName: "Corte",
+    servicePrice: "20",
+    serviceDuration: 30,
+    tenant: { timezone: "Europe/Madrid" },
+    service: { id: "s-cut", name: "Corte y peinado", duration: 45, price: "26" },
+    services: [],
+  });
+  const catalog = [
+    { id: "s-cut", name: "Corte y peinado", duration: 45, price: "26" },
+    { id: "s-mask", name: "Mascarilla", duration: 15, price: "8" },
+    { id: "s-colour", name: "Color", duration: 90, price: "50" },
+    { id: "s-gloss", name: "Brillo", duration: 5, price: "3" },
+  ];
+
+  it("a reschedule moves it and leaves its price, length and snapshot alone", async () => {
+    const apt = { ...booked(), duration: 40, endTime: "10:40", price: "25", totalAmount: 2500 };
+    const { svc, writes } = editHarness(apt, catalog);
+    await svc.update(owner, "apt-1", { scheduledTime: "12:00", addons: apt.addons.map(({ addonId, quantity }) => ({ addonId, quantity })) } as any);
+    const [, appt] = writes.find(([k]) => k === "appointment");
+    // 20 + 5 (the add-on at what it cost then), 30 + 10 minutes.
+    expect(appt.data).toMatchObject({ scheduledTime: "12:00", endTime: "12:40", price: 25, totalAmount: 2500 });
+    expect(appt.data).not.toHaveProperty("duration");
+    expect(appt.data).not.toHaveProperty("serviceName");
+    expect(appt.data).not.toHaveProperty("servicePrice");
+    expect(appt.data.addons).toEqual([{ addonId: "s-mask", quantity: 1, name: "Mascarilla", price: 5, duration: 10 }]);
+  });
+
+  it("a new add-on is taken at today's price, the old one keeps its own", async () => {
+    const { svc, writes } = editHarness({ ...booked(), duration: 40, price: "25", totalAmount: 2500 }, catalog);
+    await svc.update(owner, "apt-1", {
+      addons: [
+        { addonId: "s-mask", quantity: 1 },
+        { addonId: "s-gloss", quantity: 2 },
+      ],
+    } as any);
+    const [, appt] = writes.find(([k]) => k === "appointment");
+    expect(appt.data.addons).toEqual([
+      { addonId: "s-mask", quantity: 1, name: "Mascarilla", price: 5, duration: 10 },
+      { addonId: "s-gloss", quantity: 2, name: "Brillo", price: 3, duration: 5 },
+    ]);
+    // 20 + 5 + 2 x 3; 30 + 10 + 2 x 5.
+    expect(appt.data).toMatchObject({ price: 31, totalAmount: 3100, duration: 50 });
+  });
+
+  it("switching to another service takes that service as it is now", async () => {
+    const { svc, writes } = editHarness({ ...booked(), addons: [] }, catalog);
+    await svc.update(owner, "apt-1", { serviceId: "s-colour" } as any);
+    const [, appt] = writes.find(([k]) => k === "appointment");
+    expect(appt.data).toMatchObject({
+      serviceId: "s-colour",
+      serviceName: "Color",
+      servicePrice: "50",
+      serviceDuration: 90,
+      duration: 90,
+      price: 50,
+      totalAmount: 5000,
+    });
+  });
+
+  it("the panel is shown the visit as booked, not today's catalog", async () => {
+    const { svc } = editHarness(booked(), catalog);
+    const shown = await svc.findOne(owner, "apt-1");
+    expect(shown.service).toMatchObject({ id: "s-cut", name: "Corte", price: "20", duration: 30 });
   });
 });

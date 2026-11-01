@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "crypto";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { EmailService } from "../notifications/services/email.service";
 import { hashPassword } from "../saas/saas.helpers";
+import { sessionRevocations } from "./sessions/session-revocations";
 
 /**
  * Password reset by email, for salon users. (Clients had accounts too;
@@ -79,6 +80,7 @@ export class PasswordResetService {
         where: { id: user.id },
         data: { ...cleared, loginAttempts: 0, lockedUntil: null },
       });
+      sessionRevocations.revoke({ userId: user.id });
       return;
     }
     throw invalid;

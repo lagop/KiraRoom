@@ -416,6 +416,7 @@ export class LoyaltyService {
         paymentStatus: true,
         amountPaid: true,
         totalAmount: true,
+        servicePrice: true,
         service: { select: { price: true } },
         payments: { where: { status: "paid" }, select: { amount: true, method: true } },
       },
@@ -434,7 +435,7 @@ export class LoyaltyService {
     let basis = Number(apt.amountPaid ?? 0);
     if (!(basis > 0)) basis = moneyCents;
     if (!(basis > 0)) basis = Number(apt.totalAmount ?? 0);
-    if (!(basis > 0)) basis = Math.round(Number(apt.service?.price ?? 0) * 100);
+    if (!(basis > 0)) basis = Math.round(Number(apt.servicePrice ?? apt.service?.price ?? 0) * 100);
     // The part paid with points is not money spent: it earns nothing.
     const discounted = await this.prisma.loyaltyRedemption.aggregate({
       where: { appointmentId, status: { not: "cancelled" } },

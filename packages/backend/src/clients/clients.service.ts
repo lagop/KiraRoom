@@ -31,6 +31,7 @@ import {
   type ClientPage,
 } from "./client-search";
 import { countryForPhone, normalizeClientEmail, normalizeClientPhone } from "./client-contact";
+import { sessionRevocations } from "../auth/sessions/session-revocations";
 
 /**
  * Whose clients a caller may reach. Owner/admin: {} (the whole salon).
@@ -373,7 +374,7 @@ export class ClientsService {
     }
 
     try {
-      return await this.prisma.client.update({
+      const updated = await this.prisma.client.update({
         where: { id: clientId, tenantId },
         // A new sign-in address ends every session (tokenVersion), as a new
         // password does: whoever had the account under the old one is out.
@@ -387,6 +388,8 @@ export class ClientsService {
           preferredLanguage: true,
         },
       });
+      if (data.email !== undefined) sessionRevocations.revoke({ clientId });
+      return updated;
     } catch (error: any) {
       if (error?.code === "P2002") {
         // @@unique([tenantId, email])
@@ -424,5 +427,6 @@ export class ClientsService {
       where: { id: clientId, tenantId },
       data: { passwordHash: await hashPassword(dto.newPassword), tokenVersion: { increment: 1 } },
     });
+    sessionRevocations.revoke({ clientId });
   }
 }

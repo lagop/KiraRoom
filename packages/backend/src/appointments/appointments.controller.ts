@@ -107,6 +107,7 @@ export class AppointmentsController {
       professionalIds,
       serviceId,
       duration,
+      locationId,
     } = query;
     // Parse professionalIds if provided as comma-separated string
     const profIds = professionalIds
@@ -122,7 +123,7 @@ export class AppointmentsController {
       serviceId,
       duration,
       profIds,
-      { onlineWindow: !staff },
+      { onlineWindow: !staff, locationId },
     );
   }
 

@@ -10,6 +10,7 @@ import {
   normalizeAddons,
   visitTotals,
 } from "./visit-totals";
+import { SNAPSHOT_SELECT, bookedAddon, bookedService } from "./appointment-snapshot";
 
 /**
  * Keeps an appointment's own columns (time, duration, end, price) in step
@@ -43,24 +44,30 @@ export const VISIT_APPOINTMENT_SELECT = {
   status: true,
   paymentStatus: true,
   addons: true,
-  service: { select: { duration: true, price: true } },
+  serviceId: true,
+  ...SNAPSHOT_SELECT,
+  service: { select: { name: true, duration: true, price: true } },
   tenant: { select: { timezone: true } },
   services: { select: VISIT_ROW_SELECT, orderBy: VISIT_ROW_ORDER },
 } as const;
 
-/** The add-ons' services, priced: an add-on is a service of the salon's catalog. */
+/**
+ * The add-ons' services, priced: an add-on is a service of the salon's
+ * catalog, at the price and length it was added with when the line keeps
+ * them (appointment-snapshot.ts), else at the catalog's.
+ */
 export async function addonServices(
   db: any,
   tenantId: string,
   raw: unknown,
-): Promise<Array<{ quantity: number; service: { duration: number; price: unknown } | null }>> {
+): Promise<Array<{ quantity: number; service: { id?: string; name?: string | null; duration?: number | null; price?: unknown } | null }>> {
   const lines = normalizeAddons(raw);
   if (lines.length === 0) return [];
-  const rows: Array<{ id: string; duration: number; price: unknown }> = await db.service.findMany({
+  const rows: Array<{ id: string; name: string; duration: number; price: unknown }> = await db.service.findMany({
     where: { tenantId, id: { in: [...new Set(lines.map((l) => l.addonId))] } },
-    select: { id: true, duration: true, price: true },
+    select: { id: true, name: true, duration: true, price: true },
   });
-  return lines.map((l) => ({ quantity: l.quantity, service: rows.find((r) => r.id === l.addonId) ?? null }));
+  return lines.map((l) => ({ quantity: l.quantity, service: bookedAddon(l, rows.find((r) => r.id === l.addonId)) }));
 }
 
 /**
@@ -121,7 +128,7 @@ export async function syncVisitTotals(db: any, appointmentId: string): Promise<v
   const totals = visitTotals({
     start: appointmentStart(apt, timeZone),
     professionalId: apt.professionalId,
-    mainService: apt.service,
+    mainService: bookedService(apt),
     rows: (apt.services ?? []) as VisitRow[],
     addons: await addonServices(db, apt.tenantId, apt.addons),
   });

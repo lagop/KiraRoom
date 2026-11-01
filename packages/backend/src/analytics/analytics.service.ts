@@ -119,6 +119,8 @@ const APPOINTMENT_FIELDS = {
   professionalId: true,
   serviceId: true,
   locationId: true,
+  // The name it was booked under (appointment-snapshot.ts).
+  serviceName: true,
   service: { select: { name: true } },
   professional: {
     select: { id: true, firstName: true, lastName: true, profileImage: true },

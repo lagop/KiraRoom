@@ -74,6 +74,7 @@ import { safeTimeZone } from '../gift-cards/gift-card-expiry';
 import { salonInstant } from '../appointments/salon-time';
 import { salonDayAndTime } from '../appointments/reschedule-check';
 import { addDays, salonToday } from '../analytics/analytics-metrics';
+import { SNAPSHOT_SELECT, withBookedService } from '../appointments/appointment-snapshot';
 
 export { CreatePosOrderDto };
 export type { PricedLine };
@@ -1188,6 +1189,9 @@ export class PosService {
         addons: true,
         // Kept alongside a till discount's record (appointmentDiscountRecord).
         discount: true,
+        // What it was booked at (appointment-snapshot.ts): its name on the
+        // ticket and its price where the visit has no stored total.
+        ...SNAPSHOT_SELECT,
         service: { select: { name: true, price: true } },
         services: {
           include: { service: true },
@@ -1208,7 +1212,7 @@ export class PosService {
       }
     }
     const byId = new Map(found.map((a: any) => [a.id, a]));
-    const ordered = ids.map((id) => byId.get(id)!) as any[];
+    const ordered = ids.map((id) => withBookedService(byId.get(id)! as any)) as any[];
     ordered.forEach(assertChargeable);
     const out: ChargeableApt[] = [];
     for (const apt of ordered) {

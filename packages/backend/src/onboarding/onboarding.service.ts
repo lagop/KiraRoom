@@ -381,6 +381,10 @@ export class OnboardingService {
             currency: tenant?.currency || "EUR",
             totalAmount: totalCents,
             amountDue: totalCents,
+            // The service as booked (appointment-snapshot.ts).
+            serviceName: service.name,
+            servicePrice: service.price,
+            serviceDuration: service.duration,
             locationId: await appointmentLocationId(this.prisma, tenantId, professional.id),
             notes: "Created from onboarding wizard",
           },

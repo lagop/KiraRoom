@@ -245,6 +245,8 @@ export interface AnalyticsAppointment extends AppointmentMoney {
   professionalId?: string | null;
   serviceId?: string | null;
   locationId?: string | null;
+  /** The service's name when it was booked (appointment-snapshot.ts). */
+  serviceName?: string | null;
   service?: { name: string } | null;
   professional?: {
     id: string;
@@ -295,7 +297,7 @@ export function topServices(
   const by = new Map<string, { name: string; count: number; revenue: number }>();
   for (const a of appointments) {
     if (a.status === "cancelled") continue;
-    const name = a.service?.name || "Sin servicio";
+    const name = a.serviceName || a.service?.name || "Sin servicio";
     const key = a.serviceId || name;
     const row = by.get(key) ?? { name, count: 0, revenue: 0 };
     row.count++;

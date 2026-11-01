@@ -1,5 +1,6 @@
 import { UserRole } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
+import { sessionRevocations } from "../auth/sessions/session-revocations";
 
 type UserWriter = Pick<Prisma.TransactionClient, "user">;
 
@@ -28,5 +29,7 @@ export async function revokePanelLogin(
     where: { id: userId, tenantId, role: UserRole.staff, isActive: true },
     data: { isActive: false, tokenVersion: { increment: 1 } },
   });
+  // Its open sockets close now too, not when the tab does.
+  if (count > 0) sessionRevocations.revoke({ userId });
   return count > 0;
 }

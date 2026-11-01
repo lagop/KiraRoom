@@ -9,6 +9,7 @@ import { WhatsAppService } from './services/whatsapp.service';
 import { NotificationsService } from './notifications.service';
 import { NotificationType } from './dto';
 import { WhatsAppTemplateService } from '../whatsapp/whatsapp-template.service';
+import { withBookedService } from '../appointments/appointment-snapshot';
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -166,7 +167,11 @@ export class NotificationsScheduler {
       orderBy: { startTime: 'asc' },
       take: REMINDER_BATCH_SIZE,
     });
-    return due.filter((a) => a.createdAt.getTime() <= a.startTime!.getTime() - kind.lead);
+    // The service as it was booked (appointment-snapshot.ts): a rename in the
+    // catalog does not reach a reminder for an appointment already made.
+    return due
+      .filter((a) => a.createdAt.getTime() <= a.startTime!.getTime() - kind.lead)
+      .map((a) => withBookedService(a));
   }
 
   private async runReminders(kind: ReminderKind, now: Date) {

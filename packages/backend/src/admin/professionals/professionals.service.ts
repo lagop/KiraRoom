@@ -1,6 +1,8 @@
 import {
+  ForbiddenException,
   Injectable,
   Logger,
+  Optional,
   HttpException,
   NotFoundException,
   BadRequestException,
@@ -24,6 +26,9 @@ import {
 } from "../../professionals/optional-fields";
 import { revokePanelLogin } from "../../professionals/panel-login";
 import { CLIENT_POS_SELECT } from "../../clients/client-select";
+import { FeatureFlagService } from "../../common/feature-flags/feature-flag.service";
+import { setProfessionalLocations } from "../../multi-location/professional-locations";
+import { sessionRevocations } from "../../auth/sessions/session-revocations";
 
 /** The most the team list returns at once: every salon's whole team fits. */
 export const MAX_PROFESSIONALS_PAGE = 200;
@@ -49,7 +54,52 @@ type CreateInput = CreateProfessionalDto & { tenantId: string; isActive?: boolea
 export class AdminProfessionalsService {
   private readonly logger = new Logger(AdminProfessionalsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly flags?: FeatureFlagService,
+  ) {}
+
+  /**
+   * The locations a professional is to work at, checked before anything is
+   * written: assigning any needs the multi-location feature of the plan, and
+   * each must be one of this salon's open locations. Undefined (not sent)
+   * stays undefined; an empty list (none) is always allowed, so a salon that
+   * left the plan can still clear them.
+   */
+  private async salonLocationIds(
+    tenantId: string,
+    locationIds?: string[] | null,
+    primaryLocationId?: string | null,
+  ): Promise<{ ids: string[]; primary: string | null } | undefined> {
+    if (locationIds === undefined || locationIds === null) {
+      if (primaryLocationId) {
+        throw new BadRequestException("Elige también los locales del profesional.");
+      }
+      return undefined;
+    }
+    const ids = [...new Set(locationIds)];
+    const primary = primaryLocationId || null;
+    if (ids.length === 0) return { ids, primary: null };
+    if (this.flags && !(await this.flags.isEnabled(tenantId, "multi_location"))) {
+      throw new ForbiddenException("Asignar profesionales a locales es parte del plan Empresa (multi-local).");
+    }
+    if (primary && !ids.includes(primary)) {
+      throw new BadRequestException("El local principal tiene que estar entre los locales del profesional.");
+    }
+    const found = await this.prisma.location.count({ where: { tenantId, isActive: true, id: { in: ids } } });
+    if (found !== ids.length) {
+      throw new BadRequestException("Alguno de los locales elegidos no existe o está cerrado. Recarga la página.");
+    }
+    return { ids, primary };
+  }
+
+  /** Writes the professional's locations (professional-locations.ts). */
+  private async writeLocations(tenantId: string, professionalId: string, locations?: { ids: string[]; primary: string | null }) {
+    if (!locations) return;
+    await this.prisma.$transaction((tx: any) =>
+      setProfessionalLocations(tx, tenantId, professionalId, locations.ids, locations.primary),
+    );
+  }
 
   /**
    * A known Prisma error as a Spanish message the panel can show. Anything
@@ -86,9 +136,15 @@ export class AdminProfessionalsService {
   }
 
   async create(createProfessionalDto: CreateInput) {
-    const { serviceIds: requestedServices, ...professionalData } = createProfessionalDto;
+    const {
+      serviceIds: requestedServices,
+      locationIds: requestedLocations,
+      primaryLocationId,
+      ...professionalData
+    } = createProfessionalDto;
     const isActive = professionalData.isActive ?? true;
     const serviceIds = await this.salonServiceIds(professionalData.tenantId, requestedServices);
+    const locations = await this.salonLocationIds(professionalData.tenantId, requestedLocations, primaryLocationId);
 
     // The controller sets tenantId from the caller's token. This used to
     // fall back, for an unknown tenant, to the FIRST tenant in the database
@@ -138,9 +194,11 @@ export class AdminProfessionalsService {
     try {
       // An active professional takes one of the plan's places: counted and
       // created under the salon's lock, so two adds at once cannot both fit.
-      return isActive
+      const created = isActive
         ? await withProfessionalSlot(this.prisma, professionalData.tenantId, write)
         : await write(this.prisma);
+      await this.writeLocations(professionalData.tenantId, created.id, locations);
+      return created;
     } catch (error) {
       this.saveError(error, "create");
     }
@@ -211,6 +269,8 @@ export class AdminProfessionalsService {
             },
           },
           user: { select: { role: true, isActive: true, email: true, lastLoginAt: true } },
+          // Where they work (multi-local): the team form's locations.
+          locations: { select: { locationId: true, isPrimary: true } },
         },
       }),
       this.prisma.professional.count({ where }),
@@ -246,6 +306,7 @@ export class AdminProfessionalsService {
             service: true,
           },
         },
+        locations: { select: { locationId: true, isPrimary: true } },
       },
     });
 
@@ -259,14 +320,22 @@ export class AdminProfessionalsService {
   async update(tenantId: string, id: string, updateProfessionalDto: UpdateProfessionalDto) {
     // tenantId is in the DTO only because it extends the create one: the salon is
     // the caller's, never moved by a body.
-    const { serviceIds: requestedServices, hireDate, terminationDate, tenantId: _tenantId, ...fields } =
-      updateProfessionalDto;
+    const {
+      serviceIds: requestedServices,
+      locationIds: requestedLocations,
+      primaryLocationId,
+      hireDate,
+      terminationDate,
+      tenantId: _tenantId,
+      ...fields
+    } = updateProfessionalDto;
     const current = await this.prisma.professional.findFirst({
       where: { id, tenantId },
       select: { isActive: true, email: true, user: { select: { id: true, role: true, email: true } } },
     });
     if (!current) throw new NotFoundException(PROFESSIONAL_NOT_FOUND);
     const serviceIds = await this.salonServiceIds(tenantId, requestedServices);
+    const locations = await this.salonLocationIds(tenantId, requestedLocations, primaryLocationId);
 
     // Dates arrive as "YYYY-MM-DD" from the forms; Prisma wants a Date. Raw,
     // every edit from the team list that carried the hire date was a 400.
@@ -327,6 +396,7 @@ export class AdminProfessionalsService {
               return updated;
             });
 
+      await this.writeLocations(tenantId, id, locations);
       if (moveLogin) {
         await this.prisma.user.update({ where: { id: login!.id }, data: { email: loginEmail } });
       }
@@ -442,6 +512,7 @@ export class AdminProfessionalsService {
         where: { id: professional.userId! },
         data: { passwordHash, tokenVersion: { increment: 1 }, loginAttempts: 0, lockedUntil: null },
       });
+      sessionRevocations.revoke({ userId: professional.userId! });
 
       return { success: true, message: "Contraseña actualizada" };
     } catch (error) {
@@ -495,6 +566,7 @@ export class AdminProfessionalsService {
           lockedUntil: null,
         },
       });
+      sessionRevocations.revoke({ userId: professional.user.id });
       return { active: true, email };
     }
 
@@ -538,6 +610,8 @@ export class AdminProfessionalsService {
       where: { id: professional.user.id },
       data: { isActive: false, tokenVersion: { increment: 1 } },
     });
+    // Signed out everywhere at once: requests (tokenVersion) and live sockets.
+    sessionRevocations.revoke({ userId: professional.user.id });
     return { active: false };
   }
 }

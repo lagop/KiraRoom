@@ -96,6 +96,9 @@ function build() {
         where.tenantId === TENANT ? { id: where.id, hasProcessingTime: true, processingDuration: 20, duration: 60 } : null,
       ),
       count: jest.fn(async ({ where }: any) => (where.tenantId === TENANT ? where.id.in.length : 0)),
+      findMany: jest.fn(async ({ where }: any) =>
+        where.tenantId === TENANT ? where.id.in.map((id: string) => ({ id, name: "Corte", price: "20", duration: 30 })) : [],
+      ),
     },
     appointmentService: {
       findMany: jest.fn(async ({ where }: any) => table.filter((r) => matches(r, where)).map(withVisit)),
