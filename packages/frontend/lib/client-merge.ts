@@ -100,6 +100,10 @@ export function mergePreviewRows(kept: MergeSide, other: MergeSide): MergePrevie
  */
 export function mergeRefusal(kept: MergeSide, other: MergeSide): string | null {
   if (kept.id === other.id) return "Es la misma ficha.";
+  // As the server's client-anonymize.ts leaves a record.
+  if ([kept, other].some((s) => s.status === "inactive" && s.firstName === "Clienta" && s.lastName === "anonimizada")) {
+    return "Una ficha anonimizada (RGPD) no se puede fusionar: sus datos se borraron a petición de la clienta.";
+  }
   if (kept.status === "inactive") {
     return "La ficha que se conserva está desactivada. Conserva la otra (Intercambiar) o actívala antes.";
   }

@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import {
   CLIENT_REFERENCES,
   ClientMergeService,
+  MERGE_ANONYMIZED,
   MERGE_SAME_CLIENT,
   MERGE_SOURCE_BLOCKED,
   MERGE_TARGET_INACTIVE,
@@ -123,6 +124,14 @@ describe("what may be merged", () => {
   it("not into a deactivated record", async () => {
     const { service } = build({ a: { status: "inactive" }, b: { status: "active" } });
     await expect(service.merge("t1", "a", "b", actor)).rejects.toThrow(new ConflictException(MERGE_TARGET_INACTIVE));
+  });
+
+  it("not a record anonymised under GDPR (her erased history stays unlinked)", async () => {
+    const { service } = build({
+      a: { status: "active" },
+      b: { status: "inactive", firstName: "Clienta", lastName: "anonimizada" } as any,
+    });
+    await expect(service.merge("t1", "a", "b", actor)).rejects.toThrow(new ConflictException(MERGE_ANONYMIZED));
   });
 
   it("not a blocked record into one that is not (the block would be lost)", async () => {

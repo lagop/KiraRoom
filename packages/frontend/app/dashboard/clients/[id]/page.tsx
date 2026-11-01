@@ -31,6 +31,7 @@ import {
 import { ClientLoyaltyCard } from "@/components/loyalty/client-loyalty-card";
 import { ClientMarketingCard } from "@/components/marketing/client-marketing-card";
 import { ClientMergeDialog } from "@/components/clients/client-merge-dialog";
+import { ClientGdprCard } from "@/components/clients/client-gdpr-card";
 
 /** Shown with the visit list when the server capped it (see the API). */
 const HISTORY_LIMIT = 100;
@@ -158,26 +159,11 @@ export default function ClientDetailPage({
             </p>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <span
-            className={`inline-flex self-start rounded-full px-2 py-1 text-xs font-medium sm:self-center ${clientStatusBadgeClass(c.status)}`}
-          >
-            {t(`clients.status_${c.status}`)}
-          </span>
-          {/* Merging is the owner's or an admin's (the API refuses staff). */}
-          {manager && (
-            <ClientMergeDialog
-              client={c}
-              onMerged={(_result, keptId) => {
-                qc.invalidateQueries({ queryKey: ["clients"] });
-                qc.invalidateQueries({ queryKey: ["rebooking"] });
-                // The other record was kept: this one no longer exists.
-                if (keptId !== id) router.replace(`/dashboard/clients/${keptId}`);
-                else setMerges((n) => n + 1);
-              }}
-            />
-          )}
-        </div>
+        <span
+          className={`inline-flex self-start rounded-full px-2 py-1 text-xs font-medium sm:self-center ${clientStatusBadgeClass(c.status)}`}
+        >
+          {t(`clients.status_${c.status}`)}
+        </span>
       </header>
 
       <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
@@ -350,6 +336,31 @@ export default function ClientDetailPage({
           <p className="mt-2 text-sm text-gray-500">—</p>
         )}
       </section>
+
+      {/* Merging duplicate records: the API answers owner / admin only. */}
+      {manager && (
+        <ClientMergeDialog
+          client={c}
+          onMerged={(_result, keptId) => {
+            qc.invalidateQueries({ queryKey: ["clients"] });
+            qc.invalidateQueries({ queryKey: ["rebooking"] });
+            // The other record was kept: this one no longer exists.
+            if (keptId !== id) router.replace(`/dashboard/clients/${keptId}`);
+            else setMerges((n) => n + 1);
+          }}
+        />
+      )}
+
+      {/* Her data-protection rights: the API answers owner / admin only. */}
+      {manager && (
+        <ClientGdprCard
+          clientId={id}
+          firstName={c.firstName}
+          lastName={c.lastName}
+          email={c.email}
+          phone={c.phone}
+        />
+      )}
     </div>
   );
 }

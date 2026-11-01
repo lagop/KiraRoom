@@ -4,7 +4,11 @@
  * Uses an in-memory Prisma mock so no DB is needed.
  */
 
-import { GdprService } from "./gdpr.service";
+import { gunzipSync } from "zlib";
+import { Prisma } from "@prisma/client";
+import { GdprService, TENANT_SECRET_FIELDS } from "./gdpr.service";
+import { CLIENT_SECRET_COLUMNS } from "../../clients/client-select";
+import { ANONYMIZED_FIRST_NAME, ANONYMIZED_LAST_NAME } from "../../clients/client-anonymize";
 
 function makePrismaMock() {
   const tenants = new Map<string, any>();
@@ -34,6 +38,12 @@ function makePrismaMock() {
     user: {
       updateMany: async (args: any) => { for (const u of users) if (u.tenantId === args.where.tenantId) Object.assign(u, args.data); return { count: users.length }; },
       findMany: async (args: any) => users.filter((u) => u.tenantId === args.where.tenantId),
+      update: async (args: any) => {
+        const u = users.find((x) => x.id === args.where.id);
+        if (!u) throw new Error("not found");
+        Object.assign(u, args.data);
+        return u;
+      },
     },
     client: {
       updateMany: async (args: any) => { for (const c of clients) if (c.tenantId === args.where.tenantId) Object.assign(c, args.data); return { count: clients.length }; },
@@ -70,11 +80,21 @@ function makePrismaMock() {
         return gdprRequests[idx];
       },
     },
-    $transaction: async (fn: any) => fn(prisma),
+    $transaction: async (fn: any) => fn(scoped),
   };
+  // The models the client anonymisation also cleans (consents, chats,
+  // wait-list...): nothing stored for them here.
+  const stub = async () => ({ count: 0 });
+  const scoped: any = new Proxy(prisma, {
+    get: (target, model: string) => {
+      if (model.startsWith("$")) return target[model];
+      const methods = target[model] ?? {};
+      return new Proxy(methods, { get: (m, method: string) => m[method] ?? stub });
+    },
+  });
 
   return {
-    prisma,
+    prisma: scoped,
     tenants,
     users,
     clients,
@@ -175,7 +195,11 @@ describe("GdprService.anonymize", () => {
     await svc.anonymize("tenant-1", request.id);
 
     const c = m.clients[0];
-    expect(c.firstName).toBe("[anonymized]");
+    expect(c.firstName).toBe(ANONYMIZED_FIRST_NAME);
+    expect(c.lastName).toBe(ANONYMIZED_LAST_NAME);
+    expect(c.passwordHash).toBe(null);
+    expect(c.allergies).toEqual([]);
+    expect(c.status).toBe("inactive");
     expect(c.email).toBe(null);
     expect(c.phone).toBe(null);
     expect(c.taxId).toBe(null);
@@ -224,6 +248,43 @@ describe("GdprService.anonymize", () => {
 
     expect(m.gdprRequests[0].status).toBe("completed");
     expect(m.gdprRequests[0].completedAt).toBeInstanceOf(Date);
+  });
+});
+
+describe("GdprService secrets", () => {
+  it("every Tenant column that looks like a secret is left out of the export", () => {
+    const secretLooking = (Object.values(Prisma.TenantScalarFieldEnum) as string[]).filter((c) =>
+      /secret|password|token|hash|private/i.test(c),
+    );
+    expect(secretLooking.filter((c) => !(TENANT_SECRET_FIELDS as readonly string[]).includes(c))).toEqual([]);
+  });
+
+  it("the export carries no client sign-in secret and no Stripe secret key", async () => {
+    const m = makePrismaMock();
+    seedTenant(m);
+    Object.assign(m.tenants.get("tenant-1"), { stripeTestSecretKey: "sk_test_x", stripeLiveSecretKey: "sk_live_x", stripeTestPublishableKey: "pk_test_x" });
+    Object.assign(m.clients[0], { passwordHash: "$2b$hash", passwordResetToken: "tok", passwordResetExpires: new Date(), tokenVersion: 3 });
+    const svc = new GdprService(m.prisma as any);
+    const envelope = JSON.parse((await svc.export("tenant-1", "req-1")).toString("utf8"));
+    const payload = JSON.parse(gunzipSync(Buffer.from(envelope.data, "base64")).toString("utf8"));
+    for (const column of CLIENT_SECRET_COLUMNS) expect(payload.clients[0]).not.toHaveProperty(column);
+    for (const column of TENANT_SECRET_FIELDS) expect(payload.tenant).not.toHaveProperty(column);
+    expect(payload.tenant.stripeTestPublishableKey).toBe("pk_test_x");
+    expect(payload.clients[0].email).toBe("bob@x.com");
+  });
+
+  it("anonymize gives each user their own placeholder email and drops the Stripe secret keys", async () => {
+    const m = makePrismaMock();
+    seedTenant(m);
+    m.users.push({ id: "user-2", tenantId: "tenant-1", email: "staff@salon.com", firstName: "Eva", lastName: "Staff", isActive: true, role: "staff" });
+    Object.assign(m.tenants.get("tenant-1"), { stripeLiveSecretKey: "sk_live_x" });
+    const svc = new GdprService(m.prisma as any);
+    const request = await svc.recordRequest("tenant-1", "anonymize", "actor-1", undefined);
+    await svc.anonymize("tenant-1", request.id);
+    const emails = m.users.map((u: any) => u.email);
+    expect(new Set(emails).size).toBe(2);
+    for (const e of emails) expect(e).toContain("@deleted.local");
+    expect(m.tenants.get("tenant-1").stripeLiveSecretKey).toBe(null);
   });
 });
 

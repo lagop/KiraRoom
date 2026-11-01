@@ -106,9 +106,12 @@ beforeAll(async () => {
     data: {
       tenantId, clientId: S, serviceId: service.id, professionalId: pro.id,
       scheduledDate: new Date("2026-05-01"), scheduledTime: "10:00", duration: 30, endTime: "10:30", price: 20,
+      status: "completed",
     },
   });
-  await db.payment.create({ data: { tenantId, clientId: S, appointmentId: appt.id, amount: 2000, type: "appointment" } });
+  await db.payment.create({
+    data: { tenantId, clientId: S, appointmentId: appt.id, amount: 2000, type: "appointment", status: "paid", method: "card" },
+  });
   await db.order.create({ data: { tenantId, clientId: S, orderNumber: `L2-${run}` } });
   await db.chatConversation.create({ data: { tenantId, clientId: S } });
   await db.notification.create({ data: { tenantId, clientId: S, type: "appointment_created", title: "t", message: "m" } });
@@ -287,13 +290,15 @@ describe("merging two clients (L2)", () => {
       tags: ["vip", "nueva"],
       allergies: ["tinte"],
       communicationPreferences: { whatsapp: false },
-      visitCount: 3,
+      // Recomputed from her history (client-stats.ts): the one completed
+      // visit and its paid 20 EUR, both from the source record.
+      visitCount: 1,
       loyaltyPoints: 80,
       loyaltyTier: "silver",
     });
-    expect(Number(c.totalSpent)).toBe(150);
-    expect(Number(c.averageSpent)).toBe(50);
-    expect(c.firstVisit.toISOString().slice(0, 10)).toBe("2024-06-01");
+    expect(Number(c.totalSpent)).toBe(20);
+    expect(Number(c.averageSpent)).toBe(20);
+    expect(c.firstVisit.toISOString().slice(0, 10)).toBe("2026-05-01");
     expect(c.lastVisit.toISOString().slice(0, 10)).toBe("2026-05-01");
   });
 

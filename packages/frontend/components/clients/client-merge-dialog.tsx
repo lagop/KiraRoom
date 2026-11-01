@@ -92,14 +92,25 @@ export function ClientMergeDialog({
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-2 self-start rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 sm:self-center"
-      >
-        <GitMerge className="h-3.5 w-3.5" aria-hidden="true" />
-        Fusionar con otra clienta
-      </button>
+      <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+        <h2 className="flex items-center gap-2 text-base font-semibold text-gray-900">
+          <GitMerge className="h-4 w-4 text-purple-600" aria-hidden="true" /> Fichas duplicadas
+        </h2>
+        <p className="mt-2 text-sm text-gray-600">
+          Si esta clienta tiene otra ficha (por ejemplo, una de la reserva online y otra de caja), únelas en una sola
+          con todo su historial.
+        </p>
+        <div className="mt-4">
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className="inline-flex items-center gap-2 rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+          >
+            <GitMerge className="h-4 w-4" aria-hidden="true" />
+            Fusionar con otra clienta
+          </button>
+        </div>
+      </section>
 
       {open && (
         <div

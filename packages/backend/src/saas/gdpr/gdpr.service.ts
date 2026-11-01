@@ -4,6 +4,8 @@ import { createGzip } from "zlib";
 import { Readable } from "stream";
 import { GdprRequest, GdprRequestStatus } from "@prisma/client";
 import { PrismaService } from "../../common/prisma/prisma.service";
+import { CLIENT_SECRET_COLUMNS } from "../../clients/client-select";
+import { anonymizeClients } from "../../clients/client-anonymize";
 
 /**
  * GDPR data export (Art. 15 RGPD) and right-to-erasure (Art. 17 RGPD).
@@ -42,10 +44,31 @@ const USER_CREDENTIAL_FIELDS = [
   "tokenVersion",
 ] as const;
 
+/**
+ * The salon's own payment-provider secrets. Publishable keys are public by
+ * design; the secret keys move money on the salon's Stripe account.
+ * gdpr.service.spec.ts fails when a Tenant column that looks like a secret
+ * is not listed here.
+ */
+export const TENANT_SECRET_FIELDS = ["stripeTestSecretKey", "stripeLiveSecretKey"] as const;
+
+function without<T extends Record<string, unknown>, K extends string>(row: T, fields: readonly K[]): Omit<T, K> {
+  const out: Record<string, unknown> = { ...row };
+  for (const field of fields) delete out[field];
+  return out as Omit<T, K>;
+}
+
 export function withoutCredentials<T extends Record<string, unknown>>(user: T): Omit<T, (typeof USER_CREDENTIAL_FIELDS)[number]> {
-  const out: Record<string, unknown> = { ...user };
-  for (const field of USER_CREDENTIAL_FIELDS) delete out[field];
-  return out as Omit<T, (typeof USER_CREDENTIAL_FIELDS)[number]>;
+  return without(user, USER_CREDENTIAL_FIELDS);
+}
+
+/** A client's sign-in secrets (password hash, reset token, session version). */
+export function withoutClientCredentials<T extends Record<string, unknown>>(client: T): Omit<T, (typeof CLIENT_SECRET_COLUMNS)[number]> {
+  return without(client, CLIENT_SECRET_COLUMNS);
+}
+
+export function withoutTenantSecrets<T extends Record<string, unknown>>(tenant: T): Omit<T, (typeof TENANT_SECRET_FIELDS)[number]> {
+  return without(tenant, TENANT_SECRET_FIELDS);
 }
 
 @Injectable()
@@ -98,29 +121,28 @@ export class GdprService {
         throw new Error(`Tenant ${tenantId} not found`);
       }
 
-      // Users — replace email + PII, mark inactive.
-      await tx.user.updateMany({
-        where: { tenantId },
-        data: {
-          email: `[anonymized]+${tenantId.slice(0, 8)}@deleted.local`,
-          firstName: ANON,
-          lastName: ANON,
-          isActive: false,
-        },
-      });
+      // Users — replace email + PII, mark inactive. The email is unique
+      // across the platform, so each user gets their own placeholder (one
+      // shared address failed as soon as a salon had two users).
+      const users = await tx.user.findMany({ where: { tenantId }, select: { id: true } });
+      for (const user of users) {
+        await tx.user.update({
+          where: { id: user.id },
+          data: {
+            email: `[anonymized]+${user.id}@deleted.local`,
+            firstName: ANON,
+            lastName: ANON,
+            isActive: false,
+            tokenVersion: { increment: 1 },
+          },
+        });
+      }
 
-      // Clients — replace PII, keep FK references intact.
-      await tx.client.updateMany({
-        where: { tenantId },
-        data: {
-          firstName: ANON,
-          lastName: ANON,
-          email: null,
-          phone: null,
-          taxId: null,
-          profileImage: null,
-        },
-      });
+      // Clients — the same erasure as a single client's (the client file's
+      // "anonimizar"): profile, health data, consents' answers, chats,
+      // wait-list, notifications... Appointments and FKs stay.
+      const clients = await tx.client.findMany({ where: { tenantId }, select: { id: true } });
+      await anonymizeClients(tx, tenantId, clients.map((c) => c.id));
 
       // Invoices — preserve (4-year fiscal retention). Replace recipient
       // name + taxId with placeholders so the audit trail still has
@@ -144,6 +166,11 @@ export class GdprService {
           legalName: null,
           slug: `anon-${tenantId.slice(0, 8)}`,
           stripeCustomerId: null,
+          email: null,
+          phone: null,
+          whatsapp: null,
+          stripeTestSecretKey: null,
+          stripeLiveSecretKey: null,
           deletedAt: new Date(),
         },
       });
@@ -155,7 +182,7 @@ export class GdprService {
           completedAt: new Date(),
         },
       });
-    });
+    }, { timeout: 120_000 });
   }
 
   /** Record a new GdprRequest — used by the controller before starting work. */
@@ -213,9 +240,9 @@ export class GdprService {
     ]);
 
     return {
-      tenant: tenant ?? null,
+      tenant: tenant ? withoutTenantSecrets(tenant) : null,
       users: (users ?? []).map(withoutCredentials),
-      clients: clients ?? [],
+      clients: (clients ?? []).map(withoutClientCredentials),
       invoices: (invoices ?? []).map((inv) => ({
         ...inv,
         // Strip large encrypted blobs — they're not human-readable.

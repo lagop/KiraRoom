@@ -58,6 +58,11 @@ check("not a record with itself", mergeRefusal(KEPT, KEPT), "Es la misma ficha."
 check("not into a deactivated record", /desactivada/.test(mergeRefusal({ ...KEPT, status: "inactive" }, OTHER) ?? ""), true);
 check("not a blocked record into one that is not", /bloqueada/.test(mergeRefusal(KEPT, { ...OTHER, status: "blocked" }) ?? ""), true);
 check("a blocked record may take another", mergeRefusal({ ...KEPT, status: "blocked" }, OTHER), null);
+check(
+  "not a record anonymised under GDPR",
+  /anonimizada/.test(mergeRefusal(KEPT, { ...OTHER, status: "inactive", firstName: "Clienta", lastName: "anonimizada" }) ?? ""),
+  true,
+);
 
 const detail = fs.readFileSync(path.join(__dirname, "../app/dashboard/clients/[id]/page.tsx"), "utf8");
 check("the client file offers the merge to managers only", /manager && \(\s*<ClientMergeDialog/.test(detail), true);

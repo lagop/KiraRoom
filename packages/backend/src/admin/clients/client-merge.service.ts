@@ -13,6 +13,7 @@ import { ClientCadenceService } from "../../rebooking/client-cadence.service";
 import { CLIENT_EMAIL_TAKEN } from "../../clients/client-write";
 import { normalizeClientEmail } from "../../clients/client-contact";
 import { recomputeClientStats } from "../../clients/client-stats";
+import { ANONYMIZED_FIRST_NAME, ANONYMIZED_LAST_NAME } from "../../clients/client-anonymize";
 import { MARKETING_FIELD_ID, SYSTEM_CONSENT_PURPOSES } from "../../consent/marketing-consent";
 
 /**
@@ -61,6 +62,17 @@ export const MERGE_TARGET_INACTIVE =
   "Esta ficha está desactivada. Fusiona al revés (esta ficha dentro de la activa) o actívala antes.";
 export const MERGE_SOURCE_BLOCKED =
   "La otra ficha está bloqueada y esta no. Fusiona al revés para conservar el bloqueo, o desbloquéala antes.";
+export const MERGE_ANONYMIZED =
+  "Una ficha anonimizada (RGPD) no se puede fusionar: sus datos se borraron a petición de la clienta.";
+
+/** As client-anonymize.ts leaves a record (there is no dedicated marker). */
+function isAnonymized(c: { firstName: string; lastName: string; status: ClientStatus }): boolean {
+  return (
+    c.status === ClientStatus.inactive &&
+    c.firstName === ANONYMIZED_FIRST_NAME &&
+    c.lastName === ANONYMIZED_LAST_NAME
+  );
+}
 
 export interface MergeActor {
   id: string;
@@ -255,6 +267,8 @@ export class ClientMergeService {
       tx.client.findFirst({ where: { id: sourceId, tenantId }, select: CLIENT_MERGE_SELECT }),
     ]);
     if (!target || !source) throw new NotFoundException("Cliente no encontrado");
+    // Her erased history must not be tied back to a named record.
+    if (isAnonymized(source) || isAnonymized(target)) throw new ConflictException(MERGE_ANONYMIZED);
     if (target.status === ClientStatus.inactive) throw new ConflictException(MERGE_TARGET_INACTIVE);
     if (source.status === ClientStatus.blocked && target.status !== ClientStatus.blocked) {
       throw new ConflictException(MERGE_SOURCE_BLOCKED);
