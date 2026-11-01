@@ -118,7 +118,13 @@ beforeAll(async () => {
   await db.rebookingReminder.create({ data: { tenantId, clientId: S, scheduledAt: new Date(), channel: "email", status: "scheduled" } });
   await db.waitList.create({ data: { tenantId, clientId: S, serviceId: service.id } });
   await db.review.create({ data: { tenantId, clientId: S, rating: 5 } });
-  await db.promotionUsage.create({ data: { promotionId: randomUUID(), clientId: S, discountAmount: 5 } });
+  // A use points at its promotion (foreign key since promotions at the till).
+  const promotion = await db.promotion.upsert({
+    where: { tenantId_code: { tenantId, code: "MERGE-L2" } },
+    update: {},
+    create: { tenantId, name: "L2", code: "MERGE-L2", type: "PERCENTAGE", value: 5, startDate: new Date() },
+  });
+  await db.promotionUsage.create({ data: { promotionId: promotion.id, clientId: S, discountAmount: 5 } });
   await db.invoice.create({
     data: {
       tenantId, series: "L2", number: run, issueDate: new Date(), recipientType: "client", recipientId: S,

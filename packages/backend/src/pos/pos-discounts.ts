@@ -18,7 +18,11 @@ import { BadRequestException, ForbiddenException } from "@nestjs/common";
  *      it is then shared over the lines in proportion to what each one
  *      still costs (largest remainder, so the shares add up exactly), so
  *      an appointment knows its part and the invoice can show it per line;
- *   3. a loyalty reward, if any, comes off what is left (pos.service.ts).
+ *   3. a promotion code, if any, off what the lines cost after (1) and (2),
+ *      shared by tax base, outside the staff limit below
+ *      (promotions/promotion-at-till.ts);
+ *   4. a loyalty reward, if any, comes off what is left (pos.service.ts);
+ *   5. a gift card pays what remains, as a tender (pos-tenders.ts).
  */
 
 export const POS_DISCOUNT_TYPES = ["percentage", "fixed"] as const;

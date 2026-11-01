@@ -1,5 +1,7 @@
 import { Type } from "class-transformer";
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsDateString,
   IsEnum,
@@ -57,6 +59,10 @@ export class CreatePromotionDto {
 
   @IsOptional() @IsDateString()
   endDate?: string | null;
+
+  /** Only these services get the discount at the till; empty or left out: the whole ticket. */
+  @IsOptional() @IsArray() @ArrayMaxSize(200) @IsUUID("all", { each: true })
+  applicableServiceIds?: string[];
 }
 
 /**
@@ -93,16 +99,7 @@ export class UpdatePromotionDto {
 
   @IsOptional() @IsBoolean()
   isActive?: boolean;
-}
 
-/** Body of `POST /promotions/apply`. */
-export class ApplyPromotionDto {
-  @IsString() @MaxLength(50) @Matches(CODE, { message: "El código no puede tener espacios." })
-  code!: string;
-
-  @IsUUID()
-  clientId!: string;
-
-  @Type(() => Number) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) @Max(MAX_AMOUNT)
-  orderValue!: number;
+  @IsOptional() @IsArray() @ArrayMaxSize(200) @IsUUID("all", { each: true })
+  applicableServiceIds?: string[];
 }

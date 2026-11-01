@@ -2424,13 +2424,19 @@
       "wallet_withdrawals": "Wallet withdrawals"
     },
     "loyalty_negative": "Negative balance: {points} points",
-    "loyalty_negative_help": "A payment whose points they had already redeemed was refunded: they cannot redeem until their next visits pay it off."
+    "loyalty_negative_help": "A payment whose points they had already redeemed was refunded: they cannot redeem until their next visits pay it off.",
+    "promo_code": "Promo code",
+    "promo_code_placeholder": "CODE",
+    "promo_apply": "Apply",
+    "promo_remove": "Remove",
+    "promo_code_help": "Applied after the manual discounts and before the points. It does not count towards your discount limit.",
+    "promo_line": "Promotion {code}"
   },
   "pos_today": "Pos Today",
   "pos_tomorrow": "Pos Tomorrow",
   "promotions": {
     "title": "Promotions",
-    "subtitle": "Discount codes you can offer in your win-back campaigns.",
+    "subtitle": "Discount codes your clients use when paying at the till. You can send them in your win-back campaigns.",
     "activate": "Activate",
     "active": "Active",
     "cancel": "Cancel",
@@ -2460,7 +2466,7 @@
     "no_promotions_description": "Create your first promotion to get started",
     "percentage": "Percentage",
     "plan_blocked_title": "Promotions are not included in your plan",
-    "plan_blocked_body": "With a higher plan you can create discount codes for your clients.",
+    "plan_blocked_body": "With a higher plan you can create discount codes your clients use when paying at the till.",
     "plan_blocked_cta": "See plans in Billing",
     "promotion_name": "Promotion name",
     "start_date": "Start date",
@@ -2468,7 +2474,17 @@
     "unlimited": "No limit",
     "update": "Save",
     "uses": "Uses",
-    "value": "Value"
+    "value": "Value",
+    "till_note": "Codes are applied when charging at the till: type the code in “Promo code”. They cannot be used for online booking yet.",
+    "applicable_services": "Services",
+    "applicable_services_all": "Whole ticket",
+    "applicable_services_help": "If you pick services, the discount only applies to those lines of the ticket.",
+    "applicable_services_count": "{count} services",
+    "discounted": "Discounted",
+    "archived_toast": "Promotion archived",
+    "archived_toast_description": "It had already been used at the till: it is kept with its uses and its code no longer works.",
+    "deleted_toast": "Promotion deleted",
+    "delete_used_note": "If it was already used at the till, it is archived instead of deleted: its uses and invoices keep pointing to it."
   },
   "quantity": "Quantity",
   "login": {

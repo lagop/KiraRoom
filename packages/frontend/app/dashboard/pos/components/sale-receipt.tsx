@@ -111,6 +111,12 @@ export default function SaleReceipt({ saleId, clientEmail, canEmail, onClose }: 
                 </div>
               ))}
               <div className="my-2 border-t border-dashed" />
+              {receipt.promotion && receipt.promotion.discountCents > 0 && (
+                <div className="flex justify-between">
+                  <span>Descuento promoción {receipt.promotion.code}</span>
+                  <span>−{euros(receipt.promotion.discountCents)}</span>
+                </div>
+              )}
               {receipt.loyaltyDiscountCents > 0 && (
                 <div className="flex justify-between">
                   <span>Descuento por puntos</span>

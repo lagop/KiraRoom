@@ -2424,13 +2424,19 @@
       "wallet_withdrawals": "Retiradas de cartera"
     },
     "loyalty_negative": "Saldo negativo: {points} puntos",
-    "loyalty_negative_help": "Se le devolvió un pago cuyos puntos ya había canjeado: no puede canjear hasta que sus próximas visitas lo compensen."
+    "loyalty_negative_help": "Se le devolvió un pago cuyos puntos ya había canjeado: no puede canjear hasta que sus próximas visitas lo compensen.",
+    "promo_code": "Código promocional",
+    "promo_code_placeholder": "CÓDIGO",
+    "promo_apply": "Aplicar",
+    "promo_remove": "Quitar",
+    "promo_code_help": "Se aplica después de los descuentos manuales y antes de los puntos. No cuenta en tu límite de descuento.",
+    "promo_line": "Promoción {code}"
   },
   "pos_today": "Pos Today",
   "pos_tomorrow": "Pos Tomorrow",
   "promotions": {
     "title": "Promociones",
-    "subtitle": "Códigos de descuento que puedes ofrecer en tus campañas de reactivación.",
+    "subtitle": "Códigos de descuento que tus clientas usan al pagar en caja. Puedes enviarlos en tus campañas de reactivación.",
     "activate": "Activar",
     "active": "Activa",
     "cancel": "Cancelar",
@@ -2460,7 +2466,7 @@
     "no_promotions_description": "Crea tu primera promoción para empezar",
     "percentage": "Porcentaje",
     "plan_blocked_title": "Las promociones no están incluidas en tu plan",
-    "plan_blocked_body": "Con un plan superior puedes crear códigos de descuento para tus clientas.",
+    "plan_blocked_body": "Con un plan superior puedes crear códigos de descuento que tus clientas usan al pagar en caja.",
     "plan_blocked_cta": "Ver planes en Facturación",
     "promotion_name": "Nombre de la promoción",
     "start_date": "Fecha de inicio",
@@ -2468,7 +2474,17 @@
     "unlimited": "Sin límite",
     "update": "Guardar",
     "uses": "Usos",
-    "value": "Valor"
+    "value": "Valor",
+    "till_note": "Los códigos se aplican al cobrar en Caja: escribe el código en «Código promocional». De momento no se pueden usar en la reserva online.",
+    "applicable_services": "Servicios",
+    "applicable_services_all": "Todo el ticket",
+    "applicable_services_help": "Si eliges servicios, el descuento solo se aplica a esas líneas del ticket.",
+    "applicable_services_count": "{count} servicios",
+    "discounted": "Descontado",
+    "archived_toast": "Promoción archivada",
+    "archived_toast_description": "Ya se había usado en caja: se guarda con sus usos y su código no vuelve a valer.",
+    "deleted_toast": "Promoción eliminada",
+    "delete_used_note": "Si ya se usó en caja, se archiva en vez de borrarse: sus usos y facturas siguen apuntando a ella."
   },
   "quantity": "Cantidad",
   "login": {

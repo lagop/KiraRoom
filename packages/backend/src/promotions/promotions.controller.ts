@@ -10,7 +10,7 @@ import { RolesGuard } from "../auth/guards/roles.guard";
 import { Roles } from "../auth/decorators/roles.decorator";
 import { UserRole } from "@prisma/client";
 import { PromotionsService } from "./promotions.service";
-import { CreatePromotionDto, UpdatePromotionDto, ApplyPromotionDto } from "./dto/promotion.dto";
+import { CreatePromotionDto, UpdatePromotionDto } from "./dto/promotion.dto";
 import { Request } from "express";
 import { FeatureGuard } from "../common/guards/feature.guard";
 import { Feature } from "../common/decorators/feature.decorator";
@@ -92,22 +92,16 @@ export class PromotionsController {
     return this.promotionsService.update(id, tenantId, dto);
   }
 
+  /**
+   * Deletes a promotion, or archives it when it was already used at the
+   * till. There is no endpoint that applies a code: the till does
+   * (POST /pos/quote and /pos/checkout, `promotionCode`).
+   */
   @Delete(":id")
   @Roles(UserRole.owner, UserRole.admin)
-  @ApiOperation({ summary: "Delete a promotion" })
+  @ApiOperation({ summary: "Delete (or archive, when used) a promotion" })
   async delete(@Req() req: AuthenticatedRequest, @Param("id", ParseUUIDPipe) id: string) {
     const tenantId = req.user.tenantId;
     return this.promotionsService.delete(id, tenantId);
-  }
-
-  @Post("apply")
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  @ApiOperation({ summary: "Apply a promotion code" })
-  async apply(
-    @Req() req: AuthenticatedRequest,
-    @Body() dto: ApplyPromotionDto,
-  ) {
-    const tenantId = req.user.tenantId;
-    return this.promotionsService.applyPromotion(tenantId, dto);
   }
 }

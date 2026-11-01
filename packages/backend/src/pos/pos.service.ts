@@ -65,12 +65,22 @@ import {
 import {
   includedTaxCents,
   invoiceLineOf,
+  lineOffCents,
   loyaltyShares,
   rowsByBucket,
   saleDescription,
   type GiftCardLine,
   type PricedLine,
 } from './pos-ticket';
+import {
+  TILL_PROMOTION_SELECT,
+  assertClientMayUse,
+  claimPromotionIn,
+  normalizePromotionCode,
+  promotionOnLines,
+  promotionProblem,
+  type TillPromotion,
+} from '../promotions/promotion-at-till';
 import { effectiveCommissionRate } from '../commissions/commission-rate';
 import { safeTimeZone } from '../gift-cards/gift-card-expiry';
 import { salonInstant } from '../appointments/salon-time';
@@ -164,6 +174,16 @@ type ChargeableApt = PayableAppointment & {
 
 type TicketLine = DiscountedTicket<PricedLine>['lines'][number];
 
+/** A promotion code applied to the ticket (promotions/promotion-at-till.ts). */
+interface AppliedPromotion {
+  promotion: TillPromotion;
+  code: string;
+  /** What it took off the ticket, money cents (each line's share: promotionDiscountCents). */
+  cents: number;
+  /** What it came off: the lines it applies to, after their manual discounts. */
+  baseCents: number;
+}
+
 /** A ticket priced by the server: what POST /pos/quote answers and the checkout charges. */
 interface PricedTicket {
   appointments: ChargeableApt[];
@@ -171,6 +191,8 @@ interface PricedTicket {
   giftCards: GiftCardLine[];
   giftCardsCents: number;
   orderDiscount: DiscountSpec | null;
+  /** The promotion code applied, after the manual discounts and before the loyalty reward. */
+  promotion: AppliedPromotion | null;
   /** Per appointment: the money discount actually given. */
   appointmentDiscounts: Map<string, number>;
   /** Per appointment: the discount in catalogue terms and the money total after it. */
@@ -441,11 +463,15 @@ export class PosService {
     // The owner and managers always may; anyone else up to the salon's limit.
     if (ticket.discountCents > 0) assertDiscountAllowed(actor?.role, salon.maxStaffDiscountPercent, ticket, orderDiscount);
 
+    // A promotion code: after the manual discounts (and outside the staff's
+    // limit), before the loyalty reward. promotions/promotion-at-till.ts
+    const promotion = dto.promotionCode?.trim() ? await this.promotionOnTicket(tenantId, dto, ticket, salon) : null;
+
     // What each appointment of the ticket gets off, in money: its line's
-    // discount and its share of the ticket's.
+    // discount, its share of the ticket's and of the promotion's.
     const asked = new Map<string, number>();
     for (const line of ticket.lines) {
-      const off = line.lineDiscountCents + line.orderDiscountCents;
+      const off = lineOffCents(line);
       if (line.appointmentId && off > 0) asked.set(line.appointmentId, (asked.get(line.appointmentId) ?? 0) + off);
     }
     // In the visit's catalogue terms (what its total and invoice take off).
@@ -476,7 +502,7 @@ export class PosService {
       if (rect) catalogueDiscounts.set(id, { ...conv, chargeAfterCents: before - given });
       appointmentDiscounts.set(id, given);
       const delta = given - money;
-      if (delta !== 0) adjustAppointmentLine(ticket, id, delta);
+      if (delta !== 0) adjustAppointmentLine(ticket, id, delta, promotion);
     }
 
     return {
@@ -485,10 +511,47 @@ export class PosService {
       giftCards,
       giftCardsCents: giftCards.reduce((s, g) => s + g.amountCents, 0),
       orderDiscount,
+      promotion,
       appointmentDiscounts,
       catalogueDiscounts,
       toRectify,
     };
+  }
+
+  /**
+   * The promotion code typed at the till, on the ticket as the manual
+   * discounts left it: checked (this salon's, active, in its days in the
+   * salon's clock, uses left, the client's own limit, the minimum order, its
+   * services on the ticket) and taken off the lines it applies to, shared by
+   * their tax base (promotions/promotion-at-till.ts). 400 with the reason in
+   * Spanish otherwise. Nothing is written: the checkout claims the use.
+   */
+  private async promotionOnTicket(
+    tenantId: string,
+    dto: PosQuoteDto,
+    ticket: DiscountedTicket<PricedLine>,
+    salon: Salon,
+  ): Promise<AppliedPromotion> {
+    const code = normalizePromotionCode(dto.promotionCode as string);
+    const promotion = (await this.prisma.promotion.findFirst({
+      where: { tenantId, code },
+      select: TILL_PROMOTION_SELECT,
+    })) as TillPromotion | null;
+    if (!promotion) throw new BadRequestException(`El código ${code} no es de ninguna promoción del salón.`);
+    const problem = promotionProblem(promotion, new Date(), salon.timezone);
+    if (problem) throw new BadRequestException(problem);
+    // A walk-in client typed at the till is checked once she is found or created (claimPromotionIn).
+    if (!dto.clientInfo) await assertClientMayUse(this.prisma, promotion, dto.clientId ?? null);
+
+    const on = promotionOnLines(promotion, ticket.lines, ticket.totalCents);
+    if (on.cents <= 0) throw new BadRequestException('La promoción no descuenta nada en este ticket.');
+    ticket.lines.forEach((line, i) => {
+      if (on.shares[i] <= 0) return;
+      line.promotionDiscountCents = on.shares[i];
+      line.netCents -= on.shares[i];
+    });
+    ticket.totalCents -= on.cents;
+    return { promotion, code: promotion.code, cents: on.cents, baseCents: on.baseCents };
   }
 
   /** The tax inside the ticket's lines (gift cards carry none), for "IVA incluido". */
@@ -498,7 +561,7 @@ export class PosService {
 
   /** The lines that go on the sale's own invoice: everything but appointments. */
   private invoiceableLines(lines: TicketLine[]): TicketLine[] {
-    return lines.filter((l) => !l.appointmentId && l.netCents + l.lineDiscountCents + l.orderDiscountCents > 0);
+    return lines.filter((l) => !l.appointmentId && l.netCents + lineOffCents(l) > 0);
   }
 
   /**
@@ -524,9 +587,14 @@ export class PosService {
     return lines.map((l) => ({
       ...l,
       unitPriceCents: l.price,
-      discountCents: l.lineDiscountCents + l.orderDiscountCents,
+      discountCents: lineOffCents(l),
       taxCents: includedTaxCents(l.netCents, l.taxRate),
     }));
+  }
+
+  /** The promotion applied, as the till's answers show it. */
+  private promotionOut(p: AppliedPromotion | null) {
+    return p ? { id: p.promotion.id, code: p.code, name: p.promotion.name, discount: p.cents } : null;
   }
 
   /**
@@ -557,6 +625,8 @@ export class PosService {
       giftCards: p.giftCards,
       subtotal: p.ticket.subtotalCents + p.giftCardsCents,
       discount: { lines: p.ticket.lineDiscountsCents, order: p.ticket.orderDiscountCents, total: p.ticket.discountCents },
+      /** The promotion code applied (after the manual discounts, before the points). */
+      promotion: this.promotionOut(p.promotion),
       loyalty,
       total: p.ticket.totalCents + p.giftCardsCents - (loyalty?.discount ?? 0),
       tax: { label: salon.taxLabel, cents: this.taxOf(p.ticket.lines), included: true, note: `${salon.taxLabel} incluido` },
@@ -607,8 +677,18 @@ export class PosService {
     const saleId = randomUUID();
     const salon = await this.salonOf(tenantId);
     const priced = await this.priceTicket(tenantId, dto, salon, actor);
-    const { appointments, ticket, giftCards, giftCardsCents, orderDiscount, appointmentDiscounts, catalogueDiscounts, toRectify } =
-      priced;
+    const {
+      appointments,
+      ticket,
+      giftCards,
+      giftCardsCents,
+      orderDiscount,
+      promotion,
+      appointmentDiscounts,
+      catalogueDiscounts,
+      toRectify,
+    } = priced;
+    const promotionCents = promotion?.cents ?? 0;
     const items = ticket.lines;
     const appointmentIds = appointments.map((a) => a.id);
 
@@ -747,6 +827,13 @@ export class PosService {
     }
 
     const discountRows = this.discountRecords(tenantId, saleId, ticket, orderDiscount, actor);
+    // What of each appointment's discount is the promotion's (money), for its record and rectificativa.
+    const promotionOfApt = new Map<string, number>();
+    for (const l of items) {
+      if (l.appointmentId && (l.promotionDiscountCents ?? 0) > 0) {
+        promotionOfApt.set(l.appointmentId, (promotionOfApt.get(l.appointmentId) ?? 0) + (l.promotionDiscountCents ?? 0));
+      }
+    }
     const names = [...items.map((i) => i.name), ...giftCards.map(() => 'Tarjeta regalo')];
     const description = saleDescription(kind === 'quick_sale' ? 'Venta rápida' : 'Venta en caja', names);
     const professionals = await this.commissionRates(tenantId, items);
@@ -779,12 +866,30 @@ export class PosService {
             createdById: actor?.id ?? null,
             kind,
             subtotalCents: ticket.subtotalCents + giftCardsCents,
-            discountCents: ticket.discountCents,
+            // Every discount: the manual ones and the promotion's (its part below).
+            discountCents: ticket.discountCents + promotionCents,
             loyaltyDiscountCents: loyaltyDiscount,
+            ...(promotion
+              ? { promotionDiscountCents: promotionCents, promotionId: promotion.promotion.id, promotionCode: promotion.code }
+              : {}),
             totalCents: total,
             changeCents: change,
           },
         });
+
+        // The promotion's use, claimed with the sale: its limits are checked
+        // again here, atomically (promotions/promotion-at-till.ts), and a
+        // sale that does not commit never used it.
+        if (promotion) {
+          await claimPromotionIn(tx, {
+            tenantId,
+            promotion: promotion.promotion,
+            clientId: finalClientId ?? null,
+            saleId,
+            appointmentId: appointmentIds[0] ?? null,
+            discountCents: promotionCents,
+          });
+        }
 
         // The wallet money, in the same transaction.
         const walletCents = paymentRows.filter((r) => r.method === 'wallet').reduce((s, r) => s + r.amount, 0);
@@ -796,13 +901,19 @@ export class PosService {
         // and only if the sale is recorded. Each one checks again, with the
         // original locked, that the discount fits in what is left of it.
         for (const [appointmentId, inv] of toRectify) {
+          const promo = promotionOfApt.get(appointmentId) ?? 0;
+          const what = !promotion || promo <= 0
+            ? 'Descuento en caja'
+            : promo >= (appointmentDiscounts.get(appointmentId) ?? 0)
+              ? `Descuento promoción ${promotion.code}`
+              : `Descuento en caja y promoción ${promotion.code}`;
           const issued = await this.invoices!
             .rectifyByAmountIn(
               tx,
               tenantId,
               inv.id,
               catalogueDiscounts.get(appointmentId)!.catalogueCents,
-              `Descuento en caja (venta ${saleId})`,
+              `${what} (venta ${saleId})`,
             )
             .catch((err) => {
               // Another rectificativa got there first: the sale rolls back.
@@ -870,6 +981,7 @@ export class PosService {
                 ...(row.appointment ? loyaltyNotOnInvoiceOf(visitLoyalty.get(row.appointment.id)) : {}),
                 ...(loyaltyDiscount ? { loyaltyDiscount, loyaltyRewardId: dto.loyaltyRewardId } : {}),
                 ...(ticket.discountCents ? { posDiscountCents: ticket.discountCents } : {}),
+                ...(promotion ? { promotionCode: promotion.code, promotionDiscountCents: promotionCents } : {}),
               },
             },
           });
@@ -952,9 +1064,14 @@ export class PosService {
         // The loyalty gift's product, out of stock with its movement.
         if (giftLine) await takeGiftFromStock(tx, tenantId, giftLine, saleId);
 
-        // The discounts given, with the sale they belong to.
-        if (discountRows.length > 0) {
-          await tx.posDiscount.createMany({ data: this.withRectifications(discountRows, items, rectifications) });
+        // The discounts given, with the sale they belong to: the manual ones
+        // and the promotion's (type promotion, its id and code).
+        const recorded = [
+          ...this.withRectifications(discountRows, items, rectifications),
+          ...this.promotionRecord(tenantId, saleId, promotion, items, rectifications, actor),
+        ];
+        if (recorded.length > 0) {
+          await tx.posDiscount.createMany({ data: recorded });
         }
         // An appointment is paid if and only if the payments that pay it are recorded.
         for (const share of shares) {
@@ -978,6 +1095,7 @@ export class PosService {
                     orderDiscount,
                     actor,
                     rectifications.get(share.appointment.id)?.id,
+                    promotion,
                   ),
                 }
               : undefined,
@@ -987,7 +1105,7 @@ export class PosService {
 
         // The sale's own invoice (series T, or a full one over 3.000 EUR).
         if (invoiceKind.kind !== 'none' && this.invoices) {
-          const invoiceLines = invoiceable.map((l) => invoiceLineOf(l, loyaltyOfLine.get(l) ?? 0));
+          const invoiceLines = invoiceable.map((l) => invoiceLineOf(l, loyaltyOfLine.get(l) ?? 0, promotion?.code));
           // The loyalty gift as a zero line. IVA treatment (autoconsumo)
           // pending the salon's gestor: pos-loyalty-gift.ts.
           const giftOnInvoice = giftLine ? giftInvoiceLine(giftLine, invoiceLines) : null;
@@ -1026,7 +1144,7 @@ export class PosService {
               description: l.name.slice(0, 200),
               quantity: l.quantity,
               unitPriceCents: l.price,
-              discountCents: l.lineDiscountCents + l.orderDiscountCents,
+              discountCents: lineOffCents(l),
               ...(loyalty > 0 ? { loyaltyDiscountCents: loyalty } : {}),
               totalCents: charged,
               taxRate: l.taxRate,
@@ -1067,6 +1185,7 @@ export class PosService {
             giftCards: soldCards.map((c) => ({ id: c.id, code: c.code, amountCents: c.amountCents })),
             subtotal: ticket.subtotalCents + giftCardsCents,
             discount: { lines: ticket.lineDiscountsCents, order: ticket.orderDiscountCents, total: ticket.discountCents },
+            promotion: this.promotionOut(promotion),
             total,
             tax: { label: salon.taxLabel, cents: this.taxOf(items), included: true, note: `${salon.taxLabel} incluido` },
             /** Handed over, and the cash given back (not recorded as a sale). */
@@ -1594,6 +1713,51 @@ export class PosService {
   }
 
   /**
+   * The PosDiscount row of the promotion code applied (none without one):
+   * on the whole ticket, type promotion, with the promotion's id and code,
+   * its value as the promotion says it (a percent, or cents for a fixed
+   * amount), what it came off and what it took. Not subject to the staff's
+   * manual-discount limit. It names the rectificativa its share went to when
+   * that is one appointment's.
+   */
+  private promotionRecord(
+    tenantId: string,
+    saleId: string,
+    promotion: AppliedPromotion | null,
+    lines: TicketLine[],
+    rectifications: Map<string, IssuedInvoice>,
+    actor?: PosActor,
+  ): any[] {
+    if (!promotion) return [];
+    const p = promotion.promotion;
+    const rectified = [
+      ...new Set(
+        lines
+          .filter((l) => l.appointmentId && (l.promotionDiscountCents ?? 0) > 0 && rectifications.has(l.appointmentId))
+          .map((l) => rectifications.get(l.appointmentId as string)!.id),
+      ),
+    ];
+    return [
+      {
+        tenantId,
+        saleId,
+        scope: 'order',
+        description: `Promoción ${promotion.code}`.slice(0, 200),
+        type: 'promotion',
+        value: p.type === 'PERCENTAGE' ? Number(p.value) : Math.round(Number(p.value) * 100),
+        baseCents: promotion.baseCents,
+        amountCents: promotion.cents,
+        reason: String(p.name ?? '').slice(0, 120) || null,
+        promotionId: p.id,
+        promotionCode: promotion.code,
+        appliedById: actor?.id ?? null,
+        appliedByRole: actor?.role ?? null,
+        ...(rectified.length === 1 ? { rectificationInvoiceId: rectified[0] } : {}),
+      },
+    ];
+  }
+
+  /**
    * What an appointment keeps of a till discount (its `discount` column):
    * the cents its invoice takes off, in the visit's catalogue terms
    * (`amountCents`, appointment-invoice-pricing.ts), the money given
@@ -1609,8 +1773,24 @@ export class PosService {
     orderDiscount: DiscountSpec | null,
     actor?: PosActor,
     rectificationInvoiceId?: string,
+    promotion?: AppliedPromotion | null,
   ): Record<string, unknown> {
     const own = lines.filter((l) => l.appointmentId === apt.id);
+    // The promotion's part of it, named on the visit's invoice
+    // (appointment-invoice-pricing.ts tillPromotionOf), in its catalogue terms.
+    const promoMoney = own.reduce((s, l) => s + (l.promotionDiscountCents ?? 0), 0);
+    const promoRecord =
+      promotion && promoMoney > 0
+        ? {
+            promotion: {
+              promotionId: promotion.promotion.id,
+              code: promotion.code,
+              moneyCents: promoMoney,
+              catalogueCents:
+                moneyCents > 0 ? Math.min(catalogueCents, Math.round((catalogueCents * promoMoney) / moneyCents)) : 0,
+            },
+          }
+        : {};
     const reasons = [
       ...own.map((l) => l.discount?.reason),
       own.some((l) => l.orderDiscountCents > 0) ? orderDiscount?.reason : undefined,
@@ -1624,6 +1804,7 @@ export class PosService {
         ...(moneyCents !== catalogueCents ? { moneyCents } : {}),
         lineCents: own.reduce((s, l) => s + l.lineDiscountCents, 0),
         orderCents: own.reduce((s, l) => s + l.orderDiscountCents, 0),
+        ...promoRecord,
         ...(reasons.length ? { reason: [...new Set(reasons)].join(' · ') } : {}),
         appliedById: actor?.id ?? null,
         appliedByRole: actor?.role ?? null,
@@ -1831,6 +2012,11 @@ export class PosService {
       subtotalCents: sale.subtotalCents,
       discountCents: sale.discountCents,
       loyaltyDiscountCents: sale.loyaltyDiscountCents,
+      /** The promotion code's part of the lines' discounts ("Descuento promoción CODE"). */
+      promotion:
+        sale.promotionDiscountCents > 0 && sale.promotionCode
+          ? { code: sale.promotionCode, discountCents: sale.promotionDiscountCents }
+          : null,
       totalCents: sale.totalCents,
       payments: (Array.isArray(result.payments) ? result.payments : []).map((p: any) => ({
         method: p.method,
@@ -1949,18 +2135,28 @@ export class PosService {
  * discount a salon whose prices are the base can actually give, or what an
  * invoiced visit's rectificativa credits. The ticket's totals follow.
  */
-function adjustAppointmentLine(ticket: DiscountedTicket<PricedLine>, appointmentId: string, delta: number): void {
-  const line = ticket.lines.find((l) => l.appointmentId === appointmentId && l.lineDiscountCents + l.orderDiscountCents > 0);
+function adjustAppointmentLine(
+  ticket: DiscountedTicket<PricedLine>,
+  appointmentId: string,
+  delta: number,
+  promotion?: { cents: number } | null,
+): void {
+  const line = ticket.lines.find((l) => l.appointmentId === appointmentId && lineOffCents(l) > 0);
   if (!line) return;
   if (line.lineDiscountCents > 0) {
     line.lineDiscountCents += delta;
     ticket.lineDiscountsCents += delta;
-  } else {
+    ticket.discountCents += delta;
+  } else if (line.orderDiscountCents > 0) {
     line.orderDiscountCents += delta;
     ticket.orderDiscountCents += delta;
+    ticket.discountCents += delta;
+  } else {
+    // Only the promotion came off it: the promotion's figure follows.
+    line.promotionDiscountCents = (line.promotionDiscountCents ?? 0) + delta;
+    if (promotion) promotion.cents += delta;
   }
   line.netCents -= delta;
-  ticket.discountCents += delta;
   ticket.totalCents -= delta;
 }
 
