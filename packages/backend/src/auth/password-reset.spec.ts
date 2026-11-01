@@ -40,17 +40,14 @@ describe("PasswordResetService.request", () => {
     expect(stored.passwordResetExpires.getTime() - Date.now()).toBeLessThanOrEqual(PasswordResetService.TTL_MS);
   });
 
-  it("sends one link per salon to a client with accounts in several", async () => {
+  it("sends nothing to a client: clients no longer have accounts", async () => {
     const p = prisma({
-      clients: [
-        { id: "c1", email: "c@x.test", firstName: "C", tenant: { name: "Uno" } },
-        { id: "c2", email: "c@x.test", firstName: "C", tenant: { name: "Dos" } },
-      ],
+      clients: [{ id: "c1", email: "c@x.test", firstName: "C", tenant: { name: "Uno" } }],
     });
     const mail = email();
-    await new PasswordResetService(p, mail).request("c@x.test");
-    expect(mail.sendPasswordReset).toHaveBeenCalledTimes(2);
-    expect(mail.sendPasswordReset.mock.calls.map((c: any) => c[0].salon)).toEqual(["Uno", "Dos"]);
+    await new PasswordResetService(p, mail).request("c@x.test", "uno");
+    expect(mail.sendPasswordReset).not.toHaveBeenCalled();
+    expect(p.client.update).not.toHaveBeenCalled();
   });
 
   it("does nothing, and says nothing, for an unknown address", async () => {
@@ -79,12 +76,12 @@ describe("PasswordResetService.reset", () => {
     });
   });
 
-  it("works for a client account", async () => {
+  it("sets no client password, even with a link sent before accounts were removed", async () => {
     const p = prisma({ client: { id: "c1" } });
-    await new PasswordResetService(p, email()).reset("b".repeat(64), "nueva-clave-1");
-    expect(p.client.update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: "c1" }, data: expect.objectContaining({ tokenVersion: { increment: 1 } }) }),
-    );
+    await expect(new PasswordResetService(p, email()).reset("b".repeat(64), "nueva-clave-1")).rejects.toMatchObject({
+      status: 400,
+    });
+    expect(p.client.update).not.toHaveBeenCalled();
   });
 
   it("refuses an unknown or expired token, and a short password", async () => {

@@ -178,7 +178,7 @@ check("an IP is never a salon domain", isPlatformHost("203.0.113.7", platform), 
 check("a listed extra host is the platform", isPlatformHost("staging.example.org", platform), true);
 check("a salon's domain is not", isPlatformHost("reservas.salonluna.es", platform), false);
 check("/ serves the salon page", rewritePathFor("/", "salon-luna"), "/sites/salon-luna");
-check("/account is the salon's client area", rewritePathFor("/account", "salon-luna"), "/sites/salon-luna/account");
+check("a sub-path goes under the salon", rewritePathFor("/account", "salon-luna"), "/sites/salon-luna/account");
 check("the page's own links pass through", rewritePathFor("/sites/salon-luna/account", "salon-luna"), null);
 check(
   "another salon's page is not served on this domain",

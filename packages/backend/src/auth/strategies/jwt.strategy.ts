@@ -35,42 +35,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
   async validate(payload: JwtPayload) {
     if (payload.role === 'client') {
-      // Find client by id
-      const client = await this.prisma.client.findUnique({
-        where: { id: payload.sub },
-        select: {
-          id: true,
-          email: true,
-          firstName: true,
-          lastName: true,
-          tenantId: true,
-          status: true,
-          tokenVersion: true,
-        },
-      });
-
-      // Only an active client: the salon marking her inactive or blocked
-      // ends her sessions (inactive used to keep working).
-      if (!client || client.status !== 'active') {
-        throw new UnauthorizedException('Invalid token or client not active');
-      }
-      if ((payload.tv ?? 0) !== client.tokenVersion) {
-        throw new UnauthorizedException('Session ended');
-      }
-
-      // Bind the per-request tenant context so the Prisma tenant-scope
-      // extension filters every query this request makes.
-      bindTenant(client.tenantId, 'client');
-
-      // Return client data with role
-      return {
-        id: client.id,
-        email: client.email,
-        firstName: client.firstName,
-        lastName: client.lastName,
-        role: 'client',
-        tenantId: client.tenantId,
-      };
+      // Clients have no accounts any more (no sign-in on the salon's site);
+      // a token minted before that is refused, so no client-only route can
+      // be reached.
+      throw new UnauthorizedException('Client accounts are no longer available');
     } else {
       // Find user by id with tenant plan info
       const user = await this.prisma.user.findUnique({

@@ -22,7 +22,6 @@ import {
 import { AuditLogService } from "../saas/audit-log.service";
 import { EmailService } from "../notifications/services/email.service";
 import { randomBytes } from "crypto";
-import { clientEmailFilter } from "../clients/client-contact";
 import { isKnownSalonTimezone, normalizePlan, suggestedSalonTimezone } from "@kira/shared";
 import {
   parseJwtDuration,
@@ -343,56 +342,9 @@ export class AuthService {
       };
     }
 
-    // If not found as user, try to find as client -- in the salon whose site
-    // this is, when the caller says which (see LoginDto.tenantSlug). Client
-    // emails are stored in lower case; older records may not be, so the
-    // match ignores case, and only a record with a password can sign in.
-    const client = await this.prisma.client.findFirst({
-      where: {
-        email: clientEmailFilter(loginDto.email),
-        passwordHash: { not: null },
-        ...(loginDto.tenantSlug ? { tenant: { slug: loginDto.tenantSlug } } : {}),
-      },
-    });
-
-    if (client && client.passwordHash) {
-      // Verify password
-      const isPasswordValid = await bcrypt.compare(
-        loginDto.password,
-        client.passwordHash,
-      );
-
-      if (!isPasswordValid) {
-        throw new UnauthorizedException("Invalid credentials");
-      }
-      // Inactive or blocked by the salon: no session (only blocked was
-      // refused, and only later, by the token check).
-      if (client.status !== "active") {
-        throw new UnauthorizedException("Esta cuenta no está activa. Habla con el salón.");
-      }
-
-      // Generate tokens for client (with role 'client')
-      const tokens = await this.generateTokens(
-        client.id,
-        client.email!,
-        "client",
-        client.tenantId,
-      );
-
-      return {
-        user: {
-          id: client.id,
-          email: client.email!,
-          firstName: client.firstName,
-          lastName: client.lastName,
-          role: "client",
-          tenantId: client.tenantId,
-        },
-        tokens,
-      };
-    }
-
-    // If not found in either table
+    // Clients have no accounts: the salon's site has no sign-in any more and
+    // nothing signs a client in, whatever password her record may still
+    // hold from before. (Their data stays; only the sign-in went.)
     throw new UnauthorizedException("Invalid credentials");
   }
 
@@ -403,25 +355,8 @@ export class AuthService {
       });
 
       if (payload.role === "client") {
-        // Find client by id
-        const client = await this.prisma.client.findUnique({
-          where: { id: payload.sub },
-        });
-
-        if (!client || client.status !== "active" || (payload.tv ?? 0) !== client.tokenVersion) {
-          throw new UnauthorizedException("Invalid refresh token");
-        }
-
-        // Generate new tokens for client
-        return this.generateTokens(
-          client.id,
-          client.email!,
-          "client",
-          client.tenantId,
-          undefined,
-          undefined,
-          await this.continueSession(payload),
-        );
+        // Client sessions from before client accounts were removed end here.
+        throw new UnauthorizedException("Invalid refresh token");
       } else {
         // Find user by id
         const user = await this.prisma.user.findUnique({

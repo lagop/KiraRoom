@@ -9,7 +9,9 @@ import {
   MaxLength,
 } from "class-validator";
 
-export const WAIT_LIST_STATUSES = ["waiting", "notified", "cancelled", "fulfilled"] as const;
+// "expired": closed by the system when its dates passed or it sat untouched
+// too long (WaitListService.expireStale). Not set by hand.
+export const WAIT_LIST_STATUSES = ["waiting", "notified", "cancelled", "fulfilled", "expired"] as const;
 export type WaitListStatus = (typeof WAIT_LIST_STATUSES)[number];
 
 // The service checks that dates are real days (2026-02-30 is refused) and

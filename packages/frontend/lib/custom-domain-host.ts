@@ -64,7 +64,7 @@ export function platformHostsFrom(list: string | undefined, appUrl: string | und
  * Where a path on the salon's domain lives in the app.
  *
  *   /                 -> /sites/<slug>
- *   /account          -> /sites/<slug>/account
+ *   /<path>           -> /sites/<slug>/<path>
  *   /sites/<slug>/... -> unchanged (the page's own links use this form)
  *
  * Returns null when no rewrite is needed. A path under ANOTHER salon's
@@ -87,10 +87,8 @@ export function salonSlugForSubdomain(host: string, base: string | undefined): s
  * Once subdomains are live, the public page on the app host moves to the
  * salon's subdomain: app.kiraroom.net/sites/salon-lucia ->
  * https://salon-lucia.kiraroom.net/ (permanent, so search engines move the
- * page too). Only the public page: the client area keeps its URL, because a
- * signed-in client's session lives in the browser storage of the host they
- * signed in on, and moving them would sign them out. Ids (/sites/<uuid>)
- * and slugs that cannot be a subdomain stay where they are.
+ * page too). Only the public page itself. Ids (/sites/<uuid>) and slugs
+ * that cannot be a subdomain stay where they are.
  */
 export function subdomainRedirectFor(
   host: string,
