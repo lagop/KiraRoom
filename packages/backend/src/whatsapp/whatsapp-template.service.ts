@@ -253,6 +253,23 @@ export class WhatsAppTemplateService {
     return { status: res?.status ?? "PENDING" };
   }
 
+  /**
+   * Deletes one of the salon's templates from Meta (a deleted or replaced
+   * campaign's). Never throws: says whether it was deleted and, if not, why.
+   */
+  async deleteTemplate(tenantId: string, name: string): Promise<{ deleted: boolean; error?: string }> {
+    try {
+      const conn = await this.connection(tenantId);
+      if (!conn?.wabaId) return { deleted: false, error: "not_connected" };
+      const res = await this.meta.deleteTemplate(this.meta.decryptToken(conn.accessTokenEnc), conn.wabaId, name);
+      if (res?.error) return { deleted: false, error: res.error.message || `Meta ${res.error.code}` };
+      this.statusCache.delete(tenantId);
+      return { deleted: true };
+    } catch (err) {
+      return { deleted: false, error: (err as Error).message };
+    }
+  }
+
   private autoSubmit(tenantId: string): void {
     const last = this.lastAutoSubmit.get(tenantId) ?? 0;
     if (Date.now() - last < RESUBMIT_EVERY_MS) return;

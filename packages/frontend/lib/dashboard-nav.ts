@@ -95,8 +95,9 @@ export const DASHBOARD_NAV: NavEntry[] = [
     items: [
       link("email-campaigns", "/dashboard/email-campaigns", "nav.email_campaigns", "mail", { managers: true }),
       link("whatsapp", "/dashboard/marketing/whatsapp", "nav.whatsapp_campaigns", "message", { managers: true, pro: true }),
-      link("promotions", "/dashboard/promotions", "nav.promotions", "tag", { managers: true }),
-      link("loyalty", "/dashboard/loyalty", "nav.loyalty", "gift", { managers: true }),
+      link("promotions", "/dashboard/promotions", "nav.promotions", "tag", { managers: true, pro: true }),
+      // Not in Esencial (PLAN_MATRIX, subscriptions.service.ts): the Pro badge, like gift cards.
+      link("loyalty", "/dashboard/loyalty", "nav.loyalty", "gift", { managers: true, pro: true }),
       link("reviews", "/dashboard/reviews", "nav.reviews", "star", { managers: true }),
       link("share", "/dashboard/compartir", "nav.share", "qr"),
     ],

@@ -113,19 +113,21 @@ export class PaymentsService {
 
   /**
    * Loyalty follows the money: a paid appointment earns, a refund takes the
-   * points back. Never allowed to fail the payment itself; the loyalty
-   * sweep retries what is missed here.
+   * points back (its share of what the payment paid for, keyed to the
+   * refund: LoyaltyService.onPaymentRefunded). Never allowed to fail the
+   * payment itself; the loyalty sweep retries what is missed here.
    */
   private async loyaltyAfter(
     tenantId: string,
-    payment: { id: string; amount: number; status: string; appointmentId?: string | null; metadata?: unknown },
+    payment: { id: string; amount: number; status: string; type?: string | null; appointmentId?: string | null; metadata?: unknown },
+    refund?: { id: string; amount: number },
   ) {
     if (!this.loyalty) return;
     try {
       if (payment.status === "paid" && payment.appointmentId) {
         await this.loyalty.settleAppointment(tenantId, payment.appointmentId);
-      } else if (payment.status === "refunded") {
-        await this.loyalty.onPaymentRefunded(tenantId, payment);
+      } else if (payment.status === "refunded" && refund) {
+        await this.loyalty.onPaymentRefunded(tenantId, payment, refund);
       }
     } catch (err) {
       this.logger.warn(`loyalty after payment ${payment.id} failed: ${(err as Error).message}`);
@@ -139,7 +141,7 @@ export class PaymentsService {
    */
   private async loyaltyAfterPartial(
     tenantId: string,
-    payment: { id: string; amount: number; appointmentId?: string | null; metadata?: unknown },
+    payment: { id: string; amount: number; type?: string | null; appointmentId?: string | null; metadata?: unknown },
     refund: { id: string; amount: number },
   ) {
     if (!this.loyalty) return;
@@ -657,7 +659,7 @@ export class PaymentsService {
     });
 
     const updated = { ...payment, refunds: undefined, status };
-    if (full) await this.loyaltyAfter(tenantId, updated);
+    if (full) await this.loyaltyAfter(tenantId, updated, { id: refund.id, amount });
     else await this.loyaltyAfterPartial(tenantId, updated, { id: refund.id, amount });
     await this.clientStatsAfter(tenantId, payment.clientId);
 

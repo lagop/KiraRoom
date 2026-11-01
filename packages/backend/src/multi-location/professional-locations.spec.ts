@@ -3,6 +3,11 @@ import { BadRequestException, ForbiddenException, NotFoundException, ValidationP
 import { assertProfessionalsAt, professionalsAt, setProfessionalLocations } from "./professional-locations";
 import { AdminProfessionalsService } from "../admin/professionals/professionals.service";
 import { UpdateProfessionalDto } from "../admin/professionals/dto";
+import {
+  CreateProfessionalDto as LegacyCreateProfessionalDto,
+  UpdateProfessionalDto as LegacyUpdateProfessionalDto,
+} from "../professionals/dto";
+import { ProfessionalsController } from "../professionals/professionals.controller";
 
 /**
  * A professional at several of the salon's locations.
@@ -184,5 +189,71 @@ describe("the team form's locations", () => {
     const ok = await pipe.transform({ locationIds: [LOC_A, LOC_B], primaryLocationId: LOC_A }, meta);
     expect(ok).toMatchObject({ locationIds: [LOC_A, LOC_B], primaryLocationId: LOC_A });
     await expect(pipe.transform({ locationIds: ["nope"] }, meta)).rejects.toBeDefined();
+  });
+});
+
+describe("the old /professionals endpoint (PUT and POST)", () => {
+  /**
+   * It writes through the same AdminProfessionalsService as the team API, but
+   * its own DTOs had no locations, so the global ValidationPipe (whitelist)
+   * dropped them and a client of that endpoint could not set where someone
+   * works. Now its DTOs take them, and the service's checks apply as they are.
+   */
+  function legacy(enabled: boolean) {
+    const db = fakeDb([]);
+    const prisma: any = {
+      ...db,
+      professional: {
+        findFirst: jest.fn(async () => ({ isActive: true, email: "ana@salon.test", user: null })),
+        update: jest.fn(async (args: any) => ({ id: args.where.id })),
+      },
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
+    };
+    Object.defineProperty(prisma, "links", { get: () => db.links });
+    const flags: any = { isEnabled: jest.fn(async (_t: string, key: string) => enabled && key === "multi_location") };
+    const admin = new AdminProfessionalsService(prisma, flags);
+    const onboarding: any = { detect: jest.fn(async () => undefined) };
+    const controller = new ProfessionalsController({} as any, onboarding, {} as any, admin);
+    const pipe = new ValidationPipe({ transform: true, whitelist: true });
+    const put = async (body: unknown) =>
+      controller.update(
+        { tenantId: "salon-a" },
+        "ana",
+        await pipe.transform(body, { type: "body", metatype: LegacyUpdateProfessionalDto } as any),
+      );
+    return { put, db, prisma, pipe };
+  }
+
+  it("PUT keeps the locations through validation and saves them, with the main one", async () => {
+    const { put, db } = legacy(true);
+    await put({ firstName: "Ana", locationIds: [LOC_A, LOC_B], primaryLocationId: LOC_B });
+    expect(sorted(db.links)).toEqual(["A", "B*"]);
+  });
+
+  it("PUT is gated by the plan's multi-location feature, like the team API", async () => {
+    const { put, db, prisma } = legacy(false);
+    await expect(put({ locationIds: [LOC_A] })).rejects.toThrow(ForbiddenException);
+    expect(prisma.professional.update).not.toHaveBeenCalled();
+    expect(db.links).toEqual([]);
+  });
+
+  it("PUT refuses another salon's location and a closed one", async () => {
+    const { put } = legacy(true);
+    await expect(put({ locationIds: [FOREIGN] })).rejects.toThrow(BadRequestException);
+    await expect(put({ locationIds: [LOC_C] })).rejects.toThrow(BadRequestException);
+  });
+
+  it("the bodies validate the ids like the team API's", async () => {
+    const { pipe } = legacy(true);
+    for (const metatype of [LegacyUpdateProfessionalDto, LegacyCreateProfessionalDto]) {
+      const meta = { type: "body", metatype } as any;
+      const base = metatype === LegacyCreateProfessionalDto ? { firstName: "Ana", lastName: "G", email: "ana@salon.test" } : {};
+      await expect(pipe.transform({ ...base, locationIds: [LOC_A], primaryLocationId: LOC_A }, meta)).resolves.toMatchObject({
+        locationIds: [LOC_A],
+        primaryLocationId: LOC_A,
+      });
+      await expect(pipe.transform({ ...base, locationIds: ["nope"] }, meta)).rejects.toBeDefined();
+      await expect(pipe.transform({ ...base, primaryLocationId: "nope" }, meta)).rejects.toBeDefined();
+    }
   });
 });

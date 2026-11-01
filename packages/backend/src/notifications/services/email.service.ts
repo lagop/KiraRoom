@@ -75,6 +75,12 @@ export interface AppointmentEmailData {
   salonAddress?: string;
   salonPhone?: string;
   /**
+   * The salon's location the appointment is at, when it has several
+   * (multi-location/client-locations.ts, bookingPlace); salonAddress is then
+   * that location's address.
+   */
+  locationName?: string;
+  /**
    * Not used: the appointment emails are in Spanish. No caller knows the
    * salon's language today, and the dates they pass are already Spanish.
    */
@@ -1242,6 +1248,9 @@ export class EmailService {
       ["Profesional", data.professionalName],
       ["Fecha", displayDate(data.date)],
       ["Hora", data.time],
+      // Which of the salon's locations (multi-local); its address is
+      // salonAddress, under the salon's name.
+      ["Local", data.locationName || undefined],
     ];
   }
 
@@ -1314,6 +1323,7 @@ export class EmailService {
       `Profesional: ${data.professionalName}`,
       `Fecha: ${displayDate(data.date)}`,
       `Hora: ${data.time}`,
+      ...(data.locationName ? [`Local: ${data.locationName}`] : []),
       ...(parts.extraRows ?? []),
       "",
       parts.closing,

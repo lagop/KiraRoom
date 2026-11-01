@@ -137,6 +137,13 @@ export class WhatsAppCampaignsController {
     return this.campaigns.cancel(req.user.tenantId, id);
   }
 
+  /** Carries on a campaign paused by an account-level Meta error, once the cause is fixed. */
+  @Post(":id/resume")
+  @Roles(...SALON_MANAGERS)
+  resume(@Req() req: AuthedRequest, @Param("id", ParseUUIDPipe) id: string) {
+    return this.campaigns.resume(req.user.tenantId, id);
+  }
+
   @Delete(":id")
   @Roles(...SALON_MANAGERS)
   remove(@Req() req: AuthedRequest, @Param("id", ParseUUIDPipe) id: string) {

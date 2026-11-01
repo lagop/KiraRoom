@@ -2589,6 +2589,8 @@ enum WhatsAppCampaignStatus {
   draft
   scheduled
   sending
+  /// Stopped by an account-level Meta error (token, payment, template, restriction); the rest stays pending until "Reanudar".
+  paused
   completed
   failed
   cancelled

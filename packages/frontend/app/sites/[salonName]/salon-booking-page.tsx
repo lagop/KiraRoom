@@ -37,6 +37,16 @@ import {
   BOOKING_CHOICE_TEXT,
 } from "@/lib/public-booking";
 import { professionalAfterServiceChange, servicesForPinned } from "@/lib/booking-professional";
+import {
+  bookingLocations,
+  chosenLocation,
+  locationForProfessional,
+  locationFromQuery,
+  locationReady,
+  professionalsAtLocation,
+  professionalsForService,
+  servicesAtLocation,
+} from "@/lib/public-booking-locations";
 import PublicReviewsSection from "./components/public-reviews";
 import { ChatWidget } from "@/src/components/virtual-receptionist";
 
@@ -48,6 +58,8 @@ interface BookingData {
   professionalId: string;
   date: string;
   time: string;
+  /** One of the salon's locations, when it has several (empty otherwise). */
+  locationId: string;
 }
 
 interface SalonData {
@@ -82,6 +94,9 @@ interface Professional {
   yearsExperience?: number;
   languages: string[];
   certifications: string[];
+  /** Where they work, when the salon has locations to pick from. */
+  locationIds?: string[];
+  primaryLocationId?: string | null;
 }
 
 interface Service {
@@ -140,6 +155,8 @@ function fromPublicPage(page: PublicSalonPage) {
     yearsExperience: p.yearsExperience ?? undefined,
     languages: p.languages ?? [],
     certifications: p.certifications ?? [],
+    locationIds: p.locationIds,
+    primaryLocationId: p.primaryLocationId ?? null,
   }));
   return { salon, services, professionals };
 }
@@ -158,6 +175,9 @@ export default function SalonBookingPage({
   const salonData: SalonData = initial.salon;
   const professionals = initial.professionals;
   const services = initial.services;
+  // Two or more locations to book at: the client picks one (or it follows
+  // from the professional). None for a salon with one location: no step.
+  const [locations] = useState(() => bookingLocations(initialData));
   // The booking form offers only what the salon takes online; the price list shows everything.
   const bookableServices = services.filter((s) => s.isOnlineBookable);
   // The prices are final (the server adds the tax to a catalogue written
@@ -180,6 +200,7 @@ export default function SalonBookingPage({
     professionalId: "",
     date: "",
     time: "",
+    locationId: "",
   });
   // The two boxes next to the button, both unticked (BOOKING_CHOICE_TEXT).
   const [refusesMarketingEmail, setRefusesMarketingEmail] = useState(false);
@@ -190,7 +211,6 @@ export default function SalonBookingPage({
   // client asks to see the whole team.
   const [pinnedProfessionalId, setPinnedProfessionalId] = useState("");
   const pinnedProfessional = professionals.find((p) => p.id === pinnedProfessionalId);
-  const offeredServices = servicesForPinned(bookableServices, pinnedProfessional);
   // Links from a wait-list notice (and rebooking reminders) carry the
   // service, professional and day of the freed slot: start the form there.
   useEffect(() => {
@@ -202,12 +222,18 @@ export default function SalonBookingPage({
     // The pattern was written without backslashes (/^d{4}-d{2}-d{2}$/), so
     // it matched "dddd-dd-dd" and never a date: every link lost its day.
     const date = bookingDateFromQuery(q.get("date"));
-    if (serviceId || professionalId || date) {
+    // ?locationId=<id> or ?location=<slug>: a link to one of the salon's
+    // locations; else the professional's from the link, if any.
+    const linked = locationFromQuery(q, locations);
+    const locationId =
+      linked || locationForProfessional(professionals.find((p) => p.id === professionalId), locations, "");
+    if (serviceId || professionalId || date || locationId) {
       setBookingData((prev) => ({
         ...prev,
         serviceId: serviceId || prev.serviceId,
         professionalId: professionalId || prev.professionalId,
         date: date || prev.date,
+        locationId: locationId || prev.locationId,
       }));
     }
     // A professional's QR code (or link): she stays chosen, and the form
@@ -215,6 +241,7 @@ export default function SalonBookingPage({
     if (professionalId && professionals.some((p) => p.id === professionalId)) {
       setPinnedProfessionalId(professionalId);
     }
+    // Read once, from the page's own data.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -244,7 +271,7 @@ export default function SalonBookingPage({
         return;
       }
 
-      if (!salonData?.id || !bookingData.date) {
+      if (!salonData?.id || !bookingData.date || !locationReady(locations, bookingData.locationId)) {
         setSlotsLoading(false);
         return;
       }
@@ -265,6 +292,9 @@ export default function SalonBookingPage({
           bookingData.professionalId,
           bookingData.serviceId,
           bookingData.date,
+          undefined,
+          // At that location (multi-local): the professional's times there.
+          bookingData.locationId || undefined,
         );
 
         // An answer for inputs the client has since changed is not hers.
@@ -313,6 +343,8 @@ export default function SalonBookingPage({
     bookingData.professionalId,
     bookingData.serviceId,
     bookingData.date,
+    bookingData.locationId,
+    locations,
     salonData?.id,
     slotsRefresh,
   ]);
@@ -343,6 +375,29 @@ export default function SalonBookingPage({
         [name]: value,
       }));
     }
+  };
+
+  // Another location: what was picked stays only if it can be booked there.
+  const handleLocationChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const locationId = e.target.value;
+    setAvailableSlots([]);
+    setBookingData((prev) => {
+      const serviceStays =
+        !prev.serviceId ||
+        servicesAtLocation(bookableServices, professionals, locations, locationId).some((s) => s.id === prev.serviceId);
+      const professional = professionals.find((p) => p.id === prev.professionalId);
+      const professionalStays =
+        serviceStays &&
+        !!professional &&
+        professionalsAtLocation([professional], locations, locationId).length > 0;
+      return {
+        ...prev,
+        locationId,
+        serviceId: serviceStays ? prev.serviceId : "",
+        professionalId: professionalStays ? prev.professionalId : "",
+        time: "",
+      };
+    });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -394,19 +449,28 @@ export default function SalonBookingPage({
         // had posted, the fields would not have matched.
         scheduledDate: bookingData.date,
         scheduledTime: bookingData.time,
+        // The location she booked at, when the salon has several.
+        ...(bookingData.locationId ? { locationId: bookingData.locationId } : {}),
         // Only what she ticked: an unticked box sends nothing.
         ...(refusesMarketingEmail ? { refusesMarketingEmail: true } : {}),
         ...(offersWhatsAppNotices && wantsWhatsAppNotices ? { wantsWhatsAppNotices: true } : {}),
       });
 
-      // Only now. The confirmation has to mean the appointment exists.
+      // Only now. The confirmation has to mean the appointment exists. At
+      // one of several locations it says which one and where it is.
+      const place = chosenLocation(locations, bookingData.locationId);
       toast({
         title: t("bookingPublic.booking_confirmed"),
-        description: t("bookingPublic.booking_confirmed"),
+        description: place
+          ? place.address
+            ? t("bookingPublic.booked_at_address", { location: place.name, address: place.address })
+            : t("bookingPublic.booked_at", { location: place.name })
+          : t("bookingPublic.booking_confirmed"),
       });
 
-      // Reset form, with tomorrow as the date again
-      setBookingData({
+      // Reset form, with tomorrow as the date again. The location stays: a
+      // second booking is most likely at the same one.
+      setBookingData((prev) => ({
         clientName: "",
         clientEmail: "",
         clientPhone: "",
@@ -415,7 +479,8 @@ export default function SalonBookingPage({
         professionalId: pinnedProfessionalId,
         date: localTomorrow(),
         time: "",
-      });
+        locationId: prev.locationId,
+      }));
       setRefusesMarketingEmail(false);
       setWantsWhatsAppNotices(false);
     } catch (error) {
@@ -451,23 +516,20 @@ export default function SalonBookingPage({
   // matched, no professional could be picked and no booking was possible.
   // Every salon that completed onboarding had an unbookable public page.
   //
-  // The database had the answer all along, in ProfessionalService.
-  const linkedProfessionals = bookingData.serviceId
-    ? professionals.filter((pro) =>
-        (pro.services ?? []).some(
-          (link) =>
-            (link.service?.id ?? link.serviceId) === bookingData.serviceId,
-        ),
-      )
-    : [];
-
-  // Nothing linked to this service: offer everyone rather than nobody. An
-  // unbookable page is the worse failure, and it is the one this block exists
-  // to stop happening again.
-  const filteredProfessionals =
-    bookingData.serviceId && linkedProfessionals.length === 0
-      ? professionals
-      : linkedProfessionals;
+  // The database had the answer all along, in ProfessionalService. Nothing
+  // linked to this service: everyone rather than nobody -- an unbookable page
+  // is the worse failure (professionalsForService). Then, with locations,
+  // only who works at the chosen one (or at any, before one is chosen).
+  const filteredProfessionals = professionalsAtLocation(
+    professionalsForService(professionals, bookingData.serviceId),
+    locations,
+    bookingData.locationId,
+  );
+  // The services someone at the chosen location does.
+  const servicesHere = servicesAtLocation(bookableServices, professionals, locations, bookingData.locationId);
+  const locationHere = chosenLocation(locations, bookingData.locationId);
+  // With a professional pinned by her QR code, only the services she does.
+  const offeredServices = servicesForPinned(servicesHere, pinnedProfessional, professionals);
 
   // This refused every Sunday, for every salon, whatever its hours -- and
   // read the weekday from a UTC date, so west of Greenwich it refused
@@ -675,6 +737,39 @@ export default function SalonBookingPage({
                   </div>
               </div>
 
+              {/* The location, when the salon has several to book at. It can
+                  also be left for later: picking a professional sets it. */}
+              {locations.length > 0 && (
+                <div className="space-y-4">
+                  <h3 className="text-lg font-semibold text-gray-900 flex items-center">
+                    <MapPin className="w-5 h-5 mr-2 text-purple-600" />
+                    {t("bookingPublic.step_location")}
+                  </h3>
+                  <select
+                    id="locationId"
+                    data-test="booking-location"
+                    name="locationId"
+                    value={bookingData.locationId}
+                    onChange={handleLocationChange}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors"
+                  >
+                    <option value="">-- {t("bookingPublic.select_location")} --</option>
+                    {locations.map((location) => (
+                      <option key={location.id} value={location.id}>
+                        {location.name}
+                        {location.address ? ` · ${location.address}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  {locationHere?.address && (
+                    <p data-test="booking-location-address" className="text-sm text-gray-500 flex items-center">
+                      <MapPin className="w-4 h-4 mr-1 text-purple-600" />
+                      {locationHere.address}
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* Step 2: Service Selection */}
               <div className="space-y-4">
                 <h3 className="text-lg font-semibold text-gray-900 flex items-center">
@@ -727,6 +822,9 @@ export default function SalonBookingPage({
                               prev.professionalId === professional.id
                                 ? prev.time
                                 : "",
+                            // No location chosen yet: hers (her main one
+                            // when she works at several).
+                            locationId: locationForProfessional(professional, locations, prev.locationId),
                           }))
                         }
                         className={`p-4 border rounded-lg transition-colors text-left ${

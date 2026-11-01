@@ -3,6 +3,8 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { AppointmentsService } from '../../appointments/appointments.service';
 import { confirmAppointment, notBookableOnline, proposeAppointment } from './receptionist-booking';
 import { resolveIds } from './resolve-ids';
+import { locationOption, resolveLocation, salonPlaces } from './receptionist-locations';
+import { professionalLocationsOf } from '../../multi-location/client-locations';
 import { clientPrices, clientPriceText, priceNote } from './client-prices';
 import { taxIncludedNote } from '../../common/public-price';
 import { dayBlocks, salonClosedOn } from '../../time-off/time-off-rules';
@@ -40,6 +42,18 @@ export interface SalonToolContext {
 /* -------------------------------------------------------------------------- */
 /*  Tool definitions (sent to the LLM)                                       */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * The location of a check or a booking, for salons with several (multi-local;
+ * receptionist-locations.ts). Single-location salons ignore it.
+ */
+const LOCATION_INPUT = {
+  type: 'string',
+  description:
+    'Only when the salon has several locations (get_salon_info lists them): the id or name of the ' +
+    'location the client wants. Left out, it is taken from the client\'s message or from the professional; ' +
+    'when it cannot be, the tool answers location_required and you ask the client.',
+} as const;
 
 export const SALON_TOOLS = [
   {
@@ -136,6 +150,7 @@ export const SALON_TOOLS = [
           type: 'string',
           description: 'Optional professional id or full name to scope the search.',
         },
+        locationId: LOCATION_INPUT,
       },
       required: ['serviceId', 'date'],
     },
@@ -164,6 +179,7 @@ export const SALON_TOOLS = [
         phone: { type: 'string', description: 'Required: how the salon reaches them about a change. Ask the client for it.' },
         email: { type: 'string', description: 'Optional. Only if the client gives it.' },
         notes: { type: 'string' },
+        locationId: LOCATION_INPUT,
       },
       required: ['serviceId', 'date', 'time', 'firstName', 'lastName', 'phone'],
     },
@@ -185,7 +201,8 @@ export const SALON_TOOLS = [
     description:
       'Return salon-level details: name, address, phone, email, opening hours, ' +
       'currency and timezone. Use when the user asks for contact info, location ' +
-      'or general salon details.',
+      'or general salon details. A salon with several locations also returns ' +
+      '`locations` (id, name, address, phone): ask the client which one when booking.',
     input_schema: {
       type: 'object' as const,
       properties: {},
@@ -399,6 +416,8 @@ export class SalonToolsService {
       languages: unknown;
       bio: string | null;
       services: string[];
+      /** The locations they work at, when the salon has several. */
+      locations?: string[];
     }>;
     totalMatching: number;
   }> {
@@ -455,8 +474,16 @@ export class SalonToolsService {
       return true;
     });
 
+    // Where each works, when the salon has several locations to book at.
+    const places = await salonPlaces(ctx);
+    const placeNames = (id: string) =>
+      professionalLocationsOf(id, places.locations, places.links).locationIds.map(
+        (lid) => places.locations.find((l) => l.id === lid)!.name,
+      );
+
     return {
       professionals: filtered.map((p) => ({
+        ...(places.locations.length > 0 ? { locations: placeNames(p.id) } : {}),
         id: p.id,
         fullName: `${p.firstName} ${p.lastName}`.trim(),
         position: p.position,
@@ -479,9 +506,16 @@ export class SalonToolsService {
 
   async checkAvailability(
     ctx: SalonToolContext,
-    input: { serviceId: string; date: string; professionalId?: string },
+    input: { serviceId: string; date: string; professionalId?: string; locationId?: string },
   ): Promise<
-    | { date: string; serviceId: string; slots: Array<{ time: string }>; reason?: string; message?: string }
+    | {
+        date: string;
+        serviceId: string;
+        locationId?: string;
+        slots: Array<{ time: string }>;
+        reason?: string;
+        message?: string;
+      }
     | { error: string; date?: string; message?: string }
   > {
     if (!ctx.appointmentsService) {
@@ -497,6 +531,8 @@ export class SalonToolsService {
     // Not offered online: no times for it, and the model is told why.
     const closed = await notBookableOnline(ctx, input.serviceId);
     if (closed) return { ...closed, date: input.date };
+    // Which location these times are at, so the model can say so.
+    const here = input.locationId ? { locationId: input.locationId } : {};
     try {
       // Only what a booking will accept: not inside the service's minimum
       // notice, not beyond its maximum advance, not in the past.
@@ -507,7 +543,8 @@ export class SalonToolsService {
         input.serviceId,
         undefined,
         undefined,
-        { onlineWindow: true },
+        // At that location only, when the salon has several (resolveLocation).
+        { onlineWindow: true, ...(input.locationId ? { locationId: input.locationId } : {}) },
       );
       // AppointmentsService returns objects with a `time` field; the
       // chatbot only needs the HH:mm strings, so flatten before
@@ -517,9 +554,9 @@ export class SalonToolsService {
       ).filter((t: unknown): t is string => typeof t === 'string');
       if (flat.length === 0) {
         const why = await this.whyNoSlots(ctx, input.serviceId, input.date, input.professionalId);
-        if (why) return { date: input.date, serviceId: input.serviceId, slots: [], ...why };
+        if (why) return { date: input.date, serviceId: input.serviceId, ...here, slots: [], ...why };
       }
-      return { date: input.date, serviceId: input.serviceId, slots: flat as any };
+      return { date: input.date, serviceId: input.serviceId, ...here, slots: flat as any };
     } catch (err) {
       this.logger.warn(
         `checkAvailability failed tenant=${ctx.tenantId} date=${input.date}: ${(err as Error).message}`,
@@ -627,6 +664,8 @@ export class SalonToolsService {
          */
         openingHours: Record<string, string[]> | null;
         assistantName: string;
+        /** Only for a salon with several locations to book at. */
+        locations?: Array<{ id: string; name: string; address: string | null; phone: string | null }>;
       }
     | { error: string }
   > {
@@ -664,7 +703,16 @@ export class SalonToolsService {
         : Object.fromEntries(
             WEEK_DAYS.map((day) => [day, (shifts[day] ?? []).map((w) => `${w.openTime}–${w.closeTime}`)]),
           );
-    return { ...tenant, openingHours };
+    // Several locations to book at: each with its address and phone, so the
+    // model can say where they are and ask which one when booking.
+    const { locations } = await salonPlaces(ctx);
+    return {
+      ...tenant,
+      openingHours,
+      ...(locations.length > 0
+        ? { locations: locations.map((l) => ({ ...locationOption(l), phone: l.phone })) }
+        : {}),
+    };
   }
 }
 
@@ -683,6 +731,13 @@ export async function executeSalonTool(
     const resolved = await resolveIds(ctx, args);
     if (resolved.error) return resolved.error;
     args = resolved.args!;
+  }
+  // Which location, for a salon with several: given, said by the client,
+  // or the professional's; else the model is told to ask.
+  if (name === 'check_availability' || name === 'propose_appointment') {
+    const located = await resolveLocation(ctx, args);
+    if (located.error) return located.error;
+    args = located.args!;
   }
   switch (name) {
     case 'list_services':
