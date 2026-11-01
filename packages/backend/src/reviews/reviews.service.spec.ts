@@ -10,7 +10,9 @@ import {
 import { MODERATION_GRACE_DAYS, PUBLISH_CONSENT_VERSION } from "./review-rules";
 
 /**
- * The real review flow: one request per recent visit, by email, in the
+ * The real review flow: one request per recent visit, by WhatsApp (to
+ * clients who asked for their appointment notices by WhatsApp, with the
+ * salon's template approved) or by email, in the
  * salon's sending hours, never to an address that bounced, complained or
  * unsubscribed; a failed send retried, a request that can never go not
  * looked at again; the answer stored atomically with the client's publish
@@ -22,6 +24,14 @@ import { MODERATION_GRACE_DAYS, PUBLISH_CONSENT_VERSION } from "./review-rules";
 const NOW = new Date("2026-10-02T12:00:00.000Z");
 const HOUR = 3600_000;
 
+/** Her appointment notices by WhatsApp, as the client file switch stores them. */
+const WHATSAPP_NOTICES_ON = {
+  appointment_confirmed: { whatsapp: true },
+  appointment_cancelled: { whatsapp: true },
+  appointment_reminder_24h: { whatsapp: true },
+  appointment_reminder_1h: { whatsapp: true },
+};
+
 function appointment(over: Partial<any> = {}) {
   return {
     id: "appt-1",
@@ -30,9 +40,16 @@ function appointment(over: Partial<any> = {}) {
     professionalId: "p1",
     reviewRequestAttempts: 0,
     serviceName: "Corte",
-    client: { id: "c1", firstName: "Ana", email: "Ana@Example.test", status: "active" },
+    client: {
+      id: "c1",
+      firstName: "Ana",
+      email: "Ana@Example.test",
+      phone: "600111222",
+      communicationPreferences: {},
+      status: "active",
+    },
     service: { name: "Corte (catálogo)" },
-    tenant: { name: "Salón Lucía" },
+    tenant: { name: "Salón Lucía", country: "ES" },
     ...over,
   };
 }
@@ -52,6 +69,13 @@ function setup(over: {
   existingPrefs?: any;
   submitCount?: number;
   timezone?: string;
+  /** The client asked for her appointment notices by WhatsApp (record + switch). */
+  whatsappNotices?: boolean;
+  /** canSend of the review template: { ok } or why not. */
+  whatsappCanSend?: { ok: boolean; reason?: string };
+  whatsappResult?: any;
+  connection?: any;
+  templateStatus?: string;
 } = {}) {
   const prisma: any = {
     appointment: {
@@ -92,8 +116,16 @@ function setup(over: {
       })),
     },
     notificationPreference: {
-      findUnique: jest.fn(async () => over.existingPrefs ?? null),
+      findUnique: jest.fn(async () => over.existingPrefs ?? (over.whatsappNotices ? { preferences: WHATSAPP_NOTICES_ON } : null)),
       upsert: jest.fn(async () => ({})),
+    },
+    consent: {
+      findFirst: jest.fn(async () => (over.whatsappNotices ? { responses: { accepts: true, source: "booking" } } : null)),
+    },
+    whatsAppConnection: {
+      findUnique: jest.fn(async () =>
+        over.connection === undefined ? { isActive: true, phoneNumberId: "pn1" } : over.connection,
+      ),
     },
     client: { findMany: jest.fn(async () => []) },
     professional: { findMany: jest.fn(async () => []) },
@@ -119,9 +151,19 @@ function setup(over: {
     suppressedAmong: jest.fn(async () => new Set(over.suppressed ?? [])),
   };
   const auditLog: any = { record: jest.fn(async () => ({ id: "a1" })) };
-  const service = new ReviewsService(prisma, config, notifications, email, flags, suppressions, auditLog);
+  // Meta, mocked: never the real API.
+  const whatsapp: any = {
+    canSend: jest.fn(async () => over.whatsappCanSend ?? { ok: true }),
+    sendReviewRequest: jest.fn(async () => over.whatsappResult ?? { sent: true, messageId: "wamid.R1" }),
+    standardStatus: jest.fn(async () => [
+      { name: "kiraroom_recordatorio_cita", status: "APPROVED" },
+      { name: "kiraroom_opinion_cita", status: over.templateStatus ?? "APPROVED" },
+    ]),
+    submitTemplate: jest.fn(async () => ({ status: "PENDING" })),
+  };
+  const service = new ReviewsService(prisma, config, notifications, email, flags, suppressions, auditLog, whatsapp);
   (service as any).logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() };
-  return { service, prisma, notifications, email, flags, suppressions, auditLog };
+  return { service, prisma, notifications, email, flags, suppressions, auditLog, whatsapp };
 }
 
 describe("Google review link", () => {
@@ -189,11 +231,11 @@ describe("ReviewsService settings", () => {
     expect(prisma.googleBusinessProfile.upsert.mock.calls[1][0].update).toEqual({ writeReviewUrl: null });
   });
 
-  it("says plainly that the Google API is not available, and offers email only", async () => {
+  it("says plainly that the Google API is not available; email, and WhatsApp with its template status, no SMS", async () => {
     const { service } = setup();
     const s = await service.getSettings("t1");
     expect(s.googleApi.available).toBe(false);
-    expect(s.channels).toEqual({ email: true });
+    expect(s.channels).toEqual({ email: true, whatsapp: "APPROVED" });
     expect(s.policy.rejectionReasons.map((r) => r.key)).toEqual(["offensive", "personal_data", "off_topic", "spam"]);
   });
 });
@@ -308,10 +350,11 @@ describe("ReviewsService.dispatchForTenant", () => {
     expect(off.email.sendReviewRequest).not.toHaveBeenCalled();
   });
 
-  it("never creates in-app notifications for clients, nor uses WhatsApp or SMS", async () => {
-    const { service, notifications } = setup({ prefs: { email: false, whatsapp: true, sms: true, inApp: true } });
+  it("never creates in-app notifications for clients, nor uses SMS, nor WhatsApp without her notices by WhatsApp", async () => {
+    const { service, notifications, whatsapp } = setup({ prefs: { email: false, whatsapp: true, sms: true, inApp: true } });
     await service.dispatchForTenant("t1", NOW);
     expect(notifications.create).not.toHaveBeenCalled();
+    expect(whatsapp.sendReviewRequest).not.toHaveBeenCalled();
     const ok = setup();
     await ok.service.dispatchForTenant("t1", NOW);
     expect(ok.notifications.create).not.toHaveBeenCalled();
@@ -596,5 +639,176 @@ describe("ReviewsService: the points line of the post-visit email", () => {
     const plain = setup();
     expect((await plain.service.dispatchForTenant("t1", NOW)).sent).toBe(1);
     expect(plain.email.sendReviewRequest.mock.calls[0][0].loyalty).toBeNull();
+  });
+});
+
+describe("ReviewsService — review requests by WhatsApp (utility template, Meta mocked)", () => {
+  it("asks a client who asked for her appointment notices by WhatsApp, with the same tokenised link", async () => {
+    const { service, prisma, email, whatsapp } = setup({ whatsappNotices: true });
+    expect(await service.dispatchForTenant("t1", NOW)).toEqual({ candidates: 1, sent: 1 });
+
+    const created = prisma.review.create.mock.calls[0][0].data;
+    expect(created.source).toBe(ReviewSource.whatsapp_link);
+    expect(whatsapp.canSend).toHaveBeenCalledWith("t1", expect.objectContaining({ name: "kiraroom_opinion_cita", category: "UTILITY" }));
+    expect(whatsapp.sendReviewRequest).toHaveBeenCalledWith("t1", {
+      phone: "600111222",
+      clientName: "Ana",
+      salonName: "Salón Lucía",
+      serviceName: "Corte",
+      link: `https://app.example.test/public/r/${created.reviewToken}`,
+      country: "ES",
+    });
+    expect(email.sendReviewRequest).not.toHaveBeenCalled();
+    expect(prisma.review.update).toHaveBeenCalledWith({ where: { id: "rev-1" }, data: { requestMessageId: "wamid.R1" } });
+    // One request per visit: claimed and left claimed.
+    expect(prisma.appointment.update).not.toHaveBeenCalled();
+  });
+
+  it("falls back to email while the template is not approved (pending, rejected, missing)", async () => {
+    for (const reason of ["template_pending", "template_rejected", "template_missing", "not_connected"]) {
+      const { service, prisma, email, whatsapp } = setup({ whatsappNotices: true, whatsappCanSend: { ok: false, reason } });
+      expect((await service.dispatchForTenant("t1", NOW)).sent).toBe(1);
+      expect(whatsapp.sendReviewRequest).not.toHaveBeenCalled();
+      expect(email.sendReviewRequest).toHaveBeenCalledTimes(1);
+      expect(prisma.review.create.mock.calls[0][0].data.source).toBe(ReviewSource.email_link);
+    }
+  });
+
+  it("uses email for a client without the WhatsApp notices request, even with the switch on", async () => {
+    const { service, prisma, email, whatsapp } = setup({ existingPrefs: { preferences: WHATSAPP_NOTICES_ON } });
+    expect((await service.dispatchForTenant("t1", NOW)).sent).toBe(1);
+    expect(prisma.consent.findFirst.mock.calls[0][0].where).toMatchObject({
+      tenantId: "t1",
+      clientId: "c1",
+      revokedAt: null,
+      form: { purpose: "notices_whatsapp" },
+    });
+    expect(whatsapp.sendReviewRequest).not.toHaveBeenCalled();
+    expect(email.sendReviewRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses email when the notices request is on file but the salon turned her WhatsApp notices off", async () => {
+    const { service, whatsapp, email, prisma } = setup({ whatsappNotices: true });
+    prisma.notificationPreference.findUnique.mockResolvedValue({
+      preferences: { ...WHATSAPP_NOTICES_ON, appointment_reminder_24h: { whatsapp: false } },
+    });
+    expect((await service.dispatchForTenant("t1", NOW)).sent).toBe(1);
+    expect(whatsapp.sendReviewRequest).not.toHaveBeenCalled();
+    expect(email.sendReviewRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks by WhatsApp a client with no email at all", async () => {
+    const { service, whatsapp } = setup({
+      whatsappNotices: true,
+      candidates: [appointment({ client: { ...appointment().client, email: null } })],
+    });
+    expect((await service.dispatchForTenant("t1", NOW)).sent).toBe(1);
+    expect(whatsapp.sendReviewRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed WhatsApp send falls back to email in the same try", async () => {
+    const { service, prisma, email } = setup({
+      whatsappNotices: true,
+      whatsappResult: { sent: false, reason: "meta_131026" },
+    });
+    expect((await service.dispatchForTenant("t1", NOW)).sent).toBe(1);
+    expect(email.sendReviewRequest).toHaveBeenCalledTimes(1);
+    expect(prisma.review.update).toHaveBeenCalledWith({ where: { id: "rev-1" }, data: { source: ReviewSource.email_link } });
+    expect(prisma.review.update).toHaveBeenCalledWith({ where: { id: "rev-1" }, data: { requestMessageId: "em1" } });
+  });
+
+  it("a failed WhatsApp send with no email to fall back on is retried on a later tick", async () => {
+    const { service, prisma, email } = setup({
+      whatsappNotices: true,
+      whatsappResult: { sent: false, reason: "meta_131000" },
+      candidates: [appointment({ client: { ...appointment().client, email: null } })],
+    });
+    expect((await service.dispatchForTenant("t1", NOW)).sent).toBe(0);
+    expect(email.sendReviewRequest).not.toHaveBeenCalled();
+    expect(prisma.review.delete).toHaveBeenCalledWith({ where: { id: "rev-1" } });
+    expect(prisma.appointment.update).toHaveBeenCalledWith({
+      where: { id: "appt-1" },
+      data: { reviewRequestSent: false, reviewRequestAttempts: 1 },
+    });
+  });
+
+  it("a client who turned review requests off is not asked by WhatsApp either", async () => {
+    const { service, whatsapp, email, prisma } = setup({ whatsappNotices: true, prefs: { email: false } });
+    prisma.notificationPreference.findUnique.mockResolvedValue({
+      preferences: {
+        ...WHATSAPP_NOTICES_ON,
+        review_request: { inApp: false, email: false, sms: false, whatsapp: false },
+      },
+    });
+    expect((await service.dispatchForTenant("t1", NOW)).sent).toBe(0);
+    expect(whatsapp.sendReviewRequest).not.toHaveBeenCalled();
+    expect(email.sendReviewRequest).not.toHaveBeenCalled();
+    expect(prisma.appointment.update.mock.calls[0][0].data.reviewRequestAttempts).toBe(MAX_REQUEST_ATTEMPTS);
+  });
+
+  it("not when WhatsApp is turned off on her file", async () => {
+    const { service, whatsapp, email } = setup({
+      whatsappNotices: true,
+      candidates: [appointment({ client: { ...appointment().client, communicationPreferences: { whatsapp: false } } })],
+    });
+    expect((await service.dispatchForTenant("t1", NOW)).sent).toBe(1);
+    expect(whatsapp.sendReviewRequest).not.toHaveBeenCalled();
+    expect(email.sendReviewRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the rules: no WhatsApp outside 9:00-21:00, nor within the 30-day cooldown", async () => {
+    const late = setup({ whatsappNotices: true });
+    await late.service.dispatchForTenant("t1", new Date("2026-10-02T19:30:00.000Z")); // 21:30 in Madrid
+    expect(late.whatsapp.sendReviewRequest).not.toHaveBeenCalled();
+    const recent = setup({ whatsappNotices: true, recent: { id: "older" } });
+    expect((await recent.service.dispatchForTenant("t1", NOW)).sent).toBe(0);
+    expect(recent.whatsapp.sendReviewRequest).not.toHaveBeenCalled();
+  });
+
+  it("goes on Sundays too: a review request is not a campaign", async () => {
+    const { service, whatsapp } = setup({ whatsappNotices: true });
+    // Sunday 4 October 2026, 12:00 in Madrid.
+    expect((await service.dispatchForTenant("t1", new Date("2026-10-04T10:00:00.000Z"))).sent).toBe(1);
+    expect(whatsapp.sendReviewRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("an error while checking WhatsApp falls back to email, never fails the request", async () => {
+    const { service, whatsapp, email } = setup({ whatsappNotices: true });
+    whatsapp.canSend.mockRejectedValueOnce(new Error("graph down"));
+    expect((await service.dispatchForTenant("t1", NOW)).sent).toBe(1);
+    expect(email.sendReviewRequest).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ReviewsService — the WhatsApp channel in the settings", () => {
+  it("shows the review template's status at Meta", async () => {
+    for (const status of ["PENDING", "APPROVED", "REJECTED"]) {
+      const { service } = setup({ templateStatus: status });
+      expect((await service.getSettings("t1")).channels.whatsapp).toBe(status);
+    }
+  });
+
+  it("says when the salon has no WhatsApp connected, or the template was never submitted", async () => {
+    expect((await setup({ connection: null }).service.getSettings("t1")).channels.whatsapp).toBe("not_connected");
+    const fresh = setup();
+    fresh.whatsapp.standardStatus.mockResolvedValueOnce([{ name: "kiraroom_opinion_cita", status: "NOT_SUBMITTED" }]);
+    expect((await fresh.service.getSettings("t1")).channels.whatsapp).toBe("NOT_SUBMITTED");
+    const down = setup();
+    down.whatsapp.standardStatus.mockRejectedValueOnce(new Error("graph down"));
+    expect((await down.service.getSettings("t1")).channels.whatsapp).toBe("unknown");
+  });
+
+  it("submits the review template to Meta and answers the settings", async () => {
+    const { service, whatsapp } = setup({ templateStatus: "PENDING" });
+    const s = await service.submitWhatsAppTemplate("t1");
+    expect(whatsapp.submitTemplate).toHaveBeenCalledWith("t1", expect.objectContaining({ name: "kiraroom_opinion_cita" }));
+    expect(s.channels.whatsapp).toBe("PENDING");
+  });
+
+  it("asks to connect WhatsApp first, and passes on Meta's refusal", async () => {
+    await expect(setup({ connection: null }).service.submitWhatsAppTemplate("t1")).rejects.toThrow(/Conecta el WhatsApp/);
+    const refused = setup();
+    refused.whatsapp.submitTemplate.mockResolvedValueOnce({ error: "Invalid parameter" });
+    await expect(refused.service.submitWhatsAppTemplate("t1")).rejects.toThrow(/Invalid parameter/);
   });
 });

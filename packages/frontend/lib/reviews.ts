@@ -30,18 +30,120 @@ export function publicReviewRules(reasons: ReadonlyArray<string> = REJECTION_REA
   };
 }
 
+/** "por WhatsApp o por email" once the salon's WhatsApp review template is approved, else "por email". */
+function channelWords(whatsapp?: string | null): string {
+  return whatsapp === "APPROVED" ? "por WhatsApp o por email" : "por email";
+}
+
 /**
  * The reviews page headline. "After every appointment" only when the
  * requests are really going out: the add-on is active and switched on.
+ * WhatsApp only once Meta approved the salon's review template.
  */
-export function requestsHeadline(s: { addOnActive: boolean; autoRequestsEnabled: boolean } | null): string {
+export function requestsHeadline(
+  s: { addOnActive: boolean; autoRequestsEnabled: boolean; channels?: { whatsapp?: string | null } } | null,
+): string {
+  const by = channelWords(s?.channels?.whatsapp);
   if (s?.addOnActive && s.autoRequestsEnabled) {
-    return "Después de cada cita, KiraRoom pide su opinión a la clienta por email. Tú moderas lo que llega; las aprobadas se ven en tu página de reservas.";
+    return `Después de cada cita, KiraRoom pide su opinión a la clienta ${by}. Tú moderas lo que llega; las aprobadas se ven en tu página de reservas.`;
   }
   if (s?.addOnActive) {
-    return "Activa las peticiones y, después de cada cita, KiraRoom pedirá su opinión a la clienta por email. Tú moderas lo que llega; las aprobadas se ven en tu página de reservas.";
+    return `Activa las peticiones y, después de cada cita, KiraRoom pedirá su opinión a la clienta ${by}. Tú moderas lo que llega; las aprobadas se ven en tu página de reservas.`;
   }
-  return "Las opiniones de tus clientas, y cómo se muestran en tu página de reservas. Con el complemento «Reseñas tras la cita», KiraRoom les pide su opinión por email después de cada cita.";
+  return "Las opiniones de tus clientas, y cómo se muestran en tu página de reservas. Con el complemento «Reseñas tras la cita», KiraRoom les pide su opinión después de cada cita, por WhatsApp o por email.";
+}
+
+/** The WhatsApp channel of the review requests, as the settings show it. */
+export interface WhatsAppChannelView {
+  label: string;
+  tone: "gray" | "amber" | "green" | "red";
+  detail: string;
+  /** "Enviar plantilla a Meta" is offered. */
+  canSubmit: boolean;
+  /** "Conectar WhatsApp" is offered. */
+  needsConnection: boolean;
+}
+
+const WHO =
+  "las clientas que pidieron los avisos de sus citas por WhatsApp";
+
+/**
+ * What the Reseñas settings say about WhatsApp, from the review template's
+ * state (backend ReviewsService.getSettings channels.whatsapp). Until Meta
+ * approves the template, every request goes by email. null for a server
+ * that does not report it.
+ */
+export function whatsappChannelView(status: string | null | undefined): WhatsAppChannelView | null {
+  if (!status) return null;
+  const meanwhile = "Mientras, todas las peticiones van por email.";
+  switch (status) {
+    case "not_connected":
+      return {
+        label: "Sin conectar",
+        tone: "gray",
+        detail: `Conecta el WhatsApp de tu salón para pedir la opinión por WhatsApp a ${WHO}. ${meanwhile}`,
+        canSubmit: false,
+        needsConnection: true,
+      };
+    case "NOT_SUBMITTED":
+      return {
+        label: "Plantilla sin enviar",
+        tone: "gray",
+        detail: `Para escribir por WhatsApp a ${WHO}, Meta tiene que aprobar el mensaje (una plantilla de servicio, como la del recordatorio). Envíala y Meta la revisará, normalmente en unas horas. ${meanwhile}`,
+        canSubmit: true,
+        needsConnection: false,
+      };
+    case "PENDING":
+    case "IN_APPEAL":
+      return {
+        label: "Plantilla en revisión",
+        tone: "amber",
+        detail: `Meta está revisando la plantilla, normalmente en unas horas. ${meanwhile}`,
+        canSubmit: false,
+        needsConnection: false,
+      };
+    case "APPROVED":
+      return {
+        label: "Activo",
+        tone: "green",
+        detail: `Plantilla aprobada por Meta: ${WHO} reciben la petición por WhatsApp; el resto, por email. Si un WhatsApp no se puede entregar, se envía por email.`,
+        canSubmit: false,
+        needsConnection: false,
+      };
+    case "REJECTED":
+      return {
+        label: "Plantilla rechazada",
+        tone: "red",
+        detail: `Meta ha rechazado la plantilla, así que no se piden opiniones por WhatsApp. Todas las peticiones van por email.`,
+        canSubmit: false,
+        needsConnection: false,
+      };
+    case "PAUSED":
+    case "DISABLED":
+      return {
+        label: status === "PAUSED" ? "Plantilla en pausa" : "Plantilla desactivada",
+        tone: "amber",
+        detail: `Meta ha ${status === "PAUSED" ? "pausado" : "desactivado"} la plantilla. ${meanwhile}`,
+        canSubmit: false,
+        needsConnection: false,
+      };
+    case "unknown":
+      return {
+        label: "Sin datos de Meta",
+        tone: "gray",
+        detail: `No hemos podido consultar a Meta el estado de la plantilla. Vuelve a mirarlo más tarde; si no está aprobada, las peticiones van por email.`,
+        canSubmit: false,
+        needsConnection: false,
+      };
+    default:
+      return {
+        label: `Plantilla: ${status}`,
+        tone: "amber",
+        detail: meanwhile,
+        canSubmit: false,
+        needsConnection: false,
+      };
+  }
 }
 
 /** How a review shows on the salon's site, for the panel. */

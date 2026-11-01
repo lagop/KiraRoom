@@ -22,6 +22,32 @@ export async function salonWhatsAppConnected(
   }
 }
 
+/** The plan check of salonOffersWhatsAppPromotions (FeatureFlagService.isFeatureUnlocked). */
+export interface PlanFeatureCheck {
+  isFeatureUnlocked(tenantId: string, key: "whatsapp_marketing"): Promise<boolean>;
+}
+
+/**
+ * Does the booking page (and the widget) offer the optional "Quiero recibir
+ * promociones de <salón> por WhatsApp" box? Only when the salon has its
+ * WhatsApp connected and its plan includes WhatsApp campaigns: an opt-in
+ * nothing could ever use is not asked for. False on any error, or with no
+ * plan check at hand.
+ */
+export async function salonOffersWhatsAppPromotions(
+  prisma: Pick<PrismaService, "whatsAppConnection">,
+  plan: PlanFeatureCheck | null | undefined,
+  tenantId: string,
+): Promise<boolean> {
+  if (!plan) return false;
+  if (!(await salonWhatsAppConnected(prisma, tenantId))) return false;
+  try {
+    return await plan.isFeatureUnlocked(tenantId, "whatsapp_marketing");
+  } catch {
+    return false;
+  }
+}
+
 /**
  * A client's appointment notices -- confirmation, cancellation, change and
  * the 24 h and 1 h reminders -- by channel.

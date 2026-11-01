@@ -36,6 +36,7 @@ import {
   privacyPolicyUrl,
   slotsState,
   weekdayKey,
+  whatsappPromotionsLabel,
 } from "./public-booking";
 
 let pass = 0;
@@ -218,6 +219,35 @@ for (const rel of ["app/sites/[salonName]/salon-booking-page.tsx", "app/embed/[t
     true,
   );
 }
+// The optional WhatsApp promotions box: offered only when the server says
+// so (WhatsApp connected + a plan with WhatsApp campaigns), never pre-ticked,
+// sent only when ticked, with the salon named and how to stop.
+check(
+  "the WhatsApp promotions label names the salon and the channel",
+  whatsappPromotionsLabel("Salón Lucía"),
+  "Quiero recibir promociones de Salón Lucía por WhatsApp.",
+);
+check("the WhatsApp promotions notice says how to stop", BOOKING_CHOICE_TEXT.whatsappPromotionsNotice.includes("BAJA"), true);
+for (const [rel, flag] of [
+  ["app/sites/[salonName]/salon-booking-page.tsx", "initialData.whatsappPromotions === true"],
+  ["app/embed/[token]/page.tsx", "config.whatsappPromotions &&"],
+] as const) {
+  const src = fs.readFileSync(path.join(ROOT, rel), "utf8");
+  check(`${rel} shows the WhatsApp promotions box only when offered`, src.includes(flag), true);
+  check(`${rel} names the salon in the WhatsApp promotions box`, src.includes("whatsappPromotionsLabel("), true);
+  check(
+    `${rel} starts with the WhatsApp promotions box unticked`,
+    src.includes("[wantsWhatsAppPromotions, setWantsWhatsAppPromotions] = useState(false)"),
+    true,
+  );
+  check(
+    `${rel} sends wantsWhatsAppPromotions only when ticked`,
+    src.includes("wantsWhatsAppPromotions ? { wantsWhatsAppPromotions: true } : {}"),
+    true,
+  );
+  check(`${rel} never sends a refusal for it`, src.includes("wantsWhatsAppPromotions: false"), false);
+}
+
 for (const rel of ["app/dashboard/clients/page.tsx"]) {
   const src = fs.readFileSync(path.join(ROOT, rel), "utf8");
   check(`${rel} (add client) has the promotions box`, src.includes("<MarketingRefusalCheckbox"), true);

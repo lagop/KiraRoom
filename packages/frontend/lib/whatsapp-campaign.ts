@@ -12,6 +12,25 @@ export const CAMPAIGN_FOOTER = "Responde BAJA si no quieres más promociones";
 
 export type Tone = "gray" | "amber" | "blue" | "green" | "red";
 
+/**
+ * When campaigns go out (the server's withinCampaignWindow): 9:00 to 21:00
+ * on the salon's clock, never on Sunday. What is left on Saturday evening
+ * waits for Monday at 9:00.
+ */
+export const SENDING_WINDOW = "Entre las 9:00 y las 21:00 (hora del salón). No se envía en domingo.";
+
+/** Campaigns are Pro and Empresa: the page says so, with a link to Facturación. */
+export const PLAN_NOTICE =
+  "Las campañas de WhatsApp están incluidas en los planes Pro y Empresa. Tu plan actual no las incluye: puedes ver tus campañas anteriores, pero no crear, enviar ni reanudar ninguna.";
+export const BILLING_HREF = "/dashboard/billing";
+
+/** 403 FEATURE_NOT_IN_PLAN: the plan does not include campaigns. */
+export function isPlanBlocked(error: unknown): boolean {
+  // Duck-typed (ApiError carries status and code) so this file stays free of the API client.
+  const e = error as { status?: unknown; code?: unknown } | null;
+  return !!e && typeof e === "object" && e.status === 403 && e.code === "FEATURE_NOT_IN_PLAN";
+}
+
 export interface CampaignLabel {
   text: string;
   tone: Tone;
@@ -109,12 +128,15 @@ export function bodyProblem(raw: string): string | null {
   return null;
 }
 
-/** Which actions a campaign allows in its current state. */
-export function campaignActions(c: WhatsAppCampaign) {
+/**
+ * Which actions a campaign allows in its current state. Without a plan that
+ * includes campaigns, only stopping and deleting are left.
+ */
+export function campaignActions(c: WhatsAppCampaign, planIncludes = true) {
   return {
-    edit: c.status === "draft",
-    submit: c.status === "draft",
-    resume: c.status === "paused",
+    edit: planIncludes && c.status === "draft",
+    submit: planIncludes && c.status === "draft",
+    resume: planIncludes && c.status === "paused",
     cancel: c.status === "scheduled" || c.status === "sending" || c.status === "paused",
     remove: c.status !== "sending",
   };

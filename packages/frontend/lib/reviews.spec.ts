@@ -13,6 +13,7 @@ import {
   publicReviewRules,
   publicVisibilityNote,
   requestsHeadline,
+  whatsappChannelView,
 } from "./reviews";
 
 let pass = 0;
@@ -41,7 +42,35 @@ check(
   "without the add-on it names it",
   requestsHeadline({ addOnActive: false, autoRequestsEnabled: false }).includes("Reseñas tras la cita"),
 );
-check("no WhatsApp or SMS promise", !/WhatsApp|SMS/.test(requestsHeadline({ addOnActive: true, autoRequestsEnabled: true })));
+check("no SMS promise", !/SMS/.test(requestsHeadline({ addOnActive: true, autoRequestsEnabled: true })));
+check(
+  "WhatsApp only once the review template is approved",
+  !/WhatsApp/.test(requestsHeadline({ addOnActive: true, autoRequestsEnabled: true, channels: { whatsapp: "PENDING" } })) &&
+    /por WhatsApp o por email/.test(
+      requestsHeadline({ addOnActive: true, autoRequestsEnabled: true, channels: { whatsapp: "APPROVED" } }),
+    ),
+);
+check("an older server without the WhatsApp channel shows nothing", whatsappChannelView(undefined) === null);
+check("not submitted: offers the button", whatsappChannelView("NOT_SUBMITTED")?.canSubmit === true);
+check(
+  "pending: in review, by email meanwhile",
+  /revisando/.test(whatsappChannelView("PENDING")?.detail ?? "") && /por email/.test(whatsappChannelView("PENDING")?.detail ?? ""),
+);
+check(
+  "approved: active, email for the rest",
+  whatsappChannelView("APPROVED")?.label === "Activo" && /el resto, por email/.test(whatsappChannelView("APPROVED")?.detail ?? ""),
+);
+check(
+  "rejected: says so, all by email, no button",
+  whatsappChannelView("REJECTED")?.tone === "red" && !whatsappChannelView("REJECTED")?.canSubmit,
+);
+check("not connected: offers to connect", whatsappChannelView("not_connected")?.needsConnection === true);
+check(
+  "no channel view mentions SMS",
+  ["not_connected", "NOT_SUBMITTED", "PENDING", "APPROVED", "REJECTED", "PAUSED", "unknown"].every(
+    (st) => !/SMS/.test(whatsappChannelView(st)?.detail ?? ""),
+  ),
+);
 
 const rules = publicReviewRules();
 check("public rules: all published, positive and negative", /todas las opiniones, positivas y negativas/.test(rules.summary));
@@ -81,7 +110,11 @@ check("the consent box starts unticked", /useState\(false\)/.test(publicPage) &&
 check("the review page names the salon as controller", publicPage.includes("Responsable del tratamiento"));
 const panel = fs.readFileSync(path.join(ROOT, "app/dashboard/reviews/page.tsx"), "utf8");
 check("the panel rejects only with a reason", /moderateReview\(rejecting\.id, "reject", reason\)/.test(panel));
-check("the panel promises no WhatsApp or SMS requests", !/whatsappLabel|channels\.(sms|whatsapp)/.test(panel));
+check("the panel promises no SMS requests", !/channels\.sms/.test(panel));
+check(
+  "the panel shows the WhatsApp channel with the submit button",
+  panel.includes("whatsappChannelView(settings.channels.whatsapp)") && panel.includes("submitReviewWhatsAppTemplate"),
+);
 check("the panel says the Place ID wins", panel.includes("se usa el Place ID"));
 
 console.log(`\n${pass} passed, ${fail} failed`);

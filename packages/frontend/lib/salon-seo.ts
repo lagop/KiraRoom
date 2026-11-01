@@ -110,6 +110,12 @@ export interface PublicSalonPage {
    */
   whatsappNotices?: boolean;
   /**
+   * ...and its plan includes WhatsApp campaigns: the form offers the
+   * optional "Quiero recibir promociones de <salón> por WhatsApp". Absent
+   * from older servers.
+   */
+  whatsappPromotions?: boolean;
+  /**
    * The tax the service prices include: IVA, IGIC (Canarias) or IPSI (Ceuta
    * y Melilla). The page says "Precios con IVA incluido" once. Absent from
    * servers older than final prices.

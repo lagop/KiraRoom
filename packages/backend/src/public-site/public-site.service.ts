@@ -1,11 +1,12 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { Injectable, NotFoundException, Optional } from "@nestjs/common";
 import { SubscriptionStatus } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { salonOpenShifts, salonOpenWeek, SalonDayWindow } from "../appointments/working-hours";
 import { normalizeDomain } from "../web-domain/custom-domain";
 import { WebDomainService } from "../web-domain/web-domain.service";
 import { MAX_SPAN_DAYS, dateOfDay, daysOf } from "../time-off/time-off-rules";
-import { salonWhatsAppConnected } from "../consent/client-notices";
+import { salonOffersWhatsAppPromotions, salonWhatsAppConnected } from "../consent/client-notices";
+import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
 import { publicPrice, publicPriceSettings } from "../common/public-price";
 import { clientLocations, formatLocationAddress, professionalLocationsOf } from "../multi-location/client-locations";
 
@@ -35,6 +36,8 @@ export class PublicSiteService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly webDomain: WebDomainService,
+    // The plan check for the WhatsApp promotions box (global FeatureFlagModule).
+    @Optional() private readonly featureFlags?: FeatureFlagService,
   ) {}
 
   async getPage(slugOrId: string) {
@@ -76,7 +79,7 @@ export class PublicSiteService {
       new Date(),
     );
     const horizon = new Date(dateOfDay(today)!.getTime() + MAX_SPAN_DAYS * 86_400_000);
-    const [services, professionals, closures, whatsappNotices, where] = await Promise.all([
+    const [services, professionals, closures, whatsappNotices, where, whatsappPromotions] = await Promise.all([
       this.prisma.service.findMany({
         where: { tenantId: tenant.id, isActive: true },
         select: {
@@ -129,6 +132,7 @@ export class PublicSiteService {
       // Two or more locations someone can be booked at: the client picks one
       // (multi-location/client-locations.ts). None for every other salon.
       clientLocations(this.prisma as any, tenant.id),
+      salonOffersWhatsAppPromotions(this.prisma, this.featureFlags, tenant.id),
     ]);
     const horizonDay = horizon.toISOString().slice(0, 10);
     const closedDays = [
@@ -204,6 +208,9 @@ export class PublicSiteService {
       // The salon has its WhatsApp number connected: the booking form offers
       // "Recibir los avisos de mi cita por WhatsApp". Only a yes or no.
       whatsappNotices,
+      // ...and its plan includes WhatsApp campaigns: the form offers the
+      // optional "Quiero recibir promociones de <salón> por WhatsApp".
+      whatsappPromotions,
     };
   }
 

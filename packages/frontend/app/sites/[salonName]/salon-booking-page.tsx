@@ -35,6 +35,7 @@ import {
   privacyPolicyUrl,
   slotsState,
   BOOKING_CHOICE_TEXT,
+  whatsappPromotionsLabel,
 } from "@/lib/public-booking";
 import { professionalAfterServiceChange, servicesForPinned } from "@/lib/booking-professional";
 import {
@@ -208,6 +209,10 @@ export default function SalonBookingPage({
   const [wantsWhatsAppNotices, setWantsWhatsAppNotices] = useState(false);
   // Only when the salon has its WhatsApp number connected.
   const offersWhatsAppNotices = initialData.whatsappNotices === true;
+  // Optional, never pre-ticked: only when the salon has WhatsApp connected
+  // and its plan includes WhatsApp campaigns. Unticked sends nothing.
+  const [wantsWhatsAppPromotions, setWantsWhatsAppPromotions] = useState(false);
+  const offersWhatsAppPromotions = initialData.whatsappPromotions === true;
   // The professional a QR code or link chose (?professionalId=), until the
   // client asks to see the whole team.
   const [pinnedProfessionalId, setPinnedProfessionalId] = useState("");
@@ -455,6 +460,7 @@ export default function SalonBookingPage({
         // Only what she ticked: an unticked box sends nothing.
         ...(refusesMarketingEmail ? { refusesMarketingEmail: true } : {}),
         ...(offersWhatsAppNotices && wantsWhatsAppNotices ? { wantsWhatsAppNotices: true } : {}),
+        ...(offersWhatsAppPromotions && wantsWhatsAppPromotions ? { wantsWhatsAppPromotions: true } : {}),
       });
 
       // Only now. The confirmation has to mean the appointment exists. At
@@ -944,6 +950,23 @@ export default function SalonBookingPage({
                     />
                     <span>{BOOKING_CHOICE_TEXT.whatsappNotices}</span>
                   </label>
+                )}
+                {offersWhatsAppPromotions && (
+                  <div>
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={wantsWhatsAppPromotions}
+                        onChange={(e) => setWantsWhatsAppPromotions(e.target.checked)}
+                        aria-describedby="booking-whatsapp-promotions-notice"
+                        className="mt-0.5 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                      />
+                      <span>{whatsappPromotionsLabel(initialData.name)}</span>
+                    </label>
+                    <p id="booking-whatsapp-promotions-notice" className="mt-1 ml-6 text-xs text-gray-500">
+                      {BOOKING_CHOICE_TEXT.whatsappPromotionsNotice}
+                    </p>
+                  </div>
                 )}
                 <div>
                   <label className="flex items-start gap-2 cursor-pointer">

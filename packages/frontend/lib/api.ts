@@ -428,9 +428,15 @@ export interface ReviewSettings {
   autoRequestsEnabled: boolean;
   /** The google_reviews_auto add-on (or a plan with it) is active. */
   addOnActive: boolean;
-  /** Requests go by email only. */
+  /**
+   * Email, and WhatsApp for clients who asked for their appointment notices
+   * by WhatsApp: the review template's state ("not_connected",
+   * "NOT_SUBMITTED", Meta's PENDING / APPROVED / REJECTED..., "unknown").
+   * Absent from older servers. No SMS.
+   */
   channels: {
     email: boolean;
+    whatsapp?: string;
   };
   googleApi: { available: boolean };
   policy: {
@@ -817,6 +823,8 @@ export interface CreateAppointmentDto {
    */
   refusesMarketingEmail?: boolean;
   wantsWhatsAppNotices?: boolean;
+  /** Public booking only: she ticked the optional WhatsApp promotions box. */
+  wantsWhatsAppPromotions?: boolean;
   /**
    * Public booking at one of the salon's locations, when it has several:
    * the professional must work there.
@@ -5104,6 +5112,10 @@ class ApiClient implements ApiClientInterface {
   async getReviewSettings(): Promise<ReviewSettings> {
     return this.request(`/reviews/settings`);
   }
+  /** Submits the WhatsApp review template to Meta; answers the settings with its status. */
+  async submitReviewWhatsAppTemplate(): Promise<ReviewSettings> {
+    return this.request(`/reviews/settings/whatsapp-template`, { method: "POST" });
+  }
   async updateReviewSettings(data: {
     googlePlaceId?: string | null;
     googleWriteReviewUrl?: string | null;
@@ -5164,6 +5176,10 @@ class ApiClient implements ApiClientInterface {
   }
   async getWhatsAppCampaign(id: string): Promise<WhatsAppCampaign> {
     return this.request(`/whatsapp/campaigns/${id}`);
+  }
+  /** Whether the plan includes WhatsApp campaigns (Pro and Empresa). Every plan can read past ones. */
+  async getWhatsAppCampaignAccess(): Promise<{ included: boolean }> {
+    return this.request(`/whatsapp/campaigns/access`);
   }
   async getWhatsAppCampaignAudience(inactiveDays?: number | null): Promise<WhatsAppAudiencePreview> {
     const q = inactiveDays ? `?inactiveDays=${inactiveDays}` : "";
