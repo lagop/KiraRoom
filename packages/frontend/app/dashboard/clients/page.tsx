@@ -41,6 +41,7 @@ import {
   updateClientPayload,
   type ClientFormValues,
 } from "@/lib/client-form";
+import { MarketingRefusalCheckbox, recordNewClientRefusal } from "@/components/marketing/marketing-refusal-checkbox";
 
 type SortField = "firstName" | "lastName" | "email" | "status" | "createdAt";
 type SortDirection = "asc" | "desc";
@@ -76,6 +77,8 @@ function ClientsPageContent() {
   }, [searchParams]);
 
   const [addFormData, setAddFormData] = useState<ClientFormValues>(EMPTY_CLIENT_FORM);
+  // "No quiere recibir promociones ... por email", unticked.
+  const [addRefusesMarketing, setAddRefusesMarketing] = useState(false);
   const [editFormData, setEditFormData] = useState<ClientFormValues>(EMPTY_CLIENT_FORM);
 
   useEffect(() => {
@@ -103,7 +106,15 @@ function ClientsPageContent() {
         createClientPayload(addFormData, { canManage: manager }),
       );
       setClients((prev) => [...prev, newClient]);
+      if (addRefusesMarketing && !(await recordNewClientRefusal(newClient?.id))) {
+        toast({
+          title: "Clienta creada, pero no se pudo anotar que no quiere promociones",
+          description: "Anótalo desde su ficha, en Promociones.",
+          variant: "destructive",
+        });
+      }
       setAddFormData(EMPTY_CLIENT_FORM);
+      setAddRefusesMarketing(false);
       setIsAddDrawerOpen(false);
       toast({ title: t("clients.client_created"), variant: "default" });
     } catch (err) {
@@ -325,6 +336,11 @@ function ClientsPageContent() {
                 requiredMark
                 showStatus={manager}
                 lockEmail={false}
+              />
+              <MarketingRefusalCheckbox
+                id="add-client-refuses-marketing"
+                checked={addRefusesMarketing}
+                onChange={setAddRefusesMarketing}
               />
             </div>
 

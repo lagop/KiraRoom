@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { formatPrice } from "@/lib/salon-seo";
 import {
+  BOOKING_CHOICE_TEXT,
   bookingErrorMessage,
   localDateString,
   privacyPolicyUrl,
@@ -54,6 +55,11 @@ interface WidgetConfig {
     profileImage?: string;
     specialties: any;
   }>;
+  /**
+   * The salon has its WhatsApp number connected: the form offers
+   * "Recibir los avisos de mi cita por WhatsApp". Absent from older servers.
+   */
+  whatsappNotices?: boolean;
 }
 
 interface Slot {
@@ -84,6 +90,9 @@ export default function EmbedWidgetPage() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [notes, setNotes] = useState("");
+  // The two boxes, both unticked (BOOKING_CHOICE_TEXT).
+  const [refusesMarketingEmail, setRefusesMarketingEmail] = useState(false);
+  const [wantsWhatsAppNotices, setWantsWhatsAppNotices] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [bookingId, setBookingId] = useState<string | null>(null);
   const [bookingError, setBookingError] = useState<string | null>(null);
@@ -166,6 +175,9 @@ export default function EmbedWidgetPage() {
         // The phone is required (the salon's way to reach the client about a
         // change); the email is optional.
         clientInfo: { firstName, lastName, phone, email: email.trim() || undefined },
+        // Only what she ticked: an unticked box sends nothing.
+        ...(refusesMarketingEmail ? { refusesMarketingEmail: true } : {}),
+        ...(config.whatsappNotices && wantsWhatsAppNotices ? { wantsWhatsAppNotices: true } : {}),
       };
       const res = await fetch(`${API}/appointments`, {
         method: "POST",
@@ -381,6 +393,32 @@ export default function EmbedWidgetPage() {
               rows={3}
               className="w-full border border-gray-300 rounded-lg px-3 py-2"
             />
+            {config.whatsappNotices && (
+              <label className="flex items-start gap-2 text-sm text-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={wantsWhatsAppNotices}
+                  onChange={(e) => setWantsWhatsAppNotices(e.target.checked)}
+                  className="mt-0.5"
+                />
+                <span>{BOOKING_CHOICE_TEXT.whatsappNotices}</span>
+              </label>
+            )}
+            <div>
+              <label className="flex items-start gap-2 text-sm text-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={refusesMarketingEmail}
+                  onChange={(e) => setRefusesMarketingEmail(e.target.checked)}
+                  aria-describedby="widget-marketing-notice"
+                  className="mt-0.5"
+                />
+                <span>{BOOKING_CHOICE_TEXT.emailRefusal}</span>
+              </label>
+              <p id="widget-marketing-notice" className="mt-1 ml-6 text-xs text-gray-500">
+                {BOOKING_CHOICE_TEXT.emailNotice}
+              </p>
+            </div>
             {bookingError && (
               <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded p-2">
                 {bookingError}
@@ -404,9 +442,10 @@ export default function EmbedWidgetPage() {
             </div>
             {/* Who uses these details and what for (RGPD art. 13). */}
             <p className="text-xs text-gray-500">
-              {config.tenant.name} usará tu nombre, teléfono y email solo para
+              {config.tenant.name} usará tu nombre, teléfono y email para
               gestionar tu cita y enviarte avisos sobre ella (confirmación,
-              recordatorios y cambios).{" "}
+              recordatorios y cambios) y, si no marcas la casilla de arriba,
+              promociones por email.{" "}
               <a
                 href={privacyPolicyUrl()}
                 target="_blank"

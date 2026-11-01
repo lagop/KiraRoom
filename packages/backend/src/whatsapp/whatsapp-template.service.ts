@@ -217,7 +217,7 @@ export class WhatsAppTemplateService {
   ): Promise<ReminderResult> {
     const conn = await this.connection(tenantId);
     if (!conn?.isActive || !conn.phoneNumberId) return { sent: false, reason: "not_connected" };
-    const to = normalizePhone(phone, country ?? "ES").replace(/D/g, "");
+    const to = normalizePhone(phone, country ?? "ES").replace(/\D/g, "");
     const res = await this.meta.sendTemplate(
       this.meta.decryptToken(conn.accessTokenEnc),
       conn.phoneNumberId,

@@ -53,10 +53,16 @@ export class AppointmentsController {
   @Public()
   @ApiOperation({ summary: "Create a new appointment (public)" })
   @ApiResponse({ status: 201, description: "Appointment created successfully" })
-  async create(@Body() dto: OnlineBookingDto) {
+  async create(@Body() dto: OnlineBookingDto, @Req() req: any) {
+    // The booker's IP, hashed into the record of what she ticked (promotions,
+    // WhatsApp notices), as the consent routes do.
+    const ip =
+      (req?.headers?.["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ||
+      req?.socket?.remoteAddress ||
+      "";
     // Public: whoever booked gets the booking back, not the client record it
     // attached to nor the salon's row.
-    return publicBooking(await this.appointmentsService.createOnline(dto));
+    return publicBooking(await this.appointmentsService.createOnline(dto, { ip }));
   }
 
   @Post("staff")

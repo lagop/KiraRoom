@@ -333,7 +333,9 @@ export class ClientsService {
     try {
       return await this.prisma.client.update({
         where: { id: clientId, tenantId },
-        data,
+        // A new sign-in address ends every session (tokenVersion), as a new
+        // password does: whoever had the account under the old one is out.
+        data: data.email !== undefined ? { ...data, tokenVersion: { increment: 1 } } : data,
         select: {
           id: true,
           firstName: true,
@@ -374,9 +376,11 @@ export class ClientsService {
       // and logs out, which would punish a typo by ending the session.
       throw new BadRequestException("La contraseña actual no es correcta");
     }
+    // Every session ends (tokenVersion), so one opened with the old
+    // password does not outlive it.
     await this.prisma.client.update({
       where: { id: clientId, tenantId },
-      data: { passwordHash: await hashPassword(dto.newPassword) },
+      data: { passwordHash: await hashPassword(dto.newPassword), tokenVersion: { increment: 1 } },
     });
   }
 }

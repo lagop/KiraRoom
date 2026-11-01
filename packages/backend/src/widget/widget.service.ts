@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, Logger } from "@nestjs/common";
 import { randomBytes } from "crypto";
 import { PrismaService } from "../common/prisma/prisma.service";
+import { salonWhatsAppConnected } from "../consent/client-notices";
 
 export interface CreateWidgetInstanceInput {
   name: string;
@@ -150,6 +151,9 @@ export class WidgetService {
       },
       services: allServices,
       professionals: allProfessionals,
+      // The salon has its WhatsApp number connected: the form offers
+      // "Recibir los avisos de mi cita por WhatsApp".
+      whatsappNotices: await salonWhatsAppConnected(this.prisma, widget.tenantId),
     };
   }
 

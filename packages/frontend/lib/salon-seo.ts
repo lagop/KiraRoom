@@ -83,6 +83,11 @@ export interface PublicSalonPage {
   customDomain: string | null;
   /** salon-lucia.kiraroom.net, set only once subdomains serve over HTTPS. */
   subdomainHost?: string | null;
+  /**
+   * The salon has its WhatsApp number connected: the booking form offers
+   * "Recibir los avisos de mi cita por WhatsApp". Absent from older servers.
+   */
+  whatsappNotices?: boolean;
 }
 
 /** Public base URL of the app (where /sites/<slug> lives). */

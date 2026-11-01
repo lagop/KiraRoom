@@ -38,6 +38,8 @@ describe("changeOwnPassword", () => {
 
     expect(updates[0].where).toEqual({ id: "c1", tenantId: "t1" });
     expect(await bcrypt.compare("new-password-2", updates[0].data.passwordHash)).toBe(true);
+    // Every session ends: one opened with the old password does not outlive it.
+    expect(updates[0].data.tokenVersion).toEqual({ increment: 1 });
   });
 
   it("refuses without the current password: a borrowed session is not enough", async () => {
@@ -96,7 +98,8 @@ describe("updateSelf", () => {
   it("changes the email with the right password, and never stores the password field", async () => {
     const { service, updates } = await setup();
     await service.updateSelf("t1", "c1", { email: " new@y.z ", currentPassword: "old-password-1" });
-    expect(updates[0].data).toEqual({ email: "new@y.z" });
+    // A new sign-in address ends every session (tokenVersion).
+    expect(updates[0].data).toEqual({ email: "new@y.z", tokenVersion: { increment: 1 } });
   });
 
   it("stores an emptied phone as no phone", async () => {
