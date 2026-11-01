@@ -769,6 +769,11 @@ export interface CreateAppointmentDto {
    */
   refusesMarketingEmail?: boolean;
   wantsWhatsAppNotices?: boolean;
+  /**
+   * Public booking at one of the salon's locations, when it has several:
+   * the professional must work there.
+   */
+  locationId?: string;
 }
 
 /**
@@ -1688,6 +1693,8 @@ export interface ApiClientInterface {
     professionalId: string,
     serviceId: string,
     date: string,
+    professionalIds?: string[],
+    locationId?: string,
   ): Promise<{ time: string; isAvailable: boolean }[]>;
   getNotifications(params?: {
     limit?: number;
@@ -2979,6 +2986,8 @@ class ApiClient implements ApiClientInterface {
     serviceId: string,
     date: string,
     professionalIds?: string[],
+    /** One of the salon's locations (multi-local): only who works there. */
+    locationId?: string,
   ): Promise<{ time: string; isAvailable: boolean }[]> {
     let endpoint = `/appointments/available-slots?tenantId=${tenantId}&serviceId=${serviceId}&date=${date}`;
 
@@ -2987,6 +2996,9 @@ class ApiClient implements ApiClientInterface {
       endpoint += `&professionalIds=${professionalIds.join(",")}`;
     } else if (professionalId) {
       endpoint += `&professionalId=${professionalId}`;
+    }
+    if (locationId) {
+      endpoint += `&locationId=${encodeURIComponent(locationId)}`;
     }
 
     return this.request<{ time: string; isAvailable: boolean }[]>(endpoint);

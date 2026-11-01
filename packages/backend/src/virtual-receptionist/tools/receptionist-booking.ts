@@ -6,6 +6,7 @@ import type { SalonToolContext } from './salon-tools';
 import { clientPrices, clientPriceText } from './client-prices';
 import { taxIncludedNote } from '../../common/public-price';
 import { samePhone } from '../../common/phone';
+import { locationLabel } from './receptionist-locations';
 
 /**
  * How the virtual receptionist books, in two steps the server enforces.
@@ -39,6 +40,8 @@ export interface PendingBooking {
   email?: string;
   phone?: string;
   notes?: string;
+  /** One of the salon's locations, when it has several (receptionist-locations.ts). */
+  locationId?: string;
   /** Client messages in the conversation when this was proposed. */
   proposedAtUserTurn: number;
   bookedAppointmentId?: string;
@@ -102,6 +105,7 @@ function toDto(p: Omit<PendingBooking, 'proposedAtUserTurn' | 'bookedAppointment
     scheduledDate: p.date,
     scheduledTime: p.time,
     notes: p.notes || undefined,
+    locationId: p.locationId || undefined,
     source: 'online',
     clientInfo: {
       firstName: p.firstName,
@@ -201,6 +205,8 @@ export async function proposeAppointment(
     email: input.email ? String(input.email).trim() || undefined : undefined,
     phone: input.phone ? String(input.phone) : channelPhone(ctx),
     notes: input.notes ? String(input.notes) : undefined,
+    // Set by resolveLocation for a salon with several locations; else absent.
+    locationId: input.locationId ? String(input.locationId) : undefined,
   };
 
   const invalid = validateSync(toDto(details), { whitelist: true });
@@ -224,7 +230,7 @@ export async function proposeAppointment(
     details.serviceId,
     undefined,
     undefined,
-    { onlineWindow: true },
+    { onlineWindow: true, ...(details.locationId ? { locationId: details.locationId } : {}) },
   );
   if (!slots.some((s: { time: string; isAvailable: boolean }) => s.time === details.time && s.isAvailable)) {
     return {
@@ -245,6 +251,8 @@ export async function proposeAppointment(
         details.serviceId,
         details.time,
         [],
+        // Someone who works at that location.
+        details.locationId,
       );
     } catch {
       return {
@@ -276,6 +284,8 @@ export async function proposeAppointment(
 
   // What the client will pay, tax included, as list_services quoted it.
   const prices = await clientPrices(ctx);
+  // Where, for a salon with several locations: its name and address.
+  const location = await locationLabel(ctx, details.locationId);
   const state = await readState(ctx);
   state.pendingBooking = { ...details, proposedAtUserTurn: await userTurns(ctx) };
   await writeState(ctx, state);
@@ -288,6 +298,7 @@ export async function proposeAppointment(
       durationMinutes: service.duration,
       price: `${clientPriceText(service.price, prices)} ${service.currency} (${taxIncludedNote(prices)})`,
       professional: `${professional.firstName} ${professional.lastName}`.trim(),
+      ...(location ? { location } : {}),
       date: details.date,
       time: details.time,
       name: `${details.firstName} ${details.lastName}`.trim(),
@@ -373,6 +384,8 @@ export async function confirmAppointment(ctx: SalonToolContext): Promise<Record<
       professional: [appointment.professional?.firstName, appointment.professional?.lastName]
         .filter(Boolean)
         .join(' '),
+      // Where, when the salon has several locations.
+      ...(pending.locationId ? { location: await locationLabel(ctx, pending.locationId) } : {}),
       date: pending.date,
       time: pending.time,
     };

@@ -163,3 +163,23 @@ describe("appointment SMS to the client", () => {
     expect(sent[0].startsWith("Tu salón: ")).toBe(true);
   });
 });
+
+describe("the location, at a salon with several (multi-local)", () => {
+  it.each(sends)("%s: names the location, with its address under the salon's name", async (_label, send) => {
+    const { service, calls } = makeService();
+    await send(service, data({ locationName: "Chamberí", salonAddress: "Calle Fuencarral 120, 28010 Madrid" }));
+    const { html, text } = calls[0];
+    expect(html).toContain("Local:");
+    expect(html).toContain("Chamberí");
+    expect(html).toContain("Calle Fuencarral 120, 28010 Madrid");
+    expect(text).toContain("Local: Chamberí");
+    expect(text).toContain("Dirección: Calle Fuencarral 120, 28010 Madrid");
+  });
+
+  it.each(sends)("%s: no location row for a salon with one", async (_label, send) => {
+    const { service, calls } = makeService();
+    await send(service, data());
+    expect(calls[0].html).not.toContain("Local:");
+    expect(calls[0].text).not.toContain("Local:");
+  });
+});
