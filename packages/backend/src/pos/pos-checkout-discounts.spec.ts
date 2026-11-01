@@ -380,10 +380,12 @@ describe("POS discounts: an appointment", () => {
     expect(t.committed.appointments.get("a1")).toMatchObject({ totalAmount: 3600, amountPaid: 3600, paymentStatus: "paid" });
     expect(t.committed.appointments.get("a2")).toMatchObject({ totalAmount: 2250, amountPaid: 2250, paymentStatus: "paid" });
     expect(t.committed.appointments.get("a1")!.discount.pos).toMatchObject({ amountCents: 400, lineCents: 0, orderCents: 400 });
-    // 69,75 charged: 36 + 22,50 to the visits, the rest (and the 0,25 extra) to the ticket.
+    // 69,75 charged: 36 + 22,50 to the visits, the rest to the ticket. The
+    // 0,25 over is the change given back, not a sale (pos-tenders.ts).
     const toVisits = t.committed.payments.filter((p) => p.appointmentId).reduce((s, p) => s + p.amount, 0);
     expect(toVisits).toBe(5850);
-    expect(t.committed.payments.reduce((s, p) => s + p.amount, 0)).toBe(7000);
+    expect(t.committed.payments.reduce((s, p) => s + p.amount, 0)).toBe(6975);
+    expect(out.change).toBe(25);
   });
 
   // With invoicing available, the discount is credited by a rectificativa

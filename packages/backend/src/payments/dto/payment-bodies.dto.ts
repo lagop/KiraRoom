@@ -2,7 +2,6 @@ import { Type } from "class-transformer";
 import {
   IsBoolean,
   IsEnum,
-  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
@@ -43,13 +42,6 @@ export class CreatePaymentBodyDto {
   method?: PaymentMethod;
 }
 
-export const PAYMENT_STATUSES = ["pending", "paid", "failed", "refunded"] as const;
-
-export class UpdatePaymentStatusDto {
-  @IsIn(PAYMENT_STATUSES as unknown as string[])
-  status!: (typeof PAYMENT_STATUSES)[number];
-}
-
 /** A plan key (esencial, pro, empresa, or a legacy one); the service maps and checks it. */
 export class SubscriptionPlanDto {
   @IsString() @MaxLength(50) @Matches(/^[a-z][a-z0-9_-]*$/)
@@ -79,10 +71,20 @@ export class WalletAmountDto {
   description?: string;
 }
 
-export class AppointmentChargeDto {
-  @Type(() => Number) @IsInt() @Min(1) @Max(MAX_CENTS)
-  amount!: number;
+/**
+ * POST /payments/:id/refund: money given back for a charge, in cents. No
+ * amount: everything not refunded yet. The reason is kept on the refund.
+ */
+export class RefundPaymentDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt({ message: "El importe a devolver debe ser un número entero de céntimos." })
+  @Min(1, { message: "El importe a devolver debe ser mayor que 0." })
+  @Max(MAX_CENTS, { message: "El importe a devolver no es válido." })
+  amount?: number;
 
-  @IsIn(["card", "cash"])
-  method!: "card" | "cash";
+  @IsString({ message: "Indica el motivo de la devolución." })
+  @Matches(/\S/, { message: "Indica el motivo de la devolución." })
+  @MaxLength(500, { message: "El motivo puede tener como máximo 500 caracteres." })
+  reason!: string;
 }

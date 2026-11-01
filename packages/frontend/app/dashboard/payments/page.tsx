@@ -1,1211 +1,792 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
-import apiClient, { ClientLoyaltySummary } from "@/lib/api";
+import apiClient, {
+  ClientLoyaltySummary,
+  type Client,
+  type Payment,
+  type PaymentFilters,
+  type PaymentSummary,
+} from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/components/ui/use-toast";
+import { getCurrentUser } from "@/lib/utils";
+import { isManager } from "@/lib/dashboard-nav";
+import { RefundPaymentDialog } from "@/components/payments/RefundPaymentDialog";
+import {
+  PAYMENT_METHOD_LABELS,
+  PAYMENT_STATUS_LABELS,
+  formatEuros,
+  methodLabel,
+  parseEurosToCents,
+  paymentConcept,
+  refundableCents,
+  statusLabel,
+} from "@/lib/payments-format";
 
-// Type definitions for payments
-interface Payment {
-  id: string;
-  tenantId: string;
-  clientId?: string;
-  appointmentId?: string;
-  amount: number;
-  currency: string;
-  type:
-    | "appointment"
-    | "deposit"
-    | "product"
-    | "service"
-    | "gift_card"
-    | "membership"
-    | "other";
-  status:
-    | "pending"
-    | "processing"
-    | "succeeded"
-    | "failed"
-    | "cancelled"
-    | "refunded"
-    | "partially_refunded";
-  method: "card" | "cash" | "bank_transfer" | "wallet";
-  stripePaymentId?: string;
-  stripeInvoiceId?: string;
-  description?: string;
-  metadata?: Record<string, any>;
-  receiptUrl?: string;
-  failureMessage?: string;
-  isDeposit?: boolean;
-  depositAmount?: number;
-  remainingAmount?: number;
-  createdAt: string;
-  updatedAt: string;
-  paidAt?: string;
-  // Relations
-  client?: {
-    id: string;
-    firstName: string;
-    lastName: string;
-    email?: string;
-  };
-  appointment?: {
-    id: string;
-    scheduledDate: string;
-    status: string;
-  };
+const SORTABLE = ["createdAt", "amount", "status", "method"] as const;
+type SortField = (typeof SORTABLE)[number];
+
+/** The methods a salon charges with at the till (the filter's options). */
+const FILTER_METHODS = ["cash", "card", "bank_transfer", "wallet"] as const;
+
+function statusColor(status: string, partlyRefunded: boolean): string {
+  if (status === "paid") return partlyRefunded ? "bg-amber-100 text-amber-800" : "bg-green-100 text-green-800";
+  if (status === "pending") return "bg-yellow-100 text-yellow-800";
+  if (status === "failed") return "bg-red-100 text-red-800";
+  return "bg-gray-100 text-gray-800";
 }
 
-interface PaymentSummary {
-  totalRevenue: number;
-  totalTransactions: number;
-  pendingAmount: number;
-  refundedAmount: number;
+function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString("es-ES", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 export default function PaymentsPage() {
+  const t = useTranslations();
+  const { toast } = useToast();
+
+  // Read after mount (the server has no token): until then nobody counts as
+  // a manager, so manager-only controls appear once the role is known.
+  const [role, setRole] = useState<string | null>(null);
+  useEffect(() => {
+    setRole(getCurrentUser()?.role ?? null);
+  }, []);
+  const manager = isManager(role);
+
   const [payments, setPayments] = useState<Payment[]>([]);
   const [summary, setSummary] = useState<PaymentSummary | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<
-    "all" | "subscriptions" | "wallet"
-  >("all");
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"all" | "wallet">("all");
 
-  // Filter states
+  // Filters: sent to the server (list, cards and CSV alike).
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [methodFilter, setMethodFilter] = useState<string>("");
   const [dateFromFilter, setDateFromFilter] = useState<string>("");
   const [dateToFilter, setDateToFilter] = useState<string>("");
 
-  // Pagination states
   const [currentPage, setCurrentPage] = useState<number>(1);
-  const [pageSize, setPageSize] = useState<number>(10);
+  const [pageSize, setPageSize] = useState<number>(20);
   const [totalPages, setTotalPages] = useState<number>(1);
   const [totalPayments, setTotalPayments] = useState<number>(0);
 
-  // Sorting states
-  const [sortBy, setSortBy] = useState<string>("createdAt");
+  const [sortBy, setSortBy] = useState<SortField>("createdAt");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
-  const t = useTranslations();
+  const [refunding, setRefunding] = useState<Payment | null>(null);
+  const [exporting, setExporting] = useState(false);
 
-  useEffect(() => {
-    loadPayments();
-  }, [
-    statusFilter,
-    methodFilter,
-    dateFromFilter,
-    dateToFilter,
-    currentPage,
-    pageSize,
-    sortBy,
-    sortOrder,
-  ]);
+  const filters = useCallback(
+    (): PaymentFilters => ({
+      status: (statusFilter || undefined) as PaymentFilters["status"],
+      method: (methodFilter || undefined) as PaymentFilters["method"],
+      dateFrom: dateFromFilter || undefined,
+      dateTo: dateToFilter || undefined,
+    }),
+    [statusFilter, methodFilter, dateFromFilter, dateToFilter],
+  );
 
-  const loadPayments = async () => {
+  const loadPayments = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
     try {
-      setLoading(true);
-
-      // Get tenantId from localStorage first
-      const token = localStorage.getItem("kira_auth_token");
-      let tenantId: string | undefined;
-
-      console.log("Auth token exists:", !!token);
-
-      if (token) {
-        try {
-          // Decode JWT to get tenantId
-          const payload = JSON.parse(atob(token.split(".")[1]));
-          tenantId = payload.tenantId;
-          console.log("Decoded tenantId:", tenantId);
-        } catch (e) {
-          console.error("Failed to decode token:", e);
-        }
-      } else {
-        console.warn("No auth token found in localStorage");
-      }
-
-      // Build filter params for API
-      const paymentsParams: any = tenantId ? { tenantId } : {};
-      if (statusFilter) {
-        paymentsParams.status = statusFilter;
-      }
-      paymentsParams.page = currentPage;
-      paymentsParams.limit = pageSize;
-      if (sortBy) paymentsParams.sortBy = sortBy;
-      if (sortOrder) paymentsParams.sortOrder = sortOrder;
-      console.log("Payments API call params:", paymentsParams);
-
-      // Load payments and summary in parallel
-      const [paymentsResponse, summaryData] = await Promise.all([
-        apiClient.getPayments(paymentsParams).catch((error) => {
-          console.error("Payments API error:", error);
-          return {
-            payments: [],
-            pagination: {
-              page: currentPage,
-              limit: pageSize,
-              total: 0,
-              totalPages: 0,
-            },
-          };
-        }),
-        tenantId
-          ? apiClient.getPaymentSummary(tenantId).catch((error) => {
-              console.error("Summary API error:", error);
-              return null;
-            })
-          : Promise.resolve(null),
+      const [page, cards] = await Promise.all([
+        apiClient.getPayments({ ...filters(), page: currentPage, limit: pageSize, sortBy, sortOrder }),
+        // The cards are for owner and admin.
+        manager ? apiClient.getPaymentSummary(filters()).catch(() => null) : Promise.resolve(null),
       ]);
-
-      let paymentsArray: Payment[] = paymentsResponse.payments as Payment[];
-
-      // Extract pagination info
-      if (paymentsResponse?.pagination) {
-        setTotalPages(paymentsResponse.pagination.totalPages);
-        setTotalPayments(paymentsResponse.pagination.total);
-      }
-
-      // Apply frontend filters (method and date) that aren't supported by backend
-      if (methodFilter || dateFromFilter || dateToFilter) {
-        console.log("Applying frontend filters:", {
-          methodFilter,
-          dateFromFilter,
-          dateToFilter,
-        });
-        paymentsArray = paymentsArray.filter((payment) => {
-          // Filter by method
-          if (methodFilter && payment.method !== methodFilter) {
-            return false;
-          }
-
-          // Filter by date range (compare date strings to avoid timezone issues)
-          if (dateFromFilter || dateToFilter) {
-            const paymentDateStr = payment.createdAt.substring(0, 10); // "YYYY-MM-DD"
-            if (dateFromFilter && paymentDateStr < dateFromFilter) {
-              return false;
-            }
-            if (dateToFilter && paymentDateStr > dateToFilter) {
-              return false;
-            }
-          }
-
-          return true;
-        });
-        console.log(
-          "After frontend filtering:",
-          paymentsArray.length,
-          "payments",
-        );
-      }
-
-      console.log("Payments loaded:", paymentsArray.length, "payments");
-      if (paymentsArray.length > 0) {
-        console.log("First payment keys:", Object.keys(paymentsArray[0]));
-      }
-      console.log("Summary data loaded:", summaryData);
-
-      setPayments(paymentsArray);
-      setSummary(summaryData);
+      setPayments(page.payments ?? []);
+      setTotalPages(Math.max(1, page.pagination?.totalPages ?? 1));
+      setTotalPayments(page.pagination?.total ?? 0);
+      setSummary(cards);
     } catch (error) {
-      console.error("Failed to load payments:", error);
       setPayments([]);
       setSummary(null);
+      setTotalPages(1);
+      setTotalPayments(0);
+      setLoadError(error instanceof Error ? error.message : "No se han podido cargar los pagos.");
     } finally {
       setLoading(false);
     }
+  }, [filters, currentPage, pageSize, sortBy, sortOrder, manager]);
+
+  useEffect(() => {
+    if (activeTab === "all") void loadPayments();
+  }, [loadPayments, activeTab]);
+
+  // A filter change goes back to the first page.
+  const setFilter = (set: (v: string) => void) => (value: string) => {
+    set(value);
+    setCurrentPage(1);
   };
 
-  const formatCurrency = (
-    amount: number | undefined | null,
-    currency: string = "EUR",
-  ) => {
-    const validAmount =
-      typeof amount === "number" && !isNaN(amount) ? amount : 0;
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: currency,
-    }).format(validAmount / 100);
-  };
-
-  const formatNumber = (value: number | undefined | null) => {
-    const validValue = typeof value === "number" && !isNaN(value) ? value : 0;
-    return validValue.toString();
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "succeeded":
-      case "completed":
-      case "paid":
-        return "bg-green-100 text-green-800";
-      case "pending":
-      case "processing":
-      case "trialing":
-        return "bg-yellow-100 text-yellow-800";
-      case "failed":
-      case "cancelled":
-        return "bg-red-100 text-red-800";
-      case "refunded":
-        return "bg-gray-100 text-gray-800";
-      default:
-        return "bg-blue-100 text-blue-800";
-    }
-  };
-
-  const handleSort = (column: string) => {
+  const handleSort = (column: SortField) => {
     if (sortBy === column) {
       setSortOrder(sortOrder === "asc" ? "desc" : "asc");
     } else {
       setSortBy(column);
-      setSortOrder("asc");
+      setSortOrder(column === "createdAt" || column === "amount" ? "desc" : "asc");
     }
-    setCurrentPage(1); // Reset to first page when sorting changes
+    setCurrentPage(1);
   };
 
-  const getSortIcon = (column: string) => {
-    if (sortBy !== column) {
-      return (
-        <svg
-          className="w-4 h-4 inline-block ml-1 text-gray-400"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"
-          />
-        </svg>
-      );
+  const exportCsv = async () => {
+    setExporting(true);
+    try {
+      const { blob, filename } = await apiClient.downloadPaymentsCsv(filters());
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      toast({
+        title: "No se ha podido exportar",
+        description: error instanceof Error ? error.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setExporting(false);
     }
-    return sortOrder === "asc" ? (
-      <svg
-        className="w-4 h-4 inline-block ml-1 text-blue-600"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth={2}
-          d="M5 15l7-7 7 7"
-        />
-      </svg>
-    ) : (
-      <svg
-        className="w-4 h-4 inline-block ml-1 text-blue-600"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth={2}
-          d="M19 9l-7 7-7-7"
-        />
-      </svg>
-    );
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-      </div>
-    );
-  }
+  const sortIcon = (column: SortField) => {
+    if (sortBy !== column) return <span className="ml-1 text-gray-300">↕</span>;
+    return <span className="ml-1 text-blue-600">{sortOrder === "asc" ? "↑" : "↓"}</span>;
+  };
+
+  const header = (label: string, column?: SortField) => (
+    <th
+      className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 ${
+        column ? "cursor-pointer select-none hover:bg-gray-100" : ""
+      }`}
+      onClick={column ? () => handleSort(column) : undefined}
+    >
+      <span className="inline-flex items-center">
+        {label}
+        {column && sortIcon(column)}
+      </span>
+    </th>
+  );
+
+  const anyFilter = !!(statusFilter || methodFilter || dateFromFilter || dateToFilter);
+  const columns = manager ? 7 : 6;
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 truncate">
-            {t("payments.title")}
-          </h1>
+          <h1 className="truncate text-2xl font-bold text-gray-900">{t("payments.title")}</h1>
           <p className="text-gray-600">{t("payments.description")}</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <button
-            onClick={() => loadPayments()}
-            disabled={loading}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-blue-400 disabled:cursor-not-allowed flex items-center gap-2"
-          >
-            {loading ? (
-              <>
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                Loading...
-              </>
-            ) : (
-              <>
-                <svg
-                  className="w-4 h-4"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                  />
-                </svg>
-                Refresh
-              </>
-            )}
-          </button>
+          {manager && activeTab === "all" && (
+            <button
+              onClick={exportCsv}
+              disabled={exporting}
+              className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            >
+              {exporting ? "Exportando…" : "Exportar CSV"}
+            </button>
+          )}
+          {activeTab === "all" && (
+            <button
+              onClick={() => void loadPayments()}
+              disabled={loading}
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-400"
+            >
+              {loading ? "Cargando…" : "Actualizar"}
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Summary Cards */}
-      {summary && (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="bg-white rounded-lg shadow p-6">
-            <div className="text-sm font-medium text-gray-500">
-              {t("payments.total_revenue")}
+      {/* Summary cards (owner/admin), for the filters below */}
+      {manager && summary && activeTab === "all" && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-lg bg-white p-6 shadow">
+              <div className="text-sm font-medium text-gray-500">{t("payments.total_revenue")}</div>
+              <div className="text-2xl font-bold text-green-600">{formatEuros(summary.totalRevenue)}</div>
+              <div className="mt-1 text-xs text-gray-500">Cobrado, descontadas las devoluciones</div>
             </div>
-            <div className="text-2xl font-bold text-green-600">
-              {formatCurrency(summary.totalRevenue)}
+            <div className="rounded-lg bg-white p-6 shadow">
+              <div className="text-sm font-medium text-gray-500">{t("payments.total_transactions")}</div>
+              <div className="text-2xl font-bold text-gray-900">{summary.totalTransactions}</div>
             </div>
-          </div>
-          <div className="bg-white rounded-lg shadow p-6">
-            <div className="text-sm font-medium text-gray-500">
-              {t("payments.total_transactions")}
+            <div className="rounded-lg bg-white p-6 shadow">
+              <div className="text-sm font-medium text-gray-500">{t("payments.pending")}</div>
+              <div className="text-2xl font-bold text-yellow-600">{formatEuros(summary.pendingAmount)}</div>
             </div>
-            <div className="text-2xl font-bold text-gray-900">
-              {formatNumber(summary.totalTransactions)}
-            </div>
-          </div>
-          <div className="bg-white rounded-lg shadow p-6">
-            <div className="text-sm font-medium text-gray-500">
-              {t("payments.pending")}
-            </div>
-            <div className="text-2xl font-bold text-yellow-600">
-              {formatCurrency(summary.pendingAmount)}
+            <div className="rounded-lg bg-white p-6 shadow">
+              <div className="text-sm font-medium text-gray-500">{t("payments.refunded")}</div>
+              <div className="text-2xl font-bold text-gray-500">{formatEuros(summary.refundedAmount)}</div>
             </div>
           </div>
-          <div className="bg-white rounded-lg shadow p-6">
-            <div className="text-sm font-medium text-gray-500">
-              {t("payments.refunded")}
+          {summary.byMethod.length > 0 && (
+            <div className="flex flex-wrap gap-2 text-sm">
+              {summary.byMethod.map((m) => (
+                <span key={m.method} className="rounded-full bg-white px-3 py-1 text-gray-700 shadow-sm">
+                  {methodLabel(m.method)}: <strong>{formatEuros(m.amount)}</strong>{" "}
+                  <span className="text-gray-500">
+                    ({m.count} {m.count === 1 ? "cobro" : "cobros"})
+                  </span>
+                </span>
+              ))}
             </div>
-            <div className="text-2xl font-bold text-gray-400">
-              {formatCurrency(summary.refundedAmount)}
-            </div>
-          </div>
+          )}
         </div>
       )}
 
       {/* Tabs */}
-      <div className="border-b border-gray-200">
+      <div className="flex flex-col gap-2 border-b border-gray-200 sm:flex-row sm:items-end sm:justify-between">
         <nav className="-mb-px flex flex-wrap gap-x-8">
-          <button
-            onClick={() => setActiveTab("all")}
-            className={`py-4 px-1 border-b-2 font-medium text-sm ${
-              activeTab === "all"
-                ? "border-blue-500 text-blue-600"
-                : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-            }`}
-          >
-            {t("payments.all_payments")}
-          </button>
-          <button
-            onClick={() => setActiveTab("subscriptions")}
-            className={`py-4 px-1 border-b-2 font-medium text-sm ${
-              activeTab === "subscriptions"
-                ? "border-blue-500 text-blue-600"
-                : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-            }`}
-          >
-            {t("payments.subscriptions")}
-          </button>
-          <button
-            onClick={() => setActiveTab("wallet")}
-            className={`py-4 px-1 border-b-2 font-medium text-sm ${
-              activeTab === "wallet"
-                ? "border-blue-500 text-blue-600"
-                : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-            }`}
-          >
-            {t("payments.client_wallets")}
-          </button>
+          {(
+            [
+              ["all", t("payments.all_payments")],
+              ["wallet", t("payments.client_wallets")],
+            ] as const
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setActiveTab(key)}
+              className={`border-b-2 px-1 py-4 text-sm font-medium ${
+                activeTab === key
+                  ? "border-blue-500 text-blue-600"
+                  : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
         </nav>
+        {manager && (
+          // KiraRoom's own plan is managed in Suscripción, not here.
+          <Link href="/dashboard/billing" className="pb-3 text-sm text-blue-600 hover:underline">
+            Tu suscripción a KiraRoom →
+          </Link>
+        )}
       </div>
 
-      {/* Payments Table */}
       {activeTab === "all" && (
         <>
           {/* Filters */}
-          <div className="bg-white p-4 rounded-lg shadow mb-4">
+          <div className="mb-4 rounded-lg bg-white p-4 shadow">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              {/* Status Filter */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  {t("payments.status")}
-                </label>
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-gray-700">{t("payments.status")}</span>
                 <select
                   value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  onChange={(e) => setFilter(setStatusFilter)(e.target.value)}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
                   <option value="">{t("common.all")}</option>
-                  <option value="pending">
-                    {t("payments.status_pending")}
-                  </option>
-                  <option value="processing">
-                    {t("payments.status_processing")}
-                  </option>
-                  <option value="succeeded">
-                    {t("payments.status_succeeded")}
-                  </option>
-                  <option value="failed">{t("payments.status_failed")}</option>
-                  <option value="cancelled">
-                    {t("payments.status_cancelled")}
-                  </option>
-                  <option value="refunded">
-                    {t("payments.status_refunded")}
-                  </option>
-                  <option value="partially_refunded">
-                    {t("payments.status_partially_refunded")}
-                  </option>
+                  {Object.entries(PAYMENT_STATUS_LABELS).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
                 </select>
-              </div>
-
-              {/* Method Filter */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  {t("payments.method")}
-                </label>
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-gray-700">{t("payments.method")}</span>
                 <select
                   value={methodFilter}
-                  onChange={(e) => setMethodFilter(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  onChange={(e) => setFilter(setMethodFilter)(e.target.value)}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
                   <option value="">{t("common.all")}</option>
-                  <option value="card">
-                    {t("payments.payment_methods.card")}
-                  </option>
-                  <option value="cash">
-                    {t("payments.payment_methods.cash")}
-                  </option>
-                  <option value="bank_transfer">
-                    {t("payments.payment_methods.bank_transfer")}
-                  </option>
-                  <option value="wallet">
-                    {t("payments.payment_methods.wallet")}
-                  </option>
+                  {FILTER_METHODS.map((m) => (
+                    <option key={m} value={m}>
+                      {PAYMENT_METHOD_LABELS[m]}
+                    </option>
+                  ))}
                 </select>
-              </div>
-
-              {/* Date From Filter */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  {t("payments.date_from")}
-                </label>
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-gray-700">{t("payments.date_from")}</span>
                 <input
                   type="date"
                   value={dateFromFilter}
-                  onChange={(e) => setDateFromFilter(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  max={dateToFilter || undefined}
+                  onChange={(e) => setFilter(setDateFromFilter)(e.target.value)}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
-              </div>
-
-              {/* Date To Filter */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  {t("payments.date_to")}
-                </label>
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-gray-700">{t("payments.date_to")}</span>
                 <input
                   type="date"
                   value={dateToFilter}
-                  onChange={(e) => setDateToFilter(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  min={dateFromFilter || undefined}
+                  onChange={(e) => setFilter(setDateToFilter)(e.target.value)}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
+              </label>
+            </div>
+            {anyFilter && (
+              <div className="mt-4">
+                <button
+                  onClick={() => {
+                    setStatusFilter("");
+                    setMethodFilter("");
+                    setDateFromFilter("");
+                    setDateToFilter("");
+                    setCurrentPage(1);
+                  }}
+                  className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  {t("common.clear")}
+                </button>
               </div>
-            </div>
-
-            {/* Filter Actions */}
-            <div className="mt-4 flex gap-2">
-              <button
-                onClick={() => {
-                  setStatusFilter("");
-                  setMethodFilter("");
-                  setDateFromFilter("");
-                  setDateToFilter("");
-                }}
-                className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
-              >
-                {t("common.clear")}
-              </button>
-            </div>
+            )}
           </div>
 
-          <div className="bg-white shadow rounded-lg overflow-hidden">
+          {loadError && (
+            <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+              {loadError}
+            </div>
+          )}
+
+          <div className="overflow-hidden rounded-lg bg-white shadow">
             <div className="overflow-x-auto">
-            <table className="min-w-[720px] w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th
-                    className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
-                    onClick={() => handleSort("id")}
-                  >
-                    <div className="flex items-center">
-                      {t("payments.payment_id")}
-                      {getSortIcon("id")}
-                    </div>
-                  </th>
-                  <th
-                    className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
-                    onClick={() => handleSort("amount")}
-                  >
-                    <div className="flex items-center">
-                      {t("payments.amount")}
-                      {getSortIcon("amount")}
-                    </div>
-                  </th>
-                  <th
-                    className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
-                    onClick={() => handleSort("status")}
-                  >
-                    <div className="flex items-center">
-                      {t("payments.status")}
-                      {getSortIcon("status")}
-                    </div>
-                  </th>
-                  <th
-                    className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
-                    onClick={() => handleSort("method")}
-                  >
-                    <div className="flex items-center">
-                      {t("payments.method")}
-                      {getSortIcon("method")}
-                    </div>
-                  </th>
-                  <th
-                    className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
-                    onClick={() => handleSort("createdAt")}
-                  >
-                    <div className="flex items-center">
-                      {t("payments.date")}
-                      {getSortIcon("createdAt")}
-                    </div>
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {payments.length === 0 ? (
+              <table className="w-full min-w-[820px] divide-y divide-gray-200">
+                <thead className="bg-gray-50">
                   <tr>
-                    <td
-                      colSpan={5}
-                      className="px-6 py-4 text-center text-gray-500"
-                    >
-                      {t("payments.no_payments_found")}
-                    </td>
+                    {header(t("payments.date"), "createdAt")}
+                    {header("Clienta")}
+                    {header("Concepto")}
+                    {header(t("payments.amount"), "amount")}
+                    {header(t("payments.method"), "method")}
+                    {header(t("payments.status"), "status")}
+                    {manager && header("")}
                   </tr>
-                ) : (
-                  payments.map((payment) => (
-                    <tr key={payment.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-900">
-                        {payment.id.slice(0, 8)}...
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                        {formatCurrency(payment.amount, payment.currency)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span
-                          className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusColor(payment.status)}`}
-                        >
-                          {payment.status}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {payment.method}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {new Date(payment.createdAt).toLocaleDateString()}
+                </thead>
+                <tbody className="divide-y divide-gray-200 bg-white">
+                  {loading ? (
+                    <tr>
+                      <td colSpan={columns} className="px-4 py-8 text-center text-gray-500">
+                        Cargando…
                       </td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+                  ) : payments.length === 0 ? (
+                    <tr>
+                      <td colSpan={columns} className="px-4 py-8 text-center text-gray-500">
+                        {loadError ? "—" : t("payments.no_payments_found")}
+                      </td>
+                    </tr>
+                  ) : (
+                    payments.map((payment) => {
+                      const refunded = payment.refundedAmount ?? 0;
+                      const partly = payment.status === "paid" && refunded > 0;
+                      const canRefund = manager && refundableCents(payment) > 0;
+                      return (
+                        <tr key={payment.id} className="hover:bg-gray-50">
+                          <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-700">
+                            {formatDateTime(payment.createdAt)}
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-900">
+                            {payment.client
+                              ? `${payment.client.firstName} ${payment.client.lastName}`.trim()
+                              : "—"}
+                          </td>
+                          <td className="max-w-xs truncate px-4 py-3 text-sm text-gray-600" title={paymentConcept(payment)}>
+                            {paymentConcept(payment)}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-3 text-sm font-medium text-gray-900">
+                            {formatEuros(payment.amount)}
+                            {refunded > 0 && (
+                              <div className="text-xs font-normal text-gray-500">−{formatEuros(refunded)} devuelto</div>
+                            )}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-600">
+                            {methodLabel(payment.method)}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-3">
+                            <span
+                              className={`inline-flex rounded-full px-2 text-xs font-semibold leading-5 ${statusColor(payment.status, partly)}`}
+                            >
+                              {partly ? "Pagado · devuelto en parte" : statusLabel(payment.status)}
+                            </span>
+                          </td>
+                          {manager && (
+                            <td className="whitespace-nowrap px-4 py-3 text-right">
+                              {canRefund && (
+                                <button
+                                  onClick={() => setRefunding(payment)}
+                                  className="text-sm text-red-600 hover:text-red-800"
+                                >
+                                  Reembolsar
+                                </button>
+                              )}
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
 
-          {/* Pagination Controls */}
-          <div className="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6">
-            <div className="flex-1 flex justify-between sm:hidden">
-              <button
-                onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
-                disabled={currentPage <= 1}
-                className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {t("common.previous")}
-              </button>
-              <button
-                onClick={() =>
-                  setCurrentPage((prev) => Math.min(prev + 1, totalPages))
-                }
-                disabled={currentPage >= totalPages}
-                className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {t("common.next")}
-              </button>
-            </div>
-            <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
-              <div>
-                <p className="text-sm text-gray-700">
-                  {t("payments.showing")}{" "}
-                  <span className="font-medium">
-                    {(currentPage - 1) * pageSize + 1}
-                  </span>{" "}
-                  {}
+          {/* Pagination */}
+          <div className="flex flex-col gap-3 border-t border-gray-200 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+            <p className="text-sm text-gray-700">
+              {totalPayments === 0 ? (
+                <>0 {t("payments.results")}</>
+              ) : (
+                <>
+                  {t("payments.showing")} <span className="font-medium">{(currentPage - 1) * pageSize + 1}</span>{" "}
                   {t("payments.to")}{" "}
-                  <span className="font-medium">
-                    {Math.min(currentPage * pageSize, totalPayments)}
-                  </span>{" "}
-                  {}
-                  {t("payments.of")}{" "}
-                  <span className="font-medium">{totalPayments}</span>{" "}
-                  {t("payments.results")}
-                </p>
-              </div>
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2">
-                  <label className="text-sm text-gray-700">
-                    {t("common.show")}:
-                  </label>
-                  <select
-                    value={pageSize}
-                    onChange={(e) => {
-                      setPageSize(Number(e.target.value));
-                      setCurrentPage(1); // Reset to first page when changing page size
-                    }}
-                    className="border border-gray-300 rounded-md text-sm py-1 px-2"
-                  >
-                    <option value={10}>10</option>
-                    <option value={25}>25</option>
-                    <option value={50}>50</option>
-                    <option value={100}>100</option>
-                  </select>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() =>
-                      setCurrentPage((prev) => Math.max(prev - 1, 1))
-                    }
-                    disabled={currentPage <= 1}
-                    className="px-3 py-1 border border-gray-300 rounded-md text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {t("common.previous")}
-                  </button>
-                  <span className="text-sm text-gray-700">
-                    {currentPage} / {totalPages}
-                  </span>
-                  <button
-                    onClick={() =>
-                      setCurrentPage((prev) => Math.min(prev + 1, totalPages))
-                    }
-                    disabled={currentPage >= totalPages}
-                    className="px-3 py-1 border border-gray-300 rounded-md text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {t("common.next")}
-                  </button>
-                </div>
+                  <span className="font-medium">{Math.min(currentPage * pageSize, totalPayments)}</span>{" "}
+                  {t("payments.of")} <span className="font-medium">{totalPayments}</span> {t("payments.results")}
+                </>
+              )}
+            </p>
+            <div className="flex items-center gap-4">
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                {t("common.show")}:
+                <select
+                  value={pageSize}
+                  onChange={(e) => {
+                    setPageSize(Number(e.target.value));
+                    setCurrentPage(1);
+                  }}
+                  className="rounded-md border border-gray-300 px-2 py-1 text-sm"
+                >
+                  {[10, 20, 50, 100].map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
+                  disabled={currentPage <= 1}
+                  className="rounded-md border border-gray-300 px-3 py-1 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {t("common.previous")}
+                </button>
+                <span className="text-sm text-gray-700">
+                  {currentPage} / {totalPages}
+                </span>
+                <button
+                  onClick={() => setCurrentPage((p) => Math.min(p + 1, totalPages))}
+                  disabled={currentPage >= totalPages}
+                  className="rounded-md border border-gray-300 px-3 py-1 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {t("common.next")}
+                </button>
               </div>
             </div>
           </div>
         </>
       )}
 
-      {/* Subscriptions Tab */}
-      {activeTab === "subscriptions" && <SubscriptionPanel />}
+      {activeTab === "wallet" && <WalletPanel manager={manager} />}
 
-      {/* Wallet Tab */}
-      {activeTab === "wallet" && <WalletPanel />}
-    </div>
-  );
-}
-
-// Subscription Panel Component
-function SubscriptionPanel() {
-  const t = useTranslations();
-  const [subscription, setSubscription] = useState<any>(null);
-  const [plans, setPlans] = useState<any[]>([]);
-  const [usage, setUsage] = useState<any>(null);
-  const [invoices, setInvoices] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [checkoutLoading, setCheckoutLoading] = useState(false);
-  // Cancelling is confirmed in the panel's dialog, not window.confirm.
-  const [confirmCancel, setConfirmCancel] = useState(false);
-  const [cancelling, setCancelling] = useState(false);
-  const { toast } = useToast();
-
-  useEffect(() => {
-    loadSubscriptionData();
-  }, []);
-
-  const loadSubscriptionData = async () => {
-    try {
-      setLoading(true);
-      const [subData, plansData, usageData, invoicesData] = await Promise.all([
-        apiClient.getCurrentSubscription(),
-        apiClient.getSubscriptionPlans(),
-        apiClient.getSubscriptionUsage().catch(() => null),
-        apiClient.getSubscriptionInvoices(5).catch(() => []),
-      ]);
-      setSubscription(subData);
-      setPlans(plansData);
-      setUsage(usageData);
-      setInvoices(invoicesData);
-    } catch (error) {
-      console.error("Failed to load subscription data:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSubscribe = async (planId: string) => {
-    try {
-      setCheckoutLoading(true);
-      const { url } = await apiClient.createSubscriptionCheckout(planId);
-      window.location.href = url;
-    } catch (error) {
-      console.error("Failed to create checkout:", error);
-      toast({ title: t("payments.checkout_failed"), variant: "destructive" });
-    } finally {
-      setCheckoutLoading(false);
-    }
-  };
-
-  const performCancel = async () => {
-    setCancelling(true);
-    try {
-      await apiClient.cancelSubscription(false);
-      loadSubscriptionData();
-    } catch (error) {
-      console.error("Failed to cancel:", error);
-    } finally {
-      setCancelling(false);
-      setConfirmCancel(false);
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-6">
-      {/* Current Subscription */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h3 className="text-lg font-semibold mb-4">
-          {t("payments.current_subscription")}
-        </h3>
-        {subscription ? (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-gray-600">{t("payments.plan")}:</span>
-              <span className="font-medium capitalize">
-                {subscription.plan}
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-gray-600">{t("payments.status")}:</span>
-              <span
-                className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                  subscription.status === "active"
-                    ? "bg-green-100 text-green-800"
-                    : "bg-yellow-100 text-yellow-800"
-                }`}
-              >
-                {subscription.status}
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-gray-600">
-                {t("payments.current_period")}:
-              </span>
-              <span className="text-sm">
-                {new Date(subscription.currentPeriodStart).toLocaleDateString()}{" "}
-                - {new Date(subscription.currentPeriodEnd).toLocaleDateString()}
-              </span>
-            </div>
-            {subscription.cancelAtPeriodEnd && (
-              <div className="text-yellow-600 text-sm mt-2">
-                {t("payments.subscription_cancel_warning")}
-              </div>
-            )}
-            <button
-              onClick={() => setConfirmCancel(true)}
-              className="mt-4 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
-            >
-              {t("payments.cancel_subscription")}
-            </button>
-          </div>
-        ) : (
-          <p className="text-gray-500">
-            {t("payments.no_active_subscription")}
-          </p>
-        )}
-      </div>
-
-      {/* Usage Stats */}
-      {usage && (
-        <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-semibold mb-4">{t("payments.usage")}</h3>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <div>
-              <div className="text-sm text-gray-500">{t("payments.staff")}</div>
-              <div className="text-xl font-bold">
-                {usage.staffCount} /{" "}
-                {usage.limits?.staff || t("payments.unlimited")}
-              </div>
-            </div>
-            <div>
-              <div className="text-sm text-gray-500">
-                {t("payments.clients")}
-              </div>
-              <div className="text-xl font-bold">
-                {usage.clientCount} /{" "}
-                {usage.limits?.clients || t("payments.unlimited")}
-              </div>
-            </div>
-            <div>
-              <div className="text-sm text-gray-500">
-                {t("payments.appointments")}
-              </div>
-              <div className="text-xl font-bold">
-                {usage.appointmentsThisMonth} /{" "}
-                {usage.limits?.appointmentsPerMonth || t("payments.unlimited")}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Available Plans */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h3 className="text-lg font-semibold mb-4">
-          {t("payments.available_plans")}
-        </h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {plans.map((plan) => (
-            <div key={plan.id} className="border rounded-lg p-4">
-              <div className="flex justify-between items-start">
-                <div>
-                  <h4 className="font-semibold text-lg">{plan.name}</h4>
-                  <p className="text-2xl font-bold">
-                    €{plan.price}
-                    <span className="text-sm font-normal text-gray-500">
-                      /{plan.interval}
-                    </span>
-                  </p>
-                </div>
-              </div>
-              <ul className="mt-4 space-y-2">
-                {plan.features?.map((feature: string, idx: number) => (
-                  <li
-                    key={idx}
-                    className="text-sm text-gray-600 flex items-center"
-                  >
-                    <svg
-                      className="w-4 h-4 mr-2 text-green-500"
-                      fill="currentColor"
-                      viewBox="0 0 20 20"
-                    >
-                      <path
-                        fillRule="evenodd"
-                        d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                        clipRule="evenodd"
-                      />
-                    </svg>
-                    {feature}
-                  </li>
-                ))}
-              </ul>
-              <button
-                onClick={() => handleSubscribe(plan.id)}
-                disabled={checkoutLoading || subscription?.plan === plan.name}
-                className="mt-4 w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-              >
-                {subscription?.plan === plan.name
-                  ? t("payments.current_plan")
-                  : t("payments.subscribe")}
-              </button>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Invoices */}
-      {invoices.length > 0 && (
-        <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-semibold mb-4">
-            {t("payments.recent_invoices")}
-          </h3>
-          <div className="space-y-2">
-            {invoices.map((invoice) => (
-              <div
-                key={invoice.id}
-                className="flex items-center justify-between py-2 border-b"
-              >
-                <div>
-                  <div className="font-medium">{invoice.number}</div>
-                  <div className="text-sm text-gray-500">
-                    {new Date(invoice.date).toLocaleDateString()}
-                  </div>
-                </div>
-                <div className="flex items-center gap-4">
-                  <span className="font-medium">
-                    €{(invoice.amount / 100).toFixed(2)}
-                  </span>
-                  {invoice.hostedInvoiceUrl && (
-                    <a
-                      href={invoice.hostedInvoiceUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 hover:text-blue-800 text-sm"
-                    >
-                      View
-                    </a>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <ConfirmDialog
-        open={confirmCancel}
-        title={t("payments.confirm_cancel_subscription")}
-        description={t("payments.cancel_subscription_description")}
-        confirmLabel={t("payments.cancel_subscription")}
-        cancelLabel={t("payments.keep_subscription")}
-        destructive
-        loading={cancelling}
-        onCancel={() => setConfirmCancel(false)}
-        onConfirm={performCancel}
+      <RefundPaymentDialog
+        payment={refunding}
+        onClose={() => setRefunding(null)}
+        onRefunded={() => void loadPayments()}
       />
     </div>
   );
 }
 
-// Wallet Panel Component
-function WalletPanel() {
+interface WalletView {
+  balance: number;
+  transactions?: { id: string; type: "credit" | "debit"; amount: number; balanceAfter: number; description?: string | null; createdAt: string }[];
+}
+
+/**
+ * A client's wallet (money she left at the salon). Clients are found with
+ * the server's search; a client with no wallet yet shows 0 € and
+ * "Ingresar", whose first deposit creates it.
+ */
+function WalletPanel({ manager }: { manager: boolean }) {
   const t = useTranslations();
   const { toast } = useToast();
-  const [clients, setClients] = useState<any[]>([]);
-  const [selectedClient, setSelectedClient] = useState<string | null>(null);
-  const [wallet, setWallet] = useState<any>(null);
-  const [transactions, setTransactions] = useState<any[]>([]);
+  const [query, setQuery] = useState("");
+  const [clients, setClients] = useState<Client[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [selected, setSelected] = useState<Client | null>(null);
+  const [wallet, setWallet] = useState<WalletView | null>(null);
+  const [walletLoading, setWalletLoading] = useState(false);
   // Points live in the loyalty ledger (Fidelización), not in the wallet:
   // ClientWallet.loyaltyPoints stopped moving in #120 and showed 0 here.
   const [loyalty, setLoyalty] = useState<ClientLoyaltySummary | null>(null);
   const selectedRef = useRef<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [actionLoading, setActionLoading] = useState(false);
 
+  const [movement, setMovement] = useState<"deposit" | "withdraw" | null>(null);
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+  const [movementError, setMovementError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  // Server-side search, a moment after typing stops.
   useEffect(() => {
-    loadClients();
-  }, []);
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const page = await apiClient.getClientsPage({ page: 1, pageSize: 25, q: query, sort: "firstName", dir: "asc" });
+        if (!cancelled) setClients(page.data ?? []);
+      } catch {
+        if (!cancelled) setClients([]);
+      } finally {
+        if (!cancelled) setSearching(false);
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [query]);
 
-  const loadClients = async () => {
+  const loadWallet = async (client: Client) => {
+    setSelected(client);
+    selectedRef.current = client.id;
+    setLoyalty(null);
+    setWalletLoading(true);
+    apiClient
+      .getClientLoyalty(client.id)
+      // A late answer for a client no longer selected must not show here.
+      .then((l) => {
+        if (selectedRef.current === client.id) setLoyalty(l);
+      })
+      .catch(() => setLoyalty(null)); // no plan / no programme: nothing to show
     try {
-      setLoading(true);
-      const data = await apiClient.getClients();
-      setClients(data);
-    } catch (error) {
-      console.error("Failed to load clients:", error);
+      const data = (await apiClient.getClientWallet(client.id)) as unknown as WalletView;
+      if (selectedRef.current === client.id) setWallet(data);
+    } catch {
+      // No wallet yet: the first deposit creates it.
+      if (selectedRef.current === client.id) setWallet(null);
     } finally {
-      setLoading(false);
+      if (selectedRef.current === client.id) setWalletLoading(false);
     }
   };
 
-  const loadWallet = async (clientId: string) => {
+  const openMovement = (kind: "deposit" | "withdraw") => {
+    setMovement(kind);
+    setAmount("");
+    setNote("");
+    setMovementError(null);
+  };
+
+  const saveMovement = async () => {
+    if (!selected || !movement) return;
+    const cents = parseEurosToCents(amount);
+    if (cents === null) {
+      setMovementError("Escribe un importe en euros mayor que 0, por ejemplo 20 o 12,50.");
+      return;
+    }
+    if (movement === "withdraw" && cents > (wallet?.balance ?? 0)) {
+      setMovementError(`El saldo es ${formatEuros(wallet?.balance ?? 0)}: no se puede retirar más.`);
+      return;
+    }
+    setSaving(true);
+    setMovementError(null);
     try {
-      setSelectedClient(clientId);
-      selectedRef.current = clientId;
-      setLoyalty(null);
-      apiClient
-        .getClientLoyalty(clientId)
-        // A late answer for a client no longer selected must not show here.
-        .then((l) => {
-          if (selectedRef.current === clientId) setLoyalty(l);
-        })
-        .catch(() => setLoyalty(null)); // no plan / no programme: nothing to show
-      const walletData = await apiClient.getClientWallet(clientId);
-      setWallet(walletData);
-      // Would load transactions here too
+      if (movement === "deposit") {
+        await apiClient.depositToWallet(selected.id, cents, note.trim() || undefined);
+      } else {
+        await apiClient.withdrawFromWallet(selected.id, cents, note.trim() || undefined);
+      }
+      toast({
+        title: movement === "deposit" ? "Ingreso registrado" : "Retirada registrada",
+        description: `${formatEuros(cents)} ${movement === "deposit" ? "ingresados en" : "retirados de"} la cartera.`,
+      });
+      setMovement(null);
+      await loadWallet(selected);
     } catch (error) {
-      console.error("Failed to load wallet:", error);
-      // Wallet might not exist yet, that's okay
-      setWallet(null);
-    }
-  };
-
-  const handleDeposit = async (amount: number) => {
-    if (!selectedClient) return;
-    try {
-      setActionLoading(true);
-      await (apiClient as any).request(
-        `/payments/wallet/${selectedClient}/deposit`,
-        {
-          method: "POST",
-          body: JSON.stringify({ amount: amount * 100 }), // Convert to cents
-        },
+      setMovementError(
+        error instanceof Error
+          ? error.message
+          : movement === "deposit"
+            ? t("payments.deposit_failed")
+            : "No se pudo registrar la retirada.",
       );
-      loadWallet(selectedClient);
-    } catch (error) {
-      console.error("Failed to deposit:", error);
-      toast({ title: t("payments.deposit_failed"), variant: "destructive" });
     } finally {
-      setActionLoading(false);
+      setSaving(false);
     }
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-      </div>
-    );
-  }
+  const balance = wallet?.balance ?? 0;
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Client List */}
-        <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-semibold mb-4">
-            {t("payments.select_client")}
-          </h3>
-          <div className="space-y-2 max-h-96 overflow-y-auto">
-            {clients.map((client) => (
-              <button
-                key={client.id}
-                onClick={() => loadWallet(client.id)}
-                className={`w-full text-left p-3 rounded-lg transition-colors ${
-                  selectedClient === client.id
-                    ? "bg-blue-50 border-blue-500 border"
-                    : "hover:bg-gray-50 border border-transparent"
-                }`}
-              >
-                <div className="font-medium">
-                  {client.firstName} {client.lastName}
-                </div>
-                <div className="text-sm text-gray-500">{client.email}</div>
-              </button>
-            ))}
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+        {/* Client search */}
+        <div className="rounded-lg bg-white p-6 shadow">
+          <h3 className="mb-4 text-lg font-semibold">{t("payments.select_client")}</h3>
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Buscar por nombre, email o teléfono"
+            className="mb-3 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            aria-label="Buscar clienta"
+          />
+          <div className="max-h-96 space-y-2 overflow-y-auto">
+            {searching && clients.length === 0 ? (
+              <p className="py-4 text-center text-sm text-gray-500">Buscando…</p>
+            ) : clients.length === 0 ? (
+              <p className="py-4 text-center text-sm text-gray-500">Ninguna clienta coincide con la búsqueda.</p>
+            ) : (
+              clients.map((client) => (
+                <button
+                  key={client.id}
+                  onClick={() => void loadWallet(client)}
+                  className={`w-full rounded-lg p-3 text-left transition-colors ${
+                    selected?.id === client.id
+                      ? "border border-blue-500 bg-blue-50"
+                      : "border border-transparent hover:bg-gray-50"
+                  }`}
+                >
+                  <div className="font-medium">
+                    {client.firstName} {client.lastName}
+                  </div>
+                  <div className="text-sm text-gray-500">{client.email || client.phone || ""}</div>
+                </button>
+              ))
+            )}
           </div>
         </div>
 
-        {/* Wallet Details */}
-        <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-semibold mb-4">
-            {t("payments.wallet_details")}
-          </h3>
-          {selectedClient ? (
-            wallet ? (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+        {/* Wallet */}
+        <div className="rounded-lg bg-white p-6 shadow">
+          <h3 className="mb-4 text-lg font-semibold">{t("payments.wallet_details")}</h3>
+          {!selected ? (
+            <p className="py-8 text-center text-gray-500">{t("payments.select_client_to_view_wallet")}</p>
+          ) : walletLoading ? (
+            <p className="py-8 text-center text-gray-500">Cargando…</p>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between rounded-lg bg-gray-50 p-4">
+                <div>
                   <span className="text-gray-600">{t("payments.balance")}</span>
-                  <span className="text-2xl font-bold text-green-600">
-                    €{(wallet.balance / 100).toFixed(2)}
-                  </span>
+                  {!wallet && <div className="text-xs text-gray-500">{t("payments.no_wallet_found")}</div>}
                 </div>
-                <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                  <div>
-                    <span className="text-gray-600">
-                      {t("payments.loyalty_points")}
-                    </span>
-                    <Link
-                      href="/dashboard/loyalty"
-                      className="block text-xs text-blue-600 hover:underline"
-                    >
-                      {t("payments.manage_in_loyalty")}
-                    </Link>
-                  </div>
-                  {loyalty?.member ? (
-                    <span className="text-2xl font-bold text-blue-600">
-                      {loyalty.member.currentPoints}
-                    </span>
-                  ) : (
-                    <span className="text-sm text-gray-500">
-                      {t("payments.not_in_loyalty")}
-                    </span>
-                  )}
+                <span className="text-2xl font-bold text-green-600">{formatEuros(balance)}</span>
+              </div>
+              <div className="flex items-center justify-between rounded-lg bg-gray-50 p-4">
+                <div>
+                  <span className="text-gray-600">{t("payments.loyalty_points")}</span>
+                  <Link href="/dashboard/loyalty" className="block text-xs text-blue-600 hover:underline">
+                    {t("payments.manage_in_loyalty")}
+                  </Link>
                 </div>
+                {loyalty?.member ? (
+                  <span className="text-2xl font-bold text-blue-600">{loyalty.member.currentPoints}</span>
+                ) : (
+                  <span className="text-sm text-gray-500">{t("payments.not_in_loyalty")}</span>
+                )}
+              </div>
 
-                {/* Quick Actions */}
+              {manager && (
                 <div className="border-t pt-4">
-                  <h4 className="font-medium mb-3">
-                    {t("payments.quick_actions")}
-                  </h4>
+                  <h4 className="mb-3 font-medium">{t("payments.quick_actions")}</h4>
                   <div className="grid grid-cols-2 gap-2">
                     <button
-                      onClick={() => {
-                        const amount = prompt(
-                          t("payments.enter_deposit_amount"),
-                        );
-                        if (amount && !isNaN(parseFloat(amount))) {
-                          handleDeposit(parseFloat(amount));
-                        }
-                      }}
-                      disabled={actionLoading}
-                      className="px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
+                      onClick={() => openMovement("deposit")}
+                      className="rounded bg-green-600 px-3 py-2 text-white hover:bg-green-700"
                     >
                       {t("payments.deposit_funds")}
                     </button>
                     <button
-                      onClick={() => {
-                        const amount = prompt(
-                          t("payments.enter_withdraw_amount"),
-                        );
-                        if (amount && !isNaN(parseFloat(amount))) {
-                          handleDeposit(-parseFloat(amount));
-                        }
-                      }}
-                      disabled={actionLoading}
-                      className="px-3 py-2 bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50"
+                      onClick={() => openMovement("withdraw")}
+                      disabled={balance <= 0}
+                      className="rounded bg-red-600 px-3 py-2 text-white hover:bg-red-700 disabled:opacity-50"
                     >
                       {t("payments.withdraw_funds")}
                     </button>
                   </div>
                 </div>
-              </div>
-            ) : (
-              <div className="text-center py-8">
-                <p className="text-gray-500 mb-4">
-                  {t("payments.no_wallet_found")}
-                </p>
-                <button
-                  onClick={() => loadWallet(selectedClient)}
-                  className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-                >
-                  {t("payments.create_wallet")}
-                </button>
-              </div>
-            )
-          ) : (
-            <p className="text-gray-500 text-center py-8">
-              {t("payments.select_client_to_view_wallet")}
-            </p>
+              )}
+
+              {wallet?.transactions && wallet.transactions.length > 0 && (
+                <div className="border-t pt-4">
+                  <h4 className="mb-2 font-medium">Últimos movimientos</h4>
+                  <ul className="space-y-1 text-sm">
+                    {wallet.transactions.slice(0, 10).map((tx) => (
+                      <li key={tx.id} className="flex justify-between gap-2">
+                        <span className="truncate text-gray-600">
+                          {new Date(tx.createdAt).toLocaleDateString("es-ES")} · {tx.description || (tx.type === "credit" ? "Ingreso" : "Cobro")}
+                        </span>
+                        <span className={tx.type === "credit" ? "text-green-700" : "text-red-700"}>
+                          {tx.type === "credit" ? "+" : "−"}
+                          {formatEuros(tx.amount)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={!!movement}
+        title={movement === "withdraw" ? "Retirar de la cartera" : "Ingresar en la cartera"}
+        description={
+          <div className="space-y-3">
+            <p>
+              {selected ? `${selected.firstName} ${selected.lastName}`.trim() : ""} · saldo {formatEuros(balance)}
+            </p>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-gray-700">
+                {movement === "withdraw" ? t("payments.enter_withdraw_amount") : t("payments.enter_deposit_amount")} (€)
+              </span>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-gray-700">Nota (opcional)</span>
+              <input
+                type="text"
+                value={note}
+                maxLength={500}
+                onChange={(e) => setNote(e.target.value)}
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </label>
+            {movementError && (
+              <p role="alert" className="text-xs text-red-700">
+                {movementError}
+              </p>
+            )}
+          </div>
+        }
+        confirmLabel={movement === "withdraw" ? "Retirar" : "Ingresar"}
+        cancelLabel="Cancelar"
+        destructive={movement === "withdraw"}
+        loading={saving}
+        onCancel={() => setMovement(null)}
+        onConfirm={saveMovement}
+      />
     </div>
   );
 }

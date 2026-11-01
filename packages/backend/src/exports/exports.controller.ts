@@ -1,9 +1,10 @@
-import { Controller, Get, Req, Res, UseGuards } from "@nestjs/common";
+import { Controller, Get, Query, Req, Res, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import type { Response } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { ExportsService, ExportEntity } from "./exports.service";
 import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
+import { PaymentFiltersDto } from "../payments/payments-query";
 
 @ApiTags("exports")
 @ApiBearerAuth()
@@ -17,8 +18,14 @@ export class ExportsController {
     format: "csv" | "xlsx",
     req: any,
     res: Response,
+    filters?: PaymentFiltersDto,
   ) {
-    return this.service.stream(req.user.tenantId, entity, format, res);
+    return this.service.stream(req.user.tenantId, entity, format, res, filters);
+  }
+
+  /** The Pagos page's filters: status, method, client, dates (payments-query.ts). */
+  private paymentFilters(q: PaymentFiltersDto) {
+    return { status: q.status, method: q.method, clientId: q.clientId, dateFrom: q.dateFrom, dateTo: q.dateTo } as PaymentFiltersDto;
   }
 
   @Get("clients.csv")
@@ -45,13 +52,13 @@ export class ExportsController {
 
   @Get("payments.csv")
   @Roles(...SALON_MANAGERS)
-  paymentsCsv(@Req() req: any, @Res() res: Response) {
-    return this.handle("payments", "csv", req, res);
+  paymentsCsv(@Req() req: any, @Res() res: Response, @Query() q: PaymentFiltersDto) {
+    return this.handle("payments", "csv", req, res, this.paymentFilters(q));
   }
   @Get("payments.xlsx")
   @Roles(...SALON_MANAGERS)
-  paymentsXlsx(@Req() req: any, @Res() res: Response) {
-    return this.handle("payments", "xlsx", req, res);
+  paymentsXlsx(@Req() req: any, @Res() res: Response, @Query() q: PaymentFiltersDto) {
+    return this.handle("payments", "xlsx", req, res, this.paymentFilters(q));
   }
 
   @Get("services.csv")

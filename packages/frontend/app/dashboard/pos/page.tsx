@@ -5,6 +5,8 @@ import apiClient from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
 import { useToast, toast } from "@/components/ui/use-toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { RefundPaymentDialog } from "@/components/payments/RefundPaymentDialog";
+import { PAYMENT_STATUS_LABELS, refundableCents, statusLabel } from "@/lib/payments-format";
 import AppointmentSelector from "./components/appointment-selector";
 import DiscountEditor from "./components/discount-editor";
 import type { ClientLoyaltySummary } from "@/lib/api";
@@ -66,14 +68,10 @@ interface TodayPayment {
     | "gift_card"
     | "membership"
     | "other";
-  status:
-    | "pending"
-    | "processing"
-    | "succeeded"
-    | "failed"
-    | "cancelled"
-    | "refunded"
-    | "partially_refunded";
+  /** The server's PaymentStatus enum (a partial refund leaves it "paid"). */
+  status: "pending" | "paid" | "failed" | "refunded";
+  /** Cents given back so far. */
+  refundedAmount?: number;
   method: "card" | "cash" | "bank_transfer" | "wallet" | "gift_card";
   stripePaymentId?: string;
   stripeInvoiceId?: string;
@@ -118,9 +116,10 @@ export default function POSPage() {
   const [showClientSearch, setShowClientSearch] = useState(false);
   const [lastSale, setLastSale] = useState<any>(null);
   const [todayPayments, setTodayPayments] = useState<TodayPayment[]>([]);
-  // The payment about to be voided, confirmed in the panel's dialog.
+  // The payment being refunded ("Devolver"), in the refund dialog. It used
+  // to call DELETE /payments/:id, which only deletes pending or failed
+  // payments older than a day: voiding a sale always failed.
   const [pendingVoid, setPendingVoid] = useState<TodayPayment | null>(null);
-  const [voiding, setVoiding] = useState(false);
   const [cashTotal, setCashTotal] = useState(0);
   const [cardTotal, setCardTotal] = useState(0);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -599,34 +598,15 @@ export default function POSPage() {
     }
   };
 
-  const performDeletePayment = async () => {
-    if (!pendingVoid) return;
-    setVoiding(true);
-    try {
-      await apiClient.deletePayment(pendingVoid.id);
-      toast({
-        title: t("pos.payment_cancelled"),
-        description: t("pos.payment_cancelled_description"),
-      });
-      // Refresh both summary and payments
-      await Promise.all([
-        apiClient
-          .getPosDashboard()
-          .then(setSummary)
-          .catch(() => {}),
-        loadPayments(),
-      ]);
-    } catch (error) {
-      console.error("Failed to cancel payment:", error);
-      toast({
-        title: t("pos.payment_delete_failed"),
-        description: error instanceof Error ? error.message : undefined,
-        variant: "destructive",
-      });
-    } finally {
-      setVoiding(false);
-      setPendingVoid(null);
-    }
+  const afterRefund = async () => {
+    // Refresh both summary and payments
+    await Promise.all([
+      apiClient
+        .getPosDashboard()
+        .then(setSummary)
+        .catch(() => {}),
+      loadPayments(),
+    ]);
   };
 
   const formatCurrency = (amount: number) => {
@@ -1246,23 +1226,13 @@ export default function POSPage() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
               >
                 <option value="">{t("common.all")}</option>
-                <option value="pending">{t("payments.status_pending")}</option>
-                <option value="processing">
-                  {t("payments.status_processing")}
-                </option>
-                <option value="succeeded">
-                  {t("payments.status_succeeded")}
-                </option>
-                <option value="failed">{t("payments.status_failed")}</option>
-                <option value="cancelled">
-                  {t("payments.status_cancelled")}
-                </option>
-                <option value="refunded">
-                  {t("payments.status_refunded")}
-                </option>
-                <option value="partially_refunded">
-                  {t("payments.status_partially_refunded")}
-                </option>
+                {/* The server's statuses: the old options (succeeded,
+                    processing...) do not exist and are now a 400. */}
+                {Object.entries(PAYMENT_STATUS_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -1595,43 +1565,32 @@ export default function POSPage() {
                     <td className="px-4 py-2">
                       <span
                         className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                          payment.status === "succeeded"
+                          payment.status === "paid"
                             ? "bg-green-100 text-green-800"
-                            : payment.status === "pending" ||
-                                payment.status === "processing"
+                            : payment.status === "pending"
                               ? "bg-yellow-100 text-yellow-800"
-                              : "bg-red-100 text-red-800"
+                              : payment.status === "refunded"
+                                ? "bg-gray-100 text-gray-800"
+                                : "bg-red-100 text-red-800"
                         }`}
                       >
-                        {payment.status === "succeeded"
-                          ? t("payments.status_succeeded")
-                          : payment.status === "pending"
-                            ? t("payments.status_pending")
-                            : payment.status === "processing"
-                              ? t("payments.status_processing")
-                              : payment.status === "failed"
-                                ? t("payments.status_failed")
-                                : payment.status === "cancelled"
-                                  ? t("payments.status_cancelled")
-                                  : payment.status === "refunded"
-                                    ? t("payments.status_refunded")
-                                    : payment.status === "partially_refunded"
-                                      ? t("payments.status_partially_refunded")
-                                      : payment.status}
+                        {payment.status === "paid" && (payment.refundedAmount ?? 0) > 0
+                          ? "Pagado · devuelto en parte"
+                          : statusLabel(payment.status)}
                       </span>
                     </td>
-                    {isAdmin &&
-                      payment.status !== "cancelled" &&
-                      payment.status !== "refunded" && (
-                        <td className="px-4 py-2">
+                    {isAdmin && (
+                      <td className="px-4 py-2">
+                        {refundableCents(payment) > 0 && (
                           <button
                             onClick={() => setPendingVoid(payment)}
                             className="text-red-600 hover:text-red-800 text-sm"
                           >
-                            {t("pos.cancel")}
+                            Devolver
                           </button>
-                        </td>
-                      )}
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))
               )}
@@ -1744,20 +1703,10 @@ export default function POSPage() {
         }}
       />
 
-      <ConfirmDialog
-        open={!!pendingVoid}
-        title={
-          pendingVoid
-            ? t("pos.confirm_void_payment", { amount: formatCurrency(pendingVoid.amount / 100) })
-            : ""
-        }
-        description={t("pos.confirm_void_payment_description")}
-        confirmLabel={t("pos.void_payment")}
-        cancelLabel={t("pos.keep_payment")}
-        destructive
-        loading={voiding}
-        onCancel={() => setPendingVoid(null)}
-        onConfirm={performDeletePayment}
+      <RefundPaymentDialog
+        payment={pendingVoid}
+        onClose={() => setPendingVoid(null)}
+        onRefunded={() => void afterRefund()}
       />
     </div>
   );

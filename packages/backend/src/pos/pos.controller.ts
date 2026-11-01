@@ -103,8 +103,8 @@ export class PosController {
   @Get('order/:id')
   @ApiOperation({ summary: 'Get order/receipt details' })
   @Roles(...SALON_TEAM)
-  async getOrder(@Param('id', ParseUUIDPipe) id: string) {
-    return this.posService.getOrder(id);
+  async getOrder(@Req() req: any, @Param('id', ParseUUIDPipe) id: string) {
+    return this.posService.getOrder(req.user.tenantId, id);
   }
 
   @Get('report/daily')

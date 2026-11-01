@@ -124,10 +124,13 @@ describe("payments recompute the client's figures", () => {
       payment: {
         aggregate: jest.fn(async () => ({ _sum: { amount: 4_000 } })),
         create: jest.fn(async ({ data }: any) => ({ id: "pay1", ...data })),
-        findFirst: jest.fn(async () => ({ id: "pay1", tenantId: "t1", clientId: "c1", status: "paid", amount: 4_000 })),
+        findFirst: jest.fn(async () => ({ id: "pay1", tenantId: "t1", clientId: "c1", status: "paid", amount: 4_000, method: "cash", refunds: [], updatedAt: new Date(0) })),
         update: jest.fn(async ({ data }: any) => ({ id: "pay1", clientId: "c1", amount: 4_000, ...data })),
+        updateMany: jest.fn(async () => ({ count: 1 })),
       },
+      refund: { create: jest.fn(async ({ data }: any) => ({ id: "r1", ...data })) },
     };
+    prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
     prisma.client.findFirst = jest.fn(async () => ({ id: "c1", createdAt: CREATED }));
     return { prisma, payments: new PaymentsService(prisma) };
   }
@@ -142,7 +145,7 @@ describe("payments recompute the client's figures", () => {
 
   it("after a refund", async () => {
     const { prisma, payments } = service();
-    await payments.refundPayment("t1", "pay1");
+    await payments.refundPayment("t1", "pay1", { reason: "Error al cobrar" });
     expect(prisma.client.updateMany).toHaveBeenCalledTimes(1);
   });
 });

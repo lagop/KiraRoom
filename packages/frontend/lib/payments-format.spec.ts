@@ -1,0 +1,59 @@
+/**
+ * The Pagos page's labels and amounts (lib/payments-format.ts).
+ *
+ * Run: npx ts-node --project tsconfig.test.json --transpile-only lib/payments-format.spec.ts
+ */
+import {
+  PAYMENT_STATUS_LABELS,
+  formatEuros,
+  methodLabel,
+  parseEurosToCents,
+  paymentConcept,
+  refundableCents,
+  statusLabel,
+} from "./payments-format";
+
+let pass = 0;
+let fail = 0;
+function check(name: string, ok: boolean, detail?: unknown) {
+  if (ok) {
+    pass++;
+    console.log(`  ✓ ${name}`);
+  } else {
+    fail++;
+    console.log(`  ✗ ${name}`, detail ?? "");
+  }
+}
+const nbsp = (s: string) => s.replace(/ /g, " ");
+
+check(
+  "the status filter lists the server's four statuses, 'Pagado' included",
+  JSON.stringify(Object.keys(PAYMENT_STATUS_LABELS)) === JSON.stringify(["paid", "pending", "refunded", "failed"]),
+);
+check("statuses and methods in Spanish", statusLabel("paid") === "Pagado" && methodLabel("bank_transfer") === "Transferencia");
+check("an unknown value shows as it is", statusLabel("weird") === "weird");
+check("euros the Spanish way", nbsp(formatEuros(5000)) === "50,00 €", formatEuros(5000));
+check("thousands too", nbsp(formatEuros(123456)) === "1234,56 €" || nbsp(formatEuros(123456)) === "1.234,56 €", formatEuros(123456));
+check("no amount is 0,00 €", nbsp(formatEuros(undefined)) === "0,00 €");
+
+check("12,50 is 1250 cents", parseEurosToCents("12,50") === 1250);
+check("12.5 is 1250 cents", parseEurosToCents("12.5") === 1250);
+check("12 € is 1200 cents", parseEurosToCents("12 €") === 1200);
+check("three decimals, words, 0 and negatives are refused", [
+  parseEurosToCents("1,234"),
+  parseEurosToCents("diez"),
+  parseEurosToCents("0"),
+  parseEurosToCents("-5"),
+].every((v) => v === null));
+
+check("an appointment's payment is its service", paymentConcept({ amount: 1, status: "paid", appointment: { service: { name: "Corte" } } }) === "Corte");
+check(
+  "a till sale says so",
+  paymentConcept({ amount: 1, status: "paid", description: "POS Sale: Champú, Tinte", metadata: { posSaleId: "s" } }) ===
+    "Venta en caja: Champú, Tinte",
+);
+check("refundable: paid less refunded", refundableCents({ amount: 4000, status: "paid", refundedAmount: 1500 }) === 2500);
+check("nothing to refund on a refunded or pending payment", refundableCents({ amount: 4000, status: "refunded" }) === 0 && refundableCents({ amount: 4000, status: "pending" }) === 0);
+
+console.log(`\n${pass} passed, ${fail} failed`);
+if (fail > 0) process.exit(1);

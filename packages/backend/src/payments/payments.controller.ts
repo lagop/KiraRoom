@@ -1,4 +1,18 @@
-import { ParseUUIDPipe, Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards, Req, BadRequestException } from "@nestjs/common";
+import {
+  ParseUUIDPipe,
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Body,
+  Param,
+  Query,
+  UseGuards,
+  Req,
+  BadRequestException,
+  ForbiddenException,
+} from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
 import { PaymentsService } from "./payments.service";
 import { SubscriptionsService } from "./services/subscriptions.service";
@@ -7,7 +21,7 @@ import { StripeService } from "./services/stripe.service";
 import { ProfessionalsService } from "../professionals/professionals.service";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
-import { Roles } from "../auth/decorators/roles.decorator";
+import { Roles, SALON_MANAGERS, SALON_TEAM } from "../auth/decorators/roles.decorator";
 import {
   UpdateStripeSettingsDto,
   StripeSettingsResponseDto,
@@ -18,15 +32,32 @@ import { Public } from "../auth/decorators/public.decorator";
 import { AllowWhenReadOnly } from "../common/decorators/allow-when-read-only.decorator";
 import { ReadOnlyNoticeService } from "./read-only-notice.service";
 import {
-  AppointmentChargeDto,
   CancelSubscriptionDto,
   CreatePaymentBodyDto,
+  RefundPaymentDto,
   SubscriptionPlanDto,
   UpdateLocationCountDto,
-  UpdatePaymentStatusDto,
   WalletAmountDto,
 } from "./dto/payment-bodies.dto";
+import { PaymentFiltersDto, PaymentsListQueryDto } from "./payments-query";
 
+/**
+ * Who sees which payments:
+ *
+ * - owner / admin: every payment of the salon; only they refund, see the
+ *   summary or move wallet money.
+ * - staff: only the payments of their own appointments. A staff user with
+ *   no professional record gets a 403: they used to get every payment of
+ *   the salon (the professional filter was simply left out).
+ *
+ * Removed (no page used them, and each could rewrite the till's history):
+ * PATCH /payments/:id/status (any status, any time, completing the
+ * appointment past its consent checks), POST /payments/appointments/:id/
+ * deposit and /collect-balance ('paid' payments with no check, twice if
+ * called twice, on a cancelled visit too) and POST /payments/confirm/:id
+ * (marked a payment paid without asking Stripe). Payments are taken at the
+ * till (POS) and given back with POST /payments/:id/refund.
+ */
 @ApiTags("Payments")
 @Controller("payments")
 @UseGuards(JwtAuthGuard, RolesGuard, FeatureGuard)
@@ -41,77 +72,100 @@ export class PaymentsController {
     private readonly readOnlyNotices: ReadOnlyNoticeService,
   ) {}
 
+  /**
+   * null for owner/admin (no filter), the professional's id for staff, and
+   * a 403 for a staff user with no professional record (fail closed).
+   */
+  private async staffScope(req: any): Promise<string | null> {
+    if (req.user.role !== "staff") return null;
+    const professional = await this.professionalsService.getProfessionalByUserId(
+      req.user.id,
+      req.user.tenantId,
+    );
+    if (!professional?.id) {
+      throw new ForbiddenException(
+        "Tu usuario no tiene ficha de profesional: no puedes ver cobros. Pide al responsable del salón que te la asigne.",
+      );
+    }
+    return professional.id;
+  }
+
   // ============ PAYMENTS ============
 
   @Get()
-  @Roles("owner", "admin", "staff")
-  @ApiOperation({ summary: "Get all payments for tenant" })
-  async getPayments(
-    @Req() req: any,
-    @Query("page") page?: string,
-    @Query("limit") limit?: string,
-    @Query("status") status?: string,
-    @Query("clientId") clientId?: string,
-    @Query("sortBy") sortBy?: string,
-    @Query("sortOrder") sortOrder?: "asc" | "desc",
-    @Query("dateFrom") dateFrom?: string,
-    @Query("dateTo") dateTo?: string,
-  ) {
-    // Obtener professionalId para usuarios STAFF
-    let professionalId = null;
-    if (req.user.role === "staff") {
-      const professional =
-        await this.professionalsService.getProfessionalByUserId(
-          req.user.id,
-          req.user.tenantId,
-        );
-      professionalId = professional?.id;
-    }
-
+  @Roles(...SALON_TEAM)
+  @ApiOperation({ summary: "The salon's payments (staff: their appointments')" })
+  async getPayments(@Req() req: any, @Query() query: PaymentsListQueryDto) {
+    const professionalId = await this.staffScope(req);
     return this.paymentsService.getPayments(req.user.tenantId, professionalId, {
-      page: page ? parseInt(page) : 1,
-      limit: limit ? parseInt(limit) : 20,
-      status,
-      clientId,
-      sortBy,
-      sortOrder,
-      dateFrom,
-      dateTo,
+      page: query.page ?? 1,
+      limit: query.limit ?? 20,
+      status: query.status,
+      method: query.method,
+      clientId: query.clientId,
+      sortBy: query.sortBy,
+      sortOrder: query.sortOrder,
+      dateFrom: query.dateFrom,
+      dateTo: query.dateTo,
     });
   }
 
   @Get("today")
-  @Roles("owner", "admin", "staff")
-  @ApiOperation({ summary: "Get today's payments for POS" })
+  @Roles(...SALON_TEAM)
+  @ApiOperation({ summary: "Today's payments (the salon's day) for the till" })
   async getTodayPayments(@Req() req: any) {
-    // Obtener professionalId para usuarios STAFF
-    let professionalId = null;
-    if (req.user.role === "staff") {
-      const professional =
-        await this.professionalsService.getProfessionalByUserId(
-          req.user.id,
-          req.user.tenantId,
-        );
-      professionalId = professional?.id;
-    }
+    const professionalId = await this.staffScope(req);
+    return this.paymentsService.getTodayPayments(req.user.tenantId, professionalId);
+  }
 
-    return this.paymentsService.getTodayPayments(
-      req.user.tenantId,
-      professionalId,
-    );
+  @Get("stats/summary")
+  @Roles(...SALON_MANAGERS)
+  @ApiOperation({ summary: "The Pagos page's cards, for the list's filters" })
+  async getPaymentStats(@Req() req: any, @Query() query: PaymentFiltersDto) {
+    return this.paymentsService.getSummary(req.user.tenantId, {
+      method: query.method,
+      clientId: query.clientId,
+      dateFrom: query.dateFrom,
+      dateTo: query.dateTo,
+    });
+  }
+
+  @Get("appointment/:appointmentId")
+  @Roles(...SALON_TEAM)
+  @ApiOperation({ summary: "Get payments by appointment" })
+  async getPaymentsByAppointment(
+    @Req() req: any,
+    @Param("appointmentId", ParseUUIDPipe) appointmentId: string,
+  ) {
+    const professionalId = await this.staffScope(req);
+    return this.paymentsService.getPaymentsByAppointment(req.user.tenantId, appointmentId, professionalId);
+  }
+
+  @Get("client/:clientId")
+  @Roles(...SALON_TEAM)
+  @ApiOperation({ summary: "Get payments by client" })
+  async getPaymentsByClient(
+    @Req() req: any,
+    @Param("clientId", ParseUUIDPipe) clientId: string,
+  ) {
+    const professionalId = await this.staffScope(req);
+    // (tenantId, clientId): the two were swapped, so the history filtered on
+    // the client's id as the salon and was always empty.
+    return this.paymentsService.getPaymentsByClient(req.user.tenantId, clientId, professionalId);
   }
 
   @Get(":id")
-  @Roles("owner", "admin", "staff")
+  @Roles(...SALON_TEAM)
   @ApiOperation({ summary: "Get payment by ID" })
   async getPayment(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
-    return this.paymentsService.getPaymentById(req.user.tenantId, id);
+    const professionalId = await this.staffScope(req);
+    return this.paymentsService.getPaymentById(req.user.tenantId, id, professionalId);
   }
 
   @Delete(":id")
   @Roles("owner")
   @ApiOperation({
-    summary: "Delete/cancel a payment (Owner only - payments older than 24h)",
+    summary: "Delete a pending or failed payment (owner only, older than 24h)",
   })
   async deletePayment(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
     // Validar que el pago tenga más de 24 horas
@@ -124,7 +178,7 @@ export class PaymentsController {
 
     if (paymentAge < twentyFourHours) {
       throw new BadRequestException(
-        "Only payments older than 24 hours can be deleted",
+        "Solo se pueden borrar cobros de hace más de 24 horas.",
       );
     }
 
@@ -132,22 +186,13 @@ export class PaymentsController {
   }
 
   @Post()
-  @Roles("owner", "admin", "staff")
-  @ApiOperation({ summary: "Create a new payment" })
+  @Roles(...SALON_TEAM)
+  @ApiOperation({ summary: "Create a new (pending) payment" })
   async createPayment(
     @Req() req: any,
     @Body() body: CreatePaymentBodyDto,
   ) {
-    // Obtener professionalId para usuarios STAFF
-    let professionalId = null;
-    if (req.user.role === "staff") {
-      const professional =
-        await this.professionalsService.getProfessionalByUserId(
-          req.user.id,
-          req.user.tenantId,
-        );
-      professionalId = professional?.id;
-    }
+    const professionalId = await this.staffScope(req);
 
     return this.paymentsService.createPayment(
       req.user.tenantId,
@@ -164,70 +209,23 @@ export class PaymentsController {
     );
   }
 
-  @Patch(":id/status")
-  @Roles("owner", "admin", "staff")
-  @ApiOperation({ summary: "Update payment status" })
-  async updatePaymentStatus(
+  /**
+   * Gives back all or part of a charge taken at the salon (owner/admin):
+   * PaymentsService.refundPayment.
+   */
+  @Post(":id/refund")
+  @Roles(...SALON_MANAGERS)
+  @ApiOperation({ summary: "Refund all or part of a payment taken at the salon" })
+  async refundPayment(
     @Req() req: any,
     @Param("id", ParseUUIDPipe) id: string,
-    @Body() body: UpdatePaymentStatusDto,
+    @Body() body: RefundPaymentDto,
   ) {
-    return this.paymentsService.updatePaymentStatus(
+    return this.paymentsService.refundPayment(
       req.user.tenantId,
       id,
-      body.status,
-    );
-  }
-
-  @Get("appointment/:appointmentId")
-  @Roles("owner", "admin", "staff")
-  @ApiOperation({ summary: "Get payments by appointment" })
-  async getPaymentsByAppointment(
-    @Param("appointmentId") appointmentId: string,
-  ) {
-    return this.paymentsService.getPaymentsByAppointment(appointmentId);
-  }
-
-  @Get("client/:clientId")
-  @Roles("owner", "admin", "staff")
-  @ApiOperation({ summary: "Get payments by client" })
-  async getPaymentsByClient(
-    @Req() req: any,
-    @Param("clientId", ParseUUIDPipe) clientId: string,
-  ) {
-    // (tenantId, clientId): the two were swapped, so the history filtered on
-    // the client's id as the salon and was always empty.
-    return this.paymentsService.getPaymentsByClient(
-      req.user.tenantId,
-      clientId,
-    );
-  }
-
-  @Get("stats/summary")
-  @Roles("owner", "admin")
-  @ApiOperation({ summary: "Get payment statistics" })
-  async getPaymentStats(
-    @Req() req: any,
-    @Query("startDate") startDate?: string,
-    @Query("endDate") endDate?: string,
-  ) {
-    return this.paymentsService.getPaymentStats(
-      req.user.tenantId,
-      startDate ? new Date(startDate) : undefined,
-      endDate ? new Date(endDate) : undefined,
-    );
-  }
-
-  @Post("confirm/:paymentIntentId")
-  @Roles("owner", "admin", "staff")
-  @ApiOperation({ summary: "Confirm payment" })
-  async confirmPayment(
-    @Req() req: any,
-    @Param("paymentIntentId") paymentIntentId: string,
-  ) {
-    return this.paymentsService.confirmPayment(
-      req.user.tenantId,
-      paymentIntentId,
+      { amount: body.amount, reason: body.reason },
+      req.user.id,
     );
   }
 
@@ -361,24 +359,28 @@ export class PaymentsController {
     return this.subscriptionsService.getPublicPlans();
   }
 
+
   // ============ WALLET ============
 
   @Get("wallet/:clientId")
-  @Roles("owner", "admin", "staff")
+  @Roles(...SALON_TEAM)
   @ApiOperation({ summary: "Get client wallet" })
-  async getWallet(@Req() req: any, @Param("clientId") clientId: string) {
+  async getWallet(@Req() req: any, @Param("clientId", ParseUUIDPipe) clientId: string) {
+    await this.walletService.assertClientOfSalon(req.user.tenantId, clientId);
     return this.walletService.getWallet(req.user.tenantId, clientId);
   }
 
+  /** The first deposit creates the client's wallet. */
   @Post("wallet/:clientId/deposit")
-  @Roles("owner", "admin")
+  @Roles(...SALON_MANAGERS)
   @Feature("wallet" as any)
   @ApiOperation({ summary: "Deposit funds to client wallet" })
   async depositWallet(
     @Req() req: any,
-    @Param("clientId") clientId: string,
+    @Param("clientId", ParseUUIDPipe) clientId: string,
     @Body() body: WalletAmountDto,
   ) {
+    await this.walletService.assertClientOfSalon(req.user.tenantId, clientId);
     return this.walletService.addFunds(
       req.user.tenantId,
       clientId,
@@ -388,41 +390,45 @@ export class PaymentsController {
   }
 
   @Post("wallet/:clientId/withdraw")
-  @Roles("owner", "admin")
+  @Roles(...SALON_MANAGERS)
   @Feature("wallet" as any)
   @ApiOperation({ summary: "Withdraw funds from client wallet" })
   async withdrawWallet(
     @Req() req: any,
-    @Param("clientId") clientId: string,
+    @Param("clientId", ParseUUIDPipe) clientId: string,
     @Body() body: WalletAmountDto,
   ) {
+    await this.walletService.assertClientOfSalon(req.user.tenantId, clientId);
     return this.walletService.deductFunds(
       req.user.tenantId,
       clientId,
       Math.round(body.amount),
-      body.description,
+      body.description || "Retirada",
     );
   }
 
   @Get("wallet/:clientId/transactions")
-  @Roles("owner", "admin", "staff")
+  @Roles(...SALON_TEAM)
   @ApiOperation({ summary: "Get client wallet transactions" })
   async getWalletTransactions(
     @Req() req: any,
-    @Param("clientId") clientId: string,
+    @Param("clientId", ParseUUIDPipe) clientId: string,
     @Query("limit") limit?: string,
   ) {
+    await this.walletService.assertClientOfSalon(req.user.tenantId, clientId);
+    const n = Number.parseInt(limit ?? "", 10);
     return this.walletService.getClientTransactions(
       req.user.tenantId,
       clientId,
-      limit ? parseInt(limit) : 20,
+      Number.isFinite(n) && n > 0 ? Math.min(n, 100) : 20,
     );
   }
 
   @Get("wallet/:clientId/stats")
-  @Roles("owner", "admin", "staff")
+  @Roles(...SALON_TEAM)
   @ApiOperation({ summary: "Get client wallet stats" })
-  async getWalletStats(@Req() req: any, @Param("clientId") clientId: string) {
+  async getWalletStats(@Req() req: any, @Param("clientId", ParseUUIDPipe) clientId: string) {
+    await this.walletService.assertClientOfSalon(req.user.tenantId, clientId);
     return this.walletService.getWalletStats(req.user.tenantId, clientId);
   }
 
@@ -432,127 +438,32 @@ export class PaymentsController {
   // reached the client's real balance, and the Pagos page kept showing 0.
   // Points are adjusted in Fidelización (/loyalty/members/:id/adjust).
 
-  @Post("appointments/:appointmentId/deposit")
-  @Roles("owner", "admin", "staff")
-  @ApiOperation({ summary: "Process appointment deposit payment" })
-  async processDeposit(
-    @Req() req: any,
-    @Param("appointmentId") appointmentId: string,
-    @Body() body: AppointmentChargeDto,
-  ) {
-    const tenantId = req.user.tenantId;
-    return this.paymentsService.processDeposit(
-      tenantId,
-      appointmentId,
-      body.amount,
-      body.method,
-    );
-  }
-
-  @Post("appointments/:appointmentId/collect-balance")
-  @Roles("owner", "admin", "staff")
-  @ApiOperation({ summary: "Collect remaining balance after deposit" })
-  async collectBalance(
-    @Req() req: any,
-    @Param("appointmentId") appointmentId: string,
-    @Body() body: AppointmentChargeDto,
-  ) {
-    const tenantId = req.user.tenantId;
-    return this.paymentsService.collectBalance(
-      tenantId,
-      appointmentId,
-      body.amount,
-      body.method,
-    );
-  }
-
   // ============ STRIPE SETTINGS ============
 
+  /**
+   * The salon's own Stripe keys. The secret keys are never sent back whole:
+   * masked, plus whether one is saved (StripeService.getTenantSettings). It
+   * used to open a new database connection per request and never close it.
+   */
   @Get("stripe/settings")
-  @Roles("owner", "admin")
-  @ApiOperation({ summary: "Get Stripe configuration for tenant" })
+  @Roles(...SALON_MANAGERS)
+  @ApiOperation({ summary: "Get Stripe configuration for tenant (secret keys masked)" })
   async getStripeSettings(@Req() req: any): Promise<StripeSettingsResponseDto> {
-    const tenantId = req.user.tenantId;
-
-    // Use Prisma directly to get tenant settings
-    const { PrismaService } = await import("../common/prisma/prisma.service");
-    const prisma = new PrismaService();
-
-    const tenant = await prisma.tenant.findUnique({
-      where: { id: tenantId },
-      select: {
-        stripeMode: true,
-        stripeTestSecretKey: true,
-        stripeTestPublishableKey: true,
-        stripeLiveSecretKey: true,
-        stripeLivePublishableKey: true,
-      },
-    });
-
-    const isConfigured = !!(
-      (tenant?.stripeMode === "test" && tenant?.stripeTestSecretKey) ||
-      (tenant?.stripeMode === "live" && tenant?.stripeLiveSecretKey) ||
-      (tenant?.stripeMode === undefined && tenant?.stripeTestSecretKey)
-    );
-
-    return {
-      stripeMode: (tenant?.stripeMode as "test" | "live") || "test",
-      stripeTestSecretKey: tenant?.stripeTestSecretKey || null,
-      stripeTestPublishableKey: tenant?.stripeTestPublishableKey || null,
-      stripeLiveSecretKey: tenant?.stripeLiveSecretKey || null,
-      stripeLivePublishableKey: tenant?.stripeLivePublishableKey || null,
-      isConfigured,
-    };
+    return this.stripeService.getTenantSettings(req.user.tenantId);
   }
 
   @Patch("stripe/settings")
-  @Roles("owner", "admin")
+  @Roles(...SALON_MANAGERS)
   @ApiOperation({ summary: "Update Stripe configuration for tenant" })
   async updateStripeSettings(
     @Req() req: any,
     @Body() dto: UpdateStripeSettingsDto,
   ) {
-    const tenantId = req.user.tenantId;
-
-    const { PrismaService } = await import("../common/prisma/prisma.service");
-    const prisma = new PrismaService();
-
-    const updateData: any = {};
-
-    if (dto.stripeMode !== undefined) {
-      updateData.stripeMode = dto.stripeMode;
-    }
-    if (dto.stripeTestSecretKey !== undefined) {
-      updateData.stripeTestSecretKey = dto.stripeTestSecretKey || null;
-    }
-    if (dto.stripeTestPublishableKey !== undefined) {
-      updateData.stripeTestPublishableKey =
-        dto.stripeTestPublishableKey || null;
-    }
-    if (dto.stripeLiveSecretKey !== undefined) {
-      updateData.stripeLiveSecretKey = dto.stripeLiveSecretKey || null;
-    }
-    if (dto.stripeLivePublishableKey !== undefined) {
-      updateData.stripeLivePublishableKey =
-        dto.stripeLivePublishableKey || null;
-    }
-
-    const updated = await prisma.tenant.update({
-      where: { id: tenantId },
-      data: updateData,
-    });
-
-    // Clear cache so new settings take effect immediately
-    this.stripeService.clearTenantCache(tenantId);
-
-    return {
-      success: true,
-      stripeMode: updated.stripeMode,
-    };
+    return this.stripeService.updateTenantSettings(req.user.tenantId, dto);
   }
 
   @Get("stripe/publishable-key")
-  @Roles("owner", "admin", "staff")
+  @Roles(...SALON_TEAM)
   @ApiOperation({ summary: "Get Stripe publishable key for frontend" })
   async getStripePublishableKey(@Req() req: any) {
     const tenantId = req.user.tenantId;

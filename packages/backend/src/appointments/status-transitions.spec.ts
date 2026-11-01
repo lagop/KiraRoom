@@ -432,13 +432,14 @@ describe("a payment marking its appointment", () => {
     return {
       appointment: {
         findUnique: jest.fn(async () => ({ status })),
+        findFirst: jest.fn(async () => ({ id: "apt-1", status })),
         updateMany: jest.fn(async () => ({ count })),
         update: jest.fn(),
       },
       payment: {
-        findFirst: jest.fn(async () => ({ id: "pay-1", status: "pending", appointmentId: "apt-1" })),
-        update: jest.fn(async ({ data }: any) => ({ id: "pay-1", appointmentId: "apt-1", ...data })),
+        create: jest.fn(async ({ data }: any) => ({ id: "pay-1", ...data })),
       },
+      client: { findFirst: jest.fn(async () => ({ id: "c1" })) },
     };
   }
 
@@ -463,10 +464,14 @@ describe("a payment marking its appointment", () => {
     expect(await applyStatusIfAllowed(db(S.confirmed, 0) as any, "apt-1", S.completed)).toBe(false);
   });
 
+  // PATCH /payments/:id/status (updatePaymentStatus) is gone: a payment
+  // recorded as paid is the one path left that marks its appointment.
+  const paid = { clientId: "c1", appointmentId: "apt-1", amount: 100, method: "cash" as const, status: "paid" as const };
+
   it("PaymentsService: paying a confirmed appointment still completes it", async () => {
     const prisma = db(S.confirmed);
-    await new PaymentsService(prisma as any).updatePaymentStatus("t1", "pay-1", "paid");
-    expect(prisma.payment.update).toHaveBeenCalled();
+    await new PaymentsService(prisma as any).createPayment("t1", null, paid);
+    expect(prisma.payment.create).toHaveBeenCalled();
     expect(prisma.appointment.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ data: { status: S.completed } }),
     );
@@ -475,8 +480,8 @@ describe("a payment marking its appointment", () => {
 
   it("PaymentsService: a payment on a cancelled appointment is recorded and the appointment stays cancelled", async () => {
     const prisma = db(S.cancelled);
-    const paid = await new PaymentsService(prisma as any).updatePaymentStatus("t1", "pay-1", "paid");
-    expect(paid).toMatchObject({ status: "paid" });
+    const payment = await new PaymentsService(prisma as any).createPayment("t1", null, paid);
+    expect(payment).toMatchObject({ status: "paid" });
     expect(prisma.appointment.updateMany).not.toHaveBeenCalled();
   });
 });

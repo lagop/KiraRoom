@@ -182,7 +182,7 @@ describe("POS pricing", () => {
         items: [{ serviceId: "svc1", quantity: 1, price: 1 }],
         payments: [{ method: "cash", amount: 1 }],
       } as any),
-    ).rejects.toThrow(/less than order total/);
+    ).rejects.toThrow(/menor que el total/);
     expect(prisma.payment.create).not.toHaveBeenCalled();
   });
 

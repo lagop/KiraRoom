@@ -122,18 +122,11 @@ export class WebhooksController {
       case 'checkout.session.completed':
         await this.activatePlan(activationFromCheckout(event.data.object as Stripe.Checkout.Session));
         break;
-      case 'payment_intent.succeeded':
-        await this.handlePaymentIntentSucceeded(event.data.object as Stripe.PaymentIntent);
-        break;
-
-      case 'payment_intent.payment_failed':
-        await this.handlePaymentIntentFailed(event.data.object as Stripe.PaymentIntent);
-        break;
-
-      case 'charge.refunded':
-        await this.handleChargeRefunded(event.data.object as Stripe.Charge);
-        break;
-
+      // payment_intent.succeeded / payment_failed and charge.refunded used to
+      // mark a salon payment paid or failed by its Stripe id. These are
+      // KiraRoom's own account's events (plan billing), never a salon's
+      // client payments, and no salon payment has a PaymentIntent: they are
+      // left unhandled (default) until online client payments exist.
       case 'customer.subscription.created':
         await this.handleSubscriptionLifecycle(
           event.data.object as Stripe.Subscription,
@@ -168,61 +161,6 @@ export class WebhooksController {
     }
 
     return { received: true };
-  }
-
-  private async handlePaymentIntentSucceeded(paymentIntent: Stripe.PaymentIntent) {
-    console.log(`[WebhooksController] PaymentIntent succeeded: ${paymentIntent.id}`);
-    
-    const tenantId = paymentIntent.metadata?.tenantId;
-    const appointmentId = paymentIntent.metadata?.appointmentId;
-
-    if (tenantId && appointmentId) {
-      // Find payment by Stripe ID and update status
-      try {
-        // First find the payment by stripePaymentId
-        const payment = await this.paymentsService.getPaymentByStripeId(paymentIntent.id, tenantId);
-        if (payment) {
-          await this.paymentsService.updatePaymentStatus(
-            tenantId,
-            payment.id,
-            'paid',
-          );
-        }
-      } catch (e) {
-        console.log('[WebhooksController] Payment update error (may not exist yet):', e.message);
-      }
-    }
-  }
-
-  private async handlePaymentIntentFailed(paymentIntent: Stripe.PaymentIntent) {
-    console.log(`[WebhooksController] PaymentIntent failed: ${paymentIntent.id}`);
-    
-    const tenantId = paymentIntent.metadata?.tenantId;
-    
-    if (tenantId) {
-      try {
-        // First find the payment by stripePaymentId
-        const payment = await this.paymentsService.getPaymentByStripeId(paymentIntent.id, tenantId);
-        if (payment) {
-          await this.paymentsService.updatePaymentStatus(
-            tenantId,
-            payment.id,
-            'failed',
-          );
-        }
-      } catch (e) {
-        console.log('[WebhooksController] Payment update error (may not exist yet):', e.message);
-      }
-    }
-  }
-
-  private async handleChargeRefunded(charge: Stripe.Charge) {
-    console.log(`[WebhooksController] Charge refunded: ${charge.id}`);
-    
-    const paymentIntentId = charge.payment_intent as string;
-    if (paymentIntentId) {
-      console.log(`[WebhooksController] Processing refund for payment: ${paymentIntentId}`);
-    }
   }
 
   /**
