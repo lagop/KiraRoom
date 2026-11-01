@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { PayCommissionDto } from "./dto/commission.dto";
 import { effectiveCommissionRate, numberOrNull } from "./commission-rate";
@@ -9,6 +9,8 @@ import {
   clawedBackBySource,
   saleLineSourceKey,
 } from "./commission-clawback";
+import { commissionPeriodFilters, periodDay } from "./commission-period";
+import { safeTimeZone } from "../gift-cards/gift-card-expiry";
 
 export interface CalculateCommissionDto {
   appointmentId: string;
@@ -393,20 +395,12 @@ export class CommissionsService {
       whereClause.id = { in: dto.appointmentIds };
     }
 
-    // If date range provided
-    if (dto.startDate) {
-      whereClause.scheduledDate = {
-        ...whereClause.scheduledDate,
-        gte: dto.startDate,
-      };
-    }
-
-    if (dto.endDate) {
-      whereClause.scheduledDate = {
-        ...whereClause.scheduledDate,
-        lte: dto.endDate,
-      };
-    }
+    // If date range provided: both days included, whole salon days (commission-period.ts).
+    const period =
+      dto.startDate || dto.endDate
+        ? commissionPeriodFilters(dto.startDate, dto.endDate, await this.salonTimeZone(tenantId))
+        : {};
+    if (period.scheduledDate) whereClause.scheduledDate = period.scheduledDate;
 
     const appointments = await this.prisma.appointment.findMany({
       where: whereClause,
@@ -433,9 +427,7 @@ export class CommissionsService {
     if (lineModel?.findMany) {
       const lineWhere: any = { tenantId, professionalId, kind: "service", commissionPaid: false };
       if (dto.appointmentIds && dto.appointmentIds.length > 0) lineWhere.id = { in: dto.appointmentIds };
-      if (dto.startDate || dto.endDate) {
-        lineWhere.createdAt = { ...(dto.startDate ? { gte: dto.startDate } : {}), ...(dto.endDate ? { lte: dto.endDate } : {}) };
-      }
+      if (period.createdAt) lineWhere.createdAt = period.createdAt;
       const lines: SaleLineRow[] = await lineModel.findMany({ where: lineWhere });
       for (const l of lines) {
         const c = numberOrNull(l.commissionAmount) ?? 0;
@@ -460,9 +452,7 @@ export class CommissionsService {
     if (adjustmentModel?.findMany) {
       const adjWhere: any = { tenantId, professionalId, settled: false };
       if (dto.appointmentIds && dto.appointmentIds.length > 0) adjWhere.id = { in: dto.appointmentIds };
-      if (dto.startDate || dto.endDate) {
-        adjWhere.createdAt = { ...(dto.startDate ? { gte: dto.startDate } : {}), ...(dto.endDate ? { lte: dto.endDate } : {}) };
-      }
+      if (period.createdAt) adjWhere.createdAt = period.createdAt;
       const pending: Array<{ amount: unknown }> = await adjustmentModel.findMany({ where: adjWhere });
       for (const a of pending) totalAmount += numberOrNull(a.amount) ?? 0;
       const settled = await adjustmentModel.updateMany({
@@ -623,10 +613,11 @@ export class CommissionsService {
    */
   async getPayrollReport(
     tenantId: string,
-    startDate: Date,
-    endDate: Date,
+    startDate: Date | string,
+    endDate: Date | string,
   ): Promise<{
-    period: { start: Date; end: Date };
+    /** The calendar days asked for ("YYYY-MM-DD"), both included. */
+    period: { start: string; end: string };
     totalPayroll: number;
     professionals: {
       id: string;
@@ -640,6 +631,14 @@ export class CommissionsService {
       adjustments: PayrollAdjustment[];
     }[];
   }> {
+    // Both days included, whole salon days (commission-period.ts).
+    const start = periodDay(startDate);
+    const end = periodDay(endDate);
+    if (!start || !end) throw new BadRequestException("startDate and endDate must be dates (YYYY-MM-DD)");
+    const range = commissionPeriodFilters(start, end, await this.salonTimeZone(tenantId));
+    const scheduledDate = range.scheduledDate!;
+    const createdAt = range.createdAt!;
+
     // Get all active professionals first
     const allProfessionals = await this.prisma.professional.findMany({
       where: {
@@ -651,10 +650,7 @@ export class CommissionsService {
     const appointments = await this.prisma.appointment.findMany({
       where: {
         tenantId,
-        scheduledDate: {
-          gte: startDate,
-          lte: endDate,
-        },
+        scheduledDate,
         status: "completed",
       },
       include: {
@@ -692,7 +688,7 @@ export class CommissionsService {
     // period: what its adjustment took back is added back here and counted
     // in the period the adjustment was recorded in (commission-clawback.ts).
     const kept = await appointmentKeptShares(this.prisma, tenantId, appointments.map((a) => a.id));
-    const periodLines = await this.saleLines({ tenantId, createdAt: { gte: startDate, lte: endDate } });
+    const periodLines = await this.saleLines({ tenantId, createdAt });
     const clawedBack = await clawedBackBySource(this.prisma, tenantId, {
       appointmentIds: appointments.filter((a) => a.commissionPaid).map((a) => a.id),
       lineIds: periodLines.filter((l) => l.commissionPaid).map((l) => l.id),
@@ -731,7 +727,7 @@ export class CommissionsService {
     if (adjustmentModel?.findMany) {
       const rows: Array<{ id: string; createdAt: Date; refundId: string; professionalId: string; amount: unknown }> =
         await adjustmentModel.findMany({
-          where: { tenantId, createdAt: { gte: startDate, lte: endDate } },
+          where: { tenantId, createdAt },
           orderBy: { createdAt: "asc" },
         });
       for (const r of rows) {
@@ -750,13 +746,19 @@ export class CommissionsService {
     }));
 
     return {
-      period: { start: startDate, end: endDate },
+      period: start <= end ? { start, end } : { start: end, end: start },
       totalPayroll: roundCommission(professionals.reduce((sum, p) => sum + p.commission, 0)),
       professionals: professionals.map((p) => ({
         ...p,
         totalHours: 0, // Placeholder - would require time tracking
       })),
     };
+  }
+
+  /** The salon's timezone, for cutting periods at its midnight. */
+  private async salonTimeZone(tenantId: string): Promise<string> {
+    const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } });
+    return safeTimeZone(tenant?.timezone);
   }
 
   /**
