@@ -2572,5 +2572,106 @@
     "error": "We couldn't check the link. Please try again in a few minutes.",
     "retry": "Try again",
     "back_to_login": "Back to log in"
+  },
+  "waitList": {
+    "title": "Waiting list",
+    "subtitle": "Clients who want a slot that is full right now. When one frees up, send them a link to book it.",
+    "add": "Add to the list",
+    "dateFmt": "en-GB",
+    "errors": {
+      "forbidden": "You are not allowed to do this.",
+      "generic": "Something went wrong. Please try again."
+    },
+    "channels": {
+      "title": "Channels for notices:",
+      "unavailable": "not available",
+      "none": "Nobody can be notified right now: set up an email or SMS provider, or connect the salon's WhatsApp in Settings → WhatsApp. \"Notify\" will tell you what happened on each channel.",
+      "email": "Email",
+      "whatsapp": "WhatsApp",
+      "sms": "SMS",
+      "inApp": "Client area (old)"
+    },
+    "auto": {
+      "label": "Notify automatically when an appointment is cancelled.",
+      "help": "The first 3 clients waiting for that service whose dates fit are notified, in order of arrival, skipping anyone who cannot be reached. Only from 9:00 to 21:00: nothing is sent at night and you get a notice in the panel instead. If this is off, or nobody could be notified, you also get a notice so you can decide.",
+      "on": "Automatic notices when an appointment is cancelled: on.",
+      "off": "Automatic notices when an appointment is cancelled: off."
+    },
+    "status": {
+      "waiting": "Waiting",
+      "notified": "Notified",
+      "fulfilled": "Booked",
+      "cancelled": "Discarded",
+      "expired": "Expired"
+    },
+    "filters": {
+      "open": "Pending",
+      "fulfilled": "Booked",
+      "cancelled": "Discarded",
+      "expired": "Expired",
+      "all": "All"
+    },
+    "closed": {
+      "window_passed": "Expired: the dates they asked for have passed.",
+      "too_old": "Expired: 90 days with no notices or changes.",
+      "client_left": "Left the list from the \"No longer interested\" link in the notice.",
+      "expired": "Expired."
+    },
+    "empty": "Nobody is on the list.",
+    "entry": {
+      "service": "Service",
+      "serviceWith": "{service} with {professional}",
+      "anyDate": "any date",
+      "noEmail": "no email",
+      "noPhone": "no phone",
+      "since": "on the list since {date}",
+      "lastNotice": "last notice {date}",
+      "note": "Note: {note}"
+    },
+    "actions": {
+      "notify": "Notify",
+      "booked": "Booked",
+      "discard": "Discard",
+      "reopen": "Back on the list",
+      "remove": "Remove"
+    },
+    "remove": {
+      "title": "Remove {name} from the waiting list?",
+      "confirm": "Remove from the list"
+    },
+    "outcome": {
+      "sent": "Last notice sent",
+      "sentAuto": "Last notice sent automatically",
+      "notDelivered": "The last attempt reached no channel",
+      "channelSent": "sent",
+      "channelFailed": "failed",
+      "channelSkipped": "not sent",
+      "providerFailed": "the provider could not send it"
+    },
+    "notify": {
+      "title": "Notify {name}",
+      "help": "They will get a message with the slot you give and a link to book it on your website (if the service cannot be booked online, it asks them to call the salon). With no date, the message says there are slots available.",
+      "date": "Date",
+      "time": "Time",
+      "professional": "Professional",
+      "anyProfessional": "Anyone",
+      "cancel": "Cancel",
+      "sending": "Sending…",
+      "send": "Send notice"
+    },
+    "addDialog": {
+      "title": "Add to the waiting list",
+      "client": "Client:",
+      "change": "change",
+      "search": "Search for the client",
+      "service": "Service",
+      "anyProfessional": "Any professional",
+      "from": "From",
+      "to": "Until",
+      "notePlaceholder": "Note (optional): afternoons are better…",
+      "cancel": "Cancel",
+      "adding": "Adding…",
+      "add": "Add"
+    }
   }
 }
