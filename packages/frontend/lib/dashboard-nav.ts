@@ -79,7 +79,8 @@ export const DASHBOARD_NAV: NavEntry[] = [
     items: [
       link("pos", "/dashboard/pos", "nav.pos", "cart"),
       link("payments", "/dashboard/payments", "nav.payments", "card", { managers: true }),
-      link("invoices", "/dashboard/billing/invoices", "invoices.title", "file"),
+      // Invoices carry clients' NIFs and the takings: owner and admin (the API agrees).
+      link("invoices", "/dashboard/billing/invoices", "invoices.title", "file", { managers: true }),
       link("gift-cards", "/dashboard/gift-cards", "nav.gift_cards", "wallet", { managers: true, pro: true }),
     ],
   },

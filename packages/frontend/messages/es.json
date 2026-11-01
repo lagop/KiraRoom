@@ -65,27 +65,24 @@
   },
   "invoices": {
     "title": "Facturas",
-    "subtitle": "Emisión, firma fiscal y descarga de facturas.",
+    "subtitle": "Facturas emitidas y rectificativas: búscalas, descárgalas en PDF o envíalas por email.",
     "newInvoice": "Nueva factura",
     "filters": {
       "all": "Todas",
-      "draft": "Borrador",
       "issued": "Emitida",
-      "paid": "Pagada",
-      "cancelled": "Anulada",
-      "refunded": "Reembolsada"
+      "cancelled": "Anulada"
     },
     "fiscalStatus": {
       "not_required": "Sin fiscalidad",
-      "pending": "Pendiente de envio",
+      "pending": "Pendiente de envío",
       "accepted": "Aceptada por AEAT/diputación",
       "rejected": "Rechazada",
-      "error": "Error de envio"
+      "error": "Error de envío"
     },
     "fiscalMode": {
       "none": "Sin régimen fiscal",
       "verifactu": "Verifactu (nacional)",
-      "ticketbai": "TicketBAI (Pais Vasco)",
+      "ticketbai": "TicketBAI (País Vasco)",
       "sii_only": "SII (IVA en tiempo real)"
     },
     "actions": {
@@ -94,7 +91,11 @@
       "cancel": "Anular factura",
       "resend": "Reenviar a la AEAT",
       "create": "Crear factura",
-      "save": "Guardar"
+      "save": "Guardar",
+      "email": "Enviar por email",
+      "rectify": "Emitir rectificativa",
+      "resendError": "No se pudo reenviar la factura",
+      "downloadError": "No se pudo descargar el archivo"
     },
     "fields": {
       "series": "Serie",
@@ -132,13 +133,13 @@
       "pricesTaxLoading": "Cargando los Ajustes fiscales...",
       "pricesTaxUnavailable": "No se pudieron cargar los Ajustes fiscales: no se sabe si los precios incluyen el impuesto. Recarga la página para emitir la factura."
     },
-    "empty": "Aún no hay facturas. Crea la primera o espera a que se genere automáticamente desde un pedido pagado.",
+    "empty": "Aún no hay facturas. Se crean al completar o cobrar una cita (si tienes activada la facturación automática en Ajustes fiscales) o a mano con «Nueva factura».",
     "fiscalSettings": {
       "title": "Cumplimiento fiscal español",
       "subtitle": "Configura el régimen fiscal de tu salón.",
       "taxIdLabel": "NIF / CIF / NIE del emisor",
-      "taxIdHint": "Validado: NIF (8 digitos + letra) - NIE (X/Y/Z + 7 digitos + letra) - CIF (letra + 7 digitos)",
-      "legalName": "Razon social",
+      "taxIdHint": "Validado: NIF (8 dígitos + letra) - NIE (X/Y/Z + 7 dígitos + letra) - CIF (letra + 7 dígitos)",
+      "legalName": "Razón social",
       "mode": "Régimen",
       "defaultSeries": "Serie por defecto",
       "defaultTaxRate": "Tipo de {tax} por defecto",
@@ -165,6 +166,84 @@
       "invalidLines": "Cada línea debe tener descripción, una cantidad mayor que cero y valores válidos.",
       "recipientRequired": "El nombre del receptor es obligatorio.",
       "createFailed": "No se pudo crear la factura."
+    },
+    "status": {
+      "draft": "Borrador",
+      "issued": "Emitida",
+      "paid": "Emitida",
+      "cancelled": "Anulada",
+      "refunded": "Emitida"
+    },
+    "columns": {
+      "status": "Estado",
+      "fiscal": "Fiscal",
+      "actions": "Acciones"
+    },
+    "search": {
+      "placeholder": "Buscar por número, cliente o NIF",
+      "label": "Buscar",
+      "dateFrom": "Desde",
+      "dateTo": "Hasta",
+      "clear": "Quitar filtros"
+    },
+    "pagination": {
+      "previous": "Anterior",
+      "next": "Siguiente",
+      "page": "Página {page}",
+      "pageOf": "Página {page} de {pages}"
+    },
+    "emptyFiltered": "Ninguna factura coincide con la búsqueda o los filtros.",
+    "loadError": "No se pudieron cargar las facturas.",
+    "managersOnly": "Solo el propietario y los administradores del salón pueden ver las facturas.",
+    "emailDialog": {
+      "title": "Enviar la factura {number} por email",
+      "description": "Se envía el PDF de la factura como adjunto, en nombre del salón.",
+      "clientEmail": "Se enviará al email de la clienta: {email}",
+      "noClientEmail": "La clienta no tiene email guardado: escribe la dirección.",
+      "clientEmailUnknown": "Si lo dejas vacío, se envía al email de la clienta.",
+      "toLabel": "Enviar a otra dirección (opcional)",
+      "toPlaceholder": "nombre@ejemplo.com",
+      "invalid": "El email no es válido.",
+      "send": "Enviar",
+      "sending": "Enviando...",
+      "sent": "Factura enviada",
+      "sentTo": "Enviada a {email}.",
+      "error": "No se pudo enviar la factura"
+    },
+    "cancelDialog": {
+      "title": "¿Anular la factura {number}?",
+      "explanation": "Anula una factura solo si se emitió por error (datos equivocados, duplicada...). Si la venta existió y hay que corregirla o devolver algo, emite una factura rectificativa.",
+      "reasonLabel": "Motivo de anulación",
+      "reasonPlaceholder": "Por ejemplo: factura duplicada",
+      "reasonRequired": "Indica el motivo de la anulación.",
+      "confirm": "Anular factura",
+      "done": "Factura anulada",
+      "error": "No se pudo anular la factura"
+    },
+    "rectifyDialog": {
+      "title": "Emitir rectificativa de {number}",
+      "intro": "La rectificativa (serie R) corrige esta factura en todo o en parte. Se numera y queda enlazada a ella; la factura original no se modifica.",
+      "modeFull": "Toda la factura",
+      "modeFullHint": "Abona todo lo que queda de cada línea.",
+      "modeLines": "Algunas líneas",
+      "modeLinesHint": "Elige las líneas y cuántas unidades se devuelven.",
+      "modeAmount": "Un importe",
+      "modeAmountHint": "Un abono por diferencias, con el impuesto incluido.",
+      "unitsToReturn": "Unidades a devolver",
+      "ofQuantity": "de {quantity}",
+      "amount": "Importe a abonar ({tax} incluido)",
+      "taxRate": "Tipo de {tax}",
+      "concept": "Concepto",
+      "conceptPlaceholder": "Abono",
+      "reason": "Motivo",
+      "reasonPlaceholder": "Por ejemplo: devolución del producto, error en el precio",
+      "continue": "Continuar",
+      "cancel": "Cancelar",
+      "confirmTitle": "¿Emitir la rectificativa?",
+      "confirmDescription": "Se emitirá una factura rectificativa de {number}. Una vez emitida no se puede borrar: si te equivocas, tendrás que emitir otra.",
+      "confirm": "Emitir rectificativa",
+      "done": "Rectificativa emitida",
+      "error": "No se pudo emitir la rectificativa"
     }
   },
   "accounting": {

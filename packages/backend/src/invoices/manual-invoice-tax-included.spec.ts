@@ -44,7 +44,7 @@ describe("InvoicesController.create passes it on", () => {
   function controller() {
     const create = jest.fn(async (_input: Parameters<InvoiceService["createManual"]>[0]) => ({ id: "inv-1" }));
     const invoices = { createManual: create } as unknown as InvoiceService;
-    const ctl = new InvoicesController(invoices, {} as any, {} as any, {} as any);
+    const ctl = new InvoicesController(invoices, {} as any, {} as any, {} as any, {} as any);
     const req = { user: { tenantId: "tenant-1" } } as any;
     return { ctl, req, create };
   }
@@ -118,7 +118,7 @@ describe("a line sent without taxIncluded follows the salon (POST /invoices)", (
       $transaction: async (fn: any) => fn(tx),
     };
     const svc = new InvoiceService(prisma, new InvoiceCalculator(), {} as any);
-    const ctl = new InvoicesController(svc, {} as any, {} as any, {} as any);
+    const ctl = new InvoicesController(svc, {} as any, {} as any, {} as any, {} as any);
     return ctl
       .create({ user: { tenantId: "tenant-1" } } as any, { recipientName: "Ana Prueba", lines: [{ ...line, ...extra }] } as any)
       .then(() => invoiceCreate.mock.calls[0][0].data);

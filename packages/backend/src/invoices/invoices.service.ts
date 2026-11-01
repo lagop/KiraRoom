@@ -176,7 +176,7 @@ export class InvoiceService {
     }
     const tenant = await db.tenant.findUnique({
       where: { id: input.tenantId },
-      select: { fiscalMode: true, fiscalSettings: true, timezone: true },
+      select: { fiscalMode: true, fiscalSettings: true, timezone: true, name: true, legalName: true, taxId: true },
     });
     if (!tenant) {
       throw new NotFoundException("Tenant not found");
@@ -195,7 +195,13 @@ export class InvoiceService {
     // numbering year (invoice-numbering.ts).
     const day = dayOfIssueDate(input.issueDate ?? new Date(), tenant.timezone);
     const issueDate = issueDateOfDay(day);
-    return { computation, series, issueDate, year: Number(day.slice(0, 4)), fiscalMode: tenant.fiscalMode };
+    // The issuer as it is now, kept on the invoice: its PDF prints these even
+    // if the salon later changes its razón social or NIF.
+    const issuer = {
+      name: tenant.legalName || tenant.name,
+      taxId: tenant.taxId ?? (typeof settings.tenantNif === "string" ? settings.tenantNif : null),
+    };
+    return { computation, series, issueDate, year: Number(day.slice(0, 4)), fiscalMode: tenant.fiscalMode, issuer };
   }
 
   /** Numbers and stores the invoice, inside `tx`. */
@@ -204,7 +210,7 @@ export class InvoiceService {
     input: CreateInvoiceInput,
     prepared: Awaited<ReturnType<InvoiceService["prepare"]>>,
   ): Promise<IssuedInvoice & { series: string; number: string }> {
-    const { computation, series, issueDate, year, fiscalMode } = prepared;
+    const { computation, series, issueDate, year, fiscalMode, issuer } = prepared;
     const number = await this.allocateNumber(input.tenantId, series, year, tx);
     const invoice = await tx.invoice.create({
       data: {
@@ -228,6 +234,8 @@ export class InvoiceService {
         sourceType: input.source?.type ?? InvoiceSource.manual,
         sourceId: input.source?.id,
         notes: input.notes,
+        issuerNameAtIssue: issuer.name,
+        issuerTaxIdAtIssue: issuer.taxId,
         lines: {
           create: computation.lines.map((l) => ({
             description: l.description,

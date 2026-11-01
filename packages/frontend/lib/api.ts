@@ -1895,14 +1895,32 @@ export interface ApiClientInterface {
     }>;
     notes?: string;
   }): Promise<{ id: string }>;
+  /** A page of GET /invoices (lib/invoice-list.ts builds the query and reads the answer). */
+  listInvoicesPage(query: Record<string, string>): Promise<unknown>;
   cancelInvoice(id: string, reason: string): Promise<Invoice>;
+  /** A rectificativa of the invoice (series R): the whole of it without lines. */
+  rectifyInvoice(
+    id: string,
+    body: {
+      reason: string;
+      lines?: Array<
+        | { originalLineId: string; quantity: number }
+        | { description: string; quantity: number; unitPriceCents: number; taxRate: number; taxIncluded: boolean }
+      >;
+    },
+  ): Promise<{ id: string }>;
+  /** Emails the invoice's PDF to its client, or to `to`. */
+  emailInvoice(id: string, to?: string): Promise<{ sent: boolean; to: string }>;
+  /**
+   * The invoice's PDF or fiscal XML, fetched with the session's token. The
+   * API's file name is not readable cross-origin: `filename` names the file.
+   */
+  downloadInvoiceFile(id: string, kind: "pdf" | "xml", filename?: string): Promise<{ blob: Blob; filename: string }>;
   resendFiscal(id: string): Promise<Invoice>;
   generateInvoiceFromOrder(orderId: string): Promise<{ id: string } | null>;
   generateInvoiceFromAppointment(
     appointmentId: string,
   ): Promise<{ id: string } | null>;
-  getInvoicePdfUrl(id: string): string;
-  getInvoiceXmlUrl(id: string): string;
 
   // P2A â€” Fiscal settings
   getFiscalSettings(): Promise<FiscalSettings>;
@@ -5143,6 +5161,42 @@ class ApiClient implements ApiClientInterface {
       body: JSON.stringify(input),
     });
   }
+  async listInvoicesPage(query: Record<string, string>): Promise<unknown> {
+    const qs = new URLSearchParams(query).toString();
+    return this.request(`/invoices${qs ? `?${qs}` : ""}`);
+  }
+  async rectifyInvoice(
+    id: string,
+    body: {
+      reason: string;
+      lines?: Array<
+        | { originalLineId: string; quantity: number }
+        | { description: string; quantity: number; unitPriceCents: number; taxRate: number; taxIncluded: boolean }
+      >;
+    },
+  ): Promise<{ id: string }> {
+    return this.request<{ id: string }>(`/invoices/${id}/rectify`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+  async emailInvoice(id: string, to?: string): Promise<{ sent: boolean; to: string }> {
+    return this.request<{ sent: boolean; to: string }>(`/invoices/${id}/email`, {
+      method: "POST",
+      body: JSON.stringify(to ? { to } : {}),
+    });
+  }
+  /**
+   * A plain link to /invoices/:id/pdf carried no token (it lives in
+   * localStorage, the API reads the Authorization header) and got 401.
+   */
+  async downloadInvoiceFile(
+    id: string,
+    kind: "pdf" | "xml",
+    filename?: string,
+  ): Promise<{ blob: Blob; filename: string }> {
+    return this.downloadWithToken(`${API_BASE_URL}/invoices/${id}/${kind}`, filename ?? `factura.${kind}`);
+  }
   async cancelInvoice(id: string, reason: string): Promise<Invoice> {
     return this.request<Invoice>(`/invoices/${id}/cancel`, {
       method: "POST",
@@ -5167,12 +5221,6 @@ class ApiClient implements ApiClientInterface {
       `/invoices/from-appointment/${appointmentId}`,
       { method: "POST" },
     );
-  }
-  getInvoicePdfUrl(id: string): string {
-    return `${API_BASE_URL}/invoices/${id}/pdf`;
-  }
-  getInvoiceXmlUrl(id: string): string {
-    return `${API_BASE_URL}/invoices/${id}/xml`;
   }
 
   // ---- P2A Fiscal settings ----
@@ -5268,7 +5316,13 @@ class ApiClient implements ApiClientInterface {
     format: "csv" | "xlsx",
   ): Promise<{ blob: Blob; filename: string }> {
     const qs = new URLSearchParams({ from, to, format });
-    const url = `${API_BASE_URL}/accounting/export/facturas-emitidas?${qs}`;
+    return this.downloadWithToken(
+      `${API_BASE_URL}/accounting/export/facturas-emitidas?${qs}`,
+      `facturas-emitidas_${from}_${to}.${format}`,
+    );
+  }
+  /** GET a file with the bearer token, refreshing the session once on a 401 like request() does. */
+  private async downloadWithToken(url: string, fallbackName: string): Promise<{ blob: Blob; filename: string }> {
     const get = () => {
       const token = getToken();
       return fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
@@ -5284,8 +5338,7 @@ class ApiClient implements ApiClientInterface {
       );
     }
     const disposition = res.headers.get("Content-Disposition") ?? "";
-    const filename =
-      /filename="([^"]+)"/.exec(disposition)?.[1] ?? `facturas-emitidas_${from}_${to}.${format}`;
+    const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? fallbackName;
     return { blob: await res.blob(), filename };
   }
   async listAccountingLogs(limit = 100): Promise<AccountingSyncLog[]> {

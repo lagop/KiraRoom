@@ -4,7 +4,7 @@ import { InvoiceCalculator } from "../invoice-calculator.service";
 /**
  * The invoice PDF for a salon whose prices include the tax and for one that
  * adds it on top. Either way the unit price column is the base, the line
- * total includes the tax, and Subtotal + tax = Total. The tax is named after
+ * total includes the tax, and Base imponible + tax = Total. The tax is named after
  * the salon's regime (IGIC in the Canaries), not always IVA.
  */
 const calc = new InvoiceCalculator();
@@ -43,8 +43,8 @@ describe("invoice PDF template", () => {
     const html = htmlFor(true, 21, "IVA");
     expect(html).toContain('<td class="price">24,79 €</td>');
     expect(html).toContain('<td class="total">30,00 €</td>');
-    expect(html).toContain('<td class="label">Subtotal</td><td class="num">24,79 €</td>');
-    expect(html).toContain('<td class="label">IVA 21%</td><td class="num">5,21 €</td>');
+    expect(html).toContain('<td class="label">Base imponible</td><td class="num">24,79 €</td>');
+    expect(html).toContain('<td class="label">IVA 21 %</td><td class="num">5,21 €</td>');
     expect(html).toContain('<tr class="total"><td class="label">Total</td><td class="num">30,00 €</td>');
   });
 
@@ -52,15 +52,15 @@ describe("invoice PDF template", () => {
     const html = htmlFor(false, 21, "IVA");
     expect(html).toContain('<td class="price">30,00 €</td>');
     expect(html).toContain('<td class="total">36,30 €</td>');
-    expect(html).toContain('<td class="label">Subtotal</td><td class="num">30,00 €</td>');
-    expect(html).toContain('<td class="label">IVA 21%</td><td class="num">6,30 €</td>');
+    expect(html).toContain('<td class="label">Base imponible</td><td class="num">30,00 €</td>');
+    expect(html).toContain('<td class="label">IVA 21 %</td><td class="num">6,30 €</td>');
     expect(html).toContain('<tr class="total"><td class="label">Total</td><td class="num">36,30 €</td>');
   });
 
   it("a Canarian salon's invoice says IGIC", () => {
     const html = htmlFor(true, 7, "IGIC");
     expect(html).toContain('<th class="tax">IGIC</th>');
-    expect(html).toContain('<td class="label">IGIC 7%</td><td class="num">1,96 €</td>');
+    expect(html).toContain('<td class="label">IGIC 7 %</td><td class="num">1,96 €</td>');
     expect(html).not.toContain("IVA");
   });
 
