@@ -9,6 +9,7 @@ import {
 } from "@kira/shared";
 import { aggregateModelo303 } from "./modelo-303";
 import { aggregateModelo420 } from "./modelo-420";
+import { aggregateTaxBreakdown } from "../invoice-calculator.service";
 
 /**
  * Spanish quarterly tax declarations (Modelo 303, Modelo 420 + Modelo 130).
@@ -76,7 +77,7 @@ export class TaxReportsService {
 
     const { start, end } = TaxReportsService.quarterRange(year, quarter);
 
-    const invoices = await this.prisma.invoice.findMany({
+    const rows = await this.prisma.invoice.findMany({
       where: {
         tenantId,
         status: { in: ["issued", "paid", "refunded"] as any },
@@ -87,8 +88,21 @@ export class TaxReportsService {
         series: true,
         totalCents: true,
         taxBreakdown: true,
+        lines: { select: { taxRate: true, taxCents: true, totalCents: true } },
       },
     });
+    // The breakdown by rate is worked out again from the invoice's lines
+    // rather than read from the one stored on it: invoices issued before
+    // rates were kept to two decimals have IGIC's 9,5 % stored as 10 % there
+    // (their lines always had 9,5). Stored invoices are not rewritten.
+    const invoices = rows.map(({ lines, ...inv }) => ({
+      ...inv,
+      taxBreakdown: lines?.length
+        ? aggregateTaxBreakdown(
+            lines.map((l) => ({ taxRate: Number(l.taxRate), taxCents: l.taxCents, totalCents: l.totalCents })),
+          )
+        : inv.taxBreakdown,
+    }));
 
     // Exhaustive on purpose. The old ternary sent anything that was not a 303
     // to the 130 aggregator, so adding modelo_420 to the enum would have
@@ -198,7 +212,7 @@ export class TaxReportsService {
    * admin can review.
    */
   private aggregateModelo130(
-    invoices: Array<Pick<Invoice, "totalCents" | "taxBreakdown">>,
+    invoices: Array<Pick<Invoice, "totalCents">>,
   ): Record<string, number> {
     let totalIngresos = 0;
     for (const inv of invoices) totalIngresos += inv.totalCents;

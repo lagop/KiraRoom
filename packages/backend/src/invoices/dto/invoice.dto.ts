@@ -11,6 +11,8 @@ import {
   IsInt,
   IsNumber,
   IsOptional,
+  IsPositive,
+  Matches,
   IsNotEmpty,
   IsString,
   Max,
@@ -27,9 +29,10 @@ export class CreateInvoiceLineDto {
   @IsString()
   description!: string;
 
-  @ApiProperty({ minimum: 0 })
-  @IsNumber()
-  @Min(0)
+  @ApiProperty({ minimum: 0, exclusiveMinimum: true })
+  @IsNumber({ maxDecimalPlaces: 3 }, { message: "La cantidad tiene que ser un número." })
+  @IsPositive({ message: "La cantidad tiene que ser mayor que cero." })
+  @Max(100_000)
   quantity!: number;
 
   @ApiProperty({ description: "Unit price in cents" })
@@ -43,9 +46,11 @@ export class CreateInvoiceLineDto {
   @Min(0)
   discountPct?: number;
 
-  @ApiProperty({ description: "Tax rate percent (e.g. 21 for 21% IVA)" })
-  @IsNumber()
+  /** One of the salon's regime (TAX_REGIME_RATES), checked by InvoiceService.createManual. */
+  @ApiProperty({ description: "Tax rate percent (e.g. 21 for 21% IVA, 9.5 for IGIC)" })
+  @IsNumber({ maxDecimalPlaces: 2 }, { message: "El tipo de impuesto tiene que ser un número." })
   @Min(0)
+  @Max(100)
   taxRate!: number;
 
   @ApiPropertyOptional()
@@ -77,14 +82,18 @@ export class CreateInvoiceLineDto {
 }
 
 export class CreateInvoiceDto {
+  /** Not R (rectificativas) nor T (tickets): refused by InvoiceService.createManual. */
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(10, { message: "La serie no puede tener más de 10 caracteres." })
+  @Matches(/^[A-Za-z0-9]*$/, { message: "La serie solo puede tener letras y números." })
   series?: string;
 
+  /** Today (the salon's) or left out: an invoice is dated the day it is issued. */
   @ApiPropertyOptional()
   @IsOptional()
-  @IsDateString()
+  @IsDateString({}, { message: "La fecha de expedición no es válida." })
   issueDate?: string;
 
   @ApiPropertyOptional({ enum: ["client", "tenant"] })
@@ -112,6 +121,8 @@ export class CreateInvoiceDto {
 
   @ApiProperty({ type: [CreateInvoiceLineDto] })
   @IsArray()
+  @ArrayMinSize(1, { message: "La factura necesita al menos una línea." })
+  @ArrayMaxSize(200)
   @ValidateNested({ each: true })
   @Type(() => CreateInvoiceLineDto)
   lines!: CreateInvoiceLineDto[];
@@ -122,32 +133,83 @@ export class CreateInvoiceDto {
   notes?: string;
 }
 
+/** Statuses an invoice really has: issued, or cancelled (anulada). */
+export const LISTED_INVOICE_STATUSES = ["issued", "cancelled"] as const;
+
+/**
+ * Query of `GET /invoices`. Query strings are strings: numbers are
+ * converted (@Type) before they are checked. Newest first, a page at a time.
+ */
 export class ListInvoicesQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(10)
   series?: string;
 
-  @ApiPropertyOptional({ enum: ["draft", "issued", "paid", "cancelled", "refunded"] })
+  @ApiPropertyOptional({ enum: LISTED_INVOICE_STATUSES })
+  @IsOptional()
+  @IsIn(LISTED_INVOICE_STATUSES as unknown as string[], {
+    message: 'El estado tiene que ser "issued" (emitida) o "cancelled" (anulada).',
+  })
+  status?: (typeof LISTED_INVOICE_STATUSES)[number];
+
+  /** A number ("A2027-000012", "12"), a client's name or a NIF. */
+  @ApiPropertyOptional()
   @IsOptional()
   @IsString()
-  status?: string;
+  @MaxLength(100, { message: "La búsqueda no puede tener más de 100 caracteres." })
+  q?: string;
 
+  /** First day (YYYY-MM-DD), included. */
   @ApiPropertyOptional()
   @IsOptional()
-  @IsDateString()
+  @IsDateString({}, { message: "La fecha inicial no es válida." })
+  dateFrom?: string;
+
+  /** Last day (YYYY-MM-DD), included. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString({}, { message: "La fecha final no es válida." })
+  dateTo?: string;
+
+  /** Older name of dateFrom. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString({}, { message: "La fecha inicial no es válida." })
   fromDate?: string;
 
+  /** Older name of dateTo. */
   @ApiPropertyOptional()
   @IsOptional()
-  @IsDateString()
+  @IsDateString({}, { message: "La fecha final no es válida." })
   toDate?: string;
 
-  @ApiPropertyOptional({ default: 50 })
+  @ApiPropertyOptional({ default: 50, maximum: 100 })
   @IsOptional()
-  @IsInt()
-  @Min(1)
+  @Type(() => Number)
+  @IsInt({ message: "El límite tiene que ser un número entero." })
+  @Min(1, { message: "El límite tiene que ser al menos 1." })
+  @Max(100, { message: "El límite no puede pasar de 100." })
   limit?: number;
+
+  /** Invoices to skip; takes precedence over page. */
+  @ApiPropertyOptional({ default: 0 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt({ message: "El desplazamiento tiene que ser un número entero." })
+  @Min(0)
+  @Max(1_000_000)
+  offset?: number;
+
+  /** 1-based page of `limit` invoices. */
+  @ApiPropertyOptional({ default: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt({ message: "La página tiene que ser un número entero." })
+  @Min(1, { message: "La página empieza en 1." })
+  @Max(100_000)
+  page?: number;
 }
 
 export class UpdateTenantFiscalSettingsDto {
@@ -215,7 +277,9 @@ export class UpdateTenantFiscalSettingsDto {
 
 export class CancelInvoiceDto {
   @ApiProperty()
-  @IsString()
+  @IsString({ message: "Indica el motivo de la anulación." })
+  @IsNotEmpty({ message: "Indica el motivo de la anulación." })
+  @MaxLength(500, { message: "El motivo no puede tener más de 500 caracteres." })
   reason!: string;
 }
 /**

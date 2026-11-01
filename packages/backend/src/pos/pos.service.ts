@@ -636,10 +636,14 @@ export class PosService {
     tenantId: string,
     discounts: Map<string, number>,
   ): Promise<Map<string, InvoiceToRectify>> {
-    const invoiced = await this.prisma.invoice.findMany({
+    const found = await this.prisma.invoice.findMany({
       where: { tenantId, sourceType: 'appointment', sourceId: { in: [...discounts.keys()] } },
       select: { id: true, sourceId: true, status: true, series: true, number: true },
     });
+    // An appointment whose invoice was cancelled can be invoiced again: its
+    // live invoice is the one, the cancelled ones only count when it has none.
+    const live = new Set(found.filter((i) => i.status !== 'cancelled').map((i) => i.sourceId));
+    const invoiced = found.filter((i) => i.status !== 'cancelled' || !live.has(i.sourceId));
     const out = new Map<string, InvoiceToRectify>();
     for (const invoice of invoiced) {
       const appointmentId = invoice.sourceId as string;

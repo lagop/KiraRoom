@@ -18,8 +18,10 @@
  * requires the prices shown to consumers to include taxes.
  */
 
-/** IVA general rate, used when the salon set no defaultTaxRate. */
-export const FALLBACK_TAX_RATE = 21;
+import { TAX_REGIME_DEFAULT_RATE, taxRegimeOf } from "@kira/shared";
+
+/** IVA general rate: the fallback of a salon with no defaultTaxRate and no regime. */
+export const FALLBACK_TAX_RATE = TAX_REGIME_DEFAULT_RATE.iva;
 
 /**
  * The fiscal settings a salon is created with: the column default
@@ -42,10 +44,16 @@ export function pricesIncludeTaxOf(fiscalSettings: unknown): boolean {
   return (fiscalSettings as { pricesIncludeTax?: unknown } | null)?.pricesIncludeTax === true;
 }
 
-/** The salon's `fiscalSettings.defaultTaxRate` (7 for an IGIC salon), else 21. */
+/**
+ * The salon's `fiscalSettings.defaultTaxRate`. None set: its regime's
+ * general rate (IVA 21, IGIC 7, IPSI 10), what the panel's invoice form
+ * offers too. It used to be 21 whatever the regime, so a Canarian salon with
+ * no explicit rate had its appointments invoiced at 21 % "IGIC".
+ */
 export function salonTaxRate(fiscalSettings: unknown): number {
   const rate = (fiscalSettings as { defaultTaxRate?: unknown } | null)?.defaultTaxRate;
-  return typeof rate === "number" && Number.isFinite(rate) && rate >= 0 ? rate : FALLBACK_TAX_RATE;
+  if (typeof rate === "number" && Number.isFinite(rate) && rate >= 0) return rate;
+  return TAX_REGIME_DEFAULT_RATE[taxRegimeOf(fiscalSettings)];
 }
 
 /**

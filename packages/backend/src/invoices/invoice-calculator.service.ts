@@ -208,15 +208,21 @@ function roundHalfEven(value: number): number {
 }
 
 /**
- * Group line totals by taxRate. Rates are normalised to whole percent so
- * 21.0 and 21.00001 do not produce two separate buckets.
+ * A tax rate as a breakdown key: to two decimals, so 21.0 and 21.00001 do
+ * not produce two buckets while IGIC's 9,5 % stays 9,5 (it used to be
+ * rounded to a whole percent and stored as 10 %).
  */
-function aggregateTaxBreakdown(
-  lines: ComputedInvoiceLine[],
+export function breakdownRate(rate: number): number {
+  return Math.round(Number(rate) * 100) / 100;
+}
+
+/** Group line amounts by tax rate (breakdownRate), highest rate first. */
+export function aggregateTaxBreakdown(
+  lines: Array<{ taxRate: number; taxCents: number; totalCents: number }>,
 ): TaxBreakdownEntry[] {
   const buckets = new Map<number, TaxBreakdownEntry>();
   for (const l of lines) {
-    const rate = Math.round(l.taxRate);
+    const rate = breakdownRate(l.taxRate);
     const baseCents = l.totalCents - l.taxCents;
     const entry = buckets.get(rate) ?? { rate, baseCents: 0, taxCents: 0 };
     entry.baseCents += baseCents;
