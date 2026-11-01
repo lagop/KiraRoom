@@ -6,6 +6,12 @@ import { useTranslations } from "@/lib/use-translation";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/components/ui/use-toast";
 import {
+  commissionShare,
+  defaultPayrollRange,
+  formatCommissionCents,
+  formatCommissionDay,
+} from "@/lib/commissions-format";
+import {
   DollarSign,
   TrendingUp,
   Calendar,
@@ -74,12 +80,8 @@ export default function CommissionsPage() {
   // confirmed in the panel's dialog.
   const [pendingPay, setPendingPay] = useState<CommissionSummary | null>(null);
   const { toast } = useToast();
-  const [dateRange, setDateRange] = useState({
-    startDate: new Date(new Date().getFullYear(), new Date().getMonth(), 1)
-      .toISOString()
-      .split("T")[0],
-    endDate: new Date().toISOString().split("T")[0],
-  });
+  // Both days included (the server counts the whole last day, salon time).
+  const [dateRange, setDateRange] = useState(() => defaultPayrollRange());
 
   useEffect(() => {
     loadCommissions();
@@ -133,20 +135,9 @@ export default function CommissionsPage() {
     }
   };
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: "EUR",
-    }).format(amount);
-  };
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
-  };
+  // The API returns cents (lib/commissions-format.ts).
+  const formatCurrency = formatCommissionCents;
+  const formatDate = formatCommissionDay;
 
   const getTotalPending = () => {
     return commissions.reduce((sum, c) => sum + c.pendingCommission, 0);
@@ -173,11 +164,9 @@ export default function CommissionsPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 truncate">
-            Staff Commissions
+            {t("commissions.page_title")}
           </h1>
-          <p className="text-gray-600">
-            Track and manage staff commission payments
-          </p>
+          <p className="text-gray-600">{t("commissions.page_subtitle")}</p>
         </div>
       </div>
 
@@ -509,13 +498,7 @@ export default function CommissionsPage() {
                             {formatCurrency(prof.commission)}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right">
-                            {prof.totalSales > 0
-                              ? (
-                                  (prof.commission / prof.totalSales) *
-                                  100
-                                ).toFixed(1)
-                              : 0}
-                            %
+                            {commissionShare(prof.commission, prof.totalSales)}
                           </td>
                         </tr>
                       ))}

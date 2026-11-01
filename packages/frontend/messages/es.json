@@ -1905,6 +1905,8 @@
   },
   "category": "Categoría",
   "commissions": {
+    "page_title": "Comisiones del equipo",
+    "page_subtitle": "Sigue y liquida las comisiones de tu equipo",
     "amount": "Importe",
     "appointments": "Citas",
     "client": "Clienta",

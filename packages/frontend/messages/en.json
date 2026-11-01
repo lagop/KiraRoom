@@ -1905,6 +1905,8 @@
   },
   "category": "Category",
   "commissions": {
+    "page_title": "Staff commissions",
+    "page_subtitle": "Track and manage staff commission payments",
     "amount": "Amount",
     "appointments": "Appointments",
     "client": "Client",
