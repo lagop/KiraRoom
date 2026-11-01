@@ -3,6 +3,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { WaitListService, NotifyResult } from '../../wait-list/wait-list.service';
 import { AppointmentsService } from '../../appointments/appointments.service';
 import { canTransition, transitionRefusal } from '../../appointments/appointment-status';
+import { VISIT_ROW_ORDER, minutesUntilFree } from '../../appointments/visit-totals';
 import { clientsWhoAcceptedWhatsAppMarketing } from '../../consent/marketing-consent';
 import { normalizePhone } from '../../common/phone';
 import { STANDARD_TEMPLATES } from '../../whatsapp/whatsapp-templates';
@@ -581,15 +582,22 @@ export class SalonCopilotToolsService {
         status: true,
         client: { select: { id: true, firstName: true } },
         professional: { select: { id: true, firstName: true, lastName: true } },
-        services: { select: { service: { select: { name: true } } } },
+        duration: true,
+        service: { select: { bufferTime: true } },
+        services: {
+          select: { type: true, status: true, service: { select: { name: true, bufferTime: true } } },
+          orderBy: VISIT_ROW_ORDER as any,
+        },
       },
     });
 
-    // Compute gaps ≥ 30 min between consecutive appointments.
+    // Compute gaps ≥ 30 min between consecutive appointments. A gap starts
+    // when the professional is free again: after the appointment and the
+    // cleanup time after it ("tiempo de limpieza").
     const gaps: Array<{ start: string; end: string; minutes: number }> = [];
     for (let i = 0; i + 1 < appointments.length; i++) {
       const endA = timeToMinutes(appointments[i].scheduledTime)
-        + this.estimateAppointmentDuration(appointments[i]);
+        + minutesUntilFree(appointments[i] as any, this.estimateAppointmentDuration(appointments[i]));
       const startB = timeToMinutes(appointments[i + 1].scheduledTime);
       const gap = startB - endA;
       if (gap >= 30) {
@@ -692,7 +700,12 @@ export class SalonCopilotToolsService {
         scheduledDate: true,
         scheduledTime: true,
         professionalId: true,
-        services: { select: { service: { select: { name: true, duration: true } } } },
+        duration: true,
+        service: { select: { bufferTime: true } },
+        services: {
+          select: { type: true, status: true, service: { select: { name: true, duration: true, bufferTime: true } } },
+          orderBy: VISIT_ROW_ORDER as any,
+        },
       },
     });
 
@@ -713,9 +726,10 @@ export class SalonCopilotToolsService {
     }> = [];
     for (const [date, list] of byDay.entries()) {
       for (let i = 0; i + 1 < list.length; i++) {
+        // Free again after the appointment and its cleanup time.
         const endA =
           timeToMinutes(list[i].scheduledTime) +
-          this.estimateAppointmentDuration(list[i]);
+          minutesUntilFree(list[i] as any, this.estimateAppointmentDuration(list[i]));
         const startB = timeToMinutes(list[i + 1].scheduledTime);
         const minutes = startB - endA;
         if (minutes < minGap) continue;

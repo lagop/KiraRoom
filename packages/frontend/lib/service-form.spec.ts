@@ -26,6 +26,7 @@ const API_SERVICE = {
   duration: 45,
   // As the API returns it: a Decimal column comes back as a string.
   price: "25.00",
+  bufferTime: 10,
   isActive: true,
   isOnlineBookable: false,
   requiresApproval: true,
@@ -43,6 +44,7 @@ console.log("editing a service sends its price as a number");
     check("keeps the online settings", result.payload.isOnlineBookable === false && result.payload.requiresApproval === true);
     check("keeps the booking window", result.payload.minAdvanceBooking === 24 && result.payload.maxAdvanceBooking === 60);
     check("always euros", result.payload.currency === "EUR");
+    check("keeps the cleanup time", result.payload.bufferTime === 10, result.payload.bufferTime);
   }
 }
 
@@ -55,6 +57,21 @@ console.log("an emptied duration is an error, not 30 minutes");
   check("601 minutes refused", !formToPayload({ ...EMPTY_SERVICE_FORM, name: "X", duration: "601" }).ok);
   check("5 minutes accepted", formToPayload({ ...EMPTY_SERVICE_FORM, name: "X", duration: "5" }).ok);
 }
+
+console.log("cleanup time after the appointment");
+check("a new service has none", (() => {
+  const r = formToPayload({ ...EMPTY_SERVICE_FORM, name: "X" });
+  return r.ok && r.payload.bufferTime === 0;
+})());
+check("a service without one reads as 0", serviceToForm({ ...API_SERVICE, bufferTime: undefined }).bufferTime === "0");
+check("240 accepted", formToPayload({ ...EMPTY_SERVICE_FORM, name: "X", bufferTime: "240" }).ok);
+check("241 refused", (() => {
+  const r = formToPayload({ ...EMPTY_SERVICE_FORM, name: "X", bufferTime: "241" });
+  return !r.ok && r.error === "buffer_invalid";
+})());
+check("negative, decimal and empty refused", ["-5", "7.5", ""].every(
+  (v) => !formToPayload({ ...EMPTY_SERVICE_FORM, name: "X", bufferTime: v }).ok,
+));
 
 console.log("prices");
 check("comma decimal", parseEuros("25,50") === 25.5);
@@ -84,7 +101,7 @@ console.log("every error has a message in both languages");
 for (const lang of ["es", "en"]) {
   const raw = fs.readFileSync(path.join(__dirname, "..", "messages", `${lang}.json`), "utf8").replace(/^﻿/, "");
   const services = JSON.parse(raw).services ?? {};
-  for (const key of ["name_required", "duration_invalid", "price_invalid", "min_advance_invalid", "max_advance_invalid"]) {
+  for (const key of ["name_required", "duration_invalid", "price_invalid", "buffer_invalid", "min_advance_invalid", "max_advance_invalid"]) {
     check(`${lang}: services.${key}`, typeof services[key] === "string" && services[key].length > 0);
   }
 }

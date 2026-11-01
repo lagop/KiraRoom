@@ -33,7 +33,14 @@ const OWNER = { id: "u-owner", role: "owner", tenantId: TENANT };
 function build({
   crossBooking = false,
   workingHours = MON_9_TO_17 as unknown,
-  existing = [] as Array<{ professionalId: string; scheduledTime: string; duration: number; status?: string }>,
+  existing = [] as Array<{
+    professionalId: string;
+    scheduledTime: string;
+    duration: number;
+    status?: string;
+    service?: { bufferTime: number };
+  }>,
+  cleanup = { cut: 0, colour: 0 },
   failServiceRows = false,
 } = {}) {
   const professionals = [
@@ -41,8 +48,8 @@ function build({
     { ...COLLEAGUE, tenantId: TENANT, workingHours },
   ];
   const services = [
-    { id: CUT, tenantId: TENANT, duration: 30, price: 20, currency: "EUR" },
-    { id: COLOUR, tenantId: TENANT, duration: 60, price: 50, currency: "EUR" },
+    { id: CUT, tenantId: TENANT, duration: 30, price: 20, currency: "EUR", bufferTime: cleanup.cut },
+    { id: COLOUR, tenantId: TENANT, duration: 60, price: 50, currency: "EUR", bufferTime: cleanup.colour },
     { id: ELSEWHERE, tenantId: "tenant-a", duration: 30, price: 20, currency: "EUR" },
   ];
   // What the database holds after commit; a transaction stages its writes
@@ -444,5 +451,83 @@ describe("request validation", () => {
     expect(errors({ ...BOOKING, services: [] })).toEqual(["services"]);
     expect(errors({ ...BOOKING, services: Array(21).fill({ serviceId: CUT }) })).toEqual(["services"]);
     expect(errors({ ...BOOKING, allowOutsideHours: "yes" })).toEqual(["allowOutsideHours"]);
+  });
+});
+
+describe("the cleanup time after each appointment (Service.bufferTime)", () => {
+  it("refuses a booking that starts inside the cleanup after another appointment, for everyone", async () => {
+    // 09:30–10:00, then 15 minutes of cleanup: 10:00 is not free yet.
+    const existing = [{ professionalId: ME.id, scheduledTime: "09:30", duration: 30, service: { bufferTime: 15 } }];
+    const owner = build({ existing });
+    await expect(
+      owner.service.createByStaff({ ...BOOKING, professionalId: ME.id, allowOutsideHours: true } as any, OWNER),
+    ).rejects.toMatchObject({
+      response: {
+        code: SCHEDULE_CONFLICT,
+        message: "Ana tiene tiempo de limpieza hasta las 10:15 después de su cita con Lucía Pérez.",
+      },
+    });
+    expect(owner.db.appointments).toHaveLength(1);
+  });
+
+  it("with 0 minutes, back to back is still fine", async () => {
+    const { service, db } = build({
+      existing: [{ professionalId: ME.id, scheduledTime: "09:30", duration: 30, service: { bufferTime: 0 } }],
+    });
+    await service.createByStaff(BOOKING as any, STAFF);
+    expect(db.appointments.filter((a) => a.source === "staff")).toHaveLength(1);
+  });
+
+  it("refuses a booking whose own cleanup would run into the next appointment", async () => {
+    // The cut is 10:00–10:30 plus 15 minutes: the 10:40 client would wait.
+    const { service } = build({
+      cleanup: { cut: 15, colour: 0 },
+      existing: [{ professionalId: ME.id, scheduledTime: "10:40", duration: 30 }],
+    });
+    await expect(service.createByStaff(BOOKING as any, STAFF)).rejects.toMatchObject({
+      response: {
+        code: SCHEDULE_CONFLICT,
+        message: "Ana ya tiene una cita con Lucía Pérez a las 10:40: no quedarían los 15 min de limpieza después de esta.",
+      },
+    });
+
+    const fits = build({
+      cleanup: { cut: 15, colour: 0 },
+      existing: [{ professionalId: ME.id, scheduledTime: "10:45", duration: 30 }],
+    });
+    await fits.service.createByStaff(BOOKING as any, STAFF);
+    expect(fits.db.appointments.filter((a) => a.source === "staff")).toHaveLength(1);
+  });
+
+  it("a visit of several services is cleaned up once, after its last service, by whoever does it", async () => {
+    // Colour (Ana) 10:00–11:00, then the cut (Bea) 11:00–11:30.
+    const VISIT = {
+      ...BOOKING,
+      professionalId: ME.id,
+      services: [{ serviceId: COLOUR }, { serviceId: CUT, professionalId: COLLEAGUE.id }],
+    };
+    // The colour's own cleanup does not apply mid-visit: Ana is free at 11:00.
+    const midVisit = build({
+      cleanup: { cut: 0, colour: 30 },
+      existing: [{ professionalId: ME.id, scheduledTime: "11:00", duration: 30 }],
+    });
+    await midVisit.service.createByStaff(VISIT as any, OWNER);
+    expect(midVisit.db.appointments).toHaveLength(2);
+
+    // The cut's cleanup runs to 11:45 on Bea's agenda.
+    const after = build({
+      cleanup: { cut: 15, colour: 0 },
+      existing: [{ professionalId: COLLEAGUE.id, scheduledTime: "11:40", duration: 30 }],
+    });
+    await expect(after.service.createByStaff(VISIT as any, OWNER)).rejects.toMatchObject({
+      response: { code: SCHEDULE_CONFLICT },
+    });
+  });
+
+  it("the appointment has to fit the hours; its cleanup may run past closing", async () => {
+    // Ana works until 17:00: a 16:30 cut with 15 minutes of cleanup is fine.
+    const { service, db } = build({ cleanup: { cut: 15, colour: 0 } });
+    await service.createByStaff({ ...BOOKING, scheduledTime: "16:30" } as any, STAFF);
+    expect(db.appointments.filter((a) => a.source === "staff")).toHaveLength(1);
   });
 });
