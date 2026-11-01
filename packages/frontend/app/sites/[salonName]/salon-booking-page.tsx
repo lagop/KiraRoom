@@ -36,6 +36,7 @@ import {
   slotsState,
   BOOKING_CHOICE_TEXT,
 } from "@/lib/public-booking";
+import { professionalAfterServiceChange, servicesForPinned } from "@/lib/booking-professional";
 import {
   bookingLocations,
   chosenLocation,
@@ -207,6 +208,10 @@ export default function SalonBookingPage({
   const [wantsWhatsAppNotices, setWantsWhatsAppNotices] = useState(false);
   // Only when the salon has its WhatsApp number connected.
   const offersWhatsAppNotices = initialData.whatsappNotices === true;
+  // The professional a QR code or link chose (?professionalId=), until the
+  // client asks to see the whole team.
+  const [pinnedProfessionalId, setPinnedProfessionalId] = useState("");
+  const pinnedProfessional = professionals.find((p) => p.id === pinnedProfessionalId);
   // Links from a wait-list notice (and rebooking reminders) carry the
   // service, professional and day of the freed slot: start the form there.
   useEffect(() => {
@@ -231,6 +236,11 @@ export default function SalonBookingPage({
         date: date || prev.date,
         locationId: locationId || prev.locationId,
       }));
+    }
+    // A professional's QR code (or link): she stays chosen, and the form
+    // offers the services she does (lib/booking-professional.ts).
+    if (professionalId && professionals.some((p) => p.id === professionalId)) {
+      setPinnedProfessionalId(professionalId);
     }
     // Read once, from the page's own data.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -352,7 +362,12 @@ export default function SalonBookingPage({
       setBookingData((prev) => ({
         ...prev,
         [name]: value,
-        professionalId: name === "serviceId" ? "" : prev.professionalId, // Clear professional when service changes
+        // A new service keeps the professional if she does it (a
+        // professional's QR code chose her), else the client picks again.
+        professionalId:
+          name === "serviceId"
+            ? professionalAfterServiceChange(prev.professionalId, value, professionals)
+            : value,
         time: "", // Clear selected time as well
       }));
     } else {
@@ -461,7 +476,8 @@ export default function SalonBookingPage({
         clientEmail: "",
         clientPhone: "",
         serviceId: "",
-        professionalId: "",
+        // A professional's QR code keeps her for the next booking too.
+        professionalId: pinnedProfessionalId,
         date: localTomorrow(),
         time: "",
         locationId: prev.locationId,
@@ -513,6 +529,8 @@ export default function SalonBookingPage({
   // The services someone at the chosen location does.
   const servicesHere = servicesAtLocation(bookableServices, professionals, locations, bookingData.locationId);
   const locationHere = chosenLocation(locations, bookingData.locationId);
+  // With a professional pinned by her QR code, only the services she does.
+  const offeredServices = servicesForPinned(servicesHere, pinnedProfessional, professionals);
 
   // This refused every Sunday, for every salon, whatever its hours -- and
   // read the weekday from a UTC date, so west of Greenwich it refused
@@ -626,6 +644,29 @@ export default function SalonBookingPage({
             <h2 className="text-2xl font-bold text-purple-900 mb-6 text-center">
               {t("bookingPublic.title")}
             </h2>
+
+            {pinnedProfessional && (
+              <div
+                data-test="booking-pinned-professional"
+                className="mb-6 flex flex-col gap-2 rounded-lg border border-purple-200 bg-purple-50 p-4 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div>
+                  <p className="font-semibold text-purple-900">
+                    {t("bookingPublic.with_professional", { name: pinnedProfessional.firstName })}
+                  </p>
+                  <p className="text-sm text-purple-800">
+                    {t("bookingPublic.with_professional_hint", { name: pinnedProfessional.firstName })}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPinnedProfessionalId("")}
+                  className="text-sm text-purple-700 underline"
+                >
+                  {t("bookingPublic.all_professionals")}
+                </button>
+              </div>
+            )}
 
             <form onSubmit={handleSubmit} className="space-y-8">
               {/* Step 1: Client Information */}
@@ -747,7 +788,7 @@ export default function SalonBookingPage({
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors"
                 >
                   <option value="">-- {t("bookingPublic.select_service")} --</option>
-                  {servicesHere.map((service) => (
+                  {offeredServices.map((service) => (
                     <option key={service.id} value={service.id}>
                       {service.name} - {formatPrice(service.price, salonData.currency)} ({service.duration} min)
                     </option>

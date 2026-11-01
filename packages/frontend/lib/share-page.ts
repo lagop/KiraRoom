@@ -10,6 +10,8 @@ export interface ShareInfo {
   logo: string | null;
   /** The salon's real address: own domain, subdomain or /sites/<slug>. */
   url: string;
+  /** The address is the salon's own domain: printed codes depend on keeping it. */
+  ownDomain?: boolean;
 }
 
 /** The text that goes with the link, in WhatsApp, email or the phone's share sheet. */
@@ -92,4 +94,24 @@ export function shareFileName(slug: string, kind: "qr" | "redes", ext: "png" | "
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "");
   return [kind, clean(slug), suffix ? clean(suffix) : ""].filter(Boolean).join("-") + `.${ext}`;
+}
+
+/**
+ * The services worth a QR code: active and bookable online. One the salon
+ * takes by phone only would open a page that cannot book it.
+ */
+export function qrServices<S extends { isActive?: boolean | null; isOnlineBookable?: boolean | null }>(list: S[]): S[] {
+  return (list ?? []).filter((s) => s.isActive !== false && s.isOnlineBookable !== false);
+}
+
+/**
+ * The note under the codes. On the salon's own domain, printed codes work
+ * only while she keeps that domain; on KiraRoom's address they keep working.
+ */
+export function printedCodesNote(info: Pick<ShareInfo, "url" | "ownDomain">): string {
+  const where = displayUrl(info.url);
+  if (info.ownDomain) {
+    return `Todos los códigos llevan a tu dominio propio, ${where}. Los que imprimas solo funcionarán mientras mantengas ese dominio: si lo cambias o dejas de renovarlo, tendrás que imprimirlos de nuevo.`;
+  }
+  return `Todos los códigos llevan a ${where}. Si más adelante activas un dominio propio, los nuevos usarán esa dirección y los ya impresos seguirán funcionando.`;
 }

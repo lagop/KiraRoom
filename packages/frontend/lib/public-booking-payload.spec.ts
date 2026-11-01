@@ -188,7 +188,7 @@ console.log("\n=== the privacy notice links where it exists ===");
 
 check("absolute, on the app's host", privacyPolicyUrl("https://app.kiraroom.net"), "https://app.kiraroom.net/legal/privacy");
 check("the page exists", fs.existsSync(path.join(ROOT, "app/legal/privacy/page.tsx")), true);
-for (const rel of [...SCREENS, "app/embed/[token]/page.tsx"]) {
+for (const rel of [...SCREENS, "app/embed/[token]/page.tsx", "app/public/r/[token]/page.tsx"]) {
   const src = fs.readFileSync(path.join(ROOT, rel), "utf8");
   check(`${rel} shows the privacy notice`, src.includes("privacyPolicyUrl()"), true);
 }

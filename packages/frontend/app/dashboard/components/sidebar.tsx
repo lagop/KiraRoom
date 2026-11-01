@@ -9,6 +9,7 @@ import {
   Bug,
   Calculator,
   Calendar,
+  Code,
   CalendarOff,
   ChevronDown,
   ChevronLeft,
@@ -84,6 +85,7 @@ const ICONS: Record<string, LucideIcon> = {
   repeat: Repeat,
   scroll: ScrollText,
   calculator: Calculator,
+  code: Code,
 };
 
 /** A count next to a link: requests waiting for an answer. */

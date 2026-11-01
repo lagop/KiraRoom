@@ -2,13 +2,28 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Copy, Check, ExternalLink, Mail, MessageCircle, Share2, Download, Printer, Image as ImageIcon, QrCode } from "lucide-react";
+import {
+  Copy,
+  Check,
+  Code,
+  ExternalLink,
+  Mail,
+  MessageCircle,
+  Share2,
+  Download,
+  Printer,
+  Image as ImageIcon,
+  QrCode,
+} from "lucide-react";
 import apiClient from "@/lib/api";
+import { getCurrentUser } from "@/lib/utils";
+import { isManager } from "@/lib/dashboard-nav";
 import {
   ShareInfo,
   PRINT_FORMATS,
-  displayUrl,
   emailShareUrl,
+  printedCodesNote,
+  qrServices,
   qrTargetUrl,
   shareFileName,
   shareMessage,
@@ -65,10 +80,19 @@ export default function SharePage() {
     apiClient
       .getServices()
       .then((list: any[]) =>
-        setServices((list ?? []).filter((s) => s.isActive !== false).map((s) => ({ id: s.id, label: s.name }))),
+        // Only what the booking page can book: a phone-only service would open a page that cannot.
+        setServices(qrServices(list ?? []).map((s: any) => ({ id: s.id, label: s.name }))),
       )
       .catch(() => undefined);
   }, []);
+
+  // Read after mount (the server has no token). The domain and widget
+  // screens are for owner and admin only.
+  const [role, setRole] = useState<string | null>(null);
+  useEffect(() => {
+    setRole(getCurrentUser()?.role ?? null);
+  }, []);
+  const manager = isManager(role);
 
   useEffect(() => {
     if (!info) return;
@@ -288,13 +312,31 @@ export default function SharePage() {
         </section>
       )}
 
-      <p className="text-xs text-gray-500">
-        Todos los códigos llevan a {displayUrl(info.url)}. Si más adelante activas un dominio propio, los nuevos usarán esa
-        dirección y los ya impresos seguirán funcionando. ¿Quieres usar tu dominio?{" "}
-        <Link href="/dashboard/settings/domain" className="text-violet-700 hover:underline">
-          Configúralo aquí
-        </Link>
-        .
+      {/* 6. The widget for the salon's own website (owner and admin only). */}
+      {manager && (
+        <section className={card}>
+          <h2 className="text-base font-semibold text-gray-900">Inserta la reserva en tu web</h2>
+          <p className="mt-1 text-sm text-gray-600">
+            Si tienes web propia, pega en ella el widget de reservas y tus clientas reservarán sin salir de tu web.
+          </p>
+          <Link href="/dashboard/settings/widget" className={`${btn} mt-3`}>
+            <Code className="h-4 w-4" /> Crear el código para tu web
+          </Link>
+        </section>
+      )}
+
+      <p className={`text-xs ${info.ownDomain ? "text-amber-800" : "text-gray-500"}`}>
+        {printedCodesNote(info)}
+        {manager && !info.ownDomain && (
+          <>
+            {" "}
+            ¿Quieres usar tu dominio?{" "}
+            <Link href="/dashboard/settings/domain" className="text-violet-700 hover:underline">
+              Configúralo aquí
+            </Link>
+            .
+          </>
+        )}
       </p>
     </div>
   );

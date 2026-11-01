@@ -196,6 +196,19 @@ describe("anonymizeClients", () => {
     expect(calls.some((c) => c.model === "invoice")).toBe(false);
   });
 
+  it("keeps only her rating, anonymously: the comment goes and the review is never listed again", async () => {
+    const { calls } = await run();
+    const reviews = calls.filter((c) => c.model === "review");
+    expect(reviews.map((c) => c.method)).toEqual(["deleteMany", "updateMany"]);
+    expect(reviews[0].args.where).toMatchObject({ status: "pending" });
+    expect(reviews[1].args.data).toEqual({
+      reviewToken: null,
+      reviewTokenExpiresAt: null,
+      comment: null,
+      publishConsent: "anonymised",
+    });
+  });
+
   it("a client with no phone or email skips the lookups by them", async () => {
     const { calls } = await run({ client: [{ id: "c2", email: null, phone: null }] }, ["c2"]);
     expect(calls.filter((c) => c.model === "chatConversation")).toHaveLength(1);

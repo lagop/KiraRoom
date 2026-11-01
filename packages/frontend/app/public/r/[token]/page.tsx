@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { Star, ExternalLink, Check, AlertCircle } from "lucide-react";
+import { privacyPolicyUrl } from "@/lib/public-booking";
+import { PUBLISH_CONSENT_TEXT } from "@/lib/reviews";
 
 const API =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1";
@@ -14,15 +16,19 @@ interface ReviewData {
   googleReviewLink?: string | null;
   submitted: boolean;
   rating: number | null;
-  goodRating: number;
+  /** granted | declined | legacy, once answered. */
+  publishConsent?: string | null;
 }
 
 /**
  * The page a client reaches from the post-visit review request.
  *
- * The Google button is offered to everyone who answers, not only to happy
- * clients: Google's policy forbids soliciting reviews selectively, so it is
- * only made more prominent for a good rating.
+ * - The Google button is the same, with the same words, whatever the rating:
+ *   showing it (or making it bigger) only for happy clients is review
+ *   gating, which Google and consumer law forbid.
+ * - The review is shown on the salon's site only if she ticks the box
+ *   (unticked by default); otherwise it stays private and its rating counts
+ *   in the average anonymously. The salon is the controller of the data.
  */
 export default function PublicReviewPage() {
   const params = useParams<{ token: string }>();
@@ -32,6 +38,7 @@ export default function PublicReviewPage() {
   const [rating, setRating] = useState(0);
   const [hover, setHover] = useState(0);
   const [comment, setComment] = useState("");
+  const [publishConsent, setPublishConsent] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [optOutMode, setOptOutMode] = useState(false);
   const [optedOut, setOptedOut] = useState(false);
@@ -60,11 +67,13 @@ export default function PublicReviewPage() {
       const res = await fetch(`${API}/public/r/${encodeURIComponent(token)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rating, comment: comment.trim() || undefined }),
+        body: JSON.stringify({ rating, comment: comment.trim() || undefined, publishConsent }),
       });
       if (res.status === 410) throw new Error("expired");
       if (!res.ok && res.status !== 409) throw new Error("generic");
-      setData((d) => (d ? { ...d, submitted: true, rating } : d));
+      setData((d) =>
+        d ? { ...d, submitted: true, rating, publishConsent: publishConsent ? "granted" : "declined" } : d,
+      );
     } catch (err: any) {
       setError(err.message === "expired" ? "expired" : "generic");
     } finally {
@@ -167,46 +176,30 @@ export default function PublicReviewPage() {
   const salon = data.tenant?.name ?? "el salón";
 
   if (data.submitted) {
-    const good = (data.rating ?? 0) >= data.goodRating;
+    const listed = data.publishConsent === "granted" || data.publishConsent === "legacy";
     return shell(
       <>
         <Check className="w-12 h-12 text-green-600 mx-auto" />
         <h1 className="text-xl font-semibold">¡Gracias por tu opinión!</h1>
         <p className="text-sm text-gray-500">
-          {salon} la leerá. Si la aprueba, podrá aparecer en su página de reservas
-          con tu nombre y la inicial de tu apellido.
+          {listed
+            ? `${salon} la revisará y la mostrará en su página de reservas con tu nombre y la inicial de tu apellido.`
+            : `${salon} la leerá. No se mostrará en su web: tu valoración solo cuenta en la media, sin tu nombre.`}
         </p>
-        {data.googleReviewLink &&
-          (good ? (
-            <div className="space-y-2">
-              <p className="text-sm text-gray-700">
-                ¿Nos ayudas a que más gente nos conozca? Deja también tu reseña en Google:
-              </p>
-              <a
-                href={data.googleReviewLink}
-                target="_blank"
-                rel="noreferrer"
-                onClick={openGoogle}
-                className="inline-flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg"
-              >
-                <ExternalLink className="w-4 h-4" /> Escribir mi reseña en Google
-              </a>
-            </div>
-          ) : (
-            <p className="text-sm text-gray-500">
-              Si quieres, también puedes{" "}
-              <a
-                href={data.googleReviewLink}
-                target="_blank"
-                rel="noreferrer"
-                onClick={openGoogle}
-                className="text-blue-700 underline"
-              >
-                dejar tu reseña en Google
-              </a>
-              .
-            </p>
-          ))}
+        {data.googleReviewLink && (
+          <div className="space-y-2">
+            <p className="text-sm text-gray-700">Si quieres, también puedes dejar tu reseña en Google.</p>
+            <a
+              href={data.googleReviewLink}
+              target="_blank"
+              rel="noreferrer"
+              onClick={openGoogle}
+              className="inline-flex items-center gap-2 border border-gray-300 text-gray-800 px-4 py-2 rounded-lg hover:bg-gray-50"
+            >
+              <ExternalLink className="w-4 h-4" /> Escribir una reseña en Google
+            </a>
+          </div>
+        )}
       </>,
     );
   }
@@ -266,9 +259,23 @@ export default function PublicReviewPage() {
             className="w-full border border-gray-300 rounded-lg p-3 text-sm"
           />
 
-          <p className="text-xs text-gray-500">
-            {salon} revisa las opiniones antes de mostrarlas en su página de
-            reservas, con tu nombre y la inicial de tu apellido.
+          <label className="flex items-start gap-2 text-left text-sm text-gray-700">
+            <input
+              type="checkbox"
+              checked={publishConsent}
+              onChange={(e) => setPublishConsent(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>{PUBLISH_CONSENT_TEXT}</span>
+          </label>
+
+          <p className="text-xs text-gray-500 text-left">
+            Si no lo marcas, tu opinión es privada: {salon} la lee y tu valoración cuenta en su media, sin tu
+            nombre ni tu comentario. Responsable del tratamiento: {salon}.{" "}
+            <a href={privacyPolicyUrl()} target="_blank" rel="noreferrer" className="underline">
+              Política de privacidad
+            </a>
+            .
           </p>
 
           <button

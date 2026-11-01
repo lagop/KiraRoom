@@ -6,10 +6,12 @@ import {
   Logger,
   Optional,
 } from "@nestjs/common";
+import { ModuleRef } from "@nestjs/core";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { LoyaltyService } from "../loyalty/loyalty.service";
 import { AppointmentStatus, InvoiceSource, PaymentMethod, PaymentStatus, Prisma } from "@prisma/client";
-import { applyStatusIfAllowed } from "../appointments/appointment-status";
+import { applyStatusIfAllowed, canTransition } from "../appointments/appointment-status";
+import { AppointmentsService } from "../appointments/appointments.service";
 import { refreshClientStats } from "../clients/client-stats";
 import { salonToday } from "../analytics/analytics-metrics";
 import { WalletService } from "./services/wallet.service";
@@ -104,6 +106,10 @@ export class PaymentsService {
     @Optional() private readonly wallet?: WalletService,
     // A refund of a gift card payment goes back to the card; a refunded gift card SALE comes off the card.
     @Optional() private readonly giftCards?: GiftCardsService,
+    // Completing an appointment from its payment goes through the agenda's
+    // changeStatus (looked up when needed: AppointmentsModule is not imported
+    // here, it would close a module cycle).
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {}
 
   /**
@@ -155,10 +161,44 @@ export class PaymentsService {
    * fee paid on it. The payment itself is never refused for it: it is
    * already recorded by the time we get here.
    */
-  private async markAppointment(appointmentId: string, to: AppointmentStatus) {
+  /**
+   * A payment recorded as paid completes its appointment by the same path as
+   * the panel's "Completar" (AppointmentsService.changeStatus): completion
+   * time (the review request is timed from it), notice, invoice, points.
+   * Only when the transition table allows it. Without the agenda service
+   * (specs) the bare status write stamps the completion time too.
+   */
+  private async markAppointment(tenantId: string, appointmentId: string, to: AppointmentStatus) {
+    const appointments = this.agenda();
+    if (appointments && to === AppointmentStatus.completed) {
+      const current = await this.prisma.appointment.findFirst({
+        where: { id: appointmentId, tenantId },
+        select: { status: true },
+      });
+      if (!current || !canTransition(current.status, to)) {
+        this.logger.log(`appointment ${appointmentId} not marked ${to} by its payment: status does not allow it`);
+        return;
+      }
+      try {
+        await appointments.changeStatus({ role: "system", tenantId }, appointmentId, to);
+      } catch (err) {
+        // Consent forms unsigned, or the status changed meanwhile: the
+        // payment stands, the visit stays for the team to finish.
+        this.logger.warn(`appointment ${appointmentId} not completed by its payment: ${(err as Error).message}`);
+      }
+      return;
+    }
     const changed = await applyStatusIfAllowed(this.prisma as any, appointmentId, to);
     if (!changed) {
       this.logger.log(`appointment ${appointmentId} not marked ${to} by its payment: status does not allow it`);
+    }
+  }
+
+  private agenda(): AppointmentsService | null {
+    try {
+      return this.moduleRef?.get(AppointmentsService, { strict: false }) ?? null;
+    } catch {
+      return null;
     }
   }
 
@@ -352,7 +392,7 @@ export class PaymentsService {
     });
 
     if (status === "paid" && appointmentId) {
-      await this.markAppointment(appointmentId, AppointmentStatus.completed);
+      await this.markAppointment(tenantId, appointmentId, AppointmentStatus.completed);
     }
 
     await this.loyaltyAfter(tenantId, payment);

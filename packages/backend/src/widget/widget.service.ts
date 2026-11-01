@@ -3,6 +3,7 @@ import { randomBytes } from "crypto";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { salonWhatsAppConnected } from "../consent/client-notices";
 import { publicPrice, publicPriceSettings } from "../common/public-price";
+import { frameAncestorOrigins } from "./frame-origins";
 
 export interface CreateWidgetInstanceInput {
   name: string;
@@ -18,12 +19,16 @@ export class WidgetService {
 
   constructor(private prisma: PrismaService) {}
 
+  /**
+   * With the whole token: it is not a secret (it sits in the iframe on the
+   * salon's own site), and the panel builds the embed code from it. It
+   * used to come back cut to six characters, so every snippet 404ed.
+   */
   async list(tenantId: string) {
-    const items = await this.prisma.widgetInstance.findMany({
+    return this.prisma.widgetInstance.findMany({
       where: { tenantId },
       orderBy: { createdAt: "desc" },
     });
-    return items.map((w) => this.sanitize(w));
   }
 
   async create(tenantId: string, input: CreateWidgetInstanceInput) {
@@ -70,6 +75,22 @@ export class WidgetService {
     if (!existing) throw new NotFoundException("Widget instance not found");
     await this.prisma.widgetInstance.delete({ where: { id } });
     return { revoked: true };
+  }
+
+  /**
+   * The sites allowed to frame the widget, for the embed page's
+   * frame-ancestors header (frontend middleware). Only valid https origins
+   * (frame-origins.ts); an empty list means any site. Does not count as a
+   * use of the widget.
+   */
+  async frameAncestors(token: string): Promise<{ allowedOrigins: string[]; restricted: boolean }> {
+    const widget = await this.prisma.widgetInstance.findUnique({
+      where: { token },
+      select: { allowedOrigins: true },
+    });
+    if (!widget) throw new NotFoundException("Invalid widget token");
+    const stored = (widget.allowedOrigins ?? []) as string[];
+    return { allowedOrigins: frameAncestorOrigins(stored), restricted: stored.length > 0 };
   }
 
   async findByToken(token: string) {
@@ -150,7 +171,7 @@ export class WidgetService {
       widget: {
         id: widget.id,
         name: widget.name,
-        allowedOrigins: widget.allowedOrigins,
+        allowedOrigins: frameAncestorOrigins(widget.allowedOrigins),
         theme: widget.theme,
       },
       // The final price, tax included (common/public-price.ts), never the
@@ -172,11 +193,5 @@ export class WidgetService {
 
   private generateToken(): string {
     return randomBytes(24).toString("base64url");
-  }
-
-  private sanitize<T extends { token?: string }>(w: T): T {
-    const copy = { ...w } as any;
-    copy.token = copy.token ? `${copy.token.slice(0, 6)}…` : null;
-    return copy;
   }
 }
