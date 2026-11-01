@@ -544,7 +544,7 @@ model Service {
   processingDuration  Int? /// Duration of processing time in minutes (default from service duration)
   maxAdvanceBooking   Int                   @default(30)
   minAdvanceBooking   Int                   @default(2)
-  bufferTime          Int                   @default(15)
+  bufferTime          Int                   @default(0) /// Cleanup time after each appointment, in minutes: blocks the agenda (0 = none)
   isOnlineBookable    Boolean               @default(true)
   isMobile            Boolean               @default(false)
   /// Deposit settings

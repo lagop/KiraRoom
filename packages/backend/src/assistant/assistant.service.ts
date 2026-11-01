@@ -14,6 +14,7 @@ import {
 import { SalonCopilotToolsService, COPILOT_TOOLS } from './tools/salon-copilot-tools';
 import { ActionApprovalService } from './action-approval.service';
 import { AssistantTierService } from './assistant-tier.service';
+import { VISIT_ROW_ORDER, minutesUntilFree } from '../appointments/visit-totals';
 
 /**
  * P2A-staff-copilot sprint 16 — billing hook.
@@ -550,6 +551,12 @@ export class AssistantService {
         status: true,
         client: { select: { firstName: true } },
         professional: { select: { firstName: true } },
+        duration: true,
+        service: { select: { bufferTime: true } },
+        services: {
+          select: { type: true, status: true, service: { select: { bufferTime: true } } },
+          orderBy: VISIT_ROW_ORDER as any,
+        },
       },
     });
 
@@ -563,12 +570,14 @@ export class AssistantService {
         professionalFirstName: a.professional?.firstName ?? null,
       }));
 
-    // 3. Gaps ≥ 30 min between consecutive appointments.
+    // 3. Gaps ≥ 30 min between consecutive appointments, from when the
+    // professional is free again: after the appointment (30 min when it has
+    // no length) and the cleanup time after it.
     const gaps: Array<{ start: string; end: string; minutes: number }> = [];
     for (let i = 0; i + 1 < appts.length; i++) {
       const endA =
         timeToMinutes(appts[i].scheduledTime) +
-        Math.max(30, 1 * 30);
+        minutesUntilFree(appts[i] as any, 30);
       const startB = timeToMinutes(appts[i + 1].scheduledTime);
       const gap = startB - endA;
       if (gap >= 30) {

@@ -89,11 +89,11 @@ export class CreateServiceDto {
   @IsOptional()
   minAdvanceBooking?: number;
 
-  @ApiProperty({ description: 'Buffer time in minutes', required: false })
+  @ApiProperty({ description: 'Cleanup time after each appointment, in minutes (blocks the agenda; 0 = none)', required: false })
   @Transform(numberFromText)
-  @IsInt({ message: 'El margen tiene que ser un número entero de minutos' })
-  @Min(0, { message: 'El margen no puede ser negativo' })
-  @Max(L.bufferMax, { message: `El margen máximo es de ${L.bufferMax} minutos` })
+  @IsInt({ message: 'El tiempo de limpieza tiene que ser un número entero de minutos' })
+  @Min(0, { message: 'El tiempo de limpieza no puede ser negativo' })
+  @Max(L.bufferMax, { message: `El tiempo de limpieza máximo es de ${L.bufferMax} minutos` })
   @IsOptional()
   bufferTime?: number;
 

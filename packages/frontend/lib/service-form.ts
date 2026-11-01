@@ -14,6 +14,7 @@ export const SERVICE_FORM_LIMITS = {
   durationMin: 5,
   durationMax: 600,
   priceMax: 100_000,
+  bufferMax: 240,
   minAdvanceHoursMax: 720,
   maxAdvanceDaysMax: 730,
 } as const;
@@ -28,6 +29,11 @@ export interface ServiceFormState {
   duration: string;
   /** Euros, as typed ("25", "25,50", "25.5"). */
   price: string;
+  /**
+   * Cleanup time after each appointment, in minutes, as typed: the agenda
+   * stays blocked that long after it (Service.bufferTime). "0" = none.
+   */
+  bufferTime: string;
   isActive: boolean;
   isOnlineBookable: boolean;
   requiresApproval: boolean;
@@ -43,6 +49,7 @@ export interface ServicePayload {
   category: ServiceCategoryValue;
   duration: number;
   price: number;
+  bufferTime: number;
   currency: "EUR";
   isActive: boolean;
   isOnlineBookable: boolean;
@@ -56,6 +63,7 @@ export type ServiceFormError =
   | "name_required"
   | "duration_invalid"
   | "price_invalid"
+  | "buffer_invalid"
   | "min_advance_invalid"
   | "max_advance_invalid";
 
@@ -66,6 +74,7 @@ export const EMPTY_SERVICE_FORM: ServiceFormState = {
   category: "other",
   duration: "30",
   price: "0",
+  bufferTime: "0",
   isActive: true,
   isOnlineBookable: true,
   requiresApproval: false,
@@ -79,6 +88,7 @@ type ApiService = {
   category: ServiceCategoryValue;
   duration: number | string;
   price: number | string;
+  bufferTime?: number | null;
   isActive: boolean;
   isOnlineBookable?: boolean;
   requiresApproval?: boolean;
@@ -96,6 +106,7 @@ export function serviceToForm(service: ApiService): ServiceFormState {
     duration: String(service.duration ?? ""),
     // "25.00" → "25", "25.50" → "25.5": what the number field shows anyway.
     price: Number.isFinite(price) ? String(price) : "",
+    bufferTime: String(service.bufferTime ?? EMPTY_SERVICE_FORM.bufferTime),
     isActive: service.isActive,
     isOnlineBookable: service.isOnlineBookable ?? true,
     requiresApproval: service.requiresApproval ?? false,
@@ -134,6 +145,9 @@ export function formToPayload(
   const price = parseEuros(form.price);
   if (price === null || price > L.priceMax) return { ok: false, error: "price_invalid" };
 
+  const bufferTime = wholeNumber(form.bufferTime);
+  if (bufferTime === null || bufferTime > L.bufferMax) return { ok: false, error: "buffer_invalid" };
+
   const minAdvance = wholeNumber(form.minAdvanceBooking);
   if (minAdvance === null || minAdvance > L.minAdvanceHoursMax) {
     return { ok: false, error: "min_advance_invalid" };
@@ -152,6 +166,7 @@ export function formToPayload(
       category: form.category,
       duration,
       price,
+      bufferTime,
       currency: "EUR",
       isActive: form.isActive,
       isOnlineBookable: form.isOnlineBookable,

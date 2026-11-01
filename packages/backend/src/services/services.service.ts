@@ -58,7 +58,8 @@ export class ServicesService {
         requiresApproval: createServiceDto.requiresApproval ?? false,
         maxAdvanceBooking: createServiceDto.maxAdvanceBooking ?? 30,
         minAdvanceBooking: createServiceDto.minAdvanceBooking ?? 2,
-        bufferTime: createServiceDto.bufferTime ?? 15,
+        // Cleanup time after each appointment: none unless the salon sets it.
+        bufferTime: createServiceDto.bufferTime ?? 0,
         isOnlineBookable: createServiceDto.isOnlineBookable ?? true,
         isMobile: createServiceDto.isMobile ?? false,
         depositRequired: createServiceDto.depositRequired ?? false,

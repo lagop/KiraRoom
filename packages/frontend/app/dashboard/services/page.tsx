@@ -520,6 +520,26 @@ function ServicesPageContent() {
                   </div>
                 </div>
 
+                <div>
+                  <label htmlFor="service-buffer" className="block text-sm font-medium text-gray-700 mb-1">
+                    {t("services.buffer_label")}
+                  </label>
+                  <input
+                    id="service-buffer"
+                    type="number"
+                    min="0"
+                    max={SERVICE_FORM_LIMITS.bufferMax}
+                    step="5"
+                    value={formData.bufferTime}
+                    onChange={(e) => setField("bufferTime", e.target.value)}
+                    className={inputClass}
+                    aria-describedby="service-buffer-hint"
+                  />
+                  <p id="service-buffer-hint" className="mt-1 text-xs text-gray-500">
+                    {t("services.buffer_hint")}
+                  </p>
+                </div>
+
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
