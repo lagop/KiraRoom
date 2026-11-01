@@ -29,9 +29,9 @@ export function KeyInsights({
 }) {
   const weekTrend = weekOverWeekChange(statusTotal(last7), statusTotal(last14));
   const ratesSub = t("analytics.rates_sub", { closed: rates?.closed ?? 0 });
-  // The period runs to today; the rates stop at yesterday.
+  // A period that runs to today: the rates stop at yesterday, so say which day.
   const ratesThrough =
-    rates && period && rates.through >= period.start
+    rates && period && rates.through >= period.start && rates.through < period.end
       ? t("analytics.rates_through", { day: formatDay(rates.through, { withYear: true }) })
       : null;
 
