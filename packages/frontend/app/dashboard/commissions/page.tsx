@@ -47,6 +47,8 @@ interface CommissionSummary {
   pendingCommission: number;
   paidCommission: number;
   appointments: CommissionAppointment[];
+  /** The salon day the pending figure runs up to (today): what "Pagar" pays. */
+  pendingUpTo?: string;
 }
 
 interface PayrollReport {
@@ -118,17 +120,22 @@ export default function CommissionsPage() {
     if (!pendingPay) return;
     try {
       setPayingCommission(true);
-      await apiClient.payCommission(
-        pendingPay.professionalId,
-        [],
-        dateRange.startDate,
-        dateRange.endDate,
-      );
+      // Everything pending up to today, as the dialog showed it -- not the
+      // payroll tab's dates. If that figure changed meanwhile, the server
+      // pays nothing and says so (409).
+      await apiClient.payCommission(pendingPay.professionalId, {
+        expectedAmount: pendingPay.pendingCommission,
+      });
       await loadCommissions();
       toast({ title: t("commissions.commissions_paid_success") });
     } catch (error) {
       console.error("Failed to pay commission:", error);
-      toast({ title: t("commissions.failed_to_pay_commissions"), variant: "destructive" });
+      toast({
+        title: t("commissions.failed_to_pay_commissions"),
+        description: error instanceof Error && error.message ? error.message : undefined,
+        variant: "destructive",
+      });
+      await loadCommissions();
     } finally {
       setPayingCommission(false);
       setPendingPay(null);
@@ -397,6 +404,9 @@ export default function CommissionsPage() {
         <div className="space-y-6">
           {/* Date Range Selector */}
           <div className="bg-white rounded-lg shadow p-6">
+            <p className="mb-4 text-sm text-gray-500">
+              {t("commissions.payroll_report_only")}
+            </p>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -519,6 +529,7 @@ export default function CommissionsPage() {
           t("commissions.confirm_mark_paid_description", {
             name: pendingPay.professionalName,
             amount: formatCurrency(pendingPay.pendingCommission),
+            date: formatDate(pendingPay.pendingUpTo ?? null),
           })
         }
         confirmLabel={t("commissions.mark_paid")}

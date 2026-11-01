@@ -31,7 +31,13 @@ export class PlatformEmailConfigController {
   @Roles("saas_owner")
   update(@Req() req: AuthedRequest, @Body() body: UpdatePlatformEmailConfigDto): Promise<PlatformEmailConfigPublic> {
     return this.service.update(
-      { apiKey: body.apiKey, from: body.from, webhookSecret: body.webhookSecret },
+      {
+        apiKey: body.apiKey,
+        from: body.from,
+        webhookSecret: body.webhookSecret,
+        marketingPackEmails: body.marketingPackEmails,
+        marketingPackPriceCents: body.marketingPackPriceCents,
+      },
       { id: req.user.id, role: req.user.role },
     );
   }

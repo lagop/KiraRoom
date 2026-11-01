@@ -66,6 +66,7 @@ describe("inactive clients: only those who came at least once", () => {
       { suppressedAmong: jest.fn(async () => new Set()) } as any,
       {} as any, // unsubscribe links
       {} as any, // pacer
+      { limits: async () => ({ tenantId: "t1", month: "2026-11", cap: 1e9, resetsOn: "2026-12-01" }), reserve: async () => ({ ok: true, tenantId: "t1", month: "2026-11", source: "plan" }), release: async () => undefined, pause: async () => undefined, resumePaused: async () => 0 } as any, // quota: no cap here
     );
     (s as any).logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
 

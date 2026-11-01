@@ -116,3 +116,34 @@ describe("PlatformEmailConfigService", () => {
     expect(await service.sendTest(admin)).toEqual({ ok: false, message: expect.stringMatching(/clave/) });
   });
 });
+
+describe("PlatformEmailConfigService: the bono de emails", () => {
+  it("is not offered until both its size and its price are set", async () => {
+    const { service, auditLog } = build();
+    await service.onModuleInit();
+    expect(service.marketingPack()).toBeNull();
+
+    await service.update({ marketingPackEmails: 1000 }, admin);
+    expect(service.marketingPack()).toBeNull();
+    expect(service.getConfig().marketingPack).toEqual({ emails: 1000, priceCents: null, offered: false });
+
+    await service.update({ marketingPackPriceCents: 1500 }, admin);
+    expect(service.marketingPack()).toEqual({ emails: 1000, priceCents: 1500 });
+    expect(service.getConfig().marketingPack.offered).toBe(true);
+    // Not secret: the audit says what it changed to.
+    expect(auditLog.record).toHaveBeenLastCalledWith(
+      "platform.email_config.updated",
+      expect.objectContaining({ metadata: expect.objectContaining({ marketingPack: { emails: undefined, priceCents: 1500 } }) }),
+    );
+
+    await service.update({ marketingPackPriceCents: null }, admin);
+    expect(service.marketingPack()).toBeNull();
+  });
+
+  it("refuses a size or price out of range, with the reason", async () => {
+    const { service, prisma } = build();
+    await expect(service.update({ marketingPackEmails: 10 }, admin)).rejects.toThrow(/entre 100 y 100\.000 emails/);
+    await expect(service.update({ marketingPackPriceCents: 12.5 }, admin)).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.platformEmailConfig.upsert).not.toHaveBeenCalled();
+  });
+});

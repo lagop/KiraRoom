@@ -129,6 +129,7 @@ describe("CommissionsService periods", () => {
       tenant: { findUnique: jest.fn(async () => ({ timezone: "Europe/Madrid" })) },
       professional: {
         findMany: jest.fn(async () => [{ id: "p1", firstName: "Ana", lastName: "Pro", commissionRate: 10, isActive: true }]),
+        findFirst: jest.fn(async () => ({ id: "p1", firstName: "Ana", lastName: "Pro", commissionRate: 10, isActive: true })),
       },
       payment: { findMany: jest.fn(async () => []) },
       refund: { findMany: jest.fn(async () => []) },
@@ -185,10 +186,17 @@ describe("CommissionsService periods", () => {
     expect(where.commissionAdjustment[0].createdAt.lt).toEqual(new Date("2026-11-30T23:00:00.000Z"));
   });
 
-  it("a payout without dates does not look the salon up", async () => {
-    const { svc, prisma } = service();
-    const out = await svc.payCommission("t1", "p1", {});
-    expect(out.count).toBe(3);
-    expect(prisma.tenant.findUnique).not.toHaveBeenCalled();
+  it("a payout without dates pays what is pending up to the end of today, on the salon's clock", async () => {
+    // 30 November: the visit, the sale (23:30 in Madrid) and the adjustment are all of today.
+    const { svc, where } = service();
+    const lastDay = new Date("2026-11-30T12:00:00Z");
+    const out = await svc.payCommission("t1", "p1", {}, lastDay);
+    expect(out).toEqual({ count: 3, totalAmount: 500 + 300 - 100 });
+    expect(where.appointment[0].scheduledDate).toEqual({ lt: new Date("2026-12-01T00:00:00.000Z") });
+    expect(where.posSaleLine[0].createdAt).toEqual({ lt: new Date("2026-11-30T23:00:00.000Z") });
+
+    // On the 29th none of them is due yet.
+    const { svc: before } = service();
+    expect(await before.payCommission("t1", "p1", {}, new Date("2026-11-29T12:00:00Z"))).toEqual({ count: 0, totalAmount: 0 });
   });
 });

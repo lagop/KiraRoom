@@ -9,6 +9,8 @@ import { EmailUnsubscribeService } from "./email-unsubscribe.service";
 import { ResendEventsService } from "./resend-events.service";
 import { EmailCampaignSender } from "./email-campaign-sender.service";
 import { EmailPacer } from "./email-pacer";
+import { EmailQuotaService } from "./email-quota.service";
+import { EmailPacksService } from "./email-packs.service";
 import { PrismaModule } from "../common/prisma/prisma.module";
 import { EmailService } from "../notifications/services/email.service";
 import { PromotionsModule } from "../promotions/promotions.module";
@@ -24,11 +26,13 @@ import { PlatformModule } from "../platform/platform.module";
     EmailCampaignsScheduler,
     EmailCampaignSender,
     EmailPacer,
+    EmailQuotaService,
+    EmailPacksService,
     EmailService,
     EmailSuppressionService,
     EmailUnsubscribeService,
     ResendEventsService,
   ],
-  exports: [EmailCampaignsService, EmailUnsubscribeService, EmailSuppressionService],
+  exports: [EmailCampaignsService, EmailUnsubscribeService, EmailSuppressionService, EmailQuotaService],
 })
 export class EmailCampaignsModule {}
