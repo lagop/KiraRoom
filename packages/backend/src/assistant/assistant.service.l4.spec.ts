@@ -72,6 +72,7 @@ function makePrisma(opts: {
         return clients.filter((c: any) => {
           if (where?.tenantId && c.tenantId !== where.tenantId) return false;
           if (where?.status && c.status !== where.status) return false;
+          if (where?.lastVisit?.lt && !(c.lastVisit && c.lastVisit < where.lastVisit.lt)) return false;
           if (where?.OR) {
             const ok = where.OR.some((branch: any) => {
               if (branch.lastVisit?.lt && c.lastVisit && c.lastVisit < branch.lastVisit.lt) return true;
@@ -125,6 +126,8 @@ describe('AssistantService.getDailyBriefing (L-4)', () => {
     const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 80);
     const clients = [
       { id: 'c-9', tenantId: TENANT_ID, firstName: 'Mar', status: 'active', lastVisit: cutoff, createdAt: cutoff },
+      // Created long ago but never came: not "at risk" of being lost.
+      { id: 'c-0', tenantId: TENANT_ID, firstName: 'Nunca', status: 'active', lastVisit: null, createdAt: cutoff },
     ];
     const prisma = makePrisma({ appointments: appts, products, clients });
     const svc = makeService(prisma);

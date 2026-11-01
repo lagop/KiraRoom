@@ -157,6 +157,47 @@ describe("appointment import", () => {
     expect(out.createdRows).toBe(2);
   });
 
+  it("matches a client by name only when the row has neither phone nor email", async () => {
+    const ana = { id: "c-ana", firstName: "Ana", lastName: "López", email: null, phone: "+34600000001" };
+
+    // Same name, another phone: someone else, a new client (not c-ana).
+    const other = prisma({ clients: [ana] });
+    await new ImportService(other).commitAppointments(
+      "t1",
+      HEADER + `${day(2)};10:00;Ana López;699 99 99 99;Corte mujer;Carmen;\n`,
+      "agenda.csv",
+    );
+    expect(other.client.create).toHaveBeenCalledTimes(1);
+    expect(other.client.create.mock.calls[0][0].data).toMatchObject({ phone: "+34699999999" });
+    expect(other.appointment.create.mock.calls[0][0].data.clientId).toBe("c-new-1");
+
+    // Same name, another email: also someone else.
+    const byEmail = prisma({ clients: [ana] });
+    await new ImportService(byEmail).commitAppointments(
+      "t1",
+      "Fecha;Hora;Cliente;Email;Servicio;Profesional\n" + `${day(2)};10:00;Ana López;otra.ana@x.test;Corte mujer;Carmen\n`,
+      "agenda.csv",
+    );
+    expect(byEmail.appointment.create.mock.calls[0][0].data.clientId).toBe("c-new-1");
+
+    // No contact at all: the only Ana López the salon has.
+    const noContact = prisma({ clients: [ana] });
+    await new ImportService(noContact).commitAppointments(
+      "t1",
+      HEADER + `${day(2)};10:00;Ana López;;Corte mujer;Carmen;\n`,
+      "agenda.csv",
+    );
+    expect(noContact.client.create).not.toHaveBeenCalled();
+    expect(noContact.appointment.create.mock.calls[0][0].data.clientId).toBe("c-ana");
+  });
+
+  it("the preview counts a new client once when her rows share a phone", async () => {
+    const csv =
+      HEADER + `${day(2)};10:00;Eva Sanz;611 22 33 44;Corte mujer;Carmen;\n` + `${day(9)};10:00;Eva Sanz Gil;611223344;Corte mujer;Carmen;\n`;
+    const dry: any = await new ImportService(prisma()).dryRunAppointments("t1", csv, "agenda.csv");
+    expect(dry.newClients).toBe(1);
+  });
+
   it("marks the reminders as sent when the salon turns them off", async () => {
     const p = prisma();
     await new ImportService(p).commitAppointments(

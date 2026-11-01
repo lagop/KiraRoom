@@ -11,6 +11,7 @@ import { randomUUID } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { WalletService } from '../payments/services/wallet.service';
 import { LoyaltyService } from '../loyalty/loyalty.service';
+import { refreshClientStats } from '../clients/client-stats';
 import {
   assertChargeable,
   recordAppointmentPayment,
@@ -452,6 +453,11 @@ export class PosService {
         this.logger.warn(`loyalty points for sale ${saleId} failed: ${(err as Error).message}`);
       }
     }
+    // What each client has spent (client-stats.ts).
+    await refreshClientStats(this.prisma, tenantId, [
+      finalClientId,
+      ...(Array.isArray(paymentRecords) ? paymentRecords.map((p: { clientId?: string | null }) => p?.clientId) : []),
+    ]);
 
     return {
       orderId: `POS-${Date.now()}`,
@@ -847,6 +853,7 @@ export class PosService {
     } catch (err) {
       this.logger.warn(`loyalty points for quick sale ${saleId} failed: ${(err as Error).message}`);
     }
+    await refreshClientStats(this.prisma, tenantId, [clientId]);
 
     return {
       id: payment.id,

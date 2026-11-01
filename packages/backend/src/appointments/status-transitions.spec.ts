@@ -182,6 +182,32 @@ describe("the dedicated endpoints", () => {
     expect(b.sent.sendAppointmentCompletedNotifications).toHaveBeenCalledTimes(1);
   });
 
+  it("complete: recomputes the client's visits; a cancellation does not touch them", async () => {
+    const withStats = (b: Built) => {
+      b.prisma.client = {
+        findFirst: jest.fn(async () => ({ createdAt: new Date("2025-01-01") })),
+        updateMany: jest.fn(async () => ({ count: 1 })),
+      };
+      b.prisma.appointment.aggregate = jest.fn(async () => ({
+        _count: { _all: 1 },
+        _min: { scheduledDate: b.row.scheduledDate },
+        _max: { scheduledDate: b.row.scheduledDate },
+      }));
+      b.prisma.payment = { aggregate: jest.fn(async () => ({ _sum: { amount: null } })) };
+      return b;
+    };
+    const done = withStats(build(S.confirmed));
+    await done.service.complete(OWNER, "apt-1");
+    expect(done.prisma.client.updateMany).toHaveBeenCalledWith({
+      where: { id: "c1", tenantId: "t1" },
+      data: expect.objectContaining({ visitCount: 1, lastVisit: done.row.scheduledDate }),
+    });
+
+    const cancelled = withStats(build(S.confirmed));
+    await cancelled.service.cancel(OWNER, "apt-1");
+    expect(cancelled.prisma.client.updateMany).not.toHaveBeenCalled();
+  });
+
   it("complete twice: the second is a 409 and there is one invoice", async () => {
     const b = build(S.confirmed);
     await b.service.complete(OWNER, "apt-1");
