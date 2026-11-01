@@ -106,7 +106,8 @@ describe("updateSelf", () => {
     const { service, updates } = await setup();
     (service as any).prisma.tenant = { findUnique: async () => ({ country: "ES" }) };
     await service.updateSelf("t1", "c1", { email: "New@Y.Z", phone: "600 111 222", currentPassword: "old-password-1" });
-    expect(updates[0].data).toEqual({ email: "new@y.z", phone: "+34600111222" });
+    // A new email also ends her other sessions (tokenVersion).
+    expect(updates[0].data).toEqual({ email: "new@y.z", phone: "+34600111222", tokenVersion: { increment: 1 } });
   });
 
   it("her own email in other capitals is not a change (no password asked)", async () => {
