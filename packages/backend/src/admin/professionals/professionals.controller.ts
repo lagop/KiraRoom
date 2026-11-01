@@ -1,11 +1,11 @@
-import { ParseUUIDPipe, Controller, Get, Post, Patch, Put, Delete, Body, Param, Query, UseGuards, Logger, BadRequestException } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards, Logger } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
   ApiResponse,
   ApiBearerAuth,
 } from "@nestjs/swagger";
-import { AdminProfessionalsService } from "./professionals.service";
+import { AdminProfessionalsService, MAX_PROFESSIONALS_PAGE } from "./professionals.service";
 import {
   CreateProfessionalDto,
   UpdateProfessionalDto,
@@ -17,7 +17,6 @@ import { Roles } from "../../auth/decorators/roles.decorator";
 import { RolesGuard } from "../../auth/guards/roles.guard";
 import { UserRole } from "@prisma/client";
 import { CurrentUser } from "../../auth/decorators/current-user.decorator";
-import { ValidationError } from "class-validator";
 
 @ApiTags("Admin - Professionals")
 @ApiBearerAuth()
@@ -40,35 +39,14 @@ export class AdminProfessionalsController {
   @ApiResponse({ status: 400, description: "Invalid input data" })
   @ApiResponse({ status: 403, description: "Forbidden" })
   async create(@CurrentUser() user: any, @Body() createProfessionalDto: CreateProfessionalDto) {
-    this.logger.log(
-      "Creating professional with data:",
-      JSON.stringify(createProfessionalDto),
-    );
-    try {
-      const professional = await this.adminProfessionalsService.create({
-        ...createProfessionalDto,
-        tenantId: user.tenantId,
-      });
-      this.logger.log(
-        "Professional created successfully:",
-        JSON.stringify(professional),
-      );
-      return professional;
-    } catch (error) {
-      this.logger.error("Error creating professional:", error);
-
-      // Log validation errors more clearly
-      if (
-        error.response &&
-        error.response.message &&
-        Array.isArray(error.response.message)
-      ) {
-        const validationErrors = error.response.message;
-        this.logger.error("Validation errors:", validationErrors);
-      }
-
-      throw error;
-    }
+    // No body or record in the logs: they carry the professional's email,
+    // phone and photo. The service logs what goes wrong.
+    const professional = await this.adminProfessionalsService.create({
+      ...createProfessionalDto,
+      tenantId: user.tenantId,
+    });
+    this.logger.log(`Professional ${professional.id} created in tenant ${user.tenantId}`);
+    return professional;
   }
 
   @Get()
@@ -85,7 +63,11 @@ export class AdminProfessionalsController {
     @Query("status") status?: string,
   ) {
     const pageNum = parseInt(page || "1", 10) || 1;
-    const limitNum = parseInt(limit || "10", 10) || 10;
+    // The whole team by default, up to MAX_PROFESSIONALS_PAGE. The default
+    // was 10, and the panel asked for no limit, so the 11th professional
+    // never showed up anywhere (team screen, wait list, QR, widget...).
+    const requested = parseInt(limit || String(MAX_PROFESSIONALS_PAGE), 10) || MAX_PROFESSIONALS_PAGE;
+    const limitNum = Math.min(Math.max(requested, 1), MAX_PROFESSIONALS_PAGE);
     return this.adminProfessionalsService.findAll({
       tenantId: user.tenantId,
       page: pageNum,
@@ -102,6 +84,13 @@ export class AdminProfessionalsController {
   @ApiResponse({ status: 403, description: "Forbidden" })
   async findOne(@CurrentUser() user: any, @Param("id", ParseUUIDPipe) id: string) {
     return this.adminProfessionalsService.findOne(user.tenantId, id);
+  }
+
+  @Get(":id/upcoming-appointments")
+  @ApiOperation({ summary: "How many appointments still to happen the professional has (before deactivating them)" })
+  @ApiResponse({ status: 200, description: "{ count }" })
+  async upcomingAppointments(@CurrentUser() user: any, @Param("id", ParseUUIDPipe) id: string) {
+    return this.adminProfessionalsService.upcomingAppointmentCount(user.tenantId, id);
   }
 
   @Patch(":id")

@@ -76,6 +76,10 @@ function EditProfessionalForm() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  // Why a save failed when it is not about one field (the server's reason,
+  // e.g. the plan's limit). It used to be shown under the email.
+  const [generalError, setGeneralError] = useState<string | null>(null);
+  const [wasActive, setWasActive] = useState(true);
   // The weekly schedule. Null while none is recorded: such a professional is
   // bookable at any hour, and a default week is only shown once the salon
   // asks for one. Sent only when edited, so saving a name never rewrites it.
@@ -115,6 +119,7 @@ function EditProfessionalForm() {
            
           const specialty = currentSpecialty(professional.specialties);
           setOriginalSpecialty(specialty);
+          setWasActive(!!professional.isActive);
           setFormData({
             firstName: professional.firstName || '',
             lastName: professional.lastName || '',
@@ -177,6 +182,7 @@ function EditProfessionalForm() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaveSuccess(false);
+    setGeneralError(null);
 
     if (!validateForm()) {
       return;
@@ -219,7 +225,7 @@ function EditProfessionalForm() {
       if (scheduleTouched && /horario|tramo/i.test(message)) {
         setScheduleError(message);
       } else {
-        setErrors({ ...errors, email: t('professionals.editPage.updateFailed') });
+        setGeneralError(message || t('professionals.editPage.updateFailed'));
       }
     } finally {
       setIsSaving(false);
@@ -268,6 +274,11 @@ function EditProfessionalForm() {
         {saveSuccess && (
           <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg">
             {t('professionals.editPage.saved')}
+          </div>
+        )}
+        {generalError && (
+          <div role="alert" className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+            {generalError}
           </div>
         )}
 
@@ -403,6 +414,12 @@ function EditProfessionalForm() {
                   </option>
                 ))}
               </select>
+              {wasActive && formData.status !== 'active' && (
+                <p className="mt-1 text-xs text-amber-700">
+                  Deja de aparecer para reservar y, si entra al panel, se le quita el acceso. Sus citas
+                  pendientes no se cancelan: reasígnalas. Si vuelve, tendrás que darle acceso otra vez.
+                </p>
+              )}
             </div>
           </div>
 

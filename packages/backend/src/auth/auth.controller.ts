@@ -1,6 +1,6 @@
 import { Throttle } from "@nestjs/throttler";
 import { PasswordResetService } from "./password-reset.service";
-import { ForgotPasswordDto, ResetPasswordDto } from "./dto/password-reset.dto";
+import { ChangeOwnPasswordDto, ForgotPasswordDto, ResetPasswordDto } from "./dto/password-reset.dto";
 import { Controller, Post, Body, UseGuards, HttpCode, HttpStatus, Get, Patch, Query, Req, Res, UnauthorizedException, ForbiddenException } from "@nestjs/common";
 import type { Request, Response } from "express";
 import {
@@ -179,6 +179,39 @@ export class AuthController {
   async twoFactorRecoveryCodes(@CurrentUser() user: { id: string; role: string }, @Body() dto: TwoFactorCodeDto) {
     staffOnly(user);
     return this.twoFactor.regenerateRecoveryCodes(user.id, dto.code);
+  }
+
+  /**
+   * A panel user changes their own password (current + new). Every other
+   * session ends; this browser gets new tokens (refresh cookie + access
+   * token in the body), so it stays signed in.
+   */
+  @Patch("password")
+  @SignedIn()
+  @AllowWhenReadOnly()
+  @Throttle({ default: { ttl: 60_000, limit: 10 } }) // with the per-account lockout
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Change the signed-in panel user's own password" })
+  @ApiResponse({ status: 200, description: "Changed; new tokens for this browser" })
+  @ApiResponse({ status: 400, description: "Wrong current password, or a new one that is not valid" })
+  async changeOwnPassword(
+    @CurrentUser() user: { id: string; role: string; impersonatedBy?: string },
+    @Body() dto: ChangeOwnPasswordDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    // A salon's clients change theirs on its site (POST /clients/me/password).
+    staffOnly(user);
+    // Support signed in as the salon must not change the owner's password.
+    if (user.impersonatedBy) {
+      throw new ForbiddenException("No se puede cambiar la contraseña desde una sesión de soporte.");
+    }
+    const kind = cookieKindForRole(user.role);
+    const result = await this.authService.changeOwnPassword(user.id, dto.currentPassword, dto.newPassword);
+    // The session this browser had is over (tokenVersion); end its record too.
+    await this.authService.endSession(readRefreshCookie(req, kind));
+    return deliverSession(res, result);
   }
 
   @Public()

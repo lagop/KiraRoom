@@ -28,6 +28,23 @@ export function optionalDateUpdate(value: unknown): Date | null | undefined {
 }
 
 /**
+ * For a date the record cannot be without (hireDate): undefined, null or ""
+ * leave what is stored; anything else is that date. The dashboard sends
+ * "YYYY-MM-DD", which Prisma refuses as a DateTime unless it is turned into
+ * a Date first -- the admin update wrote it raw, so every edit from the team
+ * list failed with a 400.
+ */
+export function requiredDateUpdate(value: unknown): Date | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  return new Date(value as string);
+}
+
+/** "" (an emptied date field) as null, so @IsOptional() lets it through as "clear". */
+export function EmptyAsNull(): PropertyDecorator {
+  return Transform(({ value }) => (value === "" ? null : value));
+}
+
+/**
  * For a DTO's `commissionRate`: a numeric string ("12.5", as forms send it)
  * becomes the number; "" becomes null (clear). Pair with @IsOptional() and
  * @IsNumber() so anything else is refused with a reason.

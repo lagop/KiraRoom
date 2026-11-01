@@ -8,6 +8,7 @@ import { Button } from "@/src/components/ui/Button";
 import { Input } from "@/src/components/ui/Input";
 import { Plus, Pencil, Trash2, Power } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useTranslations } from "@/lib/use-translation";
 import { PanelAccessBlock } from "@/src/components/team/panel-access";
 import type { PanelAccess } from "@/lib/panel-access";
@@ -82,6 +83,18 @@ function ProfessionalsPageContent() {
   // The rate as the modal opened it: an update sends it only when changed.
   const [initialCommissionRate, setInitialCommissionRate] = useState("");
 
+  // Why the drawer's save failed, shown inside the drawer: the page's own
+  // error banner is behind it (the drawer covers the whole screen).
+  const [formError, setFormError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  // Deleting and deactivating are confirmed in the panel's dialog.
+  const [confirmDelete, setConfirmDelete] = useState<Professional | null>(null);
+  const [confirmDeactivate, setConfirmDeactivate] = useState<
+    { professional: Professional; upcoming: number | null } | null
+  >(null);
+  const [busy, setBusy] = useState(false);
+
   // Password change dialog state
   const [showPasswordDialog, setShowPasswordDialog] = useState(false);
   const [passwordData, setPasswordData] = useState({
@@ -117,25 +130,12 @@ function ProfessionalsPageContent() {
     try {
       setLoading(true);
       const response = await apiClient.getProfessionals();
-      console.log("fetchProfessionals - raw API response:", response);
 
       // The admin endpoint returns { data: Professional[], total, page, limit, totalPages }
       // We need to extract the data array
       const professionalsData = Array.isArray(response)
         ? response
         : (response as any)?.data || [];
-
-      console.log(
-        "fetchProfessionals - professionalsData length:",
-        professionalsData.length,
-      );
-      if (professionalsData.length > 0) {
-        console.log("fetchProfessionals - first item:", professionalsData[0]);
-        console.log(
-          "fetchProfessionals - first item services:",
-          (professionalsData[0] as any)?.services,
-        );
-      }
 
       // Ensure services are properly included in the response
       const professionalsWithServices = professionalsData.map(
@@ -153,7 +153,7 @@ function ProfessionalsPageContent() {
       // a salon with two staff members nobody had hired.
       console.error("fetchProfessionals error:", err);
       setProfessionals([]);
-      setError(err instanceof Error ? err.message : "Failed to load professionals");
+      setError(err instanceof Error ? err.message : "No se ha podido cargar el equipo.");
     } finally {
       setLoading(false);
     }
@@ -161,6 +161,8 @@ function ProfessionalsPageContent() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
+    setSaving(true);
     try {
       const specialtiesArray = formData.specialties
         .split(",")
@@ -231,20 +233,21 @@ function ProfessionalsPageContent() {
       });
       fetchProfessionals();
     } catch (err) {
-      console.error("Error saving professional:", err);
-      setError(
-        err instanceof Error ? err.message : "Failed to save professional",
+      // Inside the drawer, where the user is looking; the server says why
+      // (in Spanish), e.g. an email already in use or the plan's limit.
+      setFormError(
+        err instanceof Error && err.message
+          ? err.message
+          : "No se ha podido guardar. Revisa los datos e inténtalo de nuevo.",
       );
+    } finally {
+      setSaving(false);
     }
   };
 
   const handleEdit = (professional: Professional) => {
-    console.log("=== handleEdit called ===");
-    console.log("professional:", JSON.stringify(professional, null, 2));
-
     // Direct access to services
     const services = professional.services || [];
-    console.log("services:", services);
 
     // Extract service IDs - use serviceId first, then fallback to service.id
     const serviceIds = Array.isArray(services)
@@ -253,8 +256,7 @@ function ProfessionalsPageContent() {
           .filter((id): id is string => typeof id === "string")
       : [];
 
-    console.log("extracted serviceIds:", serviceIds);
-
+    setFormError(null);
     setEditingProfessional(professional);
     setInitialCommissionRate(commissionRateFieldValue(professional.commissionRate));
     setFormData({
@@ -276,79 +278,80 @@ function ProfessionalsPageContent() {
     setShowForm(true);
   };
 
-  const handleDelete = async (id: string) => {
-    const professional = professionals.find((p) => p.id === id);
-    const toastId = toast({
-      title: t("professionals.delete_professional"),
-      description: t("professionals.delete_professional_confirm", {
-        name: `${professional?.firstName} ${professional?.lastName}`,
-      }),
-      variant: "destructive",
-      open: true,
-      action: (
-        <div className="flex gap-2">
-          <button
-            onClick={async () => {
-              try {
-                // With appointments they are history: the server deactivates
-                // them instead, and the reloaded list shows them inactive.
-                const { deactivated } = await apiClient.deleteProfessional(id);
-                toast({
-                  title: t(
-                    deactivated
-                      ? "professionals.professional_deactivated"
-                      : "professionals.professional_deleted",
-                  ),
-                  description: t(
-                    deactivated
-                      ? "professionals.professional_deactivated_history"
-                      : "professionals.professional_deleted_success",
-                  ),
-                  variant: "default",
-                });
-                fetchProfessionals();
-              } catch (err) {
-                console.error(err);
-                // The server says why (e.g. they have history), in Spanish.
-                toast({
-                  title: t("professionals.failed_to_delete"),
-                  description: err instanceof Error ? err.message : undefined,
-                  variant: "destructive",
-                });
-              }
-            }}
-            className="bg-red-500 text-white px-4 py-2 rounded-md hover:bg-red-600 transition-colors"
-          >
-            Delete
-          </button>
-          <button
-            onClick={() => {
-              // Dismiss the toast without taking any action
-              toastId.dismiss();
-            }}
-            className="bg-gray-200 text-gray-800 px-4 py-2 rounded-md hover:bg-gray-300 transition-colors"
-          >
-            Cancel
-          </button>
-        </div>
-      ),
-    });
-  };
-
-  const handleToggleActive = async (professional: Professional) => {
+  const performDelete = async () => {
+    if (!confirmDelete) return;
+    setBusy(true);
     try {
-      await (apiClient as any).updateProfessional(professional.id, {
-        isActive: !professional.isActive,
+      // With appointments they are history: the server deactivates them
+      // instead, and the reloaded list shows them inactive.
+      const { deactivated } = await apiClient.deleteProfessional(confirmDelete.id);
+      toast({
+        title: t(
+          deactivated
+            ? "professionals.professional_deactivated"
+            : "professionals.professional_deleted",
+        ),
+        description: t(
+          deactivated
+            ? "professionals.professional_deactivated_history"
+            : "professionals.professional_deleted_success",
+        ),
+        variant: "default",
       });
       fetchProfessionals();
     } catch (err) {
-      setError("Failed to update professional status");
-      console.error(err);
+      // The server says why (e.g. they have history), in Spanish.
+      toast({
+        title: t("professionals.failed_to_delete"),
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setBusy(false);
+      setConfirmDelete(null);
+    }
+  };
+
+  const setActive = async (professional: Professional, isActive: boolean) => {
+    setBusy(true);
+    try {
+      await apiClient.updateProfessional(professional.id, { isActive });
+      fetchProfessionals();
+    } catch (err) {
+      // The real reason, e.g. the plan's limit of active professionals.
+      toast({
+        title: isActive ? "No se ha podido activar" : "No se ha podido desactivar",
+        description:
+          err instanceof Error && err.message ? err.message : "Inténtalo de nuevo en unos segundos.",
+        variant: "destructive",
+      });
+    } finally {
+      setBusy(false);
+      setConfirmDeactivate(null);
+    }
+  };
+
+  const handleToggleActive = async (professional: Professional) => {
+    if (!professional.isActive) {
+      await setActive(professional, true);
+      return;
+    }
+    // Deactivating is confirmed, with what it leaves behind: their upcoming
+    // appointments (they are not cancelled or moved by themselves).
+    setConfirmDeactivate({ professional, upcoming: null });
+    try {
+      const { count } = await apiClient.getProfessionalUpcomingCount(professional.id);
+      setConfirmDeactivate((current) =>
+        current?.professional.id === professional.id ? { professional, upcoming: count } : current,
+      );
+    } catch {
+      // The dialog still works without the number.
     }
   };
 
   const closeForm = () => {
     setShowForm(false);
+    setFormError(null);
     setEditingProfessional(null);
     setFormData({
       firstName: "",
@@ -514,7 +517,7 @@ function ProfessionalsPageContent() {
                     <Button
                       variant="destructive"
                       size="icon"
-                      onClick={() => handleDelete(professional.id)}
+                      onClick={() => setConfirmDelete(professional)}
                       title={t("professionals.delete_tooltip")}
                     >
                       <Trash2 className="w-4 h-4" />
@@ -552,7 +555,12 @@ function ProfessionalsPageContent() {
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+              {formError && (
+                <div role="alert" className="bg-red-50 text-red-700 p-3 rounded-lg text-sm">
+                  {formError}
+                </div>
+              )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium mb-1">
                     {t("professionals.first_name")} *
@@ -601,7 +609,7 @@ function ProfessionalsPageContent() {
                 )}
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium mb-1">
                     {t("professionals.phone")}
@@ -687,7 +695,7 @@ function ProfessionalsPageContent() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium mb-1">
                     {t("professionals.position")}
@@ -787,12 +795,24 @@ function ProfessionalsPageContent() {
                   {t("professionals.active")}
                 </label>
               </div>
+              {editingProfessional?.isActive && !formData.isActive && (
+                <p className="text-xs text-amber-700 -mt-2">
+                  Al desactivarlo deja de aparecer para reservar y, si entra al panel, se le quita el acceso.
+                  Sus citas pendientes no se cancelan: reasígnalas. Si vuelve, tendrás que darle acceso otra vez.
+                </p>
+              )}
+              {editingProfessional?.panelAccess?.status === "active" &&
+                formData.email.trim().toLowerCase() !== (editingProfessional.email ?? "").trim().toLowerCase() && (
+                  <p className="text-xs text-amber-700 -mt-2">
+                    Con el email nuevo también cambia el email con el que entra al panel.
+                  </p>
+                )}
 
               <div className="flex justify-end space-x-2 pt-6">
                 <Button type="button" variant="outline" onClick={closeForm}>
                   {t("professionals.cancel")}
                 </Button>
-                <Button type="submit">
+                <Button type="submit" disabled={saving}>
                   {editingProfessional
                     ? t("professionals.update_professional")
                     : t("professionals.create_professional")}
@@ -802,6 +822,58 @@ function ProfessionalsPageContent() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title={`¿Eliminar a ${confirmDelete?.firstName ?? ""} ${confirmDelete?.lastName ?? ""}?`}
+        description={
+          <div className="space-y-2">
+            <p>
+              Si tiene citas en su historial no se borra: se desactiva para conservar ese historial y deja
+              de aparecer para reservar.
+            </p>
+            <p>
+              Si entra al panel, pierde el acceso y se cierran sus sesiones. Si vuelve a trabajar contigo,
+              tendrás que darle acceso de nuevo.
+            </p>
+          </div>
+        }
+        confirmLabel="Eliminar"
+        destructive
+        loading={busy}
+        onCancel={() => setConfirmDelete(null)}
+        onConfirm={performDelete}
+      />
+
+      <ConfirmDialog
+        open={!!confirmDeactivate}
+        title={`¿Desactivar a ${confirmDeactivate?.professional.firstName ?? ""} ${
+          confirmDeactivate?.professional.lastName ?? ""
+        }?`}
+        description={
+          <div className="space-y-2">
+            <p>Dejará de aparecer para reservar online y en la recepcionista.</p>
+            <p>
+              {confirmDeactivate?.upcoming == null
+                ? "Comprobando sus citas pendientes…"
+                : confirmDeactivate.upcoming === 0
+                  ? "No tiene citas pendientes."
+                  : `Tiene ${confirmDeactivate.upcoming} ${
+                      confirmDeactivate.upcoming === 1 ? "cita pendiente" : "citas pendientes"
+                    } de hoy en adelante. No se cancelan ni se mueven solas: reasígnalas a otra persona del equipo.`}
+            </p>
+            <p>
+              Si entra al panel, pierde el acceso y se cierran sus sesiones. Al reactivarlo tendrás que
+              darle acceso de nuevo.
+            </p>
+          </div>
+        }
+        confirmLabel="Desactivar"
+        destructive
+        loading={busy}
+        onCancel={() => setConfirmDeactivate(null)}
+        onConfirm={() => confirmDeactivate && setActive(confirmDeactivate.professional, false)}
+      />
 
       {/* Password Change Dialog */}
       {showPasswordDialog && editingProfessional && (
@@ -833,7 +905,7 @@ function ProfessionalsPageContent() {
                   }
                   required
                   placeholder={t("professionals.new_password")}
-                  minLength={6}
+                  minLength={8}
                 />
               </div>
 
@@ -852,7 +924,7 @@ function ProfessionalsPageContent() {
                   }
                   required
                   placeholder={t("professionals.confirm_new_password")}
-                  minLength={6}
+                  minLength={8}
                 />
               </div>
 

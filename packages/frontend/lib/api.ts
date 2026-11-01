@@ -14,6 +14,9 @@ const API_BASE_URL =
 const TOKEN_KEY = "kira_auth_token";
 const REFRESH_TOKEN_KEY = "kira_refresh_token";
 
+/** The most professionals GET /admin/professionals answers at once (the server's cap). */
+const MAX_TEAM_PAGE = 200;
+
 // Custom error class that carries the HTTP status so callers can distinguish
 // 404 (resource not found) from other failures instead of parsing message text.
 export class ApiError extends Error {
@@ -2087,6 +2090,18 @@ class ApiClient implements ApiClientInterface {
     return this.request("/auth/2fa/recovery-codes", { method: "POST", body: JSON.stringify({ code: code.trim() }) });
   }
 
+  /**
+   * The signed-in panel user changes their own password. Every other session
+   * ends; this one continues with the new tokens the server answers with.
+   */
+  async changeOwnPassword(currentPassword: string, newPassword: string): Promise<void> {
+    const response = await this.request<{ user: any; tokens: any }>("/auth/password", {
+      method: "PATCH",
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+    this.startSession(response);
+  }
+
   private startSession(response: { user: any; tokens: any }): LoginResponse {
     // The refresh token came as an httpOnly cookie; only the access token is ours.
     setToken(response.tokens.accessToken);
@@ -2704,20 +2719,29 @@ class ApiClient implements ApiClientInterface {
   }
 
   // Professionals - Admin routes
-  async getProfessionals(tenantId?: string): Promise<Professional[]> {
-    const params = tenantId ? `?tenantId=${tenantId}` : "";
+  /**
+   * The whole team (the salon is the caller's, from the token; `tenantId`
+   * is ignored). Without a limit the server answered the first 10, so an
+   * 11th professional was missing from every screen that lists the team.
+   */
+  async getProfessionals(_tenantId?: string): Promise<Professional[]> {
     const response = await this.request<{
       data: Professional[];
       total: number;
       page: number;
       limit: number;
       totalPages: number;
-    }>(`/admin/professionals${params}`);
+    }>(`/admin/professionals?limit=${MAX_TEAM_PAGE}`);
     return response.data;
   }
 
   async getProfessional(id: string): Promise<Professional> {
     return this.request<Professional>(`/admin/professionals/${id}`);
+  }
+
+  /** Appointments still to happen (today on) of a professional: what deactivating leaves to reassign. */
+  async getProfessionalUpcomingCount(id: string): Promise<{ count: number }> {
+    return this.request<{ count: number }>(`/admin/professionals/${id}/upcoming-appointments`);
   }
 
   // Time off and salon closures. The salon is the caller's, from the token.

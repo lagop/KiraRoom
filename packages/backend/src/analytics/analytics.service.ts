@@ -250,16 +250,21 @@ export class AnalyticsService {
     }));
   }
 
-  /** Status breakdown of the last `days` salon days, today included. */
+  /** Status breakdown of the last `days` salon days, today included (one professional's, if given). */
   async getAppointmentStatusByDays(
     tenantId: string,
     days: number,
+    professionalId?: string | null,
   ): Promise<AppointmentStatusData[]> {
     const { today } = await this.todayFor(tenantId);
     const n = Math.max(1, Math.min(366, Math.floor(days) || 7));
     const period = { start: addDays(today, -(n - 1)), end: today };
     const rows = await this.prisma.appointment.findMany({
-      where: { tenantId, scheduledDate: scheduledDateRange(period) },
+      where: {
+        tenantId,
+        scheduledDate: scheduledDateRange(period),
+        ...(professionalId ? { professionalId } : {}),
+      },
       select: { status: true },
     });
     return this.statusBreakdown(rows);

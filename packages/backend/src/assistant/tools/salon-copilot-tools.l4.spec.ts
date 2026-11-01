@@ -494,6 +494,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
         appointments: SAMPLE_APPOINTMENTS,
         waitList: WL_ENTRIES,
         clients: SAMPLE_CLIENTS,
+        professionals: SAMPLE_PROFESSIONALS,
       });
       const svc = new SalonCopilotToolsService(prisma);
       const res = await svc.execute('find_filling_opportunities', {}, {
@@ -548,6 +549,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
       const prisma = makePrisma({
         appointments: SAMPLE_APPOINTMENTS,
         clients: SAMPLE_CLIENTS,
+        professionals: SAMPLE_PROFESSIONALS,
       });
       const svc = new SalonCopilotToolsService(prisma);
       const res = await svc.execute('find_filling_opportunities', {}, {
@@ -730,5 +732,65 @@ describe('SalonCopilotToolsService (L-4)', () => {
       const names = (res.top as Array<{ name: string }>).map((c) => c.name);
       expect(names).toEqual(['B', 'A', 'C']);
     });
+  });
+});
+
+/**
+ * A staff user's id is not their professional's id. The fixtures above use
+ * the same string for both ('staff-1'), which hid three comparisons of
+ * professionalId with the User id: a professional was refused their own
+ * agenda by id, their own clients, and their own gaps.
+ */
+describe('SalonCopilotToolsService: staff user id vs professional id', () => {
+  const MARIA = { id: 'pro-maria', userId: 'user-maria', firstName: 'María', lastName: 'García' };
+  const JORGE = { id: 'pro-jorge', userId: 'user-jorge', firstName: 'Jorge', lastName: 'Pérez' };
+  const APPTS = [
+    { id: 'm-1', tenantId: TENANT_ID, professionalId: 'pro-maria', clientId: 'c-1', scheduledDate: today, scheduledTime: '09:00', status: 'confirmed', services: [{ service: { name: 'Corte' } }] },
+    { id: 'm-2', tenantId: TENANT_ID, professionalId: 'pro-maria', clientId: 'c-2', scheduledDate: today, scheduledTime: '11:00', status: 'pending', services: [{ service: { name: 'Color' } }] },
+    { id: 'j-1', tenantId: TENANT_ID, professionalId: 'pro-jorge', clientId: 'c-3', scheduledDate: today, scheduledTime: '13:00', status: 'confirmed', services: [{ service: { name: 'Masaje' } }] },
+  ];
+  const ctxFor = (prisma: any, userId: string) => ({ prisma, tenantId: TENANT_ID, userId, role: 'staff' as const });
+  const setup = (professionals = [MARIA, JORGE]) => {
+    const prisma = makePrisma({ appointments: APPTS, clients: [...SAMPLE_CLIENTS, SAMPLE_CLIENT], professionals });
+    return { prisma, svc: new SalonCopilotToolsService(prisma) };
+  };
+
+  it('a professional can ask for their own agenda by their professional id', async () => {
+    const { prisma, svc } = setup();
+    const res = await svc.execute('get_my_agenda', { professionalId: 'pro-maria' }, ctxFor(prisma, 'user-maria'));
+    expect(res.error).toBeUndefined();
+    expect(res.appointments).toHaveLength(2);
+  });
+
+  it('but not a colleague\'s', async () => {
+    const { prisma, svc } = setup();
+    const res = await svc.execute('get_my_agenda', { professionalId: 'pro-jorge' }, ctxFor(prisma, 'user-maria'));
+    expect(res.error).toBe('forbidden');
+  });
+
+  it('sees their own clients, not a colleague\'s', async () => {
+    const { prisma, svc } = setup();
+    const own = await svc.execute('get_client_360', { clientId: 'c-1' }, ctxFor(prisma, 'user-maria'));
+    expect(own.error).toBeUndefined();
+    const other = await svc.execute('get_client_360', { clientId: 'c-3' }, ctxFor(prisma, 'user-maria'));
+    expect(other.error).toBe('forbidden');
+  });
+
+  it('finds the gaps in their own day', async () => {
+    const { prisma, svc } = setup();
+    const res = await svc.execute('find_filling_opportunities', {}, ctxFor(prisma, 'user-maria'));
+    expect(res.error).toBeUndefined();
+    // 09:00-09:30 then 11:00: one 90-minute gap; Jorge's 13:00 is not hers.
+    expect(res.gaps).toHaveLength(1);
+  });
+
+  it('a staff account linked to no professional gets nothing, not the whole salon', async () => {
+    const { prisma, svc } = setup([]);
+    for (const tool of ['get_my_agenda', 'find_filling_opportunities']) {
+      const res = await svc.execute(tool, {}, ctxFor(prisma, 'user-nobody'));
+      expect(res.error).toBe('forbidden');
+    }
+    const res = await svc.execute('get_client_360', { clientId: 'c-1' }, ctxFor(prisma, 'user-nobody'));
+    expect(res.error).toBe('forbidden');
   });
 });

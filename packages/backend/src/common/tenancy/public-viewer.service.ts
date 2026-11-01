@@ -12,6 +12,13 @@ export interface PublicViewer {
    * salon -- gets the public projection.
    */
   staff: boolean;
+  /**
+   * Only for staff: their role and user id, so a list can give the owner
+   * and admins every colleague's full row and a professional only their own
+   * (GET /professionals).
+   */
+  role?: string;
+  userId?: string;
 }
 
 const STAFF_ROLES = new Set(["owner", "admin", "staff"]);
@@ -52,7 +59,9 @@ export class PublicViewerService {
 
     if (queryTenantId) {
       const staff = claims.valid ? await this.isStaffOf(claims.payload, queryTenantId) : false;
-      return { tenantId: queryTenantId, staff };
+      return staff && claims.valid
+        ? { tenantId: queryTenantId, staff, role: claims.payload.role, userId: claims.payload.sub }
+        : { tenantId: queryTenantId, staff };
     }
 
     if (!claims.present) throw new BadRequestException("tenantId is required");
@@ -63,7 +72,10 @@ export class PublicViewerService {
       // A saas_owner token carries no tenant; it must say which one it means.
       throw new BadRequestException("tenantId is required");
     }
-    return { tenantId, staff: await this.isStaffOf(claims.payload, tenantId) };
+    const staff = await this.isStaffOf(claims.payload, tenantId);
+    return staff
+      ? { tenantId, staff, role: claims.payload.role, userId: claims.payload.sub }
+      : { tenantId, staff };
   }
 
   private readToken(req: { headers?: Record<string, unknown> }):

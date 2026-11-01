@@ -301,6 +301,12 @@ export const COPILOT_TOOLS = [
 /*  Tool implementations                                                    */
 /* -------------------------------------------------------------------------- */
 
+/** A staff account linked to no professional: nothing of anyone's, not the whole salon's. */
+const STAFF_NOT_LINKED = {
+  error: 'forbidden',
+  message: 'Tu cuenta no está vinculada a ninguna ficha de profesional. Pide a quien gestiona el salón que lo revise.',
+} as const;
+
 @Injectable()
 export class SalonCopilotToolsService {
   private readonly logger = new Logger(SalonCopilotToolsService.name);
@@ -367,18 +373,23 @@ export class SalonCopilotToolsService {
     const date = this.parseDateOrToday(args.date);
     const requestedProfId = args.professionalId as string | undefined;
 
-    if (ctx.role === 'staff' && requestedProfId && requestedProfId !== ctx.userId) {
-      return {
-        error: 'forbidden',
-        message: 'No puedes ver la agenda de otro profesional.',
-      };
+    if (ctx.role === 'staff') {
+      // `ctx.userId` is the User id, not the Professional id: comparing the
+      // two refused a staff member their own agenda by id. And a staff
+      // account linked to no professional must not get the whole salon's
+      // (computeAgenda without a professional is every appointment).
+      const own = await this.findStaffProfessionalId(ctx);
+      if (!own) return STAFF_NOT_LINKED;
+      if (requestedProfId && requestedProfId !== own) {
+        return {
+          error: 'forbidden',
+          message: 'No puedes ver la agenda de otro profesional.',
+        };
+      }
+      return this.computeAgenda(ctx, date, own);
     }
-    const professionalId =
-      ctx.role === 'staff'
-        ? await this.findStaffProfessionalId(ctx)
-        : requestedProfId;
 
-    return this.computeAgenda(ctx, date, professionalId);
+    return this.computeAgenda(ctx, date, requestedProfId);
   }
 
   /**
@@ -413,8 +424,11 @@ export class SalonCopilotToolsService {
 
     // Ownership check for `staff`.
     if (ctx.role === 'staff') {
+      // Their professional, not their user id (which never matched).
+      const own = await this.findStaffProfessionalId(ctx);
+      if (!own) return STAFF_NOT_LINKED;
       const owns = await this.prisma.appointment.findFirst({
-        where: { clientId, professionalId: ctx.userId },
+        where: { clientId, professionalId: own },
         select: { id: true },
       });
       if (!owns) {
@@ -529,7 +543,7 @@ export class SalonCopilotToolsService {
    */
   private async findStaffProfessionalId(ctx: CopilotToolContext): Promise<string | null> {
     const professional = await this.prisma.professional.findFirst({
-      where: { user: { id: ctx.userId } },
+      where: { tenantId: ctx.tenantId, user: { id: ctx.userId } },
       select: { id: true },
     });
     return professional?.id ?? null;
@@ -656,13 +670,21 @@ export class SalonCopilotToolsService {
     const horizon = new Date(today);
     horizon.setDate(today.getDate() + daysAhead);
 
+    // Staff: their own professional's appointments (this compared with the
+    // User id, which no appointment carries).
+    let ownProfessionalId: string | null = null;
+    if (ctx.role === 'staff') {
+      ownProfessionalId = await this.findStaffProfessionalId(ctx);
+      if (!ownProfessionalId) return STAFF_NOT_LINKED;
+    }
+
     // Fetch every appointment in the window, grouped per day.
     const appointments = await ctx.prisma.appointment.findMany({
       where: {
         tenantId: ctx.tenantId,
         scheduledDate: { gte: today, lt: horizon },
         status: { in: ['confirmed', 'pending'] },
-        ...(ctx.role === 'staff' ? { professionalId: ctx.userId } : {}),
+        ...(ownProfessionalId ? { professionalId: ownProfessionalId } : {}),
       },
       orderBy: [{ scheduledDate: 'asc' }, { scheduledTime: 'asc' }],
       select: {

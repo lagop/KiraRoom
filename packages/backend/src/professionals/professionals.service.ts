@@ -1,15 +1,11 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
-import { deleteProfessionalKeepingHistory } from "../common/prisma/history-deletes";
-import { CreateProfessionalDto, UpdateProfessionalDto } from "./dto";
-import { assertProfessionalSlot } from "./professional-limit";
-import { commissionRateUpdate, optionalDateUpdate } from "./optional-fields";
 
 /**
  * What anyone may see about a professional: what the salon's public site
  * shows. Everything else on the row -- email, phone, userId, commissionRate,
  * hireDate, terminationDate, availability, settings, stats, isOwner -- is
- * for the salon's own staff.
+ * for the salon's owner and admins (and the professional themself).
  */
 export const PUBLIC_PROFESSIONAL = {
   id: true,
@@ -29,65 +25,65 @@ export const PUBLIC_PROFESSIONAL = {
   services: { include: { service: true } },
 } as const;
 
+/** Who is asking (see PublicViewerService): staff of the salon, and which. */
+export interface ProfessionalsViewer {
+  staff: boolean;
+  role?: string;
+  userId?: string;
+}
+
+/** The owner and admins see every colleague's full row; a professional, only their own. */
+export function seesFullRows(viewer: ProfessionalsViewer): boolean {
+  return viewer.staff && (viewer.role === "owner" || viewer.role === "admin");
+}
+
+/**
+ * Reads of professionals for the calendar, the booking flows and the
+ * virtual receptionist. Creating, editing and deleting go through
+ * AdminProfessionalsService (also behind the legacy POST/PUT/DELETE
+ * /professionals), so there is one set of rules for them.
+ */
 @Injectable()
 export class ProfessionalsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(tenantId: string, createProfessionalDto: CreateProfessionalDto) {
-    if (createProfessionalDto.isActive ?? true) await assertProfessionalSlot(this.prisma, tenantId);
-    return this.prisma.professional.create({
-      data: {
-        tenantId,
-        firstName: createProfessionalDto.firstName,
-        lastName: createProfessionalDto.lastName,
-        email: createProfessionalDto.email,
-        phone: createProfessionalDto.phone,
-        profileImage: createProfessionalDto.profileImage,
-        bio: createProfessionalDto.bio,
-        specialties: createProfessionalDto.specialties || [],
-        // `??`: with `||` an explicit false became true.
-        isActive: createProfessionalDto.isActive ?? true,
-        isOwner: createProfessionalDto.isOwner ?? false,
-        position: createProfessionalDto.position,
-        // 0 is a rate: only "not given" (or null) means none.
-        commissionRate: commissionRateUpdate(createProfessionalDto.commissionRate) ?? null,
-        hireDate: createProfessionalDto.hireDate
-          ? new Date(createProfessionalDto.hireDate)
-          : new Date(),
-        terminationDate: createProfessionalDto.terminationDate
-          ? new Date(createProfessionalDto.terminationDate)
-          : null,
-        workingHours: createProfessionalDto.workingHours || [],
-        availability: createProfessionalDto.availability || {},
-        settings: createProfessionalDto.settings || {},
-        stats: createProfessionalDto.stats || {},
-      },
-    });
-  }
-
   /**
-   * Staff of the salon get full rows. Everyone else gets PUBLIC_PROFESSIONAL
-   * and only active professionals: the public site, the client portal and
-   * anonymous callers have no business with a professional's email, phone,
-   * commission rate or user id.
+   * The owner and admins get full rows. Other staff get every colleague
+   * (inactive ones too: they are on past appointments) in the public
+   * projection, and their own record in full: a colleague's email, phone or
+   * commission rate is not theirs to see. Everyone else gets
+   * PUBLIC_PROFESSIONAL and only active professionals: the public site, the
+   * client portal and anonymous callers.
    */
-  async findAll(tenantId: string, { staff }: { staff: boolean }) {
-    if (!staff) {
+  async findAll(tenantId: string, viewer: ProfessionalsViewer) {
+    if (!viewer.staff) {
       return this.prisma.professional.findMany({
         where: { tenantId, isActive: true },
         select: PUBLIC_PROFESSIONAL,
       });
     }
-    return this.prisma.professional.findMany({
-      where: { tenantId },
-      include: {
-        services: {
-          include: {
-            service: true,
+    if (seesFullRows(viewer)) {
+      return this.prisma.professional.findMany({
+        where: { tenantId },
+        include: {
+          services: {
+            include: {
+              service: true,
+            },
           },
         },
-      },
-    });
+      });
+    }
+    const [team, own] = await Promise.all([
+      this.prisma.professional.findMany({ where: { tenantId }, select: PUBLIC_PROFESSIONAL }),
+      viewer.userId
+        ? this.prisma.professional.findFirst({
+            where: { tenantId, userId: viewer.userId },
+            include: { services: { include: { service: true } } },
+          })
+        : Promise.resolve(null),
+    ]);
+    return own ? team.map((p) => (p.id === own.id ? own : p)) : team;
   }
 
   /** A full row reduced to what PUBLIC_PROFESSIONAL exposes. */
@@ -146,54 +142,10 @@ export class ProfessionalsService {
     });
 
     if (!professional) {
-      throw new NotFoundException(`Professional with ID ${id} not found`);
+      throw new NotFoundException("Profesional no encontrado");
     }
 
     return professional;
-  }
-
-  async update(id: string, updateProfessionalDto: UpdateProfessionalDto) {
-    const professional = await this.prisma.professional.findUnique({
-      where: { id },
-    });
-
-    if (!professional) {
-      throw new NotFoundException(`Professional with ID ${id} not found`);
-    }
-    if (updateProfessionalDto.isActive === true && !professional.isActive) {
-      await assertProfessionalSlot(this.prisma, professional.tenantId);
-    }
-
-    return this.prisma.professional.update({
-      where: { id },
-      data: {
-        firstName: updateProfessionalDto.firstName,
-        lastName: updateProfessionalDto.lastName,
-        email: updateProfessionalDto.email,
-        phone: updateProfessionalDto.phone,
-        profileImage: updateProfessionalDto.profileImage,
-        bio: updateProfessionalDto.bio,
-        specialties: updateProfessionalDto.specialties,
-        isActive: updateProfessionalDto.isActive,
-        isOwner: updateProfessionalDto.isOwner,
-        position: updateProfessionalDto.position,
-        // Left out: kept; null: cleared; 0: a rate of 0 (optional-fields.ts).
-        commissionRate: commissionRateUpdate(updateProfessionalDto.commissionRate),
-        hireDate: updateProfessionalDto.hireDate
-          ? new Date(updateProfessionalDto.hireDate)
-          : undefined,
-        terminationDate: optionalDateUpdate(updateProfessionalDto.terminationDate),
-        workingHours: updateProfessionalDto.workingHours,
-        availability: updateProfessionalDto.availability,
-        settings: updateProfessionalDto.settings,
-        stats: updateProfessionalDto.stats,
-      },
-    });
-  }
-
-  /** History survives the delete: see common/prisma/history-deletes.ts. */
-  async remove(tenantId: string, id: string) {
-    return deleteProfessionalKeepingHistory(this.prisma, tenantId, id);
   }
 
   /**

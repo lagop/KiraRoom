@@ -1,9 +1,8 @@
 import { ProfessionalsController } from "./professionals.controller";
-import { ProfessionalsService } from "./professionals.service";
 import { AdminProfessionalsService } from "../admin/professionals/professionals.service";
 import { AdminProfessionalsController } from "../admin/professionals/professionals.controller";
 import { bodyParser } from "../common/validation/validated-body.testing";
-import { commissionRateUpdate, optionalDateUpdate } from "./optional-fields";
+import { commissionRateUpdate, optionalDateUpdate, requiredDateUpdate } from "./optional-fields";
 
 /**
  * A professional's commission rate survives updates that do not mention it.
@@ -13,19 +12,26 @@ import { commissionRateUpdate, optionalDateUpdate } from "./optional-fields";
  * and a rate of 0 was stored as "none". Now: left out keeps it, null clears
  * it, a number -- 0 included -- sets it. The same for create (0 kept) and for
  * terminationDate, which null could not clear.
+ *
+ * The legacy PUT/POST /professionals now go through AdminProfessionalsService
+ * (professionals-create.spec), so the service checks are made there.
  */
 
-function setup(stored: Record<string, unknown> = { id: "pro-1", tenantId: "t1", isActive: true, commissionRate: 40 }) {
+function setup(stored: Record<string, unknown> = { id: "pro-1", tenantId: "t1", isActive: true, commissionRate: 40, user: null }) {
   const update = jest.fn(async (args: any) => ({ ...stored, ...args.data }));
   const create = jest.fn(async (args: any) => ({ id: "pro-1", ...args.data }));
   const prisma: any = {
-    tenant: { findUnique: async () => null },
-    professional: { findUnique: async () => stored, update, create },
+    // findUnique null: no plan limit to check. findFirst: the salon exists.
+    tenant: { findUnique: async () => null, findFirst: async () => ({ id: "t1" }) },
+    professional: { findFirst: async () => stored, update, create, count: async () => 0 },
+    professionalService: { deleteMany: jest.fn(), createMany: jest.fn() },
+    $executeRaw: jest.fn(async () => 1),
   };
-  return { svc: new ProfessionalsService(prisma), update, create, prisma };
+  prisma.$transaction = async (fn: any) => fn(prisma);
+  return { svc: new AdminProfessionalsService(prisma), update, create, prisma };
 }
 
-describe("commissionRateUpdate / optionalDateUpdate", () => {
+describe("commissionRateUpdate / optionalDateUpdate / requiredDateUpdate", () => {
   it("undefined leaves it, null and empty clear it, a number sets it (0 included)", () => {
     expect(commissionRateUpdate(undefined)).toBeUndefined();
     expect(commissionRateUpdate(null)).toBeNull();
@@ -42,42 +48,49 @@ describe("commissionRateUpdate / optionalDateUpdate", () => {
     expect(optionalDateUpdate(null)).toBeNull();
     expect(optionalDateUpdate("2026-11-01")).toEqual(new Date("2026-11-01"));
   });
+
+  it("a date the record must keep (hireDate) is never cleared", () => {
+    expect(requiredDateUpdate(undefined)).toBeUndefined();
+    expect(requiredDateUpdate(null)).toBeUndefined();
+    expect(requiredDateUpdate("")).toBeUndefined();
+    expect(requiredDateUpdate("2026-11-01")).toEqual(new Date("2026-11-01"));
+  });
 });
 
-describe("PUT /professionals/:id (ProfessionalsService.update)", () => {
+describe("updating a professional (AdminProfessionalsService.update)", () => {
   it("keeps the commission rate when the update does not mention it", async () => {
     const { svc, update } = setup();
-    await svc.update("pro-1", { phone: "+34600000000" } as any);
+    await svc.update("t1", "pro-1", { phone: "+34600000000" } as any);
     expect(update.mock.calls[0][0].data.commissionRate).toBeUndefined();
   });
 
   it("sets a rate of 0", async () => {
     const { svc, update } = setup();
-    await svc.update("pro-1", { commissionRate: 0 } as any);
+    await svc.update("t1", "pro-1", { commissionRate: 0 } as any);
     expect(update.mock.calls[0][0].data.commissionRate).toBe(0);
   });
 
   it("clears the rate with null", async () => {
     const { svc, update } = setup();
-    await svc.update("pro-1", { commissionRate: null } as any);
+    await svc.update("t1", "pro-1", { commissionRate: null } as any);
     expect(update.mock.calls[0][0].data.commissionRate).toBeNull();
   });
 
   it("keeps the termination date when left out, clears it with null", async () => {
     const { svc, update } = setup();
-    await svc.update("pro-1", { firstName: "Ana" } as any);
+    await svc.update("t1", "pro-1", { firstName: "Ana" } as any);
     expect(update.mock.calls[0][0].data.terminationDate).toBeUndefined();
-    await svc.update("pro-1", { terminationDate: null } as any);
+    await svc.update("t1", "pro-1", { terminationDate: null } as any);
     expect(update.mock.calls[1][0].data.terminationDate).toBeNull();
   });
 });
 
-describe("POST /professionals (ProfessionalsService.create)", () => {
+describe("creating a professional (AdminProfessionalsService.create)", () => {
   it("stores a rate of 0 as 0, and none when not given", async () => {
     const { svc, create } = setup();
-    await svc.create("t1", { firstName: "Ana", lastName: "G", email: "a@salon.test", commissionRate: 0 } as any);
+    await svc.create({ tenantId: "t1", firstName: "Ana", lastName: "G", email: "a@salon.test", commissionRate: 0 } as any);
     expect(create.mock.calls[0][0].data.commissionRate).toBe(0);
-    await svc.create("t1", { firstName: "Eva", lastName: "G", email: "e@salon.test" } as any);
+    await svc.create({ tenantId: "t1", firstName: "Eva", lastName: "G", email: "e@salon.test" } as any);
     expect(create.mock.calls[1][0].data.commissionRate).toBeNull();
   });
 });
@@ -93,28 +106,10 @@ describe("PUT /professionals/:id body", () => {
     expect((await parse({ phone: "+34600000000" })).commissionRate).toBeUndefined();
   });
 
-  it("refuses a rate that is not a number", async () => {
+  it("refuses a rate that is not a number, or not a percent", async () => {
     await expect(parse({ commissionRate: "abc" })).rejects.toBeDefined();
-  });
-});
-
-describe("POST /admin/professionals (AdminProfessionalsService.create)", () => {
-  it("stores a rate of 0 as 0", async () => {
-    const create = jest.fn(async (args: any) => ({ id: "pro-1", ...args.data }));
-    const tx: any = {
-      professional: { create, findUnique: async () => null, findFirst: async () => null },
-      user: { findUnique: async () => null, findFirst: async () => null },
-      professionalService: { createMany: async () => ({}) },
-    };
-    const prisma: any = {
-      ...tx,
-      // Found: the create goes ahead. findUnique null: no plan limit to check.
-      tenant: { findUnique: async () => null, findFirst: async () => ({ id: "t1" }) },
-      $transaction: async (fn: any) => (typeof fn === "function" ? fn(tx) : Promise.all(fn)),
-    };
-    const svc = new AdminProfessionalsService(prisma);
-    await svc.create({ tenantId: "t1", firstName: "Ana", lastName: "G", email: "a@salon.test", commissionRate: 0 } as any);
-    expect(create.mock.calls[0][0].data.commissionRate).toBe(0);
+    await expect(parse({ commissionRate: 150 })).rejects.toBeDefined();
+    await expect(parse({ commissionRate: -1 })).rejects.toBeDefined();
   });
 });
 

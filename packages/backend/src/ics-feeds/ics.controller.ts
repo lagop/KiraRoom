@@ -136,7 +136,9 @@ export class IcsController {
       include: { tenant: true },
     });
     this.verifyToken(`professional:${id}`, token, professional ? icsFeedVersion(professional.tenant?.features) : null);
-    if (!professional) throw new NotFoundException("Professional not found");
+    // A professional who has left (deactivated) no longer has a feed: their
+    // calendar link stops answering, as their panel login does.
+    if (!professional || !professional.isActive) throw new NotFoundException("Professional not found");
     const appointments = await this.prisma.appointment.findMany({
       where: {
         professionalId: id,
@@ -166,7 +168,10 @@ export class IcsController {
       include: { professional: true, tenant: true },
     });
     this.verifyToken(`staff:${id}`, token, user?.tenant ? icsFeedVersion(user.tenant.features) : null);
-    if (!user || !user.tenant) throw new NotFoundException("Staff not found");
+    // A login that was taken away (or a professional who left) has no feed either.
+    if (!user || !user.tenant || !user.isActive || (user.professional && !user.professional.isActive)) {
+      throw new NotFoundException("Staff not found");
+    }
     // The link lives on Professional.userId; User.professionalId is never set.
     const profIds = user.professional ? [user.professional.id] : [];
     const appointments = await this.prisma.appointment.findMany({
