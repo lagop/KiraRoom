@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   useQuery,
   useMutation,
@@ -29,6 +30,7 @@ import {
 } from "@/app/dashboard/appointments/components/appointment-drawer.utils";
 import { ClientLoyaltyCard } from "@/components/loyalty/client-loyalty-card";
 import { ClientMarketingCard } from "@/components/marketing/client-marketing-card";
+import { ClientMergeDialog } from "@/components/clients/client-merge-dialog";
 import { ClientNoticesCard } from "@/components/notifications/client-notices-card";
 import { ClientGdprCard } from "@/components/clients/client-gdpr-card";
 
@@ -53,6 +55,8 @@ export default function ClientDetailPage({
   const t = useTranslations();
   const { id } = params;
   const qc = useQueryClient();
+  const router = useRouter();
+  const [merges, setMerges] = useState(0);
   // Read after mount: the server has no token (see the dashboard header).
   const [role, setRole] = useState<string | null>(null);
   useEffect(() => {
@@ -205,9 +209,10 @@ export default function ClientDetailPage({
 
       <VisitHistory appointments={c.appointments ?? []} />
 
-      <ClientLoyaltyCard clientId={id} />
+      {/* Remounted after a merge: they load their own data. */}
+      <ClientLoyaltyCard key={`loyalty-${merges}`} clientId={id} />
 
-      <ClientMarketingCard clientId={id} />
+      <ClientMarketingCard key={`marketing-${merges}`} clientId={id} />
 
       <ClientNoticesCard clientId={id} />
 
@@ -334,6 +339,20 @@ export default function ClientDetailPage({
           <p className="mt-2 text-sm text-gray-500">—</p>
         )}
       </section>
+
+      {/* Merging duplicate records: the API answers owner / admin only. */}
+      {manager && (
+        <ClientMergeDialog
+          client={c}
+          onMerged={(_result, keptId) => {
+            qc.invalidateQueries({ queryKey: ["clients"] });
+            qc.invalidateQueries({ queryKey: ["rebooking"] });
+            // The other record was kept: this one no longer exists.
+            if (keptId !== id) router.replace(`/dashboard/clients/${keptId}`);
+            else setMerges((n) => n + 1);
+          }}
+        />
+      )}
 
       {/* Her data-protection rights: the API answers owner / admin only. */}
       {manager && (

@@ -22,6 +22,11 @@ export const PHONE_PATTERN = /^(?=(?:\D*\d){9,15}\D*$)[\d\s().+-]+$/;
  * International form when it can be worked out: "+34600111222". A number
  * without a prefix gets the salon's country code; one with "+" or "00"
  * keeps its own. Unknown country: the digits as typed.
+ *
+ * "34600111222" typed without the "+" already carries the code: a national
+ * number is never that long (nine digits in Spain), so the code plus at
+ * least nine digits is read as international instead of getting a second
+ * "34".
  */
 export function normalizePhone(raw: string, country = 'ES'): string {
   const trimmed = raw.trim();
@@ -29,7 +34,9 @@ export function normalizePhone(raw: string, country = 'ES'): string {
   if (trimmed.startsWith('+')) return `+${digits}`;
   if (digits.startsWith('00')) return `+${digits.slice(2)}`;
   const code = DIAL_CODES[country.toUpperCase()];
-  return code ? `+${code}${digits}` : digits;
+  if (!code) return digits;
+  if (digits.startsWith(code) && digits.length >= code.length + 9) return `+${digits}`;
+  return `+${code}${digits}`;
 }
 
 /**

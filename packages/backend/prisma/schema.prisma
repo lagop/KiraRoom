@@ -514,6 +514,12 @@ model Client {
   /// P2A-receptionist-advanced -- this client is on the virtual wait-list.
   waitListEntries WaitList[]
 
+  // Emails are stored in lower case (clients/client-contact.ts). The
+  // case-insensitive unique index "clients_tenantId_lower_email_key" on
+  // ("tenantId", lower(email)) is an expression index Prisma cannot describe:
+  // it lives only in migration 20261101110000_client_email_lowercase, which
+  // skips it while a salon still has two clients with the same email in
+  // different capitals.
   @@unique([tenantId, email])
   @@index([tenantId])
   @@index([tenantId, email])

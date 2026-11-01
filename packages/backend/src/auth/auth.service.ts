@@ -22,6 +22,7 @@ import {
 import { AuditLogService } from "../saas/audit-log.service";
 import { EmailService } from "../notifications/services/email.service";
 import { randomBytes } from "crypto";
+import { clientEmailFilter } from "../clients/client-contact";
 import { isKnownSalonTimezone, normalizePlan, suggestedSalonTimezone } from "@kira/shared";
 import {
   parseJwtDuration,
@@ -342,10 +343,13 @@ export class AuthService {
     }
 
     // If not found as user, try to find as client -- in the salon whose site
-    // this is, when the caller says which (see LoginDto.tenantSlug).
+    // this is, when the caller says which (see LoginDto.tenantSlug). Client
+    // emails are stored in lower case; older records may not be, so the
+    // match ignores case, and only a record with a password can sign in.
     const client = await this.prisma.client.findFirst({
       where: {
-        email: loginDto.email,
+        email: clientEmailFilter(loginDto.email),
+        passwordHash: { not: null },
         ...(loginDto.tenantSlug ? { tenant: { slug: loginDto.tenantSlug } } : {}),
       },
     });

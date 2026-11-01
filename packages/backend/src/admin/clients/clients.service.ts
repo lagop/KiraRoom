@@ -14,16 +14,19 @@ import {
   buildClientUpdateData,
   rethrowClientWriteError,
 } from '../../clients/client-write';
+import { countryForPhone } from '../../clients/client-contact';
 
 @Injectable()
 export class AdminClientsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(tenantId: string, createClientDto: CreateClientDto) {
-    const data = buildClientCreateData(tenantId, {
-      ...createClientDto,
-      preferredLanguage: createClientDto.preferredLanguage || 'es',
-    });
+    const country = await countryForPhone(this.prisma, tenantId, createClientDto.phone);
+    const data = buildClientCreateData(
+      tenantId,
+      { ...createClientDto, preferredLanguage: createClientDto.preferredLanguage || 'es' },
+      country,
+    );
     try {
       return await this.prisma.client.create({ data, select: CLIENT_DETAIL_SELECT });
     } catch (error) {
@@ -94,13 +97,14 @@ export class AdminClientsService {
   async update(tenantId: string, id: string, updateClientDto: UpdateClientDto) {
     const current = await this.prisma.client.findFirst({
       where: { id, tenantId },
-      select: { taxId: true, taxIdType: true },
+      select: { taxId: true, taxIdType: true, email: true },
     });
     if (!current) {
       throw new NotFoundException('Cliente no encontrado');
     }
 
-    const data = buildClientUpdateData(updateClientDto, current);
+    const country = await countryForPhone(this.prisma, tenantId, updateClientDto.phone);
+    const data = buildClientUpdateData(updateClientDto, current, country);
     try {
       return await this.prisma.client.update({
         where: { id, tenantId },
