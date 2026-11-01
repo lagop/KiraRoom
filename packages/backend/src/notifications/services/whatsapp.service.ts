@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Twilio from 'twilio';
+import { maskPhone, maskPhonesIn } from '../../common/phone';
 
 export interface WhatsAppMessageData {
   clientName: string;
@@ -97,7 +98,7 @@ export class WhatsAppService {
     const formattedPhone = this.formatPhoneNumber(to);
     
     if (!this.isValidPhoneNumber(formattedPhone)) {
-      this.logger.error(`Invalid phone number format: ${to}`);
+      this.logger.error(`Invalid phone number format: ${maskPhone(to)}`);
       return { success: false, error: 'Invalid phone number format' };
     }
 
@@ -110,15 +111,15 @@ export class WhatsAppService {
 
       if (message.status === 'failed' || message.status === 'undelivered') {
         const errorMsg = message.errorMessage || `WhatsApp message failed with status: ${message.status}`;
-        this.logger.error(`Failed to send WhatsApp message: ${errorMsg}`);
+        this.logger.error(`Failed to send WhatsApp message: ${maskPhonesIn(errorMsg)}`);
         return { success: false, error: errorMsg };
       }
 
-      this.logger.log(`WhatsApp message sent to ${to}: ${message.sid}`);
+      this.logger.log(`WhatsApp message sent to ${maskPhone(to)}: ${message.sid}`);
       return { success: true, id: message.sid };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.logger.error(`Failed to send WhatsApp message: ${errorMessage}`);
+      this.logger.error(`Failed to send WhatsApp message: ${maskPhonesIn(errorMessage)}`);
       return { success: false, error: errorMessage };
     }
   }
@@ -135,7 +136,7 @@ export class WhatsAppService {
     const formattedPhone = this.formatPhoneNumber(to);
     
     if (!this.isValidPhoneNumber(formattedPhone)) {
-      this.logger.error(`Invalid phone number format: ${to}`);
+      this.logger.error(`Invalid phone number format: ${maskPhone(to)}`);
       return { success: false, error: 'Invalid phone number format' };
     }
 
@@ -159,15 +160,15 @@ export class WhatsAppService {
 
       if (result.status === 'failed' || result.status === 'undelivered') {
         const errorMsg = result.errorMessage || `WhatsApp message failed with status: ${result.status}`;
-        this.logger.error(`Failed to send WhatsApp interactive message: ${errorMsg}`);
+        this.logger.error(`Failed to send WhatsApp interactive message: ${maskPhonesIn(errorMsg)}`);
         return { success: false, error: errorMsg };
       }
 
-      this.logger.log(`WhatsApp interactive message sent to ${to}: ${result.sid}`);
+      this.logger.log(`WhatsApp interactive message sent to ${maskPhone(to)}: ${result.sid}`);
       return { success: true, id: result.sid };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.logger.error(`Failed to send WhatsApp interactive message: ${errorMessage}`);
+      this.logger.error(`Failed to send WhatsApp interactive message: ${maskPhonesIn(errorMessage)}`);
       return { success: false, error: errorMessage };
     }
   }
@@ -176,7 +177,7 @@ export class WhatsAppService {
    * Handle incoming WhatsApp messages from Twilio webhook
    */
   async handleIncomingMessage(event: TwilioWhatsAppWebhookEvent): Promise<void> {
-    this.logger.log(`Received WhatsApp message from ${event.From}: ${event.Body}`);
+    this.logger.log(`Received WhatsApp message from ${maskPhone(event.From)} (${(event.Body ?? '').length} characters)`);
 
     try {
       // Process the incoming message
@@ -187,7 +188,7 @@ export class WhatsAppService {
       
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.logger.error(`Failed to handle incoming WhatsApp message: ${errorMessage}`);
+      this.logger.error(`Failed to handle incoming WhatsApp message: ${maskPhonesIn(errorMessage)}`);
     }
   }
 
@@ -203,7 +204,7 @@ export class WhatsAppService {
     const formattedPhone = this.formatPhoneNumber(data.clientPhone);
     
     if (!this.isValidPhoneNumber(formattedPhone)) {
-      this.logger.error(`Invalid phone number format: ${data.clientPhone}`);
+      this.logger.error(`Invalid phone number format: ${maskPhone(data.clientPhone)}`);
       return { success: false, error: 'Invalid phone number format' };
     }
 
@@ -216,15 +217,15 @@ export class WhatsAppService {
 
       if (message.status === 'failed' || message.status === 'undelivered') {
         const errorMsg = message.errorMessage || `WhatsApp message failed with status: ${message.status}`;
-        this.logger.error(`Failed to send WhatsApp confirmation: ${errorMsg}`);
+        this.logger.error(`Failed to send WhatsApp confirmation: ${maskPhonesIn(errorMsg)}`);
         return { success: false, error: errorMsg };
       }
 
-      this.logger.log(`WhatsApp confirmation sent to ${data.clientPhone}: ${message.sid}`);
+      this.logger.log(`WhatsApp confirmation sent to ${maskPhone(data.clientPhone)}: ${message.sid}`);
       return { success: true, id: message.sid };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.logger.error(`Failed to send WhatsApp confirmation: ${errorMessage}`);
+      this.logger.error(`Failed to send WhatsApp confirmation: ${maskPhonesIn(errorMessage)}`);
       return { success: false, error: errorMessage };
     }
   }
@@ -244,7 +245,7 @@ export class WhatsAppService {
     const formattedPhone = this.formatPhoneNumber(data.clientPhone);
     
     if (!this.isValidPhoneNumber(formattedPhone)) {
-      this.logger.error(`Invalid phone number format: ${data.clientPhone}`);
+      this.logger.error(`Invalid phone number format: ${maskPhone(data.clientPhone)}`);
       return { success: false, error: 'Invalid phone number format' };
     }
 
@@ -257,15 +258,15 @@ export class WhatsAppService {
 
       if (message.status === 'failed' || message.status === 'undelivered') {
         const errorMsg = message.errorMessage || `WhatsApp message failed with status: ${message.status}`;
-        this.logger.error(`Failed to send WhatsApp reminder: ${errorMsg}`);
+        this.logger.error(`Failed to send WhatsApp reminder: ${maskPhonesIn(errorMsg)}`);
         return { success: false, error: errorMsg };
       }
 
-      this.logger.log(`WhatsApp reminder sent to ${data.clientPhone}: ${message.sid}`);
+      this.logger.log(`WhatsApp reminder sent to ${maskPhone(data.clientPhone)}: ${message.sid}`);
       return { success: true, id: message.sid };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.logger.error(`Failed to send WhatsApp reminder: ${errorMessage}`);
+      this.logger.error(`Failed to send WhatsApp reminder: ${maskPhonesIn(errorMessage)}`);
       return { success: false, error: errorMessage };
     }
   }
@@ -285,7 +286,7 @@ export class WhatsAppService {
     const formattedPhone = this.formatPhoneNumber(data.clientPhone);
     
     if (!this.isValidPhoneNumber(formattedPhone)) {
-      this.logger.error(`Invalid phone number format: ${data.clientPhone}`);
+      this.logger.error(`Invalid phone number format: ${maskPhone(data.clientPhone)}`);
       return { success: false, error: 'Invalid phone number format' };
     }
 
@@ -298,15 +299,15 @@ export class WhatsAppService {
 
       if (message.status === 'failed' || message.status === 'undelivered') {
         const errorMsg = message.errorMessage || `WhatsApp message failed with status: ${message.status}`;
-        this.logger.error(`Failed to send WhatsApp cancellation: ${errorMsg}`);
+        this.logger.error(`Failed to send WhatsApp cancellation: ${maskPhonesIn(errorMsg)}`);
         return { success: false, error: errorMsg };
       }
 
-      this.logger.log(`WhatsApp cancellation sent to ${data.clientPhone}: ${message.sid}`);
+      this.logger.log(`WhatsApp cancellation sent to ${maskPhone(data.clientPhone)}: ${message.sid}`);
       return { success: true, id: message.sid };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.logger.error(`Failed to send WhatsApp cancellation: ${errorMessage}`);
+      this.logger.error(`Failed to send WhatsApp cancellation: ${maskPhonesIn(errorMessage)}`);
       return { success: false, error: errorMessage };
     }
   }
@@ -327,7 +328,7 @@ export class WhatsAppService {
     const formattedPhone = this.formatPhoneNumber(data.clientPhone);
     
     if (!this.isValidPhoneNumber(formattedPhone)) {
-      this.logger.error(`Invalid phone number format: ${data.clientPhone}`);
+      this.logger.error(`Invalid phone number format: ${maskPhone(data.clientPhone)}`);
       return { success: false, error: 'Invalid phone number format' };
     }
 
@@ -340,15 +341,15 @@ export class WhatsAppService {
 
       if (message.status === 'failed' || message.status === 'undelivered') {
         const errorMsg = message.errorMessage || `WhatsApp message failed with status: ${message.status}`;
-        this.logger.error(`Failed to send WhatsApp rescheduled: ${errorMsg}`);
+        this.logger.error(`Failed to send WhatsApp rescheduled: ${maskPhonesIn(errorMsg)}`);
         return { success: false, error: errorMsg };
       }
 
-      this.logger.log(`WhatsApp rescheduled sent to ${data.clientPhone}: ${message.sid}`);
+      this.logger.log(`WhatsApp rescheduled sent to ${maskPhone(data.clientPhone)}: ${message.sid}`);
       return { success: true, id: message.sid };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.logger.error(`Failed to send WhatsApp rescheduled: ${errorMessage}`);
+      this.logger.error(`Failed to send WhatsApp rescheduled: ${maskPhonesIn(errorMessage)}`);
       return { success: false, error: errorMessage };
     }
   }
