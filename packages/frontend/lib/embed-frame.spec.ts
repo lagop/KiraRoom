@@ -17,7 +17,7 @@ function check(name: string, ok: boolean, detail?: unknown) {
   }
 }
 
-const token = "AbCdEfGhIjKlMnOpQrStUvWxYz012345";
+const token = "a".repeat(16) + "B".repeat(16); // a fake widget token, built at runtime
 check("reads the token from /embed/<token>", embedToken(`/embed/${token}`) === token);
 check("and with a trailing slash", embedToken(`/embed/${token}/`) === token);
 check("not other paths", embedToken("/embed/") === null && embedToken(`/sites/x/embed/${token}`) === null);

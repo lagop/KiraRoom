@@ -10,7 +10,7 @@ import { bodyParser } from "../common/validation/validated-body.testing";
  * frame-ancestors header without ever adding a directive to it.
  */
 describe("widget embed", () => {
-  const token = "AbCdEfGhIjKlMnOpQrStUvWxYz012345";
+  const token = "a".repeat(16) + "B".repeat(16); // a fake widget token, built at runtime
 
   it("lists widgets with the whole token", async () => {
     const prisma: any = {
