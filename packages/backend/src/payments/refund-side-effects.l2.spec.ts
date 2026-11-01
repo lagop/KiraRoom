@@ -559,10 +559,11 @@ describe("refunds and their side effects (L2, real database)", () => {
     const later = await commissions.getPayrollReport(tenantId, new Date(nextMonth.getTime() - 864e5), new Date(nextMonth.getTime() + 864e5));
     expect(later.professionals.find((p) => p.id === pro)).toMatchObject({ commission: -290, refundAdjustments: -290 });
 
-    // The next payout nets and settles them.
-    const next = await commissions.payCommission(tenantId, pro, {} as any);
+    // The next payout, made next month (Pagar pays what is pending up to that day), nets and settles them.
+    const payDay = new Date(nextMonth.getTime() + 864e5);
+    const next = await commissions.payCommission(tenantId, pro, {} as any, payDay);
     expect(next.totalAmount).toBe(-290);
     expect(await db.commissionAdjustment.count({ where: { tenantId, professionalId: pro, settled: false } })).toBe(0);
-    expect((await commissions.getCommissionSummary(tenantId, pro)).pendingCommission).toBe(0);
+    expect((await commissions.getCommissionSummary(tenantId, pro, payDay)).pendingCommission).toBe(0);
   }, 60_000);
 });
