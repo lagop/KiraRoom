@@ -11,7 +11,6 @@ import {
   SalonPeriod,
   TillServiceLine,
   addDays,
-  appointmentDay,
   clientRetention,
   closedRates,
   dailyMetrics,
@@ -58,11 +57,14 @@ export interface DashboardStats {
   newClients: number;
   /** Revenue of the paid visits / paidAppointments (money kept on cancelled ones aside), in cents. */
   avgOrderValue: number;
-  /** Changes against the previous comparable period, in percent. */
-  revenueChange: number;
-  appointmentsChange: number;
-  clientsChange: number;
-  orderValueChange: number;
+  /**
+   * Changes against the previous comparable period, in percent; null when
+   * the previous figure is 0 (nothing to compare with, see percentChange).
+   */
+  revenueChange: number | null;
+  appointmentsChange: number | null;
+  clientsChange: number | null;
+  orderValueChange: number | null;
 }
 
 export interface RevenueDataPoint {
@@ -153,8 +155,6 @@ export const ANALYTICS_APPOINTMENT_SELECT = {
   status: true,
   paymentStatus: true,
   amountPaid: true,
-  totalAmount: true,
-  price: true,
   // Its loyalty reward (discount.loyalty.moneyCents) is not revenue.
   discount: true,
   scheduledDate: true,
@@ -425,23 +425,6 @@ export class AnalyticsService {
     };
   }
 
-  /** One status, month by month, over the last `months` salon months. */
-  async getAppointmentStatusEvolution(
-    tenantId: string,
-    status: string,
-    months: number = 6,
-  ): Promise<{ period: string; count: number }[]> {
-    const display =
-      STATUS_DISPLAY[status] ??
-      Object.values(STATUS_DISPLAY).find((d) => d === status) ??
-      status;
-    const evolution = await this.getAppointmentStatusesEvolution(tenantId, months);
-    return evolution.map((m) => ({
-      period: m.period,
-      count: Number(m[display] ?? 0),
-    }));
-  }
-
   /** Every status, month by month (stacked chart data), months as "YYYY-MM". */
   async getAppointmentStatusesEvolution(
     tenantId: string,
@@ -474,70 +457,6 @@ export class AnalyticsService {
       today,
       limit,
     );
-  }
-
-  /** Revenue report for explicit salon days (both inclusive). Cents. */
-  async getRevenueReport(
-    tenantId: string,
-    period: SalonPeriod,
-  ): Promise<{
-    period: SalonPeriod;
-    total: number;
-    byDay: { date: string; revenue: number }[];
-    byService: { service: string; revenue: number }[];
-    byProfessional: { professional: string; revenue: number }[];
-  }> {
-    const rows = await this.loadAppointments(tenantId, period);
-    return {
-      period,
-      total: summarize(rows).revenue,
-      byDay: dailyMetrics(rows, period).map((d) => ({ date: d.date, revenue: d.revenue })),
-      byService: topServices(rows, 100).map((s) => ({ service: s.name, revenue: s.revenue })),
-      byProfessional: topProfessionals(rows, 100).map((p) => ({
-        professional: p.name,
-        revenue: p.revenue,
-      })),
-    };
-  }
-
-  async getAppointmentsReport(
-    tenantId: string,
-    period: SalonPeriod,
-  ): Promise<{
-    period: SalonPeriod;
-    total: number;
-    completed: number;
-    cancelled: number;
-    noShow: number;
-    byDay: { date: string; count: number }[];
-    byProfessional: { professional: string; count: number }[];
-  }> {
-    const rows = await this.loadAppointments(tenantId, period);
-    const byProfMap = new Map<string, number>();
-    for (const a of rows) {
-      const name = a.professional
-        ? `${a.professional.firstName} ${a.professional.lastName}`.trim()
-        : "Sin profesional";
-      byProfMap.set(name, (byProfMap.get(name) ?? 0) + 1);
-    }
-    const byDayMap = new Map<string, number>();
-    for (const a of rows) {
-      const day = appointmentDay(a.scheduledDate);
-      byDayMap.set(day, (byDayMap.get(day) ?? 0) + 1);
-    }
-    return {
-      period,
-      total: rows.length,
-      completed: rows.filter((a) => a.status === "completed").length,
-      cancelled: rows.filter((a) => a.status === "cancelled").length,
-      noShow: rows.filter((a) => a.status === "no_show").length,
-      byDay: [...byDayMap.entries()]
-        .map(([date, count]) => ({ date, count }))
-        .sort((a, b) => a.date.localeCompare(b.date)),
-      byProfessional: [...byProfMap.entries()]
-        .map(([professional, count]) => ({ professional, count }))
-        .sort((a, b) => b.count - a.count),
-    };
   }
 
   /**

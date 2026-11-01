@@ -10,11 +10,11 @@ import { PaymentFiltersDto } from "../payments/payments-query";
 /** The appointments export's optional range: salon calendar days, both inclusive. */
 export class AppointmentsExportQueryDto {
   @IsOptional()
-  @Matches(/^d{4}-d{2}-d{2}$/, { message: "La fecha no es válida: usa el formato AAAA-MM-DD." })
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: "La fecha no es válida: usa el formato AAAA-MM-DD." })
   dateFrom?: string;
 
   @IsOptional()
-  @Matches(/^d{4}-d{2}-d{2}$/, { message: "La fecha no es válida: usa el formato AAAA-MM-DD." })
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: "La fecha no es válida: usa el formato AAAA-MM-DD." })
   dateTo?: string;
 }
 

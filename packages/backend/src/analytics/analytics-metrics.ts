@@ -81,9 +81,26 @@ export function shiftMonths(day: string, months: number): string {
   return fromUtcDate(target);
 }
 
+/**
+ * The longest period any analytics figure is computed over: twelve calendar
+ * months cut at today never exceed 366 days.
+ */
+export const MAX_PERIOD_DAYS = 366;
+
+/**
+ * Every day of the period. Counted rather than compared as strings: past
+ * 9999-12-31 addDays gives "+010000-01-01", which sorts before any end date,
+ * so a string loop never ended and froze the server. A period longer than
+ * MAX_PERIOD_DAYS (or not a period at all) is a programming error, never a
+ * reason to loop.
+ */
 export function daysIn(period: SalonPeriod): string[] {
+  const n = periodLength(period);
+  if (!Number.isFinite(n) || n > MAX_PERIOD_DAYS) {
+    throw new Error(`Analytics period too long: ${period.start} to ${period.end}`);
+  }
   const days: string[] = [];
-  for (let d = period.start; d <= period.end; d = addDays(d, 1)) days.push(d);
+  for (let i = 0; i < n; i++) days.push(addDays(period.start, i));
   return days;
 }
 
@@ -184,14 +201,54 @@ export function rangePeriod(range: string | undefined, today: string, maxMonths 
   }
 }
 
-/** Parses an explicit "YYYY-MM-DD" pair; null when either side is not a date. */
-export function explicitPeriod(start?: string, end?: string): SalonPeriod | null {
-  const re = /^\d{4}-\d{2}-\d{2}$/;
-  const s = start?.slice(0, 10);
-  const e = end?.slice(0, 10);
-  if (!s || !e || !re.test(s) || !re.test(e)) return null;
-  if (Number.isNaN(toUtcDate(s).getTime()) || Number.isNaN(toUtcDate(e).getTime())) return null;
-  return s <= e ? { start: s, end: e } : { start: e, end: s };
+/**
+ * A real calendar day as "YYYY-MM-DD", years 2000-2100 only; null otherwise.
+ * The round trip rejects days that do not exist: Date reads 2026-02-31 as
+ * 3 March.
+ */
+export function parseSalonDay(value: string | undefined | null): string | null {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const year = Number(value.slice(0, 4));
+  if (year < 2000 || year > 2100) return null;
+  const date = toUtcDate(value);
+  if (Number.isNaN(date.getTime()) || fromUtcDate(date) !== value) return null;
+  return value;
+}
+
+/**
+ * An explicit start/end pair (both "YYYY-MM-DD", both inclusive), checked
+ * before anything is loaded for it: real days in 2000-2100, end not before
+ * start, and no longer than `maxMonths` months of 30.5 days (the plan's
+ * history, 1-12) nor MAX_PERIOD_DAYS. The error is the Spanish sentence a
+ * 400 carries.
+ *
+ * No endpoint takes explicit dates today (the reports that did had no caller
+ * and were removed); one that does must go through this. An unchecked range
+ * once froze the server (see daysIn).
+ */
+export function explicitPeriod(
+  start: string | undefined,
+  end: string | undefined,
+  maxMonths = 12,
+): { period: SalonPeriod } | { error: string } {
+  const s = parseSalonDay(start);
+  const e = parseSalonDay(end);
+  if (!s || !e) {
+    return {
+      error:
+        "startDate y endDate deben ser fechas reales con formato AAAA-MM-DD, entre los años 2000 y 2100.",
+    };
+  }
+  if (e < s) return { error: "endDate no puede ser anterior a startDate." };
+  const months = Math.max(1, Math.min(12, Math.floor(maxMonths) || 1));
+  // 3 months = 92 days, 6 = 183, 12 = 366: never over MAX_PERIOD_DAYS.
+  const limit = Math.min(Math.ceil(months * 30.5), MAX_PERIOD_DAYS);
+  if (periodLength({ start: s, end: e }) > limit) {
+    return {
+      error: `El período no puede superar ${months} ${months === 1 ? "mes" : "meses"} (${limit} días) en tu plan.`,
+    };
+  }
+  return { period: { start: s, end: e } };
 }
 
 // ---------------------------------------------------------------------------
@@ -201,9 +258,8 @@ export function explicitPeriod(start?: string, end?: string): SalonPeriod | null
 export interface AppointmentMoney {
   status: string;
   paymentStatus: string;
+  /** Cents charged, VAT included (appointments.amountPaid). */
   amountPaid?: unknown;
-  totalAmount?: unknown;
-  price?: unknown;
   /** The visit's discount record: its loyalty reward's money is `discount.loyalty.moneyCents`. */
   discount?: unknown;
 }
@@ -218,15 +274,14 @@ export function isPaidAppointment(a: AppointmentMoney): boolean {
 }
 
 /**
- * What an appointment brought in, in cents: what was charged when recorded,
- * else its total (cents), else its list price (euros, hence × 100).
+ * What an appointment brought in, in cents: what was charged (amountPaid,
+ * VAT included, net of partial refunds) and nothing else. It used to fall
+ * back on the catalogue total, which excludes VAT when the salon's prices
+ * do, so a paid row recorded with amountPaid 0 mixed net into gross figures.
  */
 export function appointmentValueCents(a: AppointmentMoney): number {
   const paid = Number(a.amountPaid ?? 0);
-  if (paid > 0) return Math.round(paid);
-  const total = Number(a.totalAmount ?? 0);
-  if (total > 0) return Math.round(total);
-  return Math.round(Number(a.price ?? 0) * 100);
+  return Number.isFinite(paid) && paid > 0 ? Math.round(paid) : 0;
 }
 
 /**
@@ -258,9 +313,13 @@ export function revenueCents(a: AppointmentMoney): number {
 /** The former name of revenueCents. */
 export const paidRevenueCents = revenueCents;
 
-/** Percentage change, one decimal; 0 when there is nothing to compare with. */
-export function percentChange(current: number, previous: number): number {
-  if (!previous) return 0;
+/**
+ * Percentage change, one decimal. Null when the previous figure is 0, both
+ * periods empty included: there is nothing to compare with, and the panel
+ * shows "—" instead of a flat "+0 %" for a salon that went from 0 to 2.000 €.
+ */
+export function percentChange(current: number, previous: number): number | null {
+  if (!previous || !Number.isFinite(previous) || !Number.isFinite(current)) return null;
   return Math.round(((current - previous) / previous) * 1000) / 10;
 }
 

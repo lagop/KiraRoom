@@ -53,7 +53,7 @@ describe("Analítica is for managers only", () => {
       getOverview: jest.fn(async () => ({})),
       getAppointmentStatusByDays: jest.fn(async () => []),
     };
-    const flags: any = { clampMonths: (_p: string, m: number) => m };
+    const flags: any = { clampMonths: async (_t: string, m: number) => m };
     const ctl = new AnalyticsController(analytics, flags);
     const req = { user: { id: "u1", tenantId: "t1", role: "owner", userId: "u1" } } as any;
     await ctl.getOverview(req, "3");

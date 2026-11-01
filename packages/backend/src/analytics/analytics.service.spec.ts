@@ -84,9 +84,7 @@ describe("AnalyticsService", () => {
         {
           status: "completed",
           paymentStatus: "paid",
-          totalAmount: 4500,
-          amountPaid: 0,
-          price: 45,
+          amountPaid: 4500,
           scheduledDate: new Date("2026-10-01T00:00:00Z"),
           duration: 60,
           professionalId: "p1",
@@ -97,9 +95,7 @@ describe("AnalyticsService", () => {
         {
           status: "confirmed",
           paymentStatus: "pending",
-          totalAmount: 3000,
           amountPaid: 0,
-          price: 30,
           scheduledDate: new Date("2026-10-01T00:00:00Z"),
           duration: 30,
           professionalId: "p1",
@@ -112,7 +108,7 @@ describe("AnalyticsService", () => {
         {
           status: "completed",
           paymentStatus: "paid",
-          totalAmount: 3000,
+          amountPaid: 3000,
           scheduledDate: new Date("2026-09-01T00:00:00Z"),
         },
       ]);

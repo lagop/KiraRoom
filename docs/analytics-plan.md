@@ -1,229 +1,116 @@
-# Analytics Service Implementation Plan
+# Analítica
 
-## Overview
+How the Analítica page (`/dashboard/analytics`) computes its figures, who sees
+what, and which endpoints serve it. The code is the reference:
+`packages/backend/src/analytics/analytics-metrics.ts` holds every definition
+next to its tests; this page summarises it.
 
-> **Status (rev 3):** This document predates the unified plan / feature gating
-> rewrite. The current plan matrix lives in
-> `packages/backend/src/payments/services/subscriptions.service.ts` and
-> `packages/frontend/src/lib/plans.ts`. The `analytics-flags.service.ts` is
-> kept in sync as a defence-in-depth check on the analytics endpoints.
+## Who sees it
 
-This document outlines the plan to implement Basic (Esencial) and Advanced (Pro / Empresa) analytics for the KiraRoom dashboard.
+- Owner and admin only (owner decision 4a). The menu hides it from staff, and
+  the page sends any other role back to `/dashboard` before making a request.
+- Every `/analytics` endpoint is `SALON_MANAGERS` (also the controller's
+  default), so a staff account gets a 403 everywhere. The per-professional staff
+  scoping is gone; the dashboard home (`/dashboard`) no longer asks staff for
+  the overview or the status counts and hides those cards for them.
 
----
+## Plans
 
-## Current State Analysis
+The plan is the **effective** plan from `FeatureFlagService` (the same one
+`FeatureGuard` uses): a salon on its trial counts as Pro, and legacy names are
+normalised (`basic` → Esencial, `professional` → Pro, `advanced` and
+`enterprise` → Empresa). An add-on that unlocks `advanced_analytics` counts.
 
-### Backend (`packages/backend/src/analytics/`)
-- **analytics.service.ts**: Already has comprehensive real data queries from database
-- **analytics.controller.ts**: Exposes endpoints for overview, revenue, and appointments reports
-- **Existing data points**:
-  - Dashboard stats (revenue, appointments, new clients, avg order value)
-  - Revenue by month
-  - Service popularity
-  - Appointment status breakdown
-  - Top services and professionals
-  - Daily metrics
+| Plan | History (`maxMonths`) | Profesionales and Clientas tabs |
+|------|-----------------------|---------------------------------|
+| Esencial | 3 months | locked, with the upgrade card |
+| Pro (and trial) | 6 months | yes |
+| Empresa | 12 months | yes |
 
-### Frontend (`packages/frontend/app/dashboard/analytics/page.tsx`)
-- Already calls `apiClient.getAnalyticsOverview()`
-- Falls back to mock data on API failure (lines 58-99)
-- Displays: stats cards, revenue chart, service popularity, appointment status, key insights
+Longer requests are cut to the plan's months. The page builds its period
+options (3 / 6 / 12 months) from `maxMonths` and says "Tu plan muestra hasta N
+meses" below 12.
 
-### Subscription Model
-- **Plans (rev 3)**: `esencial` (€49), `pro` (€79), `empresa` (€149 × locales)
-- Legacy aliases `basic` / `professional` / `advanced` / `enterprise` are
-  accepted everywhere and mapped to the new plan via
-  `SubscriptionsService.normalizePlan`.
-- **Plan field**: On `Tenant` model in database
-- **JWT**: Already includes `plan` and `subscriptionStatus` (see
-  `auth/strategies/jwt.strategy.ts:91-93`).
+## Definitions
 
----
+- **Periods** are calendar days in the salon's timezone, both ends inclusive.
+  "Last N months" is the current month so far plus the N-1 before it. "vs.
+  período anterior" compares the same days N months earlier.
+- **Ingresos** (`revenueCents`): money charged, cents, VAT included, dated by
+  the appointment day.
+  - A paid, non-cancelled appointment counts its `amountPaid` (net of partial
+    refunds) **less what a loyalty reward covered**
+    (`discount.loyalty.moneyCents`): points are not revenue, as in Caja and on
+    the invoice (D4).
+  - A cancelled or no-show appointment counts what the salon **kept** of what
+    was paid for it (`amountPaid` still on it, not refunded), less the reward
+    (D9).
+  - Nothing else: no fallback to the catalogue price; still-open, partly paid
+    visits are not revenue yet.
+  - Till sales without an appointment are reported apart as `tillSales`
+    (products and services, net of refunds); `stats.totalRevenueWithTill` adds
+    them to Ingresos.
+- **Citas**: appointments dated in the period, cancelled ones excluded.
+- **Valor medio por cita**: revenue of the paid appointments divided by them
+  (money kept on cancelled visits is revenue, not a ticket).
+- **Nuevas clientas**: clients whose **first completed visit** falls in the
+  period (salon calendar), compared the same way with the previous period.
+  Client records created in the period (imports, contacts, bookings that never
+  happened) do not count until the client comes (D7).
+- **Multi-service visits** (D5): a visit with two or more services
+  (`appointment_services` rows, processing time aside) has its revenue split
+  over them in proportion to the list price each was booked at; each part, and
+  one booking, goes to its own service and professional. Occupancy charges each
+  professional only their own minutes (the agenda's busy blocks, without the
+  cleanup).
+- **Profesionales** (`professional-performance`, overview `topProfessionals`):
+  `revenue` is their share of appointment revenue; `tillServicesCents` the
+  services they did that the till sold without an appointment (sale lines of
+  kind `service`, net of refunds); `revenueCents` is both ("cobrado, IVA
+  incluido", D6). A visit charged at the till is a line of kind
+  `appointment`, so nothing is counted twice. Comisiones uses the commission
+  base instead (catalogue price, completed visits), so the two can differ.
+  Each row also has closing counts and rates (S7).
+- **Closing rates** (U9): completion, cancellation and no-show rates are over
+  appointments with a closed status (completed, cancelled, no-show) scheduled
+  up to yesterday in the salon's calendar; today's and still-open ones are left
+  out. Percent with one decimal, `null` when nothing closed. Served as
+  overview `rates`, `GET appointment-rates`, and per professional.
+- **Clientas recurrentes**: served in the period (at least one completed
+  appointment) and either came back within it or had been served before.
+  Retention = recurring / served.
+- **Ocupación**: booked minutes (non-cancelled) over working minutes from each
+  professional's schedule, less approved time off. Professionals without a
+  schedule are left out; with none, the rate is "—".
+- **Changes** (`revenueChange`, `appointmentsChange`, `clientsChange`,
+  `orderValueChange`) are percentages with one decimal, and `null` when the
+  previous figure is 0 (the page shows "—, Sin datos del período anterior").
 
-## Proposed Feature Split
+The appointments export (`GET /api/exports/appointments.csv` or `.xlsx`) takes
+optional `dateFrom` / `dateTo` salon days, both inclusive; the payments export
+already took the Pagos filters.
 
-### Basic Analytics (Esencial plan)
+Money is in cents in every response (`currencyUnit: "cents"`); the page formats
+it with `formatCents`.
 
-| Feature | Description |
-|---------|-------------|
-| **Overview Stats** | Total revenue, appointments, new clients, avg order value |
-| **Revenue Chart** | Last 3 months bar chart |
-| **Service Popularity** | Top 5 services by appointments |
-| **Appointment Status** | Status breakdown (completed, pending, cancelled, no-show) |
-| **Time Range** | Last 3 months only |
-| **Key Insights** | Basic auto-generated insights |
+## Endpoints (`/api/analytics/...`)
 
-### Advanced Analytics (Pro & Empresa plans)
+| Endpoint | Roles | Plan | Notes |
+|----------|-------|------|-------|
+| `GET features` | owner, admin | any | `{ hasAdvancedAnalytics, maxMonths }` |
+| `GET overview?months=` | owner, admin | any | stats (incl. `totalRevenueWithTill`), `rates`, `tillSales`, occupancy, revenue by month ("YYYY-MM"), service popularity |
+| `GET appointment-statuses-evolution?months=` | owner, admin | any | per-status counts per month |
+| `GET appointment-status-by-days?days=` | owner, admin | any | status breakdown of the last N days (max 366) |
+| `GET appointment-rates?days=` or `?months=` | owner, admin | any | closing rates (see above); with `months`, also `byMonth` |
+| `GET professional-performance?range=` | owner, admin | Pro / Empresa | `range`: today, this_week, last_week, this_month, last_month, last_30_days, 3_months, 6_months, 12_months |
+| `GET client-insights?months=` | owner, admin | Pro / Empresa | new, served, recurring clients and retention |
 
-| Feature | Description |
-|---------|-------------|
-| **All Basic Features** | Everything from free tier |
-| **Extended Time Range** | 6 months, 12 months options |
-| **Revenue Report** | Detailed revenue by day/service/professional |
-| **Appointments Report** | Detailed appointment analytics |
-| **Trend Analysis** | Month-over-month comparisons |
-| **Top Professionals** | Revenue and appointments by staff |
-| **Daily Metrics** | Day-by-day performance |
-| **Export Features** | Export reports as CSV (future) |
-| **Forecasting** | Simple revenue predictions (future) |
+Pro-only endpoints are gated by `@Feature("advanced_analytics")`; a refusal is
+the guard's 403 with `code: "FEATURE_NOT_IN_PLAN"` and `upgradeUrl:
+"/dashboard/billing"`.
 
----
-
-## Implementation Plan
-
-### Phase 1: Backend Changes
-
-#### 1.1 Update JWT Strategy
-**File**: `packages/backend/src/auth/strategies/jwt.strategy.ts`
-- Add `plan` field to user object returned from validation
-- Include subscription status for feature gating
-
-```typescript
-// Add to select in jwt.strategy.ts
-select: {
-  // ... existing fields
-  tenant: {
-    select: {
-      plan: true,
-      subscriptionStatus: true,
-    },
-  },
-}
-```
-
-#### 1.2 Create Analytics Feature Flags Service
-**File**: `packages/backend/src/analytics/analytics-flags.service.ts` (new)
-- Check user's plan eligibility for features
-- Methods: `hasAdvancedAnalytics(user)`, `getMaxMonths(user)`
-
-#### 1.3 Update Analytics Controller
-**File**: `packages/backend/src/analytics/analytics.controller.ts`
-- Add plan check for advanced endpoints
-- New endpoints for advanced features:
-  - `GET /analytics/revenue-detailed` (paid)
-  - `GET /analytics/appointments-detailed` (paid)
-  - `GET /analytics/forecasts` (paid - future)
-
-#### 1.4 Update Analytics Service
-**File**: `packages/backend/src/analytics/analytics.service.ts`
-- Add plan-aware methods
-- Implement `getDetailedReport(tenantId, plan, options)`
-
----
-
-### Phase 2: Frontend Changes
-
-#### 2.1 Update API Client
-**File**: `packages/frontend/lib/api.ts`
-- Add methods to check plan status
-- Add methods for advanced analytics endpoints
-
-```typescript
-// Add to api.ts
-async getPlanStatus(): Promise<{ plan: string; status: string }> {
-  return this.request('/auth/plan-status');
-}
-```
-
-#### 2.2 Create Analytics Hook
-**File**: `packages/frontend/src/hooks/useAnalytics.ts` (new)
-- Manage analytics data loading
-- Handle plan-based feature access
-- Provide upgrade prompts
-
-#### 2.3 Update Analytics Page
-**File**: `packages/frontend/app/dashboard/analytics/page.tsx`
-- Integrate plan checking
-- Show upgrade prompt for locked features
-- Add UI for advanced features when on paid plan
-- Improve error handling (don't default to mock data)
-
-#### 2.4 Create Upgrade Prompt Component
-**File**: `packages/frontend/src/components/analytics/UpgradePrompt.tsx` (new)
-- Show when free user tries to access advanced features
-- Link to subscription upgrade page
-
----
-
-### Phase 3: UI/UX Improvements
-
-#### 3.1 Add Feature Badges
-- Show "Pro" or "Advanced" badges on paid features
-- Lock icons on disabled features
-
-#### 3.2 Add Time Range Selector
-- Free: 3 months max
-- Paid: 6 months, 12 months options
-
-#### 3.3 Add Export Buttons (Future)
-- CSV export for reports
-
----
-
-## Database Changes
-
-No new tables required. Using existing:
-- `Tenant.plan` - subscription plan
-- `Tenant.subscriptionStatus` - subscription status
-- Existing analytics data from appointments, clients, services
-
----
-
-## API Endpoints
-
-### Existing (keep)
-```
-GET /api/analytics/overview?months=3|6|12
-GET /api/analytics/revenue?startDate=&endDate=
-GET /api/analytics/appointments?startDate=&endDate=
-```
-
-### New Advanced Endpoints
-```
-GET /api/analytics/detailed-report?startDate=&endDate=&type=revenue|appointments
-GET /api/analytics/professional-performance?months=3|6|12
-GET /api/analytics/client-insights?months=3|6|12
-```
-
----
-
-## Implementation Order
-
-1. **Update JWT Strategy** - Add plan to user context
-2. **Create Analytics Flags Service** - Feature gating logic
-3. **Update Controller** - Add plan checks
-4. **Update API Client** - Add plan status method
-5. **Update Analytics Page** - Connect to plan-aware endpoints
-6. **Add Upgrade UI** - Locked feature prompts
-7. **Test** - Verify free vs paid behavior
-
----
-
-## File Changes Summary
-
-### New Files
-| File | Purpose |
-|------|---------|
-| `packages/backend/src/analytics/analytics-flags.service.ts` | Feature gating |
-| `packages/frontend/src/hooks/useAnalytics.ts` | Analytics data hook |
-| `packages/frontend/src/components/analytics/UpgradePrompt.tsx` | Upgrade UI |
-| `docs/analytics-plan.md` | This document |
-
-### Modified Files
-| File | Changes |
-|------|---------|
-| `packages/backend/src/auth/strategies/jwt.strategy.ts` | Add plan to user |
-| `packages/backend/src/analytics/analytics.controller.ts` | Add plan checks, new endpoints |
-| `packages/backend/src/analytics/analytics.service.ts` | Plan-aware methods |
-| `packages/frontend/lib/api.ts` | Plan status, advanced endpoints |
-| `packages/frontend/app/dashboard/analytics/page.tsx` | Plan integration |
-
----
-
-## Notes
-
-- The backend analytics service already fetches real data - the issue is the frontend is falling back to mock data
-- Need to ensure JWT includes plan information
-- Analytics settings tab shows "Próximamente" - this should be replaced with actual plan-based access
-- Consider adding a "plan status" endpoint that frontend can call to determine UI
+The old `revenue`, `appointments`, `appointment-status-evolution` and
+`detailed-report` endpoints were removed: nothing called them, and they took
+unbounded date ranges. Any future endpoint that takes explicit dates must
+validate them with `explicitPeriod()` (real days, 2000–2100, end ≥ start, at
+most the plan's months and 366 days).

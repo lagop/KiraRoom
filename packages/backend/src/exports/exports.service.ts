@@ -71,7 +71,7 @@ function salonDateTime(date: Date, timeZone: string): string {
     .replace(",", "");
 }
 
-const DAY = /^d{4}-d{2}-d{2}$/;
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 /** A real calendar day "YYYY-MM-DD" (2026-02-31 is not one). */
 function isDay(value: string): boolean {
