@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import apiClient from "@/lib/api";
+import { isManager } from "@/lib/dashboard-nav";
+import { getCurrentUser } from "@/lib/utils";
 
 export interface DashboardStats {
   totalRevenue: number;
@@ -187,11 +189,17 @@ export function useDashboardData() {
   // value so one failure does not blank the whole dashboard -- but it used to
   // do so silently, showing €0 and 0 clients as if they were real figures.
   const [partialFailures, setPartialFailures] = useState<string[]>([]);
+  // The salon's figures (Analítica's overview and status counts) are the
+  // owner's and admins': the API answers staff with a 403, so they are not
+  // asked for, and the page leaves those cards out.
+  const [salonFigures, setSalonFigures] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
     const failed: string[] = [];
+    const manager = isManager(getCurrentUser()?.role);
+    setSalonFigures(manager);
     const soft = <T,>(name: string, request: Promise<T>, fallback: T) =>
       request.catch((err) => {
         console.error(`Dashboard: ${name} failed to load:`, err);
@@ -209,8 +217,8 @@ export function useDashboardData() {
         pendingPayments,
         unread,
       ] = await Promise.all([
-        soft("overview", apiClient.getAnalyticsOverview(1), null),
-        soft("statusByDays", apiClient.getAppointmentStatusByDays(14), [] as any[]),
+        manager ? soft("overview", apiClient.getAnalyticsOverview(1), null) : null,
+        manager ? soft("statusByDays", apiClient.getAppointmentStatusByDays(14), [] as any[]) : ([] as any[]),
         soft("todayPayments", apiClient.getTodayPayments(), [] as any[]),
         soft("clients", apiClient.getClients(), [] as any[]),
         soft("professionals", apiClient.getProfessionals(), [] as any[]),
@@ -288,5 +296,5 @@ export function useDashboardData() {
     fetchData();
   }, [fetchData]);
 
-  return { data, loading, error, partialFailures, refresh: fetchData };
+  return { data, loading, error, partialFailures, salonFigures, refresh: fetchData };
 }

@@ -1,45 +1,64 @@
-import { ForbiddenException } from "@nestjs/common";
+import { METHOD_METADATA } from "@nestjs/common/constants";
+import { UserRole } from "@prisma/client";
 import { AnalyticsController } from "./analytics.controller";
+import { ROLES_KEY, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 
 /**
- * A professional's own login sees their own figures. A staff account linked
- * to no professional got `null` for "which professional" -- read as "no
- * filter" -- and so saw the whole salon's. Now it is refused, as clients and
- * appointments are for such an account.
+ * Analítica is the owner's and admins' (owner decision 4a). Staff used to
+ * get their own figures from the overview and the status counts, under
+ * titles that read as the salon's ("Ingresos totales"), and empty widgets
+ * where the rest answered 403. Now every route is SALON_MANAGERS, so
+ * RolesGuard answers a staff account with a 403 everywhere, and the
+ * per-professional filter that served them is gone.
  */
 
-function setup(professional: { id: string } | null) {
-  const analytics: any = {
-    getOverview: jest.fn(async () => ({})),
-    getAppointmentStatusByDays: jest.fn(async () => []),
-  };
-  const flags: any = { clampMonths: async (_t: string, m: number) => m };
-  const professionals: any = { getProfessionalByUserId: jest.fn(async () => professional) };
-  return { ctl: new AnalyticsController(analytics, flags, professionals), analytics };
+function routes(): string[] {
+  const proto = AnalyticsController.prototype as unknown as Record<string, unknown>;
+  return Object.getOwnPropertyNames(proto).filter(
+    (name) => name !== "constructor" && Reflect.getMetadata(METHOD_METADATA, proto[name] as object) !== undefined,
+  );
 }
 
-const req = (role: string) => ({ user: { id: "u1", tenantId: "t1", role, userId: "u1" } }) as any;
+function rolesOf(name: string): UserRole[] | undefined {
+  const handler = (AnalyticsController.prototype as unknown as Record<string, object>)[name];
+  return Reflect.getMetadata(ROLES_KEY, handler) ?? Reflect.getMetadata(ROLES_KEY, AnalyticsController);
+}
 
-describe("analytics for staff", () => {
-  it("a professional gets their own overview and status counts", async () => {
-    const { ctl, analytics } = setup({ id: "p-ana" });
-    await ctl.getOverview(req("staff"), "3");
-    await ctl.getAppointmentStatusByDays(req("staff"), "7");
-    expect(analytics.getOverview).toHaveBeenCalledWith("t1", 3, "p-ana");
-    expect(analytics.getAppointmentStatusByDays).toHaveBeenCalledWith("t1", 7, "p-ana");
+describe("Analítica is for managers only", () => {
+  it("has routes to check", () => {
+    expect(routes()).toEqual(
+      expect.arrayContaining([
+        "getFeatureFlags",
+        "getOverview",
+        "getAppointmentStatusByDays",
+        "getAppointmentRates",
+        "getProfessionalPerformance",
+        "getClientInsights",
+      ]),
+    );
   });
 
-  it("a staff account linked to no professional gets a 403, not the whole salon", async () => {
-    const { ctl, analytics } = setup(null);
-    await expect(ctl.getOverview(req("staff"), "3")).rejects.toBeInstanceOf(ForbiddenException);
-    await expect(ctl.getAppointmentStatusByDays(req("staff"), "7")).rejects.toBeInstanceOf(ForbiddenException);
-    expect(analytics.getOverview).not.toHaveBeenCalled();
-    expect(analytics.getAppointmentStatusByDays).not.toHaveBeenCalled();
+  it.each(routes())("%s is owner and admin only: staff get a 403", (name) => {
+    const roles = rolesOf(name);
+    expect(roles).toEqual(SALON_MANAGERS);
+    expect(roles).not.toContain(UserRole.staff);
   });
 
-  it("the owner sees the whole salon", async () => {
-    const { ctl, analytics } = setup(null);
-    await ctl.getOverview(req("owner"), "3");
-    expect(analytics.getOverview).toHaveBeenCalledWith("t1", 3, null);
+  it("the controller defaults to managers too, so a new route cannot open to staff by omission", () => {
+    expect(Reflect.getMetadata(ROLES_KEY, AnalyticsController)).toEqual(SALON_MANAGERS);
+  });
+
+  it("the overview and the status counts are the whole salon's, with no professional filter", async () => {
+    const analytics: any = {
+      getOverview: jest.fn(async () => ({})),
+      getAppointmentStatusByDays: jest.fn(async () => []),
+    };
+    const flags: any = { clampMonths: async (_t: string, m: number) => m };
+    const ctl = new AnalyticsController(analytics, flags);
+    const req = { user: { id: "u1", tenantId: "t1", role: "owner", userId: "u1" } } as any;
+    await ctl.getOverview(req, "3");
+    await ctl.getAppointmentStatusByDays(req, "7");
+    expect(analytics.getOverview).toHaveBeenCalledWith("t1", 3);
+    expect(analytics.getAppointmentStatusByDays).toHaveBeenCalledWith("t1", 7);
   });
 });

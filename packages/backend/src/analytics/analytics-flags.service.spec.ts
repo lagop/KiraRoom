@@ -141,8 +141,7 @@ describe("AnalyticsController uses the effective plan", () => {
       getTopProfessionals: jest.fn(async () => []),
       todayFor: jest.fn(async () => ({ today: "2026-11-01", timezone: "Europe/Madrid" })),
     };
-    const professionals: any = { getProfessionalByUserId: jest.fn() };
-    return { ctl: new AnalyticsController(analytics, setup(row), professionals), analytics };
+    return { ctl: new AnalyticsController(analytics, setup(row)), analytics };
   }
 
   it("a trialing salon reads client insights (no 403 after the guard) with 6 months", async () => {
@@ -157,7 +156,7 @@ describe("AnalyticsController uses the effective plan", () => {
     const { ctl, analytics } = controller(tenantRow({ plan: "esencial" }));
     await ctl.getOverview(req, "12");
     await ctl.getAppointmentStatusesEvolution(req, "12");
-    expect(analytics.getOverview).toHaveBeenCalledWith("t1", 3, null);
+    expect(analytics.getOverview).toHaveBeenCalledWith("t1", 3);
     expect(analytics.getAppointmentStatusesEvolution).toHaveBeenCalledWith("t1", 3);
   });
 

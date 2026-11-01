@@ -7,8 +7,14 @@
  */
 import {
   AnalyticsAppointment,
+  AnalyticsVisitRow,
   appointmentValueCents,
+  busyMinutes,
   clientRetention,
+  closedRates,
+  newClientCount,
+  revenueCents,
+  visitParts,
   dailyMetrics,
   daysIn,
   explicitPeriod,
@@ -172,7 +178,7 @@ describe("revenue counts what was charged", () => {
     const s = summarize([
       apt({ amountPaid: 4000 }), // paid, completed
       apt({ status: "confirmed", paymentStatus: "pending" }), // not paid yet
-      apt({ status: "cancelled", paymentStatus: "paid", amountPaid: 5000 }), // cancelled
+      apt({ status: "cancelled", paymentStatus: "refunded", amountPaid: 0 }), // cancelled and given back (kept money: D9 below)
       apt({ status: "confirmed", paymentStatus: "paid", amountPaid: 2000 }), // paid in advance
     ]);
     expect(s.revenue).toBe(6000);
@@ -380,5 +386,231 @@ describe("occupancy", () => {
       ]);
       expect(result).toMatchObject({ availableMinutes: 0, rate: null, professionalsWithSchedule: 0 });
     });
+  });
+});
+
+describe("revenue is money the salon took and kept", () => {
+  const reward = (moneyCents: number) => ({ loyalty: { rewardName: "Corte gratis", catalogueCents: moneyCents, moneyCents } });
+
+  it("leaves out what a loyalty reward covered: points are not revenue (D4)", () => {
+    // A 50 € visit: 10 € paid with points, 40 € with a card. amountPaid
+    // reads 50 €, Caja took 40 €, the invoice shows a 10 € discount.
+    const visit = apt({ amountPaid: 5000, discount: reward(1000) });
+    expect(revenueCents(visit)).toBe(4000);
+    const s = summarize([visit, apt({ amountPaid: 3000 })]);
+    expect(s.revenue).toBe(7000);
+    expect(s.avgTicket).toBe(3500);
+    // Paid entirely with points: nothing came in.
+    expect(revenueCents(apt({ amountPaid: 2500, discount: reward(2500) }))).toBe(0);
+    // A till discount is not the reward: it already lowered the price.
+    expect(revenueCents(apt({ amountPaid: 4500, discount: { pos: { cents: 500 } } }))).toBe(4500);
+  });
+
+  it("counts what was kept of a paid visit cancelled without a refund, net of partial refunds (D9)", () => {
+    // Paid 40 €, cancelled, nothing given back: the salon kept 40 €.
+    expect(revenueCents(apt({ status: "cancelled", paymentStatus: "paid", amountPaid: 4000 }))).toBe(4000);
+    // 15 € of it given back: the refund lowered amountPaid to 25 €.
+    expect(revenueCents(apt({ status: "cancelled", paymentStatus: "paid", amountPaid: 2500 }))).toBe(2500);
+    // All of it given back.
+    expect(revenueCents(apt({ status: "cancelled", paymentStatus: "refunded", amountPaid: 0 }))).toBe(0);
+    // A prepayment kept on a no-show.
+    expect(revenueCents(apt({ status: "no_show", paymentStatus: "pending", amountPaid: 1000 }))).toBe(1000);
+    // A visit still to come, partly paid: not revenue until it is paid.
+    expect(revenueCents(apt({ status: "confirmed", paymentStatus: "pending", amountPaid: 1000 }))).toBe(0);
+
+    const kept = apt({ status: "cancelled", paymentStatus: "paid", amountPaid: 4000, scheduledDate: new Date("2026-10-01T00:00:00Z") });
+    const s = summarize([kept, apt({ amountPaid: 3000 })]);
+    // Revenue, dated by the visit's day; but not a booking and not a ticket.
+    expect(s).toMatchObject({ revenue: 7000, appointments: 1, paidAppointments: 1, avgTicket: 3000 });
+    expect(dailyMetrics([kept], { start: "2026-10-01", end: "2026-10-01" })).toEqual([
+      { date: "2026-10-01", appointments: 0, revenue: 4000 },
+    ]);
+    expect(monthlyRevenue([kept], { start: "2026-10-01", end: "2026-10-01" })).toEqual([{ month: "2026-10", revenue: 4000 }]);
+  });
+});
+
+describe("a visit with several services is split by service (D5)", () => {
+  const ana = { id: "p1", firstName: "Ana", lastName: "Ruiz", profileImage: null };
+  const eva = { id: "p2", firstName: "Eva", lastName: "Gil", profileImage: null };
+  const at = (hhmm: string) => new Date(`2026-10-01T${hhmm}:00.000Z`); // Madrid is UTC+2 that day
+  let n = 0;
+  const row = (over: Partial<AnalyticsVisitRow>): AnalyticsVisitRow => ({
+    id: `r${++n}`,
+    professionalId: "p1",
+    scheduledStart: null,
+    scheduledEnd: null,
+    isParallel: false,
+    type: "active",
+    status: "pending",
+    ...over,
+  });
+  // Colour (45 €, Ana, 10:00-10:45), processing (nobody, 10:45-11:15),
+  // rinse (15 €, Eva, 11:15-11:30); paid 60 €, of which 6 € with points.
+  const colourAndRinse = apt({
+    serviceId: "s-colour",
+    serviceName: "Color",
+    professionalId: "p1",
+    professional: ana,
+    amountPaid: 6000,
+    discount: { loyalty: { moneyCents: 600, catalogueCents: 600 } },
+    scheduledTime: "10:00",
+    duration: 90,
+    services: [
+      row({ serviceId: "s-colour", serviceName: "Color", servicePrice: "45.00", professionalId: "p1", scheduledStart: at("08:00"), scheduledEnd: at("08:45") }),
+      row({ serviceId: "s-colour", serviceName: "Color", servicePrice: "45.00", professionalId: null, type: "processing", scheduledStart: at("08:45"), scheduledEnd: at("09:15") }),
+      row({ serviceId: "s-rinse", serviceName: "Aclarado", servicePrice: "15.00", professionalId: "p2", professional: eva, scheduledStart: at("09:15"), scheduledEnd: at("09:30") }),
+    ],
+  });
+
+  it("shares the visit's revenue over its services by list price, in cents that add up", () => {
+    const parts = visitParts(colourAndRinse);
+    expect(parts.map((p) => [p.serviceName, p.professional?.id, p.revenueCents])).toEqual([
+      ["Color", "p1", 4050], // 54 € x 45/60
+      ["Aclarado", "p2", 1350], // 54 € x 15/60
+    ]);
+    expect(parts.reduce((s, p) => s + p.revenueCents, 0)).toBe(revenueCents(colourAndRinse));
+    // A cancelled row is no longer part of the visit; one service left is the visit as before.
+    const one = {
+      ...colourAndRinse,
+      services: colourAndRinse.services!.map((r) => (r.professionalId === "p2" ? { ...r, status: "cancelled" } : r)),
+    };
+    expect(visitParts(one)).toEqual([{ serviceKey: "s-colour", serviceName: "Color", professional: ana, revenueCents: 5400 }]);
+  });
+
+  it("credits each service and each professional with their part", () => {
+    const single = apt({ serviceId: "s-cut", serviceName: "Corte", professionalId: "p2", professional: eva, amountPaid: 2000 });
+    expect(topServices([colourAndRinse, single])).toEqual([
+      { name: "Color", count: 1, revenue: 4050 },
+      { name: "Corte", count: 1, revenue: 2000 },
+      { name: "Aclarado", count: 1, revenue: 1350 },
+    ]);
+    expect(servicePopularity([colourAndRinse, single]).map((s) => [s.name, s.count])).toEqual([
+      ["Aclarado", 1],
+      ["Color", 1],
+      ["Corte", 1],
+    ]);
+    expect(topProfessionals([colourAndRinse, single]).map((p) => [p.id, p.appointments, p.revenue])).toEqual([
+      ["p1", 1, 4050],
+      ["p2", 2, 3350], // the rinse and her own cut: two visits
+    ]);
+  });
+
+  it("charges each professional's own minutes to occupancy, and nobody's for processing", () => {
+    expect([...busyMinutes(colourAndRinse, "Europe/Madrid")]).toEqual([
+      ["p1", 45],
+      ["p2", 15],
+    ]);
+    // Rows with no stored times are laid out from the start, one after another.
+    const unplaced = {
+      ...colourAndRinse,
+      services: [
+        row({ servicePrice: "30.00", serviceDuration: 30, professionalId: "p1" }),
+        row({ servicePrice: "20.00", serviceDuration: 20, professionalId: "p2" }),
+      ],
+      duration: 60, // 10 more minutes of add-ons: the visit's professional
+    };
+    expect(Object.fromEntries(busyMinutes(unplaced, "Europe/Madrid"))).toEqual({ p1: 40, p2: 20 });
+    // One service: its professional for its duration, as before.
+    expect([...busyMinutes(apt({ professionalId: "p1", duration: 50 }), "Europe/Madrid")]).toEqual([["p1", 50]]);
+
+    const schedule = [{ day: "thursday", openTime: "10:00", closeTime: "14:00" }];
+    const result = occupancy(
+      [
+        { id: "p1", workingHours: schedule },
+        { id: "p2", workingHours: schedule },
+      ],
+      [colourAndRinse],
+      { start: "2026-10-01", end: "2026-10-01" },
+      [],
+      "Europe/Madrid",
+    );
+    expect(result).toMatchObject({ bookedMinutes: 60, availableMinutes: 480 });
+  });
+});
+
+describe("closing rates have one definition (U9, S7)", () => {
+  const day = (d: string) => new Date(`${d}T00:00:00Z`);
+
+  it("are over appointments closed up to yesterday", () => {
+    const rows = [
+      { status: "completed", scheduledDate: day("2026-10-18") },
+      { status: "completed", scheduledDate: day("2026-10-18") },
+      { status: "completed", scheduledDate: day("2026-10-19") },
+      { status: "cancelled", scheduledDate: day("2026-10-19") },
+      { status: "no_show", scheduledDate: day("2026-10-19") },
+      { status: "confirmed", scheduledDate: day("2026-10-19") }, // never closed: left out
+      { status: "completed", scheduledDate: day("2026-10-20") }, // today: left out
+      { status: "cancelled", scheduledDate: day("2026-10-25") }, // cancelled ahead: left out until its day passes
+    ];
+    expect(closedRates(rows, "2026-10-20")).toEqual({
+      through: "2026-10-19",
+      closed: 5,
+      completed: 3,
+      cancelled: 1,
+      noShow: 1,
+      completionRate: 60,
+      cancellationRate: 20,
+      noShowRate: 20,
+    });
+    expect(closedRates([], "2026-10-20")).toMatchObject({
+      closed: 0,
+      completionRate: null,
+      cancellationRate: null,
+      noShowRate: null,
+    });
+  });
+
+  it("are given per professional, with the same definition", () => {
+    const ana = { id: "p1", firstName: "Ana", lastName: "Ruiz", profileImage: null };
+    const rows = [
+      apt({ professional: ana, status: "completed", scheduledDate: day("2026-10-18") }),
+      apt({ professional: ana, status: "no_show", paymentStatus: "pending", scheduledDate: day("2026-10-18") }),
+      apt({ professional: ana, status: "cancelled", paymentStatus: "pending", scheduledDate: day("2026-10-19") }),
+      apt({ professional: ana, status: "cancelled", paymentStatus: "pending", scheduledDate: day("2026-10-19") }),
+      apt({ professional: ana, status: "completed", scheduledDate: day("2026-10-20") }), // today
+    ];
+    const [row] = topProfessionals(rows, 5, { today: "2026-10-20" });
+    expect(row).toMatchObject({
+      appointments: 3, // cancelled visits are not visits
+      closedAppointments: 4,
+      completedAppointments: 1,
+      cancelledAppointments: 2,
+      noShowAppointments: 1,
+      completionRate: 25,
+      cancellationRate: 50,
+      noShowRate: 25,
+    });
+  });
+});
+
+describe("a professional's revenue adds the services the till sold without an appointment (D6)", () => {
+  const ana = { id: "p1", firstName: "Ana", lastName: "Ruiz", profileImage: null };
+  const bea = { id: "p2", firstName: "Bea", lastName: "Gil", profileImage: null };
+
+  it("adds them apart, so the panel can label them, and never twice", () => {
+    const rows = [apt({ professional: ana, amountPaid: 4000 })];
+    const result = topProfessionals(rows, 5, {
+      tillServices: [
+        { professionalId: "p1", keptCents: 1500 },
+        { professionalId: "p2", keptCents: 2500 }, // Bea: only the till this period
+        { professionalId: "p2", keptCents: 0 }, // given back in full
+        { professionalId: null, keptCents: 900 }, // nobody named: nobody's
+        { professionalId: "p9", keptCents: 700 }, // unknown to the salon: left out
+      ],
+      directory: new Map([["p2", bea]]),
+    });
+    expect(result.map((p) => [p.id, p.revenue, p.tillServicesCents, p.revenueCents, p.appointments])).toEqual([
+      ["p1", 4000, 1500, 5500, 1],
+      ["p2", 0, 2500, 2500, 0],
+    ]);
+  });
+});
+
+describe("new clients are first visits (D7)", () => {
+  it("counts clients whose first completed visit is in the period", () => {
+    // a twice in the period: one client; b came before; an imported client
+    // with no visit is not in the list at all.
+    expect(newClientCount(["a", "a", "b", "c"], new Set(["b"]))).toBe(2);
+    expect(newClientCount([], new Set())).toBe(0);
   });
 });
