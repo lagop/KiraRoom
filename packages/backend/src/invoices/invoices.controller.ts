@@ -33,6 +33,7 @@ import {
   UploadCertificateDto,
 } from "./dto/invoice.dto";
 import { PrismaService } from "../common/prisma/prisma.service";
+import { RESERVED_SERIES } from "./invoice-numbering";
 import { taxLabelOf, taxRegimeOf, TAX_REGIME_DEFAULT_RATE } from "@kira/shared";
 
 interface AuthedRequest extends Request {
@@ -72,7 +73,7 @@ export class InvoicesController {
   @Post()
   @Roles(UserRole.owner, UserRole.admin)
   create(@Req() req: AuthedRequest, @Body() dto: CreateInvoiceDto) {
-    return this.invoices.create({
+    return this.invoices.createManual({
       ...dto,
       tenantId: this.requireTenantId(req),
       issueDate: dto.issueDate ? new Date(dto.issueDate) : undefined,
@@ -141,21 +142,26 @@ export class InvoicesController {
     return this.invoices.resendFiscal(this.requireTenantId(req), id);
   }
 
-  @Post("from-order/:orderId")
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  fromOrder(@Req() req: AuthedRequest, @Param("orderId") orderId: string) {
-    void req;
-    return this.invoices.fromOrder(orderId);
-  }
+  // POST /invoices/from-order/:orderId is gone: nothing called it, it issued
+  // a new invoice on every call and any staff member could use it. The till
+  // issues its simplified invoices from inside the sale
+  // (InvoiceService.issueSimplifiedInvoiceForSale).
 
+  /**
+   * Invoices a completed appointment of this salon now, whatever the
+   * automatic-invoicing setting: the way to invoice it again after its
+   * invoice was cancelled. Its live invoice when it has one.
+   */
   @Post("from-appointment/:appointmentId")
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
+  @Roles(UserRole.owner, UserRole.admin)
   fromAppointment(
     @Req() req: AuthedRequest,
-    @Param("appointmentId") appointmentId: string,
+    @Param("appointmentId", ParseUUIDPipe) appointmentId: string,
   ) {
-    void req;
-    return this.invoices.fromAppointment(appointmentId);
+    return this.invoices.fromAppointment(appointmentId, {
+      tenantId: this.requireTenantId(req),
+      requested: true,
+    });
   }
 
   @Get(":id/pdf")
@@ -249,6 +255,11 @@ fiscalQrUrl: invoice.fiscalQrUrl,
     @Body() dto: UpdateTenantFiscalSettingsDto,
   ) {
     const tenantId = this.requireTenantId(req);
+    if (dto.defaultSeries !== undefined && RESERVED_SERIES.includes(dto.defaultSeries.trim().toUpperCase())) {
+      throw new BadRequestException(
+        `La serie "${dto.defaultSeries}" está reservada: R es la de las rectificativas y T la de los tickets. Usa otra serie.`,
+      );
+    }
     if (dto.fiscalMode && dto.fiscalMode !== FiscalMode.none && !fiscalSubmissionAvailable()) {
       throw new ConflictException(FISCAL_SUBMISSION_UNAVAILABLE);
     }

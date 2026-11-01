@@ -581,7 +581,7 @@ Cubre el cumplimiento fiscal español: Verifactu (Real Decreto 1007/2023, nacion
 - **`invoices`** — una fila por factura emitida. Almacena importes en céntimos, `taxBreakdown` JSON con desglose por tipo IVA, `fiscalMode`/`fiscalStatus` para el estado de envío a AEAT/diputación, `fiscalXml` con el envelope firmado XAdES-BES, `fiscalQrUrl` para Verifactu, `fiscalReference` con el justificante CSV/TBAI/SII. Unique `(tenantId, series, number)` garantiza numeración correlativa.
 - **`invoice_lines`** — líneas de factura con `productId`/`serviceId`/`appointmentId` para trazabilidad origen.
 - **`fiscal_certificates`** — certificados digitales cifrados en reposo (`encryptedPem`, `passphraseCipher` opcional). Solo se almacena `fingerprint` (SHA-256) del cert público en claro para búsqueda. Indexado por `(tenantId, isActive)`.
-- **`fiscal_sequences`** — contador atómico de numeración correlativa. Unique `(tenantId, series, year)`.
+- **`fiscal_sequences`** — contador atómico de numeración correlativa. Unique `(tenantId, series, year)`. El número guardado lleva el año desde 2027 (`2027-000001`, se ve como `A2027-000001`); 2026 conserva el formato `000123` para no romper la correlatividad del año en curso (`invoice-numbering.ts`). El año y la fecha de expedición son los del salón (`Tenant.timezone`), y `issueDate` se guarda como ese día a las 00:00 UTC.
 
 ### Enums añadidos
 
@@ -599,7 +599,7 @@ Cubre el cumplimiento fiscal español: Verifactu (Real Decreto 1007/2023, nacion
 
 ### Pipeline de emisión
 
-1. `InvoiceService.create()` calcula totales vía `InvoiceCalculator` (redondeo half-even por línea, desglose por tipo IVA), asigna el siguiente correlativo vía `FiscalSequence` (incremento atómico con `update ... data: { lastNumber: { increment: 1 } }`), persiste con `status='issued'` y `fiscalStatus='pending'` (o `not_required` si `fiscalMode='none'`).
+1. `InvoiceService.create()` calcula totales vía `InvoiceCalculator` (redondeo half-even por línea, desglose por tipo IVA), asigna el siguiente correlativo vía `FiscalSequence` (una sola sentencia `INSERT ... ON CONFLICT DO UPDATE ... RETURNING`, atómica también cuando se crea el contador), persiste con `status='issued'` y `fiscalStatus='pending'` (o `not_required` si `fiscalMode='none'`).
 2. Si `fiscalMode!='none'`, se dispara `FiscalService.dispatchInvoice()` en background (no bloquea la respuesta HTTP).
 3. `FiscalService` enruta a VerifactuService / TicketBaiService / SiiService según `fiscalMode`.
 4. Cada provider: (a) construye el envelope XML según el esquema oficial, (b) firma con `XadesService.sign()` (stub), (c) envía vía HTTP/SOAP (stub), (d) persiste el resultado en `Invoice.fiscalStatus` + `fiscalReference` + `fiscalError` + `fiscalSubmittedAt`.
@@ -607,7 +607,8 @@ Cubre el cumplimiento fiscal español: Verifactu (Real Decreto 1007/2023, nacion
 ### Auto-emisión
 
 - `AppointmentsService.complete()` llama a `InvoiceService.fromAppointment()` tras marcar la cita como completada. Solo emite si `fiscalSettings.autoInvoiceAppointments=true`.
-- `POST /invoices/from-order/:orderId` permite generar factura manualmente desde un pedido POS pagado.
+- `POST /invoices/from-appointment/:appointmentId` (propietaria/admin) factura una cita completada del salón aunque la auto-emisión esté desactivada; una cita cuya factura se anuló se puede volver a facturar (el unique `(tenantId, sourceType, sourceId)` es parcial: solo facturas no anuladas).
+- Caja: `InvoiceService.issueSimplifiedInvoiceForSale(tx, ...)` emite la factura simplificada (serie `T`) de una venta dentro de su transacción, idempotente por `sourceType = pos_sale`. Las series `R` (rectificativas) y `T` están reservadas para las facturas manuales.
 
 ### Estado del firmador (importante para producción)
 

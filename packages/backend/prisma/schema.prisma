@@ -2797,8 +2797,13 @@ model Invoice {
   issuerNameAtIssue    String?
 
   /// Metadata. What the invoice was issued for: an appointment's invoice has
-  /// sourceType "appointment" and sourceId = the appointment's id. Unique per
-  /// tenant (see @@unique below), so one source document gets one invoice.
+  /// sourceType "appointment" and sourceId = the appointment's id. One live
+  /// invoice per source: unique index "invoices_tenantId_sourceType_sourceId_key"
+  /// on (tenantId, sourceType, sourceId) WHERE status <> 'cancelled'
+  /// (migration 20261101190000), so a cancelled invoice keeps its source but
+  /// does not stop a new one being issued for it. Prisma 5 cannot express a
+  /// partial index, so it lives only in that migration: it is NOT declared
+  /// here (an @@unique would make `migrate dev` replace it with a full one).
   /// A manual invoice has no sourceId, and NULLs never collide.
   sourceType InvoiceSource
   sourceId   String?
@@ -2810,7 +2815,6 @@ model Invoice {
   lines     InvoiceLine[]
 
   @@unique([tenantId, series, number])
-  @@unique([tenantId, sourceType, sourceId])
   @@index([tenantId, issueDate])
   @@index([tenantId, status])
   @@index([fiscalStatus])
@@ -2912,6 +2916,8 @@ enum InvoiceSource {
   appointment
   manual
   subscription
+  /// The simplified invoice (series T) of a sale at the till.
+  pos_sale
 }
 
 enum InvoiceAccountingStatus {
