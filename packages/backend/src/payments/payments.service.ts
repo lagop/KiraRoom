@@ -15,6 +15,7 @@ import { salonToday } from "../analytics/analytics-metrics";
 import { WalletService } from "./services/wallet.service";
 import { GiftCardsService } from "../gift-cards/gift-cards.service";
 import { needsTimezone, PaymentFilters, paymentWhere, PAYMENT_SORT_FIELDS } from "./payments-query";
+import { openCashSessionId } from "../pos/cash-session-lock";
 
 const euros = (cents: number) =>
   new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(cents / 100);
@@ -420,8 +421,19 @@ export class PaymentsService {
       });
       if (count !== 1) throw changed();
 
+      // The cash-drawer session open now (arqueo), held until this commits:
+      // a cash refund comes out of that drawer, so its close counts it.
+      // With the drawer closed the refund is still given (not blocked).
+      const cashSessionId = await openCashSessionId(tx, tenantId, "share");
       const refund = await tx.refund.create({
-        data: { paymentId: payment.id, amount, reason, status: "succeeded", adminId: actorId ?? null },
+        data: {
+          paymentId: payment.id,
+          amount,
+          reason,
+          status: "succeeded",
+          adminId: actorId ?? null,
+          ...(cashSessionId ? { cashSessionId } : {}),
+        },
       });
 
       let appointment: { id: string; amountPaid: number; paymentStatus: PaymentStatus } | null = null;

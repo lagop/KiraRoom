@@ -45,6 +45,8 @@ beforeAll(async () => {
     },
   });
   tenantId = tenant.id;
+  // These sales take cash: the drawer is open (arqueo, cash-sessions.l2.spec.ts).
+  await db.cashSession.create({ data: { tenantId, openedById: OWNER.id, openingFloatCents: 0 } });
   const fiscal = { dispatchInvoice: jest.fn(async () => undefined) };
   const invoices = new InvoiceService(db, new InvoiceCalculator(), fiscal as any);
   pos = new PosService(db, new WalletService(db), undefined, invoices);
