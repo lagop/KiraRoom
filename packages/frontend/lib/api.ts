@@ -546,7 +546,32 @@ export interface Appointment {
   paymentStatus: "pending" | "paid" | "failed" | "refunded";
   notes?: string;
   services?: AppointmentService[];
+  /** The salon's location it is at (multi-local); null for most salons. */
+  locationId?: string | null;
+  /**
+   * The public booking's answer (POST /appointments): where it is, at a
+   * salon with several locations; null otherwise.
+   */
+  location?: { id: string; name: string; address: string } | null;
 }
+
+/**
+ * GET /appointments/booking-locations: the locations the panel books at and
+ * filters the agenda by, and where each professional works. Empty for a
+ * salon with fewer than two bookable locations (the panel shows no picker).
+ */
+export interface BookingLocations {
+  locations: Array<{ id: string; name: string; slug: string; address: string; phone: string | null }>;
+  professionals: Array<{ id: string; locationIds: string[]; primaryLocationId: string | null }>;
+}
+
+/**
+ * PATCH /appointments/:id. `locationId` null: back to the professional's
+ * own location.
+ */
+export type AppointmentUpdate = Partial<Omit<CreateAppointmentDto, "locationId">> & {
+  locationId?: string | null;
+};
 
 export interface AppointmentService {
   id: string;
@@ -1597,8 +1622,9 @@ export interface ApiClientInterface {
   createAppointment(data: CreateAppointmentDto): Promise<Appointment>;
   updateAppointment(
     id: string,
-    data: Partial<CreateAppointmentDto>,
+    data: AppointmentUpdate,
   ): Promise<Appointment>;
+  getBookingLocations(): Promise<BookingLocations>;
   cancelAppointment(id: string, reason?: string): Promise<Appointment>;
   completeAppointment(id: string, notes?: string): Promise<Appointment>;
   markAppointmentNoShow(id: string): Promise<Appointment>;
@@ -2448,12 +2474,16 @@ class ApiClient implements ApiClientInterface {
 
   async updateAppointment(
     id: string,
-    data: Partial<CreateAppointmentDto>,
+    data: AppointmentUpdate,
   ): Promise<Appointment> {
     return this.request<Appointment>(`/appointments/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
     });
+  }
+
+  async getBookingLocations(): Promise<BookingLocations> {
+    return this.request<BookingLocations>("/appointments/booking-locations");
   }
 
   async cancelAppointment(id: string, reason?: string): Promise<Appointment> {

@@ -32,6 +32,20 @@ import {
 import { planSlotSearch, type SlotSuggestion } from "../slot-suggestions";
 import { localDay } from "@/components/Calendar/day-grid";
 import { StatusChangeDialog } from "../StatusChangeDialog";
+import { LocationSelect } from "@/components/Calendar/LocationSelect";
+import { useBookingLocations } from "@/lib/use-booking-locations";
+import {
+  currentLocationOf,
+  hasLocations,
+  keepIfWorksAt,
+  locationAfterProfessionalChange,
+  locationForEdit,
+  locationForNewBooking,
+  locationName,
+  mainLocationOf,
+  professionalsAtLocation,
+  worksAt,
+} from "@/lib/panel-booking-locations";
 // Phase 1+2+5 refactor — primitives, data hooks, and section components.
 // See .kilo/plans/appointment-drawer-refactor.md.
 import { useAppointmentCatalog } from "./hooks/useAppointmentCatalog";
@@ -144,6 +158,22 @@ export function AppointmentDrawer({
 
   const manager = currentUser?.role === "owner" || currentUser?.role === "admin";
 
+  // The salon's locations (multi-local; none for a salon with one): the
+  // new appointment's location, empty for the professional's main one, and
+  // the professionals offered there.
+  const bookingLocations = useBookingLocations(open);
+  const multiLocation = hasLocations(bookingLocations);
+  const [newLocationId, setNewLocationId] = useState("");
+  const bookableProfessionals = useMemo(
+    () => professionalsAtLocation(professionals, bookingLocations, newLocationId),
+    [professionals, bookingLocations, newLocationId],
+  );
+  // Editing: where the appointment is, and where the edit puts it.
+  const locationBefore = appointment
+    ? currentLocationOf(bookingLocations, { locationId: appointment.locationId, professionalId: appointment.professional.id })
+    : "";
+  const editLocationId = editedAppointment?.locationId || locationBefore;
+
   // The catalog (professionals, clients, the salon's time zone) is fetched
   // again each time the drawer opens.
   useEffect(() => {
@@ -163,6 +193,7 @@ export function AppointmentDrawer({
     setCurrentAddons([]);
     setTerms(null);
     setOutsideHoursReason(null);
+    setNewLocationId("");
     if (open && !appointmentId) {
       resetForNewAppointment();
       setAutoAssignMap({});
@@ -195,7 +226,7 @@ export function AppointmentDrawer({
   const runSuggestions = () =>
     generateSuggestions({
       selectedServices: effectiveSelectedServices,
-      professionals,
+      professionals: bookableProfessionals,
       preference: dateTimePreference,
       durationMinutes: visitMinutes,
     });
@@ -218,7 +249,7 @@ export function AppointmentDrawer({
     };
     // `generateSuggestions` and `clearSuggestions` are stable refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appointmentId, open, suggestionsReady, effectiveSelectedServices, dateTimePreference, professionals, visitMinutes]);
+  }, [appointmentId, open, suggestionsReady, effectiveSelectedServices, dateTimePreference, bookableProfessionals, visitMinutes]);
 
   const handleSelectSuggestion = (suggestion: SlotSuggestion) => {
     setSelectedSuggestion(suggestion);
@@ -254,6 +285,9 @@ export function AppointmentDrawer({
       toast({ title: t("appointments.drawer.selectSuggestionOrDate"), variant: "destructive" });
       return;
     }
+    // Multi-local: the location picked; none, the professional's main one.
+    const locationId = locationForNewBooking(bookingLocations, newLocationId);
+    if (locationId) payload.locationId = locationId;
 
     setUpdating(true);
     try {
@@ -451,6 +485,9 @@ export function AppointmentDrawer({
       ) {
         updateData.professionalId = editedAppointment.professional.id;
       }
+      // Multi-local: only when the edit moved it to another location.
+      const locationId = locationForEdit(bookingLocations, locationBefore, editLocationId);
+      if (locationId) updateData.locationId = locationId;
 
       // Commission and deposit: only what changed, the deposit in cents, a
       // 0 % commission kept as 0. They used to be dropped from every edit.
@@ -552,10 +589,53 @@ export function AppointmentDrawer({
                 }}
               />
 
+              {/* Multi-local: where. Empty: the professional's main location. */}
+              {multiLocation && (
+                <div className="mb-6">
+                  <label htmlFor="new-appointment-location" className="block text-sm font-medium text-gray-700 mb-2">
+                    {t("appointments.locations.label")}
+                  </label>
+                  <LocationSelect
+                    id="new-appointment-location"
+                    data={bookingLocations}
+                    value={newLocationId}
+                    label={t("appointments.locations.label")}
+                    emptyLabel={t("appointments.locations.professionalsMain")}
+                    onChange={(locationId) => {
+                      setNewLocationId(locationId);
+                      // Whoever was picked and does not work there is cleared.
+                      setNewAppointment((prev) => ({
+                        ...prev,
+                        professionalId: keepIfWorksAt(bookingLocations, prev.professionalId, locationId),
+                        time: "",
+                      }));
+                      setSelectedServices((prev) =>
+                        prev.map((s) => ({
+                          ...s,
+                          professionalId: keepIfWorksAt(bookingLocations, s.professionalId, locationId) || undefined,
+                        })),
+                      );
+                      setAutoAssignMap({});
+                    }}
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    {newLocationId
+                      ? t("appointments.locations.onlyHere")
+                      : (() => {
+                          const main = locationName(
+                            bookingLocations,
+                            mainLocationOf(bookingLocations, newAppointment.professionalId || selectedServices[0]?.professionalId),
+                          );
+                          return main ? t("appointments.locations.bookedAt", { location: main }) : null;
+                        })()}
+                  </p>
+                </div>
+              )}
+
               {/* Step 2: Service Selection */}
               <ServicePickerSection
                 services={services}
-                professionals={professionals}
+                professionals={bookableProfessionals}
                 selectedServices={selectedServices}
                 newAppointment={newAppointment}
                 currentUser={currentUser}
@@ -1110,6 +1190,28 @@ export function AppointmentDrawer({
                     </div>
                   </div>
 
+                  {/* Location (multi-local): where it is; editing may move it. */}
+                  {multiLocation && (
+                    <div className="bg-white rounded-xl border border-gray-200 p-6">
+                      <div className="flex items-center justify-between gap-2">
+                        <h2 className="text-lg font-semibold text-gray-900">{t("appointments.locations.label")}</h2>
+                        {editMode ? (
+                          <LocationSelect
+                            data={bookingLocations}
+                            value={editLocationId}
+                            label={t("appointments.locations.label")}
+                            className="border border-gray-300 rounded px-2 py-1 text-sm min-w-0"
+                            onChange={(locationId) =>
+                              setEditedAppointment((prev) => (prev ? { ...prev, locationId } : prev))
+                            }
+                          />
+                        ) : (
+                          <span className="text-sm text-gray-700">{locationName(bookingLocations, locationBefore) ?? "—"}</span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Professional Card - one service; a visit shows them per service */}
                   {(!appointment.services || appointment.services.length === 0) && (
                     <div className="bg-white rounded-xl border border-gray-200 p-6">
@@ -1128,6 +1230,12 @@ export function AppointmentDrawer({
                                 if (!selectedProfessional) return prev;
                                 return {
                                   ...prev,
+                                  // Stays where it is if they work there too, else their main location.
+                                  locationId: locationAfterProfessionalChange(
+                                    bookingLocations,
+                                    prev.locationId || locationBefore,
+                                    e.target.value,
+                                  ),
                                   professional: {
                                     ...prev.professional!,
                                     id: e.target.value,
@@ -1145,6 +1253,12 @@ export function AppointmentDrawer({
                                     ps.serviceId ===
                                     (editedAppointment?.service?.id || appointment.service.id),
                                 ),
+                              )
+                              // Multi-local: those at the location picked (and whoever has it now).
+                              .filter(
+                                (prof) =>
+                                  worksAt(bookingLocations, String(prof.id), editLocationId) ||
+                                  String(prof.id) === String(editedAppointment?.professional?.id || appointment.professional.id),
                               )
                               .map((professional) => (
                                 <option key={professional.id} value={professional.id}>
