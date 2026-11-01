@@ -70,18 +70,32 @@ export class WhatsAppTemplateService {
     const token = this.meta.decryptToken(conn.accessTokenEnc);
     const result: Record<string, string> = {};
     for (const t of STANDARD_TEMPLATES) {
-      const res = await this.meta.createTemplate(token, conn.wabaId, templateCreationPayload(t));
-      if (res?.error) {
-        // 2388024 / "already exists": submitted before, keep its status.
-        const exists = /already exists|2388024/i.test(`${res.error.code} ${res.error.message}`);
-        result[t.name] = exists ? "EXISTS" : `ERROR: ${res.error.message}`;
-        if (!exists) this.logger.warn(`Template ${t.name} for tenant ${tenantId} refused: ${res.error.message}`);
-      } else {
-        result[t.name] = res?.status ?? "PENDING";
-      }
+      result[t.name] = await this.create(tenantId, token, conn.wabaId, t);
     }
     this.statusCache.delete(tenantId);
     return result;
+  }
+
+  /**
+   * Asks Meta to review one standard template (the review request's, from
+   * the Reseñas settings). "EXISTS" when it was submitted before: Meta keeps
+   * its status, which standardStatus shows.
+   */
+  async submitTemplate(tenantId: string, template: TemplateDefinition): Promise<{ status: string } | { error: string }> {
+    const conn = await this.connection(tenantId);
+    if (!conn?.isActive || !conn.wabaId) return { error: "not_connected" };
+    const status = await this.create(tenantId, this.meta.decryptToken(conn.accessTokenEnc), conn.wabaId, template);
+    this.statusCache.delete(tenantId);
+    return status.startsWith("ERROR: ") ? { error: status.slice("ERROR: ".length) } : { status };
+  }
+
+  private async create(tenantId: string, token: string, wabaId: string, t: TemplateDefinition): Promise<string> {
+    const res = await this.meta.createTemplate(token, wabaId, templateCreationPayload(t));
+    if (!res?.error) return res?.status ?? "PENDING";
+    // 2388024 / "already exists": submitted before, keep its status.
+    const exists = /already exists|2388024/i.test(`${res.error.code} ${res.error.message}`);
+    if (!exists) this.logger.warn(`Template ${t.name} for tenant ${tenantId} refused: ${res.error.message}`);
+    return exists ? "EXISTS" : `ERROR: ${res.error.message}`;
   }
 
   /** Meta's review status of each template on the salon's account (cached for 30 min). */

@@ -37,7 +37,9 @@ function consentRows(accepted: string[]) {
   );
 }
 
-function setup(opts: { campaign?: any; accepted?: string[]; templates?: any; connection?: any } = {}) {
+function setup(
+  opts: { campaign?: any; accepted?: string[]; templates?: any; connection?: any; planIncludes?: boolean } = {},
+) {
   const prisma: any = {
     whatsAppCampaign: {
       findFirst: jest.fn(async ({ where }: any) =>
@@ -74,9 +76,11 @@ function setup(opts: { campaign?: any; accepted?: string[]; templates?: any; con
     deleteTemplate: jest.fn(async () => ({ deleted: true })),
     ...opts.templates,
   };
-  const service = new WhatsAppCampaignsService(prisma, templates);
+  // whatsapp_marketing: Pro and Empresa (and the trial).
+  const featureFlags: any = { isFeatureUnlocked: jest.fn(async () => opts.planIncludes ?? true) };
+  const service = new WhatsAppCampaignsService(prisma, templates, featureFlags);
   (service as any).logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
-  return { service, prisma, templates };
+  return { service, prisma, templates, featureFlags };
 }
 
 describe("WhatsAppCampaignsService — panel", () => {
@@ -351,7 +355,13 @@ describe("WhatsAppCampaignsService — account-level Meta errors pause the campa
 
   function paused(over: { templates?: any; connection?: any } = {}) {
     return setup({
-      campaign: campaignRow({ status: "paused", templateId: "kr_promo_x_1", templateStatus: "APPROVED", lastError: "x" }),
+      campaign: campaignRow({
+        status: "paused",
+        templateId: "kr_promo_x_1",
+        templateStatus: "APPROVED",
+        lastError: "x",
+        startedAt: NOON,
+      }),
       templates: { templateReview: jest.fn(async () => ({ status: "APPROVED" })), ...over.templates },
       connection: over.connection,
     });
@@ -492,5 +502,147 @@ describe("WhatsAppCampaignsService — Meta templates are cleaned up (B4)", () =
     const { service, templates } = setup({ campaign: campaignRow() });
     await service.submit("t1", ID);
     expect(templates.deleteTemplate).not.toHaveBeenCalled();
+  });
+});
+
+describe("WhatsAppCampaignsService — campaigns are Pro only (whatsapp_marketing)", () => {
+  function sendingCampaign(planIncludes: boolean) {
+    const ctx = setup({
+      campaign: campaignRow({ status: "sending", templateId: "kr_promo_x_1", tenant: { country: "ES" } }),
+      accepted: ["c1"],
+      planIncludes,
+    });
+    ctx.prisma.whatsAppCampaignRecipient.findMany.mockResolvedValueOnce([{ id: "r1", clientId: "c1", phone: "600111222" }]);
+    ctx.prisma.client.findMany.mockResolvedValueOnce([
+      { id: "c1", firstName: "Ana", status: "active", communicationPreferences: {} },
+    ]);
+    return ctx;
+  }
+
+  it("pauses a campaign that is sending when the plan does not include campaigns, saying why", async () => {
+    const { service, prisma, templates, featureFlags } = sendingCampaign(false);
+    await service.sendBatches(NOON);
+    expect(featureFlags.isFeatureUnlocked).toHaveBeenCalledWith("t1", "whatsapp_marketing");
+    expect(prisma.whatsAppCampaign.updateMany).toHaveBeenCalledWith({
+      where: { id: ID, status: "sending" },
+      data: { status: "paused", lastError: "Tu plan no incluye campañas de WhatsApp" },
+    });
+    expect(templates.sendApprovedTemplate).not.toHaveBeenCalled();
+    expect(prisma.whatsAppCampaignRecipient.update).not.toHaveBeenCalled();
+  });
+
+  it("pauses it even outside the sending hours, so the panel says why at once", async () => {
+    const { service, prisma } = sendingCampaign(false);
+    await service.sendBatches(new Date("2026-10-10T22:30:00Z")); // 00:30 in Madrid
+    expect(prisma.whatsAppCampaign.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { status: "paused", lastError: "Tu plan no incluye campañas de WhatsApp" } }),
+    );
+  });
+
+  it("keeps sending on Pro", async () => {
+    const { service, templates } = sendingCampaign(true);
+    await service.sendBatches(NOON);
+    expect(templates.sendApprovedTemplate).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start a due campaign without the plan: it is paused, nobody is added", async () => {
+    const { service, prisma } = setup({
+      campaign: campaignRow({ status: "scheduled", templateStatus: "APPROVED", tenant: { timezone: "Europe/Madrid" } }),
+      accepted: ["c1"],
+      planIncludes: false,
+    });
+    await service.startDue(NOON);
+    expect(prisma.whatsAppCampaign.updateMany).toHaveBeenCalledTimes(1);
+    expect(prisma.whatsAppCampaign.updateMany).toHaveBeenCalledWith({
+      where: { id: ID, status: "scheduled" },
+      data: { status: "paused", lastError: "Tu plan no incluye campañas de WhatsApp" },
+    });
+    expect(prisma.whatsAppCampaignRecipient.createMany).not.toHaveBeenCalled();
+  });
+
+  it("Reanudar is refused while the plan does not include campaigns", async () => {
+    const { service, prisma } = setup({
+      campaign: campaignRow({ status: "paused", templateId: "kr_promo_x_1", lastError: "Tu plan no incluye campañas de WhatsApp" }),
+      planIncludes: false,
+    });
+    await expect(service.resume("t1", ID)).rejects.toThrow(/Tu plan no incluye campañas de WhatsApp/);
+    expect(prisma.whatsAppCampaign.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("after moving back to Pro, a campaign paused before it started goes back to the queue", async () => {
+    const { service, prisma } = setup({
+      campaign: campaignRow({ status: "paused", templateId: "kr_promo_x_1", templateStatus: "APPROVED", startedAt: null }),
+      templates: { templateReview: jest.fn(async () => ({ status: "APPROVED" })) },
+    });
+    await service.resume("t1", ID);
+    expect(prisma.whatsAppCampaign.updateMany).toHaveBeenCalledWith({
+      where: { id: ID, tenantId: "t1", status: "paused" },
+      data: { status: "scheduled", lastError: null, templateStatus: "APPROVED" },
+    });
+  });
+
+  it("past campaigns stay readable without the plan", async () => {
+    const { service } = setup({ campaign: campaignRow({ status: "completed" }), planIncludes: false });
+    await expect(service.list("t1")).resolves.toHaveLength(1);
+    await expect(service.get("t1", ID)).resolves.toMatchObject({ id: ID });
+    await expect(service.access("t1")).resolves.toEqual({ included: false });
+  });
+
+  it("the plan is read once per salon per dispatcher run", async () => {
+    const { service, prisma, featureFlags } = setup({ planIncludes: false });
+    prisma.whatsAppCampaign.findMany.mockResolvedValueOnce([
+      campaignRow({ id: "a", status: "sending" }),
+      campaignRow({ id: "b", status: "sending" }),
+    ]);
+    await service.sendBatches(NOON);
+    expect(featureFlags.isFeatureUnlocked).toHaveBeenCalledTimes(1);
+    expect(prisma.whatsAppCampaign.updateMany).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("WhatsAppCampaignsService — no campaigns on Sundays", () => {
+  /** Sunday 11 October 2026, 12:00 in Madrid. */
+  const SUNDAY_NOON = new Date("2026-10-11T10:00:00Z");
+  /** Monday 12 October 2026, 9:00 in Madrid. */
+  const MONDAY_NINE = new Date("2026-10-12T07:00:00Z");
+
+  it("sends nothing on a Sunday where the salon is; the pending messages go on Monday from 9:00", async () => {
+    const ctx = setup({
+      campaign: campaignRow({
+        status: "sending",
+        templateId: "kr_promo_x_1",
+        tenant: { country: "ES", timezone: "Europe/Madrid" },
+      }),
+      accepted: ["c1"],
+    });
+    ctx.prisma.whatsAppCampaignRecipient.findMany.mockResolvedValue([{ id: "r1", clientId: "c1", phone: "600111222" }]);
+    ctx.prisma.client.findMany.mockResolvedValue([
+      { id: "c1", firstName: "Ana", status: "active", communicationPreferences: {} },
+    ]);
+    await ctx.service.sendBatches(SUNDAY_NOON);
+    expect(ctx.templates.sendApprovedTemplate).not.toHaveBeenCalled();
+    expect(ctx.prisma.whatsAppCampaignRecipient.update).not.toHaveBeenCalled();
+    await ctx.service.sendBatches(new Date("2026-10-12T06:59:00Z")); // Monday 8:59
+    expect(ctx.templates.sendApprovedTemplate).not.toHaveBeenCalled();
+    await ctx.service.sendBatches(MONDAY_NINE);
+    expect(ctx.templates.sendApprovedTemplate).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start an approved campaign on a Sunday", async () => {
+    const { service, prisma } = setup({
+      campaign: campaignRow({ status: "scheduled", templateStatus: "APPROVED", tenant: { timezone: "Europe/Madrid" } }),
+      accepted: ["c1"],
+    });
+    await service.startDue(SUNDAY_NOON);
+    expect(prisma.whatsAppCampaign.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("goes by the salon's own day: Sunday 10:00 in Tokyo is still Saturday in Madrid", async () => {
+    const { service, prisma } = setup({
+      campaign: campaignRow({ status: "scheduled", templateStatus: "APPROVED", tenant: { timezone: "Asia/Tokyo" } }),
+      accepted: ["c1"],
+    });
+    await service.startDue(new Date("2026-10-11T01:00:00Z"));
+    expect(prisma.whatsAppCampaign.updateMany).not.toHaveBeenCalled();
   });
 });

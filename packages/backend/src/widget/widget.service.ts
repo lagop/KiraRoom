@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException, Logger } from "@nestjs/common";
+import { Injectable, NotFoundException, Logger, Optional } from "@nestjs/common";
 import { randomBytes } from "crypto";
 import { PrismaService } from "../common/prisma/prisma.service";
-import { salonWhatsAppConnected } from "../consent/client-notices";
+import { salonOffersWhatsAppPromotions, salonWhatsAppConnected } from "../consent/client-notices";
+import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
 import { publicPrice, publicPriceSettings } from "../common/public-price";
 import { frameAncestorOrigins } from "./frame-origins";
 
@@ -17,7 +18,11 @@ export interface CreateWidgetInstanceInput {
 export class WidgetService {
   private readonly logger = new Logger(WidgetService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    // The plan check for the WhatsApp promotions box (global FeatureFlagModule).
+    @Optional() private featureFlags?: FeatureFlagService,
+  ) {}
 
   /**
    * With the whole token: it is not a secret (it sits in the iframe on the
@@ -181,6 +186,9 @@ export class WidgetService {
       // The salon has its WhatsApp number connected: the form offers
       // "Recibir los avisos de mi cita por WhatsApp".
       whatsappNotices: await salonWhatsAppConnected(this.prisma, widget.tenantId),
+      // ...and its plan includes WhatsApp campaigns: the form offers the
+      // optional "Quiero recibir promociones de <salón> por WhatsApp".
+      whatsappPromotions: await salonOffersWhatsAppPromotions(this.prisma, this.featureFlags, widget.tenantId),
     };
   }
 

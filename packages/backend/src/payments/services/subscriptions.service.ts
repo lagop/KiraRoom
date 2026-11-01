@@ -77,6 +77,8 @@ export type FeatureKey =
   | 'whatsapp_notifications'
   | 'sms_notifications'
   | 'email_marketing'
+  // WhatsApp promotions (campaigns): Pro and Empresa (and the trial, which is Pro).
+  | 'whatsapp_marketing'
   | 'virtual_receptionist'
   // P2A-receptionist-advanced -- Pro+/Enterprise baseline, add-on for Esencial.
   | 'virtual_receptionist_advanced'
@@ -136,6 +138,7 @@ export const PLAN_MATRIX: Record<PlanId, ReadonlyArray<FeatureKey>> = {
     'whatsapp_notifications',
     'sms_notifications',
     'email_marketing',
+    'whatsapp_marketing',
     'virtual_receptionist',
     'virtual_receptionist_advanced',
     'multichannel',
@@ -155,6 +158,7 @@ export const PLAN_MATRIX: Record<PlanId, ReadonlyArray<FeatureKey>> = {
     'whatsapp_notifications',
     'sms_notifications',
     'email_marketing',
+    'whatsapp_marketing',
     'virtual_receptionist',
     'virtual_receptionist_advanced',
     'multichannel',
@@ -182,6 +186,7 @@ export const PLAN_MATRIX: Record<PlanId, ReadonlyArray<FeatureKey>> = {
     'whatsapp_notifications',
     'sms_notifications',
     'email_marketing',
+    'whatsapp_marketing',
     'virtual_receptionist',
     'virtual_receptionist_advanced',
     'loyalty',
@@ -193,8 +198,8 @@ export const PLAN_MATRIX: Record<PlanId, ReadonlyArray<FeatureKey>> = {
     'agenda_shifts',
     'copilot_read',
   ],
-  advanced: ['whatsapp_notifications','sms_notifications','email_marketing','virtual_receptionist','loyalty','promotions','gift_cards','wallet','commissions','advanced_analytics','agenda_shifts','multi_location','consolidated_reports','api_access','white_label','custom_branding'],
-  enterprise: ['whatsapp_notifications','sms_notifications','email_marketing','virtual_receptionist','loyalty','promotions','gift_cards','wallet','commissions','advanced_analytics','agenda_shifts','multi_location','consolidated_reports','api_access','white_label','custom_branding'],
+  advanced: ['whatsapp_notifications','sms_notifications','email_marketing','whatsapp_marketing','virtual_receptionist','loyalty','promotions','gift_cards','wallet','commissions','advanced_analytics','agenda_shifts','multi_location','consolidated_reports','api_access','white_label','custom_branding'],
+  enterprise: ['whatsapp_notifications','sms_notifications','email_marketing','whatsapp_marketing','virtual_receptionist','loyalty','promotions','gift_cards','wallet','commissions','advanced_analytics','agenda_shifts','multi_location','consolidated_reports','api_access','white_label','custom_branding'],
 };
 
 @Injectable()
@@ -251,6 +256,7 @@ export class SubscriptionsService {
         // approved by Meta for pages_messaging / instagram_manage_messages).
         `Recepcionista IA en tu web, WhatsApp, Messenger, Instagram y Telegram: ${aiAllowance(PLAN_AI_CONVERSATIONS.pro)}`,
         'Fidelización, promociones y tarjetas regalo',
+        'Campañas de WhatsApp a las clientas que lo aceptan',
         'Wallet y comisiones',
         'Analítica avanzada',
         'Turnos y horarios',

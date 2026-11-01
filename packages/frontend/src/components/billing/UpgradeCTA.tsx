@@ -86,6 +86,7 @@ function humanizeFeature(feature: FeatureKey): string {
     whatsapp_notifications: "Recordatorios WhatsApp",
     sms_notifications: "Recordatorios SMS",
     email_marketing: "Email marketing",
+    whatsapp_marketing: "Campañas de WhatsApp",
     virtual_receptionist: "Recepcionista IA (Kira)",
     // These five existed in the backend matrix and were missing here, so the
     // CTA had no label for them. Surfaced by unifying FeatureKey in

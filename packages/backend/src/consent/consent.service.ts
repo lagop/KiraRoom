@@ -1,9 +1,12 @@
-import { Injectable, NotFoundException, BadRequestException, Logger } from "@nestjs/common";
+import { Injectable, NotFoundException, BadRequestException, Logger, Optional } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { EncryptionService } from "../common/encryption/encryption.service";
+import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
 import {
   BOOKING_EMAIL_REFUSAL_TEXT,
   BOOKING_WHATSAPP_NOTICES_TEXT,
+  BOOKING_WHATSAPP_PROMOTIONS_VERSION,
+  bookingWhatsAppPromotionsText,
   ChoiceKind,
   ChoiceSource,
   MARKETING_FIELD_ID,
@@ -17,6 +20,7 @@ import {
 import {
   NoticeChannels,
   noticeChannelsOf,
+  salonOffersWhatsAppPromotions,
   salonWhatsAppConnected,
   smsConfigured,
   withNoticeChannels,
@@ -53,6 +57,8 @@ export class ConsentService {
   constructor(
     private prisma: PrismaService,
     private encryption: EncryptionService,
+    // The plan check for the WhatsApp promotions box (global FeatureFlagModule).
+    @Optional() private featureFlags?: FeatureFlagService,
   ) {}
 
   async listForms(tenantId: string) {
@@ -340,8 +346,9 @@ export class ConsentService {
    * record says it was not the client who clicked.
    *
    * `source` says where it was made ("booking", "widget"; "salon" is implied
-   * by recordedBy), `shown` the exact text next to the box she ticked, and
-   * `appointmentId` the booking it came with.
+   * by recordedBy), `shown` the exact text next to the box she ticked (and
+   * `shownVersion` the version of that text), and `appointmentId` the
+   * booking it came with.
    */
   async recordMarketingChoice(input: {
     tenantId: string;
@@ -352,6 +359,7 @@ export class ConsentService {
     recordedBy?: string;
     source?: ChoiceSource;
     shown?: string;
+    shownVersion?: string;
     appointmentId?: string;
   }): Promise<MarketingConsentState> {
     const channel = input.channel ?? "email";
@@ -401,6 +409,7 @@ export class ConsentService {
                 ? { source: input.source }
                 : {}),
             ...(input.shown ? { shown: input.shown } : {}),
+            ...(input.shown && input.shownVersion ? { shownVersion: input.shownVersion } : {}),
           } as any,
           signatureName:
             `${client.firstName ?? ""} ${client.lastName ?? ""}`.trim() || "Cliente",
@@ -549,6 +558,11 @@ export class ConsentService {
    *   salon has WhatsApp connected (the box is shown only then), and only to
    *   the phone she typed: an existing client found by her email whose file
    *   has another number is left as she is.
+   * - "Quiero recibir promociones de <salón> por WhatsApp": her opt-in to
+   *   WhatsApp promotions, with the text she saw (the salon's name in it)
+   *   and its version. Only when the salon offers the box (WhatsApp
+   *   connected and a plan with WhatsApp campaigns), and only for the phone
+   *   she typed. Unticked records nothing: it is not a refusal.
    *
    * Never fails the booking: a failure is logged.
    */
@@ -561,6 +575,7 @@ export class ConsentService {
     typedPhone?: string;
     refusesMarketingEmail?: boolean;
     wantsWhatsAppNotices?: boolean;
+    wantsWhatsAppPromotions?: boolean;
   }): Promise<void> {
     const { tenantId, clientId, source } = input;
     if (input.refusesMarketingEmail === true) {
@@ -581,30 +596,88 @@ export class ConsentService {
     }
     if (input.wantsWhatsAppNotices === true) {
       try {
-        const client = await this.prisma.client.findFirst({
-          where: { id: clientId, tenantId },
-          select: { phone: true },
-        });
-        if (!samePhone(client?.phone, input.typedPhone)) {
-          this.logger.log(`WhatsApp notices not turned on for client ${clientId}: the phone on file is not the one typed`);
-          return;
-        }
-        if (!(await this.whatsappConnected(tenantId))) {
-          this.logger.log(`WhatsApp notices not turned on for client ${clientId}: the salon has no WhatsApp connected`);
-          return;
-        }
-        await this.setClientNotices({
-          tenantId,
-          clientId,
-          changes: { whatsapp: true },
-          ip: input.ip,
-          source,
-          shown: BOOKING_WHATSAPP_NOTICES_TEXT,
-          appointmentId: input.appointmentId,
-        });
+        await this.turnOnBookingWhatsAppNotices(input);
       } catch (err) {
         this.logger.warn(`WhatsApp notices of client ${clientId} not turned on: ${(err as Error).message}`);
       }
     }
+    if (input.wantsWhatsAppPromotions === true) {
+      try {
+        await this.recordBookingWhatsAppPromotions(input);
+      } catch (err) {
+        this.logger.warn(`WhatsApp promotions opt-in of client ${clientId} not recorded: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  /** Is the number on her file the one she typed? Both WhatsApp boxes apply to that number only. */
+  private async typedPhoneOnFile(tenantId: string, clientId: string, typedPhone?: string): Promise<boolean> {
+    const client = await this.prisma.client.findFirst({
+      where: { id: clientId, tenantId },
+      select: { phone: true },
+    });
+    return samePhone(client?.phone, typedPhone);
+  }
+
+  private async turnOnBookingWhatsAppNotices(input: {
+    tenantId: string;
+    clientId: string;
+    appointmentId?: string;
+    source: "booking" | "widget";
+    ip?: string;
+    typedPhone?: string;
+  }): Promise<void> {
+    const { tenantId, clientId } = input;
+    if (!(await this.typedPhoneOnFile(tenantId, clientId, input.typedPhone))) {
+      this.logger.log(`WhatsApp notices not turned on for client ${clientId}: the phone on file is not the one typed`);
+      return;
+    }
+    if (!(await this.whatsappConnected(tenantId))) {
+      this.logger.log(`WhatsApp notices not turned on for client ${clientId}: the salon has no WhatsApp connected`);
+      return;
+    }
+    await this.setClientNotices({
+      tenantId,
+      clientId,
+      changes: { whatsapp: true },
+      ip: input.ip,
+      source: input.source,
+      shown: BOOKING_WHATSAPP_NOTICES_TEXT,
+      appointmentId: input.appointmentId,
+    });
+  }
+
+  private async recordBookingWhatsAppPromotions(input: {
+    tenantId: string;
+    clientId: string;
+    appointmentId?: string;
+    source: "booking" | "widget";
+    ip?: string;
+    typedPhone?: string;
+  }): Promise<void> {
+    const { tenantId, clientId } = input;
+    if (!(await this.typedPhoneOnFile(tenantId, clientId, input.typedPhone))) {
+      this.logger.log(`WhatsApp promotions not recorded for client ${clientId}: the phone on file is not the one typed`);
+      return;
+    }
+    // The box is offered only then; a request that ticks it anyway records nothing.
+    if (!(await salonOffersWhatsAppPromotions(this.prisma, this.featureFlags, tenantId))) {
+      this.logger.log(
+        `WhatsApp promotions not recorded for client ${clientId}: the salon has no WhatsApp connected or its plan has no WhatsApp campaigns`,
+      );
+      return;
+    }
+    const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { name: true } });
+    await this.recordMarketingChoice({
+      tenantId,
+      clientId,
+      accepts: true,
+      ip: input.ip,
+      channel: "whatsapp",
+      source: input.source,
+      shown: bookingWhatsAppPromotionsText(tenant?.name ?? ""),
+      shownVersion: BOOKING_WHATSAPP_PROMOTIONS_VERSION,
+      appointmentId: input.appointmentId,
+    });
   }
 }

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Star, Filter, ExternalLink, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Star, Filter, ExternalLink, AlertCircle, CheckCircle2, MessageCircle } from "lucide-react";
 import apiClient, { Review, ReviewAnalytics, ReviewSettings } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -12,6 +12,7 @@ import {
   moderationLine,
   publicVisibilityNote,
   requestsHeadline,
+  whatsappChannelView,
 } from "@/lib/reviews";
 
 const STATUS_LABEL: Record<Review["status"], string> = {
@@ -356,6 +357,21 @@ function SettingsCard({
   const [placeId, setPlaceId] = useState(settings.googlePlaceId ?? "");
   const [url, setUrl] = useState(settings.googleWriteReviewUrl ?? "");
   const [saving, setSaving] = useState(false);
+  const [submittingTemplate, setSubmittingTemplate] = useState(false);
+  const whatsapp = whatsappChannelView(settings.channels.whatsapp);
+
+  async function submitTemplate() {
+    setSubmittingTemplate(true);
+    try {
+      const next = await apiClient.submitReviewWhatsAppTemplate();
+      onSaved(next);
+      toast({ title: "Plantilla enviada a Meta", description: "Meta suele revisarla en unas horas." });
+    } catch (err: any) {
+      toast({ title: "No se pudo enviar la plantilla", description: err?.message, variant: "destructive" });
+    } finally {
+      setSubmittingTemplate(false);
+    }
+  }
 
   async function save(patch: Parameters<typeof apiClient.updateReviewSettings>[0]) {
     setSaving(true);
@@ -379,10 +395,12 @@ function SettingsCard({
           <div>
             <div className="text-sm font-medium text-gray-900">Pedir opinión tras la cita</div>
             <p className="text-xs text-gray-500">
-              Por email, {settings.policy.delayHours} horas después de marcar la cita como completada y entre las 9:00 y
-              las 21:00 de tu salón (solo citas de los últimos {Math.round((settings.policy.windowHours ?? 72) / 24)}{" "}
-              días). Como mucho una vez cada {settings.policy.clientCooldownDays} días por clienta, y nunca a quien haya
-              dicho que no o cuyo email haya rebotado o se haya dado de baja.
+              Por WhatsApp a las clientas que pidieron los avisos de sus citas por WhatsApp (cuando Meta apruebe tu
+              plantilla) y por email al resto, {settings.policy.delayHours} horas después de marcar la cita como
+              completada y entre las 9:00 y las 21:00 de tu salón (solo citas de los últimos{" "}
+              {Math.round((settings.policy.windowHours ?? 72) / 24)} días). Como mucho una vez cada{" "}
+              {settings.policy.clientCooldownDays} días por clienta, y nunca a quien haya dicho que no o cuyo email haya
+              rebotado o se haya dado de baja.
             </p>
           </div>
           <label className="inline-flex items-center gap-2 text-sm shrink-0">
@@ -406,10 +424,50 @@ function SettingsCard({
             </span>
           </div>
         )}
+        {whatsapp && (
+          <div className="rounded border border-gray-200 p-3 text-xs space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <MessageCircle className="w-4 h-4 text-green-600" />
+              <span className="font-medium text-gray-900">WhatsApp</span>
+              <span
+                className={`rounded-full px-2 py-0.5 font-medium ${
+                  {
+                    gray: "bg-gray-100 text-gray-700",
+                    amber: "bg-amber-100 text-amber-800",
+                    green: "bg-green-100 text-green-800",
+                    red: "bg-red-100 text-red-700",
+                  }[whatsapp.tone]
+                }`}
+              >
+                {whatsapp.label}
+              </span>
+            </div>
+            <p className="text-gray-600">{whatsapp.detail}</p>
+            {whatsapp.canSubmit && (
+              <button
+                type="button"
+                disabled={submittingTemplate}
+                onClick={submitTemplate}
+                className="bg-green-600 text-white text-xs px-3 py-1.5 rounded hover:bg-green-700 disabled:opacity-50"
+              >
+                {submittingTemplate ? "Enviando…" : "Enviar plantilla a Meta"}
+              </button>
+            )}
+            {whatsapp.needsConnection && (
+              <Link href="/dashboard/settings/whatsapp" className="inline-block text-blue-700 underline">
+                Conectar WhatsApp
+              </Link>
+            )}
+          </div>
+        )}
         {settings.addOnActive && settings.autoRequestsEnabled && !settings.channels.email && (
           <div className="flex items-start gap-2 text-xs bg-amber-50 text-amber-800 p-2 rounded">
             <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>El envío de emails no está configurado, así que ahora mismo no se enviará nada.</span>
+            <span>
+              {settings.channels.whatsapp === "APPROVED"
+                ? "El envío de emails no está configurado: ahora mismo solo se pide la opinión por WhatsApp, a quien pidió los avisos de sus citas por WhatsApp."
+                : "El envío de emails no está configurado, así que ahora mismo no se enviará nada."}
+            </span>
           </div>
         )}
       </div>

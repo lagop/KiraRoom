@@ -194,14 +194,27 @@ export function privacyPolicyUrl(base = appBaseUrl()): string {
  *   every email). Ticking it records a refusal.
  * - whatsappNotices: shown only when the salon has WhatsApp connected; her
  *   confirmations and reminders then go by WhatsApp too.
+ * - whatsappPromotions + whatsappPromotionsNotice: optional, never
+ *   pre-ticked, shown only when the salon has WhatsApp connected and its
+ *   plan includes WhatsApp campaigns. {salon} is the salon's name (Meta asks
+ *   the opt-in to name the business). Ticking it records her opt-in;
+ *   unticked records nothing (it is not a refusal).
  *
  * In Spanish whatever the page's language, and word for word what the
  * backend records as shown (packages/backend/src/consent/marketing-consent.ts,
- * BOOKING_EMAIL_REFUSAL_TEXT and BOOKING_WHATSAPP_NOTICES_TEXT; a backend
- * test compares them). Change both together.
+ * BOOKING_EMAIL_REFUSAL_TEXT, BOOKING_WHATSAPP_NOTICES_TEXT and
+ * BOOKING_WHATSAPP_PROMOTIONS_LABEL / _NOTICE; a backend test compares
+ * them). Change both together.
  */
 export const BOOKING_CHOICE_TEXT = {
   emailRefusal: "No quiero recibir promociones ni novedades del salón por email.",
   emailNotice: "Si no marcas la casilla, el salón puede enviarte por email promociones de servicios parecidos a los que reservas. Puedes darte de baja cuando quieras con el enlace que llega en cada email.",
   whatsappNotices: "Recibir los avisos de mi cita por WhatsApp (confirmación, recordatorios y cambios).",
+  whatsappPromotions: "Quiero recibir promociones de {salon} por WhatsApp.",
+  whatsappPromotionsNotice: "Puedes darte de baja cuando quieras respondiendo BAJA.",
 } as const;
+
+/** The WhatsApp promotions box's label with the salon's name, as the backend records it. */
+export function whatsappPromotionsLabel(salonName: string): string {
+  return BOOKING_CHOICE_TEXT.whatsappPromotions.replace("{salon}", salonName.trim() || "el salón");
+}

@@ -4,15 +4,26 @@ import { ConsentController } from "./consent.controller";
 import {
   BOOKING_EMAIL_REFUSAL_TEXT,
   BOOKING_WHATSAPP_NOTICES_TEXT,
+  BOOKING_WHATSAPP_PROMOTIONS_LABEL,
+  BOOKING_WHATSAPP_PROMOTIONS_NOTICE,
+  BOOKING_WHATSAPP_PROMOTIONS_VERSION,
   MARKETING_FIELDS,
   MARKETING_PURPOSE,
   SYSTEM_CONSENT_PURPOSES,
   WHATSAPP_MARKETING_FIELDS,
+  WHATSAPP_MARKETING_PURPOSE,
   WHATSAPP_NOTICES_FIELDS,
   WHATSAPP_NOTICES_PURPOSE,
+  bookingWhatsAppPromotionsText,
+  clientsWhoAcceptedWhatsAppMarketing,
   clientsWhoRefusedMarketing,
 } from "./marketing-consent";
-import { APPOINTMENT_NOTICE_TYPES, noticeChannelsOf, withNoticeChannels } from "./client-notices";
+import {
+  APPOINTMENT_NOTICE_TYPES,
+  noticeChannelsOf,
+  salonOffersWhatsAppPromotions,
+  withNoticeChannels,
+} from "./client-notices";
 
 /**
  * The owner's decisions of 2026-11-01: clients have no accounts, so what a
@@ -359,5 +370,181 @@ describe("appointment notice channels", () => {
     expect(noticeChannelsOf(undefined)).toEqual({ email: true, sms: true, whatsapp: false });
     expect(noticeChannelsOf({ appointment_reminder_1h: { email: false } }).email).toBe(false);
     expect(noticeChannelsOf(withNoticeChannels({}, { whatsapp: true })).whatsapp).toBe(true);
+  });
+});
+
+describe("the optional WhatsApp promotions box at booking", () => {
+  /** whatsapp_marketing: Pro and Empresa (the FeatureFlagService check, mocked). */
+  const plan = (included: boolean): any => ({ isFeatureUnlocked: jest.fn(async () => included) });
+  const SHOWN =
+    "Quiero recibir promociones de Salón Lucía por WhatsApp. Puedes darte de baja cuando quieras respondiendo BAJA.";
+
+  function withSalon(opts: Parameters<typeof makePrisma>[0] = {}) {
+    const ctx = makePrisma(opts);
+    ctx.prisma.tenant = { findUnique: jest.fn(async () => ({ name: "Salón Lucía" })) };
+    return ctx;
+  }
+
+  it("ticked: records her WhatsApp opt-in with the exact text shown, its version, when and where", async () => {
+    const { prisma, consents, forms } = withSalon();
+    const flags = plan(true);
+    await new ConsentService(prisma, encryption, flags).recordBookingChoices({
+      tenantId: "t1",
+      clientId: "c1",
+      appointmentId: "a1",
+      source: "booking",
+      ip: "1.2.3.4",
+      typedPhone: "600111222",
+      wantsWhatsAppPromotions: true,
+    });
+    expect(flags.isFeatureUnlocked).toHaveBeenCalledWith("t1", "whatsapp_marketing");
+    expect(consents).toHaveLength(1);
+    expect(forms.find((f) => f.id === consents[0].formId)).toMatchObject({
+      purpose: WHATSAPP_MARKETING_PURPOSE,
+      fields: WHATSAPP_MARKETING_FIELDS,
+    });
+    expect(consents[0]).toMatchObject({
+      clientId: "c1",
+      appointmentId: "a1",
+      responses: {
+        accepts: true,
+        source: "booking",
+        shown: SHOWN,
+        shownVersion: BOOKING_WHATSAPP_PROMOTIONS_VERSION,
+      },
+      signatureIpHash: "hash(1.2.3.4)",
+      signedAt: expect.any(Date),
+      revokedAt: null,
+    });
+    // WhatsApp campaigns now reach her.
+    expect([...(await clientsWhoAcceptedWhatsAppMarketing(prisma, "t1"))]).toEqual(["c1"]);
+  });
+
+  it("from the widget, the source says so", async () => {
+    const { prisma, consents } = withSalon();
+    await new ConsentService(prisma, encryption, plan(true)).recordBookingChoices({
+      tenantId: "t1",
+      clientId: "c1",
+      source: "widget",
+      typedPhone: "600111222",
+      wantsWhatsAppPromotions: true,
+    });
+    expect(consents[0].responses).toMatchObject({ accepts: true, source: "widget", shown: SHOWN });
+  });
+
+  it("unticked records nothing: it is not a refusal", async () => {
+    const { prisma, consents } = withSalon();
+    const service = new ConsentService(prisma, encryption, plan(true));
+    await service.recordBookingChoices({
+      tenantId: "t1",
+      clientId: "c1",
+      source: "booking",
+      typedPhone: "600111222",
+      wantsWhatsAppPromotions: false,
+    });
+    await service.recordBookingChoices({ tenantId: "t1", clientId: "c1", source: "booking", typedPhone: "600111222" });
+    expect(consents).toHaveLength(0);
+    expect((await service.getMarketingConsent("t1", "c1", "whatsapp")).status).toBe("none");
+  });
+
+  it("is not honoured on a plan without WhatsApp campaigns, without WhatsApp connected, or with no plan check", async () => {
+    for (const [opts, flags] of [
+      [{}, plan(false)],
+      [{ connected: false }, plan(true)],
+      [{}, undefined],
+    ] as const) {
+      const { prisma, consents } = withSalon(opts);
+      await new ConsentService(prisma, encryption, flags as any).recordBookingChoices({
+        tenantId: "t1",
+        clientId: "c1",
+        source: "booking",
+        typedPhone: "600111222",
+        wantsWhatsAppPromotions: true,
+      });
+      expect(consents).toHaveLength(0);
+    }
+  });
+
+  it("is not honoured for a number other than the one on her file", async () => {
+    const { prisma, consents } = withSalon({ phone: "611 999 888" });
+    await new ConsentService(prisma, encryption, plan(true)).recordBookingChoices({
+      tenantId: "t1",
+      clientId: "c1",
+      source: "booking",
+      typedPhone: "600111222",
+      wantsWhatsAppPromotions: true,
+    });
+    expect(consents).toHaveLength(0);
+  });
+
+  it("is independent of the notices box: notices on, promotions unticked, records only the notices", async () => {
+    const { prisma, consents, forms } = withSalon();
+    await new ConsentService(prisma, encryption, plan(true)).recordBookingChoices({
+      tenantId: "t1",
+      clientId: "c1",
+      source: "booking",
+      typedPhone: "600111222",
+      wantsWhatsAppNotices: true,
+    });
+    expect(consents.map((c) => forms.find((f) => f.id === c.formId).purpose)).toEqual([WHATSAPP_NOTICES_PURPOSE]);
+  });
+
+  it("a failure never fails the booking", async () => {
+    const { prisma } = withSalon();
+    prisma.consent.create = async () => {
+      throw new Error("db down");
+    };
+    await expect(
+      new ConsentService(prisma, encryption, plan(true)).recordBookingChoices({
+        tenantId: "t1",
+        clientId: "c1",
+        source: "booking",
+        typedPhone: "600111222",
+        wantsWhatsAppPromotions: true,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("the box shows the same words the record keeps (frontend BOOKING_CHOICE_TEXT)", () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fs = require("fs");
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const path = require("path");
+    const source: string = fs.readFileSync(path.join(__dirname, "../../../frontend/lib/public-booking.ts"), "utf8");
+    const text = (key: string) => new RegExp(`${key}: "([^"]+)"`).exec(source)?.[1];
+    expect(text("whatsappPromotions")).toBe(BOOKING_WHATSAPP_PROMOTIONS_LABEL);
+    expect(text("whatsappPromotionsNotice")).toBe(BOOKING_WHATSAPP_PROMOTIONS_NOTICE);
+    expect(bookingWhatsAppPromotionsText("Salón Lucía")).toBe(SHOWN);
+  });
+
+  it("the receptionist never collects it: its bookings carry no marketing choice", () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fs = require("fs");
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const path = require("path");
+    const source: string = fs.readFileSync(
+      path.join(__dirname, "../virtual-receptionist/tools/receptionist-booking.ts"),
+      "utf8",
+    );
+    expect(source).not.toMatch(/wantsWhatsAppPromotions|refusesMarketingEmail|marketing_whatsapp/);
+  });
+});
+
+describe("salonOffersWhatsAppPromotions (the booking page and widget flag)", () => {
+  it("only with WhatsApp connected and a plan with WhatsApp campaigns; false on any error", async () => {
+    const connected: any = { whatsAppConnection: { findUnique: async () => ({ isActive: true, phoneNumberId: "pn" }) } };
+    const disconnected: any = { whatsAppConnection: { findUnique: async () => null } };
+    const yes: any = { isFeatureUnlocked: async () => true };
+    const no: any = { isFeatureUnlocked: async () => false };
+    const broken: any = {
+      isFeatureUnlocked: async () => {
+        throw new Error("db down");
+      },
+    };
+    expect(await salonOffersWhatsAppPromotions(connected, yes, "t1")).toBe(true);
+    expect(await salonOffersWhatsAppPromotions(connected, no, "t1")).toBe(false);
+    expect(await salonOffersWhatsAppPromotions(disconnected, yes, "t1")).toBe(false);
+    expect(await salonOffersWhatsAppPromotions(connected, broken, "t1")).toBe(false);
+    expect(await salonOffersWhatsAppPromotions(connected, undefined, "t1")).toBe(false);
   });
 });

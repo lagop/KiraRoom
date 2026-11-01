@@ -5,9 +5,15 @@
  *
  * Run: npx ts-node --project tsconfig.test.json --transpile-only lib/whatsapp-campaign.spec.ts
  */
+import * as fs from "fs";
+import * as path from "path";
 import {
+  BILLING_HREF,
   CAMPAIGN_FOOTER,
+  PLAN_NOTICE,
+  SENDING_WINDOW,
   bodyProblem,
+  isPlanBlocked,
   campaignActions,
   campaignLabel,
   campaignStats,
@@ -91,6 +97,25 @@ check("sending: only cancel", sending.cancel && !sending.edit && !sending.remove
 const pausedActions = campaignActions({ ...base, status: "paused" });
 check("paused: resume (Reanudar), cancel or delete", pausedActions.resume && pausedActions.cancel && pausedActions.remove && !pausedActions.edit);
 check("only a paused campaign resumes", !campaignActions({ ...base, status: "completed" }).resume);
+
+console.log("Pro only (whatsapp_marketing)");
+const noPlanDraft = campaignActions(base, false);
+check("without the plan a draft cannot be edited or sent", !noPlanDraft.edit && !noPlanDraft.submit && noPlanDraft.remove);
+const noPlanPaused = campaignActions({ ...base, status: "paused" }, false);
+check("without the plan a paused campaign cannot resume, only be cancelled or deleted", !noPlanPaused.resume && noPlanPaused.cancel && noPlanPaused.remove);
+check("403 FEATURE_NOT_IN_PLAN is the plan", isPlanBlocked({ status: 403, code: "FEATURE_NOT_IN_PLAN" }));
+check("another 403 is not", !isPlanBlocked({ status: 403, code: "SUBSCRIPTION_SUSPENDED" }) && !isPlanBlocked(new Error("x")));
+check("the notice names Pro and Empresa and keeps the past campaigns readable", /Pro y Empresa/.test(PLAN_NOTICE) && /anteriores/.test(PLAN_NOTICE));
+check("the upgrade link goes to Facturación", BILLING_HREF === "/dashboard/billing");
+const plannedPause = label({ status: "paused", lastError: "Tu plan no incluye campañas de WhatsApp" });
+check("a campaign paused by the plan says so", plannedPause.detail === "Pausada: Tu plan no incluye campañas de WhatsApp", plannedPause);
+
+console.log("No campaigns on Sundays");
+check("the sending window says no Sundays", SENDING_WINDOW.includes("No se envía en domingo") && SENDING_WINDOW.includes("9:00"));
+const page = fs.readFileSync(path.join(__dirname, "..", "app/dashboard/marketing/whatsapp/page.tsx"), "utf8");
+check("the page shows the sending window", page.includes("SENDING_WINDOW"));
+check("the page shows the plan notice with the link to Facturación", page.includes("PLAN_NOTICE") && page.includes("BILLING_HREF"));
+check("the page handles 403 FEATURE_NOT_IN_PLAN", page.includes("isPlanBlocked("));
 
 console.log("M9: paused and sent-with-errors labels");
 const paused = label({ status: "paused", lastError: "Meta no puede cobrar los mensajes." });

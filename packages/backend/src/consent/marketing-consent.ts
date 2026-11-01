@@ -26,7 +26,9 @@ import type { ConsentFormField } from "./consent.service";
  * messaging policy only allows marketing messages to people who opted in to
  * receive them from that business on WhatsApp. The salon records the opt-in
  * when the client agreed in person (responses.source = "salon", with who
- * recorded it).
+ * recorded it), or the client ticks the optional box when booking online
+ * (source "booking" or "widget", with the text shown and its version in
+ * responses.shownVersion).
  *
  * Clients have no accounts (nothing sets a client password), so the wording
  * never sends them to one: they stop emails with the link in every email,
@@ -82,6 +84,27 @@ export const BOOKING_EMAIL_REFUSAL_TEXT =
 
 export const BOOKING_WHATSAPP_NOTICES_TEXT =
   "Recibir los avisos de mi cita por WhatsApp (confirmación, recordatorios y cambios).";
+
+/**
+ * The WhatsApp promotions box, unticked and optional: shown only when the
+ * salon has its WhatsApp connected and its plan includes WhatsApp campaigns
+ * (whatsapp_marketing). Meta asks the opt-in to name the business and the
+ * channel, so the label carries the salon's name ({salon}); the line under
+ * it says how to stop. Ticked, it is recorded as a grant with both lines as
+ * shown and BOOKING_WHATSAPP_PROMOTIONS_VERSION; unticked records nothing
+ * (it is not a refusal). Word for word what the frontend shows
+ * (BOOKING_CHOICE_TEXT.whatsappPromotions / whatsappPromotionsNotice).
+ */
+export const BOOKING_WHATSAPP_PROMOTIONS_LABEL = "Quiero recibir promociones de {salon} por WhatsApp.";
+export const BOOKING_WHATSAPP_PROMOTIONS_NOTICE = "Puedes darte de baja cuando quieras respondiendo BAJA.";
+/** Changes whenever either line above does. */
+export const BOOKING_WHATSAPP_PROMOTIONS_VERSION = "2026-11-02";
+
+/** The two lines of the WhatsApp promotions box with the salon's name, as recorded. */
+export function bookingWhatsAppPromotionsText(salonName: string): string {
+  const label = BOOKING_WHATSAPP_PROMOTIONS_LABEL.replace("{salon}", (salonName ?? "").trim() || "el salón");
+  return `${label} ${BOOKING_WHATSAPP_PROMOTIONS_NOTICE}`;
+}
 
 /** The wording the client agrees to. Changing it means a new form version (ensureMarketingForm). */
 export const MARKETING_FIELDS: ConsentFormField[] = [

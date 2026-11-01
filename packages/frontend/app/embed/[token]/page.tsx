@@ -16,6 +16,7 @@ import {
   bookingErrorMessage,
   localDateString,
   privacyPolicyUrl,
+  whatsappPromotionsLabel,
 } from "@/lib/public-booking";
 
 interface WidgetConfig {
@@ -65,6 +66,11 @@ interface WidgetConfig {
    * "Recibir los avisos de mi cita por WhatsApp". Absent from older servers.
    */
   whatsappNotices?: boolean;
+  /**
+   * ...and its plan includes WhatsApp campaigns: the form offers the
+   * optional WhatsApp promotions box. Absent from older servers.
+   */
+  whatsappPromotions?: boolean;
 }
 
 interface Slot {
@@ -98,6 +104,8 @@ export default function EmbedWidgetPage() {
   // The two boxes, both unticked (BOOKING_CHOICE_TEXT).
   const [refusesMarketingEmail, setRefusesMarketingEmail] = useState(false);
   const [wantsWhatsAppNotices, setWantsWhatsAppNotices] = useState(false);
+  // Optional, never pre-ticked (config.whatsappPromotions).
+  const [wantsWhatsAppPromotions, setWantsWhatsAppPromotions] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [bookingId, setBookingId] = useState<string | null>(null);
   const [bookingError, setBookingError] = useState<string | null>(null);
@@ -183,6 +191,7 @@ export default function EmbedWidgetPage() {
         // Only what she ticked: an unticked box sends nothing.
         ...(refusesMarketingEmail ? { refusesMarketingEmail: true } : {}),
         ...(config.whatsappNotices && wantsWhatsAppNotices ? { wantsWhatsAppNotices: true } : {}),
+        ...(config.whatsappPromotions && wantsWhatsAppPromotions ? { wantsWhatsAppPromotions: true } : {}),
       };
       const res = await fetch(`${API}/appointments`, {
         method: "POST",
@@ -413,6 +422,23 @@ export default function EmbedWidgetPage() {
                 />
                 <span>{BOOKING_CHOICE_TEXT.whatsappNotices}</span>
               </label>
+            )}
+            {config.whatsappPromotions && (
+              <div>
+                <label className="flex items-start gap-2 text-sm text-gray-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={wantsWhatsAppPromotions}
+                    onChange={(e) => setWantsWhatsAppPromotions(e.target.checked)}
+                    aria-describedby="widget-whatsapp-promotions-notice"
+                    className="mt-0.5"
+                  />
+                  <span>{whatsappPromotionsLabel(config.tenant.name)}</span>
+                </label>
+                <p id="widget-whatsapp-promotions-notice" className="mt-1 ml-6 text-xs text-gray-500">
+                  {BOOKING_CHOICE_TEXT.whatsappPromotionsNotice}
+                </p>
+              </div>
             )}
             <div>
               <label className="flex items-start gap-2 text-sm text-gray-700 cursor-pointer">

@@ -296,3 +296,23 @@ describe("WhatsAppTemplateService.deleteTemplate (B4)", () => {
     expect(meta.deleteTemplate).not.toHaveBeenCalled();
   });
 });
+
+describe("WhatsAppTemplateService.submitTemplate (the review template, from the Reseñas settings)", () => {
+  it("submits only that template as a UTILITY one, through the mocked Meta client", async () => {
+    const { service, meta } = setup();
+    expect(await service.submitTemplate("t1", REVIEW_REQUEST)).toEqual({ status: "PENDING" });
+    expect(meta.createTemplate).toHaveBeenCalledTimes(1);
+    expect(meta.createTemplate).toHaveBeenCalledWith("token", "waba1", templateCreationPayload(REVIEW_REQUEST));
+    expect(templateCreationPayload(REVIEW_REQUEST).category).toBe("UTILITY");
+  });
+
+  it("a template submitted before keeps its status; a refusal says why; no connection, no call", async () => {
+    const exists = setup({ create: { error: { code: 2388024, message: "already exists" } } });
+    expect(await exists.service.submitTemplate("t1", REVIEW_REQUEST)).toEqual({ status: "EXISTS" });
+    const refused = setup({ create: { error: { code: 100, message: "Invalid parameter" } } });
+    expect(await refused.service.submitTemplate("t1", REVIEW_REQUEST)).toEqual({ error: "Invalid parameter" });
+    const off = setup({ connection: null });
+    expect(await off.service.submitTemplate("t1", REVIEW_REQUEST)).toEqual({ error: "not_connected" });
+    expect(off.meta.createTemplate).not.toHaveBeenCalled();
+  });
+});
