@@ -1402,10 +1402,19 @@ model GiftCardTransaction {
   /// Reference
   paymentId String?
 
+  /// The card's balance right after this movement (cents). Null on rows
+  /// written before it was recorded.
+  balanceAfter Int?
+
+  /// The team member who made the movement (sale, redemption, refund...).
+  /// Null on older rows and on movements made by the system.
+  createdById String?
+
   /// Notes
   note String?
 
   @@index([giftCardId])
+  @@index([paymentId])
   @@map("gift_card_transactions")
 }
 
