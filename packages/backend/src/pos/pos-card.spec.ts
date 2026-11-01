@@ -7,11 +7,17 @@ import { StripeService } from "../payments/services/stripe.service";
  * platform's account when the salon had none. Nobody confirmed it, so the
  * sale stayed "pending". Card at the till is the salon's own terminal.
  */
-function pos() {
+function pos({ serviceActive = true } = {}) {
   const prisma: any = {
     payment: { create: jest.fn(async ({ data }: any) => ({ id: "p1", ...data })) },
     service: {
       findUnique: jest.fn(async () => ({ id: "s1", name: "Corte", price: 25, currency: "EUR" })),
+      // The quick sale reads it within the salon.
+      findFirst: jest.fn(async ({ where }: any) =>
+        where.tenantId === "t1" && where.id === "s1"
+          ? { id: "s1", name: "Corte", price: 25, currency: "EUR", isActive: serviceActive }
+          : null,
+      ),
       findMany: jest.fn(async () => [{ id: "s1", name: "Corte", price: 25 }]),
     },
     client: { findFirst: jest.fn(async ({ where }: any) => (where.id ? { id: where.id } : null)), create: jest.fn() },
@@ -42,6 +48,16 @@ describe("POS card sales", () => {
     expect(prisma.payment.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ amount: 2500, status: "paid" }),
     });
+  });
+
+  it("refuses a quick sale of a deactivated service, or of another salon's", async () => {
+    const off = pos({ serviceActive: false });
+    await expect(off.service.quickSale("t1", "s1", "cash")).rejects.toThrow(/desactivado/);
+    expect(off.prisma.payment.create).not.toHaveBeenCalled();
+
+    const other = pos();
+    await expect(other.service.quickSale("t2", "s1", "cash")).rejects.toThrow(/not found/);
+    expect(other.prisma.payment.create).not.toHaveBeenCalled();
   });
 });
 

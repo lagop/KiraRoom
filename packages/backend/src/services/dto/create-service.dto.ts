@@ -1,6 +1,19 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNumber, IsBoolean, IsOptional, IsNotEmpty, IsEnum } from 'class-validator';
+import { Transform } from 'class-transformer';
+import {
+  IsString,
+  IsNumber,
+  IsBoolean,
+  IsOptional,
+  IsNotEmpty,
+  IsEnum,
+  IsIn,
+  IsInt,
+  Min,
+  Max,
+} from 'class-validator';
 import { ServiceCategory } from '@prisma/client';
+import { SERVICE_CURRENCIES, SERVICE_LIMITS as L, numberFromText, trimmed } from './service-fields';
 
 /**
  * No `tenantId` here on purpose: the tenant comes from the caller's token.
@@ -8,11 +21,14 @@ import { ServiceCategory } from '@prisma/client';
  * '1'), which the tenant scope rejected with a 403 -- so every screen but the
  * onboarding wizard failed to create a service. The global ValidationPipe
  * whitelists, so an old client still sending the field has it stripped.
+ *
+ * Limits: see service-fields.ts.
  */
 export class CreateServiceDto {
   @ApiProperty({ description: 'Service name' })
-  @IsString()
-  @IsNotEmpty()
+  @Transform(trimmed)
+  @IsString({ message: 'El nombre no es válido' })
+  @IsNotEmpty({ message: 'Escribe el nombre del servicio' })
   name: string;
 
   @ApiProperty({ description: 'Service description', required: false })
@@ -29,17 +45,21 @@ export class CreateServiceDto {
   category: ServiceCategory;
 
   @ApiProperty({ description: 'Service duration in minutes' })
-  @IsNumber()
-  @IsNotEmpty()
+  @Transform(numberFromText)
+  @IsInt({ message: 'La duración tiene que ser un número entero de minutos' })
+  @Min(L.durationMin, { message: `La duración mínima es de ${L.durationMin} minutos` })
+  @Max(L.durationMax, { message: `La duración máxima es de ${L.durationMax} minutos` })
   duration: number;
 
   @ApiProperty({ description: 'Service price' })
-  @IsNumber()
-  @IsNotEmpty()
+  @Transform(numberFromText)
+  @IsNumber({ maxDecimalPlaces: 2 }, { message: 'El precio tiene que ser un importe con 2 decimales como máximo' })
+  @Min(0, { message: 'El precio no puede ser negativo' })
+  @Max(L.priceMax, { message: `El precio máximo es ${L.priceMax} €` })
   price: number;
 
-  @ApiProperty({ description: 'Service currency', required: false })
-  @IsString()
+  @ApiProperty({ description: 'Service currency', required: false, enum: SERVICE_CURRENCIES })
+  @IsIn(SERVICE_CURRENCIES, { message: 'La única moneda disponible es EUR' })
   @IsOptional()
   currency?: string;
 
@@ -54,17 +74,26 @@ export class CreateServiceDto {
   requiresApproval?: boolean;
 
   @ApiProperty({ description: 'Max advance booking days', required: false })
-  @IsNumber()
+  @Transform(numberFromText)
+  @IsInt({ message: 'La antelación máxima tiene que ser un número entero de días' })
+  @Min(1, { message: 'La antelación máxima es de al menos 1 día' })
+  @Max(L.maxAdvanceDaysMax, { message: `La antelación máxima no puede pasar de ${L.maxAdvanceDaysMax} días` })
   @IsOptional()
   maxAdvanceBooking?: number;
 
   @ApiProperty({ description: 'Min advance booking hours', required: false })
-  @IsNumber()
+  @Transform(numberFromText)
+  @IsInt({ message: 'La antelación mínima tiene que ser un número entero de horas' })
+  @Min(0, { message: 'La antelación mínima no puede ser negativa' })
+  @Max(L.minAdvanceHoursMax, { message: `La antelación mínima no puede pasar de ${L.minAdvanceHoursMax} horas` })
   @IsOptional()
   minAdvanceBooking?: number;
 
   @ApiProperty({ description: 'Buffer time in minutes', required: false })
-  @IsNumber()
+  @Transform(numberFromText)
+  @IsInt({ message: 'El margen tiene que ser un número entero de minutos' })
+  @Min(0, { message: 'El margen no puede ser negativo' })
+  @Max(L.bufferMax, { message: `El margen máximo es de ${L.bufferMax} minutos` })
   @IsOptional()
   bufferTime?: number;
 
@@ -84,12 +113,17 @@ export class CreateServiceDto {
   depositRequired?: boolean;
 
   @ApiProperty({ description: 'Deposit amount (fixed)', required: false })
-  @IsNumber()
+  @Transform(numberFromText)
+  @IsNumber({}, { message: 'La señal no es un importe válido' })
+  @Min(0, { message: 'La señal no puede ser negativa' })
   @IsOptional()
   depositAmount?: number;
 
   @ApiProperty({ description: 'Deposit percentage (of total price)', required: false })
-  @IsNumber()
+  @Transform(numberFromText)
+  @IsNumber({}, { message: 'El porcentaje de señal no es válido' })
+  @Min(0, { message: 'El porcentaje de señal no puede ser negativo' })
+  @Max(100, { message: 'El porcentaje de señal no puede pasar del 100 %' })
   @IsOptional()
   depositPercentage?: number;
 }

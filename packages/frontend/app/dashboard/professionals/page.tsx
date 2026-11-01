@@ -190,8 +190,9 @@ function ProfessionalsPageContent() {
           updateData.commissionRate = commissionRate;
         if (formData.hireDate) updateData.hireDate = formData.hireDate;
         updateData.isActive = formData.isActive;
-        if (formData.serviceIds.length > 0)
-          updateData.serviceIds = formData.serviceIds;
+        // Always sent, the form having loaded them: an empty list now
+        // clears them (the last service could not be unticked).
+        updateData.serviceIds = formData.serviceIds;
 
         await (apiClient as any).updateProfessional(
           editingProfessional.id,

@@ -261,6 +261,15 @@ export class RebookingDispatcherService {
     const serviceId = cadence.recommendedServiceId;
     if (!serviceId) return { ok: false, reason: "no_recommended_service" };
 
+    // "Time to book your X again" for a service the salon no longer offers
+    // sends her to a page that cannot book it. Nothing is recorded or
+    // advanced: if the salon turns it back on, the reminder goes out then.
+    const recommended = await this.prisma.service.findUnique({
+      where: { id: serviceId },
+      select: { isActive: true },
+    });
+    if (recommended?.isActive === false) return { ok: false, reason: "service_inactive" };
+
     // One notice per visit cycle: after a notice for this service, the
     // client is eligible again once she has completed it again since.
     const reminderSentFor = (cadence.reminderSentFor as any[]) ?? [];

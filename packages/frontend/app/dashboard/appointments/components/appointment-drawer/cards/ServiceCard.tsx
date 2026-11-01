@@ -177,6 +177,11 @@ export function ServiceCard({
             onChange={(e) => onServiceChange(e.target.value)}
             className="border border-gray-300 rounded px-2 py-1 text-sm flex-1 min-w-0"
           >
+            {/* The catalogue lists active services only; a service since
+                deactivated stays this appointment's own option. */}
+            {!services.some((s) => String(s.id) === String(appointment.service.id)) && (
+              <option value={appointment.service.id}>{appointment.service.name}</option>
+            )}
             {services.map((service) => (
               <option key={service.id} value={service.id}>
                 {service.name}

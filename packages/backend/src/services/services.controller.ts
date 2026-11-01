@@ -45,10 +45,11 @@ export class ServicesController {
   @Public()
   @ApiOperation({ summary: "Get all services with optional filters" })
   async findAll(@Req() req: any, @Query("tenantId") tenantId?: string) {
-    // Never unscoped: see PublicViewerService for why this was a leak. A
-    // salon's catalogue is public, so every viewer gets the same rows.
-    const { tenantId: resolved } = await this.publicViewer.resolve(req, tenantId);
-    return this.servicesService.findAll(resolved);
+    // Never unscoped: see PublicViewerService for why this was a leak. The
+    // salon's own staff get the whole catalogue; everyone else only what
+    // can be booked online, without the salon's internal settings.
+    const viewer = await this.publicViewer.resolve(req, tenantId);
+    return this.servicesService.findAll(viewer.tenantId, viewer);
   }
 
   @Get(":id")
@@ -56,8 +57,19 @@ export class ServicesController {
   @ApiOperation({ summary: "Get service by ID" })
   @ApiResponse({ status: 200, description: "Service found" })
   @ApiResponse({ status: 404, description: "Service not found" })
-  async findOne(@Param("id", ParseUUIDPipe) id: string) {
-    return this.servicesService.findOne(id);
+  async findOne(
+    @Req() req: any,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Query("tenantId") tenantId?: string,
+  ) {
+    // This answered any salon's service, in full, to anyone holding its id.
+    // Now it is the list's rules for one row: the salon comes from the token
+    // or `?tenantId=`, and only its staff see inactive or offline-only
+    // services and their settings.
+    const viewer = await this.publicViewer.resolve(req, tenantId);
+    return viewer.staff
+      ? this.servicesService.findOne(viewer.tenantId, id)
+      : this.servicesService.findPublicOne(viewer.tenantId, id);
   }
 
   @Put(":id")
@@ -66,10 +78,11 @@ export class ServicesController {
   @ApiResponse({ status: 200, description: "Service updated successfully" })
   @ApiResponse({ status: 404, description: "Service not found" })
   async update(
+    @CurrentUser() user: any,
     @Param("id", ParseUUIDPipe) id: string,
     @Body() updateServiceDto: UpdateServiceDto,
   ) {
-    return this.servicesService.update(id, updateServiceDto);
+    return this.servicesService.update(user.tenantId, id, updateServiceDto);
   }
 
   @Delete(":id")

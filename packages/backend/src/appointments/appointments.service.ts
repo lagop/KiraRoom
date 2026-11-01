@@ -445,6 +445,28 @@ export class AppointmentsService {
     }
     // Attribution only, but never to another salon's widget.
     if (widget === null) throw new NotFoundException("Widget no encontrado");
+    // The booking page only offers the professionals who perform the
+    // service; a direct POST could name anyone.
+    if (professionalId && !(await this.offersService(tenantId, professionalId, dto.serviceId))) {
+      throw new BadRequestException("Ese profesional no realiza este servicio. Elige otro profesional.");
+    }
+  }
+
+  /**
+   * Whether a professional performs a service, by the rule the public
+   * booking page (salon-booking-page.tsx) and findFreeProfessional use: the
+   * active professionals linked to the service (ProfessionalService) -- or,
+   * when none is linked, as in salons that never filled that in, every
+   * active professional.
+   */
+  async offersService(tenantId: string, professionalId: string, serviceId: string): Promise<boolean> {
+    const active: Array<{ id: string; services?: Array<{ serviceId: string }> }> =
+      await this.prisma.professional.findMany({
+        where: { tenantId, isActive: true },
+        select: { id: true, services: { select: { serviceId: true } } },
+      });
+    const offering = active.filter((p) => (p.services ?? []).some((s) => s.serviceId === serviceId));
+    return offering.length === 0 || offering.some((p) => p.id === professionalId);
   }
 
   /**
@@ -746,10 +768,12 @@ export class AppointmentsService {
     // A salon that confirms online bookings automatically (its general
     // settings) gets them confirmed, unless the service still needs consent
     // forms the client hasn't signed: confirming is where that is checked
-    // (needsConsent), so such a visit starts pending like any other.
+    // (needsConsent), so such a visit starts pending like any other. Nor a
+    // service the salon marked "requires approval": the team confirms those.
     const autoConfirm =
       visit.online &&
       !!tenant?.autoConfirmOnlineBookings &&
+      !service.requiresApproval &&
       (await this.consentAllowsConfirming(tenantId, clientId, dto.serviceId));
     const appointment = await db.appointment.create({
       data: {
@@ -930,9 +954,18 @@ export class AppointmentsService {
       this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } }),
       this.prisma.service.findMany({
         where: { tenantId, id: { in: serviceIds } },
-        select: { id: true, duration: true },
+        select: { id: true, duration: true, isActive: true, name: true },
       }),
     ]);
+    // A deactivated service is off the menu: the pickers no longer offer it,
+    // and a stale form or a direct call must not book it either. Its past
+    // appointments keep it.
+    const inactive = catalog.find((s: { isActive?: boolean }) => s.isActive === false);
+    if (inactive) {
+      throw new BadRequestException(
+        `El servicio "${inactive.name}" está desactivado. Actívalo en Servicios para poder reservarlo.`,
+      );
+    }
     const timeZone = tenantRow?.timezone || "Europe/Madrid";
     const minutes = (serviceId: string) => catalog.find((s) => s.id === serviceId)?.duration ?? 0;
 
@@ -2750,6 +2783,11 @@ export class AppointmentsService {
     // professional who no longer works there.
     if (serviceRow && (serviceRow.isActive === false || serviceRow.isOnlineBookable === false)) return [];
     if (professionalRows.some((p: any) => p.isActive === false)) return [];
+    // Nor a named professional who does not perform the service: the
+    // booking would be refused (assertBookableOnline).
+    if (professionalId && serviceId && !(await this.offersService(tenantId, professionalId, serviceId))) {
+      return [];
+    }
     const window = {
       timeZone: (tenant as any).timezone || "Europe/Madrid",
       minHours: serviceRow?.minAdvanceBooking ?? 0,

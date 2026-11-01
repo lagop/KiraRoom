@@ -42,6 +42,7 @@ function build({
   serviceActive = true,
   inactiveProfessionals = [] as string[],
   autoConfirmOnlineBookings = false,
+  requiresApproval = false,
 } = {}) {
   const clientLookups: any[] = [];
   const created: any[] = [];
@@ -107,11 +108,12 @@ function build({
               maxAdvanceBooking,
               isActive: serviceActive,
               isOnlineBookable,
+              requiresApproval,
             }
           : null,
       ),
       findMany: async ({ where }: any) =>
-        where.tenantId === "tenant-b" ? [{ id: SERVICE_ID, duration: 30 }] : [],
+        where.tenantId === "tenant-b" ? [{ id: SERVICE_ID, duration: 30, name: "Corte", isActive: serviceActive }] : [],
       count: async ({ where }: any) =>
         where.tenantId === "tenant-b" ? where.id.in.filter((id: string) => id === SERVICE_ID).length : 0,
     },
@@ -373,6 +375,14 @@ describe("online booking: confirmed automatically when the salon says so", () =>
     expect(created[0].status).toBe("pending");
   });
 
+  it("stays pending when the service requires the salon's approval", async () => {
+    // Service.requiresApproval was saved and read nowhere.
+    const { service, created } = build({ autoConfirmOnlineBookings: true, requiresApproval: true });
+    (service as any).consentService = { hasValidConsent: jest.fn(async () => true) };
+    await service.createOnline(BOOKING as any);
+    expect(created[0].status).toBe("pending");
+  });
+
   it("leaves the team's own bookings from the panel alone", async () => {
     const { service, created } = build({
       autoConfirmOnlineBookings: true,
@@ -459,6 +469,40 @@ describe("online booking: only what the salon offers online", () => {
       { id: "u1", role: "owner", tenantId: "tenant-b" },
     );
     expect(created).toHaveLength(1);
+  });
+
+  it("the team cannot book a deactivated service", async () => {
+    // The pickers no longer offer it; a stale form or a direct call must
+    // not book it either.
+    const { service, created } = build({
+      serviceActive: false,
+      existingClients: [{ id: "c1", email: "x@mail.test", tenantId: "tenant-b" }],
+    });
+    const refused = service.createByStaff(
+      { ...BOOKING, clientInfo: undefined, clientId: "c1" } as any,
+      { id: "u1", role: "owner", tenantId: "tenant-b" },
+    );
+    await expect(refused).rejects.toThrow(BadRequestException);
+    await expect(refused).rejects.toThrow(/desactivado/);
+    expect(created).toHaveLength(0);
+  });
+
+  it("refuses a named professional who does not perform the service", async () => {
+    // Only Bea is linked to the service: the booking page offers only her.
+    const { service, created } = build({ offering: [PRO_2.id] });
+    const refused = service.createOnline(BOOKING as any);
+    await expect(refused).rejects.toThrow(BadRequestException);
+    await expect(refused).rejects.toThrow(/no realiza este servicio/);
+    expect(created).toHaveLength(0);
+
+    await service.createOnline({ ...BOOKING, professionalId: PRO_2.id } as any);
+    expect(created[0].professionalId).toBe(PRO_2.id);
+  });
+
+  it("lets anyone be named when nobody is linked to the service, as the booking page does", async () => {
+    const { service, created } = build({ offering: [] });
+    await service.createOnline(BOOKING as any);
+    expect(created[0].professionalId).toBe(PRO.id);
   });
 
   it("refuses another salon's widget named with a professional", async () => {

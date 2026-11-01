@@ -95,7 +95,7 @@ export default function WaitListPage() {
   useEffect(() => {
     apiClient.getWaitListChannels().then(setChannels).catch(() => setChannels(null));
     apiClient.getWaitListSettings().then((s) => setAutoNotify(s.autoNotify)).catch(() => undefined);
-    apiClient.getServices().then((s: any[]) => setServices(s.map((x) => ({ id: x.id, name: x.name })))).catch(() => undefined);
+    apiClient.getServices().then((s: any[]) => setServices(s.filter((x) => x.isActive !== false).map((x) => ({ id: x.id, name: x.name })))).catch(() => undefined);
     // The whole team (the admin list is paginated and owner/admin only).
     apiClient
       .getProfessionalsPublic()
