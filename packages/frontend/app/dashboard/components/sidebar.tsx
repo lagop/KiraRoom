@@ -41,6 +41,7 @@ import {
   Users,
   Wallet,
   X,
+  Package,
 } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
 import { getCurrentUser } from "@/lib/utils";
@@ -62,6 +63,7 @@ const ICONS: Record<string, LucideIcon> = {
   dollar: DollarSign,
   receipt: Receipt,
   cart: ShoppingCart,
+  package: Package,
   card: CreditCard,
   file: FileText,
   wallet: Wallet,

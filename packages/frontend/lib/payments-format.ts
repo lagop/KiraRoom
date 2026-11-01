@@ -6,7 +6,7 @@
  */
 
 export type PaymentStatusKey = "pending" | "paid" | "failed" | "refunded";
-export type PaymentMethodKey = "cash" | "card" | "bank_transfer" | "wallet" | "gift_card" | "loyalty_points";
+export type PaymentMethodKey = "cash" | "card" | "bizum" | "bank_transfer" | "wallet" | "gift_card" | "loyalty_points";
 
 /** The server's statuses, in the order the filter lists them. */
 export const PAYMENT_STATUS_LABELS: Record<PaymentStatusKey, string> = {
@@ -20,6 +20,7 @@ export const PAYMENT_STATUS_LABELS: Record<PaymentStatusKey, string> = {
 export const PAYMENT_METHOD_LABELS: Record<PaymentMethodKey, string> = {
   cash: "Efectivo",
   card: "Tarjeta",
+  bizum: "Bizum",
   bank_transfer: "Transferencia",
   wallet: "Cartera",
   gift_card: "Tarjeta regalo",
