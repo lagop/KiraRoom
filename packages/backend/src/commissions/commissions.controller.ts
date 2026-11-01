@@ -122,10 +122,7 @@ export class CommissionsController {
     @Query("startDate") startDate: string,
     @Query("endDate") endDate: string,
   ) {
-    return this.commissionsService.getPayrollReport(
-      user.tenantId,
-      new Date(startDate),
-      new Date(endDate),
-    );
+    // "YYYY-MM-DD" days, both included (commission-period.ts).
+    return this.commissionsService.getPayrollReport(user.tenantId, startDate, endDate);
   }
 }

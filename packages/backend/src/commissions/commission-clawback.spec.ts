@@ -38,7 +38,7 @@ function adjustmentsStore(rows: any[] = []) {
           (where.sourceKey?.in === undefined || where.sourceKey.in.includes(r.sourceKey)) &&
           (where.id?.in === undefined || where.id.in.includes(r.id)) &&
           (where.createdAt?.gte === undefined || r.createdAt >= where.createdAt.gte) &&
-          (where.createdAt?.lte === undefined || r.createdAt <= where.createdAt.lte),
+          (where.createdAt?.lt === undefined || r.createdAt < where.createdAt.lt),
       ),
     ),
     updateMany: jest.fn(async ({ where, data }: any) => {
@@ -210,6 +210,7 @@ describe("commissions with refund adjustments", () => {
         findMany: jest.fn(async () => []),
         updateMany: jest.fn(async () => ({ count: 0 })),
       },
+      tenant: { findUnique: jest.fn(async () => ({ timezone: "Europe/Madrid" })) },
       payment: { findMany: jest.fn(async () => []) },
       posSaleLine: {
         findMany: jest.fn(async ({ where }: any) =>
@@ -217,7 +218,7 @@ describe("commissions with refund adjustments", () => {
             (l) =>
               (where.commissionPaid === undefined || l.commissionPaid === where.commissionPaid) &&
               (where.id?.in === undefined || where.id.in.includes(l.id)) &&
-              (where.createdAt?.gte === undefined || (l.createdAt >= where.createdAt.gte && l.createdAt <= where.createdAt.lte)),
+              (where.createdAt?.gte === undefined || (l.createdAt >= where.createdAt.gte && l.createdAt < where.createdAt.lt)),
           ),
         ),
         updateMany: jest.fn(async () => ({ count: 0 })),
