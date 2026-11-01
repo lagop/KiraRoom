@@ -5888,11 +5888,15 @@ export interface LoyaltyRewardInput {
   description?: string;
   type: "discount" | "free_service" | "product" | "voucher";
   pointsCost: number;
-  discountPercent?: number;
+  discountPercent?: number | null;
   /** Cents. */
-  discountAmount?: number;
-  freeServiceId?: string;
+  discountAmount?: number | null;
+  freeServiceId?: string | null;
   isActive?: boolean;
+  /** How many times it can be redeemed in all; null: no limit. */
+  maxRedemptions?: number | null;
+  /** ISO date-time after which it can no longer be redeemed; null: never. */
+  expiresAt?: string | null;
 }
 
 export interface LoyaltyReward extends LoyaltyRewardInput {

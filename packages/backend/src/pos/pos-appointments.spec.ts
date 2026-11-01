@@ -176,6 +176,67 @@ describe("POS: charging an appointment", () => {
     expect(t.committed.appointments.get("a2")).toMatchObject({ amountPaid: 2500, paymentStatus: "paid" });
   });
 
+  it("the products on a visit's ticket earn points as the sale; each visit through itself", async () => {
+    const t = till([apt("a1"), apt("a2", { totalAmount: 2500, clientId: "c2", serviceId: "svc2" })]);
+    const out: any = await t.service.processCheckout({
+      tenantId: "t1",
+      clientId: "c1",
+      appointmentIds: ["a1", "a2"],
+      items: [item(4000), item(2500, "svc2"), { productId: "prod1", quantity: 1 }],
+      payments: [{ method: "cash", amount: 7700 }],
+      actor: OWNER,
+    } as any);
+    expect(t.loyalty.settleAppointment.mock.calls.map((c: any[]) => c[1])).toEqual(["a1", "a2"]);
+    // The shampoo (12,00): the sale's client, keyed by the sale; no extra visit in per-visit mode.
+    expect(t.loyalty.earnForSale).toHaveBeenCalledWith("t1", {
+      clientId: "c1",
+      saleId: out.saleId,
+      basisCents: 1200,
+      isVisit: false,
+    });
+  });
+
+  it("the products earn on what they were paid, net of their share of the reward; a visit-only ticket earns nothing as a sale", async () => {
+    // 10,00 reward on a 40,00 visit + 12,00 shampoo: the visit takes it all.
+    const t = till([apt("a1")]);
+    await t.service.processCheckout({
+      tenantId: "t1",
+      clientId: "c1",
+      appointmentIds: ["a1"],
+      items: [item(4000), { productId: "prod1", quantity: 1 }],
+      payments: [{ method: "card", amount: 4200 }],
+      loyaltyRewardId: "rw1",
+      actor: OWNER,
+    } as any);
+    expect(t.loyalty.earnForSale).toHaveBeenCalledWith("t1", expect.objectContaining({ basisCents: 1200 }));
+
+    // A reward bigger than the visit (50,00 on 40,00): 10,00 comes off the shampoo, 2,00 earns.
+    const big = till([apt("a1")], {
+      loyalty: { redeemAtSale: jest.fn(async () => ({ discountCents: 5000, pointsSpent: 500, rewardName: "50 EUR", redemptionId: "r1" })) },
+    });
+    await big.service.processCheckout({
+      tenantId: "t1",
+      clientId: "c1",
+      appointmentIds: ["a1"],
+      items: [item(4000), { productId: "prod1", quantity: 1 }],
+      payments: [{ method: "card", amount: 200 }],
+      loyaltyRewardId: "rw1",
+      actor: OWNER,
+    } as any);
+    expect(big.loyalty.earnForSale).toHaveBeenCalledWith("t1", expect.objectContaining({ basisCents: 200 }));
+
+    const visitOnly = till([apt("a1")]);
+    await visitOnly.service.processCheckout({
+      tenantId: "t1",
+      clientId: "c1",
+      appointmentIds: ["a1"],
+      items: [item(4000)],
+      payments: [{ method: "card", amount: 4000 }],
+      actor: OWNER,
+    } as any);
+    expect(visitOnly.loyalty.earnForSale).not.toHaveBeenCalled();
+  });
+
   it("prices the appointment at what it owes, not at the price the till sends", async () => {
     const t = till([apt("a1")]);
     // A price typed lower at the till used to leave the visit partly paid
