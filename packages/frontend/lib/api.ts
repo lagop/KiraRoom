@@ -1789,6 +1789,19 @@ export interface ApiClientInterface {
   getPosReceipt(saleId: string): Promise<PosReceipt>;
   getPosSettings(): Promise<PosSettings>;
   savePosSettings(settings: PosSettings): Promise<PosSettings>;
+  // The cash drawer (arqueo)
+  getCurrentCashSession(): Promise<CashSessionCurrent>;
+  openCashSession(body: { openingFloatCents: number; notes?: string }): Promise<CashSessionView>;
+  addCashMovement(
+    sessionId: string,
+    body: { type: CashMovementType; amountCents: number; reason: string },
+  ): Promise<CashMovementRow>;
+  closeCashSession(
+    sessionId: string,
+    body: { countedCashCents: number; breakdown?: Record<string, number>; notes?: string },
+  ): Promise<CashSessionView>;
+  getCashSessions(params?: { from?: string; to?: string; page?: number; limit?: number }): Promise<CashSessionList>;
+  getCashSession(sessionId: string): Promise<CashSessionView>;
   // Products
   getProducts(params?: {
     category?: string;
@@ -3981,6 +3994,51 @@ class ApiClient implements ApiClientInterface {
     return this.request<PosSettings>("/pos/settings", { method: "PUT", body: JSON.stringify(settings) });
   }
 
+  /** The open cash-drawer session (null when closed), with what it should hold. */
+  async getCurrentCashSession(): Promise<CashSessionCurrent> {
+    return this.request<CashSessionCurrent>("/pos/cash-sessions/current");
+  }
+
+  /** "Abrir caja": the float, in cents. A 409 when another one is open. */
+  async openCashSession(body: { openingFloatCents: number; notes?: string }): Promise<CashSessionView> {
+    return this.request<CashSessionView>("/pos/cash-sessions/open", { method: "POST", body: JSON.stringify(body) });
+  }
+
+  /** "Movimiento de caja": money put in or taken out of the open drawer, with why. */
+  async addCashMovement(
+    sessionId: string,
+    body: { type: CashMovementType; amountCents: number; reason: string },
+  ): Promise<CashMovementRow> {
+    return this.request<CashMovementRow>(`/pos/cash-sessions/${encodeURIComponent(sessionId)}/movements`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  /** "Cerrar caja": the cash counted (cents), optionally by coin and note. */
+  async closeCashSession(
+    sessionId: string,
+    body: { countedCashCents: number; breakdown?: Record<string, number>; notes?: string },
+  ): Promise<CashSessionView> {
+    return this.request<CashSessionView>(`/pos/cash-sessions/${encodeURIComponent(sessionId)}/close`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  /** Past sessions (owner and managers). */
+  async getCashSessions(params: { from?: string; to?: string; page?: number; limit?: number } = {}): Promise<CashSessionList> {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== "") query.set(key, String(value));
+    const qs = query.toString();
+    return this.request<CashSessionList>(`/pos/cash-sessions${qs ? `?${qs}` : ""}`);
+  }
+
+  /** One session's report. */
+  async getCashSession(sessionId: string): Promise<CashSessionView> {
+    return this.request<CashSessionView>(`/pos/cash-sessions/${encodeURIComponent(sessionId)}`);
+  }
+
   async posQuickSale(data: {
     serviceId: string;
     paymentMethod: string;
@@ -5894,6 +5952,92 @@ export interface PosReceipt {
   tenderedCents: number;
   changeCents: number;
   giftCards: Array<{ code: string; amountCents: number }>;
+}
+
+export type CashMovementType = "in" | "out";
+
+export interface CashPerson {
+  id: string;
+  name: string | null;
+}
+
+export interface CashMovementRow {
+  id: string;
+  createdAt: string;
+  type: CashMovementType;
+  amountCents: number;
+  reason: string;
+  createdBy?: CashPerson | null;
+}
+
+/** GET /pos/cash-sessions/:id: a cash-drawer session and its figures (cents). */
+export interface CashSessionView {
+  id: string;
+  status: "open" | "closed";
+  openedAt: string;
+  openingFloatCents: number;
+  closedAt: string | null;
+  countedCashCents: number | null;
+  /** Open: what the drawer should hold now. Closed: what it should have held at close. */
+  expectedCashCents: number | null;
+  discrepancyCents: number | null;
+  openedBy: CashPerson | null;
+  closedBy: CashPerson | null;
+  openingNotes: string | null;
+  closingNotes: string | null;
+  countBreakdown: Record<string, number> | null;
+  figures: {
+    byMethod: Array<{ method: string; count: number; amountCents: number; refundedCents: number; netCents: number }>;
+    cash: {
+      openingFloatCents: number;
+      salesCents: number;
+      changeGivenCents: number;
+      tenderedCents: number;
+      refundsCents: number;
+      movementsInCents: number;
+      movementsOutCents: number;
+      expectedCents: number;
+    };
+    sales: {
+      count: number;
+      grossCents: number;
+      subtotalCents: number;
+      discountCents: number;
+      loyaltyDiscountCents: number;
+      taxCents: number;
+      netCents: number;
+    };
+    refunds: { count: number; totalCents: number };
+  };
+  movements: CashMovementRow[];
+  salon: { name: string; timezone: string };
+}
+
+export interface CashSessionCurrent {
+  session: CashSessionView | null;
+  /** The last close: its count is offered as the new float. */
+  lastClosed: { id: string; closedAt: string; countedCashCents: number | null } | null;
+  /** Owner and managers: the history of past sessions. */
+  canSeeHistory: boolean;
+}
+
+export interface CashSessionSummary {
+  id: string;
+  status: "open" | "closed";
+  openedAt: string;
+  openingFloatCents: number;
+  closedAt: string | null;
+  countedCashCents: number | null;
+  expectedCashCents: number | null;
+  discrepancyCents: number | null;
+  openedBy: CashPerson | null;
+  closedBy: CashPerson | null;
+}
+
+export interface CashSessionList {
+  sessions: CashSessionSummary[];
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+  totals: { closedSessions: number; countedCashCents: number; expectedCashCents: number; discrepancyCents: number };
 }
 
 export interface PosSettings {

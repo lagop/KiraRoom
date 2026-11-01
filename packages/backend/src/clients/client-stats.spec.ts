@@ -129,6 +129,7 @@ describe("payments recompute the client's figures", () => {
         updateMany: jest.fn(async () => ({ count: 1 })),
       },
       refund: { create: jest.fn(async ({ data }: any) => ({ id: "r1", ...data })) },
+      $queryRaw: jest.fn(async () => []),
     };
     prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
     prisma.client.findFirst = jest.fn(async () => ({ id: "c1", createdAt: CREATED }));

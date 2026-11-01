@@ -172,6 +172,9 @@ model Tenant {
   /// Discounts given by hand at the till, one row each (audit).
   posDiscounts            PosDiscount[]
   posSales                PosSale[]
+  /// The cash drawer (arqueo): its sessions and the money put in or taken out.
+  cashSessions            CashSession[]
+  cashMovements           CashMovement[]
 
   /// P1.3 Ã¢â‚¬â€ Onboarding wizard state (one row per tenant)
   onboardingState      OnboardingState?
@@ -1243,6 +1246,10 @@ model Payment {
   /// The team member who recorded it at the till (staff see their own sales). Not a relation: the record outlives the account.
   recordedById String?
 
+  /// The cash-drawer session open when it was taken at the till (arqueo): its cash counts in that drawer.
+  cashSessionId String?
+  cashSession   CashSession? @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
+
   /// Additional info
   description String?
   metadata    Json    @default("{}")
@@ -1263,6 +1270,7 @@ model Payment {
   @@index([appointmentId])
   @@index([status])
   @@index([tenantId, recordedById])
+  @@index([cashSessionId])
   @@map("payments")
 }
 
@@ -1307,7 +1315,12 @@ model Refund {
   note    String?
   adminId String?
 
+  /// The cash-drawer session open when it was given back (arqueo): a cash refund comes out of that drawer.
+  cashSessionId String?
+  cashSession   CashSession? @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
+
   @@index([paymentId])
+  @@index([cashSessionId])
   @@map("refunds")
 }
 
@@ -3512,8 +3525,8 @@ enum PosDiscountType {
 /// totals in cents (money: tax included, what the client paid), and the
 /// invoice it was issued with. `id` is the sale id stamped on its payments
 /// (`metadata.posSaleId`), its discounts (PosDiscount.saleId) and its
-/// simplified invoice (sourceType pos_sale). cashSessionId links it to a cash-drawer
-/// session (arqueo, follow-up).
+/// simplified invoice (sourceType pos_sale). cashSessionId links it to the
+/// cash-drawer session (arqueo) open when it was charged.
 model PosSale {
   id                   String        @id @default(uuid())
   createdAt            DateTime      @default(now())
@@ -3533,8 +3546,9 @@ model PosSale {
   changeCents          Int           @default(0)
   /// The simplified (series T) or full invoice of its lines without an appointment.
   invoiceId            String?
-  /// The cash-drawer session (arqueo) the sale belongs to: set by the arqueo feature (follow-up); not a relation yet.
+  /// The cash-drawer session (arqueo) open when it was charged; null when the drawer was closed (card, Bizum...).
   cashSessionId        String?
+  cashSession          CashSession?  @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
   /// What the checkout answered, returned again on a retry.
   result               Json          @default("{}")
   tenant               Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -3581,4 +3595,75 @@ model PosSaleLine {
   @@index([saleId])
   @@index([tenantId, professionalId])
   @@map("pos_sale_lines")
+}
+
+enum CashSessionStatus {
+  open
+  closed
+}
+
+/// A cash-drawer session at the till (apertura y cierre de caja, arqueo):
+/// opened with a float, closed with the cash counted. The till has no
+/// location of its own, so at most ONE session is open per salon: partial
+/// unique index "cash_sessions_one_open_per_tenant" on (tenantId) WHERE
+/// status = 'open' (migration 20261101220000). Prisma 5 cannot express a
+/// partial index, so it lives only in that migration: it is NOT declared
+/// here (an @@unique would make `migrate dev` replace it with a full one).
+///
+/// Amounts in cents. expectedCashCents = float + cash taken (net of change)
+/// - cash refunds + cash put in - cash taken out, worked out and stored at
+/// close (pos/cash-session-math.ts); discrepancyCents = counted - expected.
+/// openedById / closedById are not relations: the record outlives the account.
+model CashSession {
+  id                String            @id @default(uuid())
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  tenantId          String
+  status            CashSessionStatus @default(open)
+  openedById        String
+  openedAt          DateTime          @default(now())
+  openingFloatCents Int
+  openingNotes      String?           @db.VarChar(500)
+  closedById        String?
+  closedAt          DateTime?
+  countedCashCents  Int?
+  expectedCashCents Int?
+  discrepancyCents  Int?
+  closingNotes      String?           @db.VarChar(500)
+  /// The count by coin and note, when it was made with the helper: { "5000": 2, "200": 3 } (cents -> pieces).
+  countBreakdown    Json?
+  tenant            Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  movements         CashMovement[]
+  sales             PosSale[]
+  payments          Payment[]
+  refunds           Refund[]
+
+  @@index([tenantId, openedAt])
+  @@index([tenantId, status])
+  @@map("cash_sessions")
+}
+
+enum CashMovementType {
+  in
+  out
+}
+
+/// Money put into or taken out of the drawer during a session, with why:
+/// paying a supplier from the drawer, taking cash to the bank, adding change.
+model CashMovement {
+  id          String           @id @default(uuid())
+  createdAt   DateTime         @default(now())
+  tenantId    String
+  sessionId   String
+  type        CashMovementType
+  amountCents Int
+  reason      String           @db.VarChar(300)
+  /// Who did it. Not a relation: the record outlives the account.
+  createdById String
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  session     CashSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([tenantId, createdAt])
+  @@map("cash_movements")
 }

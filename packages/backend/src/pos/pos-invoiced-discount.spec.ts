@@ -5,7 +5,7 @@ import { InvoiceService } from "../invoices/invoices.service";
 import { InvoiceCalculator } from "../invoices/invoice-calculator.service";
 import { invoiceStore } from "../invoices/invoice-store.testing";
 import { CommissionsService } from "../commissions/commissions.service";
-import { saleTables } from "./pos-test-kit.testing";
+import { cashDrawerRaw, saleTables } from "./pos-test-kit.testing";
 
 /**
  * A discount given at the till to an appointment whose invoice is already
@@ -50,6 +50,9 @@ async function setup(opts: { pricesIncludeTax?: boolean; maxStaff?: number; with
   const payments: Row[] = [];
   const discounts: Row[] = [];
   const prisma: any = store.prisma;
+  // The invoice numbering keeps its raw queries; the cash drawer is open.
+  const invoiceRaw = prisma.$queryRaw;
+  const sales = saleTables();
   Object.assign(prisma, {
     tenant: {
       findUnique: jest.fn(async () => ({
@@ -59,7 +62,8 @@ async function setup(opts: { pricesIncludeTax?: boolean; maxStaff?: number; with
         timezone: "Europe/Madrid",
       })),
     },
-    ...saleTables(),
+    ...sales,
+    $queryRaw: cashDrawerRaw(sales.store, invoiceRaw),
     appointment: {
       findMany: jest.fn(async ({ where }: any) =>
         [...appointments.values()].filter((a) => where.id.in.includes(a.id) && a.tenantId === where.tenantId).map((a) => ({ ...a })),

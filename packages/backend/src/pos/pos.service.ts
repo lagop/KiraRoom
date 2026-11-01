@@ -15,6 +15,7 @@ import { LoyaltyService } from '../loyalty/loyalty.service';
 import { GiftCardsService } from '../gift-cards/gift-cards.service';
 import { refreshClientStats } from '../clients/client-stats';
 import { settleTenders, type Tender } from './pos-tenders';
+import { drawerClosed, openCashSessionId, takesCash } from './cash-session-lock';
 import {
   assertChargeable,
   recordAppointmentPayment,
@@ -571,6 +572,10 @@ export class PosService {
       if (prior) return prior;
     }
     const payments = (dto.payments ?? []) as Tender[];
+    // Cash goes into the drawer: it needs the drawer open (arqueo). Card,
+    // Bizum and the rest do not, so a salon that never uses the drawer is
+    // not stuck. Checked again, under lock, inside the sale's transaction.
+    if (takesCash(payments) && !(await openCashSessionId(this.prisma, tenantId))) throw drawerClosed();
     // The sale's id, stamped on its payments, discounts, points and invoice.
     const saleId = randomUUID();
     const salon = await this.salonOf(tenantId);
@@ -695,10 +700,18 @@ export class PosService {
     let result: Record<string, unknown>;
     try {
       result = await this.prisma.$transaction(async (tx: any) => {
+        // The open cash-drawer session, held (FOR SHARE) until this sale
+        // commits: closing the drawer waits for it, so its money is in the
+        // count, or the close comes first and the sale finds the drawer shut.
+        const cashSessionId = await openCashSessionId(tx, tenantId, 'share');
+        if (!cashSessionId && takesCash(payments)) throw drawerClosed();
+        const inSession = cashSessionId ? { cashSessionId } : {};
+
         // First: the sale under its request id. A second request with the
         // same id waits here for the first and then fails the unique key.
         await tx.posSale.create({
           data: {
+            ...inSession,
             id: saleId,
             tenantId,
             requestId: requestId ?? saleId,
@@ -752,6 +765,7 @@ export class PosService {
               method: row.method as any,
               description,
               recordedById: actor?.id ?? null,
+              ...inSession,
               metadata: {
                 posSaleId: saleId,
                 ...(appointmentIds.length ? { appointmentIds } : {}),

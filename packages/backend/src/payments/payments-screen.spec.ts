@@ -269,6 +269,7 @@ describe("M4: POST /payments/:id/refund", () => {
     paymentCount?: number;
     stripePaymentId?: string | null;
     status?: string;
+    cashSessionId?: string;
   } = {}) {
     const payment = {
       id: PAY,
@@ -298,6 +299,8 @@ describe("M4: POST /payments/:id/refund", () => {
         updateMany: jest.fn(async () => ({ count: 1 })),
       },
       invoice: { findFirst: jest.fn(async () => over.invoice ?? null) },
+      // The cash drawer (arqueo): the open session, if any (cash-session-lock.ts).
+      $queryRaw: jest.fn(async () => (over.cashSessionId ? [{ id: over.cashSessionId }] : [])),
     };
     prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
     const loyalty: any = { onPaymentRefunded: jest.fn(async () => undefined), settleAppointment: jest.fn() };
@@ -354,6 +357,21 @@ describe("M4: POST /payments/:id/refund", () => {
     await expect(setup({ status: "refunded" }).service.refundPayment(T, PAY, { reason: "x" })).rejects.toThrow(ConflictException);
     await expect(setup({ status: "pending" }).service.refundPayment(T, PAY, { reason: "x" })).rejects.toThrow(/pagado/);
     await expect(setup({ stripePaymentId: "pi_1" }).service.refundPayment(T, PAY, { reason: "x" })).rejects.toThrow(/Stripe/);
+  });
+
+  it("with the cash drawer open, the refund is linked to its session (arqueo) under a shared lock", async () => {
+    const t = setup({ cashSessionId: "cs-1" });
+    await t.service.refundPayment(T, PAY, { amount: 1000, reason: "Devolución" });
+    expect(t.prisma.refund.create.mock.calls[0][0].data).toMatchObject({ amount: 1000, cashSessionId: "cs-1" });
+    const sql = t.prisma.$queryRaw.mock.calls[0][0];
+    expect(sql.sql).toMatch(/FROM "cash_sessions".*FOR SHARE/);
+    expect(sql.values).toEqual([T]);
+  });
+
+  it("with the drawer closed, the refund is still given (not linked)", async () => {
+    const t = setup();
+    await t.service.refundPayment(T, PAY, { amount: 1000, reason: "Devolución" });
+    expect(t.prisma.refund.create.mock.calls[0][0].data.cashSessionId).toBeUndefined();
   });
 
   it("a refund racing another gets a 409 and writes nothing else", async () => {

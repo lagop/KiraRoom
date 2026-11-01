@@ -13,6 +13,8 @@ import DiscountEditor from "./components/discount-editor";
 import TenderPanel from "./components/tender-panel";
 import SaleReceipt from "./components/sale-receipt";
 import GiftCardSaleDialog from "./components/gift-card-sale-dialog";
+import CashDrawer from "./components/cash-drawer";
+import { drawerProblem } from "@/lib/cash-session";
 import { applyDiscounts, discountProblem, staffLimitProblem, type DiscountSpec } from "@/lib/pos-discounts";
 import {
   TENDER_LABELS,
@@ -121,6 +123,10 @@ export default function POSPage() {
   const [showGiftCardSale, setShowGiftCardSale] = useState(false);
   // The receipt of the sale just charged.
   const [receiptOf, setReceiptOf] = useState<{ saleId: string; email?: string | null } | null>(null);
+  // The cash drawer (arqueo): open or not (null while loading), and a key
+  // bumped after each sale or refund so its expected cash is read again.
+  const [drawerOpen, setDrawerOpen] = useState<boolean | null>(null);
+  const [drawerKey, setDrawerKey] = useState(0);
   // "Venta rápida": confirmed first, with its amount and concept.
   const [quickSale, setQuickSale] = useState<{ service: Service; method: TenderMethod; saleId: string } | null>(null);
 
@@ -245,7 +251,9 @@ export default function POSPage() {
   // What is charged: the server's total (shown from the local ticket while it loads).
   const dueCents = quoteFresh ? quote!.total : Math.max(0, ticket.totalCents + giftCardsCents);
   const tenders = tendersOfRows(tenderRows, dueCents);
-  const tenderIssue = empty ? null : tenderProblem(tenders, dueCents);
+  // Cash needs the drawer open; card, Bizum and the rest do not (lib/cash-session.ts).
+  const drawerIssueKey = empty ? null : drawerProblem(tenders, drawerOpen);
+  const tenderIssue = empty ? null : tenderProblem(tenders, dueCents) ?? (drawerIssueKey ? t(drawerIssueKey) : null);
   const invoiceProblem = quoteFresh ? quote!.invoice.problem ?? null : null;
 
   // The sale's id: the same while the same ticket is retried, a new one
@@ -399,6 +407,7 @@ export default function POSPage() {
     ]);
     if (summaryData) setSummary(summaryData);
     if (productsData) setProducts(productsData);
+    setDrawerKey((k) => k + 1);
     await loadPayments();
   };
 
@@ -497,6 +506,8 @@ export default function POSPage() {
         description: error?.message || "Inténtalo de nuevo: si ya se cobró, no se cobrará dos veces.",
         variant: "destructive",
       });
+      // The drawer may have been closed from another till meanwhile.
+      setDrawerKey((k) => k + 1);
     } finally {
       setProcessing(false);
     }
@@ -510,6 +521,11 @@ export default function POSPage() {
   // A quick sale does not touch the ticket being built (nor its client).
   const processQuickSale = async () => {
     if (!quickSale) return;
+    const closedDrawer = drawerProblem([{ method: quickSale.method, amount: quickSale.service.chargeCents }], drawerOpen);
+    if (closedDrawer) {
+      toast({ title: t("pos.quick_sale_failed"), description: t(closedDrawer), variant: "destructive" });
+      return;
+    }
     try {
       setProcessing(true);
       const result = await apiClient.posQuickSale({
@@ -534,6 +550,8 @@ export default function POSPage() {
   };
 
   const afterRefund = async () => {
+    // A cash refund comes out of the open drawer.
+    setDrawerKey((k) => k + 1);
     await Promise.all([
       apiClient
         .getPosDashboard()
@@ -610,6 +628,9 @@ export default function POSPage() {
           </button>
         </div>
       </div>
+
+      {/* The cash drawer: open it with a float, money in or out, close it with the count. */}
+      <CashDrawer refreshKey={drawerKey} onStateChange={setDrawerOpen} />
 
       {isAdmin && showDiscountSettings && (
         <div className="bg-white p-4 rounded-lg shadow max-w-xl">

@@ -4,7 +4,7 @@ import { InvoiceService } from "../invoices/invoices.service";
 import { InvoiceCalculator } from "../invoices/invoice-calculator.service";
 import { invoiceStore } from "../invoices/invoice-store.testing";
 import { PaymentsService } from "../payments/payments.service";
-import { saleTables, TAX_INCLUDED, TAX_ON_TOP } from "./pos-test-kit.testing";
+import { cashDrawerRaw, saleTables, TAX_INCLUDED, TAX_ON_TOP } from "./pos-test-kit.testing";
 
 /**
  * The till's money rules (pos-ticket.ts, appointment-charge.ts), end to end
@@ -50,6 +50,8 @@ function harness(opts: { fiscal?: Row; clients?: Row[]; stock?: number; appointm
     { id: "p-other", tenantId: "t1", userId: "u-other", commissionRate: 40 },
   ];
   const tables = saleTables();
+  // The invoice numbering keeps its raw queries; the cash drawer is open.
+  const invoiceRaw = prisma.$queryRaw;
 
   Object.assign(prisma, {
     tenant: {
@@ -68,6 +70,7 @@ function harness(opts: { fiscal?: Row; clients?: Row[]; stock?: number; appointm
       })),
     },
     ...tables,
+    $queryRaw: cashDrawerRaw(tables.store, invoiceRaw),
     service: {
       findMany: jest.fn(async ({ where }: any) =>
         services.filter((s) => s.tenantId === where.tenantId && (!where.id || where.id.in.includes(s.id))),
@@ -420,6 +423,7 @@ describe("gift cards at the till", () => {
         refund: { create: jest.fn(async ({ data }: any) => ({ id: "r1", ...data })) },
         giftCard: { findFirst: jest.fn(async () => card) },
         invoice: { findFirst: jest.fn(async () => null) },
+        $queryRaw: cashDrawerRaw({}),
       };
       prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
       const giftCards: any = { refundToCard: jest.fn(), redeemInTx: jest.fn() };
