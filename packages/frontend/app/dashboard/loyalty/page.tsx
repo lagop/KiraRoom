@@ -1,15 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Gift, Users, Star, Plus, Trash2, Award, Search, Loader2 } from "lucide-react";
+import { Gift, Users, Star, Plus, Trash2, Award, Search, Loader2, Pencil } from "lucide-react";
 import apiClient, {
   ApiError,
   LoyaltyMemberRow,
   LoyaltyProgram,
   LoyaltyProgramSettings,
+  LoyaltyReward,
   LoyaltyRewardInput,
 } from "@/lib/api";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { useToast } from "@/components/ui/use-toast";
+import { EMPTY_REWARD_FORM, RewardForm, adjustmentOf, rewardFormOf, rewardPayload } from "@/lib/loyalty-rewards";
 
 /**
  * The salon's loyalty programme. One per salon: how points are earned
@@ -316,17 +319,19 @@ function RewardsSection({
   onChange: () => void;
   onError: (e: string | null) => void;
 }) {
+  const { toast } = useToast();
   const [services, setServices] = useState<Array<{ id: string; name: string }>>([]);
   const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState<RewardForm>(EMPTY_REWARD_FORM);
+  const [creating, setCreating] = useState(false);
+  // The reward being edited, in its own dialog.
+  const [editing, setEditing] = useState<LoyaltyReward | null>(null);
+  const [editForm, setEditForm] = useState<RewardForm>(EMPTY_REWARD_FORM);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
   // The reward about to be deleted, confirmed in the panel's dialog.
-  const [pendingDelete, setPendingDelete] = useState<LoyaltyProgram["rewards"][number] | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<LoyaltyReward | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [draft, setDraft] = useState<LoyaltyRewardInput & { discountEuros?: string }>({
-    name: "",
-    type: "discount",
-    pointsCost: 100,
-    discountPercent: 10,
-  });
 
   useEffect(() => {
     apiClient
@@ -341,7 +346,8 @@ function RewardsSection({
     if (!pendingDelete) return;
     setDeleting(true);
     try {
-      await apiClient.deleteLoyaltyReward(pendingDelete.id);
+      const out = await apiClient.deleteLoyaltyReward(pendingDelete.id);
+      toast({ title: out.deactivated ? "Recompensa desactivada: ya se había canjeado" : "Recompensa borrada" });
       onChange();
     } catch (err) {
       onError(errorText(err));
@@ -351,38 +357,68 @@ function RewardsSection({
     }
   };
 
-  const describe = (r: LoyaltyRewardInput) => {
+  const describe = (r: LoyaltyReward) => {
+    let what: string = REWARD_TYPES[r.type];
     if (r.type === "discount") {
-      if (r.discountPercent) return `${r.discountPercent} % de descuento`;
-      if (r.discountAmount) return `${euros(r.discountAmount)} de descuento`;
-      return "Descuento";
+      if (r.discountPercent) what = `${r.discountPercent} % de descuento`;
+      else if (r.discountAmount) what = `${euros(r.discountAmount)} de descuento`;
+      else what = "Descuento";
+    } else if (r.type === "free_service") {
+      what = `Gratis: ${serviceName.get(r.freeServiceId ?? "") ?? "servicio"}`;
     }
-    if (r.type === "free_service") return `Gratis: ${serviceName.get(r.freeServiceId ?? "") ?? "servicio"}`;
-    return REWARD_TYPES[r.type];
+    const used = r.maxRedemptions
+      ? `canjeada ${r.currentRedemptions ?? 0} de ${r.maxRedemptions} veces`
+      : `canjeada ${r.currentRedemptions ?? 0} veces`;
+    const until = r.expiresAt ? ` · hasta el ${new Date(r.expiresAt).toLocaleDateString("es-ES")}` : "";
+    return `${what} · ${r.pointsCost} puntos · ${used}${until}`;
   };
 
   const create = async (e: React.FormEvent) => {
     e.preventDefault();
+    const payload = rewardPayload(draft);
+    if (!payload.ok) {
+      onError(payload.error);
+      return;
+    }
+    setCreating(true);
     try {
-      const euroAmount = Number((draft.discountEuros ?? "").replace(",", "."));
-      await apiClient.createLoyaltyReward({
-        name: draft.name,
-        description: draft.description,
-        type: draft.type,
-        pointsCost: draft.pointsCost,
-        ...(draft.type === "discount"
-          ? draft.discountPercent
-            ? { discountPercent: draft.discountPercent }
-            : { discountAmount: Math.round(euroAmount * 100) }
-          : {}),
-        ...(draft.type === "free_service" ? { freeServiceId: draft.freeServiceId } : {}),
-      });
+      await apiClient.createLoyaltyReward(payload.body);
       setAdding(false);
-      setDraft({ name: "", type: "discount", pointsCost: 100, discountPercent: 10 });
+      setDraft(EMPTY_REWARD_FORM);
       onError(null);
+      toast({ title: "Recompensa creada" });
       onChange();
     } catch (err) {
       onError(errorText(err));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const openEdit = (r: LoyaltyReward) => {
+    setEditing(r);
+    setEditForm(rewardFormOf(r));
+    setEditError(null);
+  };
+
+  const saveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editing) return;
+    const payload = rewardPayload(editForm, editing.currentRedemptions ?? 0);
+    if (!payload.ok) {
+      setEditError(payload.error);
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      await apiClient.updateLoyaltyReward(editing.id, payload.body);
+      setEditing(null);
+      toast({ title: "Recompensa guardada" });
+      onChange();
+    } catch (err) {
+      setEditError(errorText(err));
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -403,85 +439,18 @@ function RewardsSection({
       </p>
 
       {adding && (
-        <form onSubmit={create} className="grid grid-cols-1 gap-3 rounded-md border border-gray-200 p-4 sm:grid-cols-2">
-          <input
-            required
-            placeholder="Nombre (p. ej. 10 % en tu próxima visita)"
-            value={draft.name}
-            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-            className="px-3 py-2 border border-gray-300 rounded-md text-sm sm:col-span-2"
-          />
-          <select
-            value={draft.type}
-            onChange={(e) => setDraft({ ...draft, type: e.target.value as LoyaltyRewardInput["type"] })}
-            className="px-3 py-2 border border-gray-300 rounded-md text-sm"
-          >
-            {Object.entries(REWARD_TYPES).map(([k, v]) => (
-              <option key={k} value={k}>
-                {v}
-              </option>
-            ))}
-          </select>
-          <label className="flex items-center gap-2 text-sm">
-            Cuesta
-            <input
-              type="number"
-              min={1}
-              required
-              value={draft.pointsCost}
-              onChange={(e) => setDraft({ ...draft, pointsCost: Number(e.target.value) || 0 })}
-              className="w-24 px-2 py-1 border border-gray-300 rounded-md"
-            />
-            puntos
-          </label>
-          {draft.type === "discount" && (
-            <div className="flex flex-wrap items-center gap-2 text-sm sm:col-span-2">
-              <input
-                type="number"
-                min={0}
-                max={100}
-                value={draft.discountPercent ?? 0}
-                onChange={(e) => setDraft({ ...draft, discountPercent: Number(e.target.value) || 0 })}
-                className="w-20 px-2 py-1 border border-gray-300 rounded-md"
-              />
-              % de descuento, o si lo dejas a 0, un importe fijo de
-              <input
-                inputMode="decimal"
-                placeholder="5,00"
-                value={draft.discountEuros ?? ""}
-                onChange={(e) => setDraft({ ...draft, discountEuros: e.target.value })}
-                className="w-24 px-2 py-1 border border-gray-300 rounded-md"
-              />
-              €
-            </div>
-          )}
-          {draft.type === "free_service" && (
-            <select
-              required
-              value={draft.freeServiceId ?? ""}
-              onChange={(e) => setDraft({ ...draft, freeServiceId: e.target.value })}
-              className="px-3 py-2 border border-gray-300 rounded-md text-sm sm:col-span-2"
-            >
-              <option value="">Elige el servicio que regala</option>
-              {services.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          )}
-          {(draft.type === "product" || draft.type === "voucher") && (
-            <p className="text-xs text-gray-500 sm:col-span-2">
-              Se entrega en el mostrador: el canje descuenta los puntos pero no cambia el importe del
-              ticket.
-            </p>
-          )}
-          <div className="sm:col-span-2 flex justify-end gap-2">
+        <form onSubmit={create} className="rounded-md border border-gray-200 p-4">
+          <RewardFields form={draft} onChange={setDraft} services={services} />
+          <div className="mt-3 flex justify-end gap-2">
             <button type="button" onClick={() => setAdding(false)} className="px-3 py-1.5 border rounded-md text-sm">
               Cancelar
             </button>
-            <button type="submit" className="px-3 py-1.5 bg-blue-600 text-white rounded-md text-sm">
-              Añadir
+            <button
+              type="submit"
+              disabled={creating}
+              className="px-3 py-1.5 bg-blue-600 text-white rounded-md text-sm disabled:opacity-50"
+            >
+              {creating ? "Añadiendo…" : "Añadir"}
             </button>
           </div>
         </form>
@@ -498,11 +467,16 @@ function RewardsSection({
                   <Award className="w-4 h-4 inline mr-1 text-amber-500" />
                   {r.name}
                 </p>
-                <p className="text-sm text-gray-500">
-                  {describe(r)} · {r.pointsCost} puntos · canjeada {r.currentRedemptions ?? 0} veces
-                </p>
+                <p className="text-sm text-gray-500">{describe(r)}</p>
               </div>
               <div className="flex items-center gap-3">
+                <button
+                  onClick={() => openEdit(r)}
+                  aria-label={`Editar ${r.name}`}
+                  className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800"
+                >
+                  <Pencil className="w-4 h-4" /> Editar
+                </button>
                 <button
                   onClick={async () => {
                     try {
@@ -529,6 +503,36 @@ function RewardsSection({
         </ul>
       )}
 
+      {editing && (
+        <Modal title={`Editar «${editing.name}»`} onClose={() => !savingEdit && setEditing(null)}>
+          <form onSubmit={saveEdit} className="space-y-3">
+            <RewardFields form={editForm} onChange={setEditForm} services={services} showActive />
+            {editError && (
+              <p role="alert" className="rounded-md border border-red-200 bg-red-50 p-2 text-sm text-red-700">
+                {editError}
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setEditing(null)}
+                disabled={savingEdit}
+                className="px-3 py-1.5 border rounded-md text-sm"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                disabled={savingEdit}
+                className="px-3 py-1.5 bg-blue-600 text-white rounded-md text-sm disabled:opacity-50"
+              >
+                {savingEdit ? "Guardando…" : "Guardar"}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
       <ConfirmDialog
         open={!!pendingDelete}
         title={`¿Borrar la recompensa «${pendingDelete?.name ?? ""}»?`}
@@ -540,6 +544,185 @@ function RewardsSection({
         onConfirm={performDelete}
       />
     </section>
+  );
+}
+
+/** The reward's fields, for a new one and in the edit dialog (lib/loyalty-rewards.ts). */
+function RewardFields({
+  form,
+  onChange,
+  services,
+  showActive,
+}: {
+  form: RewardForm;
+  onChange: (f: RewardForm) => void;
+  services: Array<{ id: string; name: string }>;
+  showActive?: boolean;
+}) {
+  const set = (patch: Partial<RewardForm>) => onChange({ ...form, ...patch });
+  return (
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <label className="block text-sm sm:col-span-2">
+        <span className="font-medium text-gray-700">Nombre</span>
+        <input
+          required
+          maxLength={120}
+          placeholder="p. ej. 10 % en tu próxima visita"
+          value={form.name}
+          onChange={(e) => set({ name: e.target.value })}
+          className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md"
+        />
+      </label>
+      <label className="block text-sm">
+        <span className="font-medium text-gray-700">Tipo</span>
+        <select
+          value={form.type}
+          onChange={(e) => set({ type: e.target.value as RewardForm["type"] })}
+          className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md"
+        >
+          {Object.entries(REWARD_TYPES).map(([k, v]) => (
+            <option key={k} value={k}>
+              {v}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="block text-sm">
+        <span className="font-medium text-gray-700">Cuesta (puntos)</span>
+        <input
+          type="number"
+          min={1}
+          required
+          value={form.pointsCost}
+          onChange={(e) => set({ pointsCost: e.target.value })}
+          className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md"
+        />
+      </label>
+
+      {form.type === "discount" && (
+        <fieldset className="space-y-2 text-sm sm:col-span-2">
+          <legend className="font-medium text-gray-700">Descuento: un porcentaje o un importe fijo</legend>
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+            <label className="inline-flex items-center gap-2">
+              <input
+                type="radio"
+                name="discountKind"
+                checked={form.discountKind === "percent"}
+                onChange={() => set({ discountKind: "percent" })}
+              />
+              <input
+                type="number"
+                min={1}
+                max={100}
+                aria-label="Porcentaje de descuento"
+                value={form.percent}
+                disabled={form.discountKind !== "percent"}
+                onChange={(e) => set({ percent: e.target.value })}
+                className="w-20 px-2 py-1 border border-gray-300 rounded-md disabled:bg-gray-100"
+              />
+              %
+            </label>
+            <label className="inline-flex items-center gap-2">
+              <input
+                type="radio"
+                name="discountKind"
+                checked={form.discountKind === "amount"}
+                onChange={() => set({ discountKind: "amount" })}
+              />
+              <input
+                inputMode="decimal"
+                placeholder="5,00"
+                aria-label="Importe del descuento en euros"
+                value={form.euros}
+                disabled={form.discountKind !== "amount"}
+                onChange={(e) => set({ euros: e.target.value })}
+                className="w-24 px-2 py-1 border border-gray-300 rounded-md disabled:bg-gray-100"
+              />
+              €
+            </label>
+          </div>
+        </fieldset>
+      )}
+      {form.type === "free_service" && (
+        <select
+          required
+          value={form.freeServiceId}
+          onChange={(e) => set({ freeServiceId: e.target.value })}
+          className="px-3 py-2 border border-gray-300 rounded-md text-sm sm:col-span-2"
+        >
+          <option value="">Elige el servicio que regala</option>
+          {services.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+      )}
+      {(form.type === "product" || form.type === "voucher") && (
+        <p className="text-xs text-gray-500 sm:col-span-2">
+          Se entrega en el mostrador: el canje descuenta los puntos pero no cambia el importe del ticket.
+        </p>
+      )}
+
+      <label className="block text-sm">
+        <span className="font-medium text-gray-700">Límite de canjes (opcional)</span>
+        <input
+          type="number"
+          min={1}
+          placeholder="Sin límite"
+          value={form.maxRedemptions}
+          onChange={(e) => set({ maxRedemptions: e.target.value })}
+          className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md"
+        />
+        <span className="mt-1 block text-xs text-gray-500">Entre todos los clientes.</span>
+      </label>
+      <label className="block text-sm">
+        <span className="font-medium text-gray-700">Válida hasta (opcional)</span>
+        <input
+          type="date"
+          value={form.expiresOn}
+          onChange={(e) => set({ expiresOn: e.target.value })}
+          className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md"
+        />
+        <span className="mt-1 block text-xs text-gray-500">Incluido ese día. Vacío: no caduca.</span>
+      </label>
+      {showActive && (
+        <label className="inline-flex items-center gap-2 text-sm sm:col-span-2">
+          <input type="checkbox" checked={form.isActive} onChange={(e) => set({ isActive: e.target.checked })} />
+          Activa (se puede canjear en Caja)
+        </label>
+      )}
+    </div>
+  );
+}
+
+/** A dialog in the panel's style (as in Tarjetas regalo): Escape or a click outside closes it. */
+function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className="bg-white rounded-lg shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-semibold text-gray-900">{title}</h2>
+          <button type="button" onClick={onClose} aria-label="Cerrar" className="text-gray-500 hover:text-gray-800">
+            ✕
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
   );
 }
 
@@ -573,7 +756,8 @@ function TiersSection({
       <h2 className="text-lg font-semibold text-gray-900">Niveles (opcional)</h2>
       <p className="text-sm text-gray-500">
         Un socio sube de nivel al acumular puntos, y desde ese nivel gana más puntos por visita o por
-        euro.
+        euro. Canjear puntos no le baja de nivel; si se devuelve un pago o se cancela una cita, los
+        puntos que se le restan cuentan.
       </p>
       {program.tiers.length > 0 && (
         <ul className="divide-y divide-gray-100">
@@ -684,20 +868,8 @@ function MembersSection({ onError }: { onError: (e: string | null) => void }) {
     }
   };
 
-  const adjust = async (m: LoyaltyMemberRow) => {
-    const raw = prompt(`Ajustar puntos de ${m.client.firstName} (p. ej. 50 o -20):`);
-    if (!raw) return;
-    const points = Number(raw);
-    if (!Number.isInteger(points) || points === 0) return;
-    const reason = prompt("Motivo (queda en su historial):");
-    if (!reason) return;
-    try {
-      await apiClient.adjustLoyaltyPoints(m.id, points, reason);
-      load(search);
-    } catch (err) {
-      onError(errorText(err));
-    }
-  };
+  // The member whose points are being adjusted, in the dialog.
+  const [adjusting, setAdjusting] = useState<LoyaltyMemberRow | null>(null);
 
   return (
     <div className="space-y-4">
@@ -779,7 +951,7 @@ function MembersSection({ onError }: { onError: (e: string | null) => void }) {
                       )}
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <button onClick={() => adjust(m)} className="text-blue-600 hover:text-blue-800">
+                      <button onClick={() => setAdjusting(m)} className="text-blue-600 hover:text-blue-800">
                         Ajustar
                       </button>
                     </td>
@@ -790,6 +962,118 @@ function MembersSection({ onError }: { onError: (e: string | null) => void }) {
           </div>
         )}
       </div>
+
+      {adjusting && (
+        <AdjustPointsDialog
+          member={adjusting}
+          onClose={() => setAdjusting(null)}
+          onDone={() => {
+            setAdjusting(null);
+            load(search);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/** A manual correction of a member's points: how many, add or take, and why (it stays in their history). */
+function AdjustPointsDialog({
+  member,
+  onClose,
+  onDone,
+}: {
+  member: LoyaltyMemberRow;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { toast } = useToast();
+  const [amount, setAmount] = useState("");
+  const [sign, setSign] = useState<"add" | "take">("add");
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const name = `${member.client.firstName} ${member.client.lastName ?? ""}`.trim();
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const out = adjustmentOf(amount, sign, reason, member.currentPoints);
+    if (!out.ok) {
+      setError(out.error);
+      return;
+    }
+    setSaving(true);
+    try {
+      await apiClient.adjustLoyaltyPoints(member.id, out.points, out.reason);
+      toast({ title: out.points > 0 ? `Sumados ${out.points} puntos a ${name}` : `Restados ${-out.points} puntos a ${name}` });
+      onDone();
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal title={`Ajustar puntos de ${name}`} onClose={() => !saving && onClose()}>
+      <form onSubmit={submit} className="space-y-4 text-sm">
+        <p className="text-gray-600">
+          Tiene <strong>{member.currentPoints}</strong> puntos. Los ajustes son para corregir: los puntos de
+          las visitas y las ventas se suman solos.
+        </p>
+        <fieldset className="flex flex-wrap gap-x-6 gap-y-2">
+          <legend className="sr-only">Sumar o restar</legend>
+          <label className="inline-flex items-center gap-2">
+            <input type="radio" name="adjustSign" checked={sign === "add"} onChange={() => setSign("add")} />
+            Sumar
+          </label>
+          <label className="inline-flex items-center gap-2">
+            <input type="radio" name="adjustSign" checked={sign === "take"} onChange={() => setSign("take")} />
+            Restar
+          </label>
+        </fieldset>
+        <label className="block">
+          <span className="font-medium text-gray-700">Puntos</span>
+          <input
+            type="number"
+            min={1}
+            required
+            autoFocus
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md"
+          />
+        </label>
+        <label className="block">
+          <span className="font-medium text-gray-700">Motivo</span>
+          <input
+            required
+            maxLength={300}
+            placeholder="p. ej. Puntos de una visita cobrada fuera del sistema"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md"
+          />
+          <span className="mt-1 block text-xs text-gray-500">Queda en su historial.</span>
+        </label>
+        {error && (
+          <p role="alert" className="rounded-md border border-red-200 bg-red-50 p-2 text-red-700">
+            {error}
+          </p>
+        )}
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={onClose} disabled={saving} className="px-3 py-1.5 border rounded-md">
+            Cancelar
+          </button>
+          <button
+            type="submit"
+            disabled={saving}
+            className="px-3 py-1.5 bg-blue-600 text-white rounded-md disabled:opacity-50"
+          >
+            {saving ? "Guardando…" : sign === "add" ? "Sumar puntos" : "Restar puntos"}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }

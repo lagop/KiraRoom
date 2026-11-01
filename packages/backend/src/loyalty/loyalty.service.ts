@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -14,6 +15,7 @@ import {
   LoyaltyRewardDto,
   LoyaltyTierDto,
   UpdateLoyaltyRewardDto,
+  discountValueProblem,
 } from "./loyalty.dto";
 
 type TxType = "earn" | "redeem" | "reversal" | "redeem_reversal" | "welcome" | "adjust";
@@ -50,6 +52,16 @@ function isDuplicate(err: unknown): boolean {
   return (
     err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002"
   ) || (err as any)?.code === "P2002";
+}
+
+/**
+ * The money a visit's share of the till's loyalty reward covered
+ * (`Appointment.discount.loyalty.moneyCents`, pos.service.ts), else 0.
+ */
+function ownRewardMoneyCents(discount: unknown): number {
+  const loyalty = (discount as { loyalty?: { moneyCents?: unknown } } | null | undefined)?.loyalty;
+  const cents = Number(loyalty?.moneyCents);
+  return Number.isFinite(cents) && cents > 0 ? Math.round(cents) : 0;
 }
 
 /**
@@ -115,6 +127,7 @@ export class LoyaltyService {
   async createReward(tenantId: string, dto: LoyaltyRewardDto) {
     const program = await this.requireProgram(tenantId);
     await this.checkFreeService(tenantId, dto.type, dto.freeServiceId);
+    const value = this.checkDiscountValue(dto.type, dto.discountPercent, dto.discountAmount);
     return this.prisma.loyaltyReward.create({
       data: {
         programId: program.id,
@@ -122,17 +135,39 @@ export class LoyaltyService {
         description: dto.description,
         type: dto.type,
         pointsCost: dto.pointsCost,
-        discountPercent: dto.discountPercent ?? null,
-        discountAmount: dto.discountAmount ?? null,
+        ...value,
         freeServiceId: dto.freeServiceId ?? null,
         isActive: dto.isActive ?? true,
+        maxRedemptions: dto.maxRedemptions ?? null,
+        expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
       },
     });
   }
 
+  /**
+   * Edits a reward. The discount is checked as it will stand (what is sent
+   * over what is stored); null clears the limit or the expiry.
+   */
   async updateReward(tenantId: string, id: string, dto: UpdateLoyaltyRewardDto) {
     const reward = await this.ownReward(tenantId, id);
-    await this.checkFreeService(tenantId, dto.type ?? reward.type, dto.freeServiceId ?? reward.freeServiceId);
+    const type = dto.type ?? reward.type;
+    await this.checkFreeService(tenantId, type, dto.freeServiceId ?? reward.freeServiceId);
+    const touchesValue = dto.type !== undefined || dto.discountPercent !== undefined || dto.discountAmount !== undefined;
+    const value = touchesValue
+      ? this.checkDiscountValue(
+          type,
+          dto.discountPercent !== undefined ? dto.discountPercent : reward.discountPercent,
+          dto.discountAmount !== undefined ? dto.discountAmount : reward.discountAmount,
+        )
+      : {};
+    if (
+      dto.maxRedemptions != null &&
+      dto.maxRedemptions < reward.currentRedemptions
+    ) {
+      throw new BadRequestException(
+        `Ya se ha canjeado ${reward.currentRedemptions} veces: el límite no puede ser menor.`,
+      );
+    }
     return this.prisma.loyaltyReward.update({
       where: { id },
       data: {
@@ -140,12 +175,32 @@ export class LoyaltyService {
         description: dto.description,
         type: dto.type,
         pointsCost: dto.pointsCost,
-        discountPercent: dto.discountPercent,
-        discountAmount: dto.discountAmount,
+        ...value,
         freeServiceId: dto.freeServiceId,
         isActive: dto.isActive,
+        ...(dto.maxRedemptions !== undefined ? { maxRedemptions: dto.maxRedemptions } : {}),
+        ...(dto.expiresAt !== undefined ? { expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null } : {}),
       },
     });
+  }
+
+  /**
+   * A discount reward takes exactly one thing off: a percent or an amount,
+   * above zero (one of 0 % and 0,00 EUR used to be accepted, and gave
+   * nothing). The other is stored empty. Other types keep neither.
+   */
+  private checkDiscountValue(
+    type: string,
+    percent?: number | null,
+    amount?: number | null,
+  ): { discountPercent: number | null; discountAmount: number | null } {
+    const problem = discountValueProblem(type, percent, amount);
+    if (problem) throw new BadRequestException(problem);
+    if (type !== "discount") return { discountPercent: null, discountAmount: null };
+    return {
+      discountPercent: percent && percent > 0 ? percent : null,
+      discountAmount: amount && amount > 0 ? amount : null,
+    };
   }
 
   async deleteReward(tenantId: string, id: string) {
@@ -177,14 +232,20 @@ export class LoyaltyService {
 
   async createTier(tenantId: string, dto: LoyaltyTierDto) {
     const program = await this.requireProgram(tenantId);
-    return this.prisma.loyaltyTier.create({
-      data: {
-        programId: program.id,
-        name: dto.name,
-        minPoints: dto.minPoints,
-        pointsMultiplier: dto.pointsMultiplier,
-      },
-    });
+    try {
+      return await this.prisma.loyaltyTier.create({
+        data: {
+          programId: program.id,
+          name: dto.name,
+          minPoints: dto.minPoints,
+          pointsMultiplier: dto.pointsMultiplier,
+        },
+      });
+    } catch (err) {
+      // (programId, name) is unique: a second "Oro" used to be a 500.
+      if (isDuplicate(err)) throw new ConflictException(`Ya hay un nivel llamado «${dto.name}». Elige otro nombre.`);
+      throw err;
+    }
   }
 
   async deleteTier(tenantId: string, id: string) {
@@ -339,9 +400,16 @@ export class LoyaltyService {
   // --------------------------------------------------------------- earning
 
   /**
-   * An appointment earns once it is both completed and paid. Called after
-   * every change that can make that true; does nothing until it is, and
-   * nothing the second time.
+   * An appointment earns once it is both completed and paid IN FULL. Called
+   * after every change that can make that true; does nothing until it is,
+   * and nothing the second time.
+   *
+   * In full: its paymentStatus is "paid", which the till sets exactly when
+   * the money (and the reward) cover what the visit costs, in money, with
+   * the salon's tax basis (recordAppointmentPayment). A first partial
+   * payment used to earn on what it was, once, and the rest paid later
+   * earned nothing: one earn per visit, on its whole money, keeps every
+   * refund and reversal (which work from that one entry's basis) exact.
    */
   async settleAppointment(tenantId: string, appointmentId: string): Promise<{ awarded: number } | null> {
     const program = await this.activeProgram(tenantId);
@@ -356,11 +424,13 @@ export class LoyaltyService {
         amountPaid: true,
         totalAmount: true,
         servicePrice: true,
+        discount: true,
         service: { select: { price: true } },
         payments: { where: { status: "paid" }, select: { amount: true, method: true } },
       },
     });
     if (!apt?.clientId || apt.status !== "completed") return null;
+    if (apt.paymentStatus !== "paid") return null;
     // Paid means a payment recorded against the appointment (the till, the
     // payments screen, Stripe). The appointment's paymentStatus flag alone
     // used to be enough, and staff could set it by hand, for any amount.
@@ -375,12 +445,20 @@ export class LoyaltyService {
     if (!(basis > 0)) basis = moneyCents;
     if (!(basis > 0)) basis = Number(apt.totalAmount ?? 0);
     if (!(basis > 0)) basis = Math.round(Number(apt.servicePrice ?? apt.service?.price ?? 0) * 100);
-    // The part paid with points is not money spent: it earns nothing.
-    const discounted = await this.prisma.loyaltyRedemption.aggregate({
-      where: { appointmentId, status: { not: "cancelled" } },
-      _sum: { valueReceived: true },
-    });
-    basis = Math.max(0, Math.round(basis - (discounted._sum.valueReceived ?? 0)));
+    // The part paid with points is not money spent: it earns nothing. The
+    // visit's own share of the reward (the till records it on the visit);
+    // the reward's whole value only for a visit charged before that record
+    // existed. The whole value over-took when the reward also covered other
+    // lines of the ticket, which now earn on their own (earnForSale).
+    let pointsPaid = ownRewardMoneyCents(apt.discount);
+    if (!pointsPaid) {
+      const discounted = await this.prisma.loyaltyRedemption.aggregate({
+        where: { appointmentId, status: { not: "cancelled" } },
+        _sum: { valueReceived: true },
+      });
+      pointsPaid = discounted._sum.valueReceived ?? 0;
+    }
+    basis = Math.max(0, Math.round(basis - pointsPaid));
     // Never more than the money actually recorded for it.
     basis = Math.min(basis, moneyCents);
 
@@ -423,26 +501,23 @@ export class LoyaltyService {
   }
 
   /**
-   * Points taken back of a visit or a till sale by partial refunds so far
-   * (reversal rows of source "refund", onPartialRefund), and the cents they
-   * were for. With `posSaleId`, also the per-payment reversals of full
-   * refunds (source "payment", onPaymentRefunded). With `paymentId`, only
-   * that payment's.
+   * Points taken back of a visit or a till sale by refunds so far (reversal
+   * rows of source "refund", one per refund: takeBackRefund), and the cents
+   * they were for. Rows of source "payment" are full refunds of a sale's
+   * payment recorded before refunds had their own entry; they count too.
    */
   private async takenBackByRefunds(
     memberId: string,
-    of: { appointmentId?: string; posSaleId?: string; paymentId?: string },
+    of: { appointmentId?: string; posSaleId?: string },
   ): Promise<{ points: number; cents: number }> {
-    const key = of.paymentId
-      ? { path: ["paymentId"], equals: of.paymentId }
-      : of.appointmentId
-        ? { path: ["appointmentId"], equals: of.appointmentId }
-        : { path: ["posSaleId"], equals: of.posSaleId as string };
+    const key = of.appointmentId
+      ? { path: ["appointmentId"], equals: of.appointmentId }
+      : { path: ["posSaleId"], equals: of.posSaleId as string };
     const rows = await this.prisma.loyaltyTransaction.findMany({
       where: {
         memberId,
         type: "reversal",
-        source: of.posSaleId && !of.paymentId ? { in: ["refund", "payment"] } : "refund",
+        source: { in: ["refund", "payment"] },
         metadata: key,
       },
       select: { points: true, metadata: true },
@@ -481,72 +556,114 @@ export class LoyaltyService {
   }
 
   /**
-   * A refunded payment takes back what it earned: the whole visit for an
-   * appointment, its share of the ticket for a till sale (less what partial
-   * refunds of it took back already). When every payment of a sale is
-   * refunded, the points spent on it come back too.
+   * A payment refunded in full (what was left of it, `refund`) takes back
+   * its share of what the payment paid for, like any refund
+   * (takeBackRefund): a visit's row only that visit's points, in proportion;
+   * a sale's own row only the sale's. The other visits and the other
+   * clients of the ticket are not touched: every row used to carry all the
+   * ticket's appointments, and refunding a shampoo took back every visit.
+   *
+   * A visit loses all its points (what is left of them) only when it is
+   * itself refunded (paymentStatus "refunded": no money left on it) or
+   * cancelled. When every payment of a sale is refunded, the points spent
+   * on it come back too.
    */
   async onPaymentRefunded(
     tenantId: string,
-    payment: { id: string; amount: number; appointmentId?: string | null; metadata?: unknown },
+    payment: { id: string; amount: number; type?: string | null; appointmentId?: string | null; metadata?: unknown },
+    refund: { id: string; amount: number },
   ): Promise<void> {
-    if (payment.appointmentId) {
-      await this.reverseAppointment(tenantId, payment.appointmentId, "Devolución del pago de la cita");
-    }
-    const meta = (payment.metadata ?? {}) as { posSaleId?: string; appointmentIds?: string[] };
-    for (const appointmentId of meta.appointmentIds ?? []) {
-      await this.reverseAppointment(tenantId, appointmentId, "Devolución del pago de la cita");
-    }
-    const saleId = meta.posSaleId;
-    if (!saleId) return;
+    await this.takeBackRefund(tenantId, payment, refund, "Devolución del pago");
 
+    if (payment.appointmentId) {
+      const apt = await this.prisma.appointment.findFirst({
+        where: { id: payment.appointmentId, tenantId },
+        select: { status: true, paymentStatus: true },
+      });
+      if (apt && (apt.paymentStatus === "refunded" || apt.status === "cancelled")) {
+        await this.reverseAppointment(
+          tenantId,
+          payment.appointmentId,
+          apt.status === "cancelled" ? "Cita cancelada" : "Devolución del pago de la cita",
+        );
+      }
+    }
+
+    const saleId = ((payment.metadata ?? {}) as { posSaleId?: string }).posSaleId;
+    if (!saleId) return;
+    const stillPaid = await this.prisma.payment.count({
+      where: { tenantId, status: "paid", metadata: { path: ["posSaleId"], equals: saleId } },
+    });
+    if (stillPaid === 0) {
+      // The whole sale given back: what is left of its points (a refund
+      // that found the balance short took less than its share) goes too.
+      await this.reverseSale(tenantId, saleId);
+      await this.cancelSaleRedemption(tenantId, saleId, "Devolución de la compra");
+    }
+  }
+
+  /** A till sale refunded in full: what is left of the points its own lines earned. */
+  private async reverseSale(tenantId: string, saleId: string): Promise<number> {
     const earned = await this.prisma.loyaltyTransaction.findFirst({
       where: { tenantId, type: "earn", source: "pos_sale", sourceId: saleId },
       include: { member: { select: { clientId: true } } },
     });
-    if (earned) {
-      const basis = Number((earned.metadata as any)?.basisCents ?? 0);
-      const share = basis > 0 ? Math.round((earned.points * payment.amount) / basis) : earned.points;
-      const ofSale = await this.takenBackByRefunds(earned.memberId, { posSaleId: saleId });
-      const ofPayment = await this.takenBackByRefunds(earned.memberId, { paymentId: payment.id });
-      const due = Math.min(share - ofPayment.points, earned.points - ofSale.points);
-      if (due > 0) {
-        await this.applyChange(tenantId, earned.programId, earned.memberId, earned.member.clientId, {
-          type: "reversal",
-          points: -due,
-          source: "payment",
-          sourceId: payment.id,
-          description: "Devolución de la compra",
-          metadata: { posSaleId: saleId, paymentId: payment.id },
-          shortfall: "clamp",
-        }, -Math.max(0, Math.min(payment.amount - ofPayment.cents, basis)));
-      }
-    }
-
-    const stillPaid = await this.prisma.payment.count({
-      where: { tenantId, status: "paid", metadata: { path: ["posSaleId"], equals: saleId } },
-    });
-    if (stillPaid === 0) await this.cancelSaleRedemption(tenantId, saleId, "Devolución de la compra");
+    if (!earned) return 0;
+    const back = await this.takenBackByRefunds(earned.memberId, { posSaleId: saleId });
+    const due = earned.points - back.points;
+    if (due <= 0) return 0;
+    const basis = Number((earned.metadata as any)?.basisCents ?? 0);
+    const taken = await this.applyChange(tenantId, earned.programId, earned.memberId, earned.member.clientId, {
+      type: "reversal",
+      points: -due,
+      source: "pos_sale",
+      sourceId: saleId,
+      description: "Devolución de la compra",
+      metadata: { posSaleId: saleId },
+      shortfall: "clamp",
+    }, -Math.max(0, basis - back.cents));
+    return taken ?? 0;
   }
 
   /**
    * A partial refund (the payment stays paid) takes back its share of the
-   * points the visit or the sale earned: points x refunded / what earned
-   * them, rounded, never more than is left to take back of it, and never
-   * the member's balance below zero ("clamp"). One ledger entry per refund
-   * (source "refund", the refund's id: a retry is a no-op). The points spent
-   * on the sale stay spent: the sale still stands.
+   * points (takeBackRefund). The points spent on the sale stay spent: the
+   * sale still stands.
    */
   async onPartialRefund(
     tenantId: string,
-    payment: { id: string; appointmentId?: string | null; metadata?: unknown },
+    payment: { id: string; type?: string | null; appointmentId?: string | null; metadata?: unknown },
     refund: { id: string; amount: number },
+  ): Promise<number> {
+    return this.takeBackRefund(tenantId, payment, refund, "Devolución parcial");
+  }
+
+  /**
+   * One refund takes back its share of the points of what the refunded
+   * payment paid for, and nothing else:
+   *
+   *   - a visit's row (appointmentId): that visit's points;
+   *   - a sale's own row (no appointment): the points the sale's own lines
+   *     earned (earnForSale), products included;
+   *   - the row that paid for a gift card sold: nothing, it earned nothing.
+   *
+   * Its share is points x refunded / the cents that earned them, rounded,
+   * never more than is left to take back of it (so a later full refund
+   * takes back only what remains), and never the member's balance below
+   * zero ("clamp"). One ledger entry per refund (source "refund", the
+   * refund's id: a retry is a no-op).
+   */
+  private async takeBackRefund(
+    tenantId: string,
+    payment: { id: string; type?: string | null; appointmentId?: string | null; metadata?: unknown },
+    refund: { id: string; amount: number },
+    description: string,
   ): Promise<number> {
     if (!(refund.amount > 0)) return 0;
     const saleId = ((payment.metadata ?? {}) as { posSaleId?: string }).posSaleId;
     const of = payment.appointmentId
       ? { source: "appointment", sourceId: payment.appointmentId, key: { appointmentId: payment.appointmentId } }
-      : saleId
+      : saleId && payment.type !== "gift_card"
         ? { source: "pos_sale", sourceId: saleId, key: { posSaleId: saleId } }
         : null;
     if (!of) return 0;
@@ -574,7 +691,7 @@ export class LoyaltyService {
       points: -due,
       source: "refund",
       sourceId: refund.id,
-      description: "Devolución parcial",
+      description,
       metadata: { ...of.key, paymentId: payment.id, refundCents: refund.amount },
       shortfall: "clamp",
     }, -Math.min(refund.amount, basis));
@@ -601,16 +718,39 @@ export class LoyaltyService {
     },
   ): Promise<{ discountCents: number; pointsSpent: number; rewardName: string; redemptionId: string }> {
     const { program, member, reward, discountCents } = await this.checkRedemption(tenantId, args);
-    await this.applyChange(tenantId, program.id, member.id, args.clientId as string, {
-      type: "redeem",
-      points: -reward.pointsCost,
-      source: "pos_sale",
-      sourceId: args.saleId,
-      description: `Canje: ${reward.name}`,
-      metadata: { rewardId: reward.id, discountCents },
-      actorId: args.actorId,
-      shortfall: "strict",
+    // The reward's limit, claimed in one conditional write: two tills
+    // redeeming its last use at once cannot both get it (the check above
+    // and a separate increment used to let both through).
+    const { count } = await this.prisma.loyaltyReward.updateMany({
+      where: {
+        id: reward.id,
+        OR: [
+          { maxRedemptions: null },
+          { currentRedemptions: { lt: this.prisma.loyaltyReward.fields.maxRedemptions } },
+        ],
+      },
+      data: { currentRedemptions: { increment: 1 } },
     });
+    if (count !== 1) throw new BadRequestException("Esta recompensa ya no está disponible");
+    try {
+      await this.applyChange(tenantId, program.id, member.id, args.clientId as string, {
+        type: "redeem",
+        points: -reward.pointsCost,
+        source: "pos_sale",
+        sourceId: args.saleId,
+        description: `Canje: ${reward.name}`,
+        metadata: { rewardId: reward.id, discountCents },
+        actorId: args.actorId,
+        shortfall: "strict",
+      });
+    } catch (err) {
+      // No points spent: the use claimed goes back.
+      await this.prisma.loyaltyReward.updateMany({
+        where: { id: reward.id, currentRedemptions: { gt: 0 } },
+        data: { currentRedemptions: { decrement: 1 } },
+      });
+      throw err;
+    }
     const redemption = await this.prisma.loyaltyRedemption.create({
       data: {
         memberId: member.id,
@@ -622,10 +762,6 @@ export class LoyaltyService {
         appointmentId: args.appointmentId ?? null,
         posSaleId: args.saleId,
       },
-    });
-    await this.prisma.loyaltyReward.update({
-      where: { id: reward.id },
-      data: { currentRedemptions: { increment: 1 } },
     });
     return { discountCents, pointsSpent: reward.pointsCost, rewardName: reward.name, redemptionId: redemption.id };
   }
@@ -747,7 +883,9 @@ export class LoyaltyService {
         where: {
           status: "completed",
           updatedAt: { gte: since },
-          OR: [{ paymentStatus: "paid" }, { payments: { some: { status: "paid" } } }],
+          // Paid in full, with money recorded (settleAppointment).
+          paymentStatus: "paid",
+          payments: { some: { status: "paid" } },
           tenant: { loyaltyPrograms: { some: { isActive: true } } },
         },
         select: { id: true, tenantId: true },
@@ -895,15 +1033,19 @@ export class LoyaltyService {
         // The client record carries a copy that campaigns and lists read.
         await tx.client.update({ where: { id: clientId }, data: { loyaltyPoints: updated.currentPoints } });
 
-        if (points > 0) {
-          const tier = await tx.loyaltyTier.findFirst({
-            where: { programId, minPoints: { lte: updated.lifetimePoints } },
-            orderBy: { minPoints: "desc" },
-            select: { id: true },
-          });
-          if ((tier?.id ?? null) !== (updated.tierId ?? null) && tier) {
-            await tx.loyaltyMember.update({ where: { id: memberId }, data: { tierId: tier.id } });
-          }
+        // The level, from the programme's levels as they are now, after
+        // every movement: a refund or a cancellation that takes back the
+        // points that reached a level takes the level back too, and a level
+        // created or removed since counts from the next movement. Levels
+        // still follow the points accumulated (lifetimePoints), which only
+        // a reversal of earned points lowers; spending never does.
+        const tier = await tx.loyaltyTier.findFirst({
+          where: { programId, minPoints: { lte: updated.lifetimePoints } },
+          orderBy: { minPoints: "desc" },
+          select: { id: true },
+        });
+        if ((tier?.id ?? null) !== (updated.tierId ?? null)) {
+          await tx.loyaltyMember.update({ where: { id: memberId }, data: { tierId: tier?.id ?? null } });
         }
         return points;
       });
