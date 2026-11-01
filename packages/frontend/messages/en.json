@@ -1932,7 +1932,8 @@
     "view_details": "View Details",
     "confirm_mark_all_paid": "Are you sure you want to mark all pending commissions as paid?",
     "confirm_mark_paid_description": "{name}'s pending commissions for the selected period will be marked as paid: {amount}.",
-    "mark_paid": "Mark as paid"
+    "mark_paid": "Mark as paid",
+    "refund_adjustment": "Refund adjustment"
   },
   "description": "Description",
   "email_campaigns": {

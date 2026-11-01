@@ -1932,7 +1932,8 @@
     "view_details": "Ver detalles",
     "confirm_mark_all_paid": "¿Seguro que quieres marcar todas las comisiones pendientes como pagadas?",
     "confirm_mark_paid_description": "Se marcarán como pagadas las comisiones pendientes de {name} en el período elegido: {amount}.",
-    "mark_paid": "Marcar como pagadas"
+    "mark_paid": "Marcar como pagadas",
+    "refund_adjustment": "Ajuste por devolución"
   },
   "description": "Resumen de comisiones de tu equipo",
   "email_campaigns": {
