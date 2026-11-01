@@ -159,7 +159,7 @@ export default function DashboardPage() {
           title="Revenue this month"
           value={formatMoney(data.stats.totalRevenue)}
           icon={DollarSign}
-          changePercent={data.stats.revenueChange}
+          changePercent={data.stats.revenueChange ?? undefined}
           changeLabel="vs. same days last month"
           iconClassName="bg-emerald-50 text-emerald-600"
         />
@@ -167,7 +167,7 @@ export default function DashboardPage() {
           title="Appointments"
           value={data.stats.totalAppointments}
           icon={Calendar}
-          changePercent={data.stats.appointmentsChange}
+          changePercent={data.stats.appointmentsChange ?? undefined}
           changeLabel="vs. same days last month"
           iconClassName="bg-indigo-50 text-indigo-600"
         />
@@ -175,7 +175,7 @@ export default function DashboardPage() {
           title="New clients"
           value={data.stats.newClients}
           icon={UserCheck}
-          changePercent={data.stats.clientsChange}
+          changePercent={data.stats.clientsChange ?? undefined}
           changeLabel="vs. same days last month"
           iconClassName="bg-violet-50 text-violet-600"
         />
@@ -183,7 +183,7 @@ export default function DashboardPage() {
           title="Avg ticket"
           value={formatMoney(data.stats.avgOrderValue)}
           icon={TrendingUp}
-          changePercent={data.stats.orderValueChange}
+          changePercent={data.stats.orderValueChange ?? undefined}
           changeLabel="vs. same days last month"
           iconClassName="bg-amber-50 text-amber-600"
         />

@@ -157,8 +157,6 @@ export class MultiLocationService {
           status: true,
           paymentStatus: true,
           amountPaid: true,
-          totalAmount: true,
-          price: true,
           scheduledDate: true,
           duration: true,
           clientId: true,

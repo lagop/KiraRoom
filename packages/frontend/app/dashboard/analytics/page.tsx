@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import {
   DollarSign,
   TrendingUp,
@@ -15,17 +16,24 @@ import {
   Star,
   Info,
   Gauge,
+  Lock,
+  AlertTriangle,
 } from "lucide-react";
-import apiClient from "../../../lib/api";
+import apiClient, { ApiError } from "../../../lib/api";
 import { useTranslations } from "@/lib/use-translation";
 import Link from "next/link";
-import { PlanGate } from "@/components/billing/PlanGate";
 import { UpgradeCTA } from "@/components/billing/UpgradeCTA";
 import { useFeatureAccess } from "@/hooks/useFeatureAccess";
+import { getCurrentUser } from "@/lib/utils";
+import { isManager } from "@/lib/dashboard-nav";
 import {
   formatCents,
+  formatMonth,
+  formatMonthRange,
+  formatPercentChange,
   formatPeriod,
   formatRate,
+  periodOptions,
   weekOverWeekChange,
 } from "@/lib/analytics-format";
 
@@ -34,13 +42,15 @@ interface DashboardStats {
   totalAppointments: number;
   newClients: number;
   avgOrderValue: number;
-  revenueChange: number;
-  appointmentsChange: number;
-  clientsChange: number;
-  orderValueChange: number;
+  /** Percent against the previous period; null when it had nothing to compare with. */
+  revenueChange: number | null;
+  appointmentsChange: number | null;
+  clientsChange: number | null;
+  orderValueChange: number | null;
 }
 
 interface RevenueDataPoint {
+  /** "YYYY-MM" */
   month: string;
   revenue: number;
 }
@@ -54,17 +64,14 @@ interface ServicePopularity {
 interface AppointmentStatusData {
   name: string;
   count: number;
-  color: string;
 }
 
 interface StatusEvolution {
+  /** "YYYY-MM" */
   period: string;
   Completed: number;
-  Confirmed: number;
-  Pending: number;
   Cancelled: number;
   "No Show": number;
-  "In Progress": number;
 }
 
 interface ProfessionalPerformance {
@@ -83,14 +90,11 @@ interface ClientInsights {
   returningClients: number;
   totalAppointments: number;
   retentionRate: number;
-  period: { start: string; end: string };
 }
 
+/** From /analytics/features: the effective plan (a trial counts as Pro). */
 interface AnalyticsFeatureFlags {
   hasAdvancedAnalytics: boolean;
-  hasDetailedReports: boolean;
-  hasForecasting: boolean;
-  hasExport: boolean;
   maxMonths: number;
 }
 
@@ -108,92 +112,96 @@ interface AnalyticsData {
   stats: DashboardStats;
   revenueData: RevenueDataPoint[];
   servicePopularity: ServicePopularity[];
-  appointmentStatus: AppointmentStatusData[];
-  topServices?: { name: string; count: number; revenue: number }[];
-  topProfessionals?: ProfessionalPerformance[];
-  dailyMetrics?: { date: string; appointments: number; revenue: number }[];
 }
 
 type StatusType = "Completed" | "Cancelled" | "No Show";
+type Tab = "overview" | "professionals" | "clients";
+
+/**
+ * What to tell the owner when a request fails. ApiError carries the HTTP
+ * status, the server's code and its (Spanish) message; this used to look for
+ * an axios-style err.response that never exists, so every failure read as
+ * the same generic line.
+ */
+function errorText(err: unknown, t: (key: string) => string): string {
+  if (err instanceof ApiError) {
+    if (err.status === 403 && err.code === "FEATURE_NOT_IN_PLAN") {
+      return t("analytics.upgrade_required_message");
+    }
+    // 4xx messages are written for the salon (e.g. "Tu cuenta no está
+    // vinculada..."); 5xx ones are not.
+    if (err.status >= 400 && err.status < 500 && err.message) return err.message;
+  }
+  return t("analytics.failed_to_load_data");
+}
 
 export default function AnalyticsPage() {
   const t = useTranslations();
+  const router = useRouter();
+
+  // Analítica is for whoever runs the salon. Read the role after mount (the
+  // server has no token) and send anyone else to the dashboard before any
+  // request is made.
+  const [role, setRole] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    setRole(getCurrentUser()?.role ?? null);
+  }, []);
+  const manager = isManager(role);
+  useEffect(() => {
+    if (role !== undefined && !isManager(role)) router.replace("/dashboard");
+  }, [role, router]);
+
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [features, setFeatures] = useState<AnalyticsFeatureFlags | null>(null);
+  const [featuresError, setFeaturesError] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [timeRange, setTimeRange] = useState<number>(3);
   const [professionalRange, setProfessionalRange] =
     useState<string>("this_month");
-  const [activeTab, setActiveTab] = useState<
-    "overview" | "professionals" | "clients"
-  >("overview");
+  const [activeTab, setActiveTab] = useState<Tab>("overview");
   const [professionalData, setProfessionalData] = useState<
     ProfessionalPerformance[]
   >([]);
   const [clientInsights, setClientInsights] = useState<ClientInsights | null>(
     null,
   );
+  const [advancedError, setAdvancedError] = useState<string | null>(null);
+  const [advancedLoading, setAdvancedLoading] = useState(false);
   const [statusesEvolution, setStatusesEvolution] = useState<StatusEvolution[]>(
     [],
   );
+  const [evolutionError, setEvolutionError] = useState<string | null>(null);
+  const [evolutionLoading, setEvolutionLoading] = useState(false);
   const [statusLast7Days, setStatusLast7Days] = useState<
     AppointmentStatusData[]
   >([]);
   const [statusLast14Days, setStatusLast14Days] = useState<
     AppointmentStatusData[]
   >([]);
-  const [evolutionLoading, setEvolutionLoading] = useState(false);
+  const [statusError, setStatusError] = useState<string | null>(null);
   const [selectedStatus, setSelectedStatus] = useState<StatusType>("Completed");
 
-  useEffect(() => {
-    loadAnalytics();
-    loadFeatures();
-  }, [timeRange]);
+  const maxMonths = features?.maxMonths ?? 3;
+  const isAdvanced = !!features?.hasAdvancedAnalytics;
 
+  // Once: the plan does not change with the period. On failure the page
+  // says so (and offers a retry) instead of quietly showing Esencial.
   const loadFeatures = async () => {
     try {
+      setFeaturesError(false);
       const result = await apiClient.getAnalyticsFeatures();
       setFeatures(result);
-      if (result.maxMonths < timeRange) {
-        setTimeRange(result.maxMonths);
-      }
+      if (result.maxMonths < timeRange) setTimeRange(result.maxMonths);
     } catch (err) {
       console.error("Failed to load features:", err);
-      setFeatures({
-        hasAdvancedAnalytics: false,
-        hasDetailedReports: false,
-        hasForecasting: false,
-        hasExport: false,
-        maxMonths: 3,
-      });
-    }
-  };
-
-  const loadStatusesEvolution = async () => {
-    try {
-      setEvolutionLoading(true);
-      const [evolution, last7, last14] = await Promise.all([
-        apiClient.getAppointmentStatusesEvolution(12),
-        apiClient.getAppointmentStatusByDays(7),
-        apiClient.getAppointmentStatusByDays(14),
-      ]);
-      setStatusesEvolution(evolution);
-      setStatusLast7Days(last7);
-      setStatusLast14Days(last14);
-    } catch (err) {
-      console.error("Failed to load statuses evolution:", err);
-      setStatusesEvolution([]);
-      setStatusLast7Days([]);
-      setStatusLast14Days([]);
-    } finally {
-      setEvolutionLoading(false);
+      setFeaturesError(true);
     }
   };
 
   useEffect(() => {
-    loadStatusesEvolution();
-  }, []);
+    if (manager) loadFeatures();
+  }, [manager]);
 
   const loadAnalytics = async () => {
     try {
@@ -201,59 +209,89 @@ export default function AnalyticsPage() {
       setError(null);
       const result = await apiClient.getAnalyticsOverview(timeRange);
       setData(result);
-    } catch (err: any) {
+    } catch (err) {
       console.error("Failed to load analytics:", err);
-      if (
-        err?.response?.status === 403 &&
-        err?.response?.data?.upgradeRequired
-      ) {
-        setError(t("analytics.upgrade_required_message"));
-      } else {
-        setError(t("analytics.failed_to_load_data"));
-      }
+      setError(errorText(err, t));
       // No sample charts under the error: this used to draw invented
-      // revenue (12,500 to 21,000 across Aug-Jan) and service counts that a
-      // salon could read as its own.
+      // revenue that a salon could read as its own.
       setData(null);
     } finally {
       setLoading(false);
     }
   };
 
-  const loadAdvancedData = async (tab: "professionals" | "clients") => {
-    if (!features?.hasAdvancedAnalytics) return;
+  useEffect(() => {
+    if (manager) loadAnalytics();
+  }, [timeRange, manager]);
 
+  // The evolution follows the selected period (the API cuts it to the plan).
+  const loadStatusesEvolution = async () => {
     try {
-      if (tab === "professionals") {
-        const result =
-          await apiClient.getProfessionalPerformance(professionalRange);
-        setProfessionalData(result);
-      } else if (tab === "clients") {
-        const result = await apiClient.getClientInsights(timeRange);
-        setClientInsights(result);
-      }
+      setEvolutionLoading(true);
+      setEvolutionError(null);
+      setStatusesEvolution(
+        await apiClient.getAppointmentStatusesEvolution(
+          Math.min(timeRange, maxMonths),
+        ),
+      );
     } catch (err) {
-      console.error(`Failed to load ${tab} data:`, err);
+      console.error("Failed to load statuses evolution:", err);
+      setEvolutionError(errorText(err, t));
+      setStatusesEvolution([]);
+    } finally {
+      setEvolutionLoading(false);
     }
   };
 
   useEffect(() => {
-    if (activeTab !== "overview" && features?.hasAdvancedAnalytics) {
-      loadAdvancedData(activeTab);
-    }
-  }, [activeTab, timeRange, professionalRange, features]);
+    if (manager && features) loadStatusesEvolution();
+  }, [timeRange, manager, features?.maxMonths]);
 
-  const stats = data?.stats || {
-    totalRevenue: 0,
-    totalAppointments: 0,
-    newClients: 0,
-    avgOrderValue: 0,
-    revenueChange: 0,
-    appointmentsChange: 0,
-    clientsChange: 0,
-    orderValueChange: 0,
+  const loadStatusByDays = async () => {
+    try {
+      setStatusError(null);
+      const [last7, last14] = await Promise.all([
+        apiClient.getAppointmentStatusByDays(7),
+        apiClient.getAppointmentStatusByDays(14),
+      ]);
+      setStatusLast7Days(last7);
+      setStatusLast14Days(last14);
+    } catch (err) {
+      console.error("Failed to load status by days:", err);
+      setStatusError(errorText(err, t));
+      setStatusLast7Days([]);
+      setStatusLast14Days([]);
+    }
   };
 
+  useEffect(() => {
+    if (manager) loadStatusByDays();
+  }, [manager]);
+
+  const loadAdvancedData = async (tab: "professionals" | "clients") => {
+    try {
+      setAdvancedLoading(true);
+      setAdvancedError(null);
+      if (tab === "professionals") {
+        setProfessionalData(
+          await apiClient.getProfessionalPerformance(professionalRange),
+        );
+      } else {
+        setClientInsights(await apiClient.getClientInsights(timeRange));
+      }
+    } catch (err) {
+      console.error(`Failed to load ${tab} data:`, err);
+      setAdvancedError(errorText(err, t));
+    } finally {
+      setAdvancedLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab !== "overview" && isAdvanced) loadAdvancedData(activeTab);
+  }, [activeTab, timeRange, professionalRange, isAdvanced]);
+
+  const stats = data?.stats;
   const revenueData = data?.revenueData || [];
   const servicePopularity = data?.servicePopularity || [];
 
@@ -266,8 +304,12 @@ export default function AnalyticsPage() {
     (sum, s) => sum + s.count,
     0,
   );
-
-  const isAdvanced = features?.hasAdvancedAnalytics;
+  /** Share of the last 14 days' appointments in one status, in percent. */
+  const shareLast14 = (name: string): number | null => {
+    if (totalAppointments14Days <= 0) return null;
+    const count = statusLast14Days.find((s) => s.name === name)?.count ?? 0;
+    return Math.round((count / totalAppointments14Days) * 100);
+  };
 
   // Status colors
   const statusColors: Record<string, string> = {
@@ -307,93 +349,16 @@ export default function AnalyticsPage() {
     }
   };
 
-  const formatMonthName = (monthValue: string) => {
-    // Handle different month formats: "2024-01", "Jan", "January", "January 2024", etc.
-    if (monthValue.includes("-")) {
-      // Check if it's a full date like "2024-01-15" or just year-month "2024-01"
-      const parts = monthValue.split("-");
-      if (parts.length >= 2) {
-        const monthNum = parseInt(parts[1]);
-        if (monthNum >= 1 && monthNum <= 12) {
-          const monthKeys = [
-            "jan",
-            "feb",
-            "mar",
-            "apr",
-            "may",
-            "jun",
-            "jul",
-            "aug",
-            "sep",
-            "oct",
-            "nov",
-            "dec",
-          ];
-          return t(`analytics.months.${monthKeys[monthNum - 1]}`);
-        }
-      }
-    }
-
-    // Handle formats like "January 2024", "Jan 2024", etc.
-    const words = monthValue.trim().split(/\s+/);
-    if (words.length > 0) {
-      const monthPart = words[0].toLowerCase();
-      const monthMap: Record<string, string> = {
-        january: "jan",
-        february: "feb",
-        march: "mar",
-        april: "apr",
-        may: "may",
-        june: "jun",
-        july: "jul",
-        august: "aug",
-        september: "sep",
-        october: "oct",
-        november: "nov",
-        december: "dec",
-        jan: "jan",
-        feb: "feb",
-        mar: "mar",
-        apr: "apr",
-        jun: "jun",
-        jul: "jul",
-        aug: "aug",
-        sep: "sep",
-        oct: "oct",
-        nov: "nov",
-        dec: "dec",
-      };
-
-      const monthKey = monthMap[monthPart];
-      if (monthKey) {
-        return t(`analytics.months.${monthKey}`);
-      }
-    }
-
-    // Try to extract month from longer strings like "January 2024 data"
-    const lowerMonth = monthValue.toLowerCase();
-    for (const [fullName, abbr] of Object.entries({
-      january: "jan",
-      february: "feb",
-      march: "mar",
-      april: "apr",
-      may: "may",
-      june: "jun",
-      july: "jul",
-      august: "aug",
-      september: "sep",
-      october: "oct",
-      november: "nov",
-      december: "dec",
-    })) {
-      if (lowerMonth.includes(fullName)) {
-        return t(`analytics.months.${abbr}`);
-      }
-    }
-
-    // If no mapping found, return original value
-    return monthValue;
-  };
+  /** "+12,5 % vs. mismo período anterior", or "—" when there is nothing to compare. */
+  const changeLine = (
+    change: number | null | undefined,
+  ): { change: string; changeType: "positive" | "negative" | "neutral" } =>
+    change === null || change === undefined
+      ? { change: `— ${t("analytics.no_previous_data")}`, changeType: "neutral" }
+      : {
+          change: `${formatPercentChange(change)} ${t("analytics.vs_previous_period")}`,
+          changeType: change >= 0 ? "positive" : "negative",
+        };
 
   // Calculate stacked bar chart data - all 3 statuses
   const stackedBarData = statusesEvolution.map((month) => ({
@@ -407,6 +372,13 @@ export default function AnalyticsPage() {
     ...stackedBarData.map((d) => d.Completed + d.Cancelled + d["No Show"]),
     1,
   );
+  const evolutionPeriod =
+    stackedBarData.length > 0
+      ? formatMonthRange(
+          stackedBarData[0].month,
+          stackedBarData[stackedBarData.length - 1].month,
+        )
+      : "";
 
   // Calculate percentage data for selected status
   const percentageData = stackedBarData.map((month) => {
@@ -427,13 +399,24 @@ export default function AnalyticsPage() {
     "No Show": "bg-gray-500 hover:bg-gray-600",
   };
 
-  if (loading) {
+  const periodLabel = (months: number) =>
+    months === 12
+      ? t("analytics.last_12_months")
+      : months === 6
+        ? t("analytics.last_6_months")
+        : t("analytics.last_3_months");
+
+  if (!manager || (loading && !data && !error)) {
     return (
       <div className="flex items-center justify-center h-64">
         <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
       </div>
     );
   }
+
+  // The Profesionales tab has its own range; the page's period does not
+  // apply to it, so its selector and period line are hidden there.
+  const showPagePeriod = activeTab !== "professionals";
 
   return (
     <div className="space-y-6">
@@ -448,103 +431,98 @@ export default function AnalyticsPage() {
           <p className="text-gray-500 mt-1" suppressHydrationWarning>
             {t("analytics.description")}
           </p>
-          {data?.period && (
+          {showPagePeriod && data?.period && (
             <p className="text-xs text-gray-400 mt-1">
               {t("analytics.period_label")}: {formatPeriod(data.period)}
             </p>
           )}
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          {!isAdvanced && (
+          {features && !isAdvanced && (
             <Link
-              href="/dashboard/settings?tab=subscription"
+              href="/dashboard/billing"
               className="flex items-center px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-lg hover:from-purple-700 hover:to-indigo-700 transition-all"
             >
               <Crown className="w-4 h-4 mr-2" />
               {t("analytics.upgrade_to_pro")}
             </Link>
           )}
-          <select
-            value={timeRange}
-            onChange={(e) => setTimeRange(Number(e.target.value))}
-            className="text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          >
-            <option value={3}>{t("analytics.last_3_months")}</option>
-            {isAdvanced && (
-              <>
-                <option value={6}>{t("analytics.last_6_months")}</option>
-                <option value={12}>{t("analytics.last_year")}</option>
-              </>
-            )}
-          </select>
+          {showPagePeriod && (
+            <div className="flex flex-col items-end">
+              <select
+                value={timeRange}
+                onChange={(e) => setTimeRange(Number(e.target.value))}
+                aria-label={t("analytics.period_label")}
+                className="text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                {periodOptions(maxMonths).map((months) => (
+                  <option key={months} value={months}>
+                    {periodLabel(months)}
+                  </option>
+                ))}
+              </select>
+              {features && maxMonths < 12 && (
+                <p className="text-xs text-gray-400 mt-1">
+                  {t("analytics.plan_months_note", { months: maxMonths })}
+                </p>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
-      {error && (
-        <div
-          className={`rounded-lg p-4 ${error.includes("Upgrade") ? "bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200" : "bg-yellow-50 border border-yellow-200"}`}
-        >
-          <div className="flex items-center">
-            {error.includes("Upgrade") ? (
-              <Crown className="w-5 h-5 text-purple-600 mr-3" />
-            ) : (
-              <Calendar className="w-5 h-5 text-yellow-600 mr-3" />
-            )}
-            <p
-              className={
-                error.includes("Upgrade")
-                  ? "text-purple-800"
-                  : "text-yellow-800"
-              }
-            >
-              {error}
-            </p>
-          </div>
-        </div>
+      {featuresError && (
+        <InlineError
+          message={t("analytics.features_error")}
+          retryLabel={t("analytics.retry")}
+          onRetry={loadFeatures}
+        />
       )}
 
-      {/* Tabs for Advanced Analytics */}
-      {isAdvanced && (
+      {/* Tabs: Pro and Empresa open them; Esencial sees them locked. */}
+      {features && (
         <div className="border-b border-gray-200">
-          <nav className="flex space-x-8">
-            <button
-              onClick={() => setActiveTab("overview")}
-              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
-                activeTab === "overview"
-                  ? "border-indigo-500 text-indigo-600"
-                  : "border-transparent text-gray-500 hover:text-gray-700"
-              }`}
-            >
-              {t("analytics.overview")}
-            </button>
-            <button
-              onClick={() => setActiveTab("professionals")}
-              className={`py-4 px-1 border-b-2 font-medium text-sm flex items-center transition-colors ${
-                activeTab === "professionals"
-                  ? "border-indigo-500 text-indigo-600"
-                  : "border-transparent text-gray-500 hover:text-gray-700"
-              }`}
-            >
-              <Star className="w-4 h-4 mr-1" />
-              {t("analytics.professionals")}
-            </button>
-            <button
-              onClick={() => setActiveTab("clients")}
-              className={`py-4 px-1 border-b-2 font-medium text-sm flex items-center transition-colors ${
-                activeTab === "clients"
-                  ? "border-indigo-500 text-indigo-600"
-                  : "border-transparent text-gray-500 hover:text-gray-700"
-              }`}
-            >
-              <Users className="w-4 h-4 mr-1" />
-              {t("analytics.clients")}
-            </button>
+          <nav className="flex space-x-8" role="tablist">
+            {(
+              [
+                ["overview", t("analytics.overview"), null],
+                ["professionals", t("analytics.professionals"), Star],
+                ["clients", t("analytics.clients"), Users],
+              ] as const
+            ).map(([tab, label, Icon]) => (
+              <button
+                key={tab}
+                role="tab"
+                aria-selected={activeTab === tab}
+                onClick={() => setActiveTab(tab)}
+                className={`py-4 px-1 border-b-2 font-medium text-sm flex items-center transition-colors ${
+                  activeTab === tab
+                    ? "border-indigo-500 text-indigo-600"
+                    : "border-transparent text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                {Icon && <Icon className="w-4 h-4 mr-1" />}
+                {label}
+                {tab !== "overview" && !isAdvanced && (
+                  <Lock className="w-3.5 h-3.5 ml-1 text-gray-400" aria-hidden />
+                )}
+              </button>
+            ))}
           </nav>
         </div>
       )}
 
+      {/* Overview: only the error when it failed, never zeros that look real. */}
+      {activeTab === "overview" && !stats && error && (
+        <InlineError
+          message={error}
+          retryLabel={t("analytics.retry")}
+          onRetry={loadAnalytics}
+        />
+      )}
+
       {/* Overview Tab */}
-      {activeTab === "overview" && (
+      {activeTab === "overview" && stats && (
         <>
           {/* Stats Grid */}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -553,34 +531,28 @@ export default function AnalyticsPage() {
               value={formatCents(stats.totalRevenue)}
               hint={t("analytics.revenue_hint")}
               icon={DollarSign}
-              change={`${stats.revenueChange >= 0 ? "+" : ""}${stats.revenueChange}% ${t("analytics.vs_previous_period")}`}
-              changeType={stats.revenueChange >= 0 ? "positive" : "negative"}
+              {...changeLine(stats.revenueChange)}
             />
             <StatCard
               title={t("analytics.total_appointments")}
               value={stats.totalAppointments.toString()}
               hint={t("analytics.appointments_hint")}
               icon={Calendar}
-              change={`${stats.appointmentsChange >= 0 ? "+" : ""}${stats.appointmentsChange}% ${t("analytics.vs_previous_period")}`}
-              changeType={
-                stats.appointmentsChange >= 0 ? "positive" : "negative"
-              }
+              {...changeLine(stats.appointmentsChange)}
             />
             <StatCard
               title={t("analytics.new_clients")}
               value={stats.newClients.toString()}
               hint={t("analytics.new_clients_hint")}
               icon={Users}
-              change={`${stats.clientsChange >= 0 ? "+" : ""}${stats.clientsChange}% ${t("analytics.vs_previous_period")}`}
-              changeType={stats.clientsChange >= 0 ? "positive" : "negative"}
+              {...changeLine(stats.clientsChange)}
             />
             <StatCard
               title={t("analytics.avg_order_value")}
               value={formatCents(stats.avgOrderValue)}
               hint={t("analytics.avg_ticket_hint")}
               icon={TrendingUp}
-              change={`${stats.orderValueChange >= 0 ? "+" : ""}${stats.orderValueChange}% ${t("analytics.vs_previous_period")}`}
-              changeType={stats.orderValueChange >= 0 ? "positive" : "negative"}
+              {...changeLine(stats.orderValueChange)}
             />
           </div>
 
@@ -600,10 +572,13 @@ export default function AnalyticsPage() {
                 )}
               </div>
               <div className="space-y-4">
-                {revenueData.map((data, index) => (
-                  <div key={index} className="flex items-center">
-                    <span className="w-12 text-sm text-gray-600">
-                      {formatMonthName(data.month)}
+                {revenueData.map((data) => (
+                  <div key={data.month} className="flex items-center">
+                    <span
+                      className="w-12 text-sm text-gray-600"
+                      title={formatMonth(data.month, { withYear: true })}
+                    >
+                      {formatMonth(data.month)}
                     </span>
                     <div className="flex-1 mx-4">
                       <div className="h-8 bg-gray-100 rounded-full overflow-hidden">
@@ -663,11 +638,16 @@ export default function AnalyticsPage() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Appointment Status Evolution - Half Width */}
             <div className="bg-white rounded-xl border border-gray-200 p-6">
-              <div className="flex items-center justify-between mb-6">
+              <div className="mb-6">
                 <h2 className="text-lg font-semibold text-gray-900">
                   {t("analytics.appointment_status_evolution")}
                 </h2>
-                <div className="flex items-center space-x-4 text-xs">
+                {evolutionPeriod && (
+                  <p className="text-xs text-gray-400 mt-1">
+                    {t("analytics.period_label")}: {evolutionPeriod}
+                  </p>
+                )}
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs mt-2">
                   {Object.entries(statusColors).map(([status, color]) => (
                     <div key={status} className="flex items-center">
                       <span
@@ -686,24 +666,26 @@ export default function AnalyticsPage() {
                 <div className="flex items-center justify-center h-48">
                   <Loader2 className="w-6 h-6 animate-spin text-indigo-600" />
                 </div>
+              ) : evolutionError ? (
+                <InlineError
+                  message={evolutionError}
+                  retryLabel={t("analytics.retry")}
+                  onRetry={loadStatusesEvolution}
+                />
               ) : stackedBarData.length > 0 ? (
                 <div className="flex items-end justify-between h-48 gap-1">
-                  {/* Generate exactly 12 slots for 12 months - stable width */}
-                  {Array.from({ length: 12 }).map((_, monthIndex) => {
-                    const monthData = stackedBarData[monthIndex];
-                    const completedHeight = monthData
-                      ? (monthData.Completed / maxStackValue) * 100
-                      : 0;
-                    const cancelledHeight = monthData
-                      ? (monthData.Cancelled / maxStackValue) * 100
-                      : 0;
-                    const noShowHeight = monthData
-                      ? (monthData["No Show"] / maxStackValue) * 100
-                      : 0;
+                  {/* One slot per month the API returned (the plan's months). */}
+                  {stackedBarData.map((monthData) => {
+                    const completedHeight =
+                      (monthData.Completed / maxStackValue) * 100;
+                    const cancelledHeight =
+                      (monthData.Cancelled / maxStackValue) * 100;
+                    const noShowHeight =
+                      (monthData["No Show"] / maxStackValue) * 100;
 
                     return (
                       <div
-                        key={monthIndex}
+                        key={monthData.month}
                         className="flex-1 flex flex-col justify-end"
                       >
                         <div className="w-full relative h-40">
@@ -715,11 +697,7 @@ export default function AnalyticsPage() {
                                 height: `${completedHeight}%`,
                                 backgroundColor: statusColors["Completed"],
                               }}
-                              title={
-                                monthData
-                                  ? `${t("analytics.completed")}: ${monthData.Completed}`
-                                  : t("analytics.no_data_available")
-                              }
+                              title={`${t("analytics.completed")}: ${monthData.Completed}`}
                             />
                           )}
                           {cancelledHeight > 0 && (
@@ -730,11 +708,7 @@ export default function AnalyticsPage() {
                                 bottom: `${completedHeight}%`,
                                 backgroundColor: statusColors["Cancelled"],
                               }}
-                              title={
-                                monthData
-                                  ? `${t("analytics.cancelled")}: ${monthData.Cancelled}`
-                                  : t("analytics.no_data_available")
-                              }
+                              title={`${t("analytics.cancelled")}: ${monthData.Cancelled}`}
                             />
                           )}
                           {noShowHeight > 0 && (
@@ -745,16 +719,15 @@ export default function AnalyticsPage() {
                                 bottom: `${completedHeight + cancelledHeight}%`,
                                 backgroundColor: statusColors["No Show"],
                               }}
-                              title={
-                                monthData
-                                  ? `${t("analytics.no_show")}: ${monthData["No Show"]}`
-                                  : t("analytics.no_data_available")
-                              }
+                              title={`${t("analytics.no_show")}: ${monthData["No Show"]}`}
                             />
                           )}
                         </div>
-                        <span className="text-xs text-gray-500 mt-2 truncate max-w-full">
-                          {monthData ? formatMonthName(monthData.month) : "-"}
+                        <span
+                          className="text-xs text-gray-500 mt-2 truncate max-w-full text-center"
+                          title={formatMonth(monthData.month, { withYear: true })}
+                        >
+                          {formatMonth(monthData.month)}
                         </span>
                       </div>
                     );
@@ -797,12 +770,21 @@ export default function AnalyticsPage() {
               </div>
 
               {/* Percentage Chart */}
-              {percentageData.length > 0 ? (
+              {evolutionError ? (
+                <InlineError
+                  message={evolutionError}
+                  retryLabel={t("analytics.retry")}
+                  onRetry={loadStatusesEvolution}
+                />
+              ) : percentageData.length > 0 ? (
                 <div className="space-y-3">
-                  {percentageData.map((item, index) => (
-                    <div key={index} className="flex items-center">
-                      <span className="w-12 text-xs text-gray-600">
-                        {formatMonthName(item.month)}
+                  {percentageData.map((item) => (
+                    <div key={item.month} className="flex items-center">
+                      <span
+                        className="w-12 text-xs text-gray-600"
+                        title={formatMonth(item.month, { withYear: true })}
+                      >
+                        {formatMonth(item.month)}
                       </span>
                       <div className="flex-1 mx-3">
                         <div className="h-6 bg-gray-100 rounded-sm overflow-hidden">
@@ -816,7 +798,7 @@ export default function AnalyticsPage() {
                         </div>
                       </div>
                       <span className="w-16 text-xs font-medium text-gray-900 text-right">
-                        {item.percentage.toFixed(1)}%
+                        {formatRate(item.percentage)}
                       </span>
                     </div>
                   ))}
@@ -839,6 +821,14 @@ export default function AnalyticsPage() {
                 </h2>
                 <PieChart className="w-5 h-5 text-gray-400" />
               </div>
+
+              {statusError && (
+                <InlineError
+                  message={statusError}
+                  retryLabel={t("analytics.retry")}
+                  onRetry={loadStatusByDays}
+                />
+              )}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 {/* Last 7 Days */}
@@ -915,7 +905,7 @@ export default function AnalyticsPage() {
                                 style={{ backgroundColor: color }}
                               />
                               <span className="text-gray-600">
-                                {getStatusLabel(status.name)}: {percentage}%
+                                {getStatusLabel(status.name)}: {formatRate(percentage)}
                               </span>
                             </div>
                           );
@@ -1004,7 +994,7 @@ export default function AnalyticsPage() {
                                 style={{ backgroundColor: color }}
                               />
                               <span className="text-gray-600">
-                                {getStatusLabel(status.name)}: {percentage}%
+                                {getStatusLabel(status.name)}: {formatRate(percentage)}
                               </span>
                             </div>
                           );
@@ -1041,16 +1031,7 @@ export default function AnalyticsPage() {
                     </p>
                   </div>
                   <span className="text-lg font-bold text-green-600">
-                    {totalAppointments14Days > 0 &&
-                    statusLast14Days.find((s) => s.name === "Completed")
-                      ? Math.round(
-                          (statusLast14Days.find((s) => s.name === "Completed")!
-                            .count /
-                            totalAppointments14Days) *
-                            100,
-                        )
-                      : 0}
-                    %
+                    {formatRate(shareLast14("Completed"))}
                   </span>
                 </div>
 
@@ -1065,16 +1046,7 @@ export default function AnalyticsPage() {
                     </p>
                   </div>
                   <span className="text-lg font-bold text-red-600">
-                    {totalAppointments14Days > 0 &&
-                    statusLast14Days.find((s) => s.name === "Cancelled")
-                      ? Math.round(
-                          (statusLast14Days.find((s) => s.name === "Cancelled")!
-                            .count /
-                            totalAppointments14Days) *
-                            100,
-                        )
-                      : 0}
-                    %
+                    {formatRate(shareLast14("Cancelled"))}
                   </span>
                 </div>
 
@@ -1089,16 +1061,7 @@ export default function AnalyticsPage() {
                     </p>
                   </div>
                   <span className="text-lg font-bold text-gray-600">
-                    {totalAppointments14Days > 0 &&
-                    statusLast14Days.find((s) => s.name === "No Show")
-                      ? Math.round(
-                          (statusLast14Days.find((s) => s.name === "No Show")!
-                            .count /
-                            totalAppointments14Days) *
-                            100,
-                        )
-                      : 0}
-                    %
+                    {formatRate(shareLast14("No Show"))}
                   </span>
                 </div>
 
@@ -1125,8 +1088,7 @@ export default function AnalyticsPage() {
                         <span
                           className={`text-lg font-bold ${weekTrend >= 0 ? "text-green-600" : "text-red-600"}`}
                         >
-                          {weekTrend > 0 ? "+" : ""}
-                          {weekTrend}%
+                          {formatPercentChange(weekTrend)}
                         </span>
                       </>
                     )}
@@ -1175,6 +1137,7 @@ export default function AnalyticsPage() {
                 <select
                   value={professionalRange}
                   onChange={(e) => setProfessionalRange(e.target.value)}
+                  aria-label={t("analytics.period_label")}
                   className="text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 >
                   <option value="today">{t("analytics.today")}</option>
@@ -1189,17 +1152,34 @@ export default function AnalyticsPage() {
                   <option value="3_months">
                     {t("analytics.last_3_months")}
                   </option>
-                  <option value="6_months">
-                    {t("analytics.last_6_months")}
-                  </option>
+                  {maxMonths >= 6 && (
+                    <option value="6_months">
+                      {t("analytics.last_6_months")}
+                    </option>
+                  )}
+                  {maxMonths >= 12 && (
+                    <option value="12_months">
+                      {t("analytics.last_12_months")}
+                    </option>
+                  )}
                 </select>
               </div>
             </div>
 
-            {professionalData.length > 0 ? (
+            {advancedError ? (
+              <InlineError
+                message={advancedError}
+                retryLabel={t("analytics.retry")}
+                onRetry={() => loadAdvancedData("professionals")}
+              />
+            ) : advancedLoading && professionalData.length === 0 ? (
+              <div className="flex items-center justify-center h-32">
+                <Loader2 className="w-6 h-6 animate-spin text-indigo-600" />
+              </div>
+            ) : professionalData.length > 0 ? (
               <div className="space-y-6">
                 <div className="space-y-4">
-                  {professionalData.slice(0, 5).map((professional, index) => (
+                  {professionalData.slice(0, 5).map((professional) => (
                     <div key={professional.id} className="flex items-center">
                       <span className="w-32 text-sm font-medium text-gray-700 truncate">
                         {professional.firstName} {professional.lastName}
@@ -1248,7 +1228,17 @@ export default function AnalyticsPage() {
             {t("analytics.client_insights")}
           </h2>
 
-          {clientInsights ? (
+          {advancedError ? (
+            <InlineError
+              message={advancedError}
+              retryLabel={t("analytics.retry")}
+              onRetry={() => loadAdvancedData("clients")}
+            />
+          ) : advancedLoading && !clientInsights ? (
+            <div className="flex items-center justify-center h-32">
+              <Loader2 className="w-6 h-6 animate-spin text-indigo-600" />
+            </div>
+          ) : clientInsights ? (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <div className="bg-indigo-50 rounded-lg p-6">
                 <div className="flex items-center justify-between mb-2">
@@ -1322,7 +1312,7 @@ export default function AnalyticsPage() {
                   <TrendingUp className="w-5 h-5 text-purple-600" />
                 </div>
                 <p className="text-3xl font-bold text-gray-900">
-                  {clientInsights.retentionRate}%
+                  {formatRate(clientInsights.retentionRate)}
                 </p>
                 <p className="text-sm text-gray-600 flex items-center gap-1">
                   {t("analytics.retention_rate")}
@@ -1341,9 +1331,9 @@ export default function AnalyticsPage() {
         </div>
       )}
 
-      {/* Locked State for Free Users (rev3 unified plan gate) */}
-      {!isAdvanced && activeTab !== "overview" && (
-        <AdvancedAnalyticsGate />
+      {/* Esencial: the tabs are shown locked, with what it takes to open them. */}
+      {features && !isAdvanced && activeTab !== "overview" && (
+        <AdvancedAnalyticsGate note={t("analytics.locked_tab")} />
       )}
     </div>
   );
@@ -1361,10 +1351,16 @@ function StatCard({
   value: string;
   icon: any;
   change: string;
-  changeType: "positive" | "negative";
+  /** "neutral" when there is nothing to compare with. */
+  changeType: "positive" | "negative" | "neutral";
   /** What the figure counts, shown as a tooltip. */
   hint?: string;
 }) {
+  const tone = {
+    positive: { icon: "text-green-500", text: "text-green-600" },
+    negative: { icon: "text-red-500", text: "text-red-600" },
+    neutral: { icon: "text-gray-400", text: "text-gray-500" },
+  }[changeType];
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-6" title={hint}>
       <div className="flex items-center justify-between mb-4">
@@ -1372,16 +1368,10 @@ function StatCard({
           {title}
           {hint && <Info className="w-3.5 h-3.5 text-gray-400" aria-label={hint} />}
         </span>
-        <Icon
-          className={`w-5 h-5 ${changeType === "positive" ? "text-green-500" : "text-red-500"}`}
-        />
+        <Icon className={`w-5 h-5 ${tone.icon}`} />
       </div>
       <div className="text-2xl font-bold text-gray-900 mb-2">{value}</div>
-      <div
-        className={`text-sm ${changeType === "positive" ? "text-green-600" : "text-red-600"}`}
-      >
-        {change}
-      </div>
+      <div className={`text-sm ${tone.text}`}>{change}</div>
     </div>
   );
 }
@@ -1470,16 +1460,48 @@ function ProfessionalCard({
   );
 }
 
-function AdvancedAnalyticsGate() {
+/** The locked Profesionales / Clientas tab: what it holds and the way to Pro. */
+function AdvancedAnalyticsGate({ note }: { note: string }) {
   const { plan, inTrial } = useFeatureAccess("advanced_analytics");
   return (
-    <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-xl p-8">
+    <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-xl p-8 space-y-4">
+      <p className="text-sm text-purple-900 text-center">{note}</p>
       <UpgradeCTA
         feature="advanced_analytics"
         plan={plan}
         inTrial={inTrial}
         href="/dashboard/billing"
       />
+    </div>
+  );
+}
+
+/** A failed section: the reason and a retry, never empty charts that look like data. */
+function InlineError({
+  message,
+  retryLabel,
+  onRetry,
+}: {
+  message: string;
+  retryLabel: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div
+      role="alert"
+      className="flex flex-col gap-3 rounded-lg border border-yellow-200 bg-yellow-50 p-4 sm:flex-row sm:items-center sm:justify-between"
+    >
+      <div className="flex items-center">
+        <AlertTriangle className="w-5 h-5 text-yellow-600 mr-3 flex-shrink-0" />
+        <p className="text-sm text-yellow-800">{message}</p>
+      </div>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="self-start rounded-md border border-yellow-300 bg-white px-3 py-1.5 text-sm font-medium text-yellow-800 hover:bg-yellow-100 sm:self-auto"
+      >
+        {retryLabel}
+      </button>
     </div>
   );
 }

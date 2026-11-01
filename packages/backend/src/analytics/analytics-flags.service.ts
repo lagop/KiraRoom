@@ -1,100 +1,77 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable } from "@nestjs/common";
+import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
+import { PlanId } from "../payments/services/subscriptions.service";
+import { SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 
-export type SubscriptionPlan =
-  | 'esencial'
-  | 'pro'
-  | 'empresa'
-  // legacy aliases kept so the helper still returns sensible values
-  // for tenants whose `plan` column hasn't been migrated yet
-  | 'basic'
-  | 'professional'
-  | 'advanced';
+/**
+ * What the Analítica page may show, per salon and per role.
+ *
+ * The plan comes from FeatureFlagService, the same source FeatureGuard uses:
+ * the effective plan (a trial counts as Pro, legacy names such as
+ * "enterprise" are normalised) plus active add-ons. This service used to read
+ * the stored plan from the JWT and keep its own alias map, so a salon on its
+ * Pro trial got the Esencial page and a 403 from endpoints the guard had just
+ * let through, and an "enterprise" row was treated as Esencial.
+ */
+export interface AnalyticsFeatureFlags {
+  /**
+   * The Profesionales and Clientas tabs (Pro and Empresa, trial included).
+   * Always false for staff: those endpoints are for whoever runs the salon.
+   */
+  hasAdvancedAnalytics: boolean;
+  /** Months of history the plan shows (Esencial 3, Pro 6, Empresa 12). */
+  maxMonths: number;
+}
 
-const LEGACY_MAP: Record<string, SubscriptionPlan> = {
-  basic: 'esencial',
-  professional: 'pro',
-  advanced: 'empresa',
+/** Months of history per (normalised) plan. */
+const MAX_MONTHS: Partial<Record<PlanId, number>> = {
+  esencial: 3,
+  pro: 6,
+  empresa: 12,
 };
 
-const normalize = (plan: SubscriptionPlan): SubscriptionPlan =>
-  LEGACY_MAP[plan] ?? plan;
-
-export interface AnalyticsFeatureFlags {
-  hasAdvancedAnalytics: boolean;
-  hasDetailedReports: boolean;
-  hasForecasting: boolean;
-  hasExport: boolean;
-  maxMonths: number;
+export function maxMonthsForPlan(plan: PlanId | null | undefined): number {
+  return (plan && MAX_MONTHS[plan]) || 3;
 }
 
 @Injectable()
 export class AnalyticsFlagsService {
-  /**
-   * Check if user has advanced analytics access
-   */
-  hasAdvancedAnalytics(plan: SubscriptionPlan): boolean {
-    const p = normalize(plan);
-    return p === 'pro' || p === 'empresa';
-  }
+  constructor(private readonly featureFlags: FeatureFlagService) {}
 
   /**
-   * Check if user has detailed reports access
+   * The effective plan and whether it (or an add-on) includes advanced
+   * analytics. A cancelled or suspended salon keeps its plan's view: the
+   * analytics endpoints are reads, and FeatureGuard lets reads through in
+   * read-only mode.
    */
-  hasDetailedReports(plan: SubscriptionPlan): boolean {
-    const p = normalize(plan);
-    return p === 'pro' || p === 'empresa';
+  private async entitlement(
+    tenantId: string,
+  ): Promise<{ plan: PlanId; advanced: boolean }> {
+    const ctx = await this.featureFlags.getContext(tenantId);
+    if (!ctx) return { plan: "esencial", advanced: false };
+    const advanced =
+      ctx.planFeatures.includes("advanced_analytics") ||
+      ctx.addonsUnlocked.includes("advanced_analytics");
+    return { plan: ctx.plan, advanced };
   }
 
-  /**
-   * Check if user has forecasting features
-   */
-  hasForecasting(plan: SubscriptionPlan): boolean {
-    const p = normalize(plan);
-    return p === 'empresa';
+  async getMaxMonths(tenantId: string): Promise<number> {
+    return maxMonthsForPlan((await this.entitlement(tenantId)).plan);
   }
 
-  /**
-   * Check if user has export features
-   */
-  hasExport(plan: SubscriptionPlan): boolean {
-    const p = normalize(plan);
-    return p === 'pro' || p === 'empresa';
+  /** `requested` cut to the plan's history; `fallback` when it is not a positive number. */
+  async clampMonths(tenantId: string, requested: number, fallback = 6): Promise<number> {
+    const months =
+      Number.isFinite(requested) && requested > 0 ? Math.floor(requested) : fallback;
+    return Math.min(months, await this.getMaxMonths(tenantId));
   }
 
-  /**
-   * Get maximum months of data allowed for the plan
-   */
-  getMaxMonths(plan: SubscriptionPlan): number {
-    const p = normalize(plan);
-    switch (p) {
-      case 'empresa':
-        return 12;
-      case 'pro':
-        return 6;
-      case 'esencial':
-      default:
-        return 3;
-    }
-  }
-
-  /**
-   * Get all feature flags for a plan
-   */
-  getFeatureFlags(plan: SubscriptionPlan): AnalyticsFeatureFlags {
+  async getFeatureFlags(tenantId: string, role: string): Promise<AnalyticsFeatureFlags> {
+    const { plan, advanced } = await this.entitlement(tenantId);
+    const manager = (SALON_MANAGERS as string[]).includes(role);
     return {
-      hasAdvancedAnalytics: this.hasAdvancedAnalytics(plan),
-      hasDetailedReports: this.hasDetailedReports(plan),
-      hasForecasting: this.hasForecasting(plan),
-      hasExport: this.hasExport(plan),
-      maxMonths: this.getMaxMonths(plan),
+      hasAdvancedAnalytics: manager && advanced,
+      maxMonths: maxMonthsForPlan(plan),
     };
-  }
-
-  /**
-   * Ensure months parameter doesn't exceed plan limit
-   */
-  clampMonths(plan: SubscriptionPlan, requestedMonths: number): number {
-    const maxMonths = this.getMaxMonths(plan);
-    return Math.min(requestedMonths, maxMonths);
   }
 }

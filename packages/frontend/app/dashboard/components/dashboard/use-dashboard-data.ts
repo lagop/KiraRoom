@@ -8,10 +8,11 @@ export interface DashboardStats {
   totalAppointments: number;
   newClients: number;
   avgOrderValue: number;
-  revenueChange: number;
-  appointmentsChange: number;
-  clientsChange: number;
-  orderValueChange: number;
+  /** Null when the previous period had nothing to compare with. */
+  revenueChange: number | null;
+  appointmentsChange: number | null;
+  clientsChange: number | null;
+  orderValueChange: number | null;
 }
 
 export interface RevenueDataPoint {
