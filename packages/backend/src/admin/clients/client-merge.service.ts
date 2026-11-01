@@ -12,6 +12,7 @@ import { AuditLogService } from "../../saas/audit-log.service";
 import { ClientCadenceService } from "../../rebooking/client-cadence.service";
 import { CLIENT_EMAIL_TAKEN } from "../../clients/client-write";
 import { normalizeClientEmail } from "../../clients/client-contact";
+import { recomputeClientStats } from "../../clients/client-stats";
 import { MARKETING_FIELD_ID, SYSTEM_CONSENT_PURPOSES } from "../../consent/marketing-consent";
 
 /**
@@ -178,10 +179,6 @@ const CLIENT_MERGE_SELECT = {
   communicationPreferences: true,
   loyaltyPoints: true,
   loyaltyTier: true,
-  totalSpent: true,
-  visitCount: true,
-  firstVisit: true,
-  lastVisit: true,
   lastReengagementSent: true,
   passwordHash: true,
 } satisfies Prisma.ClientSelect;
@@ -310,6 +307,9 @@ export class ClientMergeService {
       where: { id: targetId },
       data: this.mergedFields(target, source, hasMembership ? await this.membershipPoints(tx, targetId) : null),
     });
+    // Visits, first and last visit, spend: from the appointments and
+    // payments she now has (both records'), as everywhere else.
+    await recomputeClientStats(tx, tenantId, targetId);
 
     await this.auditLog.record(
       "client.merge",
@@ -328,7 +328,7 @@ export class ClientMergeService {
 
   /**
    * The target's record after the merge: what it has stays, what it lacks
-   * is taken from the source; lists are joined; visits and spend add up.
+   * is taken from the source; lists are joined; points add up.
    */
   private mergedFields(
     target: MergeClient,
@@ -377,13 +377,7 @@ export class ClientMergeService {
       source.communicationPreferences,
     ) as Prisma.InputJsonValue;
 
-    const totalSpent = new Prisma.Decimal(target.totalSpent).plus(source.totalSpent);
-    const visitCount = target.visitCount + source.visitCount;
-    data.totalSpent = totalSpent;
-    data.visitCount = visitCount;
-    data.averageSpent = visitCount > 0 ? totalSpent.dividedBy(visitCount).toDecimalPlaces(2) : new Prisma.Decimal(0);
-    data.firstVisit = earliest(target.firstVisit, source.firstVisit) ?? target.firstVisit;
-    data.lastVisit = latest(target.lastVisit, source.lastVisit);
+    // Visits and spend are recomputed afterwards (recomputeClientStats).
     data.lastReengagementSent = latest(target.lastReengagementSent, source.lastReengagementSent);
     data.loyaltyPoints = membershipPoints ?? target.loyaltyPoints + source.loyaltyPoints;
     data.loyaltyTier = higherTier(target.loyaltyTier, source.loyaltyTier);
