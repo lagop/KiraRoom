@@ -565,6 +565,11 @@ export class ImportService {
             price: new Prisma.Decimal(price),
             totalAmount: Math.round(price * 100), // cents, as insertAppointment stores it
             currency: service!.currency,
+            // What it was booked at: the other program's price and length
+            // when the file has them (appointment-snapshot.ts).
+            serviceName: service!.name,
+            servicePrice: new Prisma.Decimal(price),
+            serviceDuration: duration,
             paymentStatus: PaymentStatus.pending,
             notes: row.notes ?? null,
             internalNotes: `Importada de ${filename}`,

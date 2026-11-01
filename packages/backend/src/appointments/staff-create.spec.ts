@@ -48,8 +48,8 @@ function build({
     { ...COLLEAGUE, tenantId: TENANT, workingHours },
   ];
   const services = [
-    { id: CUT, tenantId: TENANT, duration: 30, price: 20, currency: "EUR", bufferTime: cleanup.cut },
-    { id: COLOUR, tenantId: TENANT, duration: 60, price: 50, currency: "EUR", bufferTime: cleanup.colour },
+    { id: CUT, tenantId: TENANT, name: "Corte", duration: 30, price: 20, currency: "EUR", bufferTime: cleanup.cut },
+    { id: COLOUR, tenantId: TENANT, name: "Color", duration: 60, price: 50, currency: "EUR", bufferTime: cleanup.colour },
     { id: ELSEWHERE, tenantId: "tenant-a", duration: 30, price: 20, currency: "EUR" },
   ];
   // What the database holds after commit; a transaction stages its writes
@@ -305,6 +305,10 @@ describe("a visit of several services, in one request", () => {
         order: 0,
         scheduledStart: new Date(`${DAY}T09:00:00.000Z`),
         scheduledEnd: new Date(`${DAY}T10:00:00.000Z`),
+        // Each service as it is now (appointment-snapshot.ts).
+        serviceName: "Color",
+        servicePrice: 50,
+        serviceDuration: 60,
       }),
       expect.objectContaining({
         serviceId: CUT,
@@ -312,8 +316,13 @@ describe("a visit of several services, in one request", () => {
         order: 1,
         scheduledStart: new Date(`${DAY}T10:00:00.000Z`),
         scheduledEnd: new Date(`${DAY}T10:30:00.000Z`),
+        serviceName: "Corte",
+        servicePrice: 20,
+        serviceDuration: 30,
       }),
     ]);
+    // The appointment's own service (serviceId) too.
+    expect(db.appointments[0]).toMatchObject({ serviceName: "Corte", servicePrice: 20, serviceDuration: 30 });
   });
 
   it("leaves nothing behind, and sends nothing, when a service row fails", async () => {

@@ -15,6 +15,11 @@ export class AvailableSlotsDto {
   @IsOptional()
   professionalIds?: string;
 
+  @ApiPropertyOptional({ description: 'One of the salon\x27s locations: only the professionals who work there' })
+  @IsUUID()
+  @IsOptional()
+  locationId?: string;
+
   @ApiPropertyOptional({ description: 'Service ID to filter slots' })
   @IsOptional()
   serviceId?: string;

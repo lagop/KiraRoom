@@ -715,6 +715,8 @@ export interface Professional {
    * hold another shape.
    */
   workingHours?: unknown;
+  /** Multi-local: where they work (GET /admin/professionals). */
+  locations?: { locationId: string; isPrimary: boolean }[];
   // Services relation - populated by admin endpoints
   services?: {
     serviceId: string;
@@ -1638,6 +1640,9 @@ export interface ApiClientInterface {
     commissionRate?: number;
     hireDate?: string;
     serviceIds?: string[];
+    /** Multi-local: the locations they work at and the main one; left out keeps them. */
+    locationIds?: string[];
+    primaryLocationId?: string | null;
   }): Promise<Professional>;
   updateProfessional(
     id: string,
@@ -1660,6 +1665,9 @@ export interface ApiClientInterface {
       hireDate?: string;
       isActive: boolean;
       serviceIds?: string[];
+    /** Multi-local: the locations they work at and the main one; left out keeps them. */
+    locationIds?: string[];
+    primaryLocationId?: string | null;
     }>,
   ): Promise<Professional>;
   deleteProfessional(id: string): Promise<HistoryDeleteResult>;
@@ -2916,6 +2924,9 @@ class ApiClient implements ApiClientInterface {
     commissionRate?: number;
     hireDate?: string;
     serviceIds?: string[];
+    /** Multi-local: the locations they work at and the main one; left out keeps them. */
+    locationIds?: string[];
+    primaryLocationId?: string | null;
     workingHours?: WorkingHoursEntry[];
   }): Promise<Professional> {
     return this.request<Professional>("/admin/professionals", {
@@ -2945,6 +2956,9 @@ class ApiClient implements ApiClientInterface {
       hireDate?: string;
       isActive: boolean;
       serviceIds?: string[];
+    /** Multi-local: the locations they work at and the main one; left out keeps them. */
+    locationIds?: string[];
+    primaryLocationId?: string | null;
       /** Owners and admins only; leave it out to keep the current schedule. */
       workingHours: WorkingHoursEntry[];
     }>,

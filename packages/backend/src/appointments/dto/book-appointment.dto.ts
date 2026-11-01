@@ -114,6 +114,16 @@ class BookingSlotDto {
   @IsOptional()
   notes?: string;
 
+  /**
+   * One of the salon's locations (multi-local), when the booking page asks
+   * for one: every professional of the visit must work there. Left out, the
+   * appointment is the professional's own location's.
+   */
+  @ApiPropertyOptional()
+  @ValidateIf((o) => o.locationId !== undefined && o.locationId !== null && o.locationId !== "")
+  @IsUUID(undefined, { message: "El local no es válido" })
+  locationId?: string;
+
   /** Ignored: the server decides the salon. Accepted so old clients validate. */
   @ApiPropertyOptional({ description: "Ignored" })
   @IsString({ message: "El salón no es válido" })

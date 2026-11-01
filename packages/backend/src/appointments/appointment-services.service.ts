@@ -5,6 +5,7 @@ import { AppointmentStatus } from '@prisma/client';
 import { AppointmentsService } from './appointments.service';
 import { canTransition } from './appointment-status';
 import { syncVisitTotals } from './visit-sync';
+import { snapshotOf } from './appointment-snapshot';
 import {
   VISIT_ROW_ORDER,
   VISIT_ROW_SELECT,
@@ -139,6 +140,8 @@ export class AppointmentServicesService {
         order: order,
         status: AppointmentServiceStatus.pending,
         notes: createDto.notes,
+        // The service as it is now: a later catalog edit does not reach it.
+        ...snapshotOf(service),
       },
       include: {
         service: true,
@@ -492,13 +495,16 @@ export class AppointmentServicesService {
     }
     const serviceIds = [...new Set(services.map((s) => s?.serviceId))];
     const professionalIds = [...new Set(services.map((s) => s?.professionalId).filter((id): id is string => !!id))];
-    const [ownServices, ownProfessionals] = await Promise.all([
-      this.prisma.service.count({ where: { tenantId: appointment.tenantId, id: { in: serviceIds.filter((id): id is string => typeof id === 'string') } } }),
+    const [catalog, ownProfessionals] = await Promise.all([
+      this.prisma.service.findMany({
+        where: { tenantId: appointment.tenantId, id: { in: serviceIds.filter((id): id is string => typeof id === 'string') } },
+        select: { id: true, name: true, price: true, duration: true },
+      }),
       professionalIds.length
         ? this.prisma.professional.count({ where: { tenantId: appointment.tenantId, id: { in: professionalIds } } })
         : Promise.resolve(0),
     ]);
-    if (ownServices !== serviceIds.length || ownProfessionals !== professionalIds.length) {
+    if (catalog.length !== serviceIds.length || ownProfessionals !== professionalIds.length) {
       throw new NotFoundException('Service or professional not found');
     }
 
@@ -517,6 +523,7 @@ export class AppointmentServicesService {
             order: service.order ?? index,
             status: AppointmentServiceStatus.pending,
             notes: service.notes,
+            ...snapshotOf(catalog.find((c) => c.id === service.serviceId)!),
           },
           include: {
             service: true,
@@ -583,6 +590,8 @@ export class AppointmentServicesService {
         scheduledEnd: processingEnd,
         type: AppointmentServiceType.processing,
         isParallel: false,
+        // Time, not a service: never charged (visit-totals.ts).
+        ...snapshotOf({ name: service.name, price: 0, duration: processingMins }),
       },
       include: {
         service: true,

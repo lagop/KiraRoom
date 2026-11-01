@@ -77,7 +77,9 @@ import {
 } from "./visit-totals";
 import { editChangesRows, planRowEdit } from "./visit-edit";
 import { priceIsFrozen } from "./visit-sync";
+import { bookedAddon, bookedService, bookedServiceName, snapshotAddons, snapshotOf, withBookedService } from "./appointment-snapshot";
 import { appointmentLocationId } from "../multi-location/appointment-location";
+import { assertProfessionalsAt, professionalsAt } from "../multi-location/professional-locations";
 import {
   clientEmailFilter,
   findClientIdByPhone,
@@ -242,7 +244,7 @@ export class AppointmentsService {
         phone: appointment.client.phone,
         clientName: appointment.client.firstName,
         salonName: appointment.tenant?.name || "tu salón",
-        serviceName: appointment.service?.name || "tu servicio",
+        serviceName: bookedServiceName(appointment, "tu servicio"),
         date: new Date(appointment.scheduledDate),
         time: appointment.scheduledTime,
         country: appointment.tenant?.country ?? undefined,
@@ -261,8 +263,14 @@ export class AppointmentsService {
    * Enrich appointment data with computed totalAmount (in cents) and amountDue.
    * The database totalAmount field is not set on creation, so we compute it from service price.
    */
-  private enrichAppointment(apt: any, basis?: SalonTaxBasis | null): any {
-    const servicePrice = Number(apt.service?.price || 0);
+  private enrichAppointment(raw: any, basis?: SalonTaxBasis | null): any {
+    // Its services as they were booked (appointment-snapshot.ts): the panel
+    // shows and adds up these, not today's catalog.
+    const apt = raw?.service ? withBookedService(raw) : raw;
+    if (Array.isArray(apt?.services)) {
+      apt.services = apt.services.map((r: any) => (r?.service ? withBookedService(r) : r));
+    }
+    const servicePrice = Number(bookedService(apt)?.price || 0);
     const totalAmount = apt.totalAmount && Number(apt.totalAmount) > 0
       ? Number(apt.totalAmount)
       : Math.round(servicePrice * 100); // Convert dollars to cents
@@ -373,6 +381,11 @@ export class AppointmentsService {
     }
 
     const date = new Date(scheduledDay);
+    // At one of the salon's locations: only who works there (multi-local).
+    const locationId = dto.locationId || undefined;
+    if (locationId && professionalId) {
+      await assertProfessionalsAt(this.prisma as any, tenantId, locationId, [professionalId]);
+    }
     const appointment = await this.prisma.$transaction(
       async (tx) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`booking:${tenantId}:${scheduledDay}`}))`;
@@ -385,7 +398,7 @@ export class AppointmentsService {
           assigned = professionalId;
         } else {
           assigned = await this.findFreeProfessional(
-            tenantId, date, dto.serviceId, dto.scheduledTime, widgetProfessionals,
+            tenantId, date, dto.serviceId, dto.scheduledTime, widgetProfessionals, locationId,
           );
         }
 
@@ -550,14 +563,19 @@ export class AppointmentsService {
     serviceId: string,
     time: string,
     allowed: string[],
+    /** Only those who work at this location (multi-local). */
+    locationId?: string,
   ): Promise<string> {
+    const here = locationId ? await professionalsAt(this.prisma as any, tenantId, locationId) : null;
     const active = await this.prisma.professional.findMany({
       where: { tenantId, isActive: true, ...(allowed.length ? { id: { in: allowed } } : {}) },
       select: { id: true, services: { select: { serviceId: true } } },
       orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
     });
     const offering = active.filter((p) => p.services.some((s) => s.serviceId === serviceId));
-    const candidates = offering.length > 0 ? offering : active;
+    // Who offers the service is decided salon-wide (nobody linked to it means
+    // everyone); the location then narrows that down.
+    const candidates = (offering.length > 0 ? offering : active).filter((p) => !here || here.has(p.id));
     for (const candidate of candidates) {
       if (await this.isSlotFree(tenantId, date, candidate.id, serviceId, time)) return candidate.id;
     }
@@ -749,8 +767,17 @@ export class AppointmentsService {
       where: { id: tenantId },
       select: { timezone: true },
     });
-    // Which of the salon's locations: the consolidated report reads it.
-    const locationId = await appointmentLocationId(db, tenantId, professional.id);
+    // Which of the salon's locations: the one booked at, when the booking
+    // names one (every professional of the visit must work there), else the
+    // professional's own. The consolidated report reads it.
+    const bookedAt = (createAppointmentDto as { locationId?: string }).locationId || undefined;
+    if (bookedAt) {
+      await assertProfessionalsAt(db, tenantId, bookedAt, [
+        professional.id,
+        ...(visit.services ?? []).map((r) => r.professionalId),
+      ]);
+    }
+    const locationId = bookedAt ?? (await appointmentLocationId(db, tenantId, professional.id));
 
     // Convert scheduledDate to Date if it's a string
     const scheduledDate =
@@ -761,10 +788,12 @@ export class AppointmentsService {
     // A visit of several services costs all of them (visit-totals.ts); it
     // was charged its first service only.
     let priceCents = Math.round(Number(service.price) * 100);
+    // Each service of the visit as it is now: the rows keep it (snapshot).
+    let priced: Array<{ id: string; name: string; duration: number; price: unknown }> = [];
     if (visit.services?.length) {
-      const priced: Array<{ id: string; duration: number; price: unknown }> = await db.service.findMany({
+      priced = await db.service.findMany({
         where: { tenantId, id: { in: [...new Set(visit.services.map((r) => r.serviceId))] } },
-        select: { id: true, duration: true, price: true },
+        select: { id: true, name: true, duration: true, price: true },
       });
       priceCents = visitTotals({
         start: visit.services[0].scheduledStart,
@@ -815,6 +844,9 @@ export class AppointmentsService {
         price: priceCents / 100,
         totalAmount: priceCents, // Store in cents
         currency: service.currency,
+        // The service as booked: a later edit of it in the catalog does not
+        // reach this appointment (appointment-snapshot.ts).
+        ...snapshotOf(service),
         paymentStatus: PaymentStatus.pending,
         notes: dto.notes || null,
         source: (dto.source as AppointmentSource) || AppointmentSource.online,
@@ -850,6 +882,9 @@ export class AppointmentsService {
           order,
           scheduledStart: row.scheduledStart,
           scheduledEnd: row.scheduledEnd,
+          ...(priced.find((p) => p.id === row.serviceId)
+            ? snapshotOf(priced.find((p) => p.id === row.serviceId)!)
+            : {}),
         })),
       });
     }
@@ -1360,6 +1395,19 @@ export class AppointmentsService {
       target.day !== dayOf(appointment.scheduledDate) ||
       target.time !== oldClock ||
       target.professionalId !== appointment.professionalId;
+    // Another professional: the appointment stays at its location when they
+    // work there too (multi-local), else it goes to theirs.
+    if (target.professionalId !== appointment.professionalId) {
+      const at = (appointment as any).locationId as string | null | undefined;
+      const stays = at
+        ? await professionalsAt(this.prisma as any, user.tenantId, at)
+            .then((here) => here.has(target.professionalId))
+            .catch(() => false)
+        : false;
+      if (!stays) {
+        updateData.locationId = await appointmentLocationId(this.prisma as any, user.tenantId, target.professionalId);
+      }
+    }
     // A cancelled appointment holds no slot, so moving one checks none.
     const holdsSlot = (statusTo ?? oldStatus) !== AppointmentStatus.cancelled;
 
@@ -1378,11 +1426,9 @@ export class AppointmentsService {
         `${done.service?.name ?? "Un servicio"} ya está completado: no se puede quitar de la cita.`,
       );
     }
-    if (dto.addons !== undefined) {
-      // A plain list. It was written as {"set": [...]}, which the panel
-      // could not read back.
-      updateData.addons = normalizeAddons(dto.addons);
-    }
+    // A plain list. It was written as {"set": [...]}, which the panel
+    // could not read back. Each line gets its snapshot below, with the catalog.
+    const addonsTo = dto.addons !== undefined ? normalizeAddons(dto.addons) : undefined;
     const serviceChanged = !!dto.serviceId && dto.serviceId !== appointment.serviceId;
     const priceChanges = rowsChanged || dto.addons !== undefined || serviceChanged;
     // A visit with services is always added up again: one saved before this
@@ -1394,7 +1440,7 @@ export class AppointmentsService {
     const catalogIds = [
       ...(serviceChanged ? [dto.serviceId!] : []),
       ...(rowEdit?.add ?? []).map((a) => a.serviceId),
-      ...normalizeAddons(updateData.addons ?? (appointment as any).addons).map((a) => a.addonId),
+      ...(addonsTo ?? normalizeAddons((appointment as any).addons)).map((a) => a.addonId),
     ];
     const catalog: Array<{ id: string; name?: string; duration: number; price: unknown; bufferTime?: number }> =
       needsTotals && catalogIds.length > 0
@@ -1404,6 +1450,15 @@ export class AppointmentsService {
           })
         : [];
     const fromCatalog = (serviceId: string) => catalog.find((s) => s.id === serviceId) ?? null;
+    // What the visit was booked at stays (appointment-snapshot.ts): an add-on
+    // already on it keeps its price, a new one takes today's; a new main
+    // service is taken as it is now.
+    if (addonsTo !== undefined) {
+      updateData.addons = snapshotAddons(addonsTo, normalizeAddons((appointment as any).addons), catalog);
+    }
+    if (serviceChanged && fromCatalog(dto.serviceId!)) {
+      Object.assign(updateData, snapshotOf(fromCatalog(dto.serviceId!) as any));
+    }
 
     const oldStart = salonInstant(appointment.scheduledDate, oldClock, timeZone);
     const newStart = salonInstant(target.day, target.time, timeZone);
@@ -1460,7 +1515,7 @@ export class AppointmentsService {
     const addons = needsTotals
       ? normalizeAddons(updateData.addons ?? (appointment as any).addons).map((a) => ({
           quantity: a.quantity,
-          service: fromCatalog(a.addonId),
+          service: bookedAddon(a, fromCatalog(a.addonId)),
         }))
       : [];
     const totals =
@@ -1468,7 +1523,7 @@ export class AppointmentsService {
         ? visitTotals({
             start: newStart,
             professionalId: target.professionalId,
-            mainService: serviceChanged ? fromCatalog(dto.serviceId!) : (appointment as any).service ?? null,
+            mainService: serviceChanged ? fromCatalog(dto.serviceId!) : bookedService(appointment as any),
             rows: rowsAfter,
             addons,
           })
@@ -1580,6 +1635,7 @@ export class AppointmentsService {
               professionalId: a.professionalId,
               isParallel: a.isParallel,
               order: a.order,
+              ...(fromCatalog(a.serviceId) ? snapshotOf(fromCatalog(a.serviceId) as any) : {}),
             },
           }),
         );
@@ -2570,7 +2626,16 @@ export class AppointmentsService {
      * Applied here, with the tenant and service rows this method already
      * loads, rather than by a second pass that read them again.
      */
-    opts: { onlineWindow?: boolean } = {},
+    opts: {
+      onlineWindow?: boolean;
+      /**
+       * One of the salon's locations (multi-local): only the professionals
+       * who work there. A named professional who does not has no slots there.
+       * Their agenda is still checked across every location: one person is
+       * never booked twice at once.
+       */
+      locationId?: string;
+    } = {},
   ) {
     // Get the tenant's working hours and timezone
     const tenant = await this.prisma.tenant.findUnique({
@@ -2607,6 +2672,9 @@ export class AppointmentsService {
       throw new NotFoundException("One or more professionals not found");
     }
 
+    const here = opts.locationId ? await professionalsAt(this.prisma as any, tenantId, opts.locationId) : null;
+    if (here && professionalsToCheck.some((id) => !here.has(id))) return [];
+
     // "Any professional" still has to obey somebody's shift.
     //
     // The first version of this check only ran when a professional was named,
@@ -2629,7 +2697,13 @@ export class AppointmentsService {
     const offeringRows = serviceId
       ? activeRows.filter((p: any) => (p.services ?? []).some((s: any) => s.serviceId === serviceId))
       : [];
-    const anyProfessionalRows = offeringRows.length > 0 ? offeringRows : activeRows;
+    // Who offers the service is decided salon-wide; a location then narrows
+    // it to who works there -- and nobody there means nothing to offer, not
+    // "no professionals recorded".
+    const anyProfessionalRows = (offeringRows.length > 0 ? offeringRows : activeRows).filter(
+      (p: { id: string }) => !here || here.has(p.id),
+    );
+    if (here && professionalsToCheck.length === 0 && anyProfessionalRows.length === 0) return [];
 
     // Get the service duration if specified
     let serviceDuration = duration;
@@ -2868,6 +2942,8 @@ export class AppointmentsService {
   private async sendAppointmentCreatedNotifications(
     appointment: any,
   ): Promise<{ emailSent: boolean; smsSent: boolean }> {
+    // The service as booked, not as the catalog has it today.
+    appointment = withBookedService(appointment);
     // Whether the client's confirmation email and SMS actually went out. The
     // chat receptionist said "te hemos enviado la confirmación" either way.
     let emailSent = false;
@@ -3157,6 +3233,8 @@ export class AppointmentsService {
    * Notifies: Client, Professional, Admin
    */
   private async sendAppointmentCompletedNotifications(appointment: any) {
+    // The service as booked, not as the catalog has it today.
+    appointment = withBookedService(appointment);
     try {
       const dateStr = new Date(appointment.scheduledDate).toLocaleDateString(
         "es-ES",
@@ -3266,6 +3344,8 @@ export class AppointmentsService {
     appointment: any,
     reason?: string,
   ) {
+    // The service as booked, not as the catalog has it today.
+    appointment = withBookedService(appointment);
     try {
       this.logger.log(
         `Sending appointment cancelled notifications for appointment ${appointment.id}`,
@@ -3508,6 +3588,8 @@ export class AppointmentsService {
     oldDate: Date,
     oldTime: string,
   ) {
+    // The service as booked, not as the catalog has it today.
+    appointment = withBookedService(appointment);
     try {
       this.logger.log(
         `Sending appointment rescheduled notifications for appointment ${appointment.id}`,
@@ -3751,6 +3833,8 @@ export class AppointmentsService {
    * Notifies: Professional, Admin
    */
   private async sendAppointmentNoShowNotifications(appointment: any) {
+    // The service as booked, not as the catalog has it today.
+    appointment = withBookedService(appointment);
     try {
       this.logger.log(
         `Sending appointment no-show notifications for appointment ${appointment.id}`,
@@ -3845,6 +3929,8 @@ export class AppointmentsService {
    * Notifies: Client, Professional, Admin
    */
   private async sendAppointmentConfirmedNotifications(appointment: any) {
+    // The service as booked, not as the catalog has it today.
+    appointment = withBookedService(appointment);
     try {
       this.logger.log(
         `Sending appointment confirmed notifications for appointment ${appointment.id}`,

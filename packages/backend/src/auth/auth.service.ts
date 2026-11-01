@@ -36,6 +36,7 @@ import {
   workingHoursProblem,
 } from "../professionals/working-hours-input";
 import { TwoFactorService } from "./two-factor/two-factor.service";
+import { sessionRevocations } from "./sessions/session-revocations";
 
 /** Audience of the short-lived token that stands between password and code. */
 const TWO_FACTOR_AUDIENCE = "kira-2fa-login";
@@ -639,6 +640,9 @@ export class AuthService {
         lockedUntil: null,
       },
     });
+    // The other sessions' live sockets close now; this browser reconnects
+    // with the tokens below.
+    sessionRevocations.revoke({ userId: user.id });
     const tokens = await this.generateTokens(
       user.id,
       user.email,
@@ -662,9 +666,11 @@ export class AuthService {
   async logoutEverywhere(id: string, role?: string): Promise<void> {
     if (role === "client") {
       await this.prisma.client.update({ where: { id }, data: { tokenVersion: { increment: 1 } } });
+      sessionRevocations.revoke({ clientId: id });
       return;
     }
     await this.prisma.user.update({ where: { id }, data: { tokenVersion: { increment: 1 } } });
+    sessionRevocations.revoke({ userId: id });
   }
 
   /**

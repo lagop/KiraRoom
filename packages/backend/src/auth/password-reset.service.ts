@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "crypto";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { EmailService } from "../notifications/services/email.service";
 import { hashPassword } from "../saas/saas.helpers";
+import { sessionRevocations } from "./sessions/session-revocations";
 
 /**
  * Password reset by email, for salon users and for clients.
@@ -96,11 +97,13 @@ export class PasswordResetService {
         where: { id: user.id },
         data: { ...cleared, loginAttempts: 0, lockedUntil: null },
       });
+      sessionRevocations.revoke({ userId: user.id });
       return;
     }
     const client = await this.prisma.client.findFirst({ where: live, select: { id: true } });
     if (client) {
       await this.prisma.client.update({ where: { id: client.id }, data: cleared });
+      sessionRevocations.revoke({ clientId: client.id });
       return;
     }
     throw invalid;

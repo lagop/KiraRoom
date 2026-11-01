@@ -1,5 +1,6 @@
 import { ConflictException } from "@nestjs/common";
 import { AppointmentStatus, PaymentStatus } from "@prisma/client";
+import { bookedService } from "../appointments/appointment-snapshot";
 
 /**
  * How an appointment learns it was paid. Money is in **cents**, the unit of
@@ -21,6 +22,8 @@ export interface PayableAppointment {
   amountPaid: unknown;
   totalAmount: unknown;
   service?: { price: unknown } | null;
+  /** The price it was booked at (appointment-snapshot.ts), euros. */
+  servicePrice?: unknown;
   /**
    * The visit's total in money (tax included: what its invoice comes to),
    * when it is not its catalogue total: a salon whose prices are the base
@@ -34,10 +37,10 @@ export interface PayableAppointment {
  * total, else its service's list price (euros, hence x 100). Money is
  * appointmentChargeCents (appointment-charge.ts explains the two bases).
  */
-export function appointmentTotalCents(apt: Pick<PayableAppointment, "totalAmount" | "service">): number {
+export function appointmentTotalCents(apt: Pick<PayableAppointment, "totalAmount" | "service" | "servicePrice">): number {
   const total = Number(apt.totalAmount ?? 0);
   if (total > 0) return Math.round(total);
-  return Math.round(Number(apt.service?.price ?? 0) * 100);
+  return Math.round(Number(bookedService(apt)?.price ?? 0) * 100);
 }
 
 /** What the visit costs in money (tax included), in cents: what its invoice comes to. */

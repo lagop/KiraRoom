@@ -2,8 +2,9 @@ import type { InvoiceLineInput } from "./invoice-calculator.service";
 import { VisitRow, visitLines } from "../appointments/visit-totals";
 import { pricesIncludeTaxOf, salonTaxRate } from "./salon-tax-settings";
 import { allocateCents } from "../pos/pos-discounts";
+import { ServiceSnapshotColumns, bookedService } from "../appointments/appointment-snapshot";
 
-export interface AppointmentToInvoice {
+export interface AppointmentToInvoice extends ServiceSnapshotColumns {
   /** Appointment.price: Decimal, in EUROS (not cents). */
   price: unknown;
   serviceId: string;
@@ -29,7 +30,8 @@ export function appointmentInvoiceLine(
   fiscalSettings: Record<string, unknown>,
 ): InvoiceLineInput {
   return {
-    description: appointment.service?.name ?? "Servicio",
+    // The service as it was booked (appointment-snapshot.ts), not as renamed since.
+    description: bookedService(appointment)?.name || "Servicio",
     quantity: 1,
     unitPriceCents: Math.round(Number(appointment.price) * 100),
     taxRate: salonTaxRate(fiscalSettings),
@@ -83,7 +85,7 @@ export function appointmentInvoiceLines(
   const charged = Math.round(Number(appointment.price) * 100);
   const listed = charged + off;
   const lines = visitLines({
-    mainService: { id: appointment.serviceId, name: appointment.service?.name, price: appointment.service?.price },
+    mainService: { id: appointment.serviceId, ...(bookedService(appointment) ?? {}) },
     rows: appointment.services ?? [],
     addons: appointment.addons ?? [],
   });

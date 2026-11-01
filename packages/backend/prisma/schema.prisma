@@ -682,6 +682,16 @@ model Appointment {
   depositAmount          Decimal?
   depositPaid            Boolean             @default(false)
   depositPaymentIntentId String?
+  /// The appointment's own service as it was booked (or as it was when the
+  /// salon switched the appointment to another service): its name, its price
+  /// in EUROS and its length in minutes. Editing the service in the catalog
+  /// no longer changes appointments already made: the visit totals, the till,
+  /// the invoice and the notices read these (appointment-snapshot.ts). Null on
+  /// rows from before the snapshot that the backfill left alone (history):
+  /// those fall back to the live service.
+  serviceName            String?
+  servicePrice           Decimal?
+  serviceDuration        Int?
   /// Multi-location (plan Empresa)
   locationId             String?
   salonLocation          Location?           @relation(fields: [locationId], references: [id], onDelete: SetNull)
@@ -788,6 +798,13 @@ model AppointmentService {
 
   /// Order within the appointment
   order Int @default(0)
+
+  /// The service as it was when it was added to the visit: name, price in
+  /// EUROS, length in minutes (see Appointment.serviceName). Null on rows
+  /// from before the snapshot that the backfill left alone.
+  serviceName     String?
+  servicePrice    Decimal?
+  serviceDuration Int?
 
   /// Status
   status AppointmentServiceStatus @default(pending)

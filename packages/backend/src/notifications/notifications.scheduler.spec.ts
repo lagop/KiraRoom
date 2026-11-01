@@ -363,3 +363,17 @@ describe("placeholder addresses", () => {
     expect(b.reminder1hSent).toBe(true);
   });
 });
+
+describe("reminders name the service as it was booked", () => {
+  it("says the name it was booked under, not the catalog's new one", async () => {
+    const renamed = appointment({ serviceName: "Corte", service: { name: "Corte y peinado premium" } });
+    const old = appointment({ startTime: new Date(NOW.getTime() + 20 * HOUR), service: { name: "Tinte" } });
+    const { scheduler, email } = makeScheduler(makePrisma([renamed, old]));
+
+    await scheduler.send24HourReminders(NOW);
+
+    const names = email.sendAppointmentReminder.mock.calls.map((c: any) => c[0].serviceName).sort();
+    // A row from before the snapshot (no serviceName) keeps the live name.
+    expect(names).toEqual(["Corte", "Tinte"]);
+  });
+});

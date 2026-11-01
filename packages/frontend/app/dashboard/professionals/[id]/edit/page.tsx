@@ -15,6 +15,8 @@ import {
 } from '@/lib/professional-specialties';
 import { WeeklyScheduleEditor } from '@/components/professionals/WeeklyScheduleEditor';
 import { TimeOffManager } from '@/components/time-off/TimeOffManager';
+import { LocationsPicker } from '@/components/professionals/LocationsPicker';
+import { NO_LOCATIONS, locationsOf, locationsPayload, type LocationChoice } from '@/lib/professional-locations';
 import {
   defaultSchedule,
   hasProblems,
@@ -85,6 +87,9 @@ function EditProfessionalForm() {
   // asks for one. Sent only when edited, so saving a name never rewrites it.
   const [schedule, setSchedule] = useState<WeeklySchedule | null>(null);
   const [scheduleTouched, setScheduleTouched] = useState(false);
+  // Multi-local only: sent only when changed (the picker hides itself otherwise).
+  const [locations, setLocations] = useState<LocationChoice>(NO_LOCATIONS);
+  const [locationsTouched, setLocationsTouched] = useState(false);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
 
   const editSchedule = (next: WeeklySchedule) => {
@@ -132,6 +137,8 @@ function EditProfessionalForm() {
           });
           setSchedule(scheduleFromWorkingHours(professional.workingHours));
           setScheduleTouched(false);
+          setLocations(locationsOf(professional));
+          setLocationsTouched(false);
         }
       } catch (err) {
         console.error('Failed to fetch professional:', err);
@@ -207,6 +214,7 @@ function EditProfessionalForm() {
         isActive: formData.status === 'active',
         serviceIds: formData.serviceIds,
         ...(scheduleTouched && schedule ? { workingHours: workingHoursFromSchedule(schedule) } : {}),
+        ...locationsPayload(locations, locationsTouched),
       };
 
       await apiClient.updateProfessional(professionalId, updateData);
@@ -470,6 +478,17 @@ function EditProfessionalForm() {
                 {t('professionals.fields.noServices')}
               </p>
             )}
+          </div>
+
+          <div className="mt-6">
+            <LocationsPicker
+              value={locations}
+              disabled={isSaving}
+              onChange={(next) => {
+                setLocations(next);
+                setLocationsTouched(true);
+              }}
+            />
           </div>
         </div>
 

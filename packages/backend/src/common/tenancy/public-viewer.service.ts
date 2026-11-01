@@ -99,9 +99,15 @@ export class PublicViewerService {
     if (!STAFF_ROLES.has(payload.role) || payload.tenantId !== tenantId) return false;
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
-      select: { isActive: true, tenantId: true },
+      select: { isActive: true, tenantId: true, tokenVersion: true },
     });
-    return !!user?.isActive && user.tenantId === tenantId;
+    // A session that ended (logout, password changed, access removed) is no
+    // longer the salon's staff here either, as for JwtStrategy.
+    return (
+      !!user?.isActive &&
+      user.tenantId === tenantId &&
+      (payload.tv ?? 0) === (user.tokenVersion ?? 0)
+    );
   }
 }
 

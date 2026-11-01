@@ -10,6 +10,8 @@ import apiClient from '@/lib/api';
 import { useToast } from '@/components/ui/use-toast';
 import { useTranslations } from '@/lib/use-translation';
 import { WeeklyScheduleEditor } from '@/components/professionals/WeeklyScheduleEditor';
+import { LocationsPicker } from '@/components/professionals/LocationsPicker';
+import { NO_LOCATIONS, locationsPayload, type LocationChoice } from '@/lib/professional-locations';
 import {
   defaultSchedule,
   hasProblems,
@@ -30,6 +32,9 @@ export function ProfessionalForm() {
   const [isLoading, setIsLoading] = useState(false);
   const [services, setServices] = useState<Service[]>([]);
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
+  // Multi-local only: the picker hides itself otherwise and nothing is sent.
+  const [locations, setLocations] = useState<LocationChoice>(NO_LOCATIONS);
+  const [locationsTouched, setLocationsTouched] = useState(false);
   // Created with a schedule: without one a new professional would be
   // bookable at any hour the salon opens.
   const [schedule, setSchedule] = useState<WeeklySchedule>(defaultSchedule);
@@ -96,6 +101,7 @@ export function ProfessionalForm() {
         position: 'professional',
         serviceIds: selectedServices,
         workingHours: workingHoursFromSchedule(schedule),
+        ...locationsPayload(locations, locationsTouched),
       });
 
       router.push('/dashboard/professionals');
@@ -244,6 +250,17 @@ export function ProfessionalForm() {
               {t('professionals.fields.noServices')}
             </p>
           )}
+        </div>
+
+        <div className="sm:col-span-2">
+          <LocationsPicker
+            value={locations}
+            disabled={isLoading}
+            onChange={(next) => {
+              setLocations(next);
+              setLocationsTouched(true);
+            }}
+          />
         </div>
 
         <div className="space-y-2 sm:col-span-2">
