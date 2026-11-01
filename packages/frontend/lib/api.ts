@@ -569,7 +569,32 @@ export interface Appointment {
   paymentStatus: "pending" | "paid" | "failed" | "refunded";
   notes?: string;
   services?: AppointmentService[];
+  /** The salon's location it is at (multi-local); null for most salons. */
+  locationId?: string | null;
+  /**
+   * The public booking's answer (POST /appointments): where it is, at a
+   * salon with several locations; null otherwise.
+   */
+  location?: { id: string; name: string; address: string } | null;
 }
+
+/**
+ * GET /appointments/booking-locations: the locations the panel books at and
+ * filters the agenda by, and where each professional works. Empty for a
+ * salon with fewer than two bookable locations (the panel shows no picker).
+ */
+export interface BookingLocations {
+  locations: Array<{ id: string; name: string; slug: string; address: string; phone: string | null }>;
+  professionals: Array<{ id: string; locationIds: string[]; primaryLocationId: string | null }>;
+}
+
+/**
+ * PATCH /appointments/:id. `locationId` null: back to the professional's
+ * own location.
+ */
+export type AppointmentUpdate = Partial<Omit<CreateAppointmentDto, "locationId">> & {
+  locationId?: string | null;
+};
 
 export interface AppointmentService {
   id: string;
@@ -1084,9 +1109,37 @@ export interface EmailCampaign {
   unsubscribes: number;
   fromName?: string;
   replyTo?: string;
+  /** Archived campaigns only show under the "Archivadas" filter. */
+  archivedAt?: string | null;
+  /** Why the last send stopped or reached nobody. */
+  lastError?: string | null;
+  /** Recipients still to be sent (the background sender works through them). */
+  pendingCount?: number;
+  /** Recipients whose email could not be sent ("Reintentar fallidos"). */
+  failedCount?: number;
   _count?: {
     recipients: number;
   };
+}
+
+/** Why a client cannot receive the salon's email campaigns. */
+export type CampaignExclusionReason = "inactive" | "no_email" | "refused" | "suppressed" | "no_visit";
+
+/** The salon's clients as the recipient picker sees them (GET /email-campaigns/audience). */
+export interface EmailCampaignAudience {
+  reachable: number;
+  excluded: Record<CampaignExclusionReason, number>;
+  /** The clients who cannot receive campaigns, with the reason. */
+  clients: Record<string, CampaignExclusionReason>;
+}
+
+/** What adding recipients did (POST /email-campaigns/:id/recipients). */
+export interface AddEmailCampaignRecipientsResult {
+  added: number;
+  /** Already on the list. */
+  alreadyAdded: number;
+  /** Asked for but not reachable (no visit, said no, unsubscribed...). */
+  excluded: number;
 }
 
 /**
@@ -1100,15 +1153,14 @@ export interface EmailCampaignTrackingStatus {
   suppressedAddresses: number;
 }
 
+/**
+ * "Enviar": the campaign is claimed and sent in the background. What
+ * happened to each email shows on the card as it goes.
+ */
 export interface SendEmailCampaignResult {
   success: boolean;
-  sentCount: number;
-  failedCount: number;
-  suppressedCount: number;
-  /** Clients who said no to promotions in their account. */
-  skippedCount?: number;
-  /** Recipients dropped at send time: client deleted or no longer active. */
-  droppedCount?: number;
+  /** Recipients queued to be sent. */
+  queued: number;
 }
 
 export interface EmailCampaignTemplate {
@@ -1620,8 +1672,9 @@ export interface ApiClientInterface {
   createAppointment(data: CreateAppointmentDto): Promise<Appointment>;
   updateAppointment(
     id: string,
-    data: Partial<CreateAppointmentDto>,
+    data: AppointmentUpdate,
   ): Promise<Appointment>;
+  getBookingLocations(): Promise<BookingLocations>;
   cancelAppointment(id: string, reason?: string): Promise<Appointment>;
   completeAppointment(id: string, notes?: string): Promise<Appointment>;
   markAppointmentNoShow(id: string): Promise<Appointment>;
@@ -1901,7 +1954,13 @@ export interface ApiClientInterface {
   getEmailCampaigns(
     status?: string,
     campaignType?: string,
+    archived?: boolean,
   ): Promise<EmailCampaign[]>;
+  getEmailCampaignAudience(): Promise<EmailCampaignAudience>;
+  archiveEmailCampaign(id: string): Promise<EmailCampaign>;
+  unarchiveEmailCampaign(id: string): Promise<EmailCampaign>;
+  unscheduleEmailCampaign(id: string): Promise<EmailCampaign>;
+  retryFailedEmailCampaign(id: string): Promise<SendEmailCampaignResult>;
   getEmailCampaign(id: string): Promise<EmailCampaign>;
   getEmailCampaignRecipients(id: string): Promise<any[]>;
   createEmailCampaign(data: CreateCampaignDto): Promise<EmailCampaign>;
@@ -1917,7 +1976,7 @@ export interface ApiClientInterface {
   ): Promise<EmailCampaign>;
   sendEmailCampaignNow(id: string): Promise<SendEmailCampaignResult>;
   sendEmailCampaignToAll(id: string): Promise<SendEmailCampaignResult>;
-  addRecipientsToCampaign(id: string, clientIds: string[]): Promise<any>;
+  addRecipientsToCampaign(id: string, clientIds: string[]): Promise<AddEmailCampaignRecipientsResult>;
   getEmailCampaignAnalytics(id: string): Promise<EmailCampaignAnalytics>;
   getEmailCampaignTrackingStatus(): Promise<EmailCampaignTrackingStatus>;
   getEmailCampaignTemplates(): Promise<EmailCampaignTemplate[]>;
@@ -2471,12 +2530,16 @@ class ApiClient implements ApiClientInterface {
 
   async updateAppointment(
     id: string,
-    data: Partial<CreateAppointmentDto>,
+    data: AppointmentUpdate,
   ): Promise<Appointment> {
     return this.request<Appointment>(`/appointments/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
     });
+  }
+
+  async getBookingLocations(): Promise<BookingLocations> {
+    return this.request<BookingLocations>("/appointments/booking-locations");
   }
 
   async cancelAppointment(id: string, reason?: string): Promise<Appointment> {
@@ -4229,10 +4292,12 @@ class ApiClient implements ApiClientInterface {
   async getEmailCampaigns(
     status?: string,
     campaignType?: string,
+    archived?: boolean,
   ): Promise<EmailCampaign[]> {
     const params = new URLSearchParams();
     if (status) params.append("status", status);
     if (campaignType) params.append("campaignType", campaignType);
+    if (archived) params.append("archived", "true");
     const queryString = params.toString();
     return this.request<EmailCampaign[]>(
       `/email-campaigns${queryString ? "?" + queryString : ""}`,
@@ -4241,6 +4306,26 @@ class ApiClient implements ApiClientInterface {
 
   async getEmailCampaign(id: string): Promise<EmailCampaign> {
     return this.request<EmailCampaign>(`/email-campaigns/${id}`);
+  }
+
+  async getEmailCampaignAudience(): Promise<EmailCampaignAudience> {
+    return this.request<EmailCampaignAudience>("/email-campaigns/audience");
+  }
+
+  async archiveEmailCampaign(id: string): Promise<EmailCampaign> {
+    return this.request<EmailCampaign>(`/email-campaigns/${id}/archive`, { method: "POST" });
+  }
+
+  async unarchiveEmailCampaign(id: string): Promise<EmailCampaign> {
+    return this.request<EmailCampaign>(`/email-campaigns/${id}/unarchive`, { method: "POST" });
+  }
+
+  async unscheduleEmailCampaign(id: string): Promise<EmailCampaign> {
+    return this.request<EmailCampaign>(`/email-campaigns/${id}/unschedule`, { method: "POST" });
+  }
+
+  async retryFailedEmailCampaign(id: string): Promise<SendEmailCampaignResult> {
+    return this.request<SendEmailCampaignResult>(`/email-campaigns/${id}/retry-failed`, { method: "POST" });
   }
 
   async getEmailCampaignRecipients(id: string): Promise<any[]> {
@@ -4302,8 +4387,8 @@ class ApiClient implements ApiClientInterface {
     );
   }
 
-  async addRecipientsToCampaign(id: string, clientIds: string[]): Promise<any> {
-    return this.request<any>(`/email-campaigns/${id}/recipients`, {
+  async addRecipientsToCampaign(id: string, clientIds: string[]): Promise<AddEmailCampaignRecipientsResult> {
+    return this.request<AddEmailCampaignRecipientsResult>(`/email-campaigns/${id}/recipients`, {
       method: "POST",
       body: JSON.stringify({ clientIds }),
     });

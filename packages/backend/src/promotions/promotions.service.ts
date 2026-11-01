@@ -1,13 +1,19 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { usablePromotionWhere } from '../email-campaigns/campaign-content';
 import { CreatePromotionDto, UpdatePromotionDto, ApplyPromotionDto } from './dto/promotion.dto';
 
 export { CreatePromotionDto, UpdatePromotionDto, ApplyPromotionDto };
 
+/** 5 -> "5,00 €". */
+function euros(value: number): string {
+  return new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(Number.isFinite(value) ? value : 0);
+}
+
 /** A percentage over 100 would pay the client to come. */
 function assertValue(type: string, value: number | undefined) {
   if (type === 'PERCENTAGE' && value !== undefined && value !== null && Number(value) > 100) {
-    throw new BadRequestException('A percentage discount cannot exceed 100');
+    throw new BadRequestException('Un descuento en porcentaje no puede pasar del 100 %.');
   }
 }
 
@@ -30,7 +36,7 @@ export class PromotionsService {
     });
 
     if (existing) {
-      throw new BadRequestException('Promotion code already exists');
+      throw new BadRequestException('Ya tienes una promoción con ese código.');
     }
 
     return this.prisma.promotion.create({
@@ -62,6 +68,17 @@ export class PromotionsService {
   }
 
   /**
+   * The promotions a re-engagement campaign can link: active and not past
+   * their end date (a code the salon no longer honours must not be offered).
+   */
+  async getUsable(tenantId: string) {
+    return this.prisma.promotion.findMany({
+      where: { tenantId, ...usablePromotionWhere() },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /**
    * Get single promotion
    */
   async getOne(id: string, tenantId: string) {
@@ -70,7 +87,7 @@ export class PromotionsService {
     });
 
     if (!promotion) {
-      throw new NotFoundException('Promotion not found');
+      throw new NotFoundException('Promoción no encontrada');
     }
 
     return promotion;
@@ -85,7 +102,7 @@ export class PromotionsService {
     });
 
     if (!promotion) {
-      throw new NotFoundException('Promotion not found');
+      throw new NotFoundException('Promoción no encontrada');
     }
     if (dto.type !== undefined || dto.value !== undefined) {
       assertValue(dto.type ?? promotion.type, dto.value ?? Number(promotion.value));
@@ -117,7 +134,19 @@ export class PromotionsService {
     });
 
     if (!promotion) {
-      throw new NotFoundException('Promotion not found');
+      throw new NotFoundException('Promoción no encontrada');
+    }
+
+    // A re-engagement campaign that is running sends this code every day:
+    // deleting the promotion under it would leave those emails without it.
+    const linked = await this.prisma.emailCampaign.findFirst({
+      where: { tenantId, linkedPromotionId: id, status: { in: ['active', 'scheduled', 'sending'] } },
+      select: { name: true },
+    });
+    if (linked) {
+      throw new ConflictException(
+        `La promoción se usa en la campaña «${linked.name}», que está activa. Desactiva la campaña o quítale la promoción antes de eliminarla.`,
+      );
     }
 
     return this.prisma.promotion.delete({
@@ -137,7 +166,7 @@ export class PromotionsService {
     });
 
     if (!promotion) {
-      throw new BadRequestException('Invalid promotion code');
+      throw new BadRequestException('El código no es válido.');
     }
 
     // The usage is recorded against this client: it must be one of the salon's.
@@ -146,29 +175,29 @@ export class PromotionsService {
       select: { id: true },
     });
     if (!client) {
-      throw new NotFoundException('Client not found');
+      throw new NotFoundException('Cliente no encontrado');
     }
 
     if (!promotion.isActive) {
-      throw new BadRequestException('Promotion is no longer active');
+      throw new BadRequestException('La promoción ya no está activa.');
     }
 
     const now = new Date();
     if (now < promotion.startDate) {
-      throw new BadRequestException('Promotion has not started yet');
+      throw new BadRequestException('La promoción todavía no ha empezado.');
     }
 
     if (promotion.endDate && now > promotion.endDate) {
-      throw new BadRequestException('Promotion has expired');
+      throw new BadRequestException('La promoción ha terminado.');
     }
 
     if (promotion.maxUses && promotion.usedCount >= promotion.maxUses) {
-      throw new BadRequestException('Promotion usage limit reached');
+      throw new BadRequestException('La promoción ya ha llegado a su máximo de usos.');
     }
 
     // Check min order value
     if (promotion.minOrderValue && dto.orderValue < Number(promotion.minOrderValue)) {
-      throw new BadRequestException(`Minimum order value of €${promotion.minOrderValue} required`);
+      throw new BadRequestException(`El importe mínimo para usar la promoción es ${euros(Number(promotion.minOrderValue))}.`);
     }
 
     // Check per-client usage
@@ -181,7 +210,7 @@ export class PromotionsService {
       });
 
       if (clientUsage >= promotion.maxUsesPerClient) {
-        throw new BadRequestException('You have reached the maximum uses for this promotion');
+        throw new BadRequestException('Esta clienta ya ha usado la promoción las veces permitidas.');
       }
     }
 
@@ -263,24 +292,24 @@ export class PromotionsService {
     });
 
     if (!promotion) {
-      return { valid: false, message: 'Invalid promotion code' };
+      return { valid: false, message: 'El código no es válido.' };
     }
 
     if (!promotion.isActive) {
-      return { valid: false, message: 'Promotion is no longer active' };
+      return { valid: false, message: 'La promoción ya no está activa.' };
     }
 
     const now = new Date();
     if (now < promotion.startDate) {
-      return { valid: false, message: 'Promotion has not started yet' };
+      return { valid: false, message: 'La promoción todavía no ha empezado.' };
     }
 
     if (promotion.endDate && now > promotion.endDate) {
-      return { valid: false, message: 'Promotion has expired' };
+      return { valid: false, message: 'La promoción ha terminado.' };
     }
 
     if (promotion.maxUses && promotion.usedCount >= promotion.maxUses) {
-      return { valid: false, message: 'Promotion usage limit reached' };
+      return { valid: false, message: 'La promoción ya ha llegado a su máximo de usos.' };
     }
 
     return {

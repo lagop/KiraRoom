@@ -679,6 +679,7 @@ export function toDrawerAppointment(
     status: data.status,
     price: Number(data.price) || 0,
     notes: data.notes || "",
+    locationId: data.locationId ?? null,
     commissionRate: numberOrNull(data.commissionRate),
     professionalCommissionRate: numberOrNull(data.professional?.commissionRate),
     depositRequired: !!data.depositRequired,
@@ -739,6 +740,8 @@ export interface StaffBookingPayload {
   commissionRate?: number;
   services?: Array<{ serviceId: string; professionalId?: string; isParallel: boolean }>;
   allowOutsideHours?: true;
+  /** Multi-local: the location picked in the drawer (lib/panel-booking-locations.ts). */
+  locationId?: string;
 }
 
 /**

@@ -13,6 +13,15 @@ import {
   salonTermsInvalid,
 } from "../../app/dashboard/appointments/components/appointment-drawer.utils";
 import { ConfirmDialog } from "@/src/components/ui/ConfirmDialog";
+import { LocationSelect } from "./LocationSelect";
+import { useBookingLocations } from "@/lib/use-booking-locations";
+import {
+  hasLocations,
+  locationForNewBooking,
+  locationsOfProfessional,
+  mainLocationOf,
+  worksAt,
+} from "@/lib/panel-booking-locations";
 
 interface ClientOption {
   id: string;
@@ -31,6 +40,8 @@ interface ServiceOption {
 interface NewAppointmentPopoverProps {
   slot: SlotClickData;
   professionals: Professional[];
+  /** The agenda's location filter (multi-local): the new appointment goes there. */
+  locationId?: string;
   onClose: () => void;
   onSuccess: () => void;
 }
@@ -38,6 +49,7 @@ interface NewAppointmentPopoverProps {
 export const NewAppointmentPopover: React.FC<NewAppointmentPopoverProps> = ({
   slot,
   professionals,
+  locationId: agendaLocationId,
   onClose,
   onSuccess,
 }) => {
@@ -64,6 +76,17 @@ export const NewAppointmentPopover: React.FC<NewAppointmentPopoverProps> = ({
   const clientSearchRef = useRef<HTMLDivElement>(null);
 
   const professional = professionals.find((p) => p.id === slot.professionalId);
+
+  // Multi-local: the agenda's location when they work there, else their
+  // main one; a picker when they work at several.
+  const bookingLocations = useBookingLocations();
+  const theirLocations = locationsOfProfessional(bookingLocations, slot.professionalId).locationIds;
+  const [locationChoice, setLocationChoice] = useState<string | null>(null);
+  const locationId =
+    locationChoice ??
+    (agendaLocationId && worksAt(bookingLocations, slot.professionalId, agendaLocationId)
+      ? agendaLocationId
+      : mainLocationOf(bookingLocations, slot.professionalId) ?? "");
 
   const filteredClients = useMemo(() => {
     if (!clientSearch) return [];
@@ -155,6 +178,7 @@ export const NewAppointmentPopover: React.FC<NewAppointmentPopoverProps> = ({
         // 0 % is a rate; empty leaves the professional's.
         commissionRate: parseRate(commissionRate) ?? undefined,
         ...(allowOutsideHours ? { allowOutsideHours: true } : {}),
+        locationId: locationForNewBooking(bookingLocations, locationId),
       };
 
       // See appointment-drawer.tsx: every dashboard role books as staff.
@@ -219,6 +243,19 @@ export const NewAppointmentPopover: React.FC<NewAppointmentPopoverProps> = ({
             </div>
 
             <div className="space-y-3">
+              {hasLocations(bookingLocations) && theirLocations.length > 1 && (
+                <div>
+                  <label className="block text-xs font-medium mb-1">{t("appointments.locations.label")}</label>
+                  <LocationSelect
+                    data={bookingLocations}
+                    value={locationId}
+                    only={theirLocations}
+                    label={t("appointments.locations.label")}
+                    onChange={setLocationChoice}
+                    className="w-full px-3 py-1.5 text-sm border border-border rounded-md focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-background"
+                  />
+                </div>
+              )}
               <div ref={clientSearchRef}>
                 <label className="block text-xs font-medium mb-1">{t("appointments.client")}</label>
                 <div className="relative">

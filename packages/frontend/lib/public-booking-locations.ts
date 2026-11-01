@@ -118,3 +118,20 @@ export function locationReady(locations: PublicSalonLocation[], locationId: stri
 export function chosenLocation(locations: PublicSalonLocation[], locationId: string): PublicSalonLocation | null {
   return locations.find((l) => l.id === locationId) ?? null;
 }
+
+/**
+ * Where the confirmation says the booking is: the location the server
+ * booked it at (POST /appointments answers with it), else the one picked.
+ * Nothing for a salon without a location step: its confirmation is as
+ * before.
+ */
+export function confirmedPlace(
+  locations: PublicSalonLocation[],
+  locationId: string,
+  booked: { location?: { id?: string; name: string; address?: string | null } | null } | null | undefined,
+): { name: string; address: string } | null {
+  if (locations.length === 0) return null;
+  if (booked?.location?.name) return { name: booked.location.name, address: booked.location.address ?? "" };
+  const picked = chosenLocation(locations, locationId);
+  return picked ? { name: picked.name, address: picked.address ?? "" } : null;
+}

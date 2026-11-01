@@ -17,6 +17,8 @@ export interface ResendWebhookEvent {
     bounce?: { type?: string; subType?: string; message?: string };
     click?: { link?: string };
     failed?: { reason?: string };
+    /** The tags the email was sent with (EmailOptions.tags). */
+    tags?: Record<string, string> | Array<{ name?: string; value?: string }>;
   };
 }
 
@@ -203,7 +205,34 @@ export class ResendEventsService {
    * notices. A permanent bounce stamps the User so EmailService stops
    * sending to a dead address (shouldSkipBouncedUser); the delivery row, if
    * one was recorded under this id, gets the new status.
+   *
+   * A spam complaint puts the address on the suppression list of the salon
+   * the email came from. It used to be dropped here, so a complaint about a
+   * campaign whose recipient row was gone (a deleted campaign, or an older
+   * re-engagement email whose row now carries a newer id) changed nothing,
+   * and the salon kept emailing a person who had marked it as spam.
    */
+  /**
+   * The salon a complaint is about: the tenant_id tag the marketing emails
+   * carry, if it names a salon; otherwise the salon whose client has this
+   * address, when exactly one does. With none, or several, nothing is
+   * guessed.
+   */
+  private async complaintTenant(data: NonNullable<ResendWebhookEvent["data"]>, to: string): Promise<string | null> {
+    const tagged = tagValue(data.tags, "tenant_id");
+    if (tagged) {
+      const tenant = await this.prisma.tenant.findUnique({ where: { id: tagged }, select: { id: true } }).catch(() => null);
+      if (tenant) return tenant.id;
+    }
+    const clients = await this.prisma.client.findMany({
+      where: { email: { equals: to, mode: "insensitive" } },
+      select: { tenantId: true },
+      distinct: ["tenantId"],
+      take: 2,
+    });
+    return clients.length === 1 ? clients[0].tenantId : null;
+  }
+
   private async handleTransactionalEvent(event: ResendWebhookEvent, emailId: string) {
     const data = event.data ?? {};
     const status = TRACKED[event.type].toUpperCase();
@@ -218,8 +247,19 @@ export class ResendEventsService {
       },
     });
 
-    if (event.type !== "email.bounced" || !isPermanent(data.bounce?.type)) return;
     const to = Array.isArray(data.to) ? data.to[0] : data.to;
+    if (event.type === "email.complained" && to) {
+      const tenantId = await this.complaintTenant(data, to);
+      if (tenantId) {
+        await this.suppressions.suppress(tenantId, to, "complaint");
+        this.logger.log(`Complaint on email ${emailId}: address suppressed for its salon`);
+      } else {
+        this.logger.warn(`Complaint on email ${emailId}: no salon to attribute it to`);
+      }
+      return;
+    }
+
+    if (event.type !== "email.bounced" || !isPermanent(data.bounce?.type)) return;
     if (!to) return;
     const stamp = await this.prisma.user.updateMany({
       where: { email: to.toLowerCase(), emailBouncedAt: null },
@@ -227,6 +267,14 @@ export class ResendEventsService {
     });
     if (stamp.count > 0) this.logger.log(`Marked ${stamp.count} user(s) as bounced`);
   }
+}
+
+/** A tag of the event, whichever shape Resend sent the tags in. */
+function tagValue(tags: NonNullable<ResendWebhookEvent["data"]>["tags"], name: string): string | null {
+  if (!tags) return null;
+  if (Array.isArray(tags)) return tags.find((t) => t?.name === name)?.value ?? null;
+  const value = (tags as Record<string, string>)[name];
+  return typeof value === "string" ? value : null;
 }
 
 /** Resend sends "Permanent" for hard bounces; a missing type is treated as one. */

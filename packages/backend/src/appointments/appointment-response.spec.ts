@@ -69,9 +69,18 @@ describe("publicBooking", () => {
   it("answers a public booking with the booking only", () => {
     const out = publicBooking(appointment());
     expect(Object.keys(out).sort()).toEqual(
-      ["id", "professional", "scheduledDate", "scheduledTime", "service", "status"].sort(),
+      ["id", "location", "professional", "scheduledDate", "scheduledTime", "service", "status"].sort(),
     );
+    expect(out.location).toBeNull();
     const text = JSON.stringify(out);
     expect(text).not.toMatch(/ana@mail\.test|600111222|látex|sk_live|Salón|u1/);
+  });
+
+  it("names the location of a multi-local booking, with its address only", () => {
+    const out = publicBooking({
+      ...appointment(),
+      salonLocation: { id: "l-norte", name: "Norte", street: "Av. Norte 5", city: "Madrid", state: "Madrid", postalCode: "28035", tenantId: "t1" },
+    });
+    expect(out.location).toEqual({ id: "l-norte", name: "Norte", address: "Av. Norte 5, 28035 Madrid" });
   });
 });

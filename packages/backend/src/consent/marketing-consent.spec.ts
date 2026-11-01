@@ -4,7 +4,7 @@ import { validateSync } from "class-validator";
 import { ConsentService } from "./consent.service";
 import { MarketingChoiceDto } from "./consent.controller";
 import { clientsWhoRefusedMarketing, MARKETING_PURPOSE, SYSTEM_CONSENT_PURPOSES } from "./marketing-consent";
-import { EmailCampaignsService } from "../email-campaigns/email-campaigns.service";
+import { EmailCampaignSender } from "../email-campaigns/email-campaign-sender.service";
 
 /**
  * The salon site's account page kept "Recibe ofertas por email" in
@@ -145,27 +145,19 @@ describe("marketing consent from the client's account", () => {
     });
     const recipientUpdates: any[] = [];
     const recipients = [
-      { id: "r1", clientId: "c1", email: "ana@example.test" },
-      { id: "r2", clientId: "c2", email: "eva@example.test" },
+      { id: "r1", clientId: "c1", email: "ana@example.test", attempts: 0 },
+      { id: "r2", clientId: "c2", email: "eva@example.test", attempts: 0 },
     ];
     const prisma: any = {
       consent: consentPrisma.consent,
-      emailCampaign: {
-        findFirst: async () => ({ id: "camp", tenantId: "t1", status: "draft" }),
+      emailCampaign: { update: async () => ({}) },
+      emailCampaignRecipient: {
+        findMany: async () => recipients,
+        update: async (args: any) => recipientUpdates.push(args),
         updateMany: async () => ({ count: 1 }),
-        findFirstOrThrow: async () => ({
-          id: "camp",
-          tenantId: "t1",
-          subject: "Ofertas",
-          content: "<p>hola</p>",
-          replyTo: null,
-          recipients,
-        }),
-        update: async () => ({}),
       },
-      emailCampaignRecipient: { update: async (args: any) => recipientUpdates.push(args) },
-      // Both are active clients of the salon.
-      client: { findMany: async ({ where }: any) => where.id.in.map((id: string) => ({ id })) },
+      // Both are active clients of the salon, with a completed visit.
+      client: { findMany: async ({ where }: any) => where.id.in.map((id: string) => ({ id, lastVisit: new Date() })) },
     };
     const email = {
       isConfigured: () => true,
@@ -173,13 +165,19 @@ describe("marketing consent from the client's account", () => {
     };
     const suppressions: any = { suppressedAmong: async () => new Set<string>() };
     const unsubscribes: any = { link: () => ({ pageUrl: "https://app.test/public/baja/x", headers: {} }), withFooter: (html: string) => html };
-    const campaigns = new EmailCampaignsService(prisma, email as any, suppressions, unsubscribes);
+    const pacer: any = { perMinute: 120, wait: async () => undefined };
+    const sender = new EmailCampaignSender(prisma, email as any, suppressions, unsubscribes, pacer);
+    (sender as any).logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+    const campaign: any = {
+      id: "camp", tenantId: "t1", subject: "Ofertas", previewText: null, content: "<p>hola</p>",
+      replyTo: null, sentAt: null, tenant: { name: "Salón", email: null },
+    };
 
-    const result: any = await campaigns.sendCampaignNow("t1", "camp");
+    const result = await sender.sendBatch(campaign, 100);
 
     expect(email.sendEmail).toHaveBeenCalledTimes(1);
     expect(email.sendEmail.mock.calls[0][0].to).toBe("eva@example.test");
-    expect(result.skippedCount).toBe(1);
+    expect(result.sent).toBe(1);
     expect(recipientUpdates.find((u) => u.where.id === "r1").data.status).toBe("unsubscribed");
   });
 });

@@ -30,6 +30,8 @@ import { MoveVisitDialog, type MoveScope } from "./MoveVisitDialog";
 import { getCurrentUser } from "@/lib/utils";
 import { NewAppointmentPopover } from "./NewAppointmentPopover";
 import { EditAppointmentPopover } from "./EditAppointmentPopover";
+import { useBookingLocations } from "@/lib/use-booking-locations";
+import { appointmentsAtLocation, columnsAtLocation } from "@/lib/panel-booking-locations";
 
 /**
  * The day view of the dashboard's appointments.
@@ -54,7 +56,10 @@ export const Calendar: React.FC<{
   onDayChange?: (day: string) => void;
   onAppointmentClick?: (appointmentId: string) => void;
   onAppointmentUpdated?: () => void;
+  /** The agenda's location filter (multi-local); empty: every location. */
+  locationId?: string;
 }> = ({
+  locationId,
   day: externalDay,
   onDayChange: externalOnDayChange,
   onAppointmentClick,
@@ -181,9 +186,22 @@ export const Calendar: React.FC<{
 
   // Only the professionals who work here (an inactive one only while they
   // still have appointments that day), over the hours they and the salon open.
+  // Multi-local, one location picked: its appointments, and the columns of
+  // the professionals who work there (or have an appointment there).
+  const bookingLocations = useBookingLocations();
+  const shownAppointments = useMemo(
+    () => appointmentsAtLocation(appointments, bookingLocations, locationId),
+    [appointments, bookingLocations, locationId],
+  );
   const columns = useMemo(
-    () => visibleProfessionals(professionals, appointments),
-    [professionals, appointments],
+    () =>
+      columnsAtLocation(
+        visibleProfessionals(professionals, shownAppointments),
+        bookingLocations,
+        locationId,
+        shownAppointments,
+      ),
+    [professionals, shownAppointments, bookingLocations, locationId],
   );
   const hours = useMemo(
     () =>
@@ -191,14 +209,14 @@ export const Calendar: React.FC<{
         day,
         openingHours,
         workingHours: columns.map((p) => p.workingHours ?? []),
-        appointments: appointments
+        appointments: shownAppointments
           .filter((a) => salonClock(a.start, timeZone).day === day)
           .map((a) => {
             const start = salonClock(a.start, timeZone).minutes;
             return { start, end: start + (new Date(a.end).getTime() - new Date(a.start).getTime()) / 60_000 };
           }),
       }),
-    [day, openingHours, columns, appointments, timeZone],
+    [day, openingHours, columns, shownAppointments, timeZone],
   );
 
   // The grid opens on the part of the day that matters: around now on today,
@@ -211,7 +229,7 @@ export const Calendar: React.FC<{
     if (!el || scrolledFor.current === key) return;
     scrolledFor.current = key;
     const now = salonClock(Date.now(), timeZone);
-    const starts = appointments
+    const starts = shownAppointments
       .filter((a) => holdsSlot(a.status) && salonClock(a.start, timeZone).day === day)
       .map((a) => salonClock(a.start, timeZone).minutes);
     const target = initialScrollMinutes({
@@ -221,7 +239,7 @@ export const Calendar: React.FC<{
       startHour: hours.startHour,
     });
     el.scrollTop = minutesToTop(target, hours.startHour);
-  }, [loading, error, mode, day, appointments, timeZone, hours.startHour]);
+  }, [loading, error, mode, day, shownAppointments, timeZone, hours.startHour]);
 
   // A click stays a click; only a real drag (or a long press) moves it.
   const sensors = useSensors(
@@ -424,7 +442,7 @@ export const Calendar: React.FC<{
               <AgendaView
                 date={selectedDate}
                 professionals={columns}
-                appointments={appointments}
+                appointments={shownAppointments}
                 onAppointmentClick={onAppointmentClick}
                 t={t}
               />
@@ -443,7 +461,7 @@ export const Calendar: React.FC<{
                 date={selectedDate}
                 hours={hours}
                 professionals={columns}
-                appointments={appointments}
+                appointments={shownAppointments}
                 timeOff={timeOff}
                 openingHours={openingHours}
                 draggingId={activeId}
@@ -458,6 +476,7 @@ export const Calendar: React.FC<{
             <NewAppointmentPopover
               slot={newAppointmentSlot}
               professionals={professionals}
+              locationId={locationId}
               onClose={() => setNewAppointmentSlot(null)}
               onSuccess={() => {
                 setNewAppointmentSlot(null);

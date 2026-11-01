@@ -29,6 +29,8 @@ export type Appointment = {
   depositRequired?: boolean;
   depositAmount?: number;
   commissionRate?: number;
+  /** The visit's location (multi-local), for the agenda's location filter. */
+  locationId?: string | null;
 };
 
 export type TimeSlot = {

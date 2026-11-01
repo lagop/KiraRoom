@@ -2034,8 +2034,15 @@ model EmailCampaign {
   unsubscribes    Int @default(0)
 
   /// Settings
-  fromName String? /// Sender name override
-  replyTo  String? /// Reply-to email
+  fromName String? /// Not used: campaigns go out under the salon's name (see EmailCampaignSender)
+  replyTo  String? /// Reply-to email; the salon's email when empty
+
+  /// Archived campaigns are hidden from the default list. A campaign that
+  /// emailed anyone is archived, never deleted: its recipient rows carry the
+  /// unsubscribe links and the delivery history.
+  archivedAt DateTime?
+  /// Why the last send stopped or reached nobody, in Spanish for the panel.
+  lastError  String?
 
   /// Relations
   tenant     Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -2061,7 +2068,7 @@ model EmailCampaignRecipient {
   name  String?
 
   /// Delivery status
-  status         String    @default("pending") /// pending, sent, delivered, opened, clicked, bounced, complained, failed, suppressed, unsubscribed
+  status         String    @default("pending") /// pending, sending, sent, delivered, opened, clicked, bounced, complained, failed, suppressed, unsubscribed
   sentAt         DateTime?
   deliveredAt    DateTime?
   openedAt       DateTime?
@@ -2074,11 +2081,19 @@ model EmailCampaignRecipient {
   messageId    String? /// Email provider message ID
   errorMessage String?
 
+  /// Background sending (EmailCampaignSender): how many times the send was
+  /// tried, and when it may be tried next -- the backoff after a 429/5xx, or
+  /// the lease of a send in flight (status "sending").
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime?
+
   /// Relations
   campaign EmailCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   client   Client?       @relation(fields: [clientId], references: [id], onDelete: SetNull)
 
   @@index([campaignId])
+  /// The sender picks a campaign's pending recipients every minute.
+  @@index([campaignId, status])
   @@index([clientId])
   @@index([email])
   /// Resend webhooks find the recipient by the id Resend returned on send.

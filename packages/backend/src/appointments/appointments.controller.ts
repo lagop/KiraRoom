@@ -148,6 +148,19 @@ export class AppointmentsController {
     );
   }
 
+  /**
+   * The salon's locations for the panel's booking forms and the agenda's
+   * filter (multi-local): two or more with someone to book, and where each
+   * professional works. Empty for every other salon, which then sees no
+   * location picker at all.
+   */
+  @Get("booking-locations")
+  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
+  @ApiOperation({ summary: "Locations to book at and where each professional works (multi-location)" })
+  async bookingLocations(@Req() req: any) {
+    return this.appointmentsService.bookingLocations(req.user.tenantId);
+  }
+
   @Get("mine")
   @Roles(UserRole.client)
   @ApiOperation({ summary: "The calling client's own appointments" })
