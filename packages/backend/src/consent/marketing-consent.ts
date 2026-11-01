@@ -24,9 +24,26 @@ import type { ConsentFormField } from "./consent.service";
  * WhatsApp promotions are a separate choice with its own system form
  * (purpose 'marketing_whatsapp'), and there silence is a no: Meta's business
  * messaging policy only allows marketing messages to people who opted in to
- * receive them from that business on WhatsApp. The opt-in comes from the
- * client's account, or is recorded by the salon when the client agreed in
- * person (responses.source = "salon", with who recorded it).
+ * receive them from that business on WhatsApp. The salon records the opt-in
+ * when the client agreed in person (responses.source = "salon", with who
+ * recorded it).
+ *
+ * Clients have no accounts (nothing sets a client password), so the wording
+ * never sends them to one: they stop emails with the link in every email,
+ * WhatsApp promotions by replying BAJA, and anything by asking the salon.
+ *
+ * Where a choice was made is kept in responses.source: "booking" (the salon's
+ * booking page), "widget" (the embeddable widget), "salon" (the panel, with
+ * recordedBy) or absent (the old account page, or a BAJA reply). A choice
+ * made on a form keeps the exact text that was next to the box in
+ * responses.shown, besides the form's own wording in formSnapshot.
+ *
+ * WhatsApp appointment notices (confirmations, reminders, changes, sent with
+ * Meta UTILITY templates) are not marketing, but the client asks for them by
+ * ticking a box, or the salon turns them on when she asks: that request is a
+ * record too (purpose 'notices_whatsapp'), so the salon can show when and
+ * where it was given. The switch itself is her notification preferences
+ * (see client-notices.ts).
  */
 export const MARKETING_PURPOSE = "marketing";
 export const MARKETING_FIELD_ID = "accepts";
@@ -36,19 +53,44 @@ export const MARKETING_FORM_NAME = "Comunicaciones comerciales";
 export const WHATSAPP_MARKETING_PURPOSE = "marketing_whatsapp";
 export const WHATSAPP_MARKETING_FORM_NAME = "Promociones por WhatsApp";
 
+export const WHATSAPP_NOTICES_PURPOSE = "notices_whatsapp";
+export const WHATSAPP_NOTICES_FORM_NAME = "Avisos de citas por WhatsApp";
+
 /** System forms: never listed, edited, required for a booking or signed publicly. */
-export const SYSTEM_CONSENT_PURPOSES = [MARKETING_PURPOSE, WHATSAPP_MARKETING_PURPOSE];
+export const SYSTEM_CONSENT_PURPOSES = [MARKETING_PURPOSE, WHATSAPP_MARKETING_PURPOSE, WHATSAPP_NOTICES_PURPOSE];
 
 export type MarketingChannel = "email" | "whatsapp";
 
-/** The wording the client agrees to. Changing it means a new form version. */
+/**
+ * The client choices kept as system consent records: promotions by email,
+ * promotions by WhatsApp, and appointment notices by WhatsApp.
+ */
+export type ChoiceKind = MarketingChannel | "whatsapp_notices";
+
+/** Where a choice was made on a form (responses.source). */
+export type ChoiceSource = "booking" | "widget" | "salon";
+
+/**
+ * The boxes of the booking page and the widget, word for word as the
+ * frontend shows them (packages/frontend/lib/public-booking.ts,
+ * BOOKING_CHOICE_TEXT): the record keeps what the client saw.
+ */
+export const BOOKING_EMAIL_REFUSAL_TEXT =
+  "No quiero recibir promociones ni novedades del salón por email. " +
+  "Si no marcas la casilla, el salón puede enviarte por email promociones de servicios parecidos " +
+  "a los que reservas. Puedes darte de baja cuando quieras con el enlace que llega en cada email.";
+
+export const BOOKING_WHATSAPP_NOTICES_TEXT =
+  "Recibir los avisos de mi cita por WhatsApp (confirmación, recordatorios y cambios).";
+
+/** The wording the client agrees to. Changing it means a new form version (ensureMarketingForm). */
 export const MARKETING_FIELDS: ConsentFormField[] = [
   {
     id: MARKETING_FIELD_ID,
     type: "boolean",
     label:
       "Quiero recibir por email promociones, ofertas y novedades del salón. " +
-      "Puedo retirar este consentimiento cuando quiera desde mi cuenta.",
+      "Puedo darme de baja cuando quiera con el enlace que llega en cada email o pidiéndoselo al salón.",
     required: false,
   },
 ];
@@ -60,19 +102,48 @@ export const WHATSAPP_MARKETING_FIELDS: ConsentFormField[] = [
     type: "boolean",
     label:
       "Quiero recibir por WhatsApp promociones, ofertas y novedades del salón. " +
-      "Puedo darme de baja cuando quiera respondiendo BAJA o desde mi cuenta.",
+      "Puedo darme de baja cuando quiera respondiendo BAJA o pidiéndoselo al salón.",
     required: false,
   },
 ];
 
-export function purposeOf(channel: MarketingChannel): string {
+/** Appointment notices by WhatsApp: transactional, asked for by the client. */
+export const WHATSAPP_NOTICES_FIELDS: ConsentFormField[] = [
+  {
+    id: MARKETING_FIELD_ID,
+    type: "boolean",
+    label:
+      "Quiero recibir por WhatsApp los avisos de mis citas (confirmación, recordatorios y cambios). " +
+      "Puedo dejar de recibirlos pidiéndoselo al salón.",
+    required: false,
+  },
+];
+
+export function purposeOf(channel: ChoiceKind): string {
+  if (channel === "whatsapp_notices") return WHATSAPP_NOTICES_PURPOSE;
   return channel === "whatsapp" ? WHATSAPP_MARKETING_PURPOSE : MARKETING_PURPOSE;
 }
 
-export function marketingFormFor(channel: MarketingChannel) {
+export function marketingFormFor(channel: ChoiceKind) {
+  if (channel === "whatsapp_notices") {
+    return { name: WHATSAPP_NOTICES_FORM_NAME, fields: WHATSAPP_NOTICES_FIELDS };
+  }
   return channel === "whatsapp"
     ? { name: WHATSAPP_MARKETING_FORM_NAME, fields: WHATSAPP_MARKETING_FIELDS }
     : { name: MARKETING_FORM_NAME, fields: MARKETING_FIELDS };
+}
+
+/**
+ * Does a stored system form say exactly `fields`? When the wording changes
+ * (as when "desde mi cuenta" went), the form gets a new version, and the
+ * records signed on the old one keep the old text in their snapshot.
+ */
+export function sameWording(stored: unknown, fields: ConsentFormField[]): boolean {
+  if (!Array.isArray(stored) || stored.length !== fields.length) return false;
+  return fields.every((f, i) => {
+    const s = stored[i] as Partial<ConsentFormField> | undefined;
+    return s?.id === f.id && s?.label === f.label;
+  });
 }
 
 export type MarketingConsentStatus = "granted" | "refused" | "none";
@@ -83,23 +154,30 @@ export interface MarketingConsentState {
   decidedAt: string | null;
   /** The wording of the choice, as recorded (or as it would be). */
   text: string;
+  /**
+   * Where it was made: "booking", "widget" or "salon"; null when there is
+   * no choice, or it came from the old account page or a BAJA reply.
+   */
+  source?: string | null;
 }
 
 /** The state a client's active marketing record (if any) represents. */
 export function marketingStateOf(
   record: { responses: unknown; signedAt: Date; formSnapshot?: unknown } | null,
-  channel: MarketingChannel = "email",
+  channel: ChoiceKind = "email",
 ): MarketingConsentState {
   const text =
     (Array.isArray(record?.formSnapshot)
       ? (record!.formSnapshot as ConsentFormField[]).find((f) => f?.id === MARKETING_FIELD_ID)?.label
       : undefined) ?? marketingFormFor(channel).fields[0].label;
-  if (!record) return { status: "none", decidedAt: null, text };
-  const accepts = (record.responses as Record<string, unknown> | null)?.[MARKETING_FIELD_ID];
+  if (!record) return { status: "none", decidedAt: null, text, source: null };
+  const responses = record.responses as Record<string, unknown> | null;
+  const accepts = responses?.[MARKETING_FIELD_ID];
   return {
     status: accepts === true ? "granted" : "refused",
     decidedAt: record.signedAt.toISOString(),
     text,
+    source: typeof responses?.source === "string" ? responses.source : null,
   };
 }
 

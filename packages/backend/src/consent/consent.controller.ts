@@ -29,6 +29,29 @@ export class SalonWhatsAppChoiceDto {
   confirmedInPerson?: boolean;
 }
 
+/**
+ * The channels of a client's appointment notices, set from her file. Only
+ * the channels sent change. Turning WhatsApp on needs `clientAsked`: the
+ * team member confirms the client asked for it, and the record says who.
+ */
+export class ClientNoticesDto {
+  @IsOptional()
+  @IsBoolean()
+  email?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  sms?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  whatsapp?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  clientAsked?: boolean;
+}
+
 interface AuthedRequest extends Request {
   user: { id: string; tenantId: string; role: string };
 }
@@ -188,6 +211,7 @@ export class ConsentController {
   @ApiBearerAuth()
   @Roles(...SALON_TEAM)
   async clientMarketing(@Req() req: AuthedRequest, @Param("clientId", ParseUUIDPipe) clientId: string) {
+    await this.service.assertClientInReach(req.user.tenantId, clientId, req.user);
     const [email, whatsapp] = await Promise.all([
       this.service.getMarketingConsent(req.user.tenantId, clientId, "email"),
       this.service.getMarketingConsent(req.user.tenantId, clientId, "whatsapp"),
@@ -201,7 +225,7 @@ export class ConsentController {
   @ApiBearerAuth()
   @Roles(...SALON_TEAM)
   @Throttle({ default: { ttl: 60_000, limit: 30 } })
-  setClientWhatsAppMarketing(
+  async setClientWhatsAppMarketing(
     @Req() req: AuthedRequest,
     @Param("clientId", ParseUUIDPipe) clientId: string,
     @Body() dto: SalonWhatsAppChoiceDto,
@@ -209,6 +233,7 @@ export class ConsentController {
     if (dto.accepts && dto.confirmedInPerson !== true) {
       throw new BadRequestException("Confirma que el cliente ha aceptado recibir promociones por WhatsApp");
     }
+    await this.service.assertClientInReach(req.user.tenantId, clientId, req.user);
     return this.service.recordMarketingChoice({
       tenantId: req.user.tenantId,
       clientId,
@@ -216,6 +241,75 @@ export class ConsentController {
       ip: clientIp(req),
       channel: "whatsapp",
       recordedBy: req.user.id,
+    });
+  }
+
+  /**
+   * The salon writes down that the client does not want promotions by
+   * email (she said so in person, by phone, by replying to an email). Only
+   * a refusal: withdrawing is always allowed, but an acceptance of email
+   * promotions is the client's own to give, never the salon's to record.
+   */
+  @Put("clients/:clientId/marketing")
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @Roles(...SALON_TEAM)
+  @Throttle({ default: { ttl: 60_000, limit: 30 } })
+  async setClientEmailMarketing(
+    @Req() req: AuthedRequest,
+    @Param("clientId", ParseUUIDPipe) clientId: string,
+    @Body() dto: MarketingChoiceDto,
+  ) {
+    if (dto.accepts !== false) {
+      throw new BadRequestException(
+        "El salón solo puede anotar que la clienta no quiere promociones por email",
+      );
+    }
+    await this.service.assertClientInReach(req.user.tenantId, clientId, req.user);
+    return this.service.recordMarketingChoice({
+      tenantId: req.user.tenantId,
+      clientId,
+      accepts: false,
+      ip: clientIp(req),
+      channel: "email",
+      recordedBy: req.user.id,
+    });
+  }
+
+  /** How the client gets her appointment notices (email, SMS, WhatsApp). */
+  @Get("clients/:clientId/notices")
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @Roles(...SALON_TEAM)
+  async clientNotices(@Req() req: AuthedRequest, @Param("clientId", ParseUUIDPipe) clientId: string) {
+    await this.service.assertClientInReach(req.user.tenantId, clientId, req.user);
+    return this.service.getClientNotices(req.user.tenantId, clientId);
+  }
+
+  /**
+   * The salon sets the channels of the client's appointment notices: clients
+   * have no account to do it themselves. WhatsApp on is her request, written
+   * down with who recorded it (see ConsentService.setClientNotices).
+   */
+  @Put("clients/:clientId/notices")
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @Roles(...SALON_TEAM)
+  @Throttle({ default: { ttl: 60_000, limit: 30 } })
+  async setClientNotices(
+    @Req() req: AuthedRequest,
+    @Param("clientId", ParseUUIDPipe) clientId: string,
+    @Body() dto: ClientNoticesDto,
+  ) {
+    await this.service.assertClientInReach(req.user.tenantId, clientId, req.user);
+    const { clientAsked, ...changes } = dto;
+    return this.service.setClientNotices({
+      tenantId: req.user.tenantId,
+      clientId,
+      changes,
+      ip: clientIp(req),
+      recordedBy: req.user.id,
+      clientAsked,
     });
   }
 

@@ -49,8 +49,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         },
       });
 
-      if (!client || client.status === 'blocked') {
-        throw new UnauthorizedException('Invalid token or client blocked');
+      // Only an active client: the salon marking her inactive or blocked
+      // ends her sessions (inactive used to keep working).
+      if (!client || client.status !== 'active') {
+        throw new UnauthorizedException('Invalid token or client not active');
       }
       if ((payload.tv ?? 0) !== client.tokenVersion) {
         throw new UnauthorizedException('Session ended');

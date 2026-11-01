@@ -690,6 +690,13 @@ export interface CreateAppointmentDto {
   depositAmount?: number;
   /** null clears the appointment's own rate (PATCH). */
   commissionRate?: number | null;
+  /**
+   * Public booking only: she ticked "No quiero recibir promociones ni
+   * novedades del salón por email" / "Recibir los avisos de mi cita por
+   * WhatsApp" (lib/public-booking.ts, BOOKING_CHOICE_TEXT).
+   */
+  refusesMarketingEmail?: boolean;
+  wantsWhatsAppNotices?: boolean;
 }
 
 /**
@@ -1080,6 +1087,21 @@ export interface MarketingConsentState {
   status: "granted" | "refused" | "none";
   decidedAt: string | null;
   text: string;
+  /** Where it was made: "booking", "widget", "salon"; null otherwise. */
+  source?: string | null;
+}
+
+export type NoticeChannel = "email" | "sms" | "whatsapp";
+
+/** How a client gets her appointment notices (GET /consent/clients/:id/notices). */
+export interface ClientNoticesState {
+  channels: Record<NoticeChannel, boolean>;
+  /** Her request for WhatsApp notices: when and where it was made. */
+  whatsappRequest: MarketingConsentState;
+  /** Can the salon send by each channel today? */
+  available: Record<NoticeChannel, boolean>;
+  /** Has she an email / a phone on file? */
+  contact: { email: boolean; phone: boolean };
 }
 
 /** P2A-receptionist-v2 â€” tenant add-on entitlement. */
@@ -3000,6 +3022,36 @@ class ApiClient implements ApiClientInterface {
     return this.request<MarketingConsentState>(`/consent/clients/${clientId}/whatsapp-marketing`, {
       method: "PUT",
       body: JSON.stringify({ accepts, confirmedInPerson }),
+    });
+  }
+
+  /**
+   * The salon writes down that the client does not want promotions by
+   * email. Only a refusal: the server never takes an acceptance from the salon.
+   */
+  async recordClientEmailMarketingRefusal(clientId: string): Promise<MarketingConsentState> {
+    return this.request<MarketingConsentState>(`/consent/clients/${clientId}/marketing`, {
+      method: "PUT",
+      body: JSON.stringify({ accepts: false }),
+    });
+  }
+
+  /** How the client gets her appointment notices, for the client file. */
+  async getClientNotices(clientId: string): Promise<ClientNoticesState> {
+    return this.request<ClientNoticesState>(`/consent/clients/${clientId}/notices`);
+  }
+
+  /**
+   * Turns channels of her appointment notices on or off. WhatsApp on needs
+   * `clientAsked`: the team member confirms she asked for it.
+   */
+  async setClientNotices(
+    clientId: string,
+    changes: Partial<Record<NoticeChannel, boolean>> & { clientAsked?: boolean },
+  ): Promise<ClientNoticesState> {
+    return this.request<ClientNoticesState>(`/consent/clients/${clientId}/notices`, {
+      method: "PUT",
+      body: JSON.stringify(changes),
     });
   }
 

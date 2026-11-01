@@ -2207,7 +2207,7 @@
     "slot_gone": "That time is no longer free. Choose another one.",
     "name_placeholder": "Full name",
     "email_placeholder": "you@email.com",
-    "privacy_notice": "{salon} will use your name, phone and email only to manage your appointment and send you notices about it (confirmation, reminders and changes).",
+    "privacy_notice": "{salon} will use your name, phone and email to manage your appointment and send you notices about it (confirmation, reminders and changes) and, unless you tick the box above, promotions by email.",
     "privacy_link": "Privacy policy",
     "logged_out": "Signed out",
     "logged_out_desc": "You have signed out.",

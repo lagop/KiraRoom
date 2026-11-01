@@ -37,6 +37,7 @@ import {
   localTomorrow,
   privacyPolicyUrl,
   slotsState,
+  BOOKING_CHOICE_TEXT,
 } from "@/lib/public-booking";
 import LoginModal from "./components/login-modal";
 import PublicReviewsSection from "./components/public-reviews";
@@ -189,6 +190,11 @@ export default function SalonBookingPage({
     date: "",
     time: "",
   });
+  // The two boxes next to the button, both unticked (BOOKING_CHOICE_TEXT).
+  const [refusesMarketingEmail, setRefusesMarketingEmail] = useState(false);
+  const [wantsWhatsAppNotices, setWantsWhatsAppNotices] = useState(false);
+  // Only when the salon has its WhatsApp number connected.
+  const offersWhatsAppNotices = initialData.whatsappNotices === true;
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState<UserData | null>(null);
 
@@ -445,6 +451,9 @@ export default function SalonBookingPage({
         // had posted, the fields would not have matched.
         scheduledDate: bookingData.date,
         scheduledTime: bookingData.time,
+        // Only what she ticked: an unticked box sends nothing.
+        ...(refusesMarketingEmail ? { refusesMarketingEmail: true } : {}),
+        ...(offersWhatsAppNotices && wantsWhatsAppNotices ? { wantsWhatsAppNotices: true } : {}),
       });
 
       // Only now. The confirmation has to mean the appointment exists.
@@ -465,6 +474,8 @@ export default function SalonBookingPage({
         date: localTomorrow(),
         time: "",
       });
+      setRefusesMarketingEmail(false);
+      setWantsWhatsAppNotices(false);
     } catch (error) {
       console.error("Error booking appointment:", error);
       // Pass the server's reason through. The slot may have been taken while
@@ -933,6 +944,37 @@ export default function SalonBookingPage({
                     {t(`bookingPublic.${slotsView}`)}
                   </div>
                 )}
+              </div>
+
+              {/* What she chooses about promotions and notices: both
+                  unticked, recorded with the booking (BOOKING_CHOICE_TEXT). */}
+              <div className="space-y-3 text-sm text-gray-700">
+                {offersWhatsAppNotices && (
+                  <label className="flex items-start gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={wantsWhatsAppNotices}
+                      onChange={(e) => setWantsWhatsAppNotices(e.target.checked)}
+                      className="mt-0.5 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                    />
+                    <span>{BOOKING_CHOICE_TEXT.whatsappNotices}</span>
+                  </label>
+                )}
+                <div>
+                  <label className="flex items-start gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={refusesMarketingEmail}
+                      onChange={(e) => setRefusesMarketingEmail(e.target.checked)}
+                      aria-describedby="booking-marketing-notice"
+                      className="mt-0.5 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                    />
+                    <span>{BOOKING_CHOICE_TEXT.emailRefusal}</span>
+                  </label>
+                  <p id="booking-marketing-notice" className="mt-1 ml-6 text-xs text-gray-500">
+                    {BOOKING_CHOICE_TEXT.emailNotice}
+                  </p>
+                </div>
               </div>
 
               {/* Submit Button */}

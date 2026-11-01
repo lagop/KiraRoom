@@ -2207,7 +2207,7 @@
     "slot_gone": "Esa hora ya no está libre. Elige otra.",
     "name_placeholder": "Nombre y apellidos",
     "email_placeholder": "tu@email.com",
-    "privacy_notice": "{salon} usará tu nombre, teléfono y email solo para gestionar tu cita y enviarte avisos sobre ella (confirmación, recordatorios y cambios).",
+    "privacy_notice": "{salon} usará tu nombre, teléfono y email para gestionar tu cita y enviarte avisos sobre ella (confirmación, recordatorios y cambios) y, si no marcas la casilla de arriba, promociones por email.",
     "privacy_link": "Política de privacidad",
     "logged_out": "Sesión cerrada",
     "logged_out_desc": "Has cerrado sesión correctamente.",

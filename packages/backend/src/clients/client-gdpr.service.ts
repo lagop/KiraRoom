@@ -7,6 +7,7 @@ import {
   MARKETING_PURPOSE,
   SYSTEM_CONSENT_PURPOSES,
   WHATSAPP_MARKETING_PURPOSE,
+  WHATSAPP_NOTICES_PURPOSE,
   marketingStateOf,
 } from "../consent/marketing-consent";
 import { CLIENT_DETAIL_SELECT } from "./client-select";
@@ -399,12 +400,22 @@ export class ClientGdprService {
       marketingConsent: {
         email: marketingStateOf(activeMarketing(MARKETING_PURPOSE)),
         whatsapp: marketingStateOf(activeMarketing(whatsappPurpose), "whatsapp"),
+        // Not a promotion: her request for appointment notices by WhatsApp.
+        whatsappAppointmentNotices: marketingStateOf(activeMarketing(WHATSAPP_NOTICES_PURPOSE), "whatsapp_notices"),
         history: marketingRecords.map((c) => {
           const responses = (c.responses ?? {}) as Record<string, unknown>;
           return {
-            channel: c.form.purpose === whatsappPurpose ? "whatsapp" : "email",
+            channel:
+              c.form.purpose === whatsappPurpose
+                ? "whatsapp"
+                : c.form.purpose === WHATSAPP_NOTICES_PURPOSE
+                  ? "whatsapp_appointment_notices"
+                  : "email",
             accepts: responses[MARKETING_FIELD_ID] === true,
             recordedBy: responses.source === "salon" ? "salon" : "client",
+            // Where she chose it (booking page, widget, salon) and the text she saw.
+            source: typeof responses.source === "string" ? responses.source : null,
+            shown: typeof responses.shown === "string" ? responses.shown : null,
             signedAt: c.signedAt,
             revokedAt: c.revokedAt,
             revokeReason: c.revokeReason,

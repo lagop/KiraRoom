@@ -185,3 +185,23 @@ export function compareAppointmentsAsc(
 export function privacyPolicyUrl(base = appBaseUrl()): string {
   return `${base}/legal/privacy`;
 }
+
+/**
+ * The two boxes of the booking page and the widget, both unticked.
+ *
+ * - emailRefusal + emailNotice: promotions by email go to existing clients
+ *   unless they say no (LSSI art. 21.2: similar services, and a way out in
+ *   every email). Ticking it records a refusal.
+ * - whatsappNotices: shown only when the salon has WhatsApp connected; her
+ *   confirmations and reminders then go by WhatsApp too.
+ *
+ * In Spanish whatever the page's language, and word for word what the
+ * backend records as shown (packages/backend/src/consent/marketing-consent.ts,
+ * BOOKING_EMAIL_REFUSAL_TEXT and BOOKING_WHATSAPP_NOTICES_TEXT; a backend
+ * test compares them). Change both together.
+ */
+export const BOOKING_CHOICE_TEXT = {
+  emailRefusal: "No quiero recibir promociones ni novedades del salón por email.",
+  emailNotice: "Si no marcas la casilla, el salón puede enviarte por email promociones de servicios parecidos a los que reservas. Puedes darte de baja cuando quieras con el enlace que llega en cada email.",
+  whatsappNotices: "Recibir los avisos de mi cita por WhatsApp (confirmación, recordatorios y cambios).",
+} as const;

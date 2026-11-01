@@ -286,7 +286,7 @@ export class AppointmentsService {
    *   concurrent requests for the same slot cannot both pass the check.
    *   Notifications are sent after the lock is released.
    */
-  async createOnline(dto: OnlineBookingDto) {
+  async createOnline(dto: OnlineBookingDto, meta: { ip?: string } = {}) {
     const professionalId = dto.professionalId || undefined;
     let tenantId: string;
     let widgetProfessionals: string[] = [];
@@ -312,7 +312,7 @@ export class AppointmentsService {
       widgetProfessionals = widget.professionals ?? [];
     }
 
-    return this.bookOnline(tenantId, dto, widgetProfessionals);
+    return this.bookOnline(tenantId, dto, widgetProfessionals, meta);
   }
 
   /**
@@ -322,11 +322,13 @@ export class AppointmentsService {
    * lock and insert; notifications after the lock.
    *
    * `allowedProfessionals` limits "any professional" to a widget's list.
+   * `meta.ip` is the booker's, for the record of what she ticked.
    */
   async bookOnline(
     tenantId: string,
     dto: OnlineBookingDto,
     allowedProfessionals: string[] = [],
+    meta: { ip?: string } = {},
   ) {
     const professionalId = dto.professionalId || undefined;
     const widgetProfessionals = allowedProfessionals;
@@ -370,6 +372,23 @@ export class AppointmentsService {
       },
       { timeout: 15_000 },
     );
+
+    // What she ticked, once the booking found or created her; before the
+    // confirmation goes out, so a WhatsApp request already applies to it.
+    if ((dto.refusesMarketingEmail || dto.wantsWhatsAppNotices) && appointment.clientId) {
+      await this.consentService
+        ?.recordBookingChoices({
+          tenantId,
+          clientId: appointment.clientId,
+          appointmentId: appointment.id,
+          source: dto.source === "widget" ? "widget" : "booking",
+          ip: meta.ip,
+          typedPhone: dto.clientInfo?.phone,
+          refusesMarketingEmail: dto.refusesMarketingEmail,
+          wantsWhatsAppNotices: dto.wantsWhatsAppNotices,
+        })
+        .catch((err) => this.logger.warn(`Booking choices not recorded: ${(err as Error).message}`));
+    }
 
     const notified = await this.afterAppointmentCreated(appointment, dto.source);
     // Not columns: tell the chat receptionist whether it may say the

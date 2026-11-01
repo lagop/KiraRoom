@@ -6,6 +6,7 @@ import { createHmac, timingSafeEqual } from "crypto";
 import { WhatsAppRecipientStatus } from "@prisma/client";
 import { ConsentService } from "../consent/consent.service";
 import { phoneKey } from "../common/phone";
+import { optOutIntent } from "./opt-out-words";
 import { WhatsAppReceptionistService } from "./whatsapp-receptionist.service";
 import { WhatsAppTemplateService } from "./whatsapp-template.service";
 
@@ -222,14 +223,18 @@ export class WhatsAppService {
       (value.contacts ?? []).map((c: any) => [c?.wa_id, c?.profile?.name] as [string, string]),
     );
     for (const m of messages) {
-      const body = (m.text?.body ?? "").toString().trim().toLowerCase();
       const from = m.from;
       if (!from) continue;
       // "cancelar" used to opt the person out of campaigns. With the
       // receptionist answering, it is far more likely to be about an
-      // appointment, so only the explicit words unsubscribe.
-      const isStop = body === "stop" || body === "unsubscribe" || body === "baja";
-      if (!isStop) {
+      // appointment, so only the explicit words unsubscribe -- as words,
+      // anywhere in the message, whatever the case, accents or punctuation
+      // (see opt-out-words.ts).
+      const stop = optOutIntent((m.text?.body ?? "").toString());
+      if (stop.optOut) await this.optOut(tenantId, from);
+      // A message that says more than "baja" (a question about her
+      // appointment) still gets its answer.
+      if (!stop.only) {
         // Not awaited: the webhook answers Meta at once; see WhatsAppReceptionistService.
         void this.receptionist.enqueue(tenantId, {
           id: m.id,
@@ -238,9 +243,7 @@ export class WhatsAppService {
           text: m.text?.body,
           profileName: names.get(from),
         });
-        continue;
       }
-      if (isStop) await this.optOut(tenantId, from);
     }
     // Message status updates
     const statuses = value.statuses ?? [];

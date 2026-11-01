@@ -5,6 +5,7 @@ import { salonOpenShifts, salonOpenWeek, SalonDayWindow } from "../appointments/
 import { normalizeDomain } from "../web-domain/custom-domain";
 import { WebDomainService } from "../web-domain/web-domain.service";
 import { MAX_SPAN_DAYS, dateOfDay, daysOf } from "../time-off/time-off-rules";
+import { salonWhatsAppConnected } from "../consent/client-notices";
 
 /**
  * Salons whose page is worth listing in the sitemap. A cancelled or
@@ -71,7 +72,7 @@ export class PublicSiteService {
       new Date(),
     );
     const horizon = new Date(dateOfDay(today)!.getTime() + MAX_SPAN_DAYS * 86_400_000);
-    const [services, professionals, closures] = await Promise.all([
+    const [services, professionals, closures, whatsappNotices] = await Promise.all([
       this.prisma.service.findMany({
         where: { tenantId: tenant.id, isActive: true },
         select: {
@@ -120,6 +121,7 @@ export class PublicSiteService {
         },
         select: { professionalId: true, kind: true, startDate: true, endDate: true },
       }),
+      salonWhatsAppConnected(this.prisma, tenant.id),
     ]);
     const horizonDay = horizon.toISOString().slice(0, 10);
     const closedDays = [
@@ -171,6 +173,9 @@ export class PublicSiteService {
       customDomain: this.liveDomain(tenant.customDomain),
       // salon-lucia.kiraroom.net, once subdomains serve over HTTPS.
       subdomainHost: this.webDomain.liveSubdomain(tenant.slug),
+      // The salon has its WhatsApp number connected: the booking form offers
+      // "Recibir los avisos de mi cita por WhatsApp". Only a yes or no.
+      whatsappNotices,
     };
   }
 

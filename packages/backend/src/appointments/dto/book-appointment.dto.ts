@@ -148,6 +148,26 @@ export class OnlineBookingDto extends BookingSlotDto {
   @IsUUID(undefined, { message: "El widget de reservas no es válido" })
   @IsOptional()
   widgetInstanceId?: string;
+
+  /**
+   * She ticked "No quiero recibir promociones ni novedades del salón por
+   * email": recorded as a refusal (ConsentService.recordBookingChoices).
+   * Unticked or absent records nothing.
+   */
+  @ApiPropertyOptional()
+  @IsBoolean({ message: "La opción de promociones no es válida" })
+  @IsOptional()
+  refusesMarketingEmail?: boolean;
+
+  /**
+   * She ticked "Recibir los avisos de mi cita por WhatsApp" (shown only when
+   * the salon has WhatsApp connected): her appointment notices go by
+   * WhatsApp too, starting with this booking's confirmation.
+   */
+  @ApiPropertyOptional()
+  @IsBoolean({ message: "La opción de avisos por WhatsApp no es válida" })
+  @IsOptional()
+  wantsWhatsAppNotices?: boolean;
 }
 
 /** POST /appointments/staff: the dashboard. */
