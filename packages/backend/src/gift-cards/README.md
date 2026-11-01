@@ -10,21 +10,43 @@ HTTP API for the `gift_cards` plan feature. Closes the gap in the Kind-sailor (R
 
 ## Endpoints
 
-| Method | Path                          | Roles               | `@Feature` gate        | Notes                                              |
-|--------|-------------------------------|---------------------|------------------------|----------------------------------------------------|
-| GET    | `/gift-cards`                 | owner, admin, staff | (none, read)           | `?page=&limit=&isActive=`                          |
-| GET    | `/gift-cards/lookup/:code`    | owner, admin, staff | (none, read)           | For client-facing redeem flow                      |
-| GET    | `/gift-cards/:id`             | owner, admin, staff | (none, read)           | Includes transaction ledger                        |
-| POST   | `/gift-cards`                 | owner, admin        | `gift_cards`           | Auto-writes `GiftCardTransaction` type `created`   |
-| PATCH  | `/gift-cards/:id`             | owner, admin        | `gift_cards`           | Only `isActive`, `expiresAt`, `message` mutable    |
-| POST   | `/gift-cards/redeem`          | owner, admin, staff | `gift_cards`           | Atomic; writes `applied` transaction; auto-deactivates at 0 |
-| DELETE | `/gift-cards/:id`             | owner, admin        | `gift_cards`           | Soft delete (`isActive=false`)                     |
+| Method | Path                          | Roles               | `@Feature` gate | Notes |
+|--------|-------------------------------|---------------------|-----------------|-------|
+| GET    | `/gift-cards`                 | owner, admin        | `gift_cards`    | `?page=&limit=&isActive=` validated (int, limit ≤ 100): a bad value is a 400 |
+| GET    | `/gift-cards/lookup/:code`    | owner, admin, staff | (none)          | The till: code as typed (case, spaces, dashes ignored) |
+| GET    | `/gift-cards/:id`             | owner, admin        | `gift_cards`    | Detail with the movements and who made each |
+| POST   | `/gift-cards`                 | owner, admin        | `gift_cards`    | Writes a `created` movement; emails the recipient unless `sendEmail: false` |
+| PATCH  | `/gift-cards/:id`             | owner, admin        | `gift_cards`    | `isActive`, `expiresAt`, `message`; never reactivates a spent or expired card |
+| POST   | `/gift-cards/redeem`          | owner, admin, staff | (none)          | The till; one conditional UPDATE, safe under concurrency |
+| DELETE | `/gift-cards/:id`             | owner, admin        | `gift_cards`    | Soft delete (`isActive=false`) |
+
+Lookup and redeem carry no plan gate on purpose: clients paid for their
+cards, so they can spend them after the salon downgrades.
 
 Behaviour:
 
 - `code` is generated server-side: 12-char hex uppercase, globally unique.
-- `redeem` is atomic (`prisma.$transaction`): rejects if `!isActive`, `currentBalance < amount`, or `expiresAt < now`.
-- Cross-tenant isolation via `findFirst({ id, tenantId })` — no leakage.
+- Redemption takes the balance in ONE `updateMany` conditioned on
+  `isActive`, `currentBalance >= amount` and not expired; a miss re-reads the
+  card to say why (Spanish 400), or 409 if it lost a race it could have won.
+- `isActive` is only the salon's switch. "Agotada" (balance 0) and
+  "Caducada" are derived and returned as `status`.
+- Expiry is a salon calendar day stored as 23:59:59.999 of that day in the
+  salon's timezone (`gift-card-expiry.ts`); `expiresOn` returns that day.
+  Default validity 2 years; past days are refused.
+- Every movement records `balanceAfter` and `createdById`.
+- Cross-tenant isolation: every query filters by `tenantId`.
+
+## For the POS
+
+`GiftCardsService` (exported by `GiftCardsModule`), all inside the caller's
+Prisma transaction:
+
+- `redeemInTx(tx, { tenantId, code | giftCardId, amountCents, paymentId?, userId?, note? })`
+- `refundToCard(tx, { tenantId, giftCardId, amountCents, paymentId, userId?, note? })` —
+  at most what that payment took from the card, net of earlier refunds.
+- `sellInTx(tx, { tenantId, amountCents, paymentId, userId?, recipient…, expiresOn? })`
+- `sendCardEmail(tenantId, giftCardId)` — after the sale commits; never throws.
 
 ## Plan distribution
 
@@ -39,7 +61,7 @@ A tenant on `esencial` with the `loyalty_giftcards` add-on active will see the e
 ## curl examples
 
 ```bash
-# Create a 50 € gift card that expires in 30 days
+# Create a 50 € gift card valid until 30 Sep 2027 (left out: 2 years)
 curl -X POST http://localhost:3001/gift-cards \
   -H "Authorization: Bearer $JWT" \
   -H "Content-Type: application/json" \
@@ -48,7 +70,7 @@ curl -X POST http://localhost:3001/gift-cards \
     "recipientName": "Ana",
     "recipientEmail": "ana@example.com",
     "message": "Feliz cumple 🎉",
-    "expiresAt": "2026-09-12"
+    "expiresAt": "2027-09-30"
   }'
 
 # List active cards
@@ -64,20 +86,13 @@ curl -X POST http://localhost:3001/gift-cards/redeem \
 
 ## Tests
 
-`gift-cards.service.spec.ts` covers:
-
-1. Create → `currentBalance = initialAmount`, `created` transaction row.
-2. Redeem over-balance → `BadRequestException`.
-3. Redeem non-existent card → `NotFoundException`.
-4. Partial redeem → balance decrements.
-5. Balance reaches 0 → `isActive` flips to `false`.
-6. Expired card → `BadRequestException`.
-7. Cross-tenant redemption → `NotFoundException`.
-
-Run with:
+- `gift-cards.service.spec.ts`: issue, expiry, email (mocked), redeem/refund/sell, PATCH rules, reads.
+- `gift-cards.controller.spec.ts`: roles and plan gates per route; query/body validation.
+- `gift-card-expiry.spec.ts`: salon-day expiry across DST and Canarias; email escaping.
+- `gift-cards.l2.spec.ts`: concurrent redemptions and refunds against a real database (skipped without one).
 
 ```bash
-npm test -- gift-cards
+npx jest src/gift-cards
 ```
 
 ## Frontend
