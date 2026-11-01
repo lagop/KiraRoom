@@ -486,16 +486,31 @@ export default function POSPage() {
       setProcessing(true);
       const result = await apiClient.posCheckout({ ...body, saleId });
       const pts = result?.loyalty;
-      toast({
-        title: t("pos.sale_completed"),
-        description:
-          `${formatEuros(result.total)}` +
-          (result.change ? ` · Cambio ${formatEuros(result.change)}` : "") +
-          (result.discount?.total ? ` · Descuento ${formatEuros(result.discount.total)}` : "") +
-          (pts?.pointsSpent ? ` · Canjeados ${pts.pointsSpent} puntos` : "") +
-          (pts?.pointsEarned ? ` · +${pts.pointsEarned} puntos` : "") +
-          (result.giftCards?.some((g) => g.emailSent) ? " · Tarjeta regalo enviada por email" : ""),
-      });
+      const summary =
+        `${formatEuros(result.total)}` +
+        (result.change ? ` · Cambio ${formatEuros(result.change)}` : "") +
+        (result.discount?.total ? ` · Descuento ${formatEuros(result.discount.total)}` : "") +
+        (pts?.pointsSpent ? ` · Canjeados ${pts.pointsSpent} puntos` : "") +
+        (pts?.pointsEarned ? ` · +${pts.pointsEarned} puntos` : "") +
+        (result.giftCards?.some((g) => g.emailSent) ? " · Tarjeta regalo enviada por email" : "");
+      // A loyalty reward a visit's issued invoice could not take: the owner
+      // credits it by hand (also flagged on the payment, in Pagos). One toast
+      // at a time, so the sale's summary goes with the warning.
+      const offInvoice = result.loyaltyNotOnInvoice ?? [];
+      toast(
+        offInvoice.length
+          ? {
+              variant: "destructive",
+              title: t("pos.loyalty_not_on_invoice_title"),
+              description: [
+                `${t("pos.sale_completed")}: ${summary}.`,
+                ...offInvoice.map((off) =>
+                  t("pos.loyalty_not_on_invoice", { invoice: off.invoice, amount: formatEuros(off.amountCents) }),
+                ),
+              ].join(" "),
+            }
+          : { title: t("pos.sale_completed"), description: summary },
+      );
       setReceiptOf({ saleId: result.saleId, email: selectedClient?.email ?? null });
       resetTicket();
       await refreshAfterSale();

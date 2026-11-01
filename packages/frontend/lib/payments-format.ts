@@ -116,3 +116,23 @@ export function pickedLines(
     valueCents: chosen.reduce((s, c) => s + unitsValueCents(c.line, c.quantity), 0),
   };
 }
+
+/** A loyalty reward the visit's issued invoice could not take (the till flags the payment): what to credit by hand. */
+export interface LoyaltyNotOnInvoice {
+  invoiceId?: string;
+  /** The invoice's series and number, e.g. "A000123". */
+  invoice: string;
+  amountCents: number;
+}
+
+/** The payment's flag, when the till left a loyalty reward off its visit's issued invoice (metadata.loyaltyNotOnInvoice). */
+export function loyaltyNotOnInvoice(payment: { metadata?: Record<string, unknown> | null }): LoyaltyNotOnInvoice | null {
+  const flag = payment.metadata?.loyaltyNotOnInvoice as Partial<LoyaltyNotOnInvoice> | undefined;
+  if (!flag || typeof flag !== "object" || typeof flag.invoice !== "string" || !flag.invoice) return null;
+  const amountCents = Number(flag.amountCents);
+  return {
+    ...(typeof flag.invoiceId === "string" ? { invoiceId: flag.invoiceId } : {}),
+    invoice: flag.invoice,
+    amountCents: Number.isFinite(amountCents) && amountCents > 0 ? Math.round(amountCents) : 0,
+  };
+}

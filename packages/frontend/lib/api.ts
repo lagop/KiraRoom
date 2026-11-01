@@ -5938,6 +5938,8 @@ export interface PosSale {
   loyalty?: { pointsEarned: number; pointsSpent: number; discount: number; rewardName?: string };
   invoice: { id: string; series: string; number: string; full: boolean } | null;
   giftCards?: Array<{ id: string; code: string; amountCents: number; recipientEmail?: string; emailSent?: boolean }>;
+  /** Visits whose loyalty reward their issued invoice could not take: a rectificativa to issue by hand. */
+  loyaltyNotOnInvoice?: Array<{ appointmentId: string; invoiceId?: string; invoice: string; amountCents: number }>;
   /** True when this answer is the first one of a sale sent again. */
   replayed?: boolean;
   [key: string]: unknown;

@@ -46,6 +46,16 @@ export interface InvoiceLineInput {
    * the PDF ("Descuento fidelidad"). Never more than discountCents.
    */
   loyaltyDiscountCents?: number;
+  /**
+   * Cents added to the line's tax (and so its total): the invoice's
+   * rounding remainder, so it comes to the money actually charged. Used
+   * where a reward given in money is taken off prices that are the base
+   * (appointment-invoice-pricing.ts): base x rate rounds per line and the
+   * total can land a cent or two off. The tax absorbs it, the way a
+   * tax-included line does (tax = gross - base). Ignored on fixed lines and
+   * when it would take the tax below zero.
+   */
+  roundingCents?: number;
 }
 
 export interface ComputedInvoiceLine {
@@ -93,7 +103,7 @@ export class InvoiceCalculator {
       throw new Error("Invoice must have at least one line");
     }
 
-    const lines: ComputedInvoiceLine[] = input.map((l) => withLoyalty(l, lineOf(l)));
+    const lines: ComputedInvoiceLine[] = input.map((l) => withRounding(l, withLoyalty(l, lineOf(l))));
 
     const subtotalCents = lines.reduce((s, l) => s + l.totalCents - l.taxCents, 0);
     const taxBreakdown = aggregateTaxBreakdown(lines);
@@ -108,6 +118,13 @@ function withLoyalty(l: InvoiceLineInput, computed: ComputedInvoiceLine): Comput
   const loyalty = Math.round(Number(l.loyaltyDiscountCents ?? 0));
   if (!(loyalty > 0) || l.fixed) return computed;
   return { ...computed, loyaltyDiscountCents: Math.min(loyalty, Math.max(0, Math.round(l.discountCents ?? 0))) };
+}
+
+/** InvoiceLineInput.roundingCents on the line's tax and total: never a negative tax or total. */
+function withRounding(l: InvoiceLineInput, computed: ComputedInvoiceLine): ComputedInvoiceLine {
+  const cents = Math.round(Number(l.roundingCents ?? 0));
+  if (!cents || l.fixed || computed.taxCents + cents < 0 || computed.totalCents + cents < 0) return computed;
+  return { ...computed, taxCents: computed.taxCents + cents, totalCents: computed.totalCents + cents };
 }
 
 function lineOf(l: InvoiceLineInput): ComputedInvoiceLine {
