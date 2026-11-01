@@ -110,31 +110,6 @@
         "signature": "We hope to see you soon,\nThe {business_name} team"
       }
     },
-    "client": {
-      "welcome": {
-        "subject": "Welcome to {business_name}",
-        "greeting": "Hello {client_name},",
-        "body": "Welcome to {business_name}! Thank you for registering with us.",
-        "benefits": "As a registered client, you can:",
-        "benefit_1": "Easily schedule appointments online",
-        "benefit_2": "Receive appointment reminders via email and SMS",
-        "benefit_3": "Access your appointment history",
-        "benefit_4": "Accumulate loyalty points",
-        "login": "You can access your account at: {website_url}",
-        "signature": "We're delighted to have you with us!\nThe {business_name} team"
-      },
-      "password_reset": {
-        "subject": "Password reset - {business_name}",
-        "greeting": "Hello {client_name},",
-        "body": "You have requested to reset your password.",
-        "instructions": "To reset your password, please click the following link:",
-        "button": "Reset password",
-        "link": "If the button doesn't work, copy and paste this link into your browser: {reset_link}",
-        "expiry": "This link will expire in 24 hours.",
-        "no_request": "If you did not request this change, you can ignore this email.",
-        "signature": "Best regards,\nThe {business_name} team"
-      }
-    },
     "admin": {
       "new_appointment": {
         "subject": "New appointment scheduled - {business_name}",

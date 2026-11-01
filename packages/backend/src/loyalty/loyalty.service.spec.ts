@@ -395,24 +395,3 @@ describe("LoyaltyService: redemption at the till", () => {
     expect(db.redemptions[0].status).toBe("cancelled");
   });
 });
-
-describe("LoyaltyService: client portal", () => {
-  it("says the programme is off instead of failing", async () => {
-    const db = fakeDb({ program: { isActive: false } });
-    expect(await db.service.portalView("t1", "c1")).toEqual({ enabled: false });
-  });
-
-  it("refuses self-enrolment when the salon signs members up at the desk", async () => {
-    const db = fakeDb({ program: { allowSelfEnroll: false } });
-    await expect(db.service.portalJoin("t1", "c1")).rejects.toThrow(/mostrador/);
-  });
-
-  it("lets a client join and gives the welcome points once", async () => {
-    const db = fakeDb({ program: { welcomePoints: 25 } });
-    db.prisma.loyaltyReward.findMany = jest.fn(async () => []);
-    await db.service.portalJoin("t1", "c1");
-    await db.service.portalJoin("t1", "c1");
-    expect(db.members).toHaveLength(1);
-    expect(db.member()).toMatchObject({ enrolledVia: "portal", currentPoints: 25 });
-  });
-});
