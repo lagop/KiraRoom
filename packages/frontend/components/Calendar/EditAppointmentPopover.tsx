@@ -15,6 +15,14 @@ import {
   salonTermsInvalid,
   salonTermsUpdate,
 } from "../../app/dashboard/appointments/components/appointment-drawer.utils";
+import { LocationSelect } from "./LocationSelect";
+import { useBookingLocations } from "@/lib/use-booking-locations";
+import {
+  currentLocationOf,
+  hasLocations,
+  locationForEdit,
+  locationsOfProfessional,
+} from "@/lib/panel-booking-locations";
 
 interface ClientOption {
   id: string;
@@ -80,6 +88,19 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
 
   const professional = professionals.find((p) => p.id === appointmentData?.professionalId);
 
+  // Multi-local: where it is, and a picker when its professional works at
+  // several locations. Another professional is a drag on the agenda (the
+  // server keeps the location if they work there, else takes theirs).
+  const bookingLocations = useBookingLocations();
+  const [loadedLocationId, setLoadedLocationId] = useState<string | null>(null);
+  const [locationChoice, setLocationChoice] = useState<string | null>(null);
+  const locationBefore = currentLocationOf(bookingLocations, {
+    locationId: loadedLocationId,
+    professionalId: appointmentData?.professionalId,
+  });
+  const locationId = locationChoice ?? locationBefore;
+  const theirLocations = locationsOfProfessional(bookingLocations, appointmentData?.professionalId).locationIds;
+
   const filteredClients = useMemo(() => {
     if (!clientSearch) return [];
     const q = clientSearch.toLowerCase();
@@ -116,6 +137,7 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
          setClientId(apiAppointment.clientId || "");
          setServiceId(apiAppointment.serviceId || "");
          setLoadedServiceId(apiAppointment.serviceId || "");
+         setLoadedLocationId(apiAppointment.locationId ?? null);
          
 // Set additional fields - handle undefined values from API.
          // These three fields (depositRequired/depositAmount/commissionRate)
@@ -248,6 +270,7 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
         depositRequired?: boolean;
         depositAmount?: number;
         commissionRate?: number | null;
+        locationId?: string;
       }> = {
         clientId,
         serviceId,
@@ -260,6 +283,9 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
         // nothing from a professional (the server ignores it).
         ...salonTermsUpdate({ role: currentUser?.role, before: termsBefore, form: terms }),
       };
+      // Only when moved to another of the professional's locations.
+      const movedTo = locationForEdit(bookingLocations, locationBefore, locationId);
+      if (movedTo) updateData.locationId = movedTo;
 
       if (currentUser?.role === "staff") {
         await apiClient.updateAppointment(appointmentId, updateData);
@@ -327,6 +353,19 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
             </div>
 
             <div className="space-y-3">
+              {hasLocations(bookingLocations) && theirLocations.length > 1 && (
+                <div>
+                  <label className="block text-xs font-medium mb-1">{t("appointments.locations.label")}</label>
+                  <LocationSelect
+                    data={bookingLocations}
+                    value={locationId}
+                    only={theirLocations}
+                    label={t("appointments.locations.label")}
+                    onChange={setLocationChoice}
+                    className="w-full px-3 py-1.5 text-sm border border-border rounded-md focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-background"
+                  />
+                </div>
+              )}
               <div ref={clientSearchRef}>
                 <label className="block text-xs font-medium mb-1">{t("appointments.client")}</label>
                 <div className="relative">

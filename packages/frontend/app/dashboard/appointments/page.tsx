@@ -36,6 +36,9 @@ import {
   type AskedStatus,
 } from "./components/appointment-drawer.utils";
 import { StatusChangeDialog } from "./components/StatusChangeDialog";
+import { LocationSelect } from "@/components/Calendar/LocationSelect";
+import { useBookingLocations } from "@/lib/use-booking-locations";
+import { appointmentLocation, hasLocations } from "@/lib/panel-booking-locations";
 
 type AppointmentStatus =
   | "confirmed"
@@ -161,6 +164,10 @@ function AppointmentsPageContent() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [professionalFilter, setProfessionalFilter] = useState("");
+  // Multi-local: the agenda of one location (list and calendar); empty: all.
+  const bookingLocations = useBookingLocations();
+  const multiLocation = hasLocations(bookingLocations);
+  const [locationFilter, setLocationFilter] = useState("");
   const [serviceFilter, setServiceFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<AppointmentStatus[]>([]);
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
@@ -373,6 +380,9 @@ function AppointmentsPageContent() {
   };
 
   const filteredAppointments = appointments.filter((apt) => {
+    if (multiLocation && locationFilter && appointmentLocation(bookingLocations, apt) !== locationFilter) {
+      return false;
+    }
     if (professionalFilter) {
       const allProfessionalNames = getAllProfessionalNames(apt).map((n) =>
         n.toLowerCase(),
@@ -764,7 +774,25 @@ function AppointmentsPageContent() {
 
       {/* Filters */}
       <div className="bg-white rounded-xl border border-gray-200 p-4">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${multiLocation ? "lg:grid-cols-5" : "lg:grid-cols-4"}`}>
+          {multiLocation && (
+            <div>
+              <label htmlFor="filter-location" className="block text-sm font-medium text-gray-700 mb-1">
+                {t("appointments.locations.label")}
+              </label>
+              <LocationSelect
+                id="filter-location"
+                data={bookingLocations}
+                value={locationFilter}
+                onChange={setLocationFilter}
+                label={t("appointments.locations.label")}
+                emptyLabel={t("appointments.locations.all")}
+                className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent ${
+                  locationFilter ? "bg-blue-50" : ""
+                }`}
+              />
+            </div>
+          )}
           <div>
             <label htmlFor="filter-professional" className="block text-sm font-medium text-gray-700 mb-1">
               {t("appointments.professional")}
@@ -909,6 +937,7 @@ function AppointmentsPageContent() {
           // Calendar View using the new Calendar component
           <div className="p-6 h-[800px] min-w-0 overflow-x-auto overflow-y-hidden">
             <CalendarComponent
+              locationId={multiLocation ? locationFilter : undefined}
               day={dateFilter}
               onDayChange={setDateFilter}
               onAppointmentClick={openAppointment}

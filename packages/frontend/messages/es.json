@@ -1346,6 +1346,13 @@
       "deleteConfirmTitle": "¿Eliminar esta cita?",
       "deleteConfirmDescription": "La cita desaparecerá de la agenda. Si el cliente no va a venir, mejor cancélala: así queda en su historial.",
       "deleteConfirm": "Eliminar cita"
+    },
+    "locations": {
+      "label": "Local",
+      "all": "Todos los locales",
+      "professionalsMain": "Local principal del profesional",
+      "bookedAt": "Se reservará en {location}",
+      "onlyHere": "Solo se muestran los profesionales de este local."
     }
   },
   "settings": {

@@ -161,6 +161,7 @@ export const transformToCalendarFormat = (
           status: appointment.status,
           appointmentServiceId: serviceAppointment.id,
           isParallel: !!serviceAppointment.isParallel,
+          locationId: (appointment as any).locationId ?? null,
         });
         
         // Move current time forward for the next serial service
@@ -190,6 +191,7 @@ export const transformToCalendarFormat = (
         type,
         isMultiService: false,
         status: appointment.status,
+        locationId: (appointment as any).locationId ?? null,
       });
     }
   });

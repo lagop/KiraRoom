@@ -10,6 +10,7 @@ import * as path from "path";
 import {
   bookingLocations,
   chosenLocation,
+  confirmedPlace,
   locationForProfessional,
   locationFromQuery,
   locationReady,
@@ -94,6 +95,16 @@ check("step: not without a location", !locationReady(LOCATIONS, ""));
 check("step: with one", locationReady(LOCATIONS, "l-norte"));
 same("the chosen one, for the confirmation", chosenLocation(LOCATIONS, "l-centro"), CENTRO);
 same("none chosen", chosenLocation(LOCATIONS, ""), null);
+same(
+  "the confirmation names where the server booked it",
+  confirmedPlace(LOCATIONS, "l-centro", { location: { id: "l-norte", name: "Norte", address: "Av. Norte 5, 28035 Madrid" } }),
+  { name: "Norte", address: "Av. Norte 5, 28035 Madrid" },
+);
+same("an answer without one: the location picked", confirmedPlace(LOCATIONS, "l-centro", { location: null }), {
+  name: CENTRO.name,
+  address: CENTRO.address ?? "",
+});
+same("no location step: nothing, whatever the answer", confirmedPlace([], "", { location: { name: "Centro", address: "x" } }), null);
 
 console.log("the page");
 const root = path.join(__dirname, "..");
