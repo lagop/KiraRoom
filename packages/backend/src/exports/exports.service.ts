@@ -342,6 +342,8 @@ export class ExportsService {
             type: r.type,
             amount: r.amount,
             balanceAfter: r.balanceAfter,
+            // How a top-up was paid (cash, card, bizum, bank_transfer); empty for other movements.
+            method: r.method ?? "",
             createdAt: r.createdAt,
           })),
           nextCursor: rows.length === take ? rows[rows.length - 1].id : undefined,

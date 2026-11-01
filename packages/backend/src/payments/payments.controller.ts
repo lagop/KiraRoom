@@ -38,6 +38,8 @@ import {
   SubscriptionPlanDto,
   UpdateLocationCountDto,
   WalletAmountDto,
+  WalletDepositDto,
+  WalletWithdrawDto,
 } from "./dto/payment-bodies.dto";
 import { PaymentFiltersDto, PaymentsListQueryDto } from "./payments-query";
 
@@ -406,40 +408,54 @@ export class PaymentsController {
     return this.walletService.getWallet(req.user.tenantId, clientId);
   }
 
-  /** The first deposit creates the client's wallet. */
+  /**
+   * A top-up: money the client hands over (cash, card, Bizum, transfer) to
+   * load her wallet. The first one creates the wallet. Cash needs the drawer
+   * open (409 CASH_SESSION_CLOSED) and counts in it (WalletService.topUp).
+   */
   @Post("wallet/:clientId/deposit")
   @Roles(...SALON_MANAGERS)
   @Feature("wallet" as any)
-  @ApiOperation({ summary: "Deposit funds to client wallet" })
+  @ApiOperation({ summary: "Top up a client wallet, with how she paid" })
   async depositWallet(
     @Req() req: any,
     @Param("clientId", ParseUUIDPipe) clientId: string,
-    @Body() body: WalletAmountDto,
+    @Body() body: WalletDepositDto,
   ) {
     await this.walletService.assertClientOfSalon(req.user.tenantId, clientId);
-    return this.walletService.addFunds(
+    return this.walletService.topUp(
       req.user.tenantId,
       clientId,
       Math.round(body.amount),
+      body.method,
+      { id: req.user.id, role: req.user.role },
       body.description,
     );
   }
 
+  /**
+   * A withdrawal: money handed back to the client from her wallet, and how
+   * (cash, card, Bizum, transfer), never past its balance. Cash needs the
+   * drawer open (409 CASH_SESSION_CLOSED) and comes out of it
+   * (WalletService.withdraw).
+   */
   @Post("wallet/:clientId/withdraw")
   @Roles(...SALON_MANAGERS)
   @Feature("wallet" as any)
-  @ApiOperation({ summary: "Withdraw funds from client wallet" })
+  @ApiOperation({ summary: "Hand money back from a client wallet, with how" })
   async withdrawWallet(
     @Req() req: any,
     @Param("clientId", ParseUUIDPipe) clientId: string,
-    @Body() body: WalletAmountDto,
+    @Body() body: WalletWithdrawDto,
   ) {
     await this.walletService.assertClientOfSalon(req.user.tenantId, clientId);
-    return this.walletService.deductFunds(
+    return this.walletService.withdraw(
       req.user.tenantId,
       clientId,
       Math.round(body.amount),
-      body.description || "Retirada",
+      body.method,
+      { id: req.user.id, role: req.user.role },
+      body.description,
     );
   }
 

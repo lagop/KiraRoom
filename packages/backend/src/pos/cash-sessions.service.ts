@@ -21,6 +21,11 @@ export interface CashActor {
   role: string;
 }
 
+/** A session as the owner and managers see it: figures, expected cash, difference. */
+export type CashSessionFullView = Awaited<ReturnType<CashSessionsService['fullView']>>;
+/** A session as staff see it: no expected cash, no totals, no difference (blind count). */
+export type CashSessionBlindView = Awaited<ReturnType<CashSessionsService['blindView']>>;
+
 /** Prisma, or the transaction a write runs in. */
 type Db = any;
 
@@ -54,8 +59,16 @@ function euros(cents: number): string {
  *   do not (cash-session-lock.ts).
  *
  * Who: anyone on the team opens, moves money and closes (they run the
- * till) and sees the session they are counting; the history and other
- * people's past sessions are the owner's and managers'.
+ * till); the history and other people's past sessions are the owner's and
+ * managers'.
+ *
+ * Blind count (arqueo ciego): staff see only their own sales, so the drawer
+ * shows them no salon-wide figure. Every session a staff member is shown
+ * (current, open, close, report) is the blind view (blindView): who opened
+ * it and when, the float, the movements they made, and, once closed, what
+ * they counted. No expected cash, no totals by method, no difference: the
+ * server still works them out and stores them at close, for the owner and
+ * managers, who get the full view (fullView).
  */
 @Injectable()
 export class CashSessionsService {
@@ -83,7 +96,7 @@ export class CashSessionsService {
           select: { id: true, closedAt: true, countedCashCents: true },
         });
     return {
-      session: session ? await this.view(this.prisma, tenantId, session) : null,
+      session: session ? await this.view(this.prisma, tenantId, session, actor) : null,
       /** What was left in the drawer last time: the panel offers it as the new float. */
       lastClosed,
       canSeeHistory: this.isManager(actor),
@@ -108,7 +121,7 @@ export class CashSessionsService {
         });
         return created;
       });
-      return this.view(this.prisma, tenantId, session);
+      return this.view(this.prisma, tenantId, session, actor);
     } catch (err) {
       if (isUniqueViolation(err)) {
         throw new ConflictException({
@@ -128,7 +141,11 @@ export class CashSessionsService {
       // Held until this commits: the session cannot close under it.
       const openId = await openCashSessionId(tx, tenantId, 'share');
       if (openId !== sessionId) throw notOpen();
-      if (dto.type === 'out') {
+      // The cap says what the drawer should hold: only to those who may know
+      // it. A blind count cannot refuse on it either, or trying amounts
+      // would tell staff the expected cash; their movement is recorded with
+      // their name and a wrong one shows as a difference at close.
+      if (dto.type === 'out' && this.isManager(actor)) {
         const session = await tx.cashSession.findFirst({ where: { id: sessionId, tenantId } });
         const figures = await this.figuresOf(tx, tenantId, session);
         if (dto.amountCents > figures.cash.expectedCents) {
@@ -198,7 +215,7 @@ export class CashSessionsService {
       },
       { timeout: 20_000 },
     );
-    return this.view(this.prisma, tenantId, closed);
+    return this.view(this.prisma, tenantId, closed, actor);
   }
 
   /** `GET /pos/cash-sessions`: past sessions, newest first, with their differences (owner and managers). */
@@ -245,7 +262,7 @@ export class CashSessionsService {
     if (!this.isManager(actor) && session.status !== 'open' && !own) {
       throw new ForbiddenException('Solo puedes ver las cajas que has abierto o cerrado tú.');
     }
-    return this.view(this.prisma, tenantId, session);
+    return this.view(this.prisma, tenantId, session, actor);
   }
 
   // ------------------------------------------------------------------ helpers
@@ -273,6 +290,15 @@ export class CashSessionsService {
       where: { tenantId, sessionId },
       select: { type: true, amountCents: true },
     });
+    // Wallet top-ups and withdrawals taken while it was open
+    // (WalletService.topUp / withdraw): only those with a tender; a refund
+    // back to the wallet or a wallet payment at the till moves no money here.
+    const walletMoves = await db.walletTransaction.findMany({
+      where: { cashSessionId: sessionId, method: { not: null }, wallet: { tenantId } },
+      select: { type: true, method: true, amount: true },
+    });
+    const topUps = walletMoves.filter((w: any) => w.type === 'credit');
+    const withdrawals = walletMoves.filter((w: any) => w.type === 'debit');
     return sessionFigures({
       openingFloatCents: session.openingFloatCents,
       payments: payments.map((p: any) => ({ method: String(p.method), amount: p.amount })),
@@ -280,6 +306,8 @@ export class CashSessionsService {
       sales,
       taxCents: tax?._sum?.taxCents ?? 0,
       movements: movements.map((m: any) => ({ type: m.type, amountCents: m.amountCents })),
+      walletTopUps: topUps.map((t: any) => ({ method: String(t.method), amount: t.amount })),
+      walletWithdrawals: withdrawals.map((w: any) => ({ method: String(w.method), amount: w.amount })),
     });
   }
 
@@ -306,18 +334,43 @@ export class CashSessionsService {
     return { of: (id?: string | null) => (id ? { id, name: byId.get(id) || null } : null) };
   }
 
-  /** A session as the panel shows it and prints it. */
-  private async view(db: Db, tenantId: string, session: any) {
-    const figures = await this.figuresOf(db, tenantId, session);
-    const movements = await db.cashMovement.findMany({
-      where: { tenantId, sessionId: session.id },
+  /** A session as the panel shows it and prints it: in full to the owner and managers, blind to the rest. */
+  private async view(db: Db, tenantId: string, session: any, actor: CashActor) {
+    return this.isManager(actor) ? this.fullView(db, tenantId, session) : this.blindView(db, tenantId, session, actor);
+  }
+
+  private async movementsOf(db: Db, tenantId: string, sessionId: string, createdById?: string) {
+    return db.cashMovement.findMany({
+      where: { tenantId, sessionId, ...(createdById ? { createdById } : {}) },
       orderBy: { createdAt: 'asc' },
       select: { id: true, createdAt: true, type: true, amountCents: true, reason: true, createdById: true },
     });
+  }
+
+  private async salonOf(db: Db, tenantId: string) {
     const tenant = await db.tenant.findUnique({ where: { id: tenantId }, select: { name: true, timezone: true } });
+    return { name: tenant?.name ?? '', timezone: safeTimeZone(tenant?.timezone) };
+  }
+
+  private movementView(m: any, names: { of: (id?: string | null) => { id: string; name: string | null } | null }) {
+    return {
+      id: m.id,
+      createdAt: m.createdAt,
+      type: m.type,
+      amountCents: m.amountCents,
+      reason: m.reason,
+      createdBy: names.of(m.createdById),
+    };
+  }
+
+  /** The owner's and managers' view: the figures, what the drawer should hold, the difference. */
+  async fullView(db: Db, tenantId: string, session: any) {
+    const figures = await this.figuresOf(db, tenantId, session);
+    const movements = await this.movementsOf(db, tenantId, session.id);
     const names = await this.namesOf([session.openedById, session.closedById, ...movements.map((m: any) => m.createdById)]);
     const closed = session.status === 'closed';
     return {
+      blind: false as const,
       ...this.summaryOf(session),
       openedBy: names.of(session.openedById),
       closedBy: names.of(session.closedById),
@@ -327,15 +380,37 @@ export class CashSessionsService {
       // Open: what the drawer should hold now. Closed: what was stored at close.
       expectedCashCents: closed ? session.expectedCashCents : figures.cash.expectedCents,
       figures,
-      movements: movements.map((m: any) => ({
-        id: m.id,
-        createdAt: m.createdAt,
-        type: m.type,
-        amountCents: m.amountCents,
-        reason: m.reason,
-        createdBy: names.of(m.createdById),
-      })),
-      salon: { name: tenant?.name ?? '', timezone: safeTimeZone(tenant?.timezone) },
+      movements: movements.map((m: any) => this.movementView(m, names)),
+      salon: await this.salonOf(db, tenantId),
+    };
+  }
+
+  /**
+   * The blind view (staff): what they can see at the drawer without being
+   * told what it should hold. Who opened it and when, the float (counted
+   * in), their own movements, and once closed, who closed it, when, and
+   * what was counted. Built from these fields only, so a figure added to
+   * the full view does not reach staff by accident; nothing is worked out.
+   */
+  async blindView(db: Db, tenantId: string, session: any, actor: CashActor) {
+    const movements = await this.movementsOf(db, tenantId, session.id, actor.id);
+    const names = await this.namesOf([session.openedById, session.closedById, actor.id]);
+    const closed = session.status === 'closed';
+    return {
+      blind: true as const,
+      id: session.id as string,
+      status: session.status as 'open' | 'closed',
+      openedAt: session.openedAt,
+      openingFloatCents: session.openingFloatCents,
+      openedBy: names.of(session.openedById),
+      openingNotes: session.openingNotes ?? null,
+      closedAt: closed ? (session.closedAt ?? null) : null,
+      closedBy: closed ? names.of(session.closedById) : null,
+      countedCashCents: closed ? (session.countedCashCents ?? null) : null,
+      countBreakdown: closed ? (session.countBreakdown ?? null) : null,
+      closingNotes: closed ? (session.closingNotes ?? null) : null,
+      movements: movements.map((m: any) => this.movementView(m, names)),
+      salon: await this.salonOf(db, tenantId),
     };
   }
 }

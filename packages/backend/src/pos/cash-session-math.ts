@@ -8,6 +8,9 @@
  *   + cash taken at the till, net of the change given back
  *     (a cash payment is recorded already net of change: pos-tenders.ts)
  *   - cash given back as refunds while the session was open
+ *   + cash handed over to load a client's wallet (a top-up: money the
+ *     salon owes her in services, not a sale)
+ *   - cash handed back to a client from her wallet (a withdrawal)
  *   + cash put in   (movements "in": more change, ...)
  *   - cash taken out (movements "out": a supplier paid from the drawer,
  *     takings to the bank, ...)
@@ -35,6 +38,13 @@ export interface SessionSaleRow {
   changeCents: number;
 }
 
+/** A wallet top-up taken (or a withdrawal handed back) while the session was open, with how. */
+export interface SessionWalletTopUpRow {
+  method: string;
+  amount: number;
+}
+export type SessionWalletWithdrawalRow = SessionWalletTopUpRow;
+
 export interface SessionMovementRow {
   type: 'in' | 'out';
   amountCents: number;
@@ -48,16 +58,24 @@ export interface SessionInput {
   /** The tax inside the session's sale lines (gift cards carry none). */
   taxCents: number;
   movements: SessionMovementRow[];
+  /** Wallet top-ups: they count in their method (cash in the drawer, card at the terminal), not as sales. */
+  walletTopUps?: SessionWalletTopUpRow[];
+  /** Wallet withdrawals: money handed back in their method (cash out of the drawer). */
+  walletWithdrawals?: SessionWalletWithdrawalRow[];
 }
 
 export interface MethodTotal {
   method: string;
-  /** Payments taken with it. */
+  /** Payments taken with it, wallet top-ups included. */
   count: number;
   amountCents: number;
-  /** Given back with it during the session. */
+  /** Of amountCents, wallet top-ups (prepaid money, not sales). */
+  topUpCents: number;
+  /** Given back with it during the session (refunds). */
   refundedCents: number;
-  /** Taken minus given back. */
+  /** Handed back with it from clients' wallets (withdrawals). */
+  walletWithdrawnCents: number;
+  /** Taken minus given back (refunds and wallet withdrawals). */
   netCents: number;
 }
 
@@ -70,6 +88,10 @@ export interface CashFigures {
   /** What clients handed over in cash: kept + change. */
   tenderedCents: number;
   refundsCents: number;
+  /** Cash handed over to load clients' wallets. */
+  walletTopUpsCents: number;
+  /** Cash handed back from clients' wallets. */
+  walletWithdrawalsCents: number;
   movementsInCents: number;
   movementsOutCents: number;
   expectedCents: number;
@@ -91,6 +113,10 @@ export interface SessionFigures {
     netCents: number;
   };
   refunds: { count: number; totalCents: number };
+  /** Wallet top-ups, every method. */
+  walletTopUps: { count: number; totalCents: number };
+  /** Wallet withdrawals, every method. */
+  walletWithdrawals: { count: number; totalCents: number };
 }
 
 /** The order the report lists methods in; others (should there be any) after. */
@@ -101,6 +127,8 @@ export function expectedCashCents(input: {
   openingFloatCents: number;
   cashSalesCents: number;
   cashRefundsCents: number;
+  cashWalletTopUpsCents?: number;
+  cashWalletWithdrawalsCents?: number;
   movementsInCents: number;
   movementsOutCents: number;
 }): number {
@@ -108,6 +136,8 @@ export function expectedCashCents(input: {
     input.openingFloatCents +
     input.cashSalesCents -
     input.cashRefundsCents +
+    (input.cashWalletTopUpsCents ?? 0) -
+    (input.cashWalletWithdrawalsCents ?? 0) +
     input.movementsInCents -
     input.movementsOutCents
   );
@@ -123,7 +153,7 @@ export function sessionFigures(input: SessionInput): SessionFigures {
   const entry = (method: string) => {
     let m = methods.get(method);
     if (!m) {
-      m = { method, count: 0, amountCents: 0, refundedCents: 0, netCents: 0 };
+      m = { method, count: 0, amountCents: 0, topUpCents: 0, refundedCents: 0, walletWithdrawnCents: 0, netCents: 0 };
       methods.set(method, m);
     }
     return m;
@@ -133,12 +163,23 @@ export function sessionFigures(input: SessionInput): SessionFigures {
     m.count += 1;
     m.amountCents += p.amount;
   }
+  const topUps = input.walletTopUps ?? [];
+  for (const t of topUps) {
+    const m = entry(t.method);
+    m.count += 1;
+    m.amountCents += t.amount;
+    m.topUpCents += t.amount;
+  }
   for (const r of input.refunds) entry(r.method).refundedCents += r.amount;
-  for (const m of methods.values()) m.netCents = m.amountCents - m.refundedCents;
+  const withdrawals = input.walletWithdrawals ?? [];
+  for (const w of withdrawals) entry(w.method).walletWithdrawnCents += w.amount;
+  for (const m of methods.values()) m.netCents = m.amountCents - m.refundedCents - m.walletWithdrawnCents;
 
   const sum = <T>(rows: T[], f: (r: T) => number) => rows.reduce((s, r) => s + f(r), 0);
   const cashSales = sum(input.payments.filter((p) => p.method === 'cash'), (p) => p.amount);
   const cashRefunds = sum(input.refunds.filter((r) => r.method === 'cash'), (r) => r.amount);
+  const cashTopUps = sum(topUps.filter((t) => t.method === 'cash'), (t) => t.amount);
+  const cashWithdrawals = sum(withdrawals.filter((w) => w.method === 'cash'), (w) => w.amount);
   const movementsIn = sum(input.movements.filter((m) => m.type === 'in'), (m) => m.amountCents);
   const movementsOut = sum(input.movements.filter((m) => m.type === 'out'), (m) => m.amountCents);
   const change = sum(input.sales, (s) => s.changeCents);
@@ -156,12 +197,16 @@ export function sessionFigures(input: SessionInput): SessionFigures {
       changeGivenCents: change,
       tenderedCents: cashSales + change,
       refundsCents: cashRefunds,
+      walletTopUpsCents: cashTopUps,
+      walletWithdrawalsCents: cashWithdrawals,
       movementsInCents: movementsIn,
       movementsOutCents: movementsOut,
       expectedCents: expectedCashCents({
         openingFloatCents: input.openingFloatCents,
         cashSalesCents: cashSales,
         cashRefundsCents: cashRefunds,
+        cashWalletTopUpsCents: cashTopUps,
+        cashWalletWithdrawalsCents: cashWithdrawals,
         movementsInCents: movementsIn,
         movementsOutCents: movementsOut,
       }),
@@ -176,6 +221,8 @@ export function sessionFigures(input: SessionInput): SessionFigures {
       netCents: gross - input.taxCents,
     },
     refunds: { count: input.refunds.length, totalCents: sum(input.refunds, (r) => r.amount) },
+    walletTopUps: { count: topUps.length, totalCents: sum(topUps, (t) => t.amount) },
+    walletWithdrawals: { count: withdrawals.length, totalCents: sum(withdrawals, (w) => w.amount) },
   };
 }
 

@@ -1139,6 +1139,9 @@ export interface SubscriptionUsage {
   };
 }
 
+/** How money goes into a wallet (top-up) or is handed back from it (withdrawal): real money. */
+export type WalletTopUpMethod = "cash" | "card" | "bizum" | "bank_transfer";
+
 export interface ClientWallet {
   id: string;
   clientId: string;
@@ -1793,8 +1796,8 @@ export interface ApiClientInterface {
 
   // Client Wallet
   getClientWallet(clientId: string): Promise<ClientWallet>;
-  depositToWallet(clientId: string, amountCents: number, description?: string): Promise<unknown>;
-  withdrawFromWallet(clientId: string, amountCents: number, description?: string): Promise<unknown>;
+  depositToWallet(clientId: string, amountCents: number, method: WalletTopUpMethod, description?: string): Promise<unknown>;
+  withdrawFromWallet(clientId: string, amountCents: number, method: WalletTopUpMethod, description?: string): Promise<unknown>;
 
   // POS
   getPosServices(): Promise<any[]>;
@@ -3952,19 +3955,25 @@ class ApiClient implements ApiClientInterface {
     return this.request<ClientWallet>(`/payments/wallet/${clientId}`);
   }
 
-  /** Money into a client's wallet (owner/admin); the first one creates it. */
-  async depositToWallet(clientId: string, amountCents: number, description?: string): Promise<unknown> {
+  /**
+   * A wallet top-up (owner/admin) and how the client paid it; the first one
+   * creates the wallet. Cash needs the cash drawer open (409 CASH_SESSION_CLOSED).
+   */
+  async depositToWallet(clientId: string, amountCents: number, method: WalletTopUpMethod, description?: string): Promise<unknown> {
     return this.request(`/payments/wallet/${clientId}/deposit`, {
       method: "POST",
-      body: JSON.stringify({ amount: amountCents, ...(description ? { description } : {}) }),
+      body: JSON.stringify({ amount: amountCents, method, ...(description ? { description } : {}) }),
     });
   }
 
-  /** Money out of a client's wallet (owner/admin), never past its balance. */
-  async withdrawFromWallet(clientId: string, amountCents: number, description?: string): Promise<unknown> {
+  /**
+   * Money handed back from a client's wallet (owner/admin) and how, never
+   * past its balance. Cash needs the cash drawer open (409 CASH_SESSION_CLOSED).
+   */
+  async withdrawFromWallet(clientId: string, amountCents: number, method: WalletTopUpMethod, description?: string): Promise<unknown> {
     return this.request(`/payments/wallet/${clientId}/withdraw`, {
       method: "POST",
-      body: JSON.stringify({ amount: amountCents, ...(description ? { description } : {}) }),
+      body: JSON.stringify({ amount: amountCents, method, ...(description ? { description } : {}) }),
     });
   }
 
@@ -5992,48 +6001,84 @@ export interface CashMovementRow {
   createdBy?: CashPerson | null;
 }
 
-/** GET /pos/cash-sessions/:id: a cash-drawer session and its figures (cents). */
-export interface CashSessionView {
+/** What a session took, by method and in the drawer (cents): the owner's and managers' view only. */
+export interface CashSessionFigures {
+  /**
+   * amountCents includes wallet top-ups taken with the method (topUpCents of
+   * it); netCents is it minus refunds and wallet withdrawals handed back with it.
+   */
+  byMethod: Array<{
+    method: string;
+    count: number;
+    amountCents: number;
+    topUpCents: number;
+    refundedCents: number;
+    walletWithdrawnCents: number;
+    netCents: number;
+  }>;
+  cash: {
+    openingFloatCents: number;
+    salesCents: number;
+    changeGivenCents: number;
+    tenderedCents: number;
+    refundsCents: number;
+    /** Cash handed over to load clients' wallets: in the drawer, not a sale. */
+    walletTopUpsCents: number;
+    /** Cash handed back from clients' wallets: out of the drawer. */
+    walletWithdrawalsCents: number;
+    movementsInCents: number;
+    movementsOutCents: number;
+    expectedCents: number;
+  };
+  sales: {
+    count: number;
+    grossCents: number;
+    subtotalCents: number;
+    discountCents: number;
+    loyaltyDiscountCents: number;
+    taxCents: number;
+    netCents: number;
+  };
+  refunds: { count: number; totalCents: number };
+  walletTopUps: { count: number; totalCents: number };
+  walletWithdrawals: { count: number; totalCents: number };
+}
+
+/** What every view of a session has. */
+interface CashSessionBase {
   id: string;
   status: "open" | "closed";
   openedAt: string;
   openingFloatCents: number;
   closedAt: string | null;
   countedCashCents: number | null;
-  /** Open: what the drawer should hold now. Closed: what it should have held at close. */
-  expectedCashCents: number | null;
-  discrepancyCents: number | null;
   openedBy: CashPerson | null;
   closedBy: CashPerson | null;
   openingNotes: string | null;
   closingNotes: string | null;
   countBreakdown: Record<string, number> | null;
-  figures: {
-    byMethod: Array<{ method: string; count: number; amountCents: number; refundedCents: number; netCents: number }>;
-    cash: {
-      openingFloatCents: number;
-      salesCents: number;
-      changeGivenCents: number;
-      tenderedCents: number;
-      refundsCents: number;
-      movementsInCents: number;
-      movementsOutCents: number;
-      expectedCents: number;
-    };
-    sales: {
-      count: number;
-      grossCents: number;
-      subtotalCents: number;
-      discountCents: number;
-      loyaltyDiscountCents: number;
-      taxCents: number;
-      netCents: number;
-    };
-    refunds: { count: number; totalCents: number };
-  };
   movements: CashMovementRow[];
   salon: { name: string; timezone: string };
 }
+
+/** GET /pos/cash-sessions/:id for the owner and managers: the session and its figures (cents). */
+export interface CashSessionFullView extends CashSessionBase {
+  blind?: false;
+  /** Open: what the drawer should hold now. Closed: what it should have held at close. */
+  expectedCashCents: number | null;
+  discrepancyCents: number | null;
+  figures: CashSessionFigures;
+}
+
+/**
+ * The same for staff (blind count): no expected cash, no totals, no
+ * difference; only their own movements. The server never sends the rest.
+ */
+export interface CashSessionBlindView extends CashSessionBase {
+  blind: true;
+}
+
+export type CashSessionView = CashSessionFullView | CashSessionBlindView;
 
 export interface CashSessionCurrent {
   session: CashSessionView | null;

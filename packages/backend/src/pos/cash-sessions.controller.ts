@@ -14,6 +14,10 @@ import {
  * CashSessionsService. Anyone on the team runs the till: opens it, puts
  * money in or takes it out, counts and closes it. The history of past
  * sessions is the owner's and managers'.
+ *
+ * Staff count blind: every session they get back is the blind view (no
+ * expected cash, no totals, no difference), shaped by the service from the
+ * caller's role, so the panel cannot show what the server never sent.
  */
 @ApiTags('POS')
 @ApiBearerAuth()
@@ -26,7 +30,7 @@ export class CashSessionsController {
   }
 
   @Get('current')
-  @ApiOperation({ summary: 'The open cash-drawer session, with what it should hold' })
+  @ApiOperation({ summary: 'The open cash-drawer session (what it should hold: owner and managers only)' })
   @Roles(...SALON_TEAM)
   async current(@Req() req: any) {
     return this.cashSessions.current(req.user.tenantId, this.actor(req));
