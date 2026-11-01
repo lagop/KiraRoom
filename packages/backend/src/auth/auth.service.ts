@@ -364,6 +364,11 @@ export class AuthService {
       if (!isPasswordValid) {
         throw new UnauthorizedException("Invalid credentials");
       }
+      // Inactive or blocked by the salon: no session (only blocked was
+      // refused, and only later, by the token check).
+      if (client.status !== "active") {
+        throw new UnauthorizedException("Esta cuenta no está activa. Habla con el salón.");
+      }
 
       // Generate tokens for client (with role 'client')
       const tokens = await this.generateTokens(
@@ -402,7 +407,7 @@ export class AuthService {
           where: { id: payload.sub },
         });
 
-        if (!client || (payload.tv ?? 0) !== client.tokenVersion) {
+        if (!client || client.status !== "active" || (payload.tv ?? 0) !== client.tokenVersion) {
           throw new UnauthorizedException("Invalid refresh token");
         }
 

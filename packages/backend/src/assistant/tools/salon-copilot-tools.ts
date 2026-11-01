@@ -3,6 +3,9 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { WaitListService, NotifyResult } from '../../wait-list/wait-list.service';
 import { AppointmentsService } from '../../appointments/appointments.service';
 import { canTransition, transitionRefusal } from '../../appointments/appointment-status';
+import { clientsWhoAcceptedWhatsAppMarketing } from '../../consent/marketing-consent';
+import { normalizePhone } from '../../common/phone';
+import { STANDARD_TEMPLATES } from '../../whatsapp/whatsapp-templates';
 
 /**
  * P2A-staff-copilot: tools the in-app copilot exposes to the LLM.
@@ -193,7 +196,9 @@ export const COPILOT_TOOLS = [
       "Send a WhatsApp template message to ONE client. Requires the tenant to have an " +
       "active WhatsApp connection (WABA OAuth or manual). The text must come from a " +
       "pre-approved Meta template (you cannot send free-form WhatsApp outside the 24h " +
-      "customer-service window). Audit-logged. Always returns a pending_approval card; " +
+      "customer-service window). A promotional (MARKETING) template is refused for a " +
+      "client who has not opted in to WhatsApp promotions or replied BAJA. " +
+      "Audit-logged. Always returns a pending_approval card; " +
       "the actual send happens after the user clicks Approve.",
     input_schema: {
       type: 'object' as const,
@@ -1022,7 +1027,37 @@ private async sendMessage(
     return { error: 'whatsapp_not_connected', message: 'Conexión WhatsApp incompleta.' };
   }
 
-  const token = decryptAes(conn.accessTokenEnc); // best-effort: see helper below
+  // A promotion (a campaign's kr_promo_* template, or any template Meta files
+  // as MARKETING) only to a client who opted in to WhatsApp promotions and
+  // has not replied BAJA since: Meta's policy, and the client's choice. This
+  // tool used to send any template to any client. A template whose category
+  // cannot be told counts as a promotion.
+  const kind = standardTemplateKind(templateName);
+  let token: string | null = null;
+  let promotion = kind === 'marketing';
+  if (kind === 'unknown') {
+    token = decryptAes(conn.accessTokenEnc);
+    promotion = (await templateCategory(token, conn.wabaId, templateName)) !== 'UTILITY';
+  }
+  if (promotion) {
+    const accepted = await clientsWhoAcceptedWhatsAppMarketing(this.prisma, ctx.tenantId, [client.id]);
+    if (!accepted.has(client.id)) {
+      return {
+        error: 'no_whatsapp_marketing_consent',
+        message:
+          'Esta clienta no ha aceptado recibir promociones por WhatsApp (o respondió BAJA). ' +
+          'Solo puedes enviarle avisos de sus citas.',
+      };
+    }
+  }
+
+  token = token ?? decryptAes(conn.accessTokenEnc); // best-effort: see helper below
+  // The number as Meta wants it: international, digits only ("600 111 222"
+  // in the client file is "34600111222"), as the other WhatsApp senders do.
+  const tenant = await this.prisma.tenant
+    ?.findUnique?.({ where: { id: ctx.tenantId }, select: { country: true } })
+    .catch(() => null);
+  const to = normalizePhone(client.phone, tenant?.country ?? 'ES').replace(/\D/g, '');
   const vars = (args.templateVars as Record<string, string>) ?? {};
   const languageCode = (args.languageCode as string) ?? 'es';
   const components = [
@@ -1044,7 +1079,7 @@ private async sendMessage(
       },
       body: JSON.stringify({
         messaging_product: 'whatsapp',
-        to: client.phone,
+        to,
         type: 'template',
         template: {
           name: templateName,
@@ -1499,4 +1534,32 @@ function decryptAes(cipher: string): string {
  */
 async function metaFetch(url: string, init: RequestInit): Promise<Response> {
   return fetch(url, init);
+}
+
+/**
+ * What a template is, from its name alone: KiraRoom's standard appointment
+ * notices are UTILITY; a WhatsApp campaign's (kr_promo_*) are MARKETING.
+ * Anything else has to be asked of Meta (templateCategory).
+ */
+export function standardTemplateKind(name: string): 'utility' | 'marketing' | 'unknown' {
+  if (name.startsWith('kr_promo_')) return 'marketing';
+  if (STANDARD_TEMPLATES.some((t) => t.name === name && t.category === 'UTILITY')) return 'utility';
+  return 'unknown';
+}
+
+/** Meta's category of a template on the salon's account; null when it cannot be told. */
+async function templateCategory(token: string, wabaId: string | null | undefined, name: string): Promise<string | null> {
+  if (!wabaId) return null;
+  try {
+    const resp = await metaFetch(
+      `https://graph.facebook.com/v20.0/${wabaId}/message_templates?fields=name,category&name=${encodeURIComponent(name)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!resp.ok) return null;
+    const body: any = await resp.json();
+    const found = (body?.data ?? []).find((t: any) => t?.name === name);
+    return typeof found?.category === 'string' ? found.category.toUpperCase() : null;
+  } catch {
+    return null;
+  }
 }

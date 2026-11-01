@@ -31,6 +31,7 @@ import {
 import { ClientLoyaltyCard } from "@/components/loyalty/client-loyalty-card";
 import { ClientMarketingCard } from "@/components/marketing/client-marketing-card";
 import { ClientMergeDialog } from "@/components/clients/client-merge-dialog";
+import { ClientNoticesCard } from "@/components/notifications/client-notices-card";
 import { ClientGdprCard } from "@/components/clients/client-gdpr-card";
 
 /** Shown with the visit list when the server capped it (see the API). */
@@ -212,6 +213,8 @@ export default function ClientDetailPage({
       <ClientLoyaltyCard key={`loyalty-${merges}`} clientId={id} />
 
       <ClientMarketingCard key={`marketing-${merges}`} clientId={id} />
+
+      <ClientNoticesCard clientId={id} />
 
       <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">

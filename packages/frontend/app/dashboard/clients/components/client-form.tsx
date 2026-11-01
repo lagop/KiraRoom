@@ -6,6 +6,7 @@ import { ArrowLeft, Save, Loader2, AlertCircle } from 'lucide-react';
 import Link from 'next/link';
 import apiClient from '@/lib/api';
 import type { CreateClientPayload } from '@/lib/client-form';
+import { MarketingRefusalCheckbox, recordNewClientRefusal } from '@/components/marketing/marketing-refusal-checkbox';
 
 interface ClientFormData {
   firstName: string;
@@ -31,6 +32,8 @@ export function ClientForm({ initialData, clientId }: ClientFormProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  // New clients only: "No quiere recibir promociones ... por email", unticked.
+  const [refusesMarketing, setRefusesMarketing] = useState(false);
   
   const isEdit = !!clientId || (initialData?.id && typeof window !== 'undefined');
   
@@ -91,7 +94,11 @@ export function ClientForm({ initialData, clientId }: ClientFormProps) {
       if (isEdit && clientId) {
         await apiClient.updateClient(clientId, data);
       } else {
-        await apiClient.createClient(data);
+        const created: any = await apiClient.createClient(data);
+        if (refusesMarketing && !(await recordNewClientRefusal(created?.id))) {
+          setError('Clienta creada, pero no se pudo anotar que no quiere promociones: anótalo desde su ficha.');
+          return;
+        }
       }
       
       setSuccess(true);
@@ -323,6 +330,14 @@ export function ClientForm({ initialData, clientId }: ClientFormProps) {
           />
         </div>
       </div>
+
+      {!isEdit && (
+        <MarketingRefusalCheckbox
+          id="new-client-refuses-marketing"
+          checked={refusesMarketing}
+          onChange={setRefusesMarketing}
+        />
+      )}
 
       {/* Form Actions */}
        <div className="flex flex-col gap-2 justify-end pt-6 border-t border-gray-200 sm:flex-row sm:items-center sm:gap-4">

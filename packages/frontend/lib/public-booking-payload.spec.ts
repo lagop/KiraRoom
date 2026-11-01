@@ -24,6 +24,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import {
+  BOOKING_CHOICE_TEXT,
   bookingDateFromQuery,
   bookingErrorMessage,
   compareAppointmentsAsc,
@@ -197,6 +198,36 @@ check("the page exists", fs.existsSync(path.join(ROOT, "app/legal/privacy/page.t
 for (const rel of [...SCREENS, "app/embed/[token]/page.tsx"]) {
   const src = fs.readFileSync(path.join(ROOT, rel), "utf8");
   check(`${rel} shows the privacy notice`, src.includes("privacyPolicyUrl()"), true);
+}
+
+console.log("\n=== the promotions and WhatsApp boxes ===");
+
+// Owner's decision of 2026-11-01: an unticked "No quiero recibir
+// promociones" box with its notice wherever client data is taken, and
+// "Recibir los avisos de mi cita por WhatsApp" when the salon has WhatsApp.
+check("no box sends the client to an account", /cuenta/i.test(Object.values(BOOKING_CHOICE_TEXT).join(" ")), false);
+check("the notice says how to unsubscribe", BOOKING_CHOICE_TEXT.emailNotice.includes("darte de baja"), true);
+for (const rel of ["app/sites/[salonName]/salon-booking-page.tsx", "app/embed/[token]/page.tsx"]) {
+  const src = fs.readFileSync(path.join(ROOT, rel), "utf8");
+  check(
+    `${rel} shows the promotions box and its notice`,
+    src.includes("BOOKING_CHOICE_TEXT.emailRefusal") && src.includes("BOOKING_CHOICE_TEXT.emailNotice"),
+    true,
+  );
+  check(`${rel} shows the WhatsApp box`, src.includes("BOOKING_CHOICE_TEXT.whatsappNotices"), true);
+  check(`${rel} sends refusesMarketingEmail`, src.includes("refusesMarketingEmail: true"), true);
+  check(`${rel} sends wantsWhatsAppNotices`, src.includes("wantsWhatsAppNotices: true"), true);
+  // Both boxes start unticked.
+  check(
+    `${rel} starts with both boxes unticked`,
+    /\[refusesMarketingEmail, setRefusesMarketingEmail\] = useState\(false\)/.test(src) &&
+      /\[wantsWhatsAppNotices, setWantsWhatsAppNotices\] = useState\(false\)/.test(src),
+    true,
+  );
+}
+for (const rel of ["app/dashboard/clients/page.tsx", "app/dashboard/clients/components/client-form.tsx"]) {
+  const src = fs.readFileSync(path.join(ROOT, rel), "utf8");
+  check(`${rel} (add client) has the promotions box`, src.includes("<MarketingRefusalCheckbox"), true);
 }
 
 console.log("\n=== Summary ===");

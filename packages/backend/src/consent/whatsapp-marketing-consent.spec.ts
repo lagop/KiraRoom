@@ -99,14 +99,14 @@ describe("WhatsApp marketing consent", () => {
     expect(consents[1].responses).toEqual({ accepts: false, source: "salon", recordedBy: "staff-1" });
   });
 
-  it("needs the salon to confirm the client agreed before recording a yes", () => {
-    const service: any = { recordMarketingChoice: jest.fn() };
+  it("needs the salon to confirm the client agreed before recording a yes", async () => {
+    const service: any = { recordMarketingChoice: jest.fn(), assertClientInReach: jest.fn() };
     const controller = new ConsentController(service);
     const req: any = { user: { id: "staff-1", tenantId: "t1" }, headers: {}, socket: {} };
 
-    expect(() => controller.setClientWhatsAppMarketing(req, "c1", { accepts: true })).toThrow(BadRequestException);
-    controller.setClientWhatsAppMarketing(req, "c1", { accepts: true, confirmedInPerson: true });
-    controller.setClientWhatsAppMarketing(req, "c1", { accepts: false });
+    await expect(controller.setClientWhatsAppMarketing(req, "c1", { accepts: true })).rejects.toThrow(BadRequestException);
+    await controller.setClientWhatsAppMarketing(req, "c1", { accepts: true, confirmedInPerson: true });
+    await controller.setClientWhatsAppMarketing(req, "c1", { accepts: false });
     expect(service.recordMarketingChoice.mock.calls.map((c: any[]) => [c[0].accepts, c[0].recordedBy, c[0].channel])).toEqual([
       [true, "staff-1", "whatsapp"],
       [false, "staff-1", "whatsapp"],

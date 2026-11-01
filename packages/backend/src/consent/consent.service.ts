@@ -2,14 +2,38 @@ import { Injectable, NotFoundException, BadRequestException, Logger } from "@nes
 import { PrismaService } from "../common/prisma/prisma.service";
 import { EncryptionService } from "../common/encryption/encryption.service";
 import {
+  BOOKING_EMAIL_REFUSAL_TEXT,
+  BOOKING_WHATSAPP_NOTICES_TEXT,
+  ChoiceKind,
+  ChoiceSource,
   MARKETING_FIELD_ID,
-  MarketingChannel,
   SYSTEM_CONSENT_PURPOSES,
   marketingFormFor,
   purposeOf,
   MarketingConsentState,
   marketingStateOf,
+  sameWording,
 } from "./marketing-consent";
+import {
+  NoticeChannels,
+  noticeChannelsOf,
+  salonWhatsAppConnected,
+  smsConfigured,
+  withNoticeChannels,
+} from "./client-notices";
+import { samePhone } from "../common/phone";
+
+/** A client's appointment notices, for the client file. */
+export interface ClientNoticesState {
+  /** The channels her appointment notices go by. */
+  channels: NoticeChannels;
+  /** Her request for WhatsApp notices: when and where it was made. */
+  whatsappRequest: MarketingConsentState;
+  /** Can the salon send them by each channel today? */
+  available: { email: boolean; sms: boolean; whatsapp: boolean };
+  /** Has she the contact details for it? */
+  contact: { email: boolean; phone: boolean };
+}
 
 import {
   ConsentFormFieldDto as ConsentFormField,
@@ -155,7 +179,7 @@ export class ConsentService {
     if (SYSTEM_CONSENT_PURPOSES.includes(form.purpose)) {
       // The marketing choice has its own routes (recordMarketingChoice),
       // which revoke the previous choice.
-      throw new BadRequestException("Marketing consent is given from the client's account");
+      throw new BadRequestException("Communication choices are recorded through their own routes");
     }
     if (input.recordedBy && (!input.signatureName || input.signatureName.trim().length < 2)) {
       throw new BadRequestException("Typed signature name required");
@@ -247,25 +271,47 @@ export class ConsentService {
 
   // ────────── Commercial communications (see marketing-consent.ts) ──────────
 
-  /** The salon's system form for the marketing choice, created on first use. */
-  async ensureMarketingForm(tenantId: string, channel: MarketingChannel = "email") {
+  /**
+   * The salon's system form for this choice, created on first use. When its
+   * wording has changed since (marketing-consent.ts), the stored form is
+   * retired and a new version with the current wording is made: a new
+   * record always keeps the text it was given for, and the old ones keep
+   * theirs in their snapshot.
+   */
+  async ensureMarketingForm(tenantId: string, channel: ChoiceKind = "email") {
     const purpose = purposeOf(channel);
     const { name, fields } = marketingFormFor(channel);
     const existing = await this.prisma.consentForm.findFirst({
       where: { tenantId, purpose, isActive: true },
       orderBy: { version: "desc" },
     });
-    if (existing) return existing;
+    if (existing && sameWording(existing.fields, fields)) return existing;
+    if (existing) {
+      const retired = await this.prisma.consentForm.updateMany({
+        where: { id: existing.id, isActive: true },
+        data: { isActive: false },
+      });
+      if (retired.count === 0) {
+        // Another request retired it meanwhile: use the version it made.
+        const current = await this.prisma.consentForm.findFirst({
+          where: { tenantId, purpose, isActive: true },
+          orderBy: { version: "desc" },
+        });
+        if (current && sameWording(current.fields, fields)) return current;
+      }
+    }
     return this.prisma.consentForm.create({
       data: {
         tenantId,
         name,
         description:
-          "Elección de cada cliente sobre las comunicaciones comerciales. La gestiona el sistema.",
+          channel === "whatsapp_notices"
+            ? "Petición de cada cliente de recibir los avisos de sus citas por WhatsApp. La gestiona el sistema."
+            : "Elección de cada cliente sobre las comunicaciones comerciales. La gestiona el sistema.",
         fields: fields as any,
         serviceIds: [],
         purpose,
-        version: 1,
+        version: (existing?.version ?? 0) + 1,
       },
     });
   }
@@ -274,7 +320,7 @@ export class ConsentService {
   async getMarketingConsent(
     tenantId: string,
     clientId: string,
-    channel: MarketingChannel = "email",
+    channel: ChoiceKind = "email",
   ): Promise<MarketingConsentState> {
     const current = await this.prisma.consent.findFirst({
       where: { tenantId, clientId, revokedAt: null, form: { purpose: purposeOf(channel) } },
@@ -292,14 +338,21 @@ export class ConsentService {
    * `recordedBy` is set when the salon records a choice the client made in
    * person (a staff user id): it is kept in the record's responses, so the
    * record says it was not the client who clicked.
+   *
+   * `source` says where it was made ("booking", "widget"; "salon" is implied
+   * by recordedBy), `shown` the exact text next to the box she ticked, and
+   * `appointmentId` the booking it came with.
    */
   async recordMarketingChoice(input: {
     tenantId: string;
     clientId: string;
     accepts: boolean;
     ip?: string;
-    channel?: MarketingChannel;
+    channel?: ChoiceKind;
     recordedBy?: string;
+    source?: ChoiceSource;
+    shown?: string;
+    appointmentId?: string;
   }): Promise<MarketingConsentState> {
     const channel = input.channel ?? "email";
     const purpose = purposeOf(channel);
@@ -342,20 +395,216 @@ export class ConsentService {
           formSnapshot: form.fields as any,
           responses: {
             [MARKETING_FIELD_ID]: input.accepts,
-            ...(input.recordedBy ? { source: "salon", recordedBy: input.recordedBy } : {}),
+            ...(input.recordedBy
+              ? { source: "salon", recordedBy: input.recordedBy }
+              : input.source
+                ? { source: input.source }
+                : {}),
+            ...(input.shown ? { shown: input.shown } : {}),
           } as any,
           signatureName:
             `${client.firstName ?? ""} ${client.lastName ?? ""}`.trim() || "Cliente",
           signatureIpHash: this.encryption.hashIp(input.ip ?? ""),
           signedAt: now,
+          appointmentId: input.appointmentId ?? null,
         },
         select: { responses: true, signedAt: true, formSnapshot: true },
       });
     });
     this.logger.log(
-      `${channel} marketing consent ${input.accepts ? "granted" : "refused"} tenant=${input.tenantId} client=${input.clientId}` +
-        (input.recordedBy ? ` (recorded by ${input.recordedBy})` : ""),
+      `${channel} choice ${input.accepts ? "granted" : "refused"} tenant=${input.tenantId} client=${input.clientId}` +
+        (input.recordedBy ? ` (recorded by ${input.recordedBy})` : input.source ? ` (${input.source})` : ""),
     );
     return marketingStateOf(created, channel);
+  }
+
+  /**
+   * The client file's rule (ClientsController): owner and admin reach every
+   * client of the salon, staff only those with an appointment with them.
+   * Anyone else answers 404, as the client file does.
+   */
+  async assertClientInReach(
+    tenantId: string,
+    clientId: string,
+    user: { id: string; role: string },
+  ): Promise<void> {
+    const where =
+      user.role === "staff"
+        ? { id: clientId, tenantId, appointments: { some: { professional: { userId: user.id } } } }
+        : { id: clientId, tenantId };
+    const found = await this.prisma.client.findFirst({ where, select: { id: true } });
+    if (!found) throw new NotFoundException("Cliente no encontrado");
+  }
+
+  // ────────── Appointment notices (see client-notices.ts) ──────────
+
+  /** Has the salon its own WhatsApp number connected (the UTILITY templates' sender)? */
+  whatsappConnected(tenantId: string): Promise<boolean> {
+    return salonWhatsAppConnected(this.prisma, tenantId);
+  }
+
+  /** The client's appointment notices by channel, and her WhatsApp request. */
+  async getClientNotices(tenantId: string, clientId: string): Promise<ClientNoticesState> {
+    const client = await this.prisma.client.findFirst({
+      where: { id: clientId, tenantId },
+      select: { email: true, phone: true },
+    });
+    if (!client) throw new NotFoundException("Cliente no encontrado");
+    const [prefs, whatsappRequest, whatsapp] = await Promise.all([
+      this.prisma.notificationPreference.findUnique({ where: { clientId }, select: { preferences: true } }),
+      this.getMarketingConsent(tenantId, clientId, "whatsapp_notices"),
+      this.whatsappConnected(tenantId),
+    ]);
+    return {
+      channels: noticeChannelsOf(prefs?.preferences),
+      whatsappRequest,
+      available: { email: true, sms: smsConfigured(), whatsapp },
+      contact: { email: !!client.email?.trim(), phone: !!client.phone?.trim() },
+    };
+  }
+
+  /**
+   * Turns channels of the client's appointment notices on or off.
+   *
+   * WhatsApp on needs the salon's number connected and a phone, and is the
+   * client's request: it is recorded (when, where, who wrote it down) like a
+   * consent, and from the panel only after the team member confirms she
+   * asked for it (`clientAsked`). WhatsApp off withdraws that record.
+   */
+  async setClientNotices(input: {
+    tenantId: string;
+    clientId: string;
+    changes: Partial<NoticeChannels>;
+    ip?: string;
+    recordedBy?: string;
+    clientAsked?: boolean;
+    source?: ChoiceSource;
+    shown?: string;
+    appointmentId?: string;
+  }): Promise<ClientNoticesState> {
+    const { tenantId, clientId, changes } = input;
+    const client = await this.prisma.client.findFirst({
+      where: { id: clientId, tenantId },
+      select: { phone: true },
+    });
+    if (!client) throw new NotFoundException("Cliente no encontrado");
+
+    if (changes.whatsapp === true) {
+      if (input.recordedBy && input.clientAsked !== true) {
+        throw new BadRequestException("Confirma que la clienta ha pedido recibir los avisos de sus citas por WhatsApp");
+      }
+      if (!client.phone?.trim()) {
+        throw new BadRequestException("La clienta no tiene teléfono: añádelo a su ficha antes");
+      }
+      if (!(await this.whatsappConnected(tenantId))) {
+        throw new BadRequestException("Conecta el WhatsApp del salón en Ajustes para enviar avisos por WhatsApp");
+      }
+    }
+
+    if (typeof changes.whatsapp === "boolean") {
+      const current = await this.getMarketingConsent(tenantId, clientId, "whatsapp_notices");
+      // Off with no request on file: nothing to withdraw.
+      if (changes.whatsapp || current.status === "granted") {
+        await this.recordMarketingChoice({
+          tenantId,
+          clientId,
+          accepts: changes.whatsapp,
+          ip: input.ip,
+          channel: "whatsapp_notices",
+          recordedBy: input.recordedBy,
+          source: input.source,
+          shown: input.shown,
+          appointmentId: input.appointmentId,
+        });
+      }
+    }
+
+    const stored = await this.prisma.notificationPreference.findUnique({
+      where: { clientId },
+      select: { preferences: true },
+    });
+    const preferences = withNoticeChannels(stored?.preferences, changes) as any;
+    await this.prisma.notificationPreference.upsert({
+      where: { clientId },
+      create: { clientId, tenantId, preferences },
+      update: { preferences },
+    });
+    if (input.recordedBy) {
+      this.logger.log(
+        `Appointment notice channels ${JSON.stringify(changes)} tenant=${tenantId} client=${clientId} (set by ${input.recordedBy})`,
+      );
+    }
+    return this.getClientNotices(tenantId, clientId);
+  }
+
+  /**
+   * What the client ticked when booking online (the salon's page or the
+   * widget), recorded once the booking found or created her:
+   *
+   * - "No quiero recibir promociones ... por email": a refusal of email
+   *   promotions, with the text she saw. Unticked records nothing (the
+   *   existing-customer exception of LSSI art. 21.2 applies).
+   * - "Recibir los avisos de mi cita por WhatsApp": her appointment notices
+   *   go by WhatsApp too, from this booking's confirmation on. Only when the
+   *   salon has WhatsApp connected (the box is shown only then), and only to
+   *   the phone she typed: an existing client found by her email whose file
+   *   has another number is left as she is.
+   *
+   * Never fails the booking: a failure is logged.
+   */
+  async recordBookingChoices(input: {
+    tenantId: string;
+    clientId: string;
+    appointmentId?: string;
+    source: "booking" | "widget";
+    ip?: string;
+    typedPhone?: string;
+    refusesMarketingEmail?: boolean;
+    wantsWhatsAppNotices?: boolean;
+  }): Promise<void> {
+    const { tenantId, clientId, source } = input;
+    if (input.refusesMarketingEmail === true) {
+      try {
+        await this.recordMarketingChoice({
+          tenantId,
+          clientId,
+          accepts: false,
+          ip: input.ip,
+          channel: "email",
+          source,
+          shown: BOOKING_EMAIL_REFUSAL_TEXT,
+          appointmentId: input.appointmentId,
+        });
+      } catch (err) {
+        this.logger.warn(`Booking email refusal of client ${clientId} not recorded: ${(err as Error).message}`);
+      }
+    }
+    if (input.wantsWhatsAppNotices === true) {
+      try {
+        const client = await this.prisma.client.findFirst({
+          where: { id: clientId, tenantId },
+          select: { phone: true },
+        });
+        if (!samePhone(client?.phone, input.typedPhone)) {
+          this.logger.log(`WhatsApp notices not turned on for client ${clientId}: the phone on file is not the one typed`);
+          return;
+        }
+        if (!(await this.whatsappConnected(tenantId))) {
+          this.logger.log(`WhatsApp notices not turned on for client ${clientId}: the salon has no WhatsApp connected`);
+          return;
+        }
+        await this.setClientNotices({
+          tenantId,
+          clientId,
+          changes: { whatsapp: true },
+          ip: input.ip,
+          source,
+          shown: BOOKING_WHATSAPP_NOTICES_TEXT,
+          appointmentId: input.appointmentId,
+        });
+      } catch (err) {
+        this.logger.warn(`WhatsApp notices of client ${clientId} not turned on: ${(err as Error).message}`);
+      }
+    }
   }
 }
