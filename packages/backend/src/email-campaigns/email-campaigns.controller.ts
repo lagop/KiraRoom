@@ -45,11 +45,13 @@ export class EmailCampaignsController {
     @CurrentUser() user: User,
     @Query("status") status?: string,
     @Query("campaignType") campaignType?: string,
+    @Query("archived") archived?: string,
   ) {
     return this.campaignsService.getCampaigns(
       user.tenantId,
       status,
       campaignType,
+      archived === "true" || archived === "1",
     );
   }
 
@@ -60,6 +62,13 @@ export class EmailCampaignsController {
   @Roles(...SALON_MANAGERS)
   async getTrackingStatus(@CurrentUser() user: User) {
     return this.campaignsService.getTrackingStatus(user.tenantId);
+  }
+
+  @Get("audience")
+  @ApiOperation({ summary: "Which clients campaigns can reach, and why the others cannot" })
+  @Roles(...SALON_MANAGERS)
+  async getAudience(@CurrentUser() user: User) {
+    return this.campaignsService.getAudience(user.tenantId);
   }
 
   @Get(":id")
@@ -102,11 +111,40 @@ export class EmailCampaignsController {
   }
 
   @Delete(":id")
-  @Roles(UserRole.owner)
-  @ApiOperation({ summary: "Delete campaign (Owner only)" })
+  @Roles(...SALON_MANAGERS)
+  @ApiOperation({ summary: "Delete a campaign that never emailed anyone (others are archived)" })
   @ApiResponse({ status: 200, description: "Campaign deleted" })
+  @ApiResponse({ status: 409, description: "Sent or sending: archive it instead" })
   async deleteCampaign(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
     return this.campaignsService.deleteCampaign(user.tenantId, id);
+  }
+
+  @Post(":id/archive")
+  @Roles(...SALON_MANAGERS)
+  @ApiOperation({ summary: "Archive a campaign: hidden from the list, recipients kept" })
+  async archiveCampaign(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
+    return this.campaignsService.archiveCampaign(user.tenantId, id);
+  }
+
+  @Post(":id/unarchive")
+  @Roles(...SALON_MANAGERS)
+  @ApiOperation({ summary: "Bring an archived campaign back to the list" })
+  async unarchiveCampaign(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
+    return this.campaignsService.unarchiveCampaign(user.tenantId, id);
+  }
+
+  @Post(":id/unschedule")
+  @Roles(...SALON_MANAGERS)
+  @ApiOperation({ summary: "Take a scheduled campaign back to draft" })
+  async unscheduleCampaign(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
+    return this.campaignsService.unscheduleCampaign(user.tenantId, id);
+  }
+
+  @Post(":id/retry-failed")
+  @Roles(...SALON_MANAGERS)
+  @ApiOperation({ summary: "Send again to the recipients whose email could not be sent" })
+  async retryFailed(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
+    return this.campaignsService.retryFailed(user.tenantId, id);
   }
 
   @Post(":id/schedule")
@@ -126,16 +164,16 @@ export class EmailCampaignsController {
   }
 
   @Post(":id/send")
-  @ApiOperation({ summary: "Send campaign now" })
-  @ApiResponse({ status: 200, description: "Campaign sent" })
+  @ApiOperation({ summary: "Start sending a campaign now (in the background)" })
+  @ApiResponse({ status: 200, description: "Campaign queued" })
   @Roles(...SALON_MANAGERS)
   async sendCampaign(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
     return this.campaignsService.sendCampaignNow(user.tenantId, id);
   }
 
   @Post(":id/send-to-all")
-  @ApiOperation({ summary: "Add every active client who accepts promotions, then send" })
-  @ApiResponse({ status: 200, description: "Campaign sent" })
+  @ApiOperation({ summary: "Add every client the campaign may reach, then start sending" })
+  @ApiResponse({ status: 200, description: "Campaign queued" })
   @Roles(...SALON_MANAGERS)
   async sendToAll(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
     return this.campaignsService.sendToAllClients(user.tenantId, id);
@@ -263,9 +301,9 @@ export class EmailCampaignsController {
   @ApiOperation({
     summary: "Get available promotions for re-engagement campaigns",
   })
-  @ApiResponse({ status: 200, description: "List of active promotions" })
+  @ApiResponse({ status: 200, description: "Promotions that are active and not past their end date" })
   @Roles(...SALON_MANAGERS)
   async getAvailablePromotions(@CurrentUser() user: User) {
-    return this.promotionsService.getAll(user.tenantId);
+    return this.promotionsService.getUsable(user.tenantId);
   }
 }

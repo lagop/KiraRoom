@@ -95,3 +95,34 @@ export function lastFour(secret: string | null): string | null {
 export function redactSecrets(message: string): string {
   return message.replace(/re_[A-Za-z0-9_-]{6,}/g, "re_***").replace(/whsec_[A-Za-z0-9+/=_-]{6,}/g, "whsec_***");
 }
+
+/**
+ * A display name safe to put in a From header: no quotes, angle brackets,
+ * backslashes or line breaks (any of them would let the name break out of
+ * the quoted string or start a new header), runs of spaces collapsed, at
+ * most 70 characters. Empty when nothing usable is left.
+ */
+export function cleanDisplayName(name: string | null | undefined): string {
+  return String(name ?? "")
+    .replace(/[\r\n\t"<>\\]/g, " ")
+    // eslint-disable-next-line no-control-regex -- control characters are what this removes
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 70)
+    .trim();
+}
+
+/**
+ * The platform's sender address under another display name:
+ * ("Salón Lucía", "KiraRoom <notificaciones@kiraroom.com>") ->
+ * "\"Salón Lucía\" <notificaciones@kiraroom.com>". The address never
+ * changes (it is the domain Resend verified); only the name does. With no
+ * usable name, or a sender that is not an address, `from` is returned as is.
+ */
+export function senderWithName(name: string | null | undefined, from: string): string {
+  const sender = parseSender(from);
+  const display = cleanDisplayName(name);
+  if (!sender || !display) return from;
+  return `"${display}" <${sender.address}>`;
+}
