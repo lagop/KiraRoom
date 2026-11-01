@@ -16,6 +16,7 @@ import * as fs from "fs";
 import * as path from "path";
 import {
   formatCents,
+  formatDay,
   formatMonth,
   formatMonthRange,
   formatPercentChange,
@@ -60,6 +61,11 @@ check("10 this week vs 8 the week before", weekOverWeekChange(10, 18), 25);
 check("fewer than the week before", weekOverWeekChange(4, 12), -50);
 check("no earlier week to compare", weekOverWeekChange(5, 5), null);
 
+console.log("\n[formatDay]");
+check("day and short month", plain(formatDay("2026-10-12")), "12 oct");
+check("with the year", plain(formatDay("2026-10-12", { withYear: true })), "12 oct 2026");
+check("not a day: unchanged", formatDay("soon"), "soon");
+
 console.log("\n[formatPeriod]");
 check("same year", plain(formatPeriod({ start: "2026-10-01", end: "2026-10-31" })), "1 oct – 31 oct 2026");
 check("across years", plain(formatPeriod({ start: "2025-12-01", end: "2026-01-15" })), "1 dic 2025 – 15 ene 2026");
@@ -88,8 +94,15 @@ check("Empresa: up to 12", periodOptions(12), [3, 6, 12]);
 check("unknown plan: 3", periodOptions(undefined), [3]);
 
 console.log("\n[analytics page leftovers]");
-const pageFile = path.join(__dirname, "../app/dashboard/analytics/page.tsx");
-const page = fs.readFileSync(pageFile, "utf8");
+// The page and the components it was split into.
+const pageDir = path.join(__dirname, "../app/dashboard/analytics");
+const page = [
+  path.join(pageDir, "page.tsx"),
+  path.join(pageDir, "use-analytics-data.ts"),
+  ...fs.readdirSync(path.join(pageDir, "components")).map((f) => path.join(pageDir, "components", f)),
+]
+  .map((f) => fs.readFileSync(f, "utf8"))
+  .join("\n");
 check("no analytics.months key lookups", page.includes("analytics.months"), false);
 check("no dead settings?tab=subscription link", page.includes("tab=subscription"), false);
 check("no err.response (ApiError carries .status)", page.includes("err?.response"), false);
