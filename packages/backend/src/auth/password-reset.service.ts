@@ -5,7 +5,9 @@ import { EmailService } from "../notifications/services/email.service";
 import { hashPassword } from "../saas/saas.helpers";
 
 /**
- * Password reset by email, for salon users and for clients.
+ * Password reset by email, for salon users. (Clients had accounts too;
+ * they no longer do, so no reset link is sent to a client and no client
+ * password is set.)
  *
  * There was none: an owner who forgot their password had no way back in
  * short of writing to support, and a client with a booking account the
@@ -32,8 +34,8 @@ export class PasswordResetService {
     return createHash("sha256").update(token).digest("hex");
   }
 
-  /** Sends a reset link to every account with this email (a client may have one per salon). */
-  async request(rawEmail: string, tenantSlug?: string): Promise<void> {
+  /** Sends a reset link to the salon user with this email, if there is one. */
+  async request(rawEmail: string, _tenantSlug?: string): Promise<void> {
     const email = (rawEmail ?? "").trim();
     if (!email) return;
     const expires = new Date(Date.now() + PasswordResetService.TTL_MS);
@@ -51,25 +53,6 @@ export class PasswordResetService {
       });
       await this.send(user.email, user.firstName, null, `${base}/reset-password?token=${token}`);
       return;
-    }
-
-    const clients = await this.prisma.client.findMany({
-      where: {
-        email: { equals: email, mode: "insensitive" },
-        passwordHash: { not: null },
-        status: { not: "blocked" },
-        ...(tenantSlug ? { tenant: { slug: tenantSlug } } : {}),
-      },
-      select: { id: true, email: true, firstName: true, tenant: { select: { name: true } } },
-      take: 10,
-    });
-    for (const client of clients) {
-      const token = randomBytes(32).toString("hex");
-      await this.prisma.client.update({
-        where: { id: client.id },
-        data: { passwordResetToken: PasswordResetService.hash(token), passwordResetExpires: expires },
-      });
-      await this.send(client.email!, client.firstName, client.tenant?.name ?? null, `${base}/reset-password?token=${token}`);
     }
   }
 
@@ -96,11 +79,6 @@ export class PasswordResetService {
         where: { id: user.id },
         data: { ...cleared, loginAttempts: 0, lockedUntil: null },
       });
-      return;
-    }
-    const client = await this.prisma.client.findFirst({ where: live, select: { id: true } });
-    if (client) {
-      await this.prisma.client.update({ where: { id: client.id }, data: cleared });
       return;
     }
     throw invalid;

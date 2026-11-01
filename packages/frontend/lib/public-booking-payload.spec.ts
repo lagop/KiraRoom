@@ -56,10 +56,8 @@ function check(label: string, actual: unknown, expected: unknown): void {
 }
 
 const ROOT = path.join(__dirname, "..");
-const SCREENS = [
-  "app/sites/[salonName]/salon-booking-page.tsx",
-  "app/sites/[salonName]/account/new-appointment/page.tsx",
-];
+// The client area's booking screen went with client accounts.
+const SCREENS = ["app/sites/[salonName]/salon-booking-page.tsx"];
 
 console.log("\n=== public bookings carry the client's details ===");
 
@@ -128,11 +126,6 @@ check("a recorded closure is closed, even on a day it opens", isClosedDay("2026-
 check("a closure is closed with no hours recorded", isClosedDay("2026-12-25", undefined, ["2026-12-24", "2026-12-25"]), true);
 check("the day after a closure is open", isClosedDay("2026-12-28", weekdaysOnly, ["2026-12-25"]), false);
 check("no screen refuses Sundays outright any more", /dayOfWeek === 0|salonClosedSunday/.test(pageSource), false);
-const clientAreaSource = fs.readFileSync(
-  path.join(ROOT, "app/sites/[salonName]/account/new-appointment/page.tsx"),
-  "utf8",
-);
-check("nor the client area", /dayOfWeek === 0|cerrado los domingos/.test(clientAreaSource), false);
 
 console.log("\n=== only an offered time can be sent ===");
 

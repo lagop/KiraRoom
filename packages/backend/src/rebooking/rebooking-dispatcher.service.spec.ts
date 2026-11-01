@@ -549,3 +549,11 @@ describe("RebookingDispatcherService.runDailyTick", () => {
     expect(m.prisma.rebookingReminder.update.mock.calls[0][0].data.proposedSlot).toBeUndefined();
   });
 });
+
+describe("RebookingDispatcherService booking link", () => {
+  it("opens the salon's booking page with the service, not the removed client area", () => {
+    const url = (build(makeMocks()) as any).buildBookingUrl("salon-luna", "svc-1") as string;
+    expect(url).toMatch(/\/sites\/salon-luna\?serviceId=svc-1$/);
+    expect(url).not.toContain("/account");
+  });
+});

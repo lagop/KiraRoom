@@ -3,8 +3,9 @@ import { AuthService } from "./auth.service";
 import { JwtStrategy } from "./strategies/jwt.strategy";
 
 /**
- * A client the salon marks inactive could still sign in and use her session:
- * only "blocked" was refused, and only by the token check.
+ * Clients no longer have accounts: none signs in, whatever her status or
+ * password, and a session from before is refused. (It started as: a client
+ * the salon marked inactive could still sign in and use her session.)
  */
 const HASH = bcrypt.hashSync("correct-horse-battery", 4);
 
@@ -49,13 +50,13 @@ describe("inactive and blocked clients", () => {
     ).rejects.toMatchObject({ status: 401 });
   });
 
-  it("an active client signs in", async () => {
+  it("an active client with the right password does not sign in either", async () => {
     await expect(
       auth(client("active")).login({ email: "ana@mail.test", password: "correct-horse-battery" } as any),
-    ).resolves.toMatchObject({ user: { id: "c1", role: "client" } });
+    ).rejects.toMatchObject({ status: 401 });
   });
 
-  it.each(["inactive", "blocked"])("a %s client's token and refresh token stop working", async (status) => {
+  it.each(["active", "inactive", "blocked"])("a %s client's token and refresh token stop working", async (status) => {
     const strategy = new JwtStrategy(
       { get: () => "secret-of-sufficient-length-1234567890" } as any,
       { client: { findUnique: jest.fn(async () => client(status)) } } as any,

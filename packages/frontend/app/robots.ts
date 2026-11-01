@@ -3,7 +3,8 @@ import { appBaseUrl } from "@/lib/salon-seo";
 
 /**
  * robots.txt: salons' public pages are for search engines; the panel, the
- * platform console, sign-in screens and each client's private area are not.
+ * platform console and sign-in screens are not. (The clients' private area
+ * is gone: its old addresses redirect to the booking page.)
  */
 export default function robots(): MetadataRoute.Robots {
   return {
@@ -26,9 +27,7 @@ export default function robots(): MetadataRoute.Robots {
           "/example-booking",
           "/public/r/",
           "/public/baja/",
-          "/sites/*/account",
-          // The same private area on a salon's own domain.
-          "/account",
+          "/public/lista-espera/",
         ],
       },
     ],
