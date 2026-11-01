@@ -30,6 +30,13 @@ import {
 } from './pos-discounts';
 import { InvoiceService, type IssuedInvoice } from '../invoices/invoices.service';
 import { CLIENT_POS_SELECT } from '../clients/client-select';
+import {
+  clientEmailFilter,
+  countryForPhone,
+  findClientIdByPhone,
+  normalizeClientEmail,
+  normalizeClientPhone,
+} from '../clients/client-contact';
 
 export { CreatePosOrderDto };
 
@@ -262,27 +269,7 @@ export class PosService {
 
     // If no clientId provided, create or find walk-in client
     if (!clientId && clientInfo) {
-      const existingClient = clientInfo.phone
-        ? await this.prisma.client.findFirst({
-            where: { tenantId, phone: clientInfo.phone },
-          })
-        : null;
-
-      if (existingClient) {
-        finalClientId = existingClient.id;
-      } else {
-        const newClient = await this.prisma.client.create({
-          data: {
-            tenantId,
-            firstName: clientInfo.firstName,
-            lastName: clientInfo.lastName ?? '',
-            email: clientInfo.email,
-            phone: clientInfo.phone,
-            status: 'active',
-          },
-        });
-        finalClientId = newClient.id;
-      }
+      finalClientId = await this.walkInClient(tenantId, clientInfo);
     }
 
     // Points spent on a reward come off the ticket before it is paid.
@@ -808,6 +795,55 @@ export class PosService {
   private async assertClient(tenantId: string, clientId: string): Promise<void> {
     const client = await this.prisma.client.findFirst({ where: { id: clientId, tenantId }, select: { id: true } });
     if (!client) throw new NotFoundException('Client not found');
+  }
+
+  /**
+   * The salon's client typed at the till: the one with that phone (last
+   * nine digits, however it was stored) or that email (any case), else a
+   * new one, stored like every other client (see clients/client-contact.ts).
+   * The phone used to be looked up as typed, so "600 111 222" at the till
+   * made a second client of "+34600111222"; an email already on file failed
+   * the sale with a unique-constraint error.
+   */
+  private async walkInClient(
+    tenantId: string,
+    info: { firstName: string; lastName?: string; email?: string; phone?: string },
+  ): Promise<string> {
+    const email = normalizeClientEmail(info.email) ?? null;
+    const phone = normalizeClientPhone(info.phone, await countryForPhone(this.prisma, tenantId, info.phone)) ?? null;
+    const byEmail = () =>
+      email
+        ? this.prisma.client.findFirst({
+            where: { tenantId, email: clientEmailFilter(email) },
+            orderBy: { createdAt: 'asc' },
+            select: { id: true },
+          })
+        : Promise.resolve(null);
+
+    const existing = (await findClientIdByPhone(this.prisma, tenantId, phone)) ?? (await byEmail())?.id;
+    if (existing) return existing;
+    try {
+      const created = await this.prisma.client.create({
+        data: {
+          tenantId,
+          firstName: info.firstName.trim(),
+          lastName: info.lastName?.trim() ?? '',
+          email,
+          phone,
+          status: 'active',
+        },
+        select: { id: true },
+      });
+      return created.id;
+    } catch (error) {
+      // Created meanwhile (another till, a booking): the email is taken by
+      // her record, so the sale goes to it.
+      if ((error as { code?: string } | null)?.code === 'P2002') {
+        const raced = await byEmail();
+        if (raced) return raced.id;
+      }
+      throw error;
+    }
   }
 
   /**

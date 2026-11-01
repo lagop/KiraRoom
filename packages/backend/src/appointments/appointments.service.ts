@@ -75,7 +75,13 @@ import {
 import { editChangesRows, planRowEdit } from "./visit-edit";
 import { priceIsFrozen } from "./visit-sync";
 import { appointmentLocationId } from "../multi-location/appointment-location";
-import { normalizePhone, phoneKey } from "../common/phone";
+import {
+  clientEmailFilter,
+  findClientIdByPhone,
+  normalizeClientEmail,
+  normalizeClientPhone,
+  salonCountry,
+} from "../clients/client-contact";
 import { isReadOnlyStatus } from "../common/guards/read-only-tenant.guard";
 import type { OnlineBookingDto, StaffBookingDto } from "./dto/book-appointment.dto";
 import { UpdateAppointmentDto } from "./dto/update-appointment.dto";
@@ -530,7 +536,9 @@ export class AppointmentsService {
     db: any = this.prisma,
     { fillMissing }: { fillMissing: boolean } = { fillMissing: true },
   ): Promise<string> {
-    const email = info.email?.trim() || undefined;
+    // Emails are stored in lower case and matched whatever their case (see
+    // clients/client-contact.ts): "Ana@Mail.com" is the client "ana@mail.com".
+    const email = normalizeClientEmail(info.email) ?? undefined;
     const phone = info.phone?.trim() || undefined;
     if (!email && !phone) {
       // An undefined filter is dropped by Prisma: a lookup without either
@@ -539,21 +547,16 @@ export class AppointmentsService {
     }
 
     let existing = email
-      ? await db.client.findFirst({ where: { email, tenantId } })
+      ? await db.client.findFirst({
+          where: { email: clientEmailFilter(email), tenantId },
+          orderBy: { createdAt: "asc" },
+        })
       : null;
     if (!existing && phone) {
       // Stored numbers are in whatever format they were typed ("600 111
-      // 222", "+34600111222"): compare their last nine digits in SQL.
-      const key = phoneKey(phone);
-      const rows: Array<{ id: string }> = key.length === 9
-        ? await db.$queryRaw`
-            SELECT id FROM clients
-            WHERE "tenantId" = ${tenantId}
-              AND right(regexp_replace(coalesce(phone, ''), '\\D', '', 'g'), 9) = ${key}
-            ORDER BY "createdAt" ASC
-            LIMIT 1`
-        : [];
-      existing = rows[0] ? await db.client.findFirst({ where: { id: rows[0].id, tenantId } }) : null;
+      // 222", "+34600111222"): compared on their last nine digits.
+      const id = await findClientIdByPhone(db, tenantId, phone);
+      existing = id ? await db.client.findFirst({ where: { id, tenantId } }) : null;
     }
 
     if (existing) {
@@ -582,11 +585,7 @@ export class AppointmentsService {
 
   /** A client's phone in international form, using the salon's country. */
   private async salonPhone(tenantId: string, phone: string, db: any = this.prisma): Promise<string> {
-    const tenant = await db.tenant.findUnique({
-      where: { id: tenantId },
-      select: { country: true },
-    });
-    return normalizePhone(phone, tenant?.country ?? "ES");
+    return normalizeClientPhone(phone, await salonCountry(db, tenantId)) ?? phone;
   }
 
   /**
@@ -1033,7 +1032,7 @@ export class AppointmentsService {
       // Handle clientEmail filter by finding the client first
       if (filters.clientEmail && !filters.clientId) {
         const client = await this.prisma.client.findFirst({
-          where: { email: filters.clientEmail, tenantId: user.tenantId },
+          where: { email: clientEmailFilter(filters.clientEmail), tenantId: user.tenantId },
         });
         if (client) {
           where.clientId = client.id;

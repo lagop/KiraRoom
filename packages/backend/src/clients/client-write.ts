@@ -1,12 +1,16 @@
 import { BadRequestException, ConflictException } from "@nestjs/common";
 import { ClientStatus, Gender, NifType, Prisma } from "@prisma/client";
 import { validateNif } from "../common/validation/nif.validator";
+import { normalizeClientEmail, normalizeClientPhone } from "./client-contact";
 
 /**
  * Turning a panel form into a Client write, shared by /clients and
  * /admin/clients so the two paths store the same thing.
  *
  * - An optional field sent as null (or "") is emptied; left out, untouched.
+ * - The email is stored in lower case and the phone in international form
+ *   with the salon's country (see client-contact.ts), so the same client is
+ *   found again however her details were typed.
  * - The tax id is checked as a NIF/CIF/NIE unless its type is a passport
  *   or "other" document.
  */
@@ -34,7 +38,11 @@ export interface ClientWriteFields {
 
 export const CLIENT_EMAIL_TAKEN = "Ese email ya está en uso en este salón";
 
-/** P2002 on Client is @@unique([tenantId, email]): say so, as a 409. */
+/**
+ * P2002 on Client is the salon's email being taken: @@unique([tenantId, email])
+ * or its case-insensitive twin (migration 20261101110000_client_email_lowercase).
+ * Say so, as a 409.
+ */
 export function rethrowClientWriteError(error: unknown): never {
   if ((error as { code?: string } | null)?.code === "P2002") {
     throw new ConflictException(CLIENT_EMAIL_TAKEN);
@@ -92,12 +100,12 @@ function optionalEnum<T>(v: T | null | undefined | ""): T | null | undefined {
 }
 
 /** The fields every write shares, already emptied / trimmed. */
-function commonFields(dto: ClientWriteFields) {
+function commonFields(dto: ClientWriteFields, country: string) {
   return {
     firstName: dto.firstName?.trim(),
     lastName: dto.lastName?.trim(),
-    email: optionalText(dto.email),
-    phone: optionalText(dto.phone),
+    email: normalizeClientEmail(dto.email),
+    phone: normalizeClientPhone(dto.phone, country),
     dateOfBirth: optionalDate(dto.dateOfBirth),
     gender: optionalEnum(dto.gender),
     profileImage: optionalText(dto.profileImage),
@@ -119,12 +127,14 @@ function withoutUndefined<T extends Record<string, unknown>>(o: T): T {
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T;
 }
 
+/** `country`: the salon's, for a phone typed without a prefix. */
 export function buildClientCreateData(
   tenantId: string,
   dto: ClientWriteFields,
+  country = "ES",
 ): Prisma.ClientUncheckedCreateInput {
   const taxIdType = optionalEnum(dto.taxIdType);
-  const fields = commonFields(dto);
+  const fields = commonFields(dto, country);
   if (!fields.firstName || !fields.lastName) {
     throw new BadRequestException("El nombre y los apellidos son obligatorios");
   }
@@ -141,11 +151,15 @@ export function buildClientCreateData(
 
 /**
  * An update. `current` is the stored tax id and type: changing only the
- * type (e.g. passport → NIF) re-checks the id already on file.
+ * type (e.g. passport → NIF) re-checks the id already on file. Given the
+ * stored email, the same address sent back in another case is left alone:
+ * not a change, and no clash with a record saved before emails were
+ * lower-cased.
  */
 export function buildClientUpdateData(
   dto: ClientWriteFields,
-  current: { taxId: string | null; taxIdType: NifType | null },
+  current: { taxId: string | null; taxIdType: NifType | null; email?: string | null },
+  country = "ES",
 ): Prisma.ClientUncheckedUpdateInput {
   const taxIdType = optionalEnum(dto.taxIdType);
   const effectiveType = taxIdType !== undefined ? taxIdType : current.taxIdType;
@@ -155,5 +169,9 @@ export function buildClientUpdateData(
   } else if (taxIdType !== undefined && current.taxId) {
     taxId = normalizeClientTaxId(current.taxId, effectiveType);
   }
-  return withoutUndefined({ ...commonFields(dto), taxId, taxIdType }) as Prisma.ClientUncheckedUpdateInput;
+  const fields = commonFields(dto, country);
+  if (fields.email && current.email && fields.email === current.email.trim().toLowerCase()) {
+    fields.email = undefined;
+  }
+  return withoutUndefined({ ...fields, taxId, taxIdType }) as Prisma.ClientUncheckedUpdateInput;
 }

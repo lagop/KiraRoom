@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   useQuery,
   useMutation,
@@ -29,6 +30,7 @@ import {
 } from "@/app/dashboard/appointments/components/appointment-drawer.utils";
 import { ClientLoyaltyCard } from "@/components/loyalty/client-loyalty-card";
 import { ClientMarketingCard } from "@/components/marketing/client-marketing-card";
+import { ClientMergeDialog } from "@/components/clients/client-merge-dialog";
 
 /** Shown with the visit list when the server capped it (see the API). */
 const HISTORY_LIMIT = 100;
@@ -51,6 +53,8 @@ export default function ClientDetailPage({
   const t = useTranslations();
   const { id } = params;
   const qc = useQueryClient();
+  const router = useRouter();
+  const [merges, setMerges] = useState(0);
   // Read after mount: the server has no token (see the dashboard header).
   const [role, setRole] = useState<string | null>(null);
   useEffect(() => {
@@ -154,11 +158,26 @@ export default function ClientDetailPage({
             </p>
           </div>
         </div>
-        <span
-          className={`inline-flex self-start rounded-full px-2 py-1 text-xs font-medium sm:self-center ${clientStatusBadgeClass(c.status)}`}
-        >
-          {t(`clients.status_${c.status}`)}
-        </span>
+        <div className="flex flex-wrap items-center gap-3">
+          <span
+            className={`inline-flex self-start rounded-full px-2 py-1 text-xs font-medium sm:self-center ${clientStatusBadgeClass(c.status)}`}
+          >
+            {t(`clients.status_${c.status}`)}
+          </span>
+          {/* Merging is the owner's or an admin's (the API refuses staff). */}
+          {manager && (
+            <ClientMergeDialog
+              client={c}
+              onMerged={(_result, keptId) => {
+                qc.invalidateQueries({ queryKey: ["clients"] });
+                qc.invalidateQueries({ queryKey: ["rebooking"] });
+                // The other record was kept: this one no longer exists.
+                if (keptId !== id) router.replace(`/dashboard/clients/${keptId}`);
+                else setMerges((n) => n + 1);
+              }}
+            />
+          )}
+        </div>
       </header>
 
       <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
@@ -203,9 +222,10 @@ export default function ClientDetailPage({
 
       <VisitHistory appointments={c.appointments ?? []} />
 
-      <ClientLoyaltyCard clientId={id} />
+      {/* Remounted after a merge: they load their own data. */}
+      <ClientLoyaltyCard key={`loyalty-${merges}`} clientId={id} />
 
-      <ClientMarketingCard clientId={id} />
+      <ClientMarketingCard key={`marketing-${merges}`} clientId={id} />
 
       <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
