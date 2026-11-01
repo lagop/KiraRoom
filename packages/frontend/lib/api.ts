@@ -3563,30 +3563,6 @@ class ApiClient implements ApiClientInterface {
     return this.request<any>(`/analytics/overview?months=${months}`);
   }
 
-  async getRevenueReport(startDate: string, endDate: string): Promise<any> {
-    return this.request<any>(
-      `/analytics/revenue?startDate=${startDate}&endDate=${endDate}`,
-    );
-  }
-
-  async getAppointmentsReport(
-    startDate: string,
-    endDate: string,
-  ): Promise<any> {
-    return this.request<any>(
-      `/analytics/appointments?startDate=${startDate}&endDate=${endDate}`,
-    );
-  }
-
-  async getAppointmentStatusEvolution(
-    status: string,
-    months: number = 6,
-  ): Promise<any> {
-    return this.request<any>(
-      `/analytics/appointment-status-evolution?status=${encodeURIComponent(status)}&months=${months}`,
-    );
-  }
-
   async getAppointmentStatusesEvolution(months: number = 6): Promise<
     {
       period: string;
@@ -3614,25 +3590,15 @@ class ApiClient implements ApiClientInterface {
   }
 
   // Analytics Feature Flags
+  /**
+   * What the analytics page may show: the effective plan (a trial counts as
+   * Pro) and the role (false for staff).
+   */
   async getAnalyticsFeatures(): Promise<{
     hasAdvancedAnalytics: boolean;
-    hasDetailedReports: boolean;
-    hasForecasting: boolean;
-    hasExport: boolean;
     maxMonths: number;
   }> {
     return this.request("/analytics/features");
-  }
-
-  // Advanced Analytics (paid feature)
-  async getDetailedReport(
-    startDate: string,
-    endDate: string,
-    type: string = "both",
-  ): Promise<any> {
-    return this.request<any>(
-      `/analytics/detailed-report?startDate=${startDate}&endDate=${endDate}&type=${type}`,
-    );
   }
 
   async getProfessionalPerformance(range?: string): Promise<any> {

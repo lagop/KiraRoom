@@ -10,12 +10,14 @@ import {
   appointmentValueCents,
   clientRetention,
   dailyMetrics,
+  daysIn,
   explicitPeriod,
   instantRange,
   lastMonthsPeriod,
   monthlyRevenue,
   monthlyStatusCounts,
   occupancy,
+  parseSalonDay,
   percentChange,
   previousPeriod,
   rangePeriod,
@@ -32,8 +34,6 @@ const apt = (over: Partial<AnalyticsAppointment>): AnalyticsAppointment => ({
   status: "completed",
   paymentStatus: "paid",
   amountPaid: 0,
-  totalAmount: 0,
-  price: 0,
   scheduledDate: new Date("2026-10-01T00:00:00.000Z"),
   duration: 60,
   ...over,
@@ -93,25 +93,86 @@ describe("periods follow the salon's calendar", () => {
     });
   });
 
-  it("accepts explicit YYYY-MM-DD dates only", () => {
-    expect(explicitPeriod("2026-10-05", "2026-10-01")).toEqual({ start: "2026-10-01", end: "2026-10-05" });
-    expect(explicitPeriod("ayer", "2026-10-01")).toBeNull();
-    expect(explicitPeriod(undefined, "2026-10-01")).toBeNull();
+  it("accepts explicit periods of real days, in order, within the plan", () => {
+    expect(explicitPeriod("2026-10-01", "2026-10-05")).toEqual({
+      period: { start: "2026-10-01", end: "2026-10-05" },
+    });
+    // 2024 is a leap year: 29 February exists.
+    expect(explicitPeriod("2024-02-29", "2024-03-01")).toHaveProperty("period");
+  });
+
+  it("rejects dates that are not real days, or outside 2000-2100", () => {
+    for (const [start, end] of [
+      ["ayer", "2026-10-01"],
+      [undefined, "2026-10-01"],
+      ["2026-02-31", "2026-03-01"], // Date would read it as 3 March
+      ["2025-02-29", "2025-03-01"], // not a leap year
+      ["2026-13-01", "2026-12-31"],
+      ["2026-10-01T00:00", "2026-10-02"],
+      ["9999-12-31", "9999-12-31"], // the request that froze the server
+      ["1900-01-01", "1900-01-02"],
+      ["2101-01-01", "2101-01-02"],
+    ]) {
+      expect(explicitPeriod(start, end)).toEqual({ error: expect.stringContaining("AAAA-MM-DD") });
+    }
+  });
+
+  it("rejects an end before the start instead of swapping them", () => {
+    expect(explicitPeriod("2026-10-05", "2026-10-01")).toEqual({
+      error: "endDate no puede ser anterior a startDate.",
+    });
+  });
+
+  it("caps the length at the plan's months, never over 366 days", () => {
+    // Esencial (3 months) = 92 days.
+    expect(explicitPeriod("2026-01-01", "2026-04-02", 3)).toHaveProperty("period");
+    expect(explicitPeriod("2026-01-01", "2026-04-03", 3)).toEqual({
+      error: "El período no puede superar 3 meses (92 días) en tu plan.",
+    });
+    // Empresa (12) = 366 days; a larger number of months is cut to 12.
+    expect(explicitPeriod("2024-01-01", "2024-12-31", 12)).toHaveProperty("period");
+    expect(explicitPeriod("2026-01-01", "2027-01-02", 12)).toHaveProperty("error");
+    expect(explicitPeriod("2026-01-01", "2027-01-02", 600)).toHaveProperty("error");
+  });
+
+  it("parseSalonDay round-trips the day", () => {
+    expect(parseSalonDay("2026-11-01")).toBe("2026-11-01");
+    expect(parseSalonDay("2026-04-31")).toBeNull();
+    expect(parseSalonDay(null)).toBeNull();
+  });
+
+  it("daysIn counts the days and refuses runaway periods instead of looping", () => {
+    expect(daysIn({ start: "2026-02-27", end: "2026-03-02" })).toEqual([
+      "2026-02-27",
+      "2026-02-28",
+      "2026-03-01",
+      "2026-03-02",
+    ]);
+    expect(daysIn({ start: "2026-10-02", end: "2026-10-01" })).toEqual([]);
+    expect(daysIn({ start: "2025-11-01", end: "2026-11-01" })).toHaveLength(366);
+    // Past 9999-12-31 the old string loop never ended; now it is one day.
+    expect(daysIn({ start: "9999-12-31", end: "9999-12-31" })).toHaveLength(1);
+    expect(() => daysIn({ start: "2000-01-01", end: "2026-10-01" })).toThrow(/too long/);
+    expect(() => daysIn({ start: "garbage", end: "2026-10-01" })).toThrow(/too long/);
   });
 });
 
 describe("revenue counts what was charged", () => {
-  it("values an appointment in cents: charged, else total, else list price", () => {
-    expect(appointmentValueCents(apt({ amountPaid: 3000, totalAmount: 3500, price: 35 }))).toBe(3000);
-    expect(appointmentValueCents(apt({ totalAmount: 3500, price: 35 }))).toBe(3500);
-    expect(appointmentValueCents(apt({ price: "35.50" }))).toBe(3550);
+  it("values a paid appointment at what was charged, VAT included, and nothing else", () => {
+    expect(appointmentValueCents(apt({ amountPaid: 3000 }))).toBe(3000);
+    expect(appointmentValueCents(apt({ amountPaid: "1234.4" }))).toBe(1234);
+    // Paid with amountPaid 0 (PATCH .../payment): no fallback to the
+    // catalogue total, which excludes VAT when the salon's prices do.
+    const row = { ...apt({ amountPaid: 0 }), totalAmount: 3500, price: 35 };
+    expect(appointmentValueCents(row)).toBe(0);
+    expect(summarize([row]).revenue).toBe(0);
   });
 
   it("leaves out unpaid and cancelled appointments", () => {
     const s = summarize([
-      apt({ totalAmount: 4000 }), // paid, completed
-      apt({ status: "confirmed", paymentStatus: "pending", totalAmount: 9900 }), // not paid yet
-      apt({ status: "cancelled", paymentStatus: "paid", totalAmount: 5000 }), // cancelled
+      apt({ amountPaid: 4000 }), // paid, completed
+      apt({ status: "confirmed", paymentStatus: "pending" }), // not paid yet
+      apt({ status: "cancelled", paymentStatus: "paid", amountPaid: 5000 }), // cancelled
       apt({ status: "confirmed", paymentStatus: "paid", amountPaid: 2000 }), // paid in advance
     ]);
     expect(s.revenue).toBe(6000);
@@ -124,17 +185,20 @@ describe("revenue counts what was charged", () => {
   it("reports changes against a real previous figure only", () => {
     expect(percentChange(150, 100)).toBe(50);
     expect(percentChange(1, 3)).toBe(-66.7);
-    expect(percentChange(10, 0)).toBe(0);
+    // Nothing to compare with: null, shown as "—", never a flat +0 %.
+    expect(percentChange(10, 0)).toBeNull();
+    expect(percentChange(0, 0)).toBeNull();
+    expect(percentChange(0, 10)).toBe(-100);
   });
 
   it("breaks revenue down by service, professional, day and month", () => {
     const ana = { id: "p1", firstName: "Ana", lastName: "Ruiz", profileImage: null };
     const eva = { id: "p2", firstName: "Eva", lastName: "Gil", profileImage: null };
     const rows = [
-      apt({ serviceId: "s1", service: { name: "Corte" }, professional: ana, totalAmount: 2000, scheduledDate: new Date("2026-09-30T00:00:00Z") }),
-      apt({ serviceId: "s1", service: { name: "Corte" }, professional: eva, totalAmount: 2000, scheduledDate: new Date("2026-10-01T00:00:00Z") }),
-      apt({ serviceId: "s2", service: { name: "Color" }, professional: ana, totalAmount: 6000, scheduledDate: new Date("2026-10-01T00:00:00Z") }),
-      apt({ serviceId: "s1", service: { name: "Corte" }, professional: eva, status: "confirmed", paymentStatus: "pending", totalAmount: 2000, scheduledDate: new Date("2026-10-02T00:00:00Z") }),
+      apt({ serviceId: "s1", service: { name: "Corte" }, professional: ana, amountPaid: 2000, scheduledDate: new Date("2026-09-30T00:00:00Z") }),
+      apt({ serviceId: "s1", service: { name: "Corte" }, professional: eva, amountPaid: 2000, scheduledDate: new Date("2026-10-01T00:00:00Z") }),
+      apt({ serviceId: "s2", service: { name: "Color" }, professional: ana, amountPaid: 6000, scheduledDate: new Date("2026-10-01T00:00:00Z") }),
+      apt({ serviceId: "s1", service: { name: "Corte" }, professional: eva, status: "confirmed", paymentStatus: "pending", scheduledDate: new Date("2026-10-02T00:00:00Z") }),
     ];
     expect(topServices(rows)).toEqual([
       { name: "Color", count: 1, revenue: 6000 },

@@ -13,7 +13,7 @@ function setup(professional: { id: string } | null) {
     getOverview: jest.fn(async () => ({})),
     getAppointmentStatusByDays: jest.fn(async () => []),
   };
-  const flags: any = { clampMonths: (_p: string, m: number) => m };
+  const flags: any = { clampMonths: async (_t: string, m: number) => m };
   const professionals: any = { getProfessionalByUserId: jest.fn(async () => professional) };
   return { ctl: new AnalyticsController(analytics, flags, professionals), analytics };
 }
