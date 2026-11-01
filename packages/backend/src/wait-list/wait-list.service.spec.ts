@@ -1,5 +1,14 @@
 import { BadRequestException, ConflictException } from "@nestjs/common";
-import { WaitListService, isQuietHour, parseDay, salonClock } from "./wait-list.service";
+import {
+  WAIT_LIST_MAX_AGE_DAYS,
+  WaitListService,
+  isQuietHour,
+  parseDay,
+  parseWaitListLeaveToken,
+  salonClock,
+  staleReason,
+  waitListLeaveToken,
+} from "./wait-list.service";
 
 /**
  * "Avisar" flipped the entry to "notified" and sent nothing; a cancelled
@@ -88,6 +97,7 @@ function setup(
   const prisma: any = {
     waitList: {
       findFirst: jest.fn(async ({ where }: any) => entries.find((e) => matches(e, where)) ?? null),
+      findUnique: jest.fn(async ({ where }: any) => entries.find((e) => e.id === where.id) ?? null),
       findMany: jest.fn(async ({ where, take }: any) => {
         const out = entries.filter((e) => matches(e, where)).sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
         return typeof take === "number" ? out.slice(0, take) : out;
@@ -98,6 +108,7 @@ function setup(
         for (const e of hit) {
           if (data.status) e.status = data.status;
           if (data.notifiedAt) e.notifiedAt = data.notifiedAt;
+          if (data.closedReason !== undefined) e.closedReason = data.closedReason;
         }
         return { count: hit.length };
       }),
@@ -489,5 +500,182 @@ describe("wait-list helpers", () => {
     expect(isQuietHour(9)).toBe(false);
     expect(isQuietHour(20)).toBe(false);
     expect(isQuietHour(21)).toBe(true);
+  });
+});
+
+describe("stale entries expire", () => {
+  const DAY = 24 * 3600_000;
+  const daysAgo = (n: number) => new Date(MORNING.getTime() - n * DAY);
+
+  it("staleReason: a past 'hasta' (salon's day), or open-ended and untouched for too long", () => {
+    expect(staleReason({ latestDate: D("2026-11-01") }, "2026-11-02", MORNING)).toBe("window_passed");
+    expect(staleReason({ latestDate: D("2026-11-02") }, "2026-11-02", MORNING)).toBeNull();
+    // A window still open is good however old the entry is.
+    expect(staleReason({ latestDate: D("2026-12-01"), updatedAt: daysAgo(400) }, "2026-11-02", MORNING)).toBeNull();
+    expect(staleReason({ updatedAt: daysAgo(WAIT_LIST_MAX_AGE_DAYS + 1) }, "2026-11-02", MORNING)).toBe("too_old");
+    expect(staleReason({ updatedAt: daysAgo(WAIT_LIST_MAX_AGE_DAYS - 1) }, "2026-11-02", MORNING)).toBeNull();
+    // Counted from a later "desde": a request for months ahead is not cut short.
+    expect(staleReason({ updatedAt: daysAgo(200), earliestDate: daysAgo(10) }, "2026-11-02", MORNING)).toBeNull();
+    expect(staleReason({}, "2026-11-02", MORNING)).toBeNull();
+  });
+
+  it("expireStale closes them with the reason and leaves the rest open", async () => {
+    const entries = [
+      { id: "w1", tenantId: "t1", status: "waiting", latestDate: D("2026-10-30"), updatedAt: daysAgo(5), createdAt: 1 },
+      { id: "w2", tenantId: "t1", status: "notified", latestDate: null, earliestDate: null, updatedAt: daysAgo(120), createdAt: 2 },
+      { id: "w3", tenantId: "t1", status: "waiting", latestDate: D("2026-11-20"), updatedAt: daysAgo(5), createdAt: 3 },
+      { id: "w4", tenantId: "t1", status: "waiting", latestDate: null, earliestDate: null, updatedAt: daysAgo(10), createdAt: 4 },
+      { id: "w5", tenantId: "t1", status: "fulfilled", latestDate: D("2026-10-01"), updatedAt: daysAgo(40), createdAt: 5 },
+    ];
+    const { service } = setup({ entries });
+    expect(await service.expireStale()).toBe(2);
+    expect(entries.map((e: any) => [e.status, e.closedReason ?? null])).toEqual([
+      ["expired", "window_passed"],
+      ["expired", "too_old"],
+      ["waiting", null],
+      ["waiting", null],
+      ["fulfilled", null],
+    ]);
+  });
+
+  it("uses each salon's own calendar day", async () => {
+    // 23:30 UTC on 2 Nov is already 3 Nov in Madrid, still 2 Nov in the Canaries.
+    const late = new Date("2026-11-02T23:30:00.000Z");
+    const entries = [
+      { id: "w1", tenantId: "t1", status: "waiting", latestDate: D("2026-11-02"), updatedAt: late, createdAt: 1,
+        tenant: { timezone: "Europe/Madrid" } },
+      { id: "w2", tenantId: "t2", status: "waiting", latestDate: D("2026-11-02"), updatedAt: late, createdAt: 2,
+        tenant: { timezone: "Atlantic/Canary" } },
+    ];
+    const { service } = setup({ entries, now: late });
+    expect(await service.expireStale()).toBe(1);
+    expect(entries.map((e) => e.status)).toEqual(["expired", "waiting"]);
+  });
+
+  it("an expired entry is not offered a freed slot, and is closed then", async () => {
+    const client = (id: string, email: string) => ({
+      id, firstName: "A", email, phone: null, communicationPreferences: {}, status: "active",
+    });
+    const entries = [
+      { id: "w1", tenantId: "t1", clientId: "c1", serviceId: "s1", professionalId: null, status: "waiting",
+        earliestDate: null, latestDate: null, notifiedAt: null, createdAt: 1, updatedAt: daysAgo(200),
+        client: client("c1", "old@example.test") },
+      { id: "w2", tenantId: "t1", clientId: "c2", serviceId: "s1", professionalId: null, status: "waiting",
+        earliestDate: null, latestDate: null, notifiedAt: null, createdAt: 2, updatedAt: daysAgo(3),
+        client: client("c2", "new@example.test") },
+    ];
+    const { service, email } = setup({ emailConfigured: true, autoNotify: true, entries });
+    await service.onAppointmentCancelled({ tenantId: "t1", serviceId: "s1", professionalId: null, date: D("2026-11-08") });
+    expect(email.sendEmail.mock.calls.map((c: any[]) => c[0].to)).toEqual(["new@example.test"]);
+    expect(entries[0].status).toBe("expired");
+  });
+
+  it("Avisar on a stale entry closes it and says why, without sending anything", async () => {
+    const { service, email } = setup({
+      emailConfigured: true,
+      entries: [{ id: "w1", tenantId: "t1", status: "waiting", latestDate: D("2026-10-20"), client: {} }],
+    });
+    await expect(service.notify("t1", "w1")).rejects.toThrow(/caducado/);
+    expect(email.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("an expired entry is reopened only with a 'hasta' that has not passed; 'expired' is not set by hand", async () => {
+    const entries = [
+      { id: "w1", tenantId: "t1", clientId: "c1", serviceId: "s1", professionalId: null, status: "expired",
+        latestDate: D("2026-10-20") },
+    ];
+    const { service, prisma } = setup({ entries });
+    await expect(service.update("t1", "w1", { status: "waiting" })).rejects.toThrow(/ya ha pasado/);
+    await service.update("t1", "w1", { status: "waiting", latestDate: "2026-11-30" });
+    expect(prisma.waitList.update.mock.calls[0][0].data).toMatchObject({
+      status: "waiting",
+      closedReason: null,
+      closedAt: null,
+    });
+    await expect(service.update("t1", "w1", { status: "expired" })).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+
+describe("the 'Ya no me interesa' link", () => {
+  const SECRET = "test-signing-secret-of-enough-length-000";
+  const ID = "11111111-2222-4333-8444-555555555555";
+  const entry = (status = "waiting") => ({
+    id: ID,
+    tenantId: "t1",
+    clientId: "c1",
+    serviceId: "s1",
+    professionalId: null,
+    status,
+    earliestDate: null,
+    latestDate: null,
+    notifiedAt: null,
+    createdAt: 1,
+    client: {
+      id: "c1", firstName: "Ana", email: "ana@example.test", phone: "600111222", communicationPreferences: {}, status: "active",
+    },
+  });
+  let prevSecret: string | undefined;
+  beforeEach(() => {
+    prevSecret = process.env.JWT_SECRET;
+    process.env.JWT_SECRET = SECRET;
+  });
+  afterEach(() => {
+    if (prevSecret === undefined) delete process.env.JWT_SECRET;
+    else process.env.JWT_SECRET = prevSecret;
+  });
+
+  it("the token names the entry, is signed, and cannot be forged or reused with another secret", () => {
+    const token = waitListLeaveToken(ID, SECRET);
+    expect(parseWaitListLeaveToken(token, SECRET)).toBe(ID);
+    expect(token).not.toContain("ana");
+    const [payload, signature] = token.split(".");
+    expect(signature).toHaveLength(32);
+    expect(parseWaitListLeaveToken(token, "another-secret")).toBeNull();
+    expect(parseWaitListLeaveToken(`${payload}.${"A".repeat(32)}`, SECRET)).toBeNull();
+    const other = Buffer.from("w.99999999-2222-4333-8444-555555555555").toString("base64url");
+    expect(parseWaitListLeaveToken(`${other}.${signature}`, SECRET)).toBeNull();
+    expect(parseWaitListLeaveToken("", SECRET)).toBeNull();
+    expect(parseWaitListLeaveToken(`${token}.x`, SECRET)).toBeNull();
+    expect(parseWaitListLeaveToken(token, "")).toBeNull();
+  });
+
+  it("the email and the SMS carry the link; no client-area notice is recorded", async () => {
+    const { service, email, sms, notifications } = setup({
+      emailConfigured: true,
+      smsConfigured: true,
+      entries: [entry()],
+    });
+    const out = await service.notify("t1", ID, { date: "2026-11-08" });
+    const token = encodeURIComponent(waitListLeaveToken(ID, SECRET));
+    expect(email.sendEmail.mock.calls[0][0].html).toContain(`/public/lista-espera/${token}`);
+    expect(email.sendEmail.mock.calls[0][0].html).toContain("Sal de la lista de espera");
+    expect(sms.sendSms.mock.calls[0][0].body).toContain("Si ya no te interesa: ");
+    expect(sms.sendSms.mock.calls[0][0].body).toContain(`/public/lista-espera/${token}`);
+    expect(out.channels.some((c) => c.channel === "inApp")).toBe(false);
+    expect(notifications.create.mock.calls.filter((c: any[]) => c[0].clientId)).toHaveLength(0);
+  });
+
+  it("describes the entry, then takes the client off the list; again is harmless", async () => {
+    const entries: any[] = [entry("notified")];
+    const { service } = setup({ entries });
+    const token = waitListLeaveToken(ID, SECRET);
+    expect(await service.describeLeaveLink(token)).toEqual({ salonName: "Salón Lucía", serviceName: "Corte", waiting: true });
+    expect(await service.leaveByToken(token)).toMatchObject({ waiting: false });
+    expect(entries[0]).toMatchObject({ status: "cancelled", closedReason: "client_left" });
+    await expect(service.leaveByToken(token)).resolves.toMatchObject({ waiting: false });
+    expect(entries[0].status).toBe("cancelled");
+  });
+
+  it("an entry closed meanwhile keeps its status", async () => {
+    const entries = [entry("fulfilled")];
+    const { service } = setup({ entries });
+    await service.leaveByToken(waitListLeaveToken(ID, SECRET));
+    expect(entries[0].status).toBe("fulfilled");
+  });
+
+  it("a bad or unknown token is a 404 that names nobody", async () => {
+    const { service } = setup({ entries: [] });
+    await expect(service.describeLeaveLink("nope")).rejects.toThrow(/Enlace no válido/);
+    await expect(service.leaveByToken(waitListLeaveToken(ID, SECRET))).rejects.toThrow(/Enlace no válido/);
   });
 });

@@ -9,6 +9,7 @@ import {
   thinkingParams,
   withCacheBreakpoints,
 } from './anthropic-request';
+import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL } from './anthropic-models';
 
 @Injectable()
 export class AnthropicProvider {
@@ -301,51 +302,37 @@ export class AnthropicProvider {
     }
   }
 
+  /** The current Claude models (anthropic-models.ts); costPerToken is USD per 1K input tokens. */
   async getAvailableModels(): Promise<any[]> {
-    return [
-      {
-        id: 'claude-3-opus-20240229',
-        name: 'Claude 3 Opus',
-        provider: LLMProvider.ANTHROPIC,
-        contextWindow: 200000,
-        costPerToken: 0.015,
-        features: ['Very high intelligence', 'Complex reasoning', 'Creative generation'],
-        isEnabled: true,
-      },
-      {
-        id: 'claude-3-sonnet-20240229',
-        name: 'Claude 3 Sonnet',
-        provider: LLMProvider.ANTHROPIC,
-        contextWindow: 200000,
-        costPerToken: 0.003,
-        features: ['Great intelligence', 'Balanced performance', 'Fast responses'],
-        isEnabled: true,
-      },
-      {
-        id: 'claude-3-haiku-20240307',
-        name: 'Claude 3 Haiku',
-        provider: LLMProvider.ANTHROPIC,
-        contextWindow: 200000,
-        costPerToken: 0.0008,
-        features: ['Fastest performance', 'High efficiency', 'Cost-effective'],
-        isEnabled: true,
-      },
-    ];
+    return CLAUDE_MODELS.map((m) => ({
+      id: m.id,
+      name: m.name,
+      provider: LLMProvider.ANTHROPIC,
+      contextWindow: m.contextWindow,
+      costPerToken: m.inputPerMTok / 1000,
+      features: m.legacy ? ['Legacy'] : [],
+      isEnabled: true,
+    }));
   }
 
   async testConnection(apiKey: string, model?: string): Promise<any> {
     const testClient = new Anthropic({ apiKey });
+    const testModel = model || DEFAULT_CLAUDE_MODEL;
 
     try {
-      const response = await testClient.messages.create({
-        model: model || 'claude-3-sonnet-20240229',
+      // The same model-dependent parameters as a real request: Claude 5
+      // models think first, and the thinking counts toward max_tokens.
+      const response: any = await testClient.messages.create({
+        model: testModel,
         messages: [{ role: 'user', content: 'Hello, world!' }],
-        max_tokens: 10,
-      });
+        max_tokens: maxTokensFor(testModel, 10),
+        ...thinkingParams(testModel, 'low'),
+      } as any);
+      const text = (response.content ?? []).find((b: any) => b.type === 'text');
 
       return {
         success: true,
-        message: response.content[0].type === 'text' ? response.content[0].text : '',
+        message: text?.text ?? '',
         model: response.model,
       };
     } catch (error) {

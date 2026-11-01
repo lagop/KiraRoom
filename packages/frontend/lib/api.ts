@@ -6088,9 +6088,12 @@ export interface WaitListEntry {
   professionalName: string | null;
   earliestDate: string | null;
   latestDate: string | null;
-  status: "waiting" | "notified" | "cancelled" | "fulfilled";
+  status: "waiting" | "notified" | "cancelled" | "fulfilled" | "expired";
   notifiedAt: string | null;
   notifyCount: number;
+  /** Set when the system (window_passed, too_old) or the client (client_left) closed it. */
+  closedReason?: string | null;
+  closedAt?: string | null;
   notes: string | null;
   createdAt: string;
   lastNotification: {

@@ -8,6 +8,7 @@ import {
   salonSlugForSubdomain,
   subdomainRedirectFor,
 } from "./lib/custom-domain-host";
+import { retiredClientAreaRedirect } from "./lib/client-area-redirect";
 
 // All authentication for `/saas/*` is enforced server-side by the NestJS
 // `SaasOwnerGuard` on the corresponding API endpoints. This middleware is
@@ -80,17 +81,39 @@ async function slugForHost(host: string): Promise<string | null> {
   return slug;
 }
 
+/**
+ * The clients' old sign-in area (lib/client-area-redirect.ts) sends them to
+ * the booking page; null when the path is not part of it.
+ */
+function clientAreaRedirect(request: NextRequest, onSalonHost: boolean): NextResponse | null {
+  if (request.method !== "GET" && request.method !== "HEAD") return null;
+  const target = retiredClientAreaRedirect(request.nextUrl.pathname, request.nextUrl.search, onSalonHost);
+  if (!target) return null;
+  const url = request.nextUrl.clone();
+  url.pathname = target.pathname;
+  url.search = target.search;
+  // 307, not permanent: client accounts could come back one day.
+  return NextResponse.redirect(url, 307);
+}
+
 export async function middleware(request: NextRequest) {
   const host = bareHost(request.headers.get("host"));
 
   // salon-lucia.kiraroom.net: the host names the salon.
   const subdomainSlug = salonSlugForSubdomain(host, SUBDOMAIN_BASE);
   if (subdomainSlug) {
+    const retired = clientAreaRedirect(request, true);
+    if (retired) return retired;
     const target = rewritePathFor(request.nextUrl.pathname, encodeURIComponent(subdomainSlug));
     if (!target) return NextResponse.next();
     const url = request.nextUrl.clone();
     url.pathname = target;
     return NextResponse.rewrite(url);
+  }
+
+  if (isPlatformHost(host, PLATFORM_HOSTS)) {
+    const retired = clientAreaRedirect(request, false);
+    if (retired) return retired;
   }
 
   // app.kiraroom.net/sites/salon-lucia -> the salon's subdomain, once live.
@@ -106,6 +129,8 @@ export async function middleware(request: NextRequest) {
   if (!isPlatformHost(host, PLATFORM_HOSTS)) {
     const slug = await slugForHost(host);
     if (slug) {
+      const retired = clientAreaRedirect(request, true);
+      if (retired) return retired;
       const target = rewritePathFor(request.nextUrl.pathname, encodeURIComponent(slug));
       if (target) {
         const url = request.nextUrl.clone();
