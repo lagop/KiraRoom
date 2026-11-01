@@ -229,6 +229,33 @@ describe("what is charged and invoiced", () => {
     ]);
   });
 
+  it("a loyalty reward used at the till is a discount on the booked lines (#213)", () => {
+    const lines = appointmentInvoiceLines(
+      {
+        price: "65",
+        serviceId: "s-colour",
+        serviceName: "Color",
+        servicePrice: "45",
+        service: { name: "Color premium", price: "55" } as any,
+        services: [
+          { id: "r1", serviceId: "s-colour", professionalId: "ana", scheduledStart: null, scheduledEnd: null, isParallel: false, status: "pending", serviceName: "Color", servicePrice: "45", serviceDuration: 60, service: { name: "Color premium", price: "55" } },
+          { id: "r2", serviceId: "s-cut", professionalId: "ana", scheduledStart: null, scheduledEnd: null, isParallel: false, status: "pending", ...BOOKED_CUT, service: LIVE_CUT },
+        ],
+        addons: [],
+        discount: { loyalty: { catalogueCents: 1300 } },
+      },
+      fiscal,
+    );
+    expect(lines.map((l) => [l.description, l.unitPriceCents])).toEqual([
+      ["Color", 4500],
+      ["Corte", 2000],
+    ]);
+    const loyalty = lines.reduce((s, l) => s + ((l as any).loyaltyDiscountCents ?? 0), 0);
+    const discounts = lines.reduce((s, l) => s + (l.discountCents ?? 0), 0);
+    expect(loyalty).toBe(1300);
+    expect(discounts).toBe(1300);
+  });
+
   it("the till's fallback without a stored total is the booked price", () => {
     expect(appointmentTotalCents({ totalAmount: 0, servicePrice: "20", service: { price: "26" } })).toBe(2000);
     expect(appointmentTotalCents({ totalAmount: 0, service: { price: "26" } })).toBe(2600);
