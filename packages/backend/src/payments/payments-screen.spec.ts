@@ -303,6 +303,8 @@ describe("M4: POST /payments/:id/refund", () => {
         updateMany: jest.fn(async () => ({ count: 1 })),
       },
       invoice: { findFirst: jest.fn(async () => over.invoice ?? null) },
+      // The sale used no promotion code (promotion-at-till.spec.ts covers one).
+      promotionUsage: { findMany: jest.fn(async () => []), updateMany: jest.fn(async () => ({ count: 0 })) },
       // The cash drawer (arqueo): the open session, if any (cash-session-lock.ts).
       $queryRaw: jest.fn(async () => (over.cashSessionId ? [{ id: over.cashSessionId }] : [])),
     };

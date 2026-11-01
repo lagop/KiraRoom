@@ -10,8 +10,10 @@ import {
   Calendar,
   Loader2,
   Lock,
+  Info,
 } from "lucide-react";
 import apiClient from "@/lib/api";
+import type { PromotionStats } from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
 import { useToast } from "@/components/ui/use-toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -23,6 +25,7 @@ import {
   formatPromotionDate,
   promotionPayload,
   promotionTypeLabel,
+  usesLabel,
 } from "@/lib/promotions-format";
 
 interface Promotion {
@@ -39,6 +42,13 @@ interface Promotion {
   startDate: string;
   endDate: string | null;
   isActive: boolean;
+  /** Only these services get the discount at the till; empty: the whole ticket. */
+  applicableServiceIds?: string[];
+}
+
+interface ServiceOption {
+  id: string;
+  name: string;
 }
 
 /** The end date is a calendar day and counts whole: it ends the day after. */
@@ -60,12 +70,20 @@ export default function PromotionsPage() {
   // The promotion about to be deleted, confirmed in the panel's dialog.
   const [pendingDelete, setPendingDelete] = useState<Promotion | null>(null);
   const [deleting, setDeleting] = useState(false);
+  // Uses at the till that still count, and what they took off (GET /promotions/statistics).
+  const [stats, setStats] = useState<Record<string, PromotionStats>>({});
+  // The salon's services, for "only these services".
+  const [services, setServices] = useState<ServiceOption[]>([]);
 
   const toastError = (title: string, error: unknown) =>
     toast({ title, description: errorMessage(error), variant: "destructive" });
 
   useEffect(() => {
     loadPromotions();
+    apiClient
+      .getServices()
+      .then((list) => setServices((list ?? []).map((x: any) => ({ id: x.id, name: x.name }))))
+      .catch(() => setServices([]));
   }, []);
 
   const loadPromotions = async () => {
@@ -73,6 +91,11 @@ export default function PromotionsPage() {
       const data = await apiClient.getPromotions();
       setPromotions(data);
       setPlanBlocked(false);
+      // The figures are extra: the list stands without them.
+      apiClient
+        .getPromotionStatistics()
+        .then((rows) => setStats(Object.fromEntries(rows.map((r) => [r.id, r]))))
+        .catch(() => setStats({}));
     } catch (error) {
       if (isPlanBlocked(error)) setPlanBlocked(true);
       else toastError("No se pudieron cargar las promociones", error);
@@ -99,6 +122,9 @@ export default function PromotionsPage() {
         maxUsesPerClient: field("maxUsesPerClient"),
         startDate: field("startDate"),
         endDate: field("endDate"),
+        // Only when the boxes were shown: a list that failed to load must not clear them.
+        applicableServiceIds:
+          services.length > 0 ? formData.getAll("applicableServiceIds").map(String) : undefined,
       },
       editing,
     );
@@ -125,9 +151,14 @@ export default function PromotionsPage() {
     if (!pendingDelete) return;
     setDeleting(true);
     try {
-      await apiClient.deletePromotion(pendingDelete.id);
+      const result = await apiClient.deletePromotion(pendingDelete.id);
       await loadPromotions();
-      toast({ title: "Promoción eliminada" });
+      // Used at the till already: archived, not deleted (its uses keep it).
+      toast(
+        result?.archived
+          ? { title: t("promotions.archived_toast"), description: t("promotions.archived_toast_description") }
+          : { title: t("promotions.deleted_toast") },
+      );
     } catch (error) {
       // 409 when an active campaign uses it: the server says which one.
       toastError("No se pudo eliminar la promoción", error);
@@ -195,6 +226,13 @@ export default function PromotionsPage() {
           </div>
         )}
       </div>
+
+      {!planBlocked && (
+        <div className="flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+          <Info className="mt-0.5 h-4 w-4 shrink-0" />
+          <p>{t("promotions.till_note")}</p>
+        </div>
+      )}
 
       {planBlocked ? (
         <div className="rounded-lg border border-blue-200 bg-blue-50 p-6">
@@ -298,8 +336,11 @@ export default function PromotionsPage() {
                       {t("promotions.uses")}
                     </p>
                     <p className="font-medium">
-                      {promotion.usedCount}
-                      {promotion.maxUses ? ` / ${promotion.maxUses}` : ""}
+                      {usesLabel(
+                        stats[promotion.id]?.usedCount ?? promotion.usedCount,
+                        promotion.maxUses,
+                        stats[promotion.id]?.totalDiscount,
+                      )}
                     </p>
                   </div>
                   <div>
@@ -308,6 +349,22 @@ export default function PromotionsPage() {
                     </p>
                     <p className="font-medium">
                       {promotionTypeLabel(promotion.type)}
+                    </p>
+                  </div>
+                  <div className="col-span-2">
+                    <p className="text-xs text-gray-500">
+                      {t("promotions.applicable_services")}
+                    </p>
+                    <p className="font-medium">
+                      {promotion.applicableServiceIds?.length
+                        ? promotion.applicableServiceIds
+                            .map((id) => services.find((s) => s.id === id)?.name)
+                            .filter(Boolean)
+                            .join(", ") ||
+                          t("promotions.applicable_services_count", {
+                            count: promotion.applicableServiceIds.length,
+                          })
+                        : t("promotions.applicable_services_all")}
                     </p>
                   </div>
                 </div>
@@ -500,6 +557,29 @@ export default function PromotionsPage() {
                     />
                   </div>
                 </div>
+                {services.length > 0 && (
+                  <fieldset>
+                    <legend className="block text-sm font-medium text-gray-700">
+                      {t("promotions.applicable_services")}
+                    </legend>
+                    <p className="text-xs text-gray-500">
+                      {t("promotions.applicable_services_help")}
+                    </p>
+                    <div className="mt-1 max-h-40 space-y-1 overflow-y-auto rounded-md border border-gray-300 p-2">
+                      {services.map((s) => (
+                        <label key={s.id} className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            name="applicableServiceIds"
+                            value={s.id}
+                            defaultChecked={!!editingPromotion?.applicableServiceIds?.includes(s.id)}
+                          />
+                          <span className="truncate">{s.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+                )}
                 <div>
                   <label className="block text-sm font-medium text-gray-700">
                     {t("promotions.start_date")}
@@ -545,7 +625,11 @@ export default function PromotionsPage() {
       <ConfirmDialog
         open={!!pendingDelete}
         title={t("promotions.delete_confirm")}
-        description={pendingDelete?.name}
+        description={
+          pendingDelete
+            ? `${pendingDelete.name}. ${t("promotions.delete_used_note")}`
+            : undefined
+        }
         confirmLabel={t("promotions.delete_cta")}
         cancelLabel={t("common.cancel")}
         destructive

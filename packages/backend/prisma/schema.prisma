@@ -1033,13 +1033,19 @@ model Promotion {
   startDate            DateTime
   endDate              DateTime?
   isActive             Boolean       @default(true)
-  /// Applicable service IDs (stored as JSON)
+  /// Applicable service IDs (stored as JSON). Empty: the whole ticket.
+  /// Otherwise the till's promotion discount comes off only the lines of
+  /// these services (and of applicableProductIds' products).
   applicableServiceIds Json          @default("[]")
   applicableProductIds Json          @default("[]")
+  /// Deleted from the panel after it was used at the till: kept (its uses
+  /// point at it), hidden from the list and never valid again.
+  archivedAt           DateTime?
 
   /// Relations
-  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant         Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   emailCampaigns EmailCampaign[]
+  usages         PromotionUsage[]
 
   @@unique([tenantId, code])
   @@index([tenantId])
@@ -1054,17 +1060,29 @@ enum PromotionType {
   BUY_X_GET_Y /// Buy X get Y free
 }
 
+/// One use of a promotion code, written by the till inside the sale's
+/// transaction (promotions/promotion-at-till.ts). A full refund of the sale
+/// releases it (releasedAt) and gives the use back (Promotion.usedCount).
 model PromotionUsage {
-  id             String   @id @default(uuid())
-  createdAt      DateTime @default(now())
+  id             String    @id @default(uuid())
+  createdAt      DateTime  @default(now())
   promotionId    String
-  clientId       String
+  /// The sale's client; null on a sale without one (allowed when the
+  /// promotion has no per-client limit).
+  clientId       String?
   orderId        String?
+  /// In euros: the money the code took off the ticket (tax included).
   discountAmount Decimal
   appointmentId  String? /// Link to appointment if applicable
+  /// The till sale (PosSale.id) the code was used on.
+  saleId         String?
+  /// The sale was refunded in full: this use no longer counts.
+  releasedAt     DateTime?
+  promotion      Promotion @relation(fields: [promotionId], references: [id], onDelete: Cascade)
 
   @@index([promotionId])
   @@index([clientId])
+  @@index([saleId])
   @@map("promotion_usage")
 }
 
@@ -3001,6 +3019,11 @@ model InvoiceLine {
   /// base). Already inside discountPct and the amounts; the PDF names it
   /// ("Descuento fidelidad"). 0 on lines from before the column.
   loyaltyDiscountCents Int @default(0)
+  /// The part of the line's discount that is a promotion code applied at
+  /// the till, in the same terms as loyaltyDiscountCents, and its code. The
+  /// PDF names it ("Descuento promoción VERANO10"). 0 / null otherwise.
+  promotionDiscountCents Int @default(0)
+  promotionCode   String?       @db.VarChar(50)
   rectifiedBy     InvoiceLine[] @relation("LineRectifications")
   invoice        Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
@@ -3626,6 +3649,10 @@ model PosDiscount {
   /// appointment whose invoice was already issued (pos.service.ts). Not a
   /// relation, like the ids above.
   rectificationInvoiceId String?
+  /// type promotion: the promotion whose code was applied, and the code
+  /// (not a relation, like the ids above). Outside the staff discount limit.
+  promotionId   String?
+  promotionCode String?          @db.VarChar(50)
   tenant        Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, createdAt])
@@ -3642,6 +3669,8 @@ enum PosDiscountScope {
 enum PosDiscountType {
   percentage
   fixed
+  /// A promotion code (Promociones) applied to the ticket at the till.
+  promotion
 }
 
 /// A sale at the till (POST /pos/checkout, /pos/quick-sale): one row per
@@ -3663,8 +3692,13 @@ model PosSale {
   /// checkout | quick_sale
   kind                 String        @default("checkout") @db.VarChar(20)
   subtotalCents        Int           @default(0)
+  /// Every discount of the ticket: the manual ones and the promotion's.
   discountCents        Int           @default(0)
   loyaltyDiscountCents Int           @default(0)
+  /// The promotion code's part of discountCents, its promotion and code.
+  promotionDiscountCents Int         @default(0)
+  promotionId          String?
+  promotionCode        String?       @db.VarChar(50)
   totalCents           Int           @default(0)
   /// Cash handed back.
   changeCents          Int           @default(0)

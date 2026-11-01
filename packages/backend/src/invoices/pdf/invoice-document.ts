@@ -29,6 +29,9 @@ export interface InvoiceLine {
   discountPct?: number;
   /** The loyalty reward's part of the discount, in the line's price terms (InvoiceLine.loyaltyDiscountCents). */
   loyaltyDiscountCents?: number;
+  /** A promotion code's part of the discount, same terms, and the code (InvoiceLine.promotionDiscountCents). */
+  promotionDiscountCents?: number;
+  promotionCode?: string | null;
   /** The price was given with the tax included (InvoiceLine.taxIncluded): the loyalty amount is then with the tax. */
   taxIncluded?: boolean;
   totalCents: number;
@@ -231,7 +234,12 @@ export function buildInvoiceDocument(input: InvoicePdfInput): InvoiceDocument {
     const hasDiscount = Number.isFinite(discountPct) && discountPct > 0;
     return {
       description: l.description,
-      discount: hasDiscount ? discountLabel(discountPct, Number(l.loyaltyDiscountCents ?? 0), l, currency) : null,
+      discount: hasDiscount
+        ? discountLabel(discountPct, Number(l.loyaltyDiscountCents ?? 0), l, currency, {
+            cents: Number(l.promotionDiscountCents ?? 0),
+            code: l.promotionCode ?? null,
+          })
+        : null,
       quantity: formatQuantity(l.quantity),
       // The price the line was charged at a unit: net of its discount.
       unitPrice: formatMoney(Math.round(l.unitPriceCents * (1 - (hasDiscount ? discountPct : 0) / 100)), currency),
@@ -283,24 +291,31 @@ export function buildInvoiceDocument(input: InvoicePdfInput): InvoiceDocument {
 
 /**
  * A line's discount as printed. The loyalty reward is a discount on the
- * invoice (owner decision 2026-11-02): it is named, with its amount. When it
- * is all of the line's discount, only its name and amount.
+ * invoice (owner decision 2026-11-02): it is named, with its amount; so is a
+ * promotion code applied at the till ("Descuento promoción VERANO10 3,00 €").
+ * When they are all of the line's discount, only their names and amounts.
  */
 export function discountLabel(
   discountPct: number,
   loyaltyCents: number,
   line: { unitPriceCents: number; quantity: number; taxRate?: number; taxIncluded?: boolean },
   currency = "EUR",
+  promotion?: { cents: number; code: string | null },
 ): string {
   const pct = `Dto. ${discountPct.toLocaleString("es-ES", { maximumFractionDigits: 2 })} %`;
-  if (!(loyaltyCents > 0)) return pct;
-  const loyalty = `Descuento fidelidad ${formatMoney(loyaltyCents, currency)}`;
-  // The whole discount is the reward (to the cent of the stored percent).
-  // In the reward's terms: with the tax when the price included it (the stored unit price is the base).
+  const promoCents = promotion && promotion.cents > 0 && promotion.code ? promotion.cents : 0;
+  const named = [
+    ...(promoCents > 0 ? [`Descuento promoción ${promotion!.code} ${formatMoney(promoCents, currency)}`] : []),
+    ...(loyaltyCents > 0 ? [`Descuento fidelidad ${formatMoney(loyaltyCents, currency)}`] : []),
+  ];
+  if (named.length === 0) return pct;
+  // The whole discount is the named ones (to the cent of the stored percent).
+  // In their terms: with the tax when the price included it (the stored unit price is the base).
   const gross = line.taxIncluded ? 1 + Number(line.taxRate ?? 0) / 100 : 1;
   const discountCents = Math.round((line.unitPriceCents * gross * Number(line.quantity) * discountPct) / 100);
   const tolerance = Math.max(2, Math.ceil(Number(line.quantity)));
-  return Math.abs(discountCents - loyaltyCents) <= tolerance ? loyalty : `${pct} (incluye ${loyalty})`;
+  const namedCents = Math.max(0, loyaltyCents) + promoCents;
+  return Math.abs(discountCents - namedCents) <= tolerance ? named.join(" + ") : `${pct} (incluye ${named.join(" y ")})`;
 }
 
 function firstLine(text: string | null | undefined): string | null {

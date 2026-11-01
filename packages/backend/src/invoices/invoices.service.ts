@@ -60,6 +60,9 @@ interface CreateInvoiceInput {
     rectifiesLineId?: string;
     /** The loyalty reward's part of discountCents (InvoiceLineInput.loyaltyDiscountCents). */
     loyaltyDiscountCents?: number;
+    /** A promotion code's part of discountCents and the code (InvoiceLineInput.promotionDiscountCents). */
+    promotionDiscountCents?: number;
+    promotionCode?: string;
     /** The invoice's rounding remainder on this line's tax (InvoiceLineInput.roundingCents). */
     roundingCents?: number;
   }>;
@@ -98,6 +101,9 @@ export interface SimplifiedInvoiceLine {
   discountCents?: number;
   /** The loyalty reward's part of discountCents ("Descuento fidelidad" on the PDF). */
   loyaltyDiscountCents?: number;
+  /** A promotion code's part of discountCents ("Descuento promoción CODE" on the PDF), and the code. */
+  promotionDiscountCents?: number;
+  promotionCode?: string;
   productId?: string;
   serviceId?: string;
 }
@@ -262,6 +268,9 @@ export class InvoiceService {
             taxIncluded: l.taxIncluded,
             ...(l.rectifiesLineId ? { rectifiesLineId: l.rectifiesLineId } : {}),
             ...(l.loyaltyDiscountCents ? { loyaltyDiscountCents: l.loyaltyDiscountCents } : {}),
+            ...(l.promotionDiscountCents
+              ? { promotionDiscountCents: l.promotionDiscountCents, promotionCode: l.promotionCode ?? null }
+              : {}),
           })),
         },
       },

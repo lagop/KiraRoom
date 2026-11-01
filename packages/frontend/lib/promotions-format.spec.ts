@@ -11,6 +11,7 @@ import {
   formatPromotionDate,
   promotionPayload,
   promotionTypeLabel,
+  usesLabel,
 } from "./promotions-format";
 
 let pass = 0;
@@ -60,6 +61,16 @@ check("empty numbers are null", created.maxUses === null && created.maxUsesPerCl
 check("empty end date is null, empty description null", created.endDate === null && created.description === null);
 const edited = promotionPayload(form, true) as any;
 check("edit leaves the code out", !("code" in edited) && edited.name === "Otoño");
+check("no services: the field is left out", !("applicableServiceIds" in created));
+const limited = promotionPayload({ ...form, applicableServiceIds: ["s1", "s2", "s1"] }, false) as any;
+check("the services ticked, once each", JSON.stringify(limited.applicableServiceIds) === JSON.stringify(["s1", "s2"]));
+const cleared = promotionPayload({ ...form, applicableServiceIds: [] }, true) as any;
+check("none ticked on an edit: the whole ticket again", Array.isArray(cleared.applicableServiceIds) && cleared.applicableServiceIds.length === 0);
+
+console.log("uses");
+check("without a limit", usesLabel(3, null) === "3");
+check("with a limit", usesLabel(3, 10) === "3 / 10");
+check("with what they took off", nbsp(usesLabel(3, 10, 12)) === "3 / 10 · 12,00 €", usesLabel(3, 10, 12));
 
 console.log(`\n=== Summary ===\nPass: ${pass}, Fail: ${fail}`);
 if (fail > 0) process.exit(1);

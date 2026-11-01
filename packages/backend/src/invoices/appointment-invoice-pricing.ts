@@ -62,6 +62,19 @@ export function tillDiscountCents(discount: unknown): number {
 }
 
 /**
+ * The promotion code's part of the till discount (`discount.pos.promotion`,
+ * pos.service.ts): its code and its cents in the visit's catalogue terms
+ * (inside tillDiscountCents, never more). Null when none.
+ */
+export function tillPromotionOf(discount: unknown): { code: string; catalogueCents: number } | null {
+  const promo = (discount as { pos?: { promotion?: { code?: unknown; catalogueCents?: unknown } } } | null | undefined)?.pos
+    ?.promotion;
+  const cents = Math.round(Number(promo?.catalogueCents));
+  if (!promo || typeof promo.code !== "string" || !promo.code || !(cents > 0)) return null;
+  return { code: promo.code, catalogueCents: Math.min(cents, tillDiscountCents(discount)) };
+}
+
+/**
  * The cents the client's loyalty reward took off the visit at the till, in
  * the visit's catalogue terms (`Appointment.discount.loyalty.catalogueCents`,
  * pos.service.ts), else 0. Unlike a till discount it does not lower the
@@ -159,6 +172,8 @@ function linesBeforeRounding(appointment: VisitToInvoice, fiscalSettings: Record
   const tax = { taxRate: salonTaxRate(fiscalSettings), taxIncluded: pricesIncludeTaxOf(fiscalSettings) };
   const off = tillDiscountCents(appointment.discount);
   const loyalty = loyaltyDiscountCents(appointment.discount);
+  // A promotion code is part of the till discount: named on the lines it came off.
+  const promo = tillPromotionOf(appointment.discount);
   const charged = Math.round(Number(appointment.price) * 100);
   const listed = charged + off;
   const lines = visitLines({
@@ -171,11 +186,13 @@ function linesBeforeRounding(appointment: VisitToInvoice, fiscalSettings: Record
     const shares = allocateCents(off, lines.map((l) => l.unitPriceCents * l.quantity));
     const left = lines.map((l, i) => l.unitPriceCents * l.quantity - shares[i]);
     const rewards = prorateCapped(loyalty, left.map((cents) => ({ weight: cents, cap: cents })));
+    const promos = prorateCapped(promo?.catalogueCents ?? 0, shares.map((cents) => ({ weight: cents, cap: cents })));
     return lines.map((l, i) => ({
       ...l,
       ...tax,
       ...(shares[i] + rewards[i] > 0 ? { discountCents: shares[i] + rewards[i] } : {}),
       ...(rewards[i] > 0 ? { loyaltyDiscountCents: rewards[i] } : {}),
+      ...(promo && promos[i] > 0 ? { promotionDiscountCents: promos[i], promotionCode: promo.code } : {}),
     }));
   }
   const names = [...new Set(lines.map((l) => l.description))];
@@ -186,6 +203,7 @@ function linesBeforeRounding(appointment: VisitToInvoice, fiscalSettings: Record
       ...(off > 0 ? { unitPriceCents: listed } : {}),
       ...(off + Math.min(loyalty, charged) > 0 ? { discountCents: off + Math.min(loyalty, charged) } : {}),
       ...(Math.min(loyalty, charged) > 0 ? { loyaltyDiscountCents: Math.min(loyalty, charged) } : {}),
+      ...(promo ? { promotionDiscountCents: promo.catalogueCents, promotionCode: promo.code } : {}),
     },
   ];
 }

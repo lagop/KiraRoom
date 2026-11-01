@@ -7,6 +7,8 @@ import { VISIT_ROW_ORDER, minutesUntilFree } from '../../appointments/visit-tota
 import { clientsWhoAcceptedWhatsAppMarketing } from '../../consent/marketing-consent';
 import { normalizePhone } from '../../common/phone';
 import { STANDARD_TEMPLATES } from '../../whatsapp/whatsapp-templates';
+import { addDays, salonToday } from '../../analytics/analytics-metrics';
+import { safeTimeZone } from '../../gift-cards/gift-card-expiry';
 
 /**
  * P2A-staff-copilot: tools the in-app copilot exposes to the LLM.
@@ -259,14 +261,13 @@ export const COPILOT_TOOLS = [
   {
     name: 'create_coupon',
     description:
-      "Issue a single-use discount code for a specific client (or for any client " +
-      "if clientId is omitted). Owner / admin / saas_owner ONLY — receptionists " +
-      "cannot mint coupons. Always requires human approval. The code is unique " +
-      "per tenant.",
+      "Issue a general single-use percentage discount code (any client may bring it; " +
+      "it cannot be tied to one client). Staff apply it at the till (Caja); it is " +
+      "not usable for online booking. Owner / admin / saas_owner ONLY — receptionists " +
+      "cannot mint coupons. Always requires human approval. The code is unique per tenant.",
     input_schema: {
       type: 'object' as const,
       properties: {
-        clientId: { type: 'string', description: 'Optional. Restrict the coupon to one client.' },
         discountPercent: { type: 'number', description: 'Discount percent (1-100).' },
         expiresInDays: { type: 'number', description: 'Days until expiry. Default 30.' },
       },
@@ -1301,8 +1302,11 @@ private async rescheduleAppointment(
   }
 
   /**
-   * Sprint 15: issue a single-use discount code (Promotion) for one
-   * client (or for any client if clientId is omitted).
+   * Sprint 15: issue a general single-use discount code (Promotion): any
+   * client may bring it, and it is applied at the till. It used to take a
+   * clientId and say "para una clienta específica" in the approval, while
+   * nothing tied the code to her: now it is what it says, a general code
+   * with one use, valid from today (the salon's day) for expiresInDays days.
    * Owner / admin / saas_owner ONLY — receptionists do not mint
    * coupons (per RFC §5).
    */
@@ -1317,11 +1321,13 @@ private async rescheduleAppointment(
     if (!Number.isFinite(discountPercent) || discountPercent <= 0 || discountPercent > 100) {
       return { error: 'invalid_discountPercent' };
     }
-    const clientId = (args.clientId as string | undefined) ?? null;
-    const expiresInDays = Math.max(Number(args.expiresInDays ?? 30), 1);
-    const now = new Date();
-    const end = new Date(now);
-    end.setDate(now.getDate() + expiresInDays);
+    const expiresInDays = Math.min(Math.max(Math.round(Number(args.expiresInDays ?? 30)) || 30, 1), 365);
+    // Calendar days, stored as their UTC midnight like the panel's form: the
+    // till reads them in the salon's clock (promotion-at-till.ts).
+    const tenant = await this.prisma.tenant.findUnique({ where: { id: ctx.tenantId }, select: { timezone: true } });
+    const today = salonToday(safeTimeZone(tenant?.timezone));
+    const startDate = new Date(`${today}T00:00:00.000Z`);
+    const endDate = new Date(`${addDays(today, expiresInDays - 1)}T00:00:00.000Z`);
 
     // Generate a unique code: 6-char random uppercase. Retries up to
     // 3 times if we hit the @@unique([tenantId, code]) constraint.
@@ -1330,13 +1336,13 @@ private async rescheduleAppointment(
     const created = await this.prisma.promotion.create({
       data: {
         tenantId: ctx.tenantId,
-        name: clientId ? 'Cupón personalizado' : 'Cupón general',
+        name: 'Cupón general',
         code,
         type: 'PERCENTAGE',
         value: discountPercent as any,
         maxUses: 1,
-        startDate: now,
-        endDate: end,
+        startDate,
+        endDate,
         isActive: true,
         applicableServiceIds: [],
         applicableProductIds: [],
@@ -1349,8 +1355,11 @@ private async rescheduleAppointment(
       couponId: created.id,
       code: created.code,
       discountPercent,
-      clientId,
+      maxUses: 1,
+      /** The last day it is valid (the salon's calendar day). */
+      validUntil: created.endDate?.toISOString().slice(0, 10) ?? null,
       expiresAt: created.endDate?.toISOString() ?? null,
+      usableAt: 'till',
     };
   }
 
