@@ -59,10 +59,11 @@ export default function PrivacyPage() {
             General Tributario.
           </li>
           <li>
-            <strong>Datos fiscales remitidos a la AEAT</strong>: facturas
-            enviadas al sistema Verifactu o TicketBAI con su NIF, importe y
-            hash de firma. Conservados mientras esté vigente la
-            obligación fiscal.
+            <strong>Datos fiscales de las facturas</strong>: NIF, importe y
+            fecha de cada factura emitida, conservados mientras esté vigente
+            la obligación fiscal. Hoy KiraRoom no envía las facturas a la
+            AEAT ni a las diputaciones forales (Verifactu, TicketBAI): ese
+            envío todavía no está disponible.
           </li>
         </ul>
       </Section>
@@ -71,7 +72,7 @@ export default function PrivacyPage() {
         <p>Tratamos los datos personales con las siguientes finalidades:</p>
         <ol>
           <li>Prestar el servicio SaaS contratado (gestión de citas, profesionales, servicios).</li>
-          <li>Emitir facturas y remitirlas a la AEAT o a las diputaciones forales.</li>
+          <li>Emitir facturas (el envío a la AEAT o a las diputaciones forales todavía no está disponible).</li>
           <li>Sincronizar asientos contables con Holded o Sage Despachos (sólo si el cliente activa la integración).</li>
           <li>Detectar y prevenir fraude o abuso del servicio.</li>
           <li>Cumplir obligaciones legales (Art. 66 RGGI, Art. 24 LOPDGDD, LSSI).</li>
@@ -104,8 +105,9 @@ export default function PrivacyPage() {
           <li>
             <strong>AEAT (Agencia Tributaria)</strong> y diputaciones
             forales del País Vasco (Diputación de Bizkaia, Gipuzkoa y
-            Álava) para el cumplimiento de obligaciones fiscales
-            (Verifactu, TicketBAI, SII).
+            Álava) solo cuando una obligación legal lo exija. KiraRoom no
+            les envía las facturas de forma automática (Verifactu,
+            TicketBAI, SII): ese envío todavía no está disponible.
           </li>
           <li>
             <strong>Holded, Sage Despachos, A3 (Wolters Kluwer), NCS</strong>{" "}
@@ -128,7 +130,7 @@ export default function PrivacyPage() {
           <li>Datos de cuenta del salón: mientras dure la relación contractual + 5 años (prescripción de acciones contractuales, Art. 1964 CC).</li>
           <li>Datos de clientes finales: mientras el salón mantenga la cuenta + 2 años desde la última interacción.</li>
           <li>Facturas y datos fiscales: <strong>4 años</strong> (Art. 66 RGGI).</li>
-          <li>Datos de facturación remitidos a la AEAT: mientras esté vigente la obligación fiscal.</li>
+          <li>Registros fiscales de las facturas: mientras esté vigente la obligación fiscal.</li>
         </ul>
       </Section>
 
