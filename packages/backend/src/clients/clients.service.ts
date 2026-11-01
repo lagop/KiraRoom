@@ -23,6 +23,13 @@ import {
   rethrowClientWriteError,
   CLIENT_EMAIL_TAKEN,
 } from "./client-write";
+import {
+  birthDateRange,
+  clientListOrderBy,
+  clientSearchSql,
+  type ClientListQuery,
+  type ClientPage,
+} from "./client-search";
 import { countryForPhone, normalizeClientEmail, normalizeClientPhone } from "./client-contact";
 
 /**
@@ -88,6 +95,37 @@ export class ClientsService {
     });
   }
 
+  /**
+   * One page of the panel's client list (see client-search.ts): search by
+   * name, email or phone, filter by status, sort. Staff get only their own
+   * clients, as in findAll.
+   */
+  async findPage(
+    tenantId: string,
+    scope: ClientScope,
+    query: ClientListQuery,
+  ): Promise<ClientPage<Prisma.ClientGetPayload<{ select: typeof CLIENT_LIST_SELECT }>>> {
+    const where: Prisma.ClientWhereInput = { tenantId, ...this.scopeWhere(scope) };
+    if (query.status) where.status = query.status;
+    const empty = { data: [], total: 0, page: query.page, pageSize: query.pageSize, totalPages: 0 };
+    if (query.search || query.phoneDigits.length > 0) {
+      const rows = await this.prisma.$queryRaw<Array<{ id: string }>>(clientSearchSql(tenantId, query));
+      if (rows.length === 0) return empty;
+      where.id = { in: rows.map((r) => r.id) };
+    }
+    const [data, total] = await Promise.all([
+      this.prisma.client.findMany({
+        where,
+        select: CLIENT_LIST_SELECT,
+        orderBy: clientListOrderBy(query),
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+      }),
+      this.prisma.client.count({ where }),
+    ]);
+    return { data, total, page: query.page, pageSize: query.pageSize, totalPages: Math.ceil(total / query.pageSize) };
+  }
+
   /** Staff see only the clients they have served or will serve. */
   private scopeWhere(scope: ClientScope): Prisma.ClientWhereInput {
     return scope.professionalId
@@ -131,25 +169,9 @@ export class ClientsService {
       where.gender = filters.gender;
     }
 
-    // Filter by age range (calculate from dateOfBirth)
-    if (filters.minAge !== undefined || filters.maxAge !== undefined) {
-      if (filters.minAge !== undefined) {
-        const maxBirthDate = new Date(
-          now.getFullYear() - filters.minAge,
-          now.getMonth(),
-          now.getDate(),
-        );
-        where.dateOfBirth = { ...where.dateOfBirth, lte: maxBirthDate };
-      }
-      if (filters.maxAge !== undefined) {
-        const minBirthDate = new Date(
-          now.getFullYear() - filters.maxAge - 1,
-          now.getMonth(),
-          now.getDate(),
-        );
-        where.dateOfBirth = { ...where.dateOfBirth, gte: minBirthDate };
-      }
-    }
+    // Filter by age range (from dateOfBirth; see birthDateRange).
+    const born = birthDateRange(now, filters.minAge, filters.maxAge);
+    if (born) where.dateOfBirth = born;
 
     // Filter by tags: any of them.
     const tagsWhere = tagsFilter(filters.tags);

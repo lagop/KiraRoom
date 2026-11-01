@@ -69,9 +69,26 @@ export class AdminProfessionalsService {
     );
   }
 
+  /**
+   * The services a professional is to perform, checked to be this salon's.
+   * Any existing id used to be accepted, so a professional could be linked
+   * to another salon's service. Undefined (not sent) stays undefined.
+   */
+  private async salonServiceIds(tenantId: string, serviceIds?: string[]): Promise<string[] | undefined> {
+    if (serviceIds === undefined || serviceIds === null) return undefined;
+    const unique = [...new Set(serviceIds)];
+    if (unique.length === 0) return unique;
+    const found = await this.prisma.service.count({ where: { tenantId, id: { in: unique } } });
+    if (found !== unique.length) {
+      throw new BadRequestException("Alguno de los servicios elegidos no existe en este salón");
+    }
+    return unique;
+  }
+
   async create(createProfessionalDto: CreateInput) {
-    const { serviceIds, ...professionalData } = createProfessionalDto;
+    const { serviceIds: requestedServices, ...professionalData } = createProfessionalDto;
     const isActive = professionalData.isActive ?? true;
+    const serviceIds = await this.salonServiceIds(professionalData.tenantId, requestedServices);
 
     // The controller sets tenantId from the caller's token. This used to
     // fall back, for an unknown tenant, to the FIRST tenant in the database
@@ -242,12 +259,14 @@ export class AdminProfessionalsService {
   async update(tenantId: string, id: string, updateProfessionalDto: UpdateProfessionalDto) {
     // tenantId is in the DTO only because it extends the create one: the salon is
     // the caller's, never moved by a body.
-    const { serviceIds, hireDate, terminationDate, tenantId: _tenantId, ...fields } = updateProfessionalDto;
+    const { serviceIds: requestedServices, hireDate, terminationDate, tenantId: _tenantId, ...fields } =
+      updateProfessionalDto;
     const current = await this.prisma.professional.findFirst({
       where: { id, tenantId },
       select: { isActive: true, email: true, user: { select: { id: true, role: true, email: true } } },
     });
     if (!current) throw new NotFoundException(PROFESSIONAL_NOT_FOUND);
+    const serviceIds = await this.salonServiceIds(tenantId, requestedServices);
 
     // Dates arrive as "YYYY-MM-DD" from the forms; Prisma wants a Date. Raw,
     // every edit from the team list that carried the hire date was a 400.
@@ -278,11 +297,35 @@ export class AdminProfessionalsService {
         );
       }
 
-      // First, update the professional data
-      const professional = await this.prisma.professional.update({
-        where: { id, tenantId },
-        data: professionalData,
-      });
+      // The professional and the services they perform, all or nothing: a
+      // failure between the delete and the create used to leave them with
+      // no services at all. Left out, the services are not touched; an
+      // empty list is "none" (it used to be ignored, so the last service
+      // could never be unticked).
+      const professional =
+        serviceIds === undefined
+          ? await this.prisma.professional.update({
+              where: { id, tenantId },
+              data: professionalData,
+            })
+          : await this.prisma.$transaction(async (tx: any) => {
+              const updated = await tx.professional.update({
+                where: { id, tenantId },
+                data: professionalData,
+              });
+              await tx.professionalService.deleteMany({
+                where: { professionalId: id },
+              });
+              if (serviceIds.length > 0) {
+                await tx.professionalService.createMany({
+                  data: serviceIds.map((serviceId) => ({
+                    professionalId: id,
+                    serviceId,
+                  })),
+                });
+              }
+              return updated;
+            });
 
       if (moveLogin) {
         await this.prisma.user.update({ where: { id: login!.id }, data: { email: loginEmail } });
@@ -292,23 +335,6 @@ export class AdminProfessionalsService {
       if (fields.isActive === false) {
         await revokePanelLogin(this.prisma, tenantId, current.user?.id);
       }
-
-      // Then handle service associations if provided and has values
-      if (serviceIds && serviceIds.length > 0) {
-        // Delete existing service associations
-        await this.prisma.professionalService.deleteMany({
-          where: { professionalId: id },
-        });
-
-        // Create new service associations
-        await this.prisma.professionalService.createMany({
-          data: serviceIds.map((serviceId) => ({
-            professionalId: id,
-            serviceId,
-          })),
-        });
-      }
-
       return professional;
     } catch (error) {
       this.saveError(error, "update");

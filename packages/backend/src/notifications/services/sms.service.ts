@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import Twilio from 'twilio';
 import { MessageBundlesService } from '../../message-bundles/message-bundles.service';
 import { displayDate } from './email.service';
+import { maskPhone, maskPhonesIn } from '../../common/phone';
 
 export interface SmsOptions {
   to: string;
@@ -67,7 +68,7 @@ export class SmsService {
     const formattedPhone = this.formatPhoneNumber(options.to);
 
     if (!this.isValidPhoneNumber(formattedPhone)) {
-      this.logger.error(`Invalid phone number format: ${options.to}`);
+      this.logger.error(`Invalid phone number format: ${maskPhone(options.to)}`);
       return { success: false, error: 'Invalid phone number format' };
     }
 
@@ -80,15 +81,15 @@ export class SmsService {
 
       if (message.status === 'failed' || message.status === 'undelivered') {
         const errorMsg = message.errorMessage || `SMS failed with status: ${message.status}`;
-        this.logger.error(`Failed to send SMS: ${errorMsg}`);
+        this.logger.error(`Failed to send SMS: ${maskPhonesIn(errorMsg)}`);
         return { success: false, error: errorMsg };
       }
 
-      this.logger.log(`SMS sent successfully: ${message.sid} to ${formattedPhone}`);
+      this.logger.log(`SMS sent successfully: ${message.sid} to ${maskPhone(formattedPhone)}`);
       return { success: true, id: message.sid };
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-      this.logger.error(`Failed to send SMS: ${errorMessage}`);
+      this.logger.error(`Failed to send SMS: ${maskPhonesIn(errorMessage)}`);
       return { success: false, error: errorMessage };
     }
   }
@@ -295,14 +296,14 @@ export class SmsService {
       .catch(() => ({ ok: false, remaining: 0, reason: 'no_addon' as const }));
     if (!decision.ok) {
       this.logger.warn(
-        `sms marketing: skipping ${to} for tenant ${tenantId} (${decision.reason ?? 'no_credits'})`,
+        `sms marketing: skipping ${maskPhone(to)} for tenant ${tenantId} (${decision.reason ?? 'no_credits'})`,
       );
       return { sent: false, reason: decision.reason };
     }
     const result = await this.sendSms({ to, body });
     if (!result.success) {
       this.logger.error(
-        `sms marketing: sendSms failed for ${to} (${result.error})`,
+        `sms marketing: sendSms failed for ${maskPhone(to)} (${maskPhonesIn(result.error)})`,
       );
       return { sent: false, reason: result.error };
     }

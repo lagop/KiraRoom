@@ -164,7 +164,7 @@ export default function RebookingSettingsPage() {
                 <tr key={r.id} className="border-t border-gray-100">
                   <td>{r.clientId}</td>
                   <td>{r.serviceId ?? "—"}</td>
-                  <td>{r.status}</td>
+                  <td>{t(`rebooking.status.${r.status}`)}</td>
                   <td>{r.sentAt ?? "—"}</td>
                 </tr>
               ))}

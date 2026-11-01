@@ -28,6 +28,7 @@ interface ServiceOption {
   name: string;
   duration: number;
   price: number;
+  isActive: boolean;
 }
 
 interface EditAppointmentPopoverProps {
@@ -54,6 +55,9 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
   const [when, setWhen] = useState<{ day: string; time: string } | null>(null);
   const [clientId, setClientId] = useState("");
   const [serviceId, setServiceId] = useState("");
+  // The service the appointment had when opened: still offered here if it
+  // has since been deactivated, so the form does not silently change it.
+  const [loadedServiceId, setLoadedServiceId] = useState("");
   const [clientSearch, setClientSearch] = useState("");
   const [showClientSuggestions, setShowClientSuggestions] = useState(false);
   const [notes, setNotes] = useState("");
@@ -111,6 +115,7 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
          // Set form fields directly from API response (it has all the fields we need)
          setClientId(apiAppointment.clientId || "");
          setServiceId(apiAppointment.serviceId || "");
+         setLoadedServiceId(apiAppointment.serviceId || "");
          
 // Set additional fields - handle undefined values from API.
          // These three fields (depositRequired/depositAmount/commissionRate)
@@ -164,6 +169,7 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
           name: s.name,
           duration: s.duration,
           price: s.price,
+          isActive: s.isActive !== false,
         }));
         setServices(mappedServices);
       } catch (err) {
@@ -383,7 +389,9 @@ export const EditAppointmentPopover: React.FC<EditAppointmentPopoverProps> = ({
                   className="w-full px-3 py-1.5 text-sm border border-border rounded-md focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-background"
                 >
                   <option value="">{t("appointments.calendarView.selectService")}</option>
-                  {services.map((service) => (
+                  {services
+                    .filter((service) => service.isActive || service.id === loadedServiceId)
+                    .map((service) => (
                     <option key={service.id} value={service.id}>
                       {t("appointments.calendarView.serviceOption", { name: service.name, minutes: service.duration })}
                     </option>

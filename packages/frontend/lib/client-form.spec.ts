@@ -151,5 +151,34 @@ check("the page no longer casts the API client to any", /apiClient as any/.test(
 const detail = fs.readFileSync(path.join(__dirname, "../app/dashboard/clients/[id]/page.tsx"), "utf8");
 check("the client file does not use React's use(params) (Next 15 only)", /\buse\(params\)/.test(detail), false);
 
+// ----- Phase 3: list, delete, labels ------------------------------------------
+
+check("the list is paged and searched by the server", /apiClient\s*\.getClientsPage\(/.test(page), true);
+check("the list no longer loads every client to filter in the browser", /apiClient\.getClients\(\)/.test(page), false);
+check("the list has a status filter", /setStatusFilter\(/.test(page), true);
+check("deleting is confirmed in the panel's dialog, not a toast", /<ConfirmDialog/.test(page) && !/toastId/.test(page), true);
+check("the delete dialog's buttons are off while it runs", /loading=\{deleting\}/.test(page), true);
+check("sortable headers are buttons (reachable with the keyboard)", /aria-sort=/.test(page) && !/<th[^>]*onClick/.test(page), true);
+check("the drawers scroll on a phone", (page.match(/className=\{`\$\{DRAWER_CONTENT\}/g) ?? []).length, 2);
+
+const messages: Record<string, any> = {
+  es: JSON.parse(fs.readFileSync(path.join(__dirname, "../messages/es.json"), "utf8")),
+  en: JSON.parse(fs.readFileSync(path.join(__dirname, "../messages/en.json"), "utf8")),
+};
+for (const lang of ["es", "en"]) {
+  for (const status of ["scheduled", "sent", "cancelled", "failed", "booked"]) {
+    check(`${lang}: rebooking status "${status}" has a label`, typeof messages[lang].rebooking.status[status], "string");
+  }
+  for (const key of ["deleting", "page_summary", "previous_page", "next_page", "pagination", "sort_by_column"]) {
+    check(`${lang}: clients.${key}`, typeof messages[lang].clients[key], "string");
+  }
+}
+check("the reminder history shows the status label, not the raw value", />\{r\.status\}</.test(detail), false);
+check(
+  "the delete warning says she is only deactivated when she has history",
+  /inactiva/.test(messages.es.clients.delete_warning_message),
+  true,
+);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

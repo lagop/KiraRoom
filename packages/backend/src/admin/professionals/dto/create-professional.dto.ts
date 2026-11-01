@@ -109,6 +109,7 @@ export class CreateProfessionalDto {
 
   @ApiProperty({ description: 'Associated service IDs', type: [String], example: ['service-uuid-1', 'service-uuid-2'] })
   @IsArray()
+  @IsString({ each: true })
   @IsOptional()
   serviceIds?: string[];
 }

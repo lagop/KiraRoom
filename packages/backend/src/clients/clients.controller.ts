@@ -11,6 +11,7 @@ import { RolesGuard } from "../auth/guards/roles.guard";
 import { UserRole } from "@prisma/client";
 import { ClientsService, ClientFilters, ClientScope } from "./clients.service";
 import { CreateClientDto, UpdateClientDto, UpdateMyProfileDto, ChangeMyPasswordDto } from "./dto";
+import { parseClientListQuery } from "./client-search";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { User } from "@prisma/client";
 import { ProfessionalsService } from "../professionals/professionals.service";
@@ -73,12 +74,29 @@ export class ClientsController {
 
   @Get()
   @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  @ApiOperation({ summary: "The salon's clients (staff: only their own)" })
+  @ApiOperation({
+    summary: "The salon's clients (staff: only their own)",
+    description:
+      "Without `page`: every client, as an array. With `page`: { data, total, page, pageSize, totalPages }, " +
+      "searched by `q` (name or email, accents ignored; phone by its digits), filtered by `status`, " +
+      "sorted by `sort` (firstName, lastName, email, status, createdAt) and `dir` (asc, desc).",
+  })
   // A `tenantId` query parameter is ignored: the tenant is the caller's.
-  async findAll(@CurrentUser() user: any) {
+  async findAll(
+    @CurrentUser() user: any,
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
+    @Query("q") q?: string,
+    @Query("status") status?: string,
+    @Query("sort") sort?: string,
+    @Query("dir") dir?: string,
+  ) {
+    // Without `page` the whole list, as every other caller reads it.
+    const query = page !== undefined ? parseClientListQuery({ page, pageSize, q, status, sort, dir }) : null;
     const scope = await this.scopeFor(user);
-    if (!scope) return [];
-    return this.clientsService.findAll(user.tenantId, scope);
+    if (!query) return scope ? this.clientsService.findAll(user.tenantId, scope) : [];
+    if (!scope) return { data: [], total: 0, page: query.page, pageSize: query.pageSize, totalPages: 0 };
+    return this.clientsService.findPage(user.tenantId, scope, query);
   }
 
   @Get("filter")

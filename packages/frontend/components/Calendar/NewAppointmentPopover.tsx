@@ -94,7 +94,8 @@ export const NewAppointmentPopover: React.FC<NewAppointmentPopoverProps> = ({
         setClients(mappedClients);
 
         const rawServices = (servicesData as any).data || servicesData;
-        const mappedServices = (rawServices as any[]).map((s: any) => ({
+        // A deactivated service is off the menu (the server refuses it too).
+        const mappedServices = (rawServices as any[]).filter((s: any) => s.isActive !== false).map((s: any) => ({
           id: s.id,
           name: s.name,
           duration: s.duration,

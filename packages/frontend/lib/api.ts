@@ -555,6 +555,25 @@ export interface AppointmentService {
   professional?: Professional;
 }
 
+/** GET /clients?page=…: one page of the panel's client list. */
+export interface ClientListParams {
+  page: number;
+  pageSize?: number;
+  /** Name or email (accents ignored), or phone digits. */
+  q?: string;
+  status?: Client["status"];
+  sort?: "firstName" | "lastName" | "email" | "status" | "createdAt";
+  dir?: "asc" | "desc";
+}
+
+export interface ClientPage {
+  data: Client[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
 export interface Client {
   id: string;
   createdAt: string;
@@ -627,9 +646,32 @@ export interface Service {
   description?: string;
   category: "hair" | "nails" | "facial" | "massage" | "body" | "other";
   duration: number;
+  /** Euros. Arrives as a string ("25.00", a Decimal column): Number() it. */
   price: number;
   currency: string;
   isActive: boolean;
+  /** The salon's own view only (the public one leaves the settings out). */
+  isOnlineBookable?: boolean;
+  requiresApproval?: boolean;
+  /** Hours of notice an online booking needs. */
+  minAdvanceBooking?: number;
+  /** Days ahead an online booking may be made. */
+  maxAdvanceBooking?: number;
+}
+
+/** What the services panel sends; see lib/service-form.ts. */
+export interface ServiceWrite {
+  name: string;
+  description?: string;
+  category: "hair" | "nails" | "facial" | "massage" | "body" | "other";
+  duration: number;
+  price: number;
+  currency: string;
+  isActive?: boolean;
+  isOnlineBookable?: boolean;
+  requiresApproval?: boolean;
+  minAdvanceBooking?: number;
+  maxAdvanceBooking?: number;
 }
 
 export interface Professional {
@@ -1502,6 +1544,7 @@ export interface ApiClientInterface {
   markAppointmentNoShow(id: string): Promise<Appointment>;
   deleteAppointment(id: string): Promise<void>;
   getClients(tenantId?: string): Promise<Client[]>;
+  getClientsPage(params: ClientListParams): Promise<ClientPage>;
   filterClients(filters: {
     gender?: string;
     minAge?: number;
@@ -1522,26 +1565,8 @@ export interface ApiClientInterface {
   mergeClient(targetId: string, sourceClientId: string): Promise<ClientMergeResult>;
   getServices(tenantId?: string): Promise<Service[]>;
   getService(id: string): Promise<Service>;
-  createService(data: {
-    name: string;
-    description?: string;
-    category: "hair" | "nails" | "facial" | "massage" | "body" | "other";
-    duration: number;
-    price: number;
-    currency: string;
-  }): Promise<Service>;
-  updateService(
-    id: string,
-    data: Partial<{
-      name: string;
-      description?: string;
-      category: "hair" | "nails" | "facial" | "massage" | "body" | "other";
-      duration: number;
-      price: number;
-      currency: string;
-      isActive: boolean;
-    }>,
-  ): Promise<Service>;
+  createService(data: ServiceWrite): Promise<Service>;
+  updateService(id: string, data: Partial<ServiceWrite>): Promise<Service>;
   deleteService(id: string): Promise<HistoryDeleteResult>;
   getProfessionalsPublic(tenantId?: string): Promise<Professional[]>;
   getProfessionals(tenantId?: string): Promise<Professional[]>;
@@ -2532,6 +2557,17 @@ class ApiClient implements ApiClientInterface {
     return this.request<Client[]>(`/clients${params}`);
   }
 
+  /** One page of the clients list, searched and filtered by the server. */
+  async getClientsPage(params: ClientListParams): Promise<ClientPage> {
+    const query = new URLSearchParams({ page: String(params.page) });
+    if (params.pageSize) query.set("pageSize", String(params.pageSize));
+    if (params.q?.trim()) query.set("q", params.q.trim());
+    if (params.status) query.set("status", params.status);
+    if (params.sort) query.set("sort", params.sort);
+    if (params.dir) query.set("dir", params.dir);
+    return this.request<ClientPage>(`/clients?${query.toString()}`);
+  }
+
   async filterClients(filters: {
     gender?: string;
     minAge?: number;
@@ -2630,32 +2666,14 @@ class ApiClient implements ApiClientInterface {
     return this.request<Service>(`/services/${id}`);
   }
 
-  async createService(data: {
-    name: string;
-    description?: string;
-    category: "hair" | "nails" | "facial" | "massage" | "body" | "other";
-    duration: number;
-    price: number;
-    currency: string;
-  }): Promise<Service> {
+  async createService(data: ServiceWrite): Promise<Service> {
     return this.request<Service>("/services", {
       method: "POST",
       body: JSON.stringify(data),
     });
   }
 
-  async updateService(
-    id: string,
-    data: Partial<{
-      name: string;
-      description?: string;
-      category: "hair" | "nails" | "facial" | "massage" | "body" | "other";
-      duration: number;
-      price: number;
-      currency: string;
-      isActive: boolean;
-    }>,
-  ): Promise<Service> {
+  async updateService(id: string, data: Partial<ServiceWrite>): Promise<Service> {
     // PUT: the backend route is `@Put(":id")`; PATCH was a 404, so no
     // service could be edited or toggled from the dashboard.
     return this.request<Service>(`/services/${id}`, {
@@ -5745,12 +5763,15 @@ export interface WaitListEntry {
     channels: WaitListChannelOutcome[];
     slot: { date: string | null; time: string | null; professionalId: string | null };
   } | null;
+  // email and phone are null for staff (contactHidden): only owner and admin see them.
   client: { firstName: string; lastName: string; email: string | null; phone: string | null };
+  contactHidden?: boolean;
 }
 
 export interface WaitListNotifyResult {
   notified: boolean;
   channels: WaitListChannelOutcome[];
-  bookingUrl: string;
+  // null when the service is not bookable online: the notice asks the client to call.
+  bookingUrl: string | null;
   summary: string;
 }
