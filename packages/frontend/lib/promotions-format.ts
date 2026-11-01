@@ -52,6 +52,8 @@ export interface PromotionFormValues {
   maxUsesPerClient: string;
   startDate: string;
   endDate: string;
+  /** The services it is limited to (the boxes ticked); none: the whole ticket. */
+  applicableServiceIds?: string[];
 }
 
 /**
@@ -71,5 +73,12 @@ export function promotionPayload(form: PromotionFormValues, editing: boolean) {
     maxUsesPerClient: int(form.maxUsesPerClient),
     startDate: form.startDate,
     endDate: form.endDate || null,
+    ...(form.applicableServiceIds ? { applicableServiceIds: [...new Set(form.applicableServiceIds)] } : {}),
   };
+}
+
+/** "3 / 10" uses, with what they took off when there is something: "3 / 10 · 12,00 €". */
+export function usesLabel(usedCount: number, maxUses: number | null, discountedEuros?: number | null): string {
+  const uses = maxUses ? `${usedCount} / ${maxUses}` : String(usedCount);
+  return discountedEuros && discountedEuros > 0 ? `${uses} · ${formatEuros(discountedEuros)}` : uses;
 }

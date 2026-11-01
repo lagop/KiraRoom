@@ -1,5 +1,5 @@
 import { PromotionsController } from "./promotions.controller";
-import { ApplyPromotionDto, CreatePromotionDto, UpdatePromotionDto } from "./dto/promotion.dto";
+import { CreatePromotionDto, UpdatePromotionDto } from "./dto/promotion.dto";
 import { bodyMetatype, bodyParser } from "../common/validation/validated-body.testing";
 
 const uuid = (first: number) => `${first}f1c2a9e-8b7d-4c6e-9a5f-1b2c3d4e5f60`;
@@ -22,7 +22,10 @@ describe("promotion bodies", () => {
   it("are validated classes, not interfaces", () => {
     expect(bodyMetatype(PromotionsController, "create")).toBe(CreatePromotionDto);
     expect(bodyMetatype(PromotionsController, "update")).toBe(UpdatePromotionDto);
-    expect(bodyMetatype(PromotionsController, "apply")).toBe(ApplyPromotionDto);
+  });
+
+  it("has no endpoint that records a use: the till is the only writer", () => {
+    expect((PromotionsController.prototype as any).apply).toBeUndefined();
   });
 
   describe("POST /promotions", () => {
@@ -74,17 +77,21 @@ describe("promotion bodies", () => {
     });
   });
 
-  describe("POST /promotions/apply", () => {
-    const parse = bodyParser(PromotionsController, "apply");
+  describe("applicable services", () => {
+    const create = bodyParser(PromotionsController, "create");
+    const update = bodyParser(PromotionsController, "update");
 
-    it("accepts a code, a client and an order value", async () => {
-      const body = { code: "OTONO10", clientId: uuid(3), orderValue: 42 };
-      expect(await parse(body)).toEqual(body);
+    it("take a list of service ids", async () => {
+      expect(await create({ ...panelForm, applicableServiceIds: [uuid(3)] })).toEqual({
+        ...panelForm,
+        applicableServiceIds: [uuid(3)],
+      });
+      expect(await update({ applicableServiceIds: [] })).toEqual({ applicableServiceIds: [] });
     });
 
-    it("refuses a client that is not an id and a negative order", async () => {
-      await expect(parse({ code: "A", clientId: { not: "" }, orderValue: 1 })).rejects.toBeDefined();
-      await expect(parse({ code: "A", clientId: uuid(3), orderValue: -1 })).rejects.toBeDefined();
+    it("refuse anything but ids", async () => {
+      await expect(create({ ...panelForm, applicableServiceIds: ["corte"] })).rejects.toBeDefined();
+      await expect(update({ applicableServiceIds: "x" })).rejects.toBeDefined();
     });
   });
 });

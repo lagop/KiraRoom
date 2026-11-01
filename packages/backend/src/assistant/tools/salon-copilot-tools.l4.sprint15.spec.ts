@@ -1,4 +1,5 @@
-import { SalonCopilotToolsService } from './salon-copilot-tools';
+import { COPILOT_TOOLS, SalonCopilotToolsService } from './salon-copilot-tools';
+import { TOOL_PREVIEW } from '../assistant.service';
 import { AppointmentsService } from '../../appointments/appointments.service';
 
 /**
@@ -22,6 +23,8 @@ function makePrisma(opts: {
   const wls = opts.waitList ?? [];
 
   return {
+    // A salon in the Canaries: the coupon's days are its calendar days.
+    tenant: { findUnique: jest.fn(async () => ({ timezone: 'Atlantic/Canary' })) },
     appointment: {
       findUnique: jest.fn().mockImplementation(async ({ where }: any) => appts.find((a: any) => a.id === where?.id) ?? null),
       update: jest.fn().mockImplementation(async ({ where, data }: any) => {
@@ -170,11 +173,42 @@ describe('SalonCopilotToolsService (L-4) — sprint 15 write tools', () => {
       expect(res).toMatchObject({
         ok: true,
         discountPercent: 25,
-        clientId: null,
+        maxUses: 1,
+        usableAt: 'till',
       });
+      expect(res).not.toHaveProperty('clientId');
       expect(typeof (res as any).code).toBe('string');
       expect((res as any).code).toMatch(/^[A-Z2-9]{6}$/);
       expect((res as any).expiresAt).toBeTruthy();
+    });
+
+    it('is a general code: no clientId in its schema, and one passed anyway changes nothing', async () => {
+      const tool = (COPILOT_TOOLS as unknown as any[]).find((t) => t.name === 'create_coupon');
+      expect(Object.keys(tool.input_schema.properties)).toEqual(['discountPercent', 'expiresInDays']);
+      expect(tool.description).not.toMatch(/specific client/);
+
+      const prisma = makePrisma({ promotions: [] });
+      const svc = new SalonCopilotToolsService(prisma);
+      const res = await svc.execute(
+        'create_coupon',
+        { discountPercent: 10, expiresInDays: 7, clientId: 'c-1' },
+        { ...ctxFor('owner'), prisma },
+      );
+      expect(res).not.toHaveProperty('clientId');
+      const data = prisma.promotion.create.mock.calls[0][0].data;
+      expect(data).toMatchObject({ name: 'Cupón general', type: 'PERCENTAGE', maxUses: 1, applicableServiceIds: [] });
+      expect(data).not.toHaveProperty('clientId');
+      // Seven of the salon's calendar days, today included, stored as the panel stores days (UTC midnight).
+      expect(data.startDate.toISOString()).toMatch(/T00:00:00\.000Z$/);
+      expect((data.endDate.getTime() - data.startDate.getTime()) / 864e5).toBe(6);
+    });
+
+    it('asks for approval with the limits it creates, never for one client', () => {
+      const text = TOOL_PREVIEW.create_coupon({ discountPercent: 15, expiresInDays: 10, clientId: 'c-1' });
+      expect(text).toBe(
+        'Crear un código de descuento del 15% para cualquier clienta, de un solo uso y válido 10 días. Se aplica al cobrar en caja (no en la reserva online).',
+      );
+      expect(text).not.toMatch(/específica/);
     });
 
     it('rejects invalid discount percent', async () => {

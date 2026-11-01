@@ -13,6 +13,7 @@ import {
   IsString,
   IsUrl,
   IsUUID,
+  Matches,
   Max,
   MaxLength,
   Min,
@@ -206,6 +207,16 @@ export class PosQuoteDto {
   /** A discount on the whole ticket, taken after the lines' own discounts. */
   @IsOptional() @ValidateNested() @Type(() => PosDiscountDto)
   discount?: PosDiscountDto;
+
+  /**
+   * A promotion code (Promociones) the client brings: checked and priced by
+   * the server, taken after the manual discounts and before the loyalty
+   * reward (promotions/promotion-at-till.ts). Outside the staff's limit.
+   */
+  @EmptyStringToUndefined() @IsOptional() @IsString()
+  @MaxLength(50, { message: "El código promocional admite 50 caracteres como mucho." })
+  @Matches(/^\s*\S+\s*$/, { message: "El código promocional no puede tener espacios." })
+  promotionCode?: string;
 }
 
 /**

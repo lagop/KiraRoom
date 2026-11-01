@@ -194,10 +194,28 @@ export default function POSPage() {
     setCart((current) => current.map((item) => (item.key === key ? { ...item, discount } : item)));
   };
 
-  // An emptied ticket forgets the ticket's discount too.
+  // A promotion code the client brings: the server checks it and takes it
+  // off after the manual discounts, before the points. `promoCode` is the
+  // one applied (sent with the quote); `promoInput` what is being typed.
+  const [promoInput, setPromoInput] = useState("");
+  const [promoCode, setPromoCode] = useState<string | undefined>(undefined);
+  const applyPromo = () => {
+    const code = promoInput.trim().toUpperCase();
+    if (code) setPromoCode(code);
+  };
+  const removePromo = () => {
+    setPromoCode(undefined);
+    setPromoInput("");
+  };
+
+  // An emptied ticket forgets the ticket's discount and the code too.
   const empty = cart.length === 0 && giftCards.length === 0;
   useEffect(() => {
-    if (cart.length === 0) setOrderDiscount(undefined);
+    if (cart.length === 0) {
+      setOrderDiscount(undefined);
+      setPromoCode(undefined);
+      setPromoInput("");
+    }
   }, [cart.length]);
 
   // ---------------------------------------------------------- the quote
@@ -213,8 +231,9 @@ export default function POSPage() {
       appointmentIds: cart.filter((l) => l.appointmentId).map((l) => l.appointmentId as string),
       ...(rewardId ? { loyaltyRewardId: rewardId } : {}),
       ...(orderDiscount ? { discount: orderDiscount } : {}),
+      ...(promoCode ? { promotionCode: promoCode } : {}),
     }),
-    [selectedClient?.id, cart, giftCards, rewardId, orderDiscount],
+    [selectedClient?.id, cart, giftCards, rewardId, orderDiscount, promoCode],
   );
   const bodyKey = JSON.stringify(ticketBody);
   useEffect(() => {
@@ -458,6 +477,7 @@ export default function POSPage() {
     setSelectedClient(null);
     setOrderDiscount(undefined);
     setRewardId("");
+    removePromo();
     setTenderRows([{ method: "cash", amountText: "" }]);
     attempt.current = null;
   };
@@ -490,6 +510,7 @@ export default function POSPage() {
         `${formatEuros(result.total)}` +
         (result.change ? ` · Cambio ${formatEuros(result.change)}` : "") +
         (result.discount?.total ? ` · Descuento ${formatEuros(result.discount.total)}` : "") +
+        (result.promotion ? ` · ${t("pos.promo_line", { code: result.promotion.code })} −${formatEuros(result.promotion.discount)}` : "") +
         (pts?.pointsSpent ? ` · Canjeados ${pts.pointsSpent} puntos` : "") +
         (pts?.pointsEarned ? ` · +${pts.pointsEarned} puntos` : "") +
         (result.giftCards?.some((g) => g.emailSent) ? " · Tarjeta regalo enviada por email" : "");
@@ -1009,19 +1030,73 @@ export default function POSPage() {
                 </div>
               )}
 
+              {/* Promotion code: checked and priced by the server */}
+              {cart.length > 0 && (
+                <div className="mb-3">
+                  <label htmlFor="pos-promo-code" className="block text-sm text-gray-700">
+                    {t("pos.promo_code")}
+                  </label>
+                  {promoCode ? (
+                    <div className="mt-1 flex items-center justify-between gap-2 rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-sm">
+                      <span className="min-w-0 truncate">
+                        <code>{promoCode}</code>
+                        {quoteFresh && quote!.promotion ? ` · ${quote!.promotion.name}` : ""}
+                      </span>
+                      <button type="button" onClick={removePromo} disabled={processing} className="shrink-0 text-xs text-red-600">
+                        {t("pos.promo_remove")}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="mt-1 flex gap-2">
+                      <input
+                        id="pos-promo-code"
+                        value={promoInput}
+                        onChange={(e) => setPromoInput(e.target.value.replace(/\s/g, ""))}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            applyPromo();
+                          }
+                        }}
+                        maxLength={50}
+                        autoComplete="off"
+                        placeholder={t("pos.promo_code_placeholder")}
+                        disabled={processing}
+                        className="min-w-0 flex-1 rounded border px-2 py-1 text-sm uppercase"
+                      />
+                      <button
+                        type="button"
+                        onClick={applyPromo}
+                        disabled={processing || !promoInput.trim()}
+                        className="shrink-0 rounded border px-3 py-1 text-sm disabled:opacity-50"
+                      >
+                        {t("pos.promo_apply")}
+                      </button>
+                    </div>
+                  )}
+                  <div className="mt-1 text-xs text-gray-500">{t("pos.promo_code_help")}</div>
+                </div>
+              )}
+
               {/* Total: the server's */}
               <div className="border-t pt-4">
+                {(ticket.discountCents > 0 || (quoteFresh && !!quote!.promotion)) && (
+                  <div className="flex justify-between text-sm text-gray-600">
+                    <span>Subtotal</span>
+                    <span>{formatEuros(ticket.subtotalCents + giftCardsCents)}</span>
+                  </div>
+                )}
                 {ticket.discountCents > 0 && (
-                  <>
-                    <div className="flex justify-between text-sm text-gray-600">
-                      <span>Subtotal</span>
-                      <span>{formatEuros(ticket.subtotalCents + giftCardsCents)}</span>
-                    </div>
-                    <div className="flex justify-between text-sm text-rose-700">
-                      <span>Descuentos</span>
-                      <span>−{formatEuros(ticket.discountCents)}</span>
-                    </div>
-                  </>
+                  <div className="flex justify-between text-sm text-rose-700">
+                    <span>Descuentos</span>
+                    <span>−{formatEuros(ticket.discountCents)}</span>
+                  </div>
+                )}
+                {quoteFresh && quote!.promotion && (
+                  <div className="flex justify-between text-sm text-emerald-700">
+                    <span>{t("pos.promo_line", { code: quote!.promotion.code })}</span>
+                    <span>−{formatEuros(quote!.promotion.discount)}</span>
+                  </div>
                 )}
                 {quoteFresh && quote!.loyalty && (
                   <div className="flex justify-between text-sm text-amber-700">

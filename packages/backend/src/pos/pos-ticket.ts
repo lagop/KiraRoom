@@ -58,6 +58,17 @@ export interface PricedLine {
   trackInventory?: boolean;
   /** The line's price in catalogue cents per unit (commission basis). */
   catalogueUnitCents?: number;
+  /**
+   * Its share of the promotion code applied at the till (money cents),
+   * after the manual discounts: netCents is after it too
+   * (promotions/promotion-at-till.ts).
+   */
+  promotionDiscountCents?: number;
+}
+
+/** Every discount on a ticket line before the loyalty reward: its own, its share of the ticket's, the promotion's. */
+export function lineOffCents(line: { lineDiscountCents: number; orderDiscountCents: number; promotionDiscountCents?: number }): number {
+  return line.lineDiscountCents + line.orderDiscountCents + (line.promotionDiscountCents ?? 0);
 }
 
 /** A gift card sold on the ticket. Not taxed, not discounted, not invoiced. */
@@ -90,13 +101,16 @@ export function loyaltyShares(lines: Array<{ netCents: number; taxRate: number }
 
 /**
  * The invoice line of a line sold without an appointment (tax included, at
- * the till's price), with its discounts and its share of the loyalty reward.
+ * the till's price), with its discounts, its share of the promotion code
+ * (named on it: "Descuento promoción CODE") and of the loyalty reward.
  */
 export function invoiceLineOf(
   line: PricedLine & { lineDiscountCents: number; orderDiscountCents: number },
   loyaltyCents = 0,
+  promotionCode?: string,
 ): SimplifiedInvoiceLine {
-  const off = line.lineDiscountCents + line.orderDiscountCents + Math.max(0, loyaltyCents);
+  const promotion = Math.max(0, line.promotionDiscountCents ?? 0);
+  const off = lineOffCents(line) + Math.max(0, loyaltyCents);
   return {
     description: line.name.slice(0, 200),
     quantity: line.quantity,
@@ -105,6 +119,7 @@ export function invoiceLineOf(
     taxIncluded: true,
     ...(off > 0 ? { discountCents: off } : {}),
     ...(loyaltyCents > 0 ? { loyaltyDiscountCents: loyaltyCents } : {}),
+    ...(promotion > 0 && promotionCode ? { promotionDiscountCents: promotion, promotionCode } : {}),
     ...(line.serviceId ? { serviceId: line.serviceId } : {}),
     ...(line.productId ? { productId: line.productId } : {}),
   };
