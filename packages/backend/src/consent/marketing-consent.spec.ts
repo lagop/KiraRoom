@@ -166,7 +166,7 @@ describe("marketing consent from the client's account", () => {
     const suppressions: any = { suppressedAmong: async () => new Set<string>() };
     const unsubscribes: any = { link: () => ({ pageUrl: "https://app.test/public/baja/x", headers: {} }), withFooter: (html: string) => html };
     const pacer: any = { perMinute: 120, wait: async () => undefined };
-    const sender = new EmailCampaignSender(prisma, email as any, suppressions, unsubscribes, pacer);
+    const sender = new EmailCampaignSender(prisma, email as any, suppressions, unsubscribes, pacer, { limits: async () => ({ tenantId: "t1", month: "2026-11", cap: 1e9, resetsOn: "2026-12-01" }), reserve: async () => ({ ok: true, tenantId: "t1", month: "2026-11", source: "plan" }), release: async () => undefined, pause: async () => undefined, resumePaused: async () => 0 } as any);
     (sender as any).logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
     const campaign: any = {
       id: "camp", tenantId: "t1", subject: "Ofertas", previewText: null, content: "<p>hola</p>",

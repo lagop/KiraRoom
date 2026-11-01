@@ -2,11 +2,19 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { AlertCircle, Check, Mail, Save, Send } from "lucide-react";
+import { AlertCircle, Check, Mail, Package, Save, Send } from "lucide-react";
 import apiClient, { PlatformEmailConfig } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { EmailForm, emailStatus, emailUpdate } from "@/lib/platform-email";
+import {
+  EmailForm,
+  OPEN_TRACKING_NOTE,
+  PackForm,
+  emailStatus,
+  emailUpdate,
+  packForm,
+  packUpdate,
+} from "@/lib/platform-email";
 import { SettingField as Field } from "../setting-field";
 
 // Where Resend sends delivery events; shown so it can be copied into Resend.
@@ -25,6 +33,10 @@ export default function PlatformEmailPage() {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The bono de emails salons can buy once their month's marketing emails run out.
+  const [pack, setPack] = useState<PackForm>({ emails: "", price: "" });
+  const [packError, setPackError] = useState<string | null>(null);
+  const [confirmPackOff, setConfirmPackOff] = useState(false);
   // The console setting about to be removed, confirmed in the panel's dialog.
   const [pendingClear, setPendingClear] = useState<{
     field: "apiKey" | "from" | "webhookSecret";
@@ -34,6 +46,7 @@ export default function PlatformEmailPage() {
   function show(next: PlatformEmailConfig) {
     setCfg(next);
     setForm({ apiKey: "", from: next.from.value ?? "", webhookSecret: "" });
+    setPack(packForm(next));
   }
 
   useEffect(() => {
@@ -55,6 +68,21 @@ export default function PlatformEmailPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  async function savePack() {
+    const out = packUpdate(pack);
+    if (!out.ok) {
+      setPackError(out.error);
+      return;
+    }
+    setPackError(null);
+    await save(out.value);
+  }
+
+  async function stopPack() {
+    await save({ marketingPackEmails: null, marketingPackPriceCents: null });
+    setConfirmPackOff(false);
   }
 
   async function sendTest() {
@@ -142,7 +170,7 @@ export default function PlatformEmailPage() {
           label="Secreto del webhook"
           source={cfg.webhookSecret.source}
           current={cfg.webhookSecret.lastFour ? `whsec_…${cfg.webhookSecret.lastFour}` : null}
-          hint={`Para registrar entregas, aperturas y rebotes de las campañas. En Resend → Webhooks, crea uno a ${WEBHOOK_URL} y copia aquí su «Signing secret».`}
+          hint={`Para registrar entregas, clics y rebotes de las campañas (las aperturas no se usan). En Resend → Webhooks, crea uno a ${WEBHOOK_URL} y copia aquí su «Signing secret».`}
           onClear={cfg.webhookSecret.source === "console" ? () => clear("webhookSecret", "el secreto") : undefined}
         >
           <input
@@ -198,6 +226,76 @@ export default function PlatformEmailPage() {
         )}
       </div>
 
+      <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+        <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+        <span>{OPEN_TRACKING_NOTE}</span>
+      </div>
+
+      <div className="bg-white border border-gray-200 rounded-xl p-6 space-y-4">
+        <div className="flex items-start gap-2">
+          <Package className="w-5 h-5 mt-0.5 shrink-0 text-purple-600" />
+          <div>
+            <h2 className="font-semibold text-gray-900">Bono de emails de marketing</h2>
+            <p className="text-sm text-gray-500">
+              Pro tiene 2.000 emails de campañas al mes y Empresa 5.000 por local. Cuando un salón los gasta, sus
+              campañas quedan en pausa hasta el mes siguiente, o hasta que compra este bono. Sus emails no caducan.
+              Mientras no tenga precio, no se ofrece.
+            </p>
+            <p className="mt-1 text-sm text-gray-700">
+              {cfg.marketingPack.offered
+                ? `A la venta: ${cfg.marketingPack.emails} emails por ${((cfg.marketingPack.priceCents ?? 0) / 100).toFixed(2).replace(".", ",")} € + IVA.`
+                : "No está a la venta."}
+            </p>
+          </div>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="block text-sm">
+            <span className="mb-1 block font-medium text-gray-700">Emails por bono</span>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={pack.emails}
+              onChange={(e) => setPack({ ...pack, emails: e.target.value })}
+              placeholder="1000"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            />
+          </label>
+          <label className="block text-sm">
+            <span className="mb-1 block font-medium text-gray-700">Precio sin IVA (€)</span>
+            <input
+              type="text"
+              inputMode="decimal"
+              value={pack.price}
+              onChange={(e) => setPack({ ...pack, price: e.target.value })}
+              placeholder="15,00"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            />
+          </label>
+        </div>
+        {packError && <p className="text-sm text-red-600">{packError}</p>}
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={savePack}
+            disabled={saving}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-900 text-white text-sm disabled:opacity-40"
+          >
+            <Save className="w-4 h-4" />
+            {saving ? "Guardando…" : "Guardar bono"}
+          </button>
+          {cfg.marketingPack.offered && (
+            <button
+              type="button"
+              onClick={() => setConfirmPackOff(true)}
+              disabled={saving}
+              className="px-4 py-2 rounded-lg border border-gray-300 text-sm disabled:opacity-40"
+            >
+              Dejar de venderlo
+            </button>
+          )}
+        </div>
+      </div>
+
       <div className="text-sm text-gray-500 flex items-start gap-2">
         <Mail className="w-4 h-4 mt-0.5 shrink-0" />
         <span>
@@ -222,6 +320,17 @@ export default function PlatformEmailPage() {
         loading={saving}
         onCancel={() => setPendingClear(null)}
         onConfirm={performClear}
+      />
+
+      <ConfirmDialog
+        open={confirmPackOff}
+        title="¿Dejar de vender el bono de emails?"
+        description="Los salones ya no podrán comprarlo. Los emails que ya compraron siguen siendo suyos."
+        confirmLabel="Dejar de venderlo"
+        destructive
+        loading={saving}
+        onCancel={() => setConfirmPackOff(false)}
+        onConfirm={stopPack}
       />
     </div>
   );

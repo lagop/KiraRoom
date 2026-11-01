@@ -9,6 +9,7 @@ import { EmailSuppressionService } from './email-suppression.service';
 import { EmailUnsubscribeService } from './email-unsubscribe.service';
 import { EmailPacer } from './email-pacer';
 import { campaignSender } from './email-campaign-sender.service';
+import { EmailQuotaService } from './email-quota.service';
 import {
   plainTextPart,
   promotionUsable,
@@ -27,6 +28,7 @@ export class EmailCampaignsScheduler {
     private readonly suppressions: EmailSuppressionService,
     private readonly unsubscribes: EmailUnsubscribeService,
     private readonly pacer: EmailPacer,
+    private readonly quota: EmailQuotaService,
   ) {}
 
   // Scheduled one-shot campaigns are started by EmailCampaignSender, which
@@ -152,8 +154,21 @@ export class EmailCampaignsScheduler {
     let sent = 0;
     let errors = 0;
     let newRecipients = 0;
+    // Re-engagement emails are marketing emails: each takes one of the
+    // salon's month (or of its bono). None left: the campaign shows why and
+    // tries again at its next daily run; those not written to today are
+    // still away and are picked up then.
+    const limits = await this.quota.limits(campaign.tenantId);
+    let capped = false;
 
     for (const client of eligibleClients) {
+      const slot = await this.quota.reserve(limits);
+      if (!slot.ok) {
+        await this.quota.pause(campaign.id, limits);
+        capped = true;
+        break;
+      }
+      let delivered = false;
       try {
         // Build personalized email content
         const personalization = this.buildReengagementEmailContent(campaign, client);
@@ -183,6 +198,7 @@ export class EmailCampaignsScheduler {
         });
 
         if (result.success) {
+          delivered = true;
           // Update client's lastReengagementSent date
           await this.prisma.client.update({
             where: { id: client.id },
@@ -190,7 +206,7 @@ export class EmailCampaignsScheduler {
           });
 
           // The recipient row carries Resend's id, which is how delivery,
-          // opens, clicks and bounces find their way back to this campaign.
+          // clicks and bounces find their way back to this campaign.
           // A client is on a campaign's list once: a later re-engagement
           // email to her updates her row to the latest send.
           const key = { campaignId_clientId: { campaignId: campaign.id, clientId: client.id } };
@@ -231,7 +247,17 @@ export class EmailCampaignsScheduler {
       } catch (error) {
         errors++;
         this.logger.error(`Error sending re-engagement email to client ${client.id}: ${error.message}`);
+      } finally {
+        // Not sent: the email goes back to the month (or the bono).
+        if (!delivered) await this.quota.release(slot);
       }
+    }
+    // A run that was not stopped by the cap clears an earlier pause.
+    if (!capped && campaign.capPausedAt) {
+      await this.prisma.emailCampaign.updateMany({
+        where: { id: campaign.id, capPausedAt: { not: null } },
+        data: { capPausedAt: null, lastError: null },
+      });
     }
 
     // Only what is known now: how many Resend accepted. Delivered and

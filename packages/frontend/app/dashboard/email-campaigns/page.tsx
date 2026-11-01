@@ -8,7 +8,6 @@ import {
   Plus,
   Send,
   Users,
-  Eye,
   MousePointer,
   XCircle,
   Clock,
@@ -31,6 +30,7 @@ import {
   EmailCampaign,
   EmailCampaignAudience,
   EmailCampaignTrackingStatus,
+  EmailMarketingQuota,
   SendEmailCampaignResult,
   CampaignStatus,
   CampaignType,
@@ -44,8 +44,13 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   EXCLUSION_LABELS,
   campaignActions,
+  campaignCardLabel,
   campaignProgress,
-  campaignStatusLabel,
+  isCapPaused,
+  packOfferText,
+  quotaLeftText,
+  quotaSummary,
+  quotaWarning,
   errorMessage,
   exclusionSummary,
   formatSalonDateTime,
@@ -198,8 +203,8 @@ export default function EmailCampaignsPage() {
   const [promotions, setPromotions] = useState<Promotion[]>([]);
   const [loadingPromotions, setLoadingPromotions] = useState(false);
 
-  // Opens, clicks and bounces only exist if Resend's webhook reaches the
-  // server. Without it they would read 0 forever, which looks like a real
+  // Clicks and bounces only exist if Resend's webhook reaches the server
+  // (opens are not measured at all: no tracking pixel). Without it they would read 0 forever, which looks like a real
   // result; the cards show "—" and a banner says what is missing.
   const [tracking, setTracking] = useState<EmailCampaignTrackingStatus | null>(
     null,
@@ -211,6 +216,44 @@ export default function EmailCampaignsPage() {
       .catch(() => setTracking(null));
   }, []);
   const trackingOff = tracking !== null && !tracking.trackingConfigured;
+
+  // The month's marketing emails: the counter, "te quedan N este mes" next
+  // to adding recipients and scheduling, and the bono when it is on sale.
+  const [quota, setQuota] = useState<EmailMarketingQuota | null>(null);
+  const [buyingPack, setBuyingPack] = useState(false);
+  const fetchQuota = () =>
+    apiClient
+      .getEmailMarketingQuota()
+      .then(setQuota)
+      .catch(() => setQuota(null));
+  useEffect(() => {
+    fetchQuota();
+    // Back from Stripe: say what happened, then drop the query from the URL.
+    try {
+      const bono = new URLSearchParams(window.location.search).get("bono");
+      if (bono === "ok") {
+        toast({ title: t("email_campaigns.pack_paid_title"), description: t("email_campaigns.pack_paid_body") });
+      } else if (bono === "cancelado") {
+        toast({ title: t("email_campaigns.pack_cancelled") });
+      }
+      if (bono) window.history.replaceState(null, "", window.location.pathname);
+    } catch {
+      // No URL to read (tests, old browsers): nothing to say.
+    }
+    // Once, on arrival.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const buyPack = async () => {
+    setBuyingPack(true);
+    try {
+      const { url } = await apiClient.buyEmailPack();
+      window.location.href = url;
+    } catch (error) {
+      setBuyingPack(false);
+      toastError(t("email_campaigns.pack_failed"), error);
+    }
+  };
   const tracked = (value: number) => (trackingOff ? "—" : value);
 
   useEffect(() => {
@@ -219,7 +262,7 @@ export default function EmailCampaignsPage() {
 
   // Sending happens in the background, a batch a minute: while a campaign
   // is going out its card refreshes so the progress line moves.
-  const anySending = campaigns.some((c) => c.status === "sending");
+  const anySending = campaigns.some((c) => c.status === "sending" && !isCapPaused(c));
   useEffect(() => {
     if (!anySending) return;
     const id = setInterval(() => fetchCampaigns(), 15_000);
@@ -269,6 +312,7 @@ export default function EmailCampaignsPage() {
       );
       setCampaigns(data);
       setPlanBlocked(false);
+      fetchQuota();
     } catch (error) {
       if (isPlanBlocked(error)) {
         setPlanBlocked(true);
@@ -671,7 +715,11 @@ export default function EmailCampaignsPage() {
 
   const confirmDescription = (action: CampaignAction, campaign: EmailCampaign) => {
     if (action === "send" || action === "sendAll") {
-      return sendConfirmText(action, campaign.pendingCount ?? campaign.totalRecipients);
+      const pending = campaign.pendingCount ?? campaign.totalRecipients;
+      const text = sendConfirmText(action, pending);
+      if (!quota) return text;
+      const warning = action === "send" ? quotaWarning(pending, quota) : null;
+      return `${text} ${warning ?? quotaLeftText(quota) + "."}`;
     }
     return t(`email_campaigns.confirm.${action}.description`);
   };
@@ -758,9 +806,9 @@ export default function EmailCampaignsPage() {
       )}
       {!planBlocked && trackingOff && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-          Las aperturas, los clics y los rebotes aún no se registran: falta
-          conectar el aviso de entregas del proveedor de email. Hasta entonces
-          solo se cuentan los emails enviados.
+          Los clics y los rebotes aún no se registran: falta conectar el aviso
+          de entregas del proveedor de email. Hasta entonces solo se cuentan
+          los emails enviados.
         </div>
       )}
       {!planBlocked && tracking && tracking.suppressedAddresses > 0 && (
@@ -771,6 +819,39 @@ export default function EmailCampaignsPage() {
           (se dieron de baja, rebote permanente o la marcaron como spam).
         </p>
       )}
+
+      {!planBlocked && quota && (() => {
+        const summary = quotaSummary(quota);
+        return (
+          <div
+            className={`flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between ${
+              summary.exhausted ? "border-orange-200 bg-orange-50" : "border-gray-200 bg-white"
+            }`}
+          >
+            <div className="space-y-1">
+              <p className="font-medium text-gray-900">{summary.title}</p>
+              <p className="text-sm text-gray-600">{summary.detail}</p>
+              {!quota.pack && (
+                <p className="text-xs text-gray-500">{t("email_campaigns.quota_no_pack")}</p>
+              )}
+            </div>
+            {quota.pack && (
+              <div className="flex shrink-0 flex-col items-start gap-1 sm:items-end">
+                <button
+                  type="button"
+                  onClick={buyPack}
+                  disabled={buyingPack}
+                  className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50"
+                >
+                  {buyingPack ? t("email_campaigns.quota_buying") : t("email_campaigns.quota_buy")}
+                </button>
+                <span className="text-xs text-gray-500">{packOfferText(quota.pack)}</span>
+                <span className="text-xs text-gray-500">{t("email_campaigns.quota_pack_note")}</span>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {!planBlocked && (
       <>
@@ -828,9 +909,11 @@ export default function EmailCampaignsPage() {
                   <p className="text-sm text-gray-500">{campaign.subject}</p>
                 </div>
                 <span
-                  className={`px-2 py-1 rounded-full text-xs font-medium ${statusColors[campaign.status]}`}
+                  className={`px-2 py-1 rounded-full text-xs font-medium ${
+                    isCapPaused(campaign) ? "bg-orange-100 text-orange-800" : statusColors[campaign.status]
+                  }`}
                 >
-                  {campaignStatusLabel(campaign.status)}
+                  {campaignCardLabel(campaign)}
                 </span>
               </div>
 
@@ -852,9 +935,11 @@ export default function EmailCampaignsPage() {
                 return progress ? (
                   <p
                     className={`mb-4 text-xs ${
-                      campaign.status === "sending"
-                        ? "text-yellow-700"
-                        : "text-red-700"
+                      isCapPaused(campaign)
+                        ? "text-orange-700"
+                        : campaign.status === "sending"
+                          ? "text-yellow-700"
+                          : "text-red-700"
                     }`}
                   >
                     {progress}
@@ -863,7 +948,7 @@ export default function EmailCampaignsPage() {
               })()}
 
               {/* Stats */}
-              <div className="grid grid-cols-5 gap-2 mb-4">
+              <div className="grid grid-cols-4 gap-2 mb-4">
                 <div className="text-center">
                   <div className="flex items-center justify-center">
                     <span title={t("email_campaigns.tooltip_recipients")}>
@@ -881,16 +966,6 @@ export default function EmailCampaignsPage() {
                     </span>
                   </div>
                   <p className="text-sm font-semibold">{campaign.emailsSent}</p>
-                </div>
-                <div className="text-center">
-                  <div className="flex items-center justify-center">
-                    <span title={t("email_campaigns.tooltip_opened")}>
-                      <Eye className="w-4 h-4 text-green-400" />
-                    </span>
-                  </div>
-                  <p className="text-sm font-semibold">
-                    {tracked(campaign.emailsOpened)}
-                  </p>
                 </div>
                 <div className="text-center">
                   <div className="flex items-center justify-center">
@@ -1269,6 +1344,16 @@ export default function EmailCampaignsPage() {
                   </>
                 )}
               </p>
+              {quota && (() => {
+                const scheduled = campaigns.find((c) => c.id === scheduleCampaignId);
+                const pending = scheduled?.pendingCount ?? scheduled?.totalRecipients ?? 0;
+                const warning = quotaWarning(pending, quota);
+                return (
+                  <p className={`text-sm ${warning ? "text-orange-700" : "text-gray-500"}`}>
+                    {warning ?? `${quotaLeftText(quota)}.`}
+                  </p>
+                );
+              })()}
             </div>
 
             <div className="flex justify-end space-x-3 pt-4 mt-4 border-t border-gray-200">
@@ -1430,6 +1515,15 @@ export default function EmailCampaignsPage() {
                       {selectedClients.length} de {selectableClients.length}{" "}
                       seleccionadas
                     </div>
+                    {quota && (
+                      <div
+                        className={`text-xs ${
+                          selectedClients.length > quota.remaining ? "text-orange-700" : ""
+                        }`}
+                      >
+                        {quotaLeftText(quota)}
+                      </div>
+                    )}
                     <div className="text-xs">
                       {(() => {
                         const existingClientIds = existingRecipients.map(

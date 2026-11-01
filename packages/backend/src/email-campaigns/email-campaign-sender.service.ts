@@ -7,6 +7,7 @@ import { plainTextPart, withPreheader, withoutPromotion } from "./campaign-conte
 import { EmailPacer } from "./email-pacer";
 import { EmailSuppressionService } from "./email-suppression.service";
 import { EmailUnsubscribeService } from "./email-unsubscribe.service";
+import { EmailQuotaService } from "./email-quota.service";
 
 /** How long a send in flight holds its recipient before a sweep may retry it. */
 export const SEND_LEASE_MS = 10 * 60_000;
@@ -74,6 +75,13 @@ type SendingCampaign = {
  * visit (the owner's rule: the LSSI art. 21.2 exception is for clients with
  * a prior relationship), who did not say no to promotions and whose address
  * is not on the salon's suppression list.
+ *
+ * Each email takes one of the salon's marketing emails of the month
+ * (EmailQuotaService) right before it goes out, and gives it back if it did
+ * not. With none left the campaign is paused (capPausedAt, and the reason
+ * on the card): it stays "sending" with the rest of its list pending, and
+ * each run resumes the paused campaigns whose salon has room again -- the
+ * next month, or a bono de emails bought.
  */
 @Injectable()
 export class EmailCampaignSender {
@@ -87,6 +95,7 @@ export class EmailCampaignSender {
     private readonly suppressions: EmailSuppressionService,
     private readonly unsubscribes: EmailUnsubscribeService,
     private readonly pacer: EmailPacer,
+    private readonly quota: EmailQuotaService,
   ) {}
 
   /** Starts a run now, without waiting for it (after "Enviar"). */
@@ -107,6 +116,7 @@ export class EmailCampaignSender {
     try {
       if (!this.emailService.isConfigured()) return;
       await this.startDue(now);
+      await this.quota.resumePaused(now);
       await this.sendBatches(now);
     } catch (err) {
       this.logger.error(`Email campaign dispatcher failed: ${(err as Error).message}`);
@@ -150,7 +160,7 @@ export class EmailCampaignSender {
   /** One batch per sending campaign, sharing the minute's pace between them. */
   async sendBatches(now: Date = new Date()): Promise<void> {
     const sending = await this.prisma.emailCampaign.findMany({
-      where: { status: "sending", campaignType: { not: "reengagement" } },
+      where: { status: "sending", campaignType: { not: "reengagement" }, capPausedAt: null },
       orderBy: { updatedAt: "asc" },
       take: CAMPAIGNS_PER_RUN,
       select: {
@@ -189,8 +199,8 @@ export class EmailCampaignSender {
     campaign: SendingCampaign,
     limit: number,
     now: Date = new Date(),
-  ): Promise<{ attempted: number; sent: number; failed: number; rateLimited: boolean }> {
-    const outcome = { attempted: 0, sent: 0, failed: 0, rateLimited: false };
+  ): Promise<{ attempted: number; sent: number; failed: number; rateLimited: boolean; capReached: boolean }> {
+    const outcome = { attempted: 0, sent: 0, failed: 0, rateLimited: false, capReached: false };
 
     // Recovery: a send in flight when the process stopped holds its
     // recipient only until the lease runs out.
@@ -254,6 +264,7 @@ export class EmailCampaignSender {
     // One-shot campaigns have no promotion behind them: a {{discountCode}}
     // typed into one would reach the client as it is.
     const content = withoutPromotion(campaign.content);
+    const limits = await this.quota.limits(tenantId, now);
 
     for (const recipient of recipients) {
       if (recipient.clientId && refused.has(recipient.clientId)) {
@@ -275,6 +286,15 @@ export class EmailCampaignSender {
         continue;
       }
 
+      // One of the month's marketing emails, or of the bono. None left: the
+      // campaign pauses here, the rest of its list pending.
+      const slot = await this.quota.reserve(limits);
+      if (!slot.ok) {
+        await this.quota.pause(campaign.id, limits, now);
+        outcome.capReached = true;
+        break;
+      }
+
       const claimed = await this.prisma.emailCampaignRecipient.updateMany({
         where: { id: recipient.id, status: "pending" },
         data: {
@@ -283,7 +303,10 @@ export class EmailCampaignSender {
           nextAttemptAt: new Date(Date.now() + SEND_LEASE_MS),
         },
       });
-      if (claimed.count === 0) continue;
+      if (claimed.count === 0) {
+        await this.quota.release(slot);
+        continue;
+      }
       const attempt = (recipient.attempts ?? 0) + 1;
 
       await this.pacer.wait();
@@ -320,6 +343,8 @@ export class EmailCampaignSender {
         continue;
       }
 
+      // Not sent: the email is given back to the month (or the bono).
+      await this.quota.release(slot);
       const error = result.error?.slice(0, 500) ?? "Error";
       if (result.retryable && attempt < MAX_SEND_ATTEMPTS) {
         await this.prisma.emailCampaignRecipient.update({

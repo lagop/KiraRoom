@@ -224,7 +224,7 @@ describe("re-engagement: a client is on the campaign's list once", () => {
     const suppressions: any = { suppressedAmong: jest.fn(async () => new Set()) };
     const unsubscribes: any = { link: () => ({ pageUrl: "https://app.test/baja", headers: {} }), withFooter: (h: string) => h };
     const pacer: any = { wait: jest.fn(async () => undefined) };
-    const s = new EmailCampaignsScheduler(prisma, email, suppressions, unsubscribes, pacer);
+    const s = new EmailCampaignsScheduler(prisma, email, suppressions, unsubscribes, pacer, { limits: async () => ({ tenantId: "t1", month: "2026-11", cap: 1e9, resetsOn: "2026-12-01" }), reserve: async () => ({ ok: true, tenantId: "t1", month: "2026-11", source: "plan" }), release: async () => undefined, pause: async () => undefined, resumePaused: async () => 0 } as any);
     (s as any).logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
     const campaign = { id: "camp", tenantId: "t1", subject: "Te echamos de menos", content: "<p>Hola</p>", tenant: { name: "Salón" } };
     return { run: () => (s as any).processReengagementCampaign(campaign), prisma };
@@ -258,5 +258,59 @@ describe("re-engagement: a client is on the campaign's list once", () => {
       totalRecipients: { increment: 1 },
       emailsSent: { increment: 1 },
     });
+  });
+});
+
+describe("re-engagement emails count against the month's marketing cap", () => {
+  function scheduler(slots: number, send: (to: string) => any = () => ({ success: true, id: "re_x" })) {
+    const prisma: any = {
+      client: {
+        findMany: jest.fn(async () => [
+          { id: "ana", email: "ana@example.test", firstName: "Ana", lastName: "López", lastReengagementSent: null },
+          { id: "eva", email: "eva@example.test", firstName: "Eva", lastName: "Ruiz", lastReengagementSent: null },
+        ]),
+        update: jest.fn(async () => ({})),
+      },
+      consent: { findMany: jest.fn(async () => []) },
+      emailCampaignRecipient: {
+        findUnique: jest.fn(async () => null),
+        update: jest.fn(async () => ({})),
+        create: jest.fn(async () => ({})),
+      },
+      emailCampaign: { update: jest.fn(async () => ({})), updateMany: jest.fn(async () => ({ count: 1 })) },
+    };
+    const email: any = { sendEmail: jest.fn(async (msg: any) => send(msg.to)) };
+    const suppressions: any = { suppressedAmong: jest.fn(async () => new Set()) };
+    const unsubscribes: any = { link: () => ({ pageUrl: "https://app.test/baja", headers: {} }), withFooter: (h: string) => h };
+    const pacer: any = { wait: jest.fn(async () => undefined) };
+    let left = slots;
+    const limits = { tenantId: "t1", month: "2026-11", cap: slots, resetsOn: "2026-12-01" };
+    const quota: any = {
+      limits: jest.fn(async () => limits),
+      reserve: jest.fn(async () => (left-- > 0 ? { ok: true, tenantId: "t1", month: "2026-11", source: "plan" } : { ok: false })),
+      release: jest.fn(async () => undefined),
+      pause: jest.fn(async () => undefined),
+    };
+    const s = new EmailCampaignsScheduler(prisma, email, suppressions, unsubscribes, pacer, quota);
+    (s as any).logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+    const campaign = { id: "camp", tenantId: "t1", subject: "Te echamos de menos", content: "<p>Hola</p>", tenant: { name: "Salón" }, capPausedAt: null };
+    return { run: () => (s as any).processReengagementCampaign(campaign), prisma, email, quota, limits };
+  }
+
+  it("stops at the cap: one email out, the campaign paused with the reason", async () => {
+    const { run, email, quota, limits } = scheduler(1);
+    const out = await run();
+    expect(out.sent).toBe(1);
+    expect(email.sendEmail).toHaveBeenCalledTimes(1);
+    expect(quota.pause).toHaveBeenCalledWith("camp", limits);
+    expect(quota.release).not.toHaveBeenCalled();
+  });
+
+  it("an email that was not sent gives its slot back", async () => {
+    const { run, quota } = scheduler(5, (to) => (to.startsWith("eva") ? { success: false, error: "Invalid" } : { success: true, id: "re_1" }));
+    const out = await run();
+    expect(out).toMatchObject({ sent: 1, errors: 1 });
+    expect(quota.release).toHaveBeenCalledTimes(1);
+    expect(quota.pause).not.toHaveBeenCalled();
   });
 });

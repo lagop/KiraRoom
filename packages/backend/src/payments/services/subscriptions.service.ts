@@ -33,6 +33,17 @@ export const LEGACY_TO_REV3: Record<string, PlanId> = {
 
 export const REV3_PLANS: ReadonlyArray<PlanId> = ['esencial', 'pro', 'empresa'];
 
+/**
+ * Marketing emails a month (one-shot and re-engagement campaigns), per salon;
+ * Empresa per billed location (Tenant.maxLocations). Esencial has no
+ * campaigns. A bono de emails adds to it (email-campaigns/email-quota.service.ts).
+ */
+export const EMAIL_MARKETING_MONTHLY_CAP: Readonly<Record<'esencial' | 'pro' | 'empresa', number>> = {
+  esencial: 0,
+  pro: 2000,
+  empresa: 5000,
+};
+
 export interface CreateSubscriptionDto {
   tenantId: string;
   plan: PlanId;

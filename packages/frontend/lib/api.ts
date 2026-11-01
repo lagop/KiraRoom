@@ -1113,6 +1113,8 @@ export interface EmailCampaign {
   archivedAt?: string | null;
   /** Why the last send stopped or reached nobody. */
   lastError?: string | null;
+  /** Set while paused at the month's marketing email cap (the reason is lastError). */
+  capPausedAt?: string | null;
   /** Recipients still to be sent (the background sender works through them). */
   pendingCount?: number;
   /** Recipients whose email could not be sent ("Reintentar fallidos"). */
@@ -1154,6 +1156,28 @@ export interface EmailCampaignTrackingStatus {
 }
 
 /**
+ * The month's marketing emails (GET /email-campaigns/quota): Pro 2.000,
+ * Empresa 5.000 per location, plus the bono de emails.
+ */
+export interface EmailMarketingQuota {
+  /** "YYYY-MM" on the salon's clock. */
+  month: string;
+  cap: number;
+  planSent: number;
+  packSent: number;
+  sent: number;
+  planRemaining: number;
+  /** Bought emails left; they do not expire. */
+  packRemaining: number;
+  /** What can still be sent this month. */
+  remaining: number;
+  /** "YYYY-MM-DD": when the month's emails start again. */
+  resetsOn: string;
+  /** The bono on sale, or null while it has no price. */
+  pack: { emails: number; priceCents: number } | null;
+}
+
+/**
  * "Enviar": the campaign is claimed and sent in the background. What
  * happened to each email shows on the card as it goes.
  */
@@ -1180,11 +1204,9 @@ export interface EmailCampaignAnalytics {
   campaign: EmailCampaign;
   totalSent: number;
   totalDelivered: number;
-  totalOpened: number;
   totalClicks: number;
   totalBounces: number;
   totalComplaints: number;
-  openRate: number;
   clickRate: number;
   bounceRate: number;
   complaintRate: number;
@@ -1936,6 +1958,8 @@ export interface ApiClientInterface {
   addRecipientsToCampaign(id: string, clientIds: string[]): Promise<AddEmailCampaignRecipientsResult>;
   getEmailCampaignAnalytics(id: string): Promise<EmailCampaignAnalytics>;
   getEmailCampaignTrackingStatus(): Promise<EmailCampaignTrackingStatus>;
+  getEmailMarketingQuota(): Promise<EmailMarketingQuota>;
+  buyEmailPack(): Promise<{ url: string }>;
   getEmailCampaignTemplates(): Promise<EmailCampaignTemplate[]>;
   getEmailCampaignTemplate(id: string): Promise<EmailCampaignTemplate>;
   createEmailCampaignTemplate(
@@ -3669,15 +3693,19 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
+  /**
+   * Marks a professional's commission paid. Without dates or ids: all that is
+   * pending up to the end of today (the summary's "Pagar"). `expectedAmount`
+   * is the figure the dialog showed, in cents: if it is no longer what is
+   * pending the server pays nothing and answers 409.
+   */
   async payCommission(
     professionalId: string,
-    appointmentIds?: string[],
-    startDate?: string,
-    endDate?: string,
-  ): Promise<any> {
-    return this.request<any>(`/commissions/pay/${professionalId}`, {
+    opts: { appointmentIds?: string[]; startDate?: string; endDate?: string; expectedAmount?: number } = {},
+  ): Promise<{ count: number; totalAmount: number }> {
+    return this.request<{ count: number; totalAmount: number }>(`/commissions/pay/${professionalId}`, {
       method: "POST",
-      body: JSON.stringify({ appointmentIds, startDate, endDate }),
+      body: JSON.stringify(opts),
     });
   }
 
@@ -4191,6 +4219,16 @@ class ApiClient implements ApiClientInterface {
     return this.request<EmailCampaignTrackingStatus>(
       "/email-campaigns/tracking-status",
     );
+  }
+
+  /** The month's marketing emails: sent, left and the bono's. */
+  async getEmailMarketingQuota(): Promise<EmailMarketingQuota> {
+    return this.request<EmailMarketingQuota>("/email-campaigns/quota");
+  }
+
+  /** "Comprar bono de emails": the Stripe page to pay for it. */
+  async buyEmailPack(): Promise<{ url: string }> {
+    return this.request<{ url: string }>("/email-campaigns/quota/pack-checkout", { method: "POST" });
   }
 
   async addRecipientsToCampaign(id: string, clientIds: string[]): Promise<AddEmailCampaignRecipientsResult> {
@@ -5475,6 +5513,8 @@ class ApiClient implements ApiClientInterface {
     apiKey?: string | null;
     from?: string | null;
     webhookSecret?: string | null;
+    marketingPackEmails?: number | null;
+    marketingPackPriceCents?: number | null;
   }): Promise<PlatformEmailConfig> {
     return this.request(`/platform/email-config`, {
       method: "PUT",
@@ -5623,6 +5663,8 @@ export interface PlatformEmailConfig {
   apiKey: { source: EmailSettingSource; lastFour: string | null };
   from: { source: EmailSettingSource; value: string | null };
   webhookSecret: { source: EmailSettingSource; lastFour: string | null };
+  /** The bono de emails salons can buy: offered once both are set. */
+  marketingPack: { emails: number | null; priceCents: number | null; offered: boolean };
   updatedAt: string | null;
   updatedBy: string | null;
 }
