@@ -5,9 +5,17 @@ import { clientsWhoRefusedMarketing } from "../consent/marketing-consent";
 import { escapeHtml } from '../common/html-escape';
 import { EmailService } from '../notifications/services/email.service';
 import { CampaignType } from './dto';
-import { EmailCampaignsService } from './email-campaigns.service';
 import { EmailSuppressionService } from './email-suppression.service';
 import { EmailUnsubscribeService } from './email-unsubscribe.service';
+import { EmailPacer } from './email-pacer';
+import { campaignSender } from './email-campaign-sender.service';
+import {
+  plainTextPart,
+  promotionUsable,
+  subjectWithoutPromotion,
+  withPreheader,
+  withoutPromotion,
+} from './campaign-content';
 
 @Injectable()
 export class EmailCampaignsScheduler {
@@ -16,52 +24,13 @@ export class EmailCampaignsScheduler {
   constructor(
     private readonly prisma: PrismaService,
     private readonly emailService: EmailService,
-    private readonly campaigns: EmailCampaignsService,
     private readonly suppressions: EmailSuppressionService,
     private readonly unsubscribes: EmailUnsubscribeService,
+    private readonly pacer: EmailPacer,
   ) {}
 
-  /**
-   * Scheduled Campaigns Cron Job
-   * Runs every 5 minutes and sends the campaigns whose time has come.
-   *
-   * There used to be a second job that handed campaigns due in the next ten
-   * minutes to Resend's batch API with a `send_at` field. The batch API has
-   * no scheduling and the field name was wrong anyway, so those emails went
-   * out up to ten minutes early, their Resend ids were thrown away (no
-   * delivery, open or bounce could ever be matched back), and this job then
-   * found no pending recipients and marked the campaign sent with zero
-   * emails. One path now: up to five minutes late, fully tracked.
-   */
-  @Cron(CronExpression.EVERY_5_MINUTES)
-  async processScheduledCampaigns() {
-    try {
-      const due = await this.prisma.emailCampaign.findMany({
-        where: { status: 'scheduled', scheduledAt: { lte: new Date() } },
-        select: { id: true, tenantId: true },
-      });
-      if (due.length === 0) return;
-      if (!this.emailService.isConfigured()) {
-        // Left scheduled, not failed: they go out once RESEND_API_KEY is set.
-        this.logger.warn(`${due.length} scheduled campaign(s) due but email sending is not configured`);
-        return;
-      }
-
-      for (const campaign of due) {
-        try {
-          await this.campaigns.deliverCampaign(campaign.tenantId, campaign.id, ['scheduled']);
-        } catch (error) {
-          this.logger.error(`Failed to send scheduled campaign ${campaign.id}: ${error.message}`);
-          await this.prisma.emailCampaign.updateMany({
-            where: { id: campaign.id, status: 'sending' },
-            data: { status: 'failed' },
-          });
-        }
-      }
-    } catch (error) {
-      this.logger.error(`Scheduled campaigns job failed: ${error.message}`);
-    }
-  }
+  // Scheduled one-shot campaigns are started by EmailCampaignSender, which
+  // sends every campaign in the background, in batches and at a pace.
 
   /**
    * Cleanup old campaign data
@@ -189,18 +158,28 @@ export class EmailCampaignsScheduler {
         // Build personalized email content
         const personalization = this.buildReengagementEmailContent(campaign, client);
 
-        // Send the email, with the client's unsubscribe link (LSSI art. 21.2)
+        // Send the email, with the client's unsubscribe link (LSSI art. 21.2),
+        // under the salon's name, replies to the salon, at the shared pace.
         const unsubscribe = this.unsubscribes.link({ kind: 'c', id: client.id });
+        const withFooter = this.unsubscribes.withFooter(
+          personalization.html,
+          campaign.tenant?.name || 'el salón',
+          unsubscribe.pageUrl,
+        );
+        const sender = campaignSender(campaign, campaign.tenant);
+        await this.pacer.wait();
         const result = await this.emailService.sendEmail({
           to: client.email,
           subject: personalization.subject,
-          html: this.unsubscribes.withFooter(
-            personalization.html,
-            campaign.tenant?.name || 'el salón',
-            unsubscribe.pageUrl,
-          ),
-          replyTo: campaign.replyTo,
+          html: withPreheader(withFooter, campaign.previewText),
+          text: plainTextPart(withFooter),
+          fromName: sender.fromName || undefined,
+          replyTo: sender.replyTo,
           headers: unsubscribe.headers,
+          tags: [
+            { name: 'tenant_id', value: campaign.tenantId },
+            { name: 'campaign_id', value: campaign.id },
+          ],
         });
 
         if (result.success) {
@@ -274,17 +253,26 @@ export class EmailCampaignsScheduler {
   /**
    * Build personalized email content for re-engagement
    */
-  private buildReengagementEmailContent(campaign: any, client: any) {
+  private buildReengagementEmailContent(campaign: any, client: any, now: Date = new Date()) {
     const values: Record<string, string> = {
       clientName: `${client.firstName ?? ''} ${client.lastName ?? ''}`.trim(),
       salonName: campaign.tenant?.name || 'el salón',
     };
-    // If there's a linked promotion, add discount code
-    if (campaign.linkedPromotion) {
-      values.discountCode = String(campaign.linkedPromotion.code ?? '');
-      values.discountValue = campaign.linkedPromotion.type === 'PERCENTAGE'
-        ? `${campaign.linkedPromotion.value}%`
-        : `${campaign.linkedPromotion.value} €`;
+    // The promotion's code only while it can still be used. A promotion
+    // deleted (the link is then empty), switched off, used up or past its
+    // end date drops the promotion block from the email: the client never
+    // gets a code the salon will not honour, nor a literal {{discountCode}}.
+    const promotion = campaign.linkedPromotion;
+    let subject = String(campaign.subject ?? '');
+    let content = String(campaign.content ?? '');
+    if (promotionUsable(promotion, now)) {
+      values.discountCode = String(promotion.code ?? '');
+      values.discountValue = promotion.type === 'PERCENTAGE'
+        ? `${Number(promotion.value)}%`
+        : euros(Number(promotion.value));
+    } else {
+      subject = subjectWithoutPromotion(subject);
+      content = withoutPromotion(content);
     }
 
     // The salon wrote the template; the values come from data (a client's
@@ -296,6 +284,11 @@ export class EmailCampaignsScheduler {
         key in values ? (escape ? escapeHtml(values[key]) : values[key]) : placeholder,
       );
 
-    return { subject: fill(campaign.subject, false), html: fill(campaign.content, true) };
+    return { subject: fill(subject, false), html: fill(content, true) };
   }
+}
+
+/** 5 -> "5,00 €", as the client reads money. */
+function euros(value: number): string {
+  return new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(Number.isFinite(value) ? value : 0);
 }

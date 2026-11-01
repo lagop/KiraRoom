@@ -1,20 +1,18 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useSearchParams } from "next/navigation";
+import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import {
   Mail,
   Plus,
   Send,
-  Calendar,
   Users,
   Eye,
   MousePointer,
   XCircle,
-  CheckCircle,
   Clock,
   Trash2,
-  BarChart3,
   Edit,
   X,
   AlarmClock,
@@ -22,10 +20,16 @@ import {
   Check,
   Play,
   Pause,
+  Archive,
+  ArchiveRestore,
+  RotateCcw,
+  CalendarX,
+  Lock,
 } from "lucide-react";
 import {
   apiClient,
   EmailCampaign,
+  EmailCampaignAudience,
   EmailCampaignTrackingStatus,
   SendEmailCampaignResult,
   CampaignStatus,
@@ -37,6 +41,20 @@ import {
 import { useTranslations } from "@/lib/use-translation";
 import { useToast } from "@/components/ui/use-toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import {
+  EXCLUSION_LABELS,
+  campaignActions,
+  campaignProgress,
+  campaignStatusLabel,
+  errorMessage,
+  exclusionSummary,
+  formatSalonDateTime,
+  isPlanBlocked,
+  optionalText,
+  scheduledInstantIso,
+  sendConfirmText,
+} from "@/lib/email-campaigns";
+import { discountLabel } from "@/lib/promotions-format";
 
 const statusColors: Record<CampaignStatus, string> = {
   draft: "bg-gray-100 text-gray-800",
@@ -49,12 +67,19 @@ const statusColors: Record<CampaignStatus, string> = {
 };
 
 /**
- * Clients a campaign can reach: with an email and active (the server
- * leaves out blocked and inactive ones, and those who said no to
- * promotions, when recipients are added and again when it sends).
+ * The picker lists every client with an email. Those who cannot receive
+ * campaigns (no completed visit, said no to promotions, unsubscribed or
+ * bounced, not active) are marked with the reason from GET
+ * /email-campaigns/audience and cannot be ticked; the server leaves them out
+ * when recipients are added and again when it sends.
  */
-const campaignReachable = (c: Client) =>
-  !!c.email && (c.status ?? "active") === "active";
+const withEmail = (c: Client) => !!c.email;
+
+const EMPTY_AUDIENCE: EmailCampaignAudience = {
+  reachable: 0,
+  excluded: { inactive: 0, no_email: 0, refused: 0, suppressed: 0, no_visit: 0 },
+  clients: {},
+};
 
 // Campaign type labels using translations
 const getCampaignTypeLabel = (type: CampaignType) => {
@@ -73,7 +98,39 @@ const getCampaignTypeLabel = (type: CampaignType) => {
 
 // What a campaign card's buttons ask before doing; the copy lives under
 // email_campaigns.confirm.<action>.
-type CampaignAction = "delete" | "send" | "sendAll" | "activate" | "deactivate";
+type CampaignAction =
+  | "delete"
+  | "send"
+  | "sendAll"
+  | "activate"
+  | "deactivate"
+  | "unschedule"
+  | "archive"
+  | "unarchive"
+  | "retryFailed";
+
+const EMPTY_FORM = {
+  name: "",
+  subject: "",
+  previewText: "",
+  content: "",
+  replyTo: "",
+  campaignType: "newsletter" as CampaignType,
+};
+
+const EMPTY_REENGAGEMENT: CreateReengagementCampaignDto = {
+  name: "",
+  subject: "",
+  previewText: "",
+  content: "",
+  inactiveDaysThreshold: 30,
+  linkedPromotionId: "",
+  replyTo: "",
+};
+
+/** Today on the salon's clock, as the date input wants it (YYYY-MM-DD). */
+const salonToday = (timeZone: string) =>
+  new Date().toLocaleDateString("en-CA", { timeZone });
 
 export default function EmailCampaignsPage() {
   const t = useTranslations();
@@ -87,6 +144,9 @@ export default function EmailCampaignsPage() {
   const [performingAction, setPerformingAction] = useState(false);
   const [campaigns, setCampaigns] = useState<EmailCampaign[]>([]);
   const [loading, setLoading] = useState(true);
+  // The plan does not include campaigns (403 FEATURE_NOT_IN_PLAN): the page
+  // says so and links to Facturación instead of showing an empty list.
+  const [planBlocked, setPlanBlocked] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [editingCampaign, setEditingCampaign] = useState<EmailCampaign | null>(
     null,
@@ -99,15 +159,26 @@ export default function EmailCampaignsPage() {
   const [scheduleDate, setScheduleDate] = useState("");
   const [scheduleTime, setScheduleTime] = useState("");
 
+  // The schedule and the dates shown are the salon's clock, not the browser's.
+  const tenant = useQuery({
+    queryKey: ["auth", "tenant"],
+    queryFn: () => apiClient.getTenant(),
+    staleTime: 5 * 60 * 1000,
+  });
+  const timeZone = tenant.data?.timezone || "Europe/Madrid";
+
   // Recipients modal state
   const [showRecipientsModal, setShowRecipientsModal] = useState(false);
   const [recipientsCampaignId, setRecipientsCampaignId] = useState<
     string | null
   >(null);
   const [clients, setClients] = useState<Client[]>([]);
+  const [audience, setAudience] =
+    useState<EmailCampaignAudience>(EMPTY_AUDIENCE);
   const [selectedClients, setSelectedClients] = useState<string[]>([]);
   const [existingRecipients, setExistingRecipients] = useState<any[]>([]);
   const [loadingClients, setLoadingClients] = useState(false);
+  const exclusionOf = (clientId: string) => audience.clients[clientId];
 
   // Filter state
   const [showFilters, setShowFilters] = useState(false);
@@ -118,27 +189,12 @@ export default function EmailCampaignsPage() {
     tags: "",
   });
 
-  const [formData, setFormData] = useState({
-    name: "",
-    subject: "",
-    previewText: "",
-    content: "",
-    campaignType: "newsletter" as CampaignType,
-  });
+  const [formData, setFormData] = useState(EMPTY_FORM);
 
   // Re-engagement campaign state
   const [showReengagementModal, setShowReengagementModal] = useState(false);
   const [reengagementData, setReengagementData] =
-    useState<CreateReengagementCampaignDto>({
-      name: "",
-      subject: "",
-      previewText: "",
-      content: "",
-      inactiveDaysThreshold: 30,
-      linkedPromotionId: "",
-      fromName: "",
-      replyTo: "",
-    });
+    useState<CreateReengagementCampaignDto>(EMPTY_REENGAGEMENT);
   const [promotions, setPromotions] = useState<Promotion[]>([]);
   const [loadingPromotions, setLoadingPromotions] = useState(false);
 
@@ -161,36 +217,37 @@ export default function EmailCampaignsPage() {
     fetchCampaigns();
   }, [filter]);
 
-  /** Says what the send really did, from the server's counts. */
-  const toastSendResult = (result: SendEmailCampaignResult) => {
-    const parts = [`${result.sentCount} enviados`];
-    if (result.failedCount > 0) parts.push(`${result.failedCount} fallidos`);
-    if (result.suppressedCount > 0)
-      parts.push(
-        `${result.suppressedCount} omitidos (se dieron de baja, rebote permanente o queja de spam)`,
-      );
-    if (result.skippedCount)
-      parts.push(`${result.skippedCount} no quieren recibir promociones`);
-    if (result.droppedCount)
-      parts.push(`${result.droppedCount} quitados (ya no son clientes activos)`);
+  // Sending happens in the background, a batch a minute: while a campaign
+  // is going out its card refreshes so the progress line moves.
+  const anySending = campaigns.some((c) => c.status === "sending");
+  useEffect(() => {
+    if (!anySending) return;
+    const id = setInterval(() => fetchCampaigns(), 15_000);
+    return () => clearInterval(id);
+  }, [anySending, filter]);
+
+  const toastError = (title: string, error: unknown) => {
     toast({
-      title: "Campaña enviada",
-      description: parts.join(", "),
-      variant: result.sentCount === 0 ? "destructive" : "default",
+      title,
+      description: errorMessage(error),
+      variant: "destructive",
     });
   };
 
-  const toastSendError = (error: unknown) => {
+  /** The send is queued: the emails go out little by little. */
+  const toastQueued = (result: SendEmailCampaignResult) => {
     toast({
-      title: "No se pudo enviar la campaña",
-      description: error instanceof Error ? error.message : undefined,
-      variant: "destructive",
+      title: "Campaña en marcha",
+      description:
+        result.queued === 1
+          ? "1 email en cola. El avance se ve en la tarjeta."
+          : `${result.queued} emails en cola. Salen poco a poco; el avance se ve en la tarjeta.`,
     });
   };
 
   const fetchCampaigns = async () => {
     try {
-      // Determine if filter is a status or campaignType
+      // The filter is a status, the re-engagement type or the archived list.
       const statusValues = [
         "draft",
         "active",
@@ -203,11 +260,21 @@ export default function EmailCampaignsPage() {
       const status = statusValues.includes(filter) ? filter : undefined;
       const campaignType =
         filter === "reengagement" ? "reengagement" : undefined;
+      const archived = filter === "archived" ? true : undefined;
 
-      const data = await apiClient.getEmailCampaigns(status, campaignType);
+      const data = await apiClient.getEmailCampaigns(
+        status,
+        campaignType,
+        archived,
+      );
       setCampaigns(data);
+      setPlanBlocked(false);
     } catch (error) {
-      console.error("Error fetching campaigns:", error);
+      if (isPlanBlocked(error)) {
+        setPlanBlocked(true);
+      } else {
+        toastError("No se pudieron cargar las campañas", error);
+      }
     } finally {
       setLoading(false);
     }
@@ -215,44 +282,27 @@ export default function EmailCampaignsPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Empty optional fields are left out, not sent as "".
+    const payload = {
+      name: formData.name,
+      subject: formData.subject,
+      content: formData.content,
+      campaignType: formData.campaignType,
+      previewText: optionalText(formData.previewText),
+      replyTo: optionalText(formData.replyTo),
+    };
     try {
       if (editingCampaign) {
-        await apiClient.updateEmailCampaign(editingCampaign.id, formData);
+        await apiClient.updateEmailCampaign(editingCampaign.id, payload);
       } else {
-        await apiClient.createEmailCampaign(formData);
+        await apiClient.createEmailCampaign(payload);
       }
       setShowModal(false);
       setEditingCampaign(null);
-      setFormData({
-        name: "",
-        subject: "",
-        previewText: "",
-        content: "",
-        campaignType: "newsletter",
-      });
+      setFormData(EMPTY_FORM);
       fetchCampaigns();
     } catch (error) {
-      console.error("Error saving campaign:", error);
-    }
-  };
-
-  const performDelete = async (id: string) => {
-    try {
-      await apiClient.deleteEmailCampaign(id);
-      fetchCampaigns();
-    } catch (error) {
-      console.error("Error deleting campaign:", error);
-    }
-  };
-
-  const performSendNow = async (id: string) => {
-    try {
-      const result = await apiClient.sendEmailCampaignNow(id);
-      fetchCampaigns();
-      toastSendResult(result);
-    } catch (error) {
-      console.error("Error sending campaign:", error);
-      toastSendError(error);
+      toastError("No se pudo guardar la campaña", error);
     }
   };
 
@@ -264,9 +314,8 @@ export default function EmailCampaignsPage() {
       });
       return;
     }
-    const scheduledAt = new Date(
-      `${scheduleDate}T${scheduleTime}`,
-    ).toISOString();
+    // 10:30 means 10:30 on the salon's clock, wherever the browser is.
+    const scheduledAt = scheduledInstantIso(scheduleDate, scheduleTime, timeZone);
     try {
       await apiClient.scheduleEmailCampaign(scheduleCampaignId, scheduledAt);
       fetchCampaigns();
@@ -274,8 +323,12 @@ export default function EmailCampaignsPage() {
       setScheduleCampaignId(null);
       setScheduleDate("");
       setScheduleTime("");
+      toast({
+        title: "Campaña programada",
+        description: formatSalonDateTime(scheduledAt, timeZone),
+      });
     } catch (error) {
-      console.error("Error scheduling campaign:", error);
+      toastError("No se pudo programar la campaña", error);
     }
   };
 
@@ -284,10 +337,12 @@ export default function EmailCampaignsPage() {
     setLoadingPromotions(true);
     setShowReengagementModal(true);
     try {
+      // The server lists only active promotions that have not ended.
       const promotionsData = await apiClient.getAvailablePromotions();
       setPromotions(promotionsData.filter((p: Promotion) => p.isActive));
     } catch (error) {
-      console.error("Error fetching promotions:", error);
+      setPromotions([]);
+      toastError("No se pudieron cargar las promociones", error);
     } finally {
       setLoadingPromotions(false);
     }
@@ -306,39 +361,20 @@ export default function EmailCampaignsPage() {
       return;
     }
     try {
-      await apiClient.createReengagementCampaign(reengagementData);
-      setShowReengagementModal(false);
-      setReengagementData({
-        name: "",
-        subject: "",
-        previewText: "",
-        content: "",
-        inactiveDaysThreshold: 30,
-        linkedPromotionId: "",
-        fromName: "",
-        replyTo: "",
+      await apiClient.createReengagementCampaign({
+        name: reengagementData.name,
+        subject: reengagementData.subject,
+        content: reengagementData.content,
+        inactiveDaysThreshold: reengagementData.inactiveDaysThreshold,
+        previewText: optionalText(reengagementData.previewText),
+        linkedPromotionId: optionalText(reengagementData.linkedPromotionId),
+        replyTo: optionalText(reengagementData.replyTo),
       });
+      setShowReengagementModal(false);
+      setReengagementData(EMPTY_REENGAGEMENT);
       fetchCampaigns();
     } catch (error) {
-      console.error("Error creating re-engagement campaign:", error);
-    }
-  };
-
-  const performActivateCampaign = async (id: string) => {
-    try {
-      await apiClient.activateEmailCampaign(id);
-      fetchCampaigns();
-    } catch (error) {
-      console.error("Error activating campaign:", error);
-    }
-  };
-
-  const performDeactivateCampaign = async (id: string) => {
-    try {
-      await apiClient.deactivateEmailCampaign(id);
-      fetchCampaigns();
-    } catch (error) {
-      console.error("Error deactivating campaign:", error);
+      toastError("No se pudo crear la campaña", error);
     }
   };
 
@@ -355,33 +391,22 @@ export default function EmailCampaignsPage() {
     });
 
     try {
-      // Get existing recipients for this campaign to pre-select them
-      const existingRecipientsData =
-        await apiClient.getEmailCampaignRecipients(campaignId);
-      const existingClientIds = existingRecipientsData.map(
-        (r: any) => r.clientId,
-      );
-
-      // Get all clients with email
-      const clientsData = await apiClient.getClients();
-      const clientsWithEmail = clientsData.filter(campaignReachable);
-
-      setClients(clientsWithEmail);
+      const [existingRecipientsData, clientsData, audienceData] =
+        await Promise.all([
+          apiClient.getEmailCampaignRecipients(campaignId),
+          apiClient.getClients(),
+          apiClient.getEmailCampaignAudience(),
+        ]);
+      setClients(clientsData.filter(withEmail));
+      setAudience(audienceData);
       setExistingRecipients(existingRecipientsData);
-
       // Pre-select clients that are already recipients of this campaign
-      setSelectedClients(existingClientIds);
+      setSelectedClients(existingRecipientsData.map((r: any) => r.clientId));
     } catch (error) {
-      console.error("Error fetching clients:", error);
-      // Fallback: show all clients if we can't check existing recipients
-      try {
-        const clientsData = await apiClient.getClients();
-        setClients(clientsData.filter(campaignReachable));
-        setSelectedClients([]);
-        setExistingRecipients([]);
-      } catch (fallbackError) {
-        console.error("Fallback error:", fallbackError);
-      }
+      setClients([]);
+      setAudience(EMPTY_AUDIENCE);
+      setExistingRecipients([]);
+      toastError("No se pudieron cargar las clientas", error);
     } finally {
       setLoadingClients(false);
     }
@@ -460,13 +485,13 @@ export default function EmailCampaignsPage() {
 
       if (hasFilters) {
         const filteredClients = await apiClient.filterClients(filterParams);
-        setClients(filteredClients.filter(campaignReachable));
+        setClients(filteredClients.filter(withEmail));
       } else {
         const allClients = await apiClient.getClients();
-        setClients(allClients.filter(campaignReachable));
+        setClients(allClients.filter(withEmail));
       }
     } catch (error) {
-      console.error("Error applying filters:", error);
+      toastError("No se pudieron aplicar los filtros", error);
     } finally {
       setLoadingClients(false);
     }
@@ -480,12 +505,24 @@ export default function EmailCampaignsPage() {
     );
   };
 
+  // "Seleccionar todas" ticks only those who can receive it.
+  const selectableClients = clients.filter((c) => !exclusionOf(c.id));
+  const allSelectableSelected =
+    selectableClients.length > 0 &&
+    selectableClients.every((c) => selectedClients.includes(c.id));
   const selectAllClients = () => {
-    if (selectedClients.length === clients.length) {
+    if (allSelectableSelected) {
       setSelectedClients([]);
     } else {
-      setSelectedClients(clients.map((c: Client) => c.id));
+      setSelectedClients(selectableClients.map((c: Client) => c.id));
     }
+  };
+
+  const closeRecipientsModal = () => {
+    setShowRecipientsModal(false);
+    setRecipientsCampaignId(null);
+    setSelectedClients([]);
+    setExistingRecipients([]);
   };
 
   const handleUpdateRecipients = async () => {
@@ -509,26 +546,26 @@ export default function EmailCampaignsPage() {
       if (newClientIds.length === 0 && removedClientIds.length === 0) {
         toast({
           title: "Sin cambios",
-          description:
-            "No se han realizado modificaciones en los destinatarios",
+          description: "No has cambiado las destinatarias",
           variant: "default",
         });
-        setShowRecipientsModal(false);
-        setRecipientsCampaignId(null);
-        setSelectedClients([]);
-        setExistingRecipients([]);
+        closeRecipientsModal();
         return;
       }
 
-      // Add new recipients
+      // The server says how many it really added: those who cannot receive
+      // campaigns are left out.
+      let added = 0;
+      let excluded = 0;
       if (newClientIds.length > 0) {
-        await apiClient.addRecipientsToCampaign(
+        const result = await apiClient.addRecipientsToCampaign(
           recipientsCampaignId,
           newClientIds,
         );
+        added = result.added;
+        excluded = result.excluded;
       }
 
-      // Remove unchecked recipients
       if (removedClientIds.length > 0) {
         await apiClient.removeRecipientsFromCampaign(
           recipientsCampaignId,
@@ -537,66 +574,106 @@ export default function EmailCampaignsPage() {
       }
 
       fetchCampaigns();
-      setShowRecipientsModal(false);
-      setRecipientsCampaignId(null);
-      setSelectedClients([]);
-      setExistingRecipients([]);
+      closeRecipientsModal();
 
-      // Create informative message
       const messages = [];
       if (newClientIds.length > 0)
-        messages.push(`${newClientIds.length} añadidos`);
+        messages.push(added === 1 ? "1 añadida" : `${added} añadidas`);
+      if (excluded > 0)
+        messages.push(
+          excluded === 1
+            ? "1 no puede recibir campañas y no se ha añadido"
+            : `${excluded} no pueden recibir campañas y no se han añadido`,
+        );
       if (removedClientIds.length > 0)
-        messages.push(`${removedClientIds.length} eliminados`);
+        messages.push(
+          removedClientIds.length === 1
+            ? "1 quitada"
+            : `${removedClientIds.length} quitadas`,
+        );
 
       toast({
-        title: "Destinatarios actualizados",
-        description:
-          messages.join(", ") +
-          `. Total: ${selectedClients.length} seleccionados`,
+        title: "Destinatarias actualizadas",
+        description: messages.join(", ") + ".",
         variant: "default",
       });
     } catch (error) {
-      console.error("Error updating recipients:", error);
-      toast({
-        title: "Error al actualizar destinatarios",
-        variant: "destructive",
-      });
+      toastError("No se pudieron actualizar las destinatarias", error);
     }
   };
 
-  const performSendToAll = async (campaignId: string) => {
-    try {
-      // The server adds every active client with an email who accepts
-      // promotions, then sends (this page used to post every client's id,
-      // blocked and inactive ones included). The toast reports what the
-      // server did: suppressed or failed addresses are not "sent".
-      const result = await apiClient.sendEmailCampaignToAll(campaignId);
-      fetchCampaigns();
-      toastSendResult(result);
-    } catch (error) {
-      console.error("Error sending to all:", error);
-      toastSendError(error);
-    }
+  // What each confirmed action does, and what the toast says when it worked.
+  const actionRunners: Record<
+    CampaignAction,
+    { run: (id: string) => Promise<unknown>; failed: string; done?: string }
+  > = {
+    delete: {
+      run: (id) => apiClient.deleteEmailCampaign(id),
+      failed: "No se pudo eliminar la campaña",
+      done: "Campaña eliminada",
+    },
+    send: {
+      run: async (id) => toastQueued(await apiClient.sendEmailCampaignNow(id)),
+      failed: "No se pudo enviar la campaña",
+    },
+    sendAll: {
+      // The server adds every client who can receive it, then sends.
+      run: async (id) => toastQueued(await apiClient.sendEmailCampaignToAll(id)),
+      failed: "No se pudo enviar la campaña",
+    },
+    activate: {
+      run: (id) => apiClient.activateEmailCampaign(id),
+      failed: "No se pudo activar la campaña",
+      done: "Campaña activada",
+    },
+    deactivate: {
+      run: (id) => apiClient.deactivateEmailCampaign(id),
+      failed: "No se pudo desactivar la campaña",
+      done: "Campaña desactivada",
+    },
+    unschedule: {
+      run: (id) => apiClient.unscheduleEmailCampaign(id),
+      failed: "No se pudo desprogramar la campaña",
+      done: "La campaña vuelve a borrador",
+    },
+    archive: {
+      run: (id) => apiClient.archiveEmailCampaign(id),
+      failed: "No se pudo archivar la campaña",
+      done: "Campaña archivada",
+    },
+    unarchive: {
+      run: (id) => apiClient.unarchiveEmailCampaign(id),
+      failed: "No se pudo desarchivar la campaña",
+      done: "Campaña desarchivada",
+    },
+    retryFailed: {
+      run: async (id) => toastQueued(await apiClient.retryFailedEmailCampaign(id)),
+      failed: "No se pudieron reintentar los envíos",
+    },
   };
 
   const performPendingAction = async () => {
     if (!pendingAction) return;
     const { action, campaign } = pendingAction;
-    const perform = {
-      delete: performDelete,
-      send: performSendNow,
-      sendAll: performSendToAll,
-      activate: performActivateCampaign,
-      deactivate: performDeactivateCampaign,
-    }[action];
+    const runner = actionRunners[action];
     setPerformingAction(true);
     try {
-      await perform(campaign.id);
+      await runner.run(campaign.id);
+      if (runner.done) toast({ title: runner.done });
+    } catch (error) {
+      toastError(runner.failed, error);
     } finally {
       setPerformingAction(false);
       setPendingAction(null);
+      fetchCampaigns();
     }
+  };
+
+  const confirmDescription = (action: CampaignAction, campaign: EmailCampaign) => {
+    if (action === "send" || action === "sendAll") {
+      return sendConfirmText(action, campaign.pendingCount ?? campaign.totalRecipients);
+    }
+    return t(`email_campaigns.confirm.${action}.description`);
   };
 
   const openEditModal = (campaign: EmailCampaign) => {
@@ -606,6 +683,7 @@ export default function EmailCampaignsPage() {
       subject: campaign.subject,
       previewText: campaign.previewText || "",
       content: campaign.content,
+      replyTo: campaign.replyTo || "",
       campaignType: campaign.campaignType,
     });
     setShowModal(true);
@@ -626,48 +704,66 @@ export default function EmailCampaignsPage() {
             <p className="text-gray-600">{t("email_campaigns.description")}</p>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            onClick={openReengagementModal}
-            className="flex items-center px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors"
-          >
-            <UserPlus className="w-4 h-4 mr-2" />
-            {t("email_campaigns.re_engagement")}
-          </button>
-          <button
-            onClick={() => {
-              setEditingCampaign(null);
-              setFormData({
-                name: "",
-                subject: "",
-                previewText: "",
-                content: "",
-                campaignType: "newsletter",
-              });
-              setShowModal(true);
-            }}
-            className="flex items-center px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
-          >
-            <Plus className="w-4 h-4 mr-2" />
-            {t("email_campaigns.new_campaign")}
-          </button>
-        </div>
+        {!planBlocked && (
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={openReengagementModal}
+              className="flex items-center px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors"
+            >
+              <UserPlus className="w-4 h-4 mr-2" />
+              {t("email_campaigns.re_engagement")}
+            </button>
+            <button
+              onClick={() => {
+                setEditingCampaign(null);
+                setFormData(EMPTY_FORM);
+                setShowModal(true);
+              }}
+              className="flex items-center px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              {t("email_campaigns.new_campaign")}
+            </button>
+          </div>
+        )}
       </div>
 
-      {tracking && !tracking.sendingConfigured && (
+      {planBlocked && (
+        <div className="rounded-xl border border-purple-200 bg-purple-50 p-6">
+          <div className="flex items-start gap-3">
+            <Lock className="mt-0.5 h-5 w-5 shrink-0 text-purple-600" />
+            <div className="space-y-2">
+              <h2 className="font-semibold text-gray-900">
+                {t("email_campaigns.plan_blocked_title")}
+              </h2>
+              <p className="text-sm text-gray-700">
+                {t("email_campaigns.plan_blocked_body")}
+              </p>
+              <Link
+                href="/dashboard/billing"
+                className="inline-flex items-center rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-700"
+              >
+                {t("email_campaigns.plan_blocked_cta")}
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!planBlocked && tracking && !tracking.sendingConfigured && (
         <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
           El envío de emails no está activado en el servidor: las campañas no
           se pueden enviar todavía.
         </div>
       )}
-      {trackingOff && (
+      {!planBlocked && trackingOff && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
           Las aperturas, los clics y los rebotes aún no se registran: falta
           conectar el aviso de entregas del proveedor de email. Hasta entonces
           solo se cuentan los emails enviados.
         </div>
       )}
-      {tracking && tracking.suppressedAddresses > 0 && (
+      {!planBlocked && tracking && tracking.suppressedAddresses > 0 && (
         <p className="text-sm text-gray-600">
           {tracking.suppressedAddresses === 1
             ? "1 dirección ya no recibe tus campañas"
@@ -676,6 +772,8 @@ export default function EmailCampaignsPage() {
         </p>
       )}
 
+      {!planBlocked && (
+      <>
       {/* Filters */}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
         <select
@@ -692,6 +790,7 @@ export default function EmailCampaignsPage() {
           <option value="reengagement">
             {t("email_campaigns.reengagement")}
           </option>
+          <option value="archived">{t("email_campaigns.archived")}</option>
         </select>
       </div>
 
@@ -704,11 +803,15 @@ export default function EmailCampaignsPage() {
         <div className="text-center py-12 bg-white rounded-xl border border-gray-200">
           <Mail className="w-12 h-12 text-gray-400 mx-auto mb-4" />
           <h3 className="text-lg font-medium text-gray-900">
-            {t("email_campaigns.no_campaigns")}
+            {filter === "archived"
+              ? t("email_campaigns.no_archived_campaigns")
+              : t("email_campaigns.no_campaigns")}
           </h3>
-          <p className="text-gray-500 mt-1">
-            {t("email_campaigns.create_first_campaign")}
-          </p>
+          {filter !== "archived" && (
+            <p className="text-gray-500 mt-1">
+              {t("email_campaigns.create_first_campaign")}
+            </p>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -727,7 +830,7 @@ export default function EmailCampaignsPage() {
                 <span
                   className={`px-2 py-1 rounded-full text-xs font-medium ${statusColors[campaign.status]}`}
                 >
-                  {campaign.status}
+                  {campaignStatusLabel(campaign.status)}
                 </span>
               </div>
 
@@ -737,7 +840,27 @@ export default function EmailCampaignsPage() {
                     `email_campaigns.${getCampaignTypeLabel(campaign.campaignType)}`,
                   )}
                 </span>
+                {campaign.archivedAt && (
+                  <span className="text-xs px-2 py-1 bg-gray-100 text-gray-600 rounded">
+                    {t("email_campaigns.archived")}
+                  </span>
+                )}
               </div>
+
+              {(() => {
+                const progress = campaignProgress(campaign);
+                return progress ? (
+                  <p
+                    className={`mb-4 text-xs ${
+                      campaign.status === "sending"
+                        ? "text-yellow-700"
+                        : "text-red-700"
+                    }`}
+                  >
+                    {progress}
+                  </p>
+                ) : null;
+              })()}
 
               {/* Stats */}
               <div className="grid grid-cols-5 gap-2 mb-4">
@@ -791,92 +914,140 @@ export default function EmailCampaignsPage() {
                 </div>
               </div>
 
-              {/* Actions */}
-              <div className="flex items-center justify-end space-x-2 pt-3 border-t border-gray-100">
-                {campaign.status === "draft" && (
-                  <>
-                    <button
-                      onClick={() => setPendingAction({ action: "sendAll", campaign })}
-                      className="p-2 text-orange-600 hover:text-orange-700 hover:bg-orange-100 rounded-lg"
-                      title={t("email_campaigns.send_to_all_clients")}
-                    >
-                      <Mail className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => openRecipientsModal(campaign.id)}
-                      className="p-2 text-purple-600 hover:text-purple-700 hover:bg-purple-100 rounded-lg"
-                      title={t("email_campaigns.add_recipients")}
-                    >
-                      <UserPlus className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => openEditModal(campaign)}
-                      className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg"
-                      title={t("email_campaigns.edit_tooltip")}
-                    >
-                      <Edit className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => {
-                        setScheduleCampaignId(campaign.id);
-                        setScheduleDate("");
-                        setScheduleTime("");
-                        setShowScheduleModal(true);
-                      }}
-                      className="p-2 text-blue-600 hover:text-blue-700 hover:bg-blue-100 rounded-lg"
-                      title={t("email_campaigns.schedule_campaign")}
-                    >
-                      <AlarmClock className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => setPendingAction({ action: "send", campaign })}
-                      className="p-2 text-green-600 hover:text-green-700 hover:bg-green-100 rounded-lg"
-                      title={t("email_campaigns.send_now")}
-                    >
-                      <Send className="w-4 h-4" />
-                    </button>
-                  </>
-                )}
-                {campaign.status === "scheduled" && (
-                  <div className="flex items-center text-blue-600 text-xs">
-                    <Clock className="w-3 h-3 mr-1" />
-                    {campaign.scheduledAt
-                      ? new Date(campaign.scheduledAt).toLocaleString()
-                      : t("email_campaigns.scheduled_for")}
+              {/* Actions: which ones a campaign offers is in lib/email-campaigns.ts */}
+              {(() => {
+                const can = campaignActions(campaign);
+                const ask = (action: CampaignAction) => () =>
+                  setPendingAction({ action, campaign });
+                return (
+                  <div className="flex flex-wrap items-center justify-end gap-1 pt-3 border-t border-gray-100">
+                    {campaign.status === "scheduled" && campaign.scheduledAt && (
+                      <div className="mr-auto flex items-center text-blue-600 text-xs">
+                        <Clock className="w-3 h-3 mr-1 shrink-0" />
+                        {formatSalonDateTime(campaign.scheduledAt, timeZone)}
+                      </div>
+                    )}
+                    {can.sendToAll && (
+                      <button
+                        onClick={ask("sendAll")}
+                        className="p-2 text-orange-600 hover:text-orange-700 hover:bg-orange-100 rounded-lg"
+                        title={t("email_campaigns.send_to_all_clients")}
+                      >
+                        <Mail className="w-4 h-4" />
+                      </button>
+                    )}
+                    {can.recipients && (
+                      <button
+                        onClick={() => openRecipientsModal(campaign.id)}
+                        className="p-2 text-purple-600 hover:text-purple-700 hover:bg-purple-100 rounded-lg"
+                        title={t("email_campaigns.add_recipients")}
+                      >
+                        <UserPlus className="w-4 h-4" />
+                      </button>
+                    )}
+                    {can.edit && (
+                      <button
+                        onClick={() => openEditModal(campaign)}
+                        className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg"
+                        title={t("email_campaigns.edit_tooltip")}
+                      >
+                        <Edit className="w-4 h-4" />
+                      </button>
+                    )}
+                    {can.schedule && (
+                      <button
+                        onClick={() => {
+                          setScheduleCampaignId(campaign.id);
+                          setScheduleDate("");
+                          setScheduleTime("");
+                          setShowScheduleModal(true);
+                        }}
+                        className="p-2 text-blue-600 hover:text-blue-700 hover:bg-blue-100 rounded-lg"
+                        title={t("email_campaigns.schedule_campaign")}
+                      >
+                        <AlarmClock className="w-4 h-4" />
+                      </button>
+                    )}
+                    {can.sendNow && (
+                      <button
+                        onClick={ask("send")}
+                        className="p-2 text-green-600 hover:text-green-700 hover:bg-green-100 rounded-lg"
+                        title={t("email_campaigns.send_now")}
+                      >
+                        <Send className="w-4 h-4" />
+                      </button>
+                    )}
+                    {can.unschedule && (
+                      <button
+                        onClick={ask("unschedule")}
+                        className="p-2 text-blue-600 hover:text-blue-700 hover:bg-blue-100 rounded-lg"
+                        title={t("email_campaigns.unschedule")}
+                      >
+                        <CalendarX className="w-4 h-4" />
+                      </button>
+                    )}
+                    {can.activate && (
+                      <button
+                        onClick={ask("activate")}
+                        className="p-2 text-green-600 hover:text-green-700 hover:bg-green-100 rounded-lg"
+                        title={t("email_campaigns.activate_campaign")}
+                      >
+                        <Play className="w-4 h-4" />
+                      </button>
+                    )}
+                    {can.deactivate && (
+                      <button
+                        onClick={ask("deactivate")}
+                        className="p-2 text-orange-600 hover:text-orange-700 hover:bg-orange-100 rounded-lg"
+                        title={t("email_campaigns.deactivate_campaign")}
+                      >
+                        <Pause className="w-4 h-4" />
+                      </button>
+                    )}
+                    {can.retryFailed && (
+                      <button
+                        onClick={ask("retryFailed")}
+                        className="p-2 text-yellow-700 hover:text-yellow-800 hover:bg-yellow-100 rounded-lg"
+                        title={t("email_campaigns.retry_failed")}
+                      >
+                        <RotateCcw className="w-4 h-4" />
+                      </button>
+                    )}
+                    {can.archive && (
+                      <button
+                        onClick={ask("archive")}
+                        className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg"
+                        title={t("email_campaigns.archive_tooltip")}
+                      >
+                        <Archive className="w-4 h-4" />
+                      </button>
+                    )}
+                    {can.unarchive && (
+                      <button
+                        onClick={ask("unarchive")}
+                        className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg"
+                        title={t("email_campaigns.unarchive_tooltip")}
+                      >
+                        <ArchiveRestore className="w-4 h-4" />
+                      </button>
+                    )}
+                    {can.delete && (
+                      <button
+                        onClick={ask("delete")}
+                        className="p-2 text-red-600 hover:text-red-700 hover:bg-red-100 rounded-lg"
+                        title={t("email_campaigns.delete_tooltip")}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
-                )}
-                {/* Re-engagement campaign activation buttons */}
-                {campaign.campaignType === "reengagement" &&
-                  campaign.status === "draft" && (
-                    <button
-                      onClick={() => setPendingAction({ action: "activate", campaign })}
-                      className="p-2 text-green-600 hover:text-green-700 hover:bg-green-100 rounded-lg"
-                      title={t("email_campaigns.activate_campaign")}
-                    >
-                      <Play className="w-4 h-4" />
-                    </button>
-                  )}
-                {campaign.campaignType === "reengagement" &&
-                  campaign.status === "active" && (
-                    <button
-                      onClick={() => setPendingAction({ action: "deactivate", campaign })}
-                      className="p-2 text-orange-600 hover:text-orange-700 hover:bg-orange-100 rounded-lg"
-                      title={t("email_campaigns.deactivate_campaign")}
-                    >
-                      <Pause className="w-4 h-4" />
-                    </button>
-                  )}
-                <button
-                  onClick={() => setPendingAction({ action: "delete", campaign })}
-                  className="p-2 text-red-600 hover:text-red-700 hover:bg-red-100 rounded-lg"
-                  title={t("email_campaigns.delete_tooltip")}
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
+                );
+              })()}
             </div>
           ))}
         </div>
+      )}
+      </>
       )}
 
       {/* Modal */}
@@ -885,7 +1056,9 @@ export default function EmailCampaignsPage() {
           <div className="bg-white rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-xl font-bold">
-                {editingCampaign ? "Editar Campaña" : "Nueva Campaña"}
+                {editingCampaign
+                  ? t("email_campaigns.edit_campaign")
+                  : t("email_campaigns.new_campaign")}
               </h2>
               <button
                 onClick={() => setShowModal(false)}
@@ -938,6 +1111,28 @@ export default function EmailCampaignsPage() {
                   }
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
                 />
+                <p className="mt-1 text-xs text-gray-500">
+                  {t("email_campaigns.preview_text_hint")}
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  {t("email_campaigns.reply_to")}
+                </label>
+                <input
+                  type="email"
+                  value={formData.replyTo}
+                  onChange={(e) =>
+                    setFormData({ ...formData, replyTo: e.target.value })
+                  }
+                  placeholder={tenant.data?.email || ""}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  {t("email_campaigns.reply_to_hint")}{" "}
+                  {t("email_campaigns.sender_note")}
+                </p>
               </div>
 
               <div>
@@ -1020,7 +1215,9 @@ export default function EmailCampaignsPage() {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl p-6 w-full max-w-md">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold">Programar Campaña</h2>
+              <h2 className="text-xl font-bold">
+                {t("email_campaigns.schedule_campaign")}
+              </h2>
               <button
                 onClick={() => setShowScheduleModal(false)}
                 className="p-2 hover:bg-gray-100 rounded-lg"
@@ -1038,7 +1235,7 @@ export default function EmailCampaignsPage() {
                   type="date"
                   value={scheduleDate}
                   onChange={(e) => setScheduleDate(e.target.value)}
-                  min={new Date().toISOString().split("T")[0]}
+                  min={salonToday(timeZone)}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
                   required
                 />
@@ -1058,8 +1255,19 @@ export default function EmailCampaignsPage() {
               </div>
 
               <p className="text-sm text-gray-500">
-                La campaña se enviará automáticamente en la fecha y hora
-                especificadas.
+                La campaña empezará a enviarse sola en esa fecha y hora.{" "}
+                {t("email_campaigns.schedule_hint", { timezone: timeZone })}
+                {scheduleDate && scheduleTime && (
+                  <>
+                    {" "}
+                    Se enviará el{" "}
+                    {formatSalonDateTime(
+                      scheduledInstantIso(scheduleDate, scheduleTime, timeZone),
+                      timeZone,
+                    )}
+                    .
+                  </>
+                )}
               </p>
             </div>
 
@@ -1089,13 +1297,20 @@ export default function EmailCampaignsPage() {
           <div className="bg-white rounded-xl p-6 w-full max-w-2xl max-h-[80vh] flex flex-col">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h2 className="text-xl font-bold">Gestionar Destinatarios</h2>
+                <h2 className="text-xl font-bold">Destinatarias</h2>
                 <p className="text-sm text-gray-500">
-                  Selecciona los clientes que quieres incluir en la campaña
+                  Elige las clientas que recibirán la campaña. Solo pueden
+                  recibirla las que han venido al menos una vez y aceptan
+                  promociones.
                 </p>
+                {exclusionSummary(audience.excluded) && (
+                  <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    {exclusionSummary(audience.excluded)}
+                  </p>
+                )}
               </div>
               <button
-                onClick={() => setShowRecipientsModal(false)}
+                onClick={closeRecipientsModal}
                 className="p-2 hover:bg-gray-100 rounded-lg"
               >
                 <X className="w-5 h-5" />
@@ -1206,14 +1421,14 @@ export default function EmailCampaignsPage() {
                     className="flex items-center text-sm text-purple-600 hover:text-purple-700"
                   >
                     <Check className="w-4 h-4 mr-1" />
-                    {selectedClients.length === clients.length
-                      ? "Deseleccionar todos"
-                      : "Seleccionar todos"}
+                    {allSelectableSelected
+                      ? "Quitar todas"
+                      : "Seleccionar todas"}
                   </button>
                   <div className="text-sm text-gray-500 space-y-1">
                     <div>
-                      {selectedClients.length} de {clients.length} clientes
-                      seleccionados
+                      {selectedClients.length} de {selectableClients.length}{" "}
+                      seleccionadas
                     </div>
                     <div className="text-xs">
                       {(() => {
@@ -1228,10 +1443,10 @@ export default function EmailCampaignsPage() {
                         ).length;
 
                         const parts = [];
-                        parts.push(`${existingRecipients.length} ya añadidos`);
-                        if (newCount > 0) parts.push(`${newCount} nuevos`);
+                        parts.push(`${existingRecipients.length} ya añadidas`);
+                        if (newCount > 0) parts.push(`${newCount} nuevas`);
                         if (removedCount > 0)
-                          parts.push(`${removedCount} serán eliminados`);
+                          parts.push(`${removedCount} se quitarán`);
 
                         return parts.join(" • ");
                       })()}
@@ -1242,7 +1457,7 @@ export default function EmailCampaignsPage() {
                 <div className="flex-1 overflow-y-auto border border-gray-200 rounded-lg">
                   {clients.length === 0 ? (
                     <div className="text-center py-8 text-gray-500">
-                      No hay clientes con correo electrónico
+                      {t("email_campaigns.no_clients_with_email")}
                     </div>
                   ) : (
                     <div className="divide-y divide-gray-200">
@@ -1250,18 +1465,24 @@ export default function EmailCampaignsPage() {
                         const isAlreadyRecipient = existingRecipients.some(
                           (r: any) => r.clientId === client.id,
                         );
+                        const exclusion = exclusionOf(client.id);
+                        const checked = selectedClients.includes(client.id);
+                        // An excluded client can be unticked (taken off the
+                        // list) but not ticked.
+                        const locked = !!exclusion && !checked;
                         return (
                           <label
                             key={client.id}
-                            className={`flex items-center p-3 cursor-pointer hover:bg-gray-50 ${
-                              selectedClients.includes(client.id)
-                                ? "bg-purple-50"
-                                : ""
-                            }`}
+                            className={`flex items-center p-3 ${
+                              locked
+                                ? "cursor-not-allowed opacity-60"
+                                : "cursor-pointer hover:bg-gray-50"
+                            } ${checked ? "bg-purple-50" : ""}`}
                           >
                             <input
                               type="checkbox"
-                              checked={selectedClients.includes(client.id)}
+                              checked={checked}
+                              disabled={locked}
                               onChange={() => toggleClient(client.id)}
                               className="w-4 h-4 text-purple-600 rounded border-gray-300 focus:ring-purple-500"
                             />
@@ -1275,11 +1496,18 @@ export default function EmailCampaignsPage() {
                                     {client.email}
                                   </p>
                                 </div>
-                                {isAlreadyRecipient && (
-                                  <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full">
-                                    Ya añadido
-                                  </span>
-                                )}
+                                <div className="flex flex-wrap justify-end gap-1">
+                                  {exclusion && (
+                                    <span className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded-full">
+                                      {EXCLUSION_LABELS[exclusion]}
+                                    </span>
+                                  )}
+                                  {isAlreadyRecipient && (
+                                    <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full">
+                                      Ya añadida
+                                    </span>
+                                  )}
+                                </div>
                               </div>
                             </div>
                           </label>
@@ -1294,7 +1522,7 @@ export default function EmailCampaignsPage() {
             <div className="flex justify-end space-x-3 pt-4 mt-4 border-t border-gray-200">
               <button
                 type="button"
-                onClick={() => setShowRecipientsModal(false)}
+                onClick={closeRecipientsModal}
                 className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
               >
                 Cancelar
@@ -1304,7 +1532,7 @@ export default function EmailCampaignsPage() {
                 onClick={handleUpdateRecipients}
                 className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700"
               >
-                Actualizar Destinatarios
+                Guardar destinatarias
                 {(() => {
                   const existingClientIds = existingRecipients.map(
                     (r: any) => r.clientId,
@@ -1321,9 +1549,9 @@ export default function EmailCampaignsPage() {
                   }
 
                   const changes = [];
-                  if (newCount > 0) changes.push(`+${newCount} nuevos`);
+                  if (newCount > 0) changes.push(`+${newCount} nuevas`);
                   if (removedCount > 0)
-                    changes.push(`-${removedCount} eliminados`);
+                    changes.push(`-${removedCount} quitadas`);
 
                   return ` (${changes.join(", ")})`;
                 })()}
@@ -1340,10 +1568,11 @@ export default function EmailCampaignsPage() {
             <div className="flex items-center justify-between p-6 border-b border-gray-200">
               <div>
                 <h2 className="text-xl font-semibold text-gray-900">
-                  Campaña de Re-engagement
+                  Campaña de reactivación
                 </h2>
                 <p className="text-sm text-gray-500">
-                  Envía recordatorios a clientes inactivos
+                  Escribe sola a las clientas que vinieron alguna vez y llevan
+                  tiempo sin volver
                 </p>
               </div>
               <button
@@ -1402,7 +1631,7 @@ export default function EmailCampaignsPage() {
                     <option value={90}>90 días</option>
                   </select>
                   <p className="text-xs text-gray-500 mt-1">
-                    Clientes que vinieron alguna vez y no han vuelto en{" "}
+                    Clientas que vinieron alguna vez y no han vuelto en{" "}
                     {reengagementData.inactiveDaysThreshold} días
                   </p>
                 </div>
@@ -1421,7 +1650,7 @@ export default function EmailCampaignsPage() {
                       onChange={(e) =>
                         setReengagementData({
                           ...reengagementData,
-                          linkedPromotionId: e.target.value || undefined,
+                          linkedPromotionId: e.target.value,
                         })
                       }
                       className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500"
@@ -1430,9 +1659,7 @@ export default function EmailCampaignsPage() {
                       {promotions.map((promo: Promotion) => (
                         <option key={promo.id} value={promo.id}>
                           {promo.name} ({promo.code}) -{" "}
-                          {promo.type === "PERCENTAGE"
-                            ? `${promo.value}%`
-                            : `€${promo.value}`}
+                          {discountLabel(promo.type, promo.value)}
                         </option>
                       ))}
                     </select>
@@ -1459,14 +1686,14 @@ export default function EmailCampaignsPage() {
                 />
                 <p className="text-xs text-gray-500 mt-1">
                   {
-                    "Usa {{clientName}}, {{salonName}}, {{discountCode}}, {{discountValue}} como placeholders"
+                    "Puedes usar {{clientName}}, {{salonName}}, {{discountCode}} y {{discountValue}}. Si la promoción deja de valer, el código y el descuento se quitan del email."
                   }
                 </p>
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Vista previa
+                  {t("email_campaigns.preview_text")}
                 </label>
                 <input
                   type="text"
@@ -1502,27 +1729,10 @@ export default function EmailCampaignsPage() {
                 <p className="mt-1 text-xs text-gray-500">{t("email_campaigns.unsubscribe_note")}</p>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Nombre del remitente
-                  </label>
-                  <input
-                    type="text"
-                    value={reengagementData.fromName || ""}
-                    onChange={(e) =>
-                      setReengagementData({
-                        ...reengagementData,
-                        fromName: e.target.value,
-                      })
-                    }
-                    placeholder="Tu Peluquería"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Responder a
+                    {t("email_campaigns.reply_to")}
                   </label>
                   <input
                     type="email"
@@ -1533,9 +1743,13 @@ export default function EmailCampaignsPage() {
                         replyTo: e.target.value,
                       })
                     }
-                    placeholder="info@tupeluqueria.com"
+                    placeholder={tenant.data?.email || "info@tupeluqueria.com"}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500"
                   />
+                  <p className="mt-1 text-xs text-gray-500">
+                    {t("email_campaigns.reply_to_hint")}{" "}
+                    {t("email_campaigns.sender_note")}
+                  </p>
                 </div>
               </div>
 
@@ -1551,7 +1765,7 @@ export default function EmailCampaignsPage() {
                   type="submit"
                   className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600"
                 >
-                  Crear Campaña
+                  {t("email_campaigns.create_campaign")}
                 </button>
               </div>
             </form>
@@ -1569,9 +1783,9 @@ export default function EmailCampaignsPage() {
             : ""
         }
         description={
-          pendingAction?.action === "delete"
-            ? undefined
-            : pendingAction && t(`email_campaigns.confirm.${pendingAction.action}.description`)
+          pendingAction
+            ? confirmDescription(pendingAction.action, pendingAction.campaign)
+            : undefined
         }
         confirmLabel={pendingAction ? t(`email_campaigns.confirm.${pendingAction.action}.cta`) : undefined}
         destructive={pendingAction?.action === "delete"}

@@ -13,22 +13,46 @@ import { EmailCampaignsScheduler } from "./email-campaigns.scheduler";
  * client is on a campaign's list once.
  */
 
-type ClientRow = { id: string; tenantId: string; status: string; email: string | null; firstName: string; lastName: string };
+type ClientRow = {
+  id: string;
+  tenantId: string;
+  status: string;
+  email: string | null;
+  firstName: string;
+  lastName: string;
+  lastVisit: Date | null;
+};
 
+const VISITED = new Date("2026-09-01");
 const CLIENTS: ClientRow[] = [
-  { id: "ana", tenantId: "t1", status: "active", email: "ana@example.test", firstName: "Ana", lastName: "López" },
-  { id: "bea", tenantId: "t1", status: "blocked", email: "bea@example.test", firstName: "Bea", lastName: "Ruiz" },
-  { id: "eva", tenantId: "t1", status: "inactive", email: "eva@example.test", firstName: "Eva", lastName: "Gil" },
-  { id: "sin-email", tenantId: "t1", status: "active", email: null, firstName: "Sin", lastName: "Email" },
-  { id: "otra", tenantId: "t2", status: "active", email: "otra@example.test", firstName: "Otra", lastName: "Salón" },
+  { id: "ana", tenantId: "t1", status: "active", email: "ana@example.test", firstName: "Ana", lastName: "López", lastVisit: VISITED },
+  { id: "bea", tenantId: "t1", status: "blocked", email: "bea@example.test", firstName: "Bea", lastName: "Ruiz", lastVisit: VISITED },
+  { id: "eva", tenantId: "t1", status: "inactive", email: "eva@example.test", firstName: "Eva", lastName: "Gil", lastVisit: VISITED },
+  { id: "sin-email", tenantId: "t1", status: "active", email: null, firstName: "Sin", lastName: "Email", lastVisit: VISITED },
+  { id: "otra", tenantId: "t2", status: "active", email: "otra@example.test", firstName: "Otra", lastName: "Salón", lastVisit: VISITED },
+  // Never came: no completed visit, so no prior relationship (LSSI 21.2).
+  { id: "nueva", tenantId: "t1", status: "active", email: "nueva@example.test", firstName: "Nueva", lastName: "Ruiz", lastVisit: null },
+  { id: "rechaza", tenantId: "t1", status: "active", email: "rechaza@example.test", firstName: "Re", lastName: "Chaza", lastVisit: VISITED },
+  { id: "baja", tenantId: "t1", status: "active", email: "Baja@example.test", firstName: "Ba", lastName: "Ja", lastVisit: VISITED },
 ];
 
-function setup(opts: { status?: string; existing?: Array<{ campaignId: string; clientId: string | null; status: string }> } = {}) {
+function setup(
+  opts: {
+    status?: string;
+    campaignType?: string;
+    existing?: Array<{ campaignId: string; clientId: string | null; status: string }>;
+  } = {},
+) {
   const rows: any[] = (opts.existing ?? []).map((r, i) => ({ id: `old${i}`, email: "x@example.test", ...r }));
   const clientQueries: any[] = [];
   const prisma: any = {
     emailCampaign: {
-      findFirst: jest.fn(async () => ({ id: "camp", tenantId: "t1", status: opts.status ?? "draft" })),
+      findFirst: jest.fn(async () => ({
+        id: "camp",
+        tenantId: "t1",
+        status: opts.status ?? "draft",
+        campaignType: opts.campaignType ?? "newsletter",
+      })),
       update: jest.fn(async () => ({})),
     },
     client: {
@@ -39,12 +63,19 @@ function setup(opts: { status?: string; existing?: Array<{ campaignId: string; c
             c.tenantId === where.tenantId &&
             (!where.status || c.status === where.status) &&
             (!where.email || c.email !== null) &&
+            (!where.lastVisit || c.lastVisit !== null) &&
             (!where.id?.in || where.id.in.includes(c.id)),
         );
       }),
     },
-    // Nobody here said no to promotions (marketing-consent.spec covers that).
-    consent: { findMany: jest.fn(async () => []) },
+    // "rechaza" said no to promotions (marketing-consent.spec covers how).
+    consent: {
+      findMany: jest.fn(async ({ where }: any) =>
+        where.tenantId === "t1" && (!where.clientId || where.clientId.in.includes("rechaza"))
+          ? [{ clientId: "rechaza", responses: { accepts: false } }]
+          : [],
+      ),
+    },
     emailCampaignRecipient: {
       // Like Postgres with the (campaignId, clientId) unique index and
       // skipDuplicates: rows already there are skipped, not returned.
@@ -66,7 +97,13 @@ function setup(opts: { status?: string; existing?: Array<{ campaignId: string; c
     },
   };
   const email: any = { isConfigured: () => true };
-  const service = new EmailCampaignsService(prisma, email, {} as any, {} as any);
+  // "baja" used the unsubscribe link: on the suppression list.
+  const suppressions: any = {
+    suppressedAmong: jest.fn(async (_t: string, emails: string[]) =>
+      new Set(emails.map((e) => e?.toLowerCase()).filter((e) => e === "baja@example.test")),
+    ),
+  };
+  const service = new EmailCampaignsService(prisma, email, suppressions, { kick: jest.fn() } as any);
   return { service, prisma, rows, clientQueries };
 }
 
@@ -74,10 +111,27 @@ describe("adding recipients to a campaign", () => {
   it("adds only the salon's active clients with an email", async () => {
     const { service, rows, clientQueries } = setup();
 
-    await service.addRecipients("t1", "camp", ["ana", "bea", "eva", "sin-email", "otra"]);
+    const result = await service.addRecipients("t1", "camp", ["ana", "bea", "eva", "sin-email", "otra"]);
 
     expect(rows.map((r) => r.clientId)).toEqual(["ana"]);
     expect(clientQueries[0]).toMatchObject({ tenantId: "t1", status: "active", email: { not: null } });
+    expect(result).toEqual({ added: 1, alreadyAdded: 0, excluded: 4 });
+  });
+
+  it("adds only clients with a completed visit, who accept promotions and are not suppressed", async () => {
+    const { service, rows, clientQueries } = setup();
+
+    const result = await service.addRecipients("t1", "camp", ["ana", "nueva", "rechaza", "baja"]);
+
+    expect(rows.map((r) => r.clientId)).toEqual(["ana"]);
+    expect(clientQueries[0]).toMatchObject({ lastVisit: { not: null } });
+    expect(result).toEqual({ added: 1, alreadyAdded: 0, excluded: 3 });
+  });
+
+  it("refuses a re-engagement campaign: it picks its own clients", async () => {
+    const { service, rows } = setup({ campaignType: "reengagement" });
+    await expect(service.addRecipients("t1", "camp", ["ana"])).rejects.toThrow(/reactivación/);
+    expect(rows).toHaveLength(0);
   });
 
   it("never puts a client on the list twice, and counts only who was added", async () => {
@@ -85,20 +139,22 @@ describe("adding recipients to a campaign", () => {
 
     const added = await service.addRecipients("t1", "camp", ["ana", "ana"]);
 
-    expect(added).toEqual([]);
+    expect(added).toEqual({ added: 0, alreadyAdded: 1, excluded: 0 });
     expect(rows.filter((r) => r.clientId === "ana")).toHaveLength(1);
     expect(prisma.emailCampaignRecipient.createManyAndReturn.mock.calls[0][0].skipDuplicates).toBe(true);
     expect(prisma.emailCampaign.update.mock.calls[0][0].data).toEqual({ totalRecipients: { increment: 0 } });
   });
 
-  it("refuses a campaign already sent", async () => {
-    const { service } = setup({ status: "sent" });
-    await expect(service.addRecipients("t1", "camp", ["ana"])).rejects.toBeInstanceOf(BadRequestException);
+  it("refuses a campaign already sent, being sent or archived as sent", async () => {
+    for (const status of ["sent", "sending", "failed", "active"]) {
+      const { service } = setup({ status });
+      await expect(service.addRecipients("t1", "camp", ["ana"])).rejects.toBeInstanceOf(BadRequestException);
+    }
   });
 });
 
 describe("Enviar a todos", () => {
-  it("adds every active client with an email, and sends", async () => {
+  it("adds every client the campaign may reach, and sends", async () => {
     const { service, rows, clientQueries } = setup();
     const send = jest.spyOn(service, "sendCampaignNow").mockResolvedValue({ success: true } as any);
 
@@ -123,7 +179,7 @@ describe("Enviar a todos", () => {
     prisma.client.findMany.mockResolvedValue([]);
     const send = jest.spyOn(service, "sendCampaignNow");
 
-    await expect(service.sendToAllClients("t1", "camp")).rejects.toThrow(/No hay clientas activas/);
+    await expect(service.sendToAllClients("t1", "camp")).rejects.toThrow(/No hay clientas que puedan recibirla/);
     expect(send).not.toHaveBeenCalled();
   });
 
@@ -167,7 +223,8 @@ describe("re-engagement: a client is on the campaign's list once", () => {
     const email: any = { sendEmail: jest.fn(async () => ({ success: true, id: "re_2" })) };
     const suppressions: any = { suppressedAmong: jest.fn(async () => new Set()) };
     const unsubscribes: any = { link: () => ({ pageUrl: "https://app.test/baja", headers: {} }), withFooter: (h: string) => h };
-    const s = new EmailCampaignsScheduler(prisma, email, {} as any, suppressions, unsubscribes);
+    const pacer: any = { wait: jest.fn(async () => undefined) };
+    const s = new EmailCampaignsScheduler(prisma, email, suppressions, unsubscribes, pacer);
     (s as any).logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
     const campaign = { id: "camp", tenantId: "t1", subject: "Te echamos de menos", content: "<p>Hola</p>", tenant: { name: "Salón" } };
     return { run: () => (s as any).processReengagementCampaign(campaign), prisma };

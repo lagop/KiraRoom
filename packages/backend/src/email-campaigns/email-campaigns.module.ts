@@ -7,6 +7,8 @@ import { EmailCampaignsScheduler } from "./email-campaigns.scheduler";
 import { EmailSuppressionService } from "./email-suppression.service";
 import { EmailUnsubscribeService } from "./email-unsubscribe.service";
 import { ResendEventsService } from "./resend-events.service";
+import { EmailCampaignSender } from "./email-campaign-sender.service";
+import { EmailPacer } from "./email-pacer";
 import { PrismaModule } from "../common/prisma/prisma.module";
 import { EmailService } from "../notifications/services/email.service";
 import { PromotionsModule } from "../promotions/promotions.module";
@@ -20,6 +22,8 @@ import { PlatformModule } from "../platform/platform.module";
   providers: [
     EmailCampaignsService,
     EmailCampaignsScheduler,
+    EmailCampaignSender,
+    EmailPacer,
     EmailService,
     EmailSuppressionService,
     EmailUnsubscribeService,

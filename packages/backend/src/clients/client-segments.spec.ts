@@ -62,10 +62,10 @@ describe("inactive clients: only those who came at least once", () => {
     };
     const s = new EmailCampaignsScheduler(
       prisma,
-      {} as any,
-      {} as any,
+      {} as any, // email
       { suppressedAmong: jest.fn(async () => new Set()) } as any,
-      {} as any,
+      {} as any, // unsubscribe links
+      {} as any, // pacer
     );
     (s as any).logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
 

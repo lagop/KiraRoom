@@ -1,195 +1,479 @@
 import { BadRequestException } from "@nestjs/common";
 import { EmailCampaignsService } from "./email-campaigns.service";
+import { EmailCampaignSender, MAX_SEND_ATTEMPTS, SEND_LEASE_MS, campaignSender, retryDelayMs } from "./email-campaign-sender.service";
 import { EmailUnsubscribeService } from "./email-unsubscribe.service";
 
 /**
  * Sending a campaign.
  *
- * Before: the result of each send was ignored (a refused email counted as
- * sent), the recipient got a made-up message id (`campaign_<id>_<id>`) that
- * no Resend event could ever match, "delivered" was set to "sent", and an
- * address that had bounced or complained was emailed again. These tests
- * pin what replaced it.
+ * Before: every email went out inside the HTTP request, one after another,
+ * so a restart left the campaign "sending" for ever, a 429 was a permanent
+ * failure, and a big list burst the shared domain. "Enviar" now only claims
+ * the campaign; EmailCampaignSender sends in the background, in batches, at
+ * a pace, with retries. These tests run it against an in-memory store.
  */
-describe("EmailCampaignsService.deliverCampaign", () => {
-  function setup(
-    opts: {
-      configured?: boolean;
-      suppressed?: string[];
-      claim?: number;
-      extraRecipients?: Array<{ id: string; clientId: string | null; email: string; status: string }>;
-      notActive?: string[];
-    } = {},
-  ) {
-    const recipients = [
-      { id: "r1", clientId: "k1", email: "ana@example.test", status: "pending" },
-      { id: "r2", clientId: "k2", email: "Rebotada@Example.test", status: "pending" },
-      { id: "r3", clientId: "k3", email: "fallo@example.test", status: "pending" },
-      ...(opts.extraRecipients ?? []),
-    ];
-    const prisma: any = {
-      emailCampaign: {
-        findFirst: jest.fn().mockResolvedValue({ id: "c1", tenantId: "t1", status: "draft" }),
-        findFirstOrThrow: jest.fn().mockResolvedValue({
-          id: "c1",
-          tenantId: "t1",
-          subject: "Ofertas de otoño",
-          content: "<p>Hola</p>",
-          replyTo: null,
-          recipients,
-          tenant: { name: "Salón Lucía" },
-        }),
-        updateMany: jest.fn().mockResolvedValue({ count: opts.claim ?? 1 }),
-        update: jest.fn().mockResolvedValue({}),
-      },
-      emailCampaignRecipient: {
-        update: jest.fn().mockResolvedValue({}),
-        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
-      },
-      // The salon's active clients among those asked for.
-      client: {
-        findMany: jest.fn(async ({ where }: any) =>
-          where.id.in.filter((id: string) => !(opts.notActive ?? []).includes(id)).map((id: string) => ({ id })),
-        ),
-      },
-      // Nobody here said no to promotions (marketing-consent.spec covers that).
-      consent: { findMany: jest.fn().mockResolvedValue([]) },
-    };
-    const email: any = {
-      isConfigured: () => opts.configured ?? true,
-      sendEmail: jest.fn(async ({ to }: { to: string }) =>
-        to.startsWith("fallo") ? { success: false, error: "Invalid `to` field" } : { success: true, id: `re_${to}` },
-      ),
-    };
-    const suppressions: any = {
-      suppressedAmong: jest.fn().mockResolvedValue(new Set(opts.suppressed ?? [])),
-    };
-    // The real link builder: only its config is used to sign and build URLs.
-    const env: Record<string, string> = { JWT_SECRET: "test-secret", APP_BASE_URL: "https://app.test" };
-    const unsubscribes = new EmailUnsubscribeService({} as any, { get: (k: string) => env[k] } as any, {} as any, {} as any);
-    const service = new EmailCampaignsService(prisma, email, suppressions, unsubscribes);
-    (service as any).logger = { log: jest.fn() };
-    return { service, prisma, email, unsubscribes };
-  }
 
-  it("stores Resend's id, skips suppressed addresses and records failures as failures", async () => {
-    const { service, prisma, email } = setup({ suppressed: ["rebotada@example.test"] });
-    const result = await service.sendCampaignNow("t1", "c1");
+type Row = Record<string, any>;
 
-    expect(result).toEqual({
-      success: true,
-      sentCount: 1,
-      failedCount: 1,
-      suppressedCount: 1,
-      skippedCount: 0,
-      droppedCount: 0,
-    });
-    expect(email.sendEmail).toHaveBeenCalledTimes(2);
-    expect(email.sendEmail).not.toHaveBeenCalledWith(expect.objectContaining({ to: "Rebotada@Example.test" }));
-
-    const updates = prisma.emailCampaignRecipient.update.mock.calls.map((c: any[]) => c[0]);
-    expect(updates).toEqual(
-      expect.arrayContaining([
-        { where: { id: "r1" }, data: expect.objectContaining({ status: "sent", messageId: "re_ana@example.test" }) },
-        { where: { id: "r2" }, data: expect.objectContaining({ status: "suppressed" }) },
-        { where: { id: "r3" }, data: expect.objectContaining({ status: "failed", errorMessage: "Invalid `to` field" }) },
-      ]),
-    );
-  });
-
-  it("counts only what it knows: sent, never delivered or bounced", async () => {
-    const { service, prisma } = setup();
-    await service.sendCampaignNow("t1", "c1");
-    const calls = prisma.emailCampaign.update.mock.calls;
-    const final = calls[calls.length - 1][0];
-    expect(final.data).toEqual({ status: "sent", sentAt: expect.any(Date), emailsSent: { increment: 2 } });
-  });
-
-  it("claims the campaign so a double click cannot send it twice", async () => {
-    const { service, email } = setup({ claim: 0 });
-    await expect(service.sendCampaignNow("t1", "c1")).rejects.toBeInstanceOf(BadRequestException);
-    expect(email.sendEmail).not.toHaveBeenCalled();
-  });
-
-  it("refuses to 'send' when email is not configured, instead of marking it sent", async () => {
-    const { service, prisma, email } = setup({ configured: false });
-    await expect(service.sendCampaignNow("t1", "c1")).rejects.toThrow(/no está configurado/);
-    expect(prisma.emailCampaign.updateMany).not.toHaveBeenCalled();
-    expect(email.sendEmail).not.toHaveBeenCalled();
-  });
-
-  it("gives every email its own unsubscribe link, in the footer and the List-Unsubscribe header", async () => {
-    // LSSI art. 21.2: each commercial email must offer a simple way to object.
-    const { service, email, unsubscribes } = setup();
-    await service.sendCampaignNow("t1", "c1");
-    const sent = email.sendEmail.mock.calls.map((c: any[]) => c[0]);
-    expect(sent.length).toBe(3);
-    for (const [i, msg] of sent.entries()) {
-      const id = ["r1", "r2", "r3"][i];
-      const pageUrl = "https://app.test/public/baja/" + unsubscribes.tokenFor({ kind: "r", id });
-      expect(msg.html).toContain("date de baja aquí");
-      expect(msg.html).toContain(pageUrl);
-      expect(msg.html).toContain("cliente de Salón Lucía");
-      expect(msg.headers["List-Unsubscribe"]).toBe("<" + pageUrl + ">");
+function matches(row: Row, where: Row = {}): boolean {
+  return Object.entries(where).every(([key, cond]) => {
+    if (key === "OR") return (cond as Row[]).some((c) => matches(row, c));
+    const value = row[key];
+    if (cond === null) return value === null || value === undefined;
+    if (cond && typeof cond === "object" && !(cond instanceof Date)) {
+      if ("in" in cond) return (cond.in as unknown[]).includes(value);
+      if ("not" in cond) return cond.not === null ? value !== null && value !== undefined : value !== cond.not;
+      if ("lt" in cond) return value !== null && value !== undefined && value < cond.lt;
+      if ("lte" in cond) return value !== null && value !== undefined && value <= cond.lte;
+      if ("gt" in cond) return value !== null && value !== undefined && value > cond.gt;
+      return false;
     }
+    return value === cond;
+  });
+}
+
+function apply(row: Row, data: Row) {
+  for (const [k, v] of Object.entries(data)) {
+    if (v && typeof v === "object" && "increment" in v) row[k] = (row[k] ?? 0) + v.increment;
+    else if (v && typeof v === "object" && "decrement" in v) row[k] = (row[k] ?? 0) - v.decrement;
+    else row[k] = v;
+  }
+  return row;
+}
+
+const NOW = new Date("2026-11-02T10:00:00Z");
+
+function fakeDb() {
+  const db = {
+    campaigns: [] as Row[],
+    recipients: [] as Row[],
+    clients: [] as Row[],
+    refusals: [] as Row[],
+  };
+  const prisma: any = {
+    emailCampaign: {
+      findMany: jest.fn(async ({ where, take }: any) =>
+        db.campaigns
+          .filter((c) => matches(c, where))
+          .slice(0, take ?? Infinity)
+          .map((c) => ({ ...c, tenant: { name: c.tenantName ?? "Salón Lucía", email: c.tenantEmail ?? null } })),
+      ),
+      findFirst: jest.fn(async ({ where }: any) => db.campaigns.find((c) => matches(c, where)) ?? null),
+      findFirstOrThrow: jest.fn(async ({ where }: any) => db.campaigns.find((c) => matches(c, where))),
+      update: jest.fn(async ({ where, data }: any) => apply(db.campaigns.find((c) => c.id === where.id)!, data)),
+      updateMany: jest.fn(async ({ where, data }: any) => {
+        const hit = db.campaigns.filter((c) => matches(c, where));
+        hit.forEach((c) => apply(c, data));
+        return { count: hit.length };
+      }),
+    },
+    emailCampaignRecipient: {
+      findMany: jest.fn(async ({ where, take }: any) =>
+        db.recipients.filter((r) => matches(r, where)).slice(0, take ?? Infinity).map((r) => ({ ...r })),
+      ),
+      count: jest.fn(async ({ where }: any) => db.recipients.filter((r) => matches(r, where)).length),
+      update: jest.fn(async ({ where, data }: any) => apply(db.recipients.find((r) => r.id === where.id)!, data)),
+      updateMany: jest.fn(async ({ where, data }: any) => {
+        const hit = db.recipients.filter((r) => matches(r, where));
+        hit.forEach((r) => apply(r, data));
+        return { count: hit.length };
+      }),
+      deleteMany: jest.fn(async ({ where }: any) => {
+        const before = db.recipients.length;
+        db.recipients = db.recipients.filter((r) => !matches(r, where));
+        return { count: before - db.recipients.length };
+      }),
+    },
+    client: {
+      findMany: jest.fn(async ({ where }: any) => db.clients.filter((c) => matches(c, where))),
+    },
+    // Refusals of promotions, as marketing-consent reads them.
+    consent: {
+      findMany: jest.fn(async ({ where }: any) =>
+        db.refusals
+          .filter((r) => r.tenantId === where.tenantId && (!where.clientId || where.clientId.in.includes(r.clientId)))
+          .map((r) => ({ clientId: r.clientId, responses: { accepts: false } })),
+      ),
+    },
+  };
+  return { db, prisma };
+}
+
+function setup(
+  opts: {
+    suppressed?: string[];
+    send?: (to: string) => any;
+    configured?: boolean;
+    perMinute?: number;
+  } = {},
+) {
+  const { db, prisma } = fakeDb();
+  db.campaigns.push({
+    id: "c1",
+    tenantId: "t1",
+    campaignType: "newsletter",
+    status: "sending",
+    subject: "Ofertas de otoño",
+    previewText: "Un 10 % en color",
+    content: "<p>Hola</p>",
+    replyTo: null,
+    sentAt: null,
+    archivedAt: null,
+    totalRecipients: 0,
+    emailsSent: 0,
+    tenantName: "Salón Lucía",
+    tenantEmail: "hola@salonlucia.example.test",
+  });
+  const recipient = (id: string, clientId: string | null, email: string, extra: Row = {}) => {
+    db.recipients.push({
+      id,
+      campaignId: "c1",
+      clientId,
+      email,
+      status: "pending",
+      attempts: 0,
+      nextAttemptAt: null,
+      sentAt: null,
+      createdAt: new Date(NOW.getTime() - 1000 * db.recipients.length),
+      ...extra,
+    });
+    db.campaigns[0].totalRecipients++;
+  };
+  const client = (id: string, extra: Row = {}) =>
+    db.clients.push({ id, tenantId: "t1", status: "active", lastVisit: new Date("2026-09-01"), ...extra });
+
+  const email: any = {
+    isConfigured: () => opts.configured ?? true,
+    sendEmail: jest.fn(async (msg: any) =>
+      opts.send ? opts.send(msg.to) : { success: true, id: `re_${msg.to}` },
+    ),
+  };
+  const suppressions: any = {
+    suppressedAmong: jest.fn(async () => new Set(opts.suppressed ?? [])),
+  };
+  const env: Record<string, string> = { JWT_SECRET: "test-secret", APP_BASE_URL: "https://app.test" };
+  const unsubscribes = new EmailUnsubscribeService({} as any, { get: (k: string) => env[k] } as any, {} as any, {} as any);
+  const pacer: any = { perMinute: opts.perMinute ?? 120, wait: jest.fn(async () => undefined) };
+  const sender = new EmailCampaignSender(prisma, email, suppressions, unsubscribes, pacer);
+  (sender as any).logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+  const campaign = () => db.campaigns[0];
+  const row = (id: string) => db.recipients.find((r) => r.id === id)!;
+  const sendingCampaign = () => ({
+    ...campaign(),
+    tenant: { name: campaign().tenantName, email: campaign().tenantEmail },
+  });
+  return { db, prisma, email, suppressions, unsubscribes, pacer, sender, campaign, row, recipient, client, sendingCampaign };
+}
+
+describe("EmailCampaignSender: a batch", () => {
+  it("stores Resend's id, skips suppressed addresses and those who said no, and records failures", async () => {
+    const t = setup({
+      suppressed: ["rebotada@example.test"],
+      send: (to) =>
+        to.startsWith("fallo")
+          ? { success: false, error: "Invalid `to` field", statusCode: 422, retryable: false }
+          : { success: true, id: `re_${to}` },
+    });
+    ["k1", "k2", "k3", "k4"].forEach((id) => t.client(id));
+    t.db.refusals.push({ tenantId: "t1", clientId: "k4" });
+    t.recipient("r1", "k1", "ana@example.test");
+    t.recipient("r2", "k2", "Rebotada@Example.test");
+    t.recipient("r3", "k3", "fallo@example.test");
+    t.recipient("r4", "k4", "no@example.test");
+
+    const out = await t.sender.sendBatch(t.sendingCampaign() as any, 100, NOW);
+
+    expect(out).toMatchObject({ sent: 1, failed: 1, rateLimited: false });
+    expect(t.email.sendEmail).toHaveBeenCalledTimes(2);
+    expect(t.row("r1")).toMatchObject({ status: "sent", messageId: "re_ana@example.test", nextAttemptAt: null });
+    expect(t.row("r2")).toMatchObject({ status: "suppressed" });
+    expect(t.row("r3")).toMatchObject({ status: "failed", errorMessage: "Invalid `to` field" });
+    expect(t.row("r4")).toMatchObject({ status: "unsubscribed" });
+    expect(t.campaign().emailsSent).toBe(1);
+  });
+
+  it("drops, at send time, a recipient with no completed visit or no longer an active client", async () => {
+    const t = setup();
+    t.client("k1");
+    t.client("k2", { lastVisit: null }); // never came
+    t.client("k3", { status: "blocked" });
+    t.recipient("r1", "k1", "ana@example.test");
+    t.recipient("r2", "k2", "nueva@example.test");
+    t.recipient("r3", "k3", "bloqueada@example.test");
+    t.recipient("r4", null, "borrada@example.test");
+
+    await t.sender.sendBatch(t.sendingCampaign() as any, 100, NOW);
+
+    expect(t.email.sendEmail).toHaveBeenCalledTimes(1);
+    expect(t.email.sendEmail.mock.calls[0][0].to).toBe("ana@example.test");
+    expect(t.db.recipients.map((r) => r.id)).toEqual(["r1"]);
+    expect(t.campaign().totalRecipients).toBe(1);
+  });
+
+  it("sends under the salon's name, replies to the salon, with a text part, a preheader and its unsubscribe link", async () => {
+    // LSSI art. 21.2: each commercial email must offer a simple way to object.
+    const t = setup();
+    t.client("k1");
+    t.recipient("r1", "k1", "ana@example.test");
+
+    await t.sender.sendBatch(t.sendingCampaign() as any, 100, NOW);
+
+    const msg = t.email.sendEmail.mock.calls[0][0];
+    const pageUrl = "https://app.test/public/baja/" + t.unsubscribes.tokenFor({ kind: "r", id: "r1" });
+    expect(msg.fromName).toBe("Salón Lucía");
+    expect(msg.replyTo).toBe("hola@salonlucia.example.test");
+    expect(msg.html).toContain("date de baja aquí");
+    expect(msg.html).toContain(pageUrl);
+    expect(msg.html).toMatch(/^<div style="display:none[^"]*">Un 10 % en color<\/div><p>Hola<\/p>/);
+    expect(msg.text).toContain("Hola");
+    expect(msg.text).toContain(`date de baja aquí (${pageUrl})`);
+    expect(msg.text).not.toContain("Un 10 % en color");
+    expect(msg.headers["List-Unsubscribe"]).toBe("<" + pageUrl + ">");
+    expect(msg.idempotencyKey).toBe("email-campaign-r1");
+    expect(msg.tags).toEqual([
+      { name: "tenant_id", value: "t1" },
+      { name: "campaign_id", value: "c1" },
+    ]);
+  });
+
+  it("uses the campaign's reply-to address over the salon's", () => {
+    expect(campaignSender({ replyTo: "citas@salon.example.test" }, { name: "Salón", email: "hola@salon.example.test" })).toEqual({
+      fromName: "Salón",
+      replyTo: "citas@salon.example.test",
+    });
+    expect(campaignSender({ replyTo: "  " }, { name: "Salón", email: null })).toEqual({ fromName: "Salón", replyTo: undefined });
+  });
+
+  it("never sends a literal {{discountCode}} in a one-shot campaign", async () => {
+    const t = setup();
+    t.campaign().content = "<p>Hola</p><p>Tu código: {{discountCode}}</p>";
+    t.client("k1");
+    t.recipient("r1", "k1", "ana@example.test");
+    await t.sender.sendBatch(t.sendingCampaign() as any, 100, NOW);
+    const msg = t.email.sendEmail.mock.calls[0][0];
+    expect(msg.html).not.toContain("{{");
+    expect(msg.html).not.toContain("Tu código");
+  });
+
+  it("puts a 5xx back in the queue with a wait, and gives up after the last try", async () => {
+    const t = setup({ send: () => ({ success: false, error: "Internal server error", statusCode: 500, retryable: true }) });
+    t.client("k1");
+    t.recipient("r1", "k1", "ana@example.test");
+
+    await t.sender.sendBatch(t.sendingCampaign() as any, 100, NOW);
+    expect(t.row("r1")).toMatchObject({ status: "pending", attempts: 1 });
+    expect(t.row("r1").nextAttemptAt).toEqual(new Date(NOW.getTime() + retryDelayMs(1)));
+
+    // Not due yet: nothing is tried, and the campaign is not finished.
+    await t.sender.sendBatch(t.sendingCampaign() as any, 100, NOW);
+    expect(t.email.sendEmail).toHaveBeenCalledTimes(1);
+    expect(t.campaign().status).toBe("sending");
+
+    for (let i = 2; i <= MAX_SEND_ATTEMPTS; i++) {
+      const at = new Date(t.row("r1").nextAttemptAt.getTime());
+      await t.sender.sendBatch(t.sendingCampaign() as any, 100, at);
+    }
+    expect(t.email.sendEmail).toHaveBeenCalledTimes(MAX_SEND_ATTEMPTS);
+    expect(t.row("r1")).toMatchObject({ status: "failed", attempts: MAX_SEND_ATTEMPTS, nextAttemptAt: null });
+  });
+
+  it("stops the batch on a 429: every send after it would get one too", async () => {
+    const t = setup({ send: () => ({ success: false, error: "Too many requests", statusCode: 429, retryable: true }) });
+    ["k1", "k2"].forEach((id) => t.client(id));
+    t.recipient("r1", "k1", "ana@example.test");
+    t.recipient("r2", "k2", "eva@example.test");
+
+    const out = await t.sender.sendBatch(t.sendingCampaign() as any, 100, NOW);
+
+    expect(out.rateLimited).toBe(true);
+    expect(t.email.sendEmail).toHaveBeenCalledTimes(1);
+    expect(t.row("r1").status).toBe("pending");
+    expect(t.row("r2")).toMatchObject({ status: "pending", attempts: 0 });
+  });
+
+  it("waits for the pacer before every email, and sends no more than the batch", async () => {
+    const t = setup();
+    ["k1", "k2", "k3"].forEach((id) => t.client(id));
+    t.recipient("r1", "k1", "a@example.test");
+    t.recipient("r2", "k2", "b@example.test");
+    t.recipient("r3", "k3", "c@example.test");
+    await t.sender.sendBatch(t.sendingCampaign() as any, 2, NOW);
+    expect(t.pacer.wait).toHaveBeenCalledTimes(2);
+    expect(t.email.sendEmail).toHaveBeenCalledTimes(2);
+  });
+
+  it("recovers a send left in flight by a restart once its lease runs out, and finishes when nobody is left", async () => {
+    const t = setup();
+    t.client("k1");
+    t.recipient("r1", "k1", "ana@example.test", {
+      status: "sending",
+      attempts: 1,
+      nextAttemptAt: new Date(NOW.getTime() + SEND_LEASE_MS),
+    });
+
+    // Still leased: not touched, campaign not finished.
+    await t.sender.sendBatch(t.sendingCampaign() as any, 100, NOW);
+    expect(t.email.sendEmail).not.toHaveBeenCalled();
+    expect(t.campaign().status).toBe("sending");
+
+    const later = new Date(NOW.getTime() + SEND_LEASE_MS + 1000);
+    await t.sender.sendBatch(t.sendingCampaign() as any, 100, later);
+    expect(t.email.sendEmail).toHaveBeenCalledTimes(1);
+    // Same idempotency key as the lost try: Resend does not deliver it twice.
+    expect(t.email.sendEmail.mock.calls[0][0].idempotencyKey).toBe("email-campaign-r1");
+    expect(t.row("r1")).toMatchObject({ status: "sent", attempts: 2 });
+
+    await t.sender.sendBatch(t.sendingCampaign() as any, 100, later);
+    expect(t.campaign()).toMatchObject({ status: "sent", sentAt: later, lastError: null });
+  });
+
+  it("finishes a campaign that reached nobody with the reason", async () => {
+    const t = setup({ suppressed: ["ana@example.test"] });
+    t.client("k1");
+    t.recipient("r1", "k1", "ana@example.test");
+    await t.sender.sendBatch(t.sendingCampaign() as any, 100, NOW);
+    await t.sender.sendBatch(t.sendingCampaign() as any, 100, NOW);
+    expect(t.campaign().status).toBe("sent");
+    expect(t.campaign().lastError).toMatch(/No se envió a nadie/);
   });
 });
 
-describe("EmailCampaignsService.deliverCampaign: active clients only", () => {
-  function setup(extra: any[], notActive: string[]) {
-    const recipients = [{ id: "r1", clientId: "k1", email: "ana@example.test", status: "pending" }, ...extra];
-    const prisma: any = {
-      emailCampaign: {
-        findFirst: jest.fn().mockResolvedValue({ id: "c1", tenantId: "t1", status: "draft" }),
-        findFirstOrThrow: jest.fn().mockResolvedValue({
-          id: "c1", tenantId: "t1", subject: "Ofertas", content: "<p>Hola</p>", replyTo: null, recipients, tenant: { name: "Salón" },
-        }),
-        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-        update: jest.fn().mockResolvedValue({}),
-      },
-      emailCampaignRecipient: { update: jest.fn().mockResolvedValue({}), deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
-      client: {
-        findMany: jest.fn(async ({ where }: any) => {
-          expect(where).toMatchObject({ tenantId: "t1", status: "active" });
-          return where.id.in.filter((id: string) => !notActive.includes(id)).map((id: string) => ({ id }));
-        }),
-      },
-      consent: { findMany: jest.fn().mockResolvedValue([]) },
-    };
-    const email: any = { isConfigured: () => true, sendEmail: jest.fn(async () => ({ success: true, id: "re_1" })) };
-    const suppressions: any = { suppressedAmong: jest.fn().mockResolvedValue(new Set()) };
-    const unsubscribes: any = { link: () => ({ pageUrl: "https://app.test/baja", headers: {} }), withFooter: (h: string) => h };
-    const service = new EmailCampaignsService(prisma, email, suppressions, unsubscribes);
-    (service as any).logger = { log: jest.fn() };
-    return { service, prisma, email };
-  }
+describe("EmailCampaignSender: the dispatcher", () => {
+  it("shares the minute's pace between the campaigns of every salon", async () => {
+    const t = setup({ perMinute: 4 });
+    t.db.campaigns.push({ ...t.campaign(), id: "c2", tenantId: "t2", totalRecipients: 0, emailsSent: 0 });
+    for (const [i, c] of ["c1", "c1", "c1", "c1", "c2", "c2", "c2"].entries()) {
+      const tenantId = c === "c1" ? "t1" : "t2";
+      t.db.clients.push({ id: `k${i}`, tenantId, status: "active", lastVisit: new Date("2026-09-01") });
+      t.db.recipients.push({
+        id: `r${i}`,
+        campaignId: c,
+        clientId: `k${i}`,
+        email: `x${i}@example.test`,
+        status: "pending",
+        attempts: 0,
+        nextAttemptAt: null,
+        createdAt: new Date(i),
+      });
+    }
 
-  it("drops a recipient whose client was deleted or is no longer active, and emails the rest", async () => {
-    const { service, prisma, email } = setup(
-      [
-        { id: "r2", clientId: null, email: "borrada@example.test", status: "pending" },
-        { id: "r3", clientId: "k3", email: "bloqueada@example.test", status: "pending" },
-        { id: "r4", clientId: "k4", email: "inactiva@example.test", status: "pending" },
-      ],
-      ["k3", "k4"],
-    );
+    await t.sender.sendBatches(NOW);
 
-    const result = await service.sendCampaignNow("t1", "c1");
-
-    expect(email.sendEmail).toHaveBeenCalledTimes(1);
-    expect(email.sendEmail.mock.calls[0][0].to).toBe("ana@example.test");
-    expect(result).toMatchObject({ sentCount: 1, droppedCount: 3 });
-    expect(prisma.emailCampaignRecipient.deleteMany).toHaveBeenCalledWith({
-      where: { id: { in: ["r2", "r3", "r4"] }, campaignId: "c1", status: "pending" },
-    });
-    const calls = prisma.emailCampaign.update.mock.calls;
-    expect(calls[calls.length - 1][0].data).toMatchObject({ totalRecipients: { decrement: 3 } });
+    const tos = t.email.sendEmail.mock.calls.map((c: any[]) => c[0].to);
+    expect(tos).toEqual(["x0@example.test", "x1@example.test", "x4@example.test", "x5@example.test"]);
   });
 
-  it("deletes nothing when every recipient is an active client", async () => {
-    const { service, prisma } = setup([], []);
-    const result = await service.sendCampaignNow("t1", "c1");
-    expect(result).toMatchObject({ sentCount: 1, droppedCount: 0 });
-    expect(prisma.emailCampaignRecipient.deleteMany).not.toHaveBeenCalled();
+  it("starts a scheduled campaign whose time has come, and sends a scheduled one with nobody back to draft", async () => {
+    const t = setup();
+    t.campaign().status = "scheduled";
+    t.campaign().scheduledAt = new Date(NOW.getTime() - 60_000);
+    t.db.campaigns.push({ ...t.campaign(), id: "empty" });
+    t.db.campaigns.push({ ...t.campaign(), id: "later", scheduledAt: new Date(NOW.getTime() + 3_600_000) });
+    t.client("k1");
+    t.recipient("r1", "k1", "ana@example.test");
+    t.db.recipients.push({ id: "rl", campaignId: "later", clientId: "k1", email: "ana@example.test", status: "pending" });
+
+    await t.sender.startDue(NOW);
+
+    const byId = (id: string) => t.db.campaigns.find((c) => c.id === id)!;
+    expect(byId("c1").status).toBe("sending");
+    expect(byId("empty")).toMatchObject({ status: "draft", scheduledAt: null });
+    expect(byId("empty").lastError).toMatch(/no tenía destinatarias/);
+    expect(byId("later").status).toBe("scheduled");
+  });
+
+  it("does nothing while email sending is not configured", async () => {
+    const t = setup({ configured: false });
+    t.client("k1");
+    t.recipient("r1", "k1", "ana@example.test");
+    await t.sender.dispatch(NOW);
+    expect(t.email.sendEmail).not.toHaveBeenCalled();
+    expect(t.row("r1").status).toBe("pending");
+  });
+});
+
+describe("EmailCampaignsService: Enviar ahora", () => {
+  function service(t: ReturnType<typeof setup>) {
+    const kick = jest.fn();
+    const s = new EmailCampaignsService(t.prisma, t.email, t.suppressions, { kick } as any);
+    return { s, kick };
+  }
+
+  it("claims the campaign and hands it to the background sender, without sending in the request", async () => {
+    const t = setup();
+    t.campaign().status = "draft";
+    t.client("k1");
+    t.recipient("r1", "k1", "ana@example.test");
+    const { s, kick } = service(t);
+
+    const result = await s.sendCampaignNow("t1", "c1");
+
+    expect(result).toEqual({ success: true, queued: 1 });
+    expect(t.campaign().status).toBe("sending");
+    expect(kick).toHaveBeenCalledTimes(1);
+    expect(t.email.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("refuses with nobody on the list, instead of 'sending' to 0 people", async () => {
+    const t = setup();
+    t.campaign().status = "draft";
+    const { s, kick } = service(t);
+    await expect(s.sendCampaignNow("t1", "c1")).rejects.toThrow(/no tiene destinatarias/);
+    expect(t.campaign().status).toBe("draft");
+    expect(kick).not.toHaveBeenCalled();
+  });
+
+  it("refuses a re-engagement campaign: it sends itself, client by client", async () => {
+    const t = setup();
+    Object.assign(t.campaign(), { status: "draft", campaignType: "reengagement" });
+    t.recipient("r1", "k1", "ana@example.test");
+    const { s } = service(t);
+    await expect(s.sendCampaignNow("t1", "c1")).rejects.toThrow(/reactivación/);
+    await expect(s.sendToAllClients("t1", "c1")).rejects.toThrow(/reactivación/);
+    await expect(s.scheduleCampaign("t1", "c1", new Date(Date.now() + 3_600_000))).rejects.toThrow(/reactivación/);
+    expect(t.campaign().status).toBe("draft");
+  });
+
+  it("cannot be sent twice: a second click finds it sending", async () => {
+    const t = setup();
+    t.campaign().status = "draft";
+    t.client("k1");
+    t.recipient("r1", "k1", "ana@example.test");
+    const { s, kick } = service(t);
+    await s.sendCampaignNow("t1", "c1");
+    await expect(s.sendCampaignNow("t1", "c1")).rejects.toBeInstanceOf(BadRequestException);
+    expect(kick).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses when email is not configured, and leaves the campaign as it was", async () => {
+    const t = setup({ configured: false });
+    t.campaign().status = "draft";
+    t.recipient("r1", "k1", "ana@example.test");
+    const { s } = service(t);
+    await expect(s.sendCampaignNow("t1", "c1")).rejects.toThrow(/no está configurado/);
+    expect(t.campaign().status).toBe("draft");
+  });
+
+  it("Reintentar fallidos: only the failed ones go back in the queue", async () => {
+    const t = setup();
+    t.campaign().status = "sent";
+    t.recipient("r1", "k1", "ana@example.test", { status: "sent", sentAt: NOW });
+    t.recipient("r2", "k2", "eva@example.test", { status: "failed", attempts: 5, errorMessage: "Internal server error" });
+    const { s, kick } = service(t);
+
+    expect(await s.retryFailed("t1", "c1")).toEqual({ success: true, queued: 1 });
+    expect(t.campaign().status).toBe("sending");
+    expect(t.row("r1").status).toBe("sent");
+    expect(t.row("r2")).toMatchObject({ status: "pending", attempts: 0, nextAttemptAt: null, errorMessage: null });
+    expect(kick).toHaveBeenCalled();
+  });
+
+  it("Reintentar fallidos with none failed says so and leaves the campaign sent", async () => {
+    const t = setup();
+    t.campaign().status = "sent";
+    t.recipient("r1", "k1", "ana@example.test", { status: "sent", sentAt: NOW });
+    const { s } = service(t);
+    await expect(s.retryFailed("t1", "c1")).rejects.toThrow(/No hay envíos fallidos/);
+    expect(t.campaign().status).toBe("sent");
   });
 });

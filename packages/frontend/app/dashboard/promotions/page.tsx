@@ -1,22 +1,29 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import {
   Tag,
   Plus,
-  Trash2,
-  Edit,
   Percent,
   Euro,
-  Gift,
   Calendar,
-  CheckCircle,
-  XCircle,
   Loader2,
+  Lock,
 } from "lucide-react";
 import apiClient from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
+import { useToast } from "@/components/ui/use-toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { errorMessage, isPlanBlocked } from "@/lib/email-campaigns";
+import {
+  CREATABLE_PROMOTION_TYPES,
+  discountLabel,
+  formatEuros,
+  formatPromotionDate,
+  promotionPayload,
+  promotionTypeLabel,
+} from "@/lib/promotions-format";
 
 interface Promotion {
   id: string;
@@ -34,39 +41,41 @@ interface Promotion {
   isActive: boolean;
 }
 
+/** The end date is a calendar day and counts whole: it ends the day after. */
+const hasEnded = (p: Promotion) =>
+  !!p.endDate && Date.now() >= new Date(p.endDate).getTime() + 24 * 60 * 60 * 1000;
+
 export default function PromotionsPage() {
   const t = useTranslations();
+  const { toast } = useToast();
   const [promotions, setPromotions] = useState<Promotion[]>([]);
   const [loading, setLoading] = useState(true);
+  // The plan does not include promotions (403 FEATURE_NOT_IN_PLAN).
+  const [planBlocked, setPlanBlocked] = useState(false);
   const [showForm, setShowForm] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [editingPromotion, setEditingPromotion] = useState<Promotion | null>(
     null,
   );
-  const [tenantId, setTenantId] = useState<string>("");
   // The promotion about to be deleted, confirmed in the panel's dialog.
   const [pendingDelete, setPendingDelete] = useState<Promotion | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  const toastError = (title: string, error: unknown) =>
+    toast({ title, description: errorMessage(error), variant: "destructive" });
+
   useEffect(() => {
-    const token = localStorage.getItem("kira_auth_token");
-    if (token) {
-      try {
-        const payload = JSON.parse(atob(token.split(".")[1]));
-        setTenantId(payload.tenantId);
-        loadPromotions(payload.tenantId);
-      } catch (e) {
-        console.error("Failed to decode token:", e);
-      }
-    }
+    loadPromotions();
   }, []);
 
-  const loadPromotions = async (tenantId: string) => {
+  const loadPromotions = async () => {
     try {
-      setLoading(true);
       const data = await apiClient.getPromotions();
       setPromotions(data);
+      setPlanBlocked(false);
     } catch (error) {
-      console.error("Failed to load promotions:", error);
+      if (isPlanBlocked(error)) setPlanBlocked(true);
+      else toastError("No se pudieron cargar las promociones", error);
     } finally {
       setLoading(false);
     }
@@ -75,35 +84,40 @@ export default function PromotionsPage() {
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
+    const field = (name: string) => String(formData.get(name) ?? "");
+    const editing = !!editingPromotion;
+    // On an edit the code is not sent: it is the one clients already have.
+    const data = promotionPayload(
+      {
+        name: field("name"),
+        description: field("description"),
+        code: field("code"),
+        type: field("type"),
+        value: field("value"),
+        minOrderValue: field("minOrderValue"),
+        maxUses: field("maxUses"),
+        maxUsesPerClient: field("maxUsesPerClient"),
+        startDate: field("startDate"),
+        endDate: field("endDate"),
+      },
+      editing,
+    );
 
-    const data = {
-      name: formData.get("name"),
-      description: formData.get("description"),
-      code: formData.get("code"),
-      type: formData.get("type"),
-      value: parseFloat(formData.get("value") as string),
-      minOrderValue: parseFloat(formData.get("minOrderValue") as string) || 0,
-      maxUses: formData.get("maxUses")
-        ? parseInt(formData.get("maxUses") as string)
-        : null,
-      maxUsesPerClient: formData.get("maxUsesPerClient")
-        ? parseInt(formData.get("maxUsesPerClient") as string)
-        : null,
-      startDate: formData.get("startDate"),
-      endDate: formData.get("endDate") || null,
-    };
-
+    setSaving(true);
     try {
       if (editingPromotion) {
         await apiClient.updatePromotion(editingPromotion.id, data);
       } else {
         await apiClient.createPromotion(data);
       }
-      await loadPromotions(tenantId);
+      await loadPromotions();
       setShowForm(false);
       setEditingPromotion(null);
+      toast({ title: editing ? "Promoción guardada" : "Promoción creada" });
     } catch (error) {
-      console.error("Failed to save promotion:", error);
+      toastError("No se pudo guardar la promoción", error);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -112,9 +126,11 @@ export default function PromotionsPage() {
     setDeleting(true);
     try {
       await apiClient.deletePromotion(pendingDelete.id);
-      await loadPromotions(tenantId);
+      await loadPromotions();
+      toast({ title: "Promoción eliminada" });
     } catch (error) {
-      console.error("Failed to delete promotion:", error);
+      // 409 when an active campaign uses it: the server says which one.
+      toastError("No se pudo eliminar la promoción", error);
     } finally {
       setDeleting(false);
       setPendingDelete(null);
@@ -126,18 +142,15 @@ export default function PromotionsPage() {
       await apiClient.updatePromotion(promotion.id, {
         isActive: !promotion.isActive,
       });
-      await loadPromotions(tenantId);
+      await loadPromotions();
     } catch (error) {
-      console.error("Failed to toggle promotion:", error);
+      toastError(
+        promotion.isActive
+          ? "No se pudo desactivar la promoción"
+          : "No se pudo activar la promoción",
+        error,
+      );
     }
-  };
-
-  const formatDate = (date: string) => {
-    return new Date(date).toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
   };
 
   const getTypeIcon = (type: string) => {
@@ -146,23 +159,8 @@ export default function PromotionsPage() {
         return <Percent className="w-4 h-4" />;
       case "FIXED":
         return <Euro className="w-4 h-4" />;
-      case "BUY_X_GET_Y":
-        return <Gift className="w-4 h-4" />;
       default:
         return <Tag className="w-4 h-4" />;
-    }
-  };
-
-  const getTypeLabel = (type: string) => {
-    switch (type) {
-      case "PERCENTAGE":
-        return t("promotions.percentage");
-      case "FIXED":
-        return t("promotions.fixed_amount");
-      case "BUY_X_GET_Y":
-        return t("promotions.buy_x_get_y");
-      default:
-        return type;
     }
   };
 
@@ -181,22 +179,44 @@ export default function PromotionsPage() {
           <h1 className="text-2xl font-bold text-gray-900 truncate">
             {t("promotions.title")}
           </h1>
-          <p className="text-gray-600 mt-1">{t("promotions.description")}</p>
+          <p className="text-gray-600 mt-1">{t("promotions.subtitle")}</p>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            onClick={() => {
-              setEditingPromotion(null);
-              setShowForm(true);
-            }}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md flex items-center gap-2"
-          >
-            <Plus className="w-4 h-4" /> {t("promotions.new_promotion")}
-          </button>
-        </div>
+        {!planBlocked && (
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => {
+                setEditingPromotion(null);
+                setShowForm(true);
+              }}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md flex items-center gap-2"
+            >
+              <Plus className="w-4 h-4" /> {t("promotions.new_promotion")}
+            </button>
+          </div>
+        )}
       </div>
 
-      {promotions.length === 0 ? (
+      {planBlocked ? (
+        <div className="rounded-lg border border-blue-200 bg-blue-50 p-6">
+          <div className="flex items-start gap-3">
+            <Lock className="mt-0.5 h-5 w-5 shrink-0 text-blue-600" />
+            <div className="space-y-2">
+              <h2 className="font-semibold text-gray-900">
+                {t("promotions.plan_blocked_title")}
+              </h2>
+              <p className="text-sm text-gray-700">
+                {t("promotions.plan_blocked_body")}
+              </p>
+              <Link
+                href="/dashboard/billing"
+                className="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+              >
+                {t("promotions.plan_blocked_cta")}
+              </Link>
+            </div>
+          </div>
+        </div>
+      ) : promotions.length === 0 ? (
         <div className="bg-white rounded-lg shadow p-12 text-center">
           <Tag className="w-12 h-12 text-gray-400 mx-auto mb-4" />
           <h3 className="text-lg font-medium text-gray-900 mb-2">
@@ -214,119 +234,128 @@ export default function PromotionsPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {promotions.map((promotion) => (
-            <div key={promotion.id} className="bg-white rounded-lg shadow p-6">
-              <div className="flex justify-between items-start mb-4">
-                <div className="flex items-center gap-2">
-                  <div
-                    className={`p-2 rounded-lg ${promotion.isActive ? "bg-green-100" : "bg-gray-100"}`}
+          {promotions.map((promotion) => {
+            const ended = hasEnded(promotion);
+            const live = promotion.isActive && !ended;
+            return (
+              <div key={promotion.id} className="bg-white rounded-lg shadow p-6">
+                <div className="flex justify-between items-start mb-4">
+                  <div className="flex items-center gap-2">
+                    <div
+                      className={`p-2 rounded-lg ${live ? "bg-green-100" : "bg-gray-100"}`}
+                    >
+                      {getTypeIcon(promotion.type)}
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-gray-900">
+                        {promotion.name}
+                      </h3>
+                      <code className="text-sm bg-gray-100 px-2 py-0.5 rounded">
+                        {promotion.code}
+                      </code>
+                    </div>
+                  </div>
+                  <span
+                    className={`px-2 py-1 rounded text-xs font-medium ${
+                      live
+                        ? "bg-green-100 text-green-800"
+                        : "bg-gray-100 text-gray-800"
+                    }`}
                   >
-                    {getTypeIcon(promotion.type)}
+                    {ended
+                      ? t("promotions.expired")
+                      : promotion.isActive
+                        ? t("promotions.active")
+                        : t("promotions.inactive")}
+                  </span>
+                </div>
+
+                {promotion.description && (
+                  <p className="text-sm text-gray-500 mb-4">
+                    {promotion.description}
+                  </p>
+                )}
+
+                <div className="grid grid-cols-2 gap-4 mb-4">
+                  <div>
+                    <p className="text-xs text-gray-500">
+                      {t("promotions.discount")}
+                    </p>
+                    <p className="font-medium">
+                      {discountLabel(promotion.type, promotion.value)}
+                    </p>
                   </div>
                   <div>
-                    <h3 className="font-semibold text-gray-900">
-                      {promotion.name}
-                    </h3>
-                    <code className="text-sm bg-gray-100 px-2 py-0.5 rounded">
-                      {promotion.code}
-                    </code>
+                    <p className="text-xs text-gray-500">
+                      {t("promotions.min_order")}
+                    </p>
+                    <p className="font-medium">
+                      {formatEuros(promotion.minOrderValue)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">
+                      {t("promotions.uses")}
+                    </p>
+                    <p className="font-medium">
+                      {promotion.usedCount}
+                      {promotion.maxUses ? ` / ${promotion.maxUses}` : ""}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">
+                      {t("promotions.type")}
+                    </p>
+                    <p className="font-medium">
+                      {promotionTypeLabel(promotion.type)}
+                    </p>
                   </div>
                 </div>
-                <span
-                  className={`px-2 py-1 rounded text-xs font-medium ${
-                    promotion.isActive
-                      ? "bg-green-100 text-green-800"
-                      : "bg-gray-100 text-gray-800"
-                  }`}
-                >
-                  {promotion.isActive
-                    ? t("promotions.active")
-                    : t("promotions.inactive")}
-                </span>
-              </div>
 
-              {promotion.description && (
-                <p className="text-sm text-gray-500 mb-4">
-                  {promotion.description}
-                </p>
-              )}
+                <div className="flex items-center gap-2 text-xs text-gray-500 mb-4">
+                  <Calendar className="w-3 h-3" />
+                  <span>
+                    {formatPromotionDate(promotion.startDate)}
+                    {promotion.endDate &&
+                      ` – ${formatPromotionDate(promotion.endDate)}`}
+                  </span>
+                </div>
 
-              <div className="grid grid-cols-2 gap-4 mb-4">
-                <div>
-                  <p className="text-xs text-gray-500">
-                    {t("promotions.discount")}
-                  </p>
-                  <p className="font-medium">
-                    {promotion.type === "PERCENTAGE"
-                      ? `${promotion.value}%`
-                      : `€${promotion.value}`}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500">
-                    {t("promotions.min_order")}
-                  </p>
-                  <p className="font-medium">€{promotion.minOrderValue}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500">
-                    {t("promotions.uses")}
-                  </p>
-                  <p className="font-medium">
-                    {promotion.usedCount}
-                    {promotion.maxUses && ` / ${promotion.maxUses}`}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500">
-                    {t("promotions.type")}
-                  </p>
-                  <p className="font-medium">{getTypeLabel(promotion.type)}</p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleToggleActive(promotion)}
+                    className={`text-sm font-medium ${promotion.isActive ? "text-red-600 hover:text-red-800" : "text-green-600 hover:text-green-800"}`}
+                  >
+                    {promotion.isActive
+                      ? t("promotions.deactivate")
+                      : t("promotions.activate")}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setEditingPromotion(promotion);
+                      setShowForm(true);
+                    }}
+                    className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                  >
+                    {t("promotions.edit")}
+                  </button>
+                  <button
+                    onClick={() => setPendingDelete(promotion)}
+                    className="text-red-600 hover:text-red-800 text-sm font-medium"
+                  >
+                    {t("promotions.delete")}
+                  </button>
                 </div>
               </div>
-
-              <div className="flex items-center gap-2 text-xs text-gray-500 mb-4">
-                <Calendar className="w-3 h-3" />
-                <span>
-                  {formatDate(promotion.startDate)}
-                  {promotion.endDate && ` - ${formatDate(promotion.endDate)}`}
-                </span>
-              </div>
-
-              <div className="flex gap-2">
-                <button
-                  onClick={() => handleToggleActive(promotion)}
-                  className={`text-sm font-medium ${promotion.isActive ? "text-red-600 hover:text-red-800" : "text-green-600 hover:text-green-800"}`}
-                >
-                  {promotion.isActive
-                    ? t("promotions.deactivate")
-                    : t("promotions.activate")}
-                </button>
-                <button
-                  onClick={() => {
-                    setEditingPromotion(promotion);
-                    setShowForm(true);
-                  }}
-                  className="text-blue-600 hover:text-blue-800 text-sm font-medium"
-                >
-                  {t("promotions.edit")}
-                </button>
-                <button
-                  onClick={() => setPendingDelete(promotion)}
-                  className="text-red-600 hover:text-red-800 text-sm font-medium"
-                >
-                  {t("promotions.delete")}
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
       {/* Create/Edit Form Modal */}
       {showForm && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto">
             <h2 className="text-xl font-semibold mb-4">
               {editingPromotion
                 ? t("promotions.edit_promotion")
@@ -362,10 +391,18 @@ export default function PromotionsPage() {
                   <input
                     name="code"
                     required
+                    readOnly={!!editingPromotion}
                     defaultValue={editingPromotion?.code}
-                    className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md uppercase"
+                    className={`mt-1 w-full px-3 py-2 border border-gray-300 rounded-md uppercase ${
+                      editingPromotion ? "bg-gray-100 text-gray-600" : ""
+                    }`}
                     placeholder={t("promotions.code_placeholder")}
                   />
+                  {editingPromotion && (
+                    <p className="mt-1 text-xs text-gray-500">
+                      {t("promotions.code_locked")}
+                    </p>
+                  )}
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
@@ -374,15 +411,22 @@ export default function PromotionsPage() {
                     </label>
                     <select
                       name="type"
-                      defaultValue={editingPromotion?.type || "PERCENTAGE"}
+                      defaultValue={
+                        CREATABLE_PROMOTION_TYPES.some(
+                          (o) => o.value === editingPromotion?.type,
+                        )
+                          ? editingPromotion?.type
+                          : "PERCENTAGE"
+                      }
                       className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md"
                     >
-                      <option value="PERCENTAGE">
-                        {t("promotions.percentage")}
-                      </option>
-                      <option value="FIXED">
-                        {t("promotions.fixed_amount")}
-                      </option>
+                      {CREATABLE_PROMOTION_TYPES.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.value === "PERCENTAGE"
+                            ? t("promotions.percentage")
+                            : t("promotions.fixed_amount")}
+                        </option>
+                      ))}
                     </select>
                   </div>
                   <div>
@@ -393,6 +437,7 @@ export default function PromotionsPage() {
                       name="value"
                       type="number"
                       step="0.01"
+                      min="0"
                       required
                       defaultValue={editingPromotion?.value}
                       className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md"
@@ -408,6 +453,7 @@ export default function PromotionsPage() {
                       name="minOrderValue"
                       type="number"
                       step="0.01"
+                      min="0"
                       defaultValue={editingPromotion?.minOrderValue || 0}
                       className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md"
                     />
@@ -419,6 +465,7 @@ export default function PromotionsPage() {
                     <input
                       name="maxUses"
                       type="number"
+                      min="1"
                       defaultValue={editingPromotion?.maxUses || ""}
                       className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md"
                       placeholder={t("promotions.unlimited")}
@@ -433,6 +480,7 @@ export default function PromotionsPage() {
                     <input
                       name="maxUsesPerClient"
                       type="number"
+                      min="1"
                       defaultValue={editingPromotion?.maxUsesPerClient || ""}
                       className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md"
                       placeholder={t("promotions.unlimited")}
@@ -481,7 +529,8 @@ export default function PromotionsPage() {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-blue-600 text-white rounded-md"
+                  disabled={saving}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-md disabled:opacity-60"
                 >
                   {editingPromotion
                     ? t("promotions.update")
