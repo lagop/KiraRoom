@@ -2744,7 +2744,12 @@ model WaitList {
   // `notified` means a slot opened and we told the client.
   // `cancelled` is terminal (client or system removed).
   // `fulfilled` means the client booked the appointment they wanted.
+  // `expired` means its dates passed or it sat untouched too long.
   status         String    @default("waiting")
+  // Why and when it closed, when the system or the client closed it:
+  // window_passed / too_old (expired) or client_left ("Ya no me interesa").
+  closedReason   String?
+  closedAt       DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   notifiedAt     DateTime?
