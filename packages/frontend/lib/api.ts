@@ -1243,17 +1243,6 @@ export interface CatalogAddOn {
   sortOrder: number;
 }
 
-/** The salon site's account page: the signed-in client's own profile. */
-export interface MyClientProfile {
-  id: string;
-  tenantId: string;
-  firstName: string;
-  lastName: string;
-  email: string | null;
-  phone: string | null;
-  preferredLanguage: string;
-}
-
 /** A client's recorded choice about promotions by email (a signed Consent). */
 export interface MarketingConsentState {
   status: "granted" | "refused" | "none";
@@ -1777,38 +1766,6 @@ export interface ApiClientInterface {
   updateNotificationPreferences(
     preferences: Partial<NotificationPreferences>,
   ): Promise<NotificationPreferences>;
-  // Client notifications (for salon site)
-  getClientNotificationPreferences(clientId: string): Promise<any>;
-  updateClientNotificationPreferences(
-    clientId: string,
-    preferences: any,
-  ): Promise<any>;
-  updateMyProfile(clientId: string, data: any): Promise<any>;
-  getMyProfile(): Promise<MyClientProfile>;
-  getMyMarketingConsent(): Promise<MarketingConsentState>;
-  setMyMarketingConsent(accepts: boolean): Promise<MarketingConsentState>;
-  getMyWhatsAppMarketingConsent(): Promise<MarketingConsentState>;
-  setMyWhatsAppMarketingConsent(accepts: boolean): Promise<MarketingConsentState>;
-  getClientNotifications(
-    clientId: string,
-    params?: {
-      limit?: number;
-      offset?: number;
-      unreadOnly?: boolean;
-      type?: string;
-    },
-  ): Promise<{ data: Notification[]; total: number; unreadCount: number }>;
-  getClientUnreadNotificationCount(
-    clientId: string,
-  ): Promise<{ count: number }>;
-  markClientNotificationAsRead(
-    clientId: string,
-    id: string,
-  ): Promise<Notification>;
-  markAllClientNotificationsAsRead(
-    clientId: string,
-  ): Promise<{ success: boolean; count: number }>;
-  archiveClientNotification(clientId: string, id: string): Promise<void>;
 
   // Payments
   getPayments(params?: PaymentFilters & {
@@ -2455,11 +2412,6 @@ class ApiClient implements ApiClientInterface {
   }
 
   // Appointments
-  /** The signed-in client's own appointments (GET /appointments is staff-only). */
-  async getMyAppointments(): Promise<Appointment[]> {
-    return this.request<Appointment[]>("/appointments/mine");
-  }
-
   async getAppointments(filters?: {
     tenantId?: string;
     professionalId?: string;
@@ -3182,62 +3134,6 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  // Client notification preferences. The client is the one in the token;
-  // `clientId` is kept in the signature for the existing callers. These
-  // used to hit /clients/:id/notifications/preferences, which does not
-  // exist, so every load fell back to defaults and every save was lost.
-  async getClientNotificationPreferences(_clientId: string): Promise<any> {
-    return this.request<any>(`/client/notifications/preferences`);
-  }
-
-  async updateClientNotificationPreferences(
-    _clientId: string,
-    preferences: any,
-  ): Promise<any> {
-    return this.request<any>(`/client/notifications/preferences`, {
-      method: "PUT",
-      body: JSON.stringify({ preferences }),
-    });
-  }
-
-  // The client in the token; `clientId` stays for existing callers. This
-  // used to PATCH /clients/:id, which does not exist.
-  async updateMyProfile(_clientId: string, data: any): Promise<any> {
-    return this.request<any>(`/clients/me`, {
-      method: "PATCH",
-      body: JSON.stringify(data),
-    });
-  }
-
-  // The account page read /admin/clients/:id, which a client may not read,
-  // and fell back to what the browser kept since sign-in.
-  async getMyProfile(): Promise<MyClientProfile> {
-    return this.request<MyClientProfile>(`/clients/me`);
-  }
-
-  async getMyMarketingConsent(): Promise<MarketingConsentState> {
-    return this.request<MarketingConsentState>(`/consent/me/marketing`);
-  }
-
-  async setMyMarketingConsent(accepts: boolean): Promise<MarketingConsentState> {
-    return this.request<MarketingConsentState>(`/consent/me/marketing`, {
-      method: "PUT",
-      body: JSON.stringify({ accepts }),
-    });
-  }
-
-  /** The signed-in client's choice about promotions by WhatsApp. */
-  async getMyWhatsAppMarketingConsent(): Promise<MarketingConsentState> {
-    return this.request<MarketingConsentState>(`/consent/me/whatsapp-marketing`);
-  }
-
-  async setMyWhatsAppMarketingConsent(accepts: boolean): Promise<MarketingConsentState> {
-    return this.request<MarketingConsentState>(`/consent/me/whatsapp-marketing`, {
-      method: "PUT",
-      body: JSON.stringify({ accepts }),
-    });
-  }
-
   /** Both marketing choices of a client, for the client file. */
   async getClientMarketingConsent(
     clientId: string,
@@ -3300,58 +3196,6 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  async changeMyPassword(currentPassword: string, newPassword: string): Promise<void> {
-    return this.request<void>(`/clients/me/password`, {
-      method: "POST",
-      body: JSON.stringify({ currentPassword, newPassword }),
-    });
-  }
-
-  // Client Notifications (for salon site)
-  async getClientNotifications(
-    clientId: string,
-    params?: {
-      limit?: number;
-      offset?: number;
-      unreadOnly?: boolean;
-      type?: string;
-    },
-  ): Promise<{ data: Notification[]; total: number; unreadCount: number }> {
-    const searchParams = new URLSearchParams();
-    searchParams.append("clientId", clientId);
-    if (params?.limit) searchParams.append("limit", params.limit.toString());
-    if (params?.offset) searchParams.append("offset", params.offset.toString());
-    if (params?.unreadOnly) searchParams.append("unreadOnly", "true");
-    if (params?.type) searchParams.append("type", params.type);
-
-    const query = searchParams.toString();
-    return this.request<{
-      data: Notification[];
-      total: number;
-      unreadCount: number;
-    }>(`/client/notifications?${query}`);
-  }
-
-  async getClientUnreadNotificationCount(
-    clientId: string,
-  ): Promise<{ count: number }> {
-    return this.request<{ count: number }>(
-      `/client/notifications/unread-count?clientId=${clientId}`,
-    );
-  }
-
-  async markClientNotificationAsRead(
-    clientId: string,
-    id: string,
-  ): Promise<Notification> {
-    return this.request<Notification>(
-      `/client/notifications/${id}/read?clientId=${clientId}`,
-      {
-        method: "PUT",
-      },
-    );
-  }
-
   async sendVirtualReceptionistMessage(data: {
     clientId: string;
     /** The signed visitor id the previous answer issued (lib/chat-visitor.ts). */
@@ -3374,26 +3218,6 @@ class ApiClient implements ApiClientInterface {
       method: "POST",
       body: JSON.stringify(data),
     });
-  }
-
-  async markAllClientNotificationsAsRead(
-    clientId: string,
-  ): Promise<{ success: boolean; count: number }> {
-    return this.request<{ success: boolean; count: number }>(
-      `/client/notifications/read-all?clientId=${clientId}`,
-      {
-        method: "PUT",
-      },
-    );
-  }
-
-  async archiveClientNotification(clientId: string, id: string): Promise<void> {
-    return this.request<void>(
-      `/client/notifications/${id}?clientId=${clientId}`,
-      {
-        method: "DELETE",
-      },
-    );
   }
 
   // Payments
@@ -3552,15 +3376,6 @@ class ApiClient implements ApiClientInterface {
 
   async getClientLoyalty(clientId: string): Promise<ClientLoyaltySummary> {
     return this.request(`/loyalty/clients/${clientId}`);
-  }
-
-  /** The signed-in client's own balance (client portal). */
-  async getMyLoyalty(): Promise<MyLoyalty> {
-    return this.request("/loyalty/me");
-  }
-
-  async joinMyLoyalty(): Promise<MyLoyalty> {
-    return this.request("/loyalty/me/join", { method: "POST" });
   }
 
   // Wait-list
@@ -6242,25 +6057,6 @@ export interface ClientLoyaltySummary {
   rewards: LoyaltyReward[];
   history: LoyaltyTransactionRow[];
 }
-
-export type MyLoyalty =
-  | { enabled: false }
-  | {
-      enabled: true;
-      program: {
-        name: string;
-        description: string | null;
-        earnMode: "per_euro" | "per_visit";
-        pointsPerEuro: number;
-        pointsPerVisit: number;
-        minPointsRedemption: number;
-        welcomePoints: number;
-        allowSelfEnroll: boolean;
-      };
-      member: { currentPoints: number; lifetimePoints: number; joinedAt: string; tier: string | null } | null;
-      rewards: Array<{ id: string; name: string; description: string | null; type: string; pointsCost: number }>;
-      history: LoyaltyTransactionRow[];
-    };
 
 // -------------------------------------------------------------- wait-list
 

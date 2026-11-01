@@ -2,14 +2,11 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
-  ConflictException,
   ForbiddenException,
 } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
-import * as bcrypt from "bcryptjs";
-import { hashPassword } from "../saas/saas.helpers";
 import { PrismaService } from "../common/prisma/prisma.service";
-import { CreateClientDto, UpdateClientDto, UpdateMyProfileDto, ChangeMyPasswordDto } from "./dto";
+import { CreateClientDto, UpdateClientDto } from "./dto";
 import { deleteClientKeepingHistory } from "../common/prisma/history-deletes";
 import {
   CLIENT_APPOINTMENTS_LIMIT,
@@ -21,7 +18,6 @@ import {
   buildClientCreateData,
   buildClientUpdateData,
   rethrowClientWriteError,
-  CLIENT_EMAIL_TAKEN,
 } from "./client-write";
 import {
   birthDateRange,
@@ -30,8 +26,7 @@ import {
   type ClientListQuery,
   type ClientPage,
 } from "./client-search";
-import { countryForPhone, normalizeClientEmail, normalizeClientPhone } from "./client-contact";
-import { sessionRevocations } from "../auth/sessions/session-revocations";
+import { countryForPhone, normalizeClientEmail } from "./client-contact";
 
 /**
  * Whose clients a caller may reach. Owner/admin: {} (the whole salon).
@@ -244,19 +239,9 @@ export class ClientsService {
     return client;
   }
 
-  /** A client reading her own record: her details, no visit list. */
-  async findSelfRecord(tenantId: string, id: string) {
-    const client = await this.prisma.client.findFirst({
-      where: { id, tenantId },
-      select: CLIENT_DETAIL_SELECT,
-    });
-    if (!client) throw new NotFoundException("Cliente no encontrado");
-    return client;
-  }
-
   /**
    * Staff (`scope.professionalId`) may edit their own clients (see
-   * findOne) but not change their email (it is how she signs in) or her
+   * findOne) but not change their email (it is how the salon reaches her) or her
    * status (blocking is the manager's call): 403 when either differs from
    * what is stored. Sending the stored value back is fine.
    */
@@ -303,130 +288,5 @@ export class ClientsService {
   /** History survives the delete: see common/prisma/history-deletes.ts. */
   async remove(tenantId: string, id: string) {
     return deleteClientKeepingHistory(this.prisma, tenantId, id);
-  }
-
-  /**
-   * What the account page shows a client about themselves. It read
-   * /admin/clients/:id, which is owner/admin only, so it always failed and
-   * the page showed whatever the browser had kept since sign-in.
-   */
-  async getSelf(tenantId: string, clientId: string) {
-    const client = await this.prisma.client.findFirst({
-      where: { id: clientId, tenantId },
-      select: {
-        id: true,
-        tenantId: true,
-        firstName: true,
-        lastName: true,
-        email: true,
-        phone: true,
-        preferredLanguage: true,
-      },
-    });
-    if (!client) throw new NotFoundException("Cliente no encontrado");
-    return client;
-  }
-
-  /**
-   * A client editing their own profile from the salon site. The account
-   * page used to PATCH /clients/:id, a route that does not exist and whose
-   * PUT twin excludes the client role, so every save failed.
-   */
-  async updateSelf(tenantId: string, clientId: string, dto: UpdateMyProfileDto) {
-    const { currentPassword, ...fields } = dto;
-    const data: Record<string, string | null> = {};
-    for (const [key, value] of Object.entries(fields)) {
-      if (value === undefined) continue;
-      data[key] = typeof value === "string" ? value.trim() : value;
-    }
-    // An emptied phone is "no phone", not an empty string the SMS sender
-    // would try. Email and phone are stored like every other write (see
-    // client-contact.ts).
-    if (data.phone !== undefined) {
-      const country = await countryForPhone(this.prisma, tenantId, data.phone);
-      data.phone = normalizeClientPhone(data.phone, country) ?? null;
-    }
-    if (data.email !== undefined) data.email = normalizeClientEmail(data.email) ?? null;
-    if (data.firstName === "") {
-      throw new BadRequestException("El nombre no puede quedar vacío");
-    }
-
-    if (data.email !== undefined) {
-      const current = await this.prisma.client.findFirst({
-        where: { id: clientId, tenantId },
-        select: { email: true, passwordHash: true },
-      });
-      if (!current) throw new NotFoundException("Cliente no encontrado");
-      if (data.email === normalizeClientEmail(current.email)) {
-        delete data.email;
-      } else {
-        // Changing the sign-in address takes the password, like changing
-        // the password does (see changeOwnPassword).
-        if (!current.passwordHash || !currentPassword) {
-          throw new BadRequestException(
-            "Para cambiar el email escribe tu contraseña actual",
-          );
-        }
-        if (!(await bcrypt.compare(currentPassword, current.passwordHash))) {
-          throw new BadRequestException("La contraseña actual no es correcta");
-        }
-      }
-    }
-
-    try {
-      const updated = await this.prisma.client.update({
-        where: { id: clientId, tenantId },
-        // A new sign-in address ends every session (tokenVersion), as a new
-        // password does: whoever had the account under the old one is out.
-        data: data.email !== undefined ? { ...data, tokenVersion: { increment: 1 } } : data,
-        select: {
-          id: true,
-          firstName: true,
-          lastName: true,
-          email: true,
-          phone: true,
-          preferredLanguage: true,
-        },
-      });
-      if (data.email !== undefined) sessionRevocations.revoke({ clientId });
-      return updated;
-    } catch (error: any) {
-      if (error?.code === "P2002") {
-        // @@unique([tenantId, email])
-        throw new ConflictException(CLIENT_EMAIL_TAKEN);
-      }
-      if (error?.code === "P2025") {
-        throw new NotFoundException("Cliente no encontrado");
-      }
-      throw error;
-    }
-  }
-
-  /**
-   * A client changing their own password. It needs the current one: a
-   * borrowed session must not be enough to lock the owner out. The account
-   * page used to say "Contraseña actualizada" without calling anything.
-   */
-  async changeOwnPassword(tenantId: string, clientId: string, dto: ChangeMyPasswordDto) {
-    const client = await this.prisma.client.findFirst({
-      where: { id: clientId, tenantId },
-      select: { passwordHash: true },
-    });
-    if (!client?.passwordHash) {
-      throw new BadRequestException("Esta cuenta no tiene contraseña");
-    }
-    const matches = await bcrypt.compare(dto.currentPassword, client.passwordHash);
-    if (!matches) {
-      // 400, not 401: the web client treats any 401 as an expired session
-      // and logs out, which would punish a typo by ending the session.
-      throw new BadRequestException("La contraseña actual no es correcta");
-    }
-    // Every session ends (tokenVersion), so one opened with the old
-    // password does not outlive it.
-    await this.prisma.client.update({
-      where: { id: clientId, tenantId },
-      data: { passwordHash: await hashPassword(dto.newPassword), tokenVersion: { increment: 1 } },
-    });
-    sessionRevocations.revoke({ clientId });
   }
 }

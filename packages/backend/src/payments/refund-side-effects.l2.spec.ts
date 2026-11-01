@@ -9,6 +9,7 @@ import { PaymentsService } from "./payments.service";
 import { LoyaltyService } from "../loyalty/loyalty.service";
 import { CommissionsService } from "../commissions/commissions.service";
 import { AuditLogService } from "../saas/audit-log.service";
+import { recordRefundClawbacks } from "../commissions/commission-clawback";
 
 /**
  * L2: what a refund changes besides the money, and the loyalty reward on
@@ -25,6 +26,9 @@ import { AuditLogService } from "../saas/audit-log.service";
  *   - The loyalty reward is a discount on the sale's simplified invoice
  *     (shared by tax base over mixed rates) and on the visit's invoice
  *     (issued later, or by a rectificativa when it was issued already).
+ *   - A refund after the commission was paid takes it back with an
+ *     adjustment ("Ajuste por devolución"), once per refund, netted into the
+ *     next payout and shown in its own period (commission-clawback.ts).
  *
  * Skipped when no database is reachable, so `npm test` stays green on a
  * workstation without Postgres. CI provides one.
@@ -494,5 +498,71 @@ describe("refunds and their side effects (L2, real database)", () => {
     } finally {
       await db.tenant.update({ where: { id: tenantId }, data: { fiscalSettings: included } });
     }
+  }, 60_000);
+  it("a refund after the commission was paid: an adjustment for the professional, once, in the next payout and its own period", async () => {
+    if (!reachable) return;
+    const pro = (
+      await db.professional.create({
+        data: { tenantId, firstName: "Clawback", lastName: "Pro", email: `claw-${run}@example.test`, hireDate: new Date(), commissionRate: 10 },
+      })
+    ).id;
+    // A walk-in service (30,00, commission 3,00) and a visit (30,00, commission 4,00), both charged by card.
+    const sale: any = await pos.processCheckout({
+      tenantId,
+      actor: OWNER,
+      items: [{ serviceId, quantity: 1, professionalId: pro }],
+      payments: [{ method: "card", amount: 3000 }],
+    } as any);
+    const linePayment = (await salePayments(sale.saleId))[0];
+    const line = await lineOf(sale.saleId, "service");
+    const apt = await db.appointment.create({
+      data: {
+        tenantId, clientId, serviceId, professionalId: pro, scheduledDate: new Date(), scheduledTime: "11:00",
+        duration: 30, endTime: "11:30", price: 30, totalAmount: 3000, status: "completed", commissionAmount: 400,
+      },
+    });
+    await pos.processCheckout({ tenantId, actor: OWNER, clientId, appointmentIds: [apt.id], payments: [{ method: "card", amount: 3000 }] } as any);
+    const aptPayment = await db.payment.findFirst({ where: { tenantId, appointmentId: apt.id, status: "paid" } });
+    expect(aptPayment).toBeTruthy();
+
+    // Before the payout a refund only lowers what will be paid: no adjustment.
+    await payments.refundPayment(tenantId, linePayment.id, { amount: 300, reason: "Retoque" }, OWNER.id);
+    expect(await db.commissionAdjustment.count({ where: { tenantId, professionalId: pro } })).toBe(0);
+    const paid = await commissions.payCommission(tenantId, pro, {} as any);
+    expect(paid.totalAmount).toBe(270 + 400);
+
+    // After it: the refund takes its share back, linked to it.
+    const r1: any = await payments.refundPayment(tenantId, linePayment.id, { amount: 900, reason: "Queja" }, OWNER.id);
+    const r2: any = await payments.refundPayment(tenantId, aptPayment.id, { amount: 1500, reason: "Queja" }, OWNER.id);
+    const rows = await db.commissionAdjustment.findMany({ where: { tenantId, professionalId: pro }, orderBy: { amount: "asc" } });
+    expect(rows.map((r: any) => [r.refundId, r.sourceKey, Number(r.amount), r.settled])).toEqual([
+      [r2.refund.id, `appointment:${apt.id}`, -200, false],
+      [r1.refund.id, `sale_line:${line.id}`, -90, false],
+    ]);
+    // Recording the same refund again changes nothing.
+    expect(
+      await recordRefundClawbacks(db, { tenantId, refundId: r1.refund.id, amount: 900, lines: [{ lineId: line.id, cents: 900 }] }),
+    ).toBe(0);
+    expect(await db.commissionAdjustment.count({ where: { tenantId, professionalId: pro } })).toBe(2);
+
+    // The summary: pending, "Ajuste por devolución".
+    const summary = await commissions.getCommissionSummary(tenantId, pro);
+    expect(summary.appointments.filter((a) => a.source === "refund_adjustment").map((a) => a.commissionAmount).sort()).toEqual([-200, -90]);
+    expect(summary.appointments.every((a) => a.source !== "refund_adjustment" || a.serviceName.startsWith("Ajuste por devolución"))).toBe(true);
+    expect(summary.pendingCommission).toBe(-290);
+
+    // Recorded next month: this period keeps what was paid, the next one carries the adjustment.
+    const nextMonth = new Date(Date.now() + 40 * 864e5);
+    await db.commissionAdjustment.updateMany({ where: { tenantId, professionalId: pro }, data: { createdAt: nextMonth } });
+    const now = await commissions.getPayrollReport(tenantId, new Date(Date.now() - 864e5), new Date(Date.now() + 864e5));
+    expect(now.professionals.find((p) => p.id === pro)).toMatchObject({ commission: 670, refundAdjustments: 0 });
+    const later = await commissions.getPayrollReport(tenantId, new Date(nextMonth.getTime() - 864e5), new Date(nextMonth.getTime() + 864e5));
+    expect(later.professionals.find((p) => p.id === pro)).toMatchObject({ commission: -290, refundAdjustments: -290 });
+
+    // The next payout nets and settles them.
+    const next = await commissions.payCommission(tenantId, pro, {} as any);
+    expect(next.totalAmount).toBe(-290);
+    expect(await db.commissionAdjustment.count({ where: { tenantId, professionalId: pro, settled: false } })).toBe(0);
+    expect((await commissions.getCommissionSummary(tenantId, pro)).pendingCommission).toBe(0);
   }, 60_000);
 });

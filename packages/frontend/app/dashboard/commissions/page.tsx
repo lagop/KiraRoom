@@ -24,6 +24,14 @@ interface CommissionAppointment {
   commissionRate: number;
   commissionAmount: number;
   paid: boolean;
+  /**
+   * "refund_adjustment": commission taken back by a refund given after it was
+   * paid ("Ajuste por devolución"), negative, settled by the next payout.
+   */
+  source?: "appointment" | "sale" | "refund_adjustment";
+  refundId?: string;
+  /** refund_adjustment: the service or line it corrects. */
+  description?: string;
 }
 
 interface CommissionSummary {
@@ -43,7 +51,10 @@ interface PayrollReport {
     name: string;
     totalHours: number;
     totalSales: number;
+    /** Net of the period's refund adjustments. */
     commission: number;
+    /** "Ajuste por devolución": the period's refund adjustments (0 or negative). */
+    refundAdjustments?: number;
   }[];
 }
 
@@ -342,7 +353,9 @@ export default function CommissionsPage() {
                         </tr>
                       </thead>
                       <tbody className="bg-white divide-y divide-gray-200">
-                        {commission.appointments.map((apt) => (
+                        {commission.appointments.map((apt) => {
+                          const adjustment = apt.source === "refund_adjustment";
+                          return (
                           <tr key={apt.id} className="hover:bg-gray-50">
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                               {formatDate(apt.date)}
@@ -351,13 +364,15 @@ export default function CommissionsPage() {
                               {apt.clientName}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                              {apt.serviceName}
+                              {adjustment
+                                ? `${t("commissions.refund_adjustment")}${apt.description ? `: ${apt.description}` : ""}`
+                                : apt.serviceName}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right">
-                              {formatCurrency(apt.amount)}
+                              {adjustment ? "—" : formatCurrency(apt.amount)}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right">
-                              {apt.commissionRate}%
+                              {adjustment ? "—" : `${apt.commissionRate}%`}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 text-right">
                               {formatCurrency(apt.commissionAmount)}
@@ -376,7 +391,8 @@ export default function CommissionsPage() {
                               )}
                             </td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -467,6 +483,9 @@ export default function CommissionsPage() {
                           {t("commissions.total_sales")}
                         </th>
                         <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          {t("commissions.refund_adjustment")}
+                        </th>
+                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                           {t("commissions.commission")}
                         </th>
                         <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -482,6 +501,9 @@ export default function CommissionsPage() {
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right">
                             {formatCurrency(prof.totalSales)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right">
+                            {prof.refundAdjustments ? formatCurrency(prof.refundAdjustments) : "—"}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 text-right">
                             {formatCurrency(prof.commission)}

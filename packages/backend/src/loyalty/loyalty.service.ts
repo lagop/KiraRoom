@@ -1,7 +1,6 @@
 import {
   BadRequestException,
   ConflictException,
-  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -396,66 +395,6 @@ export class LoyaltyService {
       shortfall: "strict",
     });
     return this.prisma.loyaltyMember.findUnique({ where: { id: memberId } });
-  }
-
-  // ------------------------------------------------------------ the portal
-
-  /** What a signed-in client sees in their portal. */
-  async portalView(tenantId: string, clientId: string) {
-    const program = await this.activeProgram(tenantId);
-    if (!program) return { enabled: false as const };
-    const member = await this.prisma.loyaltyMember.findUnique({
-      where: { clientId_programId: { clientId, programId: program.id } },
-      include: { tier: { select: { name: true } } },
-    });
-    const [rewards, history] = await Promise.all([
-      this.prisma.loyaltyReward.findMany({
-        where: { programId: program.id, isActive: true },
-        orderBy: { pointsCost: "asc" },
-        select: { id: true, name: true, description: true, type: true, pointsCost: true },
-      }),
-      member
-        ? this.prisma.loyaltyTransaction.findMany({
-            where: { memberId: member.id },
-            orderBy: { createdAt: "desc" },
-            take: HISTORY_LIMIT,
-            select: { id: true, createdAt: true, type: true, points: true, description: true },
-          })
-        : Promise.resolve([]),
-    ]);
-    return {
-      enabled: true as const,
-      program: {
-        name: program.name,
-        description: program.description,
-        earnMode: program.earnMode,
-        pointsPerEuro: program.pointsPerEuro,
-        pointsPerVisit: program.pointsPerVisit,
-        minPointsRedemption: program.minPointsRedemption,
-        welcomePoints: program.welcomePoints,
-        allowSelfEnroll: program.allowSelfEnroll,
-      },
-      member: member
-        ? {
-            currentPoints: member.currentPoints,
-            lifetimePoints: member.lifetimePoints,
-            joinedAt: member.joinedAt,
-            tier: member.tier?.name ?? null,
-          }
-        : null,
-      rewards,
-      history,
-    };
-  }
-
-  async portalJoin(tenantId: string, clientId: string) {
-    const program = await this.activeProgram(tenantId);
-    if (!program) throw new BadRequestException("Este salón no tiene programa de fidelización activo");
-    if (!program.allowSelfEnroll) {
-      throw new ForbiddenException("El salón da de alta a los socios en el mostrador");
-    }
-    await this.enrollInProgram(tenantId, program, clientId, "portal");
-    return this.portalView(tenantId, clientId);
   }
 
   // --------------------------------------------------------------- earning

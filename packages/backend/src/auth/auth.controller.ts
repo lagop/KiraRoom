@@ -41,7 +41,7 @@ function deliverLogin(res: Response, result: { user: AuthUser; tokens: TokenResp
   return "twoFactorRequired" in result ? result : deliverSession(res, result);
 }
 
-/** Two-step verification is for panel accounts; a salon's clients sign in on its site. */
+/** Panel accounts only; a salon's clients have no accounts (and no token gets this far). */
 function staffOnly(user: { role: string }) {
   if (user.role === "client") throw new ForbiddenException();
 }
@@ -201,7 +201,7 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    // A salon's clients change theirs on its site (POST /clients/me/password).
+    // Panel accounts only: a salon's clients have no accounts.
     staffOnly(user);
     // Support signed in as the salon must not change the owner's password.
     if (user.impersonatedBy) {

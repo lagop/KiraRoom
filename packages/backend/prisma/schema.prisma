@@ -1342,9 +1342,47 @@ model Refund {
   /// refund that is not of a sale. See payments/refund-lines.ts.
   saleLines Json @default("[]")
 
+  /// Commission taken back by this refund from work whose commission had
+  /// already been paid (commissions/commission-clawback.ts).
+  commissionAdjustments CommissionAdjustment[]
+
   @@index([paymentId])
   @@index([cashSessionId])
   @@map("refunds")
+}
+
+/// A correction to a professional's commission after it was paid. Today one
+/// kind: "refund" ("Ajuste por devolución"), a refund of a visit or of a
+/// walk-in service line given after its commission was paid. The paid period
+/// is not rewritten: the adjustment (negative) counts in the summary until
+/// the next payout settles it, and in the payroll report of the period it was
+/// recorded in. One per refund and item (refundId + sourceKey), so recording
+/// it again changes nothing. See commissions/commission-clawback.ts.
+model CommissionAdjustment {
+  id             String    @id @default(uuid())
+  createdAt      DateTime  @default(now())
+  tenantId       String
+  professionalId String
+  kind           String    @default("refund") @db.VarChar(20)
+  refundId       String
+  refund         Refund    @relation(fields: [refundId], references: [id], onDelete: Cascade)
+  /// What it corrects: the visit, or the till sale line (walk-in service).
+  appointmentId  String?
+  posSaleLineId  String?
+  /// "appointment:<id>" or "sale_line:<id>": one adjustment per refund and item.
+  sourceKey      String    @db.VarChar(80)
+  /// Negative: the commission taken back (same units as commissionAmount).
+  amount         Decimal   @db.Decimal(12, 2)
+  /// Settled with the next payout (POST /commissions/pay), like commissionPaid.
+  settled        Boolean   @default(false)
+  settledAt      DateTime?
+
+  @@unique([refundId, sourceKey])
+  @@index([tenantId, professionalId, settled])
+  @@index([tenantId, createdAt])
+  @@index([appointmentId])
+  @@index([posSaleLineId])
+  @@map("commission_adjustments")
 }
 
 model ClientWallet {

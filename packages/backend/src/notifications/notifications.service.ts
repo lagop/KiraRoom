@@ -68,14 +68,9 @@ export class NotificationsService {
         isRead: notification.isRead,
       };
 
+      // Only the team has live sockets: salon clients have no accounts.
       if (dto.userId) {
         this.gateway.emitToUser(dto.userId, "notification", notificationData);
-      } else if (dto.clientId) {
-        this.gateway.emitToClient(
-          dto.clientId,
-          "notification",
-          notificationData,
-        );
       }
     }
 
@@ -139,61 +134,6 @@ export class NotificationsService {
   }
 
   /**
-   * Get notifications for a client with filtering and pagination
-   */
-  async findForClient(clientId: string, filter: NotificationFilterDto) {
-    this.logger.log(`Finding notifications for client ${clientId}`);
-
-    const where: any = {
-      clientId,
-      archivedAt: null,
-    };
-
-    if (filter.isRead !== undefined) {
-      where.isRead = filter.isRead;
-    }
-
-    if (filter.type) {
-      where.type = filter.type;
-    }
-
-    if (filter.search) {
-      where.OR = [
-        { title: { contains: filter.search, mode: "insensitive" } },
-        { message: { contains: filter.search, mode: "insensitive" } },
-      ];
-    }
-
-    const [notifications, total, unreadCount] = await Promise.all([
-      this.prisma.notification.findMany({
-        where,
-        orderBy: { createdAt: "desc" },
-        take: filter.limit || 20,
-        skip: filter.offset || 0,
-        include: {
-          deliveries: true,
-        },
-      }),
-      this.prisma.notification.count({ where }),
-      this.prisma.notification.count({
-        where: {
-          clientId,
-          isRead: false,
-          archivedAt: null,
-        },
-      }),
-    ]);
-
-    return {
-      data: notifications,
-      total,
-      unreadCount,
-      limit: filter.limit || 20,
-      offset: filter.offset || 0,
-    };
-  }
-
-  /**
    * Get unread count for a user
    */
   async getUnreadCountForUser(userId: string) {
@@ -207,25 +147,10 @@ export class NotificationsService {
   }
 
   /**
-   * Get unread count for a client
-   */
-  async getUnreadCountForClient(clientId: string) {
-    return this.prisma.notification.count({
-      where: {
-        clientId,
-        isRead: false,
-        archivedAt: null,
-      },
-    });
-  }
-
-  /**
    * Mark a notification as read
    */
-  async markAsRead(notificationId: string, userId?: string, clientId?: string) {
-    const where: any = { id: notificationId };
-    if (userId) where.userId = userId;
-    if (clientId) where.clientId = clientId;
+  async markAsRead(notificationId: string, userId: string) {
+    const where: any = { id: notificationId, userId };
 
     const notification = await this.prisma.notification.findFirst({ where });
 
@@ -266,35 +191,10 @@ export class NotificationsService {
   }
 
   /**
-   * Mark all notifications as read for a client
-   */
-  async markAllAsReadForClient(clientId: string, dto: MarkAllReadDto) {
-    const where: any = {
-      clientId,
-      isRead: false,
-      archivedAt: null,
-    };
-
-    if (dto.type) {
-      where.type = dto.type;
-    }
-
-    return this.prisma.notification.updateMany({
-      where,
-      data: {
-        isRead: true,
-        readAt: new Date(),
-      },
-    });
-  }
-
-  /**
    * Archive (soft delete) a notification
    */
-  async archive(notificationId: string, userId?: string, clientId?: string) {
-    const where: any = { id: notificationId };
-    if (userId) where.userId = userId;
-    if (clientId) where.clientId = clientId;
+  async archive(notificationId: string, userId: string) {
+    const where: any = { id: notificationId, userId };
 
     const notification = await this.prisma.notification.findFirst({ where });
 
@@ -326,21 +226,6 @@ export class NotificationsService {
   }
 
   /**
-   * Get notification preferences for a client
-   */
-  async getPreferencesForClient(clientId: string) {
-    const preference = await this.prisma.notificationPreference.findUnique({
-      where: { clientId },
-    });
-
-    if (!preference) {
-      return { preferences: DEFAULT_PREFERENCES };
-    }
-
-    return preference;
-  }
-
-  /**
    * Update notification preferences for a user
    */
   async updatePreferencesForUser(
@@ -352,27 +237,6 @@ export class NotificationsService {
       where: { userId },
       create: {
         userId,
-        tenantId,
-        preferences: dto.preferences as any,
-      },
-      update: {
-        preferences: dto.preferences as any,
-      },
-    });
-  }
-
-  /**
-   * Update notification preferences for a client
-   */
-  async updatePreferencesForClient(
-    clientId: string,
-    tenantId: string,
-    dto: NotificationPreferenceDto,
-  ) {
-    return this.prisma.notificationPreference.upsert({
-      where: { clientId },
-      create: {
-        clientId,
         tenantId,
         preferences: dto.preferences as any,
       },

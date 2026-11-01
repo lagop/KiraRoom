@@ -26,7 +26,7 @@ const NEW_PASSWORD = ["nueva", "clave", "2026"].join("-");
 const OWNER_SET_PASSWORD = ["otra", "clave", "2026"].join("-");
 
 /** A gateway over fake sockets in rooms; `disconnected` lists what was closed. */
-function gateway(rows: { users?: any[]; clients?: any[] } = {}) {
+function gateway(rows: { users?: any[] } = {}) {
   const disconnected: string[] = [];
   const sockets: Array<{ id: string; rooms: string[]; data: any; disconnect: jest.Mock }> = [];
   const server: any = {
@@ -41,10 +41,6 @@ function gateway(rows: { users?: any[]; clients?: any[] } = {}) {
     user: {
       findUnique: jest.fn(async ({ where }: any) => (rows.users ?? []).find((u) => u.id === where.id) ?? null),
       findMany: jest.fn(async ({ where }: any) => (rows.users ?? []).filter((u) => where.id.in.includes(u.id))),
-    },
-    client: {
-      findUnique: jest.fn(async ({ where }: any) => (rows.clients ?? []).find((c) => c.id === where.id) ?? null),
-      findMany: jest.fn(async ({ where }: any) => (rows.clients ?? []).filter((c) => where.id.in.includes(c.id))),
     },
   };
   const gw = new NotificationsGateway({} as any, { get: () => SECRET } as any, prisma);
@@ -93,15 +89,6 @@ describe("the notifications socket", () => {
     }
   });
 
-  it("a client's too", async () => {
-    const { gw, connect, disconnected } = gateway({
-      clients: [{ id: "c1", tenantId: "t1", status: "active", tokenVersion: 0 }],
-    });
-    await connect("c1-socket", { sub: "c1", role: "client", tv: 0 });
-    await gw.endSessions({ clientId: "c1" });
-    expect(disconnected).toEqual(["c1-socket"]);
-  });
-
   it("stops listening when the module goes", async () => {
     const { gw, connect, disconnected } = gateway({ users: [{ id: "u1", tenantId: "t1", isActive: true, tokenVersion: 0 }] });
     gw.onModuleInit();
@@ -117,24 +104,20 @@ describe("the notifications socket", () => {
       { id: "u-off", tenantId: "t1", isActive: true, tokenVersion: 0 },
       { id: "u-old", tenantId: "t1", isActive: true, tokenVersion: 0 },
     ];
-    const clients = [{ id: "c-blocked", tenantId: "t1", status: "active", tokenVersion: 0 }];
-    const { gw, connect, disconnected, prisma } = gateway({ users, clients });
+    const { gw, connect, disconnected, prisma } = gateway({ users });
     await connect("ok", { sub: "u-ok", role: "owner", tv: 2 });
     await connect("off", { sub: "u-off", role: "staff", tv: 0 });
     await connect("old", { sub: "u-old", role: "staff", tv: 0 });
-    await connect("blocked", { sub: "c-blocked", role: "client", tv: 0 });
     // What happened meanwhile, by paths that did not say so:
     users[1].isActive = false; // deactivated
     users[2].tokenVersion = 1; // signed out everywhere
-    clients[0].status = "blocked";
 
     const closed = await gw.recheckSockets();
 
-    expect(closed).toBe(3);
-    expect(disconnected.sort()).toEqual(["blocked", "off", "old"]);
-    // One query per kind of account.
+    expect(closed).toBe(2);
+    expect(disconnected.sort()).toEqual(["off", "old"]);
+    // One query, whatever the number of sockets.
     expect(prisma.user.findMany).toHaveBeenCalledTimes(1);
-    expect(prisma.client.findMany).toHaveBeenCalledTimes(1);
 
     // And once its access token has expired, the socket goes too.
     expect(await gw.recheckSockets(Date.now() + 16 * 60_000)).toBe(1);

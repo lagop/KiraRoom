@@ -1,12 +1,10 @@
 import "reflect-metadata";
 import { plainToInstance } from "class-transformer";
 import { validateSync } from "class-validator";
-import { JwtService } from "@nestjs/jwt";
 import { HttpStatus } from "@nestjs/common";
 import { issueVisitorToken, legacyVisitorUuid, readVisitorToken, visitorKey } from "./visitor-token";
 import { PUBLIC_CHAT_MAX_MESSAGE, PublicChatMessageDto } from "./public-chat-message.dto";
 import {
-  CLIENT_DAILY_MESSAGES,
   ChatDailyLimitException,
   PublicChatAccessService,
   VISITOR_DAILY_MESSAGES,
@@ -80,21 +78,17 @@ describe("PublicChatMessageDto", () => {
   });
 });
 
-function accessService(opts: { client?: any; sent?: number } = {}) {
+function accessService(opts: { sent?: number } = {}) {
   const prisma = {
-    client: { findFirst: jest.fn(async () => opts.client ?? null) },
     chatMessage: { count: jest.fn(async () => opts.sent ?? 0) },
   };
   return { svc: new PublicChatAccessService(prisma as any), prisma };
 }
 
-const clientToken = (claims: Record<string, unknown>) =>
-  `Bearer ${new JwtService({ secret: SECRET }).sign({ sub: CLIENT, role: "client", tenantId: SALON, tv: 0, ...claims })}`;
-
 describe("PublicChatAccessService.identify", () => {
   it("a new visitor gets a fresh id and a token for it", async () => {
     const { svc } = accessService();
-    const id = await svc.identify({ salonId: SALON });
+    const id = svc.identify({ salonId: SALON });
     expect(id.kind).toBe("visitor");
     if (id.kind !== "visitor") return;
     expect(id.clientId).toMatch(/^visitor-[0-9a-f-]{36}$/);
@@ -103,35 +97,17 @@ describe("PublicChatAccessService.identify", () => {
 
   it("a returning visitor keeps their id; an old browser id is carried over", async () => {
     const { svc } = accessService();
-    const back = await svc.identify({ salonId: SALON, visitorToken: issueVisitorToken(SECRET, SALON, VISITOR) });
+    const back = svc.identify({ salonId: SALON, visitorToken: issueVisitorToken(SECRET, SALON, VISITOR) });
     expect(back.clientId).toBe(`visitor-${VISITOR}`);
-    const legacy = await svc.identify({ salonId: SALON, clientId: `visitor-${VISITOR}` });
+    const legacy = svc.identify({ salonId: SALON, clientId: `visitor-${VISITOR}` });
     expect(legacy.clientId).toBe(`visitor-${VISITOR}`);
   });
 
   it("a client's id in the body does not make anyone that client", async () => {
-    const { svc } = accessService({ client: { id: CLIENT, tokenVersion: 0 } });
-    const id = await svc.identify({ salonId: SALON, clientId: CLIENT });
+    const { svc } = accessService();
+    const id = svc.identify({ salonId: SALON, clientId: CLIENT });
     expect(id.kind).toBe("visitor");
     expect(id.clientId).not.toBe(CLIENT);
-  });
-
-  it("a client signed in on this salon is recognised by their session", async () => {
-    const { svc } = accessService({ client: { id: CLIENT, tokenVersion: 0 } });
-    expect(await svc.identify({ salonId: SALON }, clientToken({}))).toEqual({ kind: "client", clientId: CLIENT });
-  });
-
-  it("but not a session for another salon, a staff session, an old session or a forged one", async () => {
-    const { svc } = accessService({ client: { id: CLIENT, tokenVersion: 1 } });
-    for (const auth of [
-      clientToken({ tenantId: OTHER_SALON }),
-      clientToken({ role: "owner" }),
-      clientToken({ tv: 0 }), // logged out since: tokenVersion is 1
-      `Bearer ${new JwtService({ secret: "not-ours" }).sign({ sub: CLIENT, role: "client", tenantId: SALON })}`,
-      "Bearer junk",
-    ]) {
-      expect((await svc.identify({ salonId: SALON }, auth)).kind).toBe("visitor");
-    }
   });
 });
 
@@ -158,16 +134,6 @@ describe("PublicChatAccessService.assertWithinDailyLimit", () => {
     expect(err.getStatus()).toBe(HttpStatus.TOO_MANY_REQUESTS);
     expect(err.getResponse().message).toMatch(/máximo de mensajes de hoy/);
   });
-
-  it("a signed-in client has a higher limit, counted on their own conversations", async () => {
-    const { svc, prisma } = accessService({ sent: VISITOR_DAILY_MESSAGES });
-    await expect(svc.assertWithinDailyLimit({ kind: "client", clientId: CLIENT }, SALON)).resolves.toBeUndefined();
-    expect((prisma.chatMessage.count.mock.calls[0] as any)[0].where.conversation).toEqual({ tenantId: SALON, clientId: CLIENT });
-    const full = accessService({ sent: CLIENT_DAILY_MESSAGES });
-    await expect(full.svc.assertWithinDailyLimit({ kind: "client", clientId: CLIENT }, SALON)).rejects.toBeInstanceOf(
-      ChatDailyLimitException,
-    );
-  });
 });
 
 describe("POST /virtual-receptionist/messages", () => {
@@ -186,7 +152,7 @@ describe("POST /virtual-receptionist/messages", () => {
       clientId: CLIENT,
       metadata: { clientName: "Suplantada", serviceId: VISITOR },
     });
-    const out: any = await c.sendMessage(body, { headers: {} });
+    const out: any = await c.sendMessage(body);
     const sent = (receptionist.sendMessage.mock.calls[0] as any)[0];
     expect(sent.channel).toBe("web");
     expect(sent.clientId).toMatch(/^visitor-/);
@@ -197,7 +163,7 @@ describe("POST /virtual-receptionist/messages", () => {
   it("does not call the model once the daily limit is reached", async () => {
     const { c, receptionist } = controller(VISITOR_DAILY_MESSAGES);
     const body = plainToInstance(PublicChatMessageDto, { salonId: SALON, message: "hola" });
-    await expect(c.sendMessage(body, { headers: {} })).rejects.toBeInstanceOf(ChatDailyLimitException);
+    await expect(c.sendMessage(body)).rejects.toBeInstanceOf(ChatDailyLimitException);
     expect(receptionist.sendMessage).not.toHaveBeenCalled();
   });
 });

@@ -16,10 +16,12 @@ import { verify } from 'jsonwebtoken';
 import { NotificationsService } from './notifications.service';
 import { PrismaService } from '../common/prisma/prisma.service';
 
-/** Who a socket belongs to, taken from its access token. */
+/**
+ * Who a socket belongs to, taken from its access token: a member of a
+ * salon's team. (Salon clients have no accounts, so no client socket.)
+ */
 export interface SocketIdentity {
   userId?: string;
-  clientId?: string;
   tenantId: string;
   /** The token's session version (tv) and expiry (exp, seconds): see recheckSockets. */
   tokenVersion?: number;
@@ -76,21 +78,15 @@ export class NotificationsGateway
    */
   async endSessions(revocation: SessionRevocation): Promise<void> {
     if (!this.server) return;
-    const rooms = [
-      ...(revocation.userId ? [`user:${revocation.userId}`] : []),
-      ...(revocation.clientId ? [`client:${revocation.clientId}`] : []),
-    ];
-    for (const room of rooms) {
-      this.server.in(room).disconnectSockets(true);
-    }
+    if (revocation.userId) this.server.in(`user:${revocation.userId}`).disconnectSockets(true);
   }
 
   /**
    * The safety net for anything that ends sessions without telling
    * session-revocations.ts: every open socket is checked again against its
    * account -- still active, same session version -- and against its token's
-   * expiry, and closed when it no longer passes. One query per kind of
-   * account, whatever the number of sockets.
+   * expiry, and closed when it no longer passes. One query, whatever the
+   * number of sockets.
    */
   @Interval(SOCKET_RECHECK_MS)
   async recheckSockets(now: number = Date.now()): Promise<number> {
@@ -104,23 +100,13 @@ export class NotificationsGateway
     }
     if (sockets.length === 0) return 0;
     const userIds = [...new Set(sockets.map((s) => s.data?.userId).filter((id): id is string => !!id))];
-    const clientIds = [...new Set(sockets.map((s) => s.data?.clientId).filter((id): id is string => !!id))];
-    const [users, clients] = await Promise.all([
-      userIds.length
-        ? this.prisma.user.findMany({
-            where: { id: { in: userIds } },
-            select: { id: true, isActive: true, tokenVersion: true },
-          })
-        : Promise.resolve([]),
-      clientIds.length
-        ? this.prisma.client.findMany({
-            where: { id: { in: clientIds } },
-            select: { id: true, status: true, tokenVersion: true },
-          })
-        : Promise.resolve([]),
-    ]);
+    const users = userIds.length
+      ? await this.prisma.user.findMany({
+          where: { id: { in: userIds } },
+          select: { id: true, isActive: true, tokenVersion: true },
+        })
+      : [];
     const userById = new Map(users.map((u) => [u.id, u]));
-    const clientById = new Map(clients.map((c) => [c.id, c]));
     let closed = 0;
     for (const socket of sockets) {
       const data = socket.data ?? {};
@@ -129,9 +115,6 @@ export class NotificationsGateway
       if (data.userId) {
         const u = userById.get(data.userId);
         valid = !!u && u.isActive && u.tokenVersion === version;
-      } else if (data.clientId) {
-        const c = clientById.get(data.clientId);
-        valid = !!c && c.status !== 'blocked' && c.tokenVersion === version;
       }
       if (valid && data.expiresAt && now >= data.expiresAt * 1000) valid = false;
       if (!valid) {
@@ -159,12 +142,8 @@ export class NotificationsGateway
       return;
     }
     client.data = identity;
-    if (identity.clientId) {
-      client.join(`client:${identity.clientId}`);
-    } else {
-      client.join(`user:${identity.userId}`);
-      client.join(`tenant:${identity.tenantId}`);
-    }
+    client.join(`user:${identity.userId}`);
+    client.join(`tenant:${identity.tenantId}`);
   }
 
   /** The token's owner, if the token is valid and the account still active. */
@@ -193,15 +172,9 @@ export class NotificationsGateway
     }
     if (!payload.sub) return null;
 
-    if (payload.role === 'client') {
-      const found = await this.prisma.client.findUnique({
-        where: { id: payload.sub },
-        select: { id: true, tenantId: true, status: true, tokenVersion: true },
-      });
-      if (!found || found.status === 'blocked') return null;
-      if ((payload.tv ?? 0) !== found.tokenVersion) return null;
-      return { clientId: found.id, tenantId: found.tenantId, tokenVersion: found.tokenVersion, expiresAt: payload.exp };
-    }
+    // Clients have no accounts any more; a client token minted before that
+    // gets no socket (as in JwtStrategy).
+    if (payload.role === 'client') return null;
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
       select: { id: true, tenantId: true, isActive: true, tokenVersion: true },
@@ -213,12 +186,10 @@ export class NotificationsGateway
   }
 
   async handleDisconnect(client: SocketWithAuth) {
-    const { userId, clientId, tenantId } = client.data || {};
-    
+    const { userId } = client.data || {};
+
     if (userId) {
       this.logger.log(`User ${userId} disconnected (socket: ${client.id})`);
-    } else if (clientId) {
-      this.logger.log(`Client ${clientId} disconnected (socket: ${client.id})`);
     } else {
       this.logger.log(`Socket ${client.id} disconnected`);
     }
@@ -230,14 +201,6 @@ export class NotificationsGateway
   emitToUser(userId: string, event: string, data: any) {
     this.server.to(`user:${userId}`).emit(event, data);
     this.logger.debug(`Emitted ${event} to user:${userId}`);
-  }
-
-  /**
-   * Emit a notification to a specific client
-   */
-  emitToClient(clientId: string, event: string, data: any) {
-    this.server.to(`client:${clientId}`).emit(event, data);
-    this.logger.debug(`Emitted ${event} to client:${clientId}`);
   }
 
   /**
@@ -301,12 +264,10 @@ export class NotificationsGateway
     @ConnectedSocket() client: SocketWithAuth,
     @MessageBody() data: { notificationId: string },
   ) {
-    const { userId, clientId } = client.data;
+    const { userId } = client.data;
 
     if (userId) {
       await this.notificationsService.markAsRead(data.notificationId, userId);
-    } else if (clientId) {
-      await this.notificationsService.markAsRead(data.notificationId, undefined, clientId);
     }
 
     return { success: true };
@@ -317,12 +278,10 @@ export class NotificationsGateway
    */
   @SubscribeMessage('markAllAsRead')
   async handleMarkAllAsRead(@ConnectedSocket() client: SocketWithAuth) {
-    const { userId, clientId } = client.data;
+    const { userId } = client.data;
 
     if (userId) {
       await this.notificationsService.markAllAsReadForUser(userId, {});
-    } else if (clientId) {
-      await this.notificationsService.markAllAsReadForClient(clientId, {});
     }
 
     return { success: true };

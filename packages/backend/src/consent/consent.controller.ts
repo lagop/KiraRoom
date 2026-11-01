@@ -1,5 +1,4 @@
-import { ParseUUIDPipe, Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, Req, UseGuards, BadRequestException, ForbiddenException } from "@nestjs/common";
-import { UserRole } from "@prisma/client";
+import { ParseUUIDPipe, Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, Req, UseGuards, BadRequestException } from "@nestjs/common";
 import { IsBoolean, IsOptional } from "class-validator";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
@@ -9,7 +8,7 @@ import { ConsentService } from "./consent.service";
 import { CreateConsentFormDto, RevokeConsentDto, SignConsentDto, UpdateConsentFormDto } from "./consent.dto";
 import { Roles, SALON_TEAM, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 
-/** A client's choice about commercial communications. */
+/** A choice about email promotions (the salon only records a refusal). */
 export class MarketingChoiceDto {
   @IsBoolean()
   accepts!: boolean;
@@ -110,98 +109,32 @@ export class ConsentController {
   }
 
   /**
-   * Records a signed consent. It used to be public and take the salon and
-   * the client from the body; a signature now needs a session, and the
-   * salon is the session's:
-   * - a team member records a signature taken in the salon: names the
-   *   client and types the name she signed with; the record keeps who
-   *   recorded it;
-   * - a signed-in client signs for herself: the client is the session's.
+   * Records a signed consent taken in the salon. It used to be public and
+   * take the salon and the client from the body; a signature now needs a
+   * team member's session, and the salon is the session's. The team member
+   * names the client and types the name she signed with; the record keeps
+   * who recorded it. (Clients have no accounts, so none signs for herself.)
    */
   @Post("sign")
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @Roles(...SALON_TEAM, UserRole.client)
+  @Roles(...SALON_TEAM)
   @Throttle({ default: { ttl: 60_000, limit: 30 } })
   async sign(@Body() body: SignConsentDto, @Req() req: AuthedRequest) {
-    const base = {
+    if (!body.clientId) throw new BadRequestException("Indica la clienta que firma");
+    if (!body.signatureName?.trim()) {
+      throw new BadRequestException("Escribe el nombre con el que firma la clienta");
+    }
+    return this.service.sign({
       tenantId: req.user.tenantId,
       formId: body.formId,
       responses: body.responses ?? {},
       ip: clientIp(req),
       appointmentId: body.appointmentId,
       serviceId: body.serviceId,
-    };
-    if (req.user.role === UserRole.client) {
-      if (body.clientId && body.clientId !== req.user.id) {
-        throw new ForbiddenException("Solo puedes firmar tus propios consentimientos");
-      }
-      return this.service.sign({ ...base, clientId: req.user.id, signatureName: body.signatureName });
-    }
-    if (!body.clientId) throw new BadRequestException("Indica la clienta que firma");
-    if (!body.signatureName?.trim()) {
-      throw new BadRequestException("Escribe el nombre con el que firma la clienta");
-    }
-    return this.service.sign({
-      ...base,
       clientId: body.clientId,
       signatureName: body.signatureName,
       recordedBy: req.user.id,
-    });
-  }
-
-  /** The signed-in client's choice about promotions and news by email. */
-  @Get("me/marketing")
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  @Roles(UserRole.client)
-  myMarketing(@Req() req: AuthedRequest) {
-    return this.service.getMarketingConsent(req.user.tenantId, req.user.id);
-  }
-
-  /**
-   * Records it as a signed Consent (see marketing-consent.ts). The account
-   * page used to keep this checkbox in localStorage only.
-   */
-  @Put("me/marketing")
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  @Roles(UserRole.client)
-  @Throttle({ default: { ttl: 60_000, limit: 20 } })
-  setMyMarketing(@Req() req: AuthedRequest, @Body() dto: MarketingChoiceDto) {
-    const ip =
-      (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
-      req.socket?.remoteAddress ||
-      "";
-    return this.service.recordMarketingChoice({
-      tenantId: req.user.tenantId,
-      clientId: req.user.id,
-      accepts: dto.accepts,
-      ip,
-    });
-  }
-
-  /** The signed-in client's choice about promotions by WhatsApp. */
-  @Get("me/whatsapp-marketing")
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  @Roles(UserRole.client)
-  myWhatsAppMarketing(@Req() req: AuthedRequest) {
-    return this.service.getMarketingConsent(req.user.tenantId, req.user.id, "whatsapp");
-  }
-
-  @Put("me/whatsapp-marketing")
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  @Roles(UserRole.client)
-  @Throttle({ default: { ttl: 60_000, limit: 20 } })
-  setMyWhatsAppMarketing(@Req() req: AuthedRequest, @Body() dto: MarketingChoiceDto) {
-    return this.service.recordMarketingChoice({
-      tenantId: req.user.tenantId,
-      clientId: req.user.id,
-      accepts: dto.accepts,
-      ip: clientIp(req),
-      channel: "whatsapp",
     });
   }
 

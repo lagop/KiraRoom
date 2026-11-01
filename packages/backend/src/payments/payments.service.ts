@@ -16,6 +16,7 @@ import { WalletService } from "./services/wallet.service";
 import { GiftCardsService } from "../gift-cards/gift-cards.service";
 import { needsTimezone, PaymentFilters, paymentWhere, PAYMENT_SORT_FIELDS } from "./payments-query";
 import { openCashSessionId } from "../pos/cash-session-lock";
+import { recordRefundClawbacks } from "../commissions/commission-clawback";
 import {
   centsLeft,
   linesPaidBy,
@@ -614,6 +615,18 @@ export class PaymentsService {
           );
         }
       }
+
+      // Work whose commission was already paid: the refund takes its share
+      // back from the professional, as an adjustment of the next payout
+      // (commission-clawback.ts). Once per refund and item.
+      await recordRefundClawbacks(tx, {
+        tenantId,
+        refundId: refund.id,
+        amount,
+        appointmentId: payment.appointmentId,
+        method: payment.method,
+        lines: given.lines,
+      });
 
       return { refund, appointment, restocked: given.restocked };
     });

@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, HttpException } from "@nestjs/common";
+import { ConflictException, HttpException } from "@nestjs/common";
 import { AppointmentStatus } from "@prisma/client";
 import { AppointmentsService } from "./appointments.service";
 import { AppointmentServicesService } from "./appointment-services.service";
@@ -267,13 +267,10 @@ describe("the dedicated endpoints", () => {
     expect(b.waitList.onAppointmentCancelled).not.toHaveBeenCalled();
   });
 
-  it("a client still cannot cancel inside the salon's notice", async () => {
+  it("the salon may cancel an hour before: the notice window was the client's, and clients have no accounts", async () => {
     const b = build(S.confirmed, { startsInMs: 3_600_000 });
-    b.row.clientId = "client-me";
-    await expect(
-      b.service.cancel({ id: "client-me", role: "client", tenantId: "t1" }, "apt-1"),
-    ).rejects.toThrow(BadRequestException);
-    expect(b.prisma.appointment.update).not.toHaveBeenCalled();
+    await b.service.cancel(OWNER, "apt-1");
+    expect(b.row.status).toBe(S.cancelled);
   });
 
   it("no-show: tells the client; can be undone to confirmed", async () => {

@@ -161,13 +161,6 @@ export class AppointmentsController {
     return this.appointmentsService.bookingLocations(req.user.tenantId);
   }
 
-  @Get("mine")
-  @Roles(UserRole.client)
-  @ApiOperation({ summary: "The calling client's own appointments" })
-  async findMine(@Req() req: any) {
-    return this.appointmentsService.findForClient(req.user);
-  }
-
   @Get(":id")
   @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
   @ApiOperation({ summary: "Get appointment by ID" })
@@ -193,8 +186,7 @@ export class AppointmentsController {
   }
 
   @Put(":id/cancel")
-  // A client may cancel their own appointment, with the salon's notice.
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff, UserRole.client)
+  @Roles(UserRole.owner, UserRole.admin, UserRole.staff) // staff: their own, via findOne
   @ApiOperation({ summary: "Cancel an appointment" })
   @ApiResponse({
     status: 200,
