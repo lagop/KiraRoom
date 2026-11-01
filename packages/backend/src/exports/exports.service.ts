@@ -1,9 +1,10 @@
-import { Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import type { Response } from "express";
 import * as Papa from "papaparse";
 import ExcelJS from "exceljs";
 import { PaymentFilters, paymentWhere } from "../payments/payments-query";
+import { scheduledDateRange } from "../analytics/analytics-metrics";
 
 export type ExportEntity =
   | "clients"
@@ -70,6 +71,35 @@ function salonDateTime(date: Date, timeZone: string): string {
     .replace(",", "");
 }
 
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** A real calendar day "YYYY-MM-DD" (2026-02-31 is not one). */
+function isDay(value: string): boolean {
+  if (!DAY.test(value)) return false;
+  const d = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
+}
+
+/**
+ * The appointments export's optional date range, as a filter on
+ * `scheduledDate`: salon calendar days, both inclusive (an appointment's day
+ * is stored as the salon's calendar date, so no timezone is needed). Either
+ * end may be left open. 400 for a day that is not one, or from after to.
+ */
+export function appointmentDayFilter(dateFrom?: string, dateTo?: string): { gte?: Date; lt?: Date } | undefined {
+  if (!dateFrom && !dateTo) return undefined;
+  for (const d of [dateFrom, dateTo]) {
+    if (d && !isDay(d)) throw new BadRequestException("La fecha no es válida: usa el formato AAAA-MM-DD.");
+  }
+  if (dateFrom && dateTo && dateFrom > dateTo) {
+    throw new BadRequestException("La fecha desde no puede ser posterior a la fecha hasta.");
+  }
+  return {
+    ...(dateFrom ? { gte: scheduledDateRange({ start: dateFrom, end: dateFrom }).gte } : {}),
+    ...(dateTo ? { lt: scheduledDateRange({ start: dateTo, end: dateTo }).lt } : {}),
+  };
+}
+
 /** What a payment was for: its appointment's service, else a till sale. */
 export function paymentConcept(p: {
   description?: string | null;
@@ -95,14 +125,17 @@ export class ExportsService {
     entity: ExportEntity,
     format: ExportFormat,
     res: Response,
-    /** Payments only: the Pagos page's filters (status, method, dates). */
+    /**
+     * Payments: the Pagos page's filters (status, method, dates).
+     * Appointments: dateFrom / dateTo only, salon days (appointmentDayFilter).
+     */
     filters: PaymentFilters = {},
   ): Promise<void> {
     const timeZone = entity === "payments" ? await this.timezoneOf(tenantId) : "Europe/Madrid";
     const fetchPage = (cursor?: any) =>
       entity === "payments"
         ? this.fetchPayments(tenantId, filters, timeZone, format, cursor)
-        : this.fetchPage(tenantId, entity, cursor);
+        : this.fetchPage(tenantId, entity, cursor, filters);
     const csvOptions = entity === "payments" ? PAYMENTS_CSV_OPTIONS : CSV_OPTIONS;
 
     const filename = `${entity === "payments" ? "pagos" : entity}-${new Date().toISOString().slice(0, 10)}.${format}`;
@@ -240,6 +273,7 @@ export class ExportsService {
     tenantId: string,
     entity: ExportEntity,
     cursor?: any,
+    filters: PaymentFilters = {},
   ): Promise<{ rows: any[]; nextCursor?: any }> {
     const take = PAGE_SIZE;
     switch (entity) {
@@ -266,8 +300,9 @@ export class ExportsService {
         };
       }
       case "appointments": {
+        const scheduledDate = appointmentDayFilter(filters.dateFrom, filters.dateTo);
         const rows = await this.prisma.appointment.findMany({
-          where: { tenantId },
+          where: { tenantId, ...(scheduledDate ? { scheduledDate } : {}) },
           take,
           skip: cursor ? 1 : 0,
           cursor: cursor ? { id: cursor } : undefined,
@@ -278,10 +313,14 @@ export class ExportsService {
             id: r.id,
             clientId: r.clientId,
             professionalId: r.professionalId,
+            // The salon day and clock it is booked for (startTime is when it was started).
+            date: r.scheduledDate instanceof Date ? r.scheduledDate.toISOString().slice(0, 10) : r.scheduledDate,
+            scheduledTime: r.scheduledTime,
             startTime: r.startTime,
             endTime: r.endTime,
             status: r.status,
-            totalPrice: r.totalPrice,
+            // Euros, from totalAmount (cents): it read a totalPrice column that does not exist and was always empty.
+            totalPrice: r.totalAmount === undefined || r.totalAmount === null ? null : Number(r.totalAmount) / 100,
           })),
           nextCursor: rows.length === take ? rows[rows.length - 1].id : undefined,
         };

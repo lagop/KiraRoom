@@ -62,7 +62,7 @@ const getProfessionalName = (professional: any): string => {
 
 export default function DashboardPage() {
   const t = useTranslations();
-  const { data, loading, error, partialFailures, refresh } = useDashboardData();
+  const { data, loading, error, partialFailures, salonFigures, refresh } = useDashboardData();
 
   if (loading) {
     return (
@@ -153,7 +153,8 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Primary KPI row — replaces free-text changes with real deltas */}
+      {/* Primary KPI row — replaces free-text changes with real deltas (owner and admins: Analítica's figures) */}
+      {salonFigures && (
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <DeltaStatCard
           title="Revenue this month"
@@ -188,6 +189,7 @@ export default function DashboardPage() {
           iconClassName="bg-amber-50 text-amber-600"
         />
       </div>
+      )}
 
       {/* Secondary KPI row */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -221,7 +223,8 @@ export default function DashboardPage() {
         />
       </div>
 
-      {/* Charts row: revenue sparkline + status breakdown */}
+      {/* Charts row: revenue sparkline + status breakdown (owner and admins) */}
+      {salonFigures && (
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="bg-white rounded-xl border border-gray-200 p-6 lg:col-span-2">
           <div className="flex items-center justify-between mb-2">
@@ -253,6 +256,7 @@ export default function DashboardPage() {
           <StatusDonut data={data.statusByDays} />
         </div>
       </div>
+      )}
 
       {/* Today's schedule + action widgets */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

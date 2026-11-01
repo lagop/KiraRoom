@@ -64,7 +64,7 @@ describe("buildConsolidatedReport", () => {
     appointments: [
       apt({ professionalId: "ana", clientId: "c1", serviceId: "s1", service: { name: "Corte" } }),
       apt({ professionalId: "ana", clientId: "c1", serviceId: "s2", service: { name: "Color" }, amountPaid: 6000, duration: 120 }),
-      apt({ professionalId: "ana", clientId: "c2", status: "cancelled", amountPaid: 9999 }),
+      apt({ professionalId: "ana", clientId: "c2", status: "cancelled", paymentStatus: "refunded", amountPaid: 0 }), // cancelled and given back
       apt({ professionalId: "eva", clientId: "c3", serviceId: "s1", service: { name: "Corte" }, scheduledDate: "2026-10-02", status: "confirmed", paymentStatus: "pending", duration: 120 }),
       apt({ professionalId: "ana", locationId: "playa", clientId: "c4", serviceId: "s1", service: { name: "Corte" }, scheduledDate: "2026-10-02" }),
       apt({ professionalId: "luz", clientId: "c5", amountPaid: 1500 }), // no location

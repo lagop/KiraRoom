@@ -402,6 +402,67 @@ export interface Review {
   /** granted | declined | legacy | anonymised: whether it may be listed on the salon's site. */
   publishConsent?: string;
 }
+/**
+ * Completion, cancellation and no-show rates (GET /analytics/overview `rates`,
+ * GET /analytics/appointment-rates): over appointments with a closed status
+ * (completed, cancelled, no-show) scheduled up to yesterday, salon calendar.
+ * Rates are percents with one decimal, null when nothing closed.
+ */
+export interface AnalyticsAppointmentRates {
+  /** Last day counted ("YYYY-MM-DD"): yesterday in the salon. */
+  through: string;
+  closed: number;
+  completed: number;
+  cancelled: number;
+  noShow: number;
+  completionRate: number | null;
+  cancellationRate: number | null;
+  noShowRate: number | null;
+}
+
+/** GET /analytics/appointment-rates. `byMonth` only when asked with `months`. */
+export interface AnalyticsAppointmentRatesResponse extends AnalyticsAppointmentRates {
+  period: { start: string; end: string };
+  byMonth?: Array<AnalyticsAppointmentRates & { month: string }>;
+}
+
+/**
+ * What the till sold without an appointment in the period (overview
+ * `tillSales`): products and services, cents, VAT included, net of refunds.
+ */
+export interface AnalyticsTillSales {
+  totalCents: number;
+  servicesCents: number;
+  productsCents: number;
+  /** Till sales with something left after refunds. */
+  sales: number;
+  refundedCents: number;
+}
+
+/** A row of GET /analytics/professional-performance (and overview `topProfessionals`). Cents. */
+export interface AnalyticsProfessionalRow {
+  id: string;
+  name: string;
+  firstName: string;
+  lastName: string;
+  profileImage: string | null;
+  /** Visits they took part in, cancelled ones excluded. */
+  appointments: number;
+  /** Their share of appointments' revenue (multi-service visits split by list price). */
+  revenue: number;
+  /** Services they did that were sold at the till without an appointment, net of refunds. */
+  tillServicesCents: number;
+  /** revenue + tillServicesCents: "cobrado, IVA incluido". */
+  revenueCents: number;
+  closedAppointments: number;
+  completedAppointments: number;
+  cancelledAppointments: number;
+  noShowAppointments: number;
+  completionRate: number | null;
+  cancellationRate: number | null;
+  noShowRate: number | null;
+}
+
 export interface ReviewAnalytics {
   /** Every answered rating but the rejected ones, as on the salon's site. */
   averageRating: number;
@@ -3589,10 +3650,16 @@ class ApiClient implements ApiClientInterface {
     return this.request(`/analytics/appointment-status-by-days?days=${days}`);
   }
 
+  /** The one definition of the closing rates: the last `days` days, or `months` months with byMonth. */
+  async getAppointmentRates(window: { days?: number; months?: number } = {}): Promise<AnalyticsAppointmentRatesResponse> {
+    const q = window.months ? `months=${window.months}` : `days=${window.days ?? 7}`;
+    return this.request<AnalyticsAppointmentRatesResponse>(`/analytics/appointment-rates?${q}`);
+  }
+
   // Analytics Feature Flags
   /**
    * What the analytics page may show: the effective plan (a trial counts as
-   * Pro) and the role (false for staff).
+   * Pro). Owner and admins only: staff get a 403.
    */
   async getAnalyticsFeatures(): Promise<{
     hasAdvancedAnalytics: boolean;
