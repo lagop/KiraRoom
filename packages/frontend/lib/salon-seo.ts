@@ -41,6 +41,22 @@ export interface PublicSalonProfessional {
   languages: string[];
   certifications: string[];
   services: Array<{ serviceId: string }>;
+  /**
+   * Where they work, when the salon has locations to pick from (`locations`
+   * on the page), with their main one. Absent otherwise.
+   */
+  locationIds?: string[];
+  primaryLocationId?: string | null;
+}
+
+/** One of the salon's locations a client can book at (multi-local). */
+export interface PublicSalonLocation {
+  id: string;
+  name: string;
+  slug: string;
+  /** "Calle Mayor 1, 28013 Madrid"; empty when none is recorded. */
+  address: string;
+  phone: string | null;
 }
 
 export interface PublicSalonPage {
@@ -99,6 +115,11 @@ export interface PublicSalonPage {
    * servers older than final prices.
    */
   taxLabel?: string;
+  /**
+   * The locations the client picks from: two or more, each with someone to
+   * book. Empty (or absent, from older servers) for a salon with one.
+   */
+  locations?: PublicSalonLocation[];
 }
 
 /** Public base URL of the app (where /sites/<slug> lives). */

@@ -335,7 +335,12 @@ describe("M4: POST /payments/:id/refund", () => {
       where: { id: APT, tenantId: T, amountPaid: new Prisma.Decimal(4000) },
       data: { amountPaid: 0, paymentStatus: "refunded" },
     });
-    expect(t.loyalty.onPaymentRefunded).toHaveBeenCalledWith(T, expect.objectContaining({ id: PAY, status: "refunded" }));
+    expect(t.loyalty.onPaymentRefunded).toHaveBeenCalledWith(
+      T,
+      expect.objectContaining({ id: PAY, status: "refunded" }),
+      // Keyed to the refund, for what was left of the payment.
+      { id: "ref-1", amount: 4000 },
+    );
     expect(t.wallet.creditIn).not.toHaveBeenCalled();
     expect(out).toMatchObject({ refundedAmount: 4000, refundableAmount: 0, rectificationNeeded: false, invoice: null });
   });

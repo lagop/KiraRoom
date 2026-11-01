@@ -2506,7 +2506,11 @@
     "privacy_link": "Privacy policy",
     "logged_out": "Signed out",
     "logged_out_desc": "You have signed out.",
-    "booking_failed": "The appointment could not be booked. Please try again."
+    "booking_failed": "The appointment could not be booked. Please try again.",
+    "step_location": "Choose a location",
+    "select_location": "Select a location",
+    "booked_at": "See you at {location}.",
+    "booked_at_address": "See you at {location}: {address}."
   },
   "sites": {
     "notFoundTitle": "Salon not found",

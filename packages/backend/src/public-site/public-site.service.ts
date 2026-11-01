@@ -7,6 +7,7 @@ import { WebDomainService } from "../web-domain/web-domain.service";
 import { MAX_SPAN_DAYS, dateOfDay, daysOf } from "../time-off/time-off-rules";
 import { salonWhatsAppConnected } from "../consent/client-notices";
 import { publicPrice, publicPriceSettings } from "../common/public-price";
+import { clientLocations, formatLocationAddress, professionalLocationsOf } from "../multi-location/client-locations";
 
 /**
  * Salons whose page is worth listing in the sitemap. A cancelled or
@@ -75,7 +76,7 @@ export class PublicSiteService {
       new Date(),
     );
     const horizon = new Date(dateOfDay(today)!.getTime() + MAX_SPAN_DAYS * 86_400_000);
-    const [services, professionals, closures, whatsappNotices] = await Promise.all([
+    const [services, professionals, closures, whatsappNotices, where] = await Promise.all([
       this.prisma.service.findMany({
         where: { tenantId: tenant.id, isActive: true },
         select: {
@@ -125,6 +126,9 @@ export class PublicSiteService {
         select: { professionalId: true, kind: true, startDate: true, endDate: true },
       }),
       salonWhatsAppConnected(this.prisma, tenant.id),
+      // Two or more locations someone can be booked at: the client picks one
+      // (multi-location/client-locations.ts). None for every other salon.
+      clientLocations(this.prisma as any, tenant.id),
     ]);
     const horizonDay = horizon.toISOString().slice(0, 10);
     const closedDays = [
@@ -173,7 +177,22 @@ export class PublicSiteService {
       taxLabel: prices.taxLabel,
       // workingHours is summarised into openingHours rather than exposed
       // per person.
-      professionals: professionals.map(({ workingHours: _wh, ...p }) => p),
+      //
+      // With locations to pick from, each professional also says where they
+      // work (locationIds) and their main one, so the page offers only who
+      // works at the chosen location, or takes the location from them.
+      professionals: professionals.map(({ workingHours: _wh, ...p }) =>
+        where.locations.length > 0 ? { ...p, ...professionalLocationsOf(p.id, where.locations, where.links) } : p,
+      ),
+      // Empty unless the salon has two or more locations to book at. Only
+      // what the client needs to choose one and find it.
+      locations: where.locations.map((l) => ({
+        id: l.id,
+        name: l.name,
+        slug: l.slug,
+        address: formatLocationAddress(l),
+        phone: l.phone,
+      })),
       openingHours,
       openingShifts,
       // "YYYY-MM-DD" days the salon is closed all day (holidays, closures),
