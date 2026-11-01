@@ -4,6 +4,7 @@ import { AdminClientsService } from "../../admin/clients/clients.service";
 import { AdminProfessionalsService } from "../../admin/professionals/professionals.service";
 import { ClientsService } from "../../clients/clients.service";
 import { ProfessionalsService } from "../../professionals/professionals.service";
+import { ProfessionalsController } from "../../professionals/professionals.controller";
 import { ServicesService } from "../../services/services.service";
 import {
   CLIENT_HAS_HISTORY,
@@ -44,6 +45,7 @@ function prismaMock(counts: { appointments?: number; payments?: number; orders?:
     appointmentService: { count: jest.fn(async () => counts.blocks ?? 0) },
     clientWallet: { count: jest.fn(async () => counts.wallets ?? 0) },
     loyaltyMember: { count: jest.fn(async () => counts.loyalty ?? 0) },
+    user: { updateMany: jest.fn(async () => ({ count: 1 })) },
   };
   return { prisma, calls };
 }
@@ -140,7 +142,12 @@ describe("deleting a professional", () => {
 
   it("is what both professional endpoints do, scoped to the caller's salon", async () => {
     const makers = [
-      (p: any) => new ProfessionalsService(p),
+      // The legacy DELETE /professionals/:id goes through the admin service.
+      (p: any) => ({
+        remove: (tenantId: string, id: string) =>
+          new ProfessionalsController(new ProfessionalsService(p), {} as any, {} as any, new AdminProfessionalsService(p))
+            .remove({ tenantId }, id),
+      }),
       (p: any) => new AdminProfessionalsService(p),
     ];
     for (const make of makers) {
@@ -149,6 +156,26 @@ describe("deleting a professional", () => {
       expect(prisma.professional.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "p1", tenantId: "t1" } }));
       expect(calls.deletes).toHaveLength(0);
     }
+  });
+
+  // Their login used to stay on: someone who had left could still sign in.
+  it.each([
+    ["deactivated (history)", { appointments: 1 }],
+    ["deleted (no history)", {}],
+  ])("takes away their panel login when %s", async (_label, counts) => {
+    const { prisma } = prismaMock(counts);
+    prisma.professional.findFirst.mockResolvedValueOnce({ id: "p1", userId: "u-ana" });
+    await deleteProfessionalKeepingHistory(prisma, "t1", "p1");
+    expect(prisma.user.updateMany).toHaveBeenCalledWith({
+      where: { id: "u-ana", tenantId: "t1", role: "staff", isActive: true },
+      data: { isActive: false, tokenVersion: { increment: 1 } },
+    });
+  });
+
+  it("touches no account when the professional has no login", async () => {
+    const { prisma } = prismaMock({ appointments: 1 });
+    await deleteProfessionalKeepingHistory(prisma, "t1", "p1");
+    expect(prisma.user.updateMany).not.toHaveBeenCalled();
   });
 });
 

@@ -1,4 +1,4 @@
-import { BadRequestException } from "@nestjs/common";
+import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { IcsController, icsFeedVersion } from "./ics.controller";
 
 /**
@@ -14,7 +14,7 @@ import { IcsController, icsFeedVersion } from "./ics.controller";
 
 const SECRET = "ics-secret";
 
-function build(features: any = {}) {
+function build(features: any = {}, { professionalActive = true, userActive = true } = {}) {
   const tenant = { id: "t1", slug: "salon-ana", name: "Salón Ana", features };
   const raw: Array<{ sql: string; values: unknown[] }> = [];
   const prisma: any = {
@@ -25,11 +25,12 @@ function build(features: any = {}) {
     professional: {
       findMany: async ({ where }: any) =>
         where.tenantId === "t1" ? [{ id: "pro-1", firstName: "Ana", lastName: "López" }] : [],
-      findUnique: async ({ where }: any) => (where.id === "pro-1" ? { id: "pro-1", tenant: { ...tenant } } : null),
+      findUnique: async ({ where }: any) =>
+        where.id === "pro-1" ? { id: "pro-1", isActive: professionalActive, tenant: { ...tenant } } : null,
     },
     user: {
       findUnique: async ({ where }: any) =>
-        where.id === "user-1" ? { id: "user-1", tenantId: "t1", professional: null, tenant: { ...tenant } } : null,
+        where.id === "user-1" ? { id: "user-1", tenantId: "t1", isActive: userActive, professional: null, tenant: { ...tenant } } : null,
     },
     appointment: { findMany: async () => [] },
     // Stands in for the jsonb_set UPDATE: bumps the version like Postgres would.
@@ -162,5 +163,20 @@ describe("ICS feed revocation", () => {
     expect(icsFeedVersion({ icsFeed: { version: -1 } })).toBe(0);
     expect(icsFeedVersion({ icsFeed: { version: 1.5 } })).toBe(0);
     expect(icsFeedVersion({ icsFeed: { version: 4 } })).toBe(4);
+  });
+});
+
+describe("ICS feeds of someone who has left", () => {
+  const proToken = IcsController.signToken("professional:pro-1", SECRET);
+  const staffToken = IcsController.signToken("staff:user-1", SECRET);
+
+  it("a deactivated professional's feed stops answering", async () => {
+    const { controller } = build({}, { professionalActive: false });
+    await expect(controller.professionalFeed("pro-1", proToken, res() as any)).rejects.toThrow(NotFoundException);
+  });
+
+  it("so does the feed of a login that was taken away", async () => {
+    const { controller } = build({}, { userActive: false });
+    await expect(controller.staffFeed("user-1", staffToken, res() as any)).rejects.toThrow(NotFoundException);
   });
 });

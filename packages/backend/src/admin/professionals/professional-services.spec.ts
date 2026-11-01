@@ -16,7 +16,11 @@ const FOREIGN = "33333333-3333-4333-8333-333333333333";
 function db() {
   const ops: string[] = [];
   const tx: any = {
-    professional: { update: jest.fn(async (args: any) => (ops.push("update"), { id: args.where.id })) },
+    professional: {
+      update: jest.fn(async (args: any) => (ops.push("update"), { id: args.where.id })),
+      // The record as it is (read before any write; see team-access.spec).
+      findFirst: jest.fn(async () => ({ isActive: true, email: "ana@salon.test", user: null })),
+    },
     professionalService: {
       deleteMany: jest.fn(async () => (ops.push("deleteMany"), { count: 1 })),
       createMany: jest.fn(async (args: any) => (ops.push(`createMany:${args.data.length}`), { count: args.data.length })),

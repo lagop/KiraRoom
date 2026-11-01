@@ -1,7 +1,8 @@
 import { ApiProperty, PartialType } from '@nestjs/swagger';
 import { CreateProfessionalDto } from './create-professional.dto';
-import { IsString, IsEmail, IsOptional, IsDateString, IsArray, IsNumber, IsBoolean, IsUUID, IsNotEmpty, ValidateNested } from 'class-validator';
+import { IsString, IsEmail, IsOptional, IsDateString, IsArray, IsNumber, IsBoolean, IsUUID, IsNotEmpty, ValidateNested, Min, Max } from 'class-validator';
 import { IsWorkingHours } from '../../../professionals/working-hours-input';
+import { EmptyAsNull } from '../../../professionals/optional-fields';
 import { Type } from 'class-transformer';
 
 export class UpdateProfessionalDto extends PartialType(CreateProfessionalDto) {
@@ -15,8 +16,8 @@ export class UpdateProfessionalDto extends PartialType(CreateProfessionalDto) {
   @IsOptional()
   lastName?: string;
 
-  @ApiProperty({ description: 'Email address', example: 'john.doe@example.com', required: false })
-  @IsString()
+  @ApiProperty({ description: 'Email address (also their panel login, if they have one)', example: 'john.doe@example.com', required: false })
+  @IsEmail({}, { message: 'El email no es válido.' })
   @IsOptional()
   email?: string;
 
@@ -69,15 +70,23 @@ export class UpdateProfessionalDto extends PartialType(CreateProfessionalDto) {
   @IsOptional()
   position?: string;
 
-  @ApiProperty({ description: 'Commission rate', example: 0.5, required: false })
-  @IsNumber()
+  @ApiProperty({ description: 'Commission rate, a percent (0-100); null clears it', example: 40, required: false })
+  @IsNumber({}, { message: 'La comisión debe ser un número.' })
+  @Min(0, { message: 'La comisión va de 0 a 100 (%).' })
+  @Max(100, { message: 'La comisión va de 0 a 100 (%).' })
   @IsOptional()
-  commissionRate?: number;
+  commissionRate?: number | null;
 
   @ApiProperty({ description: 'Hire date', example: '2020-01-01', required: false })
-  @IsDateString()
+  @IsDateString({}, { message: 'La fecha de alta no es válida.' })
   @IsOptional()
-  hireDate?: Date;
+  hireDate?: string;
+
+  @ApiProperty({ description: 'Termination date; null or "" clears it', example: '2026-12-31', required: false })
+  @EmptyAsNull()
+  @IsDateString({}, { message: 'La fecha de baja no es válida.' })
+  @IsOptional()
+  terminationDate?: string | null;
 
   @ApiProperty({
     description: 'Weekly schedule: one entry per shift, several per day for a split shift (max 21). Owners and admins only.',

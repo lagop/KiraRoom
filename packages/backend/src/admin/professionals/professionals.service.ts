@@ -1,5 +1,7 @@
 import {
   Injectable,
+  Logger,
+  HttpException,
   NotFoundException,
   BadRequestException,
   ConflictException,
@@ -11,15 +13,61 @@ import {
   UpdateProfessionalDto,
   ChangeProfessionalPasswordDto,
 } from "./dto";
-import { Professional, UserRole } from "@prisma/client";
+import { AppointmentStatus, UserRole } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import * as bcrypt from "bcryptjs";
-import { assertProfessionalSlot } from "../../professionals/professional-limit";
-import { commissionRateUpdate } from "../../professionals/optional-fields";
+import { withProfessionalSlot } from "../../professionals/professional-limit";
+import {
+  commissionRateUpdate,
+  optionalDateUpdate,
+  requiredDateUpdate,
+} from "../../professionals/optional-fields";
+import { revokePanelLogin } from "../../professionals/panel-login";
 import { CLIENT_POS_SELECT } from "../../clients/client-select";
+
+/** The most the team list returns at once: every salon's whole team fits. */
+export const MAX_PROFESSIONALS_PAGE = 200;
+
+export const PROFESSIONAL_NOT_FOUND = "Profesional no encontrado";
+export const PROFESSIONAL_EMAIL_TAKEN =
+  "Ese email ya lo usa otro profesional. Pon uno distinto.";
+export const LOGIN_EMAIL_TAKEN =
+  "Ese email ya es de otra cuenta de KiraRoom, así que no puede ser con el que este profesional entra al panel. Pon un email propio del profesional.";
+const SERVICE_MISSING = "Alguno de los servicios elegidos ya no existe. Recarga la página y vuelve a elegirlos.";
+
+/** Statuses of an appointment still to happen: what deactivating leaves without a professional. */
+const UPCOMING_STATUSES: AppointmentStatus[] = [
+  AppointmentStatus.pending,
+  AppointmentStatus.confirmed,
+  AppointmentStatus.in_progress,
+];
+
+/** Creating with `isActive: false` (the legacy POST /professionals allows it). */
+type CreateInput = CreateProfessionalDto & { tenantId: string; isActive?: boolean; terminationDate?: string | null };
 
 @Injectable()
 export class AdminProfessionalsService {
+  private readonly logger = new Logger(AdminProfessionalsService.name);
+
   constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * A known Prisma error as a Spanish message the panel can show. Anything
+   * else is logged here and answered with a generic message: the raw Prisma
+   * text (English, with table and column names) used to go to the salon.
+   */
+  private saveError(error: any, action: "create" | "update"): never {
+    if (error instanceof HttpException) throw error;
+    if (error?.code === "P2025") throw new NotFoundException(PROFESSIONAL_NOT_FOUND);
+    if (error?.code === "P2002") throw new ConflictException(PROFESSIONAL_EMAIL_TAKEN);
+    if (error?.code === "P2003") throw new BadRequestException(SERVICE_MISSING);
+    this.logger.error(`Error on professional ${action}: ${error?.message ?? error}`, error?.stack);
+    throw new BadRequestException(
+      action === "create"
+        ? "No se ha podido crear el profesional. Revisa los datos e inténtalo de nuevo."
+        : "No se han podido guardar los cambios. Revisa los datos e inténtalo de nuevo.",
+    );
+  }
 
   /**
    * The services a professional is to perform, checked to be this salon's.
@@ -37,26 +85,25 @@ export class AdminProfessionalsService {
     return unique;
   }
 
-  async create(createProfessionalDto: CreateProfessionalDto) {
+  async create(createProfessionalDto: CreateInput) {
     const { serviceIds: requestedServices, ...professionalData } = createProfessionalDto;
-    // Outside the try: its catch turns every error into a 400.
-    await assertProfessionalSlot(this.prisma, professionalData.tenantId);
+    const isActive = professionalData.isActive ?? true;
     const serviceIds = await this.salonServiceIds(professionalData.tenantId, requestedServices);
 
-    try {
-      // The controller sets tenantId from the caller's token. This used to
-      // fall back, for an unknown tenant, to the FIRST tenant in the database
-      // -- or to creating a "Default Tenant" -- and put the professional
-      // there: a write into another salon. Now an unknown tenant is an error.
-      const tenant = await this.prisma.tenant.findFirst({
-        where: { id: professionalData.tenantId },
-        select: { id: true },
-      });
-      if (!tenant) {
-        throw new NotFoundException("Salon not found");
-      }
+    // The controller sets tenantId from the caller's token. This used to
+    // fall back, for an unknown tenant, to the FIRST tenant in the database
+    // -- or to creating a "Default Tenant" -- and put the professional
+    // there: a write into another salon. Now an unknown tenant is an error.
+    const tenant = await this.prisma.tenant.findFirst({
+      where: { id: professionalData.tenantId },
+      select: { id: true },
+    });
+    if (!tenant) {
+      throw new NotFoundException("Salón no encontrado");
+    }
 
-      const professional = await this.prisma.professional.create({
+    const write = (db: Pick<Prisma.TransactionClient, "professional">) =>
+      db.professional.create({
         data: {
           tenantId: professionalData.tenantId,
           firstName: professionalData.firstName,
@@ -66,14 +113,13 @@ export class AdminProfessionalsService {
           profileImage: professionalData.profileImage,
           bio: professionalData.bio,
           specialties: professionalData.specialties || [],
-          isActive: true,
+          isActive,
           isOwner: false,
           position: professionalData.position,
           // 0 is a rate: only "not given" (or null) means none.
           commissionRate: commissionRateUpdate(professionalData.commissionRate) ?? null,
-          hireDate: professionalData.hireDate
-            ? new Date(professionalData.hireDate)
-            : new Date(),
+          hireDate: requiredDateUpdate(professionalData.hireDate) ?? new Date(),
+          terminationDate: optionalDateUpdate(professionalData.terminationDate) ?? null,
           workingHours: professionalData.workingHours || [],
           availability: professionalData.availability || {},
           settings: professionalData.settings || {},
@@ -88,20 +134,39 @@ export class AdminProfessionalsService {
               : undefined,
         },
       });
-      return professional;
+
+    try {
+      // An active professional takes one of the plan's places: counted and
+      // created under the salon's lock, so two adds at once cannot both fit.
+      return isActive
+        ? await withProfessionalSlot(this.prisma, professionalData.tenantId, write)
+        : await write(this.prisma);
     } catch (error) {
-      console.error("Error creating professional:", error);
-      if (error.code === "P2002") {
-        throw new BadRequestException(
-          "Professional with this email already exists",
-        );
-      } else if (error.code === "P2003") {
-        throw new BadRequestException("One or more services do not exist");
-      }
-      throw new BadRequestException(
-        `Failed to create professional: ${error.message}`,
-      );
+      this.saveError(error, "create");
     }
+  }
+
+  /**
+   * How many appointments still to happen (today on) the professional has:
+   * what deactivating them leaves to reassign.
+   */
+  async upcomingAppointmentCount(tenantId: string, id: string) {
+    const professional = await this.prisma.professional.findFirst({
+      where: { id, tenantId },
+      select: { id: true },
+    });
+    if (!professional) throw new NotFoundException(PROFESSIONAL_NOT_FOUND);
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const count = await this.prisma.appointment.count({
+      where: {
+        tenantId,
+        professionalId: id,
+        scheduledDate: { gte: today },
+        status: { in: UPCOMING_STATUSES },
+      },
+    });
+    return { count };
   }
 
   async findAll({
@@ -137,8 +202,9 @@ export class AdminProfessionalsService {
         skip: (page - 1) * limit,
         take: limit,
         orderBy: { lastName: "asc" },
+        // No appointments here: this pulled every appointment each
+        // professional ever had, for a list that shows none of them.
         include: {
-          appointments: true,
           services: {
             include: {
               service: true,
@@ -184,69 +250,94 @@ export class AdminProfessionalsService {
     });
 
     if (!professional) {
-      throw new NotFoundException("Professional not found");
+      throw new NotFoundException(PROFESSIONAL_NOT_FOUND);
     }
 
     return professional;
   }
 
   async update(tenantId: string, id: string, updateProfessionalDto: UpdateProfessionalDto) {
-    const { serviceIds: requestedServices, ...professionalData } = updateProfessionalDto;
+    // tenantId is in the DTO only because it extends the create one: the salon is
+    // the caller's, never moved by a body.
+    const { serviceIds: requestedServices, hireDate, terminationDate, tenantId: _tenantId, ...fields } =
+      updateProfessionalDto;
+    const current = await this.prisma.professional.findFirst({
+      where: { id, tenantId },
+      select: { isActive: true, email: true, user: { select: { id: true, role: true, email: true } } },
+    });
+    if (!current) throw new NotFoundException(PROFESSIONAL_NOT_FOUND);
     const serviceIds = await this.salonServiceIds(tenantId, requestedServices);
-    if (professionalData.isActive === true) {
-      const current = await this.prisma.professional.findFirst({
-        where: { id, tenantId },
-        select: { isActive: true },
-      });
-      if (current && !current.isActive) await assertProfessionalSlot(this.prisma, tenantId);
+
+    // Dates arrive as "YYYY-MM-DD" from the forms; Prisma wants a Date. Raw,
+    // every edit from the team list that carried the hire date was a 400.
+    const professionalData = {
+      ...fields,
+      hireDate: requiredDateUpdate(hireDate),
+      terminationDate: optionalDateUpdate(terminationDate),
+    };
+
+    // The professional signs in with the email on their record (see
+    // grantPanelAccess), so a new one there moves their login too -- if no
+    // other account has it. The owner's own record is the salon's main
+    // account, which is changed from that account, not from here.
+    const login = current.user?.role === UserRole.staff ? current.user : null;
+    const loginEmail = fields.email?.trim().toLowerCase();
+    const moveLogin = !!login && !!loginEmail && loginEmail !== login.email.toLowerCase();
+    if (moveLogin) {
+      const taken = await this.prisma.user.findUnique({ where: { email: loginEmail }, select: { id: true } });
+      if (taken && taken.id !== login!.id) throw new ConflictException(LOGIN_EMAIL_TAKEN);
     }
 
     try {
+      // Back to active takes one of the plan's places: under the salon's
+      // lock, so two reactivations at once cannot both fit.
+      if (fields.isActive === true && !current.isActive) {
+        await withProfessionalSlot(this.prisma, tenantId, (tx) =>
+          tx.professional.update({ where: { id, tenantId }, data: { isActive: true } }),
+        );
+      }
+
       // The professional and the services they perform, all or nothing: a
       // failure between the delete and the create used to leave them with
       // no services at all. Left out, the services are not touched; an
       // empty list is "none" (it used to be ignored, so the last service
       // could never be unticked).
-      if (serviceIds === undefined) {
-        return await this.prisma.professional.update({
-          where: { id, tenantId },
-          data: professionalData,
-        });
+      const professional =
+        serviceIds === undefined
+          ? await this.prisma.professional.update({
+              where: { id, tenantId },
+              data: professionalData,
+            })
+          : await this.prisma.$transaction(async (tx: any) => {
+              const updated = await tx.professional.update({
+                where: { id, tenantId },
+                data: professionalData,
+              });
+              await tx.professionalService.deleteMany({
+                where: { professionalId: id },
+              });
+              if (serviceIds.length > 0) {
+                await tx.professionalService.createMany({
+                  data: serviceIds.map((serviceId) => ({
+                    professionalId: id,
+                    serviceId,
+                  })),
+                });
+              }
+              return updated;
+            });
+
+      if (moveLogin) {
+        await this.prisma.user.update({ where: { id: login!.id }, data: { email: loginEmail } });
       }
-      return await this.prisma.$transaction(async (tx: any) => {
-        const professional = await tx.professional.update({
-          where: { id, tenantId },
-          data: professionalData,
-        });
-        await tx.professionalService.deleteMany({
-          where: { professionalId: id },
-        });
-        if (serviceIds.length > 0) {
-          await tx.professionalService.createMany({
-            data: serviceIds.map((serviceId) => ({
-              professionalId: id,
-              serviceId,
-            })),
-          });
-        }
-        return professional;
-      });
+      // Deactivated: their own login goes too (it used to stay on). Coming
+      // back does not restore it; the owner gives it again on purpose.
+      if (fields.isActive === false) {
+        await revokePanelLogin(this.prisma, tenantId, current.user?.id);
+      }
+      return professional;
     } catch (error) {
-      console.error("Error updating professional:", error);
-      if (error.code === "P2025") {
-        throw new NotFoundException("Professional not found");
-      }
-      if (error.code === "P2002") {
-        throw new BadRequestException(
-          "Professional with this email already exists",
-        );
-      }
-      if (error.code === "P2003") {
-        throw new BadRequestException("One or more services do not exist");
-      }
-      throw new BadRequestException(
-        `Failed to update professional: ${error.message}`,
-      );
+      this.saveError(error, "update");
     }
   }
 
@@ -299,7 +390,7 @@ export class AdminProfessionalsService {
     });
 
     if (!professional) {
-      throw new NotFoundException("Professional not found");
+      throw new NotFoundException(PROFESSIONAL_NOT_FOUND);
     }
 
     return {
@@ -322,7 +413,7 @@ export class AdminProfessionalsService {
     });
 
     if (!professional) {
-      throw new NotFoundException("Professional not found");
+      throw new NotFoundException(PROFESSIONAL_NOT_FOUND);
     }
 
     if (!professional.user) {
@@ -352,10 +443,10 @@ export class AdminProfessionalsService {
         data: { passwordHash, tokenVersion: { increment: 1 }, loginAttempts: 0, lockedUntil: null },
       });
 
-      return { success: true, message: "Password updated successfully" };
+      return { success: true, message: "Contraseña actualizada" };
     } catch (error) {
-      console.error("Error updating professional password:", error);
-      throw new BadRequestException("Failed to update password");
+      this.logger.error(`Error updating a professional password: ${(error as any)?.message ?? error}`);
+      throw new BadRequestException("No se ha podido cambiar la contraseña. Inténtalo de nuevo.");
     }
   }
 
@@ -374,7 +465,14 @@ export class AdminProfessionalsService {
       where: { id, tenantId },
       include: { user: { select: { id: true, role: true } } },
     });
-    if (!professional) throw new NotFoundException("Professional not found");
+    if (!professional) throw new NotFoundException(PROFESSIONAL_NOT_FOUND);
+    // Deactivating takes the login away (revokePanelLogin); it must not come
+    // back while they are still inactive.
+    if (!professional.isActive) {
+      throw new BadRequestException(
+        "Este profesional está desactivado. Actívalo primero y luego dale acceso al panel.",
+      );
+    }
     const email = professional.email?.trim().toLowerCase();
     if (!email) {
       throw new BadRequestException("Pon un email en la ficha: es con el que entrará al panel.");
@@ -431,7 +529,7 @@ export class AdminProfessionalsService {
       where: { id, tenantId },
       include: { user: { select: { id: true, role: true } } },
     });
-    if (!professional) throw new NotFoundException("Professional not found");
+    if (!professional) throw new NotFoundException(PROFESSIONAL_NOT_FOUND);
     if (!professional.user) return { active: false };
     if (professional.user.role !== UserRole.staff) {
       throw new BadRequestException("La cuenta principal del salón no se puede desactivar desde aquí.");

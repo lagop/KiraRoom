@@ -1,6 +1,7 @@
 import { ConflictException, NotFoundException } from "@nestjs/common";
 import { ClientStatus } from "@prisma/client";
 import type { PrismaService } from "./prisma.service";
+import { revokePanelLogin } from "../../professionals/panel-login";
 
 /**
  * Deleting a client, professional or service from the panel.
@@ -86,9 +87,12 @@ export async function deleteProfessionalKeepingHistory(
   tenantId: string,
   id: string,
 ): Promise<HistoryDeleteResult> {
-  const professional = await prisma.professional.findFirst({ where: { id, tenantId }, select: { id: true } });
+  const professional = await prisma.professional.findFirst({
+    where: { id, tenantId },
+    select: { id: true, userId: true },
+  });
   if (!professional) throw new NotFoundException("Profesional no encontrado");
-  return deleteOrDeactivate(
+  const result = await deleteOrDeactivate(
     () =>
       anyOf(
         prisma.appointment.count({ where: { tenantId, professionalId: id } }),
@@ -99,6 +103,10 @@ export async function deleteProfessionalKeepingHistory(
     () => prisma.professional.delete({ where: { id, tenantId } }),
     PROFESSIONAL_HAS_HISTORY,
   );
+  // Deactivated or deleted, their own login to the panel goes too: it used to
+  // stay on, so someone who had left could still sign in.
+  await revokePanelLogin(prisma, tenantId, professional.userId);
+  return result;
 }
 
 export async function deleteServiceKeepingHistory(

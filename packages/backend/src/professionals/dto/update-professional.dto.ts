@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsEmail, IsBoolean, IsOptional, IsNumber } from 'class-validator';
+import { IsString, IsEmail, IsBoolean, IsOptional, IsNumber, Min, Max } from 'class-validator';
 import { IsWorkingHours } from '../working-hours-input';
 import { CommissionRateInput } from '../optional-fields';
 
@@ -57,6 +57,8 @@ export class UpdateProfessionalDto {
   @CommissionRateInput()
   @IsOptional()
   @IsNumber({}, { message: 'La comisión debe ser un número.' })
+  @Min(0, { message: 'La comisión va de 0 a 100 (%).' })
+  @Max(100, { message: 'La comisión va de 0 a 100 (%).' })
   commissionRate?: number | null;
 
   @ApiProperty({ description: 'Hire date', required: false })

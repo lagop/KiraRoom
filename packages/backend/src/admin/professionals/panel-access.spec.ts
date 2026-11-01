@@ -36,7 +36,7 @@ function professionalsDb(professional: Record<string, any> | null, opts: { email
   return { db, created, updates };
 }
 
-const ana = { id: "p1", tenantId: TENANT, firstName: "Ana", lastName: "Prueba", email: "Ana@Salon.test", user: null };
+const ana = { id: "p1", tenantId: TENANT, firstName: "Ana", lastName: "Prueba", email: "Ana@Salon.test", isActive: true, user: null };
 
 describe("giving a professional access to the panel", () => {
   it("creates a staff account with the record's email, linked both ways", async () => {

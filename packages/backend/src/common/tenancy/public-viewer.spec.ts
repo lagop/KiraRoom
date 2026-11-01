@@ -43,7 +43,12 @@ describe("PublicViewerService.resolve", () => {
   });
 
   it("falls back to the token's salon, staff when the user is active staff there", async () => {
-    expect(await viewerService().resolve(bearer(OWNER_A))).toEqual({ tenantId: "tenant-a", staff: true });
+    expect(await viewerService().resolve(bearer(OWNER_A))).toEqual({
+      tenantId: "tenant-a",
+      staff: true,
+      role: "owner",
+      userId: "user-a",
+    });
   });
 
   it("treats a client as a public viewer of their own salon", async () => {
@@ -92,7 +97,7 @@ function professionalsController() {
       findUnique: async () => FULL_PRO,
     },
   };
-  const controller = new ProfessionalsController(new ProfessionalsService(prisma), {} as any, viewerService());
+  const controller = new ProfessionalsController(new ProfessionalsService(prisma), {} as any, viewerService(), {} as any);
   return { controller, calls };
 }
 
@@ -135,8 +140,65 @@ describe("GET /professionals/:id", () => {
 
   it("does not show an inactive professional publicly", async () => {
     const prisma: any = { professional: { findUnique: async () => ({ ...FULL_PRO, isActive: false }) } };
-    const controller = new ProfessionalsController(new ProfessionalsService(prisma), {} as any, viewerService());
+    const controller = new ProfessionalsController(new ProfessionalsService(prisma), {} as any, viewerService(), {} as any);
     await expect(controller.findOne({ headers: {} }, "pro-1")).rejects.toThrow(NotFoundException);
+  });
+});
+
+/**
+ * A professional's own login (role staff) is staff of the salon, but a
+ * colleague's email, phone, commission rate or user id is not theirs to see:
+ * they get the public projection of the others and their own record in full.
+ */
+describe("GET /professionals for a professional (role staff)", () => {
+  const STAFF_ANA = { sub: "user-ana", role: "staff", tenantId: "tenant-a" };
+  const STAFF_LUIS = { sub: "user-luis", role: "staff", tenantId: "tenant-a" };
+  const LUIS = { ...FULL_PRO, id: "pro-2", firstName: "Luis", email: "luis@salon.test", userId: "user-luis" };
+  const viewers = viewerService({
+    "user-a": { isActive: true, tenantId: "tenant-a" },
+    "user-ana": { isActive: true, tenantId: "tenant-a" },
+    "user-luis": { isActive: true, tenantId: "tenant-a" },
+  });
+
+  function controllerFor(rows: any[]) {
+    const calls: any[] = [];
+    const prisma: any = {
+      professional: {
+        findMany: async (args: any) => {
+          calls.push(args);
+          // The projection, as Prisma would apply it.
+          return rows.map((r) => (args.select ? new ProfessionalsService({} as any).toPublic(r) : r));
+        },
+        findFirst: async ({ where }: any) => rows.find((r) => r.userId === where.userId) ?? null,
+        findUnique: async ({ where }: any) => rows.find((r) => r.id === where.id) ?? null,
+      },
+    };
+    return { controller: new ProfessionalsController(new ProfessionalsService(prisma), {} as any, viewers, {} as any), calls };
+  }
+
+  it("lists colleagues in the public projection and their own record in full", async () => {
+    const { controller } = controllerFor([FULL_PRO, LUIS]);
+    const list: any[] = await controller.findAll(bearer(STAFF_ANA), undefined);
+    const ana = list.find((p) => p.id === "pro-1");
+    const luis = list.find((p) => p.id === "pro-2");
+    expect(ana.email).toBe("ana@salon.test");
+    expect(luis).toMatchObject({ id: "pro-2", firstName: "Luis" });
+    for (const secret of ["email", "phone", "commissionRate", "userId"]) expect(luis[secret]).toBeUndefined();
+  });
+
+  it("by id: their own in full, a colleague's public", async () => {
+    const { controller } = controllerFor([FULL_PRO, LUIS]);
+    expect(((await controller.findOne(bearer(STAFF_LUIS), "pro-2")) as any).email).toBe("luis@salon.test");
+    const colleague: any = await controller.findOne(bearer(STAFF_LUIS), "pro-1");
+    expect(colleague.firstName).toBe("Ana");
+    expect(colleague.email).toBeUndefined();
+    expect(colleague.commissionRate).toBeUndefined();
+  });
+
+  it("the owner still gets every full row", async () => {
+    const { controller } = controllerFor([FULL_PRO, LUIS]);
+    const list: any[] = await controller.findAll(bearer(OWNER_A), undefined);
+    expect(list.map((p) => p.email)).toEqual(["ana@salon.test", "luis@salon.test"]);
   });
 });
 

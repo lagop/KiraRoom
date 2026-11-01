@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsEmail, IsOptional, IsDateString, IsArray, IsNumber, IsBoolean, IsUUID } from 'class-validator';
+import { IsString, IsEmail, IsOptional, IsDateString, IsArray, IsNumber, IsBoolean, IsUUID, Min, Max } from 'class-validator';
 import { IsWorkingHours } from '../../../professionals/working-hours-input';
 
 export class CreateProfessionalDto {
@@ -71,15 +71,17 @@ export class CreateProfessionalDto {
   @IsOptional()
   position?: string;
 
-  @ApiProperty({ description: 'Commission rate', example: 0.5 })
-  @IsNumber()
+  @ApiProperty({ description: 'Commission rate, a percent (0-100)', example: 40 })
+  @IsNumber({}, { message: 'La comisión debe ser un número.' })
+  @Min(0, { message: 'La comisión va de 0 a 100 (%).' })
+  @Max(100, { message: 'La comisión va de 0 a 100 (%).' })
   @IsOptional()
-  commissionRate?: number;
+  commissionRate?: number | null;
 
   @ApiProperty({ description: 'Hire date', example: '2020-01-01' })
-  @IsDateString()
+  @IsDateString({}, { message: 'La fecha de alta no es válida.' })
   @IsOptional()
-  hireDate?: Date;
+  hireDate?: string;
 
   @ApiProperty({
     description: 'Weekly schedule: one entry per shift, several per day for a split shift (max 21). Owners and admins only.',

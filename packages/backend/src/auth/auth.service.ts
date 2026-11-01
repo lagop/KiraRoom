@@ -588,6 +588,77 @@ export class AuthService {
     }
   }
 
+  /**
+   * A panel user (owner, admin or professional) changing their own
+   * password. There was no way to: a professional kept the first password
+   * the owner chose and handed over.
+   *
+   * It takes the current password, so a borrowed session is not enough to
+   * lock the owner of the account out; wrong guesses count towards the
+   * sign-in lockout. Every session ends (tokenVersion), as with a reset, and
+   * this browser gets a new one, so the person changing it stays signed in.
+   */
+  async changeOwnPassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<{ user: AuthUser; tokens: TokenResponse }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { professional: { select: { id: true } } },
+    });
+    if (!user || !user.isActive) throw new UnauthorizedException();
+    if (user.lockedUntil && user.lockedUntil > new Date()) {
+      const minutes = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 60000);
+      throw new BadRequestException(
+        `Demasiados intentos. Vuelve a intentarlo en ${minutes} minuto${minutes === 1 ? "" : "s"}.`,
+      );
+    }
+    if (!(await bcrypt.compare(currentPassword, user.passwordHash))) {
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          loginAttempts: { increment: 1 },
+          lockedUntil: user.loginAttempts >= MAX_LOGIN_ATTEMPTS - 1 ? new Date(Date.now() + LOCKOUT_MS) : null,
+        },
+      });
+      // 400, not 401: the panel treats a 401 as an expired session and signs
+      // out, which would punish a typo.
+      throw new BadRequestException("La contraseña actual no es correcta.");
+    }
+    if (currentPassword === newPassword) {
+      throw new BadRequestException("La contraseña nueva tiene que ser distinta de la actual.");
+    }
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        passwordHash: await bcrypt.hash(newPassword, Number(process.env.BCRYPT_ROUNDS) || 12),
+        tokenVersion: { increment: 1 },
+        loginAttempts: 0,
+        lockedUntil: null,
+      },
+    });
+    const tokens = await this.generateTokens(
+      user.id,
+      user.email,
+      user.role,
+      user.tenantId,
+      user.professional?.id,
+    );
+    return {
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        role: user.role,
+        tenantId: user.tenantId,
+      },
+      tokens,
+    };
+  }
+
   async logoutEverywhere(id: string, role?: string): Promise<void> {
     if (role === "client") {
       await this.prisma.client.update({ where: { id }, data: { tokenVersion: { increment: 1 } } });

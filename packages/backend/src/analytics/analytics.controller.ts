@@ -83,18 +83,27 @@ export class AnalyticsController {
     }
   }
 
+  /**
+   * null for the owner and admins (the whole salon); for staff, their own
+   * professional. A staff account linked to no professional used to get
+   * null too -- read as "no filter" -- and so saw the whole salon's figures.
+   * Now it is refused, as clients and appointments are for such an account.
+   */
   private async getProfessionalIdForStaff(
     req: AuthenticatedRequest,
   ): Promise<string | null> {
-    if (req.user.role === "staff") {
-      const professional =
-        await this.professionalsService.getProfessionalByUserId(
-          req.user.id,
-          req.user.tenantId,
-        );
-      return professional?.id || null;
+    if (req.user.role !== "staff") return null;
+    const professional =
+      await this.professionalsService.getProfessionalByUserId(
+        req.user.id,
+        req.user.tenantId,
+      );
+    if (!professional) {
+      throw new ForbiddenException(
+        "Tu cuenta no está vinculada a ninguna ficha de profesional. Pide a quien gestiona el salón que lo revise.",
+      );
     }
-    return null;
+    return professional.id;
   }
 
   @Get("features")
@@ -195,9 +204,13 @@ export class AnalyticsController {
     @Req() req: AuthenticatedRequest,
     @Query("days") days?: string,
   ) {
+    // Staff: their own appointments, like the overview (this answered the
+    // whole salon's to anyone on the team).
+    const professionalId = await this.getProfessionalIdForStaff(req);
     return this.analyticsService.getAppointmentStatusByDays(
       req.user.tenantId,
       days ? parseInt(days, 10) : 7,
+      professionalId,
     );
   }
 
