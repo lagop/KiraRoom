@@ -16,7 +16,8 @@ import { AppointmentStatus, PaymentMethod, PaymentStatus, Prisma } from "@prisma
  *   was created (the column cannot be empty).
  * - `lastVisit` is her latest completed visit; null with none.
  * - `totalSpent` is the money the salon has recorded from her: her payments
- *   marked paid (a refunded payment is `refunded`, so it drops out), except
+ *   marked paid (a refunded payment is `refunded`, so it drops out) less what
+ *   was given back of them by partial refunds (the payment stays paid), except
  *   the part paid with loyalty points, which is not money. Payments are in
  *   **cents** (`payments.amount`); the column is in **euros**, as the seed
  *   and the loyalty member's `totalSpent` are, hence / 100.
@@ -72,6 +73,8 @@ export interface ClientStatsDb {
   };
   appointment: { aggregate: (args: any) => Promise<any> };
   payment: { aggregate: (args: any) => Promise<any> };
+  /** Partial refunds of her paid payments. Optional: without it they are not taken off. */
+  refund?: { aggregate: (args: any) => Promise<any> };
 }
 
 /** Recomputes one client's figures and writes them. Null if she is not this salon's. */
@@ -80,7 +83,13 @@ export async function recomputeClientStats(
   tenantId: string,
   clientId: string,
 ): Promise<ClientStats | null> {
-  const [client, visits, paid] = await Promise.all([
+  const paidWhere = {
+    tenantId,
+    clientId,
+    status: PaymentStatus.paid,
+    method: { not: PaymentMethod.loyalty_points },
+  };
+  const [client, visits, paid, refunded] = await Promise.all([
     db.client.findFirst({ where: { id: clientId, tenantId }, select: { createdAt: true } }),
     db.appointment.aggregate({
       where: { tenantId, clientId, status: AppointmentStatus.completed },
@@ -88,22 +97,18 @@ export async function recomputeClientStats(
       _min: { scheduledDate: true },
       _max: { scheduledDate: true },
     }),
-    db.payment.aggregate({
-      where: {
-        tenantId,
-        clientId,
-        status: PaymentStatus.paid,
-        method: { not: PaymentMethod.loyalty_points },
-      },
-      _sum: { amount: true },
-    }),
+    db.payment.aggregate({ where: paidWhere, _sum: { amount: true } }),
+    // Given back of payments still paid: partial refunds.
+    db.refund?.aggregate
+      ? db.refund.aggregate({ where: { status: "succeeded", payment: paidWhere }, _sum: { amount: true } })
+      : Promise.resolve(null),
   ]);
   if (!client) return null;
   const stats = clientStatsFrom({
     visitCount: Number(visits?._count?._all ?? 0),
     firstVisit: visits?._min?.scheduledDate ?? null,
     lastVisit: visits?._max?.scheduledDate ?? null,
-    paidCents: Number(paid?._sum?.amount ?? 0),
+    paidCents: Number(paid?._sum?.amount ?? 0) - Number(refunded?._sum?.amount ?? 0),
     createdAt: client.createdAt,
   });
   await db.client.updateMany({ where: { id: clientId, tenantId }, data: stats });

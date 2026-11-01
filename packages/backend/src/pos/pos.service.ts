@@ -23,6 +23,7 @@ import {
   splitTicket,
   appointmentChargeCents,
   appointmentOwedCents,
+  appointmentTotalCents,
   type PayableAppointment,
 } from '../payments/appointment-payment';
 import {
@@ -61,6 +62,7 @@ import {
 import {
   includedTaxCents,
   invoiceLineOf,
+  loyaltyShares,
   rowsByBucket,
   saleDescription,
   type GiftCardLine,
@@ -82,6 +84,16 @@ interface InvoiceToRectify {
   name: string;
   /** What the rectificativa credits, in money (tax included). */
   creditedCents: number;
+}
+
+/** An appointment's share of a sale's loyalty reward, for its invoice (PosService.visitLoyalty). */
+interface VisitLoyalty {
+  /** In the visit's catalogue terms: what its invoice takes off. */
+  catalogueCents: number;
+  /** Its live invoice, issued already: credited by a rectificativa by difference with the sale. */
+  invoiceId?: string;
+  /** What the appointment keeps under `discount.loyalty`. */
+  record: Record<string, unknown>;
 }
 
 /** 409: the discount does not fit in what is left to credit of the appointment's invoice. */
@@ -244,13 +256,17 @@ export class PosService {
     const payments = await this.prisma.payment.findMany({
       where: { tenantId, createdAt: { gte: start, lt: end }, ...(scoped ? { AND: [scoped] } : {}) },
       orderBy: { createdAt: 'desc' },
-      include: { appointment: { select: { id: true, service: { select: { name: true } } } } },
+      include: {
+        appointment: { select: { id: true, service: { select: { name: true } } } },
+        refunds: { where: { status: 'succeeded' }, select: { amount: true } },
+      },
     });
 
+    // Net of what was given back: a partial refund leaves its payment paid.
     const paid = payments.filter((p) => p.status === 'paid');
     const paymentBreakdown = paid.reduce((acc, p) => {
       if (!acc[p.method]) acc[p.method] = { amount: 0, count: 0 };
-      acc[p.method].amount += p.amount;
+      acc[p.method].amount += keptCents(p);
       acc[p.method].count += 1;
       return acc;
     }, {} as Record<string, { amount: number; count: number }>);
@@ -270,7 +286,7 @@ export class PosService {
     };
     for (const p of paid) {
       const apt = (p as any).appointment as { id: string; service?: { name?: string } | null } | null;
-      if (apt) add(apt.service?.name ?? 'Cita', p.amount, apt.id);
+      if (apt) add(apt.service?.name ?? 'Cita', keptCents(p), apt.id);
     }
     const saleIds = [
       ...new Set(paid.filter((p) => !p.appointmentId).map((p) => (p.metadata as any)?.posSaleId).filter(Boolean)),
@@ -278,18 +294,24 @@ export class PosService {
     if (saleIds.length > 0) {
       const lines = await this.prisma.posSaleLine.findMany({
         where: { tenantId, saleId: { in: saleIds }, kind: 'service' },
-        select: { id: true, description: true, quantity: true, totalCents: true },
+        select: { id: true, description: true, quantity: true, totalCents: true, refundedCents: true, refundedQuantity: true },
       });
-      for (const l of lines) add(l.description, l.totalCents, l.id, l.quantity);
+      for (const l of lines) {
+        const left = l.quantity - (l.refundedQuantity ?? 0);
+        if (left > 0 || l.totalCents - (l.refundedCents ?? 0) > 0) {
+          add(l.description, l.totalCents - (l.refundedCents ?? 0), l.id, Math.max(0, left));
+        }
+      }
     }
 
     return {
       date: day,
       /** Cents (money). */
-      totalSales: paid.reduce((sum, p) => sum + p.amount, 0),
+      totalSales: paid.reduce((sum, p) => sum + keptCents(p), 0),
       totalTransactions: paid.length,
       pendingPayments: payments.filter((p) => p.status === 'pending').length,
-      refundedAmount: payments.filter((p) => p.status === 'refunded').reduce((sum, p) => sum + p.amount, 0),
+      /** Given back of the day's payments: whole refunds and partial ones. */
+      refundedAmount: payments.reduce((sum, p) => sum + refundedCents(p), 0),
       paymentBreakdown: Object.entries(paymentBreakdown).map(([method, data]) => ({ method, ...data })),
       topServices: [...services.entries()]
         .map(([name, d]) => ({ name, count: d.count, revenue: d.revenue }))
@@ -657,6 +679,25 @@ export class PosService {
     // own payment row; what is left pays the rest, by kind (Payment.type).
     const { rows, shares } = splitTicket(appointments, tenders, loyaltyDiscount, appointmentDiscounts);
     const loyaltyLeft = loyaltyDiscount - shares.reduce((s, sh) => s + sh.fromDiscount, 0);
+    // The loyalty reward is a discount on the invoices (owner decision
+    // 2026-11-02): each appointment's share goes on its visit's invoice
+    // (visitLoyalty), the rest is shared over the sale's own lines by their
+    // tax base (pos-ticket.ts loyaltyShares).
+    const loyaltyOfLine = new Map<TicketLine, number>();
+    loyaltyShares(invoiceable, Math.max(0, loyaltyLeft)).forEach((cents, i) => {
+      if (cents > 0) loyaltyOfLine.set(invoiceable[i], cents);
+    });
+    for (const share of shares) {
+      const line = items.find((l) => l.appointmentId === share.appointment.id);
+      if (line && share.fromDiscount > 0) loyaltyOfLine.set(line, share.fromDiscount);
+    }
+    let visitLoyalty: Map<string, VisitLoyalty>;
+    try {
+      visitLoyalty = await this.visitLoyalty(tenantId, salon, shares, catalogueDiscounts, saleId, rewardName);
+    } catch (err) {
+      await giveBackPoints();
+      throw err;
+    }
     const bucketOf = (k: PricedLine['kind']) =>
       items.filter((l) => !l.appointmentId && l.kind === k).reduce((s, l) => s + l.netCents, 0);
     let serviceCents = bucketOf('service');
@@ -694,6 +735,7 @@ export class PosService {
     const professionals = await this.commissionRates(tenantId, items);
 
     const rectifications = new Map<string, IssuedInvoice>();
+    const loyaltyRectifications = new Map<string, IssuedInvoice>();
     let invoice: SimplifiedSaleInvoice | null = null;
     const soldCards: Array<{ id: string; code: string; amountCents: number; recipientName?: string; recipientEmail?: string }> = [];
     const created: any[] = [];
@@ -750,6 +792,20 @@ export class PosService {
               throw err instanceof BadRequestException ? notCreditable(appointmentId, inv.name, err) : err;
             });
           rectifications.set(appointmentId, issued);
+        }
+        // The loyalty reward on a visit invoiced already: a rectificativa by
+        // difference for it, after the till discount's (checked: visitLoyalty).
+        for (const [appointmentId, v] of visitLoyalty) {
+          if (!v.invoiceId) continue;
+          const issued = await this.invoices!.rectifyByAmountIn(
+            tx,
+            tenantId,
+            v.invoiceId,
+            v.catalogueCents,
+            `Descuento fidelidad (venta ${saleId})`,
+          );
+          loyaltyRectifications.set(appointmentId, issued);
+          v.record.rectificationInvoiceId = issued.id;
         }
 
         let giftCardId: string | undefined;
@@ -880,6 +936,7 @@ export class PosService {
                   ),
                 }
               : undefined,
+            visitLoyalty.get(share.appointment.id)?.record,
           );
         }
 
@@ -889,7 +946,7 @@ export class PosService {
             tenantId,
             saleId,
             paymentIds: created.map((p) => p.id),
-            lines: invoiceable.map(invoiceLineOf),
+            lines: invoiceable.map((l) => invoiceLineOf(l, loyaltyOfLine.get(l) ?? 0)),
             clientId: finalClientId ?? undefined,
             full: invoiceKind.kind === 'full',
           });
@@ -900,8 +957,13 @@ export class PosService {
         // Its lines, for the receipt and the commissions.
         const saleLines = [
           ...items.map((l, lineIndex) => {
-            const tax = includedTaxCents(l.netCents, l.taxRate);
-            const base = salon.basis.pricesIncludeTax ? l.netCents : l.netCents - tax;
+            // The commission is on the line before the loyalty reward (paid
+            // with points, like an appointment's: commissions.service.ts).
+            const base = salon.basis.pricesIncludeTax ? l.netCents : l.netCents - includedTaxCents(l.netCents, l.taxRate);
+            // What the line was charged, as the invoice says: after the reward.
+            const loyalty = loyaltyOfLine.get(l) ?? 0;
+            const charged = l.netCents - loyalty;
+            const tax = includedTaxCents(charged, l.taxRate);
             const prof = l.kind === 'service' && l.professionalId ? professionals.get(l.professionalId) : undefined;
             return {
               saleId,
@@ -916,7 +978,8 @@ export class PosService {
               quantity: l.quantity,
               unitPriceCents: l.price,
               discountCents: l.lineDiscountCents + l.orderDiscountCents,
-              totalCents: l.netCents,
+              ...(loyalty > 0 ? { loyaltyDiscountCents: loyalty } : {}),
+              totalCents: charged,
               taxRate: l.taxRate,
               taxCents: tax,
               commissionBaseCents: base,
@@ -972,6 +1035,14 @@ export class PosService {
                   })),
                 }
               : {}),
+            ...(loyaltyRectifications.size
+              ? {
+                  loyaltyRectifications: [...loyaltyRectifications].map(([appointmentId, issued]) => ({
+                    appointmentId,
+                    invoiceId: issued.id,
+                  })),
+                }
+              : {}),
             status: 'completed',
             createdAt: new Date().toISOString(),
           }),
@@ -995,6 +1066,7 @@ export class PosService {
 
     // Committed: the invoices go to the AEAT / Holded like any invoice.
     for (const issued of rectifications.values()) this.invoices?.afterIssue(issued);
+    for (const issued of loyaltyRectifications.values()) this.invoices?.afterIssue(issued);
     const issuedInvoice = invoice as SimplifiedSaleInvoice | null;
     if (issuedInvoice?.created) this.invoices?.afterIssue(issuedInvoice);
     // The gift cards sold, emailed to who receives them.
@@ -1313,6 +1385,72 @@ export class PosService {
         throw err instanceof BadRequestException ? notCreditable(appointmentId, name, err) : err;
       }
       out.set(appointmentId, { id: invoice.id, name, creditedCents: typeof credited === 'number' ? credited : amount });
+    }
+    return out;
+  }
+
+  /**
+   * Each appointment's share of the loyalty reward, for its invoice (owner
+   * decision 2026-11-02: the reward is a discount on the invoice, so the
+   * invoice comes to what was charged). In the visit's catalogue terms, the
+   * terms of its invoice lines. The visit keeps it under `discount.loyalty`
+   * (recordAppointmentPayment) and its invoice, issued later, takes it off
+   * (appointment-invoice-pricing.ts). A visit invoiced already gets a
+   * rectificativa by difference for it, issued with the sale -- when what is
+   * left to credit of its invoice takes it (with the till discount's): when
+   * it does not, the sale still goes through and the answer's record says so
+   * (`notOnInvoice`). Already-issued invoices are never edited.
+   */
+  private async visitLoyalty(
+    tenantId: string,
+    salon: Salon,
+    shares: Array<{ appointment: ChargeableApt; fromDiscount: number }>,
+    catalogueDiscounts: Map<string, { catalogueCents: number }>,
+    saleId: string,
+    rewardName?: string,
+  ): Promise<Map<string, VisitLoyalty>> {
+    const out = new Map<string, VisitLoyalty>();
+    const rewarded = shares.filter((s) => s.fromDiscount > 0);
+    if (rewarded.length === 0) return out;
+    const invoices = this.invoices
+      ? await this.prisma.invoice.findMany({
+          where: {
+            tenantId,
+            sourceType: 'appointment',
+            sourceId: { in: rewarded.map((s) => s.appointment.id) },
+            status: { not: 'cancelled' },
+          },
+          select: { id: true, sourceId: true, series: true, number: true },
+        })
+      : [];
+    for (const share of rewarded) {
+      const apt = share.appointment;
+      const tillCents = catalogueDiscounts.get(apt.id)?.catalogueCents ?? 0;
+      const catalogueCents = salon.basis.pricesIncludeTax
+        ? share.fromDiscount
+        : loyaltyInCatalogue(apt, salon.fiscalSettings, tillCents, share.fromDiscount);
+      if (catalogueCents <= 0) continue;
+      const record: Record<string, unknown> = {
+        saleId,
+        moneyCents: share.fromDiscount,
+        catalogueCents,
+        ...(rewardName ? { rewardName } : {}),
+        at: new Date().toISOString(),
+      };
+      const invoice = invoices.find((i) => i.sourceId === apt.id);
+      let invoiceId: string | undefined;
+      if (invoice && this.invoices) {
+        try {
+          await this.invoices.assertCreditable(tenantId, invoice.id, tillCents + catalogueCents);
+          invoiceId = invoice.id;
+        } catch (err) {
+          if (!(err instanceof BadRequestException)) throw err;
+          const name = `${invoice.series}${invoice.number}`;
+          this.logger.warn(`sale ${saleId}: loyalty reward of appointment ${apt.id} not credited on ${name}: ${err.message}`);
+          record.notOnInvoice = name;
+        }
+      }
+      out.set(apt.id, { catalogueCents, ...(invoiceId ? { invoiceId } : {}), record });
     }
     return out;
   }
@@ -1685,32 +1823,37 @@ export class PosService {
 
     const payments = await this.prisma.payment.findMany({
       where: { tenantId, createdAt: { gte: start, lt: end }, ...(scoped ? { AND: [scoped] } : {}) },
-      include: { client: { select: { firstName: true, lastName: true } } },
+      include: {
+        client: { select: { firstName: true, lastName: true } },
+        refunds: { where: { status: 'succeeded' }, select: { amount: true } },
+      },
     });
 
     const paidPayments = payments.filter((p) => p.status === 'paid');
-    const refundedPayments = payments.filter((p) => p.status === 'refunded');
+    // Whole refunds and partial ones (the payment stays paid): both given back.
+    const refundedPayments = payments.filter((p) => refundedCents(p) > 0);
 
     const hourlySales = Array.from({ length: 24 }, (_, hour) => ({ hour, count: 0, amount: 0 }));
     for (const payment of paidPayments) {
       const hour = Number(salonDayAndTime(new Date(payment.createdAt), timeZone).time.slice(0, 2));
       hourlySales[hour].count += 1;
-      hourlySales[hour].amount += payment.amount;
+      hourlySales[hour].amount += keptCents(payment);
     }
 
     return {
       date: day,
       ownSalesOnly: !!scope,
       summary: {
-        totalSales: paidPayments.reduce((sum, p) => sum + p.amount, 0),
+        totalSales: paidPayments.reduce((sum, p) => sum + keptCents(p), 0),
         totalTransactions: paidPayments.length,
-        refundedAmount: refundedPayments.reduce((sum, p) => sum + p.amount, 0),
+        refundedAmount: refundedPayments.reduce((sum, p) => sum + refundedCents(p), 0),
         refundedCount: refundedPayments.length,
       },
       hourlySales,
       payments: paidPayments.map((p) => ({
         id: p.id,
-        amount: p.amount,
+        amount: keptCents(p),
+        ...(refundedCents(p) > 0 ? { refundedAmount: refundedCents(p) } : {}),
         method: p.method,
         client: p.client ? `${p.client.firstName} ${p.client.lastName}` : 'Clienta sin ficha',
         time: p.createdAt,
@@ -1737,4 +1880,41 @@ function adjustAppointmentLine(ticket: DiscountedTicket<PricedLine>, appointment
   line.netCents -= delta;
   ticket.discountCents += delta;
   ticket.totalCents -= delta;
+}
+
+/**
+ * A loyalty reward of `moneyCents` on a visit, in the visit's catalogue
+ * terms, for a salon whose prices are the base: the base cut whose invoice
+ * comes closest to the money (appointment-charge.ts visitDiscountInCatalogue),
+ * over the visit as it is after the till's own discount.
+ */
+function loyaltyInCatalogue(
+  apt: ChargeableApt,
+  fiscalSettings: Record<string, unknown>,
+  tillCents: number,
+  moneyCents: number,
+): number {
+  const catalogue = appointmentTotalCents(apt) - tillCents;
+  const visit = {
+    ...apt.visit,
+    price: catalogue / 100,
+    totalAmount: catalogue,
+    ...(tillCents > 0 ? { discount: { pos: { amountCents: tillCents } } } : {}),
+  };
+  return visitDiscountInCatalogue(visit, fiscalSettings, moneyCents).catalogueCents;
+}
+
+/**
+ * What was given back of a payment, cents: its refunds, or all of it when it
+ * was refunded before refunds were recorded one by one (no refund rows).
+ */
+function refundedCents(p: { amount: number; status: string; refunds?: Array<{ amount: number }> }): number {
+  const rows = p.refunds ?? [];
+  if (rows.length > 0) return rows.reduce((s, r) => s + r.amount, 0);
+  return p.status === 'refunded' ? p.amount : 0;
+}
+
+/** What the salon keeps of a paid payment: its amount less its partial refunds. */
+function keptCents(p: { amount: number; status: string; refunds?: Array<{ amount: number }> }): number {
+  return Math.max(0, p.amount - refundedCents(p));
 }

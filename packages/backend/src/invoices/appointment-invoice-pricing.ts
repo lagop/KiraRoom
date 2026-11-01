@@ -3,6 +3,7 @@ import { VisitRow, visitLines } from "../appointments/visit-totals";
 import { pricesIncludeTaxOf, salonTaxRate } from "./salon-tax-settings";
 import { allocateCents } from "../pos/pos-discounts";
 import { ServiceSnapshotColumns, bookedService } from "../appointments/appointment-snapshot";
+import { prorateCapped } from "../pos/prorate";
 
 export interface AppointmentToInvoice extends ServiceSnapshotColumns {
   /** Appointment.price: Decimal, in EUROS (not cents). */
@@ -61,6 +62,27 @@ export function tillDiscountCents(discount: unknown): number {
 }
 
 /**
+ * The cents the client's loyalty reward took off the visit at the till, in
+ * the visit's catalogue terms (`Appointment.discount.loyalty.catalogueCents`,
+ * pos.service.ts), else 0. Unlike a till discount it does not lower the
+ * visit's price (commissions stay on the price): it is paid with points, and
+ * its invoice shows it as a discount ("Descuento fidelidad").
+ */
+export function loyaltyDiscountCents(discount: unknown): number {
+  const loyalty = (discount as { loyalty?: { catalogueCents?: unknown } } | null | undefined)?.loyalty;
+  const cents = Number(loyalty?.catalogueCents);
+  return Number.isFinite(cents) && cents > 0 ? Math.round(cents) : 0;
+}
+
+/** The visit without its loyalty record: what it costs before the reward (appointment-charge.ts). */
+export function withoutLoyalty<V extends { discount?: unknown }>(visit: V): V {
+  const d = visit.discount;
+  if (!d || typeof d !== "object" || Array.isArray(d) || !("loyalty" in d)) return visit;
+  const { loyalty: _loyalty, ...rest } = d as Record<string, unknown>;
+  return { ...visit, discount: rest };
+}
+
+/**
  * The invoice lines for a completed visit: one per service and one per
  * add-on (with its quantity), from visit-totals.ts's visitLines, when they
  * add up to the visit's price -- the figure the client was charged
@@ -75,6 +97,12 @@ export function tillDiscountCents(discount: unknown): number {
  * invoice shows the price before it and the discount on each line
  * (`discountCents`, shared over the lines in proportion), so the lines
  * still come to what was charged and the tax is on the discounted amount.
+ *
+ * The loyalty reward used on the visit (loyaltyDiscountCents) is a discount
+ * on the invoice too (owner decision 2026-11-02), so the invoice comes to
+ * the money the client paid: shared over the lines in proportion to what
+ * is left of each (prorate.ts: whole cents, the rounding on the largest
+ * line), added to each line's discount and named on it (loyaltyDiscountCents).
  */
 export function appointmentInvoiceLines(
   appointment: VisitToInvoice,
@@ -82,6 +110,7 @@ export function appointmentInvoiceLines(
 ): InvoiceLineInput[] {
   const tax = { taxRate: salonTaxRate(fiscalSettings), taxIncluded: pricesIncludeTaxOf(fiscalSettings) };
   const off = tillDiscountCents(appointment.discount);
+  const loyalty = loyaltyDiscountCents(appointment.discount);
   const charged = Math.round(Number(appointment.price) * 100);
   const listed = charged + off;
   const lines = visitLines({
@@ -92,14 +121,23 @@ export function appointmentInvoiceLines(
   const sum = lines.reduce((total, l) => total + l.unitPriceCents * l.quantity, 0);
   if (lines.length > 1 && sum === listed) {
     const shares = allocateCents(off, lines.map((l) => l.unitPriceCents * l.quantity));
-    return lines.map((l, i) => ({ ...l, ...tax, ...(shares[i] > 0 ? { discountCents: shares[i] } : {}) }));
+    const left = lines.map((l, i) => l.unitPriceCents * l.quantity - shares[i]);
+    const rewards = prorateCapped(loyalty, left.map((cents) => ({ weight: cents, cap: cents })));
+    return lines.map((l, i) => ({
+      ...l,
+      ...tax,
+      ...(shares[i] + rewards[i] > 0 ? { discountCents: shares[i] + rewards[i] } : {}),
+      ...(rewards[i] > 0 ? { loyaltyDiscountCents: rewards[i] } : {}),
+    }));
   }
   const names = [...new Set(lines.map((l) => l.description))];
   return [
     {
       ...appointmentInvoiceLine(appointment, fiscalSettings),
       ...(names.length > 1 ? { description: names.join(" + ") } : {}),
-      ...(off > 0 ? { unitPriceCents: listed, discountCents: off } : {}),
+      ...(off > 0 ? { unitPriceCents: listed } : {}),
+      ...(off + Math.min(loyalty, charged) > 0 ? { discountCents: off + Math.min(loyalty, charged) } : {}),
+      ...(Math.min(loyalty, charged) > 0 ? { loyaltyDiscountCents: Math.min(loyalty, charged) } : {}),
     },
   ];
 }

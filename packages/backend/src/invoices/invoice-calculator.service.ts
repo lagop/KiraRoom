@@ -39,6 +39,13 @@ export interface InvoiceLineInput {
    * (InvoiceLine.rectifiesLineId), so what is left to credit of it is known.
    */
   rectifiesLineId?: string;
+  /**
+   * The part of `discountCents` that is the client's loyalty reward
+   * (pos.service.ts, appointment-invoice-pricing.ts), in the same terms. It
+   * is already inside discountCents: this only says which part it is, for
+   * the PDF ("Descuento fidelidad"). Never more than discountCents.
+   */
+  loyaltyDiscountCents?: number;
 }
 
 export interface ComputedInvoiceLine {
@@ -55,6 +62,8 @@ export interface ComputedInvoiceLine {
   taxIncluded: boolean;
   /** InvoiceLineInput.rectifiesLineId. */
   rectifiesLineId?: string;
+  /** InvoiceLineInput.loyaltyDiscountCents (0 when none). */
+  loyaltyDiscountCents?: number;
 }
 
 export interface TaxBreakdownEntry {
@@ -84,30 +93,7 @@ export class InvoiceCalculator {
       throw new Error("Invoice must have at least one line");
     }
 
-    const lines: ComputedInvoiceLine[] = input.map((l) => {
-      if (l.fixed) return fixedLine(l);
-      if ((l.discountCents ?? 0) > 0) return amountDiscountLine(l);
-      const discountPct = clampNumber(l.discountPct ?? 0, 0, 100);
-      if (l.taxIncluded) return taxIncludedLine(l, discountPct);
-      const discountedUnitCents = roundHalfEven(
-        l.unitPriceCents * (1 - discountPct / 100),
-      );
-      const lineBase = roundHalfEven(discountedUnitCents * l.quantity);
-      const taxCents = roundHalfEven(lineBase * (l.taxRate / 100));
-      const totalCents = lineBase + taxCents;
-      return {
-        description: l.description,
-        quantity: l.quantity,
-        unitPriceCents: l.unitPriceCents,
-        discountPct,
-        taxRate: l.taxRate,
-        taxCents,
-        totalCents,
-        productId: l.productId,
-        serviceId: l.serviceId,
-        taxIncluded: false,
-      };
-    });
+    const lines: ComputedInvoiceLine[] = input.map((l) => withLoyalty(l, lineOf(l)));
 
     const subtotalCents = lines.reduce((s, l) => s + l.totalCents - l.taxCents, 0);
     const taxBreakdown = aggregateTaxBreakdown(lines);
@@ -115,6 +101,38 @@ export class InvoiceCalculator {
 
     return { lines, subtotalCents, taxBreakdown, totalCents };
   }
+}
+
+/** The loyalty part of a line's discount, carried to the stored line (never more than the discount). */
+function withLoyalty(l: InvoiceLineInput, computed: ComputedInvoiceLine): ComputedInvoiceLine {
+  const loyalty = Math.round(Number(l.loyaltyDiscountCents ?? 0));
+  if (!(loyalty > 0) || l.fixed) return computed;
+  return { ...computed, loyaltyDiscountCents: Math.min(loyalty, Math.max(0, Math.round(l.discountCents ?? 0))) };
+}
+
+function lineOf(l: InvoiceLineInput): ComputedInvoiceLine {
+  if (l.fixed) return fixedLine(l);
+  if ((l.discountCents ?? 0) > 0) return amountDiscountLine(l);
+  const discountPct = clampNumber(l.discountPct ?? 0, 0, 100);
+  if (l.taxIncluded) return taxIncludedLine(l, discountPct);
+  const discountedUnitCents = roundHalfEven(
+    l.unitPriceCents * (1 - discountPct / 100),
+  );
+  const lineBase = roundHalfEven(discountedUnitCents * l.quantity);
+  const taxCents = roundHalfEven(lineBase * (l.taxRate / 100));
+  const totalCents = lineBase + taxCents;
+  return {
+    description: l.description,
+    quantity: l.quantity,
+    unitPriceCents: l.unitPriceCents,
+    discountPct,
+    taxRate: l.taxRate,
+    taxCents,
+    totalCents,
+    productId: l.productId,
+    serviceId: l.serviceId,
+    taxIncluded: false,
+  };
 }
 
 /**

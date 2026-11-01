@@ -1,8 +1,8 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
-import { Decimal } from "@prisma/client/runtime/library";
 import { PayCommissionDto } from "./dto/commission.dto";
 import { effectiveCommissionRate, numberOrNull } from "./commission-rate";
+import { appointmentKeptShares, roundCommission, saleLineAfterRefunds } from "./commission-refunds";
 
 export interface CalculateCommissionDto {
   appointmentId: string;
@@ -38,6 +38,9 @@ export interface CommissionSummary {
  *   - services sold at the till without an appointment: the sale line names
  *     the professional who did it (pos.service.ts) and keeps the rate and
  *     amount worked out when it was sold.
+ * What was refunded no longer earns a commission (commission-refunds.ts): a
+ * sale line counts what is left of it after its refunds, an appointment the
+ * share of its payments the salon kept.
  */
 type SaleLineRow = {
   id: string;
@@ -48,7 +51,22 @@ type SaleLineRow = {
   commissionAmount: unknown;
   commissionPaid: boolean;
   professionalId: string | null;
+  totalCents?: number;
+  refundedCents?: number | null;
 };
+
+/** A line's commission and base after its refunds (commission-refunds.ts). */
+function lineFigures(l: SaleLineRow, defaultRate: number) {
+  const rate = effectiveCommissionRate(l.commissionRate, defaultRate);
+  const commission = numberOrNull(l.commissionAmount) ?? (l.commissionBaseCents * rate) / 100;
+  const after = saleLineAfterRefunds({
+    commissionBaseCents: l.commissionBaseCents,
+    commissionAmount: commission,
+    totalCents: Number(l.totalCents ?? 0),
+    refundedCents: l.refundedCents ?? 0,
+  });
+  return { rate, amount: after.baseCents, commission: after.commission, kept: after.kept };
+}
 
 @Injectable()
 export class CommissionsService {
@@ -62,21 +80,21 @@ export class CommissionsService {
   }
 
   private saleEntries(lines: SaleLineRow[], defaultRate: number): CommissionSummary["appointments"] {
-    return lines.map((l) => {
-      const rate = effectiveCommissionRate(l.commissionRate, defaultRate);
-      const amount = l.commissionBaseCents;
-      return {
+    // A line given back in full earns nothing: it is not listed.
+    return lines
+      .map((l) => ({ l, f: lineFigures(l, defaultRate) }))
+      .filter(({ f }) => f.kept > 0)
+      .map(({ l, f }) => ({
         id: l.id,
         date: l.createdAt,
         clientName: "Venta en caja",
         serviceName: l.description,
-        amount,
-        commissionRate: rate,
-        commissionAmount: numberOrNull(l.commissionAmount) ?? (amount * rate) / 100,
+        amount: f.amount,
+        commissionRate: f.rate,
+        commissionAmount: f.commission,
         paid: l.commissionPaid,
         source: "sale" as const,
-      };
-    });
+      }));
   }
 
   /**
@@ -211,15 +229,19 @@ export class CommissionsService {
     });
 
     const defaultRate = effectiveCommissionRate(professional.commissionRate);
+    // Partly refunded visits count the share the salon kept (commission-refunds.ts).
+    const kept = await appointmentKeptShares(this.prisma, tenantId, appointments.map((a) => a.id));
 
     let pendingCommission = 0;
     let paidCommission = 0;
 
     const appointmentDetails = appointments.map((apt) => {
       const rate = effectiveCommissionRate(apt.commissionRate, defaultRate);
-      const amount = Number(apt.totalAmount);
-      const commissionAmount =
-        numberOrNull(apt.commissionAmount) ?? (amount * rate) / 100;
+      const share = kept.get(apt.id) ?? 1;
+      const amount = Math.round(Number(apt.totalAmount) * share);
+      const commissionAmount = roundCommission(
+        (numberOrNull(apt.commissionAmount) ?? (Number(apt.totalAmount) * rate) / 100) * share,
+      );
 
       if (apt.commissionPaid) {
         paidCommission += commissionAmount;
@@ -296,9 +318,11 @@ export class CommissionsService {
       where: whereClause,
     });
 
+    // What is paid is the commission after refunds, as the summary shows it.
+    const kept = await appointmentKeptShares(this.prisma, tenantId, appointments.map((a) => a.id));
     let totalAmount = 0;
     for (const apt of appointments) {
-      totalAmount += Number(apt.commissionAmount || 0);
+      totalAmount += roundCommission(Number(apt.commissionAmount || 0) * (kept.get(apt.id) ?? 1));
     }
 
     const result = await this.prisma.appointment.updateMany({
@@ -319,7 +343,15 @@ export class CommissionsService {
         lineWhere.createdAt = { ...(dto.startDate ? { gte: dto.startDate } : {}), ...(dto.endDate ? { lte: dto.endDate } : {}) };
       }
       const lines: SaleLineRow[] = await lineModel.findMany({ where: lineWhere });
-      for (const l of lines) totalAmount += numberOrNull(l.commissionAmount) ?? 0;
+      for (const l of lines) {
+        const c = numberOrNull(l.commissionAmount) ?? 0;
+        totalAmount += saleLineAfterRefunds({
+          commissionBaseCents: l.commissionBaseCents,
+          commissionAmount: c,
+          totalCents: Number(l.totalCents ?? 0),
+          refundedCents: l.refundedCents ?? 0,
+        }).commission;
+      }
       const paidLines = await lineModel.updateMany({
         where: lineWhere,
         data: { commissionPaid: true, commissionDate: new Date() },
@@ -388,12 +420,15 @@ export class CommissionsService {
 
         let pendingCommission = 0;
         let paidCommission = 0;
+        const kept = await appointmentKeptShares(this.prisma, tenantId, appointments.map((a) => a.id));
 
         const appointmentDetails = appointments.map((apt) => {
           const rate = effectiveCommissionRate(apt.commissionRate, defaultRate);
-          const amount = Number(apt.totalAmount);
-          const commissionAmount =
-            numberOrNull(apt.commissionAmount) ?? (amount * rate) / 100;
+          const share = kept.get(apt.id) ?? 1;
+          const amount = Math.round(Number(apt.totalAmount) * share);
+          const commissionAmount = roundCommission(
+            (numberOrNull(apt.commissionAmount) ?? (Number(apt.totalAmount) * rate) / 100) * share,
+          );
 
           if (apt.commissionPaid) {
             paidCommission += commissionAmount;
@@ -526,14 +561,17 @@ export class CommissionsService {
       });
     }
 
-    // Update with actual appointment data
+    // Update with actual appointment data: what was refunded of a visit
+    // counts neither as a sale nor for its commission (commission-refunds.ts).
+    const kept = await appointmentKeptShares(this.prisma, tenantId, appointments.map((a) => a.id));
     for (const apt of appointments) {
       const profId = apt.professionalId;
       const existing = professionalMap.get(profId);
+      const share = kept.get(apt.id) ?? 1;
 
       if (existing) {
-        existing.totalSales += Number(apt.totalAmount);
-        existing.commission += Number(apt.commissionAmount || 0);
+        existing.totalSales += Math.round(Number(apt.totalAmount) * share);
+        existing.commission += roundCommission(Number(apt.commissionAmount || 0) * share);
         professionalMap.set(profId, existing);
       }
     }
@@ -542,8 +580,14 @@ export class CommissionsService {
     for (const line of await this.saleLines({ tenantId, createdAt: { gte: startDate, lte: endDate } })) {
       const existing = line.professionalId ? professionalMap.get(line.professionalId) : undefined;
       if (existing) {
-        existing.totalSales += line.commissionBaseCents;
-        existing.commission += numberOrNull(line.commissionAmount) ?? 0;
+        const after = saleLineAfterRefunds({
+          commissionBaseCents: line.commissionBaseCents,
+          commissionAmount: numberOrNull(line.commissionAmount) ?? 0,
+          totalCents: Number(line.totalCents ?? 0),
+          refundedCents: line.refundedCents ?? 0,
+        });
+        existing.totalSales += after.baseCents;
+        existing.commission += after.commission;
       }
     }
 
