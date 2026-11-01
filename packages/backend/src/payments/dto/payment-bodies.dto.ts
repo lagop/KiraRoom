@@ -72,9 +72,15 @@ export class WalletAmountDto {
   description?: string;
 }
 
-/** How a client can pay a wallet top-up: money she hands over, not a wallet, gift card or points. */
+/**
+ * How money goes into a wallet (a top-up) or comes out of it to the client
+ * (a withdrawal): real money, not another wallet, a gift card or points.
+ */
 export const WALLET_TOP_UP_METHODS = ["cash", "card", "bizum", "bank_transfer"] as const;
 export type WalletTopUpMethod = (typeof WALLET_TOP_UP_METHODS)[number];
+/** The same tenders, for money handed back from the wallet. */
+export const WALLET_TENDER_METHODS = WALLET_TOP_UP_METHODS;
+export type WalletTenderMethod = WalletTopUpMethod;
 
 /**
  * POST /payments/wallet/:clientId/deposit: a top-up, and how the client
@@ -84,6 +90,17 @@ export type WalletTopUpMethod = (typeof WALLET_TOP_UP_METHODS)[number];
 export class WalletDepositDto extends WalletAmountDto {
   @IsIn(WALLET_TOP_UP_METHODS, { message: "Indica cómo paga la recarga: efectivo, tarjeta, Bizum o transferencia." })
   method!: WalletTopUpMethod;
+}
+
+/**
+ * POST /payments/wallet/:clientId/withdraw: money handed back to the client
+ * from her wallet, and how (WalletService.withdraw). Cash comes out of the
+ * drawer, so it needs one open; the rest is linked to the open drawer, if
+ * any, for its report.
+ */
+export class WalletWithdrawDto extends WalletAmountDto {
+  @IsIn(WALLET_TENDER_METHODS, { message: "Indica cómo se le devuelve el dinero: efectivo, tarjeta, Bizum o transferencia." })
+  method!: WalletTenderMethod;
 }
 
 /**

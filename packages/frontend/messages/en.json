@@ -2129,6 +2129,10 @@
     "top_up_method_required": "Choose how the top-up is paid.",
     "top_up_drawer_closed": "The till is closed: open it at the till (Open till) to top up in cash, or take the top-up by card, Bizum or transfer.",
     "top_up_cash_hint": "The cash goes into the open till and counts in its close.",
+    "withdraw_method": "How is the money handed back?",
+    "withdraw_method_required": "Choose how the money is handed back.",
+    "withdraw_drawer_closed": "The till is closed: open it at the till (Open till) to hand back cash, or hand it back by card, Bizum or transfer.",
+    "withdraw_cash_hint": "The cash comes out of the open till and is taken off its close.",
     "manage_in_loyalty": "Managed in Loyalty",
     "not_in_loyalty": "Not in the programme",
     "cancel_subscription_description": "Your salon switches to read-only mode for 30 days.",
@@ -2331,7 +2335,10 @@
       "your_movements": "Your cash movements",
       "wallet_top_ups_cash": "Wallet top-ups in cash",
       "of_which_top_ups": "of which wallet top-ups",
-      "wallet_top_ups": "Wallet top-ups"
+      "wallet_top_ups": "Wallet top-ups",
+      "wallet_withdrawals_cash": "Wallet withdrawals in cash",
+      "wallet_withdrawn": "handed back from wallets",
+      "wallet_withdrawals": "Wallet withdrawals"
     }
   },
   "pos_today": "Pos Today",

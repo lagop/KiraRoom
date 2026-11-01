@@ -102,7 +102,19 @@ console.log("wallet top-ups: how she pays, and cash needs the drawer");
   check("cash with the drawer open goes", topUpProblem("cash", true) === null);
   check("drawer state unknown: the server decides", topUpProblem("cash", null) === null);
   for (const m of ["card", "bizum", "bank_transfer"]) check(`${m} goes with the drawer closed`, topUpProblem(m, false) === null);
-  for (const k of ["top_up_method_required", "top_up_drawer_closed", "top_up_method"]) {
+  check("withdraw: a method is required", topUpProblem(null, true, "withdraw") === "payments.withdraw_method_required");
+  check("withdraw: cash with the drawer closed is refused", topUpProblem("cash", false, "withdraw") === "payments.withdraw_drawer_closed");
+  check("withdraw: cash with the drawer open goes", topUpProblem("cash", true, "withdraw") === null);
+  check("withdraw: Bizum with the drawer closed goes", topUpProblem("bizum", false, "withdraw") === null);
+  for (const k of [
+    "top_up_method_required",
+    "top_up_drawer_closed",
+    "top_up_method",
+    "withdraw_method",
+    "withdraw_method_required",
+    "withdraw_drawer_closed",
+    "withdraw_cash_hint",
+  ]) {
     check(`payments.${k} in es and en`, typeof (es as any).payments[k] === "string" && typeof (en as any).payments[k] === "string");
   }
 }
@@ -113,7 +125,7 @@ console.log("texts: Spanish first, English too");
   const esKeys = keys(es);
   check("es has the drawer's texts", esKeys.length > 20, esKeys.length);
   check("en has the same keys", same(esKeys, keys(en)), esKeys.filter((k) => !keys(en).includes(k)));
-  for (const k of ["err_drawer_closed", "err_amount", "err_reason", "err_out_too_much", "blind_hint", "close_intro_blind", "confirm_desc_blind", "closed_toast_blind", "report_blind_title", "your_movements", "wallet_top_ups_cash", "of_which_top_ups"]) {
+  for (const k of ["err_drawer_closed", "err_amount", "err_reason", "err_out_too_much", "blind_hint", "close_intro_blind", "confirm_desc_blind", "closed_toast_blind", "report_blind_title", "your_movements", "wallet_top_ups_cash", "of_which_top_ups", "wallet_withdrawals_cash", "wallet_withdrawn", "wallet_withdrawals"]) {
     check(`${k} is there`, typeof (es as any).pos.cash_session[k] === "string");
   }
 }

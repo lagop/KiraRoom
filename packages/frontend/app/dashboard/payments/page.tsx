@@ -602,13 +602,12 @@ function WalletPanel({ manager }: { manager: boolean }) {
     setNote("");
     setMovementError(null);
     setTopUpMethod(null);
-    if (kind === "deposit") {
-      setDrawerOpen(null);
-      apiClient
-        .getCurrentCashSession()
-        .then((c) => setDrawerOpen(!!c.session))
-        .catch(() => setDrawerOpen(null)); // unknown: the server decides
-    }
+    // Cash in or out goes through the drawer: whether it is open, said before asking.
+    setDrawerOpen(null);
+    apiClient
+      .getCurrentCashSession()
+      .then((c) => setDrawerOpen(!!c.session))
+      .catch(() => setDrawerOpen(null)); // unknown: the server decides
   };
 
   const saveMovement = async () => {
@@ -622,7 +621,7 @@ function WalletPanel({ manager }: { manager: boolean }) {
       setMovementError(`El saldo es ${formatEuros(wallet?.balance ?? 0)}: no se puede retirar más.`);
       return;
     }
-    const tenderIssue = movement === "deposit" ? topUpProblem(topUpMethod, drawerOpen) : null;
+    const tenderIssue = topUpProblem(topUpMethod, drawerOpen, movement);
     if (tenderIssue) {
       setMovementError(t(tenderIssue));
       return;
@@ -633,14 +632,14 @@ function WalletPanel({ manager }: { manager: boolean }) {
       if (movement === "deposit") {
         await apiClient.depositToWallet(selected.id, cents, topUpMethod!, note.trim() || undefined);
       } else {
-        await apiClient.withdrawFromWallet(selected.id, cents, note.trim() || undefined);
+        await apiClient.withdrawFromWallet(selected.id, cents, topUpMethod!, note.trim() || undefined);
       }
       toast({
         title: movement === "deposit" ? "Ingreso registrado" : "Retirada registrada",
         description:
           movement === "deposit"
             ? `${formatEuros(cents)} ingresados en la cartera (${methodLabel(topUpMethod!).toLowerCase()}).`
-            : `${formatEuros(cents)} retirados de la cartera.`,
+            : `${formatEuros(cents)} retirados de la cartera (${methodLabel(topUpMethod!).toLowerCase()}).`,
       });
       setMovement(null);
       await loadWallet(selected);
@@ -758,7 +757,7 @@ function WalletPanel({ manager }: { manager: boolean }) {
                       <li key={tx.id} className="flex justify-between gap-2">
                         <span className="truncate text-gray-600">
                           {new Date(tx.createdAt).toLocaleDateString("es-ES")} · {tx.description || (tx.type === "credit" ? "Ingreso" : "Cobro")}
-                          {tx.method && !(tx.description ?? "").startsWith("Recarga") ? ` · ${methodLabel(tx.method)}` : ""}
+                          {tx.method && !/^(Recarga|Retirada)/.test(tx.description ?? "") ? ` · ${methodLabel(tx.method)}` : ""}
                         </span>
                         <span className={tx.type === "credit" ? "text-green-700" : "text-red-700"}>
                           {tx.type === "credit" ? "+" : "−"}
@@ -794,9 +793,11 @@ function WalletPanel({ manager }: { manager: boolean }) {
                 className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </label>
-            {movement === "deposit" && (
+            {movement && (
               <fieldset>
-                <legend className="mb-1 block text-xs font-medium text-gray-700">{t("payments.top_up_method")}</legend>
+                <legend className="mb-1 block text-xs font-medium text-gray-700">
+                  {movement === "deposit" ? t("payments.top_up_method") : t("payments.withdraw_method")}
+                </legend>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" role="radiogroup">
                   {WALLET_TOP_UP_METHODS.map((m) => (
                     <button
@@ -818,7 +819,13 @@ function WalletPanel({ manager }: { manager: boolean }) {
                 </div>
                 {topUpMethod === "cash" && (
                   <p className={`mt-1 text-xs ${drawerOpen === false ? "text-red-700" : "text-gray-500"}`}>
-                    {drawerOpen === false ? t("payments.top_up_drawer_closed") : t("payments.top_up_cash_hint")}
+                    {movement === "deposit"
+                      ? drawerOpen === false
+                        ? t("payments.top_up_drawer_closed")
+                        : t("payments.top_up_cash_hint")
+                      : drawerOpen === false
+                        ? t("payments.withdraw_drawer_closed")
+                        : t("payments.withdraw_cash_hint")}
                   </p>
                 )}
               </fieldset>

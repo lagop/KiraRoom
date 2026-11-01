@@ -1370,14 +1370,15 @@ model WalletTransaction {
   /// Balance after
   balanceAfter Int
 
-  /// A top-up (money the client hands over to load her wallet): how she paid it. Null for
-  /// other credits (a refund back to the wallet) and for debits. Not a Payment: a top-up is
-  /// a prepayment, recognised as revenue when the wallet is spent (a wallet payment).
+  /// A top-up (money the client hands over to load her wallet) or a withdrawal (money handed
+  /// back to her): how. Null for other movements (a refund back to the wallet, a wallet
+  /// payment at the till). Not a Payment: the wallet is a prepayment, recognised as revenue
+  /// when it is spent (a wallet payment).
   method        PaymentMethod?
-  /// The cash-drawer session open when the top-up was taken: a cash one counts in that drawer.
+  /// The cash-drawer session open when it was taken or handed back: a cash one counts in that drawer.
   cashSessionId String?
   cashSession   CashSession?   @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
-  /// The team member who took the top-up. Not a relation: the record outlives the account.
+  /// The team member who took the top-up or handed back the withdrawal. Not a relation: the record outlives the account.
   recordedById  String?
 
   @@index([walletId])

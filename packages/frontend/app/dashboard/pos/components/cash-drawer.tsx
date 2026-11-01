@@ -393,6 +393,11 @@ export default function CashDrawer({ refreshKey, onStateChange }: CashDrawerProp
                                 {t("pos.cash_session.of_which_top_ups")}: {euros(m.topUpCents)}
                               </div>
                             )}
+                            {m.walletWithdrawnCents > 0 && (
+                              <div className="text-xs text-gray-500">
+                                {t("pos.cash_session.wallet_withdrawn")}: −{euros(m.walletWithdrawnCents)}
+                              </div>
+                            )}
                           </td>
                           <td className="py-1 text-right">{m.count}</td>
                           <td className="py-1 text-right">{euros(m.amountCents)}</td>
@@ -417,6 +422,12 @@ export default function CashDrawer({ refreshKey, onStateChange }: CashDrawerProp
                     <div className="flex justify-between">
                       <span>{t("pos.cash_session.wallet_top_ups_cash")}</span>
                       <span>+{euros(full.figures.cash.walletTopUpsCents)}</span>
+                    </div>
+                  )}
+                  {full.figures.cash.walletWithdrawalsCents > 0 && (
+                    <div className="flex justify-between">
+                      <span>{t("pos.cash_session.wallet_withdrawals_cash")}</span>
+                      <span>−{euros(full.figures.cash.walletWithdrawalsCents)}</span>
                     </div>
                   )}
                   {full.figures.cash.refundsCents > 0 && (

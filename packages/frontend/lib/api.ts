@@ -1123,7 +1123,7 @@ export interface SubscriptionUsage {
   };
 }
 
-/** How a client can pay a wallet top-up: money she hands over. */
+/** How money goes into a wallet (top-up) or is handed back from it (withdrawal): real money. */
 export type WalletTopUpMethod = "cash" | "card" | "bizum" | "bank_transfer";
 
 export interface ClientWallet {
@@ -1780,7 +1780,7 @@ export interface ApiClientInterface {
   // Client Wallet
   getClientWallet(clientId: string): Promise<ClientWallet>;
   depositToWallet(clientId: string, amountCents: number, method: WalletTopUpMethod, description?: string): Promise<unknown>;
-  withdrawFromWallet(clientId: string, amountCents: number, description?: string): Promise<unknown>;
+  withdrawFromWallet(clientId: string, amountCents: number, method: WalletTopUpMethod, description?: string): Promise<unknown>;
 
   // POS
   getPosServices(): Promise<any[]>;
@@ -3944,11 +3944,14 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  /** Money out of a client's wallet (owner/admin), never past its balance. */
-  async withdrawFromWallet(clientId: string, amountCents: number, description?: string): Promise<unknown> {
+  /**
+   * Money handed back from a client's wallet (owner/admin) and how, never
+   * past its balance. Cash needs the cash drawer open (409 CASH_SESSION_CLOSED).
+   */
+  async withdrawFromWallet(clientId: string, amountCents: number, method: WalletTopUpMethod, description?: string): Promise<unknown> {
     return this.request(`/payments/wallet/${clientId}/withdraw`, {
       method: "POST",
-      body: JSON.stringify({ amount: amountCents, ...(description ? { description } : {}) }),
+      body: JSON.stringify({ amount: amountCents, method, ...(description ? { description } : {}) }),
     });
   }
 
@@ -5978,8 +5981,19 @@ export interface CashMovementRow {
 
 /** What a session took, by method and in the drawer (cents): the owner's and managers' view only. */
 export interface CashSessionFigures {
-  /** amountCents includes wallet top-ups taken with the method (topUpCents of it). */
-  byMethod: Array<{ method: string; count: number; amountCents: number; topUpCents: number; refundedCents: number; netCents: number }>;
+  /**
+   * amountCents includes wallet top-ups taken with the method (topUpCents of
+   * it); netCents is it minus refunds and wallet withdrawals handed back with it.
+   */
+  byMethod: Array<{
+    method: string;
+    count: number;
+    amountCents: number;
+    topUpCents: number;
+    refundedCents: number;
+    walletWithdrawnCents: number;
+    netCents: number;
+  }>;
   cash: {
     openingFloatCents: number;
     salesCents: number;
@@ -5988,6 +6002,8 @@ export interface CashSessionFigures {
     refundsCents: number;
     /** Cash handed over to load clients' wallets: in the drawer, not a sale. */
     walletTopUpsCents: number;
+    /** Cash handed back from clients' wallets: out of the drawer. */
+    walletWithdrawalsCents: number;
     movementsInCents: number;
     movementsOutCents: number;
     expectedCents: number;
@@ -6003,6 +6019,7 @@ export interface CashSessionFigures {
   };
   refunds: { count: number; totalCents: number };
   walletTopUps: { count: number; totalCents: number };
+  walletWithdrawals: { count: number; totalCents: number };
 }
 
 /** What every view of a session has. */

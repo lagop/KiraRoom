@@ -193,6 +193,7 @@ function FullReportBody({ session }: { session: CashSessionFullView }) {
           {row(`${methodLabel(m.method)} (${m.count})`, euros(m.amountCents))}
           {m.topUpCents > 0 && row(`  ${t("pos.cash_session.of_which_top_ups")}`, euros(m.topUpCents))}
           {m.refundedCents > 0 && row(`  ${t("pos.cash_session.refunded")}`, `−${euros(m.refundedCents)}`)}
+          {m.walletWithdrawnCents > 0 && row(`  ${t("pos.cash_session.wallet_withdrawn")}`, `−${euros(m.walletWithdrawnCents)}`)}
         </div>
       ))}
 
@@ -204,6 +205,8 @@ function FullReportBody({ session }: { session: CashSessionFullView }) {
         <div className="text-xs">{row(`  ${t("pos.cash_session.change_given")}`, euros(f.cash.changeGivenCents))}</div>
       )}
       {f.cash.walletTopUpsCents > 0 && row(t("pos.cash_session.wallet_top_ups_cash"), `+${euros(f.cash.walletTopUpsCents)}`)}
+      {f.cash.walletWithdrawalsCents > 0 &&
+        row(t("pos.cash_session.wallet_withdrawals_cash"), `−${euros(f.cash.walletWithdrawalsCents)}`)}
       {f.cash.refundsCents > 0 && row(t("pos.cash_session.cash_refunds"), `−${euros(f.cash.refundsCents)}`)}
       {f.cash.movementsInCents > 0 && row(t("pos.cash_session.movements_in"), `+${euros(f.cash.movementsInCents)}`)}
       {f.cash.movementsOutCents > 0 && row(t("pos.cash_session.movements_out"), `−${euros(f.cash.movementsOutCents)}`)}
@@ -228,6 +231,11 @@ function FullReportBody({ session }: { session: CashSessionFullView }) {
       {f.refunds.count > 0 && row(`${t("pos.cash_session.refunds")} (${f.refunds.count})`, `−${euros(f.refunds.totalCents)}`)}
       {f.walletTopUps.count > 0 &&
         row(`${t("pos.cash_session.wallet_top_ups")} (${f.walletTopUps.count})`, euros(f.walletTopUps.totalCents))}
+      {f.walletWithdrawals.count > 0 &&
+        row(
+          `${t("pos.cash_session.wallet_withdrawals")} (${f.walletWithdrawals.count})`,
+          `−${euros(f.walletWithdrawals.totalCents)}`,
+        )}
 
       <div className="my-2 border-t border-dashed" />
       {movements(t("pos.cash_session.movements"))}

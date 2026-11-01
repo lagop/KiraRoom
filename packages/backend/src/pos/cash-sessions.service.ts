@@ -290,12 +290,15 @@ export class CashSessionsService {
       where: { tenantId, sessionId },
       select: { type: true, amountCents: true },
     });
-    // Wallet top-ups taken while it was open (WalletService.topUp): only
-    // those with a tender; a refund back to the wallet moves no money here.
-    const topUps = await db.walletTransaction.findMany({
-      where: { cashSessionId: sessionId, type: 'credit', method: { not: null }, wallet: { tenantId } },
-      select: { method: true, amount: true },
+    // Wallet top-ups and withdrawals taken while it was open
+    // (WalletService.topUp / withdraw): only those with a tender; a refund
+    // back to the wallet or a wallet payment at the till moves no money here.
+    const walletMoves = await db.walletTransaction.findMany({
+      where: { cashSessionId: sessionId, method: { not: null }, wallet: { tenantId } },
+      select: { type: true, method: true, amount: true },
     });
+    const topUps = walletMoves.filter((w: any) => w.type === 'credit');
+    const withdrawals = walletMoves.filter((w: any) => w.type === 'debit');
     return sessionFigures({
       openingFloatCents: session.openingFloatCents,
       payments: payments.map((p: any) => ({ method: String(p.method), amount: p.amount })),
@@ -304,6 +307,7 @@ export class CashSessionsService {
       taxCents: tax?._sum?.taxCents ?? 0,
       movements: movements.map((m: any) => ({ type: m.type, amountCents: m.amountCents })),
       walletTopUps: topUps.map((t: any) => ({ method: String(t.method), amount: t.amount })),
+      walletWithdrawals: withdrawals.map((w: any) => ({ method: String(w.method), amount: w.amount })),
     });
   }
 

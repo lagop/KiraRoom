@@ -197,30 +197,44 @@ describe("the cash drawer (L2, real database)", () => {
     expect(session).not.toHaveProperty("expectedCashCents");
     await wallets.topUp(tenantId, clientId, 3000, "cash", owner, "Bono de 30 €");
     await wallets.topUp(tenantId, clientId, 2500, "bizum", owner);
+    // Handed back from the wallet: 5 € in cash (out of the drawer), 3 € by Bizum.
+    await wallets.withdraw(tenantId, clientId, 500, "cash", owner);
+    await wallets.withdraw(tenantId, clientId, 300, "bizum", owner, "Devuelve el bono");
     await sell([{ method: "cash", amount: 4000 }]);
     await drawer.addMovement(tenantId, session.id, staff, { type: "out", amountCents: 700, reason: "Mensajero" });
 
     // Staff close blind: what they counted, their movement, no figures.
-    // 50 float + 30 top-up + 40 sale - 7 out = 113 expected; 112 counted.
-    const blind = (await drawer.close(tenantId, session.id, staff, { countedCashCents: 11_200 })) as CashSessionBlindView;
-    expect(blind).toMatchObject({ blind: true, status: "closed", countedCashCents: 11_200, closedBy: { id: staff.id } });
+    // 50 float + 30 top-up - 5 withdrawal + 40 sale - 7 out = 108 expected; 107 counted.
+    const blind = (await drawer.close(tenantId, session.id, staff, { countedCashCents: 10_700 })) as CashSessionBlindView;
+    expect(blind).toMatchObject({ blind: true, status: "closed", countedCashCents: 10_700, closedBy: { id: staff.id } });
     for (const key of ["expectedCashCents", "discrepancyCents", "figures"]) expect(blind).not.toHaveProperty(key);
     expect(blind.movements.map((m) => m.amountCents)).toEqual([700]);
-    expect(await db.cashSession.findUnique({ where: { id: session.id } })).toMatchObject({ expectedCashCents: 11_300, discrepancyCents: -100 });
+    expect(await db.cashSession.findUnique({ where: { id: session.id } })).toMatchObject({ expectedCashCents: 10_800, discrepancyCents: -100 });
     // ... and the owner sees it all, the top-ups apart from the sales.
     const full = (await drawer.report(tenantId, session.id, owner)) as CashSessionFullView;
-    expect(full.figures.cash).toMatchObject({ walletTopUpsCents: 3000, salesCents: 4000, expectedCents: 11_300 });
-    expect(full.figures.byMethod.map((m) => [m.method, m.amountCents, m.topUpCents])).toEqual([
-      ["cash", 7000, 3000],
-      ["bizum", 2500, 2500],
+    expect(full.figures.cash).toMatchObject({ walletTopUpsCents: 3000, walletWithdrawalsCents: 500, salesCents: 4000, expectedCents: 10_800 });
+    expect(full.figures.byMethod.map((m) => [m.method, m.amountCents, m.topUpCents, m.walletWithdrawnCents])).toEqual([
+      ["cash", 7000, 3000, 500],
+      ["bizum", 2500, 2500, 300],
     ]);
     expect(full.figures.walletTopUps).toEqual({ count: 2, totalCents: 5500 });
+    expect(full.figures.walletWithdrawals).toEqual({ count: 2, totalCents: 800 });
     expect(full.figures.sales).toMatchObject({ count: 1, grossCents: 4000 });
     // The wallet holds it all; no payment was written for a top-up (it is not revenue yet).
-    expect((await db.clientWallet.findFirst({ where: { tenantId, clientId } })).balance).toBe(6500);
+    expect((await db.clientWallet.findFirst({ where: { tenantId, clientId } })).balance).toBe(5700);
+    const out = await db.walletTransaction.findMany({ where: { wallet: { tenantId }, type: "debit" }, orderBy: { createdAt: "asc" } });
+    expect(out.map((w: any) => [w.method, w.amount, w.cashSessionId, w.recordedById, w.description])).toEqual([
+      ["cash", 500, session.id, owner.id, "Retirada en efectivo"],
+      ["bizum", 300, session.id, owner.id, "Devuelve el bono"],
+    ]);
+    // A cash withdrawal with the drawer closed (it is now): the till's 409, the balance untouched.
+    const shut = await wallets.withdraw(tenantId, clientId, 100, "cash", owner).catch((e) => e);
+    expect(shut.getResponse?.()).toMatchObject({ code: "CASH_SESSION_CLOSED" });
+    expect((await db.clientWallet.findFirst({ where: { tenantId, clientId } })).balance).toBe(5700);
     expect(await db.payment.count({ where: { tenantId, clientId } })).toBe(0);
     const actions = (await db.auditLog.findMany({ where: { tenantId, action: "payments.wallet.top_up" } })).length;
     expect(actions).toBe(3);
+    expect(await db.auditLog.count({ where: { tenantId, action: "payments.wallet.withdrawal" } })).toBe(2);
   }, 120_000);
 
   it("closing while cash sales are being charged: every recorded cash sale is in the count", async () => {

@@ -192,12 +192,38 @@ describe("wallet top-ups", () => {
     const f = sessionFigures(base({ payments: [{ method: "card", amount: 1000 }] }));
     expect(f.cash.walletTopUpsCents).toBe(0);
     expect(f.walletTopUps).toEqual({ count: 0, totalCents: 0 });
-    expect(f.byMethod[0]).toMatchObject({ topUpCents: 0 });
+    expect(f.walletWithdrawals).toEqual({ count: 0, totalCents: 0 });
+    expect(f.cash.walletWithdrawalsCents).toBe(0);
+    expect(f.byMethod[0]).toMatchObject({ topUpCents: 0, walletWithdrawnCents: 0, netCents: 1000 });
   });
 
-  it("expectedCashCents counts cash top-ups in", () => {
+  it("withdrawals: cash comes out of the drawer, card and Bizum show by method as handed back", () => {
+    const f = sessionFigures(
+      base({
+        payments: [{ method: "card", amount: 4000 }],
+        walletTopUps: [{ method: "cash", amount: 5000 }],
+        walletWithdrawals: [
+          { method: "cash", amount: 2000 },
+          { method: "card", amount: 1500 },
+          { method: "bizum", amount: 700 },
+        ],
+      }),
+    );
+    // 100 float + 50 top-up - 20 handed back in cash.
+    expect(f.cash).toMatchObject({ walletTopUpsCents: 5000, walletWithdrawalsCents: 2000, expectedCents: 13_000 });
+    expect(f.byMethod.map((m) => [m.method, m.amountCents, m.walletWithdrawnCents, m.netCents])).toEqual([
+      ["cash", 5000, 2000, 3000],
+      ["card", 4000, 1500, 2500],
+      ["bizum", 0, 700, -700],
+    ]);
+    expect(f.walletWithdrawals).toEqual({ count: 3, totalCents: 4200 });
+    expect(f.refunds).toEqual({ count: 0, totalCents: 0 });
+  });
+
+  it("expectedCashCents counts cash top-ups in and withdrawals out", () => {
     const input = { openingFloatCents: 1000, cashSalesCents: 500, cashRefundsCents: 200, movementsInCents: 0, movementsOutCents: 100 };
     expect(expectedCashCents(input)).toBe(1200);
     expect(expectedCashCents({ ...input, cashWalletTopUpsCents: 2500 })).toBe(3700);
+    expect(expectedCashCents({ ...input, cashWalletTopUpsCents: 2500, cashWalletWithdrawalsCents: 1000 })).toBe(2700);
   });
 });

@@ -1,9 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma, type UserRole } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AuditLogService } from '../../saas/audit-log.service';
 import { drawerClosed, openCashSessionId } from '../../pos/cash-session-lock';
-import type { WalletTopUpMethod } from '../dto/payment-bodies.dto';
+import type { WalletTenderMethod, WalletTopUpMethod } from '../dto/payment-bodies.dto';
 
 /** The part of Prisma a wallet movement needs: the service or a transaction. */
 type WalletDb = Pick<Prisma.TransactionClient, 'clientWallet' | 'walletTransaction'>;
@@ -19,9 +19,17 @@ const TOP_UP_LABEL: Record<WalletTopUpMethod, string> = {
   bank_transfer: 'Recarga por transferencia',
 };
 
-/** How a top-up was paid, kept on its wallet movement. */
+/** What a withdrawal says in the wallet history when it has no note. */
+const WITHDRAWAL_LABEL: Record<WalletTenderMethod, string> = {
+  cash: 'Retirada en efectivo',
+  card: 'Retirada a tarjeta',
+  bizum: 'Retirada por Bizum',
+  bank_transfer: 'Retirada por transferencia',
+};
+
+/** How a top-up was paid, or a withdrawal handed back, kept on its wallet movement. */
 export interface WalletTender {
-  method: WalletTopUpMethod;
+  method: WalletTenderMethod;
   cashSessionId: string | null;
   recordedById: string;
 }
@@ -243,6 +251,7 @@ export class WalletService {
     description?: string,
     referenceType?: string,
     referenceId?: string,
+    tender?: WalletTender,
   ) {
     {
       const wallet = await this.walletIn(tx, tenantId, clientId);
@@ -266,12 +275,62 @@ export class WalletService {
           description: description || 'Cobro',
           referenceType,
           referenceId,
+          ...(tender ? { method: tender.method, cashSessionId: tender.cashSessionId, recordedById: tender.recordedById } : {}),
         },
       });
       return { wallet: updated, transaction };
     }
   }
 
+
+  /**
+   * A withdrawal: money handed back to the client from her wallet, and how.
+   * The mirror of topUp: the tender is kept on the wallet movement (the
+   * prepayment is returned, not a refund of revenue); cash comes out of the
+   * drawer, so it needs one open (409 CASH_SESSION_CLOSED) and lowers its
+   * expected cash; card, Bizum and transfer are linked to the open drawer,
+   * if any, for its report. Never past the balance (debitIn).
+   */
+  async withdraw(
+    tenantId: string,
+    clientId: string,
+    amount: number,
+    method: WalletTenderMethod,
+    actor: { id: string; role: string },
+    description?: string,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const cashSessionId = await openCashSessionId(tx, tenantId, 'share');
+      if (method === 'cash' && !cashSessionId) {
+        throw new ConflictException({
+          code: 'CASH_SESSION_CLOSED',
+          message:
+            'La caja está cerrada: ábrela (Abrir caja) para devolver en efectivo. Por tarjeta, Bizum o transferencia puedes devolverlo igualmente.',
+        });
+      }
+      const out = await this.debitIn(
+        tx,
+        tenantId,
+        clientId,
+        amount,
+        description?.trim() || WITHDRAWAL_LABEL[method],
+        'withdrawal',
+        undefined,
+        { method, cashSessionId, recordedById: actor.id },
+      );
+      await this.auditLog?.record(
+        'payments.wallet.withdrawal',
+        {
+          actorId: actor.id,
+          actorRole: actor.role as UserRole,
+          tenantId,
+          metadata: { clientId, amount, method, cashSessionId, walletTransactionId: out.transaction.id },
+        },
+        tx,
+      );
+      return out;
+    });
+  }
 
   async getTransactions(tenantId: string, walletId: string, limit = 20) {
     const wallet = await this.prisma.clientWallet.findFirst({

@@ -76,7 +76,11 @@ function drawer(
     walletTransaction: {
       findMany: jest.fn(async ({ where }: any) =>
         walletTx.filter(
-          (w) => w.cashSessionId === where.cashSessionId && w.type === where.type && w.method != null && w.tenantId === where.wallet.tenantId,
+          (w) =>
+            w.cashSessionId === where.cashSessionId &&
+            (!where.type || w.type === where.type) &&
+            w.method != null &&
+            w.tenantId === where.wallet.tenantId,
         ),
       ),
     },
@@ -306,6 +310,10 @@ describe("who sees what", () => {
         // A refund back to the wallet: no tender, no money in the drawer.
         { tenantId: T, cashSessionId: "cs1", type: "credit", method: null, amount: 900 },
         { tenantId: "t2", cashSessionId: "cs1", type: "credit", method: "cash", amount: 99_999 },
+        // A withdrawal handed back in cash, one by Bizum; a wallet payment at the till (no tender) moves nothing.
+        { tenantId: T, cashSessionId: "cs1", type: "debit", method: "cash", amount: 1200 },
+        { tenantId: T, cashSessionId: "cs1", type: "debit", method: "bizum", amount: 800 },
+        { tenantId: T, cashSessionId: "cs1", type: "debit", method: null, amount: 5000 },
       ],
     });
     const forStaff: any = (await t.service.current(T, STAFF)).session;
@@ -319,14 +327,21 @@ describe("who sees what", () => {
     expect(t.prisma.payment.findMany).not.toHaveBeenCalled();
 
     const full = (await t.service.report(T, "cs1", OWNER)) as CashSessionFullView;
-    // 100 float + 25 cash sale + 30 cash top-up + 10 in - 2 out = 163.
-    expect(full).toMatchObject({ blind: false, expectedCashCents: 16_300 });
-    expect(full.figures.cash).toMatchObject({ salesCents: 2500, walletTopUpsCents: 3000, expectedCents: 16_300 });
-    expect(full.figures.byMethod.map((m) => [m.method, m.count, m.amountCents, m.topUpCents])).toEqual([
-      ["cash", 2, 5500, 3000],
-      ["card", 2, 5500, 1500],
+    // 100 float + 25 cash sale + 30 cash top-up - 12 cash withdrawal + 10 in - 2 out = 151.
+    expect(full).toMatchObject({ blind: false, expectedCashCents: 15_100 });
+    expect(full.figures.cash).toMatchObject({
+      salesCents: 2500,
+      walletTopUpsCents: 3000,
+      walletWithdrawalsCents: 1200,
+      expectedCents: 15_100,
+    });
+    expect(full.figures.byMethod.map((m) => [m.method, m.count, m.amountCents, m.topUpCents, m.walletWithdrawnCents])).toEqual([
+      ["cash", 2, 5500, 3000, 1200],
+      ["card", 2, 5500, 1500, 0],
+      ["bizum", 0, 0, 0, 800],
     ]);
     expect(full.figures.walletTopUps).toEqual({ count: 2, totalCents: 4500 });
+    expect(full.figures.walletWithdrawals).toEqual({ count: 2, totalCents: 2000 });
     expect(full.movements.map((m) => m.id)).toEqual(["m-other", "m-mine"]);
   });
 });

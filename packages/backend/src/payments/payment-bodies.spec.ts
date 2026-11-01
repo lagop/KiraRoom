@@ -6,8 +6,8 @@ import {
   RefundPaymentDto,
   SubscriptionPlanDto,
   UpdateLocationCountDto,
-  WalletAmountDto,
   WalletDepositDto,
+  WalletWithdrawDto,
 } from "./dto/payment-bodies.dto";
 import { GrantAddOnDto } from "./dto/addon.dto";
 import { bodyMetatype, bodyParser } from "../common/validation/validated-body.testing";
@@ -23,7 +23,7 @@ describe("payments bodies", () => {
     expect(bodyMetatype(P, "cancelSubscription")).toBe(CancelSubscriptionDto);
     expect(bodyMetatype(P, "updateLocationCount")).toBe(UpdateLocationCountDto);
     expect(bodyMetatype(P, "depositWallet")).toBe(WalletDepositDto);
-    expect(bodyMetatype(P, "withdrawWallet")).toBe(WalletAmountDto);
+    expect(bodyMetatype(P, "withdrawWallet")).toBe(WalletWithdrawDto);
     expect(bodyMetatype(P, "refundPayment")).toBe(RefundPaymentDto);
     expect(bodyMetatype(AddOnsAdminController, "grant")).toBe(GrantAddOnDto);
   });
@@ -42,6 +42,29 @@ describe("payments bodies", () => {
     await expect(parse({ amount: -5000, method: "cash" })).rejects.toBeDefined();
     await expect(parse({ amount: 0, method: "cash" })).rejects.toBeDefined();
     await expect(parse({ amount: "lots", method: "cash" })).rejects.toBeDefined();
+  });
+
+  it("a wallet withdrawal is positive cents and how it is handed back", async () => {
+    const parse = bodyParser(PaymentsController, "withdrawWallet");
+    for (const method of ["cash", "card", "bizum", "bank_transfer"]) {
+      expect(await parse({ amount: 1000, method })).toEqual({ amount: 1000, method });
+    }
+    await expect(parse({ amount: 1000 })).rejects.toBeDefined();
+    for (const method of ["wallet", "gift_card", "loyalty_points"]) {
+      await expect(parse({ amount: 1000, method })).rejects.toBeDefined();
+    }
+    await expect(parse({ amount: 0, method: "cash" })).rejects.toBeDefined();
+  });
+
+  it("the controller rounds a withdrawal to whole cents and passes the tender and who handed it back", async () => {
+    const wallet = { withdraw: jest.fn(async () => ({})), assertClientOfSalon: jest.fn(async () => undefined) };
+    const c = new PaymentsController(null as any, null as any, wallet as any, null as any, null as any, null as any);
+    await c.withdrawWallet(
+      { user: { tenantId: "t1", id: "u1", role: "admin" } },
+      uuid(1),
+      Object.assign(new WalletWithdrawDto(), { amount: 10.1 * 100, method: "cash" as const, description: "Se va de la ciudad" }),
+    );
+    expect(wallet.withdraw).toHaveBeenCalledWith("t1", uuid(1), 1010, "cash", { id: "u1", role: "admin" }, "Se va de la ciudad");
   });
 
   it("the controller rounds a top-up to whole cents and passes the tender and who took it", async () => {

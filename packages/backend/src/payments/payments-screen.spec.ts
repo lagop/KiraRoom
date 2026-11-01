@@ -522,13 +522,15 @@ describe("M8: a wallet belongs to one of this salon's clients", () => {
   it("another salon's client is a 404 before anything is read or written", async () => {
     const prisma: any = { client: { findFirst: jest.fn(async () => null) } };
     const wallet = new WalletService(prisma);
-    const addFunds = jest.spyOn(wallet, "addFunds");
+    const topUp = jest.spyOn(wallet, "topUp");
+    const withdraw = jest.spyOn(wallet, "withdraw");
     const { c } = controller({ wallet });
-    await expect(c.depositWallet(OWNER, CLIENT, { amount: 1000 } as any)).rejects.toThrow(/Clienta no encontrada/);
+    await expect(c.depositWallet(OWNER, CLIENT, { amount: 1000, method: "cash" } as any)).rejects.toThrow(/Clienta no encontrada/);
     expect(prisma.client.findFirst).toHaveBeenCalledWith({ where: { id: CLIENT, tenantId: T }, select: { id: true } });
-    expect(addFunds).not.toHaveBeenCalled();
+    expect(topUp).not.toHaveBeenCalled();
     await expect(c.getWallet(OWNER, CLIENT)).rejects.toThrow(NotFoundException);
-    await expect(c.withdrawWallet(OWNER, CLIENT, { amount: 1000 } as any)).rejects.toThrow(NotFoundException);
+    await expect(c.withdrawWallet(OWNER, CLIENT, { amount: 1000, method: "cash" } as any)).rejects.toThrow(NotFoundException);
+    expect(withdraw).not.toHaveBeenCalled();
   });
 });
 

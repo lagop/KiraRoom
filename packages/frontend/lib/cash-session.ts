@@ -108,16 +108,23 @@ export function movementProblem(
   return null;
 }
 
-/** How a wallet top-up can be paid, in the order the dialog offers them: money the client hands over. */
+/** How money goes into a wallet or is handed back from it, in the order the dialog offers them. */
 export const WALLET_TOP_UP_METHODS = ["cash", "card", "bizum", "bank_transfer"] as const;
 
 /**
- * Why a wallet top-up cannot be taken with the drawer as it is (a
- * translation key), or null: cash goes into the drawer, so it needs one
- * open; card, Bizum and transfer do not. Null while unknown (the server decides).
+ * Why a wallet top-up (deposit) or withdrawal cannot be done with the
+ * drawer as it is (a translation key), or null: cash goes into or out of
+ * the drawer, so it needs one open; card, Bizum and transfer do not. Null
+ * while unknown (the server decides).
  */
-export function topUpProblem(method: string | null, drawerOpen: boolean | null): string | null {
-  if (!method) return "payments.top_up_method_required";
-  if (method === "cash" && drawerOpen === false) return "payments.top_up_drawer_closed";
+export function topUpProblem(
+  method: string | null,
+  drawerOpen: boolean | null,
+  kind: "deposit" | "withdraw" = "deposit",
+): string | null {
+  if (!method) return kind === "deposit" ? "payments.top_up_method_required" : "payments.withdraw_method_required";
+  if (method === "cash" && drawerOpen === false) {
+    return kind === "deposit" ? "payments.top_up_drawer_closed" : "payments.withdraw_drawer_closed";
+  }
   return null;
 }
