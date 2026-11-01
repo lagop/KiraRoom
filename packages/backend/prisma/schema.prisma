@@ -578,7 +578,7 @@ model Professional {
   userId              String?                @unique
   firstName           String
   lastName            String
-  email               String                 @unique
+  email               String
   phone               String?
   profileImage        String?
   bio                 String?
