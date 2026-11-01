@@ -62,7 +62,7 @@ const WRITE_TOOLS = new Set<string>([
  * wording on top of the preview; the preview is just the canonical
  * "what will happen" line.
  */
-const TOOL_PREVIEW: Record<string, (input: any) => string> = {
+export const TOOL_PREVIEW: Record<string, (input: any) => string> = {
   draft_follow_up_message: (i) => {
     const channel = (i?.channel as string) ?? 'whatsapp';
     const occasion = (i?.occasion as string) ?? 'confirmation';
@@ -83,8 +83,8 @@ const TOOL_PREVIEW: Record<string, (input: any) => string> = {
   },
   create_coupon: (i) => {
     const pct = i?.discountPercent ?? '?';
-    const target = i?.clientId ? 'para una clienta específica' : 'para cualquier clienta';
-    return `Crear un cupón del ${pct}% de descuento ${target} (un solo uso).`;
+    const days = Math.min(Math.max(Math.round(Number(i?.expiresInDays ?? 30)) || 30, 1), 365);
+    return `Crear un código de descuento del ${pct}% para cualquier clienta, de un solo uso y válido ${days === 1 ? 'hoy' : `${days} días`}. Se aplica al cobrar en caja (no en la reserva online).`;
   },
   close_waitlist_slot: (i) => {
     const n = i?.topN ?? 5;

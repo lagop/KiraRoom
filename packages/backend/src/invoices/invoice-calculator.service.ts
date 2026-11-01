@@ -47,6 +47,14 @@ export interface InvoiceLineInput {
    */
   loyaltyDiscountCents?: number;
   /**
+   * The part of `discountCents` that is a promotion code applied at the till
+   * (pos.service.ts, appointment-invoice-pricing.ts), in the same terms, and
+   * the code: the PDF names it ("Descuento promoción CODE"). Already inside
+   * discountCents. Never more than discountCents.
+   */
+  promotionDiscountCents?: number;
+  promotionCode?: string;
+  /**
    * Cents added to the line's tax (and so its total): the invoice's
    * rounding remainder, so it comes to the money actually charged. Used
    * where a reward given in money is taken off prices that are the base
@@ -74,6 +82,9 @@ export interface ComputedInvoiceLine {
   rectifiesLineId?: string;
   /** InvoiceLineInput.loyaltyDiscountCents (0 when none). */
   loyaltyDiscountCents?: number;
+  /** InvoiceLineInput.promotionDiscountCents and its code (absent when none). */
+  promotionDiscountCents?: number;
+  promotionCode?: string;
 }
 
 export interface TaxBreakdownEntry {
@@ -103,7 +114,7 @@ export class InvoiceCalculator {
       throw new Error("Invoice must have at least one line");
     }
 
-    const lines: ComputedInvoiceLine[] = input.map((l) => withRounding(l, withLoyalty(l, lineOf(l))));
+    const lines: ComputedInvoiceLine[] = input.map((l) => withRounding(l, withPromotion(l, withLoyalty(l, lineOf(l)))));
 
     const subtotalCents = lines.reduce((s, l) => s + l.totalCents - l.taxCents, 0);
     const taxBreakdown = aggregateTaxBreakdown(lines);
@@ -118,6 +129,17 @@ function withLoyalty(l: InvoiceLineInput, computed: ComputedInvoiceLine): Comput
   const loyalty = Math.round(Number(l.loyaltyDiscountCents ?? 0));
   if (!(loyalty > 0) || l.fixed) return computed;
   return { ...computed, loyaltyDiscountCents: Math.min(loyalty, Math.max(0, Math.round(l.discountCents ?? 0))) };
+}
+
+/** The promotion's part of a line's discount and its code, carried to the stored line (never more than the discount). */
+function withPromotion(l: InvoiceLineInput, computed: ComputedInvoiceLine): ComputedInvoiceLine {
+  const cents = Math.round(Number(l.promotionDiscountCents ?? 0));
+  if (!(cents > 0) || l.fixed || !l.promotionCode) return computed;
+  return {
+    ...computed,
+    promotionDiscountCents: Math.min(cents, Math.max(0, Math.round(l.discountCents ?? 0))),
+    promotionCode: l.promotionCode,
+  };
 }
 
 /** InvoiceLineInput.roundingCents on the line's tax and total: never a negative tax or total. */

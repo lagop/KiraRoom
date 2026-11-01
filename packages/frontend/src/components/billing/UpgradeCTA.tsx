@@ -96,7 +96,7 @@ function humanizeFeature(feature: FeatureKey): string {
     copilot_read: "Kira Copilot para el equipo",
     copilot_write: "Kira Copilot con acciones",
     loyalty: "Programa de fidelidad",
-    promotions: "Promociones y cupones",
+    promotions: "Códigos promocionales en caja",
     gift_cards: "Tarjetas regalo",
     wallet: "Wallet de clientas",
     commissions: "Comisiones del equipo",

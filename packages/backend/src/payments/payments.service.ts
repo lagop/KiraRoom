@@ -19,6 +19,7 @@ import { GiftCardsService } from "../gift-cards/gift-cards.service";
 import { needsTimezone, PaymentFilters, paymentWhere, PAYMENT_SORT_FIELDS } from "./payments-query";
 import { openCashSessionId } from "../pos/cash-session-lock";
 import { recordRefundClawbacks } from "../commissions/commission-clawback";
+import { releaseIfSaleRefundedIn } from "../promotions/promotion-at-till";
 import {
   centsLeft,
   linesPaidBy,
@@ -667,6 +668,14 @@ export class PaymentsService {
         method: payment.method,
         lines: given.lines,
       });
+
+      // The whole till sale given back (this payment in full and none of the
+      // sale left paid): the promotion code it used counts no more. A
+      // partial refund keeps the use (promotions/promotion-at-till.ts).
+      const tillSaleId = (payment.metadata as { posSaleId?: unknown } | null)?.posSaleId;
+      if (full && typeof tillSaleId === "string" && tillSaleId) {
+        await releaseIfSaleRefundedIn(tx, tenantId, tillSaleId);
+      }
 
       return { refund, appointment, restocked: given.restocked };
     });

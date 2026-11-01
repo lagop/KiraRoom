@@ -3643,24 +3643,15 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
+  /** Whether a code can be used today (nothing is written: the till applies codes, POST /pos/quote and /pos/checkout). */
   async validatePromotionCode(code: string): Promise<any> {
-    return this.request<any>(`/promotions/validate/${code}`);
+    return this.request<any>(`/promotions/validate/${encodeURIComponent(code)}`);
   }
 
-  async applyPromotionCode(
-    code: string,
-    clientId: string,
-    orderValue: number,
-  ): Promise<any> {
-    return this.request<any>("/promotions/apply", {
-      method: "POST",
-      body: JSON.stringify({ code, clientId, orderValue }),
-    });
-  }
-
-  async getPromotionStatistics(promotionId?: string): Promise<any[]> {
+  /** Each promotion's uses at the till that still count, and what they took off (euros). */
+  async getPromotionStatistics(promotionId?: string): Promise<PromotionStats[]> {
     const query = promotionId ? `?promotionId=${promotionId}` : "";
-    return this.request<any[]>(`/promotions/statistics${query}`);
+    return this.request<PromotionStats[]>(`/promotions/statistics${query}`);
   }
 
   async getAllCommissionSummaries(): Promise<any[]> {
@@ -5871,12 +5862,33 @@ export interface PosQuoteLine {
   taxCents: number;
 }
 
+/** GET /promotions/statistics: one promotion's uses at the till. */
+export interface PromotionStats {
+  id: string;
+  name: string;
+  code: string;
+  usedCount: number;
+  /** Euros taken off by the uses that still count (a fully refunded sale released its use). */
+  totalDiscount: number;
+  usageCount: number;
+}
+
+/** The promotion code applied to a ticket at the till (cents). */
+export interface PosPromotion {
+  id: string;
+  code: string;
+  name: string;
+  discount: number;
+}
+
 /** POST /pos/quote: what the checkout will charge. */
 export interface PosQuote {
   lines: PosQuoteLine[];
   giftCards: Array<{ amountCents: number; recipientName?: string; recipientEmail?: string; message?: string }>;
   subtotal: number;
   discount: { lines: number; order: number; total: number };
+  /** The promotion code applied: after the manual discounts, before the points. */
+  promotion?: PosPromotion | null;
   loyalty: { discount: number; pointsSpent: number; rewardName: string } | null;
   total: number;
   tax: { label: string; cents: number; included: boolean; note: string };
@@ -5892,6 +5904,7 @@ export interface PosSale {
   change: number;
   tendered: number;
   discount?: { lines: number; order: number; total: number };
+  promotion?: PosPromotion | null;
   loyalty?: { pointsEarned: number; pointsSpent: number; discount: number; rewardName?: string };
   invoice: { id: string; series: string; number: string; full: boolean } | null;
   giftCards?: Array<{ id: string; code: string; amountCents: number; recipientEmail?: string; emailSent?: boolean }>;
@@ -5937,6 +5950,8 @@ export interface PosReceipt {
   subtotalCents: number;
   discountCents: number;
   loyaltyDiscountCents: number;
+  /** The promotion code's part of the lines' discounts. */
+  promotion?: { code: string; discountCents: number } | null;
   totalCents: number;
   payments: Array<{ method: string; amount: number }>;
   tenderedCents: number;
