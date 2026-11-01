@@ -198,7 +198,9 @@ export default function GiftCardsPage() {
         </header>
 
         <section className="rounded-lg border bg-white">
-          <table className="w-full text-sm">
+          {/* <main> hides horizontal overflow: the table scrolls here on a phone. */}
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[640px] text-sm">
             <thead className="border-b bg-gray-50 text-left">
               <tr>
                 <th className="px-3 py-2">Código</th>
@@ -288,6 +290,7 @@ export default function GiftCardsPage() {
                 ))}
             </tbody>
           </table>
+          </div>
           <div className="flex items-center justify-between px-3 py-2 text-xs text-muted-foreground border-t">
             <span>
               {total} gift card{total === 1 ? "" : "s"}

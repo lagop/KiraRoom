@@ -8,6 +8,7 @@ import { AlertCircle, Loader2, Plus, Trash2 } from "lucide-react";
 import apiClient, { Client } from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
 import { useTaxRegime } from "@/lib/use-tax-regime";
+import { dayInZone } from "@/lib/invoice-list";
 import {
   computeInvoiceTotals,
   pricesTaxHintKey,
@@ -83,9 +84,19 @@ export function InvoiceForm() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [series, setSeries] = useState("");
-  const [issueDate, setIssueDate] = useState(
-    () => new Date().toISOString().slice(0, 10),
-  );
+  // Today on the salon's calendar: toISOString() is UTC, the day before
+  // between midnight and 01:00/02:00 in Madrid.
+  const tenant = useQuery({
+    queryKey: ["auth", "tenant"],
+    queryFn: () => apiClient.getTenant(),
+    staleTime: 5 * 60 * 1000,
+  });
+  const salonTimezone = tenant.data?.timezone || "Europe/Madrid";
+  const [issueDate, setIssueDate] = useState(() => dayInZone(Date.now(), "Europe/Madrid"));
+  const [issueDateTouched, setIssueDateTouched] = useState(false);
+  useEffect(() => {
+    if (!issueDateTouched) setIssueDate(dayInZone(Date.now(), salonTimezone));
+  }, [salonTimezone, issueDateTouched]);
   const [recipientId, setRecipientId] = useState("");
   const [recipientName, setRecipientName] = useState("");
   const [recipientTaxId, setRecipientTaxId] = useState("");
@@ -253,7 +264,10 @@ export function InvoiceForm() {
               id="issueDate"
               type="date"
               value={issueDate}
-              onChange={(event) => setIssueDate(event.target.value)}
+              onChange={(event) => {
+                setIssueDateTouched(true);
+                setIssueDate(event.target.value);
+              }}
               className={inputClassName}
             />
           </div>

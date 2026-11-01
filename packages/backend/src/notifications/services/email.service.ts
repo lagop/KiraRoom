@@ -50,6 +50,8 @@ export interface EmailOptions {
    * not delivered twice (e.g. after a send that timed out but went through).
    */
   idempotencyKey?: string;
+  /** Files attached to the email (an invoice's PDF). */
+  attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>;
 }
 
 export interface BatchEmailOptions {
@@ -205,6 +207,7 @@ export class EmailService {
             text: options.text,
             replyTo: options.replyTo,
             headers,
+            ...(options.attachments?.length ? { attachments: options.attachments } : {}),
           },
           options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : undefined,
         ),
@@ -1654,5 +1657,90 @@ export class EmailService {
       "Si no lo has pedido tú, ignora este correo: tu contraseña no cambia.",
     ].join("\n");
     return this.sendEmail({ to: data.to, subject, html, text });
+  }
+
+  /**
+   * An invoice, with its PDF attached, sent by the salon to its client
+   * (POST /invoices/:id/email). Signed with the salon's name; replies go to
+   * the salon's own address when it has one. Transactional: no unsubscribe.
+   */
+  async sendInvoice(data: {
+    to: string;
+    recipientName: string;
+    salonName: string;
+    salonEmail?: string | null;
+    /** "Factura", "Factura simplificada" or "Factura rectificativa". */
+    title: string;
+    number: string;
+    /** dd/mm/yyyy. */
+    issueDate: string;
+    /** "30,00 €". */
+    total: string;
+    pdf: Buffer;
+    filename: string;
+  }): Promise<{ success: boolean; id?: string; error?: string }> {
+    const e = (v: unknown) => this.escapeHtml(v);
+    const subject = `${data.title} ${data.number} de ${data.salonName}`;
+    const greeting = data.recipientName ? `Hola ${e(data.recipientName)},` : "Hola,";
+    const html = `
+<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:12px;padding:32px;">
+        <tr><td>
+          <div style="font-size:22px;font-weight:700;margin-bottom:16px;">${e(data.salonName)}</div>
+          <p style="font-size:16px;line-height:1.6;margin:0 0 16px 0;">${greeting}</p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 20px 0;">
+            Te enviamos la ${e(data.title.toLowerCase())} <strong>${e(data.number)}</strong>. La tienes adjunta en PDF.
+          </p>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;margin:0 0 24px 0;">
+            <tr><td style="padding:16px 20px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                <tr>
+                  <td style="padding:4px 0;color:#6b7280;font-size:14px;width:120px;">Número:</td>
+                  <td style="padding:4px 0;color:#111827;font-size:14px;font-weight:500;">${e(data.number)}</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 0;color:#6b7280;font-size:14px;">Fecha:</td>
+                  <td style="padding:4px 0;color:#111827;font-size:14px;font-weight:500;">${e(data.issueDate)}</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 0;color:#6b7280;font-size:14px;">Total:</td>
+                  <td style="padding:4px 0;color:#111827;font-size:14px;font-weight:500;">${e(data.total)}</td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+          <p style="font-size:14px;line-height:1.6;margin:0;color:#475569;">
+            Si tienes cualquier duda sobre esta factura, responde a este correo o ponte en contacto con ${e(data.salonName)}.
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`.trim();
+    const text = [
+      data.recipientName ? `Hola ${data.recipientName},` : "Hola,",
+      "",
+      `Te enviamos la ${data.title.toLowerCase()} ${data.number} de ${data.salonName}. La tienes adjunta en PDF.`,
+      "",
+      `Número: ${data.number}`,
+      `Fecha: ${data.issueDate}`,
+      `Total: ${data.total}`,
+      "",
+      `Si tienes cualquier duda sobre esta factura, responde a este correo o ponte en contacto con ${data.salonName}.`,
+    ].join("\n");
+    return this.sendEmail({
+      to: data.to,
+      subject,
+      html,
+      text,
+      replyTo: data.salonEmail || undefined,
+      attachments: [{ filename: data.filename, content: data.pdf, contentType: "application/pdf" }],
+    });
   }
 }

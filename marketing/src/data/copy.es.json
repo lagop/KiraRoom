@@ -1,13 +1,13 @@
 {
   "hero": {
-    "h1": "Cumple con Verifactu sin pelearte con el TPV",
-    "sub": "La plataforma todo-en-uno para salones en España. Cada factura se firma y se remite sola a Hacienda o a tu diputación. Y de paso, agenda online 24/7 y una recepcionista IA que atiende a tus clientas por WhatsApp, Instagram y Telegram.",
+    "h1": "Gestiona tu salón sin pelearte con el TPV",
+    "sub": "La plataforma todo-en-uno para salones en España: agenda online 24/7, facturas con numeración correlativa y rectificativas, y una recepcionista IA que atiende a tus clientas por WhatsApp, Instagram y Telegram.",
     "primary_cta": "Empezar mis 14 días gratis",
     "secondary_cta": "Ver cómo funciona (2 min)",
-    "trust_badge": "RD 1007/2023 y las 3 diputaciones vascas · Sin tarjeta · Soporte en español"
+    "trust_badge": "14 días gratis · Sin tarjeta · Soporte en español"
   },
   "trust_bar": {
-    "line": "Cumple con Verifactu y TicketBAI · Soporte en espanol · Datos alojados en la UE",
+    "line": "Facturas con numeración correlativa y rectificativas · Soporte en español · Datos alojados en la UE",
     "logos": []
   },
   "pains": [
@@ -15,9 +15,9 @@
       "id": "facturas",
       "headline": "Las facturas te quitan el sueño",
       "validation": "Verifactu, TicketBAI, diputaciones, AEAT... Cada cambio normativo te obliga a actualizar el TPV, llamar al gestor, y rezar para no equivocarte.",
-      "solution_title": "Facturación que cumple sola con Hacienda",
-      "solution_body": "Cada factura que emites se firma digitalmente (XAdES) y se remite sola a la AEAT o a tu diputación foral (Bizkaia, Gipuzkoa, Álava). Tu gestor entra, ve todas las facturas numeradas, y se acabó.",
-      "proof": "Compatible con la normativa espanola RD 1007/2023 y las tres diputaciones forales vascas.",
+      "solution_title": "Facturas en orden, sin papeleo",
+      "solution_body": "Cada cita cobrada puede generar su factura, con numeración correlativa y el IVA o el IGIC de tu zona. Si hay que corregir algo, emites una rectificativa. Tu gestor descarga el libro de facturas emitidas y se acabó.",
+      "proof": "Facturas completas, simplificadas y rectificativas, con el desglose de IVA o IGIC por tipo.",
       "cta": "Ver cómo funciona"
     },
     {
@@ -93,7 +93,7 @@
         "Agenda y clientas ilimitadas",
         "Hasta 4 profesionales",
         "Recepcionista IA (500 conv/mes)",
-        "Facturación Verifactu + TicketBAI",
+        "Facturas y rectificativas",
         "Recordatorios por WhatsApp"
       ],
       "featured": false,
@@ -178,7 +178,7 @@
     "trust_line": "14 dias gratis · Sin tarjeta · Cancela cuando quieras · Cumple RGPD"
   },
   "meta": {
-    "title": "KiraRoom — Facturación Verifactu y gestión para salones en España",
-    "description": "Facturación Verifactu y TicketBAI automática, agenda online 24/7 y recepcionista IA para WhatsApp, Instagram y Telegram. 14 días gratis, sin tarjeta."
+    "title": "KiraRoom — Agenda, facturación y gestión para salones en España",
+    "description": "Agenda online 24/7, facturas con numeración correlativa y rectificativas, y recepcionista IA para WhatsApp, Instagram y Telegram. 14 días gratis, sin tarjeta."
   }
 }

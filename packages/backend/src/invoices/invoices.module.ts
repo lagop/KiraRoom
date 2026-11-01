@@ -6,6 +6,9 @@ import { InvoicesController } from "./invoices.controller";
 import { InvoiceService } from "./invoices.service";
 import { InvoiceCalculator } from "./invoice-calculator.service";
 import { InvoicePdfService } from "./pdf/invoice-pdf.service";
+import { InvoiceRenderService } from "./pdf/invoice-render.service";
+import { InvoiceEmailService } from "./invoice-email.service";
+import { AuditLogService } from "../saas/audit-log.service";
 import { FiscalService } from "./fiscal/fiscal.service";
 import { FiscalCertificateService } from "./fiscal/fiscal-certificate.service";
 import { FiscalRetryQueue } from "./fiscal/fiscal-retry.queue";
@@ -56,6 +59,9 @@ class InvoicesModuleInit implements OnModuleInit {
     InvoiceService,
     InvoiceCalculator,
     InvoicePdfService,
+    InvoiceRenderService,
+    InvoiceEmailService,
+    AuditLogService,
     FiscalService,
     FiscalCertificateService,
     FiscalRetryQueue,

@@ -65,15 +65,12 @@
   },
   "invoices": {
     "title": "Invoices",
-    "subtitle": "Issue, fiscal signing and download.",
+    "subtitle": "Issued and corrective invoices: search them, download them as PDF or email them.",
     "newInvoice": "New invoice",
     "filters": {
       "all": "All",
-      "draft": "Draft",
       "issued": "Issued",
-      "paid": "Paid",
-      "cancelled": "Cancelled",
-      "refunded": "Refunded"
+      "cancelled": "Cancelled"
     },
     "fiscalStatus": {
       "not_required": "No fiscal regime",
@@ -94,7 +91,11 @@
       "cancel": "Cancel invoice",
       "resend": "Resend to AEAT",
       "create": "Create invoice",
-      "save": "Save"
+      "save": "Save",
+      "email": "Send by email",
+      "rectify": "Issue corrective invoice",
+      "resendError": "The invoice could not be resent",
+      "downloadError": "The file could not be downloaded"
     },
     "fields": {
       "series": "Series",
@@ -132,7 +133,7 @@
       "pricesTaxLoading": "Loading fiscal settings...",
       "pricesTaxUnavailable": "Fiscal settings could not be loaded, so it is unknown whether prices include the tax. Reload the page to issue the invoice."
     },
-    "empty": "No invoices yet. Create one or wait for auto-generation from paid orders.",
+    "empty": "No invoices yet. They are created when an appointment is completed or charged (if automatic invoicing is on in Fiscal settings) or by hand with \"New invoice\".",
     "fiscalSettings": {
       "title": "Spanish fiscal compliance",
       "subtitle": "Configure your salon's fiscal regime.",
@@ -165,6 +166,84 @@
       "invalidLines": "Each line must have a description, a quantity greater than zero, and valid values.",
       "recipientRequired": "The recipient name is required.",
       "createFailed": "The invoice could not be created."
+    },
+    "status": {
+      "draft": "Draft",
+      "issued": "Issued",
+      "paid": "Issued",
+      "cancelled": "Cancelled",
+      "refunded": "Issued"
+    },
+    "columns": {
+      "status": "Status",
+      "fiscal": "Fiscal",
+      "actions": "Actions"
+    },
+    "search": {
+      "placeholder": "Search by number, client or tax ID",
+      "label": "Search",
+      "dateFrom": "From",
+      "dateTo": "To",
+      "clear": "Clear filters"
+    },
+    "pagination": {
+      "previous": "Previous",
+      "next": "Next",
+      "page": "Page {page}",
+      "pageOf": "Page {page} of {pages}"
+    },
+    "emptyFiltered": "No invoice matches the search or the filters.",
+    "loadError": "The invoices could not be loaded.",
+    "managersOnly": "Only the salon's owner and admins can see invoices.",
+    "emailDialog": {
+      "title": "Email invoice {number}",
+      "description": "The invoice PDF is sent as an attachment, on behalf of the salon.",
+      "clientEmail": "It will go to the client's email: {email}",
+      "noClientEmail": "The client has no email on file: type the address.",
+      "clientEmailUnknown": "Left empty, it goes to the client's email.",
+      "toLabel": "Send to another address (optional)",
+      "toPlaceholder": "name@example.com",
+      "invalid": "The email is not valid.",
+      "send": "Send",
+      "sending": "Sending...",
+      "sent": "Invoice sent",
+      "sentTo": "Sent to {email}.",
+      "error": "The invoice could not be sent"
+    },
+    "cancelDialog": {
+      "title": "Cancel invoice {number}?",
+      "explanation": "Cancel an invoice only if it was issued by mistake (wrong details, duplicate...). If the sale happened and something must be corrected or refunded, issue a corrective invoice.",
+      "reasonLabel": "Reason for cancelling",
+      "reasonPlaceholder": "For example: duplicate invoice",
+      "reasonRequired": "Give the reason for cancelling.",
+      "confirm": "Cancel invoice",
+      "done": "Invoice cancelled",
+      "error": "The invoice could not be cancelled"
+    },
+    "rectifyDialog": {
+      "title": "Corrective invoice for {number}",
+      "intro": "The corrective invoice (series R) corrects this invoice in whole or in part. It is numbered and linked to it; the original is not changed.",
+      "modeFull": "The whole invoice",
+      "modeFullHint": "Credits whatever is left of every line.",
+      "modeLines": "Some lines",
+      "modeLinesHint": "Choose the lines and how many units are returned.",
+      "modeAmount": "An amount",
+      "modeAmountHint": "A credit by difference, tax included.",
+      "unitsToReturn": "Units to return",
+      "ofQuantity": "of {quantity}",
+      "amount": "Amount to credit ({tax} included)",
+      "taxRate": "{tax} rate",
+      "concept": "Concept",
+      "conceptPlaceholder": "Credit",
+      "reason": "Reason",
+      "reasonPlaceholder": "For example: product returned, wrong price",
+      "continue": "Continue",
+      "cancel": "Cancel",
+      "confirmTitle": "Issue the corrective invoice?",
+      "confirmDescription": "A corrective invoice for {number} will be issued. Once issued it cannot be deleted: if you make a mistake, you will have to issue another one.",
+      "confirm": "Issue corrective invoice",
+      "done": "Corrective invoice issued",
+      "error": "The corrective invoice could not be issued"
     }
   },
   "accounting": {
