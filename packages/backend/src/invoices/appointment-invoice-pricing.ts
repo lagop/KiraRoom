@@ -1,4 +1,4 @@
-import type { InvoiceLineInput } from "./invoice-calculator.service";
+import { InvoiceCalculator, type InvoiceLineInput } from "./invoice-calculator.service";
 import { VisitRow, visitLines } from "../appointments/visit-totals";
 import { pricesIncludeTaxOf, salonTaxRate } from "./salon-tax-settings";
 import { allocateCents } from "../pos/pos-discounts";
@@ -74,6 +74,18 @@ export function loyaltyDiscountCents(discount: unknown): number {
   return Number.isFinite(cents) && cents > 0 ? Math.round(cents) : 0;
 }
 
+/**
+ * The MONEY the loyalty reward took off the visit at the till
+ * (`Appointment.discount.loyalty.moneyCents`, pos.service.ts), else 0. For a
+ * salon whose prices include the tax it is catalogueCents; otherwise the
+ * invoice is brought to it (appointmentInvoiceLines).
+ */
+export function loyaltyMoneyCents(discount: unknown): number {
+  const loyalty = (discount as { loyalty?: { moneyCents?: unknown } } | null | undefined)?.loyalty;
+  const cents = Number(loyalty?.moneyCents);
+  return Number.isFinite(cents) && cents > 0 ? Math.round(cents) : 0;
+}
+
 /** The visit without its loyalty record: what it costs before the reward (appointment-charge.ts). */
 export function withoutLoyalty<V extends { discount?: unknown }>(visit: V): V {
   const d = visit.discount;
@@ -108,6 +120,42 @@ export function appointmentInvoiceLines(
   appointment: VisitToInvoice,
   fiscalSettings: Record<string, unknown>,
 ): InvoiceLineInput[] {
+  return toMoneyCharged(appointment, fiscalSettings, linesBeforeRounding(appointment, fiscalSettings));
+}
+
+const calculator = new InvoiceCalculator();
+
+/**
+ * Prices that are the base: the reward was given in money (moneyCents) and
+ * taken off the lines in base terms (catalogueCents, the closest cut), and
+ * base x rate rounds per line, so the invoice can land a cent or two off
+ * what was charged -- the invoice without the reward less its money. The
+ * remainder goes on the tax of the last line that can take it
+ * (InvoiceLineInput.roundingCents), the way a tax-included line's tax is
+ * gross - base: the invoice then comes to the money charged, exactly.
+ */
+function toMoneyCharged(
+  appointment: VisitToInvoice,
+  fiscalSettings: Record<string, unknown>,
+  lines: InvoiceLineInput[],
+): InvoiceLineInput[] {
+  const money = loyaltyMoneyCents(appointment.discount);
+  if (pricesIncludeTaxOf(fiscalSettings) || money <= 0 || loyaltyDiscountCents(appointment.discount) <= 0) return lines;
+  const before = calculator.compute(linesBeforeRounding(withoutLoyalty(appointment), fiscalSettings)).totalCents;
+  const computed = calculator.compute(lines);
+  const remainder = Math.max(0, before - money) - computed.totalCents;
+  // Only rounding: each line rounds its tax once, and the reward's base cut once more.
+  if (remainder === 0 || Math.abs(remainder) > lines.length + 1) return lines;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const { taxCents, totalCents } = computed.lines[i];
+    if (taxCents + remainder >= 0 && totalCents + remainder >= 0 && taxCents > 0) {
+      return lines.map((l, j) => (j === i ? { ...l, roundingCents: remainder } : l));
+    }
+  }
+  return lines;
+}
+
+function linesBeforeRounding(appointment: VisitToInvoice, fiscalSettings: Record<string, unknown>): InvoiceLineInput[] {
   const tax = { taxRate: salonTaxRate(fiscalSettings), taxIncluded: pricesIncludeTaxOf(fiscalSettings) };
   const off = tillDiscountCents(appointment.discount);
   const loyalty = loyaltyDiscountCents(appointment.discount);

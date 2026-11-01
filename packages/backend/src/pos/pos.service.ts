@@ -8,7 +8,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import { Prisma } from '@prisma/client';
+import { Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { WalletService } from '../payments/services/wallet.service';
 import { LoyaltyService } from '../loyalty/loyalty.service';
@@ -34,6 +34,7 @@ import {
   type SalonTaxBasis,
 } from '../payments/appointment-charge';
 import { addonServices } from '../appointments/visit-sync';
+import { AuditLogService } from '../saas/audit-log.service';
 import { SALON_MANAGERS } from '../auth/decorators/roles.decorator';
 import { CreatePosOrderDto, PosCartItemDto, PosQuoteDto, PosSettingsDto } from './dto/pos.dto';
 import {
@@ -204,6 +205,7 @@ export class PosService {
     @Optional() private readonly loyalty?: LoyaltyService,
     @Optional() private readonly invoices?: InvoiceService,
     @Optional() private readonly giftCards?: GiftCardsService,
+    @Optional() private readonly auditLog?: AuditLogService,
   ) {}
 
   /** Who a team member is at the till: null for the owner and managers (they see everything). */
@@ -803,9 +805,33 @@ export class PosService {
             v.invoiceId,
             v.catalogueCents,
             `Descuento fidelidad (venta ${saleId})`,
+            // Credits the money the reward took off, to the cent.
+            Number(v.record.moneyCents),
           );
           loyaltyRectifications.set(appointmentId, issued);
           v.record.rectificationInvoiceId = issued.id;
+        }
+        // A reward its invoice could not take (visitLoyalty): on the audit
+        // log, so the owner sees it and issues the rectificativa by hand.
+        for (const [appointmentId, v] of visitLoyalty) {
+          if (!v.record.notOnInvoice || !actor || !this.auditLog) continue;
+          await this.auditLog.record(
+            'pos.loyalty_not_on_invoice',
+            {
+              actorId: actor.id,
+              actorRole: actor.role as UserRole,
+              tenantId,
+              metadata: {
+                saleId,
+                appointmentId,
+                invoiceId: v.record.notOnInvoiceId,
+                invoice: v.record.notOnInvoice,
+                moneyCents: v.record.moneyCents,
+                catalogueCents: v.catalogueCents,
+              },
+            },
+            tx,
+          );
         }
 
         let giftCardId: string | undefined;
@@ -826,6 +852,7 @@ export class PosService {
               metadata: {
                 posSaleId: saleId,
                 ...(appointmentIds.length ? { appointmentIds } : {}),
+                ...(row.appointment ? loyaltyNotOnInvoiceOf(visitLoyalty.get(row.appointment.id)) : {}),
                 ...(loyaltyDiscount ? { loyaltyDiscount, loyaltyRewardId: dto.loyaltyRewardId } : {}),
                 ...(ticket.discountCents ? { posDiscountCents: ticket.discountCents } : {}),
               },
@@ -1035,6 +1062,7 @@ export class PosService {
                   })),
                 }
               : {}),
+            ...(notOnInvoice(visitLoyalty).length ? { loyaltyNotOnInvoice: notOnInvoice(visitLoyalty) } : {}),
             ...(loyaltyRectifications.size
               ? {
                   loyaltyRectifications: [...loyaltyRectifications].map(([appointmentId, issued]) => ({
@@ -1448,6 +1476,7 @@ export class PosService {
           const name = `${invoice.series}${invoice.number}`;
           this.logger.warn(`sale ${saleId}: loyalty reward of appointment ${apt.id} not credited on ${name}: ${err.message}`);
           record.notOnInvoice = name;
+          record.notOnInvoiceId = invoice.id;
         }
       }
       out.set(apt.id, { catalogueCents, ...(invoiceId ? { invoiceId } : {}), record });
@@ -1880,6 +1909,30 @@ function adjustAppointmentLine(ticket: DiscountedTicket<PricedLine>, appointment
   line.netCents -= delta;
   ticket.discountCents += delta;
   ticket.totalCents -= delta;
+}
+
+/** The payment metadata of a visit whose loyalty reward its issued invoice could not take (PosService.visitLoyalty). */
+function loyaltyNotOnInvoiceOf(v: VisitLoyalty | undefined): Record<string, unknown> {
+  if (!v?.record.notOnInvoice) return {};
+  return {
+    loyaltyNotOnInvoice: {
+      invoiceId: v.record.notOnInvoiceId,
+      invoice: v.record.notOnInvoice,
+      amountCents: v.record.moneyCents,
+    },
+  };
+}
+
+/** The visits whose loyalty reward is not on their invoice, for the till's answer (a warning to the owner). */
+function notOnInvoice(visits: Map<string, VisitLoyalty>) {
+  return [...visits]
+    .filter(([, v]) => v.record.notOnInvoice)
+    .map(([appointmentId, v]) => ({
+      appointmentId,
+      invoiceId: v.record.notOnInvoiceId,
+      invoice: v.record.notOnInvoice,
+      amountCents: v.record.moneyCents,
+    }));
 }
 
 /**

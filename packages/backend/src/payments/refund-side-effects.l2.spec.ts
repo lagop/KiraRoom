@@ -8,6 +8,7 @@ import { WalletService } from "./services/wallet.service";
 import { PaymentsService } from "./payments.service";
 import { LoyaltyService } from "../loyalty/loyalty.service";
 import { CommissionsService } from "../commissions/commissions.service";
+import { AuditLogService } from "../saas/audit-log.service";
 
 /**
  * L2: what a refund changes besides the money, and the loyalty reward on
@@ -388,6 +389,110 @@ describe("refunds and their side effects (L2, real database)", () => {
           discrepancyCents: null,
         },
       });
+    }
+  }, 60_000);
+
+  it("a reward the visit's issued invoice cannot take: the sale goes through, flagged on the payment, the answer and the audit log", async () => {
+    if (!reachable) return;
+    const user = await db.user.create({
+      data: { tenantId, email: `l2-refunds-${run}@example.test`, firstName: "Ana", lastName: "Dueña", role: "owner", passwordHash: "not-a-real-hash" },
+    });
+    try {
+      const audited = new PosService(db, new WalletService(db), new LoyaltyService(db, { isFeatureUnlocked: jest.fn(async () => true) } as any), invoices, undefined, new AuditLogService(db));
+      const apt = await db.appointment.create({
+        data: {
+          tenantId,
+          clientId,
+          serviceId,
+          professionalId,
+          scheduledDate: new Date(),
+          scheduledTime: "11:00",
+          duration: 30,
+          endTime: "11:30",
+          price: 30,
+          totalAmount: 3000,
+          status: "completed",
+        },
+      });
+      // Its invoice, issued and then credited whole: nothing left to take the reward.
+      const first = await invoices.fromAppointment(apt.id, { tenantId, requested: true });
+      await prisma.$transaction((tx) => invoices.rectifyByAmountIn(tx, tenantId, first!.id, 3000, "Abono entero"));
+
+      const out: any = await audited.processCheckout({
+        tenantId,
+        actor: { id: user.id, role: "owner" },
+        clientId,
+        appointmentIds: [apt.id],
+        loyaltyRewardId: rewardId,
+        payments: [{ method: "card", amount: 2500 }],
+      } as any);
+      expect(out.loyaltyRectifications).toBeUndefined();
+      expect(out.loyaltyNotOnInvoice).toEqual([
+        { appointmentId: apt.id, invoiceId: first!.id, invoice: expect.stringMatching(/^A/), amountCents: 500 },
+      ]);
+      const [payment] = await salePayments(out.saleId);
+      expect(payment.metadata.loyaltyNotOnInvoice).toMatchObject({ invoiceId: first!.id, amountCents: 500 });
+      const stored = await db.appointment.findUnique({ where: { id: apt.id } });
+      expect((stored.discount as any).loyalty).toMatchObject({ notOnInvoice: out.loyaltyNotOnInvoice[0].invoice, notOnInvoiceId: first!.id });
+      const logs = await db.auditLog.findMany({ where: { tenantId, action: "pos.loyalty_not_on_invoice" } });
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).toMatchObject({ actorId: user.id, metadata: expect.objectContaining({ saleId: out.saleId, appointmentId: apt.id, moneyCents: 500 }) });
+    } finally {
+      await db.auditLog.deleteMany({ where: { actorId: user.id } });
+      await db.user.delete({ where: { id: user.id } });
+    }
+  }, 60_000);
+
+  it("prices as the base: the visit's invoice, and the rectificativa of one issued before, come to the money to the cent", async () => {
+    if (!reachable) return;
+    const included = (await db.tenant.findUnique({ where: { id: tenantId } })).fiscalSettings;
+    await db.tenant.update({ where: { id: tenantId }, data: { fiscalSettings: { pricesIncludeTax: false, defaultTaxRate: 21, defaultSeries: "A" } } });
+    try {
+      // 20,02 + 21 % = 24,22 of money; 5,00 of reward -> 19,22 paid. No base gives exactly 19,22
+      // with its tax (15,88 -> 19,21, 15,89 -> 19,23): the invoice's tax takes the cent.
+      const visit = () =>
+        db.appointment.create({
+          data: {
+            tenantId,
+            clientId,
+            serviceId,
+            professionalId,
+            scheduledDate: new Date(),
+            scheduledTime: "12:00",
+            duration: 30,
+            endTime: "12:30",
+            price: 20.02,
+            totalAmount: 2002,
+            status: "completed",
+          },
+        });
+      const sell = (appointmentId: string) =>
+        pos.processCheckout({
+          tenantId,
+          actor: OWNER,
+          clientId,
+          appointmentIds: [appointmentId],
+          loyaltyRewardId: rewardId,
+          payments: [{ method: "card", amount: 1922 }],
+        } as any);
+
+      const later = await visit();
+      await sell(later.id);
+      const stored = await db.appointment.findUnique({ where: { id: later.id } });
+      expect((stored.discount as any).loyalty).toMatchObject({ moneyCents: 500 });
+      const issued = await invoices.fromAppointment(later.id, { tenantId, requested: true });
+      const inv = await db.invoice.findUnique({ where: { id: issued!.id } });
+      expect(inv.totalCents).toBe(1922);
+
+      const before = await visit();
+      const first = await invoices.fromAppointment(before.id, { tenantId, requested: true });
+      const out: any = await sell(before.id);
+      const rect = await db.invoice.findUnique({ where: { id: out.loyaltyRectifications[0].invoiceId } });
+      const original = await db.invoice.findUnique({ where: { id: first!.id } });
+      expect(original.totalCents).toBe(2422);
+      expect(rect.totalCents).toBe(-500);
+    } finally {
+      await db.tenant.update({ where: { id: tenantId }, data: { fiscalSettings: included } });
     }
   }, 60_000);
 });

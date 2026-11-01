@@ -60,6 +60,8 @@ interface CreateInvoiceInput {
     rectifiesLineId?: string;
     /** The loyalty reward's part of discountCents (InvoiceLineInput.loyaltyDiscountCents). */
     loyaltyDiscountCents?: number;
+    /** The invoice's rounding remainder on this line's tax (InvoiceLineInput.roundingCents). */
+    roundingCents?: number;
   }>;
   /**
    * Lines that leave `taxIncluded` out follow the salon's
@@ -661,9 +663,11 @@ export class InvoiceService {
     originalInvoiceId: string,
     amountCents: number,
     reason: string,
+    /** The money the credit stands for: the rectificativa credits it exactly (amountCreditLines). */
+    moneyCents?: number,
   ): Promise<IssuedInvoice> {
     return this.rectifyIn(tx, tenantId, originalInvoiceId, reason, (original, context) =>
-      amountCreditLines(original.lines, amountCents, context),
+      amountCreditLines(original.lines, amountCents, context, moneyCents),
     );
   }
 

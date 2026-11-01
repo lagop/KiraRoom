@@ -1393,7 +1393,19 @@ model WalletTransaction {
   /// Balance after
   balanceAfter Int
 
+  /// A top-up (money the client hands over to load her wallet) or a withdrawal (money handed
+  /// back to her): how. Null for other movements (a refund back to the wallet, a wallet
+  /// payment at the till). Not a Payment: the wallet is a prepayment, recognised as revenue
+  /// when it is spent (a wallet payment).
+  method        PaymentMethod?
+  /// The cash-drawer session open when it was taken or handed back: a cash one counts in that drawer.
+  cashSessionId String?
+  cashSession   CashSession?   @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
+  /// The team member who took the top-up or handed back the withdrawal. Not a relation: the record outlives the account.
+  recordedById  String?
+
   @@index([walletId])
+  @@index([cashSessionId])
   @@map("wallet_transactions")
 }
 
@@ -3678,6 +3690,7 @@ model CashSession {
   sales             PosSale[]
   payments          Payment[]
   refunds           Refund[]
+  walletTopUps      WalletTransaction[]
 
   @@index([tenantId, openedAt])
   @@index([tenantId, status])

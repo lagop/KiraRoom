@@ -20,6 +20,7 @@ import { ProfessionalsModule } from "../professionals/professionals.module";
 import { LoyaltyModule } from "../loyalty/loyalty.module";
 import { PlatformModule } from "../platform/platform.module";
 import { GiftCardsModule } from "../gift-cards/gift-cards.module";
+import { AuditLogService } from "../saas/audit-log.service";
 
 @Module({
   imports: [
@@ -46,6 +47,8 @@ import { GiftCardsModule } from "../gift-cards/gift-cards.module";
     TrialExpiryScheduler,
     GracePeriodScheduler,
     ReadOnlyNoticeService,
+    // Wallet top-ups are audit-logged (WalletService.topUp).
+    AuditLogService,
   ],
   exports: [
     PaymentsService,

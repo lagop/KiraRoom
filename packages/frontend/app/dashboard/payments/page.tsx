@@ -8,7 +8,9 @@ import apiClient, {
   type Payment,
   type PaymentFilters,
   type PaymentSummary,
+  type WalletTopUpMethod,
 } from "@/lib/api";
+import { WALLET_TOP_UP_METHODS, topUpProblem } from "@/lib/cash-session";
 import { useTranslations } from "@/lib/use-translation";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/components/ui/use-toast";
@@ -19,6 +21,7 @@ import {
   PAYMENT_METHOD_LABELS,
   PAYMENT_STATUS_LABELS,
   formatEuros,
+  loyaltyNotOnInvoice,
   methodLabel,
   parseEurosToCents,
   paymentConcept,
@@ -392,6 +395,7 @@ export default function PaymentsPage() {
                       const refunded = payment.refundedAmount ?? 0;
                       const partly = payment.status === "paid" && refunded > 0;
                       const canRefund = manager && refundableCents(payment) > 0;
+                      const offInvoice = loyaltyNotOnInvoice(payment);
                       return (
                         <tr key={payment.id} className="hover:bg-gray-50">
                           <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-700">
@@ -402,8 +406,22 @@ export default function PaymentsPage() {
                               ? `${payment.client.firstName} ${payment.client.lastName}`.trim()
                               : "—"}
                           </td>
-                          <td className="max-w-xs truncate px-4 py-3 text-sm text-gray-600" title={paymentConcept(payment)}>
-                            {paymentConcept(payment)}
+                          <td className="max-w-xs px-4 py-3 text-sm text-gray-600">
+                            <div className="truncate" title={paymentConcept(payment)}>
+                              {paymentConcept(payment)}
+                            </div>
+                            {offInvoice && (
+                              <Link
+                                href="/dashboard/billing/invoices"
+                                role="alert"
+                                className="mt-1 block whitespace-normal rounded bg-amber-50 px-2 py-1 text-xs text-amber-800 hover:underline"
+                              >
+                                {t("payments.loyalty_not_on_invoice", {
+                                  amount: formatEuros(offInvoice.amountCents),
+                                  invoice: offInvoice.invoice,
+                                })}
+                              </Link>
+                            )}
                           </td>
                           <td className="whitespace-nowrap px-4 py-3 text-sm font-medium text-gray-900">
                             {formatEuros(payment.amount)}
@@ -511,7 +529,16 @@ export default function PaymentsPage() {
 
 interface WalletView {
   balance: number;
-  transactions?: { id: string; type: "credit" | "debit"; amount: number; balanceAfter: number; description?: string | null; createdAt: string }[];
+  transactions?: {
+    id: string;
+    type: "credit" | "debit";
+    amount: number;
+    balanceAfter: number;
+    description?: string | null;
+    /** How a top-up was paid; null for other movements. */
+    method?: string | null;
+    createdAt: string;
+  }[];
 }
 
 /**
@@ -538,6 +565,9 @@ function WalletPanel({ manager }: { manager: boolean }) {
   const [note, setNote] = useState("");
   const [movementError, setMovementError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // A top-up says how she pays it; cash goes into the till's drawer, so it needs one open.
+  const [topUpMethod, setTopUpMethod] = useState<WalletTopUpMethod | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState<boolean | null>(null);
 
   // Server-side search, a moment after typing stops.
   useEffect(() => {
@@ -587,6 +617,13 @@ function WalletPanel({ manager }: { manager: boolean }) {
     setAmount("");
     setNote("");
     setMovementError(null);
+    setTopUpMethod(null);
+    // Cash in or out goes through the drawer: whether it is open, said before asking.
+    setDrawerOpen(null);
+    apiClient
+      .getCurrentCashSession()
+      .then((c) => setDrawerOpen(!!c.session))
+      .catch(() => setDrawerOpen(null)); // unknown: the server decides
   };
 
   const saveMovement = async () => {
@@ -600,17 +637,25 @@ function WalletPanel({ manager }: { manager: boolean }) {
       setMovementError(`El saldo es ${formatEuros(wallet?.balance ?? 0)}: no se puede retirar más.`);
       return;
     }
+    const tenderIssue = topUpProblem(topUpMethod, drawerOpen, movement);
+    if (tenderIssue) {
+      setMovementError(t(tenderIssue));
+      return;
+    }
     setSaving(true);
     setMovementError(null);
     try {
       if (movement === "deposit") {
-        await apiClient.depositToWallet(selected.id, cents, note.trim() || undefined);
+        await apiClient.depositToWallet(selected.id, cents, topUpMethod!, note.trim() || undefined);
       } else {
-        await apiClient.withdrawFromWallet(selected.id, cents, note.trim() || undefined);
+        await apiClient.withdrawFromWallet(selected.id, cents, topUpMethod!, note.trim() || undefined);
       }
       toast({
         title: movement === "deposit" ? "Ingreso registrado" : "Retirada registrada",
-        description: `${formatEuros(cents)} ${movement === "deposit" ? "ingresados en" : "retirados de"} la cartera.`,
+        description:
+          movement === "deposit"
+            ? `${formatEuros(cents)} ingresados en la cartera (${methodLabel(topUpMethod!).toLowerCase()}).`
+            : `${formatEuros(cents)} retirados de la cartera (${methodLabel(topUpMethod!).toLowerCase()}).`,
       });
       setMovement(null);
       await loadWallet(selected);
@@ -728,6 +773,7 @@ function WalletPanel({ manager }: { manager: boolean }) {
                       <li key={tx.id} className="flex justify-between gap-2">
                         <span className="truncate text-gray-600">
                           {new Date(tx.createdAt).toLocaleDateString("es-ES")} · {tx.description || (tx.type === "credit" ? "Ingreso" : "Cobro")}
+                          {tx.method && !/^(Recarga|Retirada)/.test(tx.description ?? "") ? ` · ${methodLabel(tx.method)}` : ""}
                         </span>
                         <span className={tx.type === "credit" ? "text-green-700" : "text-red-700"}>
                           {tx.type === "credit" ? "+" : "−"}
@@ -763,6 +809,43 @@ function WalletPanel({ manager }: { manager: boolean }) {
                 className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </label>
+            {movement && (
+              <fieldset>
+                <legend className="mb-1 block text-xs font-medium text-gray-700">
+                  {movement === "deposit" ? t("payments.top_up_method") : t("payments.withdraw_method")}
+                </legend>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" role="radiogroup">
+                  {WALLET_TOP_UP_METHODS.map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      role="radio"
+                      aria-checked={topUpMethod === m}
+                      onClick={() => {
+                        setTopUpMethod(m);
+                        setMovementError(null);
+                      }}
+                      className={`rounded-md border px-2 py-2 text-sm font-medium ${
+                        topUpMethod === m ? "border-blue-600 bg-blue-600 text-white" : "bg-white text-gray-700 hover:bg-gray-50"
+                      }`}
+                    >
+                      {methodLabel(m)}
+                    </button>
+                  ))}
+                </div>
+                {topUpMethod === "cash" && (
+                  <p className={`mt-1 text-xs ${drawerOpen === false ? "text-red-700" : "text-gray-500"}`}>
+                    {movement === "deposit"
+                      ? drawerOpen === false
+                        ? t("payments.top_up_drawer_closed")
+                        : t("payments.top_up_cash_hint")
+                      : drawerOpen === false
+                        ? t("payments.withdraw_drawer_closed")
+                        : t("payments.withdraw_cash_hint")}
+                  </p>
+                )}
+              </fieldset>
+            )}
             <label className="block">
               <span className="mb-1 block text-xs font-medium text-gray-700">Nota (opcional)</span>
               <input

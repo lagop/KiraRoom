@@ -4,6 +4,7 @@ import {
   IsArray,
   IsBoolean,
   IsEnum,
+  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
@@ -84,6 +85,37 @@ export class RefundLineDto {
   @Min(1, { message: "Las unidades a devolver deben ser al menos 1." })
   @Max(10_000, { message: "Las unidades a devolver no son válidas." })
   quantity!: number;
+}
+
+/**
+ * How money goes into a wallet (a top-up) or comes out of it to the client
+ * (a withdrawal): real money, not another wallet, a gift card or points.
+ */
+export const WALLET_TOP_UP_METHODS = ["cash", "card", "bizum", "bank_transfer"] as const;
+export type WalletTopUpMethod = (typeof WALLET_TOP_UP_METHODS)[number];
+/** The same tenders, for money handed back from the wallet. */
+export const WALLET_TENDER_METHODS = WALLET_TOP_UP_METHODS;
+export type WalletTenderMethod = WalletTopUpMethod;
+
+/**
+ * POST /payments/wallet/:clientId/deposit: a top-up, and how the client
+ * paid it (WalletService.topUp). Cash goes into the drawer, so it needs one
+ * open; the rest is linked to the open drawer, if any, for its report.
+ */
+export class WalletDepositDto extends WalletAmountDto {
+  @IsIn(WALLET_TOP_UP_METHODS, { message: "Indica cómo paga la recarga: efectivo, tarjeta, Bizum o transferencia." })
+  method!: WalletTopUpMethod;
+}
+
+/**
+ * POST /payments/wallet/:clientId/withdraw: money handed back to the client
+ * from her wallet, and how (WalletService.withdraw). Cash comes out of the
+ * drawer, so it needs one open; the rest is linked to the open drawer, if
+ * any, for its report.
+ */
+export class WalletWithdrawDto extends WalletAmountDto {
+  @IsIn(WALLET_TENDER_METHODS, { message: "Indica cómo se le devuelve el dinero: efectivo, tarjeta, Bizum o transferencia." })
+  method!: WalletTenderMethod;
 }
 
 /**
