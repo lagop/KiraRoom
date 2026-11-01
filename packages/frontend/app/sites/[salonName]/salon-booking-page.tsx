@@ -172,6 +172,9 @@ export default function SalonBookingPage({
   const services = initial.services;
   // The booking form offers only what the salon takes online; the price list shows everything.
   const bookableServices = services.filter((s) => s.isOnlineBookable);
+  // The prices are final (the server adds the tax to a catalogue written
+  // without it); said once per list: "Precios con IVA incluido".
+  const taxIncluded = initialData.taxLabel ? t("sites.taxIncluded", { label: initialData.taxLabel }) : null;
   const hoursRows = openingHoursRows(initialData.openingHours, initialData.openingShifts);
   const [availableSlots, setAvailableSlots] = useState<AvailableTimeSlot[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
@@ -817,6 +820,11 @@ export default function SalonBookingPage({
                     </option>
                   ))}
                 </select>
+                {taxIncluded && (
+                  <p data-test="booking-tax-included" className="text-xs text-gray-500">
+                    {taxIncluded}
+                  </p>
+                )}
               </div>
 
               {/* Step 3: Professional Selection */}
@@ -1025,6 +1033,11 @@ export default function SalonBookingPage({
                 <h3 className="font-semibold text-gray-900 mb-2">
                   {t("sites.ourServices")}
                 </h3>
+                {taxIncluded && (
+                  <p data-test="price-list-tax-included" className="-mt-1 mb-2 text-xs text-gray-500">
+                    {taxIncluded}
+                  </p>
+                )}
                 <ul className="space-y-2 text-gray-600">
                   {services.map((service) => (
                     <li key={service.id} className="flex items-start justify-between gap-4">

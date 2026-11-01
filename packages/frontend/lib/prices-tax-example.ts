@@ -80,3 +80,35 @@ export function pricesTaxExampleMessage(
     params: { ...ex, label: taxLabel },
   };
 }
+
+/**
+ * What a client sees for a catalogue price, in cents: the price itself when
+ * the salon's prices include the tax, else the price plus the tax on top.
+ * Same arithmetic as the server (backend common/public-price.ts), which
+ * turns every price the website, the widget and the receptionist show into
+ * the final one, and as the invoice: 30,00 € at 21 % is 36,30 €.
+ */
+export function clientPriceCents(priceCents: number, ratePercent: number, pricesIncludeTax: boolean): number {
+  const cents = Math.round(priceCents);
+  if (pricesIncludeTax) return cents;
+  const rate = Number.isFinite(ratePercent) && ratePercent > 0 ? ratePercent : 0;
+  return cents + Math.round(cents * (rate / 100));
+}
+
+/**
+ * The hint under the price in the service drawer, for `t()`: "Las clientas
+ * verán 36,30 € (IVA incluido)". Only when the salon writes its prices
+ * without the tax (pricesIncludeTax false): otherwise clients see the price
+ * as typed and there is nothing to say. Null too while the fiscal settings
+ * load (undefined) or while the price typed is not a price.
+ */
+export function clientPriceHint(
+  priceEuros: number | null,
+  ratePercent: number,
+  pricesIncludeTax: boolean | undefined,
+  taxLabel: string,
+): { key: string; params: Record<string, string> } | null {
+  if (pricesIncludeTax !== false || priceEuros === null || !Number.isFinite(priceEuros)) return null;
+  const cents = clientPriceCents(Math.round(priceEuros * 100), ratePercent, false);
+  return { key: "services.client_price_hint", params: { price: formatEuros(cents), label: taxLabel } };
+}

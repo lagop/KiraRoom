@@ -63,6 +63,8 @@ function makeService({ tlsReady = false, subdomains = false, tenant = {} as any 
               language: "es",
               updatedAt: new Date("2026-10-01T10:00:00Z"),
               customDomain: null,
+              // A new salon: its catalogue already includes the IVA.
+              fiscalSettings: { pricesIncludeTax: true, defaultTaxRate: 21, taxRegime: "iva", tenantNif: "B12345678" },
               ...tenant,
             },
       ),
@@ -129,6 +131,35 @@ describe("PublicSiteService.getPage", () => {
     expect(page.professionals[0]).not.toHaveProperty("workingHours");
     expect(page.professionals[0].services).toEqual([{ serviceId: "s1" }]);
     expect(page.address).toEqual({ street: "Calle Mayor 1", city: "Madrid", state: "Madrid", postalCode: "28013", country: "ES" });
+  });
+
+  it("prices are the final ones, tax included, whatever way the catalogue is written", async () => {
+    // Catalogue with the IVA inside: shown as stored.
+    const included = await makeService().svc.getPage("x");
+    expect(included.services[0].price).toBe(18.5);
+    expect(included.taxLabel).toBe("IVA");
+
+    // Net catalogue: the IVA the invoice adds is in the price shown.
+    const net = await makeService({ tenant: { fiscalSettings: { pricesIncludeTax: false, defaultTaxRate: 21 } } }).svc.getPage("x");
+    expect(net.services[0].price).toBe(22.39); // 18,50 + 3,885 -> 3,89
+    expect(net.taxLabel).toBe("IVA");
+
+    // A salon from before the setting: no key, net, as its invoices are.
+    const legacy = await makeService({ tenant: { fiscalSettings: {} } }).svc.getPage("x");
+    expect(legacy.services[0].price).toBe(22.39);
+
+    // The Canaries: IGIC 7 %.
+    const canary = await makeService({
+      tenant: { fiscalSettings: { pricesIncludeTax: false, defaultTaxRate: 7, taxRegime: "igic" } },
+    }).svc.getPage("x");
+    expect(canary.services[0].price).toBe(19.8); // 18,50 + 1,295 -> 1,30
+    expect(canary.taxLabel).toBe("IGIC");
+  });
+
+  it("never sends the salon's fiscal settings, only the label of its tax", async () => {
+    const page = await makeService().svc.getPage("x");
+    expect(page).not.toHaveProperty("fiscalSettings");
+    expect(JSON.stringify(page)).not.toContain("B12345678");
   });
 
   it("shows the salon's own hours when it set them, not its professionals'", async () => {

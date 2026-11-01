@@ -18,6 +18,7 @@ import {
   getIntentClassifierPrompt,
 } from '../prompts/templates';
 import { salonPublicUrlFromEnv } from '../../web-domain/public-url';
+import { publicPrice, publicPriceSettings } from '../../common/public-price';
 
 /** Providers whose implementation runs the tool loop. The others ignore `tools`. */
 const TOOL_CAPABLE_PROVIDERS = new Set<LLMProvider>([LLMProvider.ANTHROPIC, LLMProvider.MiniMax]);
@@ -127,6 +128,7 @@ interface SalonContext {
   // Populated by FAQService (in-memory default set today). Capped
   // in buildSystemPrompt() to keep the prompt under ~2k tokens.
   faqs?: Array<{ question: string; answer: string }>;
+  /** `price` is what the client pays, tax included (common/public-price.ts). */
   services: Array<{ name: string; duration: number; price: number; category: string }>;
   professionals: Array<{ firstName: string; lastName: string; position?: string; specialties: string[] }>;
   /** Per weekday, the salon's open stretches (several when it closes for lunch). */
@@ -558,7 +560,7 @@ export class LLMService {
         services: tenant.services.map(s => ({
           name: s.name,
           duration: s.duration,
-          price: Number(s.price),
+          price: publicPrice(s.price, publicPriceSettings(tenant.fiscalSettings)),
           category: s.category,
         })),
         professionals: tenant.professionals.map(p => ({

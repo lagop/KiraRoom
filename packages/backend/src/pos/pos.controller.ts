@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Get, Post, Put, Body, Param, Query, Req, Patch, Delete } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, UseInterceptors, Get, Post, Put, Body, Param, Query, Req, Patch, Delete } from "@nestjs/common";
 import { PosService } from './pos.service';
 import {
   CreatePosOrderDto,
@@ -12,10 +12,13 @@ import {
 import { ProductService } from './product.service';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Roles, SALON_TEAM, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
+import { ScrubSecretsInterceptor } from "../appointments/appointment-response";
 
 @ApiTags('POS')
 @ApiBearerAuth()
 @Controller('pos')
+// Nothing from the till carries the salon's keys or channel tokens.
+@UseInterceptors(ScrubSecretsInterceptor)
 export class PosController {
   constructor(
     private readonly posService: PosService,

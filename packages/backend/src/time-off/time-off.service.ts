@@ -211,6 +211,7 @@ export class TimeOffService {
       const day = dayOf(apt.scheduledDate);
       const caught = appointmentBusyBlocks(apt, timeZone, day).filter(
         (b) =>
+          !b.cleanup &&
           (professionalId === null || b.professionalId === professionalId) &&
           b.startMinutes < window.endMinutes &&
           window.startMinutes < b.endMinutes,

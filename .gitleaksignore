@@ -12,3 +12,11 @@
 # A test UUID beside clientId (generic-api-key), in the first commit of #161.
 # The spec now builds the UUIDs at runtime.
 acfa4b9bb2f2d07bd97a7ae2f09e7de6693c579c:packages/backend/src/appointments/update-appointment-body.spec.ts:generic-api-key:49
+
+# Fictitious Stripe-looking keys in the payments spec (#205, first commit); the
+# spec now builds them at runtime.
+51d97d54f4ffe2c7efa1d6c2186af2acd014131a:packages/backend/src/payments/payments-screen.spec.ts:generic-api-key:451
+51d97d54f4ffe2c7efa1d6c2186af2acd014131a:packages/backend/src/payments/payments-screen.spec.ts:stripe-access-token:408
+51d97d54f4ffe2c7efa1d6c2186af2acd014131a:packages/backend/src/payments/payments-screen.spec.ts:stripe-access-token:439
+51d97d54f4ffe2c7efa1d6c2186af2acd014131a:packages/backend/src/payments/payments-screen.spec.ts:stripe-access-token:444
+51d97d54f4ffe2c7efa1d6c2186af2acd014131a:packages/backend/src/payments/payments-screen.spec.ts:stripe-access-token:468
