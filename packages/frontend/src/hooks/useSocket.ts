@@ -5,7 +5,6 @@ import { io, Socket } from 'socket.io-client';
 
 interface SocketAuth {
   userId?: string;
-  clientId?: string;
   tenantId: string;
   token?: string;
 }
@@ -22,7 +21,6 @@ interface NotificationData {
 
 interface UseSocketOptions {
   userId?: string;
-  clientId?: string;
   tenantId: string;
   token?: string;
   onNotification?: (notification: NotificationData) => void;
@@ -53,7 +51,6 @@ const NOTIFICATION_NAMESPACE = '/notifications';
 export function useSocket(options: UseSocketOptions): UseSocketReturn {
   const {
     userId,
-    clientId,
     tenantId,
     token,
     onNotification,
@@ -74,7 +71,6 @@ export function useSocket(options: UseSocketOptions): UseSocketReturn {
     const auth: SocketAuth = {
       tenantId,
       ...(userId && { userId }),
-      ...(clientId && { clientId }),
       ...(token && { token }),
     };
 
@@ -118,7 +114,7 @@ export function useSocket(options: UseSocketOptions): UseSocketReturn {
       socketRef.current = null;
       setIsConnected(false);
     };
-  }, [enabled, tenantId, userId, clientId, token, onNotification, onConnect, onDisconnect]);
+  }, [enabled, tenantId, userId, token, onNotification, onConnect, onDisconnect]);
 
   const subscribe = useCallback((types: string[]) => {
     if (socketRef.current?.connected) {

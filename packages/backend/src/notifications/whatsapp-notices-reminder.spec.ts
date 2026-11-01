@@ -45,7 +45,7 @@ function setup(preferences: unknown) {
     },
     notification: { create: jest.fn(async () => ({ id: "n1" })) },
   };
-  const notifications = new NotificationsService(prisma, { emitToClient: jest.fn() } as any, {} as any);
+  const notifications = new NotificationsService(prisma, { emitToUser: jest.fn() } as any, {} as any);
   const templates = { sendAppointmentReminder: jest.fn(async () => ({ sent: true, messageId: "wamid.1" })) };
   const email = { isConfigured: () => true, sendAppointmentReminder: jest.fn(async () => ({ success: true })) };
   const sms = { isConfigured: () => false, sendAppointmentReminder: jest.fn() };

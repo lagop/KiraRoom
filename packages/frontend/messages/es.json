@@ -1940,7 +1940,8 @@
     "view_details": "Ver detalles",
     "confirm_mark_all_paid": "¿Seguro que quieres marcar todas las comisiones pendientes como pagadas?",
     "confirm_mark_paid_description": "Se marcarán como pagadas las comisiones pendientes de {name} en el período elegido: {amount}.",
-    "mark_paid": "Marcar como pagadas"
+    "mark_paid": "Marcar como pagadas",
+    "refund_adjustment": "Ajuste por devolución"
   },
   "description": "Resumen de comisiones de tu equipo",
   "email_campaigns": {
@@ -2629,5 +2630,106 @@
     "error": "No se ha podido comprobar el enlace. Inténtalo de nuevo en unos minutos.",
     "retry": "Reintentar",
     "back_to_login": "Volver a iniciar sesión"
+  },
+  "waitList": {
+    "title": "Lista de espera",
+    "subtitle": "Clientes que quieren un hueco que ahora está lleno. Cuando se libere, avísales con un enlace para reservarlo.",
+    "add": "Añadir a la lista",
+    "dateFmt": "es-ES",
+    "errors": {
+      "forbidden": "No tienes permiso para hacer esto.",
+      "generic": "Algo ha fallado. Inténtalo de nuevo."
+    },
+    "channels": {
+      "title": "Canales para avisar:",
+      "unavailable": "no disponible",
+      "none": "Ahora mismo no se puede avisar a nadie: falta configurar un proveedor de email o SMS, o conectar el WhatsApp del salón en Ajustes → WhatsApp. \"Avisar\" te dirá qué ha pasado con cada canal.",
+      "email": "Email",
+      "whatsapp": "WhatsApp",
+      "sms": "SMS",
+      "inApp": "Área de cliente (antiguo)"
+    },
+    "auto": {
+      "label": "Avisar automáticamente cuando se cancela una cita.",
+      "help": "Se avisa a los 3 primeros clientes que esperan ese servicio y cuyas fechas encajan, por orden de llegada, saltando a quien no se puede avisar. Solo de 9:00 a 21:00: de noche no se envía nada y te llega un aviso en el panel. Si está desactivado, o si no se ha podido avisar a nadie, también te llega un aviso para que decidas tú.",
+      "on": "Avisos automáticos al cancelarse una cita: activados.",
+      "off": "Avisos automáticos al cancelarse una cita: desactivados."
+    },
+    "status": {
+      "waiting": "Esperando",
+      "notified": "Avisado",
+      "fulfilled": "Ha reservado",
+      "cancelled": "Descartado",
+      "expired": "Caducado"
+    },
+    "filters": {
+      "open": "Pendientes",
+      "fulfilled": "Han reservado",
+      "cancelled": "Descartados",
+      "expired": "Caducados",
+      "all": "Todos"
+    },
+    "closed": {
+      "window_passed": "Caducado: las fechas que pidió ya han pasado.",
+      "too_old": "Caducado: llevaba 90 días sin avisos ni cambios.",
+      "client_left": "Se quitó de la lista desde el enlace «Ya no me interesa» del aviso.",
+      "expired": "Caducado."
+    },
+    "empty": "No hay nadie en la lista.",
+    "entry": {
+      "service": "Servicio",
+      "serviceWith": "{service} con {professional}",
+      "anyDate": "cualquier fecha",
+      "noEmail": "sin email",
+      "noPhone": "sin teléfono",
+      "since": "en la lista desde {date}",
+      "lastNotice": "último aviso {date}",
+      "note": "Nota: {note}"
+    },
+    "actions": {
+      "notify": "Avisar",
+      "booked": "Ha reservado",
+      "discard": "Descartar",
+      "reopen": "Volver a la lista",
+      "remove": "Eliminar"
+    },
+    "remove": {
+      "title": "¿Quitar a {name} de la lista de espera?",
+      "confirm": "Quitar de la lista"
+    },
+    "outcome": {
+      "sent": "Último aviso enviado",
+      "sentAuto": "Último aviso enviado automáticamente",
+      "notDelivered": "El último intento no llegó a ningún canal",
+      "channelSent": "enviado",
+      "channelFailed": "falló",
+      "channelSkipped": "no enviado",
+      "providerFailed": "el proveedor no ha podido enviarlo"
+    },
+    "notify": {
+      "title": "Avisar a {name}",
+      "help": "Recibirá un mensaje con el hueco que indiques y un enlace para reservarlo en tu web (si el servicio no se reserva online, le pedirá que llame al salón). Si no indicas fecha, el mensaje dirá que hay huecos disponibles.",
+      "date": "Fecha",
+      "time": "Hora",
+      "professional": "Profesional",
+      "anyProfessional": "Cualquiera",
+      "cancel": "Cancelar",
+      "sending": "Enviando…",
+      "send": "Enviar aviso"
+    },
+    "addDialog": {
+      "title": "Añadir a la lista de espera",
+      "client": "Cliente:",
+      "change": "cambiar",
+      "search": "Busca al cliente",
+      "service": "Servicio",
+      "anyProfessional": "Cualquier profesional",
+      "from": "Desde",
+      "to": "Hasta",
+      "notePlaceholder": "Nota (opcional): mejor por la tarde…",
+      "cancel": "Cancelar",
+      "adding": "Añadiendo…",
+      "add": "Añadir"
+    }
   }
 }

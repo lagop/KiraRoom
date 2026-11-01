@@ -1,5 +1,4 @@
 import { HttpException, HttpStatus, Injectable } from "@nestjs/common";
-import { JwtService } from "@nestjs/jwt";
 import { PrismaService } from "../../common/prisma/prisma.service";
 import { issueVisitorToken, legacyVisitorUuid, readVisitorToken, visitorKey } from "./visitor-token";
 
@@ -9,15 +8,14 @@ import { issueVisitorToken, legacyVisitorUuid, readVisitorToken, visitorKey } fr
  * this stops one visitor from spending a salon's AI messages all day.
  */
 export const VISITOR_DAILY_MESSAGES = 40;
-export const CLIENT_DAILY_MESSAGES = 80;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export type ChatIdentity =
-  /** A client signed in on this salon's site: their conversation is theirs. */
-  | { kind: "client"; clientId: string }
-  /** Anyone else: an id the server issued, signed, kept by the browser. */
-  | { kind: "visitor"; clientId: string; visitorToken: string };
+/**
+ * Whoever writes: an id the server issued, signed, kept by the browser.
+ * (Salon clients have no accounts, so nobody is recognised by a session.)
+ */
+export type ChatIdentity = { kind: "visitor"; clientId: string; visitorToken: string };
 
 export class ChatDailyLimitException extends HttpException {
   constructor(limit: number) {
@@ -35,19 +33,10 @@ export class ChatDailyLimitException extends HttpException {
   }
 }
 
-/**
- * Who is writing on the public chat, and whether they may write more today.
- * The endpoint stays public (visitors have no account), so a signed-in client
- * is recognised from their session here rather than by the auth guard.
- */
+/** Who is writing on the public chat, and whether they may write more today. */
 @Injectable()
 export class PublicChatAccessService {
-  private readonly jwt: JwtService;
-
-  constructor(private readonly prisma: PrismaService) {
-    // The app's JwtModule is registered in AppModule only; same secret.
-    this.jwt = new JwtService({ secret: process.env.JWT_SECRET });
-  }
+  constructor(private readonly prisma: PrismaService) {}
 
   private secret(): string {
     const s = process.env.JWT_SECRET;
@@ -55,13 +44,7 @@ export class PublicChatAccessService {
     return s;
   }
 
-  async identify(
-    input: { salonId: string; visitorToken?: string; clientId?: string },
-    authorization?: string,
-  ): Promise<ChatIdentity> {
-    const client = await this.signedInClient(input.salonId, authorization);
-    if (client) return { kind: "client", clientId: client };
-
+  identify(input: { salonId: string; visitorToken?: string; clientId?: string }): ChatIdentity {
     const uuid =
       readVisitorToken(this.secret(), input.salonId, input.visitorToken) ??
       legacyVisitorUuid(input.clientId) ??
@@ -71,41 +54,14 @@ export class PublicChatAccessService {
     return { kind: "visitor", clientId: visitorKey(visitorUuid), visitorToken };
   }
 
-  /** The client id if the bearer token is a current session of a client of this salon. */
-  private async signedInClient(salonId: string, authorization?: string): Promise<string | null> {
-    const m = /^Bearer\s+(.+)$/i.exec(authorization ?? "");
-    if (!m) return null;
-    let payload: any;
-    try {
-      payload = this.jwt.verify(m[1]);
-    } catch {
-      return null;
-    }
-    if (payload?.role !== "client" || payload.tenantId !== salonId || typeof payload.sub !== "string") {
-      return null;
-    }
-    const client = await this.prisma.client.findFirst({
-      where: { id: payload.sub, tenantId: salonId },
-      select: { id: true, tokenVersion: true },
-    });
-    // A token from before a logout or password change no longer counts.
-    if (!client || (payload.tv ?? 0) !== client.tokenVersion) return null;
-    return client.id;
-  }
-
   async assertWithinDailyLimit(identity: ChatIdentity, tenantId: string, now = new Date()): Promise<void> {
-    const limit = identity.kind === "client" ? CLIENT_DAILY_MESSAGES : VISITOR_DAILY_MESSAGES;
-    const conversation =
-      identity.kind === "client"
-        ? { tenantId, clientId: identity.clientId }
-        : { tenantId, context: { path: ["visitorKey"], equals: identity.clientId } };
     const sent = await this.prisma.chatMessage.count({
       where: {
         role: "user",
         createdAt: { gte: new Date(now.getTime() - DAY_MS) },
-        conversation,
+        conversation: { tenantId, context: { path: ["visitorKey"], equals: identity.clientId } },
       },
     });
-    if (sent >= limit) throw new ChatDailyLimitException(limit);
+    if (sent >= VISITOR_DAILY_MESSAGES) throw new ChatDailyLimitException(VISITOR_DAILY_MESSAGES);
   }
 }

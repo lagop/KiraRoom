@@ -11,7 +11,6 @@ import {
   Req,
   UseGuards,
 } from "@nestjs/common";
-import { UserRole } from "@prisma/client";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { Roles, SALON_MANAGERS, SALON_TEAM } from "../auth/decorators/roles.decorator";
@@ -112,28 +111,5 @@ export class LoyaltyController {
   @Roles(...SALON_TEAM)
   clientSummary(@Req() req: any, @Param("clientId", ParseUUIDPipe) clientId: string) {
     return this.loyalty.clientSummary(req.user.tenantId, clientId);
-  }
-}
-
-/**
- * The client's side, from the client portal. Not behind @Feature: a salon
- * without the programme answers { enabled: false } instead of a 403 the
- * portal would have to interpret.
- */
-@Controller("loyalty/me")
-@UseGuards(JwtAuthGuard, RolesGuard)
-export class LoyaltyPortalController {
-  constructor(private readonly loyalty: LoyaltyService) {}
-
-  @Get()
-  @Roles(UserRole.client)
-  mine(@Req() req: any) {
-    return this.loyalty.portalView(req.user.tenantId, req.user.id);
-  }
-
-  @Post("join")
-  @Roles(UserRole.client)
-  join(@Req() req: any) {
-    return this.loyalty.portalJoin(req.user.tenantId, req.user.id);
   }
 }

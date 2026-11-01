@@ -1,5 +1,4 @@
-import { BadRequestException, ForbiddenException, NotFoundException } from "@nestjs/common";
-import { UserRole } from "@prisma/client";
+import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { ConsentController } from "./consent.controller";
 import { ConsentService } from "./consent.service";
 import { ROLES_KEY, SALON_TEAM } from "../auth/decorators/roles.decorator";
@@ -12,9 +11,9 @@ import { IS_PUBLIC_KEY } from "../auth/decorators/public.decorator";
  * the body, so a signature (with health answers) could be recorded for a
  * client without any session, and a signed consent is what lets her
  * appointment be confirmed. It now needs a session: the salon is the
- * session's, a team member records a signature taken in the salon, and a
- * signed-in client signs only for herself. Client, form, appointment and
- * service must all be the salon's.
+ * session's and a team member records a signature taken in the salon
+ * (clients have no accounts). Client, form, appointment and service must
+ * all be the salon's.
  */
 
 const FORM = { id: "form-1", tenantId: "t1", isActive: true, purpose: "custom", version: 2, fields: [{ id: "f_1" }] };
@@ -60,9 +59,9 @@ const base = { tenantId: "t1", clientId: "ana", formId: FORM.id, responses: { f_
 describe("POST /consent/sign: who may call it", () => {
   const handler = ConsentController.prototype.sign;
 
-  it("is not public, and is open to the salon team and to clients", () => {
+  it("is not public, and is open to the salon team only (clients have no accounts)", () => {
     expect(Reflect.getMetadata(IS_PUBLIC_KEY, handler)).toBeUndefined();
-    expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([...SALON_TEAM, UserRole.client]);
+    expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([...SALON_TEAM]);
   });
 
   function controller() {
@@ -70,25 +69,6 @@ describe("POST /consent/sign: who may call it", () => {
     return { ctl: new ConsentController({ sign } as any), sign };
   }
   const req = (user: any) => ({ user, headers: { "x-forwarded-for": "9.9.9.9" }, socket: {} }) as any;
-
-  it("a client signs for herself: the salon and the client are the session's", async () => {
-    const { ctl, sign } = controller();
-
-    await ctl.sign({ formId: FORM.id, responses: { f_1: true } } as any, req({ id: "ana", tenantId: "t1", role: "client" }));
-
-    expect(sign).toHaveBeenCalledWith(
-      expect.objectContaining({ tenantId: "t1", clientId: "ana", formId: FORM.id, ip: "9.9.9.9" }),
-    );
-    expect(sign.mock.calls[0][0].recordedBy).toBeUndefined();
-  });
-
-  it("a client cannot sign for someone else", async () => {
-    const { ctl, sign } = controller();
-    await expect(
-      ctl.sign({ formId: FORM.id, clientId: "bea" } as any, req({ id: "ana", tenantId: "t1", role: "client" })),
-    ).rejects.toBeInstanceOf(ForbiddenException);
-    expect(sign).not.toHaveBeenCalled();
-  });
 
   it("the team names the client and the name she signed with, and the record says who recorded it", async () => {
     const { ctl, sign } = controller();

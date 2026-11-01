@@ -1,6 +1,8 @@
 /**
  * How the wait list shows an entry's state. Kept pure so
- * lib/wait-list-status.spec.ts can check it without the page.
+ * lib/wait-list-status.spec.ts can check it without the page. Everything
+ * here is a messages key under "waitList" (es.json first, en.json to match);
+ * the page translates it.
  *
  * Entries close in four ways: the client booked ("Ha reservado"), the salon
  * discarded it, the system expired it (its dates passed, or it sat untouched
@@ -10,37 +12,37 @@
 
 export type WaitListStatus = "waiting" | "notified" | "cancelled" | "fulfilled" | "expired";
 
-export const WAIT_LIST_STATUS_LABEL: Record<WaitListStatus, string> = {
-  waiting: "Esperando",
-  notified: "Avisado",
-  fulfilled: "Ha reservado",
-  cancelled: "Descartado",
-  expired: "Caducado",
+export const WAIT_LIST_STATUS_KEY: Record<WaitListStatus, string> = {
+  waiting: "waitList.status.waiting",
+  notified: "waitList.status.notified",
+  fulfilled: "waitList.status.fulfilled",
+  cancelled: "waitList.status.cancelled",
+  expired: "waitList.status.expired",
 };
 
-/** The filter tabs, in order. "open" is waiting + notified. */
+/** The filter tabs, in order: [filter, label key]. "open" is waiting + notified. */
 export const WAIT_LIST_FILTERS: Array<[string, string]> = [
-  ["open", "Pendientes"],
-  ["fulfilled", "Han reservado"],
-  ["cancelled", "Descartados"],
-  ["expired", "Caducados"],
-  ["all", "Todos"],
+  ["open", "waitList.filters.open"],
+  ["fulfilled", "waitList.filters.fulfilled"],
+  ["cancelled", "waitList.filters.cancelled"],
+  ["expired", "waitList.filters.expired"],
+  ["all", "waitList.filters.all"],
 ];
 
 export function isOpenStatus(status: string): boolean {
   return status === "waiting" || status === "notified";
 }
 
-/** One line on why a closed entry closed, when the system or the client closed it. */
+/** The key of one line on why a closed entry closed, when the system or the client closed it. */
 export function closedNote(entry: { status: string; closedReason?: string | null }): string | null {
   switch (entry.closedReason) {
     case "window_passed":
-      return "Caducado: las fechas que pidió ya han pasado.";
+      return "waitList.closed.window_passed";
     case "too_old":
-      return "Caducado: llevaba 90 días sin avisos ni cambios.";
+      return "waitList.closed.too_old";
     case "client_left":
-      return "Se quitó de la lista desde el enlace «Ya no me interesa» del aviso.";
+      return "waitList.closed.client_left";
     default:
-      return entry.status === "expired" ? "Caducado." : null;
+      return entry.status === "expired" ? "waitList.closed.expired" : null;
   }
 }

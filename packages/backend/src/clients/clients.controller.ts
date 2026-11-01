@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, UseGuards, ForbiddenException, NotFoundException, HttpCode, HttpStatus } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, NotFoundException } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
@@ -10,7 +10,7 @@ import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { UserRole } from "@prisma/client";
 import { ClientsService, ClientFilters, ClientScope } from "./clients.service";
-import { CreateClientDto, UpdateClientDto, UpdateMyProfileDto, ChangeMyPasswordDto } from "./dto";
+import { CreateClientDto, UpdateClientDto } from "./dto";
 import { parseClientListQuery } from "./client-search";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { User } from "@prisma/client";
@@ -27,7 +27,6 @@ import { AllowWhenReadOnly } from "../common/decorators/allow-when-read-only.dec
  *   reaches no client at all (empty list, 404). Staff may edit those
  *   clients' details but not their email or status (403), and every
  *   client they create starts active.
- * - client: only their own record (GET /clients/:id, /clients/me).
  */
 @ApiTags("clients")
 @Controller("clients")
@@ -131,47 +130,17 @@ export class ClientsController {
     return this.clientsService.findAllWithFilters(user.tenantId, filters);
   }
 
-  // Before ":id", which would capture it (see route-order.spec).
-  @Get("me")
-  @Roles(UserRole.client)
-  @ApiOperation({ summary: "A client reads their own profile" })
-  async getMe(@CurrentUser() user: any) {
-    return this.clientsService.getSelf(user.tenantId, user.id);
-  }
-
   @Get(":id")
   // Was @Public(): an unauthenticated GET that returned any client by
   // UUID, taxId included, with no tenant check. Now authenticated and
-  // tenant-scoped; a client may only read their own record and staff only
-  // their own clients (see the class comment).
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff, UserRole.client)
+  // tenant-scoped; staff only reach their own clients (see the class comment).
+  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
   @ApiOperation({ summary: "A client's file: details and visits" })
   @ApiResponse({ status: 200, description: "Client found" })
   @ApiResponse({ status: 404, description: "Client not found (or not one of the staff member's clients)" })
   async findOne(@CurrentUser() user: any, @Param("id", ParseUUIDPipe) id: string) {
-    if (user.role === UserRole.client) {
-      if (user.id !== id) {
-        throw new ForbiddenException("A client may only read their own record");
-      }
-      return this.clientsService.findSelfRecord(user.tenantId, id);
-    }
     const scope = await this.scopeOrNotFound(user);
     return this.clientsService.findOne(user.tenantId, id, scope);
-  }
-
-  @Patch("me")
-  @Roles(UserRole.client)
-  @ApiOperation({ summary: "A client updates their own profile" })
-  async updateMe(@CurrentUser() user: any, @Body() dto: UpdateMyProfileDto) {
-    return this.clientsService.updateSelf(user.tenantId, user.id, dto);
-  }
-
-  @Post("me/password")
-  @Roles(UserRole.client)
-  @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({ summary: "A client changes their own password" })
-  async changeMyPassword(@CurrentUser() user: any, @Body() dto: ChangeMyPasswordDto) {
-    await this.clientsService.changeOwnPassword(user.tenantId, user.id, dto);
   }
 
   @Put(":id")

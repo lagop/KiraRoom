@@ -1272,11 +1272,6 @@ export class AppointmentsService {
       throw new NotFoundException("Cita no encontrada");
     }
 
-    // A client sees only their own appointments.
-    if (user.role === "client" && appointment.clientId !== user.id) {
-      throw new NotFoundException("Cita no encontrada");
-    }
-
     // Validar que STAFF solo pueda ver sus propias citas
     if (user.role === "staff") {
       const professional = await this.prisma.professional.findFirst({
@@ -1382,7 +1377,7 @@ export class AppointmentsService {
     if (statusTo) {
       Object.assign(
         updateData,
-        await this.prepareStatusChange(user, appointment, statusTo, {
+        await this.prepareStatusChange(appointment, statusTo, {
           reason: dto.cancellationReason,
         }),
       );
@@ -1796,23 +1791,6 @@ export class AppointmentsService {
     }
   }
 
-  /**
-   * The calling client's own appointments, for the salon site's account
-   * page. It used to call GET /appointments, which is staff-only, so a
-   * signed-in client never saw a single appointment.
-   */
-  async findForClient(user: { id: string; tenantId: string }) {
-    return this.prisma.appointment.findMany({
-      where: { clientId: user.id, tenantId: user.tenantId },
-      include: {
-        service: true,
-        professional: {
-          select: { id: true, firstName: true, lastName: true, profileImage: true },
-        },
-      },
-      orderBy: [{ scheduledDate: "desc" }, { scheduledTime: "desc" }],
-    });
-  }
 
   async cancel(user: any, id: string, reason?: string) {
     return this.changeStatus(user, id, AppointmentStatus.cancelled, { reason });
@@ -1835,9 +1813,8 @@ export class AppointmentsService {
    * (afterStatusChange): the notices, the wait-list, the invoice, the
    * rebooking cadence, the points.
    *
-   * `user` is whoever asks: a member of the team, a client (cancel only, via
-   * the controller's roles) or, for the visit that completes on its own,
-   * the system.
+   * `user` is whoever asks: a member of the team or, for the visit that
+   * completes on its own, the system.
    */
   async changeStatus(
     user: any,
@@ -1847,7 +1824,7 @@ export class AppointmentsService {
   ) {
     const appointment = await this.findOne(user, id);
     const from = appointment.status as AppointmentStatus;
-    const data = await this.prepareStatusChange(user, appointment, to, opts);
+    const data = await this.prepareStatusChange(appointment, to, opts);
 
     let updated: any;
     try {
@@ -1874,38 +1851,16 @@ export class AppointmentsService {
 
   /**
    * Everything that may refuse a status change, before anything is written:
-   * the transition table, a client's cancellation notice, the service's
-   * consent forms. Returns the columns to write along with the status.
+   * the transition table and the service's consent forms. Returns the
+   * columns to write along with the status.
    */
   private async prepareStatusChange(
-    user: any,
     appointment: any,
     to: AppointmentStatus,
     opts: StatusChangeOptions,
   ): Promise<Record<string, unknown>> {
     const from = appointment.status as AppointmentStatus;
     assertTransition(from, to);
-
-    // A client cancelling their own appointment is held to the salon's
-    // minimum notice -- the same rule the virtual receptionist quotes. Staff
-    // are not: the salon may always cancel.
-    if (to === AppointmentStatus.cancelled && user?.role === "client") {
-      const tenant = appointment.tenant as
-        | { minCancelHours?: number; timezone?: string }
-        | undefined;
-      const minHours = tenant?.minCancelHours ?? 24;
-      const startsAt = salonInstant(
-        appointment.scheduledDate,
-        appointment.scheduledTime,
-        tenant?.timezone || "Europe/Madrid",
-      );
-      const hoursAway = (startsAt.getTime() - Date.now()) / 3_600_000;
-      if (hoursAway < minHours) {
-        throw new BadRequestException(
-          `Esta cita solo se puede cancelar con ${minHours} horas de antelación. Contacta con el salón.`,
-        );
-      }
-    }
 
     // Checked before the write: it used to run after it, so the client got
     // the 409 while the appointment had already changed.
