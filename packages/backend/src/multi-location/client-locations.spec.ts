@@ -103,6 +103,32 @@ describe("bookingPlace", () => {
   });
 });
 
+describe("GET /appointments/booking-locations (the panel's picker)", () => {
+  const svc = (locations: any[], links: any[]) =>
+    new AppointmentsService(db(locations, links) as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+
+  it("the locations with their address, and where each professional works", async () => {
+    const out = await svc([CENTRO, NORTE], [
+      { professionalId: "ana", locationId: "l-centro", isPrimary: true },
+      { professionalId: "ana", locationId: "l-norte", isPrimary: false },
+      { professionalId: "bea", locationId: "l-norte", isPrimary: true },
+    ]).bookingLocations("t1");
+    expect(out.locations).toEqual([
+      { id: "l-centro", name: "Centro", slug: "centro", address: "Calle Mayor 1, 28013 Madrid", phone: "910000001" },
+      { id: "l-norte", name: "Norte", slug: "norte", address: "Av. Norte 5, 28035 Madrid", phone: null },
+    ]);
+    expect(out.professionals).toEqual([
+      { id: "ana", locationIds: ["l-centro", "l-norte"], primaryLocationId: "l-centro" },
+      { id: "bea", locationIds: ["l-norte"], primaryLocationId: "l-norte" },
+    ]);
+  });
+
+  it("a salon with one location gets nothing: the panel books as before", async () => {
+    const out = await svc([CENTRO], [{ professionalId: "ana", locationId: "l-centro", isPrimary: true }]).bookingLocations("t1");
+    expect(out).toEqual({ locations: [], professionals: [] });
+  });
+});
+
 describe("the booking confirmation email", () => {
   function send(locations: any[], appointmentLocation: string | null) {
     const prisma: any = { location: { findMany: jest.fn(async () => locations) } };

@@ -14,6 +14,7 @@ import {
   Min,
   Max,
   ValidateNested,
+  ValidateIf,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
@@ -109,6 +110,16 @@ export class UpdateAppointmentDto {
   @Min(0)
   @Max(100)
   commissionRate?: number;
+
+  /**
+   * One of the salon's locations (multi-local): every professional of the
+   * visit must work there. Null or empty: back to the professional's own.
+   * Left out: kept, or moved with a new professional as before.
+   */
+  @ApiPropertyOptional({ description: 'Location of the appointment (multi-location)' })
+  @ValidateIf((o) => o.locationId !== undefined && o.locationId !== null && o.locationId !== '')
+  @IsUUID(undefined, { message: 'El local no es válido' })
+  locationId?: string | null;
 
   @ApiPropertyOptional({ description: 'Deposit required - admin/owner only' })
   @IsOptional()

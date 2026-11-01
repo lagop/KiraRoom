@@ -1,5 +1,6 @@
 import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from "@nestjs/common";
 import { Observable, map } from "rxjs";
+import { formatLocationAddress } from "../multi-location/client-locations";
 
 /**
  * What an appointment response may carry.
@@ -95,6 +96,15 @@ export function publicBooking(appointment: any) {
           id: appointment.professional.id,
           firstName: appointment.professional.firstName,
           lastName: appointment.professional.lastName,
+        }
+      : null,
+    // Where, at a salon with several locations: the confirmation shows it.
+    // Null when the appointment has no location (most salons).
+    location: appointment.salonLocation
+      ? {
+          id: appointment.salonLocation.id,
+          name: appointment.salonLocation.name,
+          address: formatLocationAddress(appointment.salonLocation),
         }
       : null,
   };
