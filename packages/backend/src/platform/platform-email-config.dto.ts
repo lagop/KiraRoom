@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
-import { IsOptional, IsString, MaxLength } from "class-validator";
+import { IsInt, IsOptional, IsString, Max, MaxLength, Min } from "class-validator";
 
 /**
  * Each field: a string sets it, null clears it (the server's .env applies
@@ -24,4 +24,18 @@ export class UpdatePlatformEmailConfigDto {
   @IsString()
   @MaxLength(200)
   webhookSecret?: string | null;
+
+  @ApiPropertyOptional({ description: "Emails in a bono de emails (null: not offered)." })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(1_000_000)
+  marketingPackEmails?: number | null;
+
+  @ApiPropertyOptional({ description: "Price of a bono de emails in cents, before VAT (null: not offered)." })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(100_000_000)
+  marketingPackPriceCents?: number | null;
 }

@@ -135,24 +135,29 @@ function setup() {
 }
 
 describe("ResendEventsService", () => {
-  it("counts delivered, opened and clicked per recipient", async () => {
+  it("counts delivered and clicked per recipient", async () => {
     const { send, campaign, recipient } = setup();
     await send("email.delivered", "re_1");
     await send("email.delivered", "re_2");
-    await send("email.opened", "re_1");
     await send("email.clicked", "re_1", { click: { link: "https://salon.example.test/promo" } });
 
-    expect(campaign()).toMatchObject({ emailsDelivered: 2, emailsOpened: 1, clicks: 1, bounces: 0 });
+    expect(campaign()).toMatchObject({ emailsDelivered: 2, clicks: 1, bounces: 0 });
     expect(recipient(1).status).toBe("clicked");
     expect(recipient(2).status).toBe("delivered");
   });
 
-  it("counts a recipient who opens five times as one open", async () => {
-    const { send, campaign, db } = setup();
+  it("ignores opens: nothing stored, nothing counted, the recipient unchanged", async () => {
+    // Opens are not measured (owner's decision, no tracking pixel). Resend
+    // still posts them while open tracking is on in its dashboard.
+    const { send, campaign, recipient, db } = setup();
+    await send("email.delivered", "re_1");
     for (let i = 0; i < 5; i++) await send("email.opened", "re_1");
-    expect(campaign().emailsOpened).toBe(1);
-    // Every open is still in the event log.
-    expect(db.analytics.filter((a) => a.eventType === "opened")).toHaveLength(5);
+    await send("email.opened", "re_2");
+    expect(campaign().emailsOpened).toBe(0);
+    expect(recipient(1)).toMatchObject({ status: "delivered", openedAt: null });
+    expect(recipient(2).status).not.toBe("opened");
+    expect(db.analytics.filter((a) => a.eventType === "opened")).toHaveLength(0);
+    expect(db.analytics).toHaveLength(1);
   });
 
   it("ignores a redelivered event (same svix-id)", async () => {
@@ -163,11 +168,11 @@ describe("ResendEventsService", () => {
     expect(db.analytics).toHaveLength(1);
   });
 
-  it("does not move a recipient back when 'delivered' arrives after 'opened'", async () => {
+  it("does not move a recipient back when 'delivered' arrives after 'clicked'", async () => {
     const { send, recipient, campaign } = setup();
-    await send("email.opened", "re_1");
+    await send("email.clicked", "re_1");
     await send("email.delivered", "re_1");
-    expect(recipient(1).status).toBe("opened");
+    expect(recipient(1).status).toBe("clicked");
     expect(campaign().emailsDelivered).toBe(1);
   });
 

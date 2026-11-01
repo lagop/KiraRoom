@@ -1,4 +1,4 @@
-import type { CampaignExclusionReason, CampaignStatus, EmailCampaign } from "./api";
+import type { CampaignExclusionReason, CampaignStatus, EmailCampaign, EmailMarketingQuota } from "./api";
 import { salonInstant } from "../components/Calendar/salon-time";
 
 /**
@@ -21,6 +21,70 @@ export const CAMPAIGN_STATUS_LABELS: Record<CampaignStatus, string> = {
 
 export function campaignStatusLabel(status: string): string {
   return CAMPAIGN_STATUS_LABELS[status as CampaignStatus] ?? status;
+}
+
+/** Paused at the month's marketing email cap: still sending, the rest pending. */
+export function isCapPaused(c: Pick<EmailCampaign, "status"> & Partial<Pick<EmailCampaign, "capPausedAt">>): boolean {
+  return !!c.capPausedAt && (c.status === "sending" || c.status === "active");
+}
+
+/** The card's label: "En pausa" while stopped at the cap, else the status's. */
+export function campaignCardLabel(c: Pick<EmailCampaign, "status"> & Partial<Pick<EmailCampaign, "capPausedAt">>): string {
+  return isCapPaused(c) ? "En pausa" : campaignStatusLabel(c.status);
+}
+
+/** 2000 -> "2.000" (es-ES leaves four digits ungrouped). */
+export function formatCount(n: number): string {
+  return String(Math.max(0, Math.round(n))).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+}
+
+/** "2026-12-01" -> "1 de diciembre". */
+export function spanishDay(day: string): string {
+  const d = new Date(`${day}T00:00:00Z`);
+  return Number.isNaN(d.getTime()) ? day : d.toLocaleDateString("es-ES", { day: "numeric", month: "long", timeZone: "UTC" });
+}
+
+/** "noviembre", the month of a "YYYY-MM". */
+export function monthName(month: string): string {
+  const d = new Date(`${month}-01T00:00:00Z`);
+  return Number.isNaN(d.getTime()) ? month : d.toLocaleDateString("es-ES", { month: "long", timeZone: "UTC" });
+}
+
+/** "Te quedan 1.234 este mes", the line next to adding recipients and scheduling. */
+export function quotaLeftText(q: Pick<EmailMarketingQuota, "remaining">): string {
+  if (q.remaining <= 0) return "No te quedan emails de marketing este mes";
+  return q.remaining === 1 ? "Te queda 1 email este mes" : `Te quedan ${formatCount(q.remaining)} emails este mes`;
+}
+
+/** The counter on top of the page: what was sent of the month's, and what is left. */
+export function quotaSummary(q: EmailMarketingQuota): { title: string; detail: string; exhausted: boolean } {
+  const month = monthName(q.month);
+  const title = `Emails de marketing de ${month}: ${formatCount(q.planSent)} de ${formatCount(q.cap)}`;
+  const parts = [quotaLeftText(q) + "."];
+  if (q.packRemaining > 0) {
+    parts.push(
+      `Incluye ${formatCount(q.packRemaining)} del bono de emails, que no caducan y se usan cuando se acaban los del mes.`,
+    );
+  }
+  parts.push(`El ${spanishDay(q.resetsOn)} vuelves a tener ${formatCount(q.cap)}.`);
+  return { title, detail: parts.join(" "), exhausted: q.remaining <= 0 };
+}
+
+/** "Bono de 1.000 emails por 15,00 € + IVA": the bono as the page offers it. */
+export function packOfferText(pack: { emails: number; priceCents: number }): string {
+  const price = new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(pack.priceCents / 100);
+  return `Bono de ${formatCount(pack.emails)} emails por ${price} + IVA`;
+}
+
+/**
+ * Before sending or scheduling: what happens if the campaign has more
+ * recipients than emails left this month. Null when it all fits.
+ */
+export function quotaWarning(pending: number, q: Pick<EmailMarketingQuota, "remaining" | "resetsOn" | "pack"> | null): string | null {
+  if (!q || pending <= q.remaining) return null;
+  const left = q.remaining <= 0 ? "No te quedan emails de marketing este mes" : `Este mes solo te quedan ${formatCount(q.remaining)}`;
+  const bono = q.pack ? ", o antes si compras un bono de emails" : "";
+  return `${left}: se enviarán los que quepan, la campaña quedará en pausa y el resto se enviará solo el ${spanishDay(q.resetsOn)}${bono}.`;
 }
 
 /** The buttons a campaign card shows. */
@@ -144,6 +208,10 @@ export function sendConfirmText(action: "send" | "sendAll", pending: number): st
 /** The card's progress line while sending, and its result after. */
 export function campaignProgress(c: Pick<EmailCampaign, "status" | "emailsSent" | "totalRecipients"> & Partial<Pick<EmailCampaign, "pendingCount" | "failedCount" | "lastError">>): string | null {
   const failed = c.failedCount ?? 0;
+  // Paused at the month's cap: the reason, with how far it got.
+  if (c.status === "sending" && c.lastError) {
+    return `Enviados ${c.emailsSent} de ${c.totalRecipients}. ${c.lastError}`;
+  }
   if (c.status === "sending") {
     return `Enviando: ${c.emailsSent} de ${c.totalRecipients}` + (failed > 0 ? `, ${failed} fallidos` : "");
   }

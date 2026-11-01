@@ -6,7 +6,13 @@
  */
 import {
   campaignActions,
+  campaignCardLabel,
   campaignProgress,
+  isCapPaused,
+  packOfferText,
+  quotaLeftText,
+  quotaSummary,
+  quotaWarning,
   campaignStatusLabel,
   errorMessage,
   exclusionSummary,
@@ -101,6 +107,54 @@ check("other 403 is not", !isPlanBlocked(Object.assign(new Error("No"), { status
 check("plan error reads in Spanish", /Facturación/.test(errorMessage(planError)));
 check("server message kept", errorMessage(new Error("La campaña no tiene destinatarias")) === "La campaña no tiene destinatarias");
 check("fallback", errorMessage(null) === "Algo ha fallado. Inténtalo de nuevo.");
+
+console.log("monthly marketing email cap");
+const quota: any = {
+  month: "2026-11",
+  cap: 2000,
+  planSent: 1500,
+  packSent: 0,
+  sent: 1500,
+  planRemaining: 500,
+  packRemaining: 0,
+  remaining: 500,
+  resetsOn: "2026-12-01",
+  pack: null,
+};
+check("te quedan N este mes", quotaLeftText(quota) === "Te quedan 500 emails este mes", quotaLeftText(quota));
+check("thousands grouped", quotaLeftText({ remaining: 1234 }) === "Te quedan 1.234 emails este mes");
+check("none left", quotaLeftText({ remaining: 0 }) === "No te quedan emails de marketing este mes");
+const quotaSum = quotaSummary(quota);
+check("counter title", quotaSum.title === "Emails de marketing de noviembre: 1.500 de 2.000", quotaSum.title);
+check("counter says when it starts again", /El 1 de diciembre vuelves a tener 2\.000/.test(quotaSum.detail), quotaSum.detail);
+check(
+  "bono emails mentioned only when there are some",
+  !/bono/.test(quotaSum.detail) && /bono de emails, que no caducan/.test(quotaSummary({ ...quota, packRemaining: 300, remaining: 800 }).detail),
+);
+check("fits: no warning", quotaWarning(400, quota) === null);
+const warning = quotaWarning(700, quota) ?? "";
+check(
+  "too many: says it pauses and when it goes on",
+  /solo te quedan 500/.test(warning) && /en pausa/.test(warning) && /1 de diciembre/.test(warning) && !/bono/.test(warning),
+  warning,
+);
+check("offers the bono only when on sale", /compras un bono/.test(quotaWarning(700, { ...quota, pack: { emails: 1000, priceCents: 1500 } }) ?? ""));
+const offer = packOfferText({ emails: 1000, priceCents: 1500 }).replace(/\s/g, " ");
+check("bono offer text", offer === "Bono de 1.000 emails por 15,00 € + IVA", offer);
+const paused: any = {
+  status: "sending",
+  capPausedAt: "2026-11-20T10:00:00Z",
+  emailsSent: 300,
+  totalRecipients: 500,
+  lastError: "En pausa: este mes ya se han enviado los 2.000 emails.",
+};
+check("paused card label", isCapPaused(paused) && campaignCardLabel(paused) === "En pausa");
+check("sending card label unchanged", campaignCardLabel({ status: "sending" }) === "Enviando");
+check(
+  "paused progress gives the reason",
+  campaignProgress(paused) === "Enviados 300 de 500. En pausa: este mes ya se han enviado los 2.000 emails.",
+  campaignProgress(paused),
+);
 
 console.log(`\n=== Summary ===\nPass: ${pass}, Fail: ${fail}`);
 if (fail > 0) process.exit(1);

@@ -41,6 +41,7 @@ function service(professional: Record<string, unknown>, appointments: Record<str
       update: jest.fn(async (args: any) => (updates.push(args.data), {})),
     },
     professional: { findFirst: jest.fn(async () => professional) },
+    tenant: { findUnique: jest.fn(async () => ({ timezone: "Europe/Madrid" })) },
   };
   return { svc: new CommissionsService(prisma), updates };
 }

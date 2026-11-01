@@ -92,6 +92,11 @@ model Tenant {
   tenantAddOns        TenantAddOn[]
   /// P2A-plans-v2 - message credit wallet (message_bundles add-on).
   messageCreditWallet MessageCreditWallet?
+  /// Marketing emails sent per calendar month (the plan's monthly cap).
+  emailMarketingUsage EmailMarketingUsage[]
+  /// Bought marketing emails ("bono de emails") not used yet.
+  emailCreditWallet   EmailCreditWallet?
+  emailPackPurchases  EmailPackPurchase[]
 
   addons                        Json                     @default("{}")
   maxLocations                  Int                      @default(1)
@@ -279,6 +284,54 @@ model CustomDomain {
 
   @@index([domain])
   @@map("custom_domains")
+}
+
+/// Marketing emails (one-shot and re-engagement campaigns) sent in a calendar
+/// month of the salon's timezone. `planSent` counts against the plan's monthly
+/// cap; `packSent` were paid from the bono (EmailCreditWallet). Transactional
+/// emails (reminders, review requests, receipts) are not counted.
+model EmailMarketingUsage {
+  tenantId  String
+  /// "YYYY-MM" in the salon's timezone.
+  month     String
+  planSent  Int      @default(0)
+  packSent  Int      @default(0)
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, month])
+  @@map("email_marketing_usage")
+}
+
+/// Marketing emails bought in packs ("bono de emails"), used once the month's
+/// cap is reached. Like the message credits, they do not expire.
+model EmailCreditWallet {
+  tenantId              String    @id
+  creditsRemaining      Int       @default(0)
+  creditsPurchasedTotal Int       @default(0)
+  creditsUsedTotal      Int       @default(0)
+  lastTopupAt           DateTime?
+  updatedAt             DateTime  @updatedAt
+  tenant                Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("email_credit_wallet")
+}
+
+/// One bono de emails paid (or granted). The Stripe Checkout session id is
+/// unique, so a webhook delivered twice credits the pack once.
+model EmailPackPurchase {
+  id                      String   @id @default(uuid())
+  createdAt               DateTime @default(now())
+  tenantId                String
+  emails                  Int
+  priceCents              Int
+  /// "stripe" | "manual"
+  source                  String   @default("stripe")
+  stripeCheckoutSessionId String?  @unique
+  tenant                  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@map("email_pack_purchases")
 }
 
 model MessageCreditWallet {
@@ -2081,6 +2134,10 @@ model EmailCampaign {
   archivedAt DateTime?
   /// Why the last send stopped or reached nobody, in Spanish for the panel.
   lastError  String?
+  /// Set when sending stopped at the month's marketing email cap: the rest
+  /// stays pending and the sender resumes it when there is allowance again
+  /// (next month, or a bono de emails). Null otherwise.
+  capPausedAt DateTime?
 
   /// Relations
   tenant     Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -3326,6 +3383,11 @@ model PlatformEmailConfig {
   apiKeyEncrypted        String?  @db.Text
   fromAddress            String?
   webhookSecretEncrypted String?  @db.Text
+  /// The "bono de emails" salons can buy once their monthly marketing cap
+  /// is reached: how many emails and its price in cents (before VAT). Not
+  /// offered while either is empty.
+  marketingPackEmails     Int?
+  marketingPackPriceCents Int?
   updatedAt              DateTime @updatedAt
   updatedBy              String?
 

@@ -4,7 +4,7 @@
  * Run: npx ts-node --project tsconfig.test.json --transpile-only lib/platform-email.spec.ts
  */
 import type { PlatformEmailConfig } from "./api";
-import { emailStatus, emailUpdate, sourceText } from "./platform-email";
+import { emailStatus, emailUpdate, packForm, packUpdate, sourceText } from "./platform-email";
 
 let pass = 0;
 let fail = 0;
@@ -22,6 +22,7 @@ const none: PlatformEmailConfig = {
   apiKey: { source: "none", lastFour: null },
   from: { source: "none", value: null },
   webhookSecret: { source: "none", lastFour: null },
+  marketingPack: { emails: null, priceCents: null, offered: false },
   updatedAt: null,
   updatedBy: null,
 };
@@ -41,6 +42,23 @@ check(
   "everything set",
   /entregas/.test(emailStatus({ ...sending, webhookSecret: { source: "console", lastFour: "abcd" } }).text),
 );
+check(
+  "opens are not promised",
+  !/apertura|abri/.test(emailStatus(sending).text) &&
+    /aperturas no se usan/.test(emailStatus({ ...sending, webhookSecret: { source: "console", lastFour: "abcd" } }).text),
+);
+
+console.log("bono de emails");
+check("nothing saved: empty form", JSON.stringify(packForm(none)) === JSON.stringify({ emails: "", price: "" }));
+check(
+  "saved values shown in euros",
+  JSON.stringify(packForm({ ...none, marketingPack: { emails: 1000, priceCents: 1550, offered: true } })) ===
+    JSON.stringify({ emails: "1000", price: "15,50" }),
+);
+const okPack = packUpdate({ emails: "1.000", price: "15,50 €" });
+check("typed Spanish style, sent in cents", okPack.ok && okPack.value.marketingPackEmails === 1000 && okPack.value.marketingPackPriceCents === 1550, okPack);
+check("too few emails refused", !packUpdate({ emails: "10", price: "5" }).ok);
+check("no price refused", !packUpdate({ emails: "1000", price: "" }).ok);
 
 check("where each setting comes from", sourceText("console") === "Configurada aquí" && /servidor/.test(sourceText("server")));
 

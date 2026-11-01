@@ -23,6 +23,8 @@ export interface PlatformEmailConfigPublic {
   apiKey: { source: EmailSettingSource; lastFour: string | null };
   from: { source: EmailSettingSource; value: string | null };
   webhookSecret: { source: EmailSettingSource; lastFour: string | null };
+  /** The bono de emails salons can buy: not offered while either value is empty. */
+  marketingPack: { emails: number | null; priceCents: number | null; offered: boolean };
   updatedAt: string | null;
   updatedBy: string | null;
 }
@@ -32,6 +34,37 @@ export interface PlatformEmailConfigUpdate {
   apiKey?: string | null;
   from?: string | null;
   webhookSecret?: string | null;
+  /** Emails in a bono de emails; null stops offering it. */
+  marketingPackEmails?: number | null;
+  /** Its price in cents, before VAT; null stops offering it. */
+  marketingPackPriceCents?: number | null;
+}
+
+/** A bono de emails as salons are offered it. */
+export interface MarketingEmailPack {
+  emails: number;
+  priceCents: number;
+}
+
+export const PACK_EMAILS_MIN = 100;
+export const PACK_EMAILS_MAX = 100_000;
+export const PACK_PRICE_MIN_CENTS = 50;
+export const PACK_PRICE_MAX_CENTS = 1_000_000;
+
+/** Why a bono's size or price cannot be saved, in Spanish; null when it can. */
+export function marketingPackProblem(input: { emails?: number | null; priceCents?: number | null }): string | null {
+  const { emails, priceCents } = input;
+  if (emails !== undefined && emails !== null) {
+    if (!Number.isInteger(emails) || emails < PACK_EMAILS_MIN || emails > PACK_EMAILS_MAX) {
+      return `El bono debe tener entre ${PACK_EMAILS_MIN} y ${PACK_EMAILS_MAX.toLocaleString("es-ES")} emails.`;
+    }
+  }
+  if (priceCents !== undefined && priceCents !== null) {
+    if (!Number.isInteger(priceCents) || priceCents < PACK_PRICE_MIN_CENTS || priceCents > PACK_PRICE_MAX_CENTS) {
+      return "El precio del bono debe estar entre 0,50 € y 10.000 €, en céntimos enteros.";
+    }
+  }
+  return null;
 }
 
 interface Actor {
@@ -58,6 +91,7 @@ export class PlatformEmailConfigService implements OnModuleInit {
   private readonly logger = new Logger(PlatformEmailConfigService.name);
   private settings: EmailSettingsWithSources;
   private stored: { updatedAt: Date; updatedBy: string | null } | null = null;
+  private pack: { emails: number | null; priceCents: number | null } = { emails: null, priceCents: null };
 
   constructor(
     private readonly prisma: PrismaService,
@@ -85,12 +119,24 @@ export class PlatformEmailConfigService implements OnModuleInit {
     return { apiKey, from, webhookSecret };
   }
 
+  /**
+   * The bono de emails salons are offered once their month's marketing cap
+   * is reached (email-campaigns/email-quota.service.ts), set by the
+   * saas_owner here. Null until both its size and its price are set.
+   */
+  marketingPack(): MarketingEmailPack | null {
+    const { emails, priceCents } = this.pack;
+    if (!emails || !priceCents || emails <= 0 || priceCents <= 0) return null;
+    return { emails, priceCents };
+  }
+
   getConfig(): PlatformEmailConfigPublic {
     const { sources, apiKey, from, webhookSecret } = this.settings;
     return {
       apiKey: { source: sources.apiKey, lastFour: lastFour(apiKey) },
       from: { source: sources.from, value: from },
       webhookSecret: { source: sources.webhookSecret, lastFour: lastFour(webhookSecret) },
+      marketingPack: { ...this.pack, offered: this.marketingPack() !== null },
       updatedAt: this.stored?.updatedAt.toISOString() ?? null,
       updatedBy: this.stored?.updatedBy ?? null,
     };
@@ -111,15 +157,24 @@ export class PlatformEmailConfigService implements OnModuleInit {
       (typeof input.apiKey === "string" && apiKeyProblem(input.apiKey)) ||
       (typeof input.from === "string" && senderProblem(input.from)) ||
       (typeof input.webhookSecret === "string" && webhookSecretProblem(input.webhookSecret)) ||
+      marketingPackProblem({ emails: input.marketingPackEmails, priceCents: input.marketingPackPriceCents }) ||
       null;
     if (problem) throw new BadRequestException(problem);
 
-    const data: { apiKeyEncrypted?: string | null; fromAddress?: string | null; webhookSecretEncrypted?: string | null } = {};
+    const data: {
+      apiKeyEncrypted?: string | null;
+      fromAddress?: string | null;
+      webhookSecretEncrypted?: string | null;
+      marketingPackEmails?: number | null;
+      marketingPackPriceCents?: number | null;
+    } = {};
     if (input.apiKey !== undefined) data.apiKeyEncrypted = input.apiKey === null ? null : this.encryption.encrypt(input.apiKey.trim());
     if (input.from !== undefined) data.fromAddress = input.from === null ? null : input.from.trim();
     if (input.webhookSecret !== undefined) {
       data.webhookSecretEncrypted = input.webhookSecret === null ? null : this.encryption.encrypt(input.webhookSecret.trim());
     }
+    if (input.marketingPackEmails !== undefined) data.marketingPackEmails = input.marketingPackEmails;
+    if (input.marketingPackPriceCents !== undefined) data.marketingPackPriceCents = input.marketingPackPriceCents;
     const changed = Object.keys(data);
     if (changed.length === 0) return this.getConfig();
 
@@ -135,6 +190,10 @@ export class PlatformEmailConfigService implements OnModuleInit {
       metadata: {
         set: Object.entries(input).filter(([, v]) => typeof v === "string").map(([k]) => k),
         cleared: Object.entries(input).filter(([, v]) => v === null).map(([k]) => k),
+        // The bono's size and price are not secret: what it changed to.
+        ...(input.marketingPackEmails !== undefined || input.marketingPackPriceCents !== undefined
+          ? { marketingPack: { emails: data.marketingPackEmails, priceCents: data.marketingPackPriceCents } }
+          : {}),
       },
     });
     await this.reload();
@@ -171,6 +230,7 @@ export class PlatformEmailConfigService implements OnModuleInit {
   private async reload(): Promise<void> {
     const row = await this.prisma.platformEmailConfig.findUnique({ where: { id: "global" } });
     this.stored = row ? { updatedAt: row.updatedAt, updatedBy: row.updatedBy } : null;
+    this.pack = { emails: row?.marketingPackEmails ?? null, priceCents: row?.marketingPackPriceCents ?? null };
     this.settings = resolveEmailSettings(
       row
         ? {

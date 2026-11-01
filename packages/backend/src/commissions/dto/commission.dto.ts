@@ -54,4 +54,16 @@ export class PayCommissionDto {
   @Type(() => Date)
   @IsDate()
   endDate?: Date;
+
+  /**
+   * The pending figure the "Pagar" dialog showed, in cents (it can be
+   * negative after refund adjustments). If what is pending is no longer
+   * this, nothing is paid (409): what is paid is always what was shown.
+   */
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(-100_000_000)
+  @Max(100_000_000)
+  expectedAmount?: number;
 }
