@@ -46,7 +46,8 @@ function makePrisma(opts: {
         const matched = wls.filter((w: any) => {
           if (w.tenantId !== where.tenantId) return false;
           if (w.serviceId !== where.serviceId) return false;
-          if (w.status !== where.status) return false;
+          const statuses = where.status?.in ?? [where.status];
+          if (!statuses.includes(w.status)) return false;
           return true;
         });
         return typeof take === 'number' ? matched.slice(0, take) : matched;
@@ -198,6 +199,25 @@ describe('SalonCopilotToolsService (L-4) — sprint 15 write tools', () => {
       expect((res as any).error).toBe('forbidden');
     });
 
+    it('notifies at most 10 clients, whatever topN asks for', async () => {
+      const wls = Array.from({ length: 15 }, (_, i) => ({
+        id: `w-${i}`, tenantId: TENANT_ID, serviceId: 's-1', status: i % 2 ? 'notified' : 'waiting',
+        client: { id: `c-${i}`, firstName: `C${i}`, phone: null },
+      }));
+      const prisma = makePrisma({ waitList: wls });
+      const waitList = { notify: jest.fn().mockResolvedValue({ notified: true, channels: [], bookingUrl: null, summary: 'ok' }) };
+      const svc = new SalonCopilotToolsService(prisma, waitList as any);
+      await svc.execute(
+        'close_waitlist_slot',
+        { serviceId: 's-1', windowStart: '2026-09-04', windowEnd: '2026-09-04', topN: 500 },
+        { ...ctxFor('owner'), prisma },
+      );
+      expect(prisma.waitList.findMany.mock.calls[0][0].take).toBe(10);
+      expect(waitList.notify).toHaveBeenCalledTimes(10);
+      // Clients already told about an earlier slot are still in line.
+      expect(prisma.waitList.findMany.mock.calls[0][0].where.status).toEqual({ in: ['waiting', 'notified'] });
+    });
+
     /*
      * The tool used to flip the entries to 'notified' and send nothing.
      * It now sends through WaitListService.notify (the panel's "Avisar"),
@@ -235,7 +255,7 @@ describe('SalonCopilotToolsService (L-4) — sprint 15 write tools', () => {
       const res: any = await svc.execute(
         'close_waitlist_slot',
         { serviceId: 's-1', windowStart: '2026-09-04', windowEnd: '2026-09-04', time: '10:30', topN: 2 },
-        { ...ctxFor('receptionist'), prisma },
+        { ...ctxFor('admin'), prisma },
       );
 
       expect(waitList.notify).toHaveBeenCalledTimes(2);
@@ -266,7 +286,7 @@ describe('SalonCopilotToolsService (L-4) — sprint 15 write tools', () => {
       const res: any = await svc.execute(
         'close_waitlist_slot',
         { serviceId: 's-1', windowStart: '2026-09-04', windowEnd: '2026-09-06' },
-        { ...ctxFor('manager'), prisma },
+        { ...ctxFor('admin'), prisma },
       );
       expect(res.error).toBe('not_delivered');
       expect(res.notified).toBe(0);
@@ -298,7 +318,7 @@ describe('SalonCopilotToolsService (L-4) — sprint 15 write tools', () => {
       const res: any = await svc.execute(
         'close_waitlist_slot',
         { serviceId: 's-1', windowStart: '2026-09-04', windowEnd: '2026-09-04' },
-        { ...ctxFor('receptionist'), prisma },
+        { ...ctxFor('admin'), prisma },
       );
       expect(res).toMatchObject({ ok: true, notified: 0 });
       expect(res.message).toContain('No se ha avisado a nadie');
@@ -311,7 +331,7 @@ describe('SalonCopilotToolsService (L-4) — sprint 15 write tools', () => {
       const res = await svc.execute(
         'close_waitlist_slot',
         { serviceId: 's-1', windowStart: '2026-09-04', windowEnd: '2026-09-04', time: '25:00' },
-        { ...ctxFor('receptionist'), prisma },
+        { ...ctxFor('admin'), prisma },
       );
       expect((res as any).error).toBe('invalid_time');
     });
@@ -322,7 +342,7 @@ describe('SalonCopilotToolsService (L-4) — sprint 15 write tools', () => {
       const res = await svc.execute(
         'close_waitlist_slot',
         { serviceId: 's-1', windowStart: '04/09/2026', windowEnd: '2026-09-05' },
-        { ...ctxFor('receptionist'), prisma },
+        { ...ctxFor('admin'), prisma },
       );
       expect((res as any).error).toBe('invalid_windowStart');
     });

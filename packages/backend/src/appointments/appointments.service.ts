@@ -840,6 +840,23 @@ export class AppointmentsService {
         });
     }
 
+    // She booked the service she was waiting for: her wait-list entry for
+    // it closes ("Ha reservado") and she is not offered slots any more.
+    if (this.waitListService && appointment.clientId && appointment.serviceId) {
+      this.waitListService
+        .onAppointmentBooked({
+          tenantId: appointment.tenantId,
+          clientId: appointment.clientId,
+          serviceId: appointment.serviceId,
+          professionalId: appointment.professionalId ?? null,
+        })
+        .catch((err) => {
+          this.logger.warn(
+            `wait-list close failed for appointment ${appointment.id}: ${(err as Error).message}`,
+          );
+        });
+    }
+
     // Third funnel milestone, and the one that matters: the salon has a
     // real booking in the system. Time from tenant_signed_up to this is
     // the activation metric.

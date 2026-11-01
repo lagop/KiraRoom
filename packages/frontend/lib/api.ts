@@ -5721,12 +5721,15 @@ export interface WaitListEntry {
     channels: WaitListChannelOutcome[];
     slot: { date: string | null; time: string | null; professionalId: string | null };
   } | null;
+  // email and phone are null for staff (contactHidden): only owner and admin see them.
   client: { firstName: string; lastName: string; email: string | null; phone: string | null };
+  contactHidden?: boolean;
 }
 
 export interface WaitListNotifyResult {
   notified: boolean;
   channels: WaitListChannelOutcome[];
-  bookingUrl: string;
+  // null when the service is not bookable online: the notice asks the client to call.
+  bookingUrl: string | null;
   summary: string;
 }
