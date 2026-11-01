@@ -22,10 +22,17 @@ export interface ResendWebhookEvent {
   };
 }
 
-/** Event types recorded per campaign recipient, and their analytics name. */
+/**
+ * Event types recorded per campaign recipient, and their analytics name.
+ *
+ * `email.opened` is not one of them: opens are not measured (the owner's
+ * decision -- an open pixel reads the client's device, LSSI art. 22.2, and
+ * Apple Mail and others fake opens anyway). An open event Resend still posts,
+ * while open tracking is on in its dashboard, is ignored: nothing stored,
+ * nothing counted. Clicks are kept.
+ */
 const TRACKED: Record<string, string> = {
   "email.delivered": "delivered",
-  "email.opened": "opened",
   "email.clicked": "clicked",
   "email.bounced": "bounced",
   "email.complained": "complained",
@@ -34,13 +41,12 @@ const TRACKED: Record<string, string> = {
 
 /**
  * The engagement statuses only ever move forward: a late `delivered` must
- * not turn an `opened` recipient back into `delivered` (Resend does not
+ * not turn a `clicked` recipient back into `delivered` (Resend does not
  * guarantee order). Bounce, complaint and failure are outcomes, not steps,
- * and always win.
+ * and always win. ("opened" is only on rows from before opens were dropped.)
  */
 const LOWER_THAN: Record<string, string[]> = {
   delivered: ["pending", "scheduled", "sent"],
-  opened: ["pending", "scheduled", "sent", "delivered"],
   clicked: ["pending", "scheduled", "sent", "delivered", "opened"],
 };
 
@@ -51,7 +57,7 @@ const LOWER_THAN: Record<string, string[]> = {
  * panel's "delivered" was the number of emails Resend accepted; opens,
  * clicks and bounces stayed at zero forever. Now each recipient row carries
  * what actually happened to its email, the campaign counters count
- * recipients (an email opened five times is one open), and hard bounces and
+ * recipients (a link clicked five times is one click), and hard bounces and
  * complaints put the address on the salon's suppression list.
  *
  * Idempotent: Svix redelivers on timeouts, so the svix-id is stored on the
@@ -111,10 +117,6 @@ export class ResendEventsService {
       case "delivered":
         await this.firstTime(recipient, "deliveredAt", at, "emailsDelivered");
         await this.advanceStatus(recipient.id, "delivered");
-        break;
-      case "opened":
-        await this.firstTime(recipient, "openedAt", at, "emailsOpened");
-        await this.advanceStatus(recipient.id, "opened");
         break;
       case "clicked":
         await this.firstTime(recipient, "clickedAt", at, "clicks");
@@ -177,9 +179,9 @@ export class ResendEventsService {
    */
   private async firstTime(
     recipient: { id: string; campaignId: string },
-    field: "deliveredAt" | "openedAt" | "clickedAt" | "bouncedAt" | "complainedAt",
+    field: "deliveredAt" | "clickedAt" | "bouncedAt" | "complainedAt",
     at: Date,
-    counter: "emailsDelivered" | "emailsOpened" | "clicks" | "bounces" | "complaints",
+    counter: "emailsDelivered" | "clicks" | "bounces" | "complaints",
   ): Promise<boolean> {
     const stamped = await this.prisma.emailCampaignRecipient.updateMany({
       where: { id: recipient.id, [field]: null },
@@ -193,7 +195,7 @@ export class ResendEventsService {
     return true;
   }
 
-  private async advanceStatus(recipientId: string, status: "delivered" | "opened" | "clicked") {
+  private async advanceStatus(recipientId: string, status: "delivered" | "clicked") {
     await this.prisma.emailCampaignRecipient.updateMany({
       where: { id: recipientId, status: { in: LOWER_THAN[status] } },
       data: { status },

@@ -23,6 +23,8 @@ import { User, UserRole } from "@prisma/client";
 import { PromotionsService } from "../promotions/promotions.service";
 import { FeatureGuard } from "../common/guards/feature.guard";
 import { Feature } from "../common/decorators/feature.decorator";
+import { EmailQuotaService } from "./email-quota.service";
+import { EmailPacksService } from "./email-packs.service";
 
 @ApiTags("Email Campaigns")
 @ApiBearerAuth()
@@ -33,6 +35,8 @@ export class EmailCampaignsController {
   constructor(
     private readonly campaignsService: EmailCampaignsService,
     private readonly promotionsService: PromotionsService,
+    private readonly quota: EmailQuotaService,
+    private readonly packs: EmailPacksService,
   ) {}
 
   // ============ CAMPAIGNS ============
@@ -62,6 +66,22 @@ export class EmailCampaignsController {
   @Roles(...SALON_MANAGERS)
   async getTrackingStatus(@CurrentUser() user: User) {
     return this.campaignsService.getTrackingStatus(user.tenantId);
+  }
+
+  /** The month's marketing emails: sent, left ("te quedan N este mes"), the bono's, and the bono on sale. */
+  @Get("quota")
+  @ApiOperation({ summary: "Marketing emails this month: the plan's cap, sent, left and the bono" })
+  @Roles(...SALON_MANAGERS)
+  async getQuota(@CurrentUser() user: User) {
+    return this.quota.getQuota(user.tenantId);
+  }
+
+  /** "Comprar bono de emails": the Stripe page to pay for it. */
+  @Post("quota/pack-checkout")
+  @ApiOperation({ summary: "Start paying for a bono de emails (Stripe Checkout)" })
+  @Roles(UserRole.owner, UserRole.admin)
+  async buyPack(@CurrentUser() user: User) {
+    return this.packs.createCheckout(user.tenantId);
   }
 
   @Get("audience")

@@ -45,6 +45,7 @@ describe("commissions after refunds", () => {
   it("the summary counts a partly refunded visit and a partly refunded walk-in line at what is left; a line refunded whole is gone", async () => {
     const prisma: any = {
       professional: { findFirst: jest.fn(async () => ({ id: "p1", firstName: "Ana", lastName: "Pro", commissionRate: 10 })) },
+      tenant: { findUnique: jest.fn(async () => ({ timezone: "Europe/Madrid" })) },
       appointment: {
         findMany: jest.fn(async () => [
           {

@@ -2,6 +2,8 @@ import { BadRequestException } from "@nestjs/common";
 import { EmailCampaignsService } from "./email-campaigns.service";
 import { EmailCampaignSender, MAX_SEND_ATTEMPTS, SEND_LEASE_MS, campaignSender, retryDelayMs } from "./email-campaign-sender.service";
 import { EmailUnsubscribeService } from "./email-unsubscribe.service";
+import { EmailQuotaService } from "./email-quota.service";
+import { creditEmailPackFromCheckout } from "./email-packs.service";
 
 /**
  * Sending a campaign.
@@ -49,6 +51,11 @@ function fakeDb() {
     recipients: [] as Row[],
     clients: [] as Row[],
     refusals: [] as Row[],
+    // The salon's plan and clock, its month counters and its bono.
+    tenant: { id: "t1", plan: "pro", subscriptionStatus: "active", trialEnd: null, maxLocations: 1, timezone: "Europe/Madrid", tenantAddOns: [] } as Row,
+    usage: [] as Row[],
+    wallets: [] as Row[],
+    purchases: [] as Row[],
   };
   const prisma: any = {
     emailCampaign: {
@@ -87,6 +94,55 @@ function fakeDb() {
     client: {
       findMany: jest.fn(async ({ where }: any) => db.clients.filter((c) => matches(c, where))),
     },
+    tenant: {
+      findUnique: jest.fn(async ({ where }: any) => ({ ...db.tenant, id: where.id })),
+    },
+    emailMarketingUsage: {
+      createMany: jest.fn(async ({ data }: any) => {
+        let count = 0;
+        for (const d of data) {
+          if (db.usage.some((u) => u.tenantId === d.tenantId && u.month === d.month)) continue;
+          db.usage.push({ planSent: 0, packSent: 0, ...d });
+          count++;
+        }
+        return { count };
+      }),
+      findUnique: jest.fn(async ({ where }: any) =>
+        db.usage.find((u) => u.tenantId === where.tenantId_month.tenantId && u.month === where.tenantId_month.month) ?? null,
+      ),
+      updateMany: jest.fn(async ({ where, data }: any) => {
+        const hit = db.usage.filter((u) => matches(u, where));
+        hit.forEach((u) => apply(u, data));
+        return { count: hit.length };
+      }),
+    },
+    emailCreditWallet: {
+      findUnique: jest.fn(async ({ where }: any) => db.wallets.find((w) => w.tenantId === where.tenantId) ?? null),
+      updateMany: jest.fn(async ({ where, data }: any) => {
+        const hit = db.wallets.filter((w) => matches(w, where));
+        hit.forEach((w) => apply(w, data));
+        return { count: hit.length };
+      }),
+      upsert: jest.fn(({ where, create, update }: any) => async () => {
+        const w = db.wallets.find((x) => x.tenantId === where.tenantId);
+        if (w) apply(w, update);
+        else db.wallets.push({ creditsRemaining: 0, creditsPurchasedTotal: 0, creditsUsedTotal: 0, ...create });
+      }),
+    },
+    emailPackPurchase: {
+      create: jest.fn(({ data }: any) => async () => {
+        if (db.purchases.some((x) => x.stripeCheckoutSessionId === data.stripeCheckoutSessionId)) {
+          const { Prisma } = jest.requireActual("@prisma/client");
+          throw new Prisma.PrismaClientKnownRequestError("Unique constraint failed", { code: "P2002", clientVersion: "test" });
+        }
+        db.purchases.push({ ...data });
+      }),
+    },
+    // Runs the queued writes in order, as one: a failing one undoes nothing
+    // here, but it runs first (the purchase row), so a repeat writes nothing.
+    $transaction: jest.fn(async (ops: Array<() => Promise<unknown>>) => {
+      for (const op of ops) await op();
+    }),
     // Refusals of promotions, as marketing-consent reads them.
     consent: {
       findMany: jest.fn(async ({ where }: any) =>
@@ -105,6 +161,8 @@ function setup(
     send?: (to: string) => any;
     configured?: boolean;
     perMinute?: number;
+    /** The bono on sale in the console (null: not priced). */
+    packOffer?: { emails: number; priceCents: number } | null;
   } = {},
 ) {
   const { db, prisma } = fakeDb();
@@ -154,7 +212,10 @@ function setup(
   const env: Record<string, string> = { JWT_SECRET: "test-secret", APP_BASE_URL: "https://app.test" };
   const unsubscribes = new EmailUnsubscribeService({} as any, { get: (k: string) => env[k] } as any, {} as any, {} as any);
   const pacer: any = { perMinute: opts.perMinute ?? 120, wait: jest.fn(async () => undefined) };
-  const sender = new EmailCampaignSender(prisma, email, suppressions, unsubscribes, pacer);
+  const platformEmail: any = { marketingPack: () => opts.packOffer ?? null };
+  const quota = new EmailQuotaService(prisma, platformEmail);
+  (quota as any).logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+  const sender = new EmailCampaignSender(prisma, email, suppressions, unsubscribes, pacer, quota);
   (sender as any).logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
   const campaign = () => db.campaigns[0];
   const row = (id: string) => db.recipients.find((r) => r.id === id)!;
@@ -162,7 +223,7 @@ function setup(
     ...campaign(),
     tenant: { name: campaign().tenantName, email: campaign().tenantEmail },
   });
-  return { db, prisma, email, suppressions, unsubscribes, pacer, sender, campaign, row, recipient, client, sendingCampaign };
+  return { db, prisma, email, suppressions, unsubscribes, pacer, sender, quota, campaign, row, recipient, client, sendingCampaign };
 }
 
 describe("EmailCampaignSender: a batch", () => {
@@ -475,5 +536,125 @@ describe("EmailCampaignsService: Enviar ahora", () => {
     const { s } = service(t);
     await expect(s.retryFailed("t1", "c1")).rejects.toThrow(/No hay envíos fallidos/);
     expect(t.campaign().status).toBe("sent");
+  });
+});
+
+describe("The monthly marketing email cap", () => {
+  /** n clients with a visit, each a pending recipient of the campaign. */
+  function withRecipients(t: ReturnType<typeof setup>, n: number) {
+    for (let i = 1; i <= n; i++) {
+      t.client(`k${i}`);
+      t.recipient(`r${i}`, `k${i}`, `clienta${i}@example.test`);
+    }
+  }
+  const usage = (t: ReturnType<typeof setup>, month: string) =>
+    t.db.usage.find((u) => u.tenantId === "t1" && u.month === month);
+  const byStatus = (t: ReturnType<typeof setup>, status: string) => t.db.recipients.filter((r) => r.status === status).length;
+
+  it("counts each email sent in the salon's month, and only those sent", async () => {
+    const t = setup({
+      send: (to) => (to.startsWith("clienta3") ? { success: false, error: "Invalid", statusCode: 422, retryable: false } : { success: true, id: `re_${to}` }),
+    });
+    withRecipients(t, 3);
+    await t.sender.sendBatch(t.sendingCampaign() as any, 100, NOW);
+    // Two went out; the refused one was given back.
+    expect(usage(t, "2026-11")).toMatchObject({ planSent: 2, packSent: 0 });
+    const quota = await t.quota.getQuota("t1", NOW);
+    expect(quota).toMatchObject({ month: "2026-11", cap: 2000, sent: 2, remaining: 1998, resetsOn: "2026-12-01" });
+  });
+
+  it("the month is the salon's: 23:30 UTC on 31 October is already November in Madrid", async () => {
+    const t = setup();
+    withRecipients(t, 1);
+    const lateOctoberUtc = new Date("2026-10-31T23:30:00Z"); // 00:30 on 1 November in Madrid
+    await t.sender.sendBatch(t.sendingCampaign() as any, 100, lateOctoberUtc);
+    expect(usage(t, "2026-11")).toMatchObject({ planSent: 1 });
+    expect(usage(t, "2026-10")).toBeUndefined();
+
+    // The same instant for a salon on UTC is still October.
+    t.db.tenant.timezone = "UTC";
+    expect((await t.quota.getQuota("t1", lateOctoberUtc)).month).toBe("2026-10");
+  });
+
+  it("pauses the campaign at the cap with the reason, keeps the rest pending, and resumes next month", async () => {
+    const t = setup();
+    withRecipients(t, 3);
+    t.db.usage.push({ tenantId: "t1", month: "2026-11", planSent: 1998, packSent: 0 });
+
+    const out = await t.sender.sendBatch(t.sendingCampaign() as any, 100, NOW);
+
+    expect(out).toMatchObject({ sent: 2, capReached: true });
+    expect(byStatus(t, "sent")).toBe(2);
+    expect(byStatus(t, "pending")).toBe(1);
+    expect(t.campaign().status).toBe("sending");
+    expect(t.campaign().capPausedAt).toEqual(NOW);
+    expect(t.campaign().lastError).toMatch(/En pausa: este mes ya se han enviado los 2\.000 emails de marketing de tu plan/);
+    expect(t.campaign().lastError).toMatch(/1 de diciembre/);
+    expect(usage(t, "2026-11")!.planSent).toBe(2000);
+
+    // Still November: nothing resumes, nothing is sent.
+    await t.sender.dispatch(new Date("2026-11-30T22:00:00Z"));
+    expect(t.campaign().capPausedAt).toEqual(NOW);
+    expect(byStatus(t, "pending")).toBe(1);
+
+    // 1 December on the salon's clock (23:30 UTC on 30 November): it goes on by itself.
+    const december = new Date("2026-11-30T23:30:00Z");
+    await t.sender.dispatch(december);
+    expect(t.campaign().capPausedAt).toBeNull();
+    expect(byStatus(t, "pending")).toBe(0);
+    expect(byStatus(t, "sent")).toBe(3);
+    expect(usage(t, "2026-12")).toMatchObject({ planSent: 1 });
+  });
+
+  it("a bono bought resumes a paused campaign the same month, and its emails are counted apart", async () => {
+    const t = setup({ packOffer: { emails: 500, priceCents: 900 } });
+    withRecipients(t, 2);
+    t.db.usage.push({ tenantId: "t1", month: "2026-11", planSent: 2000, packSent: 0 });
+
+    await t.sender.sendBatch(t.sendingCampaign() as any, 100, NOW);
+    expect(t.campaign().capPausedAt).toEqual(NOW);
+    expect(t.campaign().lastError).toMatch(/o antes si compras un bono de emails/);
+    expect(t.email.sendEmail).not.toHaveBeenCalled();
+
+    // Stripe confirms the payment: the bono's emails go to the wallet, once.
+    const session: any = {
+      id: "cs_test_1",
+      payment_status: "paid",
+      client_reference_id: "t1",
+      metadata: { kind: "email_pack", tenantId: "t1", emails: "500", priceCents: "900" },
+    };
+    expect(await creditEmailPackFromCheckout(t.prisma, session, NOW)).toBe("credited");
+    expect(await creditEmailPackFromCheckout(t.prisma, session, NOW)).toBe("duplicate");
+    expect(t.db.wallets[0]).toMatchObject({ creditsRemaining: 500, creditsPurchasedTotal: 500 });
+    expect((await t.quota.getQuota("t1", NOW)).remaining).toBe(500);
+
+    await t.sender.dispatch(new Date(NOW.getTime() + 60_000));
+    expect(t.campaign().capPausedAt).toBeNull();
+    expect(byStatus(t, "sent")).toBe(2);
+    expect(usage(t, "2026-11")).toMatchObject({ planSent: 2000, packSent: 2 });
+    expect(t.db.wallets[0]).toMatchObject({ creditsRemaining: 498, creditsUsedTotal: 2 });
+  });
+
+  it("an email that fails after taking a bono slot gives it back", async () => {
+    const t = setup({ send: () => ({ success: false, error: "Invalid", statusCode: 422, retryable: false }) });
+    withRecipients(t, 1);
+    t.db.usage.push({ tenantId: "t1", month: "2026-11", planSent: 2000, packSent: 0 });
+    t.db.wallets.push({ tenantId: "t1", creditsRemaining: 10, creditsPurchasedTotal: 10, creditsUsedTotal: 0 });
+    await t.sender.sendBatch(t.sendingCampaign() as any, 100, NOW);
+    expect(t.db.wallets[0]).toMatchObject({ creditsRemaining: 10, creditsUsedTotal: 0 });
+    expect(usage(t, "2026-11")).toMatchObject({ planSent: 2000, packSent: 0 });
+  });
+
+  it("Empresa counts 5,000 per billed location", async () => {
+    const t = setup();
+    Object.assign(t.db.tenant, { plan: "empresa", maxLocations: 3 });
+    expect((await t.quota.getQuota("t1", NOW)).cap).toBe(15000);
+  });
+
+  it("an unpaid or foreign session credits nothing", async () => {
+    const t = setup();
+    expect(await creditEmailPackFromCheckout(t.prisma, { id: "cs_2", payment_status: "unpaid", client_reference_id: "t1", metadata: { kind: "email_pack", tenantId: "t1", emails: "500" } } as any)).toBe("unpaid");
+    expect(await creditEmailPackFromCheckout(t.prisma, { id: "cs_3", payment_status: "paid", client_reference_id: null, metadata: { kind: "email_pack", emails: "x" } } as any)).toBe("invalid");
+    expect(t.db.wallets).toEqual([]);
   });
 });

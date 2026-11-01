@@ -6,7 +6,7 @@ import { EmailCampaignsScheduler } from "./email-campaigns.scheduler";
  * the HTML they are escaped. They used to be inserted as they were.
  */
 describe("EmailCampaignsScheduler re-engagement content", () => {
-  const scheduler = new EmailCampaignsScheduler({} as any, {} as any, {} as any, {} as any, {} as any);
+  const scheduler = new EmailCampaignsScheduler({} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
   const build = (campaign: any, client: any, now = new Date("2026-11-02T10:00:00Z")) =>
     (scheduler as any).buildReengagementEmailContent(campaign, client, now);
 

@@ -662,7 +662,9 @@ export class EmailCampaignsService {
     });
 
     // The counters are per recipient (ResendEventsService counts a
-    // recipient's first open/click/bounce only), so they divide cleanly.
+    // recipient's first click/bounce only), so they divide cleanly. Opens are
+    // not measured (the owner's decision: no tracking pixel, LSSI art. 22.2),
+    // so there is no open count or open rate.
     // There is no unsubscribe rate: campaigns have no unsubscribe link that
     // records anything, so that number would always be an invented 0.
     const pct = (part: number, whole: number) => (whole > 0 ? (part / whole) * 100 : 0);
@@ -670,11 +672,9 @@ export class EmailCampaignsService {
       campaign,
       totalSent: campaign.emailsSent,
       totalDelivered: campaign.emailsDelivered,
-      totalOpened: campaign.emailsOpened,
       totalClicks: campaign.clicks,
       totalBounces: campaign.bounces,
       totalComplaints: campaign.complaints,
-      openRate: pct(campaign.emailsOpened, campaign.emailsDelivered),
       clickRate: pct(campaign.clicks, campaign.emailsDelivered),
       bounceRate: pct(campaign.bounces, campaign.emailsSent),
       complaintRate: pct(campaign.complaints, campaign.emailsSent),

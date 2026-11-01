@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { PayCommissionDto } from "./dto/commission.dto";
 import { effectiveCommissionRate, numberOrNull } from "./commission-rate";
@@ -9,7 +9,8 @@ import {
   clawedBackBySource,
   saleLineSourceKey,
 } from "./commission-clawback";
-import { commissionPeriodFilters, periodDay } from "./commission-period";
+import { CommissionPeriodFilters, commissionPeriodFilters, periodDay } from "./commission-period";
+import { salonToday } from "../analytics/analytics-metrics";
 import { safeTimeZone } from "../gift-cards/gift-card-expiry";
 
 export interface CalculateCommissionDto {
@@ -44,6 +45,16 @@ export interface CommissionSummary {
     refundId?: string;
     description?: string;
   }[];
+  /**
+   * The salon day ("YYYY-MM-DD") the pending figure runs up to, today:
+   * "Pagar" pays exactly this, whatever the payroll tab's dates.
+   */
+  pendingUpTo?: string;
+}
+
+/** 12345 (cents) -> "123,45 €", for the messages. */
+function eurosFromCents(cents: number): string {
+  return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(Math.round(cents) / 100);
 }
 
 /**
@@ -100,6 +111,8 @@ export interface PayrollAdjustment {
 
 @Injectable()
 export class CommissionsService {
+  private readonly logger = new Logger(CommissionsService.name);
+
   constructor(private prisma: PrismaService) {}
 
   /** The till's walk-in service lines with a professional (none on a database without them). */
@@ -134,6 +147,7 @@ export class CommissionsService {
   private async pendingAdjustmentEntries(
     tenantId: string,
     professionalId: string,
+    filters: { createdAt?: { gte?: Date; lt?: Date }; id?: { in: string[] } } = {},
   ): Promise<CommissionSummary["appointments"]> {
     const model = (this.prisma as any).commissionAdjustment;
     if (!model?.findMany) return [];
@@ -145,7 +159,7 @@ export class CommissionsService {
       posSaleLineId: string | null;
       amount: unknown;
     }> = await model.findMany({
-      where: { tenantId, professionalId, settled: false },
+      where: { tenantId, professionalId, settled: false, ...filters },
       orderBy: { createdAt: "desc" },
     });
     if (rows.length === 0) return [];
@@ -289,28 +303,28 @@ export class CommissionsService {
   }
 
   /**
-   * Get commission summary for a professional
+   * What a professional has pending, item by item, as the summary lists it
+   * and "Pagar" pays it: completed and paid visits not paid out yet (their
+   * commission after refunds), walk-in services sold at the till, and the
+   * refund adjustments not settled ("Ajuste por devolución", negative).
+   * Limited to the given dates (`scheduledDate` for visits, `createdAt` for
+   * the rest) and ids, when given.
    */
-  async getCommissionSummary(
+  private async pendingItems(
     tenantId: string,
-    professionalId: string,
-  ): Promise<CommissionSummary> {
-    const professional = await this.prisma.professional.findFirst({
-      where: { id: professionalId, tenantId },
-    });
-
-    if (!professional) {
-      throw new NotFoundException("Professional not found");
-    }
-
-    // Get all completed and paid appointments with commission data (exclude cancelled)
+    professional: { id: string; commissionRate: unknown },
+    filters: CommissionPeriodFilters & { ids?: string[] },
+  ): Promise<{ entries: CommissionSummary["appointments"]; total: number }> {
+    const ids = filters.ids && filters.ids.length > 0 ? { id: { in: filters.ids } } : {};
     const appointments = await this.prisma.appointment.findMany({
       where: {
         tenantId,
-        professionalId,
+        professionalId: professional.id,
         status: "completed",
         paymentStatus: "paid",
         commissionPaid: false,
+        ...(filters.scheduledDate ? { scheduledDate: filters.scheduledDate } : {}),
+        ...ids,
       },
       include: {
         client: true,
@@ -321,158 +335,186 @@ export class CommissionsService {
       },
     });
 
-    const defaultRate = effectiveCommissionRate(professional.commissionRate);
+    const defaultRate = effectiveCommissionRate(professional.commissionRate as any);
     // Partly refunded visits count the share the salon kept (commission-refunds.ts).
     const kept = await appointmentKeptShares(this.prisma, tenantId, appointments.map((a) => a.id));
-
-    let pendingCommission = 0;
-    let paidCommission = 0;
-
-    const appointmentDetails = appointments.map((apt) => {
+    const visits: CommissionSummary["appointments"] = appointments.map((apt: any) => {
       const rate = effectiveCommissionRate(apt.commissionRate, defaultRate);
       const share = kept.get(apt.id) ?? 1;
-      const amount = Math.round(Number(apt.totalAmount) * share);
-      const commissionAmount = roundCommission(
-        (numberOrNull(apt.commissionAmount) ?? (Number(apt.totalAmount) * rate) / 100) * share,
-      );
-
-      if (apt.commissionPaid) {
-        paidCommission += commissionAmount;
-      } else {
-        pendingCommission += commissionAmount;
-      }
-
       return {
         id: apt.id,
         date: apt.scheduledDate,
-        clientName: `${apt.client.firstName} ${apt.client.lastName}`,
-        serviceName: apt.service.name,
-        amount,
+        clientName: apt.client ? `${apt.client.firstName} ${apt.client.lastName}` : "Clienta",
+        serviceName: apt.service?.name ?? apt.serviceName ?? "Servicio",
+        amount: Math.round(Number(apt.totalAmount) * share),
         commissionRate: rate,
-        commissionAmount,
-        paid: apt.commissionPaid,
+        commissionAmount: roundCommission(
+          (numberOrNull(apt.commissionAmount) ?? (Number(apt.totalAmount) * rate) / 100) * share,
+        ),
+        paid: !!apt.commissionPaid,
+        source: "appointment" as const,
       };
     });
 
     const sales = this.saleEntries(
-      await this.saleLines({ tenantId, professionalId, commissionPaid: false }),
+      await this.saleLines({
+        tenantId,
+        professionalId: professional.id,
+        commissionPaid: false,
+        ...(filters.createdAt ? { createdAt: filters.createdAt } : {}),
+        ...ids,
+      }),
       defaultRate,
     );
-    for (const s of sales) pendingCommission += s.commissionAmount;
-    const adjustments = await this.pendingAdjustmentEntries(tenantId, professionalId);
-    for (const a of adjustments) pendingCommission += a.commissionAmount;
-    pendingCommission = roundCommission(pendingCommission);
-    const entries = [...appointmentDetails, ...sales, ...adjustments];
+    const adjustments = await this.pendingAdjustmentEntries(tenantId, professional.id, {
+      ...(filters.createdAt ? { createdAt: filters.createdAt } : {}),
+      ...ids,
+    });
 
+    const entries = [...visits, ...sales, ...adjustments];
+    const total = roundCommission(entries.reduce((sum, e) => sum + (e.paid ? 0 : e.commissionAmount), 0));
+    return { entries, total };
+  }
+
+  /** Everything up to the end of today on the salon's clock: what "Pagar" pays. */
+  private upToToday(timeZone: string, now: Date): CommissionPeriodFilters & { day: string } {
+    const day = salonToday(timeZone, now);
+    return { ...commissionPeriodFilters(null, day, timeZone), day };
+  }
+
+  private toSummary(
+    professional: { id: string; firstName: string; lastName: string },
+    pending: { entries: CommissionSummary["appointments"]; total: number },
+    upTo: string,
+  ): CommissionSummary {
     return {
       professionalId: professional.id,
       professionalName: `${professional.firstName} ${professional.lastName}`,
-      totalEarnings: entries.reduce((sum, a) => sum + a.amount, 0),
-      pendingCommission,
-      paidCommission,
-      appointments: entries,
+      totalEarnings: pending.entries.reduce((sum, a) => sum + a.amount, 0),
+      pendingCommission: pending.total,
+      paidCommission: 0,
+      pendingUpTo: upTo,
+      appointments: pending.entries,
     };
   }
 
   /**
-   * Pay commissions for completed appointments
+   * A professional's pending commission: everything not paid out yet up to
+   * the end of today on the salon's clock, refund adjustments included. The
+   * "Pagar" dialog shows this figure and payCommission pays exactly it.
+   */
+  async getCommissionSummary(
+    tenantId: string,
+    professionalId: string,
+    now: Date = new Date(),
+  ): Promise<CommissionSummary> {
+    const professional = await this.prisma.professional.findFirst({
+      where: { id: professionalId, tenantId },
+    });
+
+    if (!professional) {
+      throw new NotFoundException("Professional not found");
+    }
+
+    const cutoff = this.upToToday(await this.salonTimeZone(tenantId), now);
+    return this.toSummary(professional, await this.pendingItems(tenantId, professional, cutoff), cutoff.day);
+  }
+
+  /**
+   * "Pagar": marks paid what is pending for the professional and returns
+   * the amount.
+   *
+   * Without dates or ids -- what the summary's button sends -- it pays
+   * everything pending up to the end of today on the salon's clock, refund
+   * adjustments netted in: the same items and the same figure as the summary
+   * (it used to take the payroll tab's date range, so the dialog said one
+   * amount and a different one was paid). With `expectedAmount` (the figure
+   * the dialog showed) it refuses with 409, paying nothing, if that is no
+   * longer what is pending.
+   *
+   * With dates or ids (API callers), the same, limited to them. Exactly the
+   * items counted are marked paid.
    */
   async payCommission(
     tenantId: string,
     professionalId: string,
     dto: PayCommissionDto,
+    now: Date = new Date(),
   ): Promise<{ count: number; totalAmount: number }> {
-    const whereClause: any = {
-      tenantId,
-      professionalId,
-      status: "completed",
-      paymentStatus: "paid",
-      commissionPaid: false,
-    };
-
-    // If specific appointment IDs provided
-    if (dto.appointmentIds && dto.appointmentIds.length > 0) {
-      whereClause.id = { in: dto.appointmentIds };
+    const professional = await this.prisma.professional.findFirst({
+      where: { id: professionalId, tenantId },
+    });
+    if (!professional) {
+      throw new NotFoundException("Professional not found");
     }
 
-    // If date range provided: both days included, whole salon days (commission-period.ts).
+    const timeZone = await this.salonTimeZone(tenantId);
+    // Both days included, whole salon days (commission-period.ts).
     const period =
       dto.startDate || dto.endDate
-        ? commissionPeriodFilters(dto.startDate, dto.endDate, await this.salonTimeZone(tenantId))
-        : {};
-    if (period.scheduledDate) whereClause.scheduledDate = period.scheduledDate;
-
-    const appointments = await this.prisma.appointment.findMany({
-      where: whereClause,
+        ? commissionPeriodFilters(dto.startDate, dto.endDate, timeZone)
+        : this.upToToday(timeZone, now);
+    const pending = await this.pendingItems(tenantId, professional, {
+      scheduledDate: period.scheduledDate,
+      createdAt: period.createdAt,
+      ids: dto.appointmentIds,
     });
 
-    // What is paid is the commission after refunds, as the summary shows it.
-    const kept = await appointmentKeptShares(this.prisma, tenantId, appointments.map((a) => a.id));
-    let totalAmount = 0;
-    for (const apt of appointments) {
-      totalAmount += roundCommission(Number(apt.commissionAmount || 0) * (kept.get(apt.id) ?? 1));
+    if (
+      dto.expectedAmount !== undefined &&
+      dto.expectedAmount !== null &&
+      Math.abs(pending.total - Number(dto.expectedAmount)) > 0.005
+    ) {
+      throw new ConflictException(
+        `Lo pendiente ha cambiado desde que abriste el aviso: ahora es ${eurosFromCents(pending.total)}. ` +
+          "No se ha pagado nada. Revísalo y vuelve a pagar.",
+      );
     }
 
-    const result = await this.prisma.appointment.updateMany({
-      where: whereClause,
-      data: {
-        commissionPaid: true,
-        commissionDate: new Date(),
-      },
-    });
+    const idsOf = (source: string) => pending.entries.filter((e) => e.source === source).map((e) => e.id);
+    const paidAt = new Date();
+    let count = 0;
 
-    // The walk-in services of the till, by the same filters (ids, sale dates).
-    let salesCount = 0;
+    const visitIds = idsOf("appointment");
+    if (visitIds.length > 0) {
+      const result = await this.prisma.appointment.updateMany({
+        where: { tenantId, professionalId, id: { in: visitIds }, commissionPaid: false },
+        data: { commissionPaid: true, commissionDate: paidAt },
+      });
+      count += result.count ?? 0;
+    }
+
+    const lineIds = idsOf("sale");
     const lineModel = (this.prisma as any).posSaleLine;
-    if (lineModel?.findMany) {
-      const lineWhere: any = { tenantId, professionalId, kind: "service", commissionPaid: false };
-      if (dto.appointmentIds && dto.appointmentIds.length > 0) lineWhere.id = { in: dto.appointmentIds };
-      if (period.createdAt) lineWhere.createdAt = period.createdAt;
-      const lines: SaleLineRow[] = await lineModel.findMany({ where: lineWhere });
-      for (const l of lines) {
-        const c = numberOrNull(l.commissionAmount) ?? 0;
-        totalAmount += saleLineAfterRefunds({
-          commissionBaseCents: l.commissionBaseCents,
-          commissionAmount: c,
-          totalCents: Number(l.totalCents ?? 0),
-          refundedCents: l.refundedCents ?? 0,
-        }).commission;
-      }
-      const paidLines = await lineModel.updateMany({
-        where: lineWhere,
-        data: { commissionPaid: true, commissionDate: new Date() },
+    if (lineIds.length > 0 && lineModel?.updateMany) {
+      const result = await lineModel.updateMany({
+        where: { tenantId, professionalId, kind: "service", id: { in: lineIds }, commissionPaid: false },
+        data: { commissionPaid: true, commissionDate: paidAt },
       });
-      salesCount = paidLines.count ?? 0;
+      count += result.count ?? 0;
     }
 
-    // Refund adjustments not settled yet (commission-clawback.ts): netted into
-    // this payout, by the same filters (ids, the date they were recorded).
-    let adjustmentsCount = 0;
+    // Refund adjustments not settled yet (commission-clawback.ts): netted into this payout.
+    const adjustmentIds = idsOf("refund_adjustment");
     const adjustmentModel = (this.prisma as any).commissionAdjustment;
-    if (adjustmentModel?.findMany) {
-      const adjWhere: any = { tenantId, professionalId, settled: false };
-      if (dto.appointmentIds && dto.appointmentIds.length > 0) adjWhere.id = { in: dto.appointmentIds };
-      if (period.createdAt) adjWhere.createdAt = period.createdAt;
-      const pending: Array<{ amount: unknown }> = await adjustmentModel.findMany({ where: adjWhere });
-      for (const a of pending) totalAmount += numberOrNull(a.amount) ?? 0;
-      const settled = await adjustmentModel.updateMany({
-        where: adjWhere,
-        data: { settled: true, settledAt: new Date() },
+    if (adjustmentIds.length > 0 && adjustmentModel?.updateMany) {
+      const result = await adjustmentModel.updateMany({
+        where: { tenantId, professionalId, id: { in: adjustmentIds }, settled: false },
+        data: { settled: true, settledAt: paidAt },
       });
-      adjustmentsCount = settled.count ?? 0;
+      count += result.count ?? 0;
     }
 
-    return {
-      count: result.count + salesCount + adjustmentsCount,
-      totalAmount: roundCommission(totalAmount),
-    };
+    return { count, totalAmount: pending.total };
   }
 
   /**
-   * Get all professionals' commission summaries for a tenant
+   * Every active professional's pending commission (the Comisiones summary
+   * tab), each as getCommissionSummary works it out.
    */
   async getAllCommissionSummaries(
     tenantId: string,
+    now: Date = new Date(),
   ): Promise<CommissionSummary[]> {
     const professionals = await this.prisma.professional.findMany({
       where: {
@@ -480,131 +522,26 @@ export class CommissionsService {
         isActive: true,
       },
     });
-
-    console.log(
-      `Found ${professionals.length} active professionals for tenant ${tenantId}`,
-    );
-    console.log(
-      "Active professionals:",
-      professionals.map((p) => `${p.firstName} ${p.lastName}`).join(", "),
-    );
+    const cutoff = this.upToToday(await this.salonTimeZone(tenantId), now);
 
     const summaries: CommissionSummary[] = [];
-
     for (const professional of professionals) {
-      console.log(
-        `Processing professional: ${professional.firstName} ${professional.lastName}, active: ${professional.isActive}`,
-      );
       try {
-        // Get professional's commission rate
-        const defaultRate = effectiveCommissionRate(professional.commissionRate);
-
-        // Get all appointments for this professional (completed and paid, not cancelled)
-        const appointments = await this.prisma.appointment.findMany({
-          where: {
-            tenantId,
-            professionalId: professional.id,
-            status: "completed",
-            paymentStatus: "paid",
-            commissionPaid: false,
-          },
-          include: {
-            client: true,
-            service: true,
-          },
-          orderBy: {
-            scheduledDate: "desc",
-          },
-        });
-
-        console.log(
-          `Professional ${professional.firstName} ${professional.lastName}: ${appointments.length} appointments`,
-        );
-
-        let pendingCommission = 0;
-        let paidCommission = 0;
-        const kept = await appointmentKeptShares(this.prisma, tenantId, appointments.map((a) => a.id));
-
-        const appointmentDetails = appointments.map((apt) => {
-          const rate = effectiveCommissionRate(apt.commissionRate, defaultRate);
-          const share = kept.get(apt.id) ?? 1;
-          const amount = Math.round(Number(apt.totalAmount) * share);
-          const commissionAmount = roundCommission(
-            (numberOrNull(apt.commissionAmount) ?? (Number(apt.totalAmount) * rate) / 100) * share,
-          );
-
-          if (apt.commissionPaid) {
-            paidCommission += commissionAmount;
-          } else {
-            pendingCommission += commissionAmount;
-          }
-
-          return {
-            id: apt.id,
-            date: apt.scheduledDate,
-            clientName: apt.client
-              ? `${apt.client.firstName} ${apt.client.lastName}`
-              : "Unknown",
-            serviceName: apt.service?.name || "Unknown Service",
-            amount,
-            commissionRate: rate,
-            commissionAmount,
-            paid: apt.commissionPaid,
-          };
-        });
-
-        const sales = this.saleEntries(
-          await this.saleLines({ tenantId, professionalId: professional.id, commissionPaid: false }),
-          defaultRate,
-        );
-        for (const s of sales) pendingCommission += s.commissionAmount;
-        appointmentDetails.push(...sales);
-        const adjustments = await this.pendingAdjustmentEntries(tenantId, professional.id);
-        for (const a of adjustments) pendingCommission += a.commissionAmount;
-        pendingCommission = roundCommission(pendingCommission);
-        appointmentDetails.push(...adjustments);
-
-        const totalEarnings = appointmentDetails.reduce(
-          (sum, a) => sum + a.amount,
-          0,
-        );
-
-        console.log(
-          `Professional ${professional.firstName} ${professional.lastName}: pending=${pendingCommission}, paid=${paidCommission}, earnings=${totalEarnings}, appointments=${appointmentDetails.length}`,
-        );
-
-        summaries.push({
-          professionalId: professional.id,
-          professionalName: `${professional.firstName} ${professional.lastName}`,
-          totalEarnings,
-          pendingCommission,
-          paidCommission,
-          appointments: appointmentDetails,
-        });
+        summaries.push(this.toSummary(professional, await this.pendingItems(tenantId, professional, cutoff), cutoff.day));
       } catch (error) {
-        // If there's an error, still include the professional with empty data
-        console.error(
-          `Error getting commission summary for professional ${professional.id} (${professional.firstName} ${professional.lastName}):`,
-          error,
-        );
-        console.log("Adding professional with zero values due to error");
+        // One professional's data failing does not hide the others.
+        this.logger.error(`Commission summary failed for professional ${professional.id}: ${(error as Error).message}`);
         summaries.push({
           professionalId: professional.id,
           professionalName: `${professional.firstName} ${professional.lastName}`,
           totalEarnings: 0,
           pendingCommission: 0,
           paidCommission: 0,
+          pendingUpTo: cutoff.day,
           appointments: [],
         });
       }
     }
-
-    console.log(`Returning ${summaries.length} commission summaries`);
-    console.log(
-      "Summary names:",
-      summaries.map((s) => s.professionalName).join(", "),
-    );
-
     return summaries;
   }
 

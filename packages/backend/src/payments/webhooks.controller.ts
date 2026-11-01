@@ -11,6 +11,7 @@ import { Public } from '../auth/decorators/public.decorator';
 import { activationFromCheckout, activationFromSubscription, PlanActivation } from './plan-activation';
 import { ReadOnlyNoticeService } from './read-only-notice.service';
 import { PlatformStripeConfigService } from '../platform/platform-stripe-config.service';
+import { creditEmailPackFromCheckout, isEmailPackSession } from '../email-campaigns/email-packs.service';
 
 @Controller('webhooks')
 export class WebhooksController {
@@ -119,9 +120,18 @@ export class WebhooksController {
     console.log(`[WebhooksController] Processing Stripe event: ${event.type}`);
 
     switch (event.type) {
-      case 'checkout.session.completed':
-        await this.activatePlan(activationFromCheckout(event.data.object as Stripe.Checkout.Session));
+      case 'checkout.session.completed': {
+        const session = event.data.object as Stripe.Checkout.Session;
+        // A bono de emails (one-off payment): its emails go to the salon's
+        // wallet, once per session; paused campaigns go on by themselves.
+        if (isEmailPackSession(session)) {
+          const result = await creditEmailPackFromCheckout(this.prisma, session);
+          this.logger.log(`Bono de emails checkout ${session.id}: ${result}`);
+          break;
+        }
+        await this.activatePlan(activationFromCheckout(session));
         break;
+      }
       // payment_intent.succeeded / payment_failed and charge.refunded used to
       // mark a salon payment paid or failed by its Stripe id. These are
       // KiraRoom's own account's events (plan billing), never a salon's

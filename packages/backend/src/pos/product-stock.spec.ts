@@ -99,6 +99,7 @@ describe("commissions of the till's walk-in services", () => {
   it("are in the professional's summary as pending, from the sale line", async () => {
     const prisma: any = {
       professional: { findFirst: jest.fn(async () => ({ id: "p1", firstName: "Lucía", lastName: "M", commissionRate: 30 })) },
+      tenant: { findUnique: jest.fn(async () => ({ timezone: "Europe/Madrid" })) },
       appointment: { findMany: jest.fn(async () => []) },
       posSaleLine: {
         findMany: jest.fn(async ({ where }: any) => {
