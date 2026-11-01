@@ -210,6 +210,18 @@ export interface HistoryDeleteResult {
   deactivated: boolean;
 }
 
+/** POST /admin/clients/:id/merge: what moved to the record kept, and the sentence to show. */
+export interface ClientMergeResult {
+  ok: true;
+  targetClientId: string;
+  sourceClientId: string;
+  moved: Record<string, number>;
+  message: string;
+}
+
+/** A row of GET /admin/clients: the list columns and how many appointments she has. */
+export type ClientSearchRow = Client & { _count?: { appointments: number } };
+
 /** The password was right and the account asks for a code from the app next. */
 export interface TwoFactorRequired {
   twoFactorRequired: true;
@@ -1526,6 +1538,8 @@ export interface ApiClientInterface {
   createClient(data: CreateClientPayload & { tenantId?: string }): Promise<Client>;
   updateClient(id: string, data: UpdateClientPayload, options?: { asStaff?: boolean }): Promise<Client>;
   deleteClient(id: string): Promise<HistoryDeleteResult>;
+  searchClientsForManager(query: string): Promise<ClientSearchRow[]>;
+  mergeClient(targetId: string, sourceClientId: string): Promise<ClientMergeResult>;
   getServices(tenantId?: string): Promise<Service[]>;
   getService(id: string): Promise<Service>;
   createService(data: ServiceWrite): Promise<Service>;
@@ -2575,6 +2589,24 @@ class ApiClient implements ApiClientInterface {
   async deleteClient(id: string): Promise<HistoryDeleteResult> {
     return this.request<HistoryDeleteResult>(`/admin/clients/${id}`, {
       method: "DELETE",
+    });
+  }
+
+  /** Owner/admin: the salon's clients matching a name, email or phone (10 at most). */
+  async searchClientsForManager(query: string): Promise<ClientSearchRow[]> {
+    const params = new URLSearchParams({ search: query, limit: "10", page: "1" });
+    const res = await this.request<{ data: ClientSearchRow[] }>(`/admin/clients?${params.toString()}`);
+    return res.data ?? [];
+  }
+
+  /**
+   * Owner/admin: everything `sourceClientId` has moves to `targetId`, and
+   * the source record is deleted (see the backend's client-merge.service).
+   */
+  async mergeClient(targetId: string, sourceClientId: string): Promise<ClientMergeResult> {
+    return this.request<ClientMergeResult>(`/admin/clients/${targetId}/merge`, {
+      method: "POST",
+      body: JSON.stringify({ sourceClientId }),
     });
   }
 
@@ -5676,12 +5708,15 @@ export interface WaitListEntry {
     channels: WaitListChannelOutcome[];
     slot: { date: string | null; time: string | null; professionalId: string | null };
   } | null;
+  // email and phone are null for staff (contactHidden): only owner and admin see them.
   client: { firstName: string; lastName: string; email: string | null; phone: string | null };
+  contactHidden?: boolean;
 }
 
 export interface WaitListNotifyResult {
   notified: boolean;
   channels: WaitListChannelOutcome[];
-  bookingUrl: string;
+  // null when the service is not bookable online: the notice asks the client to call.
+  bookingUrl: string | null;
   summary: string;
 }

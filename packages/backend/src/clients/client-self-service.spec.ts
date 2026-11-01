@@ -102,6 +102,25 @@ describe("updateSelf", () => {
     expect(updates[0].data).toEqual({ email: "new@y.z", tokenVersion: { increment: 1 } });
   });
 
+  it("stores her email in lower case and her phone in international form", async () => {
+    const { service, updates } = await setup();
+    (service as any).prisma.tenant = { findUnique: async () => ({ country: "ES" }) };
+    await service.updateSelf("t1", "c1", { email: "New@Y.Z", phone: "600 111 222", currentPassword: "old-password-1" });
+    // A new email also ends her other sessions (tokenVersion).
+    expect(updates[0].data).toEqual({ email: "new@y.z", phone: "+34600111222", tokenVersion: { increment: 1 } });
+  });
+
+  it("her own email in other capitals is not a change (no password asked)", async () => {
+    const prisma: any = {
+      client: {
+        findFirst: async () => ({ email: "ana@y.z", passwordHash: "x" }),
+        update: async (args: any) => ({ id: "c1", ...args.data }),
+      },
+    };
+    const updated = await new ClientsService(prisma).updateSelf("t1", "c1", { email: "ANA@y.z", firstName: "Ana" });
+    expect(updated).toEqual({ id: "c1", firstName: "Ana" });
+  });
+
   it("stores an emptied phone as no phone", async () => {
     const { service, updates } = await setup();
     await service.updateSelf("t1", "c1", { phone: "" });

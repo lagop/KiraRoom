@@ -123,7 +123,11 @@ function build({
         return (
           existingClients.find(
             (c) =>
-              (where.email === undefined || c.email === where.email) &&
+              // { equals, mode: "insensitive" }: any case matches.
+              (where.email === undefined ||
+                (typeof where.email === "object"
+                  ? c.email?.toLowerCase() === where.email.equals.toLowerCase()
+                  : c.email === where.email)) &&
               (where.id === undefined || c.id === where.id) &&
               c.tenantId === where.tenantId,
           ) ?? null
@@ -204,8 +208,30 @@ describe("online booking: who and where", () => {
 
     await service.createOnline(BOOKING as any);
 
-    expect(clientLookups[0]).toEqual({ email: "ana@mail.test", tenantId: "tenant-b" });
+    expect(clientLookups[0]).toEqual({
+      email: { equals: "ana@mail.test", mode: "insensitive" },
+      tenantId: "tenant-b",
+    });
     expect(created[0].clientId).toBe("ana-at-b");
+  });
+
+  it("finds her whatever the capitals of her email, and stores a new one in lower case", async () => {
+    const { service, created, prisma } = build({
+      existingClients: [{ id: "ana-at-b", email: "Ana@Mail.test", tenantId: "tenant-b" }],
+    });
+
+    await service.createOnline({ ...BOOKING, clientInfo: { ...BOOKING.clientInfo, email: " ANA@mail.TEST " } } as any);
+    expect(created[0].clientId).toBe("ana-at-b");
+    expect(prisma.client.create).not.toHaveBeenCalled();
+
+    await service.createOnline({
+      ...BOOKING,
+      clientInfo: { firstName: "Eva", lastName: "V", email: "Eva@Mail.TEST", phone: "699 888 777" },
+    } as any);
+    expect(prisma.client.create.mock.calls[0][0].data).toMatchObject({
+      email: "eva@mail.test",
+      phone: "+34699888777",
+    });
   });
 
   it("creates the client in this salon when they are only known elsewhere", async () => {
