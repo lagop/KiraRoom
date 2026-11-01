@@ -277,7 +277,8 @@ describe("M4: POST /payments/:id/refund", () => {
       clientId: CLIENT,
       appointmentId: over.appointmentId === undefined ? APT : over.appointmentId,
       amount: 4000,
-      method: over.method ?? "cash",
+      // Card by default: a cash refund needs the drawer open (tested below).
+      method: over.method ?? "card",
       status: over.status ?? "paid",
       stripePaymentId: over.stripePaymentId ?? null,
       metadata: { posSaleId: "sale-1" },
@@ -288,7 +289,10 @@ describe("M4: POST /payments/:id/refund", () => {
       payment: {
         findFirst: jest.fn(async () => payment),
         updateMany: jest.fn(async () => ({ count: over.paymentCount ?? 1 })),
+        count: jest.fn(async () => 0),
       },
+      // The till sale's lines (a sale with none here: refund-side-effects.spec.ts has them).
+      posSaleLine: { findMany: jest.fn(async () => []), updateMany: jest.fn(async () => ({ count: 1 })) },
       refund: { create: jest.fn(async ({ data }: any) => ({ id: "ref-1", ...data })) },
       appointment: {
         findFirst: jest.fn(async () => ({
@@ -303,7 +307,11 @@ describe("M4: POST /payments/:id/refund", () => {
       $queryRaw: jest.fn(async () => (over.cashSessionId ? [{ id: over.cashSessionId }] : [])),
     };
     prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
-    const loyalty: any = { onPaymentRefunded: jest.fn(async () => undefined), settleAppointment: jest.fn() };
+    const loyalty: any = {
+      onPaymentRefunded: jest.fn(async () => undefined),
+      onPartialRefund: jest.fn(async () => 0),
+      settleAppointment: jest.fn(),
+    };
     const wallet: any = { creditIn: jest.fn(async () => ({ wallet: { balance: 4000 } })) };
     return { prisma, loyalty, wallet, service: new PaymentsService(prisma, loyalty, wallet) };
   }
@@ -332,12 +340,13 @@ describe("M4: POST /payments/:id/refund", () => {
     expect(out).toMatchObject({ refundedAmount: 4000, refundableAmount: 0, rectificationNeeded: false, invoice: null });
   });
 
-  it("a partial refund: payment stays paid, appointment's amountPaid goes down, points untouched", async () => {
+  it("a partial refund: payment stays paid, appointment's amountPaid goes down, its share of the points taken back", async () => {
     const t = setup();
     const out = await t.service.refundPayment(T, PAY, { amount: 1500, reason: "Descuento posterior" });
     expect(t.prisma.payment.updateMany.mock.calls[0][0].data.status).toBe("paid");
     expect(t.prisma.appointment.updateMany.mock.calls[0][0].data).toEqual({ amountPaid: 2500, paymentStatus: "paid" });
     expect(t.loyalty.onPaymentRefunded).not.toHaveBeenCalled();
+    expect(t.loyalty.onPartialRefund).toHaveBeenCalledWith(T, expect.objectContaining({ id: PAY }), { id: "ref-1", amount: 1500 });
     expect(out).toMatchObject({ refundedAmount: 1500, refundableAmount: 2500 });
   });
 
@@ -360,16 +369,34 @@ describe("M4: POST /payments/:id/refund", () => {
   });
 
   it("with the cash drawer open, the refund is linked to its session (arqueo) under a shared lock", async () => {
-    const t = setup({ cashSessionId: "cs-1" });
+    const t = setup({ method: "cash", cashSessionId: "cs-1" });
     await t.service.refundPayment(T, PAY, { amount: 1000, reason: "Devolución" });
     expect(t.prisma.refund.create.mock.calls[0][0].data).toMatchObject({ amount: 1000, cashSessionId: "cs-1" });
-    const sql = t.prisma.$queryRaw.mock.calls[0][0];
-    expect(sql.sql).toMatch(/FROM "cash_sessions".*FOR SHARE/);
-    expect(sql.values).toEqual([T]);
+    const shared = t.prisma.$queryRaw.mock.calls.map((c: any[]) => c[0]).find((q: any) => /FOR SHARE/.test(q.sql));
+    expect(shared.sql).toMatch(/FROM "cash_sessions".*FOR SHARE/);
+    expect(shared.values).toEqual([T]);
   });
 
-  it("with the drawer closed, the refund is still given (not linked)", async () => {
-    const t = setup();
+  it("cash with the drawer closed: 409 CASH_SESSION_CLOSED, nothing written (it would belong to no arqueo)", async () => {
+    const t = setup({ method: "cash" });
+    const err: any = await t.service.refundPayment(T, PAY, { amount: 1000, reason: "Devolución" }).catch((e) => e);
+    expect(err).toBeInstanceOf(ConflictException);
+    expect(err.getResponse()).toMatchObject({ code: "CASH_SESSION_CLOSED" });
+    expect(t.prisma.$transaction).not.toHaveBeenCalled();
+    expect(t.prisma.refund.create).not.toHaveBeenCalled();
+  });
+
+  it("cash: the drawer closed between the check and the transaction is still a 409 (re-checked under the lock)", async () => {
+    const t = setup({ method: "cash", cashSessionId: "cs-1" });
+    // Open at the first look, closed when the transaction locks it.
+    t.prisma.$queryRaw.mockResolvedValueOnce([{ id: "cs-1" }]).mockResolvedValueOnce([]);
+    const err: any = await t.service.refundPayment(T, PAY, { amount: 1000, reason: "x" }).catch((e) => e);
+    expect(err.getResponse()).toMatchObject({ code: "CASH_SESSION_CLOSED" });
+    expect(t.prisma.refund.create).not.toHaveBeenCalled();
+  });
+
+  it.each(["card", "bizum", "bank_transfer", "wallet"])("a %s refund with the drawer closed is given (not linked)", async (method) => {
+    const t = setup({ method, appointmentId: null });
     await t.service.refundPayment(T, PAY, { amount: 1000, reason: "Devolución" });
     expect(t.prisma.refund.create.mock.calls[0][0].data.cashSessionId).toBeUndefined();
   });

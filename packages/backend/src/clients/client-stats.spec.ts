@@ -107,6 +107,24 @@ describe("recomputeClientStats", () => {
   });
 });
 
+describe("partial refunds", () => {
+  it("what was given back of a payment still paid comes off her spend", async () => {
+    const d: any = { ...db({ visits: { count: 2, first: CREATED, last: CREATED }, paidCents: 10_000 }) };
+    d.refund = { aggregate: jest.fn(async () => ({ _sum: { amount: 2_500 } })) };
+    const stats = await recomputeClientStats(d, "t1", "c1");
+    expect(stats?.totalSpent.toString()).toBe("75");
+    expect(stats?.averageSpent.toString()).toBe("37.5");
+    // Only refunds of her paid payments (a refunded one is out already), only succeeded ones.
+    expect(d.refund.aggregate).toHaveBeenCalledWith({
+      where: {
+        status: "succeeded",
+        payment: { tenantId: "t1", clientId: "c1", status: "paid", method: { not: "loyalty_points" } },
+      },
+      _sum: { amount: true },
+    });
+  });
+});
+
 describe("refreshClientStats", () => {
   it("recomputes each client once and never throws", async () => {
     const d = db();
@@ -124,7 +142,7 @@ describe("payments recompute the client's figures", () => {
       payment: {
         aggregate: jest.fn(async () => ({ _sum: { amount: 4_000 } })),
         create: jest.fn(async ({ data }: any) => ({ id: "pay1", ...data })),
-        findFirst: jest.fn(async () => ({ id: "pay1", tenantId: "t1", clientId: "c1", status: "paid", amount: 4_000, method: "cash", refunds: [], updatedAt: new Date(0) })),
+        findFirst: jest.fn(async () => ({ id: "pay1", tenantId: "t1", clientId: "c1", status: "paid", amount: 4_000, method: "card", refunds: [], updatedAt: new Date(0) })),
         update: jest.fn(async ({ data }: any) => ({ id: "pay1", clientId: "c1", amount: 4_000, ...data })),
         updateMany: jest.fn(async () => ({ count: 1 })),
       },

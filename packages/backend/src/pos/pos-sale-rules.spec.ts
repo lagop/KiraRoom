@@ -530,6 +530,35 @@ describe("staff see only their own sales", () => {
     expect(report.payments[0].client).toBe("Clienta sin ficha");
   });
 
+  it("partial refunds come off the day's sales and count as refunded, like whole ones", async () => {
+    const t = harness();
+    const at = new Date("2026-11-01T09:30:00Z");
+    t.prisma.payment.findMany = jest.fn(async () => [
+      // 40,00 paid, 15,00 given back of it (stays paid).
+      { id: "y1", amount: 4000, method: "cash", status: "paid", createdAt: at, appointmentId: null, metadata: {}, refunds: [{ amount: 1500 }] },
+      // Given back whole, with its refund row.
+      { id: "y2", amount: 2000, method: "card", status: "refunded", createdAt: at, appointmentId: null, metadata: {}, refunds: [{ amount: 2000 }] },
+      // Given back whole before refunds were recorded one by one.
+      { id: "y3", amount: 1000, method: "card", status: "refunded", createdAt: at, appointmentId: null, metadata: {} },
+      { id: "y4", amount: 3000, method: "card", status: "paid", createdAt: at, appointmentId: null, metadata: {}, refunds: [] },
+    ]);
+    const report = await t.pos.getDailyReport("t1", "2026-11-01", OWNER);
+    expect(report.summary).toMatchObject({ totalSales: 5500, totalTransactions: 2, refundedAmount: 4500, refundedCount: 3 });
+    expect(report.hourlySales[10]).toEqual({ hour: 10, count: 2, amount: 5500 });
+    expect(report.payments.find((p: any) => p.id === "y1")).toMatchObject({ amount: 2500, refundedAmount: 1500 });
+    // The query reads the refunds with the payments.
+    expect(t.prisma.payment.findMany.mock.calls[0][0].include.refunds).toEqual({ where: { status: "succeeded" }, select: { amount: true } });
+
+    const dash = await t.pos.getDashboard("t1", "2026-11-01", OWNER);
+    expect(dash).toMatchObject({ totalSales: 5500, refundedAmount: 4500 });
+    expect(dash.paymentBreakdown).toEqual(
+      expect.arrayContaining([
+        { method: "cash", amount: 2500, count: 1 },
+        { method: "card", amount: 3000, count: 1 },
+      ]),
+    );
+  });
+
   it("receipt: staff only of the sales they recorded (403 in Spanish)", async () => {
     const t = harness();
     const out = await t.sell({ items: [{ serviceId: "svc1", quantity: 1 }], payments: [{ method: "cash", amount: 5000 }] }, OWNER);

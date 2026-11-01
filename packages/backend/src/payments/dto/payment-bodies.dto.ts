@@ -1,5 +1,7 @@
 import { Type } from "class-transformer";
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsEnum,
   IsInt,
@@ -11,6 +13,7 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateNested,
 } from "class-validator";
 import { PaymentMethod, PaymentType } from "@prisma/client";
 
@@ -71,11 +74,33 @@ export class WalletAmountDto {
   description?: string;
 }
 
+/** A line of a till sale given back: its id (GET /payments/:id/refund-lines) and how many units. */
+export class RefundLineDto {
+  @IsUUID("4", { message: "Una de las líneas elegidas no es válida." })
+  lineId!: string;
+
+  @Type(() => Number)
+  @IsInt({ message: "Las unidades a devolver deben ser un número entero." })
+  @Min(1, { message: "Las unidades a devolver deben ser al menos 1." })
+  @Max(10_000, { message: "Las unidades a devolver no son válidas." })
+  quantity!: number;
+}
+
 /**
  * POST /payments/:id/refund: money given back for a charge, in cents. No
- * amount: everything not refunded yet. The reason is kept on the refund.
+ * amount: everything not refunded yet, or, with `lines`, what those units
+ * are worth. The reason is kept on the refund. `lines` (a till sale's own
+ * payment only): the units given back; products return to stock
+ * (payments/refund-lines.ts). An amount without lines restocks nothing.
  */
 export class RefundPaymentDto {
+  @IsOptional()
+  @IsArray({ message: "Las líneas a devolver no son válidas." })
+  @ArrayMaxSize(200, { message: "Demasiadas líneas en una devolución." })
+  @ValidateNested({ each: true })
+  @Type(() => RefundLineDto)
+  lines?: RefundLineDto[];
+
   @IsOptional()
   @Type(() => Number)
   @IsInt({ message: "El importe a devolver debe ser un número entero de céntimos." })

@@ -177,6 +177,11 @@ export function shareMethod(share: AppointmentShare<unknown>): string | null {
  * and `discount` (the column) keeps the record its invoice reads
  * (appointment-invoice-pricing.ts). The write also checks the total did not
  * change since it was read.
+ *
+ * `loyalty`: the loyalty reward's part of this visit (pos.service.ts). It
+ * does not lower the price (it is paid with points: `coveredCents` counts
+ * it) but is kept under `discount.loyalty`, which the visit's invoice shows
+ * as a discount (appointment-invoice-pricing.ts).
  */
 export async function recordAppointmentPayment(
   db: { appointment: { updateMany: (args: any) => Promise<{ count: number }> } },
@@ -184,6 +189,7 @@ export async function recordAppointmentPayment(
   coveredCents: number,
   method: string | null,
   discount?: { cents: number; record: Record<string, unknown>; chargeTotalCents?: number },
+  loyalty?: Record<string, unknown>,
 ): Promise<{ amountPaid: number; paymentStatus: PaymentStatus }> {
   const listTotal = appointmentTotalCents(apt);
   const discounted = !!discount && discount.cents > 0;
@@ -208,6 +214,7 @@ export async function recordAppointmentPayment(
       paymentStatus,
       ...(method ? { paymentMethod: method } : {}),
       ...(discounted ? { totalAmount: total, price: total / 100, discount: discount.record } : {}),
+      ...(loyalty ? { discount: { ...asRecord(discounted ? discount.record : (apt as { discount?: unknown }).discount), loyalty } } : {}),
     },
   });
   if (count !== 1) {
@@ -218,4 +225,8 @@ export async function recordAppointmentPayment(
     });
   }
   return { amountPaid, paymentStatus };
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
