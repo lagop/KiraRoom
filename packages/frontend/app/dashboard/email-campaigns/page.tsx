@@ -115,7 +115,6 @@ export default function EmailCampaignsPage() {
     gender: "",
     minAge: "",
     maxAge: "",
-    loyaltyTier: "",
     tags: "",
   });
 
@@ -352,7 +351,6 @@ export default function EmailCampaignsPage() {
       gender: "",
       minAge: "",
       maxAge: "",
-      loyaltyTier: "",
       tags: "",
     });
 
@@ -449,7 +447,6 @@ export default function EmailCampaignsPage() {
       }
 
       if (filters.gender) filterParams.gender = filters.gender;
-      if (filters.loyaltyTier) filterParams.loyaltyTier = filters.loyaltyTier;
       if (filters.tags)
         filterParams.tags = filters.tags
           .split(",")
@@ -1135,27 +1132,9 @@ export default function EmailCampaignsPage() {
                         <option value="other">Otro</option>
                       </select>
                     </div>
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">
-                        Nivel de lealtad
-                      </label>
-                      <select
-                        value={filters.loyaltyTier}
-                        onChange={(e) =>
-                          setFilters({
-                            ...filters,
-                            loyaltyTier: e.target.value,
-                          })
-                        }
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                      >
-                        <option value="">Todos</option>
-                        <option value="bronze">Bronze</option>
-                        <option value="silver">Silver</option>
-                        <option value="gold">Gold</option>
-                        <option value="platinum">Platinum</option>
-                      </select>
-                    </div>
+                    {/* No "nivel de lealtad" filter: clients.loyaltyTier is
+                        never computed (every client reads "bronze"); the
+                        loyalty programme's levels live on its members. */}
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
@@ -1423,7 +1402,7 @@ export default function EmailCampaignsPage() {
                     <option value={90}>90 días</option>
                   </select>
                   <p className="text-xs text-gray-500 mt-1">
-                    Clientes sin visitar en{" "}
+                    Clientes que vinieron alguna vez y no han vuelto en{" "}
                     {reengagementData.inactiveDaysThreshold} días
                   </p>
                 </div>

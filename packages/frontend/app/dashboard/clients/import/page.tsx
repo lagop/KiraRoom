@@ -59,7 +59,7 @@ const COPY: Record<Kind, { title: string; intro: string; columns: string }> = {
     title: "Importar clientes",
     intro:
       "Sube la exportación de tu programa anterior (Booksy, Treatwell, Fresha…) o un Excel (.xlsx). Reconocemos columnas como Nombre, Apellidos, Teléfono o Móvil, Email y Fecha de nacimiento. No se duplican las clientas que ya tienes: comparamos el email y el teléfono.",
-    columns: "Nombre (o Cliente / Nombre completo), Apellidos, Teléfono o Móvil, Email, Fecha de nacimiento, Notas. Hace falta un teléfono o un email.",
+    columns: "Nombre (o Cliente / Nombre completo), Apellidos, Teléfono o Móvil, Email, Fecha de nacimiento, Notas, Acepta publicidad (o LOPD): un «no» queda guardado y esa clienta no recibe campañas. Hace falta un teléfono o un email.",
   },
   services: {
     title: "Importar servicios",
@@ -449,6 +449,13 @@ function ImportPageContent() {
               <a href="/dashboard/appointments" className="text-purple-600 hover:underline">
                 Ver la agenda
               </a>
+            </p>
+          )}
+          {kind === "clients" && !!commit.marketingRefusals && (
+            <p className="text-sm text-gray-600">
+              {commit.marketingRefusals === 1
+                ? "1 clienta no acepta publicidad: queda guardado en su ficha y no recibirá campañas."
+                : `${commit.marketingRefusals} clientas no aceptan publicidad: queda guardado en su ficha y no recibirán campañas.`}
             </p>
           )}
           {commit.errorRows > 0 && (

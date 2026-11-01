@@ -30,6 +30,28 @@ const CLIENT_ALIASES: Record<string, string[]> = {
   dateOfBirth: ["dateofbirth", "birthdate", "birthday", "fechadenacimiento", "nacimiento", "cumpleanos", "fechanacimiento"],
   notes: ["notes", "note", "notas", "nota", "observaciones", "comentarios", "comments"],
   gender: ["gender", "genero", "sexo"],
+  marketing: [
+    "aceptapublicidad",
+    "publicidad",
+    "lopd",
+    "rgpd",
+    "comunicacionescomerciales",
+    "aceptacomunicacionescomerciales",
+    "aceptacomunicaciones",
+    "comunicaciones",
+    "newsletter",
+    "aceptanewsletter",
+    "marketing",
+    "aceptamarketing",
+    "consentimientomarketing",
+    "consentimientopublicidad",
+    "aceptapromociones",
+    "promociones",
+    "acceptsmarketing",
+    "marketingconsent",
+    "marketingoptin",
+    "optin",
+  ],
   action: ["action"],
 };
 
@@ -63,6 +85,13 @@ export interface ClientRow {
   dateOfBirth?: string;
   gender?: string;
   notes?: string;
+  /**
+   * What the old program's "acepta publicidad" / LOPD column says: "no" is
+   * a refusal of commercial communications, recorded with the client;
+   * "yes" is kept here only (see ImportService.recordMarketingRefusal).
+   * Undefined: no such column, or a value that is neither.
+   */
+  marketing?: "yes" | "no";
   action: "insert" | "update" | "skip";
 }
 
@@ -88,12 +117,26 @@ export function readClientRows(rows: Record<string, unknown>[], country = "ES"):
       dateOfBirth: parseDate(cell(row, cols.dateOfBirth)),
       gender: cell(row, cols.gender) || undefined,
       notes: cell(row, cols.notes) || undefined,
+      marketing: parseYesNo(cell(row, cols.marketing)),
       action: action === "update" || action === "skip" ? action : "insert",
     };
   });
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * "Sí" / "No" as other programs write them: si, sí, s, x, yes, true, 1,
+ * acepta... / no, n, false, 0, no acepta, rechaza, baja... Anything else
+ * (blank, "pendiente") is undefined: not a choice.
+ */
+export function parseYesNo(value: string): "yes" | "no" | undefined {
+  const v = headerKey(value);
+  if (!v) return undefined;
+  if (/^(no|n|false|falso|0|noacepta|noaceptado|noautoriza|rechaza|rechazado|baja|dadodebaja|optout)$/.test(v)) return "no";
+  if (/^(si|s|yes|y|x|true|verdadero|1|acepta|aceptado|autoriza|autorizado|optin)$/.test(v)) return "yes";
+  return undefined;
+}
 
 export function clientRowErrors(row: ClientRow, rawDate?: string): { col: string; msg: string }[] {
   const errors: { col: string; msg: string }[] = [];
