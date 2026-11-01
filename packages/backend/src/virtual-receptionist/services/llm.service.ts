@@ -19,6 +19,7 @@ import {
 } from '../prompts/templates';
 import { salonPublicUrlFromEnv } from '../../web-domain/public-url';
 import { publicPrice, publicPriceSettings } from '../../common/public-price';
+import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL } from '../providers/anthropic-models';
 
 /** Providers whose implementation runs the tool loop. The others ignore `tools`. */
 const TOOL_CAPABLE_PROVIDERS = new Set<LLMProvider>([LLMProvider.ANTHROPIC, LLMProvider.MiniMax]);
@@ -889,8 +890,8 @@ const dynamicContext = getDynamicContext(language, {
         provider: LLMProvider.ANTHROPIC,
         apiKey: '********',
         baseUrl: 'https://api.anthropic.com/v1',
-        defaultModel: 'claude-3-opus-20240229',
-        supportedModels: ['claude-3-opus-20240229', 'claude-3-sonnet-20240229', 'claude-3-haiku-20240307'],
+        defaultModel: DEFAULT_CLAUDE_MODEL,
+        supportedModels: CLAUDE_MODELS.map((m) => m.id),
         isActive: true,
         maxTokens: 8192,
         temperature: 0.7,

@@ -3222,7 +3222,7 @@ model PlatformLlmConfig {
   // EncryptionService.decrypt(). Never expose via API; only the
   // last-4-chars hash is returned to the admin UI.
   apiKeyEncrypted String   @db.Text
-  defaultModel    String   @default("claude-haiku-4-5")
+  defaultModel    String   @default("claude-haiku-5-5")
   // Optional fields that the provider factory needs (e.g. MiniMax
   // requires MINIMAX_BASE_URL).
   baseUrl         String?

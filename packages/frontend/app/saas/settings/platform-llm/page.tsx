@@ -26,7 +26,7 @@ export default function PlatformLlmConfigPage() {
   };
 
 const PROVIDER_OPTIONS = [
-  { value: "anthropic", label: "Anthropic (Claude Haiku 4.5, Sonnet 4.5, Opus 4.5)" },
+  { value: "anthropic", label: "Anthropic (Claude Haiku 5.5, Sonnet 5.5, Opus 5.5)" },
   { value: "openai", label: "OpenAI (GPT-4o, GPT-4o-mini)" },
   { value: "google", label: "Google Gemini" },
   { value: "MiniMax", label: "MiniMax" },
@@ -35,9 +35,10 @@ const PROVIDER_OPTIONS = [
 const MODEL_PRESETS: Record<string, string[]> = {
   anthropic: [
     "claude-haiku-5-5",
+    "claude-sonnet-5-5",
+    "claude-opus-5-5",
+    // Legacy: ten times the price of Haiku 5.5.
     "claude-haiku-4-5",
-    "claude-sonnet-4-5",
-    "claude-opus-4-5",
   ],
   openai: ["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"],
   google: ["gemini-2.5-pro", "gemini-2.5-flash"],
@@ -48,7 +49,7 @@ const MODEL_PRESETS: Record<string, string[]> = {
   const [loading, setLoading] = useState(true);
 
   const [provider, setProvider] = useState("anthropic");
-  const [defaultModel, setDefaultModel] = useState("claude-haiku-4-5");
+  const [defaultModel, setDefaultModel] = useState("claude-haiku-5-5");
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [workspaceId, setWorkspaceId] = useState("");
@@ -206,7 +207,7 @@ const MODEL_PRESETS: Record<string, string[]> = {
               list={`models-${provider}`}
               value={defaultModel}
               onChange={(e) => setDefaultModel(e.target.value)}
-              placeholder="claude-haiku-4-5"
+              placeholder="claude-haiku-5-5"
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono"
             />
             <datalist id={`models-${provider}`}>
