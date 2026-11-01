@@ -475,7 +475,7 @@ export interface TaxReportDraft {
   status: string;
 }
 
-export type WhatsAppCampaignStatus = "draft" | "scheduled" | "sending" | "completed" | "failed" | "cancelled";
+export type WhatsAppCampaignStatus = "draft" | "scheduled" | "sending" | "paused" | "completed" | "failed" | "cancelled";
 
 /** A WhatsApp promotion: the salon's text, reviewed by Meta as a template. */
 export interface WhatsAppCampaign {
@@ -497,11 +497,14 @@ export interface WhatsAppCampaign {
   lastError: string | null;
   createdAt: string;
   totalRecipients: number;
+  /** Counts worked out from the recipients when the campaign is read. */
   sent: number;
   delivered: number;
   read: number;
   failed: number;
   optedOut: number;
+  /** Recipients not sent yet (a sending or paused campaign). */
+  pending?: number;
   /** Recipients by status (detail only): pending, sent, delivered, read, failed, opted_out. */
   byStatus?: Record<string, number>;
 }
@@ -5210,6 +5213,10 @@ class ApiClient implements ApiClientInterface {
   }
   async cancelWhatsAppCampaign(id: string): Promise<WhatsAppCampaign> {
     return this.request(`/whatsapp/campaigns/${id}/cancel`, { method: "POST" });
+  }
+  /** Carries on a campaign paused by a problem with the salon's WhatsApp account. */
+  async resumeWhatsAppCampaign(id: string): Promise<WhatsAppCampaign> {
+    return this.request(`/whatsapp/campaigns/${id}/resume`, { method: "POST" });
   }
   async deleteWhatsAppCampaign(id: string): Promise<{ deleted: boolean }> {
     return this.request(`/whatsapp/campaigns/${id}`, { method: "DELETE" });

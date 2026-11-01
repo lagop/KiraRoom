@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Loader2, MessageCircle, Plus, Send, Trash2, X, Pencil, Ban, Users } from "lucide-react";
+import { Loader2, MessageCircle, Plus, Send, Trash2, X, Pencil, Ban, Users, Play } from "lucide-react";
 import apiClient, {
   WhatsAppAudiencePreview,
   WhatsAppCampaign,
@@ -17,6 +17,8 @@ import {
   bodyProblem,
   campaignActions,
   campaignLabel,
+  campaignStats,
+  insertName,
   previewBody,
 } from "@/lib/whatsapp-campaign";
 
@@ -36,7 +38,7 @@ const SEGMENTS = [
   { value: "180", label: "Sin venir desde hace más de 6 meses" },
 ];
 
-type CampaignAction = "submit" | "cancel" | "remove";
+type CampaignAction = "submit" | "cancel" | "remove" | "resume";
 
 interface FormState {
   id: string | null;
@@ -76,6 +78,7 @@ export default function WhatsAppCampaignsPage() {
   const [busy, setBusy] = useState<string | null>(null);
   // The campaign action about to run, confirmed in the panel's dialog.
   const [pendingAct, setPendingAct] = useState<{ campaign: WhatsAppCampaign; action: CampaignAction } | null>(null);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -185,6 +188,10 @@ export default function WhatsAppCampaignsPage() {
       if (action === "submit") await apiClient.submitWhatsAppCampaign(c.id);
       if (action === "cancel") await apiClient.cancelWhatsAppCampaign(c.id);
       if (action === "remove") await apiClient.deleteWhatsAppCampaign(c.id);
+      if (action === "resume") {
+        await apiClient.resumeWhatsAppCampaign(c.id);
+        toast({ title: "Campaña reanudada", description: "Sigue enviándose a los clientes que faltaban." });
+      }
       await load();
     } catch (err: any) {
       toast({ title: "No se pudo hacer", description: err?.message, variant: "destructive" });
@@ -209,6 +216,15 @@ export default function WhatsAppCampaignsPage() {
       cancelLabel: "Mantener campaña",
       destructive: true,
     },
+    resume: {
+      title: `¿Reanudar «${pendingAct.campaign.name}»?`,
+      description:
+        `Se enviará a los clientes que faltan${pendingAct.campaign.pending ? ` (${pendingAct.campaign.pending})` : ""}. ` +
+        "Comprueba antes que has resuelto el motivo de la pausa; si sigue igual, la campaña volverá a pausarse.",
+      confirmLabel: "Reanudar",
+      cancelLabel: "Cancelar",
+      destructive: false,
+    },
     remove: {
       title: `¿Eliminar «${pendingAct.campaign.name}»?`,
       description: undefined,
@@ -219,6 +235,23 @@ export default function WhatsAppCampaignsPage() {
   }[pendingAct.action];
 
   const preview = useMemo(() => (form ? previewBody(form.body) : ""), [form]);
+  const hasName = !!form && /\{\{\s*nombre\s*\}\}/i.test(form.body);
+
+  // Where the cursor is, never at the end: Meta refuses a text that ends
+  // with the name (see insertName).
+  function insertNameAtCursor() {
+    if (!form) return;
+    const el = bodyRef.current;
+    const start = el ? el.selectionStart : form.body.length;
+    const end = el ? el.selectionEnd : start;
+    const next = insertName(form.body, start, end);
+    setForm({ ...form, body: next.body });
+    requestAnimationFrame(() => {
+      if (!bodyRef.current) return;
+      bodyRef.current.focus();
+      bodyRef.current.setSelectionRange(next.cursor, next.cursor);
+    });
+  }
 
   return (
     <div className="space-y-6">
@@ -254,8 +287,8 @@ export default function WhatsAppCampaignsPage() {
       <div className="rounded-lg border border-gray-200 bg-white p-4 text-sm text-gray-600">
         <p>
           <strong className="text-gray-900">Quién las recibe.</strong> WhatsApp solo permite promociones a
-          quien ha aceptado recibirlas. Tus clientes pueden aceptarlas desde su cuenta en tu web, o puedes
-          anotarlo en su ficha cuando te lo digan en el salón. Si responden BAJA, dejan de recibirlas.
+          quien ha aceptado recibirlas. Cuando un cliente te dé su consentimiento, anótalo en su ficha. Si
+          responde BAJA, deja de recibirlas.
         </p>
         <p className="mt-2">
           <strong className="text-gray-900">Coste.</strong> Meta cobra los mensajes de promoción
@@ -277,6 +310,7 @@ export default function WhatsAppCampaignsPage() {
           {campaigns.map((c) => {
             const label = campaignLabel(c, formatDate);
             const actions = campaignActions(c);
+            const stats = campaignStats(c);
             return (
               <li key={c.id} className="rounded-xl border border-gray-200 bg-white p-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -289,13 +323,7 @@ export default function WhatsAppCampaignsPage() {
                     </div>
                     {label.detail && <p className="mt-1 text-sm text-gray-600">{label.detail}</p>}
                     <p className="mt-2 line-clamp-2 whitespace-pre-line text-sm text-gray-500">{c.body}</p>
-                    {(c.status === "sending" || c.status === "completed") && c.totalRecipients > 0 && (
-                      <p className="mt-2 text-xs text-gray-500">
-                        {c.totalRecipients} destinatarios
-                        {c.status === "completed" &&
-                          ` · ${c.sent} enviados · ${c.delivered} entregados · ${c.read} leídos · ${c.failed} fallidos · ${c.optedOut} bajas`}
-                      </p>
-                    )}
+                    {stats && <p className="mt-2 text-xs text-gray-500">{stats}</p>}
                   </div>
                   <div className="flex shrink-0 flex-wrap gap-2">
                     {actions.edit && (
@@ -315,6 +343,16 @@ export default function WhatsAppCampaignsPage() {
                         className="inline-flex items-center gap-1 rounded-md bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
                       >
                         <Send className="h-3 w-3" /> Enviar a revisión
+                      </button>
+                    )}
+                    {actions.resume && (
+                      <button
+                        type="button"
+                        disabled={busy === c.id}
+                        onClick={() => setPendingAct({ campaign: c, action: "resume" })}
+                        className="inline-flex items-center gap-1 rounded-md bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                      >
+                        <Play className="h-3 w-3" /> Reanudar
                       </button>
                     )}
                     {actions.cancel && (
@@ -372,13 +410,16 @@ export default function WhatsAppCampaignsPage() {
                     Mensaje
                     <button
                       type="button"
-                      onClick={() => setForm({ ...form, body: `${form.body}{{nombre}}` })}
-                      className="text-xs font-normal text-green-700 hover:underline"
+                      onClick={insertNameAtCursor}
+                      disabled={hasName}
+                      title={hasName ? "El mensaje ya lleva {{nombre}}" : undefined}
+                      className="text-xs font-normal text-green-700 hover:underline disabled:cursor-not-allowed disabled:text-gray-400 disabled:no-underline"
                     >
                       Insertar {"{{nombre}}"}
                     </button>
                   </span>
                   <textarea
+                    ref={bodyRef}
                     value={form.body}
                     onChange={(e) => setForm({ ...form, body: e.target.value })}
                     rows={7}
