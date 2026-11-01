@@ -311,6 +311,13 @@
     },
     "whatsapp": {
       "body": "{{clientFirstName}} hace {{daysSinceLastVisit}} días desde tu último {{serviceName}} en {{salonName}}. Reservamos? Responde SÍ o usa este enlace: {{bookingUrl}}"
+    },
+    "status": {
+      "scheduled": "Programado",
+      "sent": "Enviado",
+      "cancelled": "Cancelado",
+      "failed": "No se pudo enviar",
+      "booked": "Reservó cita"
     }
   },
   "signup": {
@@ -1396,9 +1403,9 @@
     "save": "Guardar",
     "saving": "Guardando...",
     "delete_client_title": "Eliminar clienta",
-    "delete_client_confirm": "¿Estás seguro de que quieres eliminar a {name}?",
+    "delete_client_confirm": "¿Eliminar a {name}?",
     "delete_warning": "Advertencia",
-    "delete_warning_message": "Esta acción no se puede deshacer.",
+    "delete_warning_message": "Si no tiene citas ni pagos, se borra su ficha y no se puede deshacer. Si tiene historial, no se borra: queda como inactiva y se conservan su ficha, sus citas y sus pagos. Para borrar sus datos personales, usa «Anonimizar sus datos» en su ficha.",
     "client_deleted": "Clienta eliminada",
     "client_deleted_success": "La clienta se ha eliminado correctamente",
     "client_deactivated": "Clienta desactivada",
@@ -1467,7 +1474,13 @@
     "history_limit": "Se muestran las {count} citas más recientes.",
     "reminder_history": "Historial de recordatorios",
     "service": "Servicio",
-    "load_failed": "No se pudo cargar la ficha de la clienta"
+    "load_failed": "No se pudo cargar la ficha de la clienta",
+    "deleting": "Eliminando…",
+    "page_summary": "{from}–{to} de {total}",
+    "previous_page": "Página anterior",
+    "next_page": "Página siguiente",
+    "pagination": "Paginación de clientas",
+    "sort_by_column": "Ordenar por {column}"
   },
   "pagos": {
     "of": "de",

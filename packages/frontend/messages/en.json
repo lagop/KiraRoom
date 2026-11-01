@@ -311,6 +311,13 @@
     },
     "whatsapp": {
       "body": "{{clientFirstName}} ðŸ‘‹, it's been {{daysSinceLastVisit}} days since your last {{serviceName}} at {{salonName}}. Book now? Reply YES or use: {{bookingUrl}}"
+    },
+    "status": {
+      "scheduled": "Scheduled",
+      "sent": "Sent",
+      "cancelled": "Cancelled",
+      "failed": "Failed",
+      "booked": "Booked"
     }
   },
   "signup": {
@@ -1396,9 +1403,9 @@
     "save": "Save",
     "saving": "Saving...",
     "delete_client_title": "Delete client",
-    "delete_client_confirm": "Are you sure you want to delete {name}?",
+    "delete_client_confirm": "Delete {name}?",
     "delete_warning": "Warning",
-    "delete_warning_message": "This action cannot be undone.",
+    "delete_warning_message": "If she has no appointments or payments, her file is deleted and this cannot be undone. If she has history, nothing is deleted: she is marked inactive and her file, appointments and payments are kept. To erase her personal data, use “Anonymise her data” on her file.",
     "client_deleted": "Client deleted",
     "client_deleted_success": "Client has been deleted successfully",
     "client_deactivated": "Client deactivated",
@@ -1467,7 +1474,13 @@
     "history_limit": "Showing the {count} most recent appointments.",
     "reminder_history": "Reminder history",
     "service": "Service",
-    "load_failed": "Could not load the client's file"
+    "load_failed": "Could not load the client's file",
+    "deleting": "Deleting…",
+    "page_summary": "{from}–{to} of {total}",
+    "previous_page": "Previous page",
+    "next_page": "Next page",
+    "pagination": "Client list pages",
+    "sort_by_column": "Sort by {column}"
   },
   "pagos": {
     "of": "of",

@@ -51,3 +51,46 @@ export function samePhone(a: string | null | undefined, b: string | null | undef
   const ka = phoneKey(a);
   return ka.length === 9 && ka === phoneKey(b);
 }
+
+/**
+ * A phone number as a log line may show it: "+34 6•• ••• 222". The country
+ * code (when the number has one), the first digit and the last three stay;
+ * the rest is hidden. A Twilio "whatsapp:" address keeps its prefix. Server
+ * logs are kept and read outside the salon, so a full number does not
+ * belong in them.
+ */
+export function maskPhone(raw: string | null | undefined): string {
+  if (raw === null || raw === undefined) return '(sin teléfono)';
+  let s = String(raw).trim();
+  const channel = /^whatsapp:/i.test(s) ? 'whatsapp:' : '';
+  s = s.replace(/^whatsapp:/i, '').trim();
+  let digits = s.replace(/\D/g, '');
+  if (digits.length < 6) return `${channel}${'•'.repeat(Math.max(digits.length, 3))}`;
+  let country = '';
+  const international = s.startsWith('+') || digits.startsWith('00');
+  if (digits.startsWith('00')) digits = digits.slice(2);
+  if (international || (digits.length === 11 && digits.startsWith('34'))) {
+    const code =
+      Object.values(DIAL_CODES)
+        .sort((a, b) => b.length - a.length)
+        .find((c) => digits.startsWith(c) && digits.length - c.length >= 6) ?? digits.slice(0, 2);
+    country = `+${code} `;
+    digits = digits.slice(code.length);
+  }
+  // The first digit, the hidden middle in threes, the last three: 6•• ••• 222.
+  const head = `${digits[0]}${'•'.repeat(digits.length - 4)}`;
+  return `${channel}${country}${head.match(/.{1,3}/g)!.join(' ')} ${digits.slice(-3)}`;
+}
+
+/**
+ * Masks every phone number inside a text (a provider's error message such
+ * as "The 'To' number +34600111222 is not a valid phone number"), so it can
+ * go to the log. A run of 9 to 15 digits, with the usual separators, counts
+ * as a number.
+ */
+export function maskPhonesIn(text: string | null | undefined): string {
+  return String(text ?? '').replace(/(?:whatsapp:)?\+?\d[\d\s().-]{7,}\d/gi, (match) => {
+    const count = match.replace(/\D/g, '').length;
+    return count >= 9 && count <= 15 ? maskPhone(match) : match;
+  });
+}

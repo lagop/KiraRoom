@@ -1,7 +1,7 @@
 "use client";
 import { ImportLink } from "@/components/import-link";
 
-import { useState, useEffect, Suspense } from "react";
+import { useState, useEffect, useRef, Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
@@ -14,8 +14,11 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { Button } from "@/src/components/ui/Button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   Drawer,
   DrawerClose,
@@ -45,13 +48,32 @@ import { MarketingRefusalCheckbox, recordNewClientRefusal } from "@/components/m
 
 type SortField = "firstName" | "lastName" | "email" | "status" | "createdAt";
 type SortDirection = "asc" | "desc";
+type StatusFilter = "" | Client["status"];
 
 type FieldChange = React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>;
+
+/** Rows a page of the list shows. */
+const PAGE_SIZE = 25;
+/** How long typing pauses before the list is searched again. */
+const SEARCH_DELAY_MS = 300;
+
+// The drawers scroll on their own: on a phone the form is taller than the
+// screen, and the Save button was out of reach.
+const DRAWER_CONTENT = "flex flex-col overflow-y-auto overflow-x-hidden overscroll-contain";
+// Below the form, its buttons spaced by the gap (not the default margins).
+const DRAWER_FOOTER = "mt-auto gap-2 border-t border-gray-200 pt-4 sm:space-x-0";
 
 function ClientsPageContent() {
   const searchParams = useSearchParams();
   const t = useTranslations();
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("");
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+  // Bumped to fetch the current page again (after adding or deleting).
+  const [reloadKey, setReloadKey] = useState(0);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +81,8 @@ function ClientsPageContent() {
   const [isAddDrawerOpen, setIsAddDrawerOpen] = useState(false);
   const [isEditDrawerOpen, setIsEditDrawerOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [clientToDelete, setClientToDelete] = useState<Client | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [sortField, setSortField] = useState<SortField>("createdAt");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   // Read after mount (the server has no token). Until then nobody counts as
@@ -81,22 +105,57 @@ function ClientsPageContent() {
   const [addRefusesMarketing, setAddRefusesMarketing] = useState(false);
   const [editFormData, setEditFormData] = useState<ClientFormValues>(EMPTY_CLIENT_FORM);
 
+  // The search runs once typing pauses, from the first page.
   useEffect(() => {
-    fetchClients();
-  }, []);
+    const next = searchQuery.trim();
+    if (next === debouncedSearch) return;
+    const timer = setTimeout(() => {
+      setDebouncedSearch(next);
+      setPage(1);
+    }, SEARCH_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [searchQuery, debouncedSearch]);
 
-  const fetchClients = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const data = await apiClient.getClients();
-      setClients(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("clients.failed_to_load"));
-    } finally {
-      setLoading(false);
-    }
-  };
+  // The server searches, filters, sorts and pages: the list no longer
+  // loads every client of the salon at once. Only the latest request's
+  // answer is shown, so a slow earlier search cannot overwrite it.
+  const requestId = useRef(0);
+  useEffect(() => {
+    const id = ++requestId.current;
+    setLoading(true);
+    setError(null);
+    apiClient
+      .getClientsPage({
+        page,
+        pageSize: PAGE_SIZE,
+        q: debouncedSearch || undefined,
+        status: statusFilter || undefined,
+        sort: sortField,
+        dir: sortDirection,
+      })
+      .then((res) => {
+        if (id !== requestId.current) return;
+        // A delete can empty the last page: step back to the one before.
+        if (res.data.length === 0 && res.page > 1 && res.total > 0) {
+          setPage(Math.max(1, res.totalPages));
+          return;
+        }
+        setClients(res.data);
+        setTotal(res.total);
+        setTotalPages(res.totalPages);
+      })
+      .catch((err) => {
+        if (id !== requestId.current) return;
+        setError(err instanceof Error ? err.message : t("clients.failed_to_load"));
+      })
+      .finally(() => {
+        if (id === requestId.current) setLoading(false);
+      });
+    // `t` changes identity on every render; the list does not depend on it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, debouncedSearch, statusFilter, sortField, sortDirection, reloadKey]);
+
+  const reload = () => setReloadKey((k) => k + 1);
 
   const handleAddClient = async () => {
     try {
@@ -105,7 +164,7 @@ function ClientsPageContent() {
       const newClient = await apiClient.createClient(
         createClientPayload(addFormData, { canManage: manager }),
       );
-      setClients((prev) => [...prev, newClient]);
+      reload();
       if (addRefusesMarketing && !(await recordNewClientRefusal(newClient?.id))) {
         toast({
           title: "Clienta creada, pero no se pudo anotar que no quiere promociones",
@@ -141,76 +200,39 @@ function ClientsPageContent() {
     setEditFormData((prev) => ({ ...prev, [name]: value }));
   };
 
-  const handleDelete = async (client: Client) => {
-    const toastId = toast({
-      title: t("clients.delete_client_title"),
-      description: (
-        <div className="space-y-2">
-          <p>
-            {t("clients.delete_client_confirm", {
-              name: `${client.firstName} ${client.lastName}`,
-            })}
-          </p>
-          <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-            <div className="flex items-start">
-              <span className="text-red-600 mr-3">
-                {t("clients.delete_warning")}:
-              </span>
-              <div>
-                <p className="text-red-800 text-sm">
-                  {t("clients.delete_warning_message")}
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      ),
-      variant: "destructive",
-      open: true,
-      action: (
-        <div className="flex gap-2">
-          <button
-            onClick={async () => {
-              try {
-                const { deactivated } = await apiClient.deleteClient(client.id);
-                // With appointments or payments she is history: the server
-                // deactivates her instead, so she stays in the list.
-                setClients((prev) =>
-                  deactivated
-                    ? prev.map((c) => (c.id === client.id ? { ...c, status: "inactive" } : c))
-                    : prev.filter((c) => c.id !== client.id),
-                );
-                toast({
-                  title: t(deactivated ? "clients.client_deactivated" : "clients.client_deleted"),
-                  description: t(
-                    deactivated ? "clients.client_deactivated_history" : "clients.client_deleted_success",
-                  ),
-                  variant: "default",
-                });
-              } catch (err) {
-                // The server says why (e.g. she has history), in Spanish.
-                toast({
-                  title: t("clients.failed_to_delete"),
-                  description: err instanceof Error ? err.message : undefined,
-                  variant: "destructive",
-                });
-              }
-            }}
-            className="bg-red-500 text-white px-4 py-2 rounded-md hover:bg-red-600 transition-colors"
-          >
-            {t("clients.delete")}
-          </button>
-          <button
-            onClick={() => {
-              toastId.dismiss();
-            }}
-            className="bg-gray-200 text-gray-800 px-4 py-2 rounded-md hover:bg-gray-300 transition-colors"
-          >
-            {t("clients.cancel")}
-          </button>
-        </div>
-      ),
-    });
+  // Confirmed in the dialog; its buttons are off while the request runs,
+  // so a second click cannot send it twice.
+  const confirmDelete = async () => {
+    const client = clientToDelete;
+    if (!client || deleting) return;
+    setDeleting(true);
+    try {
+      const { deactivated } = await apiClient.deleteClient(client.id);
+      // With appointments or payments she is history: the server
+      // deactivates her instead, so she stays in the list.
+      if (deactivated) {
+        setClients((prev) => prev.map((c) => (c.id === client.id ? { ...c, status: "inactive" } : c)));
+      } else {
+        reload();
+      }
+      setClientToDelete(null);
+      toast({
+        title: t(deactivated ? "clients.client_deactivated" : "clients.client_deleted"),
+        description: t(
+          deactivated ? "clients.client_deactivated_history" : "clients.client_deleted_success",
+        ),
+        variant: "default",
+      });
+    } catch (err) {
+      // The server says why, in Spanish.
+      toast({
+        title: t("clients.failed_to_delete"),
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const handleSort = (field: SortField) => {
@@ -220,35 +242,7 @@ function ClientsPageContent() {
       setSortField(field);
       setSortDirection("asc");
     }
-  };
-
-  const getSortedClients = () => {
-    const filtered = clients.filter((client) => {
-      const fullName = `${client.firstName} ${client.lastName}`.toLowerCase();
-      const email = client.email?.toLowerCase() || "";
-      const query = searchQuery.toLowerCase();
-      return fullName.includes(query) || email.includes(query);
-    });
-
-    return filtered.sort((a, b) => {
-      let aVal: unknown = a[sortField];
-      let bVal: unknown = b[sortField];
-
-      if (
-        sortField === "firstName" ||
-        sortField === "lastName" ||
-        sortField === "email"
-      ) {
-        aVal = (aVal || "").toString().toLowerCase();
-        bVal = (bVal || "").toString().toLowerCase();
-      }
-
-      if ((aVal as string) < (bVal as string))
-        return sortDirection === "asc" ? -1 : 1;
-      if ((aVal as string) > (bVal as string))
-        return sortDirection === "asc" ? 1 : -1;
-      return 0;
-    });
+    setPage(1);
   };
 
   const handleEditClientClick = (client: Client) => {
@@ -292,18 +286,46 @@ function ClientsPageContent() {
     }
   };
 
-  const sortedClients = getSortedClients();
+  const firstRow = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const lastRow = Math.min(page * PAGE_SIZE, total);
+
+  /** A column header that sorts the list, reachable with the keyboard. */
+  const sortableHeader = (field: SortField, label: string, className = "") => {
+    const active = sortField === field;
+    return (
+      <th
+        scope="col"
+        aria-sort={active ? (sortDirection === "asc" ? "ascending" : "descending") : "none"}
+        className={`px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider ${className}`}
+      >
+        <button
+          type="button"
+          onClick={() => handleSort(field)}
+          title={t("clients.sort_by_column", { column: label })}
+          className="-mx-1 flex items-center space-x-1 rounded px-1 uppercase tracking-wider hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+        >
+          <span>{label}</span>
+          {active &&
+            (sortDirection === "asc" ? (
+              <ArrowUp className="w-4 h-4" aria-hidden="true" />
+            ) : (
+              <ArrowDown className="w-4 h-4" aria-hidden="true" />
+            ))}
+        </button>
+      </th>
+    );
+  };
 
   return (
     <div className="space-y-6">
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+        <div role="alert" className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
           {error}
         </div>
       )}
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold text-gray-900 truncate">
             {t("clients.title")}
           </h1>
@@ -316,19 +338,19 @@ function ClientsPageContent() {
         <Drawer open={isAddDrawerOpen} onOpenChange={setIsAddDrawerOpen}>
           <DrawerTrigger asChild>
             <Button>
-              <Plus className="w-4 h-4 mr-2" />
+              <Plus className="w-4 h-4 mr-2" aria-hidden="true" />
               {t("clients.add_client")}
             </Button>
           </DrawerTrigger>
-          <DrawerContent className="max-w-md sm:max-w-lg lg:max-w-3xl">
-            <DrawerHeader>
+          <DrawerContent className={`${DRAWER_CONTENT} max-w-md sm:max-w-lg lg:max-w-3xl`}>
+            <DrawerHeader className="pr-8 text-left">
               <DrawerTitle>{t("clients.add_new_client")}</DrawerTitle>
               <DrawerDescription>
                 {t("clients.enter_client_info")}
               </DrawerDescription>
             </DrawerHeader>
 
-            <div className="p-6 space-y-4">
+            <div className="space-y-4 py-4 sm:p-6">
               <ClientFormFields
                 idPrefix="add-client"
                 values={addFormData}
@@ -344,7 +366,7 @@ function ClientsPageContent() {
               />
             </div>
 
-            <DrawerFooter>
+            <DrawerFooter className={DRAWER_FOOTER}>
               <Button
                 onClick={handleAddClient}
                 disabled={saving || !addFormData.firstName.trim() || !addFormData.lastName.trim()}
@@ -363,17 +385,34 @@ function ClientsPageContent() {
       {/* Search and Filters */}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
         <div className="relative w-full sm:flex-1 sm:max-w-md">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" aria-hidden="true" />
           <input
-            type="text"
-            placeholder={t("clients.search_clients")}
+            type="search"
+            placeholder={t("clients.search_placeholder")}
+            aria-label={t("clients.search_label")}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
         </div>
-        <div className="flex items-center space-x-2">
-          <ArrowUpDown className="w-4 h-4 text-gray-400" />
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={statusFilter}
+            aria-label={t("clients.filter_status")}
+            onChange={(e) => {
+              setStatusFilter(e.target.value as StatusFilter);
+              setPage(1);
+            }}
+            className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          >
+            <option value="">
+              {t("clients.filter_status")}: {t("clients.all_statuses")}
+            </option>
+            <option value="active">{t("clients.status_active")}</option>
+            <option value="inactive">{t("clients.status_inactive")}</option>
+            <option value="blocked">{t("clients.status_blocked")}</option>
+          </select>
+          <ArrowUpDown className="w-4 h-4 text-gray-400" aria-hidden="true" />
           <select
             value={`${sortField}-${sortDirection}`}
             aria-label={t("clients.sort_by")}
@@ -384,6 +423,7 @@ function ClientsPageContent() {
               ];
               setSortField(field);
               setSortDirection(direction);
+              setPage(1);
             }}
             className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
           >
@@ -400,60 +440,18 @@ function ClientsPageContent() {
       {/* Clients Table */}
       <div className="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="min-w-[720px] w-full divide-y divide-gray-200">
+          <table className="min-w-[720px] w-full divide-y divide-gray-200" aria-busy={loading}>
             <thead className="bg-gray-50">
               <tr>
-                <th
-                  scope="col"
-                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                  onClick={() => handleSort("firstName")}
-                >
-                  <div className="flex items-center space-x-1">
-                    <span>{t("clients.client")}</span>
-                    {sortField === "firstName" &&
-                      (sortDirection === "asc" ? (
-                        <ArrowUp className="w-4 h-4" />
-                      ) : (
-                        <ArrowDown className="w-4 h-4" />
-                      ))}
-                  </div>
-                </th>
+                {sortableHeader("firstName", t("clients.client"))}
                 <th
                   scope="col"
                   className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap"
                 >
                   {t("clients.contact")}
                 </th>
-                <th
-                  scope="col"
-                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap"
-                  onClick={() => handleSort("status")}
-                >
-                  <div className="flex items-center space-x-1">
-                    <span>{t("clients.status")}</span>
-                    {sortField === "status" &&
-                      (sortDirection === "asc" ? (
-                        <ArrowUp className="w-4 h-4" />
-                      ) : (
-                        <ArrowDown className="w-4 h-4" />
-                      ))}
-                  </div>
-                </th>
-                <th
-                  scope="col"
-                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                  onClick={() => handleSort("createdAt")}
-                >
-                  <div className="flex items-center space-x-1">
-                    <span>{t("clients.created")}</span>
-                    {sortField === "createdAt" &&
-                      (sortDirection === "asc" ? (
-                        <ArrowUp className="w-4 h-4" />
-                      ) : (
-                        <ArrowDown className="w-4 h-4" />
-                      ))}
-                  </div>
-                </th>
+                {sortableHeader("status", t("clients.status"), "whitespace-nowrap")}
+                {sortableHeader("createdAt", t("clients.created"))}
                 <th
                   scope="col"
                   className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider"
@@ -463,18 +461,18 @@ function ClientsPageContent() {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {loading ? (
+              {loading && clients.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="px-6 py-12 text-center">
                     <div className="flex items-center justify-center">
-                      <Loader2 className="w-6 h-6 animate-spin mr-2" />
+                      <Loader2 className="w-6 h-6 animate-spin mr-2" aria-hidden="true" />
                       <span className="text-gray-500">
                         {t("common.loading")}
                       </span>
                     </div>
                   </td>
                 </tr>
-              ) : sortedClients.length === 0 ? (
+              ) : clients.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="px-6 py-12 text-center">
                     <p className="text-gray-500">
@@ -483,14 +481,16 @@ function ClientsPageContent() {
                   </td>
                 </tr>
               ) : (
-                sortedClients.map((client) => (
-                  <tr key={client.id} className="hover:bg-gray-50">
+                clients.map((client) => {
+                  const name = `${client.firstName} ${client.lastName}`;
+                  return (
+                  <tr key={client.id} className={`hover:bg-gray-50 ${loading ? "opacity-60" : ""}`}>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <Link
                         href={`/dashboard/clients/${client.id}`}
                         className="flex items-center group"
                       >
-                        <div className="flex-shrink-0 w-10 h-10">
+                        <div className="flex-shrink-0 w-10 h-10" aria-hidden="true">
                           <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-full flex items-center justify-center">
                             <span className="text-white font-semibold text-sm">
                               {client.firstName.charAt(0)}
@@ -500,7 +500,7 @@ function ClientsPageContent() {
                         </div>
                         <div className="ml-4">
                           <div className="text-sm font-medium text-gray-900 group-hover:text-indigo-700 group-hover:underline">
-                            {client.firstName} {client.lastName}
+                            {name}
                           </div>
                         </div>
                       </Link>
@@ -529,57 +529,97 @@ function ClientsPageContent() {
                           href={`/dashboard/clients/${client.id}`}
                           className="text-indigo-600 hover:text-indigo-900 p-1 rounded-md hover:bg-indigo-50 transition-colors"
                           title={t("clients.view_details")}
-                          aria-label={t("clients.view_details")}
+                          aria-label={`${t("clients.view_details")}: ${name}`}
                         >
-                          <Eye className="w-4 h-4" />
+                          <Eye className="w-4 h-4" aria-hidden="true" />
                         </Link>
                         <button
+                          type="button"
                           onClick={() => handleEditClientClick(client)}
                           className="text-blue-600 hover:text-blue-900 p-1 rounded-md hover:bg-blue-50 transition-colors"
                           title={t("clients.edit_client")}
-                          aria-label={t("clients.edit_client")}
+                          aria-label={`${t("clients.edit_client")}: ${name}`}
                         >
-                          <Edit className="w-4 h-4" />
+                          <Edit className="w-4 h-4" aria-hidden="true" />
                         </button>
                         {/* Deleting is the owner's or an admin's (the API refuses staff). */}
                         {manager && (
                           <button
-                            onClick={() => handleDelete(client)}
-                            className="text-red-600 hover:text-red-900 p-1 rounded-md hover:bg-red-50 transition-colors"
+                            type="button"
+                            onClick={() => setClientToDelete(client)}
+                            disabled={deleting}
+                            className="text-red-600 hover:text-red-900 p-1 rounded-md hover:bg-red-50 transition-colors disabled:opacity-50"
                             title={t("clients.delete_client")}
-                            aria-label={t("clients.delete_client")}
+                            aria-label={`${t("clients.delete_client")}: ${name}`}
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <Trash2 className="w-4 h-4" aria-hidden="true" />
                           </button>
                         )}
                       </div>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>
         </div>
+
+        {total > 0 && (
+          <nav
+            aria-label={t("clients.pagination")}
+            className="flex items-center justify-between gap-3 border-t border-gray-200 px-4 py-3 text-sm text-gray-600"
+          >
+            <p aria-live="polite">
+              {t("clients.page_summary", { from: firstRow, to: lastRow, total })}
+            </p>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={loading || page <= 1}
+                aria-label={t("clients.previous_page")}
+                title={t("clients.previous_page")}
+              >
+                <ChevronLeft className="w-4 h-4" aria-hidden="true" />
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPage((p) => p + 1)}
+                disabled={loading || page >= totalPages}
+                aria-label={t("clients.next_page")}
+                title={t("clients.next_page")}
+              >
+                <ChevronRight className="w-4 h-4" aria-hidden="true" />
+              </Button>
+            </div>
+          </nav>
+        )}
       </div>
 
       {/* Edit Client Drawer */}
       <Drawer open={isEditDrawerOpen} onOpenChange={setIsEditDrawerOpen}>
-        <DrawerContent className="max-w-md lg:max-w-4xl">
+        <DrawerContent className={`${DRAWER_CONTENT} max-w-md lg:max-w-4xl`}>
           {selectedClient && (
             <>
-              <DrawerHeader>
-                <div className="flex items-center space-x-3 mb-2">
-                  <div className="w-12 h-12 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-full flex items-center justify-center">
+              <DrawerHeader className="pr-8 text-left">
+                <div className="flex min-w-0 items-center space-x-3 mb-2">
+                  <div
+                    className="w-12 h-12 flex-shrink-0 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-full flex items-center justify-center"
+                    aria-hidden="true"
+                  >
                     <span className="text-white font-semibold text-lg">
                       {selectedClient.firstName.charAt(0)}
                       {selectedClient.lastName.charAt(0)}
                     </span>
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <DrawerTitle className="text-xl font-bold text-gray-900">
                       {t("clients.edit_client")}
                     </DrawerTitle>
-                    <DrawerDescription className="text-sm text-gray-600">
+                    <DrawerDescription className="break-words text-sm text-gray-600">
                       {t("clients.update_client_info", {
                         name: `${selectedClient.firstName} ${selectedClient.lastName}`,
                       })}
@@ -588,8 +628,8 @@ function ClientsPageContent() {
                 </div>
               </DrawerHeader>
 
-              <div className="p-6">
-                <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 space-y-4">
+              <div className="py-4 sm:p-6">
+                <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 sm:p-6 space-y-4">
                   <ClientFormFields
                     idPrefix="edit-client"
                     values={editFormData}
@@ -601,7 +641,7 @@ function ClientsPageContent() {
                 </div>
               </div>
 
-              <DrawerFooter>
+              <DrawerFooter className={DRAWER_FOOTER}>
                 <Button
                   onClick={handleEditClient}
                   disabled={saving || !editFormData.firstName.trim() || !editFormData.lastName.trim()}
@@ -616,12 +656,34 @@ function ClientsPageContent() {
           )}
         </DrawerContent>
       </Drawer>
+
+      {/* Deleting removes her file only when she has no history; otherwise
+          the server deactivates her. The dialog says both. */}
+      <ConfirmDialog
+        open={clientToDelete !== null}
+        title={
+          clientToDelete
+            ? t("clients.delete_client_confirm", {
+                name: `${clientToDelete.firstName} ${clientToDelete.lastName}`,
+              })
+            : ""
+        }
+        description={t("clients.delete_warning_message")}
+        confirmLabel={deleting ? t("clients.deleting") : t("clients.delete")}
+        cancelLabel={t("clients.cancel")}
+        destructive
+        loading={deleting}
+        onCancel={() => {
+          if (!deleting) setClientToDelete(null);
+        }}
+        onConfirm={confirmDelete}
+      />
     </div>
   );
 }
 
 const FIELD =
-  "w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-500";
+  "w-full min-w-0 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-500";
 const LABEL = "block text-sm font-medium text-gray-700 mb-1";
 
 /**

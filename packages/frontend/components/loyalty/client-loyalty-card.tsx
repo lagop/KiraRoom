@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Star, Loader2 } from "lucide-react";
 import apiClient, { ClientLoyaltySummary } from "@/lib/api";
+import { useToast } from "@/components/ui/use-toast";
 
 const TYPE_LABEL: Record<string, string> = {
   earn: "Ganados",
@@ -21,6 +22,7 @@ export function ClientLoyaltyCard({ clientId }: { clientId: string }) {
   const [data, setData] = useState<ClientLoyaltySummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const { toast } = useToast();
 
   const load = useCallback(async () => {
     try {
@@ -53,18 +55,27 @@ export function ClientLoyaltyCard({ clientId }: { clientId: string }) {
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-sm text-gray-600">No es socio de {data.program.name}.</p>
           <button
+            type="button"
             disabled={busy || !data.program.isActive}
             onClick={async () => {
               setBusy(true);
               try {
                 await apiClient.enrollLoyaltyMember(clientId);
-                await load();
+                await load(); // never throws: it keeps its own error
+              } catch (err) {
+                // It used to fail without a word: the server says why.
+                toast({
+                  title: "No se pudo dar de alta en fidelización",
+                  description: err instanceof Error ? err.message : undefined,
+                  variant: "destructive",
+                });
               } finally {
                 setBusy(false);
               }
             }}
-            className="rounded-md bg-violet-600 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-md bg-violet-600 px-3 py-1.5 text-sm text-white disabled:opacity-50"
           >
+            {busy && <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />}
             Dar de alta
           </button>
         </div>
