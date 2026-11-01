@@ -119,6 +119,10 @@ export const FEATURE_KEYS = [
   'whatsapp_notifications',
   'sms_notifications',
   'email_marketing',
+  // WhatsApp promotions (campaigns) from the salon's number: Pro and up.
+  // Appointment notices and review requests by WhatsApp are utility
+  // messages under whatsapp_notifications, in every plan.
+  'whatsapp_marketing',
   'virtual_receptionist',
   'virtual_receptionist_advanced',
   'multichannel',
@@ -162,6 +166,7 @@ const PRO_FEATURES: ReadonlyArray<FeatureKey> = [
   ...ESENCIAL_FEATURES,
   'sms_notifications',
   'email_marketing',
+  'whatsapp_marketing',
   'virtual_receptionist_advanced',
   'multichannel',
   'loyalty',

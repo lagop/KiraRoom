@@ -83,7 +83,21 @@ describe("online booking: what the client ticked", () => {
     ).resolves.toMatchObject({ id: "apt-1" });
   });
 
+  it("the WhatsApp promotions box alone reaches the consent service too", async () => {
+    const { service, consent } = setup();
+    await service.bookOnline("tenant-1", { ...BOOKING, wantsWhatsAppPromotions: true } as any, [], { ip: "1.2.3.4" });
+    expect((consent.recordBookingChoices.mock.calls[0] as any[])[0]).toMatchObject({
+      source: "booking",
+      typedPhone: "600 111 222",
+      wantsWhatsAppPromotions: true,
+    });
+  });
+
   it("the boxes are optional booleans", () => {
+    const promos = plainToInstance(OnlineBookingDto, { ...BOOKING, wantsWhatsAppPromotions: true });
+    expect(validateSync(promos)).toEqual([]);
+    const badPromos = plainToInstance(OnlineBookingDto, { ...BOOKING, wantsWhatsAppPromotions: "sí" });
+    expect(validateSync(badPromos).map((e) => e.property)).toEqual(["wantsWhatsAppPromotions"]);
     const valid = plainToInstance(OnlineBookingDto, { ...BOOKING, refusesMarketingEmail: true, wantsWhatsAppNotices: false });
     expect(validateSync(valid)).toEqual([]);
     const invalid = plainToInstance(OnlineBookingDto, { ...BOOKING, refusesMarketingEmail: "yes" });

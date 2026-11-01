@@ -11,10 +11,14 @@ import apiClient, {
 import { useToast } from "@/components/ui/use-toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
+  BILLING_HREF,
   CAMPAIGN_FOOTER,
   MAX_BODY_LENGTH,
+  PLAN_NOTICE,
+  SENDING_WINDOW,
   Tone,
   bodyProblem,
+  isPlanBlocked,
   campaignActions,
   campaignLabel,
   campaignStats,
@@ -65,14 +69,20 @@ function toLocalInput(iso: string | null) {
 /**
  * WhatsApp promotions from the salon's own number. The salon writes the
  * message; Meta reviews it as a template (hours, sometimes a day); then it
- * goes, between 9:00 and 21:00, only to clients who agreed to receive
- * promotions by WhatsApp.
+ * goes, between 9:00 and 21:00 and never on Sunday, only to clients who
+ * agreed to receive promotions by WhatsApp.
+ *
+ * Pro and Empresa only (whatsapp_marketing): on another plan the page shows
+ * the past campaigns and a notice with the link to Facturación.
  */
 export default function WhatsAppCampaignsPage() {
   const { toast } = useToast();
   const [connection, setConnection] = useState<WhatsAppConnection | null | undefined>(undefined);
   const [campaigns, setCampaigns] = useState<WhatsAppCampaign[]>([]);
   const [loading, setLoading] = useState(true);
+  // Does the plan include campaigns? Unknown (null) until the server says;
+  // a server without the check reads as yes, and its 403s still say no.
+  const [planIncludes, setPlanIncludes] = useState<boolean | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
   const [audience, setAudience] = useState<WhatsAppAudiencePreview | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -83,13 +93,20 @@ export default function WhatsAppCampaignsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [conn, list] = await Promise.all([
+      const [conn, list, access] = await Promise.all([
         apiClient.getWhatsAppConnection().catch(() => null),
         apiClient.listWhatsAppCampaigns(),
+        apiClient.getWhatsAppCampaignAccess().catch((err) => ({ included: !isPlanBlocked(err) })),
       ]);
       setConnection(conn);
       setCampaigns(list);
+      setPlanIncludes(access.included);
     } catch (err: any) {
+      if (isPlanBlocked(err)) {
+        setPlanIncludes(false);
+        setCampaigns([]);
+        return;
+      }
       toast({ title: "No se pudieron cargar las campañas", description: err?.message, variant: "destructive" });
     } finally {
       setLoading(false);
@@ -126,6 +143,20 @@ export default function WhatsAppCampaignsPage() {
 
   const problem = form ? bodyProblem(form.body) : null;
   const connected = !!connection?.isActive;
+  const canCreate = connected && planIncludes !== false;
+
+  /** A 403 FEATURE_NOT_IN_PLAN: the page switches to the plan notice. */
+  function planError(err: unknown): boolean {
+    if (!isPlanBlocked(err)) return false;
+    setPlanIncludes(false);
+    setForm(null);
+    toast({
+      title: "Tu plan no incluye campañas de WhatsApp",
+      description: "Están incluidas en los planes Pro y Empresa. Puedes cambiar de plan en Facturación.",
+      variant: "destructive",
+    });
+    return true;
+  }
 
   function openNew() {
     setForm({ ...EMPTY_FORM });
@@ -174,6 +205,7 @@ export default function WhatsAppCampaignsPage() {
       setForm(null);
       await load();
     } catch (err: any) {
+      if (planError(err)) return;
       toast({ title: "No se pudo guardar", description: err?.message, variant: "destructive" });
     } finally {
       setBusy(null);
@@ -194,6 +226,7 @@ export default function WhatsAppCampaignsPage() {
       }
       await load();
     } catch (err: any) {
+      if (planError(err)) return;
       toast({ title: "No se pudo hacer", description: err?.message, variant: "destructive" });
     } finally {
       setBusy(null);
@@ -204,7 +237,9 @@ export default function WhatsAppCampaignsPage() {
   const confirmCopy = pendingAct && {
     submit: {
       title: `¿Enviar «${pendingAct.campaign.name}» a revisión de Meta?`,
-      description: "Cuando Meta la apruebe, se enviará a los clientes que hayan aceptado promociones por WhatsApp.",
+      description:
+        "Cuando Meta la apruebe, se enviará a los clientes que hayan aceptado promociones por WhatsApp, " +
+        "entre las 9:00 y las 21:00 y nunca en domingo.",
       confirmLabel: "Enviar a revisión",
       cancelLabel: "Cancelar",
       destructive: false,
@@ -261,20 +296,30 @@ export default function WhatsAppCampaignsPage() {
           <p className="mt-1 max-w-2xl text-sm text-gray-500">
             Promociones desde el WhatsApp de tu salón. Meta revisa cada mensaje antes de enviarlo
             (normalmente unas horas), y solo lo reciben los clientes que han aceptado promociones por
-            WhatsApp, entre las 9:00 y las 21:00.
+            WhatsApp.
           </p>
+          <p className="mt-1 text-sm font-medium text-gray-700">{SENDING_WINDOW}</p>
         </div>
         <button
           type="button"
           onClick={openNew}
-          disabled={!connected}
+          disabled={!canCreate}
           className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
         >
           <Plus className="h-4 w-4" /> Nueva campaña
         </button>
       </div>
 
-      {connection === null && (
+      {planIncludes === false && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800" role="status">
+          <p>{PLAN_NOTICE}</p>
+          <Link href={BILLING_HREF} className="mt-2 inline-block font-medium underline">
+            Ver planes en Facturación
+          </Link>
+        </div>
+      )}
+
+      {connection === null && planIncludes !== false && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
           Para enviar campañas, conecta antes el WhatsApp de tu salón en{" "}
           <Link href="/dashboard/settings/whatsapp" className="font-medium underline">
@@ -287,8 +332,9 @@ export default function WhatsAppCampaignsPage() {
       <div className="rounded-lg border border-gray-200 bg-white p-4 text-sm text-gray-600">
         <p>
           <strong className="text-gray-900">Quién las recibe.</strong> WhatsApp solo permite promociones a
-          quien ha aceptado recibirlas. Cuando un cliente te dé su consentimiento, anótalo en su ficha. Si
-          responde BAJA, deja de recibirlas.
+          quien ha aceptado recibirlas. Cuando un cliente te dé su consentimiento, anótalo en su ficha;
+          también puede darlo al reservar en tu web, con la casilla opcional «Quiero recibir promociones
+          por WhatsApp». Si responde BAJA, deja de recibirlas.
         </p>
         <p className="mt-2">
           <strong className="text-gray-900">Coste.</strong> Meta cobra los mensajes de promoción
@@ -309,7 +355,7 @@ export default function WhatsAppCampaignsPage() {
         <ul className="space-y-3">
           {campaigns.map((c) => {
             const label = campaignLabel(c, formatDate);
-            const actions = campaignActions(c);
+            const actions = campaignActions(c, planIncludes !== false);
             const stats = campaignStats(c);
             return (
               <li key={c.id} className="rounded-xl border border-gray-200 bg-white p-4">
@@ -338,7 +384,7 @@ export default function WhatsAppCampaignsPage() {
                     {actions.submit && (
                       <button
                         type="button"
-                        disabled={!connected || busy === c.id}
+                        disabled={!canCreate || busy === c.id}
                         onClick={() => setPendingAct({ campaign: c, action: "submit" })}
                         className="inline-flex items-center gap-1 rounded-md bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
                       >
@@ -465,7 +511,7 @@ export default function WhatsAppCampaignsPage() {
                     className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
                   />
                   <span className="mt-1 block text-xs text-gray-500">
-                    Vacío: en cuanto Meta la apruebe. Siempre entre las 9:00 y las 21:00.
+                    Vacío: en cuanto Meta la apruebe. {SENDING_WINDOW}
                   </span>
                 </label>
               </div>
@@ -504,7 +550,7 @@ export default function WhatsAppCampaignsPage() {
               </button>
               <button
                 type="button"
-                disabled={busy === "save" || !connected || !!problem}
+                disabled={busy === "save" || !canCreate || !!problem}
                 onClick={() => save(true)}
                 className="inline-flex items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
               >

@@ -419,7 +419,7 @@ export class AppointmentsService {
 
     // What she ticked, once the booking found or created her; before the
     // confirmation goes out, so a WhatsApp request already applies to it.
-    if ((dto.refusesMarketingEmail || dto.wantsWhatsAppNotices) && appointment.clientId) {
+    if ((dto.refusesMarketingEmail || dto.wantsWhatsAppNotices || dto.wantsWhatsAppPromotions) && appointment.clientId) {
       await this.consentService
         ?.recordBookingChoices({
           tenantId,
@@ -430,6 +430,7 @@ export class AppointmentsService {
           typedPhone: dto.clientInfo?.phone,
           refusesMarketingEmail: dto.refusesMarketingEmail,
           wantsWhatsAppNotices: dto.wantsWhatsAppNotices,
+          wantsWhatsAppPromotions: dto.wantsWhatsAppPromotions,
         })
         .catch((err) => this.logger.warn(`Booking choices not recorded: ${(err as Error).message}`));
     }

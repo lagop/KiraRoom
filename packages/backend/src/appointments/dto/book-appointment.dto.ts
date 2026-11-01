@@ -178,6 +178,17 @@ export class OnlineBookingDto extends BookingSlotDto {
   @IsBoolean({ message: "La opción de avisos por WhatsApp no es válida" })
   @IsOptional()
   wantsWhatsAppNotices?: boolean;
+
+  /**
+   * She ticked the optional "Quiero recibir promociones de <salón> por
+   * WhatsApp" (shown only when the salon has WhatsApp connected and its plan
+   * includes WhatsApp campaigns): recorded as her opt-in, with the text
+   * shown. Unticked or absent records nothing; it is not a refusal.
+   */
+  @ApiPropertyOptional()
+  @IsBoolean({ message: "La opción de promociones por WhatsApp no es válida" })
+  @IsOptional()
+  wantsWhatsAppPromotions?: boolean;
 }
 
 /** POST /appointments/staff: the dashboard. */

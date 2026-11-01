@@ -125,6 +125,13 @@ export class ReviewsController {
     return this.service.updateSettings(req.user.tenantId, body);
   }
 
+  /** Submits the WhatsApp review template to Meta; answers the settings with its status. */
+  @Post("settings/whatsapp-template")
+  @Roles(...SALON_MANAGERS)
+  submitWhatsAppTemplate(@Req() req: AuthedRequest) {
+    return this.service.submitWhatsAppTemplate(req.user.tenantId);
+  }
+
   @Post(":id/moderate")
   @Roles(...SALON_MANAGERS)
   moderate(

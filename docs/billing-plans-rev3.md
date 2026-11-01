@@ -27,7 +27,8 @@ Definida como fuente Ãºnica en:
 
 | Feature                      | Esencial | Pro | Empresa | Notas                                               |
 |------------------------------|:--------:|:---:|:-------:|-----------------------------------------------------|
-| whatsapp_notifications       |   âœ…    | âœ…  |   âœ…    | Reminders + WhatsApp masivo, todos los planes       |
+| whatsapp_notifications       |   âœ…    | âœ…  |   âœ…    | Avisos de citas y reseñas por WhatsApp             |
+| whatsapp_marketing           |   âŒ    | âœ…  |   âœ…    | Campañas de WhatsApp (promociones), Pro+          |
 | virtual_receptionist         |   âœ…    | âœ…  |   âœ…    | Chat web IA (base). Cap 500 conv/mes en Esencial   |
 | virtual_receptionist_advanced|   âž•    | âœ…  |   âœ…    | Add-on `ai_expansion` para Esencial (24 €/mes)     |
 | **multichannel** (H-4)       |   âž•    | âœ…  |   âœ…    | Add-on `multichannel` para Esencial (19 €/mes)     |
@@ -78,7 +79,7 @@ Checkout, excepto `message_bundles` (metered, top-up programÃ¡tico).
 | `loyalty_giftcards`     |               12 | `loyalty` + `promotions` + `gift_cards` | esencial     | Programa de puntos, promos y gift cards (3 en 1)                                   |
 | `email_marketing`       |               12 | `email_marketing`                   | esencial        | CampaÃ±as segmentadas por audiencia                                                  |
 | **`multichannel` (H-4)**|           **19**| **`multichannel`**                 | **esencial**    | **Messenger + Instagram + Telegram. Detalles en Â§17**                              |
-| `google_reviews_auto`   |               19 | `google_reviews_auto`               | esencial        | Peticiones de reseña tras la cita (email/WhatsApp/SMS) + enlace a la ficha de Google. No usa la API de Google |
+| `google_reviews_auto`   |               19 | `google_reviews_auto`               | esencial        | Peticiones de reseña tras la cita (WhatsApp a quien pidió los avisos por WhatsApp, si no email; sin SMS) + enlace a la ficha de Google. No usa la API de Google |
 | `web_domain`            |               15 | (sin unlocks; funciÃ³n independiente)| esencial        | Dominio propio (citas.tunegocio.com) con SSL + SEO                                  |
 | `deposits_antinoshow`   |                5 | (sin unlocks; funciÃ³n independiente)| esencial        | SeÃ±al al reservar para reducir no-shows                                             |
 | `message_bundles`       |  metered (top-up) | (sin unlocks; consumo de crÃ©ditos)  | todos           | CrÃ©ditos para WhatsApp masivo / SMS marketing. No aparece en la lista; se top-up desde "Bonos" |
@@ -452,15 +453,17 @@ Controller: `packages/backend/src/sms/`. FeatureKey: `sms_notifications`.
 `SmsController` expone un endpoint admin para verificar wiring sin abrir un
 ticket de soporte.
 
-### 18.4 WhatsApp gating (feature `whatsapp_notifications`)
+### 18.4 WhatsApp gating (`whatsapp_notifications` y `whatsapp_marketing`)
 
 Controller: `packages/backend/src/whatsapp/`. Cambios del closeout:
 
 - `JwtAuthGuard` + `RolesGuard` + `FeatureGuard` a nivel de clase.
-- `@Feature('whatsapp_notifications')` solo en los 3 endpoints de campana:
-  - `POST /whatsapp/campaigns`
-  - `POST /whatsapp/campaigns/:id/send`
-  - `GET /whatsapp/campaigns/:id/report`
+- Campañas (`WhatsAppCampaignsController`): `@Feature('whatsapp_marketing')` (Pro y
+  Empresa, y la prueba) para crear, editar, enviar a revisión y reanudar. Leer,
+  cancelar y borrar quedan en `whatsapp_notifications` (todos los planes): un
+  salón Esencial ve sus campañas anteriores, y el dispatcher pausa las que
+  estaban programadas o enviándose con "Tu plan no incluye campañas de WhatsApp".
+  Nunca se envían en domingo (hora del salón), además de 9:00-21:00.
 - Endpoints sin gate (necesarios para conectar antes de pagar): `connect/*`,
   `connection`, `templates`, `disconnect`.
 - `MetaWebhookController` (en el mismo archivo) sigue sin gate porque su

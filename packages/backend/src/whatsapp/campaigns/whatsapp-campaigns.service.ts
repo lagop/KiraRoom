@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Injectable, Logger, NotFoundExc
 import { Cron, CronExpression } from "@nestjs/schedule";
 import { Prisma, WhatsAppCampaignStatus, WhatsAppRecipientStatus } from "@prisma/client";
 import { PrismaService } from "../../common/prisma/prisma.service";
+import { FeatureFlagService } from "../../common/feature-flags/feature-flag.service";
 import { clientsWhoAcceptedWhatsAppMarketing } from "../../consent/marketing-consent";
 import { WhatsAppTemplateService } from "../whatsapp-template.service";
 import { templateParam } from "../whatsapp-templates";
@@ -10,7 +11,7 @@ import {
   campaignTemplatePayload,
   compileBody,
   templateNameFor,
-  withinSendingHours,
+  withinCampaignWindow,
 } from "./campaign-template";
 import { DISCONNECTED_REASON, TOKEN_EXPIRED_REASON, accountLevelReason } from "./meta-account-errors";
 
@@ -37,6 +38,10 @@ const BATCH = 50;
 /** Meta's "too many messages" codes: stop the batch, retry next minute. */
 const RATE_LIMIT_CODES = new Set(["meta_4", "meta_80007", "meta_130429", "meta_131056"]);
 const EDITABLE: WhatsAppCampaignStatus[] = [WhatsAppCampaignStatus.draft];
+/** The plan feature WhatsApp campaigns need (Pro and Empresa). */
+export const CAMPAIGN_FEATURE = "whatsapp_marketing" as const;
+/** Why a campaign of a salon whose plan lost campaigns stopped. */
+export const PLAN_REASON = "Tu plan no incluye campañas de WhatsApp";
 
 /**
  * WhatsApp promotions from the salon's own number.
@@ -47,8 +52,14 @@ const EDITABLE: WhatsAppCampaignStatus[] = [WhatsAppCampaignStatus.draft];
  * (rejected -> back to draft with Meta's reason), starts approved campaigns
  * whose time has come, and sends in batches.
  *
- * Messages only go out from 9:00 to 21:00 in the salon's time zone; a
- * campaign approved at night waits for the morning.
+ * Messages only go out from 9:00 to 21:00 in the salon's time zone, and
+ * never on Sunday there; a campaign approved at night waits for the
+ * morning, one due on a Sunday for Monday at 9:00.
+ *
+ * Campaigns are a Pro feature (whatsapp_marketing). A salon whose plan does
+ * not include them (Esencial, or after moving down from Pro) keeps reading
+ * its past campaigns, but nothing new starts or goes on: a campaign due or
+ * sending is paused with PLAN_REASON, and "Reanudar" needs the plan again.
  *
  * The audience is worked out when sending starts and again for every batch:
  * only clients who opted in to WhatsApp promotions and did not withdraw
@@ -63,6 +74,7 @@ export class WhatsAppCampaignsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly templates: WhatsAppTemplateService,
+    private readonly featureFlags: FeatureFlagService,
   ) {}
 
   // ─── Panel ────────────────────────────────────────────────────────────
@@ -92,6 +104,14 @@ export class WhatsAppCampaignsService {
       byCampaign.set(g.campaignId, row);
     }
     return campaigns.map((c) => ({ ...c, ...countsFrom(byCampaign.get(c.id) ?? {}) }));
+  }
+
+  /**
+   * Whether the salon's plan includes campaigns, for the page: without it
+   * the page shows the past campaigns and an upgrade notice.
+   */
+  async access(tenantId: string): Promise<{ included: boolean }> {
+    return { included: await this.featureFlags.isFeatureUnlocked(tenantId, CAMPAIGN_FEATURE) };
   }
 
   async get(tenantId: string, id: string) {
@@ -180,6 +200,9 @@ export class WhatsAppCampaignsService {
     if (campaign.status !== WhatsAppCampaignStatus.paused) {
       throw new ConflictException("Esta campaña no está en pausa.");
     }
+    if (!(await this.planIncludesCampaigns(campaign.tenantId))) {
+      throw new ConflictException(`${PLAN_REASON}: cambia a Pro en Facturación para reanudarla.`);
+    }
     const account = await this.accountProblem(tenantId, new Date());
     if (account === "disconnected") {
       throw new ConflictException("El WhatsApp del salón no está conectado: conéctalo en Ajustes → WhatsApp antes de reanudar.");
@@ -210,9 +233,15 @@ export class WhatsAppCampaignsService {
             : `Meta tiene la plantilla en estado ${review.status}: todavía no se puede reanudar.`,
       );
     }
+    // Paused before it started (its plan lost campaigns while it waited):
+    // back to the queue, where the dispatcher works out the audience.
     const resumed = await this.prisma.whatsAppCampaign.updateMany({
       where: { id, tenantId, status: WhatsAppCampaignStatus.paused },
-      data: { status: WhatsAppCampaignStatus.sending, lastError: null, templateStatus: "APPROVED" },
+      data: {
+        status: campaign.startedAt ? WhatsAppCampaignStatus.sending : WhatsAppCampaignStatus.scheduled,
+        lastError: null,
+        templateStatus: "APPROVED",
+      },
     });
     if (resumed.count === 0) throw new ConflictException("Esta campaña no está en pausa.");
     return this.get(tenantId, id);
@@ -338,8 +367,13 @@ export class WhatsAppCampaignsService {
       include: { tenant: { select: { timezone: true } } },
       take: 20,
     });
+    const plans = new Map<string, boolean>();
     for (const campaign of due) {
-      if (!withinSendingHours(now, campaign.tenant?.timezone ?? "Europe/Madrid")) continue;
+      if (!(await this.planIncludesCampaigns(campaign.tenantId, plans))) {
+        await this.pause(campaign.id, PLAN_REASON, "plan", WhatsAppCampaignStatus.scheduled);
+        continue;
+      }
+      if (!withinCampaignWindow(now, campaign.tenant?.timezone ?? "Europe/Madrid")) continue;
       // Claimed first: a second instance or run does not start it twice.
       const claimed = await this.prisma.whatsAppCampaign.updateMany({
         where: { id: campaign.id, status: WhatsAppCampaignStatus.scheduled },
@@ -383,9 +417,16 @@ export class WhatsAppCampaignsService {
       include: { tenant: { select: { country: true, timezone: true } } },
       take: 20,
     });
+    const plans = new Map<string, boolean>();
     for (const campaign of sending) {
-      // A batch interrupted at 21:00 carries on the next morning.
-      if (!withinSendingHours(now, campaign.tenant?.timezone ?? "Europe/Madrid")) continue;
+      // The plan no longer includes campaigns: the rest waits, paused.
+      if (!(await this.planIncludesCampaigns(campaign.tenantId, plans))) {
+        await this.pause(campaign.id, PLAN_REASON, "plan");
+        continue;
+      }
+      // A batch interrupted at 21:00 carries on the next morning; one left
+      // on Saturday evening, on Monday at 9:00.
+      if (!withinCampaignWindow(now, campaign.tenant?.timezone ?? "Europe/Madrid")) continue;
       const pending = await this.prisma.whatsAppCampaignRecipient.findMany({
         where: { campaignId: campaign.id, status: WhatsAppRecipientStatus.pending },
         take: BATCH,
@@ -479,15 +520,42 @@ export class WhatsAppCampaignsService {
     });
   }
 
-  /** Stops a sending campaign for an account-level problem; the pending recipients stay pending. */
-  private async pause(campaignId: string, reason: string, code?: string) {
+  /**
+   * Stops a sending campaign for an account-level problem (or a scheduled
+   * one whose plan lost campaigns); the pending recipients stay pending.
+   */
+  private async pause(
+    campaignId: string,
+    reason: string,
+    code?: string,
+    from: WhatsAppCampaignStatus = WhatsAppCampaignStatus.sending,
+  ) {
     const paused = await this.prisma.whatsAppCampaign.updateMany({
-      where: { id: campaignId, status: WhatsAppCampaignStatus.sending },
+      where: { id: campaignId, status: from },
       data: { status: WhatsAppCampaignStatus.paused, lastError: reason },
     });
     if (paused.count > 0) {
       this.logger.warn(`WhatsApp campaign ${campaignId}: paused (${code ?? "account check"})`);
     }
+  }
+
+  /**
+   * Does the salon's plan (or trial) include WhatsApp campaigns? Read once
+   * per salon per dispatcher run when a cache is given. An error reads as
+   * "yes": a database hiccup must not pause every campaign.
+   */
+  private async planIncludesCampaigns(tenantId: string, cache?: Map<string, boolean>): Promise<boolean> {
+    const known = cache?.get(tenantId);
+    if (known !== undefined) return known;
+    let included: boolean;
+    try {
+      included = await this.featureFlags.isFeatureUnlocked(tenantId, CAMPAIGN_FEATURE);
+    } catch (err) {
+      this.logger.warn(`Plan check for tenant ${tenantId} failed: ${(err as Error).message}`);
+      included = true;
+    }
+    cache?.set(tenantId, included);
+    return included;
   }
 
   /** Whether the campaign is still sending, read now (it may have been cancelled mid-batch). */

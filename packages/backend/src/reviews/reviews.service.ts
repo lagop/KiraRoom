@@ -17,6 +17,10 @@ import { EmailService } from "../notifications/services/email.service";
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
 import { EmailSuppressionService } from "../email-campaigns/email-suppression.service";
 import { AuditLogService } from "../saas/audit-log.service";
+import { WhatsAppTemplateService } from "../whatsapp/whatsapp-template.service";
+import { REVIEW_REQUEST } from "../whatsapp/whatsapp-templates";
+import { MARKETING_FIELD_ID, WHATSAPP_NOTICES_PURPOSE } from "../consent/marketing-consent";
+import { noticeChannelsOf, salonWhatsAppConnected } from "../consent/client-notices";
 import {
   LEGACY_REJECTION_REASON,
   LISTABLE_CONSENTS,
@@ -110,11 +114,20 @@ interface CandidateAppointment {
     id: string;
     firstName: string;
     email: string | null;
+    phone?: string | null;
+    communicationPreferences?: unknown;
     status: string;
   } | null;
   service: { name: string } | null;
-  tenant: { name: string };
+  tenant: { name: string; country?: string | null };
 }
+
+/**
+ * Where the salon's WhatsApp review template stands, for the settings:
+ * "not_connected", "NOT_SUBMITTED", Meta's status (PENDING, APPROVED,
+ * REJECTED, PAUSED, DISABLED...) or "unknown" when Meta could not be asked.
+ */
+export type WhatsAppReviewChannel = string;
 
 /** What one try did: sent, failed and worth retrying, or can never go. */
 export type RequestOutcome = "sent" | "failed" | "skipped";
@@ -148,6 +161,7 @@ export class ReviewsService {
     private readonly featureFlags: FeatureFlagService,
     private readonly suppressions: EmailSuppressionService,
     private readonly auditLog: AuditLogService,
+    private readonly whatsappTemplates: WhatsAppTemplateService,
   ) {}
 
   // ───────────────────────── Panel ─────────────────────────
@@ -275,17 +289,22 @@ export class ReviewsService {
 
   async getSettings(tenantId: string) {
     const profile = await this.prisma.googleBusinessProfile.findUnique({ where: { tenantId } });
-    const entitled = await this.automaticRequestsEntitled(tenantId);
+    const [entitled, whatsapp] = await Promise.all([
+      this.automaticRequestsEntitled(tenantId),
+      this.whatsappReviewTemplateStatus(tenantId),
+    ]);
     return {
       googlePlaceId: profile?.placeId ?? null,
       googleWriteReviewUrl: profile?.writeReviewUrl ?? null,
       googleReviewLink: googleWriteReviewLink(profile),
       autoRequestsEnabled: profile?.enableReviewRequests ?? false,
       addOnActive: entitled,
-      // Requests go by email only: WhatsApp and SMS review requests are not
-      // offered (nobody can turn them on since client accounts went away).
+      // By WhatsApp to clients who asked for their appointment notices by
+      // WhatsApp, once Meta approves the salon's review template; by email
+      // to everyone else (and when WhatsApp fails). No SMS.
       channels: {
         email: this.emailService.isConfigured(),
+        whatsapp,
       },
       // Reading and replying to Google reviews from the panel is not built:
       // it needs Google's approval of the Business Profile API.
@@ -333,6 +352,34 @@ export class ReviewsService {
       create: { tenantId, ...(data as Prisma.GoogleBusinessProfileUncheckedCreateInput) },
     });
     return this.getSettings(tenantId);
+  }
+
+  /**
+   * "Enviar plantilla a Meta": submits the WhatsApp review template (a
+   * UTILITY template, like the reminder) to the salon's WhatsApp Business
+   * account. Meta reviews it, usually within hours; until it is approved
+   * every request goes by email.
+   */
+  async submitWhatsAppTemplate(tenantId: string) {
+    if (!(await salonWhatsAppConnected(this.prisma, tenantId))) {
+      throw new BadRequestException("Conecta el WhatsApp del salón en Ajustes → WhatsApp antes de enviar la plantilla.");
+    }
+    const result = await this.whatsappTemplates.submitTemplate(tenantId, REVIEW_REQUEST);
+    if ("error" in result) {
+      throw new BadRequestException(`Meta no ha aceptado la plantilla: ${result.error}`);
+    }
+    return this.getSettings(tenantId);
+  }
+
+  private async whatsappReviewTemplateStatus(tenantId: string): Promise<WhatsAppReviewChannel> {
+    if (!(await salonWhatsAppConnected(this.prisma, tenantId))) return "not_connected";
+    try {
+      const status = (await this.whatsappTemplates.standardStatus(tenantId)).find((t) => t.name === REVIEW_REQUEST.name);
+      return status?.status ?? "NOT_SUBMITTED";
+    } catch (err: any) {
+      this.logger.warn(`WhatsApp template status for tenant ${tenantId} unavailable: ${err.message}`);
+      return "unknown";
+    }
   }
 
   /**
@@ -534,8 +581,9 @@ export class ReviewsService {
   /**
    * Every hour: publishes reviews left in moderation past the grace period,
    * then, for each salon that switched the requests on and pays for them,
-   * asks the clients of recent visits by email -- only in the salon's
-   * sending hours (09:00-21:00 on its clock).
+   * asks the clients of recent visits by WhatsApp or email -- only in the
+   * salon's sending hours (09:00-21:00 on its clock, any day: a review
+   * request is not a campaign).
    */
   @Cron(CronExpression.EVERY_HOUR)
   async dispatchReviewRequests(now: Date = new Date()) {
@@ -612,9 +660,11 @@ export class ReviewsService {
         professionalId: true,
         reviewRequestAttempts: true,
         serviceName: true,
-        client: { select: { id: true, firstName: true, email: true, status: true } },
+        client: {
+          select: { id: true, firstName: true, email: true, phone: true, communicationPreferences: true, status: true },
+        },
         service: { select: { name: true } },
-        tenant: { select: { name: true } },
+        tenant: { select: { name: true, country: true } },
       },
       orderBy: { completionTime: "asc" },
       take: 100,
@@ -661,10 +711,13 @@ export class ReviewsService {
   }
 
   /**
-   * One try at asking for a review, by email. "skipped" when it can never
-   * go (blocked client, asked recently, no email, opted out, address on the
-   * salon's suppression list); "failed" when the provider is missing or
-   * refused it, which a later tick retries.
+   * One try at asking for a review: by WhatsApp when the client asked for
+   * her appointment notices by WhatsApp and the salon's review template is
+   * approved by Meta (whatsappRoute); otherwise, or when that send fails,
+   * by email, as before. "skipped" when it can never go (blocked client,
+   * asked recently, no channel left: no WhatsApp and no email, opted out,
+   * address on the salon's suppression list); "failed" when a provider is
+   * missing or refused it, which a later tick retries.
    */
   private async requestReview(appt: CandidateAppointment, now: Date): Promise<RequestOutcome> {
     const client = appt.client;
@@ -685,12 +738,13 @@ export class ReviewsService {
       return "skipped";
     }
 
-    const why = await this.cannotEmail(appt.tenantId, client);
-    if (why) {
-      this.logger.log(`Review request for appointment ${appt.id} not sent: ${why}`);
+    const noWhatsApp = await this.whatsappRoute(appt.tenantId, client);
+    const noEmail = await this.cannotEmail(appt.tenantId, client);
+    if (noWhatsApp && noEmail) {
+      this.logger.log(`Review request for appointment ${appt.id} not sent: whatsapp: ${noWhatsApp}; email: ${noEmail}`);
       return "skipped";
     }
-    if (!this.emailService.isConfigured()) {
+    if (noWhatsApp && !this.emailService.isConfigured()) {
       this.logger.log(
         `Review request for appointment ${appt.id} not sent: email provider not configured (platform console or RESEND_API_KEY)`,
       );
@@ -698,7 +752,7 @@ export class ReviewsService {
     }
 
     // The row exists before anything is sent, so the link works the moment
-    // the message arrives; it is removed again if the email did not go.
+    // the message arrives; it is removed again if nothing went.
     const token = randomBytes(24).toString("base64url");
     const review = await this.prisma.review.create({
       data: {
@@ -708,19 +762,54 @@ export class ReviewsService {
         professionalId: appt.professionalId,
         rating: 0,
         status: ReviewStatus.pending,
-        source: ReviewSource.email_link,
+        source: noWhatsApp ? ReviewSource.email_link : ReviewSource.whatsapp_link,
         reviewToken: token,
         reviewTokenExpiresAt: new Date(now.getTime() + TOKEN_TTL_DAYS * DAY),
         // Nothing is shown until she answers and ticks the box.
         publishConsent: "declined",
       },
     });
-
     const link = `${this.frontendUrl()}/public/r/${token}`;
+    const serviceName = appt.serviceName ?? appt.service?.name ?? "tu cita";
+
+    let whatsappFailed = false;
+    if (!noWhatsApp) {
+      const res = await this.whatsappTemplates
+        .sendReviewRequest(appt.tenantId, {
+          phone: client.phone!,
+          clientName: client.firstName,
+          salonName: appt.tenant.name,
+          serviceName,
+          link,
+          country: appt.tenant.country ?? undefined,
+        })
+        .catch((err: Error) => ({ sent: false, messageId: undefined, reason: err.message }));
+      if (res.sent) {
+        if (res.messageId) await this.storeMessageId(review.id, res.messageId);
+        this.logger.log(`Review request for appointment ${appt.id} sent by WhatsApp`);
+        return "sent";
+      }
+      whatsappFailed = true;
+      this.logger.log(`Review request for appointment ${appt.id}: WhatsApp not sent (${res.reason ?? "error"}), trying email`);
+    }
+
+    // Email: the client's channel, or the fallback of a WhatsApp send that failed.
+    if (noEmail || !this.emailService.isConfigured()) {
+      await this.prisma.review.delete({ where: { id: review.id } });
+      this.logger.log(
+        `Review request for appointment ${appt.id} not sent: email: ${noEmail ?? "provider not configured (platform console or RESEND_API_KEY)"}`,
+      );
+      // Only reached after a WhatsApp send that failed (no channel at all
+      // was skipped above): worth another try on a later tick.
+      return "failed";
+    }
+    if (whatsappFailed) {
+      await this.prisma.review.update({ where: { id: review.id }, data: { source: ReviewSource.email_link } });
+    }
     const res = await this.emailService.sendReviewRequest({
       to: client.email!,
       clientName: client.firstName,
-      serviceName: appt.serviceName ?? appt.service?.name ?? "tu cita",
+      serviceName,
       salonName: appt.tenant.name,
       reviewUrl: link,
       optOutUrl: `${link}?baja=1`,
@@ -729,15 +818,55 @@ export class ReviewsService {
       await this.prisma.review.delete({ where: { id: review.id } });
       this.logger.log(`Review request for appointment ${appt.id} not sent: email: ${res.error ?? "error"}`);
       // An address already known to bounce will not take it on a retry either.
-      return res.skipped ? "skipped" : "failed";
+      return res.skipped && !whatsappFailed ? "skipped" : "failed";
     }
-    if (res.id) {
-      await this.prisma.review
-        .update({ where: { id: review.id }, data: { requestMessageId: res.id } })
-        .catch((err) => this.logger.warn(`Review ${review.id}: message id not stored: ${err.message}`));
-    }
+    if (res.id) await this.storeMessageId(review.id, res.id);
     this.logger.log(`Review request for appointment ${appt.id} sent by email`);
     return "sent";
+  }
+
+  private async storeMessageId(reviewId: string, messageId: string) {
+    await this.prisma.review
+      .update({ where: { id: reviewId }, data: { requestMessageId: messageId } })
+      .catch((err) => this.logger.warn(`Review ${reviewId}: message id not stored: ${err.message}`));
+  }
+
+  /**
+   * Why this client is not asked by WhatsApp, or null when she is. She is
+   * when she asked for her appointment notices by WhatsApp (the request is
+   * on file and the switch is on: client-notices.ts), WhatsApp is not
+   * turned off on her file, she did not turn review requests off, and the
+   * salon's number is connected with the review template (a UTILITY one,
+   * like the reminder) approved by Meta. Never fails: an error is a reason.
+   */
+  private async whatsappRoute(
+    tenantId: string,
+    client: NonNullable<CandidateAppointment["client"]>,
+  ): Promise<string | null> {
+    try {
+      if (!client.phone?.trim()) return "no phone";
+      if ((client.communicationPreferences as { whatsapp?: unknown } | null)?.whatsapp === false) {
+        return "WhatsApp turned off on the client's file";
+      }
+      const [prefs, request] = await Promise.all([
+        this.prisma.notificationPreference.findUnique({ where: { clientId: client.id }, select: { preferences: true } }),
+        this.prisma.consent.findFirst({
+          where: { tenantId, clientId: client.id, revokedAt: null, form: { purpose: WHATSAPP_NOTICES_PURPOSE } },
+          orderBy: { signedAt: "desc" },
+          select: { responses: true },
+        }),
+      ]);
+      const granted = (request?.responses as Record<string, unknown> | null)?.[MARKETING_FIELD_ID] === true;
+      if (!granted || !noticeChannelsOf(prefs?.preferences).whatsapp) {
+        return "no WhatsApp appointment notices";
+      }
+      const stored = (prefs?.preferences ?? {}) as Record<string, Record<string, unknown> | undefined>;
+      if (stored[NotificationType.REVIEW_REQUEST]?.whatsapp === false) return "the client turned review requests off";
+      const check = await this.whatsappTemplates.canSend(tenantId, REVIEW_REQUEST);
+      return check.ok ? null : check.reason ?? "template not approved";
+    } catch (err) {
+      return `check failed: ${(err as Error).message}`;
+    }
   }
 
   /**
