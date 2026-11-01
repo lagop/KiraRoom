@@ -77,7 +77,10 @@ export const DASHBOARD_NAV: NavEntry[] = [
     label: "nav.group_sales",
     icon: "receipt",
     items: [
-      link("pos", "/dashboard/pos", "nav.pos", "cart"),
+      // Exact: the products page below is its own entry.
+      link("pos", "/dashboard/pos", "nav.pos", "cart", { exact: true }),
+      // What the till sells besides services, and its stock.
+      link("pos-products", "/dashboard/pos/products", "nav.pos_products", "package", { managers: true }),
       link("payments", "/dashboard/payments", "nav.payments", "card", { managers: true }),
       // Invoices carry clients' NIFs and the takings: owner and admin (the API agrees).
       link("invoices", "/dashboard/billing/invoices", "invoices.title", "file", { managers: true }),

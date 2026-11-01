@@ -852,7 +852,7 @@ export interface Payment {
     | "other";
   /** The server's PaymentStatus enum (a partial refund leaves it "paid"). */
   status: "pending" | "paid" | "failed" | "refunded";
-  method: "card" | "cash" | "bank_transfer" | "wallet" | "gift_card" | "loyalty_points";
+  method: "card" | "cash" | "bizum" | "bank_transfer" | "wallet" | "gift_card" | "loyalty_points";
   /** Cents given back so far (refunds). */
   refundedAmount?: number;
   stripePaymentId?: string;
@@ -1783,7 +1783,10 @@ export interface ApiClientInterface {
   getPosServices(): Promise<any[]>;
   getPosClients(search?: string): Promise<any[]>;
   getPosDashboard(date?: string): Promise<any>;
-  posCheckout(data: any): Promise<{ orderId: string }>;
+  posCheckout(data: any): Promise<PosSale>;
+  posQuote(data: any): Promise<PosQuote>;
+  getPosSaleProducts(search?: string): Promise<PosSaleProduct[]>;
+  getPosReceipt(saleId: string): Promise<PosReceipt>;
   getPosSettings(): Promise<PosSettings>;
   savePosSettings(settings: PosSettings): Promise<PosSettings>;
   // Products
@@ -1795,7 +1798,7 @@ export interface ApiClientInterface {
   getProduct(id: string): Promise<any>;
   createProduct(data: any): Promise<any>;
   updateProduct(id: string, data: any): Promise<any>;
-  deleteProduct(id: string): Promise<void>;
+  deleteProduct(id: string): Promise<{ deleted?: boolean; deactivated?: boolean } | void>;
   getProductCategories(): Promise<any[]>;
   createProductCategory(data: any): Promise<any>;
   getInventoryTransactions(params?: {
@@ -1820,7 +1823,8 @@ export interface ApiClientInterface {
     serviceId: string;
     paymentMethod: string;
     clientId?: string;
-  }): Promise<{ id: string }>;
+    saleId?: string;
+  }): Promise<PosSale>;
 
   // Email Campaigns
   getEmailCampaigns(
@@ -3944,11 +3948,28 @@ class ApiClient implements ApiClientInterface {
     return this.request<any>(`/pos/dashboard${query}`);
   }
 
-  async posCheckout(data: any): Promise<{ orderId: string }> {
-    return this.request<{ orderId: string }>("/pos/checkout", {
+  /** A sale at the till. Send the same `saleId` on a retry: the server records it once. */
+  async posCheckout(data: any): Promise<PosSale> {
+    return this.request<PosSale>("/pos/checkout", {
       method: "POST",
       body: JSON.stringify(data),
     });
+  }
+
+  /** The ticket priced by the server (money, tax included): what the checkout will charge. */
+  async posQuote(data: any): Promise<PosQuote> {
+    return this.request<PosQuote>("/pos/quote", { method: "POST", body: JSON.stringify(data) });
+  }
+
+  /** Products the till sells: active, with their price in money and their stock. */
+  async getPosSaleProducts(search?: string): Promise<PosSaleProduct[]> {
+    const query = search ? `?search=${encodeURIComponent(search)}` : "";
+    return this.request<PosSaleProduct[]>(`/pos/sale-products${query}`);
+  }
+
+  /** The ticket of a sale (the simplified invoice's legal minimum). */
+  async getPosReceipt(saleId: string): Promise<PosReceipt> {
+    return this.request<PosReceipt>(`/pos/sales/${encodeURIComponent(saleId)}/receipt`);
   }
 
   /** The till's settings: the staff discount limit (everyone reads, owner and managers save). */
@@ -3964,8 +3985,9 @@ class ApiClient implements ApiClientInterface {
     serviceId: string;
     paymentMethod: string;
     clientId?: string;
-  }): Promise<{ id: string }> {
-    return this.request<{ id: string }>("/pos/quick-sale", {
+    saleId?: string;
+  }): Promise<PosSale> {
+    return this.request<PosSale>("/pos/quick-sale", {
       method: "POST",
       body: JSON.stringify(data),
     });
@@ -4003,8 +4025,9 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  async deleteProduct(id: string): Promise<void> {
-    return this.request<void>(`/pos/products/${id}`, {
+  /** Deleted, or deactivated when it has sales or stock movements (`deactivated: true`). */
+  async deleteProduct(id: string): Promise<{ deleted?: boolean; deactivated?: boolean } | void> {
+    return this.request<{ deleted?: boolean; deactivated?: boolean } | void>(`/pos/products/${id}`, {
       method: "DELETE",
     });
   }
@@ -5785,6 +5808,94 @@ export interface LoyaltyTransactionRow {
 }
 
 /** The till's settings (GET/PUT /pos/settings). */
+/** A line of the ticket as the server priced it (money cents, tax included). */
+export interface PosQuoteLine {
+  kind: "appointment" | "service" | "product";
+  serviceId?: string;
+  productId?: string;
+  appointmentId?: string;
+  professionalId?: string;
+  name: string;
+  unitPriceCents: number;
+  quantity: number;
+  grossCents: number;
+  discountCents: number;
+  netCents: number;
+  taxRate: number;
+  taxCents: number;
+}
+
+/** POST /pos/quote: what the checkout will charge. */
+export interface PosQuote {
+  lines: PosQuoteLine[];
+  giftCards: Array<{ amountCents: number; recipientName?: string; recipientEmail?: string; message?: string }>;
+  subtotal: number;
+  discount: { lines: number; order: number; total: number };
+  loyalty: { discount: number; pointsSpent: number; rewardName: string } | null;
+  total: number;
+  tax: { label: string; cents: number; included: boolean; note: string };
+  invoice: { kind: "none" | "simplified" | "full"; problem?: string };
+}
+
+/** A sale recorded at the till (POST /pos/checkout, /pos/quick-sale). */
+export interface PosSale {
+  saleId: string;
+  orderId: string;
+  kind: "checkout" | "quick_sale";
+  total: number;
+  change: number;
+  tendered: number;
+  discount?: { lines: number; order: number; total: number };
+  loyalty?: { pointsEarned: number; pointsSpent: number; discount: number; rewardName?: string };
+  invoice: { id: string; series: string; number: string; full: boolean } | null;
+  giftCards?: Array<{ id: string; code: string; amountCents: number; recipientEmail?: string; emailSent?: boolean }>;
+  /** True when this answer is the first one of a sale sent again. */
+  replayed?: boolean;
+  [key: string]: unknown;
+}
+
+export interface PosSaleProduct {
+  id: string;
+  name: string;
+  sku?: string | null;
+  category?: string | null;
+  chargeCents: number;
+  taxRate: number;
+  trackInventory: boolean;
+  quantity: number;
+}
+
+/** GET /pos/sales/:id/receipt. */
+export interface PosReceipt {
+  saleId: string;
+  salon: { name: string; tradeName: string; taxId: string | null; address: string; phone: string | null };
+  invoice: { id: string; number: string; full: boolean; recipientName?: string | null; recipientTaxId?: string | null } | null;
+  date: string;
+  time: string;
+  lines: Array<{
+    kind: string;
+    description: string;
+    quantity: number;
+    unitPriceCents: number;
+    discountCents: number;
+    totalCents: number;
+    taxRate: number;
+    taxCents: number;
+  }>;
+  taxLabel: string;
+  taxNote: string;
+  taxBreakdown: Array<{ rate: number; baseCents: number; taxCents: number }>;
+  taxCents: number;
+  subtotalCents: number;
+  discountCents: number;
+  loyaltyDiscountCents: number;
+  totalCents: number;
+  payments: Array<{ method: string; amount: number }>;
+  tenderedCents: number;
+  changeCents: number;
+  giftCards: Array<{ code: string; amountCents: number }>;
+}
+
 export interface PosSettings {
   /** The most a staff member may take off a line at the till, in percent. 0: only the owner or a manager. */
   maxStaffDiscountPercent: number;

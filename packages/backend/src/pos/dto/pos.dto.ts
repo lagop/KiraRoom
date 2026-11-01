@@ -24,7 +24,7 @@ import {
 import { EmptyStringToUndefined } from "../../common/dto/empty-to-undefined";
 import { POS_DISCOUNT_TYPES, PosDiscountType } from "../pos-discounts";
 
-export const POS_PAYMENT_METHODS = ["card", "cash", "bank_transfer", "wallet", "gift_card"] as const;
+export const POS_PAYMENT_METHODS = ["card", "cash", "bank_transfer", "bizum", "wallet", "gift_card"] as const;
 export type PosPaymentMethod = (typeof POS_PAYMENT_METHODS)[number];
 
 /** Cents: one million euros is no salon ticket. */
@@ -98,6 +98,14 @@ export class PosCartItemDto {
   @IsUUID()
   appointmentId?: string;
 
+  /**
+   * Who did a service sold without an appointment (its commission). Left
+   * out: the professional of the team member at the till, if they have one.
+   */
+  @IsOptional()
+  @IsUUID()
+  professionalId?: string;
+
   @Type(() => Number)
   @IsInt()
   @Min(1)
@@ -119,6 +127,33 @@ export class PosTenderDto {
   @Min(0)
   @Max(MAX_CENTS)
   amount!: number;
+
+  /** For method gift_card: the card's code. */
+  @EmptyStringToUndefined() @IsOptional() @IsString() @MaxLength(40)
+  giftCardCode?: string;
+}
+
+/**
+ * A gift card sold at the till: what it is worth and who it is for. A
+ * multi-purpose voucher is not taxed when sold (only what it pays for,
+ * later), so it is its own line, off the simplified invoice.
+ */
+export class PosGiftCardSaleDto {
+  /** Cents: 1 € to 10.000 €. */
+  @Type(() => Number)
+  @IsInt({ message: "El importe de la tarjeta regalo va en céntimos." })
+  @Min(100, { message: "Una tarjeta regalo es de 1 € como mínimo." })
+  @Max(1_000_000, { message: "Una tarjeta regalo es de 10.000 € como mucho." })
+  amountCents!: number;
+
+  @EmptyStringToUndefined() @IsOptional() @IsString() @MaxLength(120)
+  recipientName?: string;
+
+  @EmptyStringToUndefined() @IsOptional() @IsEmail({}, { message: "El email de quien recibe la tarjeta no es válido." }) @MaxLength(254)
+  recipientEmail?: string;
+
+  @EmptyStringToUndefined() @IsOptional() @IsString() @MaxLength(500)
+  message?: string;
 }
 
 /** A walk-in client created (or found by phone) at the till. */
@@ -137,25 +172,25 @@ export class PosClientInfoDto {
 }
 
 /**
- * Body of `POST /pos/checkout`. It was an interface, so the pipe let
- * everything through, and each line's price came from the client: any
- * ticket could be rung up for any amount. The tenant and the actor come
- * from the JWT (the controller), never from here.
+ * Body of `POST /pos/quote`: the ticket as the till would charge it, priced
+ * by the server, nothing written. The checkout's body without the payments.
  */
-export class CreatePosOrderDto {
+export class PosQuoteDto {
   @IsOptional() @IsUUID()
   clientId?: string;
 
   @IsOptional() @ValidateNested() @Type(() => PosClientInfoDto)
   clientInfo?: PosClientInfoDto;
 
-  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(100)
+  /** Services, products and appointments. May be empty when the ticket only sells gift cards. */
+  @IsOptional() @IsArray() @ArrayMaxSize(100)
   @ValidateNested({ each: true }) @Type(() => PosCartItemDto)
-  items!: PosCartItemDto[];
+  items?: PosCartItemDto[];
 
-  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(10)
-  @ValidateNested({ each: true }) @Type(() => PosTenderDto)
-  payments!: PosTenderDto[];
+  /** Gift cards sold on this ticket. */
+  @IsOptional() @IsArray() @ArrayMaxSize(10)
+  @ValidateNested({ each: true }) @Type(() => PosGiftCardSaleDto)
+  giftCards?: PosGiftCardSaleDto[];
 
   @IsOptional() @IsString() @MaxLength(5000)
   notes?: string;
@@ -173,6 +208,26 @@ export class CreatePosOrderDto {
   discount?: PosDiscountDto;
 }
 
+/**
+ * Body of `POST /pos/checkout`. It was an interface, so the pipe let
+ * everything through, and each line's price came from the client: any
+ * ticket could be rung up for any amount. The tenant and the actor come
+ * from the JWT (the controller), never from here.
+ */
+export class CreatePosOrderDto extends PosQuoteDto {
+  /**
+   * The panel's id for this sale (a UUID it generates once per ticket): a
+   * retried request with the same id returns the first sale's answer
+   * instead of charging twice.
+   */
+  @IsOptional() @IsUUID("all", { message: "El identificador de la venta no es válido." })
+  saleId?: string;
+
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(10)
+  @ValidateNested({ each: true }) @Type(() => PosTenderDto)
+  payments!: PosTenderDto[];
+}
+
 /** Body of `PUT /pos/settings` (owner and managers). */
 export class PosSettingsDto {
   /** The most a staff member may take off a line, in percent. 0: staff cannot discount. */
@@ -183,16 +238,22 @@ export class PosSettingsDto {
   maxStaffDiscountPercent!: number;
 }
 
-/** Body of `POST /pos/quick-sale`: one service, priced from the database. */
+export const QUICK_SALE_METHODS = ["cash", "card", "bank_transfer", "bizum"] as const;
+
+/** Body of `POST /pos/quick-sale`: one service, priced from the database, paid exactly. */
 export class PosQuickSaleDto {
   @IsUUID()
   serviceId!: string;
 
-  @IsIn(["cash", "card"])
-  paymentMethod!: "cash" | "card";
+  @IsIn(QUICK_SALE_METHODS as unknown as string[], { message: "Forma de pago no válida." })
+  paymentMethod!: (typeof QUICK_SALE_METHODS)[number];
 
   @IsOptional() @IsUUID()
   clientId?: string;
+
+  /** As CreatePosOrderDto.saleId: a retry returns the first sale. */
+  @IsOptional() @IsUUID("all", { message: "El identificador de la venta no es válido." })
+  saleId?: string;
 }
 
 /**

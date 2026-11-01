@@ -21,12 +21,18 @@ export interface PayableAppointment {
   amountPaid: unknown;
   totalAmount: unknown;
   service?: { price: unknown } | null;
+  /**
+   * The visit's total in money (tax included: what its invoice comes to),
+   * when it is not its catalogue total: a salon whose prices are the base
+   * (appointment-charge.ts). Left out: the catalogue total is the money.
+   */
+  chargeTotalCents?: number;
 }
 
 /**
- * What the visit costs, in cents: its stored total, else its service's list
- * price (euros, hence x 100). The same rule the panel shows
- * (AppointmentsService.enrichAppointment).
+ * What the visit costs in the salon's CATALOGUE terms, in cents: its stored
+ * total, else its service's list price (euros, hence x 100). Money is
+ * appointmentChargeCents (appointment-charge.ts explains the two bases).
  */
 export function appointmentTotalCents(apt: Pick<PayableAppointment, "totalAmount" | "service">): number {
   const total = Number(apt.totalAmount ?? 0);
@@ -34,9 +40,16 @@ export function appointmentTotalCents(apt: Pick<PayableAppointment, "totalAmount
   return Math.round(Number(apt.service?.price ?? 0) * 100);
 }
 
-/** What is still to be paid, in cents. */
+/** What the visit costs in money (tax included), in cents: what its invoice comes to. */
+export function appointmentChargeCents(
+  apt: Pick<PayableAppointment, "totalAmount" | "service" | "chargeTotalCents">,
+): number {
+  return typeof apt.chargeTotalCents === "number" ? apt.chargeTotalCents : appointmentTotalCents(apt);
+}
+
+/** What is still to be paid, in money cents (amountPaid is money). */
 export function appointmentOwedCents(apt: PayableAppointment): number {
-  return Math.max(0, appointmentTotalCents(apt) - Math.round(Number(apt.amountPaid ?? 0)));
+  return Math.max(0, appointmentChargeCents(apt) - Math.round(Number(apt.amountPaid ?? 0)));
 }
 
 /**
@@ -170,14 +183,18 @@ export async function recordAppointmentPayment(
   apt: PayableAppointment,
   coveredCents: number,
   method: string | null,
-  discount?: { cents: number; record: Record<string, unknown> },
+  discount?: { cents: number; record: Record<string, unknown>; chargeTotalCents?: number },
 ): Promise<{ amountPaid: number; paymentStatus: PaymentStatus }> {
   const listTotal = appointmentTotalCents(apt);
   const discounted = !!discount && discount.cents > 0;
+  // `discount.cents` is in catalogue terms (what totalAmount goes down by);
+  // `discount.chargeTotalCents` the money total after it (appointment-charge.ts).
   const total = discounted ? Math.max(0, listTotal - discount.cents) : listTotal;
+  // amountPaid is money: paid once it covers the money total.
+  const moneyTotal = discounted ? Math.max(0, discount.chargeTotalCents ?? total) : appointmentChargeCents(apt);
   const before = Math.round(Number(apt.amountPaid ?? 0));
-  const amountPaid = Math.min(total, before + Math.max(0, coveredCents));
-  const paymentStatus = amountPaid >= total ? PaymentStatus.paid : (apt.paymentStatus as PaymentStatus);
+  const amountPaid = Math.min(moneyTotal, before + Math.max(0, coveredCents));
+  const paymentStatus = amountPaid >= moneyTotal ? PaymentStatus.paid : (apt.paymentStatus as PaymentStatus);
   const { count } = await db.appointment.updateMany({
     where: {
       id: apt.id,

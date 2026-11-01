@@ -1,5 +1,6 @@
 import { BadRequestException } from "@nestjs/common";
 import { PosService } from "./pos.service";
+import { saleTables, salonTenant } from "./pos-test-kit.testing";
 
 /**
  * The till is where points are spent (a reward comes off the ticket) and
@@ -29,6 +30,9 @@ function pos(loyaltyOver: Record<string, any> = {}) {
     },
     service: { findMany: jest.fn(async () => [{ id: "svc1", name: "Corte", price: 40 }]) },
     client: { findFirst: jest.fn(async ({ where }: any) => (where.id ? { id: where.id } : null)), create: jest.fn() },
+    tenant: { findUnique: jest.fn(async () => salonTenant()) },
+    professional: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+    ...saleTables(),
   };
   prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
   const loyalty: any = {
@@ -100,7 +104,7 @@ describe("POS and loyalty", () => {
         items,
         payments: [{ method: "card", amount: 4000 }],
       } as any),
-    ).rejects.toThrow(/not found/);
+    ).rejects.toThrow(/no encontrada/);
   });
 
   it("a loyalty failure never fails the sale", async () => {

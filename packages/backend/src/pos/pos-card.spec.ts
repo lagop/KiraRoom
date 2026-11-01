@@ -1,5 +1,6 @@
 import { PosService } from "./pos.service";
 import { StripeService } from "../payments/services/stripe.service";
+import { saleTables, salonTenant } from "./pos-test-kit.testing";
 
 /**
  * A card sale at the till created a Stripe PaymentIntent for 100 times the
@@ -18,10 +19,19 @@ function pos({ serviceActive = true } = {}) {
           ? { id: "s1", name: "Corte", price: 25, currency: "EUR", isActive: serviceActive }
           : null,
       ),
-      findMany: jest.fn(async () => [{ id: "s1", name: "Corte", price: 25 }]),
+      // The checkout (and the quick sale, which is one) reads the salon's services by id.
+      findMany: jest.fn(async ({ where }: any) =>
+        where.tenantId === "t1" && where.id.in.includes("s1")
+          ? [{ id: "s1", name: "Corte", price: 25, isActive: serviceActive }]
+          : [],
+      ),
     },
     client: { findFirst: jest.fn(async ({ where }: any) => (where.id ? { id: where.id } : null)), create: jest.fn() },
+    tenant: { findUnique: jest.fn(async () => salonTenant()) },
+    professional: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+    ...saleTables(),
   };
+  prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
   const wallet: any = { deductFunds: jest.fn() };
   return { service: new PosService(prisma, wallet), prisma };
 }
@@ -56,7 +66,7 @@ describe("POS card sales", () => {
     expect(off.prisma.payment.create).not.toHaveBeenCalled();
 
     const other = pos();
-    await expect(other.service.quickSale("t2", "s1", "cash")).rejects.toThrow(/not found/);
+    await expect(other.service.quickSale("t2", "s1", "cash")).rejects.toThrow(/no encontrado/);
     expect(other.prisma.payment.create).not.toHaveBeenCalled();
   });
 });

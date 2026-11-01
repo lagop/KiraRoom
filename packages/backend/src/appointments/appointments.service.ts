@@ -90,6 +90,7 @@ import type { OnlineBookingDto, StaffBookingDto } from "./dto/book-appointment.d
 import { UpdateAppointmentDto } from "./dto/update-appointment.dto";
 import type { UpdateAppointmentPaymentDto } from "./dto/update-appointment-payment.dto";
 import { appointmentTotalCents, assertVisitChargeable } from "../payments/appointment-payment";
+import { moneyOfCatalogueCents, salonTaxBasis, type SalonTaxBasis } from "../payments/appointment-charge";
 import { appointmentDeleteBlocker, deleteAppointmentRow } from "./appointment-delete";
 import { isForeignKeyViolation } from "../common/prisma/history-deletes";
 import {
@@ -260,19 +261,35 @@ export class AppointmentsService {
    * Enrich appointment data with computed totalAmount (in cents) and amountDue.
    * The database totalAmount field is not set on creation, so we compute it from service price.
    */
-  private enrichAppointment(apt: any): any {
+  private enrichAppointment(apt: any, basis?: SalonTaxBasis | null): any {
     const servicePrice = Number(apt.service?.price || 0);
     const totalAmount = apt.totalAmount && Number(apt.totalAmount) > 0
       ? Number(apt.totalAmount)
       : Math.round(servicePrice * 100); // Convert dollars to cents
     const amountPaid = Number(apt.amountPaid || 0);
+    // amountPaid is money (tax included); totalAmount is the catalogue
+    // figure. For a salon whose prices are the base, what is due is the
+    // money total (base + tax: appointment-charge.ts), what the till
+    // charges. A visit of several services may differ by a cent from its
+    // invoice here; the till prices it exactly (POST /pos/quote).
+    const chargeTotal = basis ? moneyOfCatalogueCents(totalAmount, basis) : totalAmount;
     return {
       ...apt,
       // Rows saved before the fix hold {"set": [...]}: always a plain list.
       ...(apt.addons !== undefined ? { addons: normalizeAddons(apt.addons) } : {}),
       totalAmount,
-      amountDue: Math.max(0, totalAmount - amountPaid),
+      chargeTotal,
+      amountDue: Math.max(0, chargeTotal - amountPaid),
     };
+  }
+
+  /** The salon's tax basis for amountDue (null when it cannot be read: catalogue = money). */
+  private async chargeBasisOf(tenantId: string): Promise<SalonTaxBasis | null> {
+    const tenant = await (this.prisma as any).tenant?.findUnique?.({
+      where: { id: tenantId },
+      select: { fiscalSettings: true },
+    });
+    return tenant && tenant.fiscalSettings !== undefined ? salonTaxBasis(tenant.fiscalSettings) : null;
   }
 
   /**
@@ -1180,8 +1197,9 @@ export class AppointmentsService {
       orderBy: [{ scheduledDate: "desc" }, { scheduledTime: "desc" }],
     });
     const appointments = (newestFirst as any[]).reverse();
+    const basis = await this.chargeBasisOf(user.tenantId);
 
-    return appointments.map((apt: any) => this.enrichAppointment(apt));
+    return appointments.map((apt: any) => this.enrichAppointment(apt, basis));
   }
 
   /** The most appointments GET /appointments returns. */
@@ -1228,7 +1246,10 @@ export class AppointmentsService {
       }
     }
 
-    return this.enrichAppointment(appointment);
+    return this.enrichAppointment(
+      appointment,
+      appointment.tenant?.fiscalSettings !== undefined ? salonTaxBasis(appointment.tenant.fiscalSettings) : null,
+    );
   }
 
   async update(
@@ -2083,8 +2104,9 @@ export class AppointmentsService {
 
     // Nothing left to pay (a free service, or paid in full without the
     // status being updated) is not pending.
+    const basis = await this.chargeBasisOf(user.tenantId);
     return appointments
-      .map((apt: any) => this.enrichAppointment(apt))
+      .map((apt: any) => this.enrichAppointment(apt, basis))
       .filter((apt: any) => apt.amountDue > 0);
   }
 
@@ -2106,9 +2128,10 @@ export class AppointmentsService {
     }
     const appointment = await this.findOne(user, id);
 
-    // amountPaid is in cents, the unit of the column. There is no tip
-    // field: nothing above the appointment's total is accepted.
-    const total = appointmentTotalCents(appointment);
+    // amountPaid is in cents of money (tax included), the unit of the
+    // column. There is no tip field: nothing above what the visit costs
+    // (its money total, appointment-charge.ts) is accepted.
+    const total = appointment.chargeTotal ?? appointmentTotalCents(appointment);
     if (data.amountPaid > total) {
       const euros = (c: number) => `${(c / 100).toFixed(2).replace(".", ",")} €`;
       throw new BadRequestException(

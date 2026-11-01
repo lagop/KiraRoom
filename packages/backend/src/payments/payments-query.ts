@@ -75,6 +75,11 @@ export interface PaymentFilters {
   dateTo?: string;
   /** A staff member's own professional: only payments of their appointments. */
   professionalId?: string | null;
+  /**
+   * A staff member at the till: also (or, with no professional, only) the
+   * payments they recorded themselves (Payment.recordedById).
+   */
+  recordedById?: string | null;
 }
 
 const DAY_ONLY = /^\d{4}-\d{2}-\d{2}$/;
@@ -98,7 +103,18 @@ export function paymentWhere(
   if (filters.status) where.status = filters.status as PaymentStatus;
   if (filters.method) where.method = filters.method as PaymentMethod;
   if (filters.clientId) where.clientId = filters.clientId;
-  if (filters.professionalId) where.appointment = { professionalId: filters.professionalId };
+  if (filters.recordedById) {
+    where.AND = [
+      {
+        OR: [
+          { recordedById: filters.recordedById },
+          ...(filters.professionalId ? [{ appointment: { professionalId: filters.professionalId } }] : []),
+        ],
+      },
+    ];
+  } else if (filters.professionalId) {
+    where.appointment = { professionalId: filters.professionalId };
+  }
 
   const from = filters.dateFrom
     ? DAY_ONLY.test(filters.dateFrom)

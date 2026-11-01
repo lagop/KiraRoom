@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException } from "@nestjs/common";
 import { PosService } from "./pos.service";
 import { CommissionsService } from "../commissions/commissions.service";
+import { saleTables, salonTenant } from "./pos-test-kit.testing";
 
 /**
  * Discounts at the till, end to end through PosService.processCheckout:
@@ -18,7 +19,7 @@ const CATALOGUE = {
     { id: "svc1", name: "Corte", price: 40 },
     { id: "svc2", name: "Tinte", price: 25 },
   ],
-  products: [{ id: "prod1", name: "Champú", price: 12.5, isActive: true }],
+  products: [{ id: "prod1", name: "Champú", price: 12.5, isActive: true, trackInventory: false }],
 };
 
 function apt(id: string, over: Row = {}): Row {
@@ -46,7 +47,9 @@ function till(appointments: Row[], opts: { maxStaff?: number; invoiced?: string[
     discounts: [] as Row[],
     appointments: new Map(appointments.map((a) => [a.id, { ...a }])),
   };
+  const sales = saleTables();
   const db = (pending: { payments: Row[]; discounts: Row[]; updates: [string, Row][] }) => ({
+    ...sales,
     payment: {
       create: jest.fn(async ({ data }: any) => {
         const row = { id: `pay${committed.payments.length + pending.payments.length + 1}`, ...data };
@@ -93,7 +96,11 @@ function till(appointments: Row[], opts: { maxStaff?: number; invoiced?: string[
       }),
       update: jest.fn(async ({ where, data }: any) => Object.assign(committed.appointments.get(where.id)!, data)),
     },
-    professional: { findFirst: jest.fn(async ({ where }: any) => (where.userId === "u-me" ? { id: "p-me" } : null)) },
+    professional: {
+      findFirst: jest.fn(async ({ where }: any) => (where.userId === "u-me" ? { id: "p-me" } : null)),
+      findMany: jest.fn(async () => []),
+    },
+    ...sales,
     service: {
       findMany: jest.fn(async ({ where }: any) =>
         CATALOGUE.services.filter((x) => where.id.in.includes(x.id) && where.tenantId === "t1"),
@@ -105,7 +112,7 @@ function till(appointments: Row[], opts: { maxStaff?: number; invoiced?: string[
       ),
     },
     tenant: {
-      findUnique: jest.fn(async () => ({ maxStaffDiscountPercent: opts.maxStaff ?? 0 })),
+      findUnique: jest.fn(async () => salonTenant({ maxStaffDiscountPercent: opts.maxStaff ?? 0 })),
       update: jest.fn(async ({ data }: any) => ({ maxStaffDiscountPercent: data.maxStaffDiscountPercent })),
     },
     invoice: {
@@ -133,7 +140,11 @@ function till(appointments: Row[], opts: { maxStaff?: number; invoiced?: string[
     settleAppointment: jest.fn(async () => ({ awarded: 0 })),
     ...opts.loyalty,
   };
-  const wallet: any = { deductFunds: jest.fn(async () => ({})), addFunds: jest.fn(async () => ({})) };
+  const wallet: any = {
+    deductFunds: jest.fn(async () => ({})),
+    addFunds: jest.fn(async () => ({})),
+    debitIn: jest.fn(async () => ({})),
+  };
   const service = new PosService(prisma, wallet, loyalty);
   return { service, prisma, loyalty, wallet, committed, direct };
 }
@@ -164,8 +175,11 @@ describe("POS discounts: a walk-in ticket", () => {
     expect(out.subtotal).toBe(6500);
     expect(out.discount).toEqual({ lines: 400, order: 500, total: 900 });
     expect(out.total).toBe(5600);
+    // One payment row per kind sold (Payment.type): the service's 33,05 and
+    // the products' 22,95 (each line after its share of the discounts).
     expect(t.committed.payments).toEqual([
-      expect.objectContaining({ amount: 5600, method: "cash", metadata: expect.objectContaining({ posDiscountCents: 900 }) }),
+      expect.objectContaining({ amount: 3305, method: "cash", type: "service", metadata: expect.objectContaining({ posDiscountCents: 900 }) }),
+      expect.objectContaining({ amount: 2295, method: "cash", type: "product", metadata: expect.objectContaining({ posDiscountCents: 900 }) }),
     ]);
     // Recorded in the same transaction as the payment.
     expect(t.prisma.$transaction).toHaveBeenCalledTimes(1);
@@ -300,11 +314,10 @@ describe("POS discounts: staff and the salon's limit", () => {
     expect(t.committed.discounts).toHaveLength(1);
   });
 
-  it("the owner is not limited, and the salon's setting is not even read for them", async () => {
+  it("the owner is not limited, whatever the salon's staff limit", async () => {
     const t = till([], { maxStaff: 0 });
     const out = await t.service.processCheckout({ ...ticket({ type: "percentage", value: 100 }), actor: OWNER, payments: [{ method: "cash", amount: 0 }] } as any);
     expect(out.total).toBe(0);
-    expect(t.prisma.tenant.findUnique).not.toHaveBeenCalled();
   });
 
   it("reads and saves the limit", async () => {

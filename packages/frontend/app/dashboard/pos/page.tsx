@@ -1,27 +1,51 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import apiClient from "@/lib/api";
+import type { ClientLoyaltySummary, PosQuote, PosSaleProduct, Professional } from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
-import { useToast, toast } from "@/components/ui/use-toast";
+import { useToast } from "@/components/ui/use-toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { RefundPaymentDialog } from "@/components/payments/RefundPaymentDialog";
-import { PAYMENT_STATUS_LABELS, refundableCents, statusLabel } from "@/lib/payments-format";
+import { PAYMENT_STATUS_LABELS, methodLabel, refundableCents, statusLabel } from "@/lib/payments-format";
 import AppointmentSelector from "./components/appointment-selector";
 import DiscountEditor from "./components/discount-editor";
-import type { ClientLoyaltySummary } from "@/lib/api";
+import TenderPanel from "./components/tender-panel";
+import SaleReceipt from "./components/sale-receipt";
+import GiftCardSaleDialog from "./components/gift-card-sale-dialog";
+import { applyDiscounts, discountProblem, staffLimitProblem, type DiscountSpec } from "@/lib/pos-discounts";
 import {
-  applyDiscounts,
-  discountProblem,
-  formatEuros,
-  staffLimitProblem,
-  type DiscountSpec,
-} from "@/lib/pos-discounts";
+  TENDER_LABELS,
+  addLine,
+  euros as formatEuros,
+  giftCardsForServer,
+  itemsForServer,
+  newSaleId,
+  removeLine,
+  setProfessional,
+  setQuantity,
+  tenderProblem,
+  tendersForServer,
+  tendersOfRows,
+  type CartLine,
+  type GiftCardSale,
+  type TenderMethod,
+  type TenderRow,
+} from "@/lib/pos-cart";
+
+/**
+ * La caja (TPV). Every amount here is money in cents, tax included: what
+ * the client pays and what the invoice says (lib/pos-cart.ts). The server
+ * prices the ticket (POST /pos/quote) and the panel charges exactly its
+ * total; each sale carries a `saleId` so a retry is recorded once.
+ */
 
 interface Service {
   id: string;
   name: string;
-  price: number;
+  price: number | string;
+  /** What the till charges, tax included, in cents. */
+  chargeCents: number;
   category: string;
   duration: number;
 }
@@ -34,15 +58,6 @@ interface Client {
   email?: string;
 }
 
-interface CartItem {
-  service: Service;
-  quantity: number;
-  /** The appointment this line charges (the server prices it at what it still owes). */
-  _appointmentId?: string;
-  /** A discount on this line: only its kind, value and reason go to the server. */
-  discount?: DiscountSpec;
-}
-
 interface POSSummary {
   date: string;
   totalSales: number;
@@ -51,6 +66,8 @@ interface POSSummary {
   refundedAmount: number;
   paymentBreakdown: { method: string; amount: number; count: number }[];
   topServices: { name: string; count: number; revenue: number }[];
+  /** Only this team member's sales (staff). */
+  ownSalesOnly?: boolean;
 }
 
 interface TodayPayment {
@@ -60,71 +77,53 @@ interface TodayPayment {
   appointmentId?: string;
   amount: number;
   currency: string;
-  type:
-    | "appointment"
-    | "deposit"
-    | "product"
-    | "service"
-    | "gift_card"
-    | "membership"
-    | "other";
+  type: "appointment" | "deposit" | "product" | "service" | "gift_card" | "membership" | "other";
   /** The server's PaymentStatus enum (a partial refund leaves it "paid"). */
   status: "pending" | "paid" | "failed" | "refunded";
   /** Cents given back so far. */
   refundedAmount?: number;
-  method: "card" | "cash" | "bank_transfer" | "wallet" | "gift_card";
+  method: "card" | "cash" | "bizum" | "bank_transfer" | "wallet" | "gift_card";
   stripePaymentId?: string;
-  stripeInvoiceId?: string;
   description?: string;
   metadata?: Record<string, any>;
-  receiptUrl?: string;
-  failureMessage?: string;
-  isDeposit?: boolean;
-  depositAmount?: number;
-  remainingAmount?: number;
   createdAt: string;
   updatedAt: string;
   paidAt?: string;
-  // Relations
-  client?: {
-    id: string;
-    firstName: string;
-    lastName: string;
-    email?: string;
-  };
-  appointment?: {
-    id: string;
-    scheduledDate: string;
-    status: string;
-  };
+  client?: { id: string; firstName: string; lastName: string; email?: string };
+  appointment?: { id: string; scheduledDate: string; status: string };
 }
+
+/** The methods a quick sale may use (exactly the price, one method). */
+const QUICK_METHODS: TenderMethod[] = ["cash", "card", "bizum", "bank_transfer"];
 
 export default function POSPage() {
   const t = useTranslations();
+  const { toast } = useToast();
   const [services, setServices] = useState<Service[]>([]);
+  const [products, setProducts] = useState<PosSaleProduct[]>([]);
+  const [catalogTab, setCatalogTab] = useState<"services" | "products">("services");
+  const [professionals, setProfessionals] = useState<Professional[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [allClients, setAllClients] = useState<Client[]>([]);
-  const [cart, setCart] = useState<CartItem[]>([]);
+  const [cart, setCart] = useState<CartLine[]>([]);
+  const [giftCards, setGiftCards] = useState<GiftCardSale[]>([]);
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
-  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<
-    "cash" | "card"
-  >("cash");
+  const [tenderRows, setTenderRows] = useState<TenderRow[]>([{ method: "cash", amountText: "" }]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [summary, setSummary] = useState<POSSummary | null>(null);
   const [clientSearch, setClientSearch] = useState("");
   const [showClientSearch, setShowClientSearch] = useState(false);
-  const [lastSale, setLastSale] = useState<any>(null);
   const [todayPayments, setTodayPayments] = useState<TodayPayment[]>([]);
-  // The payment being refunded ("Devolver"), in the refund dialog. It used
-  // to call DELETE /payments/:id, which only deletes pending or failed
-  // payments older than a day: voiding a sale always failed.
+  // The payment being refunded ("Devolver"), in the refund dialog.
   const [pendingVoid, setPendingVoid] = useState<TodayPayment | null>(null);
-  const [cashTotal, setCashTotal] = useState(0);
-  const [cardTotal, setCardTotal] = useState(0);
   const [isAdmin, setIsAdmin] = useState(false);
-  const { toast } = useToast();
-  
+  const [showGiftCardSale, setShowGiftCardSale] = useState(false);
+  // The receipt of the sale just charged.
+  const [receiptOf, setReceiptOf] = useState<{ saleId: string; email?: string | null } | null>(null);
+  // "Venta rápida": confirmed first, with its amount and concept.
+  const [quickSale, setQuickSale] = useState<{ service: Service; method: TenderMethod; saleId: string } | null>(null);
+
   // Loyalty: the selected client's rewards, and the one being redeemed.
   const [loyalty, setLoyalty] = useState<ClientLoyaltySummary | null>(null);
   const [rewardId, setRewardId] = useState<string>("");
@@ -158,33 +157,11 @@ export default function POSPage() {
       .catch(() => setMaxStaffDiscount(0));
   }, []);
 
-  // The ticket as the server will price it, in cents: the lines, their
-  // discounts, the ticket's discount (lib/pos-discounts.ts). Display only.
-  const ticketLines = cart.map((item) => ({
-    price: Math.round(item.service.price * 100),
-    quantity: item.quantity,
-    discount: item.discount,
-  }));
+  // The ticket as the server prices it, in money cents: the lines and
+  // their discounts (lib/pos-discounts.ts), shown while the quote loads.
+  const ticketLines = cart.map((item) => ({ price: item.unitCents, quantity: item.quantity, discount: item.discount }));
   const ticket = applyDiscounts(ticketLines, orderDiscount);
-
-  // Same rule as the server (LoyaltyService.discountFor), in cents, on what
-  // is left after the till's discounts, so the amount charged is what the
-  // client really pays.
-  const loyaltyDiscountCents = (): number => {
-    const reward = loyalty?.rewards.find((r) => r.id === rewardId);
-    if (!reward) return 0;
-    const base = ticket.totalCents;
-    let d = 0;
-    if (reward.type === "discount") {
-      if (reward.discountPercent) d = Math.round((base * reward.discountPercent) / 100);
-      else if (reward.discountAmount) d = reward.discountAmount;
-    } else if (reward.type === "free_service") {
-      const at = cart.findIndex((i) => i.service.id === reward.freeServiceId);
-      d = at >= 0 ? Math.floor(ticket.lines[at].netCents / cart[at].quantity) : 0;
-    }
-    return Math.max(0, Math.min(d, base));
-  };
-  const amountDueCents = () => Math.max(0, ticket.totalCents - loyaltyDiscountCents());
+  const giftCardsCents = giftCards.reduce((s, g) => s + g.amountCents, 0);
 
   // Why the server would refuse the ticket's discounts, said before charging.
   const canDiscount = isAdmin || maxStaffDiscount > 0;
@@ -193,7 +170,7 @@ export default function POSPage() {
       const d = cart[i].discount;
       if (d) {
         const problem = discountProblem(d, ticket.lines[i].grossCents, "la línea");
-        if (problem) return `${cart[i].service.name}: ${problem}`;
+        if (problem) return `${cart[i].name}: ${problem}`;
       }
     }
     if (orderDiscount) {
@@ -207,14 +184,77 @@ export default function POSPage() {
     ...new Set([...cart.map((i) => i.discount?.reason), orderDiscount?.reason].filter((r): r is string => !!r)),
   ];
 
-  const setLineDiscount = (index: number, discount: DiscountSpec | undefined) => {
-    setCart((current) => current.map((item, i) => (i === index ? { ...item, discount } : item)));
+  const setLineDiscount = (key: string, discount: DiscountSpec | undefined) => {
+    setCart((current) => current.map((item) => (item.key === key ? { ...item, discount } : item)));
   };
 
-  // An emptied cart forgets the ticket's discount too.
+  // An emptied ticket forgets the ticket's discount too.
+  const empty = cart.length === 0 && giftCards.length === 0;
   useEffect(() => {
     if (cart.length === 0) setOrderDiscount(undefined);
   }, [cart.length]);
+
+  // ---------------------------------------------------------- the quote
+  // What the server will charge: asked again whenever the ticket changes.
+  const [quote, setQuote] = useState<PosQuote | null>(null);
+  const [quoteKey, setQuoteKey] = useState<string>("");
+  const [quoteError, setQuoteError] = useState<string | null>(null);
+  const ticketBody = useMemo(
+    () => ({
+      clientId: selectedClient?.id,
+      items: itemsForServer(cart),
+      giftCards: giftCardsForServer(giftCards),
+      appointmentIds: cart.filter((l) => l.appointmentId).map((l) => l.appointmentId as string),
+      ...(rewardId ? { loyaltyRewardId: rewardId } : {}),
+      ...(orderDiscount ? { discount: orderDiscount } : {}),
+    }),
+    [selectedClient?.id, cart, giftCards, rewardId, orderDiscount],
+  );
+  const bodyKey = JSON.stringify(ticketBody);
+  useEffect(() => {
+    if (empty || issue) {
+      setQuote(null);
+      setQuoteKey("");
+      setQuoteError(null);
+      return;
+    }
+    let alive = true;
+    const timer = setTimeout(() => {
+      apiClient
+        .posQuote(ticketBody)
+        .then((q) => {
+          if (!alive) return;
+          setQuote(q);
+          setQuoteKey(bodyKey);
+          setQuoteError(null);
+        })
+        .catch((e) => {
+          if (!alive) return;
+          setQuote(null);
+          setQuoteKey("");
+          setQuoteError(e instanceof Error ? e.message : "No se pudo calcular el total.");
+        });
+    }, 250);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bodyKey, empty, issue]);
+  const quoteFresh = !!quote && quoteKey === bodyKey;
+  // What is charged: the server's total (shown from the local ticket while it loads).
+  const dueCents = quoteFresh ? quote!.total : Math.max(0, ticket.totalCents + giftCardsCents);
+  const tenders = tendersOfRows(tenderRows, dueCents);
+  const tenderIssue = empty ? null : tenderProblem(tenders, dueCents);
+  const invoiceProblem = quoteFresh ? quote!.invoice.problem ?? null : null;
+
+  // The sale's id: the same while the same ticket is retried, a new one
+  // for any other ticket (POST /pos/checkout records each id once).
+  const attempt = useRef<{ key: string; saleId: string } | null>(null);
+  const saleIdFor = (key: string) => {
+    if (!attempt.current || attempt.current.key !== key) attempt.current = { key, saleId: newSaleId() };
+    return attempt.current.saleId;
+  };
 
   const saveStaffLimit = async () => {
     const value = Number(staffLimitInput);
@@ -244,7 +284,7 @@ export default function POSPage() {
 
   // Appointment payment integration
   const [showAppointmentSelector, setShowAppointmentSelector] = useState(false);
-  const [selectedAppointments, setSelectedAppointments] = useState<any[]>([]);
+  const selectedAppointments = cart.filter((l) => l.kind === "appointment");
 
   // Filter states
   const [statusFilter, setStatusFilter] = useState<string>("");
@@ -263,7 +303,7 @@ export default function POSPage() {
   const [sortBy, setSortBy] = useState<string>("createdAt");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
-  // Check if user is admin
+  // Owner and managers see the salon; staff, their own sales (the API decides).
   useEffect(() => {
     const token = localStorage.getItem("kira_auth_token");
     if (token) {
@@ -281,41 +321,24 @@ export default function POSPage() {
     loadAllClients();
   }, []);
 
-  // Get tenantId from token
-  const getTenantId = (): string | undefined => {
-    const token = localStorage.getItem("kira_auth_token");
-    if (token) {
-      try {
-        const payload = JSON.parse(atob(token.split(".")[1]));
-        return payload.tenantId;
-      } catch (e) {
-        console.error("Failed to decode token:", e);
-      }
-    }
-    return undefined;
-  };
+  // Who did a service sold at the till (commissions): managers pick; staff are themselves.
+  useEffect(() => {
+    if (!isAdmin) return;
+    apiClient
+      .getProfessionals()
+      .then((list) => setProfessionals((list ?? []).filter((p: any) => p.isActive !== false)))
+      .catch(() => setProfessionals([]));
+  }, [isAdmin]);
 
   // Load payments with filters, pagination, sorting
   const loadPayments = async () => {
     try {
-      const tenantId = getTenantId();
-      if (!tenantId) {
-        console.warn("No tenantId available");
-        return;
-      }
-
-      // Build date range for today
       const today = new Date();
-      const startOfDay = new Date(
-        today.getFullYear(),
-        today.getMonth(),
-        today.getDate(),
-      );
+      const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
       const endOfDay = new Date(startOfDay);
       endOfDay.setHours(23, 59, 59, 999);
 
       const params: any = {
-        tenantId,
         dateFrom: startOfDay.toISOString(),
         dateTo: endOfDay.toISOString(),
         page: currentPage,
@@ -323,38 +346,22 @@ export default function POSPage() {
         sortBy,
         sortOrder,
       };
-
       if (statusFilter) params.status = statusFilter;
       if (methodFilter) params.method = methodFilter;
       if (clientFilter) params.clientId = clientFilter;
 
       const response = await apiClient.getPayments(params);
+      let paymentsArray: TodayPayment[] = response.payments as unknown as TodayPayment[];
 
-      let paymentsArray: TodayPayment[] = response.payments as TodayPayment[];
-
-      // Apply frontend filters that backend doesn't support
-      if (methodFilter) {
-        paymentsArray = paymentsArray.filter(
-          (payment) => payment.method === methodFilter,
-        );
-      }
-
-      // Apply service filter (by description)
+      // The concept is searched here (the API filters the rest).
       if (serviceFilter) {
         const lower = serviceFilter.toLowerCase();
-        paymentsArray = paymentsArray.filter(
-          (payment) =>
-            payment.description &&
-            payment.description.toLowerCase().includes(lower),
-        );
+        paymentsArray = paymentsArray.filter((payment) => payment.description?.toLowerCase().includes(lower));
       }
-
-      // Extract pagination info
       if (response.pagination) {
         setTotalPages(response.pagination.totalPages);
         setTotalPayments(response.pagination.total);
       }
-
       setTodayPayments(paymentsArray);
     } catch (error) {
       console.error("Failed to load payments:", error);
@@ -365,55 +372,34 @@ export default function POSPage() {
   // Reload payments when any filter, pagination, or sorting changes
   useEffect(() => {
     loadPayments();
-  }, [
-    statusFilter,
-    methodFilter,
-    clientFilter,
-    serviceFilter,
-    currentPage,
-    pageSize,
-    sortBy,
-    sortOrder,
-  ]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFilter, methodFilter, clientFilter, serviceFilter, currentPage, pageSize, sortBy, sortOrder]);
 
   const loadData = async () => {
     try {
       setLoading(true);
-      console.log("Loading POS data...");
-
-      const [servicesData, summaryData] = await Promise.all([
-        apiClient.getPosServices().catch((err) => {
-          console.error("Failed to load services:", err);
-          return [];
-        }),
-        apiClient.getPosDashboard().catch((err) => {
-          console.error("Failed to load dashboard:", err);
-          return null;
-        }),
+      const [servicesData, productsData, summaryData] = await Promise.all([
+        apiClient.getPosServices().catch(() => []),
+        apiClient.getPosSaleProducts().catch(() => []),
+        apiClient.getPosDashboard().catch(() => null),
       ]);
-
       setServices(servicesData || []);
+      setProducts(productsData || []);
       setSummary(summaryData);
-
-      // Compute cash and card totals from summary breakdown
-      if (summaryData?.paymentBreakdown) {
-        const cashBreakdown = summaryData.paymentBreakdown.find(
-          (p: any) => p.method === "cash",
-        );
-        const cardBreakdown = summaryData.paymentBreakdown.find(
-          (p: any) => p.method === "card",
-        );
-        setCashTotal(cashBreakdown?.amount || 0);
-        setCardTotal(cardBreakdown?.amount || 0);
-      }
-
-      // Load payments separately with filters
       await loadPayments();
-    } catch (error) {
-      console.error("Failed to load POS data:", error);
     } finally {
       setLoading(false);
     }
+  };
+
+  const refreshAfterSale = async () => {
+    const [summaryData, productsData] = await Promise.all([
+      apiClient.getPosDashboard().catch(() => null),
+      apiClient.getPosSaleProducts().catch(() => null),
+    ]);
+    if (summaryData) setSummary(summaryData);
+    if (productsData) setProducts(productsData);
+    await loadPayments();
   };
 
   const searchClients = async (query: string) => {
@@ -422,8 +408,7 @@ export default function POSPage() {
       return;
     }
     try {
-      const data = await apiClient.getPosClients(query);
-      setClients(data);
+      setClients(await apiClient.getPosClients(query));
     } catch (error) {
       console.error("Failed to search clients:", error);
     }
@@ -431,49 +416,49 @@ export default function POSPage() {
 
   const loadAllClients = async () => {
     try {
-      const data = await apiClient.getClients();
-      setAllClients(data);
+      setAllClients(await apiClient.getClients());
     } catch (error) {
       console.error("Failed to load clients:", error);
     }
   };
 
-  const addToCart = (service: Service) => {
-    const existing = cart.find((item) => item.service.id === service.id);
-    if (existing) {
-      setCart(
-        cart.map((item) =>
-          item.service.id === service.id
-            ? { ...item, quantity: item.quantity + 1 }
-            : item,
-        ),
-      );
-    } else {
-      setCart([...cart, { service, quantity: 1 }]);
-    }
+  const addService = (service: Service) => {
+    setCart((c) => addLine(c, { kind: "service", serviceId: service.id, name: service.name, unitCents: service.chargeCents }));
   };
 
-  const removeFromCart = (serviceId: string) => {
-    setCart(cart.filter((item) => item.service.id !== serviceId));
-  };
-
-  const updateQuantity = (serviceId: string, quantity: number) => {
-    if (quantity <= 0) {
-      removeFromCart(serviceId);
+  const addProduct = (product: PosSaleProduct) => {
+    const inCart = cart.find((l) => l.productId === product.id)?.quantity ?? 0;
+    if (product.trackInventory && inCart >= product.quantity) {
+      toast({ title: "Sin stock", description: `No quedan más unidades de ${product.name}.`, variant: "destructive" });
       return;
     }
-    setCart(
-      cart.map((item) =>
-        item.service.id === serviceId ? { ...item, quantity } : item,
-      ),
+    setCart((c) =>
+      addLine(c, {
+        kind: "product",
+        productId: product.id,
+        name: product.name,
+        unitCents: product.chargeCents,
+        stock: product.trackInventory ? product.quantity : null,
+      }),
     );
+  };
+
+  const resetTicket = () => {
+    setCart([]);
+    setGiftCards([]);
+    setSelectedClient(null);
+    setOrderDiscount(undefined);
+    setRewardId("");
+    setTenderRows([{ method: "cash", amountText: "" }]);
+    attempt.current = null;
   };
 
   // A discounted ticket is confirmed first, in the panel's dialog.
   const requestCheckout = () => {
-    if (cart.length === 0) return;
-    if (issue) {
-      toast({ title: "Revisa el descuento", description: issue, variant: "destructive" });
+    if (empty) return;
+    const problem = issue ?? quoteError ?? invoiceProblem ?? tenderIssue;
+    if (problem) {
+      toast({ title: "Revisa el ticket", description: problem, variant: "destructive" });
       return;
     }
     if (ticket.discountCents > 0) {
@@ -484,70 +469,32 @@ export default function POSPage() {
   };
 
   const processCheckout = async () => {
-    if (cart.length === 0) return;
-
-    // If appointments are selected, use appointment payment flow
-    if (selectedAppointments.length > 0) {
-      await handleAppointmentPayment();
-      return;
-    }
-
+    if (empty || !quoteFresh) return;
+    const payments = tendersForServer(tenders);
+    const body = { ...ticketBody, payments };
+    const saleId = saleIdFor(JSON.stringify(body));
     try {
       setProcessing(true);
-      // What is sold, how many and any discount asked for: the server
-      // prices every line itself, never from here.
-      const items = cart.map((item) => ({
-        serviceId: item.service.id,
-        quantity: item.quantity,
-        ...(item.discount ? { discount: item.discount } : {}),
-      }));
-
-      const checkoutData = {
-        // tenantId is obtained from JWT token via API
-        clientId: selectedClient?.id,
-        items,
-        payments: [
-          {
-            method: selectedPaymentMethod,
-            amount: amountDueCents(),
-          },
-        ],
-        ...(rewardId ? { loyaltyRewardId: rewardId } : {}),
-        ...(orderDiscount ? { discount: orderDiscount } : {}),
-      };
-
-      console.log("Starting POS checkout with data:", checkoutData);
-
-      const result: any = await apiClient.posCheckout(checkoutData);
-
-      console.log("POS checkout result:", result);
-
-      // Show success message
+      const result = await apiClient.posCheckout({ ...body, saleId });
       const pts = result?.loyalty;
       toast({
         title: t("pos.sale_completed"),
         description:
-          t("pos.payment_completed") +
-          (result?.discount?.total ? ` · Descuento ${formatEuros(result.discount.total)}` : "") +
+          `${formatEuros(result.total)}` +
+          (result.change ? ` · Cambio ${formatEuros(result.change)}` : "") +
+          (result.discount?.total ? ` · Descuento ${formatEuros(result.discount.total)}` : "") +
           (pts?.pointsSpent ? ` · Canjeados ${pts.pointsSpent} puntos` : "") +
-          (pts?.pointsEarned ? ` · +${pts.pointsEarned} puntos` : ""),
+          (pts?.pointsEarned ? ` · +${pts.pointsEarned} puntos` : "") +
+          (result.giftCards?.some((g) => g.emailSent) ? " · Tarjeta regalo enviada por email" : ""),
       });
-
-      // Clear cart and reset
-      setCart([]);
-      setSelectedClient(null);
-
-      // Refresh all data after a short delay
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      await loadData();
+      setReceiptOf({ saleId: result.saleId, email: selectedClient?.email ?? null });
+      resetTicket();
+      await refreshAfterSale();
     } catch (error: any) {
-      console.error("Checkout failed:", error);
-      const errorMessage =
-        error?.message || error?.response?.data?.message || "Unknown error";
-      console.log("Checkout error, showing toast:", errorMessage);
+      // The same ticket sent again keeps its sale id: recorded once.
       toast({
         title: t("pos.checkout_failed"),
-        description: errorMessage,
+        description: error?.message || "Inténtalo de nuevo: si ya se cobró, no se cobrará dos veces.",
         variant: "destructive",
       });
     } finally {
@@ -555,51 +502,38 @@ export default function POSPage() {
     }
   };
 
-  const processQuickSale = async (service: Service) => {
+  const requestQuickSale = (service: Service) => {
+    const current = tenderRows.length === 1 ? tenderRows[0].method : "cash";
+    setQuickSale({ service, method: QUICK_METHODS.includes(current) ? current : "cash", saleId: newSaleId() });
+  };
+
+  // A quick sale does not touch the ticket being built (nor its client).
+  const processQuickSale = async () => {
+    if (!quickSale) return;
     try {
       setProcessing(true);
-
       const result = await apiClient.posQuickSale({
-        serviceId: service.id,
-        paymentMethod: selectedPaymentMethod,
+        serviceId: quickSale.service.id,
+        paymentMethod: quickSale.method,
         clientId: selectedClient?.id,
+        saleId: quickSale.saleId,
       });
-
-      console.log("POS quick sale result:", result);
-
-      // Show success message
-      const clientName = selectedClient
-        ? `${selectedClient.firstName} ${selectedClient.lastName}`
-        : "Walk-in";
-
+      const clientName = selectedClient ? `${selectedClient.firstName} ${selectedClient.lastName}` : t("pos.walk_in");
       toast({
         title: t("pos.quick_sale_completed"),
-        description: `${clientName} - ${service.name} x1 = ${formatCurrency(service.price)}`,
+        description: `${clientName} · ${quickSale.service.name} · ${formatEuros(result.total)} (${TENDER_LABELS[quickSale.method]})`,
       });
-
-      // Clear cart and reset
-      setCart([]);
-      setSelectedClient(null);
-
-      // Refresh all data after a short delay
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      await loadData();
+      setQuickSale(null);
+      setReceiptOf({ saleId: result.saleId, email: selectedClient?.email ?? null });
+      await refreshAfterSale();
     } catch (error: any) {
-      console.error("Quick sale failed:", error);
-      const errorMessage =
-        error?.message || error?.response?.data?.message || "Unknown error";
-      toast({
-        title: t("pos.quick_sale_failed"),
-        description: errorMessage,
-        variant: "destructive",
-      });
+      toast({ title: t("pos.quick_sale_failed"), description: error?.message, variant: "destructive" });
     } finally {
       setProcessing(false);
     }
   };
 
   const afterRefund = async () => {
-    // Refresh both summary and payments
     await Promise.all([
       apiClient
         .getPosDashboard()
@@ -609,102 +543,38 @@ export default function POSPage() {
     ]);
   };
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat("en-EU", {
-      style: "currency",
-      currency: "EUR",
-    }).format(amount);
-  };
-
   const handleSelectAppointments = (appointments: any[]) => {
-    setSelectedAppointments(appointments);
+    if (appointments.length === 0) return;
     setSelectedClient(appointments[0].client);
-
-    // Add all appointment services to cart
-    const newCartItems = appointments.map((appointment: any) => ({
-      service: {
-        id: appointment.service.id,
-        name: `${appointment.service.name} (${appointment.client.firstName} ${appointment.client.lastName})`,
-        // What is still owed (a deposit or earlier payment already counts), cents to euros
-        price: (appointment.amountDue ?? appointment.totalAmount) / 100,
-        category: "other" as any,
-        duration: appointment.service.duration || 60,
-      },
-      quantity: 1,
-      _appointmentId: appointment.id,
-    }));
-    setCart(newCartItems);
-
-    const totalAmount = appointments.reduce((sum: number, a: any) => sum + (a.amountDue ?? a.totalAmount) / 100, 0);
+    // The appointments replace any chosen before; what else is on the ticket stays.
+    setCart((current) => {
+      let next = current.filter((l) => l.kind !== "appointment");
+      for (const a of appointments) {
+        next = addLine(next, {
+          kind: "appointment",
+          serviceId: a.service?.id,
+          appointmentId: a.id,
+          name: `${a.service?.name ?? "Cita"} (${a.client.firstName} ${a.client.lastName})`,
+          // What is still owed, tax included (a deposit already counts).
+          unitCents: a.amountDue ?? a.chargeTotal ?? a.totalAmount,
+        });
+      }
+      return next;
+    });
+    const due = appointments.reduce((sum: number, a: any) => sum + (a.amountDue ?? a.chargeTotal ?? a.totalAmount), 0);
     toast({
-      title: t("pos.appointments_selected") || `${appointments.length} appointments selected`,
-      description: `${appointments.map((a: any) => `${a.client.firstName} ${a.client.lastName}`).join(", ")} — ${formatCurrency(totalAmount)}`,
+      title: `${appointments.length} ${appointments.length === 1 ? "cita" : "citas"} en el ticket`,
+      description: `${appointments.map((a: any) => `${a.client.firstName} ${a.client.lastName}`).join(", ")} — ${formatEuros(due)}`,
     });
   };
 
-  const handleAppointmentPayment = async () => {
-    if (selectedAppointments.length === 0) return;
-
-    try {
-      setProcessing(true);
-
-      // The server prices each line itself (an appointment at what it
-      // still owes); only what is sold and the discount asked for go.
-      const items = cart.map((item) => ({
-        serviceId: item.service.id,
-        ...(item._appointmentId ? { appointmentId: item._appointmentId } : {}),
-        quantity: item.quantity,
-        ...(item.discount ? { discount: item.discount } : {}),
-      }));
-
-      const checkoutData = {
-        clientId: selectedAppointments[0].client.id,
-        appointmentIds: selectedAppointments.map((apt: any) => apt.id),
-        items,
-        ...(rewardId ? { loyaltyRewardId: rewardId } : {}),
-        ...(orderDiscount ? { discount: orderDiscount } : {}),
-        payments: [
-          {
-            method: selectedPaymentMethod,
-            // The whole cart (appointments and anything added) less the
-            // discounts and the reward.
-            amount: amountDueCents(),
-          },
-        ],
-      };
-
-      // One call: the server records each appointment's payment and marks it
-      // paid in the same transaction, and refuses cancelled or no-show ones.
-      await apiClient.posCheckout(checkoutData);
-
-      toast({
-        title: t("pos.payment_completed"),
-        description: `${selectedAppointments.length} ${t("pos.appointment_payment_success").toLowerCase()}`,
-      });
-
-      // Clear selection and cart
-      setSelectedAppointments([]);
-      setCart([]);
-      setSelectedClient(null);
-
-      // Refresh data
-      await loadData();
-    } catch (error: any) {
-      console.error("Appointment payment failed:", error);
-      toast({
-        title: t("pos.payment_failed"),
-        description: error.message || "Payment processing failed",
-        variant: "destructive",
-      });
-    } finally {
-      setProcessing(false);
-    }
-  };
+  const breakdown = (method: string) => summary?.paymentBreakdown?.find((p) => p.method === method)?.amount ?? 0;
+  const checkoutBlocked = empty || processing || !!issue || !quoteFresh || !!quoteError || !!invoiceProblem || !!tenderIssue;
 
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="text-lg">Loading POS...</div>
+        <div className="text-lg">{t("pos.loading")}</div>
       </div>
     );
   }
@@ -725,6 +595,14 @@ export default function POSPage() {
             </button>
           )}
           <button
+            type="button"
+            onClick={() => setShowGiftCardSale(true)}
+            className="px-4 py-2 rounded-lg border border-purple-300 bg-white text-purple-700 hover:bg-purple-50"
+          >
+            Vender tarjeta regalo
+          </button>
+          <button
+            type="button"
             onClick={() => setShowAppointmentSelector(true)}
             className="px-4 py-2 rounded-lg bg-purple-600 text-white hover:bg-purple-700"
           >
@@ -768,282 +646,293 @@ export default function POSPage() {
       )}
 
       {showAppointmentSelector && (
-        <AppointmentSelector
-          onSelectAppointments={handleSelectAppointments}
-          onClose={() => setShowAppointmentSelector(false)}
-        />
+        <AppointmentSelector onSelectAppointments={handleSelectAppointments} onClose={() => setShowAppointmentSelector(false)} />
       )}
 
-      {/* Summary Cards */}
+      {/* Summary: the salon's day for owner and managers, their own sales for staff (the API scopes it). */}
       {summary && (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
-          <div className="bg-white p-4 rounded-lg shadow">
-            <div className="text-sm text-gray-500">{t("pos.today_sales")}</div>
-            <div className="text-2xl font-bold text-green-600">
-              {formatCurrency(summary.totalSales / 100)}
+        <div>
+          {summary.ownSalesOnly && <p className="mb-2 text-sm text-gray-600">{t("pos.own_sales_only")}</p>}
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+            <div className="bg-white p-4 rounded-lg shadow">
+              <div className="text-sm text-gray-500">{summary.ownSalesOnly ? "Tus ventas de hoy" : t("pos.today_sales")}</div>
+              <div className="text-2xl font-bold text-green-600">{formatEuros(summary.totalSales)}</div>
             </div>
-          </div>
-          <div className="bg-white p-4 rounded-lg shadow">
-            <div className="text-sm text-gray-500">{t("pos.transactions")}</div>
-            <div className="text-2xl font-bold">
-              {summary.totalTransactions}
+            <div className="bg-white p-4 rounded-lg shadow">
+              <div className="text-sm text-gray-500">{t("pos.transactions")}</div>
+              <div className="text-2xl font-bold">{summary.totalTransactions}</div>
             </div>
-          </div>
-          <div className="bg-white p-4 rounded-lg shadow">
-            <div className="text-sm text-gray-500">{t("pos.pending")}</div>
-            <div className="text-2xl font-bold text-yellow-600">
-              {summary.pendingPayments}
+            <div className="bg-white p-4 rounded-lg shadow">
+              <div className="text-sm text-gray-500">{t("pos.refunded")}</div>
+              <div className="text-2xl font-bold text-red-600">{formatEuros(summary.refundedAmount)}</div>
             </div>
-          </div>
-          <div className="bg-white p-4 rounded-lg shadow">
-            <div className="text-sm text-gray-500">{t("pos.refunded")}</div>
-            <div className="text-2xl font-bold text-red-600">
-              {formatCurrency(summary.refundedAmount / 100)}
+            <div className="bg-white p-4 rounded-lg shadow">
+              <div className="text-sm text-gray-500">{t("pos.cash")}</div>
+              <div className="text-2xl font-bold text-blue-600">{formatEuros(breakdown("cash"))}</div>
             </div>
-          </div>
-          <div className="bg-white p-4 rounded-lg shadow">
-            <div className="text-sm text-gray-500">
-              {t("pos.cash").replace("💵 ", "")}
+            <div className="bg-white p-4 rounded-lg shadow">
+              <div className="text-sm text-gray-500">{t("pos.card")}</div>
+              <div className="text-2xl font-bold text-purple-600">{formatEuros(breakdown("card"))}</div>
             </div>
-            <div className="text-2xl font-bold text-blue-600">
-              {formatCurrency(cashTotal / 100)}
-            </div>
-          </div>
-          <div className="bg-white p-4 rounded-lg shadow">
-            <div className="text-sm text-gray-500">
-              {t("pos.card").replace("💳 ", "")}
-            </div>
-            <div className="text-2xl font-bold text-purple-600">
-              {formatCurrency(cardTotal / 100)}
+            <div className="bg-white p-4 rounded-lg shadow">
+              <div className="text-sm text-gray-500">Bizum</div>
+              <div className="text-2xl font-bold text-teal-600">{formatEuros(breakdown("bizum"))}</div>
             </div>
           </div>
         </div>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Services Grid */}
+        {/* What the till sells */}
         <div className="lg:col-span-2">
           <div className="bg-white rounded-lg shadow">
-            <div className="p-4 border-b">
-              <h2 className="text-lg font-semibold">{t("pos.services")}</h2>
+            <div className="p-4 border-b flex gap-2" role="tablist">
+              {(["services", "products"] as const).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  role="tab"
+                  aria-selected={catalogTab === tab}
+                  onClick={() => setCatalogTab(tab)}
+                  className={`px-3 py-1 rounded-lg text-sm font-semibold ${
+                    catalogTab === tab ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                  }`}
+                >
+                  {tab === "services" ? t("pos.services") : t("pos.products")}
+                </button>
+              ))}
             </div>
             <div className="p-4">
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                {services.map((service) => (
-                  <button
-                    key={service.id}
-                    onClick={() => addToCart(service)}
-                    className="p-3 border rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-colors text-left"
-                  >
-                    <div className="font-medium text-sm truncate">
-                      {service.name}
+              {catalogTab === "services" ? (
+                <>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                    {services.map((service) => (
+                      // Two sibling buttons: a button inside a button is invalid HTML.
+                      <div key={service.id} className="border rounded-lg hover:border-blue-500 transition-colors">
+                        <button
+                          type="button"
+                          onClick={() => addService(service)}
+                          className="block w-full p-3 text-left hover:bg-blue-50 rounded-t-lg"
+                        >
+                          <div className="font-medium text-sm truncate">{service.name}</div>
+                          <div className="text-lg font-bold text-green-600">{formatEuros(service.chargeCents)}</div>
+                          <div className="text-xs text-gray-500">{service.duration} min</div>
+                        </button>
+                        <div className="px-3 pb-3">
+                          <button
+                            type="button"
+                            onClick={() => requestQuickSale(service)}
+                            className="w-full text-xs bg-blue-600 text-white py-1 rounded hover:bg-blue-700 disabled:bg-blue-300"
+                            disabled={processing}
+                          >
+                            {t("pos.quick_sale")}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {services.length === 0 && <div className="text-center py-8 text-gray-500">{t("pos.no_services_available")}</div>}
+                </>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                    {products.map((product) => {
+                      const out = product.trackInventory && product.quantity <= 0;
+                      return (
+                        <button
+                          key={product.id}
+                          type="button"
+                          disabled={out}
+                          onClick={() => addProduct(product)}
+                          className="p-3 border rounded-lg text-left hover:border-blue-500 hover:bg-blue-50 transition-colors disabled:opacity-50 disabled:hover:bg-white"
+                        >
+                          <div className="font-medium text-sm truncate">{product.name}</div>
+                          <div className="text-lg font-bold text-green-600">{formatEuros(product.chargeCents)}</div>
+                          <div className={`text-xs ${out ? "text-red-600" : "text-gray-500"}`}>
+                            {product.trackInventory ? (out ? "Sin stock" : `${product.quantity} en stock`) : "Sin control de stock"}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {products.length === 0 && (
+                    <div className="text-center py-8 text-gray-500">
+                      No hay productos a la venta.{isAdmin ? " Añádelos en Caja y ventas › Productos." : ""}
                     </div>
-                    <div className="text-lg font-bold text-green-600">
-                      {formatCurrency(service.price)}
-                    </div>
-                    <div className="text-xs text-gray-500">
-                      {service.duration} min
-                    </div>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        processQuickSale(service);
-                      }}
-                      className="mt-2 w-full text-xs bg-blue-600 text-white py-1 rounded hover:bg-blue-700"
-                      disabled={processing}
-                    >
-                      {t("pos.quick_sale")}
-                    </button>
-                  </button>
-                ))}
-              </div>
-              {services.length === 0 && (
-                <div className="text-center py-8 text-gray-500">
-                  {t("pos.no_services_available")}
-                </div>
+                  )}
+                </>
               )}
             </div>
           </div>
         </div>
 
-        {/* Cart / Checkout */}
+        {/* The ticket */}
         <div>
           <div className="bg-white rounded-lg shadow">
             <div className="p-4 border-b">
               <h2 className="text-lg font-semibold">{t("pos.cart")}</h2>
             </div>
             <div className="p-4">
-        {/* Appointment Info */}
-        {selectedAppointments.length > 0 && (
-          <div className="mb-4 border border-blue-200 bg-blue-50 rounded-lg p-3">
-            <div className="flex justify-between items-start mb-2">
-              <div>
-                <div className="font-semibold text-blue-900">
-                  {t("pos.appointment_details")} ({selectedAppointments.length})
-                </div>
-              </div>
-              <button
-                onClick={() => {
-                  setSelectedAppointments([]);
-                  setCart([]);
-                }}
-                className="text-red-600 text-sm hover:underline"
-              >
-                {t("pos.remove")}
-              </button>
-            </div>
-            <div className="space-y-2 mb-3">
-              {selectedAppointments.map((apt) => (
-                <div key={apt.id} className="text-sm text-blue-800 flex justify-between items-center">
-                  <div>
-                    <span className="font-medium">{apt.client.firstName} {apt.client.lastName}</span>
-                    <span className="text-blue-600"> — {apt.service.name}</span>
-                    <div className="text-xs text-blue-500">
-                      {new Date(apt.scheduledDate).toLocaleDateString()} {apt.scheduledTime}
-                    </div>
+              {/* Client */}
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">{t("pos.client_optional")}</label>
+                {selectedClient ? (
+                  <div className="flex items-center justify-between bg-gray-100 p-2 rounded">
+                    <span>
+                      {selectedClient.firstName} {selectedClient.lastName}
+                    </span>
+                    {selectedAppointments.length === 0 && (
+                      <button type="button" onClick={() => setSelectedClient(null)} className="text-red-600 text-sm">
+                        {t("pos.remove")}
+                      </button>
+                    )}
                   </div>
-                  <span className="font-semibold text-blue-900 ml-2 whitespace-nowrap">
-                    {formatCurrency(apt.totalAmount / 100)}
-                  </span>
-                </div>
-              ))}
-            </div>
-            <div className="border-t border-blue-200 pt-2 flex justify-between items-center text-sm">
-              <span className="font-semibold text-blue-800">{t("pos.total")}:</span>
-              <span className="font-bold text-blue-900 text-base">
-                {formatCurrency(selectedAppointments.reduce((sum, apt) => sum + apt.totalAmount / 100, 0))}
-              </span>
-            </div>
-          </div>
-        )}
-
-        {/* Client Selection */}
-        <div className="mb-4">
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            {t("pos.client_optional")}
-          </label>
-          {selectedClient && selectedAppointments.length === 0 ? (
-            <div className="flex items-center justify-between bg-gray-100 p-2 rounded">
-              <span>
-                {selectedClient.firstName} {selectedClient.lastName}
-              </span>
-              <button
-                onClick={() => setSelectedClient(null)}
-                className="text-red-600 text-sm"
-              >
-                {t("pos.remove")}
-              </button>
-            </div>
-          ) : selectedAppointments.length === 0 ? (
-            <button
-              onClick={() => setShowClientSearch(!showClientSearch)}
-              className="w-full text-left px-3 py-2 border rounded-lg text-gray-500"
-            >
-              {t("pos.add_client")}
-            </button>
-          ) : null}
-          {showClientSearch && (
-            <div className="mt-2">
-              <input
-                type="text"
-                placeholder={t("pos.search_client")}
-                value={clientSearch}
-                onChange={(e) => {
-                  setClientSearch(e.target.value);
-                  searchClients(e.target.value);
-                }}
-                className="w-full px-3 py-2 border rounded-lg"
-              />
-              {clients.length > 0 && (
-                <div className="mt-2 border rounded-lg max-h-32 overflow-y-auto">
-                  {clients.map((client) => (
-                    <button
-                      key={client.id}
-                      onClick={() => {
-                        setSelectedClient(client);
-                        setShowClientSearch(false);
-                        setClientSearch("");
-                      }}
-                      className="w-full text-left px-3 py-2 hover:bg-gray-100"
-                    >
-                      {client.firstName} {client.lastName}
-                      {client.phone && (
-                        <span className="text-gray-500">
-                          {" "}
-                          - {client.phone}
-                        </span>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-              {/* Cart Items */}
-              <div className="space-y-2 mb-4">
-                {cart.map((item, index) => (
-                  <div
-                    key={item._appointmentId ?? item.service.id}
-                    className="flex items-start justify-between border-b pb-2"
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setShowClientSearch(!showClientSearch)}
+                    className="w-full text-left px-3 py-2 border rounded-lg text-gray-500"
                   >
-                    <div className="flex-1">
-                      <div className="font-medium text-sm">
-                        {item.service.name}
+                    {t("pos.add_client")} · {t("pos.walk_in")}
+                  </button>
+                )}
+                {showClientSearch && !selectedClient && (
+                  <div className="mt-2">
+                    <input
+                      type="text"
+                      placeholder={t("pos.search_client")}
+                      value={clientSearch}
+                      onChange={(e) => {
+                        setClientSearch(e.target.value);
+                        searchClients(e.target.value);
+                      }}
+                      className="w-full px-3 py-2 border rounded-lg"
+                    />
+                    {clients.length > 0 && (
+                      <div className="mt-2 border rounded-lg max-h-32 overflow-y-auto">
+                        {clients.map((client) => (
+                          <button
+                            type="button"
+                            key={client.id}
+                            onClick={() => {
+                              setSelectedClient(client);
+                              setShowClientSearch(false);
+                              setClientSearch("");
+                            }}
+                            className="w-full text-left px-3 py-2 hover:bg-gray-100"
+                          >
+                            {client.firstName} {client.lastName}
+                            {client.phone && <span className="text-gray-500"> - {client.phone}</span>}
+                          </button>
+                        ))}
                       </div>
-                      <div className="text-xs text-gray-500">
-                        {formatCurrency(item.service.price)} × {item.quantity}
-                        {ticket.lines[index] && ticket.lines[index].netCents !== ticket.lines[index].grossCents && (
-                          <span className="ml-1 text-gray-700">
-                            = <span className="line-through">{formatEuros(ticket.lines[index].grossCents)}</span>{" "}
-                            <strong>{formatEuros(ticket.lines[index].netCents)}</strong>
-                          </span>
-                        )}
-                      </div>
-                      {canDiscount && ticket.lines[index] && (
-                        <DiscountEditor
-                          value={item.discount}
-                          baseCents={ticket.lines[index].grossCents}
-                          amountCents={ticket.lines[index].lineDiscountCents}
-                          scope="la línea"
-                          onChange={(d) => setLineDiscount(index, d)}
-                          disabled={processing}
-                        />
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() =>
-                          updateQuantity(item.service.id, item.quantity - 1)
-                        }
-                        className="w-6 h-6 rounded bg-gray-200 text-gray-600"
-                      >
-                        -
-                      </button>
-                      <span className="w-4 text-center">{item.quantity}</span>
-                      <button
-                        onClick={() =>
-                          updateQuantity(item.service.id, item.quantity + 1)
-                        }
-                        className="w-6 h-6 rounded bg-gray-200 text-gray-600"
-                      >
-                        +
-                      </button>
-                      <button
-                        onClick={() => removeFromCart(item.service.id)}
-                        className="text-red-600 text-sm ml-2"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  </div>
-                ))}
-                {cart.length === 0 && (
-                  <div className="text-center py-4 text-gray-500">
-                    {t("pos.cart_empty")}
+                    )}
                   </div>
                 )}
+              </div>
+
+              {/* Lines: keyed by what they sell, so each control changes only its own line. */}
+              <div className="space-y-2 mb-4">
+                {cart.map((item, index) => {
+                  const line = ticket.lines[index];
+                  return (
+                    <div key={item.key} className="flex items-start justify-between gap-2 border-b pb-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium text-sm break-words">
+                          {item.name}
+                          {item.kind === "appointment" && <span className="ml-1 text-xs text-purple-700">(cita)</span>}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {formatEuros(item.unitCents)} × {item.quantity}
+                          {item.kind === "appointment" && " · pendiente de cobro"}
+                          {line && line.netCents !== line.grossCents && (
+                            <span className="ml-1 text-gray-700">
+                              = <span className="line-through">{formatEuros(line.grossCents)}</span> <strong>{formatEuros(line.netCents)}</strong>
+                            </span>
+                          )}
+                        </div>
+                        {item.kind === "service" && isAdmin && professionals.length > 0 && (
+                          <select
+                            aria-label={`Quién hizo ${item.name}`}
+                            value={item.professionalId ?? ""}
+                            onChange={(e) => setCart((c) => setProfessional(c, item.key, e.target.value || undefined))}
+                            className="mt-1 w-full rounded border px-1 py-0.5 text-xs"
+                          >
+                            <option value="">Lo hizo: quien cobra</option>
+                            {professionals.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                Lo hizo: {p.firstName} {p.lastName}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        {canDiscount && line && (
+                          <DiscountEditor
+                            value={item.discount}
+                            baseCents={line.grossCents}
+                            amountCents={line.lineDiscountCents}
+                            scope="la línea"
+                            onChange={(d) => setLineDiscount(item.key, d)}
+                            disabled={processing}
+                          />
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {item.kind !== "appointment" && (
+                          <>
+                            <button
+                              type="button"
+                              aria-label={`Una unidad menos de ${item.name}`}
+                              onClick={() => setCart((c) => setQuantity(c, item.key, item.quantity - 1))}
+                              className="w-6 h-6 rounded bg-gray-200 text-gray-600"
+                            >
+                              −
+                            </button>
+                            <span className="w-5 text-center">{item.quantity}</span>
+                            <button
+                              type="button"
+                              aria-label={`Una unidad más de ${item.name}`}
+                              disabled={item.stock != null && item.quantity >= item.stock}
+                              onClick={() => setCart((c) => setQuantity(c, item.key, item.quantity + 1))}
+                              className="w-6 h-6 rounded bg-gray-200 text-gray-600 disabled:opacity-40"
+                            >
+                              +
+                            </button>
+                          </>
+                        )}
+                        <button
+                          type="button"
+                          aria-label={`Quitar ${item.name}`}
+                          onClick={() => setCart((c) => removeLine(c, item.key))}
+                          className="text-red-600 text-sm ml-1"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+                {giftCards.map((card) => (
+                  <div key={card.key} className="flex items-start justify-between gap-2 border-b pb-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium text-sm">Tarjeta regalo</div>
+                      <div className="text-xs text-gray-500">
+                        {formatEuros(card.amountCents)} · sin IVA
+                        {card.recipientName ? ` · para ${card.recipientName}` : ""}
+                        {card.recipientEmail ? ` · se envía a ${card.recipientEmail}` : ""}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label="Quitar la tarjeta regalo"
+                      onClick={() => setGiftCards((g) => g.filter((x) => x.key !== card.key))}
+                      className="text-red-600 text-sm"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+                {empty && <div className="text-center py-4 text-gray-500">{t("pos.cart_empty")}</div>}
               </div>
 
               {/* Loyalty reward */}
@@ -1053,11 +942,7 @@ export default function POSPage() {
                     Puntos: <strong>{loyalty.member.currentPoints}</strong>
                   </div>
                   {loyalty.rewards.some((r) => r.redeemable) ? (
-                    <select
-                      value={rewardId}
-                      onChange={(e) => setRewardId(e.target.value)}
-                      className="w-full rounded border px-2 py-1"
-                    >
+                    <select value={rewardId} onChange={(e) => setRewardId(e.target.value)} className="w-full rounded border px-2 py-1">
                       <option value="">No canjear puntos</option>
                       {loyalty.rewards
                         .filter((r) => r.redeemable)
@@ -1084,21 +969,17 @@ export default function POSPage() {
                     onChange={setOrderDiscount}
                     disabled={processing}
                   />
-                  {!isAdmin && (
-                    <div className="mt-1 text-xs text-gray-500">
-                      Puedes descontar hasta un {maxStaffDiscount} % por línea.
-                    </div>
-                  )}
+                  {!isAdmin && <div className="mt-1 text-xs text-gray-500">Puedes descontar hasta un {maxStaffDiscount} % por línea.</div>}
                 </div>
               )}
 
-              {/* Total */}
+              {/* Total: the server's */}
               <div className="border-t pt-4">
                 {ticket.discountCents > 0 && (
                   <>
                     <div className="flex justify-between text-sm text-gray-600">
                       <span>Subtotal</span>
-                      <span>{formatEuros(ticket.subtotalCents)}</span>
+                      <span>{formatEuros(ticket.subtotalCents + giftCardsCents)}</span>
                     </div>
                     <div className="flex justify-between text-sm text-rose-700">
                       <span>Descuentos</span>
@@ -1106,78 +987,58 @@ export default function POSPage() {
                     </div>
                   </>
                 )}
-                {rewardId && (
+                {quoteFresh && quote!.loyalty && (
                   <div className="flex justify-between text-sm text-amber-700">
-                    <span>Descuento por puntos</span>
-                    <span>−{formatEuros(loyaltyDiscountCents())}</span>
+                    <span>Descuento por puntos ({quote!.loyalty.rewardName})</span>
+                    <span>−{formatEuros(quote!.loyalty.discount)}</span>
                   </div>
                 )}
                 <div className="flex justify-between text-lg font-bold">
                   <span>{t("pos.total")}</span>
-                  <span>{formatEuros(amountDueCents())}</span>
+                  <span>{formatEuros(dueCents)}</span>
                 </div>
-                {issue && (
+                {quoteFresh && quote!.tax.cents > 0 && (
+                  <div className="flex justify-between text-xs text-gray-500">
+                    <span>{quote!.tax.note}</span>
+                    <span>{formatEuros(quote!.tax.cents)}</span>
+                  </div>
+                )}
+                {!empty && !quoteFresh && !quoteError && !issue && <div className="text-xs text-gray-400">Calculando el total…</div>}
+                {(issue || quoteError || invoiceProblem) && (
                   <div role="alert" className="mt-2 rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">
-                    {issue}
+                    {issue ?? quoteError ?? invoiceProblem}
                   </div>
                 )}
               </div>
 
-              {/* Payment Method Toggle */}
-              <div className="mt-4 mb-4">
-                <label className="block text-sm font-medium text-gray-500 mb-2">
-                  {t("pos.method")}
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => setSelectedPaymentMethod("cash")}
-                    className={`flex items-center justify-center gap-2 py-3 rounded-lg font-semibold transition-all ${
-                      selectedPaymentMethod === "cash"
-                        ? "bg-green-600 text-white shadow-md ring-2 ring-green-300"
-                        : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                    }`}
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
-                    </svg>
-                    {t("pos.cash")}
-                  </button>
-                  <button
-                    onClick={() => setSelectedPaymentMethod("card")}
-                    className={`flex items-center justify-center gap-2 py-3 rounded-lg font-semibold transition-all ${
-                      selectedPaymentMethod === "card"
-                        ? "bg-blue-600 text-white shadow-md ring-2 ring-blue-300"
-                        : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                    }`}
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-                    </svg>
-                    {t("pos.card")}
-                  </button>
+              {/* How she pays */}
+              {!empty && (
+                <div className="mt-4 mb-4">
+                  <TenderPanel
+                    dueCents={dueCents}
+                    rows={tenderRows}
+                    onChange={setTenderRows}
+                    canUseWallet={!!selectedClient}
+                    disabled={processing}
+                  />
+                  {tenderIssue && quoteFresh && <div className="mt-2 text-xs text-amber-700">{tenderIssue}</div>}
                 </div>
-              </div>
+              )}
 
-        {/* Checkout Button */}
-        <button
-          onClick={requestCheckout}
-          disabled={cart.length === 0 || processing || !!issue}
-          className={`w-full py-3 rounded-lg font-semibold ${
-            cart.length === 0 || processing || issue
-              ? "bg-gray-300 text-gray-500 cursor-not-allowed"
-              : selectedPaymentMethod === "cash"
-              ? "bg-green-600 text-white hover:bg-green-700"
-              : "bg-blue-600 text-white hover:bg-blue-700"
-          }`}
-        >
-          {processing
-            ? t("pos.processing")
-            : selectedAppointments.length > 0
-            ? `${t("pos.pay_full_amount")} (${selectedAppointments.length})`
-            : selectedPaymentMethod === "cash"
-            ? t("pos.pay_cash")
-            : t("pos.pay_card")}
-        </button>
+              <button
+                type="button"
+                onClick={requestCheckout}
+                disabled={checkoutBlocked}
+                className={`w-full py-3 rounded-lg font-semibold ${
+                  checkoutBlocked ? "bg-gray-300 text-gray-500 cursor-not-allowed" : "bg-green-600 text-white hover:bg-green-700"
+                }`}
+              >
+                {processing
+                  ? t("pos.processing")
+                  : empty
+                    ? t("pos.cart_empty")
+                    : `Cobrar ${formatEuros(dueCents)}`}
+              </button>
             </div>
           </div>
         </div>
@@ -1259,9 +1120,11 @@ export default function POSPage() {
                 <option value="bank_transfer">
                   {t("payments.payment_methods.bank_transfer")}
                 </option>
+                <option value="bizum">Bizum</option>
                 <option value="wallet">
                   {t("payments.payment_methods.wallet")}
                 </option>
+                <option value="gift_card">Tarjeta regalo</option>
               </select>
             </div>
 
@@ -1549,18 +1412,10 @@ export default function POSPage() {
                       {payment.description || "-"}
                     </td>
                     <td className="px-4 py-2 text-sm font-medium text-gray-900">
-                      {formatCurrency(payment.amount / 100)}
+                      {formatEuros(payment.amount)}
                     </td>
-                    <td className="px-4 py-2 text-sm text-gray-500 capitalize">
-                      {payment.method === "card"
-                        ? t("payments.payment_methods.card")
-                        : payment.method === "cash"
-                          ? t("payments.payment_methods.cash")
-                          : payment.method === "bank_transfer"
-                            ? t("payments.payment_methods.bank_transfer")
-                            : payment.method === "wallet"
-                              ? t("payments.payment_methods.wallet")
-                              : payment.method}
+                    <td className="px-4 py-2 text-sm text-gray-500">
+                      {methodLabel(payment.method)}
                     </td>
                     <td className="px-4 py-2">
                       <span
@@ -1685,12 +1540,12 @@ export default function POSPage() {
 
       <ConfirmDialog
         open={confirmingDiscount}
-        title={`¿Cobrar ${formatEuros(amountDueCents())} con un descuento de ${formatEuros(ticket.discountCents)}?`}
+        title={`¿Cobrar ${formatEuros(dueCents)} con un descuento de ${formatEuros(ticket.discountCents)}?`}
         description={
           <>
-            Subtotal {formatEuros(ticket.subtotalCents)}, descuento {formatEuros(ticket.discountCents)}.
-            {discountReasons.length > 0 && <> Motivo: {discountReasons.join(" · ")}.</>} El descuento queda
-            registrado a tu nombre.
+            Subtotal {formatEuros(ticket.subtotalCents + giftCardsCents)}, descuento {formatEuros(ticket.discountCents)}.
+            {discountReasons.length > 0 && <> Motivo: {discountReasons.join(" · ")}.</>} El descuento queda registrado a tu
+            nombre.
           </>
         }
         confirmLabel="Cobrar con descuento"
@@ -1703,11 +1558,52 @@ export default function POSPage() {
         }}
       />
 
-      <RefundPaymentDialog
-        payment={pendingVoid}
-        onClose={() => setPendingVoid(null)}
-        onRefunded={() => void afterRefund()}
+      <ConfirmDialog
+        open={!!quickSale}
+        title={quickSale ? `¿Venta rápida de ${formatEuros(quickSale.service.chargeCents)}?` : ""}
+        description={
+          quickSale ? (
+            <div className="space-y-2">
+              <p>
+                {quickSale.service.name} · {selectedClient ? `${selectedClient.firstName} ${selectedClient.lastName}` : t("pos.walk_in")}
+                . El ticket que estás preparando no cambia.
+              </p>
+              <label className="flex items-center gap-2 text-sm">
+                Forma de pago
+                <select
+                  value={quickSale.method}
+                  onChange={(e) => setQuickSale({ ...quickSale, method: e.target.value as TenderMethod })}
+                  className="rounded border px-2 py-1"
+                >
+                  {QUICK_METHODS.map((m) => (
+                    <option key={m} value={m}>
+                      {TENDER_LABELS[m]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          ) : null
+        }
+        confirmLabel="Cobrar"
+        cancelLabel="Cancelar"
+        loading={processing}
+        onCancel={() => setQuickSale(null)}
+        onConfirm={() => void processQuickSale()}
       />
+
+      {showGiftCardSale && (
+        <GiftCardSaleDialog
+          onAdd={(card) => setGiftCards((g) => [...g, { ...card, key: newSaleId() }])}
+          onClose={() => setShowGiftCardSale(false)}
+        />
+      )}
+
+      {receiptOf && (
+        <SaleReceipt saleId={receiptOf.saleId} clientEmail={receiptOf.email} canEmail={isAdmin} onClose={() => setReceiptOf(null)} />
+      )}
+
+      <RefundPaymentDialog payment={pendingVoid} onClose={() => setPendingVoid(null)} onRefunded={() => void afterRefund()} />
     </div>
   );
 }

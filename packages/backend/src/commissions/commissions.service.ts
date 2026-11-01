@@ -25,12 +25,59 @@ export interface CommissionSummary {
     commissionRate: number;
     commissionAmount: number;
     paid: boolean;
+    /** "sale": a service sold at the till without an appointment (PosSaleLine). */
+    source?: "appointment" | "sale";
   }[];
 }
+
+/**
+ * Commissions come from two places, on the same basis (the catalogue figure,
+ * cents: Appointment.totalAmount, or a sale line's commissionBaseCents --
+ * without the tax when the salon's prices are the base):
+ *   - appointments: completed and paid, the appointment's professional;
+ *   - services sold at the till without an appointment: the sale line names
+ *     the professional who did it (pos.service.ts) and keeps the rate and
+ *     amount worked out when it was sold.
+ */
+type SaleLineRow = {
+  id: string;
+  createdAt: Date;
+  description: string;
+  commissionBaseCents: number;
+  commissionRate: unknown;
+  commissionAmount: unknown;
+  commissionPaid: boolean;
+  professionalId: string | null;
+};
 
 @Injectable()
 export class CommissionsService {
   constructor(private prisma: PrismaService) {}
+
+  /** The till's walk-in service lines with a professional (none on a database without them). */
+  private async saleLines(where: Record<string, unknown>): Promise<SaleLineRow[]> {
+    const model = (this.prisma as any).posSaleLine;
+    if (!model?.findMany) return [];
+    return model.findMany({ where: { kind: "service", ...where }, orderBy: { createdAt: "desc" } });
+  }
+
+  private saleEntries(lines: SaleLineRow[], defaultRate: number): CommissionSummary["appointments"] {
+    return lines.map((l) => {
+      const rate = effectiveCommissionRate(l.commissionRate, defaultRate);
+      const amount = l.commissionBaseCents;
+      return {
+        id: l.id,
+        date: l.createdAt,
+        clientName: "Venta en caja",
+        serviceName: l.description,
+        amount,
+        commissionRate: rate,
+        commissionAmount: numberOrNull(l.commissionAmount) ?? (amount * rate) / 100,
+        paid: l.commissionPaid,
+        source: "sale" as const,
+      };
+    });
+  }
 
   /**
    * Calculate commission for an appointment
@@ -192,13 +239,20 @@ export class CommissionsService {
       };
     });
 
+    const sales = this.saleEntries(
+      await this.saleLines({ tenantId, professionalId, commissionPaid: false }),
+      defaultRate,
+    );
+    for (const s of sales) pendingCommission += s.commissionAmount;
+    const entries = [...appointmentDetails, ...sales];
+
     return {
       professionalId: professional.id,
       professionalName: `${professional.firstName} ${professional.lastName}`,
-      totalEarnings: appointmentDetails.reduce((sum, a) => sum + a.amount, 0),
+      totalEarnings: entries.reduce((sum, a) => sum + a.amount, 0),
       pendingCommission,
       paidCommission,
-      appointments: appointmentDetails,
+      appointments: entries,
     };
   }
 
@@ -255,8 +309,26 @@ export class CommissionsService {
       },
     });
 
+    // The walk-in services of the till, by the same filters (ids, sale dates).
+    let salesCount = 0;
+    const lineModel = (this.prisma as any).posSaleLine;
+    if (lineModel?.findMany) {
+      const lineWhere: any = { tenantId, professionalId, kind: "service", commissionPaid: false };
+      if (dto.appointmentIds && dto.appointmentIds.length > 0) lineWhere.id = { in: dto.appointmentIds };
+      if (dto.startDate || dto.endDate) {
+        lineWhere.createdAt = { ...(dto.startDate ? { gte: dto.startDate } : {}), ...(dto.endDate ? { lte: dto.endDate } : {}) };
+      }
+      const lines: SaleLineRow[] = await lineModel.findMany({ where: lineWhere });
+      for (const l of lines) totalAmount += numberOrNull(l.commissionAmount) ?? 0;
+      const paidLines = await lineModel.updateMany({
+        where: lineWhere,
+        data: { commissionPaid: true, commissionDate: new Date() },
+      });
+      salesCount = paidLines.count ?? 0;
+    }
+
     return {
-      count: result.count,
+      count: result.count + salesCount,
       totalAmount,
     };
   }
@@ -342,6 +414,13 @@ export class CommissionsService {
             paid: apt.commissionPaid,
           };
         });
+
+        const sales = this.saleEntries(
+          await this.saleLines({ tenantId, professionalId: professional.id, commissionPaid: false }),
+          defaultRate,
+        );
+        for (const s of sales) pendingCommission += s.commissionAmount;
+        appointmentDetails.push(...sales);
 
         const totalEarnings = appointmentDetails.reduce(
           (sum, a) => sum + a.amount,
@@ -456,6 +535,15 @@ export class CommissionsService {
         existing.totalSales += Number(apt.totalAmount);
         existing.commission += Number(apt.commissionAmount || 0);
         professionalMap.set(profId, existing);
+      }
+    }
+
+    // Walk-in services sold at the till in the period.
+    for (const line of await this.saleLines({ tenantId, createdAt: { gte: startDate, lte: endDate } })) {
+      const existing = line.professionalId ? professionalMap.get(line.professionalId) : undefined;
+      if (existing) {
+        existing.totalSales += line.commissionBaseCents;
+        existing.commission += numberOrNull(line.commissionAmount) ?? 0;
       }
     }
 

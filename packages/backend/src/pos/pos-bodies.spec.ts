@@ -9,6 +9,7 @@ import {
   UpdateProductDto,
 } from "./dto/pos.dto";
 import { bodyMetatype, bodyParser } from "../common/validation/validated-body.testing";
+import { saleTables, salonTenant } from "./pos-test-kit.testing";
 
 const uuid = (first: number) => `${first}f1c2a9e-8b7d-4c6e-9a5f-1b2c3d4e5f60`;
 
@@ -60,7 +61,11 @@ describe("POS bodies", () => {
     it("refuses bad lines and tenders", async () => {
       const line = { serviceId: uuid(3), quantity: 1 };
       const pay = [{ method: "cash", amount: 100 }];
-      await expect(parse({ items: [], payments: pay })).rejects.toBeDefined();
+      // A ticket may have no items (only a gift card sold): the service refuses an empty one.
+      await expect(parse({ items: [line], payments: [] })).rejects.toBeDefined();
+      await expect(parse({ items: [line], payments: pay, saleId: "not-a-uuid" })).rejects.toBeDefined();
+      await expect(parse({ items: [line], payments: pay, giftCards: [{ amountCents: 50 }] })).rejects.toBeDefined();
+      await expect(parse({ items: [line], payments: [{ method: "bizum", amount: 100 }] })).resolves.toBeDefined();
       await expect(parse({ items: [{ quantity: 1 }], payments: pay })).rejects.toBeDefined();
       await expect(parse({ items: [{ ...line, quantity: 0 }], payments: pay })).rejects.toBeDefined();
       await expect(parse({ items: [{ ...line, quantity: 1.5 }], payments: pay })).rejects.toBeDefined();
@@ -73,10 +78,11 @@ describe("POS bodies", () => {
     });
   });
 
-  it("POST /pos/quick-sale takes a service, cash or card, and a client", async () => {
+  it("POST /pos/quick-sale takes a service, cash, card, transfer or Bizum, a client and a sale id", async () => {
     const parse = bodyParser(PosController, "quickSale");
     const body = { serviceId: uuid(1), paymentMethod: "card", clientId: uuid(2) };
     expect(await parse({ ...body, amount: 1 })).toEqual(body);
+    expect(await parse({ ...body, paymentMethod: "bizum", saleId: uuid(3) })).toEqual({ ...body, paymentMethod: "bizum", saleId: uuid(3) });
     await expect(parse({ ...body, paymentMethod: "wallet" })).rejects.toBeDefined();
   });
 
@@ -136,7 +142,7 @@ describe("POS pricing", () => {
       payment: { create: jest.fn(async ({ data }: any) => ({ id: "p1", ...data })) },
       service: {
         findMany: jest.fn(async ({ where }: any) =>
-          [{ id: "svc1", name: "Corte", price: "40.00" }].filter((s) => where.id.in.includes(s.id)),
+          [{ id: "svc1", name: "Corte", price: "40.00", isActive: true }].filter((s) => where.id.in.includes(s.id)),
         ),
       },
       product: {
@@ -146,10 +152,17 @@ describe("POS pricing", () => {
             { id: "prod2", name: "Laca", price: "9.00", isActive: false },
           ].filter((p) => where.id.in.includes(p.id)),
         ),
+        updateMany: jest.fn(async () => ({ count: 1 })),
+        findFirst: jest.fn(async () => ({ quantity: 9, trackInventory: true })),
       },
+      inventoryTransaction: { create: jest.fn(async ({ data }: any) => data) },
       client: { findFirst: jest.fn(async ({ where }: any) => (where.id === "c1" ? { id: "c1" } : null)), create: jest.fn() },
+      tenant: { findUnique: jest.fn(async () => salonTenant()) },
+      professional: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+      ...saleTables(),
     };
-    const wallet: any = { deductFunds: jest.fn(), addFunds: jest.fn() };
+    prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
+    const wallet: any = { deductFunds: jest.fn(), addFunds: jest.fn(), debitIn: jest.fn() };
     return { service: new PosService(prisma, wallet), prisma, wallet };
   }
 
@@ -190,10 +203,10 @@ describe("POS pricing", () => {
     const { service } = pos();
     const sell = (items: any[]) =>
       service.processCheckout({ tenantId: "t1", items, payments: [{ method: "cash", amount: 99999 }] } as any);
-    await expect(sell([{ serviceId: "svc-other", quantity: 1 }])).rejects.toThrow(/Service not found/);
-    await expect(sell([{ productId: "prod-other", quantity: 1 }])).rejects.toThrow(/Product not found/);
-    await expect(sell([{ productId: "prod2", quantity: 1 }])).rejects.toThrow(/not available/);
-    await expect(sell([{ serviceId: "svc1", productId: "prod1", quantity: 1 }])).rejects.toThrow(/one service or one product/);
+    await expect(sell([{ serviceId: "svc-other", quantity: 1 }])).rejects.toThrow(/Servicio no encontrado/);
+    await expect(sell([{ productId: "prod-other", quantity: 1 }])).rejects.toThrow(/Producto no encontrado/);
+    await expect(sell([{ productId: "prod2", quantity: 1 }])).rejects.toThrow(/no está a la venta/);
+    await expect(sell([{ serviceId: "svc1", productId: "prod1", quantity: 1 }])).rejects.toThrow(/un servicio o un producto/);
   });
 
   it("refuses a client of another salon, and a wallet payment with no client", async () => {
@@ -201,10 +214,11 @@ describe("POS pricing", () => {
     const items = [{ serviceId: "svc1", quantity: 1 }];
     await expect(
       service.processCheckout({ tenantId: "t1", clientId: "c-other", items, payments: [{ method: "cash", amount: 4000 }] } as any),
-    ).rejects.toThrow(/Client not found/);
+    ).rejects.toThrow(/Clienta no encontrada/);
     await expect(
       service.processCheckout({ tenantId: "t1", items, payments: [{ method: "wallet", amount: 4000 }] } as any),
-    ).rejects.toThrow(/needs a client/);
+    ).rejects.toThrow(/elige a la clienta/);
     expect(wallet.deductFunds).not.toHaveBeenCalled();
+    expect(wallet.debitIn).not.toHaveBeenCalled();
   });
 });

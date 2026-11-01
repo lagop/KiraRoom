@@ -36,6 +36,7 @@ import { MARKETING_FIELD_ID, SYSTEM_CONSENT_PURPOSES } from "../../consent/marke
 export const CLIENT_REFERENCES: Readonly<Record<string, string>> = {
   "Appointment.clientId": "moved",
   "Payment.clientId": "moved",
+  "PosSale.clientId": "moved (her tickets at the till)",
   "Order.clientId": "moved",
   "ChatConversation.clientId": "moved",
   "Notification.clientId": "moved",
@@ -281,6 +282,7 @@ export class ClientMergeService {
     // History: rows that simply change owner.
     moved.appointments = (await tx.appointment.updateMany({ where: { tenantId, ...from }, data: to })).count;
     moved.payments = (await tx.payment.updateMany({ where: { tenantId, ...from }, data: to })).count;
+    await tx.posSale.updateMany({ where: { tenantId, ...from }, data: to });
     moved.orders = (await tx.order.updateMany({ where: { tenantId, ...from }, data: to })).count;
     moved.chatConversations = (await tx.chatConversation.updateMany({ where: { tenantId, ...from }, data: to })).count;
     moved.notifications = (await tx.notification.updateMany({ where: { tenantId, ...from }, data: to })).count;
