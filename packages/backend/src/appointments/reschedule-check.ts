@@ -34,6 +34,12 @@ import { timeOffBetween } from "../time-off/time-off-query";
  * their own appointments, and the services they do in a colleague's visit
  * (the rinse after a colour). A multi-service visit used to count as its
  * first service only, for its main professional only (visit-totals.ts).
+ *
+ * Busy also covers the cleanup after each visit ("tiempo de limpieza",
+ * Service.bufferTime, 0 = none): nothing may start inside it, and the
+ * cleanup of the appointment being booked or moved (cleanupMinutes) may not
+ * run into the next one. The visit has to end by closing time; its cleanup
+ * may run past it.
  */
 
 export interface RescheduleTarget {
@@ -46,6 +52,14 @@ export interface RescheduleTarget {
   /** HH:MM, the salon's clock. */
   time: string;
   durationMinutes: number;
+  /**
+   * The cleanup after it ("tiempo de limpieza", Service.bufferTime), when
+   * this is the service its visit ends with (visit-totals.ts plannedCleanup):
+   * it may not run into the professional's next appointment. Not part of
+   * the hours: the visit has to end by closing time, its cleanup may run
+   * past it.
+   */
+  cleanupMinutes?: number;
 }
 
 export type Busy = {
@@ -54,6 +68,8 @@ export type Busy = {
   clientName?: string | null;
   /** Minutes of the day, when known; else read from scheduledTime. */
   startMinutes?: number;
+  /** The cleanup after another visit, not the visit itself. */
+  cleanup?: boolean;
 };
 
 /**
@@ -89,6 +105,8 @@ export function rescheduleProblem(input: {
   /** "create" for a new appointment: only changes the wording. */
   action?: "move" | "create";
   skipHours?: boolean;
+  /** RescheduleTarget.cleanupMinutes: blocks the agenda after it, not the hours. */
+  cleanupMinutes?: number;
 }): string | null {
   const { startMinutes, durationMinutes } = input;
   const hours = !input.skipHours;
@@ -115,17 +133,30 @@ export function rescheduleProblem(input: {
   if (hours && salon && !fitsInShifts(startMinutes, durationMinutes, salon)) {
     return `Está fuera del horario del salón (${describeShifts(salon)}).`;
   }
+  // The professional is busy until the end of the visit plus its cleanup
+  // (cleanupMinutes): it may not start inside another visit or the cleanup
+  // after it, and its own cleanup may not run into the next visit.
   const end = startMinutes + durationMinutes;
-  const clash = input.others.find((o) => {
-    const s = o.startMinutes ?? minutesOf(o.scheduledTime);
+  const cleanup = Math.max(0, Math.round(input.cleanupMinutes ?? 0));
+  const startOf = (o: Busy) => o.startMinutes ?? minutesOf(o.scheduledTime);
+  const clashes = input.others.filter((o) => {
+    const s = startOf(o);
     if (s === null) return false;
-    return s < end && startMinutes < s + o.duration;
+    return s < end + cleanup && startMinutes < s + o.duration;
   });
-  if (clash) {
-    const who = clash.clientName ? ` con ${clash.clientName}` : "";
-    return `${input.professionalName} ya tiene una cita${who} a las ${clash.scheduledTime}.`;
+  if (clashes.length === 0) return null;
+  // The visit itself on top of another one says the most; then a cleanup.
+  const clash =
+    clashes.find((o) => !o.cleanup && startOf(o)! < end) ?? clashes.find((o) => !o.cleanup) ?? clashes[0];
+  const who = clash.clientName ? ` con ${clash.clientName}` : "";
+  if (clash.cleanup) {
+    const until = clock(Math.min(24 * 60 - 1, startOf(clash)! + clash.duration));
+    return `${input.professionalName} tiene tiempo de limpieza hasta las ${until} después de su cita${who}.`;
   }
-  return null;
+  if (startOf(clash)! >= end) {
+    return `${input.professionalName} ya tiene una cita${who} a las ${clash.scheduledTime}: no quedarían los ${cleanup} min de limpieza después de esta.`;
+  }
+  return `${input.professionalName} ya tiene una cita${who} a las ${clash.scheduledTime}.`;
 }
 
 const clock = clockOf;
@@ -164,6 +195,8 @@ export async function professionalBusyTime(
       scheduledTime: true,
       duration: true,
       client: { select: { firstName: true, lastName: true } },
+      // Its cleanup time (appointmentBusyBlocks); the rows' is in VISIT_ROW_SELECT.
+      service: { select: { bufferTime: true } },
       services: { select: VISIT_ROW_SELECT, orderBy: VISIT_ROW_ORDER as any },
     },
   });
@@ -175,6 +208,7 @@ export async function professionalBusyTime(
         startMinutes: b.startMinutes,
         duration: b.endMinutes - b.startMinutes,
         clientName: o.client ? `${o.client.firstName} ${o.client.lastName}`.trim() : null,
+        ...(b.cleanup ? { cleanup: true } : {}),
       })),
   );
 }
@@ -256,6 +290,7 @@ async function scheduleCheckInput(
   return {
     startMinutes,
     durationMinutes: target.durationMinutes,
+    cleanupMinutes: target.cleanupMinutes,
     professionalShifts: workingWindowsFor(professional.workingHours, noon),
     professionalName: professional.firstName,
     salonShifts: salonWindowsFor(tenant?.openingHours, noon),

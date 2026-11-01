@@ -319,3 +319,41 @@ describe("moving one service of a multi-service appointment (PUT /appointment-se
     expect(prisma.appointmentService.update).toHaveBeenCalled();
   });
 });
+
+describe("rescheduleProblem with cleanup time (Service.bufferTime)", () => {
+  const base = {
+    startMinutes: 10 * 60,
+    durationMinutes: 60,
+    professionalShifts: [{ startMinutes: 9 * 60, endMinutes: 11 * 60 }],
+    professionalName: "Ana",
+    others: [],
+    inPast: false,
+  };
+
+  it("cleanupMinutes 0 behaves exactly as without it", () => {
+    const next = [{ scheduledTime: "11:00", duration: 30 }];
+    expect(rescheduleProblem({ ...base, others: next, cleanupMinutes: 0 })).toBeNull();
+    expect(rescheduleProblem({ ...base, others: next })).toBeNull();
+  });
+
+  it("its own cleanup may not reach the next appointment", () => {
+    expect(
+      rescheduleProblem({ ...base, cleanupMinutes: 10, others: [{ scheduledTime: "11:05", duration: 30, clientName: "Lucía" }] }),
+    ).toBe("Ana ya tiene una cita con Lucía a las 11:05: no quedarían los 10 min de limpieza después de esta.");
+  });
+
+  it("it may not start inside another appointment's cleanup", () => {
+    expect(
+      rescheduleProblem({
+        ...base,
+        others: [{ scheduledTime: "09:45", startMinutes: 9 * 60 + 45, duration: 20, clientName: "Lucía", cleanup: true }],
+      }),
+    ).toBe("Ana tiene tiempo de limpieza hasta las 10:05 después de su cita con Lucía.");
+  });
+
+  it("the visit itself still has to fit the shift; only its cleanup may run past it", () => {
+    // Shift ends 11:00; 10:00–11:00 plus 15 minutes of cleanup is fine.
+    expect(rescheduleProblem({ ...base, cleanupMinutes: 15 })).toBeNull();
+    expect(rescheduleProblem({ ...base, durationMinutes: 75 })).toMatch(/fuera del horario/);
+  });
+});

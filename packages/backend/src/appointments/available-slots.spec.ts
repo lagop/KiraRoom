@@ -30,11 +30,13 @@ const SERVICE_ID = "svc-corte";
 function build({
   workingHours = CARLA_HOURS as unknown,
   openingHours = {} as unknown,
+  bufferTime = 0,
   appointments = [] as Array<{
     professionalId: string;
     scheduledTime: string;
     duration: number;
     status?: string;
+    service?: { bufferTime: number };
   }>,
 } = {}) {
   const prisma: any = {
@@ -53,7 +55,7 @@ function build({
     service: {
       findFirst: jest
         .fn()
-        .mockResolvedValue({ id: SERVICE_ID, tenantId: TENANT_ID, duration: 30 }),
+        .mockResolvedValue({ id: SERVICE_ID, tenantId: TENANT_ID, duration: 30, bufferTime }),
     },
     appointment: {
       findMany: jest.fn().mockResolvedValue(
@@ -256,5 +258,62 @@ describe("getAvailableSlots with no professional named", () => {
     );
 
     expect(slots.length).toBeGreaterThan(0);
+  });
+});
+
+describe("getAvailableSlots keeps the cleanup time after each appointment free", () => {
+  // Monday 2026-09-28: Carla works 09:00–18:00; the service lasts 30 minutes.
+  const monday = "2026-09-28";
+
+  it("0 minutes (every service after the migration) offers exactly what it always did", async () => {
+    const appointments = [
+      { professionalId: PRO_ID, scheduledTime: "10:00", duration: 30, service: { bufferTime: 0 } },
+    ];
+    expect(await times(monday, { appointments, bufferTime: 0 })).toEqual(
+      await times(monday, { appointments: [{ professionalId: PRO_ID, scheduledTime: "10:00", duration: 30 }] }),
+    );
+    const slots = await times(monday, { appointments });
+    expect(slots).toContain("09:30");
+    expect(slots).toContain("10:30");
+  });
+
+  it("nothing starts inside the cleanup after an existing appointment", async () => {
+    // 10:00–10:30 plus 15 minutes of cleanup: 10:30 is taken, 11:00 is free.
+    const slots = await times(monday, {
+      appointments: [{ professionalId: PRO_ID, scheduledTime: "10:00", duration: 30, service: { bufferTime: 15 } }],
+    });
+    expect(slots).not.toContain("10:00");
+    expect(slots).not.toContain("10:30");
+    expect(slots).toContain("09:30");
+    expect(slots).toContain("11:00");
+  });
+
+  it("a booking's own cleanup may not run into the next appointment", async () => {
+    // The service needs 30 min + 15 of cleanup: 09:30 would leave Carla
+    // tidying up when the 10:00 client sits down.
+    const slots = await times(monday, {
+      bufferTime: 15,
+      appointments: [{ professionalId: PRO_ID, scheduledTime: "10:00", duration: 30 }],
+    });
+    expect(slots).not.toContain("09:30");
+    expect(slots).toContain("09:00");
+    expect(slots).toContain("10:30");
+  });
+
+  it("the appointment has to end by closing time; its cleanup may run past it", async () => {
+    // 17:30–18:00 is still offered on an 18:00 close with 15 minutes of cleanup.
+    const slots = await times(monday, { bufferTime: 15 });
+    expect(slots[slots.length - 1]).toBe("17:30");
+  });
+
+  it("the any-professional path applies it too", async () => {
+    const { service } = build({
+      bufferTime: 15,
+      appointments: [{ professionalId: PRO_ID, scheduledTime: "10:00", duration: 30 }],
+    });
+    const slots = await service.getAvailableSlots(TENANT_ID, new Date(`${monday}T00:00:00.000Z`), undefined, SERVICE_ID, 30);
+    const free = slots.map((s: { time: string }) => s.time);
+    expect(free).not.toContain("09:30");
+    expect(free).toContain("10:30");
   });
 });

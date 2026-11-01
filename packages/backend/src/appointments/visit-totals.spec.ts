@@ -1,5 +1,10 @@
 import {
   appointmentBusyBlocks,
+  clashesWithBlock,
+  lastServiceIndex,
+  minutesUntilFree,
+  overlapsBlock,
+  plannedCleanup,
   clockOf,
   endClock,
   layoutVisit,
@@ -244,5 +249,100 @@ describe("who is busy when", () => {
     expect(appointmentBusyBlocks({ professionalId: "ana", scheduledTime: "09:30", duration: 45 }, TZ)).toEqual([
       { professionalId: "ana", startMinutes: 570, endMinutes: 615 },
     ]);
+  });
+});
+
+describe("cleanup time after a visit (Service.bufferTime)", () => {
+  const visit = {
+    professionalId: "ana",
+    scheduledDate: new Date("2026-11-02T00:00:00.000Z"),
+    scheduledTime: "10:00",
+    duration: 105,
+    services: [
+      row({ id: "colour", professionalId: "ana", service: { duration: 60, bufferTime: 20 } }),
+      row({ id: "setting", professionalId: null, type: "processing", service: { duration: 30, bufferTime: 20 } }),
+      row({ id: "rinse", professionalId: "bea", service: { duration: 15, bufferTime: 10 } }),
+    ],
+  };
+
+  it("0, or no bufferTime read at all, adds nothing: the blocks are what they always were", () => {
+    expect(
+      appointmentBusyBlocks({ professionalId: "ana", scheduledTime: "09:30", duration: 45, service: { bufferTime: 0 } }, TZ),
+    ).toEqual([{ professionalId: "ana", startMinutes: 570, endMinutes: 615 }]);
+    expect(appointmentBusyBlocks({ professionalId: "ana", scheduledTime: "09:30", duration: 45 }, TZ)).toEqual([
+      { professionalId: "ana", startMinutes: 570, endMinutes: 615 },
+    ]);
+  });
+
+  it("one service: its cleanup runs from its end, for its professional", () => {
+    expect(
+      appointmentBusyBlocks({ professionalId: "ana", scheduledTime: "09:30", duration: 45, service: { bufferTime: 15 } }, TZ),
+    ).toEqual([
+      { professionalId: "ana", startMinutes: 570, endMinutes: 615 },
+      { professionalId: "ana", startMinutes: 615, endMinutes: 630, cleanup: true },
+    ]);
+  });
+
+  it("several services: once, after the visit, with the cleanup of the service it ends with, for whoever does it", () => {
+    expect(appointmentBusyBlocks(visit, TZ)).toEqual([
+      { professionalId: "ana", startMinutes: 600, endMinutes: 660 },
+      { professionalId: "bea", startMinutes: 690, endMinutes: 705 },
+      { professionalId: "bea", startMinutes: 705, endMinutes: 715, cleanup: true },
+    ]);
+  });
+
+  it("add-ons past the services: the cleanup follows them, for the appointment's professional", () => {
+    expect(appointmentBusyBlocks({ ...visit, duration: 120 }, TZ)).toContainEqual({
+      professionalId: "ana",
+      startMinutes: 720,
+      endMinutes: 730,
+      cleanup: true,
+    });
+  });
+
+  it("a visit's processing row does not carry the cleanup", () => {
+    const schedule = [
+      { id: "a", professionalId: "ana", start: at("10:00"), end: at("11:00"), isParallel: false },
+      { id: "b", professionalId: "ana", start: at("11:00"), end: at("11:30"), isParallel: false },
+    ];
+    expect(lastServiceIndex(schedule, [{ type: "active" }, { type: "processing" }])).toBe(0);
+    expect(
+      plannedCleanup(schedule, [
+        { type: "active", service: { bufferTime: 15 } },
+        { type: "processing", service: { bufferTime: 40 } },
+      ]),
+    ).toEqual({ index: 0, minutes: 15 });
+    expect(plannedCleanup([], [], { bufferTime: 25 })).toEqual({ index: -1, minutes: 25 });
+  });
+
+  it("clashesWithBlock: nothing starts inside the cleanup, and a booking's own cleanup may not reach the next visit", () => {
+    const visit = { professionalId: "ana", startMinutes: 600, endMinutes: 660 };
+    const cleanup = { professionalId: "ana", startMinutes: 660, endMinutes: 675, cleanup: true };
+    // 11:00 is inside the 15-minute cleanup after the 10:00-11:00 visit.
+    expect(clashesWithBlock(cleanup, 660, 30)).toBe(true);
+    expect(clashesWithBlock(cleanup, 675, 30)).toBe(false);
+    // 09:00-09:45 with 15 min of cleanup runs into the 10:00 visit; with 0, it fits.
+    expect(clashesWithBlock(visit, 540, 45, 15)).toBe(false);
+    expect(clashesWithBlock(visit, 540, 50, 15)).toBe(true);
+    expect(clashesWithBlock(visit, 540, 60, 0)).toBe(false);
+    // Without cleanup it is overlapsBlock: back to back is fine.
+    expect(clashesWithBlock(visit, 660, 30)).toBe(overlapsBlock(visit, 660, 30));
+  });
+
+  it("minutesUntilFree: the appointment's length plus the cleanup of its last live service", () => {
+    expect(minutesUntilFree({ duration: 60, service: { bufferTime: 10 } }, 30)).toBe(70);
+    expect(
+      minutesUntilFree(
+        {
+          duration: 90,
+          services: [
+            { type: "active", status: "pending", service: { bufferTime: 5 } },
+            { type: "active", status: "cancelled", service: { bufferTime: 40 } },
+          ],
+        },
+        30,
+      ),
+    ).toBe(95);
+    expect(minutesUntilFree({}, 30)).toBe(30);
   });
 });
