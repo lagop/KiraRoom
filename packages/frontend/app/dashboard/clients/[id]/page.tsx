@@ -321,7 +321,7 @@ export default function ClientDetailPage({
                 className="flex flex-col gap-2 py-2 text-sm sm:flex-row sm:items-center sm:justify-between"
               >
                 <span>{r.serviceId ? serviceName(r.serviceId) : "—"}</span>
-                <span className="text-xs text-gray-500">{r.status}</span>
+                <span className="text-xs text-gray-500">{t(`rebooking.status.${r.status}`)}</span>
                 <span className="text-xs text-gray-400">
                   {r.sentAt
                     ? new Date(r.sentAt).toLocaleString("es-ES")

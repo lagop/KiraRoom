@@ -7,40 +7,41 @@
  *  - NIE: X/Y/Z + 7 digits + 1 letter (foreign residents)
  *    Substituted: X→0, Y→1, Z→2 then treated as NIF.
  *  - CIF: letter + 7 digits + letter/digit (legal entities)
- *    Control character is computed from a weighted-sum checksum
- *    per Real Decreto 338/1990. The control character is either a
- *    letter or a digit; the choice depends on the type of the
- *    starting letter.
+ *    Control character is computed from a weighted-sum checksum.
+ *    Whether it is a letter, a digit or either depends on the
+ *    starting letter (see CIF_CONTROL_TYPE).
  *
  * Returns { valid, type?, normalized?, error? }.
  */
 
 const NIF_LETTERS = "TRWAGMYFPDXBNJZSQVHLCKE";
 
-// Per RD 338/1990: starting letter → set of allowed control characters.
-// Reference: https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/ort/info_general/modelos/AyudaNIF.pdf
-//   A, B, E, H → digit only
-//   K, P, Q, S, N, W → letter or digit
-//   All others → letter only
+// Starting letter → which control characters it takes (Orden EHA/451/2008;
+// the AEAT's "Ayuda NIF"):
+//   P, Q, R, S, N, W    → letter only (public bodies, non-resident entities)
+//   A, B, E, H          → digit only (S.A., S.L., comunidades de bienes / de propietarios)
+//   C, D, F, G, J, U, V → letter or digit
+// C, D, F, G, J, U and V used to be "letter only", which refused the many
+// asociaciones (G), cooperativas (F) and sociedades civiles (J) whose CIF
+// ends in a digit.
 const CIF_CONTROL_TYPE: Record<string, "digit" | "letter" | "both"> = {
   A: "digit",
   B: "digit",
   E: "digit",
   H: "digit",
-  K: "letter",
   P: "letter",
   Q: "letter",
+  R: "letter",
   S: "letter",
   N: "letter",
   W: "letter",
-  C: "letter",
-  D: "letter",
-  F: "letter",
-  G: "letter",
-  J: "letter",
-  R: "letter",
-  U: "letter",
-  V: "letter",
+  C: "both",
+  D: "both",
+  F: "both",
+  G: "both",
+  J: "both",
+  U: "both",
+  V: "both",
 };
 
 const CIF_CONTROL_LETTERS = "JABCDEFGHI";
@@ -63,20 +64,16 @@ function computeNifLetter(number: number): string {
 }
 
 /**
- * Compute the CIF checksum control character.
+ * The CIF checksum as a digit 0-9.
  *
- * Algorithm (RD 338/1990):
- *   1. For each of the 7 middle digits at position p (0-indexed), the
- *      position-weight is: even p → 2, odd p → 1.
- *   2. Multiply the digit by the weight; if the result is two-digit
- *      (i.e. ≥ 10) sum its digits.
- *   3. Sum all weighted values.
- *   4. Round the sum up to the next multiple of 10.
- *   5. The control character is `10 - (sum mod 10) mod 10` as a digit.
- *      If the starting letter's table entry allows letters, convert to
- *      letter via CIF_CONTROL_LETTERS[digit].
+ *   1. Each of the 7 middle digits at position p (0-indexed) is weighted:
+ *      even p → 2, odd p → 1.
+ *   2. A two-digit product (≥ 10) counts as the sum of its digits.
+ *   3. Sum them all.
+ *   4. The control digit is `(10 - sum mod 10) mod 10`; as a letter it is
+ *      CIF_CONTROL_LETTERS[digit] (J for 0, A for 1 ... I for 9).
  */
-function computeCifControl(letter: string, body: string): string {
+function computeCifControlDigit(body: string): number {
   let sum = 0;
   for (let i = 0; i < 7; i++) {
     const digit = parseInt(body[i], 10);
@@ -84,13 +81,7 @@ function computeCifControl(letter: string, body: string): string {
     const product = digit * weight;
     sum += product < 10 ? product : Math.floor(product / 10) + (product % 10);
   }
-  const rounded = Math.ceil(sum / 10) * 10;
-  const controlDigit = (10 - (rounded % 10)) % 10;
-  const allowed = CIF_CONTROL_TYPE[letter] ?? "letter";
-  if (allowed === "digit") {
-    return String(controlDigit);
-  }
-  return CIF_CONTROL_LETTERS[controlDigit];
+  return (10 - (sum % 10)) % 10;
 }
 
 export function validateNif(raw: string): NifValidation {
@@ -124,35 +115,18 @@ export function validateNif(raw: string): NifValidation {
 
   // CIF: 1 letter + 7 digits + 1 letter-or-digit
   if (/^[A-HJNP-SUVW]\d{7}[0-9A-J]$/.test(s)) {
-    const startLetter = s[0];
-    const body = s.slice(1, 8);
-    const providedControl = s[8];
-    const expectedControl = computeCifControl(startLetter, body);
-
-    // Some CIFs use a digit where the table says letter (and vice versa)
-    // because the AEAT pre-validates on data entry. Be lenient: accept if
-    // either the letter or the digit matches the table for the starting
-    // letter. The strict check is only for the *expected* control type.
-    const allowed = CIF_CONTROL_TYPE[startLetter] ?? "letter";
-    const isDigit = /\d/.test(providedControl);
-    const isLetter = /[A-Z]/.test(providedControl);
-
-    // Reject if the provided control character is of the wrong type.
-    if (allowed === "digit" && isLetter) {
+    const allowed = CIF_CONTROL_TYPE[s[0]];
+    const provided = s[8];
+    const providedIsDigit = /\d/.test(provided);
+    // A letter where the starting letter takes only a digit, or the other
+    // way round.
+    if ((allowed === "digit" && !providedIsDigit) || (allowed === "letter" && providedIsDigit)) {
       return { valid: false, error: "cif-control-type" };
     }
-    if (allowed === "letter" && isDigit) {
-      return { valid: false, error: "cif-control-type" };
-    }
-    // Now verify the actual value.
-    if (providedControl !== expectedControl) {
-      // Letter vs digit: try the alternative representation.
-      const altDigit = String(
-        CIF_CONTROL_LETTERS.indexOf(providedControl),
-      );
-      if (altDigit !== expectedControl) {
-        return { valid: false, error: "cif-checksum" };
-      }
+    const control = computeCifControlDigit(s.slice(1, 8));
+    const expected = providedIsDigit ? String(control) : CIF_CONTROL_LETTERS[control];
+    if (provided !== expected) {
+      return { valid: false, error: "cif-checksum" };
     }
     return { valid: true, type: "cif", normalized: s };
   }

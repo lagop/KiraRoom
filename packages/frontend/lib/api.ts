@@ -540,6 +540,25 @@ export interface AppointmentService {
   professional?: Professional;
 }
 
+/** GET /clients?page=…: one page of the panel's client list. */
+export interface ClientListParams {
+  page: number;
+  pageSize?: number;
+  /** Name or email (accents ignored), or phone digits. */
+  q?: string;
+  status?: Client["status"];
+  sort?: "firstName" | "lastName" | "email" | "status" | "createdAt";
+  dir?: "asc" | "desc";
+}
+
+export interface ClientPage {
+  data: Client[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
 export interface Client {
   id: string;
   createdAt: string;
@@ -1487,6 +1506,7 @@ export interface ApiClientInterface {
   markAppointmentNoShow(id: string): Promise<Appointment>;
   deleteAppointment(id: string): Promise<void>;
   getClients(tenantId?: string): Promise<Client[]>;
+  getClientsPage(params: ClientListParams): Promise<ClientPage>;
   filterClients(filters: {
     gender?: string;
     minAge?: number;
@@ -2501,6 +2521,17 @@ class ApiClient implements ApiClientInterface {
   async getClients(tenantId?: string): Promise<Client[]> {
     const params = tenantId ? `?tenantId=${tenantId}` : "";
     return this.request<Client[]>(`/clients${params}`);
+  }
+
+  /** One page of the clients list, searched and filtered by the server. */
+  async getClientsPage(params: ClientListParams): Promise<ClientPage> {
+    const query = new URLSearchParams({ page: String(params.page) });
+    if (params.pageSize) query.set("pageSize", String(params.pageSize));
+    if (params.q?.trim()) query.set("q", params.q.trim());
+    if (params.status) query.set("status", params.status);
+    if (params.sort) query.set("sort", params.sort);
+    if (params.dir) query.set("dir", params.dir);
+    return this.request<ClientPage>(`/clients?${query.toString()}`);
   }
 
   async filterClients(filters: {

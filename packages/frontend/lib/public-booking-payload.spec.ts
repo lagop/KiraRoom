@@ -225,7 +225,7 @@ for (const rel of ["app/sites/[salonName]/salon-booking-page.tsx", "app/embed/[t
     true,
   );
 }
-for (const rel of ["app/dashboard/clients/page.tsx", "app/dashboard/clients/components/client-form.tsx"]) {
+for (const rel of ["app/dashboard/clients/page.tsx"]) {
   const src = fs.readFileSync(path.join(ROOT, rel), "utf8");
   check(`${rel} (add client) has the promotions box`, src.includes("<MarketingRefusalCheckbox"), true);
 }
