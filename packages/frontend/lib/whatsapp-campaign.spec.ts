@@ -10,6 +10,8 @@ import {
   bodyProblem,
   campaignActions,
   campaignLabel,
+  campaignStats,
+  insertName,
   previewBody,
   rejectionReason,
 } from "./whatsapp-campaign";
@@ -85,7 +87,43 @@ check("footer fits Meta's 60 characters", CAMPAIGN_FOOTER.length <= 60);
 console.log("campaignActions");
 check("draft: edit and submit", campaignActions(base).edit && campaignActions(base).submit && !campaignActions(base).cancel);
 const sending = campaignActions({ ...base, status: "sending" });
-check("sending: only cancel", sending.cancel && !sending.edit && !sending.remove);
+check("sending: only cancel", sending.cancel && !sending.edit && !sending.remove && !sending.resume);
+const pausedActions = campaignActions({ ...base, status: "paused" });
+check("paused: resume (Reanudar), cancel or delete", pausedActions.resume && pausedActions.cancel && pausedActions.remove && !pausedActions.edit);
+check("only a paused campaign resumes", !campaignActions({ ...base, status: "completed" }).resume);
+
+console.log("M9: paused and sent-with-errors labels");
+const paused = label({ status: "paused", lastError: "Meta no puede cobrar los mensajes." });
+check("paused says so with the reason", paused.text === "Pausada" && paused.detail === "Pausada: Meta no puede cobrar los mensajes.", paused);
+check("paused without a stored reason still explains", (label({ status: "paused" }).detail ?? "").startsWith("Pausada: "));
+const withErrors = label({ status: "completed", totalRecipients: 10, failed: 3, completedAt: "2026-10-05T10:00:00Z" });
+check("some failed: 'Enviada con errores'", withErrors.text === "Enviada con errores" && withErrors.tone === "amber", withErrors);
+check("…saying how many", (withErrors.detail ?? "").includes("3 de 10 no se pudieron enviar"), withErrors);
+check("one failed: singular", (label({ status: "completed", totalRecipients: 4, failed: 1 }).detail ?? "").includes("1 de 4 no se pudo enviar"));
+check("none failed: 'Enviada'", label({ status: "completed", totalRecipients: 10, sent: 10 }).text === "Enviada");
+
+console.log("M10: counts line");
+check("nothing before sending", campaignStats({ ...base, status: "scheduled", totalRecipients: 5 }) === null);
+const stats = campaignStats({ ...base, status: "paused", totalRecipients: 10, sent: 4, delivered: 3, read: 1, failed: 0, optedOut: 1, pending: 5 });
+check("paused: counts and what is still pending", stats === "10 destinatarios · 4 enviados · 3 entregados · 1 leídos · 0 fallidos · 1 bajas · 5 pendientes", stats);
+check("completed: counts, no pending", !(campaignStats({ ...base, status: "completed", totalRecipients: 2, sent: 2 }) ?? "").includes("pendientes"));
+
+console.log("B2: insertName");
+const mid = insertName("Hola, este mes 20 % en mechas.", 4);
+check("inserts at the cursor", mid.body === "Hola {{nombre}}, este mes 20 % en mechas.", mid);
+check("cursor goes after the name", mid.cursor === "Hola {{nombre}}".length, mid);
+const midWord = insertName("Te esperamos este mes", 12);
+check("spaces around the name inside a sentence", midWord.body === "Te esperamos {{nombre}} este mes", midWord);
+const atEnd = insertName("Este mes 20 % en mechas.", "Este mes 20 % en mechas.".length);
+check("cursor at the end: greets at the start instead", atEnd.body === "Hola {{nombre}}, Este mes 20 % en mechas.", atEnd);
+check("…and the result is valid for Meta", bodyProblem(atEnd.body) === null, bodyProblem(atEnd.body));
+const trailing = insertName("Vuelve pronto  ", 13);
+check("only spaces after the cursor counts as the end", trailing.body.startsWith("Hola {{nombre}}, ") && bodyProblem(trailing.body) === null, trailing);
+check("empty message gets the greeting", insertName("", 0).body === "Hola {{nombre}}, ");
+check("cursor at the very start greets too", insertName("Vuelve pronto.", 0).body === "Hola {{nombre}}, Vuelve pronto.");
+check("an existing 'Hola' is merged, not doubled", insertName("Hola, vuelve pronto.", 20).body === "Hola {{nombre}}, vuelve pronto.");
+check("a text that already has the name is left alone", insertName("Hola {{nombre}}, ya", 3).body === "Hola {{nombre}}, ya");
+check("never ends with the name", bodyProblem(insertName("Gracias por venir", 17).body) === null);
 
 console.log(`\n=== Summary ===\nPass: ${pass}, Fail: ${fail}`);
 if (fail > 0) process.exit(1);

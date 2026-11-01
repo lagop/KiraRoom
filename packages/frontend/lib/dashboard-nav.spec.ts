@@ -59,6 +59,14 @@ console.log("current page");
   check("the requests page opens Equipo y servicios", activeGroup(nav, "/dashboard/solicitudes-ausencia") === "team");
 }
 
+console.log("plan badges");
+{
+  const pro = links(DASHBOARD_NAV).filter((l) => l.pro).map((l) => l.id);
+  // Not in Esencial (PLAN_MATRIX, backend subscriptions.service.ts): the menu says so.
+  check("Promociones and Fidelización show the Pro badge", pro.includes("promotions") && pro.includes("loyalty"), pro);
+  check("gift cards keep theirs", pro.includes("gift-cards"), pro);
+}
+
 console.log("every link has its translation and its page");
 {
   const messages = ["es", "en"].map((lang) => JSON.parse(fs.readFileSync(path.join(__dirname, "../messages", `${lang}.json`), "utf8")));

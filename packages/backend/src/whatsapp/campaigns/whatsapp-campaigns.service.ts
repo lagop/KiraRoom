@@ -12,6 +12,7 @@ import {
   templateNameFor,
   withinSendingHours,
 } from "./campaign-template";
+import { DISCONNECTED_REASON, TOKEN_EXPIRED_REASON, accountLevelReason } from "./meta-account-errors";
 
 export interface CampaignInput {
   name: string;
@@ -66,12 +67,31 @@ export class WhatsAppCampaignsService {
 
   // ─── Panel ────────────────────────────────────────────────────────────
 
-  list(tenantId: string) {
-    return this.prisma.whatsAppCampaign.findMany({
+  /**
+   * The salon's campaigns with their counts worked out now from the
+   * recipients: Meta's delivered/read statuses keep arriving for days after
+   * the last message went out, so counts stored when sending finished went
+   * stale at once.
+   */
+  async list(tenantId: string) {
+    const campaigns = await this.prisma.whatsAppCampaign.findMany({
       where: { tenantId },
       orderBy: { createdAt: "desc" },
       take: 100,
     });
+    if (campaigns.length === 0) return campaigns;
+    const groups = await this.prisma.whatsAppCampaignRecipient.groupBy({
+      by: ["campaignId", "status"],
+      where: { campaignId: { in: campaigns.map((c) => c.id) } },
+      _count: { _all: true },
+    });
+    const byCampaign = new Map<string, Record<string, number>>();
+    for (const g of groups) {
+      const row = byCampaign.get(g.campaignId) ?? {};
+      row[g.status] = g._count._all;
+      byCampaign.set(g.campaignId, row);
+    }
+    return campaigns.map((c) => ({ ...c, ...countsFrom(byCampaign.get(c.id) ?? {}) }));
   }
 
   async get(tenantId: string, id: string) {
@@ -83,7 +103,7 @@ export class WhatsAppCampaignsService {
     });
     const byStatus: Record<string, number> = {};
     for (const g of groups) byStatus[g.status] = g._count._all;
-    return { ...campaign, byStatus };
+    return { ...campaign, ...countsFrom(byStatus), byStatus };
   }
 
   async create(tenantId: string, userId: string, input: CampaignInput) {
@@ -125,15 +145,19 @@ export class WhatsAppCampaignsService {
       throw new ConflictException("La campaña se está enviando: cancélala primero.");
     }
     await this.prisma.whatsAppCampaign.delete({ where: { id } });
+    // Its template would otherwise stay on the salon's WhatsApp Business
+    // account for good (one per campaign, and per resubmission).
+    await this.dropMetaTemplate(tenantId, campaign.templateId, "campaign deleted");
     return { deleted: true };
   }
 
-  /** Stops a scheduled or sending campaign; what was sent stays sent. */
+  /** Stops a scheduled, sending or paused campaign; what was sent stays sent. */
   async cancel(tenantId: string, id: string) {
     const campaign = await this.find(tenantId, id);
     const cancellable: WhatsAppCampaignStatus[] = [
       WhatsAppCampaignStatus.scheduled,
       WhatsAppCampaignStatus.sending,
+      WhatsAppCampaignStatus.paused,
     ];
     if (!cancellable.includes(campaign.status)) {
       throw new ConflictException("Esta campaña no está programada ni enviándose.");
@@ -142,6 +166,56 @@ export class WhatsAppCampaignsService {
       where: { id },
       data: { status: WhatsAppCampaignStatus.cancelled, completedAt: new Date() },
     });
+  }
+
+  /**
+   * "Reanudar": a campaign paused by an account-level Meta error goes on
+   * sending to the clients not yet reached. Checks first what can be checked
+   * (connection, token expiry, the template's status at Meta); a payment
+   * problem cannot be, so if it is still there the next message pauses the
+   * campaign again, and that client stays pending.
+   */
+  async resume(tenantId: string, id: string) {
+    const campaign = await this.find(tenantId, id);
+    if (campaign.status !== WhatsAppCampaignStatus.paused) {
+      throw new ConflictException("Esta campaña no está en pausa.");
+    }
+    const account = await this.accountProblem(tenantId, new Date());
+    if (account === "disconnected") {
+      throw new ConflictException("El WhatsApp del salón no está conectado: conéctalo en Ajustes → WhatsApp antes de reanudar.");
+    }
+    if (account === "expired") {
+      throw new ConflictException(
+        "El acceso a tu cuenta de WhatsApp Business ha caducado: vuelve a conectar el WhatsApp en Ajustes → WhatsApp antes de reanudar.",
+      );
+    }
+    let review: { status: string; reason?: string } | null;
+    try {
+      review = await this.templates.templateReview(tenantId, campaign.templateId);
+    } catch (err) {
+      throw new ConflictException(
+        `No se ha podido comprobar la campaña con Meta (${(err as Error).message}). Si el acceso ha caducado, vuelve a conectar el WhatsApp en Ajustes → WhatsApp.`,
+      );
+    }
+    if (!review) {
+      throw new ConflictException("La plantilla de esta campaña ya no está en tu cuenta de WhatsApp Business: crea la campaña de nuevo.");
+    }
+    if (review.status !== "APPROVED") {
+      await this.prisma.whatsAppCampaign.update({ where: { id }, data: { templateStatus: review.status } });
+      throw new ConflictException(
+        review.status === "PAUSED"
+          ? "Meta mantiene en pausa la plantilla de esta campaña. Vuelve a intentarlo más tarde."
+          : review.status === "DISABLED"
+            ? "Meta ha desactivado la plantilla de esta campaña: no se puede reanudar. Crea una campaña nueva con otro texto."
+            : `Meta tiene la plantilla en estado ${review.status}: todavía no se puede reanudar.`,
+      );
+    }
+    const resumed = await this.prisma.whatsAppCampaign.updateMany({
+      where: { id, tenantId, status: WhatsAppCampaignStatus.paused },
+      data: { status: WhatsAppCampaignStatus.sending, lastError: null, templateStatus: "APPROVED" },
+    });
+    if (resumed.count === 0) throw new ConflictException("Esta campaña no está en pausa.");
+    return this.get(tenantId, id);
   }
 
   /** Who would receive a campaign with this filter, now. */
@@ -185,7 +259,7 @@ export class WhatsAppCampaignsService {
           : `Meta no ha aceptado el mensaje: ${result.error}`,
       );
     }
-    return this.prisma.whatsAppCampaign.update({
+    const updated = await this.prisma.whatsAppCampaign.update({
       where: { id },
       data: {
         templateId: name,
@@ -196,6 +270,11 @@ export class WhatsAppCampaignsService {
         status: WhatsAppCampaignStatus.scheduled,
       },
     });
+    // The rejected template this one replaces is of no further use.
+    if (campaign.templateId && campaign.templateId !== name) {
+      await this.dropMetaTemplate(tenantId, campaign.templateId, "replaced by a new submission");
+    }
+    return updated;
   }
 
   // ─── Dispatcher ───────────────────────────────────────────────────────
@@ -317,8 +396,16 @@ export class WhatsAppCampaignsService {
         continue;
       }
 
+      // Known before sending anything: a disconnected number or an expired
+      // token would only fail every message of the batch.
+      const account = await this.accountProblem(campaign.tenantId, now);
+      if (account) {
+        await this.pause(campaign.id, account === "expired" ? TOKEN_EXPIRED_REASON : DISCONNECTED_REASON);
+        continue;
+      }
+
       // Consent is checked again per batch: a client may have answered BAJA
-      // to another campaign or withdrawn in their account since the start.
+      // to another campaign or withdrawn at the salon since the start.
       const clientIds = pending.map((r) => r.clientId).filter((id): id is string => !!id);
       const [accepted, clients] = await Promise.all([
         clientsWhoAcceptedWhatsAppMarketing(this.prisma, campaign.tenantId, clientIds),
@@ -330,6 +417,12 @@ export class WhatsAppCampaignsService {
       const byId = new Map(clients.map((c) => [c.id, c]));
 
       for (const recipient of pending) {
+        // Cancelled (or paused) from the panel while this batch runs: stop
+        // here, not 50 messages later.
+        if (!(await this.stillSending(campaign.id))) {
+          this.logger.log(`WhatsApp campaign ${campaign.id}: no longer sending, batch stopped`);
+          break;
+        }
         const client = recipient.clientId ? byId.get(recipient.clientId) : undefined;
         if (!client || !accepted.has(client.id) || whatsappOff(client.communicationPreferences)) {
           await this.prisma.whatsAppCampaignRecipient.update({
@@ -355,15 +448,12 @@ export class WhatsAppCampaignsService {
           });
           continue;
         }
-        if (result.reason === "not_connected") {
-          await this.prisma.whatsAppCampaign.update({
-            where: { id: campaign.id },
-            data: {
-              status: WhatsAppCampaignStatus.failed,
-              completedAt: new Date(),
-              lastError: "El WhatsApp del salón se desconectó durante el envío.",
-            },
-          });
+        // About the salon's account or the template, not this client: every
+        // other message would fail the same way. Paused, and this client and
+        // the rest stay pending for "Reanudar".
+        const accountReason = accountLevelReason(result.reason);
+        if (accountReason) {
+          await this.pause(campaign.id, accountReason, result.reason);
           break;
         }
         if (result.reason && RATE_LIMIT_CODES.has(result.reason)) {
@@ -381,28 +471,54 @@ export class WhatsAppCampaignsService {
 
   // ─── Internals ────────────────────────────────────────────────────────
 
+  /** Nobody left pending. The counts are worked out when read (list/get), not here. */
   private async finish(campaignId: string) {
-    const groups = await this.prisma.whatsAppCampaignRecipient.groupBy({
-      by: ["status"],
-      where: { campaignId },
-      _count: { _all: true },
-    });
-    const count = (s: WhatsAppRecipientStatus) => groups.find((g) => g.status === s)?._count._all ?? 0;
     await this.prisma.whatsAppCampaign.updateMany({
       where: { id: campaignId, status: WhatsAppCampaignStatus.sending },
-      data: {
-        status: WhatsAppCampaignStatus.completed,
-        completedAt: new Date(),
-        sent:
-          count(WhatsAppRecipientStatus.sent) +
-          count(WhatsAppRecipientStatus.delivered) +
-          count(WhatsAppRecipientStatus.read),
-        delivered: count(WhatsAppRecipientStatus.delivered) + count(WhatsAppRecipientStatus.read),
-        read: count(WhatsAppRecipientStatus.read),
-        failed: count(WhatsAppRecipientStatus.failed),
-        optedOut: count(WhatsAppRecipientStatus.opted_out),
-      },
+      data: { status: WhatsAppCampaignStatus.completed, completedAt: new Date() },
     });
+  }
+
+  /** Stops a sending campaign for an account-level problem; the pending recipients stay pending. */
+  private async pause(campaignId: string, reason: string, code?: string) {
+    const paused = await this.prisma.whatsAppCampaign.updateMany({
+      where: { id: campaignId, status: WhatsAppCampaignStatus.sending },
+      data: { status: WhatsAppCampaignStatus.paused, lastError: reason },
+    });
+    if (paused.count > 0) {
+      this.logger.warn(`WhatsApp campaign ${campaignId}: paused (${code ?? "account check"})`);
+    }
+  }
+
+  /** Whether the campaign is still sending, read now (it may have been cancelled mid-batch). */
+  private async stillSending(campaignId: string): Promise<boolean> {
+    const row = await this.prisma.whatsAppCampaign.findUnique({
+      where: { id: campaignId },
+      select: { status: true },
+    });
+    return row?.status === WhatsAppCampaignStatus.sending;
+  }
+
+  /** What is wrong with the salon's WhatsApp connection that is known without asking Meta. */
+  private async accountProblem(tenantId: string, now: Date): Promise<"disconnected" | "expired" | null> {
+    const conn = await this.prisma.whatsAppConnection.findUnique({
+      where: { tenantId },
+      select: { isActive: true, phoneNumberId: true, tokenExpiresAt: true },
+    });
+    if (!conn?.isActive || !conn.phoneNumberId) return "disconnected";
+    if (conn.tokenExpiresAt && conn.tokenExpiresAt.getTime() <= now.getTime()) return "expired";
+    return null;
+  }
+
+  /** Deletes a campaign's template from Meta; a failure is logged, never thrown. */
+  private async dropMetaTemplate(tenantId: string, name: string | null | undefined, why: string) {
+    if (!name) return;
+    const result = await this.templates
+      .deleteTemplate(tenantId, name)
+      .catch((err: Error) => ({ deleted: false, error: err.message }));
+    if (!result.deleted) {
+      this.logger.warn(`WhatsApp template ${name} of tenant ${tenantId} not deleted from Meta (${why}): ${result.error ?? "unknown"}`);
+    }
   }
 
   /** The clients among these who may receive WhatsApp promotions now. */
@@ -436,6 +552,24 @@ export class WhatsAppCampaignsService {
 /** The client turned WhatsApp off as a channel (or answered BAJA). */
 function whatsappOff(prefs: unknown): boolean {
   return (prefs as { whatsapp?: unknown } | null)?.whatsapp === false;
+}
+
+/**
+ * A campaign's counts from its recipients by status. A message read was also
+ * delivered and sent, so each count includes the later ones.
+ */
+export function countsFrom(byStatus: Record<string, number>) {
+  const n = (s: WhatsAppRecipientStatus) => byStatus[s] ?? 0;
+  const read = n(WhatsAppRecipientStatus.read);
+  const delivered = n(WhatsAppRecipientStatus.delivered) + read;
+  return {
+    sent: n(WhatsAppRecipientStatus.sent) + delivered,
+    delivered,
+    read,
+    failed: n(WhatsAppRecipientStatus.failed),
+    optedOut: n(WhatsAppRecipientStatus.opted_out),
+    pending: n(WhatsAppRecipientStatus.pending),
+  };
 }
 
 function segmentOf(input: Partial<CampaignInput>): Prisma.InputJsonValue {
