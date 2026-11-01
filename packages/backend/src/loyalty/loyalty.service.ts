@@ -578,6 +578,53 @@ export class LoyaltyService {
       actorId?: string | null;
     },
   ): Promise<{ discountCents: number; pointsSpent: number; rewardName: string; redemptionId: string }> {
+    const { program, member, reward, discountCents } = await this.checkRedemption(tenantId, args);
+    await this.applyChange(tenantId, program.id, member.id, args.clientId as string, {
+      type: "redeem",
+      points: -reward.pointsCost,
+      source: "pos_sale",
+      sourceId: args.saleId,
+      description: `Canje: ${reward.name}`,
+      metadata: { rewardId: reward.id, discountCents },
+      actorId: args.actorId,
+      shortfall: "strict",
+    });
+    const redemption = await this.prisma.loyaltyRedemption.create({
+      data: {
+        memberId: member.id,
+        rewardId: reward.id,
+        pointsSpent: reward.pointsCost,
+        valueReceived: discountCents,
+        status: "completed",
+        usedAt: new Date(),
+        appointmentId: args.appointmentId ?? null,
+        posSaleId: args.saleId,
+      },
+    });
+    await this.prisma.loyaltyReward.update({
+      where: { id: reward.id },
+      data: { currentRedemptions: { increment: 1 } },
+    });
+    return { discountCents, pointsSpent: reward.pointsCost, rewardName: reward.name, redemptionId: redemption.id };
+  }
+
+  /**
+   * What a reward would take off a ticket, checked like redeemAtSale but
+   * spending nothing: the till's quote (POST /pos/quote).
+   */
+  async previewSaleDiscount(
+    tenantId: string,
+    args: { clientId?: string | null; rewardId: string; items: SaleItem[]; subtotalCents: number },
+  ): Promise<{ discountCents: number; pointsSpent: number; rewardName: string }> {
+    const { reward, discountCents } = await this.checkRedemption(tenantId, args);
+    return { discountCents, pointsSpent: reward.pointsCost, rewardName: reward.name };
+  }
+
+  /** Throws when the client cannot use the reward now; else what it takes off. */
+  private async checkRedemption(
+    tenantId: string,
+    args: { clientId?: string | null; rewardId: string; items: SaleItem[]; subtotalCents: number },
+  ) {
     if (!args.clientId) throw new BadRequestException("Elige el cliente para canjear sus puntos");
     const program = await this.activeProgram(tenantId);
     if (!program) throw new BadRequestException("El programa de fidelización no está activo");
@@ -606,34 +653,7 @@ export class LoyaltyService {
       );
     }
     const discountCents = this.discountFor(reward, args.items, args.subtotalCents);
-
-    await this.applyChange(tenantId, program.id, member.id, args.clientId, {
-      type: "redeem",
-      points: -reward.pointsCost,
-      source: "pos_sale",
-      sourceId: args.saleId,
-      description: `Canje: ${reward.name}`,
-      metadata: { rewardId: reward.id, discountCents },
-      actorId: args.actorId,
-      shortfall: "strict",
-    });
-    const redemption = await this.prisma.loyaltyRedemption.create({
-      data: {
-        memberId: member.id,
-        rewardId: reward.id,
-        pointsSpent: reward.pointsCost,
-        valueReceived: discountCents,
-        status: "completed",
-        usedAt: new Date(),
-        appointmentId: args.appointmentId ?? null,
-        posSaleId: args.saleId,
-      },
-    });
-    await this.prisma.loyaltyReward.update({
-      where: { id: reward.id },
-      data: { currentRedemptions: { increment: 1 } },
-    });
-    return { discountCents, pointsSpent: reward.pointsCost, rewardName: reward.name, redemptionId: redemption.id };
+    return { program, member, reward, discountCents };
   }
 
   /** Gives back the points spent on a sale (it failed, or was refunded). */

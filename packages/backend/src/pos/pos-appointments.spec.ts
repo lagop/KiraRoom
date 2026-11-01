@@ -1,6 +1,7 @@
 import { ConflictException, ForbiddenException } from "@nestjs/common";
 import { PosService } from "./pos.service";
 import { splitTicket } from "../payments/appointment-payment";
+import { saleTables, salonTenant } from "./pos-test-kit.testing";
 
 /**
  * Charging an appointment at the till ("cobrar") took two calls: the sale
@@ -22,7 +23,7 @@ const CATALOGUE = {
     { id: "svc1", name: "Corte", price: 40 },
     { id: "svc2", name: "Tinte", price: 25 },
   ],
-  products: [{ id: "prod1", name: "Champú", price: 12, isActive: true }],
+  products: [{ id: "prod1", name: "Champú", price: 12, isActive: true, trackInventory: false }],
 };
 
 function apt(id: string, over: Row = {}): Row {
@@ -43,7 +44,10 @@ function apt(id: string, over: Row = {}): Row {
 
 function till(appointments: Row[], opts: { loyalty?: Row; failUpdate?: boolean } = {}) {
   const committed = { payments: [] as Row[], appointments: new Map(appointments.map((a) => [a.id, { ...a }])) };
+  const sales = saleTables();
   const db = (pending: { payments: Row[]; updates: [string, Row][] }) => ({
+    ...sales,
+    product: { updateMany: jest.fn(async () => ({ count: 0 })), findFirst: jest.fn(async () => ({ trackInventory: false })) },
     payment: {
       create: jest.fn(async ({ data }: any) => {
         const row = { id: `pay${committed.payments.length + pending.payments.length + 1}`, ...data };
@@ -75,7 +79,12 @@ function till(appointments: Row[], opts: { loyalty?: Row; failUpdate?: boolean }
         [...committed.appointments.values()].filter((a) => where.id.in.includes(a.id) && a.tenantId === where.tenantId),
       ),
     },
-    professional: { findFirst: jest.fn(async ({ where }: any) => (where.userId === "u-me" ? { id: "p-me" } : null)) },
+    professional: {
+      findFirst: jest.fn(async ({ where }: any) => (where.userId === "u-me" ? { id: "p-me" } : null)),
+      findMany: jest.fn(async () => []),
+    },
+    tenant: { findUnique: jest.fn(async () => salonTenant()) },
+    ...sales,
     // The salon's catalogue: lines are priced from here, never from the body.
     service: {
       findMany: jest.fn(async ({ where }: any) =>
@@ -107,7 +116,11 @@ function till(appointments: Row[], opts: { loyalty?: Row; failUpdate?: boolean }
     settleAppointment: jest.fn(async () => ({ awarded: 0 })),
     ...opts.loyalty,
   };
-  const wallet: any = { deductFunds: jest.fn(async () => ({})), addFunds: jest.fn(async () => ({})) };
+  const wallet: any = {
+    deductFunds: jest.fn(async () => ({})),
+    addFunds: jest.fn(async () => ({})),
+    debitIn: jest.fn(async () => ({})),
+  };
   const service = new PosService(prisma, wallet, loyalty);
   return { service, prisma, loyalty, wallet, committed };
 }
@@ -222,7 +235,7 @@ describe("POS: charging an appointment", () => {
         payments: [{ method: "cash", amount: 8000 }],
         actor: OWNER,
       } as any),
-    ).rejects.toThrow(/not on this ticket/);
+    ).rejects.toThrow(/no está en este ticket/);
   });
 
   it("takes the client's loyalty reward off the appointment: the rest pays it in full", async () => {
@@ -270,7 +283,7 @@ describe("POS: charging an appointment", () => {
       expect(err.getResponse()).toMatchObject({ code: "APPOINTMENT_NOT_CHARGEABLE", appointmentId: "a2" });
       expect(err.message).toContain(words);
       expect(t.loyalty.redeemAtSale).not.toHaveBeenCalled();
-      expect(t.wallet.deductFunds).not.toHaveBeenCalled();
+      expect(t.wallet.debitIn).not.toHaveBeenCalled();
       expect(t.committed.payments).toHaveLength(0);
     }
   });
@@ -314,7 +327,7 @@ describe("POS: charging an appointment", () => {
     expect(t.committed.appointments.get("a1")).toMatchObject({ paymentStatus: "paid" });
   });
 
-  it("when another till charged it first, nothing is recorded and the points and wallet money go back", async () => {
+  it("when another till charged it first, nothing is recorded and the points go back (the wallet with the transaction)", async () => {
     const t = till([apt("a1")], { failUpdate: true });
     await expect(
       t.service.processCheckout({
@@ -329,7 +342,10 @@ describe("POS: charging an appointment", () => {
     ).rejects.toMatchObject({ response: expect.objectContaining({ code: "APPOINTMENT_PAYMENT_CHANGED" }) });
     expect(t.committed.payments).toHaveLength(0);
     expect(t.loyalty.cancelSaleRedemption).toHaveBeenCalledTimes(1);
-    expect(t.wallet.addFunds).toHaveBeenCalledWith("t1", "c1", 3000, expect.any(String));
+    // The wallet was charged inside the sale's transaction, which rolled back:
+    // nothing to give back by hand any more.
+    expect(t.wallet.debitIn).toHaveBeenCalledWith(expect.anything(), "t1", "c1", 3000, expect.any(String), "pos_sale", expect.any(String));
+    expect(t.wallet.addFunds).not.toHaveBeenCalled();
   });
 });
 

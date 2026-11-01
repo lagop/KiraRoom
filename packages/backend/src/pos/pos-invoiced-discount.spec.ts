@@ -5,6 +5,7 @@ import { InvoiceService } from "../invoices/invoices.service";
 import { InvoiceCalculator } from "../invoices/invoice-calculator.service";
 import { invoiceStore } from "../invoices/invoice-store.testing";
 import { CommissionsService } from "../commissions/commissions.service";
+import { saleTables } from "./pos-test-kit.testing";
 
 /**
  * A discount given at the till to an appointment whose invoice is already
@@ -51,8 +52,14 @@ async function setup(opts: { pricesIncludeTax?: boolean; maxStaff?: number; with
   const prisma: any = store.prisma;
   Object.assign(prisma, {
     tenant: {
-      findUnique: jest.fn(async () => ({ fiscalMode: "none", fiscalSettings, maxStaffDiscountPercent: opts.maxStaff ?? 0 })),
+      findUnique: jest.fn(async () => ({
+        fiscalMode: "none",
+        fiscalSettings,
+        maxStaffDiscountPercent: opts.maxStaff ?? 0,
+        timezone: "Europe/Madrid",
+      })),
     },
+    ...saleTables(),
     appointment: {
       findMany: jest.fn(async ({ where }: any) =>
         [...appointments.values()].filter((a) => where.id.in.includes(a.id) && a.tenantId === where.tenantId).map((a) => ({ ...a })),
@@ -71,7 +78,10 @@ async function setup(opts: { pricesIncludeTax?: boolean; maxStaff?: number; with
       }),
       update: jest.fn(async ({ where, data }: any) => Object.assign(appointments.get(where.id)!, data)),
     },
-    professional: { findFirst: jest.fn(async ({ where }: any) => (where.userId === "u-me" ? { id: "p-me" } : null)) },
+    professional: {
+      findFirst: jest.fn(async ({ where }: any) => (where.userId === "u-me" ? { id: "p-me" } : null)),
+      findMany: jest.fn(async () => []),
+    },
     service: { findMany: jest.fn(async () => []) },
     product: { findMany: jest.fn(async () => []) },
     client: { findFirst: jest.fn(async ({ where }: any) => ({ id: where.id })) },
@@ -174,10 +184,11 @@ describe("a till discount on an appointment already invoiced", () => {
     expect(commission).toEqual({ commissionRate: 20, commissionAmount: 720 });
   });
 
-  it("with the tax on top: 10,00 off the base is 10,00 + 2,10 credited", async () => {
+  it("with the tax on top: the till works in money, 12,10 off is 10,00 + 2,10 credited", async () => {
     const t = await setup({ pricesIncludeTax: false });
     expect(t.original.totalCents).toBe(4840);
-    await t.checkout({ type: "fixed", value: 1000 }, 3000);
+    // The visit costs 48,40 at the till (its invoice total); 12,10 off leaves 36,30.
+    await t.checkout({ type: "fixed", value: 1210 }, 3630);
     const [rect] = t.rectificativas();
     expect(rect).toMatchObject({ subtotalCents: -1000, totalCents: -1210 });
     expect(rect.lines[0]).toMatchObject({ taxIncluded: false, taxCents: -210, totalCents: -1210 });
@@ -253,9 +264,10 @@ describe("a till discount on an appointment already invoiced", () => {
     const t = await setup();
     const check = t.invoices.assertCreditable.bind(t.invoices);
     jest.spyOn(t.invoices, "assertCreditable").mockImplementationOnce(async (...args) => {
-      await check(...args);
+      const credited = await check(...args);
       // Someone credits 38,00 right after the check.
       await t.invoices.rectifyByAmountIn(t.prisma, "t1", t.original.id, 3800, "otra caja");
+      return credited;
     });
     const err = await t.checkout({ type: "percentage", value: 10 }, 3600).catch((e) => e);
     expect(err).toBeInstanceOf(ConflictException);

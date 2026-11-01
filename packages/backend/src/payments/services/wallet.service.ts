@@ -152,7 +152,25 @@ export class WalletService {
     referenceType?: string,
     referenceId?: string,
   ) {
-    return this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction((tx) =>
+      this.debitIn(tx, tenantId, clientId, amount, description, referenceType, referenceId),
+    );
+  }
+
+  /**
+   * Money out of the wallet inside the caller's transaction: a till sale
+   * paid with the wallet commits, or rolls back, with the sale.
+   */
+  async debitIn(
+    tx: WalletDb,
+    tenantId: string,
+    clientId: string,
+    amount: number,
+    description?: string,
+    referenceType?: string,
+    referenceId?: string,
+  ) {
+    {
       const wallet = await this.walletIn(tx, tenantId, clientId);
       const { count } = await tx.clientWallet.updateMany({
         where: { id: wallet.id, balance: { gte: amount } },
@@ -177,7 +195,7 @@ export class WalletService {
         },
       });
       return { wallet: updated, transaction };
-    });
+    }
   }
 
 

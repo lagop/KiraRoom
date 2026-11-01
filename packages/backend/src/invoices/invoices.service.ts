@@ -112,6 +112,12 @@ export interface SimplifiedSaleInvoiceInput {
   clientId?: string;
   /** Defaults to now; the salon's calendar day of it is the issue date. */
   issueDate?: Date;
+  /**
+   * A full invoice (factura completa) instead: the salon's default series,
+   * no 3.000 EUR cap, and the client must have a NIF (her name and NIF go on
+   * it). For a sale over SIMPLIFIED_INVOICE_MAX_CENTS.
+   */
+  full?: boolean;
 }
 
 export interface SimplifiedSaleInvoice extends IssuedInvoice {
@@ -454,8 +460,14 @@ export class InvoiceService {
       select: { id: true, fiscalMode: true, series: true, number: true },
     });
     if (existing) return { ...existing, created: false };
+    if (input.full && !input.clientId) {
+      throw new BadRequestException("Una factura completa necesita la clienta con su NIF.");
+    }
 
-    let recipient: Pick<CreateInvoiceInput, "recipientType" | "recipientId" | "recipientName" | "recipientTaxId"> = {
+    let recipient: Pick<
+      CreateInvoiceInput,
+      "recipientType" | "recipientId" | "recipientName" | "recipientTaxId" | "recipientAddress"
+    > = {
       recipientType: "tenant",
       recipientName: "Consumidor final",
     };
@@ -465,6 +477,11 @@ export class InvoiceService {
         select: { id: true, firstName: true, lastName: true, taxId: true },
       });
       if (!client) throw new BadRequestException("La clienta de la venta no es de este salón.");
+      if (input.full && !client.taxId?.trim()) {
+        throw new BadRequestException(
+          "Para una factura completa la clienta tiene que tener su NIF en la ficha.",
+        );
+      }
       recipient = {
         recipientType: "client",
         recipientId: client.id,
@@ -475,18 +492,21 @@ export class InvoiceService {
     const paymentIds = (input.paymentIds ?? []).filter(Boolean);
     const invoiceInput: CreateInvoiceInput = {
       tenantId,
-      series: SIMPLIFIED_SERIES,
+      // A full invoice: the salon's own series (prepare() reads its defaultSeries).
+      series: input.full ? undefined : SIMPLIFIED_SERIES,
       issueDate: input.issueDate,
       ...recipient,
       lines: input.lines,
       taxIncludedFromSalon: true,
-      notes: paymentIds.length
+      notes: input.full
+        ? `Factura de la venta ${saleId}${paymentIds.length ? ` (pagos: ${paymentIds.join(", ")})` : ""}`
+        : paymentIds.length
         ? `Factura simplificada de la venta ${saleId} (pagos: ${paymentIds.join(", ")})`
         : `Factura simplificada de la venta ${saleId}`,
       source: { type: POS_SALE_SOURCE, id: saleId },
     };
     const prepared = await this.prepare(invoiceInput, tx);
-    if (prepared.computation.totalCents > SIMPLIFIED_INVOICE_MAX_CENTS) {
+    if (!input.full && prepared.computation.totalCents > SIMPLIFIED_INVOICE_MAX_CENTS) {
       throw new BadRequestException(
         "Una factura simplificada no puede pasar de 3.000,00 € (impuestos incluidos): emite una factura completa.",
       );
@@ -647,9 +667,11 @@ export class InvoiceService {
    * than is left to credit), without issuing anything or locking: a check
    * before a sale is written. rectifyByAmountIn checks again under the lock.
    */
-  async assertCreditable(tenantId: string, originalInvoiceId: string, amountCents: number): Promise<void> {
+  async assertCreditable(tenantId: string, originalInvoiceId: string, amountCents: number): Promise<number> {
     const original = await this.rectifiable(this.prisma, tenantId, originalInvoiceId);
-    amountCreditLines(original.lines, amountCents, await this.creditContext(this.prisma, original));
+    const lines = amountCreditLines(original.lines, amountCents, await this.creditContext(this.prisma, original));
+    // What the rectificativa would credit, in money (tax included): its lines' totals are negative.
+    return -lines.reduce((sum, l) => sum + (l.fixed?.totalCents ?? this.calculator.compute([l]).totalCents), 0);
   }
 
   private async rectifyIn(

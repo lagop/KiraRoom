@@ -46,9 +46,11 @@ import { PaymentFiltersDto, PaymentsListQueryDto } from "./payments-query";
  *
  * - owner / admin: every payment of the salon; only they refund, see the
  *   summary or move wallet money.
- * - staff: only the payments of their own appointments. A staff user with
- *   no professional record gets a 403: they used to get every payment of
- *   the salon (the professional filter was simply left out).
+ * - staff: only the payments of their own appointments and the sales they
+ *   recorded at the till (list, today, one payment). A staff user with no
+ *   professional record sees only what they recorded (it used to be every
+ *   payment of the salon: the professional filter was simply left out); the
+ *   other routes still answer them 403.
  *
  * Removed (no page used them, and each could rewrite the till's history):
  * PATCH /payments/:id/status (any status, any time, completing the
@@ -90,14 +92,27 @@ export class PaymentsController {
     return professional.id;
   }
 
+  /**
+   * What a team member sees of the till's sales (owner decision 2026-11-01):
+   * null for owner/admin (everything); for staff, the sales they recorded
+   * themselves plus the payments of their own appointments. A staff user
+   * with no professional record sees only what they recorded.
+   */
+  private async salesScope(req: any): Promise<{ professionalId: string | null; recordedById: string } | null> {
+    if (req.user.role !== "staff") return null;
+    const professional = await this.professionalsService.getProfessionalByUserId(req.user.id, req.user.tenantId);
+    return { professionalId: professional?.id ?? null, recordedById: req.user.id };
+  }
+
   // ============ PAYMENTS ============
 
   @Get()
   @Roles(...SALON_TEAM)
-  @ApiOperation({ summary: "The salon's payments (staff: their appointments')" })
+  @ApiOperation({ summary: "The salon's payments (staff: their appointments' and the sales they recorded)" })
   async getPayments(@Req() req: any, @Query() query: PaymentsListQueryDto) {
-    const professionalId = await this.staffScope(req);
-    return this.paymentsService.getPayments(req.user.tenantId, professionalId, {
+    const scope = await this.salesScope(req);
+    return this.paymentsService.getPayments(req.user.tenantId, scope?.professionalId ?? null, {
+      recordedById: scope?.recordedById ?? null,
       page: query.page ?? 1,
       limit: query.limit ?? 20,
       status: query.status,
@@ -114,8 +129,12 @@ export class PaymentsController {
   @Roles(...SALON_TEAM)
   @ApiOperation({ summary: "Today's payments (the salon's day) for the till" })
   async getTodayPayments(@Req() req: any) {
-    const professionalId = await this.staffScope(req);
-    return this.paymentsService.getTodayPayments(req.user.tenantId, professionalId);
+    const scope = await this.salesScope(req);
+    return this.paymentsService.getTodayPayments(
+      req.user.tenantId,
+      scope?.professionalId ?? null,
+      scope?.recordedById ?? null,
+    );
   }
 
   @Get("stats/summary")
@@ -158,8 +177,13 @@ export class PaymentsController {
   @Roles(...SALON_TEAM)
   @ApiOperation({ summary: "Get payment by ID" })
   async getPayment(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
-    const professionalId = await this.staffScope(req);
-    return this.paymentsService.getPaymentById(req.user.tenantId, id, professionalId);
+    const scope = await this.salesScope(req);
+    return this.paymentsService.getPaymentById(
+      req.user.tenantId,
+      id,
+      scope?.professionalId ?? null,
+      scope?.recordedById ?? null,
+    );
   }
 
   @Delete(":id")

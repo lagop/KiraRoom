@@ -19,6 +19,7 @@ import { NotificationsModule } from "../notifications/notifications.module";
 import { ProfessionalsModule } from "../professionals/professionals.module";
 import { LoyaltyModule } from "../loyalty/loyalty.module";
 import { PlatformModule } from "../platform/platform.module";
+import { GiftCardsModule } from "../gift-cards/gift-cards.module";
 
 @Module({
   imports: [
@@ -26,6 +27,8 @@ import { PlatformModule } from "../platform/platform.module";
     ProfessionalsModule,
     // Payments and refunds move loyalty points (PaymentsService.loyaltyAfter).
     LoyaltyModule,
+    // A refund of a gift card payment goes back to the card (PaymentsService.refundPayment).
+    GiftCardsModule,
     NotificationsModule,
     forwardRef(() => MessageBundlesModule),
     ScheduleModule.forRoot(),

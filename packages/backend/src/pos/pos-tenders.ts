@@ -3,27 +3,35 @@ import { BadRequestException } from '@nestjs/common';
 export interface Tender {
   method: string;
   amount: number;
+  /** For a gift card: the code the client shows (redeemed in the sale's transaction). */
+  giftCardCode?: string;
 }
 
 /**
- * What the till records of what the client handed over, in cents.
+ * What the till records of what the client handed over, in cents (money:
+ * tax included, appointment-charge.ts).
  *
  * The till took any amount at or above the total and recorded all of it as
  * revenue: 100 € "paid" by card on a 40 € ticket was 100 € of sales. Now:
  *
- * - a card, transfer or wallet payment is exactly what it pays: nothing
- *   over the total is accepted from them;
+ * - a card, transfer, Bizum, wallet or gift card payment is exactly what it
+ *   pays: nothing over the total is accepted from them;
  * - cash may be more than the total: the difference is the change given
  *   back (`change`), taken off the cash tenders, so only the total is
  *   recorded;
- * - a gift card is not a plain method: there is no card behind it at the
- *   till (gift cards are redeemed in Tarjetas regalo), so it is refused.
+ * - several methods together (cash + card...) must add up to the total, the
+ *   excess only from cash;
+ * - a gift card needs its code: the sale redeems that much from it
+ *   (GiftCardsService.redeemInTx) in its own transaction.
  */
 export function settleTenders(tenders: Tender[], totalCents: number): { tenders: Tender[]; change: number } {
-  if (tenders.some((t) => t.method === 'gift_card')) {
-    throw new BadRequestException(
-      'Las tarjetas regalo se canjean desde Tarjetas regalo. En la caja cobra en efectivo, con tarjeta, por transferencia o con la cartera de la clienta.',
-    );
+  for (const t of tenders) {
+    if (t.method === 'gift_card' && !t.giftCardCode?.trim()) {
+      throw new BadRequestException('Escribe el código de la tarjeta regalo con la que paga la clienta.');
+    }
+    if (t.method === 'loyalty_points') {
+      throw new BadRequestException('Los puntos se canjean eligiendo una recompensa, no como forma de pago.');
+    }
   }
   const paid = tenders.reduce((sum, t) => sum + t.amount, 0);
   if (paid < totalCents) {
@@ -35,7 +43,7 @@ export function settleTenders(tenders: Tender[], totalCents: number): { tenders:
   const cash = tenders.filter((t) => t.method === 'cash').reduce((sum, t) => sum + t.amount, 0);
   if (excess > cash) {
     throw new BadRequestException(
-      'Con tarjeta, transferencia o cartera se cobra exactamente el total del ticket: solo el efectivo puede ser mayor (se devuelve el cambio).',
+      'Con tarjeta, transferencia, Bizum, cartera o tarjeta regalo se cobra exactamente lo que falta: solo el efectivo puede ser mayor (se devuelve el cambio).',
     );
   }
 

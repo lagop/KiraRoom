@@ -13,6 +13,7 @@ import { applyStatusIfAllowed } from "../appointments/appointment-status";
 import { refreshClientStats } from "../clients/client-stats";
 import { salonToday } from "../analytics/analytics-metrics";
 import { WalletService } from "./services/wallet.service";
+import { GiftCardsService } from "../gift-cards/gift-cards.service";
 import { needsTimezone, PaymentFilters, paymentWhere, PAYMENT_SORT_FIELDS } from "./payments-query";
 
 const euros = (cents: number) =>
@@ -55,6 +56,8 @@ export class PaymentsService {
     @Optional() private readonly loyalty?: LoyaltyService,
     // A refund of a wallet payment puts the money back in the wallet.
     @Optional() private readonly wallet?: WalletService,
+    // A refund of a gift card payment goes back to the card; a refunded gift card SALE comes off the card.
+    @Optional() private readonly giftCards?: GiftCardsService,
   ) {}
 
   /**
@@ -160,13 +163,15 @@ export class PaymentsService {
    * One payment. A staff member (`professionalId`) reaches only the
    * payments of their own appointments; any other is a 404.
    */
-  async getPaymentById(tenantId: string, paymentId: string, professionalId?: string | null) {
+  async getPaymentById(
+    tenantId: string,
+    paymentId: string,
+    professionalId?: string | null,
+    recordedById?: string | null,
+  ) {
+    const scoped = paymentWhere(tenantId, { professionalId, recordedById });
     const payment = await this.prisma.payment.findFirst({
-      where: {
-        id: paymentId,
-        tenantId,
-        ...(professionalId ? { appointment: { professionalId } } : {}),
-      },
+      where: { ...scoped, id: paymentId },
       include: {
         client: {
           select: {
@@ -214,7 +219,8 @@ export class PaymentsService {
         | "bank_transfer"
         | "wallet"
         | "gift_card"
-        | "loyalty_points";
+        | "loyalty_points"
+        | "bizum";
       type?:
         | "appointment"
         | "deposit"
@@ -442,6 +448,49 @@ export class PaymentsService {
         await this.wallet.creditIn(tx, tenantId, payment.clientId, amount, `Devolución: ${reason}`, "refund", refund.id);
       }
 
+      // Paid with a gift card (at the till): the money goes back to the card,
+      // like a wallet payment to the wallet.
+      const meta = (payment.metadata ?? {}) as { giftCardId?: string; soldGiftCardIds?: string[] };
+      if (payment.method === PaymentMethod.gift_card) {
+        if (!meta.giftCardId || !this.giftCards) {
+          throw new BadRequestException("Este cobro con tarjeta regalo no indica la tarjeta: devuélvelo desde Tarjetas regalo.");
+        }
+        await this.giftCards.refundToCard(tx, {
+          tenantId,
+          giftCardId: meta.giftCardId,
+          amountCents: amount,
+          paymentId: payment.id,
+          userId: actorId ?? null,
+          note: `Devolución: ${reason}`,
+        });
+      }
+      // The payment that BOUGHT a gift card: what is given back comes off the
+      // card (refused when the card no longer has it: it was spent).
+      if (payment.type === "gift_card" && meta.soldGiftCardIds?.length) {
+        if (!this.giftCards) throw new BadRequestException("Ahora mismo no se puede devolver la venta de una tarjeta regalo.");
+        let left = amount;
+        for (const giftCardId of meta.soldGiftCardIds) {
+          if (left <= 0) break;
+          const card = await tx.giftCard.findFirst({ where: { id: giftCardId, tenantId }, select: { currentBalance: true } });
+          const take = Math.min(left, card?.currentBalance ?? 0);
+          if (take <= 0) continue;
+          await this.giftCards.redeemInTx(tx, {
+            tenantId,
+            giftCardId,
+            amountCents: take,
+            paymentId: payment.id,
+            userId: actorId ?? null,
+            note: `Devolución de la venta de la tarjeta: ${reason}`,
+          });
+          left -= take;
+        }
+        if (left > 0) {
+          throw new BadRequestException(
+            `La tarjeta regalo ya se ha usado: solo quedan ${euros(amount - left)} en ella para devolver.`,
+          );
+        }
+      }
+
       return { refund, appointment };
     });
 
@@ -498,10 +547,10 @@ export class PaymentsService {
   }
 
   /** Today's payments, today being the salon's calendar day. */
-  async getTodayPayments(tenantId: string, professionalId: string | null) {
+  async getTodayPayments(tenantId: string, professionalId: string | null, recordedById?: string | null) {
     const timeZone = await this.timezoneOf(tenantId);
     const today = salonToday(timeZone);
-    const where = paymentWhere(tenantId, { dateFrom: today, dateTo: today, professionalId }, timeZone);
+    const where = paymentWhere(tenantId, { dateFrom: today, dateTo: today, professionalId, recordedById }, timeZone);
 
     const payments = await this.prisma.payment.findMany({
       where,

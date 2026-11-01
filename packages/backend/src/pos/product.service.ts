@@ -1,7 +1,5 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { StripeService } from '../payments/services/stripe.service';
-import { WalletService } from '../payments/services/wallet.service';
 import { CreateProductDto, UpdateProductDto } from './dto/pos.dto';
 import { CLIENT_POS_SELECT } from '../clients/client-select';
 
@@ -26,18 +24,6 @@ const NULLABLE_PRODUCT_FIELDS: ReadonlySet<string> = new Set([
   "costPrice", "imageUrl", "taxRate", "onlinePrice",
 ]);
 
-export interface CreateOrderDto {
-  tenantId: string;
-  clientId?: string;
-  items: {
-    productId: string;
-    quantity: number;
-  }[];
-  paymentMethod: 'card' | 'cash' | 'bank_transfer' | 'wallet' | 'gift_card';
-  notes?: string;
-  source?: string;
-}
-
 export interface InventoryAdjustmentDto {
   productId: string;
   tenantId: string;
@@ -47,13 +33,16 @@ export interface InventoryAdjustmentDto {
   notes?: string;
 }
 
+/**
+ * The salon's products and their stock. Products are SOLD at the till
+ * (PosService.processCheckout: priced with tax, stock taken in the sale's
+ * transaction). The old order flow here (createOrder: prices in float
+ * euros, "Stripe payment would be handled here", stock taken outside any
+ * transaction) and its unused stats were removed: nothing called them.
+ */
 @Injectable()
 export class ProductService {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly stripeService: StripeService,
-    private readonly walletService: WalletService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   // ============================================
   // PRODUCT CRUD
@@ -122,37 +111,72 @@ export class ProductService {
     });
   }
 
-  async getProduct(id: string) {
-    const product = await this.prisma.product.findUnique({
-      where: { id },
+  /** One of this salon's products (404 for any other id). */
+  async getProduct(tenantId: string, id: string) {
+    const product = await this.prisma.product.findFirst({
+      where: { id, tenantId },
     });
     if (!product) {
-      throw new NotFoundException('Product not found');
+      throw new NotFoundException('Producto no encontrado');
     }
     return product;
   }
 
-  async updateProduct(id: string, dto: UpdateProductDto) {
-    await this.getProduct(id); // Verify exists
+  /**
+   * Edits a product. A new `quantity` is a stock count: it goes through the
+   * inventory log as an adjustment (the difference), like POST
+   * /pos/inventory/adjust, instead of overwriting the stock with no trace.
+   */
+  async updateProduct(tenantId: string, id: string, dto: UpdateProductDto) {
+    const product = await this.getProduct(tenantId, id);
 
     const data: Record<string, unknown> = {};
     for (const key of PRODUCT_FIELDS) {
+      if (key === 'quantity') continue;
       const value = dto?.[key];
       if (value === undefined || (value === null && !NULLABLE_PRODUCT_FIELDS.has(key))) continue;
       data[key] = value;
     }
+    if (typeof dto?.quantity === 'number' && dto.quantity !== product.quantity) {
+      await this.adjustInventory({
+        tenantId,
+        productId: id,
+        type: 'adjustment',
+        quantity: dto.quantity,
+        reason: 'Recuento al editar el producto',
+      });
+    }
+    if (Object.keys(data).length === 0) return this.getProduct(tenantId, id);
     return this.prisma.product.update({
-      where: { id },
+      where: { id: product.id },
       data,
     });
   }
 
-  async deleteProduct(id: string) {
-    await this.getProduct(id);
-
-    return this.prisma.product.delete({
-      where: { id },
-    });
+  /**
+   * Deletes a product with no history. One that was sold or had its stock
+   * moved is deactivated instead (it leaves the till and the shop, its
+   * history stays): deleting it cascaded its inventory log away.
+   */
+  async deleteProduct(tenantId: string, id: string) {
+    const product = await this.getProduct(tenantId, id);
+    const [movements, orders] = await Promise.all([
+      this.prisma.inventoryTransaction.count({ where: { productId: id, tenantId } }),
+      this.prisma.productOrder.count({ where: { productId: id } }),
+    ]);
+    if (movements > 0 || orders > 0) {
+      const updated = await this.prisma.product.update({ where: { id: product.id }, data: { isActive: false } });
+      return { ...updated, deactivated: true };
+    }
+    try {
+      await this.prisma.product.delete({ where: { id: product.id } });
+    } catch (err) {
+      if ((err as { code?: string } | null)?.code === 'P2003') {
+        throw new ConflictException('Este producto tiene historial: desactívalo en lugar de borrarlo.');
+      }
+      throw err;
+    }
+    return { ...product, deleted: true };
   }
 
   // ============================================
@@ -181,7 +205,7 @@ export class ProductService {
         where: { id: data.parentId, tenantId },
         select: { id: true },
       });
-      if (!parent) throw new NotFoundException('Parent category not found');
+      if (!parent) throw new NotFoundException('Categoría no encontrada');
     }
     return this.prisma.productCategory.create({
       data: {
@@ -199,16 +223,18 @@ export class ProductService {
   // INVENTORY MANAGEMENT
   // ============================================
 
+  /**
+   * A stock movement, logged. `restock` adds units; `transfer`, `damaged`
+   * and `expired` take them out; `adjustment` sets the counted stock and
+   * logs the DIFFERENCE (it logged minus the new stock: a count of 12 on
+   * 10 units was "-12"). The stock is written over the value just read, so
+   * a sale at the till meanwhile is never overwritten (409, try again).
+   */
   async adjustInventory(dto: InventoryAdjustmentDto) {
-    const product = await this.getProduct(dto.productId);
-    if (product.tenantId !== dto.tenantId) {
-      throw new BadRequestException('Product does not belong to tenant');
-    }
+    const product = await this.getProduct(dto.tenantId, dto.productId);
 
     const previousQty = product.quantity;
-    let newQty = dto.quantity;
-
-    // Calculate new quantity based on type
+    let newQty: number;
     switch (dto.type) {
       case 'restock':
         newQty = previousQty + dto.quantity;
@@ -216,40 +242,39 @@ export class ProductService {
       case 'adjustment':
         newQty = dto.quantity;
         break;
-      case 'transfer':
-        newQty = previousQty - dto.quantity;
-        break;
-      case 'damaged':
-      case 'expired':
+      default:
+        // transfer, damaged, expired
         newQty = previousQty - dto.quantity;
         break;
     }
 
     if (newQty < 0) {
-      throw new BadRequestException('Insufficient inventory');
+      throw new BadRequestException(`No hay tantas unidades de ${product.name}: quedan ${previousQty}.`);
     }
 
-    // Update product quantity
-    const updatedProduct = await this.prisma.product.update({
-      where: { id: dto.productId },
-      data: { quantity: newQty },
+    return this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.product.updateMany({
+        where: { id: product.id, tenantId: dto.tenantId, quantity: previousQty },
+        data: { quantity: newQty },
+      });
+      if (count !== 1) {
+        throw new ConflictException('El stock de este producto acaba de cambiar (una venta). Recarga y vuelve a intentarlo.');
+      }
+      await tx.inventoryTransaction.create({
+        data: {
+          productId: product.id,
+          tenantId: dto.tenantId,
+          type: dto.type,
+          // Signed: what came in (+) or went out (-).
+          quantity: newQty - previousQty,
+          previousQty,
+          newQty,
+          reason: dto.reason,
+          notes: dto.notes,
+        },
+      });
+      return tx.product.findFirst({ where: { id: product.id, tenantId: dto.tenantId } });
     });
-
-    // Create inventory transaction
-    await this.prisma.inventoryTransaction.create({
-      data: {
-        productId: dto.productId,
-        tenantId: dto.tenantId,
-        type: dto.type,
-        quantity: dto.type === 'restock' ? dto.quantity : -Math.abs(dto.quantity),
-        previousQty,
-        newQty,
-        reason: dto.reason,
-        notes: dto.notes,
-      },
-    });
-
-    return updatedProduct;
   }
 
   async getInventoryTransactions(tenantId: string, productId?: string) {
@@ -263,116 +288,9 @@ export class ProductService {
     });
   }
 
-  async getLowStockProducts(tenantId: string) {
-    return this.prisma.product.findMany({
-      where: {
-        tenantId,
-        trackInventory: true,
-        quantity: { lte: 5 },
-        isActive: true,
-      },
-      orderBy: { quantity: 'asc' },
-    });
-  }
-
   // ============================================
-  // ORDERS (POS SALES)
+  // ORDERS (legacy, read only)
   // ============================================
-
-  async createOrder(dto: CreateOrderDto) {
-    // Validate products and calculate totals
-    let subtotal = 0;
-    const orderItems = [];
-
-    for (const item of dto.items) {
-      const product = await this.getProduct(item.productId);
-      
-      if (product.tenantId !== dto.tenantId) {
-        throw new BadRequestException(`Product ${product.name} does not belong to tenant`);
-      }
-
-      if (!product.isActive) {
-        throw new BadRequestException(`Product ${product.name} is not available`);
-      }
-
-      // Check inventory
-      if (product.trackInventory && product.quantity < item.quantity) {
-        throw new BadRequestException(`Insufficient inventory for ${product.name}`);
-      }
-
-      // The product's own price, never one sent by the client.
-      const unitPrice = Number(product.price);
-      const itemTotal = unitPrice * item.quantity;
-      subtotal += itemTotal;
-
-      orderItems.push({
-        productId: item.productId,
-        quantity: item.quantity,
-        unitPrice,
-        totalPrice: itemTotal,
-      });
-
-      // Deduct inventory
-      if (product.trackInventory) {
-        await this.adjustInventory({
-          productId: item.productId,
-          tenantId: dto.tenantId,
-          type: 'sale' as any,
-          quantity: item.quantity,
-          reason: 'POS Sale',
-        });
-      }
-    }
-
-    // Generate order number
-    const today = new Date();
-    const dateStr = today.toISOString().split('T')[0].replace(/-/g, '');
-    const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
-    const orderNumber = `ORD-${dateStr}-${random}`;
-
-    // Calculate loyalty points
-    const pointsEarned = Math.floor(subtotal); // 1 point per euro
-
-    // Create order
-    const order = await this.prisma.order.create({
-      data: {
-        tenantId: dto.tenantId,
-        clientId: dto.clientId,
-        orderNumber,
-        status: 'completed',
-        type: 'sale',
-        subtotal,
-        taxAmount: 0,
-        discount: 0,
-        total: subtotal,
-        paidAmount: subtotal,
-        paymentMethod: dto.paymentMethod,
-        pointsEarned,
-        source: dto.source || 'pos',
-        notes: dto.notes,
-        items: {
-          create: orderItems,
-        },
-      },
-      include: {
-        items: {
-          include: {
-            product: true,
-          },
-        },
-        client: { select: CLIENT_POS_SELECT },
-      },
-    });
-
-    // Process payment
-    if (dto.paymentMethod === 'card') {
-      // Stripe payment would be handled here
-    } else if (dto.paymentMethod === 'wallet' && dto.clientId) {
-      await this.walletService.deductFunds(dto.tenantId, dto.clientId, Number(subtotal), 'Order payment');
-    }
-
-    return order;
-  }
 
   async getOrders(tenantId: string, params?: {
     status?: string;
@@ -412,9 +330,10 @@ export class ProductService {
     });
   }
 
-  async getOrder(id: string) {
-    return this.prisma.order.findUnique({
-      where: { id },
+  /** One of this salon's orders (404 for any other id). */
+  async getOrder(tenantId: string, id: string) {
+    const order = await this.prisma.order.findFirst({
+      where: { id, tenantId },
       include: {
         client: { select: CLIENT_POS_SELECT },
         items: {
@@ -424,96 +343,7 @@ export class ProductService {
         },
       },
     });
-  }
-
-  // ============================================
-  // DASHBOARD / ANALYTICS
-  // ============================================
-
-  async getProductStats(tenantId: string) {
-    const [
-      totalProducts,
-      activeProducts,
-      lowStockProducts,
-      outOfStock,
-      totalInventoryValue,
-    ] = await Promise.all([
-      this.prisma.product.count({ where: { tenantId } }),
-      this.prisma.product.count({ where: { tenantId, isActive: true } }),
-      this.prisma.product.count({ 
-        where: { tenantId, trackInventory: true, quantity: { lte: 5, gt: 0 } } 
-      }),
-      this.prisma.product.count({ 
-        where: { tenantId, trackInventory: true, quantity: { lte: 0 } } 
-      }),
-      this.prisma.product.aggregate({
-        where: { tenantId, trackInventory: true },
-        _sum: {
-          quantity: true,
-        },
-      }),
-    ]);
-
-    // Calculate total inventory value (price * quantity)
-    const products = await this.prisma.product.findMany({
-      where: { tenantId, trackInventory: true },
-      select: { price: true, quantity: true },
-    });
-
-    const inventoryValue = products.reduce(
-      (sum, p) => sum + Number(p.price || 0) * (p.quantity || 0),
-      0
-    );
-
-    return {
-      totalProducts,
-      activeProducts,
-      lowStockProducts,
-      outOfStock,
-      totalInventoryUnits: totalInventoryValue._sum.quantity || 0,
-      inventoryValue,
-    };
-  }
-
-  async getSalesStats(tenantId: string, period?: 'day' | 'week' | 'month') {
-    const now = new Date();
-    let startDate: Date;
-
-    switch (period) {
-      case 'day':
-        startDate = new Date(now.setHours(0, 0, 0, 0));
-        break;
-      case 'week':
-        startDate = new Date(now.setDate(now.getDate() - 7));
-        break;
-      case 'month':
-      default:
-        startDate = new Date(now.setMonth(now.getMonth() - 1));
-        break;
-    }
-
-    const orders = await this.prisma.order.findMany({
-      where: {
-        tenantId,
-        createdAt: { gte: startDate },
-        status: 'completed',
-      },
-      include: {
-        items: true,
-      },
-    });
-
-    const totalSales = orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
-    const totalOrders = orders.length;
-    const averageOrderValue = totalOrders > 0 ? totalSales / totalOrders : 0;
-    const totalItems = orders.reduce((sum, o) => sum + o.items.length, 0);
-
-    return {
-      period,
-      totalSales,
-      totalOrders,
-      averageOrderValue,
-      totalItems,
-    };
+    if (!order) throw new NotFoundException('Pedido no encontrado');
+    return order;
   }
 }

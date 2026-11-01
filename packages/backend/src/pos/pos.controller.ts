@@ -6,6 +6,7 @@ import {
   CreateProductDto,
   InventoryAdjustmentBodyDto,
   PosQuickSaleDto,
+  PosQuoteDto,
   PosSettingsDto,
   UpdateProductDto,
 } from './dto/pos.dto';
@@ -32,8 +33,8 @@ export class PosController {
     @Req() req: any,
     @Query('date') date?: string,
   ) {
-    const tenantId = req.user.tenantId;
-    return this.posService.getDashboard(tenantId, date);
+    // Staff: only their own sales (PosService.staffScope).
+    return this.posService.getDashboard(req.user.tenantId, date, { id: req.user.id, role: req.user.role });
   }
 
   @Get('services')
@@ -71,6 +72,30 @@ export class PosController {
     return this.posService.updateSettings(req.user.tenantId, body);
   }
 
+  /** The ticket priced by the server, in money (tax included): what the checkout will charge. */
+  @Post('quote')
+  @ApiOperation({ summary: 'Price a POS ticket without charging it' })
+  @Roles(...SALON_TEAM)
+  async quote(@Req() req: any, @Body() dto: PosQuoteDto) {
+    return this.posService.quote({ ...dto, tenantId: req.user.tenantId, actor: { id: req.user.id, role: req.user.role } });
+  }
+
+  /** Products the till sells: active, priced with tax, with their stock. */
+  @Get('sale-products')
+  @ApiOperation({ summary: 'Products available at the till' })
+  @Roles(...SALON_TEAM)
+  async saleProducts(@Req() req: any, @Query('search') search?: string) {
+    return this.posService.getSaleProducts(req.user.tenantId, search?.slice(0, 100));
+  }
+
+  /** The ticket of a sale (receipt): staff only theirs. */
+  @Get('sales/:id/receipt')
+  @ApiOperation({ summary: 'Receipt of a POS sale' })
+  @Roles(...SALON_TEAM)
+  async receipt(@Req() req: any, @Param('id', ParseUUIDPipe) id: string) {
+    return this.posService.getReceipt(req.user.tenantId, id, { id: req.user.id, role: req.user.role });
+  }
+
   @Post('checkout')
   @ApiOperation({ summary: 'Process POS checkout' })
   @Roles(...SALON_TEAM)
@@ -95,19 +120,17 @@ export class PosController {
     @Body() body: PosQuickSaleDto,
   ) {
     const tenantId = req.user.tenantId;
-    return this.posService.quickSale(
-      tenantId,
-      body.serviceId,
-      body.paymentMethod,
-      body.clientId,
-    );
+    return this.posService.quickSale(tenantId, body.serviceId, body.paymentMethod, body.clientId, {
+      saleId: body.saleId,
+      actor: { id: req.user.id, role: req.user.role },
+    });
   }
 
   @Get('order/:id')
   @ApiOperation({ summary: 'Get order/receipt details' })
   @Roles(...SALON_TEAM)
   async getOrder(@Req() req: any, @Param('id', ParseUUIDPipe) id: string) {
-    return this.posService.getOrder(req.user.tenantId, id);
+    return this.posService.getOrder(req.user.tenantId, id, { id: req.user.id, role: req.user.role });
   }
 
   @Get('report/daily')
@@ -117,8 +140,8 @@ export class PosController {
     @Req() req: any,
     @Query('date') date: string,
   ) {
-    const tenantId = req.user.tenantId;
-    return this.posService.getDailyReport(tenantId, date);
+    // Staff: only their own sales (PosService.staffScope).
+    return this.posService.getDailyReport(req.user.tenantId, date, { id: req.user.id, role: req.user.role });
   }
 
   // ============ PRODUCTS ============
@@ -149,8 +172,8 @@ export class PosController {
   @Get('products/:id')
   @ApiOperation({ summary: 'Get a single product' })
   @Roles(...SALON_TEAM)
-  async getProduct(@Param('id', ParseUUIDPipe) id: string) {
-    return this.productService.getProduct(id);
+  async getProduct(@Req() req: any, @Param('id', ParseUUIDPipe) id: string) {
+    return this.productService.getProduct(req.user.tenantId, id);
   }
 
   @Post('products')
@@ -168,17 +191,18 @@ export class PosController {
   @ApiOperation({ summary: 'Update a product' })
   @Roles(...SALON_MANAGERS)
   async updateProduct(
+    @Req() req: any,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: UpdateProductDto,
   ) {
-    return this.productService.updateProduct(id, body);
+    return this.productService.updateProduct(req.user.tenantId, id, body);
   }
 
   @Delete('products/:id')
   @ApiOperation({ summary: 'Delete a product' })
   @Roles(...SALON_MANAGERS)
-  async deleteProduct(@Param('id', ParseUUIDPipe) id: string) {
-    return this.productService.deleteProduct(id);
+  async deleteProduct(@Req() req: any, @Param('id', ParseUUIDPipe) id: string) {
+    return this.productService.deleteProduct(req.user.tenantId, id);
   }
 
   @Post('products/categories')
@@ -243,7 +267,7 @@ export class PosController {
   @Get('orders/:id')
   @ApiOperation({ summary: 'Get order details' })
   @Roles(...SALON_TEAM)
-  async getOrderDetails(@Param('id', ParseUUIDPipe) id: string) {
-    return this.productService.getOrder(id);
+  async getOrderDetails(@Req() req: any, @Param('id', ParseUUIDPipe) id: string) {
+    return this.productService.getOrder(req.user.tenantId, id);
   }
 }

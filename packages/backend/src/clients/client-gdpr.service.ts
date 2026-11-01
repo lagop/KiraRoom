@@ -72,6 +72,7 @@ export class ClientGdprService {
       promotionUsage,
       receptionistProfile,
       notificationPreference,
+      tillSales,
     ] = await Promise.all([
       this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { name: true, legalName: true, taxId: true } }),
       this.prisma.appointment.findMany({
@@ -356,6 +357,24 @@ export class ClientGdprService {
         where: byClient,
         select: { preferences: true, updatedAt: true },
       }),
+      // Her tickets at the till (the payments above are their money).
+      this.prisma.posSale.findMany({
+        where: byClient,
+        orderBy: { createdAt: "asc" },
+        select: {
+          createdAt: true,
+          kind: true,
+          subtotalCents: true,
+          discountCents: true,
+          loyaltyDiscountCents: true,
+          totalCents: true,
+          invoiceId: true,
+          lines: {
+            orderBy: { lineIndex: "asc" },
+            select: { kind: true, description: true, quantity: true, unitPriceCents: true, discountCents: true, totalCents: true },
+          },
+        },
+      }),
     ]);
 
     // Names for the ids above, from this salon only.
@@ -494,6 +513,7 @@ export class ClientGdprService {
       receptionistProfile,
       conversations,
       notificationPreferences: notificationPreference,
+      tillSales,
       notifications,
       campaigns: {
         email: emailCampaigns.map(({ campaign, ...r }) => ({ ...r, campaign: campaign.name, subject: campaign.subject })),

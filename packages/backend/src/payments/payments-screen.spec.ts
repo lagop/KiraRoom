@@ -83,7 +83,7 @@ describe("A3: Stripe settings use the injected Prisma", () => {
   });
 });
 
-describe("M1: a staff user without a professional record sees no payment", () => {
+describe("M1: staff see only their own sales; without a professional record, only what they recorded", () => {
   const svc = () => ({
     getPayments: jest.fn(async () => ({ payments: [] })),
     getTodayPayments: jest.fn(async () => []),
@@ -92,15 +92,34 @@ describe("M1: a staff user without a professional record sees no payment", () =>
     getPaymentsByAppointment: jest.fn(async () => []),
   });
 
-  it("403 in Spanish on every read, the service never asked", async () => {
+  it("without a professional: the till's lists show only the sales they recorded; client and appointment reads stay 403", async () => {
     const payments = svc();
     const { c } = controller({ payments });
-    await expect(c.getPayments(STAFF, {} as any)).rejects.toThrow(ForbiddenException);
-    await expect(c.getTodayPayments(STAFF)).rejects.toThrow(/ficha de profesional/);
-    await expect(c.getPayment(STAFF, PAY)).rejects.toThrow(ForbiddenException);
-    await expect(c.getPaymentsByClient(STAFF, CLIENT)).rejects.toThrow(ForbiddenException);
+    await c.getPayments(STAFF, {} as any);
+    expect(payments.getPayments.mock.calls[0]).toEqual(expect.arrayContaining([T]));
+    expect(JSON.stringify(payments.getPayments.mock.calls[0])).toContain('"recordedById":"u-staff"');
+    await c.getTodayPayments(STAFF);
+    expect(payments.getTodayPayments).toHaveBeenCalledWith(T, null, "u-staff");
+    await c.getPayment(STAFF, PAY);
+    expect(payments.getPaymentById.mock.calls[0]).toEqual(expect.arrayContaining([T, PAY, "u-staff"]));
+    await expect(c.getPaymentsByClient(STAFF, CLIENT)).rejects.toThrow(/ficha de profesional/);
     await expect(c.getPaymentsByAppointment(STAFF, APT)).rejects.toThrow(ForbiddenException);
-    for (const fn of Object.values(payments)) expect(fn).not.toHaveBeenCalled();
+    expect(payments.getPaymentsByClient).not.toHaveBeenCalled();
+    expect(payments.getPaymentsByAppointment).not.toHaveBeenCalled();
+  });
+
+  it("without a professional, the query matches only rows they recorded (fails closed)", async () => {
+    const prisma: any = {
+      payment: { findMany: jest.fn(async () => []), findFirst: jest.fn(async () => null), count: jest.fn(async () => 0) },
+    };
+    const { c } = controller({ payments: new PaymentsService(prisma) });
+    await c.getPayments(STAFF, {} as any);
+    expect(prisma.payment.findMany.mock.calls[0][0].where).toMatchObject({
+      tenantId: T,
+      AND: [{ OR: [{ recordedById: "u-staff" }] }],
+    });
+    await expect(c.getPayment(STAFF, PAY)).rejects.toThrow(NotFoundException);
+    expect(prisma.payment.findFirst.mock.calls[0][0].where).toMatchObject({ id: PAY, tenantId: T, AND: [{ OR: [{ recordedById: "u-staff" }] }] });
   });
 
   it("a staff member with one gets only their appointments' payments", async () => {
@@ -110,13 +129,21 @@ describe("M1: a staff user without a professional record sees no payment", () =>
     const { c } = controller({ payments: new PaymentsService(prisma), professional: { id: "pro-1" } });
 
     await c.getPayments(STAFF, {} as any);
-    expect(prisma.payment.findMany.mock.calls[0][0].where).toMatchObject({ tenantId: T, appointment: { professionalId: "pro-1" } });
+    // Their appointments' payments, and the till sales they recorded.
+    expect(prisma.payment.findMany.mock.calls[0][0].where).toMatchObject({
+      tenantId: T,
+      AND: [{ OR: [{ recordedById: "u-staff" }, { appointment: { professionalId: "pro-1" } }] }],
+    });
 
     await c.getPaymentsByClient(STAFF, CLIENT);
     expect(prisma.payment.findMany.mock.calls[1][0].where).toEqual({ tenantId: T, clientId: CLIENT, appointment: { professionalId: "pro-1" } });
 
     await expect(c.getPayment(STAFF, PAY)).rejects.toThrow(NotFoundException);
-    expect(prisma.payment.findFirst.mock.calls[0][0].where).toEqual({ id: PAY, tenantId: T, appointment: { professionalId: "pro-1" } });
+    expect(prisma.payment.findFirst.mock.calls[0][0].where).toMatchObject({
+      id: PAY,
+      tenantId: T,
+      AND: [{ OR: [{ recordedById: "u-staff" }, { appointment: { professionalId: "pro-1" } }] }],
+    });
 
     await c.getPaymentsByAppointment(STAFF, APT);
     expect(prisma.payment.findMany.mock.calls[2][0].where).toEqual({ tenantId: T, appointmentId: APT, appointment: { professionalId: "pro-1" } });
@@ -488,8 +515,9 @@ describe("M8: a wallet belongs to one of this salon's clients", () => {
 });
 
 describe("B7: what the till records of what was handed over", () => {
-  it("card, transfer and wallet must be exactly the total", () => {
-    expect(() => settleTenders([{ method: "card", amount: 10000 }], 4000)).toThrow(/exactamente el total/);
+  it("card, transfer, Bizum and wallet must be exactly the total", () => {
+    expect(() => settleTenders([{ method: "card", amount: 10000 }], 4000)).toThrow(/exactamente lo que falta/);
+    expect(() => settleTenders([{ method: "bizum", amount: 4100 }], 4000)).toThrow(/exactamente lo que falta/);
     expect(settleTenders([{ method: "card", amount: 4000 }], 4000)).toEqual({ tenders: [{ method: "card", amount: 4000 }], change: 0 });
   });
 
@@ -501,9 +529,33 @@ describe("B7: what the till records of what was handed over", () => {
     });
   });
 
-  it("less than the total, or a bare gift card, is a 400", () => {
+  it("less than the total, a gift card without its code, or points as a tender, is a 400", () => {
     expect(() => settleTenders([{ method: "cash", amount: 100 }], 4000)).toThrow(/menor que el total/);
-    expect(() => settleTenders([{ method: "gift_card", amount: 4000 }], 4000)).toThrow(/Tarjetas regalo/);
+    expect(() => settleTenders([{ method: "gift_card", amount: 4000 }], 4000)).toThrow(/código de la tarjeta regalo/);
+    expect(() => settleTenders([{ method: "loyalty_points", amount: 4000 }], 4000)).toThrow(/recompensa/);
+    expect(settleTenders([{ method: "gift_card", amount: 4000, giftCardCode: "ABCD" }], 4000).change).toBe(0);
+  });
+
+  it("mixed: card + Bizum + cash, the change only from cash", () => {
+    expect(
+      settleTenders(
+        [
+          { method: "card", amount: 2000 },
+          { method: "bizum", amount: 1000 },
+          { method: "cash", amount: 2000 },
+        ],
+        4250,
+      ),
+    ).toEqual({
+      tenders: [
+        { method: "card", amount: 2000 },
+        { method: "bizum", amount: 1000 },
+        { method: "cash", amount: 1250 },
+      ],
+      change: 750,
+    });
+    // Over the total with no cash to give change from.
+    expect(() => settleTenders([{ method: "card", amount: 3000 }, { method: "bizum", amount: 1500 }], 4000)).toThrow(/solo el efectivo/);
   });
 });
 

@@ -119,11 +119,12 @@ export function whatsappVisitorKeys(phone: string | null | undefined): string[] 
 
 /**
  * Models that point at a client and that anonymisation leaves as they are:
- * money and points, with no personal data of their own. Every other model
+ * money and points, with no personal data of their own (a till sale, PosSale,
+ * keeps its amounts and line names; it stores no recipient details). Every other model
  * with a client link is deleted or cleaned by anonymizeClients();
  * client-anonymize.spec.ts fails when a new one is neither.
  */
-export const CLIENT_LINKED_MODELS_KEPT = ["Payment", "ClientWallet", "LoyaltyMember", "PromotionUsage"] as const;
+export const CLIENT_LINKED_MODELS_KEPT = ["Payment", "ClientWallet", "LoyaltyMember", "PromotionUsage", "PosSale"] as const;
 
 export interface AnonymizeSummary {
   clients: number;

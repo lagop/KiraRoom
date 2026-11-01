@@ -171,6 +171,7 @@ model Tenant {
   maxStaffDiscountPercent Int           @default(0)
   /// Discounts given by hand at the till, one row each (audit).
   posDiscounts            PosDiscount[]
+  posSales                PosSale[]
 
   /// P1.3 Ã¢â‚¬â€ Onboarding wizard state (one row per tenant)
   onboardingState      OnboardingState?
@@ -1239,6 +1240,9 @@ model Payment {
   depositAmount   Int?
   remainingAmount Int?
 
+  /// The team member who recorded it at the till (staff see their own sales). Not a relation: the record outlives the account.
+  recordedById String?
+
   /// Additional info
   description String?
   metadata    Json    @default("{}")
@@ -1258,6 +1262,7 @@ model Payment {
   @@index([clientId])
   @@index([appointmentId])
   @@index([status])
+  @@index([tenantId, recordedById])
   @@map("payments")
 }
 
@@ -1662,6 +1667,8 @@ enum PaymentMethod {
   wallet
   gift_card
   loyalty_points
+  /// Bizum to the salon's phone: like a transfer, exact amount (pos-tenders.ts).
+  bizum
 }
 
 enum TransactionType {
@@ -3498,4 +3505,80 @@ enum PosDiscountScope {
 enum PosDiscountType {
   percentage
   fixed
+}
+
+/// A sale at the till (POST /pos/checkout, /pos/quick-sale): one row per
+/// ticket, the idempotency key the panel sends with it (`requestId`), the
+/// totals in cents (money: tax included, what the client paid), and the
+/// invoice it was issued with. `id` is the sale id stamped on its payments
+/// (`metadata.posSaleId`), its discounts (PosDiscount.saleId) and its
+/// simplified invoice (sourceType pos_sale). cashSessionId links it to a cash-drawer
+/// session (arqueo, follow-up).
+model PosSale {
+  id                   String        @id @default(uuid())
+  createdAt            DateTime      @default(now())
+  tenantId             String
+  /// The client-generated id of the request (UUID): a retry with the same one returns this sale.
+  requestId            String
+  /// Not relations: the record outlives them (like PosDiscount).
+  clientId             String?
+  createdById          String?
+  /// checkout | quick_sale
+  kind                 String        @default("checkout") @db.VarChar(20)
+  subtotalCents        Int           @default(0)
+  discountCents        Int           @default(0)
+  loyaltyDiscountCents Int           @default(0)
+  totalCents           Int           @default(0)
+  /// Cash handed back.
+  changeCents          Int           @default(0)
+  /// The simplified (series T) or full invoice of its lines without an appointment.
+  invoiceId            String?
+  /// The cash-drawer session (arqueo) the sale belongs to: set by the arqueo feature (follow-up); not a relation yet.
+  cashSessionId        String?
+  /// What the checkout answered, returned again on a retry.
+  result               Json          @default("{}")
+  tenant               Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lines                PosSaleLine[]
+
+  @@unique([tenantId, requestId])
+  @@index([tenantId, createdAt])
+  @@index([cashSessionId])
+  @@map("pos_sales")
+}
+
+/// One line of a till sale, in money (tax included). Commissions for a
+/// service sold without an appointment come from here (professionalId).
+model PosSaleLine {
+  id                  String    @id @default(uuid())
+  createdAt           DateTime  @default(now())
+  saleId              String
+  tenantId            String
+  lineIndex           Int
+  /// appointment | service | product | gift_card
+  kind                String    @db.VarChar(20)
+  serviceId           String?
+  productId           String?
+  appointmentId       String?
+  giftCardId          String?
+  /// Who did the service (walk-in services): their commission.
+  professionalId      String?
+  description         String    @db.VarChar(200)
+  quantity            Int       @default(1)
+  unitPriceCents      Int
+  discountCents       Int       @default(0)
+  totalCents          Int
+  /// Percent (21); 0 for a gift card (not taxed when sold).
+  taxRate             Decimal   @default(0) @db.Decimal(5, 2)
+  taxCents            Int       @default(0)
+  /// What the commission is a percent of: the line in the salon's catalogue terms (as Appointment.totalAmount).
+  commissionBaseCents Int       @default(0)
+  commissionRate      Decimal?  @db.Decimal(5, 2)
+  commissionAmount    Decimal?  @db.Decimal(12, 2)
+  commissionPaid      Boolean   @default(false)
+  commissionDate      DateTime?
+  sale                PosSale   @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@index([saleId])
+  @@index([tenantId, professionalId])
+  @@map("pos_sale_lines")
 }
