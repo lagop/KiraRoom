@@ -69,14 +69,7 @@ describe("StripeService for a salon", () => {
     const stripe = new StripeService({ get: () => undefined } as any, prisma, platformStripe);
     const { isEnabled } = await stripe.getStripeForTenant("t1");
     expect(isEnabled).toBe(false);
-    await expect(stripe.createPaymentIntent("t1", 2500)).rejects.toThrow(/not configured/);
   });
-
-  it("charges the amount it is given, in cents", async () => {
-    const create = jest.fn(async (args: any) => args);
-    const stripe = new StripeService({ get: (_k: string, d?: string) => d } as any, {} as any, {} as any);
-    (stripe as any).getStripeForTenant = async () => ({ stripe: { paymentIntents: { create } }, isEnabled: true });
-    await stripe.createPaymentIntent("t1", 2500);
-    expect((create.mock.calls[0] as any[])[0].amount).toBe(2500);
-  });
+  // createPaymentIntent (and its 'charges in cents' test) is gone: nothing
+  // called it. Online client payments come with Stripe Connect.
 });

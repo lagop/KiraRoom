@@ -176,7 +176,7 @@ describe("POS: charging an appointment", () => {
         payments: [{ method: "cash", amount: 1500 }],
         actor: OWNER,
       } as any),
-    ).rejects.toThrow(/less than order total/);
+    ).rejects.toThrow(/menor que el total/);
     expect(t.committed.payments).toHaveLength(0);
   });
 

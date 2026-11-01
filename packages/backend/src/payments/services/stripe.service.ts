@@ -1,11 +1,15 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Stripe from 'stripe';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { EncryptionService } from '../../common/encryption/encryption.service';
 import { PlatformStripeConfigService } from '../../platform/platform-stripe-config.service';
+import { UpdateStripeSettingsDto, StripeSettingsResponseDto } from '../dto/stripe-settings.dto';
+import { maskSecretKey, revealSecretKey, secretKeyChange } from './stripe-keys';
 
 @Injectable()
 export class StripeService {
+  private readonly logger = new Logger(StripeService.name);
   private tenantStripes: Map<string, Stripe> = new Map();
   private tenantEnabled: Map<string, boolean> = new Map();
 
@@ -15,7 +19,88 @@ export class StripeService {
     // KiraRoom's account (console, else .env): only the publishable-key
     // fallback below. Salon payments always use the salon's own account.
     private readonly platformStripe: PlatformStripeConfigService,
+    // The salon's secret keys are stored encrypted (stripe-keys.ts).
+    @Optional() private readonly encryption?: EncryptionService,
   ) {}
+
+  private reveal(stored: string | null | undefined): string | null {
+    return revealSecretKey(stored, this.encryption ? (v) => this.encryption!.decrypt(v) : null);
+  }
+
+  private seal(plain: string): string {
+    if (!this.encryption) return plain;
+    try {
+      return this.encryption.encrypt(plain);
+    } catch (err) {
+      this.logger.error(`Cannot encrypt a salon's Stripe key: ${(err as Error).message}`);
+      throw new InternalServerErrorException(
+        'No se ha podido guardar la clave de forma segura. Inténtalo más tarde o contacta con soporte.',
+      );
+    }
+  }
+
+  /**
+   * The salon's Stripe settings for its settings page. The secret keys are
+   * never sent: only masked (`sk_live_…1234`) and whether one is saved.
+   */
+  async getTenantSettings(tenantId: string): Promise<StripeSettingsResponseDto> {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: {
+        stripeMode: true,
+        stripeTestSecretKey: true,
+        stripeTestPublishableKey: true,
+        stripeLiveSecretKey: true,
+        stripeLivePublishableKey: true,
+      },
+    });
+    const mode: 'test' | 'live' = tenant?.stripeMode === 'live' ? 'live' : 'test';
+    const testSecret = this.reveal(tenant?.stripeTestSecretKey);
+    const liveSecret = this.reveal(tenant?.stripeLiveSecretKey);
+    return {
+      stripeMode: mode,
+      stripeTestSecretKey: maskSecretKey(testSecret),
+      stripeTestPublishableKey: tenant?.stripeTestPublishableKey || null,
+      stripeLiveSecretKey: maskSecretKey(liveSecret),
+      stripeLivePublishableKey: tenant?.stripeLivePublishableKey || null,
+      testSecretKeyConfigured: !!testSecret,
+      liveSecretKeyConfigured: !!liveSecret,
+      isConfigured: mode === 'live' ? !!liveSecret : !!testSecret,
+    };
+  }
+
+  /**
+   * Saves the salon's Stripe settings. A secret key sent back masked (the
+   * page shows what it was given) keeps the stored one; an empty one clears
+   * it; a new one is checked and stored encrypted.
+   */
+  async updateTenantSettings(tenantId: string, dto: UpdateStripeSettingsDto) {
+    const data: Record<string, string | null> = {};
+    if (dto.stripeMode !== undefined) data.stripeMode = dto.stripeMode;
+
+    for (const [field, mode] of [
+      ['stripeTestSecretKey', 'test'],
+      ['stripeLiveSecretKey', 'live'],
+    ] as const) {
+      const change = secretKeyChange((dto as Record<string, unknown>)[field], mode);
+      if (change.kind === 'clear') data[field] = null;
+      if (change.kind === 'set') data[field] = this.seal(change.plain);
+    }
+    for (const field of ['stripeTestPublishableKey', 'stripeLivePublishableKey'] as const) {
+      const value = (dto as Record<string, unknown>)[field];
+      if (value === undefined) continue;
+      data[field] = typeof value === 'string' && value.trim() ? value.trim() : null;
+    }
+
+    const updated = await this.prisma.tenant.update({
+      where: { id: tenantId },
+      data,
+      select: { stripeMode: true },
+    });
+    // New keys take effect at once.
+    this.clearTenantCache(tenantId);
+    return { success: true, stripeMode: updated.stripeMode };
+  }
 
   /**
    * The salon's own Stripe account, from the keys it saved in its settings.
@@ -48,14 +133,14 @@ export class StripeService {
 
       if (tenant) {
         const mode = tenant.stripeMode || 'test';
-        const secretKey = mode === 'live' ? tenant.stripeLiveSecretKey : tenant.stripeTestSecretKey;
+        const secretKey = this.reveal(mode === 'live' ? tenant.stripeLiveSecretKey : tenant.stripeTestSecretKey);
 
-        if (secretKey && secretKey.startsWith('sk_')) {
+        if (secretKey) {
           stripe = new Stripe(secretKey, {
             apiVersion: '2024-12-18.acacia' as any,
           });
           isEnabled = true;
-          console.log(`[StripeService] Tenant ${tenantId} Stripe ${mode} mode enabled`);
+          this.logger.log(`Tenant ${tenantId} Stripe ${mode} mode enabled`);
         }
       }
 
@@ -105,72 +190,6 @@ export class StripeService {
     return isEnabled;
   }
 
-  /** amountCents: in cents, like Payment.amount. */
-  async createPaymentIntent(
-    tenantId: string,
-    amountCents: number,
-    clientId?: string,
-    appointmentId?: string,
-    isDeposit: boolean = false,
-  ): Promise<Stripe.PaymentIntent> {
-    const { stripe, isEnabled } = await this.getStripeForTenant(tenantId);
-    
-    if (!isEnabled) {
-      throw new Error('Stripe is not configured for this tenant');
-    }
-
-    const metadata: Record<string, string> = {
-      tenantId,
-    };
-    
-    if (clientId) metadata.clientId = clientId;
-    if (appointmentId) metadata.appointmentId = appointmentId;
-    if (isDeposit) metadata.isDeposit = 'true';
-
-    return stripe.paymentIntents.create({
-      amount: Math.round(amountCents),
-      currency: this.configService.get<string>('STRIPE_CURRENCY', 'eur'),
-      metadata,
-      automatic_payment_methods: {
-        enabled: true,
-      },
-    });
-  }
-
-  async createPaymentIntentWithDetails(
-    tenantId: string,
-    amount: number,
-    customerId?: string,
-    appointmentId?: string,
-    isDeposit: boolean = false,
-    description?: string,
-  ): Promise<Stripe.PaymentIntent> {
-    const { stripe, isEnabled } = await this.getStripeForTenant(tenantId);
-    
-    if (!isEnabled) {
-      throw new Error('Stripe is not configured for this tenant');
-    }
-
-    const metadata: Record<string, string> = {
-      tenantId,
-    };
-    
-    if (customerId) metadata.clientId = customerId;
-    if (appointmentId) metadata.appointmentId = appointmentId;
-    if (isDeposit) metadata.isDeposit = 'true';
-
-    return stripe.paymentIntents.create({
-      amount: Math.round(amount * 100),
-      currency: this.configService.get<string>('STRIPE_CURRENCY', 'eur'),
-      customer: customerId,
-      description: description || (isDeposit ? 'Deposit payment' : 'Appointment payment'),
-      metadata,
-      automatic_payment_methods: {
-        enabled: true,
-      },
-    });
-  }
-
   async retrievePaymentIntent(tenantId: string, paymentIntentId: string): Promise<Stripe.PaymentIntent> {
     const { stripe, isEnabled } = await this.getStripeForTenant(tenantId);
     
@@ -211,25 +230,6 @@ export class StripeService {
     }
 
     return stripe.paymentIntents.cancel(paymentIntentId);
-  }
-
-  async createRefund(
-    tenantId: string,
-    paymentIntentId: string,
-    amount?: number,
-    reason?: Stripe.RefundCreateParams.Reason,
-  ): Promise<Stripe.Refund> {
-    const { stripe, isEnabled } = await this.getStripeForTenant(tenantId);
-    
-    if (!isEnabled) {
-      throw new Error('Stripe is not configured for this tenant');
-    }
-
-    return stripe.refunds.create({
-      payment_intent: paymentIntentId,
-      amount: amount ? Math.round(amount * 100) : undefined,
-      reason,
-    });
   }
 
   async createCustomer(

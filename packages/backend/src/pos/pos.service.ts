@@ -12,6 +12,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { WalletService } from '../payments/services/wallet.service';
 import { LoyaltyService } from '../loyalty/loyalty.service';
 import { refreshClientStats } from '../clients/client-stats';
+import { settleTenders } from './pos-tenders';
 import {
   assertChargeable,
   recordAppointmentPayment,
@@ -295,18 +296,22 @@ export class PosService {
     }
     const total = ticket.totalCents - loyaltyDiscount;
 
-    // Verify payment amounts match total
-    const paymentTotal = payments.reduce((sum, p) => sum + p.amount, 0);
-    if (paymentTotal < total) {
+    // What was handed over: the total exactly, or more in cash (the change
+    // goes back and is not recorded as a sale). pos-tenders.ts
+    let tenders: { method: string; amount: number }[];
+    let change = 0;
+    try {
+      ({ tenders, change } = settleTenders(payments, total));
+    } catch (err) {
       if (pointsSpent) await this.loyalty?.cancelSaleRedemption(tenantId, saleId, 'Venta no completada');
-      throw new BadRequestException('Payment amount is less than order total');
+      throw err;
     }
 
     // Each appointment gets the part of the ticket that pays for it, as its
     // own payment row (Payment.appointmentId): the reward first, then the
     // money. It used to be one row with the ids only in its metadata, and a
     // second call from the panel marked the appointment paid for any amount.
-    const { rows, shares } = splitTicket(appointments, payments, loyaltyDiscount, appointmentDiscounts);
+    const { rows, shares } = splitTicket(appointments, tenders, loyaltyDiscount, appointmentDiscounts);
     const discountRows = this.discountRecords(tenantId, saleId, ticket, orderDiscount, dto.actor);
 
     // "Card" at the till is the salon's own card terminal: the money is
@@ -319,7 +324,7 @@ export class PosService {
     let paymentRecords: any[] = [];
     const rectifications = new Map<string, IssuedInvoice>();
     try {
-      for (const payment of payments) {
+      for (const payment of tenders) {
         if (payment.method === 'wallet' && finalClientId) {
           await this.walletService.deductFunds(tenantId, finalClientId, payment.amount, 'POS Payment');
           walletTaken.push(payment.amount);
@@ -458,6 +463,8 @@ export class PosService {
         total: ticket.discountCents,
       },
       total,
+      /** Cash handed back, in cents: not recorded as a sale. */
+      change,
       payments: paymentRecords,
       loyalty: { pointsEarned, pointsSpent, discount: loyaltyDiscount, rewardName },
       ...(rectifications.size
@@ -915,17 +922,19 @@ export class PosService {
   /**
    * Get order/receipt details
    */
-  async getOrder(orderId: string) {
+  async getOrder(tenantId: string, orderId: string) {
+    // The salon's own: any id used to be read, another salon's sale and
+    // client contact included.
     const payment = await this.prisma.payment.findFirst({
-      where: { id: orderId },
+      where: { id: orderId, tenantId },
     });
 
     if (!payment) {
-      throw new NotFoundException('Order not found');
+      throw new NotFoundException('Venta no encontrada');
     }
 
     const client = payment.clientId
-      ? await this.prisma.client.findUnique({ where: { id: payment.clientId } })
+      ? await this.prisma.client.findFirst({ where: { id: payment.clientId, tenantId } })
       : null;
 
     return {

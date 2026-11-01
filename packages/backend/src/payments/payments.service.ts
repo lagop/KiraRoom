@@ -2,14 +2,49 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ConflictException,
   Logger,
   Optional,
 } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { LoyaltyService } from "../loyalty/loyalty.service";
-import { AppointmentStatus } from "@prisma/client";
+import { AppointmentStatus, PaymentMethod, PaymentStatus, Prisma } from "@prisma/client";
 import { applyStatusIfAllowed } from "../appointments/appointment-status";
 import { refreshClientStats } from "../clients/client-stats";
+import { salonToday } from "../analytics/analytics-metrics";
+import { WalletService } from "./services/wallet.service";
+import { needsTimezone, PaymentFilters, paymentWhere, PAYMENT_SORT_FIELDS } from "./payments-query";
+
+const euros = (cents: number) =>
+  new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(cents / 100);
+
+/** What a list row carries: its client, its appointment and what was refunded of it. */
+const LIST_INCLUDE = {
+  client: { select: { id: true, firstName: true, lastName: true, email: true } },
+  appointment: {
+    select: { id: true, scheduledDate: true, status: true, service: { select: { name: true } } },
+  },
+  refunds: { where: { status: "succeeded" as const }, select: { amount: true } },
+} satisfies Prisma.PaymentInclude;
+
+/** Adds `refundedAmount` (cents, refunds made so far) and drops the refund rows. */
+function withRefunded<P extends { refunds?: { amount: number }[] }>(payment: P) {
+  const { refunds, ...rest } = payment;
+  return { ...rest, refundedAmount: (refunds ?? []).reduce((s, r) => s + r.amount, 0) };
+}
+
+export interface PaymentsSummary {
+  /** Paid, net of what was refunded of it, in cents. */
+  totalRevenue: number;
+  /** Payments matching the filters, whatever their status. */
+  totalTransactions: number;
+  /** Payments still pending, in cents. */
+  pendingAmount: number;
+  /** Money given back (refunds), in cents. */
+  refundedAmount: number;
+  /** Net revenue by payment method. */
+  byMethod: { method: PaymentMethod; amount: number; count: number }[];
+}
 
 @Injectable()
 export class PaymentsService {
@@ -18,6 +53,8 @@ export class PaymentsService {
   constructor(
     private readonly prisma: PrismaService,
     @Optional() private readonly loyalty?: LoyaltyService,
+    // A refund of a wallet payment puts the money back in the wallet.
+    @Optional() private readonly wallet?: WalletService,
   ) {}
 
   /**
@@ -42,12 +79,12 @@ export class PaymentsService {
   }
 
   /**
-   * A payment marks its appointment completed, and a refund cancelled, as
-   * before -- but only where the appointments' transition table allows it,
-   * and only over the status just read. A visit already completed stays as
-   * it is (paying after completing is the usual order), and a cancelled or
-   * no-show one is not revived by a fee paid on it. The payment itself is
-   * never refused for it: it is already recorded by the time we get here.
+   * A payment marks its appointment completed -- but only where the
+   * appointments' transition table allows it, and only over the status just
+   * read. A visit already completed stays as it is (paying after completing
+   * is the usual order), and a cancelled or no-show one is not revived by a
+   * fee paid on it. The payment itself is never refused for it: it is
+   * already recorded by the time we get here.
    */
   private async markAppointment(appointmentId: string, to: AppointmentStatus) {
     const changed = await applyStatusIfAllowed(this.prisma as any, appointmentId, to);
@@ -65,91 +102,51 @@ export class PaymentsService {
     await refreshClientStats(this.prisma, tenantId, [clientId]);
   }
 
+  /** The salon's timezone, for its calendar days (Europe/Madrid by default). */
+  private async timezoneOf(tenantId: string): Promise<string> {
+    try {
+      const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } });
+      return tenant?.timezone || "Europe/Madrid";
+    } catch {
+      return "Europe/Madrid";
+    }
+  }
+
+  private async whereFor(tenantId: string, filters: PaymentFilters) {
+    const timeZone = needsTimezone(filters) ? await this.timezoneOf(tenantId) : undefined;
+    return paymentWhere(tenantId, filters, timeZone);
+  }
+
   async getPayments(
     tenantId: string,
     professionalId: string | null,
-    options: {
+    options: PaymentFilters & {
       page?: number;
       limit?: number;
-      status?: string;
-      clientId?: string;
       sortBy?: string;
       sortOrder?: "asc" | "desc";
-      dateFrom?: string;
-      dateTo?: string;
     },
   ) {
-    const {
-      page = 1,
-      limit = 20,
-      status,
-      clientId,
-      sortBy,
-      sortOrder,
-      dateFrom,
-      dateTo,
-    } = options;
+    const page = Math.max(1, Math.floor(options.page ?? 1));
+    const limit = Math.min(100, Math.max(1, Math.floor(options.limit ?? 20)));
     const skip = (page - 1) * limit;
 
-    const where: any = { tenantId };
-    if (status) where.status = status;
-    if (clientId) where.clientId = clientId;
+    const where = await this.whereFor(tenantId, { ...options, professionalId });
 
-    // Filtrar solo pagos de citas del profesional (para usuarios STAFF)
-    if (professionalId) {
-      where.appointment = {
-        professionalId: professionalId,
-      };
-    }
-
-    // Date range filter
-    if (dateFrom || dateTo) {
-      where.createdAt = {};
-      if (dateFrom) where.createdAt.gte = new Date(dateFrom);
-      if (dateTo) {
-        const endOfDay = new Date(dateTo);
-        endOfDay.setHours(23, 59, 59, 999);
-        where.createdAt.lte = endOfDay;
-      }
-    }
-
-    // Build orderBy dynamically
-    const orderBy: any = {};
-    const allowedSortFields = ["id", "createdAt", "amount", "status", "method"];
-    const validSortField =
-      sortBy && allowedSortFields.includes(sortBy) ? sortBy : "createdAt";
-    const validSortOrder = sortOrder === "asc" ? "asc" : "desc";
-    orderBy[validSortField] = validSortOrder;
+    const field = (PAYMENT_SORT_FIELDS as readonly string[]).includes(options.sortBy ?? "")
+      ? (options.sortBy as string)
+      : "createdAt";
+    const order = options.sortOrder === "asc" ? "asc" : "desc";
+    // The id breaks ties, so a page never repeats or skips a row.
+    const orderBy: Prisma.PaymentOrderByWithRelationInput[] = [{ [field]: order }, { id: order }];
 
     const [payments, total] = await Promise.all([
-      this.prisma.payment.findMany({
-        where,
-        skip,
-        take: limit,
-        orderBy,
-        include: {
-          client: {
-            select: {
-              id: true,
-              firstName: true,
-              lastName: true,
-              email: true,
-            },
-          },
-          appointment: {
-            select: {
-              id: true,
-              scheduledDate: true,
-              status: true,
-            },
-          },
-        },
-      }),
+      this.prisma.payment.findMany({ where, skip, take: limit, orderBy, include: LIST_INCLUDE }),
       this.prisma.payment.count({ where }),
     ]);
 
     return {
-      payments,
+      payments: payments.map(withRefunded),
       pagination: {
         page,
         limit,
@@ -159,11 +156,16 @@ export class PaymentsService {
     };
   }
 
-  async getPaymentById(tenantId: string, paymentId: string) {
+  /**
+   * One payment. A staff member (`professionalId`) reaches only the
+   * payments of their own appointments; any other is a 404.
+   */
+  async getPaymentById(tenantId: string, paymentId: string, professionalId?: string | null) {
     const payment = await this.prisma.payment.findFirst({
       where: {
         id: paymentId,
         tenantId,
+        ...(professionalId ? { appointment: { professionalId } } : {}),
       },
       include: {
         client: {
@@ -188,14 +190,15 @@ export class PaymentsService {
             },
           },
         },
+        refunds: { where: { status: "succeeded" }, select: { amount: true } },
       },
     });
 
     if (!payment) {
-      throw new NotFoundException("Payment not found");
+      throw new NotFoundException("Cobro no encontrado");
     }
 
-    return payment;
+    return withRefunded(payment);
   }
 
   async createPayment(
@@ -239,7 +242,7 @@ export class PaymentsService {
     });
 
     if (!client) {
-      throw new NotFoundException("Client not found");
+      throw new NotFoundException("Clienta no encontrada");
     }
 
     if (appointmentId) {
@@ -259,10 +262,7 @@ export class PaymentsService {
       });
 
       if (!appointment) {
-        const errorMessage = professionalId
-          ? "Appointment not found for this professional"
-          : "Appointment not found for this client";
-        throw new NotFoundException(errorMessage);
+        throw new NotFoundException("Cita no encontrada");
       }
     }
 
@@ -289,105 +289,187 @@ export class PaymentsService {
     return payment;
   }
 
-  async updatePaymentStatus(
-    tenantId: string,
-    paymentId: string,
-    status: "pending" | "paid" | "failed" | "refunded",
-  ) {
-    const payment = await this.prisma.payment.findFirst({
-      where: {
-        id: paymentId,
-        tenantId,
-      },
-    });
+  /**
+   * The Pagos page's cards, for the same filters as its list (status
+   * aside: each card is one status). They were named differently from what
+   * the page read (3 of 4 cards always 0) and ignored the filters.
+   */
+  async getSummary(tenantId: string, filters: PaymentFilters): Promise<PaymentsSummary> {
+    const where = await this.whereFor(tenantId, { ...filters, status: undefined });
 
-    if (!payment) {
-      throw new NotFoundException("Payment not found");
-    }
-
-    const updatedPayment = await this.prisma.payment.update({
-      where: { id: paymentId },
-      data: { status },
-    });
-
-    if (status === "paid" && payment.appointmentId) {
-      await this.markAppointment(payment.appointmentId, AppointmentStatus.completed);
-    }
-
-    if (status !== payment.status) {
-      await this.loyaltyAfter(tenantId, updatedPayment);
-      await this.clientStatsAfter(tenantId, payment.clientId);
-    }
-
-    return updatedPayment;
-  }
-
-  async getPaymentStats(tenantId: string, startDate?: Date, endDate?: Date) {
-    const where: any = { tenantId };
-
-    if (startDate || endDate) {
-      where.createdAt = {};
-      if (startDate) where.createdAt.gte = startDate;
-      if (endDate) where.createdAt.lte = endDate;
-    }
-
-    const [
-      totalPayments,
-      completedPayments,
-      pendingPayments,
-      failedPayments,
-      totalRevenue,
-    ] = await Promise.all([
+    const [totalTransactions, paid, pending, legacyRefunded, refunds] = await Promise.all([
       this.prisma.payment.count({ where }),
-      this.prisma.payment.count({ where: { ...where, status: "paid" } }),
-      this.prisma.payment.count({ where: { ...where, status: "pending" } }),
-      this.prisma.payment.count({ where: { ...where, status: "failed" } }),
-      this.prisma.payment.aggregate({
-        where: { ...where, status: "paid" },
+      this.prisma.payment.groupBy({
+        by: ["method"],
+        where: { ...where, status: PaymentStatus.paid },
         _sum: { amount: true },
+        _count: { _all: true },
+      }),
+      this.prisma.payment.aggregate({ where: { ...where, status: PaymentStatus.pending }, _sum: { amount: true } }),
+      // Refunded before refunds were recorded one by one: the whole payment.
+      this.prisma.payment.aggregate({
+        where: { ...where, status: PaymentStatus.refunded, refunds: { none: {} } },
+        _sum: { amount: true },
+      }),
+      this.prisma.refund.findMany({
+        where: { status: "succeeded", payment: where },
+        select: { amount: true, payment: { select: { method: true, status: true } } },
       }),
     ]);
 
+    // What was given back of payments still paid (partial refunds) comes
+    // off their method's revenue.
+    const partialByMethod = new Map<string, number>();
+    for (const r of refunds) {
+      if (r.payment.status !== PaymentStatus.paid) continue;
+      partialByMethod.set(r.payment.method, (partialByMethod.get(r.payment.method) ?? 0) + r.amount);
+    }
+    const byMethod = paid
+      .map((g) => ({
+        method: g.method,
+        amount: (g._sum.amount ?? 0) - (partialByMethod.get(g.method) ?? 0),
+        count: g._count._all,
+      }))
+      .sort((a, b) => b.amount - a.amount);
+
     return {
-      totalPayments,
-      completedPayments,
-      pendingPayments,
-      failedPayments,
-      totalRevenue: totalRevenue._sum.amount || 0,
+      totalRevenue: byMethod.reduce((s, m) => s + m.amount, 0),
+      totalTransactions,
+      pendingAmount: pending._sum.amount ?? 0,
+      refundedAmount: refunds.reduce((s, r) => s + r.amount, 0) + (legacyRefunded._sum.amount ?? 0),
+      byMethod,
     };
   }
 
-  async refundPayment(tenantId: string, paymentId: string, reason?: string) {
+  /**
+   * Gives back all or part of a charge taken at the salon (cash, card
+   * terminal, transfer, wallet), in one transaction:
+   *
+   * - a `Refund` row with the amount and the reason;
+   * - the payment becomes `refunded` once all of it is given back; a
+   *   partial refund leaves it `paid`, the refunds saying how much;
+   * - its appointment's `amountPaid` goes down by the amount (and its
+   *   payment status becomes `refunded` when nothing is left paid). The
+   *   visit's own status is not touched: it happened;
+   * - a wallet payment's money goes back to the wallet.
+   *
+   * Then, once committed, a full refund takes back the loyalty points the
+   * payment earned (and gives back points spent on the sale when nothing of
+   * it is left paid), and the client's figures are recomputed.
+   *
+   * An issued invoice is not edited: the answer names it so the salon issues
+   * the rectificativa (Facturas).
+   *
+   * No online (Stripe) payment exists on this version; one would be refused
+   * here rather than marked refunded without Stripe giving the money back.
+   */
+  async refundPayment(
+    tenantId: string,
+    paymentId: string,
+    input: { amount?: number; reason: string },
+    actorId?: string | null,
+  ) {
     const payment = await this.prisma.payment.findFirst({
-      where: {
-        id: paymentId,
-        tenantId,
-      },
+      where: { id: paymentId, tenantId },
+      include: { refunds: { where: { status: "succeeded" }, select: { amount: true } } },
+    });
+    if (!payment) throw new NotFoundException("Cobro no encontrado");
+    if (payment.status === PaymentStatus.refunded) {
+      throw new ConflictException("Este cobro ya está devuelto.");
+    }
+    if (payment.status !== PaymentStatus.paid) {
+      throw new BadRequestException("Solo se puede devolver un cobro pagado.");
+    }
+    if (payment.stripePaymentId) {
+      throw new BadRequestException("Este cobro se hizo en línea con Stripe: devuélvelo desde tu cuenta de Stripe.");
+    }
+    const reason = (input.reason ?? "").trim();
+    if (!reason) throw new BadRequestException("Indica el motivo de la devolución.");
+
+    const already = (payment.refunds ?? []).reduce((s, r) => s + r.amount, 0);
+    const left = payment.amount - already;
+    if (left <= 0) throw new ConflictException("Este cobro ya está devuelto.");
+    const amount = input.amount ?? left;
+    if (!Number.isInteger(amount) || amount < 1) {
+      throw new BadRequestException("El importe a devolver debe ser mayor que 0.");
+    }
+    if (amount > left) {
+      throw new BadRequestException(
+        `Como máximo puedes devolver ${euros(left)} de este cobro` +
+          (already > 0 ? ` (ya se devolvieron ${euros(already)}).` : "."),
+      );
+    }
+    const full = amount === left;
+    const status = full ? PaymentStatus.refunded : PaymentStatus.paid;
+
+    const changed = () =>
+      new ConflictException("El cobro acaba de cambiar. Recarga y vuelve a intentarlo.");
+
+    const { refund, appointment } = await this.prisma.$transaction(async (tx) => {
+      // Over the payment as just read: a second refund at the same time
+      // finds it changed and gets a 409, so the two cannot add up past it.
+      const { count } = await tx.payment.updateMany({
+        where: { id: payment.id, tenantId, status: PaymentStatus.paid, updatedAt: payment.updatedAt },
+        data: { status, updatedAt: new Date() },
+      });
+      if (count !== 1) throw changed();
+
+      const refund = await tx.refund.create({
+        data: { paymentId: payment.id, amount, reason, status: "succeeded", adminId: actorId ?? null },
+      });
+
+      let appointment: { id: string; amountPaid: number; paymentStatus: PaymentStatus } | null = null;
+      if (payment.appointmentId) {
+        const apt = await tx.appointment.findFirst({
+          where: { id: payment.appointmentId, tenantId },
+          select: { id: true, amountPaid: true, paymentStatus: true },
+        });
+        if (apt) {
+          const before = Math.round(Number(apt.amountPaid ?? 0));
+          const amountPaid = Math.max(0, before - amount);
+          const paymentStatus = amountPaid === 0 ? PaymentStatus.refunded : apt.paymentStatus;
+          const res = await tx.appointment.updateMany({
+            where: { id: apt.id, tenantId, amountPaid: apt.amountPaid },
+            data: { amountPaid, paymentStatus },
+          });
+          if (res.count !== 1) throw changed();
+          appointment = { id: apt.id, amountPaid, paymentStatus };
+        }
+      }
+
+      if (payment.method === PaymentMethod.wallet && payment.clientId) {
+        if (!this.wallet) throw new BadRequestException("No se puede devolver a la cartera ahora mismo.");
+        await this.wallet.creditIn(tx, tenantId, payment.clientId, amount, `Devolución: ${reason}`, "refund", refund.id);
+      }
+
+      return { refund, appointment };
     });
 
-    if (!payment) {
-      throw new NotFoundException("Payment not found");
-    }
-
-    if (payment.status !== "paid") {
-      throw new BadRequestException("Only paid payments can be refunded");
-    }
-
-    const updatedPayment = await this.prisma.payment.update({
-      where: { id: paymentId },
-      data: {
-        status: "refunded",
-      },
-    });
-
-    if (payment.appointmentId) {
-      await this.markAppointment(payment.appointmentId, AppointmentStatus.cancelled);
-    }
-
-    await this.loyaltyAfter(tenantId, updatedPayment);
+    const updated = { ...payment, refunds: undefined, status };
+    if (full) await this.loyaltyAfter(tenantId, updated);
     await this.clientStatsAfter(tenantId, payment.clientId);
 
-    return updatedPayment;
+    const invoice = payment.appointmentId
+      ? await this.prisma.invoice.findFirst({
+          where: {
+            tenantId,
+            sourceType: "appointment",
+            sourceId: payment.appointmentId,
+            status: { in: ["issued", "paid"] },
+          },
+          select: { id: true, series: true, number: true },
+        })
+      : null;
+
+    return {
+      payment: { ...updated, refundedAmount: already + amount },
+      refund,
+      refundedAmount: already + amount,
+      refundableAmount: left - amount,
+      appointment,
+      invoice: invoice ? { id: invoice.id, number: `${invoice.series ?? ""}${invoice.number ?? ""}` } : null,
+      rectificationNeeded: !!invoice,
+    };
   }
 
   async deletePayment(tenantId: string, paymentId: string) {
@@ -399,12 +481,12 @@ export class PaymentsService {
     });
 
     if (!payment) {
-      throw new NotFoundException("Payment not found");
+      throw new NotFoundException("Cobro no encontrado");
     }
 
     if (!["pending", "failed"].includes(payment.status)) {
       throw new BadRequestException(
-        "Only pending or failed payments can be deleted",
+        "Solo se pueden borrar cobros pendientes o fallidos. Un cobro pagado se devuelve (Reembolsar).",
       );
     }
 
@@ -415,66 +497,28 @@ export class PaymentsService {
     return { success: true };
   }
 
-  async getPaymentByStripeId(stripePaymentId: string, tenantId: string) {
-    const payment = await this.prisma.payment.findFirst({
-      where: {
-        stripePaymentId,
-        tenantId,
-      },
-    });
-
-    return payment;
-  }
-
+  /** Today's payments, today being the salon's calendar day. */
   async getTodayPayments(tenantId: string, professionalId: string | null) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-
-    const where: any = {
-      tenantId,
-      createdAt: {
-        gte: today,
-        lt: tomorrow,
-      },
-    };
-
-    // Filtrar solo pagos de citas del profesional (para usuarios STAFF)
-    if (professionalId) {
-      where.appointment = {
-        professionalId: professionalId,
-      };
-    }
+    const timeZone = await this.timezoneOf(tenantId);
+    const today = salonToday(timeZone);
+    const where = paymentWhere(tenantId, { dateFrom: today, dateTo: today, professionalId }, timeZone);
 
     const payments = await this.prisma.payment.findMany({
       where,
-      include: {
-        client: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            email: true,
-          },
-        },
-        appointment: {
-          select: {
-            id: true,
-            scheduledDate: true,
-            status: true,
-          },
-        },
-      },
+      include: LIST_INCLUDE,
       orderBy: { createdAt: "desc" },
     });
 
-    return payments;
+    return payments.map(withRefunded);
   }
 
-  async getPaymentsByAppointment(appointmentId: string) {
+  async getPaymentsByAppointment(tenantId: string, appointmentId: string, professionalId?: string | null) {
     const payments = await this.prisma.payment.findMany({
-      where: { appointmentId },
+      where: {
+        tenantId,
+        appointmentId,
+        ...(professionalId ? { appointment: { professionalId } } : {}),
+      },
       include: {
         client: {
           select: {
@@ -484,18 +528,20 @@ export class PaymentsService {
             email: true,
           },
         },
+        refunds: { where: { status: "succeeded" }, select: { amount: true } },
       },
       orderBy: { createdAt: "desc" },
     });
 
-    return payments;
+    return payments.map(withRefunded);
   }
 
-  async getPaymentsByClient(tenantId: string, clientId: string) {
+  async getPaymentsByClient(tenantId: string, clientId: string, professionalId?: string | null) {
     const payments = await this.prisma.payment.findMany({
       where: {
         tenantId,
         clientId,
+        ...(professionalId ? { appointment: { professionalId } } : {}),
       },
       include: {
         appointment: {
@@ -505,118 +551,11 @@ export class PaymentsService {
             status: true,
           },
         },
+        refunds: { where: { status: "succeeded" }, select: { amount: true } },
       },
       orderBy: { createdAt: "desc" },
     });
 
-    return payments;
-  }
-
-  async confirmPayment(tenantId: string, paymentIntentId: string) {
-    // Find payment by stripe payment intent id or create a new one
-    const payment = await this.prisma.payment.findFirst({
-      where: {
-        tenantId,
-        stripePaymentId: paymentIntentId,
-      },
-    });
-
-    if (!payment) {
-      throw new NotFoundException("Payment not found for this payment intent");
-    }
-
-    const updatedPayment = await this.prisma.payment.update({
-      where: { id: payment.id },
-      data: { status: "paid" },
-    });
-
-    if (payment.appointmentId) {
-      await this.markAppointment(payment.appointmentId, AppointmentStatus.completed);
-    }
-
-    await this.loyaltyAfter(tenantId, updatedPayment);
-    await this.clientStatsAfter(tenantId, payment.clientId);
-
-    return updatedPayment;
-  }
-
-  async processDeposit(
-    tenantId: string,
-    appointmentId: string,
-    amount: number,
-    method: "card" | "cash",
-  ) {
-    const appointment = await this.prisma.appointment.findFirst({
-      where: {
-        id: appointmentId,
-        tenantId,
-      },
-    });
-
-    if (!appointment) {
-      throw new NotFoundException("Appointment not found");
-    }
-
-    const payment = await this.prisma.payment.create({
-      data: {
-        tenantId,
-        clientId: appointment.clientId,
-        appointmentId,
-        amount,
-        type: "deposit",
-        method,
-        status: "paid",
-        description: "Deposit payment",
-      },
-    });
-
-    // Update appointment with deposit info
-    await this.prisma.appointment.update({
-      where: { id: appointmentId },
-      data: {
-        depositPaid: true,
-        depositAmount: amount,
-      },
-    });
-    await this.clientStatsAfter(tenantId, appointment.clientId);
-
-    return payment;
-  }
-
-  async collectBalance(
-    tenantId: string,
-    appointmentId: string,
-    amount: number,
-    method: "card" | "cash",
-  ) {
-    const appointment = await this.prisma.appointment.findFirst({
-      where: {
-        id: appointmentId,
-        tenantId,
-      },
-    });
-
-    if (!appointment) {
-      throw new NotFoundException("Appointment not found");
-    }
-
-    const payment = await this.prisma.payment.create({
-      data: {
-        tenantId,
-        clientId: appointment.clientId,
-        appointmentId,
-        amount,
-        type: "appointment",
-        method,
-        status: "paid",
-        description: "Balance payment",
-      },
-    });
-
-    // Update appointment status to completed
-    await this.markAppointment(appointmentId, AppointmentStatus.completed);
-    await this.clientStatsAfter(tenantId, appointment.clientId);
-
-    return payment;
+    return payments.map(withRefunded);
   }
 }

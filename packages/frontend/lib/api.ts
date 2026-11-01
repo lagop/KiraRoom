@@ -136,6 +136,18 @@ export const removeToken = () => {
 export function decodeJwtToken(token: string): any { try { const b = token.split('.')[1]; const j = JSON.parse(atob(b.replace(/-/g, '+').replace(/_/g, '/'))); return j; } catch { return null; } }
 
 /** Returns the JWT `exp` claim (in seconds) or `null` if unparseable. */
+/**
+ * The query string of the payments list, summary and CSV: only the
+ * filters that are set.
+ */
+function paymentQuery(params: object): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== "") q.set(k, String(v));
+  }
+  return q.toString();
+}
+
 function getJwtExp(token: string): number | null {
   const claims = decodeJwtToken(token);
   if (claims && typeof claims.exp === "number") return claims.exp;
@@ -838,15 +850,11 @@ export interface Payment {
     | "gift_card"
     | "membership"
     | "other";
-  status:
-    | "pending"
-    | "processing"
-    | "succeeded"
-    | "failed"
-    | "cancelled"
-    | "refunded"
-    | "partially_refunded";
-  method: "card" | "cash" | "bank_transfer" | "wallet" | "gift_card";
+  /** The server's PaymentStatus enum (a partial refund leaves it "paid"). */
+  status: "pending" | "paid" | "failed" | "refunded";
+  method: "card" | "cash" | "bank_transfer" | "wallet" | "gift_card" | "loyalty_points";
+  /** Cents given back so far (refunds). */
+  refundedAmount?: number;
   stripePaymentId?: string;
   stripeInvoiceId?: string;
   description?: string;
@@ -870,22 +878,48 @@ export interface Payment {
     id: string;
     scheduledDate: string;
     status: string;
+    service?: { name: string } | null;
   };
 }
 
+/** The Pagos page's cards (GET /payments/stats/summary), in cents. */
 export interface PaymentSummary {
+  /** Paid, net of refunds. */
   totalRevenue: number;
   totalTransactions: number;
   pendingAmount: number;
   refundedAmount: number;
+  byMethod: { method: Payment["method"]; amount: number; count: number }[];
+}
+
+/** The Pagos page's filters, sent to the list, the summary and the CSV. */
+export interface PaymentFilters {
+  status?: Payment["status"];
+  method?: Payment["method"];
+  clientId?: string;
+  /** YYYY-MM-DD (a salon day) or an ISO instant. */
+  dateFrom?: string;
+  dateTo?: string;
+}
+
+/** POST /payments/:id/refund's answer. */
+export interface PaymentRefundResult {
+  refundedAmount: number;
+  refundableAmount: number;
+  /** The appointment's issued invoice, which needs a rectificativa. */
+  invoice: { id: string; number: string } | null;
+  rectificationNeeded: boolean;
 }
 
 export interface StripeSettings {
   stripeMode: "test" | "live";
+  /** Masked by the server (sk_test_…1234); sent back as is, it is kept. */
   stripeTestSecretKey: string | null;
   stripeTestPublishableKey: string | null;
   stripeLiveSecretKey: string | null;
   stripeLivePublishableKey: string | null;
+  testSecretKeyConfigured?: boolean;
+  liveSecretKeyConfigured?: boolean;
   isConfigured: boolean;
 }
 
@@ -1687,11 +1721,9 @@ export interface ApiClientInterface {
   archiveClientNotification(clientId: string, id: string): Promise<void>;
 
   // Payments
-  getPayments(params?: {
-    tenantId?: string;
-    clientId?: string;
-    appointmentId?: string;
-    status?: string;
+  getPayments(params?: PaymentFilters & {
+    page?: number;
+    limit?: number;
     sortBy?: string;
     sortOrder?: "asc" | "desc";
   }): Promise<{
@@ -1707,21 +1739,11 @@ export interface ApiClientInterface {
   getTodayPayments(): Promise<any[]>;
   deletePayment(id: string): Promise<void>;
   createPayment(data: CreatePaymentDto): Promise<Payment>;
-  updatePaymentStatus(id: string, status: string): Promise<Payment>;
+  refundPayment(id: string, body: { amount?: number; reason: string }): Promise<PaymentRefundResult>;
   getPaymentByAppointment(appointmentId: string): Promise<Payment[]>;
-  processDeposit(
-    appointmentId: string,
-    amount: number,
-    method: "card" | "cash",
-  ): Promise<Payment>;
-  collectBalance(
-    appointmentId: string,
-    amount: number,
-    method: "card" | "cash",
-  ): Promise<Payment>;
   getPaymentByClient(clientId: string): Promise<Payment[]>;
-  getPaymentSummary(tenantId: string): Promise<PaymentSummary>;
-  confirmPayment(paymentIntentId: string): Promise<Payment>;
+  getPaymentSummary(filters?: PaymentFilters): Promise<PaymentSummary>;
+  downloadPaymentsCsv(filters?: PaymentFilters): Promise<{ blob: Blob; filename: string }>;
   // Stripe Settings
   getStripeSettings(): Promise<StripeSettings>;
   updateStripeSettings(
@@ -1754,6 +1776,8 @@ export interface ApiClientInterface {
 
   // Client Wallet
   getClientWallet(clientId: string): Promise<ClientWallet>;
+  depositToWallet(clientId: string, amountCents: number, description?: string): Promise<unknown>;
+  withdrawFromWallet(clientId: string, amountCents: number, description?: string): Promise<unknown>;
 
   // POS
   getPosServices(): Promise<any[]>;
@@ -3244,15 +3268,11 @@ class ApiClient implements ApiClientInterface {
   }
 
   // Payments
-  async getPayments(params?: {
-    tenantId?: string;
-    clientId?: string;
-    appointmentId?: string;
-    status?: string;
+  async getPayments(params?: PaymentFilters & {
+    page?: number;
+    limit?: number;
     sortBy?: string;
     sortOrder?: "asc" | "desc";
-    dateFrom?: string;
-    dateTo?: string;
   }): Promise<{
     payments: Payment[];
     pagination: {
@@ -3262,9 +3282,7 @@ class ApiClient implements ApiClientInterface {
       totalPages: number;
     };
   }> {
-    const query = new URLSearchParams(
-      params as Record<string, string>,
-    ).toString();
+    const query = paymentQuery(params ?? {});
     return this.request<{
       payments: Payment[];
       pagination: {
@@ -3311,43 +3329,16 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  async updatePaymentStatus(id: string, status: string): Promise<Payment> {
-    return this.request<Payment>(`/payments/${id}/status`, {
-      method: "PATCH",
-      body: JSON.stringify({ status }),
+  /** Gives back all or part of a charge (owner/admin). No amount: all that is left. */
+  async refundPayment(id: string, body: { amount?: number; reason: string }): Promise<PaymentRefundResult> {
+    return this.request<PaymentRefundResult>(`/payments/${id}/refund`, {
+      method: "POST",
+      body: JSON.stringify(body),
     });
   }
 
   async getPaymentByAppointment(appointmentId: string): Promise<Payment[]> {
     return this.request<Payment[]>(`/payments/appointment/${appointmentId}`);
-  }
-
-  async processDeposit(
-    appointmentId: string,
-    amount: number,
-    method: "card" | "cash",
-  ): Promise<Payment> {
-    return this.request<Payment>(
-      `/payments/appointments/${appointmentId}/deposit`,
-      {
-        method: "POST",
-        body: JSON.stringify({ amount, method }),
-      },
-    );
-  }
-
-  async collectBalance(
-    appointmentId: string,
-    amount: number,
-    method: "card" | "cash",
-  ): Promise<Payment> {
-    return this.request<Payment>(
-      `/payments/appointments/${appointmentId}/collect-balance`,
-      {
-        method: "POST",
-        body: JSON.stringify({ amount, method }),
-      },
-    );
   }
 
   async getPendingPaymentAppointments(params?: {
@@ -3740,16 +3731,34 @@ class ApiClient implements ApiClientInterface {
     return this.request<Payment[]>(`/payments/client/${clientId}`);
   }
 
-  async getPaymentSummary(tenantId: string): Promise<PaymentSummary> {
-    return this.request<PaymentSummary>(
-      `/payments/stats/summary?tenantId=${tenantId}`,
-    );
+  /** The Pagos page's cards, for the list's filters (status aside). */
+  async getPaymentSummary(filters: PaymentFilters = {}): Promise<PaymentSummary> {
+    const { status: _status, ...rest } = filters;
+    const query = paymentQuery(rest);
+    return this.request<PaymentSummary>(`/payments/stats/summary${query ? `?${query}` : ""}`);
   }
 
-  async confirmPayment(paymentIntentId: string): Promise<Payment> {
-    return this.request<Payment>(`/payments/confirm/${paymentIntentId}`, {
-      method: "POST",
-    });
+  /**
+   * The Pagos list as a CSV (owner/admin), with the page's filters. A file
+   * download needs the bearer token, so it cannot be a plain link.
+   */
+  async downloadPaymentsCsv(filters: PaymentFilters = {}): Promise<{ blob: Blob; filename: string }> {
+    const query = paymentQuery(filters);
+    const url = `${API_BASE_URL}/exports/payments.csv${query ? `?${query}` : ""}`;
+    const get = () => {
+      const token = getToken();
+      return fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {}, credentials: "include" });
+    };
+    let res = await get();
+    if (res.status === 401 && (await this.refreshAccessToken())) res = await get();
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const raw = (body as { message?: unknown }).message;
+      throw new ApiError(Array.isArray(raw) ? raw.join(". ") : String(raw || `Error ${res.status}`), res.status);
+    }
+    const disposition = res.headers.get("Content-Disposition") ?? "";
+    const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "pagos.csv";
+    return { blob: await res.blob(), filename };
   }
 
   // Stripe Settings
@@ -3902,6 +3911,22 @@ class ApiClient implements ApiClientInterface {
   // Client Wallet
   async getClientWallet(clientId: string): Promise<ClientWallet> {
     return this.request<ClientWallet>(`/payments/wallet/${clientId}`);
+  }
+
+  /** Money into a client's wallet (owner/admin); the first one creates it. */
+  async depositToWallet(clientId: string, amountCents: number, description?: string): Promise<unknown> {
+    return this.request(`/payments/wallet/${clientId}/deposit`, {
+      method: "POST",
+      body: JSON.stringify({ amount: amountCents, ...(description ? { description } : {}) }),
+    });
+  }
+
+  /** Money out of a client's wallet (owner/admin), never past its balance. */
+  async withdrawFromWallet(clientId: string, amountCents: number, description?: string): Promise<unknown> {
+    return this.request(`/payments/wallet/${clientId}/withdraw`, {
+      method: "POST",
+      body: JSON.stringify({ amount: amountCents, ...(description ? { description } : {}) }),
+    });
   }
 
   // POS

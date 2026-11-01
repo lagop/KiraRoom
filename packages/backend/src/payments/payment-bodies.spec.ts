@@ -1,12 +1,11 @@
 import { PaymentsController } from "./payments.controller";
 import { AddOnsAdminController } from "./controllers/addons.controller";
 import {
-  AppointmentChargeDto,
   CancelSubscriptionDto,
   CreatePaymentBodyDto,
+  RefundPaymentDto,
   SubscriptionPlanDto,
   UpdateLocationCountDto,
-  UpdatePaymentStatusDto,
   WalletAmountDto,
 } from "./dto/payment-bodies.dto";
 import { GrantAddOnDto } from "./dto/addon.dto";
@@ -18,15 +17,13 @@ describe("payments bodies", () => {
   it("are validated classes, not inline types", () => {
     const P = PaymentsController;
     expect(bodyMetatype(P, "createPayment")).toBe(CreatePaymentBodyDto);
-    expect(bodyMetatype(P, "updatePaymentStatus")).toBe(UpdatePaymentStatusDto);
     expect(bodyMetatype(P, "createCheckout")).toBe(SubscriptionPlanDto);
     expect(bodyMetatype(P, "changePlan")).toBe(SubscriptionPlanDto);
     expect(bodyMetatype(P, "cancelSubscription")).toBe(CancelSubscriptionDto);
     expect(bodyMetatype(P, "updateLocationCount")).toBe(UpdateLocationCountDto);
     expect(bodyMetatype(P, "depositWallet")).toBe(WalletAmountDto);
     expect(bodyMetatype(P, "withdrawWallet")).toBe(WalletAmountDto);
-    expect(bodyMetatype(P, "processDeposit")).toBe(AppointmentChargeDto);
-    expect(bodyMetatype(P, "collectBalance")).toBe(AppointmentChargeDto);
+    expect(bodyMetatype(P, "refundPayment")).toBe(RefundPaymentDto);
     expect(bodyMetatype(AddOnsAdminController, "grant")).toBe(GrantAddOnDto);
   });
 
@@ -39,14 +36,23 @@ describe("payments bodies", () => {
   });
 
   it("the controller rounds a wallet amount to whole cents", async () => {
-    const wallet = { addFunds: jest.fn(async () => ({})) };
+    const wallet = { addFunds: jest.fn(async () => ({})), assertClientOfSalon: jest.fn(async () => undefined) };
     const c = new PaymentsController(null as any, null as any, wallet as any, null as any, null as any, null as any);
     await c.depositWallet({ user: { tenantId: "t1" } }, uuid(1), Object.assign(new WalletAmountDto(), { amount: 10.1 * 100 }));
     expect(wallet.addFunds).toHaveBeenCalledWith("t1", uuid(1), 1010, undefined);
   });
 
-  it("a status is one of the four; a payment's type and method are the enums", async () => {
-    await expect(bodyParser(PaymentsController, "updatePaymentStatus")({ status: "stolen" })).rejects.toBeDefined();
+  it("a refund: optional whole cents, a reason that is not blank", async () => {
+    const parse = bodyParser(PaymentsController, "refundPayment");
+    expect(await parse({ amount: 1500, reason: "Error al cobrar" })).toEqual({ amount: 1500, reason: "Error al cobrar" });
+    expect(await parse({ reason: "Todo" })).toEqual({ reason: "Todo" });
+    await expect(parse({ amount: 1500 })).rejects.toBeDefined();
+    await expect(parse({ amount: 1500, reason: "   " })).rejects.toBeDefined();
+    await expect(parse({ amount: 0, reason: "x" })).rejects.toBeDefined();
+    await expect(parse({ amount: 12.5, reason: "x" })).rejects.toBeDefined();
+  });
+
+  it("a payment's type and method are the enums", async () => {
     const create = bodyParser(PaymentsController, "createPayment");
     const body = { amount: 2500, clientId: uuid(1), method: "cash", type: "service" };
     expect(await create({ ...body, status: "paid", tenantId: uuid(2) })).toEqual(body);

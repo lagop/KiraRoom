@@ -18,7 +18,7 @@ describe("GET /payments/client/:clientId", () => {
 
     const out = await controller.getPaymentsByClient({ user: { tenantId: TENANT, role: "owner" } }, CLIENT);
 
-    expect(out).toEqual([{ id: "pay1" }]);
+    expect(out).toEqual([{ id: "pay1", refundedAmount: 0 }]);
     expect(prisma.payment.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { tenantId: TENANT, clientId: CLIENT } }),
     );
