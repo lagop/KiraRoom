@@ -163,3 +163,41 @@ describe("count by coin and note", () => {
     expect(() => checkedBreakdown({ "5000": 1 }, 4000)).toThrow(/no suma/);
   });
 });
+
+describe("wallet top-ups", () => {
+  it("a cash top-up goes into the drawer; card and Bizum ones show by method; none is a sale", () => {
+    const f = sessionFigures(
+      base({
+        payments: [{ method: "cash", amount: 4000 }],
+        sales: [sale(4000)],
+        walletTopUps: [
+          { method: "cash", amount: 5000 },
+          { method: "card", amount: 3000 },
+          { method: "bizum", amount: 2000 },
+        ],
+      }),
+    );
+    // 100 float + 40 sale + 50 top-up.
+    expect(f.cash).toMatchObject({ salesCents: 4000, walletTopUpsCents: 5000, tenderedCents: 4000, expectedCents: 19_000 });
+    expect(f.byMethod.map((m) => [m.method, m.count, m.amountCents, m.topUpCents, m.netCents])).toEqual([
+      ["cash", 2, 9000, 5000, 9000],
+      ["card", 1, 3000, 3000, 3000],
+      ["bizum", 1, 2000, 2000, 2000],
+    ]);
+    expect(f.walletTopUps).toEqual({ count: 3, totalCents: 10_000 });
+    expect(f.sales).toMatchObject({ count: 1, grossCents: 4000 });
+  });
+
+  it("none: the figures are as before", () => {
+    const f = sessionFigures(base({ payments: [{ method: "card", amount: 1000 }] }));
+    expect(f.cash.walletTopUpsCents).toBe(0);
+    expect(f.walletTopUps).toEqual({ count: 0, totalCents: 0 });
+    expect(f.byMethod[0]).toMatchObject({ topUpCents: 0 });
+  });
+
+  it("expectedCashCents counts cash top-ups in", () => {
+    const input = { openingFloatCents: 1000, cashSalesCents: 500, cashRefundsCents: 200, movementsInCents: 0, movementsOutCents: 100 };
+    expect(expectedCashCents(input)).toBe(1200);
+    expect(expectedCashCents({ ...input, cashWalletTopUpsCents: 2500 })).toBe(3700);
+  });
+});

@@ -81,10 +81,43 @@ export function drawerProblem(
   return "pos.cash_session.err_drawer_closed";
 }
 
-/** Why a movement cannot be recorded yet (a translation key), or null. */
-export function movementProblem(amountCents: number | null, reason: string, type: "in" | "out", expectedCents: number): string | null {
+/**
+ * What the drawer should hold, for those who may know it (owner and
+ * managers). Null in the blind view staff get (blind count): the server
+ * does not send it, and nothing here should stand in for it.
+ */
+export function expectedCashOf(session: { blind?: boolean; expectedCashCents?: number | null } | null | undefined): number | null {
+  if (!session || session.blind) return null;
+  return session.expectedCashCents ?? 0;
+}
+
+/**
+ * Why a movement cannot be recorded yet (a translation key), or null. A
+ * withdrawal is capped by the expected cash only when it is known (null:
+ * blind count, the server does not refuse on it either).
+ */
+export function movementProblem(
+  amountCents: number | null,
+  reason: string,
+  type: "in" | "out",
+  expectedCents: number | null,
+): string | null {
   if (amountCents === null || amountCents <= 0) return "pos.cash_session.err_amount";
   if (!reason.trim()) return "pos.cash_session.err_reason";
-  if (type === "out" && amountCents > expectedCents) return "pos.cash_session.err_out_too_much";
+  if (type === "out" && expectedCents !== null && amountCents > expectedCents) return "pos.cash_session.err_out_too_much";
+  return null;
+}
+
+/** How a wallet top-up can be paid, in the order the dialog offers them: money the client hands over. */
+export const WALLET_TOP_UP_METHODS = ["cash", "card", "bizum", "bank_transfer"] as const;
+
+/**
+ * Why a wallet top-up cannot be taken with the drawer as it is (a
+ * translation key), or null: cash goes into the drawer, so it needs one
+ * open; card, Bizum and transfer do not. Null while unknown (the server decides).
+ */
+export function topUpProblem(method: string | null, drawerOpen: boolean | null): string | null {
+  if (!method) return "payments.top_up_method_required";
+  if (method === "cash" && drawerOpen === false) return "payments.top_up_drawer_closed";
   return null;
 }

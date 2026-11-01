@@ -19,6 +19,7 @@ import {
   denominationLabel,
   discrepancy,
   discrepancyClass,
+  expectedCashOf,
   movementProblem,
   type CountRows,
 } from "@/lib/cash-session";
@@ -42,6 +43,11 @@ interface CashDrawerProps {
  *   (optionally coin by coin), the difference in colour, confirmed in a
  *   ConfirmDialog, then the printable closing report;
  * - "Historial de cajas" for the owner and managers.
+ *
+ * Staff count blind: the server sends them no expected cash, no totals by
+ * method and no difference (session.blind). They see the float, record
+ * movements, type what they counted and get a confirmation and a slip with
+ * what they counted and their own movements.
  */
 export default function CashDrawer({ refreshKey, onStateChange }: CashDrawerProps) {
   const t = useTranslations();
@@ -93,7 +99,9 @@ export default function CashDrawer({ refreshKey, onStateChange }: CashDrawerProp
   }, [load, refreshKey]);
 
   const session = state?.session ?? null;
-  const expected = session?.expectedCashCents ?? 0;
+  // Null for staff (blind count): nothing is shown or compared against.
+  const expected = expectedCashOf(session);
+  const full = session && !session.blind ? session : null;
 
   const openDrawer = async () => {
     const cents = parseEurosInput(floatText || "0");
@@ -148,7 +156,7 @@ export default function CashDrawer({ refreshKey, onStateChange }: CashDrawerProp
   };
   const countTotal = countTotalCents(countRows);
   const countedCents = showCount ? countTotal : parseEurosInput(countedText);
-  const diff = countedCents === null ? null : discrepancy(countedCents, expected);
+  const diff = countedCents === null || expected === null ? null : discrepancy(countedCents, expected);
 
   const closeDrawer = async () => {
     if (!session || countedCents === null) return;
@@ -163,7 +171,9 @@ export default function CashDrawer({ refreshKey, onStateChange }: CashDrawerProp
       setClosing(false);
       toast({
         title: t("pos.cash_session.closed_toast"),
-        description: `${t("pos.cash_session.difference")}: ${diffText(closed.discrepancyCents ?? 0)}`,
+        description: closed.blind
+          ? t("pos.cash_session.closed_toast_blind", { amount: euros(closed.countedCashCents ?? countedCents) })
+          : `${t("pos.cash_session.difference")}: ${diffText(closed.discrepancyCents ?? 0)}`,
       });
       setReport(closed);
       await load();
@@ -240,11 +250,16 @@ export default function CashDrawer({ refreshKey, onStateChange }: CashDrawerProp
               })}
               {" · "}
               {t("pos.cash_session.float")} {euros(session.openingFloatCents)}
-              {" · "}
-              <strong>
-                {t("pos.cash_session.expected_cash")} {euros(expected)}
-              </strong>
+              {expected !== null && (
+                <>
+                  {" · "}
+                  <strong>
+                    {t("pos.cash_session.expected_cash")} {euros(expected)}
+                  </strong>
+                </>
+              )}
             </p>
+            {session.blind && <p className="text-xs text-green-900/70">{t("pos.cash_session.blind_hint")}</p>}
           </div>
           <div className="flex flex-wrap gap-2">
             <button
@@ -349,67 +364,86 @@ export default function CashDrawer({ refreshKey, onStateChange }: CashDrawerProp
             <h2 id="cash-close-title" className="mb-1 text-base font-semibold">
               {t("pos.cash_session.close_title")}
             </h2>
-            <p className="mb-4 text-sm text-gray-600">{t("pos.cash_session.close_intro")}</p>
+            <p className="mb-4 text-sm text-gray-600">
+              {full ? t("pos.cash_session.close_intro") : t("pos.cash_session.close_intro_blind")}
+            </p>
 
-            <h3 className="mb-1 text-sm font-semibold">{t("pos.cash_session.by_method")}</h3>
-            {session.figures.byMethod.length === 0 ? (
-              <p className="mb-4 text-sm text-gray-500">{t("pos.cash_session.no_payments")}</p>
-            ) : (
-              <table className="mb-4 w-full text-sm">
-                <thead>
-                  <tr className="text-left text-xs text-gray-500">
-                    <th className="py-1 font-medium">{t("pos.cash_session.method")}</th>
-                    <th className="py-1 text-right font-medium">{t("pos.cash_session.payments_count")}</th>
-                    <th className="py-1 text-right font-medium">{t("pos.cash_session.amount")}</th>
-                    <th className="py-1 text-right font-medium">{t("pos.cash_session.refunded")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {session.figures.byMethod.map((m) => (
-                    <tr key={m.method} className="border-t">
-                      <td className="py-1">{methodLabel(m.method)}</td>
-                      <td className="py-1 text-right">{m.count}</td>
-                      <td className="py-1 text-right">{euros(m.amountCents)}</td>
-                      <td className="py-1 text-right">{m.refundedCents ? `−${euros(m.refundedCents)}` : "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            {full && expected !== null && (
+              <>
+                <h3 className="mb-1 text-sm font-semibold">{t("pos.cash_session.by_method")}</h3>
+                {full.figures.byMethod.length === 0 ? (
+                  <p className="mb-4 text-sm text-gray-500">{t("pos.cash_session.no_payments")}</p>
+                ) : (
+                  <table className="mb-4 w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-xs text-gray-500">
+                        <th className="py-1 font-medium">{t("pos.cash_session.method")}</th>
+                        <th className="py-1 text-right font-medium">{t("pos.cash_session.payments_count")}</th>
+                        <th className="py-1 text-right font-medium">{t("pos.cash_session.amount")}</th>
+                        <th className="py-1 text-right font-medium">{t("pos.cash_session.refunded")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {full.figures.byMethod.map((m) => (
+                        <tr key={m.method} className="border-t">
+                          <td className="py-1">
+                            {methodLabel(m.method)}
+                            {m.topUpCents > 0 && (
+                              <div className="text-xs text-gray-500">
+                                {t("pos.cash_session.of_which_top_ups")}: {euros(m.topUpCents)}
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-1 text-right">{m.count}</td>
+                          <td className="py-1 text-right">{euros(m.amountCents)}</td>
+                          <td className="py-1 text-right">{m.refundedCents ? `−${euros(m.refundedCents)}` : "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+
+                <h3 className="mb-1 text-sm font-semibold">{t("pos.cash_session.cash_drawer")}</h3>
+                <div className="mb-4 space-y-0.5 text-sm">
+                  <div className="flex justify-between">
+                    <span>{t("pos.cash_session.opening_float")}</span>
+                    <span>{euros(full.figures.cash.openingFloatCents)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>{t("pos.cash_session.cash_sales")}</span>
+                    <span>+{euros(full.figures.cash.salesCents)}</span>
+                  </div>
+                  {full.figures.cash.walletTopUpsCents > 0 && (
+                    <div className="flex justify-between">
+                      <span>{t("pos.cash_session.wallet_top_ups_cash")}</span>
+                      <span>+{euros(full.figures.cash.walletTopUpsCents)}</span>
+                    </div>
+                  )}
+                  {full.figures.cash.refundsCents > 0 && (
+                    <div className="flex justify-between">
+                      <span>{t("pos.cash_session.cash_refunds")}</span>
+                      <span>−{euros(full.figures.cash.refundsCents)}</span>
+                    </div>
+                  )}
+                  {full.figures.cash.movementsInCents > 0 && (
+                    <div className="flex justify-between">
+                      <span>{t("pos.cash_session.movements_in")}</span>
+                      <span>+{euros(full.figures.cash.movementsInCents)}</span>
+                    </div>
+                  )}
+                  {full.figures.cash.movementsOutCents > 0 && (
+                    <div className="flex justify-between">
+                      <span>{t("pos.cash_session.movements_out")}</span>
+                      <span>−{euros(full.figures.cash.movementsOutCents)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between border-t pt-1 font-semibold">
+                    <span>{t("pos.cash_session.expected")}</span>
+                    <span>{euros(expected)}</span>
+                  </div>
+                </div>
+              </>
             )}
-
-            <h3 className="mb-1 text-sm font-semibold">{t("pos.cash_session.cash_drawer")}</h3>
-            <div className="mb-4 space-y-0.5 text-sm">
-              <div className="flex justify-between">
-                <span>{t("pos.cash_session.opening_float")}</span>
-                <span>{euros(session.figures.cash.openingFloatCents)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>{t("pos.cash_session.cash_sales")}</span>
-                <span>+{euros(session.figures.cash.salesCents)}</span>
-              </div>
-              {session.figures.cash.refundsCents > 0 && (
-                <div className="flex justify-between">
-                  <span>{t("pos.cash_session.cash_refunds")}</span>
-                  <span>−{euros(session.figures.cash.refundsCents)}</span>
-                </div>
-              )}
-              {session.figures.cash.movementsInCents > 0 && (
-                <div className="flex justify-between">
-                  <span>{t("pos.cash_session.movements_in")}</span>
-                  <span>+{euros(session.figures.cash.movementsInCents)}</span>
-                </div>
-              )}
-              {session.figures.cash.movementsOutCents > 0 && (
-                <div className="flex justify-between">
-                  <span>{t("pos.cash_session.movements_out")}</span>
-                  <span>−{euros(session.figures.cash.movementsOutCents)}</span>
-                </div>
-              )}
-              <div className="flex justify-between border-t pt-1 font-semibold">
-                <span>{t("pos.cash_session.expected")}</span>
-                <span>{euros(expected)}</span>
-              </div>
-            </div>
 
             {!showCount ? (
               <label className="mb-2 block text-sm">
@@ -497,11 +531,13 @@ export default function CashDrawer({ refreshKey, onStateChange }: CashDrawerProp
         title={t("pos.cash_session.confirm_title", { amount: euros(countedCents ?? 0) })}
         description={
           <div className="space-y-2">
-            {diff === 0 ? (
+            {expected === null || diff === null ? (
+              <p>{t("pos.cash_session.confirm_desc_blind")}</p>
+            ) : diff === 0 ? (
               <p>{t("pos.cash_session.confirm_desc_square", { expected: euros(expected) })}</p>
             ) : (
-              <p className={`rounded border px-2 py-1 ${discrepancyClass(diff ?? 0)}`}>
-                {t("pos.cash_session.confirm_desc_diff", { expected: euros(expected), diff: diffText(diff ?? 0) })}
+              <p className={`rounded border px-2 py-1 ${discrepancyClass(diff)}`}>
+                {t("pos.cash_session.confirm_desc_diff", { expected: euros(expected), diff: diffText(diff) })}
               </p>
             )}
             <p>{t("pos.cash_session.confirm_desc_after")}</p>

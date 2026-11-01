@@ -2,6 +2,7 @@ import { Type } from "class-transformer";
 import {
   IsBoolean,
   IsEnum,
+  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
@@ -69,6 +70,20 @@ export class WalletAmountDto {
 
   @IsOptional() @IsString() @MaxLength(500)
   description?: string;
+}
+
+/** How a client can pay a wallet top-up: money she hands over, not a wallet, gift card or points. */
+export const WALLET_TOP_UP_METHODS = ["cash", "card", "bizum", "bank_transfer"] as const;
+export type WalletTopUpMethod = (typeof WALLET_TOP_UP_METHODS)[number];
+
+/**
+ * POST /payments/wallet/:clientId/deposit: a top-up, and how the client
+ * paid it (WalletService.topUp). Cash goes into the drawer, so it needs one
+ * open; the rest is linked to the open drawer, if any, for its report.
+ */
+export class WalletDepositDto extends WalletAmountDto {
+  @IsIn(WALLET_TOP_UP_METHODS, { message: "Indica cómo paga la recarga: efectivo, tarjeta, Bizum o transferencia." })
+  method!: WalletTopUpMethod;
 }
 
 /**

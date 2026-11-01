@@ -14,8 +14,11 @@ import {
   discrepancyClass,
   discrepancyTone,
   drawerProblem,
+  expectedCashOf,
   movementProblem,
   parsePieces,
+  topUpProblem,
+  WALLET_TOP_UP_METHODS,
 } from "./cash-session";
 import { parseEurosInput } from "./pos-cart";
 import es from "../messages/es.json";
@@ -78,6 +81,30 @@ console.log("money in and out");
   check("needs a reason", movementProblem(500, "  ", "in", 0) === "pos.cash_session.err_reason");
   check("cannot take out more than there should be", movementProblem(10_001, "Banco", "out", 10_000) === "pos.cash_session.err_out_too_much");
   check("putting money in has no ceiling", movementProblem(10_001, "Cambio", "in", 0) === null);
+  check("blind count (expected unknown): no ceiling either", movementProblem(10_001, "Banco", "out", null) === null);
+  check("blind count still needs an amount and a reason", movementProblem(500, " ", "out", null) === "pos.cash_session.err_reason");
+}
+
+console.log("blind count: the panel never stands in for the expected cash");
+{
+  check("owner/admin view: the expected cash", expectedCashOf({ blind: false, expectedCashCents: 14_500 }) === 14_500);
+  check("an older full view without the flag is full", expectedCashOf({ expectedCashCents: 900 }) === 900);
+  check("staff (blind) view: null, not 0", expectedCashOf({ blind: true }) === null);
+  check("blind even if a figure slipped in", expectedCashOf({ blind: true, expectedCashCents: 14_500 }) === null);
+  check("no session: null", expectedCashOf(null) === null);
+}
+
+console.log("wallet top-ups: how she pays, and cash needs the drawer");
+{
+  check("the four tenders, cash first", same([...WALLET_TOP_UP_METHODS], ["cash", "card", "bizum", "bank_transfer"]));
+  check("a method is required", topUpProblem(null, true) === "payments.top_up_method_required");
+  check("cash with the drawer closed is refused", topUpProblem("cash", false) === "payments.top_up_drawer_closed");
+  check("cash with the drawer open goes", topUpProblem("cash", true) === null);
+  check("drawer state unknown: the server decides", topUpProblem("cash", null) === null);
+  for (const m of ["card", "bizum", "bank_transfer"]) check(`${m} goes with the drawer closed`, topUpProblem(m, false) === null);
+  for (const k of ["top_up_method_required", "top_up_drawer_closed", "top_up_method"]) {
+    check(`payments.${k} in es and en`, typeof (es as any).payments[k] === "string" && typeof (en as any).payments[k] === "string");
+  }
 }
 
 console.log("texts: Spanish first, English too");
@@ -86,7 +113,7 @@ console.log("texts: Spanish first, English too");
   const esKeys = keys(es);
   check("es has the drawer's texts", esKeys.length > 20, esKeys.length);
   check("en has the same keys", same(esKeys, keys(en)), esKeys.filter((k) => !keys(en).includes(k)));
-  for (const k of ["err_drawer_closed", "err_amount", "err_reason", "err_out_too_much"]) {
+  for (const k of ["err_drawer_closed", "err_amount", "err_reason", "err_out_too_much", "blind_hint", "close_intro_blind", "confirm_desc_blind", "closed_toast_blind", "report_blind_title", "your_movements", "wallet_top_ups_cash", "of_which_top_ups"]) {
     check(`${k} is there`, typeof (es as any).pos.cash_session[k] === "string");
   }
 }
