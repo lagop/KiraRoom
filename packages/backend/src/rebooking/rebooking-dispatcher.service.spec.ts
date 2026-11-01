@@ -176,6 +176,15 @@ describe("RebookingDispatcherService.processOne", () => {
     expect(result.reason).toBe("no_recommended_service");
   });
 
+  it("skips a service the salon deactivated, without recording a reminder", async () => {
+    const m = makeMocks();
+    m.prisma.service.findUnique.mockResolvedValue({ name: "Corte & color", duration: 30, isActive: false });
+    const result = await build(m).processOne("client-1");
+    expect(result).toEqual({ ok: false, reason: "service_inactive" });
+    expect(m.emailService.sendEmail).not.toHaveBeenCalled();
+    expect(m.prisma.rebookingReminder.create).not.toHaveBeenCalled();
+  });
+
   it("skips when reminderSentFor already contains this serviceId", async () => {
     const m = makeMocks();
     m.cadence.reminderSentFor = [{ serviceId: "svc-1", sentAt: new Date().toISOString(), channel: "email" }];

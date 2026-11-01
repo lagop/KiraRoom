@@ -40,6 +40,8 @@ interface Appointment {
     | "no_show";
   price: number;
   currency: string;
+  /** Included by GET /appointments/mine. */
+  service?: { name: string } | null;
 }
 
 interface Service {
@@ -188,9 +190,11 @@ export default function AccountPage({
     )
     .sort((a, b) => compareAppointmentsAsc(b, a));
 
-  const getServiceName = (serviceId: string) => {
-    const service = services.find((s) => s.id === serviceId);
-    return service ? service.name : "Servicio";
+  // The appointment carries its service: the catalogue (GET /services)
+  // only lists what can be booked online now, not a service since retired.
+  const getServiceName = (apt: Appointment) => {
+    const service = services.find((s) => s.id === apt.serviceId);
+    return apt.service?.name ?? service?.name ?? "Servicio";
   };
 
   const getProfessionalName = (professionalId: string) => {
@@ -276,7 +280,7 @@ export default function AccountPage({
                         </span>
                       </div>
                       <h3 className="text-lg font-semibold text-gray-900 mb-1">
-                        {getServiceName(appointment.serviceId)}
+                        {getServiceName(appointment)}
                       </h3>
                       <p className="text-sm text-gray-600 mb-1">
                         Con {getProfessionalName(appointment.professionalId)}
@@ -356,7 +360,7 @@ export default function AccountPage({
                         </span>
                       </div>
                       <h3 className="text-lg font-semibold text-gray-900 mb-1">
-                        {getServiceName(appointment.serviceId)}
+                        {getServiceName(appointment)}
                       </h3>
                       <p className="text-sm text-gray-600 mb-1">
                         Con {getProfessionalName(appointment.professionalId)}
@@ -426,7 +430,7 @@ export default function AccountPage({
         title="¿Cancelar esta cita?"
         description={
           toCancel
-            ? `${getServiceName(toCancel.serviceId)}, ${formatDate(toCancel.scheduledDate)} a las ${toCancel.scheduledTime}. El salón dejará libre esa hora.`
+            ? `${getServiceName(toCancel)}, ${formatDate(toCancel.scheduledDate)} a las ${toCancel.scheduledTime}. El salón dejará libre esa hora.`
             : undefined
         }
         confirmLabel="Sí, cancelar la cita"

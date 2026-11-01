@@ -71,7 +71,7 @@ export default function WaitListPage() {
   useEffect(() => {
     apiClient.getWaitListChannels().then(setChannels).catch(() => setChannels(null));
     apiClient.getWaitListSettings().then((s) => setAutoNotify(s.autoNotify)).catch(() => undefined);
-    apiClient.getServices().then((s: any[]) => setServices(s.map((x) => ({ id: x.id, name: x.name })))).catch(() => undefined);
+    apiClient.getServices().then((s: any[]) => setServices(s.filter((x) => x.isActive !== false).map((x) => ({ id: x.id, name: x.name })))).catch(() => undefined);
     apiClient
       .getProfessionals()
       .then((p: any[]) => setProfessionals(p.map((x) => ({ id: x.id, name: `${x.firstName} ${x.lastName}`.trim() }))))

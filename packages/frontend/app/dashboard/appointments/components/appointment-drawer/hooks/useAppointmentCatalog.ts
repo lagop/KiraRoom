@@ -151,8 +151,11 @@ export function useAppointmentCatalog(
       // A professional's own services are picked out below, from their
       // professional record (staffOwnCatalog). This used to fetch it from
       // /admin/professionals, which refuses staff: the list came out empty.
+      // A deactivated service is off the menu: not offered for a new
+      // booking or to add to one (the server refuses it for a new booking).
+      // An appointment that already has it keeps showing it (ServiceCard).
       setServices(
-        servicesData.map((s: any) => ({
+        servicesData.filter((s: any) => s.isActive !== false).map((s: any) => ({
           id: s.id,
           name: s.name,
           price: s.price,

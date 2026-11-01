@@ -820,10 +820,17 @@ export class PosService {
    * Process a quick sale (single item, immediate payment)
    */
   async quickSale(tenantId: string, serviceId: string, paymentMethod: 'cash' | 'card', clientId?: string) {
-    const service = await this.prisma.service.findUnique({ where: { id: serviceId } });
-    
+    // This salon's service only, and one it still offers: a deactivated
+    // service is off the menu at the till too.
+    const service = await this.prisma.service.findFirst({ where: { id: serviceId, tenantId } });
+
     if (!service) {
       throw new NotFoundException('Service not found');
+    }
+    if (service.isActive === false) {
+      throw new BadRequestException(
+        `El servicio "${service.name}" está desactivado. Actívalo en Servicios para poder venderlo.`,
+      );
     }
     if (clientId) await this.assertClient(tenantId, clientId);
 

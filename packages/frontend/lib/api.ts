@@ -612,9 +612,32 @@ export interface Service {
   description?: string;
   category: "hair" | "nails" | "facial" | "massage" | "body" | "other";
   duration: number;
+  /** Euros. Arrives as a string ("25.00", a Decimal column): Number() it. */
   price: number;
   currency: string;
   isActive: boolean;
+  /** The salon's own view only (the public one leaves the settings out). */
+  isOnlineBookable?: boolean;
+  requiresApproval?: boolean;
+  /** Hours of notice an online booking needs. */
+  minAdvanceBooking?: number;
+  /** Days ahead an online booking may be made. */
+  maxAdvanceBooking?: number;
+}
+
+/** What the services panel sends; see lib/service-form.ts. */
+export interface ServiceWrite {
+  name: string;
+  description?: string;
+  category: "hair" | "nails" | "facial" | "massage" | "body" | "other";
+  duration: number;
+  price: number;
+  currency: string;
+  isActive?: boolean;
+  isOnlineBookable?: boolean;
+  requiresApproval?: boolean;
+  minAdvanceBooking?: number;
+  maxAdvanceBooking?: number;
 }
 
 export interface Professional {
@@ -1505,26 +1528,8 @@ export interface ApiClientInterface {
   deleteClient(id: string): Promise<HistoryDeleteResult>;
   getServices(tenantId?: string): Promise<Service[]>;
   getService(id: string): Promise<Service>;
-  createService(data: {
-    name: string;
-    description?: string;
-    category: "hair" | "nails" | "facial" | "massage" | "body" | "other";
-    duration: number;
-    price: number;
-    currency: string;
-  }): Promise<Service>;
-  updateService(
-    id: string,
-    data: Partial<{
-      name: string;
-      description?: string;
-      category: "hair" | "nails" | "facial" | "massage" | "body" | "other";
-      duration: number;
-      price: number;
-      currency: string;
-      isActive: boolean;
-    }>,
-  ): Promise<Service>;
+  createService(data: ServiceWrite): Promise<Service>;
+  updateService(id: string, data: Partial<ServiceWrite>): Promise<Service>;
   deleteService(id: string): Promise<HistoryDeleteResult>;
   getProfessionalsPublic(tenantId?: string): Promise<Professional[]>;
   getProfessionals(tenantId?: string): Promise<Professional[]>;
@@ -2583,32 +2588,14 @@ class ApiClient implements ApiClientInterface {
     return this.request<Service>(`/services/${id}`);
   }
 
-  async createService(data: {
-    name: string;
-    description?: string;
-    category: "hair" | "nails" | "facial" | "massage" | "body" | "other";
-    duration: number;
-    price: number;
-    currency: string;
-  }): Promise<Service> {
+  async createService(data: ServiceWrite): Promise<Service> {
     return this.request<Service>("/services", {
       method: "POST",
       body: JSON.stringify(data),
     });
   }
 
-  async updateService(
-    id: string,
-    data: Partial<{
-      name: string;
-      description?: string;
-      category: "hair" | "nails" | "facial" | "massage" | "body" | "other";
-      duration: number;
-      price: number;
-      currency: string;
-      isActive: boolean;
-    }>,
-  ): Promise<Service> {
+  async updateService(id: string, data: Partial<ServiceWrite>): Promise<Service> {
     // PUT: the backend route is `@Put(":id")`; PATCH was a 404, so no
     // service could be edited or toggled from the dashboard.
     return this.request<Service>(`/services/${id}`, {

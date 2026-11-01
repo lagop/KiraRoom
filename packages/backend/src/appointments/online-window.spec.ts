@@ -78,6 +78,20 @@ describe("getAvailableSlots with onlineWindow", () => {
     ];
     expect(await slots(svc, day(5), true)).toEqual([]);
   });
+
+  it("offers nothing with a professional who does not perform the service; the staff still see the slots", async () => {
+    // Somebody else is linked to the service, so a booking with PRO would be
+    // refused (assertBookableOnline).
+    const svc = build();
+    const team = [
+      { id: PRO, tenantId: TENANT, workingHours: null, isActive: true, services: [] },
+      { id: "pro-2", tenantId: TENANT, workingHours: null, isActive: true, services: [{ serviceId: SERVICE }] },
+    ];
+    (svc as any).prisma.professional.findMany = async ({ where }: any) =>
+      team.filter((p) => !where?.id?.in || where.id.in.includes(p.id));
+    expect(await slots(svc, day(5), true)).toEqual([]);
+    expect((await slots(svc, day(5), false)).length).toBeGreaterThan(0);
+  });
 });
 
 describe("GET /appointments/available-slots", () => {

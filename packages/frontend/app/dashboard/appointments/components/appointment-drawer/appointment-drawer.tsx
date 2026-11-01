@@ -493,6 +493,13 @@ export function AppointmentDrawer({
   };
 
   const handleServiceChange = (serviceId: string) => {
+    // Back to the appointment's own service, which may be one the catalogue
+    // no longer lists (deactivated).
+    if (appointment?.service && String(appointment.service.id) === serviceId) {
+      const own = appointment.service;
+      setEditedAppointment((prev) => (prev ? { ...prev, service: { ...prev.service!, ...own } } : prev));
+      return;
+    }
     const selectedService = services.find((s) => String(s.id) === serviceId);
     setEditedAppointment((prev) => {
       if (!prev || !selectedService) return prev;

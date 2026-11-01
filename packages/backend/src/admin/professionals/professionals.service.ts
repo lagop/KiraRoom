@@ -21,10 +21,27 @@ import { CLIENT_POS_SELECT } from "../../clients/client-select";
 export class AdminProfessionalsService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * The services a professional is to perform, checked to be this salon's.
+   * Any existing id used to be accepted, so a professional could be linked
+   * to another salon's service. Undefined (not sent) stays undefined.
+   */
+  private async salonServiceIds(tenantId: string, serviceIds?: string[]): Promise<string[] | undefined> {
+    if (serviceIds === undefined || serviceIds === null) return undefined;
+    const unique = [...new Set(serviceIds)];
+    if (unique.length === 0) return unique;
+    const found = await this.prisma.service.count({ where: { tenantId, id: { in: unique } } });
+    if (found !== unique.length) {
+      throw new BadRequestException("Alguno de los servicios elegidos no existe en este salón");
+    }
+    return unique;
+  }
+
   async create(createProfessionalDto: CreateProfessionalDto) {
-    const { serviceIds, ...professionalData } = createProfessionalDto;
+    const { serviceIds: requestedServices, ...professionalData } = createProfessionalDto;
     // Outside the try: its catch turns every error into a 400.
     await assertProfessionalSlot(this.prisma, professionalData.tenantId);
+    const serviceIds = await this.salonServiceIds(professionalData.tenantId, requestedServices);
 
     try {
       // The controller sets tenantId from the caller's token. This used to
@@ -174,7 +191,8 @@ export class AdminProfessionalsService {
   }
 
   async update(tenantId: string, id: string, updateProfessionalDto: UpdateProfessionalDto) {
-    const { serviceIds, ...professionalData } = updateProfessionalDto;
+    const { serviceIds: requestedServices, ...professionalData } = updateProfessionalDto;
+    const serviceIds = await this.salonServiceIds(tenantId, requestedServices);
     if (professionalData.isActive === true) {
       const current = await this.prisma.professional.findFirst({
         where: { id, tenantId },
@@ -184,29 +202,35 @@ export class AdminProfessionalsService {
     }
 
     try {
-      // First, update the professional data
-      const professional = await this.prisma.professional.update({
-        where: { id, tenantId },
-        data: professionalData,
-      });
-
-      // Then handle service associations if provided and has values
-      if (serviceIds && serviceIds.length > 0) {
-        // Delete existing service associations
-        await this.prisma.professionalService.deleteMany({
-          where: { professionalId: id },
-        });
-
-        // Create new service associations
-        await this.prisma.professionalService.createMany({
-          data: serviceIds.map((serviceId) => ({
-            professionalId: id,
-            serviceId,
-          })),
+      // The professional and the services they perform, all or nothing: a
+      // failure between the delete and the create used to leave them with
+      // no services at all. Left out, the services are not touched; an
+      // empty list is "none" (it used to be ignored, so the last service
+      // could never be unticked).
+      if (serviceIds === undefined) {
+        return await this.prisma.professional.update({
+          where: { id, tenantId },
+          data: professionalData,
         });
       }
-
-      return professional;
+      return await this.prisma.$transaction(async (tx: any) => {
+        const professional = await tx.professional.update({
+          where: { id, tenantId },
+          data: professionalData,
+        });
+        await tx.professionalService.deleteMany({
+          where: { professionalId: id },
+        });
+        if (serviceIds.length > 0) {
+          await tx.professionalService.createMany({
+            data: serviceIds.map((serviceId) => ({
+              professionalId: id,
+              serviceId,
+            })),
+          });
+        }
+        return professional;
+      });
     } catch (error) {
       console.error("Error updating professional:", error);
       if (error.code === "P2025") {
