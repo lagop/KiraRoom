@@ -1,10 +1,22 @@
 import { Controller, Get, Query, Req, Res, UseGuards } from "@nestjs/common";
-import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
+import { ApiBearerAuth, ApiQuery, ApiTags } from "@nestjs/swagger";
+import { IsOptional, Matches } from "class-validator";
 import type { Response } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { ExportsService, ExportEntity } from "./exports.service";
 import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 import { PaymentFiltersDto } from "../payments/payments-query";
+
+/** The appointments export's optional range: salon calendar days, both inclusive. */
+export class AppointmentsExportQueryDto {
+  @IsOptional()
+  @Matches(/^d{4}-d{2}-d{2}$/, { message: "La fecha no es válida: usa el formato AAAA-MM-DD." })
+  dateFrom?: string;
+
+  @IsOptional()
+  @Matches(/^d{4}-d{2}-d{2}$/, { message: "La fecha no es válida: usa el formato AAAA-MM-DD." })
+  dateTo?: string;
+}
 
 @ApiTags("exports")
 @ApiBearerAuth()
@@ -41,13 +53,17 @@ export class ExportsController {
 
   @Get("appointments.csv")
   @Roles(...SALON_MANAGERS)
-  appointmentsCsv(@Req() req: any, @Res() res: Response) {
-    return this.handle("appointments", "csv", req, res);
+  @ApiQuery({ name: "dateFrom", required: false, description: "First salon day (YYYY-MM-DD), inclusive" })
+  @ApiQuery({ name: "dateTo", required: false, description: "Last salon day (YYYY-MM-DD), inclusive" })
+  appointmentsCsv(@Req() req: any, @Res() res: Response, @Query() q: AppointmentsExportQueryDto) {
+    return this.handle("appointments", "csv", req, res, { dateFrom: q.dateFrom, dateTo: q.dateTo });
   }
   @Get("appointments.xlsx")
   @Roles(...SALON_MANAGERS)
-  appointmentsXlsx(@Req() req: any, @Res() res: Response) {
-    return this.handle("appointments", "xlsx", req, res);
+  @ApiQuery({ name: "dateFrom", required: false, description: "First salon day (YYYY-MM-DD), inclusive" })
+  @ApiQuery({ name: "dateTo", required: false, description: "Last salon day (YYYY-MM-DD), inclusive" })
+  appointmentsXlsx(@Req() req: any, @Res() res: Response, @Query() q: AppointmentsExportQueryDto) {
+    return this.handle("appointments", "xlsx", req, res, { dateFrom: q.dateFrom, dateTo: q.dateTo });
   }
 
   @Get("payments.csv")

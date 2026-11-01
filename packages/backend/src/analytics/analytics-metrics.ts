@@ -17,6 +17,9 @@
 import { salonInstant } from "../appointments/salon-time";
 import { workingWindowsFor } from "../appointments/working-hours";
 import { TimeOffBlock, availableWindows, dayBlocks } from "../time-off/time-off-rules";
+import { appointmentBusyBlocks, freesProfessional, isLiveRow, rowService, toCents } from "../appointments/visit-totals";
+import { loyaltyMoneyCents } from "../invoices/appointment-invoice-pricing";
+import { allocateCents } from "../pos/pos-discounts";
 
 // ---------------------------------------------------------------------------
 // Periods
@@ -201,6 +204,8 @@ export interface AppointmentMoney {
   amountPaid?: unknown;
   totalAmount?: unknown;
   price?: unknown;
+  /** The visit's discount record: its loyalty reward's money is `discount.loyalty.moneyCents`. */
+  discount?: unknown;
 }
 
 /**
@@ -224,9 +229,34 @@ export function appointmentValueCents(a: AppointmentMoney): number {
   return Math.round(Number(a.price ?? 0) * 100);
 }
 
-export function paidRevenueCents(a: AppointmentMoney): number {
-  return isPaidAppointment(a) ? appointmentValueCents(a) : 0;
+/**
+ * What a visit brought in, in cents: money charged, VAT included (what Caja
+ * and the invoices show), dated by the visit's day.
+ *
+ * - A paid visit that was not cancelled: what was charged for it, less what
+ *   the client's loyalty reward covered (`discount.loyalty.moneyCents`). The
+ *   till adds the reward to amountPaid so the visit reads as paid, but no
+ *   money came in for it: Caja has no payment for it and the invoice shows
+ *   it as a discount (owner decision D4: points are not revenue).
+ * - A visit that will not be charged any more (cancelled, or a no-show)
+ *   counts what the salon kept of what was paid for it (a prepayment or a
+ *   cancellation fee not given back), less the reward. A refund lowers
+ *   amountPaid, so this is net of partial refunds and a full one leaves 0
+ *   (owner decision D9, 2a).
+ * - Anything else (confirmed, pending, partly paid and still to come) is
+ *   not revenue yet.
+ */
+export function revenueCents(a: AppointmentMoney): number {
+  const reward = loyaltyMoneyCents(a.discount);
+  if (isPaidAppointment(a)) return Math.max(0, appointmentValueCents(a) - reward);
+  if ((a.status === "cancelled" || a.status === "no_show") && a.paymentStatus !== "refunded") {
+    return Math.max(0, Math.round(Number(a.amountPaid ?? 0)) - reward);
+  }
+  return 0;
 }
+
+/** The former name of revenueCents. */
+export const paidRevenueCents = revenueCents;
 
 /** Percentage change, one decimal; 0 when there is nothing to compare with. */
 export function percentChange(current: number, previous: number): number {
@@ -238,8 +268,37 @@ export function percentChange(current: number, previous: number): number {
 // Appointment summaries
 // ---------------------------------------------------------------------------
 
+export interface ProfessionalRef {
+  id: string;
+  firstName: string;
+  lastName: string;
+  profileImage?: string | null;
+}
+
+/** A service row of a visit (appointment_services), as analytics reads it. */
+export interface AnalyticsVisitRow {
+  id: string;
+  serviceId?: string;
+  professionalId: string | null;
+  scheduledStart: Date | null;
+  scheduledEnd: Date | null;
+  isParallel: boolean;
+  /** active | processing | continuation */
+  type?: string | null;
+  status?: string | null;
+  serviceName?: string | null;
+  servicePrice?: unknown;
+  serviceDuration?: number | null;
+  service?: { name?: string | null; price?: unknown; duration?: number | null; bufferTime?: number | null } | null;
+  professional?: ProfessionalRef | null;
+}
+
 export interface AnalyticsAppointment extends AppointmentMoney {
   scheduledDate: Date | string;
+  /** "HH:MM" on the salon's clock: places a visit's rows for occupancy. */
+  scheduledTime?: string | null;
+  /** The visit's service rows (multi-service visits); empty or absent for one service. */
+  services?: AnalyticsVisitRow[] | null;
   duration?: number | null;
   clientId?: string;
   professionalId?: string | null;
@@ -257,7 +316,7 @@ export interface AnalyticsAppointment extends AppointmentMoney {
 }
 
 export interface AppointmentSummary {
-  /** Paid, non-cancelled appointments, in cents. */
+  /** revenueCents() of every appointment, in cents. */
   revenue: number;
   /** Appointments booked in the period, cancelled ones excluded. */
   appointments: number;
@@ -269,15 +328,18 @@ export interface AppointmentSummary {
 
 export function summarize(appointments: ReadonlyArray<AnalyticsAppointment>): AppointmentSummary {
   let revenue = 0;
+  let paidRevenue = 0;
   let booked = 0;
   let paid = 0;
   let completed = 0;
   for (const a of appointments) {
     if (a.status !== "cancelled") booked++;
     if (a.status === "completed") completed++;
+    const cents = revenueCents(a);
+    revenue += cents;
     if (isPaidAppointment(a)) {
       paid++;
-      revenue += appointmentValueCents(a);
+      paidRevenue += cents;
     }
   }
   return {
@@ -285,24 +347,69 @@ export function summarize(appointments: ReadonlyArray<AnalyticsAppointment>): Ap
     appointments: booked,
     paidAppointments: paid,
     completedAppointments: completed,
-    avgTicket: paid > 0 ? Math.round(revenue / paid) : 0,
+    // The average paid visit: money kept on a cancelled visit is revenue,
+    // not a ticket.
+    avgTicket: paid > 0 ? Math.round(paidRevenue / paid) : 0,
   };
 }
 
-/** Bookings and revenue per service, by revenue then bookings. */
+/** One service of a visit, with its share of what the visit brought in. */
+export interface VisitPart {
+  /** The service's id, else its name. */
+  serviceKey: string;
+  serviceName: string;
+  /** Who did it; the visit's professional when the row names nobody. */
+  professional: ProfessionalRef | null;
+  revenueCents: number;
+}
+
+/**
+ * A visit split by service (owner decision D5). A visit with two or more
+ * services (live rows of appointment_services; processing time is time, not
+ * a service) has its revenue shared over them in proportion to the list
+ * price each was booked at, in whole cents that add up; each part goes to
+ * its own service and to the professional who did it. All-zero prices
+ * share equally. A one-service visit is one part, its service and its
+ * professional, as before.
+ */
+export function visitParts(a: AnalyticsAppointment): VisitPart[] {
+  const value = revenueCents(a);
+  const rows = (a.services ?? []).filter((r) => isLiveRow(r) && !freesProfessional(r));
+  if (rows.length < 2) {
+    const name = a.serviceName || a.service?.name || "Sin servicio";
+    return [{ serviceKey: a.serviceId || name, serviceName: name, professional: a.professional ?? null, revenueCents: value }];
+  }
+  const prices = rows.map((r) => toCents(rowService(r)?.price));
+  const shares = allocateCents(value, prices.some((p) => p > 0) ? prices : rows.map(() => 1));
+  return rows.map((r, i) => {
+    const name = rowService(r)?.name || "Sin servicio";
+    const professional =
+      !r.professionalId || r.professionalId === a.professional?.id
+        ? (a.professional ?? null)
+        : (r.professional ?? { id: r.professionalId, firstName: "", lastName: "" });
+    return { serviceKey: r.serviceId || name, serviceName: name, professional, revenueCents: shares[i] };
+  });
+}
+
+/**
+ * Bookings and revenue per service, by revenue then bookings. Each service
+ * of a multi-service visit counts as a booking of its own (visitParts). A
+ * cancelled visit books nothing, but the money kept on it still counts.
+ */
 export function topServices(
   appointments: ReadonlyArray<AnalyticsAppointment>,
   limit = 5,
 ): { name: string; count: number; revenue: number }[] {
   const by = new Map<string, { name: string; count: number; revenue: number }>();
   for (const a of appointments) {
-    if (a.status === "cancelled") continue;
-    const name = a.serviceName || a.service?.name || "Sin servicio";
-    const key = a.serviceId || name;
-    const row = by.get(key) ?? { name, count: 0, revenue: 0 };
-    row.count++;
-    row.revenue += paidRevenueCents(a);
-    by.set(key, row);
+    const cancelled = a.status === "cancelled";
+    for (const part of visitParts(a)) {
+      if (cancelled && part.revenueCents === 0) continue;
+      const row = by.get(part.serviceKey) ?? { name: part.serviceName, count: 0, revenue: 0 };
+      if (!cancelled) row.count++;
+      row.revenue += part.revenueCents;
+      by.set(part.serviceKey, row);
+    }
   }
   return [...by.values()]
     .sort((x, y) => y.revenue - x.revenue || y.count - x.count || x.name.localeCompare(y.name))
@@ -314,7 +421,7 @@ export function servicePopularity(
   appointments: ReadonlyArray<AnalyticsAppointment>,
   limit = 10,
 ): { name: string; count: number; percentage: number }[] {
-  const rows = topServices(appointments, Number.MAX_SAFE_INTEGER);
+  const rows = topServices(appointments, Number.MAX_SAFE_INTEGER).filter((r) => r.count > 0);
   const total = rows.reduce((s, r) => s + r.count, 0);
   return rows
     .map((r) => ({
@@ -332,21 +439,66 @@ export interface ProfessionalRow {
   firstName: string;
   lastName: string;
   profileImage: string | null;
+  /** Visits they took part in (one per visit, however many of its services), cancelled ones excluded. */
   appointments: number;
+  /** Their share of what appointments brought in (revenueCents, split by visitParts), cents. */
   revenue: number;
+  /** Services they did that were sold at the till without an appointment, net of refunds, cents. */
+  tillServicesCents: number;
+  /** revenue + tillServicesCents: all charged for their work, VAT included, cents. */
+  revenueCents: number;
+  /** Their appointments with a closed status up to yesterday (closedRates' definition). */
+  closedAppointments: number;
+  completedAppointments: number;
+  cancelledAppointments: number;
+  noShowAppointments: number;
+  /** Over closedAppointments, percent with one decimal; null with none closed. */
+  completionRate: number | null;
+  cancellationRate: number | null;
+  noShowRate: number | null;
 }
 
+/** A service sold at the till without an appointment (a sale line of kind "service"). */
+export interface TillServiceLine {
+  professionalId: string | null;
+  /** What is left of the line after refunds, money cents (VAT included). */
+  keptCents: number;
+}
+
+/**
+ * Per professional: visits, revenue and how their appointments closed.
+ *
+ * Revenue is "cobrado, IVA incluido" (owner decision D6, 3a): their share of
+ * each visit's revenue (revenueCents, split per service by visitParts) plus
+ * the services they did that were sold at the till without an appointment
+ * (`tillServices`, sale lines of kind "service", what is left after
+ * refunds). A visit charged at the till is a sale line of kind
+ * "appointment", never "service", so it is counted once, from the
+ * appointment. Comisiones counts the commission base instead (catalogue
+ * price, completed visits only), so the two figures need not match.
+ *
+ * The closing counts follow closedRates: appointments with a closed status
+ * (completed, cancelled, no-show) up to the day before `today` (every day
+ * of the rows when it is not given). A visit counts for each professional
+ * who took part in it.
+ *
+ * `directory` names the professionals who appear only through the till.
+ */
 export function topProfessionals(
   appointments: ReadonlyArray<AnalyticsAppointment>,
   limit = 5,
+  opts: {
+    today?: string;
+    tillServices?: ReadonlyArray<TillServiceLine>;
+    directory?: ReadonlyMap<string, ProfessionalRef>;
+  } = {},
 ): ProfessionalRow[] {
+  const through = opts.today ? addDays(opts.today, -1) : null;
   const by = new Map<string, ProfessionalRow>();
-  for (const a of appointments) {
-    const p = a.professional;
-    if (!p || a.status === "cancelled") continue;
-    const row =
-      by.get(p.id) ??
-      ({
+  const rowOf = (p: ProfessionalRef): ProfessionalRow => {
+    let row = by.get(p.id);
+    if (!row) {
+      row = {
         id: p.id,
         name: `${p.firstName} ${p.lastName}`.trim(),
         firstName: p.firstName,
@@ -354,14 +506,129 @@ export function topProfessionals(
         profileImage: p.profileImage ?? null,
         appointments: 0,
         revenue: 0,
-      } as ProfessionalRow);
-    row.appointments++;
-    row.revenue += paidRevenueCents(a);
-    by.set(p.id, row);
+        tillServicesCents: 0,
+        revenueCents: 0,
+        closedAppointments: 0,
+        completedAppointments: 0,
+        cancelledAppointments: 0,
+        noShowAppointments: 0,
+        completionRate: null,
+        cancellationRate: null,
+        noShowRate: null,
+      };
+      by.set(p.id, row);
+    }
+    return row;
+  };
+  for (const a of appointments) {
+    const took = new Map<string, ProfessionalRef>();
+    for (const part of visitParts(a)) {
+      if (!part.professional) continue;
+      took.set(part.professional.id, part.professional);
+      if (part.revenueCents > 0) rowOf(part.professional).revenue += part.revenueCents;
+    }
+    const closed = isClosedStatus(a.status) && (!through || appointmentDay(a.scheduledDate) <= through);
+    for (const p of took.values()) {
+      if (a.status !== "cancelled") rowOf(p).appointments++;
+      if (!closed) continue;
+      const row = rowOf(p);
+      row.closedAppointments++;
+      if (a.status === "completed") row.completedAppointments++;
+      else if (a.status === "cancelled") row.cancelledAppointments++;
+      else row.noShowAppointments++;
+    }
   }
-  return [...by.values()]
-    .sort((x, y) => y.revenue - x.revenue || y.appointments - x.appointments)
+  for (const line of opts.tillServices ?? []) {
+    if (!line.professionalId || line.keptCents <= 0) continue;
+    const known = by.get(line.professionalId) ?? opts.directory?.get(line.professionalId);
+    if (known) rowOf(known).tillServicesCents += line.keptCents;
+  }
+  const rows = [...by.values()];
+  for (const r of rows) {
+    r.revenueCents = r.revenue + r.tillServicesCents;
+    r.completionRate = rate(r.completedAppointments, r.closedAppointments);
+    r.cancellationRate = rate(r.cancelledAppointments, r.closedAppointments);
+    r.noShowRate = rate(r.noShowAppointments, r.closedAppointments);
+  }
+  return rows
+    .sort((x, y) => y.revenueCents - x.revenueCents || y.appointments - x.appointments)
     .slice(0, limit);
+}
+
+// ---------------------------------------------------------------------------
+// Closing rates
+// ---------------------------------------------------------------------------
+
+/** The statuses an appointment ends in. */
+export const CLOSED_STATUSES = ["completed", "cancelled", "no_show"] as const;
+
+export function isClosedStatus(status: string): boolean {
+  return (CLOSED_STATUSES as readonly string[]).includes(status);
+}
+
+/** part / whole as a percentage with one decimal; null when whole is 0. */
+function rate(part: number, whole: number): number | null {
+  return whole > 0 ? Math.round((part / whole) * 1000) / 10 : null;
+}
+
+export interface AppointmentRates {
+  /** The last day counted: the day before the salon's today. */
+  through: string;
+  /** Appointments up to `through` with a closed status: completed, cancelled or no-show. */
+  closed: number;
+  completed: number;
+  cancelled: number;
+  noShow: number;
+  /** Over `closed`, percent with one decimal; null when nothing closed. */
+  completionRate: number | null;
+  cancellationRate: number | null;
+  noShowRate: number | null;
+}
+
+/**
+ * The one definition of the completion, cancellation and no-show rates
+ * (U9): over the appointments that have closed (completed, cancelled or
+ * no-show) scheduled up to yesterday on the salon's calendar. Today's
+ * appointments are left out, and so are confirmed and pending ones (still
+ * open), so a rate does not dip during the day while visits are under way.
+ */
+export function closedRates(
+  rows: ReadonlyArray<{ status: string; scheduledDate: Date | string }>,
+  today: string,
+): AppointmentRates {
+  const through = addDays(today, -1);
+  let completed = 0;
+  let cancelled = 0;
+  let noShow = 0;
+  for (const r of rows) {
+    if (appointmentDay(r.scheduledDate) > through) continue;
+    if (r.status === "completed") completed++;
+    else if (r.status === "cancelled") cancelled++;
+    else if (r.status === "no_show") noShow++;
+  }
+  const closed = completed + cancelled + noShow;
+  return {
+    through,
+    closed,
+    completed,
+    cancelled,
+    noShow,
+    completionRate: rate(completed, closed),
+    cancellationRate: rate(cancelled, closed),
+    noShowRate: rate(noShow, closed),
+  };
+}
+
+/** closedRates for each calendar month of the period, months as "YYYY-MM". */
+export function monthlyClosedRates(
+  rows: ReadonlyArray<{ status: string; scheduledDate: Date | string }>,
+  period: SalonPeriod,
+  today: string,
+): Array<{ month: string } & AppointmentRates> {
+  const months = new Map<string, Array<{ status: string; scheduledDate: Date | string }>>();
+  for (let m = monthStart(period.start); m <= period.end; m = monthStart(m, 1)) months.set(m.slice(0, 7), []);
+  for (const r of rows) months.get(appointmentDay(r.scheduledDate).slice(0, 7))?.push(r);
+  return [...months.entries()].map(([month, list]) => ({ month, ...closedRates(list, today) }));
 }
 
 /** One row per day of the period, empty days included. */
@@ -372,9 +639,9 @@ export function dailyMetrics(
   const rows = new Map(daysIn(period).map((d) => [d, { date: d, appointments: 0, revenue: 0 }]));
   for (const a of appointments) {
     const row = rows.get(appointmentDay(a.scheduledDate));
-    if (!row || a.status === "cancelled") continue;
-    row.appointments++;
-    row.revenue += paidRevenueCents(a);
+    if (!row) continue;
+    if (a.status !== "cancelled") row.appointments++;
+    row.revenue += revenueCents(a);
   }
   return [...rows.values()];
 }
@@ -390,7 +657,7 @@ export function monthlyRevenue(
   }
   for (const a of appointments) {
     const row = rows.get(appointmentDay(a.scheduledDate).slice(0, 7));
-    if (row) row.revenue += paidRevenueCents(a);
+    if (row) row.revenue += revenueCents(a);
   }
   return [...rows.values()];
 }
@@ -466,6 +733,23 @@ export function clientRetention(
   };
 }
 
+/**
+ * New clients ("clientas nuevas", owner decision D7, 1a): clients whose FIRST
+ * completed visit falls in the period. `periodCompletedClientIds` are the
+ * clients of the period's completed appointments, `servedBefore` those with a
+ * completed appointment before the period's first day. A client record
+ * created in the period (an import, a contact, a booking that never
+ * happened) is not a new client until she comes.
+ */
+export function newClientCount(
+  periodCompletedClientIds: Iterable<string>,
+  servedBefore: ReadonlySet<string>,
+): number {
+  let n = 0;
+  for (const id of new Set(periodCompletedClientIds)) if (!servedBefore.has(id)) n++;
+  return n;
+}
+
 // ---------------------------------------------------------------------------
 // Occupancy
 // ---------------------------------------------------------------------------
@@ -481,11 +765,56 @@ export interface Occupancy {
   professionalsWithSchedule: number;
 }
 
+export interface OccupancyAppointment {
+  professionalId?: string | null;
+  duration?: number | null;
+  status: string;
+  scheduledDate: Date | string;
+  scheduledTime?: string | null;
+  services?: AnalyticsVisitRow[] | null;
+}
+
+/**
+ * Minutes each professional spends on a visit. One service: its
+ * professional, for its duration. Several (D5): each professional during
+ * their own services, nobody during processing time, and the visit's
+ * professional for whatever of its duration runs past them (add-ons): the
+ * agenda's own reading (appointmentBusyBlocks), without the cleanup after
+ * the visit.
+ */
+export function busyMinutes(a: OccupancyAppointment, timeZone: string): Map<string, number> {
+  const out = new Map<string, number>();
+  const duration = Math.max(0, Number(a.duration ?? 0));
+  const live = (a.services ?? []).filter(isLiveRow);
+  const blocks =
+    live.length > 0 && a.professionalId && a.scheduledTime
+      ? appointmentBusyBlocks(
+          {
+            professionalId: a.professionalId,
+            scheduledDate: a.scheduledDate,
+            scheduledTime: a.scheduledTime,
+            duration,
+            services: live,
+          },
+          timeZone,
+        ).filter((b) => !b.cleanup)
+      : [];
+  if (blocks.length === 0) {
+    if (a.professionalId) out.set(a.professionalId, duration);
+    return out;
+  }
+  for (const b of blocks) {
+    out.set(b.professionalId, (out.get(b.professionalId) ?? 0) + Math.max(0, b.endMinutes - b.startMinutes));
+  }
+  return out;
+}
+
 /**
  * Occupancy is booked time over working time. Working time comes from each
  * professional's weekly hours (`professionals.workingHours`) over the days of
  * the period; booked time is the duration of their appointments in it,
- * cancelled ones excluded (a no-show still held the slot). Professionals with
+ * cancelled ones excluded (a no-show still held the slot), each professional
+ * of a multi-service visit for their own part of it (busyMinutes). Professionals with
  * no hours recorded are left out on both sides rather than assumed to work
  * some default shift -- if none has hours, the rate is null and the panel says
  * the schedules are missing.
@@ -498,14 +827,10 @@ export interface Occupancy {
  */
 export function occupancy(
   professionals: ReadonlyArray<{ id: string; workingHours?: unknown }>,
-  appointments: ReadonlyArray<{
-    professionalId?: string | null;
-    duration?: number | null;
-    status: string;
-    scheduledDate: Date | string;
-  }>,
+  appointments: ReadonlyArray<OccupancyAppointment>,
   period: SalonPeriod,
   timeOff: ReadonlyArray<TimeOffBlock> = [],
+  timeZone = "Europe/Madrid",
 ): Occupancy {
   const days = daysIn(period);
   const counted = new Set<string>();
@@ -530,10 +855,12 @@ export function occupancy(
   }
   let booked = 0;
   for (const a of appointments) {
-    if (a.status === "cancelled" || !a.professionalId || !counted.has(a.professionalId)) continue;
+    if (a.status === "cancelled") continue;
     const day = appointmentDay(a.scheduledDate);
     if (day < period.start || day > period.end) continue;
-    booked += Math.max(0, Number(a.duration ?? 0));
+    for (const [professionalId, minutes] of busyMinutes(a, timeZone)) {
+      if (counted.has(professionalId)) booked += minutes;
+    }
   }
   return {
     bookedMinutes: booked,

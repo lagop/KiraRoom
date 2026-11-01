@@ -17,6 +17,7 @@ import {
   scheduledDateRange,
 } from "../analytics/analytics-metrics";
 import { timeOffBetween } from "../time-off/time-off-query";
+import { ANALYTICS_APPOINTMENT_SELECT } from "../analytics/analytics.service";
 
 @Injectable()
 export class MultiLocationService {
@@ -145,29 +146,17 @@ export class MultiLocationService {
     period: SalonPeriod,
     extra?: { id: string; name: string },
   ): Promise<ConsolidatedReport> {
-    const [active, appointments, professionals, links, timeOff] = await Promise.all([
+    const [active, appointments, professionals, links, timeOff, tenant] = await Promise.all([
       this.prisma.location.findMany({
         where: { tenantId, isActive: true },
         orderBy: { createdAt: "asc" },
         select: { id: true, name: true },
       }),
+      // The columns Analítica reads, so both apply the same definitions
+      // (loyalty rewards, multi-service visits).
       this.prisma.appointment.findMany({
         where: { tenantId, scheduledDate: scheduledDateRange(period) },
-        select: {
-          status: true,
-          paymentStatus: true,
-          amountPaid: true,
-          totalAmount: true,
-          price: true,
-          scheduledDate: true,
-          duration: true,
-          clientId: true,
-          professionalId: true,
-          serviceId: true,
-          locationId: true,
-          serviceName: true,
-          service: { select: { name: true } },
-        },
+        select: ANALYTICS_APPOINTMENT_SELECT,
       }),
       this.prisma.professional.findMany({
         where: { tenantId, isActive: true },
@@ -178,6 +167,7 @@ export class MultiLocationService {
         select: { professionalId: true, locationId: true, isPrimary: true },
       }),
       timeOffBetween(this.prisma as any, tenantId, period.start, period.end),
+      this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } }),
     ]);
     const locations =
       extra && !active.some((l) => l.id === extra.id) ? [...active, extra] : active;
@@ -188,6 +178,7 @@ export class MultiLocationService {
       professionals,
       links,
       timeOff,
+      timeZone: tenant?.timezone || "Europe/Madrid",
     });
   }
 
