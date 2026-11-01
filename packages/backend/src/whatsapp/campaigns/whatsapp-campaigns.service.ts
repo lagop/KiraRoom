@@ -442,8 +442,13 @@ function segmentOf(input: Partial<CampaignInput>): Prisma.InputJsonValue {
   return input.inactiveDays ? { inactiveDays: input.inactiveDays } : {};
 }
 
-function inactiveFilter(inactiveDays?: number | null, now = new Date()): Prisma.ClientWhereInput {
+/**
+ * "Sin venir desde hace N días": clients whose last completed visit is older
+ * than that. A client with no completed visit at all is left out (the
+ * owner's rule: campaigns only to clients who came at least once).
+ */
+export function inactiveFilter(inactiveDays?: number | null, now = new Date()): Prisma.ClientWhereInput {
   if (!inactiveDays) return {};
   const since = new Date(now.getTime() - inactiveDays * 24 * 60 * 60 * 1000);
-  return { OR: [{ lastVisit: { lt: since } }, { lastVisit: null }] };
+  return { lastVisit: { lt: since } };
 }

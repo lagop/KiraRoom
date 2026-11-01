@@ -30,6 +30,7 @@ import {
 import { ClientLoyaltyCard } from "@/components/loyalty/client-loyalty-card";
 import { ClientMarketingCard } from "@/components/marketing/client-marketing-card";
 import { ClientNoticesCard } from "@/components/notifications/client-notices-card";
+import { ClientGdprCard } from "@/components/clients/client-gdpr-card";
 
 /** Shown with the visit list when the server capped it (see the API). */
 const HISTORY_LIMIT = 100;
@@ -333,6 +334,17 @@ export default function ClientDetailPage({
           <p className="mt-2 text-sm text-gray-500">—</p>
         )}
       </section>
+
+      {/* Her data-protection rights: the API answers owner / admin only. */}
+      {manager && (
+        <ClientGdprCard
+          clientId={id}
+          firstName={c.firstName}
+          lastName={c.lastName}
+          email={c.email}
+          phone={c.phone}
+        />
+      )}
     </div>
   );
 }

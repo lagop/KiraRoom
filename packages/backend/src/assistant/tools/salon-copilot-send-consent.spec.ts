@@ -40,7 +40,7 @@ function makePrisma(opts: { optedIn?: boolean; phone?: string } = {}): any {
   };
 }
 
-const ctx = (prisma: any) => ({ prisma, tenantId: TENANT_ID, userId: 'u-1', role: 'owner' });
+const ctx = (prisma: any) => ({ prisma, tenantId: TENANT_ID, userId: 'u-1', role: 'owner' as const });
 
 function mockMeta(category?: string) {
   return jest.spyOn(global, 'fetch' as any).mockImplementation(async (url: any) => {
@@ -100,7 +100,7 @@ describe('send_message and WhatsApp promotion consent', () => {
       ctx(prisma),
     );
     expect(res.ok).toBe(true);
-    const body = JSON.parse(fetch.mock.calls[0][1].body);
+    const body = JSON.parse((fetch.mock.calls[0] as any[])[1].body);
     expect(body.to).toBe('34600111222');
   });
 
@@ -114,7 +114,7 @@ describe('send_message and WhatsApp promotion consent', () => {
     );
     expect(res.ok).toBe(true);
     expect(prisma.consent.findMany).not.toHaveBeenCalled();
-    expect(JSON.parse(fetch.mock.calls[0][1].body).to).toBe('34600111222');
+    expect(JSON.parse((fetch.mock.calls[0] as any[])[1].body).to).toBe('34600111222');
   });
 
   it('sends a template Meta files as UTILITY without promotion opt-in', async () => {

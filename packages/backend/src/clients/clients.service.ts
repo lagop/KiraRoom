@@ -49,6 +49,19 @@ export interface ClientFilters {
   hasEmail?: boolean;
 }
 
+/**
+ * Clients with any of these tags. `tags` is a JSON array, and `hasSome`
+ * (a filter of Postgres array columns) made Prisma refuse the query: the
+ * campaign screen's tag filter answered 500. A JSON array is matched with
+ * `array_contains` (Postgres `@>`), one tag at a time, OR'ed. Blank and
+ * repeated tags are dropped; null when none is left.
+ */
+export function tagsFilter(tags?: string[] | null): Prisma.ClientWhereInput | null {
+  const wanted = [...new Set((tags ?? []).map((t) => String(t).trim()).filter(Boolean))];
+  if (wanted.length === 0) return null;
+  return { OR: wanted.map((tag) => ({ tags: { array_contains: [tag] } })) };
+}
+
 @Injectable()
 export class ClientsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -136,12 +149,9 @@ export class ClientsService {
       }
     }
 
-    // Filter by tags
-    if (filters.tags && filters.tags.length > 0) {
-      where.tags = {
-        hasSome: filters.tags,
-      };
-    }
+    // Filter by tags: any of them.
+    const tagsWhere = tagsFilter(filters.tags);
+    if (tagsWhere) where.AND = [...(where.AND ?? []), tagsWhere];
 
     // Filter by loyalty tier
     if (filters.loyaltyTier) {

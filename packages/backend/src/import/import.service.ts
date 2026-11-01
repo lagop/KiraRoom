@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, Logger } from "@nestjs/common";
+import { Injectable, BadRequestException, Logger, Optional } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 // @ts-ignore - papaparse lacks bundled types in some setups
 import * as Papa from "papaparse";
@@ -25,6 +25,7 @@ import {
 } from "./columns";
 import { readXlsxRows, SpreadsheetError } from "./spreadsheet";
 import { appointmentLocations } from "../multi-location/appointment-location";
+import { ConsentService } from "../consent/consent.service";
 
 /** The uploaded file: CSV text, or the bytes of an .xlsx (its first sheet is read). */
 export type ImportFile = string | { xlsx: Buffer };
@@ -66,6 +67,20 @@ function ambiguous(text: string, names: string[]): string {
   return `"${text}" puede ser varios (${shown}): pon el nombre completo en el archivo`;
 }
 
+/**
+ * A client's notes after an import with action=update: the file's notes are
+ * added after the ones she has (a blank line between), not written over
+ * them; nothing changes when the file has none or they are already there.
+ */
+export function mergeNotes(existing: string | null | undefined, incoming: string | null | undefined): string | null {
+  const before = (existing ?? "").trim();
+  const added = (incoming ?? "").trim();
+  if (!added) return before || null;
+  if (!before) return added;
+  if (before.includes(added)) return before;
+  return `${before}\n\n${added}`;
+}
+
 /** "10:30" + 45 -> "11:15" (wraps past midnight). */
 function addMinutes(time: string, minutes: number): string {
   const [h, m] = time.split(":").map(Number);
@@ -88,7 +103,10 @@ function addMinutes(time: string, minutes: number): string {
 export class ImportService {
   private readonly logger = new Logger(ImportService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    @Optional() private readonly consent?: ConsentService,
+  ) {}
 
   // ---- Clients ------------------------------------------------------------
 
@@ -96,11 +114,18 @@ export class ImportService {
     return this.importClients(tenantId, file, filename, true);
   }
 
-  async commitClients(tenantId: string, file: ImportFile, filename: string) {
-    return this.importClients(tenantId, file, filename, false);
+  /** `actorId`: who imports (kept on the marketing refusals the file records). */
+  async commitClients(tenantId: string, file: ImportFile, filename: string, actorId?: string) {
+    return this.importClients(tenantId, file, filename, false, actorId);
   }
 
-  private async importClients(tenantId: string, file: ImportFile, filename: string, dryRun: boolean) {
+  private async importClients(
+    tenantId: string,
+    file: ImportFile,
+    filename: string,
+    dryRun: boolean,
+    actorId?: string,
+  ) {
     const raw = await this.readRows(file);
     const country = await this.tenantCountry(tenantId);
     const rows = readClientRows(raw, country);
@@ -111,6 +136,7 @@ export class ImportService {
     let created = 0;
     let updated = 0;
     let skipped = 0;
+    let marketingRefusals = 0;
     const tally: Record<PreviewRow["status"], number> = { ok: 0, update: 0, duplicate: 0, invalid: 0, skip: 0 };
 
     for (let i = 0; i < rows.length; i++) {
@@ -132,45 +158,104 @@ export class ImportService {
       keys.forEach((k) => seen.add(k));
       if (rowErrors.length > 0) errors.push({ row: rowIndex, fields: rowErrors });
       tally[status]++;
-      if (preview.length < 50) preview.push({ rowIndex, data: row, errors: rowErrors, status, existingId });
+      // A "no" to advertising is recorded for the client the row is, new or
+      // already in KiraRoom (not for a row left out on purpose, nor for the
+      // same person's second row in the file: the first one decides).
+      const refuses = row.marketing === "no" && status !== "invalid" && row.action !== "skip" && !repeated;
+      const note = refuses ? "No acepta publicidad: se guardará en su ficha" : undefined;
+      if (preview.length < 50) preview.push({ rowIndex, data: row, errors: rowErrors, status, existingId, note });
 
       if (dryRun || status === "invalid") continue;
       if (status === "duplicate" || row.action === "skip") {
         skipped++;
+        if (refuses && existingId && (await this.recordMarketingRefusal(tenantId, existingId, actorId))) {
+          marketingRefusals++;
+        }
         continue;
       }
       try {
-        const data = {
-          firstName: row.firstName,
-          lastName: row.lastName,
-          phone: row.phone ?? null,
-          dateOfBirth: row.dateOfBirth ? new Date(row.dateOfBirth) : null,
-          notes: row.notes ?? null,
-        };
+        let clientId: string;
         if (status === "update" && existingId) {
+          // An empty cell keeps what the client has: an export with no
+          // phone or birthday for her is not a reason to erase hers. Notes
+          // are added to hers, not written over them.
+          const current = await this.prisma.client.findFirst({
+            where: { id: existingId, tenantId },
+            select: { notes: true },
+          });
           await this.prisma.client.update({
             where: { id: existingId },
-            data: { ...data, ...(row.email ? { email: row.email } : {}) },
+            data: {
+              firstName: row.firstName,
+              ...(row.lastName ? { lastName: row.lastName } : {}),
+              ...(row.phone ? { phone: row.phone } : {}),
+              ...(row.dateOfBirth ? { dateOfBirth: new Date(row.dateOfBirth) } : {}),
+              ...(row.notes ? { notes: mergeNotes(current?.notes, row.notes) } : {}),
+              ...(row.email ? { email: row.email } : {}),
+            },
           });
+          clientId = existingId;
           updated++;
         } else {
           const client = await this.prisma.client.create({
-            data: { tenantId, ...data, email: row.email ?? null, status: "active", source: "import" } as any,
+            data: {
+              tenantId,
+              firstName: row.firstName,
+              lastName: row.lastName,
+              phone: row.phone ?? null,
+              dateOfBirth: row.dateOfBirth ? new Date(row.dateOfBirth) : null,
+              notes: row.notes ?? null,
+              email: row.email ?? null,
+              status: "active",
+              source: "import",
+            } as any,
             select: { id: true },
           });
           keys.forEach((k) => known.set(k, client.id));
+          clientId = client.id;
           created++;
         }
+        if (refuses && (await this.recordMarketingRefusal(tenantId, clientId, actorId))) marketingRefusals++;
       } catch (err: any) {
         errors.push({ row: rowIndex, fields: [{ col: "base de datos", msg: err.message ?? "error" }] });
       }
     }
 
-    return this.finish(tenantId, ImportType.clients, filename, dryRun, rows.length, preview, errors, tally, {
+    const result = await this.finish(tenantId, ImportType.clients, filename, dryRun, rows.length, preview, errors, tally, {
       created,
       updated,
       skipped,
     });
+    return { ...result, marketingRefusals };
+  }
+
+  /**
+   * The old program says the client does not accept advertising: recorded
+   * as her refusal of commercial communications, through the same consent
+   * record as a "no" from her account, marked as recorded by the salon (who
+   * imported). Campaigns then leave her out. Nothing is sent.
+   *
+   * A "yes" is not recorded: an acceptance is the client's own act, with
+   * the wording she saw, and the file cannot show either. (Without a
+   * record, email campaigns still reach existing clients, as before.)
+   *
+   * Never fails the import; returns whether it was recorded.
+   */
+  private async recordMarketingRefusal(tenantId: string, clientId: string, actorId?: string): Promise<boolean> {
+    if (!this.consent) return false;
+    try {
+      await this.consent.recordMarketingChoice({
+        tenantId,
+        clientId,
+        accepts: false,
+        channel: "email",
+        recordedBy: actorId ?? "import",
+      });
+      return true;
+    } catch (err) {
+      this.logger.warn(`marketing refusal of imported client ${clientId} not recorded: ${(err as Error).message}`);
+      return false;
+    }
   }
 
   /** The salon's clients by email and by phone (last nine digits). */
@@ -384,7 +469,11 @@ export class ImportService {
       ) as string[];
       const sameName = byName.get(nameKey(row.clientName)) ?? [];
       const nameId = createdClients.get(nameKey(row.clientName)) ?? (sameName.length === 1 ? sameName[0] : undefined);
-      const clientId = keys.map((k) => contacts.get(k) ?? createdClients.get(k)).find(Boolean) ?? nameId;
+      // The name only when the row has no email or phone: a row whose
+      // contact matches nobody is someone else with the same name (a new
+      // client), not the one already called that.
+      const clientId =
+        keys.length > 0 ? keys.map((k) => contacts.get(k) ?? createdClients.get(k)).find(Boolean) : nameId;
 
       let status: PreviewRow["status"];
       let note: string | undefined;
@@ -411,7 +500,10 @@ export class ImportService {
       if (status === "ok" && !clientId) {
         newClients++;
         // The dry run creates nothing, but the client's next rows are not new.
-        if (dryRun) createdClients.set(nameKey(row.clientName), "(nuevo)");
+        if (dryRun) {
+          createdClients.set(nameKey(row.clientName), "(nuevo)");
+          keys.forEach((k) => createdClients.set(k, "(nuevo)"));
+        }
       }
       if (status === "invalid") errors.push({ row: rowIndex, fields: rowErrors });
       tally[status]++;

@@ -606,7 +606,8 @@ export class AssistantService {
       lowStockCount = lowStockSample.length;
     }
 
-    // 5. At-risk clients — clients with ≥ 60d since lastVisit, capped at 5.
+    // 5. At-risk clients — clients whose last completed visit is ≥ 60d
+    // ago, capped at 5. One who never came is not at risk of being lost.
     let clientsAtRiskCount = 0;
     let clientsAtRisk: Array<{ id: string; firstName: string; daysSinceLastVisit: number | null }> = [];
     if (['owner', 'admin', 'manager', 'receptionist', 'staff', 'saas_owner'].includes(role)) {
@@ -616,10 +617,7 @@ export class AssistantService {
         where: {
           tenantId: user.tenantId,
           status: 'active',
-          OR: [
-            { lastVisit: { lt: cutoff } },
-            { lastVisit: null, createdAt: { lt: cutoff } },
-          ],
+          lastVisit: { lt: cutoff },
         },
         orderBy: { lastVisit: 'asc' },
         take: 5,
