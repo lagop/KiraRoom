@@ -400,7 +400,7 @@ export class MiniMaxProvider {
   ): string {
     for (const call of executed) {
       if (call.name === 'list_services') {
-        const r = call.result as { services?: Array<{ name: string; price: string; currency: string; durationMinutes: number }>; totalMatching?: number };
+        const r = call.result as { services?: Array<{ name: string; price: string; currency: string; durationMinutes: number }>; totalMatching?: number; taxIncluded?: string };
         const list = r?.services ?? [];
         if (!list.length) {
           return 'No he encontrado servicios que coincidan con tu búsqueda.';
@@ -409,12 +409,15 @@ export class MiniMaxProvider {
           .slice(0, 12)
           .map((s) => `• ${s.name} — ${s.price} ${s.currency} (${s.durationMinutes} min)`)
           .join('\n');
-        return `Estos son los servicios disponibles:\n${lines}\n¿Cuál te interesa?`;
+        // Final prices: say once that the tax is in them ("IVA incluido").
+        const tax = r?.taxIncluded ? `Precios con ${r.taxIncluded}.\n` : '';
+        return `Estos son los servicios disponibles:\n${lines}\n${tax}¿Cuál te interesa?`;
       }
       if (call.name === 'get_service') {
-        const s = call.result as { name?: string; price?: string; currency?: string; durationMinutes?: number };
+        const s = call.result as { name?: string; price?: string; currency?: string; durationMinutes?: number; taxIncluded?: string };
         if (s?.name) {
-          return `${s.name}: ${s.price} ${s.currency} (${s.durationMinutes} min). ¿Quieres reservar?`;
+          const tax = s.taxIncluded ? `, ${s.taxIncluded}` : '';
+          return `${s.name}: ${s.price} ${s.currency}${tax} (${s.durationMinutes} min). ¿Quieres reservar?`;
         }
       }
       if (call.name === 'check_availability') {

@@ -3520,7 +3520,10 @@ class ApiClient implements ApiClientInterface {
     recipientEmail?: string;
     recipientName?: string;
     message?: string;
-    expiresAt?: string;
+    /** Last valid day ("YYYY-MM-DD"); left out: two years; null: never expires. */
+    expiresAt?: string | null;
+    /** Email the card to `recipientEmail` (server default: yes). */
+    sendEmail?: boolean;
   }): Promise<any> {
     return this.request<any>("/gift-cards", {
       method: "POST",

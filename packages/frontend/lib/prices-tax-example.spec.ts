@@ -8,7 +8,13 @@
  */
 import * as fs from "fs";
 import * as path from "path";
-import { formatEuros, pricesTaxExample, pricesTaxExampleMessage } from "./prices-tax-example";
+import {
+  clientPriceCents,
+  clientPriceHint,
+  formatEuros,
+  pricesTaxExample,
+  pricesTaxExampleMessage,
+} from "./prices-tax-example";
 
 let pass = 0;
 let fail = 0;
@@ -64,6 +70,22 @@ check("IGIC, the regime's label", s3 === "Un servicio de 30,00 € se factura co
 const s4 = sentence(10, false, "IPSI");
 check("IPSI on top", s4 === "Un servicio de 30,00 € se factura como 30,00 € + 3,00 € de IPSI = 33,00 €", s4);
 check("no 'IVA incluido' wording", !/incluido/i.test(s1 + s2));
+
+console.log("what clients see (the hint in the service drawer)");
+check("net 30,00 at 21 % -> 36,30", clientPriceCents(3000, 21, false) === 3630, clientPriceCents(3000, 21, false));
+check("prices with the tax inside: as typed", clientPriceCents(3000, 21, true) === 3000);
+check("IGIC 7 %: 32,10", clientPriceCents(3000, 7, false) === 3210);
+check("0 %: as typed", clientPriceCents(3000, 0, false) === 3000);
+check("rounds like the invoice: 19,99 -> 24,19", clientPriceCents(1999, 21, false) === 2419, clientPriceCents(1999, 21, false));
+const hint = clientPriceHint(30, 21, false, "IVA");
+const hintText = hint ? render(es, hint.key, hint.params) : null;
+check("hint sentence", hintText === "Las clientas verán 36,30 € (IVA incluido)", hintText);
+const hintIgic = clientPriceHint(25.5, 7, false, "IGIC");
+const hintIgicText = hintIgic ? render(es, hintIgic.key, hintIgic.params) : null;
+check("hint in IGIC", hintIgicText === "Las clientas verán 27,29 € (IGIC incluido)", hintIgicText);
+check("no hint when prices include the tax", clientPriceHint(30, 21, true, "IVA") === null);
+check("no hint while the settings load", clientPriceHint(30, 21, undefined, "IVA") === null);
+check("no hint for a price that is not one", clientPriceHint(null, 21, false, "IVA") === null);
 
 console.log(`\n=== Summary ===\nPass: ${pass}, Fail: ${fail}`);
 if (fail > 0) process.exit(1);

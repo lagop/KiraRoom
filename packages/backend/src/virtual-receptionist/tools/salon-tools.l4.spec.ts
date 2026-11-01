@@ -176,6 +176,8 @@ const SAMPLE_TENANT = {
   currency: 'EUR',
   openingHours: { open: '09:00', close: '20:00' },
   assistantName: 'Kira',
+  // Its catalogue already includes the IVA: prices are quoted as stored.
+  fiscalSettings: { pricesIncludeTax: true, defaultTaxRate: 21, taxRegime: 'iva' },
 };
 
 describe('SalonToolsService (L-4)', () => {
@@ -304,6 +306,50 @@ describe('SalonToolsService (L-4)', () => {
     it('caps the result list at the requested limit', async () => {
       const result = await svc.listServices({ prisma, tenantId: TENANT_ID }, { limit: 2 });
       expect(result.services).toHaveLength(2);
+    });
+  });
+
+  describe('prices quoted to clients', () => {
+    const withFiscal = (fiscalSettings: unknown) =>
+      makePrisma(SAMPLE_SERVICES, SAMPLE_PROFESSIONALS, { ...SAMPLE_TENANT, fiscalSettings });
+
+    it('a catalogue that includes the IVA is quoted as stored, and says the IVA is included', async () => {
+      const list = await svc.listServices({ prisma, tenantId: TENANT_ID }, {});
+      expect(list.services.find((s: any) => s.id === 's-cut-w')?.price).toBe('45.00');
+      expect(list.priceNote).toContain('IVA included');
+      expect(list.priceNote).toContain('IVA incluido');
+      expect(list.taxIncluded).toBe('IVA incluido');
+      const one = await svc.getService({ prisma, tenantId: TENANT_ID }, { serviceId: 's-cut-m' });
+      expect(one).toMatchObject({ price: '18.00', priceNote: expect.stringContaining('IVA incluido') });
+    });
+
+    it('a net catalogue is quoted with the IVA the invoice adds: 45,00 -> 54,45', async () => {
+      const net = withFiscal({ pricesIncludeTax: false, defaultTaxRate: 21 });
+      const list = await svc.listServices({ prisma: net, tenantId: TENANT_ID }, {});
+      expect(list.services.find((s: any) => s.id === 's-cut-w')?.price).toBe('54.45');
+      expect(list.services.find((s: any) => s.id === 's-cut-m')?.price).toBe('21.78');
+      const one = await svc.getService({ prisma: net, tenantId: TENANT_ID }, { serviceId: 's-cut-m' });
+      expect(one).toMatchObject({ price: '21.78', taxIncluded: 'IVA incluido' });
+      expect(net.tenant.findUnique).toHaveBeenCalledWith({
+        where: { id: TENANT_ID },
+        select: { fiscalSettings: true },
+      });
+    });
+
+    it('a salon from before the setting (no key) is net too, as its invoices are', async () => {
+      const legacy = withFiscal(undefined);
+      const one = await svc.getService({ prisma: legacy, tenantId: TENANT_ID }, { serviceId: 's-cut-m' });
+      expect(one).toMatchObject({ price: '21.78', priceNote: expect.stringContaining('IVA') });
+    });
+
+    it('a Canarian salon is quoted with IGIC and says so', async () => {
+      const canary = withFiscal({ pricesIncludeTax: false, defaultTaxRate: 7, taxRegime: 'igic' });
+      const list = await svc.listServices({ prisma: canary, tenantId: TENANT_ID }, { keyword: 'relaxing massage' });
+      expect(list.totalMatching).toBe(0);
+      expect(list.services.find((s: any) => s.id === 's-cut-m')?.price).toBe('19.26');
+      expect(list.priceNote).toContain('IGIC incluido');
+      expect(list.taxIncluded).toBe('IGIC incluido');
+      expect(list.priceNote).not.toContain('IVA');
     });
   });
 

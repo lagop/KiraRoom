@@ -5,6 +5,16 @@ import { AppointmentStatus } from '@prisma/client';
 import { AppointmentsService } from './appointments.service';
 import { canTransition } from './appointment-status';
 import { syncVisitTotals } from './visit-sync';
+import {
+  VISIT_ROW_ORDER,
+  VISIT_ROW_SELECT,
+  VisitRow,
+  clockOf,
+  isLiveRow,
+  plannedCleanup,
+  visitSchedule,
+} from './visit-totals';
+import { salonInstant } from './salon-time';
 import { CreateAppointmentServiceDto, UpdateAppointmentServiceDto, AppointmentServiceFiltersDto, AppointmentServiceType, AppointmentServiceStatus } from './dto/appointment-services.dto';
 
 /** Whoever calls a route of this controller: req.user. */
@@ -241,6 +251,28 @@ export class AppointmentServicesService {
     return appointmentService;
   }
 
+  /**
+   * The cleanup time ("tiempo de limpieza") the moved service brings along:
+   * its service's, when the visit ends with it once it sits at `start`-`end`
+   * (visit-totals.ts plannedCleanup); otherwise 0.
+   */
+  private cleanupIfLast(
+    appointment: { professionalId: string; scheduledDate?: Date | null; scheduledTime?: string | null; services?: VisitRow[] | null },
+    rowId: string,
+    start: Date,
+    end: Date,
+    timeZone: string,
+  ): number {
+    const live = (appointment.services ?? []).filter(isLiveRow);
+    const clock = appointment.scheduledTime ? clockOf(appointment.scheduledTime, timeZone) : null;
+    if (live.length === 0 || !appointment.scheduledDate || !clock) return 0;
+    const schedule = visitSchedule(salonInstant(appointment.scheduledDate, clock, timeZone), appointment.professionalId, live).map(
+      (s) => (s.id === rowId ? { ...s, start, end } : s),
+    );
+    const cleanup = plannedCleanup(schedule, live);
+    return cleanup.index !== -1 && schedule[cleanup.index].id === rowId ? cleanup.minutes : 0;
+  }
+
   async update(
     id: string,
     updateDto: UpdateAppointmentServiceDto,
@@ -255,7 +287,16 @@ export class AppointmentServicesService {
         scheduledStart: true,
         scheduledEnd: true,
         appointment: {
-          select: { id: true, tenantId: true, professionalId: true, tenant: { select: { timezone: true } } },
+          select: {
+            id: true,
+            tenantId: true,
+            professionalId: true,
+            scheduledDate: true,
+            scheduledTime: true,
+            tenant: { select: { timezone: true } },
+            // The whole visit: is this the service it ends with (its cleanup)?
+            services: { select: VISIT_ROW_SELECT, orderBy: VISIT_ROW_ORDER as any },
+          },
         },
       },
     });
@@ -288,7 +329,8 @@ export class AppointmentServicesService {
       professionalId !== rowProfessional;
     if (moved && start && end && professionalId) {
       if (end <= start) throw new BadRequestException('scheduledEnd must be after scheduledStart');
-      const { day, time } = salonDayAndTime(start, current.appointment.tenant?.timezone || 'Europe/Madrid');
+      const timeZone = current.appointment.tenant?.timezone || 'Europe/Madrid';
+      const { day, time } = salonDayAndTime(start, timeZone);
       await assertCanReschedule(this.prisma as any, {
         tenantId: current.appointment.tenantId,
         appointmentId: current.appointment.id,
@@ -296,6 +338,7 @@ export class AppointmentServicesService {
         day,
         time,
         durationMinutes: Math.round((end.getTime() - start.getTime()) / 60000),
+        cleanupMinutes: this.cleanupIfLast(current.appointment as any, id, start, end, timeZone),
       });
     }
 

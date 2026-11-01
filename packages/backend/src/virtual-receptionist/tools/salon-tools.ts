@@ -3,6 +3,8 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { AppointmentsService } from '../../appointments/appointments.service';
 import { confirmAppointment, notBookableOnline, proposeAppointment } from './receptionist-booking';
 import { resolveIds } from './resolve-ids';
+import { clientPrices, clientPriceText, priceNote } from './client-prices';
+import { taxIncludedNote } from '../../common/public-price';
 import { dayBlocks, salonClosedOn } from '../../time-off/time-off-rules';
 import { timeOffBetween } from '../../time-off/time-off-query';
 import { salonOpenShifts } from '../../appointments/working-hours';
@@ -46,6 +48,7 @@ export const SALON_TOOLS = [
       'List the salon\'s active services. Use this whenever the user asks about ' +
       'the catalog, available services, or wants to see prices. Returns up to 25 ' +
       'services. For exact price / duration of one service, prefer `get_service`. ' +
+      'Prices are final, tax included (see priceNote). ' +
       'A service with onlineBookable: false is not booked by chat: the client books it ' +
       'by calling the salon.',
     input_schema: {
@@ -75,7 +78,8 @@ export const SALON_TOOLS = [
     name: 'get_service',
     description:
       'Get a single service by its id. Returns name, description, price, duration, ' +
-      'currency and category. Use this when the user names a specific service ' +
+      'currency and category; the price is final, tax included (see priceNote). ' +
+      'Use this when the user names a specific service ' +
       '("cuánto cuesta la coloración completa") and you have the id from a ' +
       'previous `list_services` call.',
     input_schema: {
@@ -240,8 +244,13 @@ export class SalonToolsService {
     }>;
     totalMatching: number;
     note?: string;
+    /** The prices are final, tax included: client-prices.ts. */
+    priceNote: string;
+    /** "IVA incluido" (IGIC, IPSI): what to say next to them. */
+    taxIncluded: string;
   }> {
     const limit = Math.min(Math.max(input.limit ?? 25, 1), 50);
+    const prices = await clientPrices(ctx);
     // P2A-receptionist-tools: we deliberately don't pass `category`
     // to Prisma. The LLM has been seen to invent non-enum values like
     // "Cabello" or "Peluqueria" that Prisma rejects with
@@ -299,11 +308,13 @@ export class SalonToolsService {
           description: s.description,
           category: s.category,
           durationMinutes: s.duration,
-          price: Number(s.price).toFixed(2),
+          price: clientPriceText(s.price, prices),
           currency: s.currency,
           onlineBookable: s.isOnlineBookable !== false,
         })),
         totalMatching: 0,
+        priceNote: priceNote(prices),
+        taxIncluded: taxIncludedNote(prices),
         note:
           `No service name or description contains "${input.keyword}". This is the full catalogue: ` +
           'look for what the client means in it (names may be in another language) before saying the salon does not offer it.',
@@ -317,11 +328,13 @@ export class SalonToolsService {
         description: s.description,
         category: s.category,
         durationMinutes: s.duration,
-        price: Number(s.price).toFixed(2),
+        price: clientPriceText(s.price, prices),
         currency: s.currency,
         onlineBookable: s.isOnlineBookable !== false,
       })),
       totalMatching: filtered.length,
+      priceNote: priceNote(prices),
+      taxIncluded: taxIncludedNote(prices),
       ...(input.audience
         ? { note: `Filtered for audience="${input.audience}".` }
         : {}),
@@ -340,6 +353,8 @@ export class SalonToolsService {
     price: string;
     currency: string;
     onlineBookable: boolean;
+    priceNote: string;
+    taxIncluded: string;
   } | { error: string; serviceId: string }> {
     const service = await ctx.prisma.service.findFirst({
       where: { id: input.serviceId, tenantId: ctx.tenantId, isActive: true },
@@ -355,15 +370,18 @@ export class SalonToolsService {
       },
     });
     if (!service) return { error: 'service_not_found', serviceId: input.serviceId };
+    const prices = await clientPrices(ctx);
     return {
       id: service.id,
       name: service.name,
       description: service.description,
       category: service.category,
       durationMinutes: service.duration,
-      price: Number(service.price).toFixed(2),
+      price: clientPriceText(service.price, prices),
       currency: service.currency,
       onlineBookable: service.isOnlineBookable,
+      priceNote: priceNote(prices),
+      taxIncluded: taxIncludedNote(prices),
     };
   }
 

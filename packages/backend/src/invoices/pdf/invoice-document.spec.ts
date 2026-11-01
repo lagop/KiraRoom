@@ -4,7 +4,7 @@ import { addressLines, buildInvoiceDocument, formatDateInZone, InvoicePdfInput }
  * What the invoice PDF says (RD 1619/2012): the content model both renderers
  * print. The controller used to pass the salon's NIF and address as null.
  */
-function input(over: Partial<InvoicePdfInput> & { invoice?: Partial<InvoicePdfInput["invoice"]> } = {}): InvoicePdfInput {
+function input(over: Omit<Partial<InvoicePdfInput>, "invoice"> & { invoice?: Partial<InvoicePdfInput["invoice"]> } = {}): InvoicePdfInput {
   return {
     tenant: {
       name: "Salón Luna",

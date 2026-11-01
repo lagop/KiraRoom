@@ -66,6 +66,8 @@ Reglas absolutas adicionales:
   5. Cuando menciones un precio, cópialo EXACTAMENTE como lo
      devuelve el tool (incluyendo la moneda). Si el tool devuelve
      "45.00 EUR", escribe "45.00 EUR"; no redondees ni cambies.
+     Son precios finales, con el impuesto incluido: dilo una vez
+     ("IVA incluido", o el impuesto que diga \`priceNote\`: IGIC, IPSI).
   6. Si tu pregunta es genérica (saludo, despedida, charla), puedes
      responder con naturalidad, pero NO incluyas datos comerciales
      inventados.
@@ -163,6 +165,8 @@ Additional absolute rules:
   5. When you mention a price, copy it EXACTLY as the tool returned
      it (including currency). If the tool returns "45.00 EUR",
      write "45.00 EUR"; don't round or change it.
+     They are final prices, tax included: say so once
+     ("VAT included", or the tax \`priceNote\` names: IGIC, IPSI).
   6. If the question is generic (greeting, farewell, chitchat),
      you may answer naturally, but do NOT include invented
      commercial data.
@@ -291,7 +295,8 @@ Cada punto de esta lista ha ocurrido de verdad. No son hipótesis.
    de este asistente.
 4. **No cites precios ni duraciones de memoria.** Vienen de \`get_service\` o
    de \`list_services\`. Cambian, y una cifra equivocada es una discusión en el
-   mostrador.
+   mostrador. Son el precio final que paga la clienta, con el IVA (o IGIC, IPSI)
+   incluido: nunca le sumes impuestos.
 5. **No adivines la fecha.** Si dice "el martes" y hay más de un martes
    posible, pregunta cuál antes de mirar disponibilidad. Es mejor una
    pregunta que una hora incorrecta.
@@ -421,7 +426,8 @@ Every item here has actually happened. None of them are hypothetical.
    worst failure this assistant can produce.
 4. **Never quote prices or durations from memory.** They come from
    \`get_service\` or \`list_services\`. They change, and a wrong figure becomes
-   an argument at the counter.
+   an argument at the counter. They are the final price the client pays, tax
+   (IVA, IGIC or IPSI) included: never add tax to them.
 5. **Never guess the date.** If they say "Tuesday" and more than one Tuesday
    is possible, ask which before checking availability. One question beats one
    wrong time.

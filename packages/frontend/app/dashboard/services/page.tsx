@@ -19,13 +19,19 @@ import {
   serviceToForm,
   type ServiceCategoryValue,
   type ServiceFormState,
+  parseEuros,
 } from "@/lib/service-form";
+import { useTaxRegime } from "@/lib/use-tax-regime";
+import { clientPriceHint } from "@/lib/prices-tax-example";
 
 
 function ServicesPageContent() {
   const searchParams = useSearchParams();
   const { toast } = useToast();
   const t = useTranslations();
+  // Prices here are the catalogue as the salon writes it. When it writes
+  // them without the tax, clients see them with it: the drawer says how much.
+  const tax = useTaxRegime();
 
   const CATEGORIES = [
     { value: "hair", label: t("services.hair") },
@@ -75,6 +81,8 @@ function ServicesPageContent() {
 
   // Numbers as typed: see lib/service-form.ts.
   const [formData, setFormData] = useState<ServiceFormState>(EMPTY_SERVICE_FORM);
+  // "Las clientas verán 36,30 € (IVA incluido)", live as the price is typed.
+  const clientPrice = clientPriceHint(parseEuros(formData.price), tax.serverRate, tax.pricesIncludeTax, tax.label);
   const setField = <K extends keyof ServiceFormState>(key: K, value: ServiceFormState[K]) => {
     setFormData((prev) => ({ ...prev, [key]: value }));
     setFormError(null);
@@ -501,9 +509,35 @@ function ServicesPageContent() {
                       step="0.01"
                       value={formData.price}
                       onChange={(e) => setField("price", e.target.value)}
+                      aria-describedby={clientPrice ? "service-price-hint" : undefined}
                       className={inputClass}
                     />
+                    {clientPrice && (
+                      <p id="service-price-hint" data-test="service-client-price" className="mt-1 text-xs text-gray-500">
+                        {t(clientPrice.key, clientPrice.params)}
+                      </p>
+                    )}
                   </div>
+                </div>
+
+                <div>
+                  <label htmlFor="service-buffer" className="block text-sm font-medium text-gray-700 mb-1">
+                    {t("services.buffer_label")}
+                  </label>
+                  <input
+                    id="service-buffer"
+                    type="number"
+                    min="0"
+                    max={SERVICE_FORM_LIMITS.bufferMax}
+                    step="5"
+                    value={formData.bufferTime}
+                    onChange={(e) => setField("bufferTime", e.target.value)}
+                    className={inputClass}
+                    aria-describedby="service-buffer-hint"
+                  />
+                  <p id="service-buffer-hint" className="mt-1 text-xs text-gray-500">
+                    {t("services.buffer_hint")}
+                  </p>
                 </div>
 
                 <div className="flex items-center gap-2">

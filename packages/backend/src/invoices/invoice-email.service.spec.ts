@@ -133,7 +133,7 @@ describe("InvoiceEmailService", () => {
       to: "gestoria@example.com",
     });
     expect(sent[0].to).toEqual(["gestoria@example.com"]);
-    expect(audit.record.mock.calls[0][1].metadata.toClientEmail).toBe(false);
+    expect((audit.record.mock.calls[0] as any[])[1].metadata.toClientEmail).toBe(false);
   });
 
   it("asks for an address when the client has none (or only a placeholder)", async () => {

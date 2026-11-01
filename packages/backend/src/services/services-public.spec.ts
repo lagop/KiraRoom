@@ -13,8 +13,8 @@ import { ServicesService } from "./services.service";
  */
 
 const ROWS = [
-  { id: "s-on", tenantId: "salon-a", name: "Corte", isActive: true, isOnlineBookable: true, depositAmount: 500, staff: ["x"] },
-  { id: "s-off", tenantId: "salon-a", name: "Tinte", isActive: false, isOnlineBookable: true, depositAmount: null, staff: [] },
+  { id: "s-on", tenantId: "salon-a", name: "Corte", price: "30.00", isActive: true, isOnlineBookable: true, depositAmount: 500, staff: ["x"] },
+  { id: "s-off", tenantId: "salon-a", name: "Tinte", price: "45.00", isActive: false, isOnlineBookable: true, depositAmount: null, staff: [] },
   { id: "s-desk", tenantId: "salon-a", name: "Novia", isActive: true, isOnlineBookable: false, depositAmount: null, staff: [] },
   { id: "s-b", tenantId: "salon-b", name: "Manicura", isActive: true, isOnlineBookable: true, depositAmount: null, staff: [] },
 ];
@@ -25,9 +25,16 @@ const matches = (row: any, where: any) =>
 const project = (row: any, select?: Record<string, boolean>) =>
   select ? Object.fromEntries(Object.keys(select).map((k) => [k, row[k]])) : row;
 
-function build(viewer: { tenantId: string; staff: boolean }) {
+function build(
+  viewer: { tenantId: string; staff: boolean },
+  // salon-a writes its catalogue without the IVA (a salon from before the setting).
+  fiscalSettings: Record<string, unknown> = { pricesIncludeTax: false, defaultTaxRate: 21 },
+) {
   const updates: any[] = [];
   const prisma: any = {
+    tenant: {
+      findUnique: jest.fn(async () => ({ fiscalSettings })),
+    },
     service: {
       findMany: jest.fn(async ({ where, select }: any) =>
         ROWS.filter((r) => matches(r, where)).map((r) => project(r, select)),
@@ -60,6 +67,32 @@ describe("GET /services", () => {
     expect(rows[0]).not.toHaveProperty("staff");
     expect(rows[0]).toHaveProperty("name", "Corte");
   });
+
+  it("gives clients the final price, tax included; the salon's staff the catalogue price", async () => {
+    const visitor = build({ tenantId: "salon-a", staff: false });
+    const rows = await visitor.controller.findAll({}, "salon-a");
+    expect(rows[0]).toMatchObject({ id: "s-on", price: 36.3, taxLabel: "IVA" });
+    expect(visitor.prisma.tenant.findUnique).toHaveBeenCalledWith({
+      where: { id: "salon-a" },
+      select: { fiscalSettings: true },
+    });
+
+    const staff = build({ tenantId: "salon-a", staff: true });
+    const own = await staff.controller.findAll({}, undefined);
+    expect(own.find((r: any) => r.id === "s-on")).toMatchObject({ price: "30.00" });
+    expect(staff.prisma.tenant.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("leaves a catalogue that already includes the tax as it is, and names IGIC in the Canaries", async () => {
+    const included = build({ tenantId: "salon-a", staff: false }, { pricesIncludeTax: true, defaultTaxRate: 21 });
+    expect((await included.controller.findAll({}, "salon-a"))[0]).toMatchObject({ price: 30, taxLabel: "IVA" });
+
+    const canary = build(
+      { tenantId: "salon-a", staff: false },
+      { pricesIncludeTax: false, defaultTaxRate: 7, taxRegime: "igic" },
+    );
+    expect((await canary.controller.findAll({}, "salon-a"))[0]).toMatchObject({ price: 32.1, taxLabel: "IGIC" });
+  });
 });
 
 describe("GET /services/:id", () => {
@@ -83,6 +116,7 @@ describe("GET /services/:id", () => {
     await expect(controller.findOne({}, "s-desk", "salon-a")).rejects.toThrow(NotFoundException);
     const row = await controller.findOne({}, "s-on", "salon-a");
     expect(row).not.toHaveProperty("depositAmount");
+    expect(row).toMatchObject({ price: 36.3, taxLabel: "IVA" });
   });
 
   it("shows the salon's staff any of its services in full", async () => {

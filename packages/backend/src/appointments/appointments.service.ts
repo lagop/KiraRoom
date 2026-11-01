@@ -62,7 +62,9 @@ import {
   VISIT_ROW_ORDER,
   VISIT_ROW_SELECT,
   appointmentBusyBlocks,
-  overlapsBlock,
+  cleanupMinutesOf,
+  clashesWithBlock,
+  plannedCleanup,
   VisitRow,
   clockOf,
   endClock,
@@ -954,7 +956,7 @@ export class AppointmentsService {
       this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } }),
       this.prisma.service.findMany({
         where: { tenantId, id: { in: serviceIds } },
-        select: { id: true, duration: true, isActive: true, name: true },
+        select: { id: true, duration: true, isActive: true, name: true, bufferTime: true },
       }),
     ]);
     // A deactivated service is off the menu: the pickers no longer offer it,
@@ -994,13 +996,18 @@ export class AppointmentsService {
           isParallel: false,
         }];
     const span = visitSpan(visit);
+    // The cleanup after the visit, on the service it ends with (visit-totals.ts).
+    const inCatalog = (id: string) => catalog.find((s) => s.id === id) ?? null;
+    const cleanup = rows.length
+      ? plannedCleanup(visit, rows.map((r) => ({ service: inCatalog(r.serviceId) })))
+      : { index: 0, minutes: cleanupMinutesOf(inCatalog(dto.serviceId)) };
 
     const { services: _rows, allowOutsideHours, commissionRate, depositRequired, depositAmount, ...booking } =
       dto;
     const appointment = await this.prisma.$transaction(
       async (tx: any) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`booking:${tenantId}:${day}`}))`;
-        for (const s of visit) {
+        for (const [i, s] of visit.entries()) {
           const at = salonDayAndTime(s.start, timeZone);
           await assertCanBook(
             tx,
@@ -1010,6 +1017,7 @@ export class AppointmentsService {
               day: at.day,
               time: at.time,
               durationMinutes: Math.round((s.end.getTime() - s.start.getTime()) / 60_000),
+              cleanupMinutes: i === cleanup.index ? cleanup.minutes : 0,
             },
             // A professional's bookings stay inside the hours.
             { allowOutsideHours: manager && allowOutsideHours === true },
@@ -1367,11 +1375,11 @@ export class AppointmentsService {
       ...(rowEdit?.add ?? []).map((a) => a.serviceId),
       ...normalizeAddons(updateData.addons ?? (appointment as any).addons).map((a) => a.addonId),
     ];
-    const catalog: Array<{ id: string; name?: string; duration: number; price: unknown }> =
+    const catalog: Array<{ id: string; name?: string; duration: number; price: unknown; bufferTime?: number }> =
       needsTotals && catalogIds.length > 0
         ? await this.prisma.service.findMany({
             where: { tenantId: user.tenantId, id: { in: [...new Set(catalogIds)] } },
-            select: { id: true, name: true, duration: true, price: true },
+            select: { id: true, name: true, duration: true, price: true, bufferTime: true },
           })
         : [];
     const fromCatalog = (serviceId: string) => catalog.find((s) => s.id === serviceId) ?? null;
@@ -1459,7 +1467,9 @@ export class AppointmentsService {
               (rowsAfter.find((r) => r.id === rowId)?.service as { name?: string } | null)?.name ?? "otro servicio";
             throw new ConflictException(`La clienta estaría a la vez en ${name(clash[0].id)} y ${name(clash[1].id)}.`);
           }
-          for (const s of after) {
+          // The cleanup after the visit, on the service it now ends with.
+          const cleanup = plannedCleanup(after, liveAfter);
+          for (const [i, s] of after.entries()) {
             const row = liveAfter.find((r) => r.id === s.id);
             if (row && freesProfessional(row)) continue;
             const b = before.find((x) => x.id === s.id);
@@ -1474,18 +1484,24 @@ export class AppointmentsService {
               day: at.day,
               time: at.time,
               durationMinutes: Math.round((s.end.getTime() - s.start.getTime()) / 60_000),
+              cleanupMinutes: i === cleanup.index ? cleanup.minutes : 0,
             });
           }
         }
-      } else if (moved || duration > appointment.duration) {
-        await assertCanReschedule(this.prisma as any, {
-          tenantId: user.tenantId,
-          appointmentId: appointment.id,
-          professionalId: target.professionalId,
-          day: target.day,
-          time: target.time,
-          durationMinutes: duration,
-        });
+      } else {
+        const cleanupBefore = cleanupMinutesOf((appointment as any).service);
+        const cleanupAfter = serviceChanged ? cleanupMinutesOf(fromCatalog(dto.serviceId!)) : cleanupBefore;
+        if (moved || duration > appointment.duration || cleanupAfter > cleanupBefore) {
+          await assertCanReschedule(this.prisma as any, {
+            tenantId: user.tenantId,
+            appointmentId: appointment.id,
+            professionalId: target.professionalId,
+            day: target.day,
+            time: target.time,
+            durationMinutes: duration,
+            cleanupMinutes: cleanupAfter,
+          });
+        }
       }
     }
 
@@ -2188,13 +2204,15 @@ export class AppointmentsService {
         tenant: { select: { timezone: true } },
         services: {
           orderBy: [{ order: "asc" }, { createdAt: "asc" }, { id: "asc" }],
-          include: { service: { select: { name: true, duration: true, price: true } } },
+          include: { service: { select: { name: true, duration: true, price: true, bufferTime: true } } },
         },
       },
     });
     if (!appointment) throw new NotFoundException("Cita no encontrada");
     const timeZone = (appointment as any).tenant?.timezone || "Europe/Madrid";
     const rows = (appointment as any).services as any[];
+    // Each service's cleanup time, for the one the visit ends with (applyVisit).
+    const cleanup = new Map<string, number>(rows.map((r) => [r.id, cleanupMinutesOf(r.service)]));
     const start = salonInstant(
       appointment.scheduledDate,
       clockOf(appointment.scheduledTime, timeZone) ?? appointment.scheduledTime,
@@ -2203,7 +2221,7 @@ export class AppointmentsService {
     const services = visitSchedule(start, appointment.professionalId, rows);
     const names = new Map<string, string>(rows.map((r) => [r.id, r.service?.name ?? "otro servicio"]));
     const processing = new Set<string>(rows.filter((r) => freesProfessional(r)).map((r) => r.id));
-    return { appointment, timeZone, start, services, rows, names, processing };
+    return { appointment, timeZone, start, services, rows, names, processing, cleanup };
   }
 
   /**
@@ -2346,6 +2364,8 @@ export class AppointmentsService {
       services: VisitService[];
       names: Map<string, string>;
       processing?: Set<string>;
+      /** Each row's cleanup time (loadVisitOf). */
+      cleanup?: Map<string, number>;
     },
     after: VisitService[],
     /** Further columns per row (order, mode), written with the times. */
@@ -2363,6 +2383,15 @@ export class AppointmentsService {
         `La clienta estaría a la vez en ${visit.names.get(clash[0].id)} y ${visit.names.get(clash[1].id)}.`,
       );
     }
+    // The cleanup after the visit, on the service it now ends with.
+    const cleanup = plannedCleanup(
+      after,
+      after.map((s) => ({
+        type: visit.processing?.has(s.id) ? "processing" : null,
+        service: { bufferTime: visit.cleanup?.get(s.id) ?? 0 },
+      })),
+    );
+    const cleanupId = cleanup.index === -1 ? null : after[cleanup.index].id;
     for (const s of changed) {
       // While a colour sets, its professional is free: nothing to check.
       if (visit.processing?.has(s.id)) continue;
@@ -2374,6 +2403,7 @@ export class AppointmentsService {
         day,
         time,
         durationMinutes: Math.round((s.end.getTime() - s.start.getTime()) / 60_000),
+        cleanupMinutes: s.id === cleanupId ? cleanup.minutes : 0,
       });
     }
 
@@ -2580,6 +2610,11 @@ export class AppointmentsService {
 
     // Get the service duration if specified
     let serviceDuration = duration;
+    // The cleanup after it ("tiempo de limpieza", Service.bufferTime): the
+    // professional stays busy that long after the service, so it may not run
+    // into their next appointment. Not part of the hours: the service has to
+    // end by closing time, the cleanup may run past it.
+    let serviceCleanup = 0;
     let serviceRow: {
       isActive: boolean;
       isOnlineBookable: boolean;
@@ -2596,6 +2631,7 @@ export class AppointmentsService {
       }
 
       serviceDuration = service.duration;
+      serviceCleanup = cleanupMinutesOf(service);
       serviceRow = service as any;
     }
 
@@ -2676,7 +2712,12 @@ export class AppointmentsService {
           : {}),
         status: { not: AppointmentStatus.cancelled },
       },
-      include: { services: { select: VISIT_ROW_SELECT, orderBy: VISIT_ROW_ORDER } },
+      // The service's cleanup time too: the agenda is busy for it after each
+      // visit (appointmentBusyBlocks).
+      include: {
+        service: { select: { bufferTime: true } },
+        services: { select: VISIT_ROW_SELECT, orderBy: VISIT_ROW_ORDER },
+      },
     });
     const salonTimeZone = (tenant as any).timezone || "Europe/Madrid";
     const busy: BusyBlock[] = (existingAppointments as any[]).flatMap((apt) =>
@@ -2719,7 +2760,7 @@ export class AppointmentsService {
             busy.some(
               (block) =>
                 block.professionalId === profId &&
-                overlapsBlock(block, slotMinutes, serviceDuration),
+                clashesWithBlock(block, slotMinutes, serviceDuration, serviceCleanup),
             );
 
           if (hasConflict) {
@@ -2734,7 +2775,7 @@ export class AppointmentsService {
         // it wrongly — it offered hours nobody works.
         const slotMinutes = minutesOf(slot.time);
         const overlaps = (block: BusyBlock) =>
-          slotMinutes !== null && overlapsBlock(block, slotMinutes, serviceDuration);
+          slotMinutes !== null && clashesWithBlock(block, slotMinutes, serviceDuration, serviceCleanup);
 
         if (anyProfessionalRows.length === 0) {
           // No professionals recorded at all: impose no shift limit, and the

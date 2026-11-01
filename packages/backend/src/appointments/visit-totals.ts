@@ -34,7 +34,7 @@ export interface VisitRow {
   /** active | processing | continuation */
   type?: string | null;
   status?: string | null;
-  service?: { duration?: number | null; price?: unknown } | null;
+  service?: { duration?: number | null; price?: unknown; bufferTime?: number | null } | null;
 }
 
 /** The columns of a row these functions need, for Prisma selects. */
@@ -47,7 +47,7 @@ export const VISIT_ROW_SELECT = {
   isParallel: true,
   type: true,
   status: true,
-  service: { select: { duration: true, price: true } },
+  service: { select: { duration: true, price: true, bufferTime: true } },
 } as const;
 
 /** The order a visit's rows are read in: the order the salon gave them. */
@@ -241,11 +241,37 @@ export function visitTotals(input: {
 /*  Who is busy when                                                          */
 /* -------------------------------------------------------------------------- */
 
-/** A professional busy from `startMinutes` to `endMinutes` on the salon's clock that day. */
+/**
+ * A professional busy from `startMinutes` to `endMinutes` on the salon's clock
+ * that day. `cleanup` marks the tidy-up after a visit (Service.bufferTime):
+ * it blocks the agenda like the visit itself, but it is not the visit.
+ */
 export interface BusyBlock {
   professionalId: string;
   startMinutes: number;
   endMinutes: number;
+  cleanup?: boolean;
+}
+
+/** A service's cleanup time ("tiempo de limpieza") in whole minutes, never negative. */
+export function cleanupMinutesOf(service: { bufferTime?: number | null } | null | undefined): number {
+  const n = Math.round(Number(service?.bufferTime ?? 0));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * Which service of a visit carries its cleanup time: the one the visit ends
+ * with. Of the services where they sit (`schedule`, aligned with `rows`), the
+ * one that ends last, a later one winning a tie. A processing row (the colour
+ * setting, the professional free) does not count. -1 when there is none.
+ */
+export function lastServiceIndex(schedule: VisitService[], rows: Array<Pick<VisitRow, "type">>): number {
+  let last = -1;
+  schedule.forEach((s, i) => {
+    if (rows[i] && freesProfessional(rows[i])) return;
+    if (last === -1 || s.end.getTime() >= schedule[last].end.getTime()) last = i;
+  });
+  return last;
 }
 
 /**
@@ -256,6 +282,16 @@ export interface BusyBlock {
  * processing row, and its own professional for whatever of the
  * appointment's duration runs past its services (add-ons).
  *
+ * Then the cleanup ("tiempo de limpieza", Service.bufferTime): one block
+ * from the end of the visit, as long as the cleanup time of the service the
+ * visit ends with (lastServiceIndex; the appointment's own service when it
+ * has no rows), for the professional whose busy time ends the visit. One
+ * tidy-up per visit, after it: a colour followed by a cut is cleaned up
+ * after the cut, for the cut's time. Nothing stored changes -- the
+ * appointment's duration, end and price stay the visit's; the cleanup only
+ * keeps the agenda from booking over it. It needs `service.bufferTime` in the
+ * select (VISIT_ROW_SELECT has it for rows); without it there is no cleanup.
+ *
  * `day` is the appointment's day when the row lacks scheduledDate.
  */
 export function appointmentBusyBlocks(
@@ -264,6 +300,7 @@ export function appointmentBusyBlocks(
     scheduledDate?: Date | string | null;
     scheduledTime: string;
     duration: number;
+    service?: { bufferTime?: number | null } | null;
     services?: VisitRow[] | null;
   },
   timeZone: string,
@@ -275,7 +312,12 @@ export function appointmentBusyBlocks(
   const duration = Number(apt.duration) || 0;
   const live = (apt.services ?? []).filter(isLiveRow);
   if (live.length === 0) {
-    return [{ professionalId: apt.professionalId, startMinutes, endMinutes: startMinutes + duration }];
+    const end = startMinutes + duration;
+    return withCleanup(
+      [{ professionalId: apt.professionalId, startMinutes, endMinutes: end }],
+      end,
+      cleanupMinutesOf(apt.service),
+    );
   }
 
   const dayOf = apt.scheduledDate
@@ -297,12 +339,71 @@ export function appointmentBusyBlocks(
   if (startMinutes + duration > rowsEnd) {
     blocks.push({ professionalId: apt.professionalId, startMinutes: rowsEnd, endMinutes: startMinutes + duration });
   }
-  return blocks;
+  const last = lastServiceIndex(schedule, live);
+  const cleanup = last === -1 ? cleanupMinutesOf(apt.service) : cleanupMinutesOf(live[last].service);
+  return withCleanup(blocks, Math.max(rowsEnd, startMinutes + duration), cleanup, apt.professionalId);
+}
+
+/** `blocks` plus the cleanup after the visit, for whoever's block ends it. */
+function withCleanup(blocks: BusyBlock[], visitEnd: number, minutes: number, fallback?: string): BusyBlock[] {
+  if (minutes <= 0) return blocks;
+  let last: BusyBlock | undefined;
+  for (const b of blocks) if (!last || b.endMinutes >= last.endMinutes) last = b;
+  const professionalId = last?.professionalId ?? fallback;
+  if (!professionalId) return blocks;
+  return [...blocks, { professionalId, startMinutes: visitEnd, endMinutes: visitEnd + minutes, cleanup: true }];
 }
 
 /** Whether a block overlaps `[from, from + minutes)`. Back to back is not an overlap. */
 export function overlapsBlock(block: BusyBlock, from: number, minutes: number): boolean {
   return block.startMinutes < from + minutes && from < block.endMinutes;
+}
+
+/**
+ * Whether a booking at `from` for `minutes`, followed by `cleanup` minutes of
+ * its own cleanup, clashes with a busy block (another visit or its cleanup):
+ * it may not start inside either, and its own cleanup may not run into the
+ * next visit. With no cleanup anywhere it is exactly overlapsBlock.
+ */
+export function clashesWithBlock(block: BusyBlock, from: number, minutes: number, cleanup = 0): boolean {
+  return overlapsBlock(block, from, minutes + Math.max(0, cleanup));
+}
+
+/**
+ * For the assistant's gap-finding, which reads appointments one after another
+ * by start time: how many minutes after its start the professional is free
+ * again -- its duration (`fallback` when none is recorded) plus the cleanup
+ * after it. The cleanup is that of its last live service row in the order
+ * given (VISIT_ROW_ORDER), else of its own service.
+ */
+export function minutesUntilFree(
+  apt: {
+    duration?: number | null;
+    service?: { bufferTime?: number | null } | null;
+    services?: Array<Pick<VisitRow, "type" | "status"> & { service?: { bufferTime?: number | null } | null }> | null;
+  },
+  fallback: number,
+): number {
+  const duration = Number(apt.duration);
+  const rows = (apt.services ?? []).filter((r) => isLiveRow(r) && !freesProfessional(r));
+  const last = rows.length ? rows[rows.length - 1].service : apt.service;
+  return (duration > 0 ? duration : fallback) + cleanupMinutesOf(last);
+}
+
+/**
+ * The cleanup after a visit that is about to be booked or moved, for the
+ * agenda checks (reschedule-check.ts): which of its services carries it
+ * (index into `schedule`, -1 for a visit without rows) and for how long.
+ * The same rule as appointmentBusyBlocks.
+ */
+export function plannedCleanup(
+  schedule: VisitService[],
+  rows: Array<Pick<VisitRow, "type"> & { service?: { bufferTime?: number | null } | null }>,
+  mainService?: { bufferTime?: number | null } | null,
+): { index: number; minutes: number } {
+  if (schedule.length === 0) return { index: -1, minutes: cleanupMinutesOf(mainService) };
+  const index = lastServiceIndex(schedule, rows);
+  return { index, minutes: index === -1 ? 0 : cleanupMinutesOf(rows[index]?.service) };
 }
 
 /* -------------------------------------------------------------------------- */

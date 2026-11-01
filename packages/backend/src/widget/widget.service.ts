@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, Logger } from "@nestjs/common";
 import { randomBytes } from "crypto";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { salonWhatsAppConnected } from "../consent/client-notices";
+import { publicPrice, publicPriceSettings } from "../common/public-price";
 
 export interface CreateWidgetInstanceInput {
   name: string;
@@ -130,6 +131,7 @@ export class WidgetService {
         images: true,
       },
     });
+    const prices = publicPriceSettings(widget.tenant.fiscalSettings);
     return {
       tenant: {
         id: widget.tenant.id,
@@ -142,6 +144,8 @@ export class WidgetService {
         timezone: widget.tenant.timezone,
         currency: widget.tenant.currency,
         language: widget.tenant.language,
+        // The tax the prices below include (IVA, IGIC, IPSI): "IVA incluido".
+        taxLabel: prices.taxLabel,
       },
       widget: {
         id: widget.id,
@@ -149,7 +153,9 @@ export class WidgetService {
         allowedOrigins: widget.allowedOrigins,
         theme: widget.theme,
       },
-      services: allServices,
+      // The final price, tax included (common/public-price.ts), never the
+      // net catalogue figure of a salon that writes its prices without it.
+      services: allServices.map((s) => ({ ...s, price: publicPrice(s.price, prices) })),
       professionals: allProfessionals,
       // The salon has its WhatsApp number connected: the form offers
       // "Recibir los avisos de mi cita por WhatsApp".
