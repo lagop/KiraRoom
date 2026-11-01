@@ -1,4 +1,5 @@
 import type { DiscountSpec } from "./pos-discounts";
+import { prorateCapped } from "./prorate";
 import type { SimplifiedInvoiceLine } from "../invoices/invoices.service";
 
 /**
@@ -20,8 +21,12 @@ import type { SimplifiedInvoiceLine } from "../invoices/invoices.service";
  *     keeps its own invoice (the appointment flow), never both.
  *   - A gift card sold is its own line kind: a multi-purpose voucher is not
  *     taxed when sold, so it is not on the invoice and carries no tax.
- *   - The loyalty reward is paid with points, like a tender: it lowers what
- *     is charged in money, not the invoice (the same as for appointments).
+ *   - The loyalty reward is paid with points and is a discount on the
+ *     invoice (owner decision 2026-11-02), so the invoice comes to what was
+ *     charged: an appointment's share goes on the visit's invoice
+ *     (appointment-invoice-pricing.ts), the rest is shared over the sale's
+ *     own lines in proportion to their tax base (loyaltyShares), added to
+ *     each line's discount and named on it ("Descuento fidelidad").
  *   - Commissions: an appointment's come from it (a percent of its
  *     catalogue total, as before); a service sold without one is recorded
  *     on its sale line with the professional who did it, its commission a
@@ -69,9 +74,29 @@ export function includedTaxCents(amountCents: number, ratePercent: number): numb
   return amountCents - Math.round(amountCents / (1 + ratePercent / 100));
 }
 
-/** The invoice line of a line sold without an appointment (tax included, at the till's price). */
-export function invoiceLineOf(line: PricedLine & { lineDiscountCents: number; orderDiscountCents: number }): SimplifiedInvoiceLine {
-  const off = line.lineDiscountCents + line.orderDiscountCents;
+/**
+ * The loyalty reward's share of each line (money cents): in proportion to
+ * the line's tax base after its discounts, never more than the line, in
+ * whole cents with the rounding on the largest line (prorate.ts). With one
+ * tax rate that is in proportion to the lines' money; with mixed rates the
+ * base decides, so each rate's base and tax go down by its share.
+ */
+export function loyaltyShares(lines: Array<{ netCents: number; taxRate: number }>, loyaltyCents: number): number[] {
+  return prorateCapped(
+    loyaltyCents,
+    lines.map((l) => ({ weight: Math.max(0, l.netCents - includedTaxCents(l.netCents, l.taxRate)), cap: Math.max(0, l.netCents) })),
+  );
+}
+
+/**
+ * The invoice line of a line sold without an appointment (tax included, at
+ * the till's price), with its discounts and its share of the loyalty reward.
+ */
+export function invoiceLineOf(
+  line: PricedLine & { lineDiscountCents: number; orderDiscountCents: number },
+  loyaltyCents = 0,
+): SimplifiedInvoiceLine {
+  const off = line.lineDiscountCents + line.orderDiscountCents + Math.max(0, loyaltyCents);
   return {
     description: line.name.slice(0, 200),
     quantity: line.quantity,
@@ -79,6 +104,7 @@ export function invoiceLineOf(line: PricedLine & { lineDiscountCents: number; or
     taxRate: line.taxRate,
     taxIncluded: true,
     ...(off > 0 ? { discountCents: off } : {}),
+    ...(loyaltyCents > 0 ? { loyaltyDiscountCents: loyaltyCents } : {}),
     ...(line.serviceId ? { serviceId: line.serviceId } : {}),
     ...(line.productId ? { productId: line.productId } : {}),
   };

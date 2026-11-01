@@ -84,10 +84,20 @@ describe("PlatformLlmConfigService (L-4)", () => {
       expect(view.provider).toBe("anthropic");
       expect(view.apiKeyLastFour).toBe("");
       expect(view.updatedAt).toBeNull();
+      // The model production runs; Haiku 4.5 is legacy.
+      expect(view.defaultModel).toBe("claude-haiku-5-5");
     });
   });
 
   describe("updateConfig", () => {
+    it("creates the row with Claude Haiku 5.5 when no model is given", async () => {
+      const prisma = makePrisma({});
+      const svc = new PlatformLlmConfigService(prisma as any, makeEncryption(), {} as any);
+      await svc.updateConfig({ provider: "anthropic", apiKey: "test-key-not-real-0000" });
+      const upsertArg = prisma.platformLlmConfig.upsert.mock.calls[0][0];
+      expect(upsertArg.create.defaultModel).toBe("claude-haiku-5-5");
+    });
+
     it("encrypts a new apiKey before persisting", async () => {
       const prisma = makePrisma({});
       const encryption = makeEncryption();

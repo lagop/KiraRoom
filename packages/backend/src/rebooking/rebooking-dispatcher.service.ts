@@ -578,10 +578,15 @@ export class RebookingDispatcherService {
     return { ok: true, channel };
   }
 
+  /**
+   * The salon's public booking page with the service chosen. It used to be
+   * the client area's booking screen, which went with client accounts
+   * (old links redirect to the booking page).
+   */
   private buildBookingUrl(slug?: string, serviceId?: string): string {
     const base = process.env.FRONTEND_BASE_URL ?? "http://localhost:3000";
-    const params = serviceId ? `?service=${encodeURIComponent(serviceId)}` : "";
-    return slug ? `${base}/sites/${encodeURIComponent(slug)}/account/new-appointment${params}` : `${base}${params}`;
+    const params = serviceId ? `?serviceId=${encodeURIComponent(serviceId)}` : "";
+    return slug ? `${base}/sites/${encodeURIComponent(slug)}${params}` : `${base}${params}`;
   }
 
   private daysSince(date: Date | string): number {

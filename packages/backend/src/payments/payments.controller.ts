@@ -250,9 +250,21 @@ export class PaymentsController {
     return this.paymentsService.refundPayment(
       req.user.tenantId,
       id,
-      { amount: body.amount, reason: body.reason },
+      { amount: body.amount, reason: body.reason, ...(body.lines?.length ? { lines: body.lines } : {}) },
       req.user.id,
     );
+  }
+
+  /**
+   * The lines of the till sale a payment paid, with what is left to give
+   * back of each: the refund dialog lets the salon pick them (owner/admin,
+   * as the refund itself).
+   */
+  @Get(":id/refund-lines")
+  @Roles(...SALON_MANAGERS)
+  @ApiOperation({ summary: "Lines of the till sale a payment paid, for a refund by line" })
+  async refundLines(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
+    return this.paymentsService.refundLines(req.user.tenantId, id);
   }
 
   // ============ SUBSCRIPTIONS ============

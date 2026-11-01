@@ -8,7 +8,7 @@ import {
 } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { LoyaltyService } from "../loyalty/loyalty.service";
-import { AppointmentStatus, PaymentMethod, PaymentStatus, Prisma } from "@prisma/client";
+import { AppointmentStatus, InvoiceSource, PaymentMethod, PaymentStatus, Prisma } from "@prisma/client";
 import { applyStatusIfAllowed } from "../appointments/appointment-status";
 import { refreshClientStats } from "../clients/client-stats";
 import { salonToday } from "../analytics/analytics-metrics";
@@ -16,6 +16,19 @@ import { WalletService } from "./services/wallet.service";
 import { GiftCardsService } from "../gift-cards/gift-cards.service";
 import { needsTimezone, PaymentFilters, paymentWhere, PAYMENT_SORT_FIELDS } from "./payments-query";
 import { openCashSessionId } from "../pos/cash-session-lock";
+import {
+  centsLeft,
+  linesPaidBy,
+  REFUNDABLE_KINDS,
+  refundableLines,
+  requestedLines,
+  shareOverLines,
+  unitsLeft,
+  unitsValueCents,
+  type RefundedLine,
+  type RefundLineRequest,
+  type SaleLineForRefund,
+} from "./refund-lines";
 
 const euros = (cents: number) =>
   new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(cents / 100);
@@ -33,6 +46,37 @@ const LIST_INCLUDE = {
 function withRefunded<P extends { refunds?: { amount: number }[] }>(payment: P) {
   const { refunds, ...rest } = payment;
   return { ...rest, refundedAmount: (refunds ?? []).reduce((s, r) => s + r.amount, 0) };
+}
+
+/** InvoiceSource "pos_sale" (invoices.service.ts POS_SALE_SOURCE), spelled out to keep this module free of the invoices one. */
+const POS_SALE_SOURCE = "pos_sale" as InvoiceSource;
+
+/** A product back in stock after a refund. */
+export interface Restocked {
+  productId: string;
+  description: string;
+  quantity: number;
+}
+
+/**
+ * The till sale a payment paid the sale's own lines of (Payment.metadata
+ * .posSaleId), or null: an appointment's payment (its line is the visit),
+ * a gift card sold (refunded off the card) or a payment not of the till.
+ */
+export function ownSaleOf(payment: { appointmentId?: string | null; type?: string | null; metadata?: unknown }): string | null {
+  const saleId = (payment.metadata as { posSaleId?: unknown } | null)?.posSaleId;
+  if (typeof saleId !== "string" || !saleId) return null;
+  if (payment.appointmentId || payment.type === "gift_card") return null;
+  return saleId;
+}
+
+/** 409 the panel shows when cash would be given back with the drawer closed (as a cash sale, cash-session-lock.ts). */
+export function drawerClosedForRefund(): ConflictException {
+  return new ConflictException({
+    code: "CASH_SESSION_CLOSED",
+    message:
+      "La caja está cerrada: ábrela (Abrir caja) para devolver en efectivo, así la devolución cuenta en el arqueo. Las devoluciones con tarjeta, Bizum o a la cartera no la necesitan.",
+  });
 }
 
 export interface PaymentsSummary {
@@ -79,6 +123,24 @@ export class PaymentsService {
       }
     } catch (err) {
       this.logger.warn(`loyalty after payment ${payment.id} failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * A partial refund takes back its share of the points the payment earned
+   * (LoyaltyService.onPartialRefund: in proportion, never below zero, with
+   * a ledger entry). Never fails the refund.
+   */
+  private async loyaltyAfterPartial(
+    tenantId: string,
+    payment: { id: string; amount: number; appointmentId?: string | null; metadata?: unknown },
+    refund: { id: string; amount: number },
+  ) {
+    if (!this.loyalty) return;
+    try {
+      await this.loyalty.onPartialRefund(tenantId, payment, refund);
+    } catch (err) {
+      this.logger.warn(`loyalty after partial refund ${refund.id} failed: ${(err as Error).message}`);
     }
   }
 
@@ -352,20 +414,31 @@ export class PaymentsService {
    * Gives back all or part of a charge taken at the salon (cash, card
    * terminal, transfer, wallet), in one transaction:
    *
-   * - a `Refund` row with the amount and the reason;
+   * - a `Refund` row with the amount, the reason and, for a till sale, the
+   *   lines it gave back (refund-lines.ts);
    * - the payment becomes `refunded` once all of it is given back; a
    *   partial refund leaves it `paid`, the refunds saying how much;
    * - its appointment's `amountPaid` goes down by the amount (and its
    *   payment status becomes `refunded` when nothing is left paid). The
    *   visit's own status is not touched: it happened;
-   * - a wallet payment's money goes back to the wallet.
+   * - a wallet payment's money goes back to the wallet;
+   * - a till sale's lines (refund-lines.ts): the units named (`lines`) go
+   *   back, products to stock with an inventory movement, and each line
+   *   records what was given back of it (its commission counts the rest);
+   *   an amount with no lines restocks nothing; the whole sale given back
+   *   returns every unit not returned yet.
    *
-   * Then, once committed, a full refund takes back the loyalty points the
-   * payment earned (and gives back points spent on the sale when nothing of
-   * it is left paid), and the client's figures are recomputed.
+   * Cash comes out of the drawer: a cash refund needs the drawer open (409
+   * CASH_SESSION_CLOSED, like a cash sale) and is counted in its arqueo.
+   * Card, Bizum, transfer, wallet and gift card refunds do not need it.
    *
-   * An issued invoice is not edited: the answer names it so the salon issues
-   * the rectificativa (Facturas).
+   * Then, once committed, the loyalty points the payment earned are taken
+   * back -- all of them on a full refund (and points spent on the sale come
+   * back when nothing of it is left paid), their share on a partial one,
+   * never below zero -- and the client's figures are recomputed.
+   *
+   * An issued invoice is not edited: the answer names it (the visit's, or
+   * the till sale's) so the salon issues the rectificativa (Facturas).
    *
    * No online (Stripe) payment exists on this version; one would be refused
    * here rather than marked refunded without Stripe giving the money back.
@@ -373,7 +446,7 @@ export class PaymentsService {
   async refundPayment(
     tenantId: string,
     paymentId: string,
-    input: { amount?: number; reason: string },
+    input: { amount?: number; reason: string; lines?: RefundLineRequest[] },
     actorId?: string | null,
   ) {
     const payment = await this.prisma.payment.findFirst({
@@ -396,7 +469,19 @@ export class PaymentsService {
     const already = (payment.refunds ?? []).reduce((s, r) => s + r.amount, 0);
     const left = payment.amount - already;
     if (left <= 0) throw new ConflictException("Este cobro ya está devuelto.");
-    const amount = input.amount ?? left;
+
+    // A till sale's own payment (not an appointment's, not a gift card sold):
+    // its refund can name the sale's lines.
+    const meta = (payment.metadata ?? {}) as { giftCardId?: string; soldGiftCardIds?: string[] };
+    const saleId = ownSaleOf(payment);
+    if (input.lines?.length && !saleId) {
+      throw new BadRequestException("Este cobro no es de una venta en caja: devuélvelo por importe, sin elegir líneas.");
+    }
+    const saleLines = saleId ? await this.saleLinesOf(this.prisma, tenantId, saleId) : [];
+    const chosen = input.lines?.length ? requestedLines(saleLines, input.lines) : [];
+    const chosenValue = chosen.reduce((s, c) => s + c.valueCents, 0);
+
+    const amount = input.amount ?? (chosen.length ? Math.min(left, chosenValue) : left);
     if (!Number.isInteger(amount) || amount < 1) {
       throw new BadRequestException("El importe a devolver debe ser mayor que 0.");
     }
@@ -406,13 +491,22 @@ export class PaymentsService {
           (already > 0 ? ` (ya se devolvieron ${euros(already)}).` : "."),
       );
     }
+    if (chosen.length && amount > chosenValue) {
+      throw new BadRequestException(
+        `Las líneas elegidas valen ${euros(chosenValue)}: no se puede devolver más por ellas.`,
+      );
+    }
+    // Cash comes out of the drawer: checked here, and again under its lock.
+    const cash = payment.method === PaymentMethod.cash;
+    if (cash && !(await openCashSessionId(this.prisma, tenantId))) throw drawerClosedForRefund();
+
     const full = amount === left;
     const status = full ? PaymentStatus.refunded : PaymentStatus.paid;
 
     const changed = () =>
       new ConflictException("El cobro acaba de cambiar. Recarga y vuelve a intentarlo.");
 
-    const { refund, appointment } = await this.prisma.$transaction(async (tx) => {
+    const { refund, appointment, restocked } = await this.prisma.$transaction(async (tx) => {
       // Over the payment as just read: a second refund at the same time
       // finds it changed and gets a 409, so the two cannot add up past it.
       const { count } = await tx.payment.updateMany({
@@ -422,9 +516,25 @@ export class PaymentsService {
       if (count !== 1) throw changed();
 
       // The cash-drawer session open now (arqueo), held until this commits:
-      // a cash refund comes out of that drawer, so its close counts it.
-      // With the drawer closed the refund is still given (not blocked).
+      // a cash refund comes out of that drawer, so its close counts it. A
+      // cash refund with the drawer closed would belong to no count: refused.
       const cashSessionId = await openCashSessionId(tx, tenantId, "share");
+      if (cash && !cashSessionId) throw drawerClosedForRefund();
+
+      // The sale's lines given back, and the products back in stock.
+      const given = saleId
+        ? await this.giveBackLines(tx, {
+            tenantId,
+            saleId,
+            paymentId: payment.id,
+            paymentType: payment.type,
+            amount,
+            full,
+            chosen,
+            reason,
+          })
+        : { lines: [] as RefundedLine[], restocked: [] as Restocked[] };
+
       const refund = await tx.refund.create({
         data: {
           paymentId: payment.id,
@@ -433,6 +543,7 @@ export class PaymentsService {
           status: "succeeded",
           adminId: actorId ?? null,
           ...(cashSessionId ? { cashSessionId } : {}),
+          ...(given.lines.length ? { saleLines: given.lines as unknown as Prisma.InputJsonValue } : {}),
         },
       });
 
@@ -462,7 +573,6 @@ export class PaymentsService {
 
       // Paid with a gift card (at the till): the money goes back to the card,
       // like a wallet payment to the wallet.
-      const meta = (payment.metadata ?? {}) as { giftCardId?: string; soldGiftCardIds?: string[] };
       if (payment.method === PaymentMethod.gift_card) {
         if (!meta.giftCardId || !this.giftCards) {
           throw new BadRequestException("Este cobro con tarjeta regalo no indica la tarjeta: devuélvelo desde Tarjetas regalo.");
@@ -503,24 +613,15 @@ export class PaymentsService {
         }
       }
 
-      return { refund, appointment };
+      return { refund, appointment, restocked: given.restocked };
     });
 
     const updated = { ...payment, refunds: undefined, status };
     if (full) await this.loyaltyAfter(tenantId, updated);
+    else await this.loyaltyAfterPartial(tenantId, updated, { id: refund.id, amount });
     await this.clientStatsAfter(tenantId, payment.clientId);
 
-    const invoice = payment.appointmentId
-      ? await this.prisma.invoice.findFirst({
-          where: {
-            tenantId,
-            sourceType: "appointment",
-            sourceId: payment.appointmentId,
-            status: { in: ["issued", "paid"] },
-          },
-          select: { id: true, series: true, number: true },
-        })
-      : null;
+    const invoice = await this.invoiceToRectify(tenantId, payment.appointmentId, saleId);
 
     return {
       payment: { ...updated, refundedAmount: already + amount },
@@ -528,9 +629,189 @@ export class PaymentsService {
       refundedAmount: already + amount,
       refundableAmount: left - amount,
       appointment,
+      /** Units back in stock (products of a till sale). */
+      restocked,
       invoice: invoice ? { id: invoice.id, number: `${invoice.series ?? ""}${invoice.number ?? ""}` } : null,
       rectificationNeeded: !!invoice,
     };
+  }
+
+  /**
+   * GET /payments/:id/refund-lines: the lines of the till sale a payment
+   * paid, with what is left to give back of each, for the refund dialog.
+   * `saleId` null: the payment is not a till sale's own (an appointment's,
+   * a gift card sold, a payment from the Pagos screen): refunded by amount.
+   */
+  async refundLines(tenantId: string, paymentId: string) {
+    const payment = await this.prisma.payment.findFirst({
+      where: { id: paymentId, tenantId },
+      select: { id: true, type: true, appointmentId: true, metadata: true },
+    });
+    if (!payment) throw new NotFoundException("Cobro no encontrado");
+    const saleId = ownSaleOf(payment);
+    if (!saleId) return { saleId: null, lines: [] };
+    return { saleId, lines: refundableLines(await this.saleLinesOf(this.prisma, tenantId, saleId)) };
+  }
+
+  /** A till sale's lines, as a refund reads them (refund-lines.ts). */
+  private async saleLinesOf(db: Prisma.TransactionClient, tenantId: string, saleId: string): Promise<SaleLineForRefund[]> {
+    const rows = await db.posSaleLine.findMany({
+      where: { tenantId, saleId },
+      orderBy: { lineIndex: "asc" },
+      select: {
+        id: true,
+        kind: true,
+        productId: true,
+        appointmentId: true,
+        description: true,
+        quantity: true,
+        totalCents: true,
+        refundedQuantity: true,
+        refundedCents: true,
+      },
+    });
+    return rows.map((r) => ({ ...r, refundedQuantity: r.refundedQuantity ?? 0, refundedCents: r.refundedCents ?? 0 }));
+  }
+
+  /**
+   * Inside the refund's transaction: what it gives back of the sale's lines
+   * (refund-lines.ts), each line written over what was just read (a refund
+   * of another payment of the same sale at the same time gets a 409), and
+   * the products back in stock, each with its inventory movement.
+   */
+  private async giveBackLines(
+    tx: Prisma.TransactionClient,
+    args: {
+      tenantId: string;
+      saleId: string;
+      paymentId: string;
+      paymentType: string;
+      amount: number;
+      full: boolean;
+      chosen: Array<{ line: SaleLineForRefund; quantity: number }>;
+      reason: string;
+    },
+  ): Promise<{ lines: RefundedLine[]; restocked: Restocked[] }> {
+    const { tenantId, saleId } = args;
+    const saleChanged = () => new ConflictException("La venta acaba de cambiar. Recarga y vuelve a intentarlo.");
+    // Read again inside the transaction: what is left of each line now.
+    const lines = await this.saleLinesOf(tx, tenantId, saleId);
+    const byId = new Map(lines.map((l) => [l.id, l]));
+    const units = new Map<string, number>();
+    const cents = new Map<string, number>();
+
+    if (args.chosen.length) {
+      const chosen = args.chosen.map((c) => {
+        const line = byId.get(c.line.id);
+        if (!line || c.quantity > unitsLeft(line)) throw saleChanged();
+        return { line, quantity: c.quantity };
+      });
+      const shares = shareOverLines(
+        args.amount,
+        chosen.map((c) => c.line),
+        chosen.map((c) => unitsValueCents(c.line, c.quantity)),
+      );
+      chosen.forEach((c, i) => {
+        units.set(c.line.id, c.quantity);
+        cents.set(c.line.id, shares[i]);
+      });
+    } else {
+      const targets = linesPaidBy(args.paymentType, lines);
+      const shares = shareOverLines(args.amount, targets, targets.map(centsLeft));
+      targets.forEach((l, i) => cents.set(l.id, shares[i]));
+    }
+
+    // The whole sale given back (no payment of it left paid): every unit
+    // not returned yet comes back and every line is refunded in full.
+    let wholeSale = false;
+    if (args.full) {
+      const stillPaid = await tx.payment.count({
+        where: {
+          tenantId,
+          id: { not: args.paymentId },
+          status: PaymentStatus.paid,
+          metadata: { path: ["posSaleId"], equals: saleId },
+        },
+      });
+      wholeSale = stillPaid === 0;
+    }
+
+    const out: RefundedLine[] = [];
+    const restocked: Restocked[] = [];
+    for (const line of lines) {
+      if (!(REFUNDABLE_KINDS as readonly string[]).includes(line.kind) || line.appointmentId) continue;
+      let q = units.get(line.id) ?? 0;
+      let c = cents.get(line.id) ?? 0;
+      let refundedQuantity = line.refundedQuantity + q;
+      let refundedCents = line.refundedCents + c;
+      if (wholeSale) {
+        q += line.quantity - refundedQuantity;
+        refundedQuantity = line.quantity;
+        refundedCents = Math.max(refundedCents, line.totalCents);
+        c = refundedCents - line.refundedCents;
+      }
+      if (q <= 0 && c <= 0) continue;
+      const res = await tx.posSaleLine.updateMany({
+        where: { id: line.id, tenantId, refundedQuantity: line.refundedQuantity, refundedCents: line.refundedCents },
+        data: { refundedQuantity, refundedCents },
+      });
+      if (res.count !== 1) throw saleChanged();
+      out.push({ lineId: line.id, quantity: q, cents: c });
+
+      if (line.kind === "product" && line.productId && q > 0) {
+        const back = await this.restock(tx, tenantId, line.productId, q, saleId, args.reason);
+        if (back) restocked.push({ productId: line.productId, description: line.description, quantity: q });
+      }
+    }
+    return { lines: out, restocked };
+  }
+
+  /** Puts `quantity` units of a product back in stock, with its movement. False when its stock is not counted. */
+  private async restock(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    productId: string,
+    quantity: number,
+    saleId: string,
+    reason: string,
+  ): Promise<boolean> {
+    const product = await tx.product.findFirst({
+      where: { id: productId, tenantId },
+      select: { id: true, trackInventory: true },
+    });
+    if (!product?.trackInventory) return false;
+    const after = await tx.product.update({
+      where: { id: product.id },
+      data: { quantity: { increment: quantity } },
+      select: { quantity: true },
+    });
+    await tx.inventoryTransaction.create({
+      data: {
+        productId: product.id,
+        tenantId,
+        type: "return",
+        quantity,
+        previousQty: after.quantity - quantity,
+        newQty: after.quantity,
+        reason: "Devolución en caja",
+        notes: `Venta ${saleId}: ${reason}`.slice(0, 500),
+      },
+    });
+    return true;
+  }
+
+  /** The issued invoice a refund leaves standing: the visit's, or the till sale's own. */
+  private async invoiceToRectify(tenantId: string, appointmentId: string | null, saleId: string | null) {
+    const source = appointmentId
+      ? { sourceType: "appointment" as InvoiceSource, sourceId: appointmentId }
+      : saleId
+        ? { sourceType: POS_SALE_SOURCE, sourceId: saleId }
+        : null;
+    if (!source) return null;
+    return this.prisma.invoice.findFirst({
+      where: { tenantId, ...source, status: { in: ["issued", "paid"] } },
+      select: { id: true, series: true, number: true },
+    });
   }
 
   async deletePayment(tenantId: string, paymentId: string) {

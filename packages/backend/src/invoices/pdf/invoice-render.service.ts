@@ -95,6 +95,8 @@ export class InvoiceRenderService {
         quantity: Number(l.quantity),
         unitPriceCents: l.unitPriceCents,
         discountPct: Number(l.discountPct),
+        loyaltyDiscountCents: (l as { loyaltyDiscountCents?: number }).loyaltyDiscountCents ?? 0,
+        taxIncluded: (l as { taxIncluded?: boolean }).taxIncluded === true,
         taxRate: Number(l.taxRate),
         totalCents: l.totalCents,
       })),

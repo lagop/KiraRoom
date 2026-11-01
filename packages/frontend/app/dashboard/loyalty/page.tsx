@@ -277,19 +277,12 @@ export default function LoyaltyPage() {
                   Dar de alta automáticamente a cada cliente en su primera visita pagada.
                   <span className="block text-gray-500">
                     Si lo desactivas, solo suman puntos los clientes que des de alta tú (desde su
-                    ficha o desde Socios) o que se apunten desde su área de cliente.
+                    ficha o desde Socios).
                   </span>
                 </span>
               </label>
-              <label className="flex items-start gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  className="mt-1"
-                  checked={form.allowSelfEnroll}
-                  onChange={(e) => setForm({ ...form, allowSelfEnroll: e.target.checked })}
-                />
-                <span>Permitir que los clientes se apunten desde su área de cliente.</span>
-              </label>
+              {/* No "se apunten ellos": clients have no account on the salon's
+                  site any more, so there is nowhere for them to do it. */}
             </fieldset>
 
             <div className="flex items-center gap-3">

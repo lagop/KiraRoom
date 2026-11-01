@@ -1,7 +1,6 @@
 ﻿"use client";
 
 import { useState, useEffect } from "react";
-import Link from "next/link";
 import {
   Calendar,
   Clock,
@@ -11,12 +10,10 @@ import {
   MapPin,
   Phone,
   Mail,
-  LogIn,
-  LogOut,
   Instagram,
   Facebook,
 } from "lucide-react";
-import apiClient, { removeToken } from "@/lib/api";
+import apiClient from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { useTenantTranslations } from "@/lib/use-translation";
 import {
@@ -39,7 +36,6 @@ import {
   slotsState,
   BOOKING_CHOICE_TEXT,
 } from "@/lib/public-booking";
-import LoginModal from "./components/login-modal";
 import PublicReviewsSection from "./components/public-reviews";
 import { ChatWidget } from "@/src/components/virtual-receptionist";
 
@@ -101,15 +97,6 @@ interface Service {
 interface AvailableTimeSlot {
   time: string;
   available: boolean;
-}
-
-interface UserData {
-  id: string;
-  firstName: string;
-  lastName: string;
-  email: string;
-  phone?: string;
-  role: string;
 }
 
 /**
@@ -198,33 +185,13 @@ export default function SalonBookingPage({
   const [wantsWhatsAppNotices, setWantsWhatsAppNotices] = useState(false);
   // Only when the salon has its WhatsApp number connected.
   const offersWhatsAppNotices = initialData.whatsappNotices === true;
-  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
-  const [currentUser, setCurrentUser] = useState<UserData | null>(null);
-
-  // Check if user is already logged in on component mount
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const userStr = localStorage.getItem("user");
-      if (userStr) {
-        const user = JSON.parse(userStr);
-        setCurrentUser(user);
-        // Auto-fill booking data with user information
-        setBookingData((prev) => ({
-          ...prev,
-          clientName: `${user.firstName} ${user.lastName}`,
-          clientEmail: user.email,
-          clientPhone: user.phone || "",
-        }));
-      }
-    }
-  }, []);
-
   // Links from a wait-list notice (and rebooking reminders) carry the
   // service, professional and day of the freed slot: start the form there.
   useEffect(() => {
     if (typeof window === "undefined") return;
     const q = new URLSearchParams(window.location.search);
-    const serviceId = q.get("serviceId") || "";
+    // ?service= is what rebooking emails and the old client area sent.
+    const serviceId = q.get("serviceId") || q.get("service") || "";
     const professionalId = q.get("professionalId") || "";
     // The pattern was written without backslashes (/^d{4}-d{2}-d{2}$/), so
     // it matched "dddd-dd-dd" and never a date: every link lost its day.
@@ -238,41 +205,6 @@ export default function SalonBookingPage({
       }));
     }
   }, []);
-
-  const handleLoginSuccess = (user: UserData) => {
-    setCurrentUser(user);
-    // Auto-fill booking data with user information
-    setBookingData((prev) => ({
-      ...prev,
-      clientName: `${user.firstName} ${user.lastName}`,
-      clientEmail: user.email,
-      clientPhone: user.phone || "",
-    }));
-  };
-
-  const handleLogout = async () => {
-    try {
-      await apiClient.logout();
-    } catch (error) {
-      // Ignore logout errors (e.g., if token is already invalid)
-    }
-    removeToken();
-    if (typeof window !== "undefined") {
-      localStorage.removeItem("user");
-    }
-    setCurrentUser(null);
-    // Reset booking data
-    setBookingData((prev) => ({
-      ...prev,
-      clientName: "",
-      clientEmail: "",
-      clientPhone: "",
-    }));
-    toast({
-      title: t("bookingPublic.logged_out"),
-      description: t("bookingPublic.logged_out_desc"),
-    });
-  };
 
   // Default date: tomorrow, in the visitor's calendar. toISOString() gave
   // the UTC day, which after midnight in Spain was still today.
@@ -429,24 +361,15 @@ export default function SalonBookingPage({
 
       await apiClient.createAppointment({
         tenantId: salonData.id,
-        // Signed in or not, the booking carries the client's details: the
-        // public endpoint takes no clientId (an anonymous caller must not
-        // book as someone else) and finds the client by email or phone in
-        // this salon. Sending only clientId made every signed-in booking fail
-        // with "clientInfo should not be null or undefined".
-        clientInfo: currentUser
-          ? {
-              firstName: currentUser.firstName,
-              lastName: currentUser.lastName ?? "",
-              email: currentUser.email || undefined,
-              phone: currentUser.phone || bookingData.clientPhone,
-            }
-          : {
-              firstName,
-              lastName: restOfName.join(" "),
-              email: bookingData.clientEmail.trim() || undefined,
-              phone: bookingData.clientPhone,
-            },
+        // The public endpoint takes no clientId (an anonymous caller must not
+        // book as someone else): it finds or creates the client by email or
+        // phone in this salon.
+        clientInfo: {
+          firstName,
+          lastName: restOfName.join(" "),
+          email: bookingData.clientEmail.trim() || undefined,
+          phone: bookingData.clientPhone,
+        },
         serviceId: bookingData.serviceId,
         professionalId: bookingData.professionalId,
         // The DTO's names, not the form's: it wants scheduledDate and
@@ -467,11 +390,9 @@ export default function SalonBookingPage({
 
       // Reset form, with tomorrow as the date again
       setBookingData({
-        clientName: currentUser
-          ? `${currentUser.firstName} ${currentUser.lastName}`
-          : "",
-        clientEmail: currentUser ? currentUser.email : "",
-        clientPhone: currentUser ? currentUser.phone || "" : "",
+        clientName: "",
+        clientEmail: "",
+        clientPhone: "",
         serviceId: "",
         professionalId: "",
         date: localTomorrow(),
@@ -574,49 +495,6 @@ export default function SalonBookingPage({
               </span>
             </div>
 
-            {/* Login/Logout Section */}
-            <div className="flex items-center space-x-4">
-              {currentUser ? (
-                <div className="flex items-center space-x-4">
-                  <div className="flex items-center space-x-3">
-                    <div className="w-8 h-8 rounded-full bg-purple-600 flex items-center justify-center text-white font-semibold text-sm">
-                      {currentUser.firstName.charAt(0)}
-                      {currentUser.lastName.charAt(0)}
-                    </div>
-                    <div className="text-left hidden md:block">
-                      <p className="text-sm font-medium text-gray-900">
-                        {currentUser.firstName} {currentUser.lastName}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        {currentUser.email}
-                      </p>
-                    </div>
-                  </div>
-                  <Link
-                    href={`/sites/${salonName}/account`}
-                    className="flex items-center space-x-2 bg-purple-100 text-purple-700 px-3 py-1.5 rounded-lg hover:bg-purple-200 transition-colors text-sm"
-                  >
-                    <User className="w-4 h-4" />
-                    <span>{t("nav.dashboard")}</span>
-                  </Link>
-                  <button
-                    onClick={handleLogout}
-                    className="flex items-center space-x-2 bg-purple-600 text-white px-3 py-1.5 rounded-lg hover:bg-purple-700 transition-colors text-sm"
-                  >
-                    <LogOut className="w-4 h-4" />
-                    <span>{t("nav.logout")}</span>
-                  </button>
-                </div>
-              ) : (
-                <button
-                  onClick={() => setIsLoginModalOpen(true)}
-                  className="flex items-center space-x-2 bg-purple-600 text-white px-3 py-1.5 rounded-lg hover:bg-purple-700 transition-colors text-sm"
-                >
-                  <LogIn className="w-4 h-4" />
-                  <span>{t("login.login")}</span>
-                </button>
-              )}
-            </div>
           </div>
         </div>
       </nav>
@@ -694,46 +572,6 @@ export default function SalonBookingPage({
                   {t("bookingPublic.step_4")}
                 </h3>
 
-                {currentUser ? (
-                  <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                    <p className="text-green-800 mb-2">
-                      <strong>{t("bookingPublic.personal_info")}</strong>
-                    </p>
-                    <p className="text-sm text-green-700 mb-1">
-                        <strong>{t("common.name")}:</strong> {currentUser.firstName}{" "}
-                        {currentUser.lastName}
-                      </p>
-                      <p className="text-sm text-green-700 mb-1">
-                        <strong>{t("common.email")}:</strong> {currentUser.email}
-                      </p>
-                      {currentUser.phone ? (
-                        <p className="text-sm text-green-700">
-                          <strong>{t("common.phone")}:</strong> {currentUser.phone}
-                        </p>
-                      ) : (
-                        // Online bookings need a phone: it is how the salon
-                        // reaches the client about a last-minute change.
-                        <div className="mt-3">
-                          <label
-                            htmlFor="clientPhone"
-                            className="block text-sm font-medium text-gray-700 mb-1"
-                          >
-                            {t("bookingPublic.phone")} *
-                          </label>
-                          <input
-                            type="tel"
-                            id="clientPhone"
-                            name="clientPhone"
-                            value={bookingData.clientPhone}
-                            onChange={handleInputChange}
-                            required
-                            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors"
-                            placeholder="+34 600 123 456"
-                          />
-                        </div>
-                      )}
-                  </div>
-                ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                       <label
@@ -794,7 +632,6 @@ export default function SalonBookingPage({
                       />
                     </div>
                   </div>
-                )}
               </div>
 
               {/* Step 2: Service Selection */}
@@ -1254,26 +1091,9 @@ export default function SalonBookingPage({
         </div>
       </footer>
 
-      {/* Login Modal */}
-      <LoginModal
-        isOpen={isLoginModalOpen}
-        onClose={() => setIsLoginModalOpen(false)}
-        onLoginSuccess={handleLoginSuccess}
-      />
-
       {/* Virtual Receptionist Widget */}
       {salonData && (
-        <ChatWidget
-          salonId={salonData.id}
-          clientId={currentUser?.id}
-          clientName={
-            currentUser
-              ? `${currentUser.firstName} ${currentUser.lastName}`
-              : undefined
-          }
-          clientEmail={currentUser?.email}
-          clientPhone={currentUser?.phone}
-        />
+        <ChatWidget salonId={salonData.id} />
       )}
     </div>
   );

@@ -6,26 +6,23 @@ import apiClient, { ApiError, WaitListEntry, WaitListNotifyResult } from "@/lib/
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { getCurrentUser } from "@/lib/utils";
 import { isManager } from "@/lib/dashboard-nav";
+import { WAIT_LIST_FILTERS, WAIT_LIST_STATUS_LABEL, closedNote, isOpenStatus } from "@/lib/wait-list-status";
 
 /**
  * Wait-list for fully booked services. "Avisar" really sends the notice
  * (email, the salon's WhatsApp or SMS) with a link to book, and shows what
  * each channel did; when no channel can deliver, it says why instead of
- * marking the client as notified.
+ * marking the client as notified. Entries whose dates passed, or that sat
+ * untouched for 90 days, close as "Caducado"; a client can also leave from
+ * the "Ya no me interesa" link in the notice.
  */
-
-const STATUS_LABEL: Record<WaitListEntry["status"], string> = {
-  waiting: "Esperando",
-  notified: "Avisado",
-  fulfilled: "Ha reservado",
-  cancelled: "Descartado",
-};
 
 const CHANNEL_LABEL: Record<string, string> = {
   email: "Email",
   whatsapp: "WhatsApp",
   sms: "SMS",
-  inApp: "Área de cliente",
+  // Notices sent before client accounts were removed.
+  inApp: "Área de cliente (antiguo)",
 };
 
 function errorText(err: unknown): string {
@@ -79,7 +76,7 @@ export default function WaitListPage() {
     try {
       setLoading(true);
       const all = await apiClient.getWaitList(status === "open" || status === "all" ? undefined : status);
-      setEntries(status === "open" ? all.filter((e) => e.status === "waiting" || e.status === "notified") : all);
+      setEntries(status === "open" ? all.filter((e) => isOpenStatus(e.status)) : all);
       setError(null);
     } catch (err) {
       setError(errorText(err));
@@ -192,12 +189,7 @@ export default function WaitListPage() {
       )}
 
       <div className="flex flex-wrap gap-2 text-sm">
-        {[
-          ["open", "Pendientes"],
-          ["fulfilled", "Han reservado"],
-          ["cancelled", "Descartados"],
-          ["all", "Todos"],
-        ].map(([k, label]) => (
+        {WAIT_LIST_FILTERS.map(([k, label]) => (
           <button
             key={k}
             onClick={() => setStatus(k)}
@@ -233,10 +225,12 @@ export default function WaitListPage() {
                               ? "bg-green-100 text-green-700"
                               : e.status === "cancelled"
                                 ? "bg-gray-100 text-gray-600"
-                                : "bg-amber-100 text-amber-700"
+                                : e.status === "expired"
+                                  ? "bg-gray-100 text-gray-500 italic"
+                                  : "bg-amber-100 text-amber-700"
                         }`}
                       >
-                        {STATUS_LABEL[e.status]}
+                        {WAIT_LIST_STATUS_LABEL[e.status] ?? e.status}
                         {e.notifyCount > 1 ? ` ×${e.notifyCount}` : ""}
                       </span>
                     </p>
@@ -256,6 +250,7 @@ export default function WaitListPage() {
                       {e.notifiedAt && ` · último aviso ${new Date(e.notifiedAt).toLocaleString("es-ES")}`}
                     </p>
                     {e.notes && <p className="text-xs text-gray-500">Nota: {e.notes}</p>}
+                    {closedNote(e) && <p className="text-xs text-gray-500">{closedNote(e)}</p>}
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     {(e.status === "waiting" || e.status === "notified") && (
@@ -280,7 +275,10 @@ export default function WaitListPage() {
                         </button>
                       </>
                     )}
-                    {(e.status === "cancelled" || e.status === "fulfilled") && (
+                    {/* An entry whose dates passed is not reopened: add a new one with new dates. */}
+                    {(e.status === "cancelled" ||
+                      e.status === "fulfilled" ||
+                      (e.status === "expired" && e.closedReason !== "window_passed")) && (
                       <button
                         onClick={() => setEntryStatus(e, "waiting")}
                         className="inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-sm text-gray-600"

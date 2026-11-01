@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
+import { createHmac, timingSafeEqual } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { FeatureFlagService } from '../common/feature-flags/feature-flag.service';
 import { realEmail } from '../common/placeholder-email';
@@ -46,6 +47,92 @@ export interface NotifyResult {
 
 /** Entries still waiting for a slot. `notified` ones stay eligible for later slots. */
 export const ACTIVE_STATUSES: WaitListStatus[] = ['waiting', 'notified'];
+
+/**
+ * An open-ended entry (no "hasta") nobody has touched for this long --
+ * no notice, no edit -- is stale: the client has most likely booked
+ * elsewhere or forgotten. Counted from the later of its last change and its
+ * "desde", so a request for months ahead is not cut short.
+ */
+export const WAIT_LIST_MAX_AGE_DAYS = 90;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Why an entry was closed (WaitList.closedReason). */
+export const CLOSED_REASONS = {
+  /** Its "hasta" is in the past. */
+  windowPassed: 'window_passed',
+  /** Open-ended and untouched for WAIT_LIST_MAX_AGE_DAYS. */
+  tooOld: 'too_old',
+  /** The client pressed "Ya no me interesa" in a notice. */
+  clientLeft: 'client_left',
+} as const;
+type ExpiryReason = typeof CLOSED_REASONS.windowPassed | typeof CLOSED_REASONS.tooOld;
+
+function time(value: unknown): number {
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'string') return new Date(value).getTime();
+  return NaN;
+}
+
+/**
+ * Whether an open entry has gone stale, and why; null while it is still
+ * good. `salonToday` is the salon's calendar day ("YYYY-MM-DD"). A row
+ * without dates (none in the database) is never stale.
+ */
+export function staleReason(
+  entry: { earliestDate?: Date | string | null; latestDate?: Date | string | null; updatedAt?: Date | string | null },
+  salonToday: string,
+  now: Date,
+): ExpiryReason | null {
+  const latest = time(entry.latestDate);
+  if (Number.isFinite(latest)) {
+    return new Date(latest).toISOString().slice(0, 10) < salonToday ? CLOSED_REASONS.windowPassed : null;
+  }
+  const touched = time(entry.updatedAt);
+  if (!Number.isFinite(touched)) return null;
+  const earliest = time(entry.earliestDate);
+  const from = Number.isFinite(earliest) ? Math.max(touched, earliest) : touched;
+  return now.getTime() - from > WAIT_LIST_MAX_AGE_DAYS * DAY_MS ? CLOSED_REASONS.tooOld : null;
+}
+
+const LEAVE_SIGNATURE_CHARS = 32;
+
+function leaveSignature(payload: string, secret: string): string {
+  // A key of its own, derived, so this signature is never valid anywhere else.
+  const key = createHmac('sha256', secret).update('wait-list-leave:v1').digest();
+  return createHmac('sha256', key).update(payload).digest('base64url').slice(0, LEAVE_SIGNATURE_CHARS);
+}
+
+/**
+ * The token of an entry's "Ya no me interesa" link: the entry id, signed
+ * (HMAC-SHA256, 192 bits kept), so it cannot be guessed or made for another
+ * entry. It carries no personal data.
+ */
+export function waitListLeaveToken(entryId: string, secret: string): string {
+  const payload = Buffer.from(`w.${entryId}`).toString('base64url');
+  return `${payload}.${leaveSignature(payload, secret)}`;
+}
+
+/** The entry id a token names, or null when it is malformed or not ours. */
+export function parseWaitListLeaveToken(token: string, secret: string): string | null {
+  const [payload, signature, extra] = String(token ?? '').split('.');
+  if (!payload || !signature || extra !== undefined || !secret) return null;
+  const expected = Buffer.from(leaveSignature(payload, secret));
+  const given = Buffer.from(signature);
+  if (expected.length !== given.length || !timingSafeEqual(expected, given)) return null;
+  const decoded = Buffer.from(payload, 'base64url').toString();
+  if (!decoded.startsWith('w.')) return null;
+  const id = decoded.slice(2);
+  return /^[0-9a-f-]{36}$/i.test(id) ? id : null;
+}
+
+/** What the public "Ya no me interesa" page shows. */
+export interface LeaveLinkInfo {
+  salonName: string;
+  serviceName: string;
+  /** False once the entry is closed, whatever closed it. */
+  waiting: boolean;
+}
 
 /** How many waiting clients an automatic notice reaches per freed slot. */
 const AUTO_NOTIFY_MAX = 3;
@@ -252,13 +339,30 @@ export class WaitListService {
         { earliest: earliestGiven && !!dto.earliestDate, latest: latestGiven && !!dto.latestDate },
       );
     }
-    if (dto.status === 'waiting' && !ACTIVE_STATUSES.includes(entry.status as WaitListStatus)) {
+    if (dto.status === 'expired') {
+      throw new BadRequestException('Una entrada caduca sola; para cerrarla usa "Descartar"');
+    }
+    const reopening = dto.status === 'waiting' && !ACTIVE_STATUSES.includes(entry.status as WaitListStatus);
+    if (reopening) {
+      const latest = window && latestGiven ? window.latest : entry.latestDate ?? null;
+      if (latest) {
+        const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } });
+        const today = salonClock(this.clock(), tenant?.timezone || DEFAULT_TZ).day;
+        if (latest.toISOString().slice(0, 10) < today) {
+          throw new BadRequestException('La fecha "Hasta" ya ha pasado: apúntalo de nuevo con otras fechas');
+        }
+      }
       await this.assertNoDuplicate(this.prisma, tenantId, entry.clientId, entry.serviceId, entry.professionalId ?? null, entry.id);
     }
     return this.prisma.waitList.update({
       where: { id },
       data: {
         ...(dto.status ? { status: dto.status } : {}),
+        // Why it closed is set by the system or the client; the salon closing
+        // or reopening the entry by hand clears it.
+        ...(dto.status
+          ? { closedReason: null, closedAt: ACTIVE_STATUSES.includes(dto.status) ? null : this.clock() }
+          : {}),
         ...(window && earliestGiven ? { earliestDate: window.earliest } : {}),
         ...(window && latestGiven ? { latestDate: window.latest } : {}),
         ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
@@ -312,10 +416,19 @@ export class WaitListService {
     if (!ACTIVE_STATUSES.includes(entry.status as WaitListStatus)) {
       throw new BadRequestException('Esta entrada de la lista de espera ya está cerrada');
     }
+    const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } });
+    const today = salonClock(this.clock(), tenant?.timezone || DEFAULT_TZ).day;
+    const stale = staleReason(entry, today, this.clock());
+    if (stale) {
+      await this.expire([entry.id], stale);
+      throw new BadRequestException(
+        stale === CLOSED_REASONS.windowPassed
+          ? 'Esta entrada ha caducado: las fechas que pidió el cliente ya han pasado'
+          : `Esta entrada ha caducado: llevaba más de ${WAIT_LIST_MAX_AGE_DAYS} días sin cambios`,
+      );
+    }
     if (slot.date) {
       const day = parseDay(slot.date, 'Fecha del hueco');
-      const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } });
-      const today = salonClock(this.clock(), tenant?.timezone || DEFAULT_TZ).day;
       if (day.toISOString().slice(0, 10) < today) {
         throw new BadRequestException('La fecha del hueco ya ha pasado');
       }
@@ -369,15 +482,25 @@ export class WaitListService {
       orderBy: { createdAt: 'asc' },
       take: 20,
     });
-    // One notice per client, even if she is on the list twice.
-    const seen = new Set<string>();
-    const matches = rows.filter((r) => (seen.has(r.clientId) ? false : (seen.add(r.clientId), true)));
-    if (matches.length === 0) return [];
-
+    if (rows.length === 0) return [];
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: args.tenantId },
       select: { waitListAutoNotify: true, timezone: true },
     });
+    // Stale entries are not offered the slot; they are closed now rather
+    // than at the next expiry run.
+    const today = salonClock(now, tenant?.timezone || DEFAULT_TZ).day;
+    const fresh: typeof rows = [];
+    for (const r of rows) {
+      const stale = staleReason(r, today, now);
+      if (stale) await this.expire([r.id], stale);
+      else fresh.push(r);
+    }
+    // One notice per client, even if she is on the list twice.
+    const seen = new Set<string>();
+    const matches = fresh.filter((r) => (seen.has(r.clientId) ? false : (seen.add(r.clientId), true)));
+    if (matches.length === 0) return [];
+
     const slot: NotifyWaitListDto = {
       date: args.date.toISOString().slice(0, 10),
       time: args.time ?? undefined,
@@ -517,6 +640,7 @@ export class WaitListService {
       ? this.bookingUrl(tenant, entry.serviceId, professionalId, slot.date)
       : null;
     const salonPhone = tenant?.phone?.trim() || null;
+    const leaveUrl = this.leaveUrl(entry.id);
     const client = entry.client;
     const email = realEmail(client.email);
     const optedOut = (client.communicationPreferences ?? {}) as Record<string, unknown>;
@@ -538,7 +662,7 @@ export class WaitListService {
         .sendEmail({
           to: email,
           subject: `Se ha liberado un hueco en ${salonName}`,
-          html: this.emailBody({ firstName: client.firstName, salonName, serviceName, slotText, bookingUrl, salonPhone }),
+          html: this.emailBody({ firstName: client.firstName, salonName, serviceName, slotText, bookingUrl, salonPhone, leaveUrl }),
         })
         .catch((err) => ({ success: false, error: (err as Error).message }));
       if (!res.success) this.logger.warn(`wait-list email failed for entry ${entry.id}: ${res.error}`);
@@ -599,7 +723,9 @@ export class WaitListService {
         const res = await this.sms
           .sendSms({
             to: client.phone,
-            body: `${salonName}: se ha liberado un hueco para ${serviceName} (${slotText}). ${how}`,
+            body: `${salonName}: se ha liberado un hueco para ${serviceName} (${slotText}). ${how}${
+              leaveUrl ? ` Si ya no te interesa: ${leaveUrl}` : ''
+            }`,
           })
           .catch((err) => ({ success: false, error: (err as Error).message }));
         if (!res.success) this.logger.warn(`wait-list SMS failed for entry ${entry.id}: ${res.error}`);
@@ -611,24 +737,8 @@ export class WaitListService {
       }
     }
 
-    // The client portal's bell. Recorded, but it does not count as a notice:
-    // nobody sees it unless they happen to log in.
-    try {
-      await this.notifications.create({
-        tenantId,
-        clientId: client.id,
-        type: NotificationType.WAITLIST_SLOT_AVAILABLE,
-        title: 'Hueco libre',
-        message: `Se ha liberado un hueco para ${serviceName} (${slotText}).${
-          bookingUrl ? '' : ' Para reservarlo, llama al salón.'
-        }`,
-        data: { waitListId: entry.id, ...(bookingUrl ? { bookingUrl } : {}) },
-      });
-      outcomes.push({ channel: 'inApp', status: 'sent', reason: 'lo verá al entrar en su área de cliente' });
-    } catch (err) {
-      this.logger.warn(`wait-list in-app notice failed for entry ${entry.id}: ${(err as Error).message}`);
-      outcomes.push({ channel: 'inApp', status: 'failed', reason: 'no se ha podido guardar el aviso' });
-    }
+    // Clients have no account on the salon's site any more, so there is no
+    // in-app notice for them: email, WhatsApp and SMS are the channels.
 
     const delivered = outcomes.filter((o) => o.channel !== 'inApp' && o.status === 'sent');
     const notified = delivered.length > 0;
@@ -742,6 +852,7 @@ export class WaitListService {
     slotText: string;
     bookingUrl: string | null;
     salonPhone: string | null;
+    leaveUrl?: string | null;
   }) {
     const how = v.bookingUrl
       ? `<p><a href="${escapeHtml(v.bookingUrl)}">Reservar ahora</a></p>`
@@ -751,7 +862,128 @@ export class WaitListService {
     return `<p>Hola ${escapeHtml(v.firstName)},</p>
 <p>Estabas en la lista de espera de <strong>${escapeHtml(v.salonName)}</strong> para <strong>${escapeHtml(v.serviceName)}</strong>, y se ha liberado un hueco: ${escapeHtml(v.slotText)}.</p>
 ${how}
-<p style="font-size:12px;color:#666">El hueco es para quien reserve primero. Si ya no te interesa, ignora este mensaje.</p>`;
+<p style="font-size:12px;color:#666">El hueco es para quien reserve primero.${
+      v.leaveUrl
+        ? ` ¿Ya no te interesa? <a href="${escapeHtml(v.leaveUrl)}" style="color:#666">Sal de la lista de espera</a> y no te avisaremos más.`
+        : ' Si ya no te interesa, ignora este mensaje.'
+    }</p>`;
+  }
+
+  // -------------------------------------------------------------- expiry
+
+  /**
+   * Closes stale entries as "expired" (see staleReason): a "hasta" in the
+   * past (salon's calendar), or open-ended and untouched for
+   * WAIT_LIST_MAX_AGE_DAYS. Run every hour by WaitListExpiryScheduler, so a
+   * salon in any time zone sees its entries close soon after its midnight.
+   * Not tied to the plan: an entry closes even if the salon lost the feature.
+   */
+  async expireStale(limit = 1000): Promise<number> {
+    const now = this.clock();
+    const cutoff = new Date(now.getTime() - WAIT_LIST_MAX_AGE_DAYS * DAY_MS);
+    // A "hasta" before tomorrow (UTC) may be past in some salon's calendar;
+    // staleReason decides with the salon's own day.
+    const tomorrow = new Date(`${now.toISOString().slice(0, 10)}T00:00:00.000Z`);
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+    const rows = await this.prisma.waitList.findMany({
+      where: {
+        status: { in: ACTIVE_STATUSES },
+        OR: [
+          { latestDate: { lt: tomorrow } },
+          {
+            latestDate: null,
+            updatedAt: { lt: cutoff },
+            OR: [{ earliestDate: null }, { earliestDate: { lt: cutoff } }],
+          },
+        ],
+      },
+      select: {
+        id: true,
+        earliestDate: true,
+        latestDate: true,
+        updatedAt: true,
+        tenant: { select: { timezone: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+      take: limit,
+    });
+    const byReason: Record<ExpiryReason, string[]> = { window_passed: [], too_old: [] };
+    for (const r of rows) {
+      const today = salonClock(now, r.tenant?.timezone || DEFAULT_TZ).day;
+      const reason = staleReason(r, today, now);
+      if (reason) byReason[reason].push(r.id);
+    }
+    let closed = 0;
+    for (const reason of Object.keys(byReason) as ExpiryReason[]) {
+      closed += await this.expire(byReason[reason], reason);
+    }
+    return closed;
+  }
+
+  /** Marks open entries expired; one closed meanwhile keeps its status. */
+  private async expire(ids: string[], reason: ExpiryReason): Promise<number> {
+    if (ids.length === 0) return 0;
+    const res = await this.prisma.waitList.updateMany({
+      where: { id: { in: ids }, status: { in: ACTIVE_STATUSES } },
+      data: { status: 'expired', closedReason: reason, closedAt: this.clock() },
+    });
+    return res.count;
+  }
+
+  // ------------------------------------------- "Ya no me interesa" (public)
+
+  /** The link's page: what the client is waiting for, and whether still. */
+  async describeLeaveLink(token: string): Promise<LeaveLinkInfo> {
+    const entry = await this.byLeaveToken(token);
+    return this.leaveInfo(entry);
+  }
+
+  /**
+   * The client leaves the list from the link in a notice: no account, no
+   * sign-in. Idempotent; an entry closed meanwhile (booked, discarded,
+   * expired) keeps its status. Not tied to the plan.
+   */
+  async leaveByToken(token: string): Promise<LeaveLinkInfo> {
+    const entry = await this.byLeaveToken(token);
+    if (ACTIVE_STATUSES.includes(entry.status as WaitListStatus)) {
+      await this.prisma.waitList.updateMany({
+        where: { id: entry.id, status: { in: ACTIVE_STATUSES } },
+        data: { status: 'cancelled', closedReason: CLOSED_REASONS.clientLeft, closedAt: this.clock() },
+      });
+    }
+    return { ...(await this.leaveInfo(entry)), waiting: false };
+  }
+
+  private async byLeaveToken(token: string) {
+    const invalid = new NotFoundException('Enlace no válido');
+    const id = parseWaitListLeaveToken(token, process.env.JWT_SECRET ?? '');
+    if (!id) throw invalid;
+    const entry = await this.prisma.waitList.findUnique({
+      where: { id },
+      select: { id: true, tenantId: true, serviceId: true, status: true },
+    });
+    if (!entry) throw invalid;
+    return entry;
+  }
+
+  private async leaveInfo(entry: { tenantId: string; serviceId: string; status: string }): Promise<LeaveLinkInfo> {
+    const [tenant, service] = await Promise.all([
+      this.prisma.tenant.findUnique({ where: { id: entry.tenantId }, select: { name: true } }),
+      this.prisma.service.findFirst({ where: { id: entry.serviceId, tenantId: entry.tenantId }, select: { name: true } }),
+    ]);
+    return {
+      salonName: tenant?.name ?? 'el salón',
+      serviceName: service?.name ?? 'el servicio',
+      waiting: ACTIVE_STATUSES.includes(entry.status as WaitListStatus),
+    };
+  }
+
+  /** The "Ya no me interesa" page for an entry; null without a signing secret. */
+  private leaveUrl(entryId: string): string | null {
+    const secret = process.env.JWT_SECRET;
+    if (!secret) return null;
+    const appBase = (process.env.APP_BASE_URL || process.env.FRONTEND_URL || 'https://app.kiraroom.net').replace(/\/+$/, '');
+    return `${appBase}/public/lista-espera/${encodeURIComponent(waitListLeaveToken(entryId, secret))}`;
   }
 
   // -------------------------------------------------------------- helpers

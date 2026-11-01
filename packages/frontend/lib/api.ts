@@ -6,6 +6,7 @@ import type { WorkingHoursEntry } from "./weekly-schedule";
 import { requestBody } from "./time-off";
 import type { TimeOff, TimeOffConflict, TimeOffInput, TimeOffStatus } from "./time-off";
 import type { CreateClientPayload, UpdateClientPayload } from "./client-form";
+import type { RefundableSaleLine } from "./payments-format";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1";
@@ -902,10 +903,25 @@ export interface PaymentFilters {
   dateTo?: string;
 }
 
+/** POST /payments/:id/refund's body (cents). `lines`: units of a till sale given back (products return to stock). */
+export interface PaymentRefundBody {
+  amount?: number;
+  reason: string;
+  lines?: Array<{ lineId: string; quantity: number }>;
+}
+
+/** GET /payments/:id/refund-lines: null saleId when the payment is not a till sale's own. */
+export interface PaymentRefundLines {
+  saleId: string | null;
+  lines: RefundableSaleLine[];
+}
+
 /** POST /payments/:id/refund's answer. */
 export interface PaymentRefundResult {
   refundedAmount: number;
   refundableAmount: number;
+  /** Products back in stock. */
+  restocked?: Array<{ productId: string; description: string; quantity: number }>;
   /** The appointment's issued invoice, which needs a rectificativa. */
   invoice: { id: string; number: string } | null;
   rectificationNeeded: boolean;
@@ -1742,7 +1758,8 @@ export interface ApiClientInterface {
   getTodayPayments(): Promise<any[]>;
   deletePayment(id: string): Promise<void>;
   createPayment(data: CreatePaymentDto): Promise<Payment>;
-  refundPayment(id: string, body: { amount?: number; reason: string }): Promise<PaymentRefundResult>;
+  refundPayment(id: string, body: PaymentRefundBody): Promise<PaymentRefundResult>;
+  getPaymentRefundLines(id: string): Promise<PaymentRefundLines>;
   getPaymentByAppointment(appointmentId: string): Promise<Payment[]>;
   getPaymentByClient(clientId: string): Promise<Payment[]>;
   getPaymentSummary(filters?: PaymentFilters): Promise<PaymentSummary>;
@@ -3349,12 +3366,17 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  /** Gives back all or part of a charge (owner/admin). No amount: all that is left. */
-  async refundPayment(id: string, body: { amount?: number; reason: string }): Promise<PaymentRefundResult> {
+  /** Gives back all or part of a charge (owner/admin). No amount: all that is left (or what the lines are worth). */
+  async refundPayment(id: string, body: PaymentRefundBody): Promise<PaymentRefundResult> {
     return this.request<PaymentRefundResult>(`/payments/${id}/refund`, {
       method: "POST",
       body: JSON.stringify(body),
     });
+  }
+
+  /** The lines of the till sale a payment paid, with what is left to give back of each (owner/admin). */
+  async getPaymentRefundLines(id: string): Promise<PaymentRefundLines> {
+    return this.request<PaymentRefundLines>(`/payments/${id}/refund-lines`);
   }
 
   async getPaymentByAppointment(appointmentId: string): Promise<Payment[]> {
@@ -6133,9 +6155,12 @@ export interface WaitListEntry {
   professionalName: string | null;
   earliestDate: string | null;
   latestDate: string | null;
-  status: "waiting" | "notified" | "cancelled" | "fulfilled";
+  status: "waiting" | "notified" | "cancelled" | "fulfilled" | "expired";
   notifiedAt: string | null;
   notifyCount: number;
+  /** Set when the system (window_passed, too_old) or the client (client_left) closed it. */
+  closedReason?: string | null;
+  closedAt?: string | null;
   notes: string | null;
   createdAt: string;
   lastNotification: {

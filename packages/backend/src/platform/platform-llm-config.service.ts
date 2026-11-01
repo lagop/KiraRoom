@@ -5,6 +5,7 @@ import { EncryptionService } from "../common/encryption/encryption.service";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { LLMProvider } from "@kira/shared";
+import { DEFAULT_CLAUDE_MODEL } from "../virtual-receptionist/providers/anthropic-models";
 
 /**
  * P2A-platform-llm: platform-wide LLM configuration.
@@ -113,7 +114,7 @@ export class PlatformLlmConfigService implements OnApplicationBootstrap {
     if (!row) {
       return {
         provider: "anthropic",
-        defaultModel: "claude-haiku-4-5",
+        defaultModel: DEFAULT_CLAUDE_MODEL,
         baseUrl: null,
         workspaceId: null,
         apiKeyMasked: "",
@@ -171,7 +172,7 @@ export class PlatformLlmConfigService implements OnApplicationBootstrap {
       create: {
         id: "global",
         provider: input.provider ?? "anthropic",
-        defaultModel: input.defaultModel ?? "claude-haiku-4-5",
+        defaultModel: input.defaultModel ?? DEFAULT_CLAUDE_MODEL,
         baseUrl: input.baseUrl ?? null,
         workspaceId: input.workspaceId ?? null,
         // On first creation an apiKey MUST be provided; otherwise we

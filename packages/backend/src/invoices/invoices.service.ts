@@ -58,6 +58,8 @@ interface CreateInvoiceInput {
     fixed?: { taxCents: number; totalCents: number };
     /** On a rectificativa: the line of the original it credits. */
     rectifiesLineId?: string;
+    /** The loyalty reward's part of discountCents (InvoiceLineInput.loyaltyDiscountCents). */
+    loyaltyDiscountCents?: number;
   }>;
   /**
    * Lines that leave `taxIncluded` out follow the salon's
@@ -92,6 +94,8 @@ export interface SimplifiedInvoiceLine {
   taxIncluded?: boolean;
   /** A discount on the whole line, in cents (InvoiceLineInput.discountCents). */
   discountCents?: number;
+  /** The loyalty reward's part of discountCents ("Descuento fidelidad" on the PDF). */
+  loyaltyDiscountCents?: number;
   productId?: string;
   serviceId?: string;
 }
@@ -255,6 +259,7 @@ export class InvoiceService {
             serviceId: l.serviceId,
             taxIncluded: l.taxIncluded,
             ...(l.rectifiesLineId ? { rectifiesLineId: l.rectifiesLineId } : {}),
+            ...(l.loyaltyDiscountCents ? { loyaltyDiscountCents: l.loyaltyDiscountCents } : {}),
           })),
         },
       },
