@@ -2978,6 +2978,19 @@ class ApiClient implements ApiClientInterface {
     return this.request(`/consent/clients/${clientId}/marketing`);
   }
 
+  /**
+   * Everything the salon holds about a client (RGPD arts. 15 and 20), as the
+   * JSON document to hand her. Owner / admin only.
+   */
+  async exportClientData(clientId: string): Promise<Record<string, unknown> & { generatedAt: string }> {
+    return this.request(`/admin/clients/${clientId}/export`);
+  }
+
+  /** Erase a client's personal data, keeping visits and invoices (RGPD art. 17). */
+  async anonymizeClient(clientId: string): Promise<{ ok: true }> {
+    return this.request(`/admin/clients/${clientId}/anonymize`, { method: "POST" });
+  }
+
   /** The salon records a WhatsApp choice the client made in person. */
   async setClientWhatsAppMarketingConsent(
     clientId: string,
