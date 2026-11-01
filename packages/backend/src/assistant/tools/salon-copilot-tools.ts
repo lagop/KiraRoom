@@ -281,7 +281,7 @@ export const COPILOT_TOOLS = [
       "sends each one the wait-list notice (email, the salon's WhatsApp or SMS, " +
       "with a booking link). A client counts as notified only when a channel " +
       "delivered; the result says, per client, what went out or why nothing did. " +
-      "Manager / receptionist only.",
+      "Salon owner / admin only.",
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -290,7 +290,7 @@ export const COPILOT_TOOLS = [
         windowStart: { type: 'string', description: 'ISO date YYYY-MM-DD' },
         windowEnd: { type: 'string', description: 'ISO date YYYY-MM-DD' },
         time: { type: 'string', description: 'Optional. Start time of the freed slot, HH:MM.' },
-        topN: { type: 'number', description: 'How many clients to notify. Default 5.' },
+        topN: { type: 'number', description: 'How many clients to notify, 1 to 10. Default 5.' },
       },
       required: ['serviceId', 'windowStart', 'windowEnd'],
     },
@@ -1337,7 +1337,7 @@ private async rescheduleAppointment(
 
   /**
    * Sprint 15: pick the top N wait-list clients that match a freed slot
-   * and notify them. Manager / receptionist only.
+   * and notify them. Salon owner / admin only.
    *
    * This used to mark them 'notified' and send nothing: the description
    * said "the actual send is via send_message", which nothing chained, so
@@ -1352,13 +1352,15 @@ private async rescheduleAppointment(
     args: Record<string, unknown>,
     ctx: CopilotToolContext,
   ) {
-    if (!['owner', 'admin', 'manager', 'receptionist', 'saas_owner'].includes(ctx.role)) {
-      return { error: 'forbidden', message: 'Solo manager / recepcionista / owner pueden usar la lista de espera.' };
+    if (!['owner', 'admin', 'saas_owner'].includes(ctx.role)) {
+      return { error: 'forbidden', message: 'Solo el propietario o un administrador del salón pueden avisar a la lista de espera.' };
     }
     const serviceId = args.serviceId as string | undefined;
     const windowStart = args.windowStart as string | undefined;
     const windowEnd = args.windowEnd as string | undefined;
-    const topN = Math.max(Number(args.topN ?? 5), 1);
+    // 1 to 10: each one is a real message.
+    const requested = Math.floor(Number(args.topN ?? 5));
+    const topN = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 10) : 5;
     const professionalId = (args.professionalId as string | undefined) ?? null;
 
     if (!serviceId) return { error: 'missing_serviceId' };
@@ -1377,7 +1379,9 @@ private async rescheduleAppointment(
       where: {
         tenantId: ctx.tenantId,
         serviceId,
-        status: 'waiting',
+        // Told about an earlier slot is still waiting; blocked or removed clients are not told.
+        status: { in: ['waiting', 'notified'] },
+        client: { status: 'active' },
         ...(professionalId
           ? { OR: [{ professionalId: null }, { professionalId }] }
           : {}),

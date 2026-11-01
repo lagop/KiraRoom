@@ -30,6 +30,7 @@ import {
   type ClientListQuery,
   type ClientPage,
 } from "./client-search";
+import { countryForPhone, normalizeClientEmail, normalizeClientPhone } from "./client-contact";
 
 /**
  * Whose clients a caller may reach. Owner/admin: {} (the whole salon).
@@ -74,7 +75,8 @@ export class ClientsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(tenantId: string, dto: CreateClientDto) {
-    const data = buildClientCreateData(tenantId, dto);
+    const country = await countryForPhone(this.prisma, tenantId, dto.phone);
+    const data = buildClientCreateData(tenantId, dto, country);
     try {
       return await this.prisma.client.create({ data, select: CLIENT_DETAIL_SELECT });
     } catch (error) {
@@ -273,8 +275,10 @@ export class ClientsService {
     }
 
     if (scope.professionalId) {
-      const email = updateClientDto.email === undefined ? undefined : updateClientDto.email?.trim() || null;
-      if (email !== undefined && email !== client.email) {
+      // Compared as stored (lower case): the same address in other capitals
+      // is not a change.
+      const email = normalizeClientEmail(updateClientDto.email);
+      if (email !== undefined && email !== normalizeClientEmail(client.email)) {
         throw new ForbiddenException(STAFF_MAY_NOT_CHANGE);
       }
       if (updateClientDto.status !== undefined && updateClientDto.status !== client.status) {
@@ -282,7 +286,8 @@ export class ClientsService {
       }
     }
 
-    const data = buildClientUpdateData(updateClientDto, client);
+    const country = await countryForPhone(this.prisma, tenantId, updateClientDto.phone);
+    const data = buildClientUpdateData(updateClientDto, client, country);
     try {
       return await this.prisma.client.update({
         where: { id, tenantId },
@@ -334,8 +339,13 @@ export class ClientsService {
       data[key] = typeof value === "string" ? value.trim() : value;
     }
     // An emptied phone is "no phone", not an empty string the SMS sender
-    // would try.
-    if (data.phone === "") data.phone = null;
+    // would try. Email and phone are stored like every other write (see
+    // client-contact.ts).
+    if (data.phone !== undefined) {
+      const country = await countryForPhone(this.prisma, tenantId, data.phone);
+      data.phone = normalizeClientPhone(data.phone, country) ?? null;
+    }
+    if (data.email !== undefined) data.email = normalizeClientEmail(data.email) ?? null;
     if (data.firstName === "") {
       throw new BadRequestException("El nombre no puede quedar vacío");
     }
@@ -346,7 +356,7 @@ export class ClientsService {
         select: { email: true, passwordHash: true },
       });
       if (!current) throw new NotFoundException("Cliente no encontrado");
-      if (data.email === current.email) {
+      if (data.email === normalizeClientEmail(current.email)) {
         delete data.email;
       } else {
         // Changing the sign-in address takes the password, like changing

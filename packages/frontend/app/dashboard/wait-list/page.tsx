@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Bell, CheckCircle2, Clock, Loader2, Plus, Trash2, XCircle } from "lucide-react";
 import apiClient, { ApiError, WaitListEntry, WaitListNotifyResult } from "@/lib/api";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { getCurrentUser } from "@/lib/utils";
+import { isManager } from "@/lib/dashboard-nav";
 
 /**
  * Wait-list for fully booked services. "Avisar" really sends the notice
@@ -28,7 +30,22 @@ const CHANNEL_LABEL: Record<string, string> = {
 
 function errorText(err: unknown): string {
   if (err instanceof ApiError && err.status === 404 && /plan/i.test(err.message)) return err.message;
+  if (err instanceof ApiError && err.status === 403) return "No tienes permiso para hacer esto.";
   return err instanceof Error && err.message ? err.message : "Algo ha fallado. Inténtalo de nuevo.";
+}
+
+/** A channel's reason in Spanish; older notices stored the provider's own (English) error. */
+const SPANISH_REASON = /^(el |la |lo |no |ya |meta |whatsapp )/i;
+function reasonText(c: { status: string; reason?: string }): string | null {
+  if (!c.reason) return null;
+  if (SPANISH_REASON.test(c.reason)) return c.reason;
+  return c.status === "failed" ? "el proveedor no ha podido enviarlo" : null;
+}
+
+/** Today in the browser, for the date inputs' minimum. */
+function todayIso(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 type Named = { id: string; name: string };
@@ -46,6 +63,13 @@ export default function WaitListPage() {
   // The entry about to be removed, confirmed in the panel's dialog.
   const [pendingRemove, setPendingRemove] = useState<WaitListEntry | null>(null);
   const [removing, setRemoving] = useState(false);
+  // Read after mount (the server has no token). Only owner and admin change
+  // the automatic notices; until the role is known nobody does.
+  const [role, setRole] = useState<string | null>(null);
+  useEffect(() => {
+    setRole(getCurrentUser()?.role ?? null);
+  }, []);
+  const manager = isManager(role);
 
   const [services, setServices] = useState<Named[]>([]);
   const [professionals, setProfessionals] = useState<Named[]>([]);
@@ -72,9 +96,16 @@ export default function WaitListPage() {
     apiClient.getWaitListChannels().then(setChannels).catch(() => setChannels(null));
     apiClient.getWaitListSettings().then((s) => setAutoNotify(s.autoNotify)).catch(() => undefined);
     apiClient.getServices().then((s: any[]) => setServices(s.map((x) => ({ id: x.id, name: x.name })))).catch(() => undefined);
+    // The whole team (the admin list is paginated and owner/admin only).
     apiClient
-      .getProfessionals()
-      .then((p: any[]) => setProfessionals(p.map((x) => ({ id: x.id, name: `${x.firstName} ${x.lastName}`.trim() }))))
+      .getProfessionalsPublic()
+      .then((p: any[]) =>
+        setProfessionals(
+          p
+            .filter((x) => x.isActive !== false)
+            .map((x) => ({ id: x.id, name: `${x.firstName} ${x.lastName}`.trim() })),
+        ),
+      )
       .catch(() => undefined);
     apiClient.getClients().then((c: any[]) => setClients(c)).catch(() => undefined);
   }, []);
@@ -139,16 +170,26 @@ export default function WaitListPage() {
         </div>
       )}
 
-      <label className="flex items-start gap-2 rounded-md border border-gray-200 bg-white p-3 text-sm">
-        <input type="checkbox" className="mt-1" checked={autoNotify} onChange={(e) => toggleAuto(e.target.checked)} />
-        <span>
-          Avisar automáticamente cuando se cancela una cita.
-          <span className="block text-gray-500">
-            Se avisa a los 3 primeros clientes que esperan ese servicio y cuyas fechas encajan, por
-            orden de llegada. Si está desactivado, te llega un aviso en el panel para que decidas tú.
+      {manager ? (
+        <label className="flex items-start gap-2 rounded-md border border-gray-200 bg-white p-3 text-sm">
+          <input type="checkbox" className="mt-1" checked={autoNotify} onChange={(e) => toggleAuto(e.target.checked)} />
+          <span>
+            Avisar automáticamente cuando se cancela una cita.
+            <span className="block text-gray-500">
+              Se avisa a los 3 primeros clientes que esperan ese servicio y cuyas fechas encajan, por
+              orden de llegada, saltando a quien no se puede avisar. Solo de 9:00 a 21:00: de noche
+              no se envía nada y te llega un aviso en el panel. Si está desactivado, o si no se ha
+              podido avisar a nadie, también te llega un aviso para que decidas tú.
+            </span>
           </span>
-        </span>
-      </label>
+        </label>
+      ) : (
+        role && (
+          <p className="rounded-md border border-gray-200 bg-white p-3 text-sm text-gray-600">
+            Avisos automáticos al cancelarse una cita: {autoNotify ? "activados" : "desactivados"}.
+          </p>
+        )
+      )}
 
       <div className="flex flex-wrap gap-2 text-sm">
         {[
@@ -209,7 +250,8 @@ export default function WaitListPage() {
                         : "cualquier fecha"}
                     </p>
                     <p className="text-xs text-gray-500">
-                      {e.client.email ?? "sin email"} · {e.client.phone ?? "sin teléfono"} · en la lista desde{" "}
+                      {!e.contactHidden && `${e.client.email ?? "sin email"} · ${e.client.phone ?? "sin teléfono"} · `}
+                      en la lista desde{" "}
                       {new Date(e.createdAt).toLocaleDateString("es-ES")}
                       {e.notifiedAt && ` · último aviso ${new Date(e.notifiedAt).toLocaleString("es-ES")}`}
                     </p>
@@ -337,7 +379,7 @@ function NoticeOutcome({ result, entry }: { result?: WaitListNotifyResult; entry
           <li key={c.channel}>
             {CHANNEL_LABEL[c.channel] ?? c.channel}:{" "}
             {c.status === "sent" ? "enviado" : c.status === "failed" ? "falló" : "no enviado"}
-            {c.reason ? ` (${c.reason})` : ""}
+            {reasonText(c) ? ` (${reasonText(c)})` : ""}
           </li>
         ))}
       </ul>
@@ -389,13 +431,14 @@ function NotifyDialog({
           Avisar a {entry.client.firstName} {entry.client.lastName}
         </h2>
         <p className="text-sm text-gray-600">
-          Recibirá un mensaje con el hueco que indiques y un enlace para reservarlo en tu web. Si no
-          indicas fecha, el mensaje dirá que hay huecos disponibles.
+          Recibirá un mensaje con el hueco que indiques y un enlace para reservarlo en tu web (si el
+          servicio no se reserva online, le pedirá que llame al salón). Si no indicas fecha, el
+          mensaje dirá que hay huecos disponibles.
         </p>
         <div className="grid grid-cols-2 gap-3">
           <label className="text-sm">
             Fecha
-            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="mt-1 w-full rounded-md border px-2 py-1.5" />
+            <input type="date" value={date} min={todayIso()} onChange={(e) => setDate(e.target.value)} className="mt-1 w-full rounded-md border px-2 py-1.5" />
           </label>
           <label className="text-sm">
             Hora
@@ -448,6 +491,8 @@ function AddDialog({
   const [earliestDate, setEarliest] = useState("");
   const [latestDate, setLatest] = useState("");
   const [notes, setNotes] = useState("");
+  // One request per click: a double click used to add the client twice.
+  const [saving, setSaving] = useState(false);
 
   const q = query.trim().toLowerCase();
   const matches = q
@@ -457,7 +502,8 @@ function AddDialog({
 
   const save = async (ev: React.FormEvent) => {
     ev.preventDefault();
-    if (!clientId || !serviceId) return;
+    if (!clientId || !serviceId || saving) return;
+    setSaving(true);
     try {
       await apiClient.addToWaitList({
         clientId,
@@ -471,6 +517,8 @@ function AddDialog({
       onSaved();
     } catch (err) {
       onError(errorText(err));
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -520,11 +568,11 @@ function AddDialog({
         <div className="grid grid-cols-2 gap-3 text-sm">
           <label>
             Desde
-            <input type="date" value={earliestDate} onChange={(e) => setEarliest(e.target.value)} className="mt-1 w-full rounded-md border px-2 py-1.5" />
+            <input type="date" value={earliestDate} min={todayIso()} onChange={(e) => setEarliest(e.target.value)} className="mt-1 w-full rounded-md border px-2 py-1.5" />
           </label>
           <label>
             Hasta
-            <input type="date" value={latestDate} onChange={(e) => setLatest(e.target.value)} className="mt-1 w-full rounded-md border px-2 py-1.5" />
+            <input type="date" value={latestDate} min={earliestDate || todayIso()} onChange={(e) => setLatest(e.target.value)} className="mt-1 w-full rounded-md border px-2 py-1.5" />
           </label>
         </div>
         <input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={500} placeholder="Nota (opcional): mejor por la tarde…" className="w-full rounded-md border px-3 py-2 text-sm" />
@@ -532,8 +580,8 @@ function AddDialog({
           <button type="button" onClick={onClose} className="rounded-md border px-4 py-2 text-sm">
             Cancelar
           </button>
-          <button type="submit" disabled={!clientId || !serviceId} className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white disabled:opacity-50">
-            Añadir
+          <button type="submit" disabled={!clientId || !serviceId || saving} className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white disabled:opacity-50">
+            {saving ? "Añadiendo…" : "Añadir"}
           </button>
         </div>
       </form>

@@ -184,6 +184,8 @@ function fakePrisma(clients: Record<string, any>[] = []) {
         return { id: args.where.id, ...args.data };
       },
     },
+    // The salon's country, for a phone typed without a prefix.
+    tenant: { findUnique: async () => ({ country: "ES" }) },
   };
   return { prisma, calls };
 }
@@ -324,5 +326,36 @@ describe("staff reach only their own clients", () => {
     expect(calls.create[0].data.status).toBe("active");
     await controller.create(owner, { firstName: "Ana", lastName: "Ruiz", status: "blocked" });
     expect(calls.create[1].data.status).toBe("blocked");
+  });
+});
+
+describe("one email and one phone however they were typed", () => {
+  it("both paths store the email in lower case and the phone in international form", async () => {
+    const { prisma, calls } = fakePrisma([ANA]);
+    const clients = new ClientsService(prisma);
+    const admin = new AdminClientsService(prisma);
+
+    await clients.create("t1", { firstName: "Eva", lastName: "Gil", email: " Eva@Mail.ES ", phone: "600 111 222" });
+    await admin.create("t1", { firstName: "Eva", lastName: "Gil", email: "EVA@mail.es", phone: "0034 600-111-222" });
+    await admin.update("t1", "c1", { email: "Nueva@Mail.ES", phone: "+34 611 222 333" });
+
+    expect(calls.create.map((c) => [c.data.email, c.data.phone])).toEqual([
+      ["eva@mail.es", "+34600111222"],
+      ["eva@mail.es", "+34600111222"],
+    ]);
+    expect(calls.update[0].data).toMatchObject({ email: "nueva@mail.es", phone: "+34611222333" });
+  });
+
+  it("the stored email sent back in other capitals is not a change (staff may send it)", async () => {
+    const { prisma, calls } = fakePrisma([{ ...ANA, email: "Ana@Example.com" }]);
+    const controller = new ClientsController(new ClientsService(prisma), {
+      getProfessionalByUserId: async () => ({ id: "p1" }),
+    } as any);
+    await controller.update({ id: "u1", tenantId: "t1", role: UserRole.staff }, "c1", {
+      email: "ANA@example.COM",
+      notes: "x",
+    });
+    expect(calls.update[0].data.email).toBeUndefined();
+    expect(calls.update[0].data.notes).toBe("x");
   });
 });

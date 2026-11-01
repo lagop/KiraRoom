@@ -13,6 +13,15 @@ describe('client phone numbers', () => {
     expect(normalizePhone('912 345 678', 'PT')).toBe('+351912345678');
   });
 
+  it('reads the country code typed without "+" as the code, not as part of the number', () => {
+    expect(normalizePhone('34600111222')).toBe('+34600111222');
+    expect(normalizePhone('34 600 111 222')).toBe('+34600111222');
+    expect(normalizePhone('351912345678', 'PT')).toBe('+351912345678');
+    // A national number that merely starts with the code digits is too short to carry it.
+    expect(normalizePhone('5512345678', 'MX')).toBe('+525512345678');
+    expect(normalizePhone('5212345678', 'MX')).toBe('+525212345678');
+  });
+
   it('keeps a number that already says its country', () => {
     expect(normalizePhone('+44 7700 900123')).toBe('+447700900123');
     expect(normalizePhone('0044 7700 900123')).toBe('+447700900123');
