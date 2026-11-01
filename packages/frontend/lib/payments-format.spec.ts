@@ -9,7 +9,9 @@ import {
   methodLabel,
   parseEurosToCents,
   paymentConcept,
+  pickedLines,
   refundableCents,
+  unitsValueCents,
   statusLabel,
 } from "./payments-format";
 
@@ -54,6 +56,28 @@ check(
 );
 check("refundable: paid less refunded", refundableCents({ amount: 4000, status: "paid", refundedAmount: 1500 }) === 2500);
 check("nothing to refund on a refunded or pending payment", refundableCents({ amount: 4000, status: "refunded" }) === 0 && refundableCents({ amount: 4000, status: "pending" }) === 0);
+
+const champu = {
+  id: "l1",
+  kind: "product",
+  description: "Champú",
+  quantity: 3,
+  refundedQuantity: 0,
+  refundableQuantity: 3,
+  totalCents: 1000,
+  refundedCents: 0,
+  refundableCents: 1000,
+};
+check("one unit of three for 10,00 is 3,33", unitsValueCents(champu, 1) === 333);
+check(
+  "the last units take what is left of the line",
+  unitsValueCents({ ...champu, refundedQuantity: 2, refundableQuantity: 1, refundedCents: 666, refundableCents: 334 }, 1) === 334,
+);
+check("all the units: all that is left", unitsValueCents(champu, 3) === 1000);
+const corte = { ...champu, id: "l2", kind: "service", description: "Corte", quantity: 1, refundableQuantity: 1, totalCents: 3000, refundableCents: 3000 };
+const picked = pickedLines([champu, corte], { l1: 2, l2: 0 });
+check("picked lines: only those with units, and their value", picked.lines.length === 1 && picked.lines[0].quantity === 2 && picked.valueCents === 667);
+check("never more units than are left", pickedLines([champu], { l1: 9 }).lines[0].quantity === 3);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

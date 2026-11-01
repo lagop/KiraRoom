@@ -1,5 +1,5 @@
 import { InvoiceCalculator } from "../invoices/invoice-calculator.service";
-import { appointmentInvoiceLines, type VisitToInvoice } from "../invoices/appointment-invoice-pricing";
+import { appointmentInvoiceLines, withoutLoyalty, type VisitToInvoice } from "../invoices/appointment-invoice-pricing";
 import { pricesIncludeTaxOf, salonTaxRate } from "../invoices/salon-tax-settings";
 import { appointmentTotalCents } from "./appointment-payment";
 
@@ -62,7 +62,8 @@ export function visitChargeCents(visit: ChargeableVisit, fiscalSettings: unknown
   const catalogue = appointmentTotalCents(visit as any);
   if (pricesIncludeTaxOf(fiscalSettings)) return catalogue;
   const settings = (fiscalSettings ?? {}) as Record<string, unknown>;
-  const priced = { ...visit, price: Number(visit.price ?? 0) > 0 ? visit.price : catalogue / 100 };
+  // Before the loyalty reward: it is paid with points (amountPaid counts it), not off what the visit costs.
+  const priced = withoutLoyalty({ ...visit, price: Number(visit.price ?? 0) > 0 ? visit.price : catalogue / 100 });
   return calculator.compute(appointmentInvoiceLines(priced, settings)).totalCents;
 }
 

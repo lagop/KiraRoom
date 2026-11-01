@@ -275,6 +275,52 @@ describe("LoyaltyService: reversal", () => {
     expect(db.member()!.currentPoints).toBe(30);
   });
 
+  it("a partial refund of a visit takes back its share with a ledger entry, once; the full reversal only the rest", async () => {
+    const db = fakeDb();
+    await db.service.enroll("t1", "c1", "staff");
+    db.appointments.push(paidVisit({ amountPaid: 4000, totalAmount: 4000, payments: [{ amount: 4000, method: "card" }] }));
+    expect(await db.service.settleAppointment("t1", "a1")).toEqual({ awarded: 40 });
+
+    // 10,00 of 40,00 back: 10 points.
+    expect(await db.service.onPartialRefund("t1", { id: "p1", appointmentId: "a1" }, { id: "r1", amount: 1000 })).toBe(-10);
+    // The same refund again (a retry) takes nothing more.
+    expect(await db.service.onPartialRefund("t1", { id: "p1", appointmentId: "a1" }, { id: "r1", amount: 1000 })).toBe(0);
+    expect(db.member()!.currentPoints).toBe(30);
+    expect(db.txs.find((t) => t.source === "refund")).toMatchObject({
+      type: "reversal",
+      points: -10,
+      sourceId: "r1",
+      description: "Devolución parcial",
+      metadata: { appointmentId: "a1", paymentId: "p1", refundCents: 1000 },
+    });
+
+    // The rest refunded: the visit is reversed for what is left (30), not 40.
+    expect(await db.service.reverseAppointment("t1", "a1", "Devolución del pago de la cita")).toBe(-30);
+    expect(db.member()!.currentPoints).toBe(0);
+    // Nothing more once it was reversed in full.
+    expect(await db.service.onPartialRefund("t1", { id: "p1", appointmentId: "a1" }, { id: "r2", amount: 1000 })).toBe(0);
+  });
+
+  it("partial refunds of a sale never take more than it earned, nor the balance below zero", async () => {
+    const db = fakeDb();
+    await db.service.enroll("t1", "c1", "staff");
+    await db.service.earnForSale("t1", { clientId: "c1", saleId: "s1", basisCents: 6000, isVisit: true });
+    const payment = { id: "p1", metadata: { posSaleId: "s1" } };
+    // 20,00 of 60,00: 20 points.
+    expect(await db.service.onPartialRefund("t1", payment, { id: "r1", amount: 2000 })).toBe(-20);
+    // The client spent most of what is left: a refund worth 30 takes the 5 there are.
+    db.member()!.currentPoints = 5;
+    expect(await db.service.onPartialRefund("t1", payment, { id: "r2", amount: 3000 })).toBe(-5);
+    expect(db.member()!.currentPoints).toBe(0);
+
+    // The payment refunded in full afterwards: its share (60) less what its
+    // partial refunds took back (25): 35, so 60 in all, never more.
+    db.member()!.currentPoints = 100;
+    db.payments.push({ id: "p1", tenantId: "t1", status: "refunded", metadata: { posSaleId: "s1" } });
+    await db.service.onPaymentRefunded("t1", { id: "p1", amount: 6000, metadata: { posSaleId: "s1" } });
+    expect(db.member()!.currentPoints).toBe(65);
+  });
+
   it("a products-only ticket earns nothing in per-visit mode", async () => {
     const db = fakeDb({ program: { earnMode: "per_visit" } });
     await db.service.enroll("t1", "c1", "staff");

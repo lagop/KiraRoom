@@ -77,3 +77,42 @@ export function refundableCents(p: Pick<PaymentLike, "amount" | "status" | "refu
   if (p.status !== "paid") return 0;
   return Math.max(0, p.amount - (p.refundedAmount ?? 0));
 }
+
+/** A line of a till sale as GET /payments/:id/refund-lines lists it (cents). */
+export interface RefundableSaleLine {
+  id: string;
+  kind: string;
+  description: string;
+  quantity: number;
+  refundedQuantity: number;
+  refundableQuantity: number;
+  totalCents: number;
+  refundedCents: number;
+  refundableCents: number;
+}
+
+/**
+ * What `quantity` units of a line are worth now, as the server works it out
+ * (payments/refund-lines.ts unitsValueCents): their share of the line, and
+ * all that is left of it for its last units.
+ */
+export function unitsValueCents(line: RefundableSaleLine, quantity: number): number {
+  if (quantity <= 0) return 0;
+  if (quantity >= line.refundableQuantity) return line.refundableCents;
+  if (line.quantity <= 0) return 0;
+  return Math.min(line.refundableCents, Math.round((line.totalCents * quantity) / line.quantity));
+}
+
+/** The lines picked (id -> units, 0 left out), as the refund's `lines`, and what they are worth. */
+export function pickedLines(
+  lines: RefundableSaleLine[],
+  picks: Record<string, number>,
+): { lines: Array<{ lineId: string; quantity: number }>; valueCents: number } {
+  const chosen = lines
+    .map((l) => ({ line: l, quantity: Math.max(0, Math.min(l.refundableQuantity, Math.floor(picks[l.id] ?? 0))) }))
+    .filter((c) => c.quantity > 0);
+  return {
+    lines: chosen.map((c) => ({ lineId: c.line.id, quantity: c.quantity })),
+    valueCents: chosen.reduce((s, c) => s + unitsValueCents(c.line, c.quantity), 0),
+  };
+}

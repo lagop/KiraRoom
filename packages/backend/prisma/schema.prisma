@@ -1319,6 +1319,12 @@ model Refund {
   cashSessionId String?
   cashSession   CashSession? @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
 
+  /// The till sale lines it gave back, when it was a POS sale's refund:
+  /// [{ lineId, quantity, cents }] (quantity: units back in stock for a
+  /// product; cents: the part of this refund that line takes). Empty for a
+  /// refund that is not of a sale. See payments/refund-lines.ts.
+  saleLines Json @default("[]")
+
   @@index([paymentId])
   @@index([cashSessionId])
   @@map("refunds")
@@ -2882,6 +2888,11 @@ model InvoiceLine {
   /// before the column (those count against the original as a whole).
   rectifiesLineId String?
   rectifiesLine   InvoiceLine?  @relation("LineRectifications", fields: [rectifiesLineId], references: [id], onDelete: SetNull)
+  /// The part of the line's discount that is the client's loyalty reward,
+  /// in the line's price terms (with the tax when taxIncluded, else the
+  /// base). Already inside discountPct and the amounts; the PDF names it
+  /// ("Descuento fidelidad"). 0 on lines from before the column.
+  loyaltyDiscountCents Int @default(0)
   rectifiedBy     InvoiceLine[] @relation("LineRectifications")
   invoice        Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
@@ -3595,6 +3606,14 @@ model PosSaleLine {
   commissionAmount    Decimal?  @db.Decimal(12, 2)
   commissionPaid      Boolean   @default(false)
   commissionDate      DateTime?
+  /// The part of the loyalty reward that came off this line (money cents):
+  /// totalCents and taxCents are after it, as the sale's invoice says.
+  loyaltyDiscountCents Int      @default(0)
+  /// Given back so far (refunds of the sale): units (back in stock for a
+  /// product) and money cents. The commission counts what is left:
+  /// commissionAmount x (totalCents - refundedCents) / totalCents.
+  refundedQuantity    Int       @default(0)
+  refundedCents       Int       @default(0)
   sale                PosSale   @relation(fields: [saleId], references: [id], onDelete: Cascade)
 
   @@index([saleId])
