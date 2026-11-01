@@ -1,7 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "crypto";
 import { PosService } from "./pos.service";
-import { CashSessionsService } from "./cash-sessions.service";
+import { CashSessionsService, type CashSessionBlindView, type CashSessionFullView } from "./cash-sessions.service";
 import { InvoiceService } from "../invoices/invoices.service";
 import { InvoiceCalculator } from "../invoices/invoice-calculator.service";
 import { WalletService } from "../payments/services/wallet.service";
@@ -16,6 +16,10 @@ import { AuditLogService } from "../saas/audit-log.service";
  *   - A day at the till: float, a cash sale with change, a card sale, a
  *     mixed one, a cash refund, money taken out; the close stores what the
  *     drawer should hold and the difference with the count.
+ *   - Wallet top-ups: cash needs the drawer open and counts in it; card is
+ *     linked to it and shows by method; neither is a sale.
+ *   - Blind count: a staff member who closes gets no expected cash, no
+ *     totals and no difference back; the owner reads them afterwards.
  *   - Closing while sales are being charged: every cash sale either is in
  *     the count or is refused because the drawer is closed; none is left
  *     linked to a closed session outside its count.
@@ -31,7 +35,10 @@ let owner: { id: string; role: string };
 let pos: PosService;
 let drawer: CashSessionsService;
 let payments: PaymentsService;
+let wallets: WalletService;
 let serviceId: string;
+let clientId: string;
+let staff: { id: string; role: string };
 const run = randomUUID().slice(0, 8);
 
 beforeAll(async () => {
@@ -66,6 +73,19 @@ beforeAll(async () => {
     },
   });
   owner = { id: user.id, role: "owner" };
+  const staffUser = await db.user.create({
+    data: {
+      tenantId,
+      email: `l2-drawer-staff-${run}@example.test`,
+      firstName: "Lucía",
+      lastName: "Caja",
+      role: "staff",
+      passwordHash: "not-a-real-hash",
+    },
+  });
+  staff = { id: staffUser.id, role: "staff" };
+  const client = await db.client.create({ data: { tenantId, firstName: "Marta", lastName: "Cartera", phone: `6${run.replace(/D/g, "").padEnd(8, "0").slice(0, 8)}` } });
+  clientId = client.id;
   const service = await db.service.create({
     data: { tenantId, name: "Corte", price: 40, duration: 30, isActive: true, category: "hair" },
   });
@@ -75,6 +95,7 @@ beforeAll(async () => {
   pos = new PosService(db, new WalletService(db), undefined, invoices);
   drawer = new CashSessionsService(db, new AuditLogService(db));
   payments = new PaymentsService(db);
+  wallets = new WalletService(db, new AuditLogService(db));
 }, 60_000);
 
 afterAll(async () => {
@@ -84,6 +105,9 @@ afterAll(async () => {
     await db.payment.deleteMany({ where: { tenantId } }).catch(() => undefined);
     await db.invoiceLine.deleteMany({ where: { invoice: { tenantId } } }).catch(() => undefined);
     await db.invoice.deleteMany({ where: { tenantId } }).catch(() => undefined);
+    await db.clientWallet.deleteMany({ where: { tenantId } }).catch(() => undefined);
+    await db.client.deleteMany({ where: { tenantId } }).catch(() => undefined);
+    await db.cashSession.deleteMany({ where: { tenantId } }).catch(() => undefined);
     await db.user.deleteMany({ where: { tenantId } }).catch(() => undefined);
     await db.tenant.delete({ where: { id: tenantId } }).catch(() => undefined);
   }
@@ -132,7 +156,7 @@ describe("the cash drawer (L2, real database)", () => {
     await drawer.addMovement(tenantId, session.id, owner, { type: "in", amountCents: 500, reason: "Cambio" });
 
     // 100 + 40 + 25 - 10 - 20 + 5 = 140 expected; 139,50 counted.
-    const closed = await drawer.close(tenantId, session.id, owner, { countedCashCents: 13_950 });
+    const closed = (await drawer.close(tenantId, session.id, owner, { countedCashCents: 13_950 })) as CashSessionFullView;
     expect(closed).toMatchObject({ status: "closed", expectedCashCents: 14_000, countedCashCents: 13_950, discrepancyCents: -50 });
     expect(closed.figures.cash).toMatchObject({
       openingFloatCents: 10_000,
@@ -157,6 +181,60 @@ describe("the cash drawer (L2, real database)", () => {
 
     // After the close the drawer is shut again: no more cash.
     await expect(sell([{ method: "cash", amount: 4000 }])).rejects.toThrow(/La caja está cerrada/);
+  }, 120_000);
+
+  it("wallet top-ups: cash needs the drawer and counts in it, card shows by method, staff count blind", async () => {
+    if (!reachable) return;
+    // Drawer closed: a cash top-up is the till's 409 and nothing moves; card still goes, unlinked.
+    const refused = await wallets.topUp(tenantId, clientId, 2000, "cash", owner).catch((e) => e);
+    expect(refused.getResponse?.()).toMatchObject({ code: "CASH_SESSION_CLOSED" });
+    expect(await db.clientWallet.findFirst({ where: { tenantId, clientId } })).toBeNull();
+    const early = await wallets.topUp(tenantId, clientId, 1000, "card", owner);
+    expect(early.transaction).toMatchObject({ method: "card", cashSessionId: null, recordedById: owner.id, description: "Recarga con tarjeta" });
+
+    const session = await drawer.open(tenantId, staff, { openingFloatCents: 5000 });
+    expect(session).toEqual(expect.objectContaining({ blind: true }));
+    expect(session).not.toHaveProperty("expectedCashCents");
+    await wallets.topUp(tenantId, clientId, 3000, "cash", owner, "Bono de 30 €");
+    await wallets.topUp(tenantId, clientId, 2500, "bizum", owner);
+    // Handed back from the wallet: 5 € in cash (out of the drawer), 3 € by Bizum.
+    await wallets.withdraw(tenantId, clientId, 500, "cash", owner);
+    await wallets.withdraw(tenantId, clientId, 300, "bizum", owner, "Devuelve el bono");
+    await sell([{ method: "cash", amount: 4000 }]);
+    await drawer.addMovement(tenantId, session.id, staff, { type: "out", amountCents: 700, reason: "Mensajero" });
+
+    // Staff close blind: what they counted, their movement, no figures.
+    // 50 float + 30 top-up - 5 withdrawal + 40 sale - 7 out = 108 expected; 107 counted.
+    const blind = (await drawer.close(tenantId, session.id, staff, { countedCashCents: 10_700 })) as CashSessionBlindView;
+    expect(blind).toMatchObject({ blind: true, status: "closed", countedCashCents: 10_700, closedBy: { id: staff.id } });
+    for (const key of ["expectedCashCents", "discrepancyCents", "figures"]) expect(blind).not.toHaveProperty(key);
+    expect(blind.movements.map((m) => m.amountCents)).toEqual([700]);
+    expect(await db.cashSession.findUnique({ where: { id: session.id } })).toMatchObject({ expectedCashCents: 10_800, discrepancyCents: -100 });
+    // ... and the owner sees it all, the top-ups apart from the sales.
+    const full = (await drawer.report(tenantId, session.id, owner)) as CashSessionFullView;
+    expect(full.figures.cash).toMatchObject({ walletTopUpsCents: 3000, walletWithdrawalsCents: 500, salesCents: 4000, expectedCents: 10_800 });
+    expect(full.figures.byMethod.map((m) => [m.method, m.amountCents, m.topUpCents, m.walletWithdrawnCents])).toEqual([
+      ["cash", 7000, 3000, 500],
+      ["bizum", 2500, 2500, 300],
+    ]);
+    expect(full.figures.walletTopUps).toEqual({ count: 2, totalCents: 5500 });
+    expect(full.figures.walletWithdrawals).toEqual({ count: 2, totalCents: 800 });
+    expect(full.figures.sales).toMatchObject({ count: 1, grossCents: 4000 });
+    // The wallet holds it all; no payment was written for a top-up (it is not revenue yet).
+    expect((await db.clientWallet.findFirst({ where: { tenantId, clientId } })).balance).toBe(5700);
+    const out = await db.walletTransaction.findMany({ where: { wallet: { tenantId }, type: "debit" }, orderBy: { createdAt: "asc" } });
+    expect(out.map((w: any) => [w.method, w.amount, w.cashSessionId, w.recordedById, w.description])).toEqual([
+      ["cash", 500, session.id, owner.id, "Retirada en efectivo"],
+      ["bizum", 300, session.id, owner.id, "Devuelve el bono"],
+    ]);
+    // A cash withdrawal with the drawer closed (it is now): the till's 409, the balance untouched.
+    const shut = await wallets.withdraw(tenantId, clientId, 100, "cash", owner).catch((e) => e);
+    expect(shut.getResponse?.()).toMatchObject({ code: "CASH_SESSION_CLOSED" });
+    expect((await db.clientWallet.findFirst({ where: { tenantId, clientId } })).balance).toBe(5700);
+    expect(await db.payment.count({ where: { tenantId, clientId } })).toBe(0);
+    const actions = (await db.auditLog.findMany({ where: { tenantId, action: "payments.wallet.top_up" } })).length;
+    expect(actions).toBe(3);
+    expect(await db.auditLog.count({ where: { tenantId, action: "payments.wallet.withdrawal" } })).toBe(2);
   }, 120_000);
 
   it("closing while cash sales are being charged: every recorded cash sale is in the count", async () => {

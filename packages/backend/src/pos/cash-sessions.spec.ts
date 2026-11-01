@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, NotFoundExc
 import { ROLES_KEY, SALON_MANAGERS, SALON_TEAM } from "../auth/decorators/roles.decorator";
 import { bodyMetatype, bodyParser } from "../common/validation/validated-body.testing";
 import { CashSessionsController } from "./cash-sessions.controller";
-import { CashSessionsService } from "./cash-sessions.service";
+import { CashSessionsService, type CashSessionFullView } from "./cash-sessions.service";
 import { CashMovementDto, CloseCashSessionDto, OpenCashSessionDto } from "./dto/cash-session.dto";
 import { PosService } from "./pos.service";
 import { OPEN_CASH_SESSION, saleTables, salonTenant } from "./pos-test-kit.testing";
@@ -20,12 +20,15 @@ const STAFF = { id: "u-staff", role: "staff" };
 const OTHER_STAFF = { id: "u-other", role: "staff" };
 
 /** An in-memory drawer: sessions, the rows linked to them and the raw lock query. */
-function drawer(seed: { sessions?: Row[]; payments?: Row[]; refunds?: Row[]; sales?: Row[]; movements?: Row[] } = {}) {
+function drawer(
+  seed: { sessions?: Row[]; payments?: Row[]; refunds?: Row[]; sales?: Row[]; movements?: Row[]; walletTx?: Row[] } = {},
+) {
   const sessions: Row[] = seed.sessions ?? [];
   const movements: Row[] = seed.movements ?? [];
   const payments: Row[] = seed.payments ?? [];
   const refunds: Row[] = seed.refunds ?? [];
   const sales: Row[] = seed.sales ?? [];
+  const walletTx: Row[] = seed.walletTx ?? [];
   const locks: string[] = [];
   const audit = { record: jest.fn(async () => ({ id: "a1" })) };
   const prisma: any = {
@@ -54,7 +57,9 @@ function drawer(seed: { sessions?: Row[]; payments?: Row[]; refunds?: Row[]; sal
       update: jest.fn(async ({ where, data }: any) => Object.assign(sessions.find((s) => s.id === where.id)!, data)),
     },
     cashMovement: {
-      findMany: jest.fn(async ({ where }: any) => movements.filter((m) => m.sessionId === where.sessionId)),
+      findMany: jest.fn(async ({ where }: any) =>
+        movements.filter((m) => m.sessionId === where.sessionId && (!where.createdById || m.createdById === where.createdById)),
+      ),
       create: jest.fn(async ({ data }: any) => {
         const row = { id: `m${movements.length + 1}`, createdAt: new Date(), ...data };
         movements.push(row);
@@ -68,6 +73,17 @@ function drawer(seed: { sessions?: Row[]; payments?: Row[]; refunds?: Row[]; sal
       ),
     },
     posSale: { findMany: jest.fn(async ({ where }: any) => sales.filter((s) => s.cashSessionId === where.cashSessionId)) },
+    walletTransaction: {
+      findMany: jest.fn(async ({ where }: any) =>
+        walletTx.filter(
+          (w) =>
+            w.cashSessionId === where.cashSessionId &&
+            (!where.type || w.type === where.type) &&
+            w.method != null &&
+            w.tenantId === where.wallet.tenantId,
+        ),
+      ),
+    },
     posSaleLine: { aggregate: jest.fn(async () => ({ _sum: { taxCents: 0 } })) },
     tenant: { findUnique: jest.fn(async () => ({ name: "Salón Prueba", timezone: "Europe/Madrid" })) },
     user: {
@@ -95,7 +111,9 @@ describe("opening the drawer", () => {
     const t = drawer();
     const out = await t.service.open(T, STAFF, { openingFloatCents: 15_000, notes: " cambio del lunes " });
     expect(t.sessions[0]).toMatchObject({ tenantId: T, openedById: STAFF.id, openingFloatCents: 15_000, openingNotes: "cambio del lunes" });
-    expect(out).toMatchObject({ status: "open", openingFloatCents: 15_000, expectedCashCents: 15_000, openedBy: { name: "Lucía Prueba" } });
+    // Staff count blind: the float they put in, never what the drawer should hold.
+    expect(out).toMatchObject({ blind: true, status: "open", openingFloatCents: 15_000, openedBy: { name: "Lucía Prueba" } });
+    expect(out).not.toHaveProperty("expectedCashCents");
     expect(t.audit.record).toHaveBeenCalledWith(
       "pos.cash_session.opened",
       expect.objectContaining({ actorId: STAFF.id, tenantId: T, metadata: { sessionId: "cs1", openingFloatCents: 15_000 } }),
@@ -121,7 +139,7 @@ describe("opening the drawer", () => {
     const open = drawer({ sessions: [openSession()], payments: [{ cashSessionId: "cs1", method: "cash", amount: 2500 }] });
     const now = await open.service.current(T, OWNER);
     expect(now.canSeeHistory).toBe(true);
-    expect(now.session).toMatchObject({ id: "cs1", expectedCashCents: 12_500 });
+    expect(now.session).toMatchObject({ blind: false, id: "cs1", expectedCashCents: 12_500 });
   });
 });
 
@@ -146,11 +164,11 @@ describe("closing the drawer", () => {
   it("locks the session FOR UPDATE, stores expected and discrepancy, audit-logs it", async () => {
     const t = closing();
     // 100 float + 40 + 20 cash - 10 refund - 5 out = 145 expected; 140 counted.
-    const out = await t.service.close(T, "cs1", STAFF, { countedCashCents: 14_000, notes: "faltan 5" });
+    const out = (await t.service.close(T, "cs1", OWNER, { countedCashCents: 14_000, notes: "faltan 5" })) as CashSessionFullView;
     expect(t.locks[0]).toMatch(/FROM "cash_sessions".*FOR UPDATE/);
     expect(t.sessions[0]).toMatchObject({
       status: "closed",
-      closedById: STAFF.id,
+      closedById: OWNER.id,
       countedCashCents: 14_000,
       expectedCashCents: 14_500,
       discrepancyCents: -500,
@@ -166,6 +184,28 @@ describe("closing the drawer", () => {
       expect.objectContaining({ metadata: { sessionId: "cs1", countedCashCents: 14_000, expectedCashCents: 14_500, discrepancyCents: -500 } }),
       t.prisma,
     );
+  });
+
+  it("staff close blind: the same figures are stored, they get back only what they counted, their movements and the time", async () => {
+    const t = closing();
+    t.movements.push({ id: "m2", sessionId: "cs1", type: "in", amountCents: 300, reason: "Cambio", createdById: STAFF.id, createdAt: new Date() });
+    // 145 + 3 in = 148 expected; 140 counted.
+    const out: any = await t.service.close(T, "cs1", STAFF, { countedCashCents: 14_000, breakdown: { "5000": 2, "2000": 2 }, notes: "ok" });
+    expect(t.sessions[0]).toMatchObject({ status: "closed", closedById: STAFF.id, expectedCashCents: 14_800, discrepancyCents: -800 });
+    expect(out).toMatchObject({
+      blind: true,
+      status: "closed",
+      countedCashCents: 14_000,
+      countBreakdown: { "5000": 2, "2000": 2 },
+      closingNotes: "ok",
+      closedBy: { id: STAFF.id },
+    });
+    expect(out.closedAt).toBeInstanceOf(Date);
+    for (const key of ["expectedCashCents", "discrepancyCents", "figures"]) expect(out).not.toHaveProperty(key);
+    // Their own movement, not the owner's.
+    expect(out.movements.map((m: any) => m.id)).toEqual(["m2"]);
+    // Nothing in the blind view is a total: no number but the float, the count and their movements.
+    expect(JSON.stringify(out)).not.toMatch(/14800|-800|6000/);
   });
 
   it("keeps a count by coin and note when it adds up, refuses it otherwise", async () => {
@@ -204,6 +244,12 @@ describe("money in and out of the drawer", () => {
     );
     await t.service.addMovement(T, "cs1", OWNER, { type: "out", amountCents: 10_000, reason: "Banco" });
     expect(t.movements).toHaveLength(1);
+  });
+
+  it("staff are not refused on what the drawer should hold: the refusal would tell them", async () => {
+    const t = drawer({ sessions: [openSession()] });
+    await t.service.addMovement(T, "cs1", STAFF, { type: "out", amountCents: 10_001, reason: "Banco" });
+    expect(t.movements[0]).toMatchObject({ type: "out", amountCents: 10_001, createdById: STAFF.id });
   });
 
   it("only into the session that is open", async () => {
@@ -248,6 +294,55 @@ describe("who sees what", () => {
     await expect(t.service.report(T, "cs-theirs", STAFF)).rejects.toThrow(ForbiddenException);
     await expect(t.service.report(T, "cs-theirs", OWNER)).resolves.toMatchObject({ id: "cs-theirs" });
     await expect(t.service.report("t2", "cs-mine", OWNER)).rejects.toThrow(NotFoundException);
+  });
+
+  it("staff get the blind view everywhere; the owner the full one, top-ups included", async () => {
+    const t = drawer({
+      sessions: [openSession({ openedById: OTHER_STAFF.id })],
+      payments: [{ cashSessionId: "cs1", method: "cash", amount: 2500 }, { cashSessionId: "cs1", method: "card", amount: 4000 }],
+      movements: [
+        { id: "m-other", sessionId: "cs1", type: "in", amountCents: 1000, reason: "Cambio", createdById: OTHER_STAFF.id, createdAt: new Date() },
+        { id: "m-mine", sessionId: "cs1", type: "out", amountCents: 200, reason: "Café", createdById: STAFF.id, createdAt: new Date() },
+      ],
+      walletTx: [
+        { tenantId: T, cashSessionId: "cs1", type: "credit", method: "cash", amount: 3000 },
+        { tenantId: T, cashSessionId: "cs1", type: "credit", method: "card", amount: 1500 },
+        // A refund back to the wallet: no tender, no money in the drawer.
+        { tenantId: T, cashSessionId: "cs1", type: "credit", method: null, amount: 900 },
+        { tenantId: "t2", cashSessionId: "cs1", type: "credit", method: "cash", amount: 99_999 },
+        // A withdrawal handed back in cash, one by Bizum; a wallet payment at the till (no tender) moves nothing.
+        { tenantId: T, cashSessionId: "cs1", type: "debit", method: "cash", amount: 1200 },
+        { tenantId: T, cashSessionId: "cs1", type: "debit", method: "bizum", amount: 800 },
+        { tenantId: T, cashSessionId: "cs1", type: "debit", method: null, amount: 5000 },
+      ],
+    });
+    const forStaff: any = (await t.service.current(T, STAFF)).session;
+    const reportForStaff: any = await t.service.report(T, "cs1", STAFF);
+    for (const view of [forStaff, reportForStaff]) {
+      expect(view).toMatchObject({ blind: true, id: "cs1", openingFloatCents: 10_000, countedCashCents: null });
+      for (const key of ["expectedCashCents", "discrepancyCents", "figures"]) expect(view).not.toHaveProperty(key);
+      expect(view.movements.map((m: any) => m.id)).toEqual(["m-mine"]);
+    }
+    // No figure was even worked out for them.
+    expect(t.prisma.payment.findMany).not.toHaveBeenCalled();
+
+    const full = (await t.service.report(T, "cs1", OWNER)) as CashSessionFullView;
+    // 100 float + 25 cash sale + 30 cash top-up - 12 cash withdrawal + 10 in - 2 out = 151.
+    expect(full).toMatchObject({ blind: false, expectedCashCents: 15_100 });
+    expect(full.figures.cash).toMatchObject({
+      salesCents: 2500,
+      walletTopUpsCents: 3000,
+      walletWithdrawalsCents: 1200,
+      expectedCents: 15_100,
+    });
+    expect(full.figures.byMethod.map((m) => [m.method, m.count, m.amountCents, m.topUpCents, m.walletWithdrawnCents])).toEqual([
+      ["cash", 2, 5500, 3000, 1200],
+      ["card", 2, 5500, 1500, 0],
+      ["bizum", 0, 0, 0, 800],
+    ]);
+    expect(full.figures.walletTopUps).toEqual({ count: 2, totalCents: 4500 });
+    expect(full.figures.walletWithdrawals).toEqual({ count: 2, totalCents: 2000 });
+    expect(full.movements.map((m) => m.id)).toEqual(["m-other", "m-mine"]);
   });
 });
 
