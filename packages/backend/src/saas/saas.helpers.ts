@@ -1,8 +1,10 @@
 import {
   BadRequestException,
+  ConflictException,
   NotFoundException,
 } from "@nestjs/common";
 import * as bcrypt from "bcryptjs";
+import { randomBytes } from "crypto";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
 import {
@@ -46,13 +48,17 @@ export function slugify(name: string): string {
     .replace(/-+$/, "");
 }
 
+const UUID_SHAPED = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 export async function assertTenantSlugAvailable(
   prisma: PrismaService,
   slug: string,
-  errMessage: string = "Salon slug already exists, please choose another",
+  errMessage: string = "Ya hay otro salón con esa dirección en KiraRoom. Prueba con otra.",
 ): Promise<void> {
   // A reserved name would be the salon's subdomain (app.kiraroom.net...).
-  if (RESERVED_SUBDOMAINS.has(slug)) {
+  // One shaped like an id would be read as another salon's id by the
+  // lookups that take "slug or id" (public page, receptionist).
+  if (RESERVED_SUBDOMAINS.has(slug) || UUID_SHAPED.test(slug)) {
     throw new BadRequestException(
       "Ese nombre no se puede usar como dirección del salón. Añade algo más, por ejemplo la ciudad.",
     );
@@ -62,6 +68,50 @@ export async function assertTenantSlugAvailable(
     throw new BadRequestException(errMessage);
   }
 }
+
+/** "salon-lucia", "salon-lucia-2", "salon-lucia-3"... each at most 63 chars. */
+export function tenantSlugCandidate(base: string, n: number): string {
+  if (n <= 1) return base;
+  const suffix = `-${n}`;
+  return `${base.slice(0, 63 - suffix.length).replace(/-+$/, "")}${suffix}`;
+}
+
+/** How many numbered slugs signup tries before falling back to a random one. */
+const SLUG_NUMBERED_TRIES = 20;
+
+/**
+ * A free slug for a salon called `name`. Names are not unique -- two salons
+ * may both be "Peluquería Lucía" -- so a name that is taken (or reserved for
+ * the platform, or shaped like an id) gets "-2", "-3"..., and after those a
+ * short random suffix. `skip` lists slugs already known to be taken (a
+ * create that lost a race), so a retry moves past them.
+ */
+export async function availableTenantSlug(
+  prisma: { tenant: { findUnique: (args: any) => Promise<unknown> } },
+  name: string,
+  skip: ReadonlySet<string> = new Set(),
+): Promise<string> {
+  const base = slugify(name) || "salon";
+  const usable = (slug: string) =>
+    !skip.has(slug) && !RESERVED_SUBDOMAINS.has(slug) && !UUID_SHAPED.test(slug);
+  for (let n = 1; n <= SLUG_NUMBERED_TRIES; n++) {
+    const slug = tenantSlugCandidate(base, n);
+    if (!usable(slug)) continue;
+    const taken = await prisma.tenant.findUnique({ where: { slug }, select: { id: true } });
+    if (!taken) return slug;
+  }
+  for (let i = 0; i < 5; i++) {
+    const slug = `${base.slice(0, 56).replace(/-+$/, "")}-${randomBytes(3).toString("hex")}`;
+    if (!usable(slug)) continue;
+    const taken = await prisma.tenant.findUnique({ where: { slug }, select: { id: true } });
+    if (!taken) return slug;
+  }
+  throw new ConflictException(TENANT_SLUG_UNAVAILABLE);
+}
+
+/** When no free address could be found for a new salon (practically never). */
+export const TENANT_SLUG_UNAVAILABLE =
+  "No hemos podido crear la dirección de tu salón. Vuelve a intentarlo en unos segundos.";
 
 export async function hashPassword(plain: string): Promise<string> {
   const rounds = Number(process.env.BCRYPT_ROUNDS) || BCRYPT_ROUNDS_DEFAULT;
