@@ -267,3 +267,130 @@ describe("GDPR export", () => {
     expect(out).toEqual({ id: "u1", email: "e" });
   });
 });
+
+/**
+ * Turning two-step verification on or off ends the account's other sessions,
+ * as a password change does (B21): a stolen session must not outlive the
+ * owner turning it on. This browser goes on with new tokens.
+ */
+describe("two-step verification on or off ends the other sessions", () => {
+  it("enable and disable raise tokenVersion", async () => {
+    const db = usersDb({ id: "u1", email: "duena@salon.test", tokenVersion: 4, passwordHash: await bcrypt.hash("clave", 4) });
+    const svc = new TwoFactorService(db.prisma as any, encryption as any);
+    const { secret } = await svc.setup("u1");
+    expect(db.user.tokenVersion).toBe(4); // a pending secret changes nothing yet
+    const t0 = new Date("2026-10-24T10:00:00Z");
+    await svc.enable("u1", codeForStep(secret, stepAt(t0)), t0);
+    expect(db.user.tokenVersion).toBe(5);
+    const later = new Date(t0.getTime() + 60_000);
+    await svc.disable("u1", "clave", codeForStep(secret, stepAt(later)), later);
+    expect(db.user.tokenVersion).toBe(6);
+  });
+
+  function controller(user: Record<string, unknown> = {}) {
+    const session = {
+      user: { id: "u1", email: "e", firstName: "", lastName: "", role: "owner", tenantId: "t1" },
+      tokens: { accessToken: "a2", refreshToken: "r2", refreshExpiresIn: 600, expiresIn: 900, tokenType: "Bearer" },
+    };
+    const authService = {
+      endSession: jest.fn(async () => undefined),
+      sessionAfterSignInChange: jest.fn(async () => session),
+    };
+    const twoFactor = {
+      setup: jest.fn(async () => ({ secret: "s", otpauthUrl: "u" })),
+      enable: jest.fn(async () => ({ recoveryCodes: ["a", "b"] })),
+      disable: jest.fn(async () => ({ enabled: false, recoveryCodesLeft: 0 })),
+      regenerateRecoveryCodes: jest.fn(async () => ({ recoveryCodes: ["c"] })),
+    };
+    const res = { cookie: jest.fn() };
+    const req = { headers: { cookie: `${STAFF_REFRESH_COOKIE}=old-refresh` } };
+    const c = new AuthController(authService as any, {} as any, twoFactor as any);
+    return { c, authService, twoFactor, res, req, panelUser: { id: "u1", role: "owner", ...user } };
+  }
+
+  it("enable answers the recovery codes and a new session for this browser", async () => {
+    const { c, authService, res, req, panelUser } = controller();
+    const out: any = await c.twoFactorEnable(panelUser, { code: "123456" } as any, req as any, res as any);
+    expect(out.recoveryCodes).toEqual(["a", "b"]);
+    expect(authService.endSession).toHaveBeenCalledWith("old-refresh");
+    expect(authService.sessionAfterSignInChange).toHaveBeenCalledWith("u1");
+    expect(res.cookie).toHaveBeenCalledWith(STAFF_REFRESH_COOKIE, "r2", expect.anything());
+    expect(out.tokens).toMatchObject({ accessToken: "a2" });
+    expect(out.tokens.refreshToken).toBeUndefined();
+  });
+
+  it("disable too", async () => {
+    const { c, authService, res, req, panelUser } = controller();
+    const out: any = await c.twoFactorDisable(panelUser, { password: "p", code: "123456" } as any, req as any, res as any);
+    expect(out).toMatchObject({ enabled: false, tokens: { accessToken: "a2" } });
+    expect(authService.sessionAfterSignInChange).toHaveBeenCalledWith("u1");
+  });
+
+  it("a failed code starts no new session", async () => {
+    const { c, authService, twoFactor, res, req, panelUser } = controller();
+    twoFactor.enable.mockRejectedValueOnce(new Error("El código no es correcto."));
+    await expect(c.twoFactorEnable(panelUser, { code: "000000" } as any, req as any, res as any)).rejects.toThrow();
+    expect(authService.sessionAfterSignInChange).not.toHaveBeenCalled();
+    expect(res.cookie).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A support session (impersonation) cannot touch the owner's two-step
+   * verification (B12), as it cannot change her password: it could lock
+   * her out of her own account.
+   */
+  it("a support session cannot set up, enable, disable or replace recovery codes", async () => {
+    const { c, twoFactor, res, req, panelUser } = controller({ impersonatedBy: "saas-owner" });
+    const calls: Array<Promise<unknown>> = [
+      c.twoFactorSetup(panelUser),
+      c.twoFactorEnable(panelUser, { code: "123456" } as any, req as any, res as any),
+      c.twoFactorDisable(panelUser, { password: "p", code: "123456" } as any, req as any, res as any),
+      c.twoFactorRecoveryCodes(panelUser, { code: "123456" } as any),
+    ];
+    for (const call of calls) {
+      const err: any = await call.catch((e) => e);
+      expect(err).toBeInstanceOf(ForbiddenException);
+      expect(err.message).toMatch(/sesión de soporte/);
+    }
+    expect(twoFactor.setup).not.toHaveBeenCalled();
+    expect(twoFactor.enable).not.toHaveBeenCalled();
+    expect(twoFactor.disable).not.toHaveBeenCalled();
+    expect(twoFactor.regenerateRecoveryCodes).not.toHaveBeenCalled();
+  });
+
+  it("support can still see whether it is on", async () => {
+    const authService = {};
+    const twoFactor = { status: jest.fn(async () => ({ enabled: true, recoveryCodesLeft: 3 })) };
+    const c = new AuthController(authService as any, {} as any, twoFactor as any);
+    await expect(c.twoFactorStatus({ id: "u1", role: "owner", impersonatedBy: "x" } as any)).resolves.toEqual({
+      enabled: true,
+      recoveryCodesLeft: 3,
+    });
+  });
+});
+
+describe("AuthService.sessionAfterSignInChange", () => {
+  it("issues tokens for an active user, with the raised tokenVersion", async () => {
+    const prisma: any = {
+      user: {
+        findUnique: jest.fn(async () => ({
+          id: "u1", email: "e@salon.test", firstName: "Ana", lastName: "P", role: "owner", tenantId: "t1",
+          isActive: true, tokenVersion: 7, professional: null,
+        })),
+      },
+    };
+    const jwtService: any = { sign: jest.fn(() => "signed") };
+    const sessions: any = { start: jest.fn(async () => ({ sid: "s", jti: "j" })) };
+    const auth = new AuthService(prisma, jwtService, {} as any, {} as any, {} as any, sessions, {} as any);
+    const out = await auth.sessionAfterSignInChange("u1");
+    expect(out.user).toMatchObject({ id: "u1", tenantId: "t1" });
+    expect(jwtService.sign.mock.calls[0][0]).toMatchObject({ sub: "u1", tv: 7 });
+    expect(sessions.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a deactivated user", async () => {
+    const prisma: any = { user: { findUnique: jest.fn(async () => ({ id: "u1", isActive: false })) } };
+    const auth = new AuthService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    await expect(auth.sessionAfterSignInChange("u1")).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+});

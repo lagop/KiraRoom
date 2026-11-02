@@ -2419,15 +2419,26 @@ class ApiClient implements ApiClientInterface {
     return this.request("/auth/2fa/setup", { method: "POST" });
   }
 
+  /**
+   * Turning two-step verification on or off ends every other session; this
+   * one continues with the new tokens the server answers with.
+   */
   async enableTwoFactor(code: string): Promise<{ recoveryCodes: string[] }> {
-    return this.request("/auth/2fa/enable", { method: "POST", body: JSON.stringify({ code: code.trim() }) });
+    const response = await this.request<{ recoveryCodes: string[]; user?: any; tokens?: any }>("/auth/2fa/enable", {
+      method: "POST",
+      body: JSON.stringify({ code: code.trim() }),
+    });
+    if (response.tokens?.accessToken) this.startSession({ user: response.user, tokens: response.tokens });
+    return { recoveryCodes: response.recoveryCodes };
   }
 
   async disableTwoFactor(password: string, code: string): Promise<TwoFactorStatus> {
-    return this.request("/auth/2fa/disable", {
+    const response = await this.request<TwoFactorStatus & { user?: any; tokens?: any }>("/auth/2fa/disable", {
       method: "POST",
       body: JSON.stringify({ password, code: code.trim() }),
     });
+    if (response.tokens?.accessToken) this.startSession({ user: response.user, tokens: response.tokens });
+    return { enabled: response.enabled, recoveryCodesLeft: response.recoveryCodesLeft };
   }
 
   async regenerateRecoveryCodes(code: string): Promise<{ recoveryCodes: string[] }> {
@@ -4679,7 +4690,8 @@ class ApiClient implements ApiClientInterface {
 
   async updateTenant(data: {
     name?: string;
-    description?: string;
+    /** null (or "") clears it, as for postalCode, state, phone and email. */
+    description?: string | null;
     language?: string;
     currency?: string;
     timezone?: string;
@@ -4687,11 +4699,11 @@ class ApiClient implements ApiClientInterface {
     timeFormat?: string;
     street?: string;
     city?: string;
-    postalCode?: string;
-    state?: string;
-    phone?: string;
+    postalCode?: string | null;
+    state?: string | null;
+    phone?: string | null;
     logo?: string;
-    email?: string;
+    email?: string | null;
     minCancelHours?: number;
     /** The salon's week, replacing what was stored; [] = no salon-level hours. */
     openingHours?: WorkingHoursEntry[];

@@ -6,7 +6,7 @@ import {
 } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
-import { buildConsolidatedReport, ConsolidatedReport } from "./consolidated-report";
+import { buildConsolidatedReport, ConsolidatedReport, homeLocations, locationOf } from "./consolidated-report";
 import { CreateLocationDto, UpdateLocationDto } from "./location.dto";
 import {
   AnalyticsAppointment,
@@ -66,13 +66,7 @@ export class MultiLocationService {
       select: { maxLocations: true, plan: true },
     });
     if (!tenant) throw new NotFoundException("Tenant no encontrado");
-    const current = await this.prisma.location.count({ where: { tenantId } });
-    const max = tenant.maxLocations ?? 1;
-    if (current >= max) {
-      throw new BadRequestException(
-        `Has alcanzado el maximo de locales (${max}) para tu plan Empresa.`,
-      );
-    }
+    await this.assertRoomForActive(tenantId, tenant.maxLocations);
     const slug = (dto.slug || this.slugify(dto.name)).toLowerCase();
     if (!slug) throw new BadRequestException("slug es obligatorio");
     const exists = await this.prisma.location.findUnique({
@@ -103,6 +97,13 @@ export class MultiLocationService {
     if (dto.isActive === false && loc.isActive) {
       await this.assertNotLastActive(tenantId);
     }
+    if (dto.isActive === true && !loc.isActive) {
+      const tenant = await this.prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { maxLocations: true },
+      });
+      await this.assertRoomForActive(tenantId, tenant?.maxLocations);
+    }
     return this.prisma.location.update({
       where: { id },
       data: { ...dto, slug: dto.slug ? this.slugify(dto.slug) : undefined },
@@ -116,6 +117,50 @@ export class MultiLocationService {
    * Empresa salon with two locations could not close one. The only real
    * limit is not switching off the last one.
    */
+  /**
+   * The plan limit counts active locations only: a closed one used to count
+   * too, so a salon at its limit that closed one by mistake could neither
+   * reactivate it nor create another.
+   */
+  private async assertRoomForActive(tenantId: string, maxLocations: number | null | undefined) {
+    const active = await this.prisma.location.count({ where: { tenantId, isActive: true } });
+    const max = maxLocations ?? 1;
+    if (active >= max) {
+      throw new BadRequestException(
+        `Has alcanzado el máximo de locales activos (${max}) de tu plan. Desactiva otro local antes.`,
+      );
+    }
+  }
+
+  /**
+   * What deactivating a location affects: its appointments from the salon's
+   * today on that are still to happen (pending or confirmed). An appointment
+   * without a location of its own counts where its professional works, as in
+   * the consolidated report. The panel shows the number in the confirmation.
+   */
+  async deactivationPreview(tenantId: string, id: string): Promise<{ upcomingAppointments: number }> {
+    await this.get(tenantId, id);
+    const today = await this.todayOf(tenantId);
+    const [appointments, links, active] = await Promise.all([
+      this.prisma.appointment.findMany({
+        where: {
+          tenantId,
+          scheduledDate: { gte: new Date(`${today}T00:00:00.000Z`) },
+          status: { in: ["pending", "confirmed"] },
+          OR: [{ locationId: id }, { locationId: null }],
+        },
+        select: { locationId: true, professionalId: true },
+      }),
+      this.prisma.professionalLocation.findMany({
+        where: { location: { tenantId } },
+        select: { professionalId: true, locationId: true, isPrimary: true },
+      }),
+      this.prisma.location.findMany({ where: { tenantId, isActive: true }, select: { id: true } }),
+    ]);
+    const homes = homeLocations(links, new Set([...active.map((l) => l.id), id]));
+    return { upcomingAppointments: appointments.filter((a) => locationOf(a, homes) === id).length };
+  }
+
   private async assertNotLastActive(tenantId: string) {
     const activeCount = await this.prisma.location.count({
       where: { tenantId, isActive: true },

@@ -11,6 +11,80 @@ import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { UserRole } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
+import { salonInstant } from "../appointments/salon-time";
+import { salonToday } from "../analytics/analytics-metrics";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_TIMEZONE = "Europe/Madrid";
+
+/** How far back and ahead a feed reaches, in the salon's calendar days. */
+export const ICS_PAST_DAYS = 30;
+export const ICS_FUTURE_DAYS = 180;
+/** Far above any salon's appointments in the window; only there so a feed can never be unbounded. */
+const ICS_MAX_EVENTS = 20_000;
+
+/**
+ * What a feed shows: pending online bookings (marked as tentative, since
+ * autoConfirmOnlineBookings is off by default and they used to be left out
+ * until someone confirmed them) and every appointment that goes ahead.
+ * Cancelled ones and no-shows are not in it.
+ */
+export const ICS_STATUSES = ["pending", "confirmed", "in_progress", "completed"] as const;
+
+/**
+ * The feed's date window: from ICS_PAST_DAYS before the salon's today to
+ * ICS_FUTURE_DAYS after it, on scheduledDate (a calendar day). The feeds used
+ * to take the first 500/1000 rows from 30 days ago, oldest first, so a busy
+ * salon's upcoming appointments fell off the end.
+ */
+export function icsWindow(timeZone: string | null | undefined, now: Date = new Date()): { gte: Date; lte: Date } {
+  const today = Date.parse(`${salonToday(timeZone || DEFAULT_TIMEZONE, now)}T00:00:00.000Z`);
+  return { gte: new Date(today - ICS_PAST_DAYS * DAY_MS), lte: new Date(today + ICS_FUTURE_DAYS * DAY_MS) };
+}
+
+/** The appointments filter every feed shares. */
+function feedWhere(timeZone: string | null | undefined) {
+  return { status: { in: [...ICS_STATUSES] }, scheduledDate: icsWindow(timeZone) };
+}
+
+/**
+ * The calendar events of a feed. An appointment's date and "HH:MM" are the
+ * salon's wall clock: the instant comes from the salon's timezone and goes
+ * out in UTC ("…Z"), so Google, Apple and Outlook show it at the right hour
+ * wherever the server runs. It used to read the time in the server's zone
+ * (UTC in the container) and send it as UTC: every appointment was an hour
+ * late in winter and two in summer.
+ */
+export function buildIcsEvents(appointments: any[], tenant: any): ics.EventAttributes[] {
+  const timeZone: string = tenant.timezone || DEFAULT_TIMEZONE;
+  return appointments.map<ics.EventAttributes>((a) => {
+    const start = salonInstant(a.scheduledDate, validClock(a.scheduledTime), timeZone).getTime();
+    const duration: number = a.duration ?? 60;
+    const clientName = a.client ? `${a.client.firstName} ${a.client.lastName}` : "Cliente";
+    const serviceName = a.service?.name ?? "Servicio";
+    const pending = a.status === "pending";
+    return {
+      title: `${pending ? "Por confirmar · " : ""}${serviceName} - ${clientName}`,
+      start,
+      startInputType: "utc",
+      startOutputType: "utc",
+      end: start + duration * 60 * 1000,
+      endInputType: "utc",
+      endOutputType: "utc",
+      status: pending ? "TENTATIVE" : "CONFIRMED",
+      location: [tenant.street, tenant.city, tenant.country].filter(Boolean).join(", "),
+      description: a.notes || "",
+      uid: `${a.id}@${tenant.slug}.kiraroom.app`,
+      productId: "KiraRoom/ICS-Feed",
+      calName: `${tenant.name} — Calendario`,
+    };
+  });
+}
+
+/** "HH:MM", or 09:00 for a missing or malformed time (as before). */
+function validClock(time: unknown): string {
+  return typeof time === "string" && /^([01]?\d|2[0-3]):[0-5]\d/.test(time) ? time.slice(0, 5) : "09:00";
+}
 
 /**
  * The salon's feed-token version, kept in `Tenant.features.icsFeed.version`.
@@ -60,8 +134,9 @@ export class IcsController {
     if (!tenant) throw new NotFoundException("Salon not found");
     const version = icsFeedVersion(tenant.features);
     const rotatedAt = (tenant.features as any)?.icsFeed?.rotatedAt ?? null;
+    // Only those still working here: a deactivated professional's feed answers 404.
     const professionals = await this.prisma.professional.findMany({
-      where: { tenantId },
+      where: { tenantId, isActive: true },
       select: { id: true, firstName: true, lastName: true },
       orderBy: { firstName: "asc" },
     });
@@ -142,14 +217,13 @@ export class IcsController {
     const appointments = await this.prisma.appointment.findMany({
       where: {
         professionalId: id,
-        status: { in: ["confirmed", "completed", "in_progress"] },
-        scheduledDate: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+        ...feedWhere(professional.tenant?.timezone),
       },
       include: { client: true, service: true },
-      orderBy: { scheduledDate: "asc" },
-      take: 500,
+      orderBy: [{ scheduledDate: "asc" }, { scheduledTime: "asc" }],
+      take: ICS_MAX_EVENTS,
     });
-    const events = this.buildEvents(appointments, professional.tenant);
+    const events = buildIcsEvents(appointments, professional.tenant);
     return this.send(res, events, `professional-${id}.ics`);
   }
 
@@ -180,14 +254,13 @@ export class IcsController {
         ...(profIds.length > 0
           ? { professionalId: { in: profIds } }
           : { tenantId: user.tenantId }),
-        status: { in: ["confirmed", "completed", "in_progress"] },
-        scheduledDate: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+        ...feedWhere(user.tenant.timezone),
       },
       include: { client: true, service: true },
-      orderBy: { scheduledDate: "asc" },
-      take: 500,
+      orderBy: [{ scheduledDate: "asc" }, { scheduledTime: "asc" }],
+      take: ICS_MAX_EVENTS,
     });
-    return this.send(res, this.buildEvents(appointments, user.tenant), `staff-${id}.ics`);
+    return this.send(res, buildIcsEvents(appointments, user.tenant), `staff-${id}.ics`);
   }
 
   @Get("salon/:slug")
@@ -206,14 +279,13 @@ export class IcsController {
     const appointments = await this.prisma.appointment.findMany({
       where: {
         tenantId: tenant.id,
-        status: { in: ["confirmed", "completed", "in_progress"] },
-        scheduledDate: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+        ...feedWhere(tenant.timezone),
       },
       include: { client: true, service: true },
-      orderBy: { scheduledDate: "asc" },
-      take: 1000,
+      orderBy: [{ scheduledDate: "asc" }, { scheduledTime: "asc" }],
+      take: ICS_MAX_EVENTS,
     });
-    return this.send(res, this.buildEvents(appointments, tenant), `salon-${slug}.ics`);
+    return this.send(res, buildIcsEvents(appointments, tenant), `salon-${slug}.ics`);
   }
 
   /**
@@ -251,45 +323,6 @@ export class IcsController {
     }
   }
 
-  private buildEvents(appointments: any[], tenant: any): ics.EventAttributes[] {
-    return appointments.map((a) => {
-      const start = this.toDate(a.scheduledDate, a.scheduledTime);
-      const duration: number = a.duration ?? 60;
-      const end = new Date(start.getTime() + duration * 60 * 1000);
-      const clientName = a.client
-        ? `${a.client.firstName} ${a.client.lastName}`
-        : "Cliente";
-      const serviceName = a.service?.name ?? "Servicio";
-      return {
-        title: `${serviceName} - ${clientName}`,
-        start: this.toIcsDate(start),
-        end: this.toIcsDate(end),
-        location: [tenant.street, tenant.city, tenant.country].filter(Boolean).join(", "),
-        description: a.notes || "",
-        uid: `${a.id}@${tenant.slug}.kiraroom.app`,
-        productId: "KiraRoom/ICS-Feed",
-        calName: `${tenant.name} — Calendario`,
-      };
-    });
-  }
-
-  private toIcsDate(d: Date): [number, number, number, number, number] {
-    return [
-      d.getUTCFullYear(),
-      d.getUTCMonth() + 1,
-      d.getUTCDate(),
-      d.getUTCHours(),
-      d.getUTCMinutes(),
-    ];
-  }
-
-  private toDate(scheduledDate: Date | string, scheduledTime: string): Date {
-    const base = new Date(scheduledDate);
-    const [hh, mm] = (scheduledTime || "09:00").split(":").map((n) => parseInt(n, 10));
-    base.setHours(hh ?? 9, mm ?? 0, 0, 0);
-    return base;
-  }
-
   private send(res: Response, events: ics.EventAttributes[], filename: string) {
     const { error, value } = ics.createEvents(events);
     if (error) {
@@ -299,7 +332,8 @@ export class IcsController {
     }
     res.setHeader("Content-Type", "text/calendar; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    res.setHeader("Cache-Control", "public, max-age=300");
+    // Clients' names and appointments: no shared cache (proxy, CDN) may keep a copy.
+    res.setHeader("Cache-Control", "private, no-store");
     return res.send(value);
   }
 }

@@ -2,6 +2,7 @@ import { ApiPropertyOptional } from "@nestjs/swagger";
 import { Transform } from "class-transformer";
 import { IsString, IsOptional, IsIn, IsUrl, IsEmail, IsInt, Min, Max, Matches, IsTimeZone, IsBoolean } from "class-validator";
 import { EmptyStringToUndefined } from "../../common/dto/empty-to-undefined";
+import { PHONE_PATTERN } from "../../common/phone";
 import { IsWorkingHours } from "../../professionals/working-hours-input";
 import { BOOKING_SLOT_MINUTES, type WorkingHoursEntry } from "../../appointments/working-hours";
 import {
@@ -16,6 +17,16 @@ import {
  * One HH:MM, 24-hour window. The onboarding wizard sends one per weekday; the
  * settings page used to send one for the whole salon as `openingHours`.
  */
+/**
+ * Blank (or null) clears the field: stored as null. The settings pages used
+ * to send blanks as undefined, which left the old text on the public page.
+ */
+const BlankToNull = () =>
+  Transform(({ value }) => (value === null || (typeof value === "string" && value.trim() === "") ? null : value));
+
+/** The rule the booking form uses for a client's phone (common/phone.ts). */
+export const TENANT_PHONE_INVALID = "Introduce un teléfono válido (al menos 9 cifras)";
+
 export class OpeningHoursDto {
   @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
   open: string;
@@ -25,10 +36,11 @@ export class OpeningHoursDto {
 }
 
 export class UpdateTenantDto {
-  @ApiPropertyOptional({ description: "Public contact email" })
-  @IsEmail()
+  @ApiPropertyOptional({ description: "Public contact email; blank or null clears it", nullable: true })
+  @BlankToNull()
   @IsOptional()
-  email?: string;
+  @IsEmail({}, { message: "Introduce un correo electrónico válido o déjalo vacío" })
+  email?: string | null;
 
   @ApiPropertyOptional({ description: "Minimum notice to cancel, in hours" })
   @IsInt()
@@ -83,10 +95,11 @@ export class UpdateTenantDto {
   @IsOptional()
   name?: string;
 
-  @ApiPropertyOptional({ description: "Tenant description" })
-  @IsString()
+  @ApiPropertyOptional({ description: "Tenant description; blank or null clears it", nullable: true })
+  @BlankToNull()
   @IsOptional()
-  description?: string;
+  @IsString()
+  description?: string | null;
 
   @ApiPropertyOptional({ description: "Tenant language", enum: ["es", "en"] })
   @IsString()
@@ -132,23 +145,27 @@ export class UpdateTenantDto {
   @IsOptional()
   city?: string;
 
-  @ApiPropertyOptional({ description: "Tenant phone number" })
-  @IsString()
+  @ApiPropertyOptional({ description: "Tenant phone number; blank or null clears it", nullable: true })
+  @BlankToNull()
   @IsOptional()
-  phone?: string;
+  @IsString()
+  @Matches(PHONE_PATTERN, { message: TENANT_PHONE_INVALID })
+  phone?: string | null;
 
   @ApiPropertyOptional({ description: "Tenant logo URL or data: URL" })
   @IsString()
   @IsOptional()
   logo?: string;
 
-  @ApiPropertyOptional({ description: "Tenant postal code" })
-  @IsString()
+  @ApiPropertyOptional({ description: "Tenant postal code; blank or null clears it", nullable: true })
+  @BlankToNull()
   @IsOptional()
-  postalCode?: string;
+  @IsString()
+  postalCode?: string | null;
 
-  @ApiPropertyOptional({ description: "Tenant state / province" })
-  @IsString()
+  @ApiPropertyOptional({ description: "Tenant state / province; blank or null clears it", nullable: true })
+  @BlankToNull()
   @IsOptional()
-  state?: string;
+  @IsString()
+  state?: string | null;
 }

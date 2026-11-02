@@ -46,6 +46,19 @@ function staffOnly(user: { role: string }) {
   if (user.role === "client") throw new ForbiddenException();
 }
 
+/**
+ * Support signed in as the salon (impersonation) must not set up, turn on or
+ * off two-step verification, nor replace the recovery codes: it could lock
+ * the owner out of her own account. Same rule as the password change.
+ */
+function supportCannotTouchTwoFactor(user: { impersonatedBy?: string }) {
+  if (user.impersonatedBy) {
+    throw new ForbiddenException("No se puede cambiar la verificación en dos pasos desde una sesión de soporte.");
+  }
+}
+
+type PanelUser = { id: string; role: string; impersonatedBy?: string };
+
 @ApiTags("Authentication")
 @Controller("auth")
 export class AuthController {
@@ -140,8 +153,9 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
   @ApiOperation({ summary: "Start turning on two-step verification: a secret for the authenticator app" })
-  async twoFactorSetup(@CurrentUser() user: { id: string; role: string }) {
+  async twoFactorSetup(@CurrentUser() user: PanelUser) {
     staffOnly(user);
+    supportCannotTouchTwoFactor(user);
     return this.twoFactor.setup(user.id);
   }
 
@@ -151,10 +165,20 @@ export class AuthController {
   @Throttle({ default: { ttl: 60_000, limit: 10 } })
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
-  @ApiOperation({ summary: "Confirm the app with its first code; answers the recovery codes once" })
-  async twoFactorEnable(@CurrentUser() user: { id: string; role: string }, @Body() dto: TwoFactorCodeDto) {
+  @ApiOperation({
+    summary:
+      "Confirm the app with its first code; answers the recovery codes once. Other sessions end; this browser gets new tokens",
+  })
+  async twoFactorEnable(
+    @CurrentUser() user: PanelUser,
+    @Body() dto: TwoFactorCodeDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     staffOnly(user);
-    return this.twoFactor.enable(user.id, dto.code);
+    supportCannotTouchTwoFactor(user);
+    const result = await this.twoFactor.enable(user.id, dto.code);
+    return { ...result, ...(await this.renewSession(user, req, res)) };
   }
 
   @Post("2fa/disable")
@@ -163,10 +187,19 @@ export class AuthController {
   @Throttle({ default: { ttl: 60_000, limit: 10 } })
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
-  @ApiOperation({ summary: "Turn two-step verification off (password and a code)" })
-  async twoFactorDisable(@CurrentUser() user: { id: string; role: string }, @Body() dto: TwoFactorDisableDto) {
+  @ApiOperation({
+    summary: "Turn two-step verification off (password and a code). Other sessions end; this browser gets new tokens",
+  })
+  async twoFactorDisable(
+    @CurrentUser() user: PanelUser,
+    @Body() dto: TwoFactorDisableDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     staffOnly(user);
-    return this.twoFactor.disable(user.id, dto.password, dto.code);
+    supportCannotTouchTwoFactor(user);
+    const result = await this.twoFactor.disable(user.id, dto.password, dto.code);
+    return { ...result, ...(await this.renewSession(user, req, res)) };
   }
 
   @Post("2fa/recovery-codes")
@@ -176,9 +209,20 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
   @ApiOperation({ summary: "New recovery codes, replacing the old ones (needs a code)" })
-  async twoFactorRecoveryCodes(@CurrentUser() user: { id: string; role: string }, @Body() dto: TwoFactorCodeDto) {
+  async twoFactorRecoveryCodes(@CurrentUser() user: PanelUser, @Body() dto: TwoFactorCodeDto) {
     staffOnly(user);
+    supportCannotTouchTwoFactor(user);
     return this.twoFactor.regenerateRecoveryCodes(user.id, dto.code);
+  }
+
+  /**
+   * After two-step verification was turned on or off every session ended
+   * (tokenVersion); this browser's record is closed and it gets a new one,
+   * as after a password change, so the person who did it stays signed in.
+   */
+  private async renewSession(user: PanelUser, req: Request, res: Response) {
+    await this.authService.endSession(readRefreshCookie(req, cookieKindForRole(user.role)));
+    return deliverSession(res, await this.authService.sessionAfterSignInChange(user.id));
   }
 
   /**

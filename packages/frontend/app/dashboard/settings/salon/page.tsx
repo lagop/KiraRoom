@@ -6,6 +6,7 @@ import apiClient from "@/lib/api";
 import { Loader2, Save, Upload } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
 import { CanaryTimezoneHint } from "@/components/settings/CanaryTimezoneHint";
+import { salonIdentityUpdate } from "@/lib/salon-identity";
 
 const LOGO_MAX_BYTES = 500 * 1024;
 const LOGO_RECOMMENDED_PX = 512;
@@ -79,16 +80,10 @@ export default function SalonSettingsPage() {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          update.mutate({
-            name: name.trim(),
-            description: description.trim() || undefined,
-            street: street.trim(),
-            city: city.trim(),
-            postalCode: postalCode.trim() || undefined,
-            state: state.trim() || undefined,
-            phone: phone.trim(),
-            logo: logo.trim(),
-          });
+          // Blank optional fields go as null, which clears them.
+          update.mutate(
+            salonIdentityUpdate({ name, description, street, city, postalCode, state, phone, logo }),
+          );
         }}
         className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm space-y-5"
       >
@@ -193,6 +188,13 @@ export default function SalonSettingsPage() {
           {update.isSuccess && (
             <span className="text-xs text-green-600">
               {t("settings.saved")}
+            </span>
+          )}
+          {update.isError && (
+            <span role="alert" className="text-xs text-red-600">
+              {update.error instanceof Error && update.error.message
+                ? update.error.message
+                : t("settings.salon.saveError")}
             </span>
           )}
           <button

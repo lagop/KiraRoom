@@ -12,7 +12,7 @@ import { PrismaService } from "../common/prisma/prisma.service";
 import { ProductEventsService, PRODUCT_EVENTS } from "../common/telemetry/product-events.service";
 import { RegisterDto } from "./dto/register.dto";
 import { LoginDto } from "./dto/login.dto";
-import { UserRole } from "@prisma/client";
+import { Prisma, UserRole } from "@prisma/client";
 import {
   assertTenantSlugAvailable,
   createTenantWithOwner,
@@ -60,6 +60,54 @@ export interface TokenResponse {
   tokenType: string;
 }
 
+/**
+ * What the panel gets of its own salon, from GET and PATCH /auth/tenant.
+ * Never the Stripe keys, the channel credentials (features), the Stripe
+ * customer/subscription ids or the fiscal and accounting settings: PATCH used
+ * to answer the whole row, so every save on General sent them to the browser.
+ */
+export const TENANT_SETTINGS_SELECT = {
+  id: true,
+  name: true,
+  slug: true,
+  timezone: true,
+  currency: true,
+  country: true,
+  language: true,
+  // Plan / subscription status (consumed by /dashboard/settings/channels
+  // to branch the upgrade CTA: Esencial → buy multichannel add-on,
+  // other plans → upgrade plan).
+  plan: true,
+  subscriptionStatus: true,
+  // Identity (consumed by /dashboard/settings/salon and the
+  // onboarding wizard's "workspace_business" step).
+  description: true,
+  street: true,
+  city: true,
+  postalCode: true,
+  state: true,
+  phone: true,
+  logo: true,
+  // Consumed by /dashboard/settings, which used to show invented
+  // values for all of these and save none of them.
+  email: true,
+  dateFormat: true,
+  timeFormat: true,
+  minCancelHours: true,
+  openingHours: true,
+  instagram: true,
+  facebook: true,
+  bookingSlotMinutes: true,
+  autoConfirmOnlineBookings: true,
+  // Tax identifiers (consumed by /dashboard/settings/fiscal).
+  taxId: true,
+  taxIdType: true,
+  legalName: true,
+} as const satisfies Prisma.TenantSelect;
+
+/** Tenant.name is unique (the decision whether it should be is pending): a clash is a 409, not a 500. */
+export const TENANT_NAME_TAKEN = "Ya hay otro salón con ese nombre en KiraRoom. Prueba con otro, por ejemplo añadiendo tu ciudad.";
+
 /** How a new token pair relates to the sign-in it continues. */
 type SessionOptions = { session?: { sid: string; jti: string }; accessOnly?: boolean };
 
@@ -75,6 +123,14 @@ export interface AuthUser {
   impersonatedBy?: string;
   impersonationId?: string;
   impersonatedTenantId?: string;
+}
+
+/** Whether a Prisma unique-constraint error (P2002) is about this column. */
+function targetIncludes(e: any, column: string): boolean {
+  const target = e?.meta?.target;
+  if (Array.isArray(target)) return target.includes(column);
+  // Postgres reports the index name ("tenants_name_key") on some paths.
+  return typeof target === "string" ? target.includes(column) : true;
 }
 
 @Injectable()
@@ -578,6 +634,21 @@ export class AuthService {
     // The other sessions' live sockets close now; this browser reconnects
     // with the tokens below.
     sessionRevocations.revoke({ userId: user.id });
+    return this.sessionAfterSignInChange(user.id);
+  }
+
+  /**
+   * A new session for the browser that just changed how the account signs in
+   * (its password, two-step verification). The caller has already raised
+   * tokenVersion, which ended every session, this browser's included; this
+   * one goes on with the tokens answered here.
+   */
+  async sessionAfterSignInChange(userId: string): Promise<{ user: AuthUser; tokens: TokenResponse }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { professional: { select: { id: true } } },
+    });
+    if (!user || !user.isActive) throw new UnauthorizedException();
     const tokens = await this.generateTokens(
       user.id,
       user.email,
@@ -739,44 +810,7 @@ export class AuthService {
   async getTenant(tenantId: string) {
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-        timezone: true,
-        currency: true,
-        country: true,
-        language: true,
-        // Plan / subscription status (consumed by /dashboard/settings/channels
-        // to branch the upgrade CTA: Esencial → buy multichannel add-on,
-        // other plans → upgrade plan).
-        plan: true,
-        subscriptionStatus: true,
-        // Identity (consumed by /dashboard/settings/salon and the
-        // onboarding wizard's "workspace_business" step).
-        description: true,
-        street: true,
-        city: true,
-        postalCode: true,
-        state: true,
-        phone: true,
-        logo: true,
-        // Consumed by /dashboard/settings, which used to show invented
-        // values for all of these and save none of them.
-        email: true,
-        dateFormat: true,
-        timeFormat: true,
-        minCancelHours: true,
-        openingHours: true,
-        instagram: true,
-        facebook: true,
-        bookingSlotMinutes: true,
-        autoConfirmOnlineBookings: true,
-        // Tax identifiers (consumed by /dashboard/settings/fiscal).
-        taxId: true,
-        taxIdType: true,
-        legalName: true,
-      },
+      select: TENANT_SETTINGS_SELECT,
     });
 
     if (!tenant) {
@@ -804,10 +838,17 @@ export class AuthService {
     }
     const timezone = await this.timezoneForAddressChange(tenantId, updateData);
     if (timezone) data.timezone = timezone;
-    return this.prisma.tenant.update({
-      where: { id: tenantId },
-      data,
-    });
+    try {
+      // The same shape as GET /auth/tenant, never the whole row (secrets).
+      return await this.prisma.tenant.update({
+        where: { id: tenantId },
+        data,
+        select: TENANT_SETTINGS_SELECT,
+      });
+    } catch (e: any) {
+      if (e?.code === "P2002" && targetIncludes(e, "name")) throw new ConflictException(TENANT_NAME_TAKEN);
+      throw e;
+    }
   }
 
   /**
