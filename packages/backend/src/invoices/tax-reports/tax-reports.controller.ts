@@ -1,7 +1,7 @@
 import { BadRequestException, Body, Controller, Get, HttpCode, Param, ParseIntPipe, Post, Query, Req, UseGuards } from "@nestjs/common";
 import { Request } from "express";
 import { JwtAuthGuard } from "../../auth/guards/jwt-auth.guard";
-import { Roles } from "../../auth/decorators/roles.decorator";
+import { Roles, SALON_MANAGERS } from "../../auth/decorators/roles.decorator";
 import { RolesGuard } from "../../auth/guards/roles.guard";
 import { UserRole, TaxReportType } from "@prisma/client";
 import { TaxReportsService } from "./tax-reports.service";
@@ -10,6 +10,11 @@ interface AuthedRequest extends Request {
   user: { tenantId?: string };
 }
 
+/**
+ * The quarterly drafts hold the salon's takings (bases and cuotas), which
+ * invoices and analytics hide from staff: every route is the owner's and
+ * admins'. Staff used to be able to read the list and each draft.
+ */
 @Controller("tax-reports")
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class TaxReportsController {
@@ -34,13 +39,13 @@ export class TaxReportsController {
 
   /** The quarterly return of the salon's tax regime (303, 420 or none). */
   @Get("quarterly-type")
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
+  @Roles(...SALON_MANAGERS)
   quarterlyType(@Req() req: AuthedRequest) {
     return this.reports.quarterlyReturnFor(this.tenantId(req));
   }
 
   @Get(":type/:year/:quarter")
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
+  @Roles(...SALON_MANAGERS)
   async findOne(
     @Req() req: AuthedRequest,
     @Param("type") type: string,
@@ -58,7 +63,7 @@ export class TaxReportsController {
   }
 
   @Get()
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
+  @Roles(...SALON_MANAGERS)
   async list(@Req() req: AuthedRequest, @Query("limit") limit?: string) {
     const cap = limit ? Math.min(parseInt(limit, 10) || 50, 200) : 50;
     return this.reports.listForTenant(this.tenantId(req), cap);

@@ -57,6 +57,13 @@ export class MultiLocationController {
     return this.service.remove(req.user.tenantId, id);
   }
 
+  @Get(":id/deactivation-preview")
+  @ApiOperation({ summary: "Citas pendientes del local, para avisar antes de desactivarlo" })
+  @Roles(...SALON_MANAGERS)
+  deactivationPreview(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
+    return this.service.deactivationPreview(req.user.tenantId, id);
+  }
+
   @Get(":id/stats")
   @ApiOperation({ summary: "KPIs del local (ultimos 30 dias)" })
   @Roles(...SALON_MANAGERS)

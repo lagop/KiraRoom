@@ -1,8 +1,8 @@
 import { plainToInstance } from "class-transformer";
 import { validateSync } from "class-validator";
-import { BadRequestException } from "@nestjs/common";
-import { UpdateTenantDto } from "./dto/update-tenant.dto";
-import { AuthService } from "./auth.service";
+import { BadRequestException, ConflictException } from "@nestjs/common";
+import { TENANT_PHONE_INVALID, UpdateTenantDto } from "./dto/update-tenant.dto";
+import { AuthService, TENANT_NAME_TAKEN, TENANT_SETTINGS_SELECT } from "./auth.service";
 
 /**
  * /dashboard/settings showed invented business data ("Kira Room", "Calle
@@ -165,5 +165,92 @@ describe("updateTenant", () => {
       service.updateTenant("t1", { openingHours: { open: "09:00", close: "09:00" } }),
     ).rejects.toThrow(BadRequestException);
     expect(written).toBe(false);
+  });
+});
+
+/**
+ * PATCH /auth/tenant answered the whole Tenant row: the Stripe keys, the
+ * channel credentials kept in features, the Stripe customer id, the fiscal
+ * settings... on every save of General or Datos del salón (A3). It now
+ * answers what GET /auth/tenant answers.
+ */
+describe("updateTenant answers the safe shape", () => {
+  const SECRET_FIELDS = [
+    "stripeTestSecretKey",
+    "stripeLiveSecretKey",
+    "stripeCustomerId",
+    "stripeSubscriptionId",
+    "features",
+    "aiFairUse",
+  ];
+
+  function serviceWith(update: (args: any) => any) {
+    const service = Object.create(AuthService.prototype);
+    service.prisma = { tenant: { findUnique: async () => ({}), update: jest.fn(update) } };
+    service.logger = { log: jest.fn() };
+    return service;
+  }
+
+  it("selects exactly what GET /auth/tenant selects, and no secret field", async () => {
+    const service = serviceWith(async ({ select }: any) =>
+      Object.fromEntries(Object.keys(select).map((k) => [k, `v-${k}`])),
+    );
+    const out = await service.updateTenant("t1", { name: "Salón Ana" });
+    const { select } = service.prisma.tenant.update.mock.calls[0][0];
+    expect(select).toBe(TENANT_SETTINGS_SELECT);
+    for (const field of SECRET_FIELDS) {
+      expect(select).not.toHaveProperty(field);
+      expect(out).not.toHaveProperty(field);
+    }
+    expect(Object.keys(select).every((k) => (TENANT_SETTINGS_SELECT as any)[k] === true)).toBe(true);
+  });
+
+  it("GET /auth/tenant uses the same select", async () => {
+    const service = Object.create(AuthService.prototype);
+    const findUnique = jest.fn(async () => ({ id: "t1" }));
+    service.prisma = { tenant: { findUnique } };
+    await service.getTenant("t1");
+    expect((findUnique.mock.calls[0] as any[])[0].select).toBe(TENANT_SETTINGS_SELECT);
+  });
+
+  it("a name another salon already has is a Spanish 409, not a 500", async () => {
+    const service = serviceWith(async () => {
+      throw Object.assign(new Error("Unique constraint failed"), { code: "P2002", meta: { target: ["name"] } });
+    });
+    const err = await service.updateTenant("t1", { name: "Salón Ana" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ConflictException);
+    expect((err as Error).message).toBe(TENANT_NAME_TAKEN);
+  });
+
+  it("other database errors are not dressed up as a name clash", async () => {
+    const boom = Object.assign(new Error("connection lost"), { code: "P1001" });
+    const service = serviceWith(async () => {
+      throw boom;
+    });
+    await expect(service.updateTenant("t1", { name: "X" })).rejects.toBe(boom);
+  });
+});
+
+/** Datos del salón and General can clear what they show (A9, A10). */
+describe("UpdateTenantDto: clearing fields, email and phone", () => {
+  it("blank description, postal code, province, email and phone are stored as null", () => {
+    const body = { description: "", postalCode: "  ", state: "", email: "", phone: "" };
+    expect(errorsFor(body)).toEqual([]);
+    expect(dtoOf(body)).toMatchObject({ description: null, postalCode: null, state: null, email: null, phone: null });
+    expect(errorsFor({ description: null, postalCode: null, state: null, email: null, phone: null })).toEqual([]);
+  });
+
+  it("a wrong email or phone gets a Spanish message", () => {
+    const messages = (body: object) =>
+      validateSync(plainToInstance(UpdateTenantDto, body)).flatMap((e) => Object.values(e.constraints ?? {}));
+    expect(messages({ email: "hola@" })).toEqual(["Introduce un correo electrónico válido o déjalo vacío"]);
+    expect(messages({ phone: "123" })).toEqual([TENANT_PHONE_INVALID]);
+    expect(messages({ phone: "llámanos" })).toEqual([TENANT_PHONE_INVALID]);
+  });
+
+  it("accepts the phone formats a salon types", () => {
+    for (const phone of ["600 111 222", "+34 600 111 222", "0034600111222", "(+34) 928-123-456"]) {
+      expect(errorsFor({ phone })).toEqual([]);
+    }
   });
 });

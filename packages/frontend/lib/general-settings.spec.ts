@@ -72,5 +72,17 @@ check(
   { dateFormat: "YYYY/MM/DD", timeFormat: "12h", minCancelHours: 48 },
 );
 
+// Emptying the contact email or phone used to answer "email must be an email" in English.
+check(
+  "emptying the contact email or phone clears them (null)",
+  tenantUpdateFrom({ ...saved, contactEmail: "  ", contactPhone: "" }, saved),
+  { phone: null, email: null },
+);
+check(
+  "a contact email or phone is sent trimmed",
+  tenantUpdateFrom({ ...saved, contactEmail: " hola@salon.test ", contactPhone: " 600 111 222 " }, saved),
+  { phone: "600 111 222", email: "hola@salon.test" },
+);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

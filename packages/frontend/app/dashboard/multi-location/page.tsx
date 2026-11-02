@@ -9,6 +9,15 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/components/ui/use-toast";
 import { formatCents, formatRate } from "@/lib/analytics-format";
 import { ConsolidatedReport } from "./consolidated-report";
+import { deactivationNotice, upcomingAppointmentsAt } from "@/lib/location-deactivation";
+
+type T = (key: string, params?: Record<string, any>) => string;
+
+/** The confirmation's text about the appointments still to come there. */
+function noticeText(t: T, upcoming: number | null): string | undefined {
+  const notice = deactivationNotice(upcoming);
+  return notice ? t(notice.key, notice.params) : undefined;
+}
 
 interface Location {
   id: string;
@@ -168,7 +177,7 @@ function LocationCard({
 }: {
   location: Location;
   stats?: LocationStats;
-  t: (key: string, params?: Record<string, any>) => string;
+  t: T;
   onStats: () => void;
   onEdit: () => void;
   onDeleted: () => void;
@@ -177,6 +186,14 @@ function LocationCard({
   // Deactivating is confirmed in the panel's dialog.
   const [confirmDeactivate, setConfirmDeactivate] = useState(false);
   const [deactivating, setDeactivating] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [upcoming, setUpcoming] = useState<number | null>(null);
+  const askDeactivate = async () => {
+    setChecking(true);
+    setUpcoming(await upcomingAppointmentsAt(location.id));
+    setChecking(false);
+    setConfirmDeactivate(true);
+  };
   const performDeactivate = async () => {
     setDeactivating(true);
     try {
@@ -291,18 +308,22 @@ function LocationCard({
           <Edit2 className="h-3.5 w-3.5" />
           {t("multiLocation.card.edit")}
         </button>
-        <button
-          onClick={() => setConfirmDeactivate(true)}
-          className="ml-auto inline-flex items-center gap-1 rounded-md border border-red-100 px-2.5 py-1 text-xs text-red-600 hover:bg-red-50"
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-          {t("multiLocation.card.deactivate")}
-        </button>
+        {location.isActive && (
+          <button
+            onClick={askDeactivate}
+            disabled={checking}
+            className="ml-auto inline-flex items-center gap-1 rounded-md border border-red-100 px-2.5 py-1 text-xs text-red-600 hover:bg-red-50 disabled:opacity-50"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            {t("multiLocation.card.deactivate")}
+          </button>
+        )}
       </div>
 
       <ConfirmDialog
         open={confirmDeactivate}
         title={t("multiLocation.card.deactivateConfirm", { name: location.name })}
+        description={noticeText(t, upcoming)}
         confirmLabel={t("multiLocation.card.deactivateCta")}
         cancelLabel={t("common.cancel")}
         destructive
@@ -323,8 +344,9 @@ function LocationForm({
   location?: Location;
   onClose: () => void;
   onSaved: () => void;
-  t: (key: string) => string;
+  t: T;
 }) {
+  const { toast } = useToast();
   const [form, setForm] = useState({
     name: location?.name ?? "",
     slug: location?.slug ?? "",
@@ -336,24 +358,45 @@ function LocationForm({
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Switching a location off from the form asks first, with its upcoming appointments.
+  const [confirmOff, setConfirmOff] = useState<{ upcoming: number | null } | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const save = async () => {
     setSaving(true);
     setError(null);
     try {
       const url = location ? `/locations/${location.id}` : "/locations";
       const method = location ? "PATCH" : "POST";
+      // A new location starts active; only an existing one sends the switch.
+      const { isActive, ...fields } = form;
       await apiClient.request(url, {
         method,
-        body: JSON.stringify(form),
+        body: JSON.stringify(location ? { ...fields, isActive } : fields),
       });
+      if (location && isActive !== location.isActive) {
+        toast({
+          title: isActive ? t("multiLocation.form.reactivated") : t("multiLocation.form.deactivated"),
+        });
+      }
       onSaved();
     } catch (e: any) {
       setError(e?.message || t("multiLocation.form.saveError"));
     } finally {
       setSaving(false);
+      setConfirmOff(null);
     }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (location?.isActive && !form.isActive) {
+      setSaving(true);
+      const upcoming = await upcomingAppointmentsAt(location.id);
+      setSaving(false);
+      setConfirmOff({ upcoming });
+      return;
+    }
+    await save();
   };
 
   return (
@@ -399,6 +442,24 @@ function LocationForm({
             value={form.email}
             onChange={(v) => setForm((f) => ({ ...f, email: v }))}
           />
+          {location && (
+            <label className="flex items-start gap-3 pt-1">
+              <input
+                type="checkbox"
+                role="switch"
+                aria-checked={form.isActive}
+                checked={form.isActive}
+                onChange={(e) => setForm((f) => ({ ...f, isActive: e.target.checked }))}
+                className="mt-0.5 h-4 w-4 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
+              />
+              <span>
+                <span className="block text-sm font-medium text-gray-900">
+                  {t("multiLocation.form.fields.isActive")}
+                </span>
+                <span className="block text-xs text-gray-500">{t("multiLocation.form.isActiveHint")}</span>
+              </span>
+            </label>
+          )}
         </div>
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
         <div className="mt-5 flex items-center justify-end gap-2">
@@ -420,6 +481,17 @@ function LocationForm({
           </button>
         </div>
       </form>
+      <ConfirmDialog
+        open={confirmOff !== null}
+        title={t("multiLocation.card.deactivateConfirm", { name: location?.name ?? form.name })}
+        description={confirmOff ? noticeText(t, confirmOff.upcoming) : undefined}
+        confirmLabel={t("multiLocation.card.deactivateCta")}
+        cancelLabel={t("common.cancel")}
+        destructive
+        loading={saving}
+        onCancel={() => setConfirmOff(null)}
+        onConfirm={save}
+      />
     </div>
   );
 }

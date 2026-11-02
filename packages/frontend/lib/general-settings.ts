@@ -54,8 +54,9 @@ export function tenantUpdateFrom(
   const update: TenantUpdate = {};
   if (changed("businessName")) update.name = settings.businessName;
   if (changed("address")) update.street = settings.address;
-  if (changed("contactPhone")) update.phone = settings.contactPhone;
-  if (changed("contactEmail")) update.email = settings.contactEmail;
+  // Blank clears them (stored as null); the server checks the format.
+  if (changed("contactPhone")) update.phone = String(settings.contactPhone ?? "").trim() || null;
+  if (changed("contactEmail")) update.email = String(settings.contactEmail ?? "").trim() || null;
   // "" clears it; the server turns a handle into the profile URL.
   if (changed("instagram")) update.instagram = String(settings.instagram ?? "").trim();
   if (changed("facebook")) update.facebook = String(settings.facebook ?? "").trim();

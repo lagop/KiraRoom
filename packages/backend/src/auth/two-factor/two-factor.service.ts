@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, UnauthorizedException } from "@nestjs/common";
 import * as bcrypt from "bcryptjs";
 import { PrismaService } from "../../common/prisma/prisma.service";
+import { sessionRevocations } from "../sessions/session-revocations";
 import { EncryptionService } from "../../common/encryption/encryption.service";
 import {
   generateRecoveryCodes,
@@ -27,6 +28,10 @@ export interface TwoFactorStatus {
  *
  * The User table had twoFactorEnabled and twoFactorSecret since its first
  * migration; nothing used them until now.
+ *
+ * Turning it on or off ends every session of the account (tokenVersion),
+ * as a password change does: a stolen session must not outlive the owner
+ * turning it on. The controller gives the browser that did it a new one.
  */
 @Injectable()
 export class TwoFactorService {
@@ -88,8 +93,10 @@ export class TwoFactorService {
         twoFactorPendingSecret: null,
         twoFactorLastStep: step,
         twoFactorRecoveryCodes: recoveryCodes.map(hashRecoveryCode),
+        tokenVersion: { increment: 1 },
       },
     });
+    sessionRevocations.revoke({ userId });
     return { recoveryCodes };
   }
 
@@ -115,8 +122,10 @@ export class TwoFactorService {
         twoFactorPendingSecret: null,
         twoFactorLastStep: null,
         twoFactorRecoveryCodes: [],
+        tokenVersion: { increment: 1 },
       },
     });
+    sessionRevocations.revoke({ userId });
     return { enabled: false, recoveryCodesLeft: 0 };
   }
 

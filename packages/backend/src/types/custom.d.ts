@@ -22,8 +22,13 @@ declare module "ics" {
   export interface EventAttributes {
     uid?: string;
     title: string;
-    start: [number, number, number, number, number] | Date | number[];
-    end?: [number, number, number, number, number] | Date | number[];
+    /** A number is milliseconds since the epoch (an instant). */
+    start: [number, number, number, number, number] | Date | number[] | number;
+    end?: [number, number, number, number, number] | Date | number[] | number;
+    startInputType?: "local" | "utc";
+    startOutputType?: "local" | "utc";
+    endInputType?: "local" | "utc";
+    endOutputType?: "local" | "utc";
     description?: string;
     location?: string;
     url?: string;

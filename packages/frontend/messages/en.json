@@ -692,12 +692,21 @@
         "street": "Address",
         "city": "City",
         "phone": "Phone",
-        "email": "Email"
+        "email": "Email",
+        "isActive": "Active"
       },
       "save": "Save",
       "saving": "Saving...",
       "cancel": "Cancel",
-      "saveError": "Error saving"
+      "saveError": "Error saving",
+      "isActiveHint": "Inactive locations don't count towards your plan's location limit. You can reactivate it at any time.",
+      "reactivated": "Location reactivated",
+      "deactivated": "Location deactivated"
+    },
+    "deactivate": {
+      "noUpcoming": "It has no upcoming appointments.",
+      "upcomingOne": "It has 1 upcoming appointment. It stays in the calendar: let the client know if the location closes.",
+      "upcomingMany": "It has {count} upcoming appointments. They stay in the calendar: let those clients know if the location closes."
     }
   },
   "common": {
@@ -1385,7 +1394,8 @@
       "postalCode": "Postal code",
       "state": "Province / state",
       "phone": "Phone",
-      "logo": "Logo"
+      "logo": "Logo",
+      "saveError": "The salon details could not be saved."
     },
     "saved": "Saved",
     "theme": "Theme",

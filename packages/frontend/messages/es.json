@@ -692,12 +692,21 @@
         "street": "Dirección",
         "city": "Ciudad",
         "phone": "Teléfono",
-        "email": "Email"
+        "email": "Email",
+        "isActive": "Activo"
       },
       "save": "Guardar",
       "saving": "Guardando...",
       "cancel": "Cancelar",
-      "saveError": "Error al guardar"
+      "saveError": "Error al guardar",
+      "isActiveHint": "Los locales inactivos no cuentan para el límite de locales de tu plan. Puedes reactivarlo cuando quieras.",
+      "reactivated": "Local reactivado",
+      "deactivated": "Local desactivado"
+    },
+    "deactivate": {
+      "noUpcoming": "No tiene citas pendientes a partir de hoy.",
+      "upcomingOne": "Tiene 1 cita pendiente a partir de hoy. Seguirá en la agenda: avisa a la clienta si el local cierra.",
+      "upcomingMany": "Tiene {count} citas pendientes a partir de hoy. Seguirán en la agenda: avisa a esas clientas si el local cierra."
     }
   },
   "common": {
@@ -1385,7 +1394,8 @@
       "postalCode": "Código postal",
       "state": "Provincia",
       "phone": "Teléfono",
-      "logo": "Logo"
+      "logo": "Logo",
+      "saveError": "No se han podido guardar los datos del salón."
     },
     "saved": "Guardado",
     "theme": "Tema",

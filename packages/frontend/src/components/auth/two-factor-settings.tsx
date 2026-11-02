@@ -157,6 +157,9 @@ export function TwoFactorSettings() {
             <li>Añade una cuenta escaneando este código QR.</li>
             <li>Escribe el código de 6 cifras que te muestra para KiraRoom.</li>
           </ol>
+          <p className="text-xs text-gray-500">
+            Al activarla se cerrará la sesión en tus otros dispositivos; en este sigues dentro.
+          </p>
           <img src={step.qr} alt="Código QR para la app de autenticación" width={220} height={220} />
           <p className="text-xs text-gray-500">
             ¿No puedes escanearlo? Escribe esta clave en la app: <code className="break-all">{step.secret}</code>

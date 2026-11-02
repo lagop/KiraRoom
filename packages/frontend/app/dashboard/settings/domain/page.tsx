@@ -26,6 +26,9 @@ export default function DomainSettingsPage() {
   const [busy, setBusy] = useState<null | "save" | "verify" | "remove">(null);
   // Disconnecting the domain is confirmed in the panel's dialog.
   const [confirmRemove, setConfirmRemove] = useState(false);
+  // So is replacing it: saving a new one drops the old domain's verification
+  // straight away, and a mistyped change used to take the live domain offline.
+  const [confirmChange, setConfirmChange] = useState(false);
 
   useEffect(() => {
     apiClient
@@ -240,6 +243,10 @@ export default function DomainSettingsPage() {
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
+                  if (domain && input.trim().toLowerCase() !== domain.name.toLowerCase()) {
+                    setConfirmChange(true);
+                    return;
+                  }
                   void run("save", () => apiClient.setWebDomain(input));
                 }}
                 className="space-y-2"
@@ -284,6 +291,24 @@ export default function DomainSettingsPage() {
           </section>
         </>
       )}
+
+      <ConfirmDialog
+        open={confirmChange && !!domain}
+        title={`¿Cambiar ${domain?.name ?? ""} por ${input.trim()}?`}
+        description={
+          domain?.verified
+            ? `${domain.name} dejará de estar verificado ahora mismo y tu página dejará de verse en él. En el nuevo dominio no se verá hasta que crees sus registros DNS y se compruebe. Tu página seguirá en ${status?.publicUrl ?? "su dirección de KiraRoom"}.`
+            : `Tendrás que crear los registros DNS del nuevo dominio. Tu página seguirá en ${status?.publicUrl ?? "su dirección de KiraRoom"}.`
+        }
+        confirmLabel="Cambiar dominio"
+        destructive={!!domain?.verified}
+        loading={busy === "save"}
+        onCancel={() => setConfirmChange(false)}
+        onConfirm={async () => {
+          await run("save", () => apiClient.setWebDomain(input));
+          setConfirmChange(false);
+        }}
+      />
 
       <ConfirmDialog
         open={confirmRemove && !!domain}

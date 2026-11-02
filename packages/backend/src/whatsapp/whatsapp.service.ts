@@ -1,4 +1,5 @@
-import { Injectable, Logger, NotFoundException, BadRequestException } from "@nestjs/common";
+import { Injectable, Logger, NotFoundException, BadRequestException, ConflictException } from "@nestjs/common";
+import type { WhatsAppConnection } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { MetaCloudApiClient } from "./meta-cloud-api.client";
 import { ConfigService } from "@nestjs/config";
@@ -25,6 +26,20 @@ function metaTime(timestamp: unknown): Date {
   return Number.isFinite(seconds) && seconds > 0 ? new Date(seconds * 1000) : new Date();
 }
 
+/**
+ * A connection as the panel sees it: never the access or refresh token, not
+ * even encrypted. Every endpoint that answers with a connection goes through
+ * this (connect, OAuth callback, getConnection).
+ */
+export function safeWhatsAppConnection(conn: WhatsAppConnection) {
+  const { accessTokenEnc: _token, refreshTokenEnc: _refresh, ...safe } = conn;
+  return safe;
+}
+
+/** Shown when a phone-number id is already another salon's. */
+export const WHATSAPP_NUMBER_TAKEN =
+  "Ese número de WhatsApp ya está conectado a otro salón. Si es tuyo, escríbenos a soporte para revisarlo.";
+
 interface BucketState {
   capacity: number;
   refillPerSec: number;
@@ -36,7 +51,9 @@ interface BucketState {
 export class WhatsAppService {
   private readonly logger = new Logger(WhatsAppService.name);
   private readonly buckets = new Map<string, BucketState>();
-  private readonly phoneNumberIndex = new Map<string, string>(); // phoneNumberId -> tenantId
+  // phoneNumberId -> tenantId, or null when more than one salon holds the
+  // number (connected before that was refused): such a number routes nowhere.
+  private readonly phoneNumberIndex = new Map<string, string | null>();
   private phoneIndexLoadedAt = 0;
 
   constructor(
@@ -106,6 +123,20 @@ export class WhatsAppService {
       displayName?: string;
     },
   ) {
+    // One salon per WhatsApp number: inbound messages are routed by this id,
+    // so a second salon entering it would receive the first one's clients.
+    if (input.phoneNumberId) {
+      const taken = await this.prisma.whatsAppConnection.findFirst({
+        where: { phoneNumberId: input.phoneNumberId, isActive: true, tenantId: { not: tenantId } },
+        select: { tenantId: true },
+      });
+      if (taken) {
+        this.logger.warn(
+          `tenant ${tenantId} tried to connect WhatsApp number ${input.phoneNumberId}, already connected to tenant ${taken.tenantId}`,
+        );
+        throw new ConflictException(WHATSAPP_NUMBER_TAKEN);
+      }
+    }
     const conn = await this.prisma.whatsAppConnection.upsert({
       where: { tenantId },
       update: {
@@ -132,13 +163,20 @@ export class WhatsAppService {
         isActive: true,
       },
     });
-    this.phoneNumberIndex.set(conn.phoneNumberId, tenantId);
+    // Rebuilt on the next inbound message, so a number shared with another
+    // salon is seen as ambiguous instead of moving to this one.
+    this.invalidatePhoneIndex();
     // Ask Meta to review the reminder template now: approval takes from
     // minutes to a day, and reminders need it. Not awaited.
     void this.templates
       .submitStandardTemplates(tenantId)
       .catch((err) => this.logger.warn(`Template submission for tenant ${tenantId} failed: ${(err as Error).message}`));
-    return conn;
+    return safeWhatsAppConnection(conn);
+  }
+
+  private invalidatePhoneIndex() {
+    this.phoneNumberIndex.clear();
+    this.phoneIndexLoadedAt = 0;
   }
 
   /** Resubmits the standard templates (e.g. after one was rejected and fixed). */
@@ -155,14 +193,14 @@ export class WhatsAppService {
       where: { tenantId },
     });
     if (!conn) return null;
-    const { accessTokenEnc: _omit, refreshTokenEnc: _omit2, ...safe } = conn;
-    return safe;
+    return safeWhatsAppConnection(conn);
   }
 
   async disconnect(tenantId: string) {
     await this.prisma.whatsAppConnection
       .delete({ where: { tenantId } })
       .catch(() => null);
+    this.invalidatePhoneIndex();
     return { disconnected: true };
   }
 
@@ -221,13 +259,22 @@ export class WhatsAppService {
   private async lookupTenantByPhone(phoneNumberId: string): Promise<string | null> {
     if (Date.now() - this.phoneIndexLoadedAt > 5 * 60 * 1000) {
       const rows = await this.prisma.whatsAppConnection.findMany({
+        where: { isActive: true, phoneNumberId: { not: "" } },
         select: { tenantId: true, phoneNumberId: true },
       });
       this.phoneNumberIndex.clear();
-      for (const r of rows) this.phoneNumberIndex.set(r.phoneNumberId, r.tenantId);
+      for (const r of rows) {
+        const seen = this.phoneNumberIndex.get(r.phoneNumberId);
+        // A second salon with the same number: nobody gets its messages.
+        this.phoneNumberIndex.set(r.phoneNumberId, seen === undefined || seen === r.tenantId ? r.tenantId : null);
+      }
       this.phoneIndexLoadedAt = Date.now();
     }
-    return this.phoneNumberIndex.get(phoneNumberId) ?? null;
+    const tenantId = this.phoneNumberIndex.get(phoneNumberId);
+    if (tenantId === null) {
+      this.logger.warn(`WhatsApp number ${phoneNumberId} is connected to more than one salon; message dropped`);
+    }
+    return tenantId ?? null;
   }
 
   private async handleChange(tenantId: string, change: any): Promise<void> {

@@ -8,6 +8,7 @@ import {
   RefreshCw,
   Code as CodeIcon,
   ExternalLink,
+  Pencil,
 } from "lucide-react";
 import apiClient, {
   WidgetInstance,
@@ -16,10 +17,11 @@ import apiClient, {
 } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { draftFrom, parseOrigins, toggleId, widgetUpdateFrom, type WidgetDraft } from "@/lib/widget-edit";
 
 function buildEmbedSnippet(token: string, frontendUrl?: string) {
   const base = (frontendUrl ||
-    (typeof window !== "undefined" ? window.location.origin : "https://app.kiraroom.app")
+    (typeof window !== "undefined" ? window.location.origin : "https://app.kiraroom.net")
   ).replace(/\/$/, "");
   const url = `${base}/embed/${token}`;
   return `<iframe src="${url}" width="100%" height="640" style="border:0;border-radius:12px" loading="lazy"></iframe>`;
@@ -34,7 +36,10 @@ export default function WidgetSettingsPage() {
   const [name, setName] = useState("");
   const [allowedOriginsText, setAllowedOriginsText] = useState("");
   const [loading, setLoading] = useState(true);
-  const [tenantSlug, setTenantSlug] = useState<string>("");
+  // The widget being edited (allowed sites, services, professionals).
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<WidgetDraft | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
   // The widget about to be revoked, confirmed in the panel's dialog.
   const [pendingRevoke, setPendingRevoke] = useState<WidgetInstance | null>(null);
   const [revoking, setRevoking] = useState(false);
@@ -42,12 +47,8 @@ export default function WidgetSettingsPage() {
   async function load() {
     setLoading(true);
     try {
-      const [list, t] = await Promise.all([
-        apiClient.listWidgetInstances(),
-        apiClient.getTenant().catch(() => null),
-      ]);
-      setInstances(list);
-      if (t?.slug) setTenantSlug(t.slug);
+      setInstances(await apiClient.listWidgetInstances());
+      // For the editor's pickers.
       try {
         const svcs = await apiClient.getServices();
         setServices(svcs);
@@ -80,10 +81,7 @@ export default function WidgetSettingsPage() {
     }
     setCreating(true);
     try {
-      const allowedOrigins = allowedOriginsText
-        .split("\n")
-        .map((s) => s.trim())
-        .filter(Boolean);
+      const allowedOrigins = parseOrigins(allowedOriginsText);
       await apiClient.createWidgetInstance({
         name: name.trim(),
         allowedOrigins,
@@ -115,6 +113,31 @@ export default function WidgetSettingsPage() {
     } finally {
       setRevoking(false);
       setPendingRevoke(null);
+    }
+  }
+
+  function startEdit(w: WidgetInstance) {
+    setEditingId(w.id);
+    setDraft(draftFrom(w));
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setDraft(null);
+  }
+
+  async function saveEdit() {
+    if (!editingId || !draft) return;
+    setSavingEdit(true);
+    try {
+      await apiClient.updateWidgetInstance(editingId, widgetUpdateFrom(draft, { services, professionals }));
+      toast({ title: "Widget actualizado", description: "El código de tu web no cambia." });
+      cancelEdit();
+      await load();
+    } catch (err: any) {
+      toast({ title: "No se pudo guardar", description: err?.message, variant: "destructive" });
+    } finally {
+      setSavingEdit(false);
     }
   }
 
@@ -214,18 +237,49 @@ export default function WidgetSettingsPage() {
                       <div className="text-xs text-gray-500">
                         {w.bookCount ?? 0} reservas ·{" "}
                         {w.lastUsedAt
-                          ? `última ${new Date(w.lastUsedAt).toLocaleString()}`
+                          ? `última ${new Date(w.lastUsedAt).toLocaleString("es-ES")}`
                           : "sin uso aún"}
                       </div>
                     </div>
-                    <button
-                      onClick={() => setPendingRevoke(w)}
-                      className="text-red-600 hover:bg-red-50 p-2 rounded-lg"
-                      title="Revocar"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => (editingId === w.id ? cancelEdit() : startEdit(w))}
+                        className="text-gray-600 hover:bg-gray-50 p-2 rounded-lg"
+                        title="Editar"
+                        aria-label={`Editar el widget ${w.name}`}
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => setPendingRevoke(w)}
+                        className="text-red-600 hover:bg-red-50 p-2 rounded-lg"
+                        title="Revocar"
+                        aria-label={`Revocar el widget ${w.name}`}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
+
+                  {editingId === w.id && draft && (
+                    <WidgetEditor
+                      draft={draft}
+                      onChange={setDraft}
+                      services={services}
+                      professionals={professionals}
+                      saving={savingEdit}
+                      onSave={saveEdit}
+                      onCancel={cancelEdit}
+                    />
+                  )}
+
+                  {editingId !== w.id && (w.allowedOrigins.length > 0 || w.services.length > 0 || w.professionals.length > 0) && (
+                    <p className="text-xs text-gray-500">
+                      {w.allowedOrigins.length > 0 ? `Solo en: ${w.allowedOrigins.join(", ")}` : "En cualquier web"}
+                      {w.services.length > 0 ? ` · ${w.services.length} servicios` : ""}
+                      {w.professionals.length > 0 ? ` · ${w.professionals.length} profesionales` : ""}
+                    </p>
+                  )}
 
                   {w.token && (
                     <>
@@ -306,5 +360,111 @@ export default function WidgetSettingsPage() {
   );
 }
 
-const API =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1";
+/** Allowed sites, services and professionals of an existing widget; its code does not change. */
+function WidgetEditor({
+  draft,
+  onChange,
+  services,
+  professionals,
+  saving,
+  onSave,
+  onCancel,
+}: {
+  draft: WidgetDraft;
+  onChange: (d: WidgetDraft) => void;
+  services: Service[];
+  professionals: Professional[];
+  saving: boolean;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const bookable = services.filter((s) => s.isActive !== false);
+  const team = professionals.filter((p) => p.isActive !== false);
+  return (
+    <div className="rounded-lg border border-purple-100 bg-purple-50/40 p-4 space-y-4">
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          Webs donde se puede mostrar (una por línea; vacío = cualquiera)
+        </label>
+        <textarea
+          value={draft.allowedOriginsText}
+          onChange={(e) => onChange({ ...draft, allowedOriginsText: e.target.value })}
+          rows={3}
+          placeholder={"https://misalon.com\nhttps://misalon.es"}
+          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+        />
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <PickList
+          legend="Servicios (ninguno marcado = todos los reservables)"
+          items={bookable.map((s) => ({ id: s.id, label: s.name }))}
+          selected={draft.services}
+          onToggle={(id) => onChange({ ...draft, services: toggleId(draft.services, id) })}
+          empty="No hay servicios."
+        />
+        <PickList
+          legend="Profesionales (ninguno marcado = todo el equipo)"
+          items={team.map((p) => ({ id: p.id, label: `${p.firstName} ${p.lastName ?? ""}`.trim() }))}
+          selected={draft.professionals}
+          onToggle={(id) => onChange({ ...draft, professionals: toggleId(draft.professionals, id) })}
+          empty="No hay profesionales."
+        />
+      </div>
+      <p className="text-xs text-gray-500">El código que pegaste en tu web sigue siendo el mismo.</p>
+      <div className="flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-lg border border-gray-200 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
+        >
+          Cancelar
+        </button>
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={saving}
+          className="bg-purple-600 text-white px-3 py-1.5 rounded-lg text-sm hover:bg-purple-700 disabled:opacity-50"
+        >
+          {saving ? "Guardando…" : "Guardar cambios"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PickList({
+  legend,
+  items,
+  selected,
+  onToggle,
+  empty,
+}: {
+  legend: string;
+  items: Array<{ id: string; label: string }>;
+  selected: string[];
+  onToggle: (id: string) => void;
+  empty: string;
+}) {
+  return (
+    <fieldset>
+      <legend className="block text-sm font-medium text-gray-700 mb-1">{legend}</legend>
+      {items.length === 0 ? (
+        <p className="text-xs text-gray-500">{empty}</p>
+      ) : (
+        <div className="max-h-48 overflow-y-auto rounded-lg border border-gray-200 bg-white p-2 space-y-1">
+          {items.map((i) => (
+            <label key={i.id} className="flex items-center gap-2 text-sm text-gray-700">
+              <input
+                type="checkbox"
+                checked={selected.includes(i.id)}
+                onChange={() => onToggle(i.id)}
+                className="h-4 w-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+              />
+              <span className="truncate">{i.label}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </fieldset>
+  );
+}
