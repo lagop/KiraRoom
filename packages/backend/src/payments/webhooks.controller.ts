@@ -119,6 +119,51 @@ export class WebhooksController {
   private async processStripeEvent(event: Stripe.Event) {
     console.log(`[WebhooksController] Processing Stripe event: ${event.type}`);
 
+    // Stripe delivers each event at least once and retries it for days, so
+    // the same event can arrive again long after it was applied (an old
+    // "subscription active" replayed after the salon cancelled reactivated
+    // it). Each event id is handled once; if handling fails, the claim is
+    // released so Stripe's retry gets another go.
+    const claimed = await this.claimEvent(event);
+    if (claimed === 'duplicate') {
+      this.logger.log(`Stripe event ${event.id} (${event.type}) already handled; skipping`);
+      return { received: true, duplicate: true };
+    }
+    try {
+      await this.routeStripeEvent(event);
+    } catch (err) {
+      if (claimed === 'claimed') await this.releaseEvent(event.id);
+      throw err;
+    }
+    return { received: true };
+  }
+
+  /**
+   * Records the event id before handling it. 'unclaimed' when the event has
+   * no id (the unsigned dev/test path).
+   */
+  private async claimEvent(event: Stripe.Event): Promise<'claimed' | 'duplicate' | 'unclaimed'> {
+    if (!event?.id) return 'unclaimed';
+    try {
+      await this.prisma.stripeWebhookEvent.create({
+        data: { id: event.id, type: String(event.type ?? '') },
+      });
+      return 'claimed';
+    } catch (err) {
+      if ((err as { code?: string })?.code === 'P2002') return 'duplicate';
+      throw err;
+    }
+  }
+
+  private async releaseEvent(id: string) {
+    try {
+      await this.prisma.stripeWebhookEvent.delete({ where: { id } });
+    } catch (err) {
+      this.logger.error(`Could not release Stripe event ${id} for a retry: ${(err as Error).message}`);
+    }
+  }
+
+  private async routeStripeEvent(event: Stripe.Event) {
     switch (event.type) {
       case 'checkout.session.completed': {
         const session = event.data.object as Stripe.Checkout.Session;
@@ -169,8 +214,6 @@ export class WebhooksController {
       default:
         console.log(`[WebhooksController] Unhandled event type: ${event.type}`);
     }
-
-    return { received: true };
   }
 
   /**
@@ -337,25 +380,84 @@ export class WebhooksController {
    * events (invoice.paid / payment_failed) look it up by. Idempotent:
    * checkout.session.completed and customer.subscription.created both
    * arrive for the same purchase.
+   *
+   * Only for the salon's own, live subscription. An event's object is a
+   * snapshot from when it was sent, and Stripe neither orders events nor
+   * stops retrying them, so the subscription is read again from Stripe and
+   * the decision is made on what it is now:
+   * - not active/trialing any more (cancelled, replaced), or another
+   *   tenant's: stale, ignored;
+   * - the salon's stored subscription, but the salon cancelled it: ignored
+   *   (a cancelled Stripe subscription never comes back; reactivating goes
+   *   through a new checkout, which is a new subscription);
+   * - another subscription while the stored one still bills: a duplicate
+   *   (two checkouts opened side by side). The stored one is kept (plan
+   *   changes and add-on items live on it) and the newcomer is cancelled in
+   *   Stripe so it stops charging; its first invoice is logged for a manual
+   *   refund;
+   * - otherwise (the same subscription, no stored one, or the stored one is
+   *   dead): applied.
+   * Without a Stripe client (the unsigned dev/test path) the event's own
+   * snapshot is used, with the same rules.
    */
   private async activatePlan(activation: PlanActivation | null) {
     if (!activation) return;
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: activation.tenantId },
-      select: { id: true, subscriptionStatus: true },
+      select: { id: true, subscriptionStatus: true, stripeSubscriptionId: true },
     });
     if (!tenant) {
       this.logger.warn(`Plan activation for unknown tenant ${activation.tenantId}`);
       return;
     }
+
+    const stripe = this.platformStripe?.client() ?? null;
+    let current: PlanActivation = activation;
+    if (stripe && activation.subscriptionId) {
+      const live = await this.retrieveSubscription(stripe, activation.subscriptionId);
+      const fromLive = live ? activationFromSubscription(live) : null;
+      if (!fromLive || fromLive.tenantId !== tenant.id) {
+        this.logger.log(
+          `Ignoring stale activation of ${activation.subscriptionId} for tenant ${tenant.id}: it is ${live?.status ?? 'gone'} in Stripe`,
+        );
+        return;
+      }
+      current = {
+        ...fromLive,
+        plan: fromLive.plan ?? activation.plan,
+        locations: fromLive.locations ?? activation.locations,
+        customerId: fromLive.customerId ?? activation.customerId,
+      };
+    }
+
+    const subscriptionId = current.subscriptionId;
+    const stored = tenant.stripeSubscriptionId;
+    if (subscriptionId && stored === subscriptionId) {
+      if (tenant.subscriptionStatus === 'cancelled') {
+        this.logger.error(
+          `Not reactivating tenant ${tenant.id}: the salon cancelled subscription ${subscriptionId}, which ${stripe ? 'Stripe still reports as live' : 'this event reports as active'}; check it in the Stripe dashboard`,
+        );
+        return;
+      }
+    } else if (subscriptionId && stored && tenant.subscriptionStatus !== 'cancelled') {
+      const storedSubscription = stripe ? await this.retrieveSubscription(stripe, stored) : null;
+      const storedLive = stripe
+        ? !!storedSubscription && activationFromSubscription(storedSubscription) !== null
+        : true;
+      if (storedLive) {
+        await this.cancelDuplicate(stripe, tenant.id, subscriptionId, stored);
+        return;
+      }
+    }
+
     await this.prisma.tenant.update({
       where: { id: tenant.id },
       data: {
         subscriptionStatus: 'active',
-        ...(activation.plan ? { plan: activation.plan as any } : {}),
-        ...(activation.locations ? { maxLocations: activation.locations } : {}),
-        ...(activation.customerId ? { stripeCustomerId: activation.customerId } : {}),
-        ...(activation.subscriptionId ? { stripeSubscriptionId: activation.subscriptionId } : {}),
+        ...(current.plan ? { plan: current.plan as any } : {}),
+        ...(current.locations ? { maxLocations: current.locations } : {}),
+        ...(current.customerId ? { stripeCustomerId: current.customerId } : {}),
+        ...(subscriptionId ? { stripeSubscriptionId: subscriptionId } : {}),
         paymentFailedAt: null,
         gracePeriodEndsAt: null,
         readOnlyUntil: null,
@@ -363,8 +465,44 @@ export class WebhooksController {
       },
     });
     this.logger.log(
-      `Tenant ${tenant.id}: ${tenant.subscriptionStatus} -> active on plan ${activation.plan ?? '(unchanged)'}`,
+      `Tenant ${tenant.id}: ${tenant.subscriptionStatus} -> active on plan ${current.plan ?? '(unchanged)'}`,
     );
+  }
+
+  /** The subscription as Stripe has it now; null when Stripe has no such subscription. */
+  private async retrieveSubscription(stripe: Stripe, id: string): Promise<Stripe.Subscription | null> {
+    try {
+      return await stripe.subscriptions.retrieve(id);
+    } catch (err) {
+      if ((err as { code?: string })?.code === 'resource_missing') return null;
+      // Anything else (Stripe unreachable): fail the event so Stripe retries it.
+      throw err;
+    }
+  }
+
+  /** A second plan subscription for a salon whose stored one still bills. */
+  private async cancelDuplicate(
+    stripe: Stripe | null,
+    tenantId: string,
+    duplicateId: string,
+    keptId: string,
+  ) {
+    if (!stripe) {
+      this.logger.error(
+        `Tenant ${tenantId} has a second plan subscription ${duplicateId} besides ${keptId}; not applied (no Stripe client here: cancel it by hand)`,
+      );
+      return;
+    }
+    try {
+      await stripe.subscriptions.cancel(duplicateId);
+      this.logger.error(
+        `Tenant ${tenantId} paid a second plan subscription ${duplicateId} besides ${keptId}: cancelled it in Stripe; refund its first invoice by hand`,
+      );
+    } catch (err) {
+      this.logger.error(
+        `Tenant ${tenantId} has a second plan subscription ${duplicateId} besides ${keptId} and cancelling it failed: ${(err as Error).message}; cancel and refund it by hand`,
+      );
+    }
   }
 
   private async handleInvoicePaid(invoice: Stripe.Invoice) {

@@ -3915,3 +3915,16 @@ model CashMovement {
   @@index([tenantId, createdAt])
   @@map("cash_movements")
 }
+
+/// Stripe webhook events already handled, by Stripe's event id. Stripe
+/// delivers an event at least once and retries it for days: a replayed
+/// event is acknowledged and skipped instead of being applied twice.
+model StripeWebhookEvent {
+  /// Stripe's event id (evt_...).
+  id         String   @id
+  type       String
+  receivedAt DateTime @default(now())
+
+  @@index([receivedAt])
+  @@map("stripe_webhook_events")
+}

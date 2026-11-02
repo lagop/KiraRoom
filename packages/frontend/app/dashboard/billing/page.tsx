@@ -427,6 +427,11 @@ function BillingPageContent() {
                 ? t("billing.reactivate.doing")
                 : t("billing.reactivate.cta")}
             </button>
+            {!(sub?.trialEnd && new Date(sub.trialEnd).getTime() > Date.now()) && (
+              // Out of trial, reactivating is a payment (in trial it just
+              // returns to the trial).
+              <p className="mt-2 text-xs text-red-800">{t("billing.reactivate.hint")}</p>
+            )}
           </div>
         </div>
       )}

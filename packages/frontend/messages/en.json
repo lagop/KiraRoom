@@ -518,7 +518,8 @@
     },
     "reactivate": {
       "cta": "Reactivate plan",
-      "doing": "Processing..."
+      "doing": "Processing...",
+      "hint": "You will go to Stripe's secure payment page. Your plan is reactivated as soon as the payment is confirmed; until then the account stays read-only."
     },
     "cancelled": {
       "title": "Your subscription is cancelled",
