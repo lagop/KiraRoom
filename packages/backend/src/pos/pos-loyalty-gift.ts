@@ -19,6 +19,8 @@ import { productTaxRatePercent } from '../invoices/salon-tax-settings';
 export const LOYALTY_GIFT_KIND = 'loyalty_gift';
 /** The stock movement's reason. */
 export const LOYALTY_GIFT_REASON = 'regalo fidelidad';
+/** The movement's reason when the whole sale is given back and the gift returns to stock. */
+export const LOYALTY_GIFT_RETURN_REASON = 'devolución regalo fidelidad';
 
 export interface GiftLine {
   /** The product handed over (its stock goes down), or null ("otro regalo"). */
@@ -95,6 +97,67 @@ export async function takeGiftFromStock(tx: any, tenantId: string, line: GiftLin
       notes: `Venta ${saleId}`,
     },
   });
+}
+
+/**
+ * Inside a refund's transaction, when the WHOLE till sale has been given
+ * back (no payment of it left paid: the same condition under which the
+ * points spent on the reward come back, LoyaltyService.onPaymentRefunded),
+ * the gift's product returns to stock: +1 with a "devolución regalo
+ * fidelidad" movement.
+ *
+ * Exactly once: the gift line's refundedQuantity is set over what was just
+ * read, so a retry or a concurrent refund finds it set and does nothing.
+ * Only when the sale really took the unit out (its "regalo fidelidad"
+ * movement exists) and the product's stock is still counted; "otro regalo"
+ * never moved stock. Returns the units put back.
+ */
+export async function returnGiftIfSaleRefundedIn(tx: any, tenantId: string, saleId: string): Promise<number> {
+  const stillPaid = await tx.payment.count({
+    where: { tenantId, status: 'paid', metadata: { path: ['posSaleId'], equals: saleId } },
+  });
+  if (stillPaid > 0) return 0;
+  const lines = await tx.posSaleLine.findMany({
+    where: { tenantId, saleId, kind: LOYALTY_GIFT_KIND },
+    select: { id: true, productId: true, quantity: true, refundedQuantity: true },
+  });
+  let back = 0;
+  for (const line of lines) {
+    const before = line.refundedQuantity ?? 0;
+    const left = line.quantity - before;
+    if (left <= 0) continue;
+    const { count } = await tx.posSaleLine.updateMany({
+      where: { id: line.id, tenantId, refundedQuantity: before },
+      data: { refundedQuantity: line.quantity },
+    });
+    if (count !== 1 || !line.productId) continue;
+    const taken = await tx.inventoryTransaction.findFirst({
+      where: { tenantId, productId: line.productId, reason: LOYALTY_GIFT_REASON, notes: `Venta ${saleId}` },
+      select: { id: true },
+    });
+    if (!taken) continue;
+    const { count: moved } = await tx.product.updateMany({
+      where: { id: line.productId, tenantId, trackInventory: true },
+      data: { quantity: { increment: left } },
+    });
+    if (moved !== 1) continue;
+    const after = await tx.product.findFirst({ where: { id: line.productId, tenantId }, select: { quantity: true } });
+    const newQty = after?.quantity ?? left;
+    await tx.inventoryTransaction.create({
+      data: {
+        productId: line.productId,
+        tenantId,
+        type: 'adjustment',
+        quantity: left,
+        previousQty: newQty - left,
+        newQty,
+        reason: LOYALTY_GIFT_RETURN_REASON,
+        notes: `Venta ${saleId}`,
+      },
+    });
+    back += left;
+  }
+  return back;
 }
 
 /** The sale's zero-price line of the gift (PosSaleLine). */

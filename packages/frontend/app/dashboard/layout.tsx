@@ -129,11 +129,12 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-screen bg-gray-50">
-      {/* Sidebar — always visible on every viewport. The mobile
-          drawer overlay below is kept as an optional secondary
-          entry point for users who want a fullscreen menu. */}
+      {/* Sidebar — a column from md up. Below md it is not rendered as
+          a column (it pushed the page right and looked open on load):
+          the header's menu button opens the drawer below, which starts
+          closed. Pure CSS, so server and client render the same. */}
       <div
-        className={`shrink-0 sticky top-0 self-start h-screen overflow-y-auto transition-all duration-300 z-20 ${
+        className={`hidden md:block shrink-0 sticky top-0 self-start h-screen overflow-y-auto transition-all duration-300 z-20 ${
           sidebarCollapsed ? "w-16" : "w-64"
         }`}
       >
@@ -152,8 +153,11 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         />
       )}
       <div
-        className={`fixed inset-y-0 left-0 z-50 md:hidden transform transition-transform duration-300 ${
-          mobileSidebarOpen ? "translate-x-0" : "-translate-x-full"
+        // Closed: off screen and invisible, so its links are not tabbable
+        // or read out while it is shut.
+        aria-hidden={!mobileSidebarOpen}
+        className={`fixed inset-y-0 left-0 z-50 md:hidden transform transition-[transform,visibility] duration-300 ${
+          mobileSidebarOpen ? "visible translate-x-0" : "invisible -translate-x-full"
         }`}
       >
         <DashboardSidebar
