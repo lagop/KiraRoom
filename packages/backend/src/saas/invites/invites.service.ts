@@ -22,7 +22,7 @@ import { AuthSessionsService } from "../../auth/sessions/auth-sessions.service";
 import { AuditLogService } from "../audit-log.service";
 import {
   createTenantWithOwner,
-  slugify,
+  availableTenantSlug,
 } from "../saas.helpers";
 import { AcceptInviteDto } from "./dto/accept-invite.dto";
 import { CreateInviteDto } from "./dto/create-invite.dto";
@@ -261,28 +261,9 @@ export class InvitesService {
 
       // Slug must be available at accept time (a tenant could have
       // registered the same slug between invite-mint and invite-accept).
-      const slug = slugify(invite.tenantName);
-      const existingBySlug = await tx.tenant.findUnique({
-        where: { slug },
-        select: { id: true },
-      });
-      let finalSlug = slug;
-      if (existingBySlug) {
-        // Fall back to slug + 6 random hex chars so the accept never
-        // blocks on a name collision. The SaaS admin can rename later.
-        finalSlug = `${slug}-${randomBytes(3).toString("hex")}`;
-        const stillCollision = await tx.tenant.findUnique({
-          where: { slug: finalSlug },
-          select: { id: true },
-        });
-        if (stillCollision) {
-          // Astronomically unlikely (1 in 16M). The SaaS admin should
-          // mint a fresh invite with a different name.
-          throw new BadRequestException(
-            "Slug collision detected — please contact support.",
-          );
-        }
-      }
+      // A taken name gets the next free address ("-2", "-3"...), the same
+      // as a signup, so the accept never blocks on a name collision.
+      const finalSlug = await availableTenantSlug(tx, invite.tenantName);
 
       const { tenantId, userId, email, role } = await this.acceptWithSlug(
         tx,

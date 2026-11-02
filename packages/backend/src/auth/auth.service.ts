@@ -14,10 +14,10 @@ import { RegisterDto } from "./dto/register.dto";
 import { LoginDto } from "./dto/login.dto";
 import { Prisma, UserRole } from "@prisma/client";
 import {
-  assertTenantSlugAvailable,
+  availableTenantSlug,
   createTenantWithOwner,
   getActiveTenant,
-  slugify,
+  TENANT_SLUG_UNAVAILABLE,
 } from "../saas/saas.helpers";
 import { AuditLogService } from "../saas/audit-log.service";
 import { EmailService } from "../notifications/services/email.service";
@@ -164,17 +164,15 @@ export class AuthService {
       throw new ConflictException("Email already registered");
     }
 
-    // Slug uniqueness + tenant+owner creation both go through the SaaS
-    // helpers so the three creation paths (signup form / SaaS-admin
-    // createTenant / invite acceptance) stay in lockstep. Single
-    // source of truth for trial length + bcrypt cost lives in
-    // saas.constants.ts.
-    const slug = slugify(registerDto.salonName);
-    await assertTenantSlugAvailable(
-      this.prisma,
-      slug,
-      "Salon name already exists, please choose another",
-    );
+    // Tenant+owner creation goes through the SaaS helpers so the three
+    // creation paths (signup form / SaaS-admin createTenant / invite
+    // acceptance) stay in lockstep. Single source of truth for trial
+    // length + bcrypt cost lives in saas.constants.ts.
+    //
+    // Two salons may share a name, so a name that is taken no longer stops
+    // the signup ("Salon name already exists"): the salon gets the next free
+    // address, "peluqueria-lucia-2". A signup that loses the race for that
+    // address to another one at the same moment takes the next.
 
     // Parse ownerName into firstName and lastName (RegisterDto uses a
     // single ownerName field; CreateTenantDto uses ownerFirstName +
@@ -183,19 +181,37 @@ export class AuthService {
     const firstName = nameParts[0] || "";
     const lastName = nameParts.slice(1).join(" ") || "";
 
-    const { tenant: createdTenant, user } = await createTenantWithOwner(this.prisma, {
-      name: registerDto.salonName,
-      slug,
-      plan: "esencial",
-      ownerEmail: registerDto.email,
-      ownerPassword: registerDto.password,
-      ownerFirstName: firstName,
-      ownerLastName: lastName,
-      // The browser's zone at sign-up, when it is one a salon can be in: a
-      // salon signing up from Las Palmas starts on Canary time instead of
-      // Madrid's. Onboarding's address step corrects the rest.
-      timezone: isKnownSalonTimezone(registerDto.timezone) ? registerDto.timezone : undefined,
-    });
+    const lostRace = new Set<string>();
+    let created: Awaited<ReturnType<typeof createTenantWithOwner>> | undefined;
+    for (let attempt = 0; !created; attempt++) {
+      const slug = await availableTenantSlug(this.prisma, registerDto.salonName, lostRace);
+      try {
+        created = await createTenantWithOwner(this.prisma, {
+          name: registerDto.salonName,
+          slug,
+          plan: "esencial",
+          ownerEmail: registerDto.email,
+          ownerPassword: registerDto.password,
+          ownerFirstName: firstName,
+          ownerLastName: lastName,
+          // The browser's zone at sign-up, when it is one a salon can be in: a
+          // salon signing up from Las Palmas starts on Canary time instead of
+          // Madrid's. Onboarding's address step corrects the rest.
+          timezone: isKnownSalonTimezone(registerDto.timezone) ? registerDto.timezone : undefined,
+        });
+      } catch (e: any) {
+        if (e?.code !== "P2002") throw e;
+        // The owner's email, registered by a signup a moment ago.
+        const target = e?.meta?.target;
+        if (Array.isArray(target) ? target.includes("email") : String(target ?? "").includes("email")) {
+          throw new ConflictException("Email already registered");
+        }
+        if (!targetIncludes(e, "slug")) throw e;
+        if (attempt >= 4) throw new ConflictException(TENANT_SLUG_UNAVAILABLE);
+        lostRace.add(slug);
+      }
+    }
+    const { tenant: createdTenant, user } = created;
 
     // Funnel entry point: everything else in the activation funnel is
     // measured relative to this event.
