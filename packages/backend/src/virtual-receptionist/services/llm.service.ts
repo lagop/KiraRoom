@@ -539,10 +539,11 @@ export class LLMService {
         language: tenant.language || 'es',
         // @ts-ignore - New fields from migration
         assistantName: (tenant as any).assistantName || 'Kira',
-        // @ts-ignore - New fields from migration
-        cancellationPolicy: (tenant as any).cancellationPolicy || undefined,
-        // @ts-ignore - New fields from migration
-        minCancelHours: (tenant as any).minCancelHours || 24,
+        // The salon's own policy text (Ajustes > Generales), informational.
+        cancellationPolicy: tenant.cancellationPolicy || undefined,
+        // 0 is "Sin política": no minimum notice. `|| 24` used to turn it
+        // into 24 h, so the receptionist asked for notice the salon never set.
+        minCancelHours: tenant.minCancelHours,
         // P2A-receptionist-advanced -- persona is gated on the advanced
         // feature. The base system prompt already gives Kira a default
         // voice; only when the tenant has advanced unlocked AND a
@@ -749,7 +750,8 @@ const dynamicContext = getDynamicContext(language, {
       salonTimezone: context.timezone || undefined,
       salonHours: formatWorkingHours(workingHours, language),
       cancellationPolicy: context.cancellationPolicy,
-      minCancelHours: context.minCancelHours ?? 24,
+      // Unknown or 0: the prompt says there is no minimum notice.
+      minCancelHours: context.minCancelHours,
       // Stable per salon, so it stays inside the cacheable prefix. The
       // salon's real address -- own domain or subdomain -- not the old
       // app.kiraroom.net/sites/<slug>, which the receptionist used to give.

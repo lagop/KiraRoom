@@ -56,7 +56,18 @@ export default function CalendarFeedsPage() {
       .catch((err) => setError(err instanceof Error ? err.message : "Error"));
   }, []);
 
-  const copied = () => toast({ title: "Enlace copiado" });
+  // The clipboard API needs a secure context and permission: say so when it fails.
+  const copy = (url: string) =>
+    navigator.clipboard
+      .writeText(url)
+      .then(() => toast({ title: "Enlace copiado" }))
+      .catch(() =>
+        toast({
+          title: "No se pudo copiar el enlace",
+          description: "Selecciónalo en el recuadro y cópialo a mano.",
+          variant: "destructive",
+        }),
+      );
 
   return (
     <div className="space-y-6">
@@ -68,6 +79,10 @@ export default function CalendarFeedsPage() {
           Suscríbete a tu agenda desde Google Calendar, Apple Calendar o Outlook.
           Los enlaces son privados: quien tenga uno puede ver esas citas, así que
           no los compartas.
+        </p>
+        <p className="text-gray-500 mt-1 text-sm">
+          Cada cita muestra solo el servicio y el nombre de pila de la clienta: ni
+          apellidos, ni teléfono, ni email, ni notas.
         </p>
       </div>
 
@@ -83,10 +98,10 @@ export default function CalendarFeedsPage() {
             title="Salón completo"
             description="Todas las citas del salón agregadas en un solo calendario."
             url={feedUrl("salon", tokens.salon.slug, tokens.salon.token)}
-            onCopy={copied}
+            onCopy={copy}
           />
 
-          <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
             <h2 className="font-semibold mb-4">Por profesional</h2>
             <div className="space-y-2">
               {tokens.professionals.map((p) => (
@@ -94,7 +109,7 @@ export default function CalendarFeedsPage() {
                   key={p.id}
                   label={p.name}
                   url={feedUrl("professional", p.id, p.token)}
-                  onCopy={copied}
+                  onCopy={copy}
                 />
               ))}
               {tokens.professionals.length === 0 && (
@@ -103,7 +118,7 @@ export default function CalendarFeedsPage() {
             </div>
           </div>
 
-          <div className="bg-white rounded-xl border border-gray-200 p-6 flex flex-col sm:flex-row sm:items-center gap-4">
+          <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 flex flex-col sm:flex-row sm:items-center gap-4">
             <div className="flex-1">
               <h2 className="font-semibold mb-1">¿Se ha filtrado un enlace?</h2>
               <p className="text-sm text-gray-500">
@@ -138,6 +153,28 @@ export default function CalendarFeedsPage() {
   );
 }
 
+/** The link in a read-only box (tap to select it all) and a Copiar button; wraps on a phone. */
+function UrlField({ url, label, onCopy }: { url: string; label: string; onCopy: (url: string) => void }) {
+  return (
+    <div className="flex min-w-0 flex-1 items-center gap-2">
+      <input
+        readOnly
+        value={url}
+        aria-label={`Enlace de ${label}`}
+        onFocus={(e) => e.currentTarget.select()}
+        className="min-w-0 flex-1 bg-gray-50 border border-gray-200 rounded px-2 py-2 text-xs font-mono"
+      />
+      <button
+        type="button"
+        onClick={() => onCopy(url)}
+        className="inline-flex shrink-0 items-center gap-1 bg-gray-100 hover:bg-gray-200 rounded px-3 py-2 text-sm text-gray-700"
+      >
+        <Copy className="w-4 h-4" /> Copiar
+      </button>
+    </div>
+  );
+}
+
 function FeedCard({
   title,
   description,
@@ -147,29 +184,18 @@ function FeedCard({
   title: string;
   description: string;
   url: string;
-  onCopy: () => void;
+  onCopy: (url: string) => void;
 }) {
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-6">
+    <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
       <h2 className="font-semibold mb-1">{title}</h2>
       <p className="text-sm text-gray-500 mb-3">{description}</p>
-      <div className="flex items-center gap-2">
-        <input
-          readOnly
-          value={url}
-          className="flex-1 bg-gray-50 border border-gray-200 rounded px-2 py-1 text-xs font-mono"
-        />
-        <button
-          onClick={() => navigator.clipboard.writeText(url).then(onCopy)}
-          className="bg-gray-100 hover:bg-gray-200 p-2 rounded"
-        >
-          <Copy className="w-4 h-4" />
-        </button>
-      </div>
+      <UrlField url={url} label={title} onCopy={onCopy} />
     </div>
   );
 }
 
+/** One professional's link: the name above the link on a phone, beside it from sm up. */
 function FeedRow({
   label,
   url,
@@ -177,23 +203,15 @@ function FeedRow({
 }: {
   label: string;
   url: string;
-  onCopy: () => void;
+  onCopy: (url: string) => void;
 }) {
   return (
-    <div className="flex items-center gap-2 py-1">
-      <LinkIcon className="w-3 h-3 text-gray-400" />
-      <span className="w-40 text-sm text-gray-700">{label}</span>
-      <input
-        readOnly
-        value={url}
-        className="flex-1 bg-gray-50 border border-gray-200 rounded px-2 py-1 text-xs font-mono"
-      />
-      <button
-        onClick={() => navigator.clipboard.writeText(url).then(onCopy)}
-        className="bg-gray-100 hover:bg-gray-200 p-2 rounded"
-      >
-        <Copy className="w-4 h-4" />
-      </button>
+    <div className="flex flex-col gap-1 py-1 sm:flex-row sm:items-center sm:gap-2">
+      <span className="flex min-w-0 items-center gap-2 text-sm text-gray-700 sm:w-40 sm:shrink-0">
+        <LinkIcon className="w-3 h-3 shrink-0 text-gray-400" />
+        <span className="truncate">{label}</span>
+      </span>
+      <UrlField url={url} label={label} onCopy={onCopy} />
     </div>
   );
 }

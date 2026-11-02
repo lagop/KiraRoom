@@ -735,6 +735,8 @@
     "subtitle": "Manage your business locations (Enterprise plan).",
     "add": "Add location",
     "loading": "Loading locations...",
+    "loadError": "Could not load the locations",
+    "downgraded": "Your plan no longer includes several locations. Clients no longer pick a location when booking (on your page, the widget and the virtual receptionist): they book at the salon, with the address in Salon details. Appointments already booked at a location keep it. You can close the locations you no longer use; to edit them or open others, go back to the Enterprise plan.",
     "empty": {
       "title": "You don't have any locations yet",
       "desc": "Create your first location. The Enterprise plan works from 1 location; add more when you open another."
@@ -1911,7 +1913,8 @@
     "time_off_requests": "Time off requests",
     "account": "Your account",
     "pos_products": "Products",
-    "multi_location": "Multi-location"
+    "multi_location": "Multi-location",
+    "calendar_feeds": "Calendars"
   },
   "Failed to add points": "Failed to add points",
   "Failed to create professional": {
@@ -2729,7 +2732,8 @@
     "showLess": "Show less",
     "yearsExperience": "years of experience",
     "languages": "Languages:",
-    "portfolioWork": "Work {n}"
+    "portfolioWork": "Work {n}",
+    "cancellationPolicy": "Cancellations"
   },
   "platform_llm": {
     "title": "Chatbot AI provider",

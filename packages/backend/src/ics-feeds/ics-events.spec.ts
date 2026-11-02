@@ -26,7 +26,7 @@ function appt(over: Record<string, unknown> = {}) {
     duration: 45,
     status: "confirmed",
     notes: null,
-    client: { firstName: "Lucía", lastName: "Gómez" },
+    client: { firstName: "Lucía" },
     service: { name: "Corte" },
     ...over,
   };
@@ -75,8 +75,8 @@ describe("ICS feed times are the salon's wall clock, sent in UTC (A1)", () => {
 describe("ICS feed contents (A2)", () => {
   it("a pending online booking is tentative and says so; a confirmed one is confirmed", () => {
     const [pending, confirmed] = buildIcsEvents([appt({ status: "pending" }), appt({ id: "a2" })], tenant);
-    expect(pending).toMatchObject({ status: "TENTATIVE", title: "Por confirmar · Corte - Lucía Gómez" });
-    expect(confirmed).toMatchObject({ status: "CONFIRMED", title: "Corte - Lucía Gómez" });
+    expect(pending).toMatchObject({ status: "TENTATIVE", title: "Por confirmar · Corte - Lucía" });
+    expect(confirmed).toMatchObject({ status: "CONFIRMED", title: "Corte - Lucía" });
     expect(ical([appt({ status: "pending" })])).toContain("STATUS:TENTATIVE");
   });
 
@@ -93,6 +93,31 @@ describe("ICS feed contents (A2)", () => {
     expect(ICS_FUTURE_DAYS).toBe(180);
     expect(w.gte.toISOString()).toBe("2026-12-02T00:00:00.000Z");
     expect(w.lte.toISOString()).toBe("2027-06-30T00:00:00.000Z");
+  });
+});
+
+describe("ICS feed privacy: the client's first name and the service, nothing else (A12)", () => {
+  // What a full row would carry if the query ever asked for it again.
+  const full = appt({
+    notes: "Alérgica al amoniaco",
+    internalNotes: "Debe 20 €",
+    client: { firstName: "Lucía", lastName: "Gómez", phone: "+34600111222", email: "lucia@correo.test", notes: "Embarazada" },
+  });
+
+  it("no surname, phone, email or notes in the feed", () => {
+    const out = ical([full]);
+    expect(out).toContain("SUMMARY:Corte - Lucía");
+    for (const secret of ["Gómez", "600111222", "lucia@correo.test", "amoniaco", "Debe 20", "Embarazada"]) {
+      expect(out).not.toContain(secret);
+    }
+    expect(out).not.toMatch(/^DESCRIPTION:/m);
+  });
+
+  it("a client without a first name is 'Cliente'", () => {
+    expect(buildIcsEvents([appt({ client: { firstName: " " } }), appt({ client: null })], tenant).map((e) => e.title)).toEqual([
+      "Corte - Cliente",
+      "Corte - Cliente",
+    ]);
   });
 });
 
@@ -124,6 +149,8 @@ describe("ICS feed endpoints", () => {
     });
     const days = (args.where.scheduledDate.lte - args.where.scheduledDate.gte) / 86_400_000;
     expect(days).toBe(ICS_PAST_DAYS + ICS_FUTURE_DAYS);
+    // Only the first name and the service name are read from the database.
+    expect(args.include).toEqual({ client: { select: { firstName: true } }, service: { select: { name: true } } });
     expect(res.send.mock.calls[0][0]).toContain("DTSTART:20261110T090000Z");
   });
 

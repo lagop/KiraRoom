@@ -4674,7 +4674,6 @@ class ApiClient implements ApiClientInterface {
     name: string;
     slug: string;
     timezone: string;
-    currency: string;
     country: string;
     language: string;
     plan?: string;
@@ -4690,9 +4689,10 @@ class ApiClient implements ApiClientInterface {
     taxIdType?: "nif" | "cif" | "nie" | "passport" | "other" | null;
     legalName?: string | null;
     email?: string | null;
-    dateFormat?: string;
-    timeFormat?: string;
+    /** Informational: hours of notice the salon asks for; 0 = none. */
     minCancelHours?: number;
+    /** The salon's cancellation policy in its own words (informational). */
+    cancellationPolicy?: string | null;
     /**
      * The salon's own week ([{ day, openTime, closeTime }]), or a legacy
      * shape: read it with lib/salon-hours.ts.
@@ -4714,10 +4714,7 @@ class ApiClient implements ApiClientInterface {
     /** null (or "") clears it, as for postalCode, state, phone and email. */
     description?: string | null;
     language?: string;
-    currency?: string;
     timezone?: string;
-    dateFormat?: string;
-    timeFormat?: string;
     street?: string;
     city?: string;
     postalCode?: string | null;
@@ -4726,6 +4723,8 @@ class ApiClient implements ApiClientInterface {
     logo?: string;
     email?: string | null;
     minCancelHours?: number;
+    /** null (or "") clears it. */
+    cancellationPolicy?: string | null;
     /** The salon's week, replacing what was stored; [] = no salon-level hours. */
     openingHours?: WorkingHoursEntry[];
     /** "@handle" or a profile link (stored as the profile URL); "" clears it. */
@@ -4738,7 +4737,6 @@ class ApiClient implements ApiClientInterface {
     name: string;
     slug: string;
     timezone: string;
-    currency: string;
     country: string;
     language: string;
   }> {

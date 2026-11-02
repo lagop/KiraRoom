@@ -1,5 +1,8 @@
 import { WidgetService, widgetLocations } from "./widget.service";
 
+// Empresa: the multi-location feature only (client-locations.ts asks).
+const EMPRESA: any = { isFeatureUnlocked: async (_t: string, key: string) => key === "multi_location", isEnabled: async (_t: string, key: string) => key === "multi_location" };
+
 /**
  * The booking widget (/embed/<token>) gets the location step the public
  * booking page has (#216): a salon with two or more locations to book at
@@ -44,7 +47,7 @@ function build(widgetProfessionals: string[], locationRows = [CENTRO, NORTE]) {
     },
     whatsAppConnection: { findUnique: jest.fn(async () => null) },
   };
-  return { prisma, service: new WidgetService(prisma) };
+  return { prisma, service: new WidgetService(prisma, EMPRESA) };
 }
 
 describe("widget location step", () => {

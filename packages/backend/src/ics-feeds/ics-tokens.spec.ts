@@ -14,7 +14,7 @@ import { IcsController, icsFeedVersion } from "./ics.controller";
 
 const SECRET = "ics-secret";
 
-function build(features: any = {}, { professionalActive = true, userActive = true } = {}) {
+function build(features: any = {}, { professionalActive = true } = {}) {
   const tenant = { id: "t1", slug: "salon-ana", name: "Salón Ana", features };
   const raw: Array<{ sql: string; values: unknown[] }> = [];
   const prisma: any = {
@@ -27,10 +27,6 @@ function build(features: any = {}, { professionalActive = true, userActive = tru
         where.tenantId === "t1" ? [{ id: "pro-1", firstName: "Ana", lastName: "López" }] : [],
       findUnique: async ({ where }: any) =>
         where.id === "pro-1" ? { id: "pro-1", isActive: professionalActive, tenant: { ...tenant } } : null,
-    },
-    user: {
-      findUnique: async ({ where }: any) =>
-        where.id === "user-1" ? { id: "user-1", tenantId: "t1", isActive: userActive, professional: null, tenant: { ...tenant } } : null,
     },
     appointment: { findMany: async () => [] },
     // Stands in for the jsonb_set UPDATE: bumps the version like Postgres would.
@@ -85,7 +81,6 @@ describe("ICS feed revocation", () => {
   // Signed before versions existed: what subscribed calendars hold today.
   const legacySalon = IcsController.signToken("salon:salon-ana", SECRET);
   const legacyPro = IcsController.signToken("professional:pro-1", SECRET);
-  const legacyStaff = IcsController.signToken("staff:user-1", SECRET);
 
   it("version 0 signs exactly as before, so subscribed calendars keep working", async () => {
     const { controller } = build();
@@ -93,7 +88,6 @@ describe("ICS feed revocation", () => {
     expect(IcsController.signToken("salon:salon-ana", SECRET, 0)).toBe(legacySalon);
     expect((await controller.salonFeed("salon-ana", legacySalon, res() as any)).statusCode).toBe(200);
     expect((await controller.professionalFeed("pro-1", legacyPro, res() as any)).statusCode).toBe(200);
-    expect((await controller.staffFeed("user-1", legacyStaff, res() as any)).statusCode).toBe(200);
   });
 
   it("rotating revokes every old link and the new ones work", async () => {
@@ -106,12 +100,9 @@ describe("ICS feed revocation", () => {
     expect(out.salon.token).not.toBe(legacySalon);
     await expect(controller.salonFeed("salon-ana", legacySalon, res() as any)).rejects.toThrow("Invalid token");
     await expect(controller.professionalFeed("pro-1", legacyPro, res() as any)).rejects.toThrow("Invalid token");
-    await expect(controller.staffFeed("user-1", legacyStaff, res() as any)).rejects.toThrow("Invalid token");
 
     expect((await controller.salonFeed("salon-ana", out.salon.token, res() as any)).statusCode).toBe(200);
     expect((await controller.professionalFeed("pro-1", out.professionals[0].token, res() as any)).statusCode).toBe(200);
-    const staffToken = IcsController.signToken("staff:user-1", SECRET, 1);
-    expect((await controller.staffFeed("user-1", staffToken, res() as any)).statusCode).toBe(200);
   });
 
   it("each rotation revokes the previous one", async () => {
@@ -137,7 +128,7 @@ describe("ICS feed revocation", () => {
 
   it("a versioned input cannot collide with a real scope", () => {
     expect(IcsController.signToken("salon:x", SECRET, 1)).not.toBe(IcsController.signToken("salon:x", SECRET, 0));
-    // Every real scope starts with salon:/professional:/staff:, never "v<n>:".
+    // Every real scope starts with salon:/professional:, never "v<n>:".
     expect(IcsController.signToken("salon:x", SECRET, 1)).toBe(IcsController.signToken("v1:salon:x", SECRET, 0));
   });
 
@@ -168,15 +159,13 @@ describe("ICS feed revocation", () => {
 
 describe("ICS feeds of someone who has left", () => {
   const proToken = IcsController.signToken("professional:pro-1", SECRET);
-  const staffToken = IcsController.signToken("staff:user-1", SECRET);
 
   it("a deactivated professional's feed stops answering", async () => {
     const { controller } = build({}, { professionalActive: false });
     await expect(controller.professionalFeed("pro-1", proToken, res() as any)).rejects.toThrow(NotFoundException);
   });
 
-  it("so does the feed of a login that was taken away", async () => {
-    const { controller } = build({}, { userActive: false });
-    await expect(controller.staffFeed("user-1", staffToken, res() as any)).rejects.toThrow(NotFoundException);
+  it("there is no staff feed: nothing ever issued its tokens", () => {
+    expect((IcsController.prototype as any).staffFeed).toBeUndefined();
   });
 });

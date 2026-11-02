@@ -1,6 +1,9 @@
 import { executeSalonTool, SALON_TOOLS, SalonToolsService } from "./salon-tools";
 import { locationsMentioned, pickLocation, resolveLocation } from "./receptionist-locations";
 
+// Empresa: the multi-location feature only (client-locations.ts asks).
+const EMPRESA: any = { isFeatureUnlocked: async (_t: string, key: string) => key === "multi_location", isEnabled: async (_t: string, key: string) => key === "multi_location" };
+
 /**
  * The receptionist at a salon with several locations (multi-local): it asks
  * or works out which one, and passes it to availability and booking. No LLM
@@ -87,6 +90,7 @@ function setup({ locations = LOCATION_ROWS, links = LINKS, message = "Quiero un 
       prisma,
       tenantId: "tenant-a",
       appointmentsService,
+      featureFlags: EMPRESA,
       conversation: { id: "conv-1", clientId: "visitor-1", lastUserMessage, channel: "web" },
     }) as any;
   const run = (name: string, input: object = {}) => executeSalonTool(service, name, input, ctx());

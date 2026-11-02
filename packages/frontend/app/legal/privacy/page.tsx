@@ -50,7 +50,7 @@ export default function PrivacyPage() {
           <li>
             <strong>Datos de clientes finales</strong>: nombre, apellidos,
             email, teléfono, NIF (opcional), historial de citas y compras,
-            consentimientos firmados (RGPD + LSSI).
+            consentimientos registrados (RGPD + LSSI).
           </li>
           <li>
             <strong>Datos de facturación</strong>: importes, fechas, NIF

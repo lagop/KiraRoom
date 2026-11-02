@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException, BadRequestException, Logger, Optional } from "@nestjs/common";
+import { Injectable, NotFoundException, BadRequestException, ConflictException, Logger, Optional } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { EncryptionService } from "../common/encryption/encryption.service";
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
@@ -26,6 +27,9 @@ import {
   withNoticeChannels,
 } from "./client-notices";
 import { samePhone } from "../common/phone";
+
+/** Why a consent form with signatures can't be deleted. */
+export const CONSENT_FORM_HAS_SIGNATURES = "Este formulario tiene firmas; no se puede borrar.";
 
 /** A client's appointment notices, for the client file. */
 export interface ClientNoticesState {
@@ -136,7 +140,19 @@ export class ConsentService {
     if (SYSTEM_CONSENT_PURPOSES.includes(existing.purpose)) {
       throw new BadRequestException("The marketing consent form is managed by the system");
     }
-    await this.prisma.consentForm.delete({ where: { id } });
+    // Signed consents point at the form (onDelete: Restrict): a form with
+    // signatures stays, so the records are never lost.
+    const signed = await this.prisma.consent.count({ where: { formId: id, tenantId } });
+    if (signed > 0) throw new ConflictException(CONSENT_FORM_HAS_SIGNATURES);
+    try {
+      await this.prisma.consentForm.delete({ where: { id } });
+    } catch (e) {
+      // A signature recorded between the count and the delete.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") {
+        throw new ConflictException(CONSENT_FORM_HAS_SIGNATURES);
+      }
+      throw e;
+    }
     return { deleted: true };
   }
 

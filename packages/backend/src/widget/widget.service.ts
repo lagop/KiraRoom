@@ -188,7 +188,7 @@ export class WidgetService {
     // Two or more locations to book at among this widget's professionals:
     // the client picks one, as on the public booking page. None otherwise.
     const where = widgetLocations(
-      await clientLocations(this.prisma as any, widget.tenantId),
+      await clientLocations(this.prisma as any, widget.tenantId, this.featureFlags),
       allProfessionals.map((p) => p.id),
     );
     return {
@@ -201,7 +201,8 @@ export class WidgetService {
         city: widget.tenant.city,
         country: widget.tenant.country,
         timezone: widget.tenant.timezone,
-        currency: widget.tenant.currency,
+        // Euros, as everything is charged (the Moneda setting is gone).
+        currency: "EUR",
         language: widget.tenant.language,
         // The tax the prices below include (IVA, IGIC, IPSI): "IVA incluido".
         taxLabel: prices.taxLabel,

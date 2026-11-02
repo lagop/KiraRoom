@@ -25,15 +25,13 @@ const TENANT: TenantSettingsRow = {
   name: "Salón Luna",
   slug: "salon-luna",
   timezone: "Europe/Madrid",
-  currency: "EUR",
   country: "ES",
   language: "es",
   street: "Calle Mayor 1",
   phone: "600000000",
   email: "hola@salonluna.example",
-  dateFormat: "DD/MM/YYYY",
-  timeFormat: "24h",
   minCancelHours: 24,
+  cancellationPolicy: "Avísanos si no puedes venir.",
   openingHours: [{ day: "monday", openTime: "10:00", closeTime: "14:00" }],
   instagram: "https://www.instagram.com/salonluna/",
   facebook: null,
@@ -53,7 +51,9 @@ check("a server without these fields: empty, half hours, off", [older.instagram,
   "30",
   "false",
 ]);
-check("the formats keep their option ids", [saved.dateFormat, saved.timeFormat, saved.cancellationPolicy], ["dd/mm/yyyy", "24", "24"]);
+check("the notice as the select's option, the policy text as written", [saved.minCancelHours, saved.cancellationPolicyText], ["24", "Avísanos si no puedes venir."]);
+check("no currency, date format or time format fields", ["currency", "dateFormat", "timeFormat"].filter((k) => k in saved), []);
+check("'Sin política' (0) stays 0", settingsFromTenant({ ...TENANT, minCancelHours: 0 }).minCancelHours, "0");
 
 console.log("\n=== fields -> save ===");
 check("nothing changed, nothing sent", tenantUpdateFrom(saved, saved), {});
@@ -68,9 +68,12 @@ check(
 check("emptying Instagram clears it", tenantUpdateFrom({ ...saved, instagram: "" }, saved), { instagram: "" });
 check(
   "the existing fields as before",
-  tenantUpdateFrom({ ...saved, dateFormat: "yyyy/mm/dd", timeFormat: "12", cancellationPolicy: "48" }, saved),
-  { dateFormat: "YYYY/MM/DD", timeFormat: "12h", minCancelHours: 48 },
+  tenantUpdateFrom({ ...saved, minCancelHours: "0", cancellationPolicyText: "  Sin cargos, avisa cuando puedas. " }, saved),
+  { minCancelHours: 0, cancellationPolicy: "Sin cargos, avisa cuando puedas." },
 );
+check("emptying the policy text clears it (null)", tenantUpdateFrom({ ...saved, cancellationPolicyText: " " }, saved), {
+  cancellationPolicy: null,
+});
 
 // Emptying the contact email or phone used to answer "email must be an email" in English.
 check(
