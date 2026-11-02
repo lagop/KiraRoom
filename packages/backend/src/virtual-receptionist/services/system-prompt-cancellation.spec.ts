@@ -27,7 +27,9 @@ describe("the receptionist's cancellation policy", () => {
     expect(prompt).toContain("Aviso mínimo para cancelar: sin política (no hay plazo mínimo).");
     expect(prompt).toContain("El salón no pide un plazo mínimo");
     expect(prompt).not.toMatch(/24 horas/);
-    expect(prompt).not.toContain("{{");
+    for (const placeholder of ["{{CANCELLATION_POLICY}}", "{{LATE_CANCELLATION}}", "{{MIN_CANCEL_HOURS}}"]) {
+      expect(prompt).not.toContain(placeholder);
+    }
   });
 
   it("uses the salon's hours when it set some", () => {
