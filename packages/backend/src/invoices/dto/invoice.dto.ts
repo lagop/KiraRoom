@@ -259,9 +259,11 @@ export class UpdateTenantFiscalSettingsDto {
   @IsBoolean()
   pricesIncludeTax?: boolean;
 
-  @ApiPropertyOptional({ description: "Emitter NIF/CIF/NIE — mirrored to Tenant.taxId" })
+  /** Sent only when it changes; an empty value is refused (fiscal-identity.ts). */
+  @ApiPropertyOptional({ description: "Emitter NIF/CIF/NIE — stored in Tenant.taxId and mirrored to fiscalSettings.tenantNif" })
   @IsOptional()
-  @IsString()
+  @IsString({ message: "El NIF tiene que ser un texto." })
+  @MaxLength(20, { message: "El NIF no puede tener más de 20 caracteres." })
   tenantNif?: string;
 
   @ApiPropertyOptional({ enum: ["nif", "cif", "nie", "passport", "other"] })
@@ -269,9 +271,11 @@ export class UpdateTenantFiscalSettingsDto {
   @IsEnum(["nif", "cif", "nie", "passport", "other"])
   taxIdType?: "nif" | "cif" | "nie" | "passport" | "other";
 
+  /** Sent only when it changes; an empty value is refused (fiscal-identity.ts). */
   @ApiPropertyOptional({ description: "Legal name (razón social) for the emitter" })
   @IsOptional()
-  @IsString()
+  @IsString({ message: "La razón social tiene que ser un texto." })
+  @MaxLength(200, { message: "La razón social no puede tener más de 200 caracteres." })
   legalName?: string;
 }
 

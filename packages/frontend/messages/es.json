@@ -154,6 +154,7 @@
       "certFingerprint": "Huella",
       "certNotAfter": "Caduca",
       "saved": "Configuración guardada",
+      "saveError": "No se ha guardado",
       "taxRegime": "Régimen fiscal del territorio",
       "taxRegimeHint": "IVA en península y Baleares, IGIC en Canarias, IPSI en Ceuta y Melilla. Al cambiarlo se ajusta el tipo por defecto.",
       "pricesIncludeTax": "Mis precios ya incluyen el impuesto",

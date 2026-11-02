@@ -3,6 +3,7 @@ import ExcelJS from "exceljs";
 import { InvoiceStatus } from "@prisma/client";
 import { TAX_REGIME_LABELS, taxRegimeOf } from "@kira/shared";
 import { PrismaService } from "../common/prisma/prisma.service";
+import { csvNumberCell, csvTextCell } from "../common/csv-cell";
 
 /**
  * Libro registro de facturas emitidas, as a file the salon hands to its
@@ -143,36 +144,34 @@ function formatRate(rate: number): string {
   return String(rate).replace(".", ",");
 }
 
-function csvCell(value: string): string {
-  return /[";\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
-}
-
 /**
  * Semicolon-separated, decimal comma, UTF-8 with BOM: the dialect Excel in
  * Spanish opens correctly with a double click, and what A3/Sage/ContaPlus
  * import wizards default to.
+ *
+ * The client's name comes from the public booking form, so text cells are
+ * escaped against spreadsheet formulas (common/csv-cell.ts); the rate and
+ * the amounts, which may be negative, stay numbers.
  */
 export function invoiceBookCsv(rows: InvoiceBookRow[]): string {
-  const lines = [INVOICE_BOOK_COLUMNS.join(";")];
+  const lines = [INVOICE_BOOK_COLUMNS.map((c) => csvTextCell(c)).join(";")];
   for (const r of rows) {
     lines.push(
       [
-        formatDate(r.date),
-        r.series,
-        r.number,
-        `${r.series}${r.number}`,
-        r.invoiceType,
-        r.customerTaxId,
-        r.customerName,
-        r.tax,
-        formatRate(r.rate),
-        formatAmount(r.baseCents),
-        formatAmount(r.taxCents),
-        formatAmount(r.totalCents),
-        r.status,
-      ]
-        .map((v) => csvCell(String(v)))
-        .join(";"),
+        csvTextCell(formatDate(r.date)),
+        csvTextCell(r.series),
+        csvTextCell(r.number),
+        csvTextCell(`${r.series}${r.number}`),
+        csvTextCell(r.invoiceType),
+        csvTextCell(r.customerTaxId),
+        csvTextCell(r.customerName),
+        csvTextCell(r.tax),
+        csvNumberCell(formatRate(r.rate)),
+        csvNumberCell(formatAmount(r.baseCents)),
+        csvNumberCell(formatAmount(r.taxCents)),
+        csvNumberCell(formatAmount(r.totalCents)),
+        csvTextCell(r.status),
+      ].join(";"),
     );
   }
   return "﻿" + lines.join("\r\n") + "\r\n";
