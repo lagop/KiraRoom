@@ -27,6 +27,7 @@ import {
   invoicePage,
   INVOICE_PAGE_SIZE,
 } from "@/lib/invoice-list";
+import { IssuerDataBanner } from "@/components/invoices/issuer-data-banner";
 import { CancelInvoiceDialog, EmailInvoiceDialog, RectifyInvoiceDialog } from "./components/invoice-dialogs";
 
 function formatMoney(cents: number, currency = "EUR") {
@@ -156,6 +157,8 @@ export default function InvoicesPage() {
           </a>
         )}
       </header>
+
+      <IssuerDataBanner />
 
       <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
         <div className="space-y-3 border-b border-gray-200 p-4">

@@ -5,11 +5,9 @@ import {
   Settings,
   Store,
   Calendar,
-  CreditCard,
   Users,
   Check,
 } from "lucide-react";
-import { StripeSettingsContent } from "./stripe-settings-content";
 import apiClient from "@/lib/api";
 import { getCurrentUser } from "@/lib/utils";
 import { useTranslations } from "@/lib/use-translation";
@@ -438,7 +436,9 @@ export default function SettingsPage() {
     { id: "general", label: t("settings.general"), icon: Store },
     { id: "preferences", label: t("settings.preferences"), icon: Settings },
     { id: "services", label: t("settings.services"), icon: Calendar },
-    { id: "payments", label: t("settings.payments"), icon: CreditCard },
+    // No "Pagos" tab: it asked salons for their own Stripe keys, which no
+    // flow uses (there are no online payments from clients yet). The keys
+    // already saved stay stored, encrypted. The tax rate is in Ajustes fiscales.
     { id: "users", label: t("settings.users"), icon: Users },
   ];
 
@@ -488,20 +488,7 @@ export default function SettingsPage() {
             </div>
           )}
 
-          {activeTab === "payments" ? (
-            <>
-              {/* The tax is the salon's own fiscal setting, saved there; the
-                  "Tasa de impuestos" field that stood here was never saved. */}
-              <p className="mb-6 rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
-                {t("settings.tax_moved")}{" "}
-                <Link href="/dashboard/settings/fiscal" className="font-medium text-purple-600 hover:text-purple-700">
-                  {t("invoices.fiscalSettings.title")}
-                </Link>
-                .
-              </p>
-              <StripeSettingsContent />
-            </>
-          ) : (defaultSettingsData as any)[activeTab] ? (
+          {(defaultSettingsData as any)[activeTab] ? (
             <>
               <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
                 {(defaultSettingsData as any)[activeTab].map((field: any) => (

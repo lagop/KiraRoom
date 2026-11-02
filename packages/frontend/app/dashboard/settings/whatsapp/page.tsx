@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import {
   Link as LinkIcon,
   Unlink,
-  ExternalLink,
   AlertCircle,
   Check,
   ChevronDown,
@@ -89,15 +88,6 @@ export default function WhatsAppSettingsPage() {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  async function startOAuth() {
-    try {
-      const { url } = await apiClient.startWhatsAppConnect();
-      window.open(url, "_blank", "noopener");
-    } catch (err: any) {
-      toast({ title: t("whatsappSettings.connectError"), description: err?.message, variant: "destructive" });
-    }
-  }
 
   async function connectManual() {
     setBusy(true);
@@ -259,17 +249,10 @@ export default function WhatsAppSettingsPage() {
         </div>
       ) : (
         <div className="space-y-6">
-          <div className="bg-white border border-gray-200 rounded-xl p-6">
-            <h2 className="font-semibold mb-2">{t("whatsappSettings.metaTitle")}</h2>
-            <p className="text-sm text-gray-500 mb-3">{t("whatsappSettings.metaIntro")}</p>
-            <button
-              onClick={startOAuth}
-              className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 inline-flex items-center gap-2"
-            >
-              <ExternalLink className="w-4 h-4" /> {t("whatsappSettings.metaCta")}
-            </button>
-          </div>
-
+          {/* No "Conectar con Meta" (OAuth): it saved the token without the
+              WhatsApp Business account or number, so it showed "Conectado"
+              and sent nothing. Back once the embedded signup is built; the
+              backend answers 410 meanwhile. */}
           <div className="bg-white border border-gray-200 rounded-xl p-6">
             <h2 className="font-semibold mb-2">{t("whatsappSettings.manualTitle")}</h2>
             <p className="text-sm text-gray-500 mb-3">{t("whatsappSettings.manualIntro")}</p>

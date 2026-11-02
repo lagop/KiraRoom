@@ -38,6 +38,7 @@ console.log("who sees what");
   check("staff keep their daily screens", ["dashboard", "appointments", "clients", "wait-list", "pos", "share"].every((id) => staff.includes(id)), staff);
   check("staff do not see the salon's management screens", !["payments", "professionals", "billing", "analytics", "whatsapp", "invoices"].some((id) => staff.includes(id)), staff);
   check("staff keep their own two-step verification", staff.includes("security-staff"));
+  check("no menu item opens the hidden salon Stripe keys page", !links(DASHBOARD_NAV).some((l) => l.href.startsWith("/dashboard/settings/stripe")));
   check("staff have no settings group and no empty team group", !navFor("staff").some((e) => e.id === "settings" || e.id === "team"));
   check("before the user is read, the menu is the staff one (matches the server render)", ids(navFor(null)).join() === staff.join());
 }

@@ -272,6 +272,21 @@
       "confirm": "Issue corrective invoice",
       "done": "Corrective invoice issued",
       "error": "The corrective invoice could not be issued"
+    },
+    "issuerBanner": {
+      "title": "Your salon's details are missing from your invoices",
+      "missing": "Every invoice must show the salon's {fields}.",
+      "warn": "Right now your invoices are issued without them and are not valid for the tax office.",
+      "scheduled": "From {date} invoices can't be issued without them; sales at the till will still be charged, without an invoice.",
+      "blocking": "Invoices can't be issued until you fill them in. Sales at the till are still charged, without an invoice.",
+      "linkFiscal": "Add the tax ID and legal name",
+      "linkSalon": "Add the address",
+      "and": "and",
+      "fields": {
+        "taxId": "tax ID (NIF)",
+        "legalName": "legal name",
+        "address": "tax address (street, postcode and city)"
+      }
     }
   },
   "accounting": {
@@ -425,7 +440,8 @@
       "logService": "Service",
       "logDate": "Date",
       "logChannel": "Channel",
-      "logStatus": "Status"
+      "logStatus": "Status",
+      "channelEmailOnly": "Reminders are sent by email. WhatsApp sending will come later."
     },
     "client": {
       "predictionTitle": "Rebooking prediction",
@@ -2578,7 +2594,8 @@
     "promo_apply": "Apply",
     "promo_remove": "Remove",
     "promo_code_help": "Applied after the manual discounts and before the points. It does not count towards your discount limit.",
-    "promo_line": "Promotion {code}"
+    "promo_line": "Promotion {code}",
+    "invoice_skipped_title": "Sale charged without an invoice"
   },
   "pos_today": "Pos Today",
   "pos_tomorrow": "Pos Tomorrow",
@@ -2980,7 +2997,7 @@
     "metaTitle": "Option 1: connect with your Meta account",
     "metaIntro": "We take you to Meta (Facebook) so you can authorise KiraRoom to send messages from your WhatsApp Business account.",
     "metaCta": "Connect with Meta",
-    "manualTitle": "Option 2: manual connection",
+    "manualTitle": "Manual connection",
     "manualIntro": "If you, or whoever runs the account, have the WhatsApp Business details from Meta's Business Manager, paste them here.",
     "connect": "Connect",
     "connecting": "Connecting…",

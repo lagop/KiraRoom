@@ -16,6 +16,7 @@ import GiftCardSaleDialog from "./components/gift-card-sale-dialog";
 import CashDrawer from "./components/cash-drawer";
 import { drawerProblem } from "@/lib/cash-session";
 import { balanceClass, isNegativeBalance } from "@/lib/loyalty-points";
+import { IssuerDataBanner } from "@/components/invoices/issuer-data-banner";
 import { applyDiscounts, discountProblem, staffLimitProblem, type DiscountSpec } from "@/lib/pos-discounts";
 import {
   TENDER_LABELS,
@@ -520,13 +521,17 @@ export default function POSPage() {
       // credits it by hand (also flagged on the payment, in Pagos). One toast
       // at a time, so the sale's summary goes with the warning.
       const offInvoice = result.loyaltyNotOnInvoice ?? [];
+      // Charged without its invoice: the salon has no NIF, razón social or
+      // address yet and invoices are refused for it. The sale is recorded.
+      const skipped = result.invoiceSkipped?.reason;
       toast(
-        offInvoice.length
+        offInvoice.length || skipped
           ? {
               variant: "destructive",
-              title: t("pos.loyalty_not_on_invoice_title"),
+              title: skipped ? t("pos.invoice_skipped_title") : t("pos.loyalty_not_on_invoice_title"),
               description: [
                 `${t("pos.sale_completed")}: ${summary}.`,
+                ...(skipped ? [skipped] : []),
                 ...offInvoice.map((off) =>
                   t("pos.loyalty_not_on_invoice", { invoice: off.invoice, amount: formatEuros(off.amountCents) }),
                 ),
@@ -573,9 +578,13 @@ export default function POSPage() {
         saleId: quickSale.saleId,
       });
       const clientName = selectedClient ? `${selectedClient.firstName} ${selectedClient.lastName}` : t("pos.walk_in");
+      const quickSkipped = result.invoiceSkipped?.reason;
       toast({
-        title: t("pos.quick_sale_completed"),
-        description: `${clientName} · ${quickSale.service.name} · ${formatEuros(result.total)} (${TENDER_LABELS[quickSale.method]})`,
+        title: quickSkipped ? t("pos.invoice_skipped_title") : t("pos.quick_sale_completed"),
+        description:
+          `${clientName} · ${quickSale.service.name} · ${formatEuros(result.total)} (${TENDER_LABELS[quickSale.method]})` +
+          (quickSkipped ? `. ${quickSkipped}` : ""),
+        ...(quickSkipped ? { variant: "destructive" as const } : {}),
       });
       setQuickSale(null);
       setReceiptOf({ saleId: result.saleId, email: selectedClient?.email ?? null });
@@ -637,6 +646,8 @@ export default function POSPage() {
 
   return (
     <div className="space-y-6">
+      {/* No issuer data: sales are charged, their invoices skipped once refused. */}
+      <IssuerDataBanner />
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-2xl font-bold truncate">{t("pos.title")}</h1>
         <div className="flex flex-wrap items-center gap-3">

@@ -9,6 +9,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Download, KeyRound, Loader2, Send, Unplug } from "lucide-react";
 import { Modelo303Card } from "@/components/tax/modelo-303-card";
 import { Modelo420Card } from "@/components/tax/modelo-420-card";
+import { Modelo130IncomeCard } from "@/components/tax/modelo-130-income-card";
 import { accountingActionKey, accountingStatusKey, quarterStartOf, salonDay } from "@/lib/accounting-format";
 
 /**
@@ -410,6 +411,7 @@ export default function AccountingSettingsPage() {
 
       <Modelo303Card />
       <Modelo420Card />
+      <Modelo130IncomeCard />
 
       <ConfirmDialog
         open={confirmDisconnect}

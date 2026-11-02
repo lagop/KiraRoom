@@ -272,6 +272,21 @@
       "confirm": "Emitir rectificativa",
       "done": "Rectificativa emitida",
       "error": "No se pudo emitir la rectificativa"
+    },
+    "issuerBanner": {
+      "title": "Faltan datos del salón para tus facturas",
+      "missing": "Toda factura tiene que llevar {fields} del salón.",
+      "warn": "Ahora mismo tus facturas se emiten sin ellos y no son válidas para Hacienda.",
+      "scheduled": "A partir del {date} no se podrán emitir facturas sin ellos; las ventas en caja se cobrarán igualmente, sin factura.",
+      "blocking": "No se pueden emitir facturas hasta que los completes. Las ventas en caja se cobran igualmente, sin factura.",
+      "linkFiscal": "Completar NIF y razón social",
+      "linkSalon": "Completar la dirección",
+      "and": "y",
+      "fields": {
+        "taxId": "el NIF",
+        "legalName": "la razón social",
+        "address": "la dirección fiscal (calle, código postal y ciudad)"
+      }
     }
   },
   "accounting": {
@@ -425,7 +440,8 @@
       "logService": "Servicio",
       "logDate": "Fecha",
       "logChannel": "Canal",
-      "logStatus": "Estado"
+      "logStatus": "Estado",
+      "channelEmailOnly": "Los recordatorios se envían por email. El envío por WhatsApp llegará más adelante."
     },
     "client": {
       "predictionTitle": "Predicción de rebooking",
@@ -2578,7 +2594,8 @@
     "promo_apply": "Aplicar",
     "promo_remove": "Quitar",
     "promo_code_help": "Se aplica después de los descuentos manuales y antes de los puntos. No cuenta en tu límite de descuento.",
-    "promo_line": "Promoción {code}"
+    "promo_line": "Promoción {code}",
+    "invoice_skipped_title": "Venta cobrada sin factura"
   },
   "pos_today": "Pos Today",
   "pos_tomorrow": "Pos Tomorrow",
@@ -2980,7 +2997,7 @@
     "metaTitle": "Opción 1: conectar con tu cuenta de Meta",
     "metaIntro": "Te llevamos a Meta (Facebook) para que autorices a KiraRoom a enviar mensajes desde tu cuenta de WhatsApp Business.",
     "metaCta": "Conectar con Meta",
-    "manualTitle": "Opción 2: conexión manual",
+    "manualTitle": "Conexión manual",
     "manualIntro": "Si tú o quien te lleva la cuenta tenéis los datos de WhatsApp Business del Administrador comercial de Meta, pégalos aquí.",
     "connect": "Conectar",
     "connecting": "Conectando…",
