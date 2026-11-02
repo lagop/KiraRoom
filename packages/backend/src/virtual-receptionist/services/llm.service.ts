@@ -6,6 +6,7 @@ import { salonClock } from '../prompts/clock';
 import { CLOSURE_HORIZON_DAYS, SalonClosure, salonClosuresNotice } from '../prompts/closures';
 import { PlatformLlmConfigService } from '../../platform/platform-llm-config.service';
 import { LLMProvider, LLMGenerationConfig, LLMCompletion } from '@kira/shared';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { FAQService } from './faq.service';
 import { FeatureFlagService } from '../../common/feature-flags/feature-flag.service';
@@ -478,46 +479,42 @@ export class LLMService {
    */
   private async getSalonContext(salonId: string): Promise<SalonContext | null> {
     try {
-      // Try to find tenant by id, slug, or name
-      // Also try normalized versions (add/remove hyphens)
-      const normalizedSalonId = salonId.replace(/-/g, '');
-      const withHyphen = salonId.includes('-') ? salonId : salonId.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase();
-      
-      const tenant = await this.prisma.tenant.findFirst({
-        where: {
-          OR: [
-            { id: salonId },
-            { slug: salonId },
-            { name: { contains: salonId, mode: 'insensitive' } },
-            // Try normalized versions (add/remove hyphens)
-            { slug: withHyphen },
-            { slug: { contains: normalizedSalonId, mode: 'insensitive' } },
-          ],
-        },
-        include: {
-          services: {
-            where: { isActive: true },
-            select: {
-              name: true,
-              duration: true,
-              price: true,
-              category: true,
-            },
+      // Exactly this salon: its id, or else its slug. It used to also match
+      // any salon whose name or slug merely contained the value (plus hyphen
+      // variants of it), so a chat could load ANOTHER salon's services,
+      // prices, team and hours and answer as the wrong salon -- and names
+      // are not unique any more. Every caller passes the tenant id; the id is
+      // tried first so a slug that looks like another salon's id never wins.
+      const include = {
+        services: {
+          where: { isActive: true },
+          select: {
+            name: true,
+            duration: true,
+            price: true,
+            category: true,
           },
-          professionals: {
-            where: { isActive: true },
-            select: {
-              firstName: true,
-              lastName: true,
-              position: true,
-              specialties: true,
-              // Needed to derive the salon's real opening hours below.
-              workingHours: true,
-            },
-          },
-          customDomain: { select: { domain: true, verifiedAt: true } },
         },
-      });
+        professionals: {
+          where: { isActive: true },
+          select: {
+            firstName: true,
+            lastName: true,
+            position: true,
+            specialties: true,
+            // Needed to derive the salon's real opening hours below.
+            workingHours: true,
+          },
+        },
+        customDomain: { select: { domain: true, verifiedAt: true } },
+      } satisfies Prisma.TenantInclude;
+      const tenant =
+        (await this.prisma.tenant.findFirst({ where: { id: salonId }, include })) ??
+        (await this.prisma.tenant.findFirst({
+          where: { slug: { equals: salonId, mode: 'insensitive' } },
+          orderBy: { createdAt: 'asc' },
+          include,
+        }));
 
       if (!tenant) {
         this.logger.warn(`Tenant not found for salonId: ${salonId}`);
