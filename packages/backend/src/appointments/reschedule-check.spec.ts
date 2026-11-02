@@ -13,6 +13,17 @@ import { AppointmentServicesService } from "./appointment-services.service";
 const TENANT = "t1";
 const DAY = "2026-11-02"; // a Monday
 const NOW = new Date("2026-10-30T10:00:00Z");
+
+// These cases move appointments on fixed days; "now" is pinned before them
+// so the "already passed" check does not depend on when the suite runs. Only
+// Date is faked: timers and promises run as usual.
+beforeAll(() => {
+  jest.useFakeTimers({
+    now: new Date("2026-10-30T10:00:00Z"),
+    doNotFake: ["nextTick", "setImmediate", "clearImmediate", "setTimeout", "clearTimeout", "setInterval", "clearInterval", "queueMicrotask", "hrtime", "performance"],
+  });
+});
+afterAll(() => jest.useRealTimers());
 const MON_9_TO_17 = [{ day: "monday", openTime: "09:00", closeTime: "17:00" }];
 
 describe("rescheduleProblem", () => {
