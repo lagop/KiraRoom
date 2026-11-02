@@ -32,3 +32,29 @@ export function planAction(sub: BillingSubscription | null | undefined, planId: 
   }
   return "checkout";
 }
+
+/**
+ * The name an add-on is shown with: the catalogue's ("Pack de 1.000 mensajes
+ * de IA"), or the installed row's, never the internal key (ai_messages_1000)
+ * unless nothing else is known.
+ */
+export function addOnDisplayName(
+  key: string,
+  catalog: Array<{ key?: string; name?: string } | null | undefined> | null | undefined,
+  installed?: Array<{ addOnKey?: string; addOn?: { key?: string; name?: string } | null } | null | undefined> | null,
+): string {
+  const fromCatalog = catalog?.find((a) => a?.key === key)?.name;
+  if (fromCatalog) return fromCatalog;
+  const fromInstalled = installed?.find((i) => (i?.addOn?.key ?? i?.addOnKey) === key)?.addOn?.name;
+  return fromInstalled || key;
+}
+
+/** Cents as Spanish money in the invoice's currency: 4900 -> "49,00 €". */
+export function formatSubscriptionAmount(cents: number, currency?: string | null): string {
+  const code = (currency || "eur").toUpperCase();
+  try {
+    return new Intl.NumberFormat("es-ES", { style: "currency", currency: code }).format((cents || 0) / 100);
+  } catch {
+    return `${((cents || 0) / 100).toFixed(2).replace(".", ",")} ${code}`;
+  }
+}

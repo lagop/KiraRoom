@@ -9,7 +9,7 @@ import {
 } from "@kira/shared";
 import { aggregateModelo303 } from "./modelo-303";
 import { aggregateModelo420 } from "./modelo-420";
-import { aggregateTaxBreakdown } from "../invoice-calculator.service";
+import { effectiveTaxBreakdown } from "../invoice-calculator.service";
 
 /**
  * Spanish quarterly tax declarations (Modelo 303, Modelo 420 + Modelo 130).
@@ -92,16 +92,11 @@ export class TaxReportsService {
       },
     });
     // The breakdown by rate is worked out again from the invoice's lines
-    // rather than read from the one stored on it: invoices issued before
-    // rates were kept to two decimals have IGIC's 9,5 % stored as 10 % there
-    // (their lines always had 9,5). Stored invoices are not rewritten.
+    // (effectiveTaxBreakdown: old ones stored IGIC 9,5 % as 10 %), as the
+    // libro de facturas does, so the two reconcile.
     const invoices = rows.map(({ lines, ...inv }) => ({
       ...inv,
-      taxBreakdown: lines?.length
-        ? aggregateTaxBreakdown(
-            lines.map((l) => ({ taxRate: Number(l.taxRate), taxCents: l.taxCents, totalCents: l.totalCents })),
-          )
-        : inv.taxBreakdown,
+      taxBreakdown: effectiveTaxBreakdown({ taxBreakdown: inv.taxBreakdown, lines }),
     }));
 
     // Exhaustive on purpose. The old ternary sent anything that was not a 303

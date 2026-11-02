@@ -161,12 +161,12 @@ describe("cancelled from the dashboard", () => {
 
   it("emails the owner a confirmation, once", async () => {
     const { c, notices, readOnlyUntil } = controller(true);
-    const res = await c.cancelSubscription({ user: { tenantId: "t1" } }, {});
+    const res = await c.cancelSubscription({ user: { tenantId: "t1" } });
     expect(notices.notify).toHaveBeenCalledWith("t1", "cancelled", readOnlyUntil);
     expect(res).not.toHaveProperty("newlyCancelled");
 
     const already = controller(false);
-    await already.c.cancelSubscription({ user: { tenantId: "t1" } }, {});
+    await already.c.cancelSubscription({ user: { tenantId: "t1" } });
     expect(already.notices.notify).not.toHaveBeenCalled();
   });
 });

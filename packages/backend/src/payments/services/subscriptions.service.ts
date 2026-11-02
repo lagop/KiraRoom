@@ -7,6 +7,19 @@ import { PlatformStripeConfigService } from '../../platform/platform-stripe-conf
 import { aiConversationsApprox, aiMessageCap, formatCountEs, PLAN_AI_CONVERSATIONS } from '@kira/shared';
 
 /** "500 mensajes al mes, unas 70 conversaciones", as kiraroom.com puts it. */
+/** A plan limit with no cap: null in the catalog (-1 in older rows). */
+export function isUnlimited(limit: number | null | undefined): boolean {
+  return limit === null || limit === undefined || limit === -1;
+}
+
+/**
+ * What a subscription invoice is for in the list: what was paid once it is
+ * paid, what is asked for while it is open or unpaid.
+ */
+export function invoiceAmount(invoice: { status?: string | null; amount_due: number; amount_paid: number }): number {
+  return invoice.status === "open" || invoice.status === "uncollectible" ? invoice.amount_due : invoice.amount_paid;
+}
+
 function aiAllowance(messages: number, perLocation = false): string {
   const where = perLocation ? ' por local' : '';
   return `${formatCountEs(messages)} mensajes al mes${where}, unas ${formatCountEs(aiConversationsApprox(messages))} conversaciones`;
@@ -364,37 +377,6 @@ export class SubscriptionsService {
     return aiMessageCap({ plan: this.normalizePlan(plan) as any, ...opts });
   }
 
-  /**
-   * Adds-on allowed for a given plan. Hidden / disabled from the
-   * catalog when the feature is already included in the plan (user
-   * would be paying for something they already have).
-   *
-   * For dev-tools + tests. The richer filter (unlocks[] vs plan
-   * featureKeys) used by the real catalog API lives in
-   * `AddOnsService.isRelevantForPlan`; this list is intentionally
-   * smaller / explicit so unit tests stay deterministic.
-   */
-  upsellableAddOnsForPlan(plan: PlanId): string[] {
-    const all = [
-      'ai_messages_1000',
-      'loyalty_giftcards',
-      'email_marketing',
-      'multichannel',
-      'google_reviews_auto',
-      // 'web_domain' is not sold until custom domains are served over
-      // HTTPS (see WITHHELD_ADDON_KEYS in addons.service.ts).
-      'deposits_antinoshow',
-    ];
-    // Filter out add-ons whose unlocks are already covered by the plan.
-    // H-4: Pro+ already includes `multichannel` in PLAN_MATRIX, so the
-    // Esencial-only multichannel add-on is hidden for them. The AI pack
-    // adds messages on any plan.
-    if (plan === 'pro' || plan === 'empresa') {
-      return all.filter((k) => k !== 'multichannel');
-    }
-    return all;
-  }
-
   isFeatureEnabledForPlan(plan: PlanId, key: FeatureKey): boolean {
     return PLAN_MATRIX[plan]?.includes(key) ?? false;
   }
@@ -412,6 +394,10 @@ export class SubscriptionsService {
 
     const planId = this.normalizePlan(tenant.plan);
     const planDetails = this.plans[planId];
+    const inTrial =
+      tenant.subscriptionStatus === "trialing" &&
+      !!tenant.trialEnd &&
+      tenant.trialEnd.getTime() > Date.now();
 
     return {
       plan: planId,
@@ -427,7 +413,14 @@ export class SubscriptionsService {
       stripeCustomerId: tenant.stripeCustomerId,
       stripeSubscriptionId: tenant.stripeSubscriptionId,
       planDetails,
-   };
+      // The plan the salon actually has: Pro during the trial, whatever is
+      // stored (a new salon is saved as esencial).
+      inTrial,
+      effectivePlan: this.effectivePlan(tenant.plan, inTrial),
+      // Add-ons are items of the paid subscription (AddOnsService.purchase):
+      // in trial, or without a subscription, they cannot be bought yet.
+      canBuyAddOns: tenant.subscriptionStatus === "active" && !!tenant.stripeSubscriptionId,
+    };
   }
 
   async createCheckoutSession(
@@ -574,76 +567,6 @@ export class SubscriptionsService {
     } catch (err) {
       console.warn('Could not expire open plan checkouts for tenant', tenantId, err);
     }
-  }
-
-  async createSubscription(tenantId: string, priceId: string, paymentMethodId?: string) {
-    if (!this.isEnabled) {
-      throw new Error('Stripe is not configured');
-    }
-
-    const tenant = await this.prisma.tenant.findUnique({
-      where: { id: tenantId },
-    });
-
-    if (!tenant) {
-      throw new NotFoundException('Tenant not found');
-    }
-
-    let customerId = tenant.stripeCustomerId;
-
-    if (!customerId) {
-      const customer = await this.stripe.customers.create({
-        metadata: { tenantId },
-        email: tenant.email,
-        name: tenant.name,
-      });
-      customerId = customer.id;
-
-      await this.prisma.tenant.update({
-        where: { id: tenantId },
-        data: { stripeCustomerId: customerId },
-      });
-    }
-
-    if (paymentMethodId) {
-      await this.stripe.paymentMethods.attach(paymentMethodId, {
-        customer: customerId,
-      });
-
-      await this.stripe.customers.update(customerId, {
-        invoice_settings: {
-          default_payment_method: paymentMethodId,
-        },
-      });
-    }
-
-    const subscription = await this.stripe.subscriptions.create({
-      customer: customerId,
-      items: [{ price: priceId }],
-      metadata: { tenantId },
-      payment_behavior: 'default_incomplete',
-      payment_settings: {
-        save_default_payment_method: 'on_subscription',
-      },
-      expand: ['latest_invoice.payment_intent'],
-    });
-
-    await this.prisma.tenant.update({
-      where: { id: tenantId },
-      data: {
-        stripeSubscriptionId: subscription.id,
-        subscriptionStatus: 'active',
-        plan: 'esencial' as any, // Will be updated when webhook fires
-        currentPeriodStart: new Date(subscription.current_period_start * 1000),
-        currentPeriodEnd: new Date(subscription.current_period_end * 1000),
-      },
-    });
-
-    return {
-      subscriptionId: subscription.id,
-      status: subscription.status,
-      clientSecret: (subscription.latest_invoice as any)?.payment_intent?.client_secret,
-    };
   }
 
   /**
@@ -1162,7 +1085,12 @@ export class SubscriptionsService {
     return invoices.data.map((invoice) => ({
       id: invoice.id,
       number: invoice.number,
-      amount: invoice.amount_paid,
+      // An open or unpaid invoice has paid nothing yet: amount_paid showed it
+      // as 0,00 €. What it asks for is amount_due; "pending" marks it.
+      amount: invoiceAmount(invoice),
+      amountDue: invoice.amount_due,
+      amountPaid: invoice.amount_paid,
+      pending: invoice.status === "open" || invoice.status === "uncollectible",
       currency: invoice.currency,
       status: invoice.status,
       created: new Date(invoice.created * 1000),
@@ -1172,35 +1100,6 @@ export class SubscriptionsService {
   }
 
   // ============ FEATURE CHECKS ============
-
-  async checkFeature(
-    tenantId: string,
-    feature: FeatureKey | string,
-  ): Promise<boolean> {
-    const tenant = await this.prisma.tenant.findUnique({
-      where: { id: tenantId },
-    });
-
-    if (!tenant) {
-      return false;
-    }
-
-    if (feature === "web_domain") {
-      const addons = (tenant.addons as Record<string, any>) || {};
-      return !!addons.web_domain?.enabled;
-    }
-
-    if (tenant.subscriptionStatus === "cancelled") {
-      return false;
-    }
-
-    const inTrial =
-      tenant.subscriptionStatus === "trialing" &&
-      !!tenant.trialEnd &&
-      tenant.trialEnd.getTime() > Date.now();
-    const plan = this.effectivePlan(tenant.plan, inTrial);
-    return this.isFeatureEnabledForPlan(plan, feature as FeatureKey);
-  }
 
   async getUsageStats(tenantId: string) {
     const tenant = await this.prisma.tenant.findUnique({
@@ -1247,18 +1146,18 @@ export class SubscriptionsService {
       usage: {
         clients: {
           current: clientCount,
-          limit: planDetails.maxClients,
-          unlimited: planDetails.maxClients === -1,
+          limit: isUnlimited(planDetails.maxClients) ? null : planDetails.maxClients,
+          unlimited: isUnlimited(planDetails.maxClients),
         },
         professionals: {
           current: professionalCount,
-          limit: planDetails.maxProfessionals,
-          unlimited: planDetails.maxProfessionals === -1,
+          limit: isUnlimited(planDetails.maxProfessionals) ? null : planDetails.maxProfessionals,
+          unlimited: isUnlimited(planDetails.maxProfessionals),
         },
         appointments: {
           current: appointmentCount,
-          limit: planDetails.maxAppointmentsPerMonth,
-          unlimited: planDetails.maxAppointmentsPerMonth === -1,
+          limit: isUnlimited(planDetails.maxAppointmentsPerMonth) ? null : planDetails.maxAppointmentsPerMonth,
+          unlimited: isUnlimited(planDetails.maxAppointmentsPerMonth),
         },
       },
     };

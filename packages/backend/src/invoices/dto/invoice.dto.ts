@@ -21,8 +21,9 @@ import {
   ValidateIf,
   ValidateNested,
 } from "class-validator";
-import { Type } from "class-transformer";
+import { Transform, Type } from "class-transformer";
 import { TAX_REGIMES, type TaxRegime } from "@kira/shared";
+import { SERIES_FORMAT, SERIES_INVALID } from "../fiscal-identity";
 
 export class CreateInvoiceLineDto {
   @ApiProperty()
@@ -218,15 +219,23 @@ export class UpdateTenantFiscalSettingsDto {
   @IsEnum(["none", "verifactu", "ticketbai", "sii_only"])
   fiscalMode?: "none" | "verifactu" | "ticketbai" | "sii_only";
 
-  @ApiPropertyOptional()
+  /** Trimmed and in capitals before the check, so "a" and "A" are one series. */
+  @ApiPropertyOptional({ description: "1-4 letters or digits, stored in capitals" })
   @IsOptional()
-  @IsString()
+  @Transform(({ value }) => (typeof value === "string" ? value.trim().toUpperCase() : value))
+  @IsString({ message: "La serie tiene que ser un texto." })
+  @Matches(SERIES_FORMAT, { message: SERIES_INVALID })
   defaultSeries?: string;
 
-  @ApiPropertyOptional()
+  /** Up to two decimals: IGIC has 9,5 %. */
+  @ApiPropertyOptional({ minimum: 0, maximum: 100 })
   @IsOptional()
-  @IsInt()
-  @Min(0)
+  @IsNumber(
+    { maxDecimalPlaces: 2, allowNaN: false, allowInfinity: false },
+    { message: "El tipo impositivo tiene que ser un número con dos decimales como mucho (por ejemplo 21 o 9,5)." },
+  )
+  @Min(0, { message: "El tipo impositivo no puede ser negativo." })
+  @Max(100, { message: "El tipo impositivo no puede pasar del 100 %." })
   defaultTaxRate?: number;
 
   @ApiPropertyOptional()

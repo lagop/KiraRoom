@@ -13,9 +13,12 @@ import { planAction, paysSubscription } from "@/lib/billing-plan";
 import { aiConversationsApprox } from "@kira/shared";
 import { Check, Loader2, Sparkles, X } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
+import { useToast } from "@/components/ui/use-toast";
+import { addOnDisplayName, formatSubscriptionAmount } from "@/lib/billing-plan";
 
 function BillingPageContent() {
   const t = useTranslations();
+  const { toast } = useToast();
   const ctx = useTenantContext();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -88,11 +91,12 @@ function BillingPageContent() {
     const buyKey = searchParams.get("buy");
     if (!buyKey) return;
     if (!addOns) return; // catalog still loading
+    const buyName = addOnDisplayName(buyKey, addOns, installedAddOns);
     if (installedAddOns?.some((row) => row?.addOn?.key === buyKey)) {
       // Already installed: surface a friendly notice, don't open the dialog.
       setFlowBanner({
         kind: "info",
-        message: t("billing.addons.alreadyInstalled", { key: buyKey }),
+        message: t("billing.addons.alreadyInstalled", { key: buyName }),
       });
       cleanupQueryParams(["buy"]);
       return;
@@ -113,14 +117,21 @@ function BillingPageContent() {
       // the user browse plans instead.
       setFlowBanner({
         kind: "warning",
-        message: t("billing.addons.notInCatalog", { key: buyKey }),
+        message: t("billing.addons.notInCatalog", { key: buyName }),
       });
+      cleanupQueryParams(["buy"]);
+      return;
+    }
+    if (!canBuyAddOnsOf(sub)) {
+      // In trial or without a paid subscription the backend refuses it:
+      // say so instead of opening a dialog that would fail.
+      setFlowBanner({ kind: "info", message: t("billing.addons.needsPaidPlan") });
       cleanupQueryParams(["buy"]);
       return;
     }
     setConfirmAddOn({ key: buyKey, action: "purchase" });
     cleanupQueryParams(["buy"]);
-  }, [searchParams, addOns, installedAddOns, t, cleanupQueryParams]);
+  }, [searchParams, addOns, installedAddOns, sub, t, cleanupQueryParams]);
 
   // Handle the Stripe success / cancel return URLs set in
   // `tenant-addons.controller.ts`.
@@ -130,10 +141,12 @@ function BillingPageContent() {
     const status = searchParams.get("status");
     if (!addOn || !status) return;
     const returnTo = searchParams.get("returnTo");
+    // The name, not the internal key; the catalogue may still be loading.
+    const addOnName = addOnDisplayName(addOn, addOns, installedAddOns);
     if (status === "success") {
       setFlowBanner({
         kind: "success",
-        message: t("billing.addons.purchaseSuccess", { key: addOn }),
+        message: t("billing.addons.purchaseSuccess", { key: addOnName }),
       });
       // If the wizard asked us to bounce back, do it after a tick so
       // the user sees the success banner flash. Same-origin paths only.
@@ -149,13 +162,35 @@ function BillingPageContent() {
     } else if (status === "cancelled") {
       setFlowBanner({
         kind: "warning",
-        message: t("billing.addons.purchaseCancelled", { key: addOn }),
+        message: t("billing.addons.purchaseCancelled", { key: addOnName }),
       });
       // On cancel we DON'T redirect — let the user stay on the
       // billing page and retry when ready.
     }
     cleanupQueryParams(["addOn", "status", "returnTo"]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, t, cleanupQueryParams]);
+
+  // Back from the plan checkout (subscriptions.service createCheckoutSession:
+  // ?subscription=success|cancelled). Stripe's webhook activates the plan,
+  // which can take a few seconds: the page says so and loads the
+  // subscription again now and twice more, instead of staying on "En
+  // prueba" or "Cancelada" without a word.
+  useEffect(() => {
+    const result = searchParams?.get("subscription");
+    if (!result) return;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    if (result === "success") {
+      toast({ title: t("billing.checkoutReturn.successTitle"), description: t("billing.checkoutReturn.successBody") });
+      load();
+      timers.push(setTimeout(() => load(), 4000), setTimeout(() => load(), 10000));
+    } else if (result === "cancelled" || result === "cancel") {
+      toast({ title: t("billing.checkoutReturn.cancelTitle"), description: t("billing.checkoutReturn.cancelBody") });
+    }
+    cleanupQueryParams(["subscription"]);
+    return () => timers.forEach(clearTimeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const load = async () => {
     setLoading(true);
@@ -261,7 +296,7 @@ function BillingPageContent() {
     setConfirmCancel(false);
     setWorking("cancel");
     try {
-      await apiClient.cancelSubscription(false);
+      await apiClient.cancelSubscription();
       await load();
     } catch (e: any) {
       setError(e?.message || t("billing.cancelError"));
@@ -311,7 +346,7 @@ function BillingPageContent() {
         if (row?.status === "active") {
           setFlowBanner({
             kind: "success",
-            message: t("billing.addons.purchaseSuccess", { key }),
+            message: t("billing.addons.purchaseSuccess", { key: addOnDisplayName(key, addOns, installedAddOns) }),
           });
           if (
             pendingReturnTo &&
@@ -327,7 +362,7 @@ function BillingPageContent() {
         } else {
           setFlowBanner({
             kind: "warning",
-            message: t("billing.addons.purchasePending", { key }),
+            message: t("billing.addons.purchasePending", { key: addOnDisplayName(key, addOns, installedAddOns) }),
           });
         }
       } else {
@@ -370,6 +405,16 @@ function BillingPageContent() {
   const currentPlan: PlanId = (sub?.plan as PlanId) || "esencial";
   const isCancelled = sub?.status === "cancelled";
   const isTrialing = sub?.status === "trialing";
+  // The plan the salon has now: Pro during the trial, though it is stored
+  // as Esencial until it subscribes.
+  const shownPlan: PlanId = (sub?.effectivePlan as PlanId) || currentPlan;
+  const inTrial: boolean =
+    sub?.inTrial ?? (isTrialing && !!sub?.trialEnd && new Date(sub.trialEnd).getTime() > Date.now());
+  const canBuyAddOns = canBuyAddOnsOf(sub);
+  const confirmAddOnPrice = (() => {
+    const row = confirmAddOn ? addOns?.find((a) => a?.key === confirmAddOn.key) : null;
+    return row?.monthlyPriceCents ? formatSubscriptionAmount(row.monthlyPriceCents, row.currency) : "";
+  })();
 
   return (
     <div className="space-y-6 p-6">
@@ -439,7 +484,7 @@ function BillingPageContent() {
       <section className="rounded-lg border border-gray-200 bg-white p-5">
         <div className="flex flex-wrap items-center gap-3">
           <span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-semibold text-violet-700">
-            {t(`plans.${currentPlan}`)}
+            {t(`plans.${shownPlan}`)}
           </span>
           <StatusBadge status={sub?.status} t={t} />
           {sub?.trialEnd && isTrialing && (
@@ -490,7 +535,8 @@ function BillingPageContent() {
         )}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {plans?.map((p: any) => {
-            const isCurrent = p.id === currentPlan;
+            // In trial the highlighted card is the Pro of the trial.
+            const isCurrent = p.id === (inTrial ? shownPlan : currentPlan);
             const action = planAction(sub, p.id);
             return (
               <div
@@ -501,10 +547,16 @@ function BillingPageContent() {
                   <h3 className="text-lg font-semibold text-gray-900">
                     {t(`plans.${p.id}`)}
                   </h3>
-                  {p.id === "pro" && (
-                    <span className="rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
-                      {t("landing.pricing.popular")}
+                  {inTrial && p.id === shownPlan ? (
+                    <span className="rounded bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">
+                      {t("billing.trialPlanBadge")}
                     </span>
+                  ) : (
+                    p.id === "pro" && (
+                      <span className="rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                        {t("landing.pricing.popular")}
+                      </span>
+                    )
                   )}
                 </div>
                 <p className="mt-1 text-2xl font-bold text-gray-900">
@@ -567,6 +619,9 @@ function BillingPageContent() {
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-700">
             {t("billing.addons.title")}
           </h2>
+          {!canBuyAddOns && (
+            <p className="mb-3 text-sm text-gray-600">{t("billing.addons.needsPaidPlan")}</p>
+          )}
           <AddOnGrid
             addOns={addOns}
             installed={installedAddOns ?? []}
@@ -574,6 +629,7 @@ function BillingPageContent() {
             onPurchase={handlePurchaseAddOn}
             onCancel={handleCancelAddOn}
             working={working}
+            canBuy={canBuyAddOns}
           />
         </section>
       )}
@@ -646,10 +702,19 @@ function BillingPageContent() {
         open={!!confirmAddOn}
         title={
           confirmAddOn?.action === "purchase"
-            ? t("billing.addons.confirmPurchase", { key: confirmAddOn?.key ?? "" })
-            : t("billing.addons.confirmCancel", { key: confirmAddOn?.key ?? "" })
+            ? t("billing.addons.confirmPurchase", {
+                name: addOnDisplayName(confirmAddOn.key, addOns, installedAddOns),
+                price: confirmAddOnPrice,
+              })
+            : t("billing.addons.confirmCancel", {
+                name: confirmAddOn ? addOnDisplayName(confirmAddOn.key, addOns, installedAddOns) : "",
+              })
         }
-        description={t("billing.addons.confirmDescription")}
+        description={
+          confirmAddOn?.action === "cancel"
+            ? t("billing.addons.confirmCancelDescription")
+            : t("billing.addons.confirmDescription")
+        }
         confirmLabel={
           confirmAddOn?.action === "purchase"
             ? t("billing.addons.subscribe")
@@ -664,6 +729,12 @@ function BillingPageContent() {
   );
 }
 
+/** Add-ons can be bought only on a paid subscription (AddOnsService.purchase). */
+function canBuyAddOnsOf(sub: any): boolean {
+  if (typeof sub?.canBuyAddOns === "boolean") return sub.canBuyAddOns;
+  return sub?.status === "active" && !!sub?.stripeSubscriptionId;
+}
+
 function StatusBadge({
   status,
   t,
@@ -676,6 +747,7 @@ function StatusBadge({
     trialing: "bg-blue-100 text-blue-700",
     cancelled: "bg-red-100 text-red-700",
     past_due: "bg-amber-100 text-amber-700",
+    suspended: "bg-red-100 text-red-700",
   };
   return (
     <span
@@ -728,7 +800,7 @@ function InvoicesList({
                     {inv.number || inv.id}
                   </td>
                   <td className="px-4 py-2 whitespace-nowrap font-medium text-gray-900">
-                    €{(inv.amount / 100).toFixed(2)}
+                    {formatSubscriptionAmount(inv.amount, inv.currency)}
                   </td>
                   <td className="px-4 py-2">
                     <InvoiceStatusBadge status={inv.status} t={t} />
@@ -741,7 +813,7 @@ function InvoicesList({
                         rel="noopener noreferrer"
                         className="text-violet-600 underline hover:text-violet-700"
                       >
-                        {t("billing.invoices.open")}
+                        {inv.pending ? t("billing.invoices.pay") : t("billing.invoices.open")}
                       </a>
                     ) : (
                       <span className="text-gray-400">{t("billing.invoices.dash")}</span>
@@ -862,6 +934,7 @@ function AddOnGrid({
   onPurchase,
   onCancel,
   working,
+  canBuy,
 }: {
   addOns: any[];
   installed: any[];
@@ -869,6 +942,8 @@ function AddOnGrid({
   onPurchase: (key: string) => void;
   onCancel: (key: string) => void;
   working: string | null;
+  /** False in trial or without a paid subscription: no "Activar". */
+  canBuy: boolean;
 }) {
   const installedByKey = new Map(
     installed.map((i) => [i.addOn?.key ?? i.addOnKey, i]),
@@ -879,7 +954,7 @@ function AddOnGrid({
         const inst = installedByKey.get(a.key);
         const isActive = inst?.status === "active";
         const price = a.monthlyPriceCents
-          ? `€${(a.monthlyPriceCents / 100).toFixed(2)} / ${t("billing.addons.perMonth")}`
+          ? `${formatSubscriptionAmount(a.monthlyPriceCents, a.currency)} / ${t("billing.addons.perMonth")}`
           : a.metered
             ? t("billing.addons.metered")
             : t("billing.addons.included");
@@ -947,6 +1022,13 @@ function AddOnGrid({
                   className="w-full cursor-not-allowed rounded-md border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-500"
                 >
                   {t("billing.addons.comingSoon")}
+                </button>
+              ) : !canBuy ? (
+                <button
+                  disabled
+                  className="w-full cursor-not-allowed rounded-md border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-500"
+                >
+                  {t("billing.addons.withPaidPlan")}
                 </button>
               ) : (
                 <button

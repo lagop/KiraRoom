@@ -5,6 +5,8 @@
   Controller,
   Get,
   Header,
+  Logger,
+  Optional,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -37,7 +39,8 @@ import {
 } from "./dto/invoice.dto";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { RESERVED_SERIES } from "./invoice-numbering";
-import { FISCAL_SETTINGS_SELECT, fiscalSettingsView, issuerIdentityPatch } from "./fiscal-identity";
+import { FISCAL_SETTINGS_SELECT, fiscalSettingsView, issuerIdentityPatch, normalizeSeries } from "./fiscal-identity";
+import { AuditLogService } from "../saas/audit-log.service";
 import { taxLabelOf, taxRegimeOf, TAX_REGIME_DEFAULT_RATE } from "@kira/shared";
 
 interface AuthedRequest extends Request {
@@ -53,7 +56,10 @@ export class InvoicesController {
     private readonly certs: FiscalCertificateService,
     private readonly prisma: PrismaService,
     private readonly invoiceEmail: InvoiceEmailService,
+    @Optional() private readonly auditLog?: AuditLogService,
   ) {}
+
+  private readonly logger = new Logger(InvoicesController.name);
 
   // Owner and admin only, like the rest of the invoice routes: invoices
   // carry the clients' NIFs and the salon's takings, which staff do not see.
@@ -251,11 +257,14 @@ export class InvoicesController {
     @Body() dto: UpdateTenantFiscalSettingsDto,
   ) {
     const tenantId = this.requireTenantId(req);
-    // An empty razón social or NIF is refused, never stored over the real one.
+    // An empty razón social or NIF is refused, never stored over the real
+    // one; a NIF that does not validate is refused too (fiscal-identity.ts).
     const identity = issuerIdentityPatch(dto);
-    if (dto.defaultSeries !== undefined && RESERVED_SERIES.includes(dto.defaultSeries.trim().toUpperCase())) {
+    // "a" and "A" were two numbering sequences, and "" invoices with no series.
+    const defaultSeries = dto.defaultSeries !== undefined ? normalizeSeries(dto.defaultSeries) : undefined;
+    if (defaultSeries !== undefined && RESERVED_SERIES.includes(defaultSeries)) {
       throw new BadRequestException(
-        `La serie "${dto.defaultSeries}" está reservada: R es la de las rectificativas y T la de los tickets. Usa otra serie.`,
+        `La serie "${defaultSeries}" está reservada: R es la de las rectificativas y T la de los tickets. Usa otra serie.`,
       );
     }
     if (dto.fiscalMode && dto.fiscalMode !== FiscalMode.none && !fiscalSubmissionAvailable()) {
@@ -263,11 +272,12 @@ export class InvoicesController {
     }
     const current = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
-      select: { fiscalSettings: true },
+      select: { fiscalSettings: true, taxId: true },
     });
+    const taxIdBefore = current?.taxId ?? null;
     const merged = {
       ...((current?.fiscalSettings as Record<string, unknown>) ?? {}),
-      ...(dto.defaultSeries !== undefined ? { defaultSeries: dto.defaultSeries } : {}),
+      ...(defaultSeries !== undefined ? { defaultSeries } : {}),
       ...(dto.defaultTaxRate !== undefined ? { defaultTaxRate: dto.defaultTaxRate } : {}),
       ...(dto.autoInvoiceAppointments !== undefined
         ? { autoInvoiceAppointments: dto.autoInvoiceAppointments }
@@ -305,7 +315,35 @@ export class InvoicesController {
       },
       select: FISCAL_SETTINGS_SELECT,
     });
+    if (identity.taxId !== undefined && identity.taxId !== taxIdBefore) {
+      await this.auditTaxIdChange(req, tenantId, taxIdBefore, identity.taxId);
+    }
     return { ...fiscalSettingsView(updated), submissionAvailable: fiscalSubmissionAvailable() };
+  }
+
+  /**
+   * The issuer NIF goes on every invoice, so who changed it and when is
+   * kept, as the SaaS admin's edit does (tenant.taxId.change). A failed
+   * audit write is logged: the change itself is already saved.
+   */
+  private async auditTaxIdChange(req: AuthedRequest, tenantId: string, before: string | null, after: string) {
+    const user = req.user;
+    if (!this.auditLog || !user?.id || !user.role) return;
+    try {
+      await this.auditLog.record("tenant.taxId.change", {
+        actorId: user.id,
+        actorRole: user.role,
+        tenantId,
+        metadata: {
+          before,
+          after,
+          source: "settings/fiscal",
+          ...(user.impersonatedBy ? { impersonatedBy: user.impersonatedBy } : {}),
+        },
+      });
+    } catch (err) {
+      this.logger.warn(`Audit log for the NIF change of tenant ${tenantId} failed: ${(err as Error).message}`);
+    }
   }
 
   // ---- Certificates ----
@@ -316,13 +354,21 @@ export class InvoicesController {
     @Req() req: AuthedRequest,
     @Body() body: UploadCertificateDto,
   ) {
-    return this.certs.saveCertificate({
-      tenantId: this.requireTenantId(req),
-      alias: body.alias,
-      provider: body.provider,
-      pkcs12Base64: body.pkcs12Base64,
-      passphrase: body.passphrase,
-    });
+    try {
+      return await this.certs.saveCertificate({
+        tenantId: this.requireTenantId(req),
+        alias: body.alias,
+        provider: body.provider,
+        pkcs12Base64: body.pkcs12Base64,
+        passphrase: body.passphrase,
+      });
+    } catch (err) {
+      // A file that is not a PKCS#12 bundle answered a bare 500.
+      this.logger.warn(`Certificate upload refused: ${(err as Error).message}`);
+      throw new BadRequestException(
+        "No se pudo leer el certificado. Sube el archivo .p12 o .pfx que te dio la FNMT (o tu proveedor) y comprueba la contraseña.",
+      );
+    }
   }
 
   @Patch("certificates/:id/deactivate")

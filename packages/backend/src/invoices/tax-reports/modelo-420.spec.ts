@@ -1,5 +1,5 @@
 import { BadRequestException } from "@nestjs/common";
-import { MODELO_420_NOT_COVERED, MODELO_420_RATE_ROWS, aggregateModelo420 } from "./modelo-420";
+import { MODELO_420_IGIC_RATES, MODELO_420_NOT_COVERED, MODELO_420_RATE_ROWS, aggregateModelo420 } from "./modelo-420";
 
 /**
  * Modelo 420 (IGIC). Generating it used to be refused: nobody had the Agencia
@@ -60,5 +60,30 @@ describe("aggregateModelo420", () => {
   it("ignores malformed breakdowns instead of failing the whole quarter", () => {
     const boxes = aggregateModelo420([{ taxBreakdown: null }, { taxBreakdown: [line(7, 1_000, 70)] }]);
     expect(boxes["03"]).toBe(70);
+  });
+
+  it.each([[21], [10], [4], [6.5]])("refuses a line at %p %%, which is not an IGIC rate, in Spanish", (rate) => {
+    const run = () =>
+      aggregateModelo420([{ taxBreakdown: [line(7, 1_000, 70)] }, { taxBreakdown: [line(rate, 1_000, rate * 10)] }]);
+    expect(run).toThrow(BadRequestException);
+    expect(run).toThrow(/IGIC al .* %, y el IGIC solo tiene los tipos 0, 3, 5, 7, 9,5, 15, 20 %/);
+  });
+
+  it("lists every wrong rate once, in Spanish decimals", () => {
+    const err = (() => {
+      try {
+        aggregateModelo420([{ taxBreakdown: [line(21, 100, 21), line(10.5, 100, 10), line(21, 100, 21)] }]);
+      } catch (e) {
+        return e as Error;
+      }
+      return null;
+    })();
+    expect(err?.message).toContain("IGIC al 10,5, 21 %");
+  });
+
+  it("accepts every IGIC rate, 5 % included", () => {
+    for (const rate of MODELO_420_IGIC_RATES) {
+      expect(() => aggregateModelo420([{ taxBreakdown: [line(rate, 1_000, rate * 10)] }])).not.toThrow();
+    }
   });
 });

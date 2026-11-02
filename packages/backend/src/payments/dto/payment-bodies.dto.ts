@@ -2,7 +2,6 @@ import { Type } from "class-transformer";
 import {
   ArrayMaxSize,
   IsArray,
-  IsBoolean,
   IsEnum,
   IsIn,
   IsInt,
@@ -50,11 +49,6 @@ export class CreatePaymentBodyDto {
 export class SubscriptionPlanDto {
   @IsString() @MaxLength(50) @Matches(/^[a-z][a-z0-9_-]*$/)
   plan!: string;
-}
-
-export class CancelSubscriptionDto {
-  @IsOptional() @IsBoolean()
-  immediately?: boolean;
 }
 
 export class UpdateLocationCountDto {

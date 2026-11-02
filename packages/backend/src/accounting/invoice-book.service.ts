@@ -4,6 +4,7 @@ import { InvoiceStatus } from "@prisma/client";
 import { TAX_REGIME_LABELS, taxRegimeOf } from "@kira/shared";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { csvNumberCell, csvTextCell } from "../common/csv-cell";
+import { effectiveTaxBreakdown, type BreakdownSourceLine } from "../invoices/invoice-calculator.service";
 
 /**
  * Libro registro de facturas emitidas, as a file the salon hands to its
@@ -84,6 +85,8 @@ interface BookInvoice {
   subtotalCents: number;
   totalCents: number;
   taxBreakdown: unknown;
+  /** Its lines: the breakdown is worked out from them (effectiveTaxBreakdown). */
+  lines?: BreakdownSourceLine[] | null;
   status: InvoiceStatus;
 }
 
@@ -91,7 +94,11 @@ interface BookInvoice {
 export function buildInvoiceBookRows(invoices: BookInvoice[], taxLabel: string): InvoiceBookRow[] {
   const rows: InvoiceBookRow[] = [];
   for (const inv of invoices) {
-    const breakdown = (Array.isArray(inv.taxBreakdown) ? inv.taxBreakdown : []) as Array<{
+    // From the lines, as the Modelo 303/420 drafts do: an old invoice stored
+    // IGIC 9,5 % as 10 % in its breakdown, and the book has to reconcile with
+    // the return.
+    const effective = effectiveTaxBreakdown(inv);
+    const breakdown = (Array.isArray(effective) ? effective : []) as Array<{
       rate?: number;
       baseCents?: number;
       taxCents?: number;
@@ -258,6 +265,7 @@ export class InvoiceBookService {
           subtotalCents: true,
           totalCents: true,
           taxBreakdown: true,
+          lines: { select: { taxRate: true, taxCents: true, totalCents: true } },
           status: true,
         },
       }),
