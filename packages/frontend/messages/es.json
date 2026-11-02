@@ -138,7 +138,7 @@
       "title": "Cumplimiento fiscal español",
       "subtitle": "Configura el régimen fiscal de tu salón.",
       "taxIdLabel": "NIF / CIF / NIE del emisor",
-      "taxIdHint": "Validado: NIF (8 dígitos + letra) - NIE (X/Y/Z + 7 dígitos + letra) - CIF (letra + 7 dígitos)",
+      "taxIdHint": "Se comprueba al guardar: NIF (8 números y una letra), NIE (X, Y o Z, 7 números y una letra) o CIF (una letra, 7 números y un carácter de control). El tipo se ajusta al número.",
       "legalName": "Razón social",
       "mode": "Régimen",
       "defaultSeries": "Serie por defecto",
@@ -149,11 +149,11 @@
       "diputacionGipuzkoa": "Gipuzkoa",
       "diputacionAlava": "Alava",
       "certificates": "Certificados digitales",
-      "uploadCert": "Subir certificado (.p12 cifrado)",
-      "certAlias": "Alias",
+      "uploadCert": "Subir un certificado",
+      "certAlias": "Nombre (opcional)",
       "certFingerprint": "Huella",
       "certNotAfter": "Caduca",
-      "saved": "Configuración guardada",
+      "saved": "Datos fiscales guardados",
       "saveError": "No se ha guardado",
       "taxRegime": "Régimen fiscal del territorio",
       "taxRegimeHint": "IVA en península y Baleares, IGIC en Canarias, IPSI en Ceuta y Melilla. Al cambiarlo se ajusta el tipo por defecto.",
@@ -161,7 +161,34 @@
       "pricesIncludeTaxHint": "Se aplica a las facturas de citas y de ventas en caja.",
       "pricesIncludeTaxExampleIncluded": "Un servicio de {price} se factura como {base} + {tax} de {label}",
       "pricesIncludeTaxExampleOnTop": "Un servicio de {price} se factura como {base} + {tax} de {label} = {total}",
-      "submissionUnavailable": "El envío de facturas a la AEAT (Verifactu, TicketBAI o SII) todavía no está disponible. Puedes emitir facturas desde KiraRoom, pero no se envían a Hacienda."
+      "submissionUnavailable": "El envío de facturas a la AEAT (Verifactu, TicketBAI o SII) todavía no está disponible. Puedes emitir facturas desde KiraRoom, pero no se envían a Hacienda.",
+      "taxIdPassport": "Pasaporte",
+      "taxIdOther": "Otro",
+      "legalNamePlaceholder": "Razón social del emisor",
+      "ownerOnly": "Solo la dueña puede cambiar los datos fiscales.",
+      "defaultSeriesHint": "De 1 a 4 letras o números. La R y la T están reservadas para rectificativas y tickets.",
+      "taxRateInvalid": "Escribe un tipo entre 0 y 100, con dos decimales como mucho (por ejemplo 21 o 9,5).",
+      "confirmTitle": "¿Guardar estos cambios fiscales?",
+      "confirmIntro": "Las facturas ya emitidas no cambian: conservan su NIF, su serie, su impuesto y sus importes. A partir de ahora:",
+      "confirmTaxId": "Las facturas nuevas llevarán el NIF {taxId}.",
+      "confirmSeries": "Las facturas nuevas se numerarán en la serie {series}, con su propia numeración.",
+      "confirmRegime": "Las facturas nuevas llevarán {tax} en vez de {previous}, al {rate} % por defecto.",
+      "confirmPrices": "Un servicio de {price} en tu catálogo: tus clientas pagaban {before} y pagarán {after} ({tax} incluido). Es el precio que verán en tu web de reservas y el total de las facturas nuevas.",
+      "confirmCta": "Guardar cambios",
+      "certIntro": "El certificado digital del salón firma el envío de las facturas a Hacienda cuando VERI*FACTU o TicketBAI estén activos. Se guarda cifrado y nunca sale del servidor.",
+      "certNone": "Todavía no hay ningún certificado.",
+      "uploadCertHint": "Sube el archivo .p12 o .pfx que te dio la FNMT (o tu proveedor de certificados) y escribe su contraseña.",
+      "certFile": "Archivo del certificado (.p12 o .pfx)",
+      "certPassword": "Contraseña del certificado",
+      "certAliasPlaceholder": "Por ejemplo: FNMT 2026",
+      "certUploadCta": "Subir certificado",
+      "certUploaded": "Certificado guardado",
+      "certUploadError": "No se ha subido el certificado",
+      "certFileMissing": "Elige el archivo del certificado.",
+      "deactivate": "Desactivar",
+      "certDeactivateTitle": "¿Desactivar el certificado «{alias}»?",
+      "certDeactivateBody": "Dejará de usarse para firmar. Si el envío a Hacienda está activo, necesitarás otro certificado.",
+      "certDeactivateError": "No se ha desactivado el certificado"
     },
     "errors": {
       "invalidLines": "Cada línea debe tener descripción, una cantidad mayor que cero y valores válidos.",
@@ -297,7 +324,24 @@
     "logExternalId": "ID en Holded",
     "logError": "Error",
     "ownerOnly": "Solo el propietario del salón puede conectar o desconectar Holded.",
-    "disconnectCta": "Desconectar Holded"
+    "disconnectCta": "Desconectar Holded",
+    "logInvoice": "Factura",
+    "logActions": {
+      "sync": "Envío",
+      "cancel": "Anulación",
+      "connect": "Conexión",
+      "unlink": "Desconexión",
+      "retry": "Reintento",
+      "refresh_token": "Renovación del acceso",
+      "other": "Otra"
+    },
+    "logStatuses": {
+      "ok": "Correcto",
+      "error": "Error",
+      "skipped": "Omitido",
+      "notReflected": "No reflejado en Holded",
+      "other": "—"
+    }
   },
   "onboarding": {
     "linear": {
@@ -360,18 +404,28 @@
   },
   "rebooking": {
     "settings": {
-      "title": "Recordatorios proactivos de rebooking",
-      "subtitle": "Reta a tus clientas en el momento justo para que vuelvan.",
+      "title": "Recordatorios para volver a reservar",
+      "subtitle": "Recuerda a tus clientas que les toca volver, en el momento justo.",
       "enabled": "Activar recordatorios proactivos",
       "leadDays": "Días de antelación (1-7)",
-      "channelFallback": "Canal de envio",
+      "channelFallback": "Canal de envío",
       "channelEmail": "Email",
       "channelWhatsapp": "WhatsApp",
       "channelBoth": "Email y WhatsApp",
       "minVisits": "Mínimo de visitas previas (1-10)",
       "save": "Guardar configuración",
       "saved": "Configuración guardada",
-      "logTitle": "Últimos recordatorios enviados"
+      "logTitle": "Últimos recordatorios enviados",
+      "saveError": "No se ha guardado la configuración",
+      "recomputing": "Estamos recalculando ahora el próximo recordatorio de tus clientas con estos ajustes.",
+      "recomputeHint": "Al cambiar los días de antelación o el mínimo de visitas se recalcula el próximo recordatorio de todas tus clientas.",
+      "logEmpty": "Todavía no se ha enviado ningún recordatorio.",
+      "logError": "No se han podido cargar los últimos recordatorios.",
+      "logClient": "Clienta",
+      "logService": "Servicio",
+      "logDate": "Fecha",
+      "logChannel": "Canal",
+      "logStatus": "Estado"
     },
     "client": {
       "predictionTitle": "Predicción de rebooking",
@@ -397,7 +451,8 @@
       "sent": "Enviado",
       "cancelled": "Cancelado",
       "failed": "No se pudo enviar",
-      "booked": "Reservó cita"
+      "booked": "Reservó cita",
+      "unknown": "Desconocido"
     }
   },
   "signup": {
@@ -531,7 +586,10 @@
       "unlimited": "Ilimitado",
       "clients": "Clientas",
       "professionals": "Profesionales",
-      "appointments": "Citas este mes"
+      "appointments": "Citas este mes",
+      "capClients": "clientas",
+      "capProfessionals": "profesionales",
+      "capAppointments": "citas"
     },
     "changePlan": "Cambiar de plan",
     "addons": {
@@ -546,8 +604,8 @@
       "subscribe": "Activar",
       "cancel": "Cancelar",
       "working": "Procesando...",
-      "confirmPurchase": "Estás seguro de que quieres activar el add-on '{key}'?",
-      "confirmCancel": "Estás seguro de que quieres cancelar el add-on '{key}'?",
+      "confirmPurchase": "¿Activar «{name}» por {price} al mes?",
+      "confirmCancel": "¿Cancelar «{name}»?",
       "error": "No se pudo procesar la operación sobre el add-on.",
       "alreadyInstalled": "El add-on '{key}' ya está activo en tu cuenta.",
       "notInCatalog": "El add-on '{key}' no está disponible para tu plan actual.",
@@ -555,7 +613,11 @@
       "purchaseCancelled": "Has cancelado la compra del add-on '{key}'.",
       "purchasePending": "Stripe aún no ha confirmado el add-on '{key}'. Recarga la página en unos segundos.",
       "comingSoon": "Próximamente",
-      "comingSoonNotice": "'{key}' estará disponible próximamente; todavía no se puede contratar."
+      "comingSoonNotice": "'{key}' estará disponible próximamente; todavía no se puede contratar.",
+      "confirmDescription": "Se añade a tu suscripción y se cobra prorrateado en tu próxima factura. Puedes cancelarlo cuando quieras.",
+      "confirmCancelDescription": "Se quita de tu suscripción y deja de cobrarse; lo que desbloquea deja de funcionar.",
+      "needsPaidPlan": "Los complementos se añaden a tu suscripción de pago: podrás activarlos cuando contrates tu plan.",
+      "withPaidPlan": "Con el plan de pago"
     },
     "aiUsage": {
       "title": "Mensajes de la recepcionista IA",
@@ -586,9 +648,10 @@
       "statusOpen": "Pendiente",
       "statusVoid": "Anulada",
       "statusDraft": "Borrador",
-      "statusUncollectible": "Incobrable",
+      "statusUncollectible": "Impagada",
       "dateFmt": "es-ES",
-      "recibo": "Recibo"
+      "recibo": "Recibo",
+      "pay": "Pagar"
     },
     "trial": {
       "daysRemaining": "Te quedan {days} {plural} de prueba Pro.",
@@ -602,7 +665,8 @@
       "active": "Activo",
       "trialing": "En prueba",
       "cancelled": "Cancelado",
-      "past_due": "Pago pendiente"
+      "past_due": "Pago pendiente",
+      "suspended": "Suspendido"
     },
     "choosePlan": "Elegir plan",
     "processing": "Procesando...",
@@ -622,7 +686,14 @@
     "checkoutDescription": "Irás a la página de pago segura de Stripe para poner la tarjeta.",
     "checkoutGo": "Ir al pago",
     "switchDescription": "Stripe ajusta el próximo cobro según los días que quedan del mes.",
-    "back": "Volver"
+    "back": "Volver",
+    "trialPlanBadge": "Tu prueba",
+    "checkoutReturn": {
+      "successTitle": "Pago recibido",
+      "successBody": "Estamos activando tu plan: en unos segundos lo verás aquí.",
+      "cancelTitle": "No se ha completado el pago",
+      "cancelBody": "No se ha cobrado nada y tu plan sigue como estaba."
+    }
   },
   "plans": {
     "esencial": "Esencial",
@@ -2857,5 +2928,64 @@
       "adding": "Añadiendo…",
       "add": "Añadir"
     }
+  },
+  "whatsappSettings": {
+    "title": "WhatsApp Business",
+    "subtitle": "Conecta tu número de WhatsApp Business: la recepcionista virtual atenderá por WhatsApp y los recordatorios de cita saldrán desde tu número.",
+    "loadError": "No se ha podido cargar la conexión de WhatsApp.",
+    "retry": "Reintentar",
+    "connectedTitle": "Conectado",
+    "qualityLabel": "Calidad del número",
+    "quality": {
+      "green": "Buena",
+      "yellow": "Media",
+      "red": "Baja",
+      "unknown": "Sin datos"
+    },
+    "accessExpires": "El acceso concedido a KiraRoom caduca el {date}.",
+    "technicalData": "Datos técnicos",
+    "fields": {
+      "wabaId": "ID de la cuenta de WhatsApp Business",
+      "phoneNumberId": "ID del número en Meta",
+      "accessToken": "Token de acceso",
+      "displayPhone": "Número de teléfono (con prefijo, por ejemplo +34…)",
+      "displayName": "Nombre que verán tus clientas (opcional)"
+    },
+    "templatesTitle": "Plantillas de mensaje",
+    "templatesIntro": "A quien no te ha escrito en las últimas 24 horas, WhatsApp solo le entrega mensajes con una plantilla aprobada por Meta: recordatorios, confirmaciones, cancelaciones y cambios de cita, avisos de la lista de espera y peticiones de reseña. Las enviamos a revisión al conectar; suelen aprobarse en unas horas. Mientras una no esté aprobada, ese aviso sale por el canal de siempre (email, SMS o el WhatsApp de la plataforma).",
+    "templateNames": {
+      "reminder": "Recordatorio de cita",
+      "confirmed": "Cita confirmada",
+      "cancelled": "Cita cancelada",
+      "changed": "Cambio de cita",
+      "freeSlot": "Hueco libre (lista de espera)",
+      "review": "Petición de reseña",
+      "other": "Otra plantilla"
+    },
+    "templateStatus": {
+      "approved": "Aprobada",
+      "rejected": "Rechazada",
+      "pending": "En revisión",
+      "notSubmitted": "Sin enviar"
+    },
+    "submitTemplates": "Enviar a revisión",
+    "templatesSubmitted": "Plantillas enviadas a Meta para su revisión",
+    "templatesSubmitError": "No se pudieron enviar las plantillas",
+    "disconnect": "Desconectar",
+    "disconnected": "WhatsApp desconectado",
+    "disconnectError": "No se ha podido desconectar WhatsApp",
+    "disconnectConfirmTitle": "¿Desconectar WhatsApp?",
+    "disconnectConfirmBody": "Las campañas pendientes no se enviarán y los avisos volverán a salir por el canal de siempre.",
+    "disconnectCta": "Desconectar WhatsApp",
+    "metaTitle": "Opción 1: conectar con tu cuenta de Meta",
+    "metaIntro": "Te llevamos a Meta (Facebook) para que autorices a KiraRoom a enviar mensajes desde tu cuenta de WhatsApp Business.",
+    "metaCta": "Conectar con Meta",
+    "manualTitle": "Opción 2: conexión manual",
+    "manualIntro": "Si tú o quien te lleva la cuenta tenéis los datos de WhatsApp Business del Administrador comercial de Meta, pégalos aquí.",
+    "connect": "Conectar",
+    "connecting": "Conectando…",
+    "connected": "WhatsApp conectado",
+    "connectError": "No se ha podido conectar WhatsApp",
+    "tokenStored": "El token de acceso se guarda cifrado y no se vuelve a mostrar; solo se usa para enviar tus mensajes de WhatsApp."
   }
 }

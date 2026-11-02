@@ -296,7 +296,7 @@ export class SaasService {
     // source of truth for SaaS-side visibility, and the daily cron /
     // reconciliation job will sync Stripe later.
     try {
-      await this.subscriptions.cancelSubscription(id, /* immediately */ false);
+      await this.subscriptions.cancelSubscription(id);
     } catch (err) {
       this.logger.warn(
         `Stripe cancel failed during soft-delete of tenant ${id}; continuing with local soft-delete.`,

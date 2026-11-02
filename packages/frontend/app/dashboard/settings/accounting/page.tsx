@@ -9,6 +9,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Download, KeyRound, Loader2, Send, Unplug } from "lucide-react";
 import { Modelo303Card } from "@/components/tax/modelo-303-card";
 import { Modelo420Card } from "@/components/tax/modelo-420-card";
+import { accountingActionKey, accountingStatusKey, quarterStartOf, salonDay } from "@/lib/accounting-format";
 
 /**
  * Accounting settings.
@@ -18,15 +19,6 @@ import { Modelo420Card } from "@/components/tax/modelo-420-card";
  * A3, NCS and anything else): the page used to offer OAuth buttons for
  * Holded and Sage that led to a stub returning made-up ids.
  */
-
-function isoDay(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
-/** First day of the current calendar quarter, the usual export period. */
-function quarterStart(now = new Date()): string {
-  return isoDay(new Date(Date.UTC(now.getUTCFullYear(), Math.floor(now.getUTCMonth() / 3) * 3, 1)));
-}
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -78,8 +70,20 @@ export default function AccountingSettingsPage() {
     onSuccess: refresh,
   });
 
-  const [from, setFrom] = useState(quarterStart());
-  const [to, setTo] = useState(isoDay(new Date()));
+  // The export defaults to the current quarter up to today, in the salon's
+  // day (lib/accounting-format.ts): in UTC, just after midnight on the 1st
+  // of a quarter it still offered the previous one.
+  const tenant = useQuery({ queryKey: ["auth", "tenant"], queryFn: () => apiClient.getTenant() });
+  const salonTimeZone = tenant.data?.timezone || "Europe/Madrid";
+  const [from, setFrom] = useState(() => quarterStartOf(salonDay(new Date(), "Europe/Madrid")));
+  const [to, setTo] = useState(() => salonDay(new Date(), "Europe/Madrid"));
+  const [datesTouched, setDatesTouched] = useState(false);
+  useEffect(() => {
+    if (!tenant.data || datesTouched) return;
+    const today = salonDay(new Date(), salonTimeZone);
+    setFrom(quarterStartOf(today));
+    setTo(today);
+  }, [tenant.data, salonTimeZone, datesTouched]);
   const [exportError, setExportError] = useState<string | null>(null);
   const exportBook = useMutation({
     mutationFn: (format: "csv" | "xlsx") => apiClient.downloadAccountingInvoiceBook(from, to, format),
@@ -298,6 +302,7 @@ export default function AccountingSettingsPage() {
                     <thead className="text-xs uppercase text-gray-500">
                       <tr>
                         <th className="text-left">{t("accounting.logDate")}</th>
+                        <th className="text-left">{t("accounting.logInvoice")}</th>
                         <th className="text-left">{t("accounting.logAction")}</th>
                         <th className="text-left">{t("accounting.logStatus")}</th>
                         <th className="text-left">{t("accounting.logExternalId")}</th>
@@ -308,9 +313,12 @@ export default function AccountingSettingsPage() {
                       {logs.data.map((log) => (
                         <tr key={log.id} className="border-t border-gray-100 align-top">
                           <td className="whitespace-nowrap py-1.5 pr-2 text-xs">
-                            {new Date(log.createdAt).toLocaleString("es-ES")}
+                            {new Date(log.createdAt).toLocaleString("es-ES", { timeZone: salonTimeZone })}
                           </td>
-                          <td className="py-1.5 pr-2 text-xs">{log.action}</td>
+                          <td className="whitespace-nowrap py-1.5 pr-2 font-mono text-xs">
+                            {log.invoiceNumber ?? "—"}
+                          </td>
+                          <td className="py-1.5 pr-2 text-xs">{t(accountingActionKey(log.action))}</td>
                           <td className="py-1.5 pr-2 text-xs">
                             <span
                               className={
@@ -322,7 +330,7 @@ export default function AccountingSettingsPage() {
                                     : "bg-gray-100 text-gray-600")
                               }
                             >
-                              {log.status}
+                              {t(accountingStatusKey(log.action, log.status))}
                             </span>
                           </td>
                           <td className="py-1.5 pr-2 font-mono text-xs">{log.externalId ?? "—"}</td>
@@ -355,7 +363,10 @@ export default function AccountingSettingsPage() {
               id="export-from"
               type="date"
               value={from}
-              onChange={(e) => setFrom(e.target.value)}
+              onChange={(e) => {
+                setDatesTouched(true);
+                setFrom(e.target.value);
+              }}
               className="mt-1 block rounded-md border border-gray-300 px-3 py-1.5 text-sm"
             />
           </div>
@@ -367,7 +378,10 @@ export default function AccountingSettingsPage() {
               id="export-to"
               type="date"
               value={to}
-              onChange={(e) => setTo(e.target.value)}
+              onChange={(e) => {
+                setDatesTouched(true);
+                setTo(e.target.value);
+              }}
               className="mt-1 block rounded-md border border-gray-300 px-3 py-1.5 text-sm"
             />
           </div>

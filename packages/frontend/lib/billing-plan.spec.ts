@@ -6,7 +6,7 @@
  * Run: npx ts-node --project tsconfig.test.json --transpile-only lib/billing-plan.spec.ts
  */
 
-import { paysSubscription, planAction } from "./billing-plan";
+import { addOnDisplayName, formatSubscriptionAmount, paysSubscription, planAction } from "./billing-plan";
 
 let pass = 0;
 let fail = 0;
@@ -33,6 +33,18 @@ check("cancelled: its own plan can be contracted again, not a disabled «Tu plan
 check("cancelled with no Stripe subscription left: its own plan too", planAction({ plan: "pro", status: "cancelled", stripeSubscriptionId: null }, "pro") === "subscribe");
 check("active with no Stripe subscription (set by the platform): its plan stays current", planAction({ plan: "pro", status: "active" }, "pro") === "current");
 check("no plan read yet counts as Esencial", planAction({ status: "trialing" }, "esencial") === "subscribe");
+
+// Add-ons by name, money in Spanish (B16, B17).
+const catalog = [{ key: "ai_messages_1000", name: "Pack de 1.000 mensajes de IA" }];
+check("an add-on is named as the catalogue names it", addOnDisplayName("ai_messages_1000", catalog) === "Pack de 1.000 mensajes de IA");
+check(
+  "or as the installed row does",
+  addOnDisplayName("multichannel", catalog, [{ addOn: { key: "multichannel", name: "Multicanal" } }]) === "Multicanal",
+);
+check("the key only when nothing else is known", addOnDisplayName("x_key", null, null) === "x_key");
+const nbsp = (s: string) => s.replace(/ /g, " ");
+check("49,00 € in Spanish", nbsp(formatSubscriptionAmount(4900, "eur")) === "49,00 €", formatSubscriptionAmount(4900, "eur"));
+check("no currency reads as euros", nbsp(formatSubscriptionAmount(1900, null)) === "19,00 €");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

@@ -138,7 +138,7 @@
       "title": "Spanish fiscal compliance",
       "subtitle": "Configure your salon's fiscal regime.",
       "taxIdLabel": "Emitter NIF / CIF / NIE",
-      "taxIdHint": "Validated: NIF (8 digits + letter) - NIE (X/Y/Z + 7 digits + letter) - CIF (letter + 7 digits)",
+      "taxIdHint": "Checked on save: NIF (8 digits and a letter), NIE (X, Y or Z, 7 digits and a letter) or CIF (a letter, 7 digits and a control character). The type follows the number.",
       "legalName": "Legal name",
       "mode": "Regime",
       "defaultSeries": "Default series",
@@ -149,11 +149,11 @@
       "diputacionGipuzkoa": "Gipuzkoa",
       "diputacionAlava": "Ãlava",
       "certificates": "Digital certificates",
-      "uploadCert": "Upload certificate (encrypted .p12)",
-      "certAlias": "Alias",
+      "uploadCert": "Upload a certificate",
+      "certAlias": "Name (optional)",
       "certFingerprint": "Fingerprint",
       "certNotAfter": "Expires",
-      "saved": "Settings saved",
+      "saved": "Tax details saved",
       "saveError": "Not saved",
       "taxRegime": "Territory tax regime",
       "taxRegimeHint": "VAT in mainland Spain and the Balearics, IGIC in the Canary Islands, IPSI in Ceuta and Melilla. Changing it adjusts the default rate.",
@@ -161,7 +161,34 @@
       "pricesIncludeTaxHint": "Applies to invoices for appointments and till sales.",
       "pricesIncludeTaxExampleIncluded": "A {price} service is invoiced as {base} + {tax} {label}",
       "pricesIncludeTaxExampleOnTop": "A {price} service is invoiced as {base} + {tax} {label} = {total}",
-      "submissionUnavailable": "Sending invoices to the tax agency (Verifactu, TicketBAI or SII) is not available yet. You can issue invoices in KiraRoom, but they are not sent."
+      "submissionUnavailable": "Sending invoices to the tax agency (Verifactu, TicketBAI or SII) is not available yet. You can issue invoices in KiraRoom, but they are not sent.",
+      "taxIdPassport": "Passport",
+      "taxIdOther": "Other",
+      "legalNamePlaceholder": "Issuer's legal name",
+      "ownerOnly": "Only the owner can change the tax details.",
+      "defaultSeriesHint": "1 to 4 letters or digits. R and T are reserved for corrective invoices and tickets.",
+      "taxRateInvalid": "Enter a rate between 0 and 100, with at most two decimals (for example 21 or 9.5).",
+      "confirmTitle": "Save these tax changes?",
+      "confirmIntro": "Invoices already issued do not change: they keep their NIF, series, tax and amounts. From now on:",
+      "confirmTaxId": "New invoices will carry the NIF {taxId}.",
+      "confirmSeries": "New invoices will be numbered in series {series}, with its own numbering.",
+      "confirmRegime": "New invoices will carry {tax} instead of {previous}, at {rate} % by default.",
+      "confirmPrices": "A {price} service in your catalogue: your clients paid {before} and will pay {after} ({tax} included). That is the price they will see on your booking site and the total of new invoices.",
+      "confirmCta": "Save changes",
+      "certIntro": "The salon's digital certificate signs the invoices sent to the tax agency once VERI*FACTU or TicketBAI are active. It is stored encrypted and never leaves the server.",
+      "certNone": "No certificate yet.",
+      "uploadCertHint": "Upload the .p12 or .pfx file you got from the FNMT (or your certificate provider) and type its password.",
+      "certFile": "Certificate file (.p12 or .pfx)",
+      "certPassword": "Certificate password",
+      "certAliasPlaceholder": "For example: FNMT 2026",
+      "certUploadCta": "Upload certificate",
+      "certUploaded": "Certificate saved",
+      "certUploadError": "The certificate was not uploaded",
+      "certFileMissing": "Choose the certificate file.",
+      "deactivate": "Deactivate",
+      "certDeactivateTitle": "Deactivate the certificate «{alias}»?",
+      "certDeactivateBody": "It will no longer be used to sign. If sending to the tax agency is active, you will need another certificate.",
+      "certDeactivateError": "The certificate was not deactivated"
     },
     "errors": {
       "invalidLines": "Each line must have a description, a quantity greater than zero, and valid values.",
@@ -297,7 +324,24 @@
     "logExternalId": "Holded ID",
     "logError": "Error",
     "ownerOnly": "Only the salon owner can connect or disconnect Holded.",
-    "disconnectCta": "Disconnect Holded"
+    "disconnectCta": "Disconnect Holded",
+    "logInvoice": "Invoice",
+    "logActions": {
+      "sync": "Sent",
+      "cancel": "Cancellation",
+      "connect": "Connection",
+      "unlink": "Disconnection",
+      "retry": "Retry",
+      "refresh_token": "Access renewal",
+      "other": "Other"
+    },
+    "logStatuses": {
+      "ok": "OK",
+      "error": "Error",
+      "skipped": "Skipped",
+      "notReflected": "Not reflected in Holded",
+      "other": "—"
+    }
   },
   "onboarding": {
     "linear": {
@@ -360,18 +404,28 @@
   },
   "rebooking": {
     "settings": {
-      "title": "Proactive rebooking reminders",
-      "subtitle": "Nudge clients at the right moment to come back.",
+      "title": "Reminders to book again",
+      "subtitle": "Remind your clients it is time to come back, at the right moment.",
       "enabled": "Enable proactive reminders",
       "leadDays": "Lead days (1-7)",
-      "channelFallback": "Send channel",
+      "channelFallback": "Sending channel",
       "channelEmail": "Email",
       "channelWhatsapp": "WhatsApp",
       "channelBoth": "Email and WhatsApp",
       "minVisits": "Minimum previous visits (1-10)",
       "save": "Save settings",
       "saved": "Settings saved",
-      "logTitle": "Recent reminders sent"
+      "logTitle": "Recent reminders sent",
+      "saveError": "The settings were not saved",
+      "recomputing": "We are recomputing your clients' next reminder with these settings now.",
+      "recomputeHint": "Changing the lead days or the minimum visits recomputes the next reminder of all your clients.",
+      "logEmpty": "No reminder has been sent yet.",
+      "logError": "The latest reminders could not be loaded.",
+      "logClient": "Client",
+      "logService": "Service",
+      "logDate": "Date",
+      "logChannel": "Channel",
+      "logStatus": "Status"
     },
     "client": {
       "predictionTitle": "Rebooking prediction",
@@ -397,7 +451,8 @@
       "sent": "Sent",
       "cancelled": "Cancelled",
       "failed": "Failed",
-      "booked": "Booked"
+      "booked": "Booked",
+      "unknown": "Unknown"
     }
   },
   "signup": {
@@ -531,7 +586,10 @@
       "unlimited": "Unlimited",
       "clients": "Clients",
       "professionals": "Professionals",
-      "appointments": "Appointments this month"
+      "appointments": "Appointments this month",
+      "capClients": "clients",
+      "capProfessionals": "professionals",
+      "capAppointments": "appointments"
     },
     "changePlan": "Change plan",
     "addons": {
@@ -546,8 +604,8 @@
       "subscribe": "Activate",
       "cancel": "Cancel",
       "working": "Processing...",
-      "confirmPurchase": "Are you sure you want to activate the '{key}' add-on?",
-      "confirmCancel": "Are you sure you want to cancel the '{key}' add-on?",
+      "confirmPurchase": "Activate «{name}» for {price} a month?",
+      "confirmCancel": "Cancel «{name}»?",
       "error": "Could not process the add-on operation.",
       "alreadyInstalled": "The '{key}' add-on is already active on your account.",
       "notInCatalog": "The '{key}' add-on is not available for your current plan.",
@@ -555,7 +613,11 @@
       "purchaseCancelled": "You cancelled the '{key}' add-on purchase.",
       "purchasePending": "Stripe has not confirmed the '{key}' add-on yet. Reload the page in a few seconds.",
       "comingSoon": "Coming soon",
-      "comingSoonNotice": "'{key}' is coming soon; it cannot be bought yet."
+      "comingSoonNotice": "'{key}' is coming soon; it cannot be bought yet.",
+      "confirmDescription": "It is added to your subscription and charged prorated on your next invoice. You can cancel it at any time.",
+      "confirmCancelDescription": "It is removed from your subscription and no longer charged; what it unlocks stops working.",
+      "needsPaidPlan": "Add-ons are added to your paid subscription: you can activate them once you subscribe to your plan.",
+      "withPaidPlan": "With the paid plan"
     },
     "aiUsage": {
       "title": "AI receptionist messages",
@@ -586,9 +648,10 @@
       "statusOpen": "Pending",
       "statusVoid": "Void",
       "statusDraft": "Draft",
-      "statusUncollectible": "Uncollectible",
+      "statusUncollectible": "Unpaid",
       "dateFmt": "en-US",
-      "recibo": "Recibo"
+      "recibo": "Recibo",
+      "pay": "Pay"
     },
     "trial": {
       "daysRemaining": "You have {days} {plural} of Pro trial left.",
@@ -602,7 +665,8 @@
       "active": "Active",
       "trialing": "Trial",
       "cancelled": "Cancelled",
-      "past_due": "Payment overdue"
+      "past_due": "Payment overdue",
+      "suspended": "Suspended"
     },
     "choosePlan": "Choose plan",
     "processing": "Processing...",
@@ -622,7 +686,14 @@
     "checkoutDescription": "You will go to Stripe's secure payment page to enter your card.",
     "checkoutGo": "Go to payment",
     "switchDescription": "Stripe adjusts your next charge for the days left this month.",
-    "back": "Back"
+    "back": "Back",
+    "trialPlanBadge": "Your trial",
+    "checkoutReturn": {
+      "successTitle": "Payment received",
+      "successBody": "We are activating your plan: you will see it here in a few seconds.",
+      "cancelTitle": "The payment was not completed",
+      "cancelBody": "Nothing was charged and your plan is as it was."
+    }
   },
   "plans": {
     "esencial": "Esencial",
@@ -2857,5 +2928,64 @@
       "adding": "Adding…",
       "add": "Add"
     }
+  },
+  "whatsappSettings": {
+    "title": "WhatsApp Business",
+    "subtitle": "Connect your WhatsApp Business number: the virtual receptionist will answer on WhatsApp and appointment reminders will go out from your number.",
+    "loadError": "The WhatsApp connection could not be loaded.",
+    "retry": "Retry",
+    "connectedTitle": "Connected",
+    "qualityLabel": "Number quality",
+    "quality": {
+      "green": "Good",
+      "yellow": "Medium",
+      "red": "Low",
+      "unknown": "No data"
+    },
+    "accessExpires": "The access granted to KiraRoom expires on {date}.",
+    "technicalData": "Technical details",
+    "fields": {
+      "wabaId": "WhatsApp Business account ID",
+      "phoneNumberId": "Phone number ID in Meta",
+      "accessToken": "Access token",
+      "displayPhone": "Phone number (with country code, e.g. +34…)",
+      "displayName": "Name your clients will see (optional)"
+    },
+    "templatesTitle": "Message templates",
+    "templatesIntro": "To someone who has not written to you in the last 24 hours, WhatsApp only delivers messages with a Meta-approved template: appointment reminders, confirmations, cancellations and changes, wait-list notices and review requests. We submit them for review when you connect; they are usually approved within hours. Until one is approved, that notice goes out through the usual channel (email, SMS or the platform's WhatsApp).",
+    "templateNames": {
+      "reminder": "Appointment reminder",
+      "confirmed": "Appointment confirmed",
+      "cancelled": "Appointment cancelled",
+      "changed": "Appointment changed",
+      "freeSlot": "Free slot (wait list)",
+      "review": "Review request",
+      "other": "Other template"
+    },
+    "templateStatus": {
+      "approved": "Approved",
+      "rejected": "Rejected",
+      "pending": "In review",
+      "notSubmitted": "Not submitted"
+    },
+    "submitTemplates": "Submit for review",
+    "templatesSubmitted": "Templates submitted to Meta for review",
+    "templatesSubmitError": "The templates could not be submitted",
+    "disconnect": "Disconnect",
+    "disconnected": "WhatsApp disconnected",
+    "disconnectError": "WhatsApp could not be disconnected",
+    "disconnectConfirmTitle": "Disconnect WhatsApp?",
+    "disconnectConfirmBody": "Pending campaigns will not be sent and notices will go back to the usual channel.",
+    "disconnectCta": "Disconnect WhatsApp",
+    "metaTitle": "Option 1: connect with your Meta account",
+    "metaIntro": "We take you to Meta (Facebook) so you can authorise KiraRoom to send messages from your WhatsApp Business account.",
+    "metaCta": "Connect with Meta",
+    "manualTitle": "Option 2: manual connection",
+    "manualIntro": "If you, or whoever runs the account, have the WhatsApp Business details from Meta's Business Manager, paste them here.",
+    "connect": "Connect",
+    "connecting": "Connecting…",
+    "connected": "WhatsApp connected",
+    "connectError": "WhatsApp could not be connected",
+    "tokenStored": "The access token is stored encrypted and never shown again; it is only used to send your WhatsApp messages."
   }
 }

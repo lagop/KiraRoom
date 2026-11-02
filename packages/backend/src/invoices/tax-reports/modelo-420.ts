@@ -53,6 +53,18 @@ export const MODELO_420_NOT_COVERED = [
   "42", "43", "44", "46", "47",
 ] as const;
 
+/**
+ * The IGIC rates (Ley 4/2012 de Canarias and later changes): tipo cero,
+ * reducidos 3 % and 5 %, general 7 %, incrementados 9,5 % and 15 %, and the
+ * especial 20 %. A line at any other rate is not IGIC.
+ */
+export const MODELO_420_IGIC_RATES: readonly number[] = [0, 3, 5, 7, 9.5, 15, 20];
+
+/** 9.5 -> "9,5". */
+function spanishRate(rate: number): string {
+  return String(rate).replace(".", ",");
+}
+
 interface BreakdownLine {
   rate: number;
   baseCents: number;
@@ -64,19 +76,36 @@ interface BreakdownLine {
  *
  * Rates are kept to two decimals: IGIC has 9.5 %, which the Modelo 303's
  * whole-number bucketing would have turned into 10 %.
+ *
+ * Like the 303, a rate IGIC does not have (a product kept at IVA's 21 %, a
+ * stale default) is refused rather than given its own "IGIC 21 %" row.
  */
 export function aggregateModelo420(invoices: Array<{ taxBreakdown: unknown }>): Record<string, number> {
   const byRate = new Map<number, { base: number; tax: number }>();
+  const unexpected = new Set<number>();
   for (const inv of invoices) {
     const lines = Array.isArray(inv.taxBreakdown) ? (inv.taxBreakdown as BreakdownLine[]) : [];
     for (const line of lines) {
       const rate = Math.round(Number(line.rate) * 100) / 100;
       if (!Number.isFinite(rate)) continue;
+      if (!MODELO_420_IGIC_RATES.includes(rate)) {
+        unexpected.add(rate);
+        continue;
+      }
       const bucket = byRate.get(rate) ?? { base: 0, tax: 0 };
       bucket.base += Number(line.baseCents) || 0;
       bucket.tax += Number(line.taxCents) || 0;
       byRate.set(rate, bucket);
     }
+  }
+
+  if (unexpected.size > 0) {
+    const list = [...unexpected].sort((a, b) => a - b).map(spanishRate).join(", ");
+    throw new BadRequestException(
+      `Este trimestre tiene facturas con IGIC al ${list} %, y el IGIC solo tiene los tipos ` +
+        `${MODELO_420_IGIC_RATES.map(spanishRate).join(", ")} %. Revisa el tipo de esas facturas ` +
+        `antes de generar el borrador del modelo 420.`,
+    );
   }
 
   const rates = [...byRate.keys()].sort((a, b) => a - b);

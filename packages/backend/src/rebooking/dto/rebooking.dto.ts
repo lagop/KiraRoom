@@ -16,9 +16,9 @@ export class UpdateRebookingConfigDto {
 
   @ApiPropertyOptional({ minimum: 1, maximum: 7 })
   @IsOptional()
-  @IsInt()
-  @Min(1)
-  @Max(7)
+  @IsInt({ message: "Los días de antelación tienen que ser un número entero, de 1 a 7." })
+  @Min(1, { message: "Los días de antelación van de 1 a 7." })
+  @Max(7, { message: "Los días de antelación van de 1 a 7." })
   leadDays?: number;
 
   @ApiPropertyOptional({ enum: ["email", "whatsapp", "both"] })
@@ -28,9 +28,9 @@ export class UpdateRebookingConfigDto {
 
   @ApiPropertyOptional({ minimum: 1, maximum: 10 })
   @IsOptional()
-  @IsInt()
-  @Min(1)
-  @Max(10)
+  @IsInt({ message: "El mínimo de visitas tiene que ser un número entero, de 1 a 10." })
+  @Min(1, { message: "El mínimo de visitas va de 1 a 10." })
+  @Max(10, { message: "El mínimo de visitas va de 1 a 10." })
   minVisits?: number;
 }
 

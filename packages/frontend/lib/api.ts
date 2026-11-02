@@ -1190,8 +1190,13 @@ export interface Subscription {
 export interface SubscriptionInvoice {
   id: string;
   number: string | null;
-  /** Amount in cents (Stripe amount_paid) */
+  /** Amount in cents: what was paid, or what is due while open / unpaid. */
   amount: number;
+  /** Stripe amount_due / amount_paid, in cents. */
+  amountDue?: number;
+  amountPaid?: number;
+  /** Open or uncollectible: still to be paid. */
+  pending?: boolean;
   currency: string;
   status: "draft" | "open" | "paid" | "void" | "uncollectible" | string;
   created: string;
@@ -1603,6 +1608,24 @@ export interface RebookingConfig {
   leadDays: number;
   channelFallback: "email" | "whatsapp" | "both";
   minVisits: number;
+  /** On a save: the clients' next reminder dates are being recomputed. */
+  recomputing?: boolean;
+}
+
+/** GET /rebooking/log: the salon's latest reminders, by name. */
+export interface RebookingTenantLog {
+  /** The salon's timezone, to show the dates in its day. */
+  timezone: string;
+  items: Array<{
+    id: string;
+    clientName: string | null;
+    serviceName: string | null;
+    channel: "email" | "whatsapp" | "both";
+    status: "scheduled" | "sent" | "cancelled" | "failed" | "booked";
+    scheduledAt: string;
+    sentAt: string | null;
+    createdAt: string;
+  }>;
 }
 
 export interface ClientCadenceByService {
@@ -1775,6 +1798,8 @@ export interface AccountingSyncLog {
   externalId: string | null;
   errorMessage: string | null;
   createdAt: string;
+  /** Series + number of the invoice; null for connect / disconnect rows. */
+  invoiceNumber?: string | null;
 }
 
 /** GET /web-domain: the public page and the salon's own domain, if any. */
@@ -2007,7 +2032,7 @@ export interface ApiClientInterface {
   getCurrentSubscription(): Promise<Subscription | null>;
   createSubscriptionCheckout(plan: string): Promise<{ url: string }>;
   changeSubscriptionPlan(plan: string): Promise<Subscription>;
-  cancelSubscription(immediately?: boolean): Promise<Subscription>;
+  cancelSubscription(): Promise<Subscription>;
   getSubscriptionInvoices(limit?: number): Promise<SubscriptionInvoice[]>;
   getBillingPortalUrl(): Promise<{ url: string }>;
   getSubscriptionUsage(): Promise<SubscriptionUsage>;
@@ -2160,6 +2185,7 @@ export interface ApiClientInterface {
   ): Promise<RebookingConfig>;
   getRebookingPrediction(clientId: string): Promise<ClientCadence | null>;
   getRebookingLog(clientId: string): Promise<RebookingReminder[]>;
+  getRebookingTenantLog(limit?: number): Promise<RebookingTenantLog>;
   optOutClientRebooking(clientId: string): Promise<{ ok: boolean }>;
   recomputeClientCadence(clientId: string): Promise<{ ok: boolean }>;
 
@@ -2242,17 +2268,13 @@ export interface ApiClientInterface {
 
   // P2A â€” Certificates
   listFiscalCertificates(): Promise<FiscalCertificate[]>;
+  /** The .p12 / .pfx file as base64 and its password (UploadCertificateDto). */
   uploadFiscalCertificate(input: {
     alias: string;
-    provider: "p12" | "cloud_dnie";
-    encryptedPem: string;
-    passphraseCipher?: string;
-    fingerprint: string;
-    issuer?: string;
-    subject?: string;
-    notBefore?: string;
-    notAfter?: string;
-  }): Promise<FiscalCertificate>;
+    provider: "p12";
+    pkcs12Base64: string;
+    passphrase: string;
+  }): Promise<{ id: string; fingerprint: string }>;
   deactivateFiscalCertificate(id: string): Promise<{ count: number }>;
 
   // P2B â€” Accounting integrations
@@ -3987,10 +4009,9 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  async cancelSubscription(immediately?: boolean): Promise<Subscription> {
+  async cancelSubscription(): Promise<Subscription> {
     return this.request<Subscription>("/payments/subscription/cancel", {
       method: "POST",
-      body: JSON.stringify({ immediately }),
     });
   }
 
@@ -5416,6 +5437,9 @@ class ApiClient implements ApiClientInterface {
   async getRebookingLog(clientId: string): Promise<RebookingReminder[]> {
     return this.request(`/rebooking/clients/${clientId}/log`);
   }
+  async getRebookingTenantLog(limit = 20): Promise<RebookingTenantLog> {
+    return this.request(`/rebooking/log?limit=${limit}`);
+  }
   async optOutClientRebooking(clientId: string): Promise<{ ok: boolean }> {
     return this.request(`/rebooking/clients/${clientId}/opt-out`, { method: "POST" });
   }
@@ -5580,8 +5604,13 @@ class ApiClient implements ApiClientInterface {
   async listFiscalCertificates(): Promise<FiscalCertificate[]> {
     return this.request(`/invoices/certificates`);
   }
-  async uploadFiscalCertificate(input: any): Promise<FiscalCertificate> {
-    return this.request<FiscalCertificate>(`/invoices/certificates`, {
+  async uploadFiscalCertificate(input: {
+    alias: string;
+    provider: "p12";
+    pkcs12Base64: string;
+    passphrase: string;
+  }): Promise<{ id: string; fingerprint: string }> {
+    return this.request<{ id: string; fingerprint: string }>(`/invoices/certificates`, {
       method: "POST",
       body: JSON.stringify(input),
     });

@@ -99,32 +99,13 @@ describe('P2A-receptionist-v2: PLAN_MATRIX', () => {
     expect(subs.aiCap('professional', { inTrial: false })).toBe(2000);
   });
 
-  it('upsellableAddOnsForPlan filtra los redundantes en Pro/Empresa', () => {
-    const esencial = subs.upsellableAddOnsForPlan('esencial');
-    expect(esencial).toContain('ai_messages_1000');
-    expect(esencial).not.toContain('ai_expansion'); // retired
-    expect(esencial).toContain('loyalty_giftcards');
-    expect(esencial).toContain('email_marketing');
-    // H-4: multichannel is included for Esencial (sold as add-on so the
-    // salon can keep the €49 plan and only pay for the channels).
-    expect(esencial).toContain('multichannel');
-
-    const pro = subs.upsellableAddOnsForPlan('pro');
-    expect(pro).toContain('ai_messages_1000'); // adds messages on any plan
-    expect(pro).toContain('loyalty_giftcards');
-    expect(pro).toContain('email_marketing');
-    // H-4: Pro already grants `multichannel` in PLAN_MATRIX, so the
-    // filter removes the add-on from the catalog.
-    expect(pro).not.toContain('multichannel');
-
-    // Not sold until custom domains are served over HTTPS.
-    expect(esencial).not.toContain('web_domain');
-    expect(pro).not.toContain('web_domain');
-
-    const empresa = subs.upsellableAddOnsForPlan('empresa');
-    expect(empresa).toContain('ai_messages_1000');
-    expect(empresa).not.toContain('multichannel');
+  it('has no dead billing paths left (createSubscription marked active before paying)', () => {
+    const proto = SubscriptionsService.prototype as any;
+    for (const m of ['createSubscription', 'checkFeature', 'upsellableAddOnsForPlan']) {
+      expect(proto[m]).toBeUndefined();
+    }
   });
+
 });
 
 // The app says the AI caps the way kiraroom.com does: messages, and the

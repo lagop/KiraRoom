@@ -42,3 +42,75 @@ export function changedFiscalFields<T extends Record<string, unknown>>(draft: T,
   }
   return patch;
 }
+
+/** The settings a change of which is confirmed before saving. */
+export interface FiscalRiskFields {
+  tenantNif: string;
+  defaultSeries: string;
+  defaultTaxRate: number;
+  taxRegime: "iva" | "igic" | "ipsi";
+  pricesIncludeTax: boolean;
+}
+
+const TAX_LABEL: Record<FiscalRiskFields["taxRegime"], string> = { iva: "IVA", igic: "IGIC", ipsi: "IPSI" };
+
+/** "30,00 €" for 3000 cents; same as prices-tax-example formatEuros. */
+function euros(cents: number): string {
+  const abs = Math.abs(Math.round(cents));
+  const whole = Math.floor(abs / 100)
+    .toString()
+    .replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return `${cents < 0 ? "-" : ""}${whole},${String(abs % 100).padStart(2, "0")} €`;
+}
+
+/** What a 30,00 € catalogue price costs the client under these settings. */
+function clientTotal(rate: number, included: boolean): number {
+  if (included) return 3000;
+  const r = Number.isFinite(rate) && rate > 0 ? rate : 0;
+  return 3000 + Math.round(3000 * (r / 100));
+}
+
+/**
+ * The lines of the confirmation shown before saving a change to the NIF, the
+ * default series, the tax regime or whether prices include the tax: what
+ * changes for the invoices from now on (the ones already issued keep their
+ * values, said by the dialog's intro). Empty when none of those changed, so
+ * a save of anything else goes through without a dialog.
+ */
+export function fiscalChangeSummary(
+  draft: FiscalRiskFields,
+  loaded: FiscalRiskFields,
+): Array<{ key: string; params: Record<string, string> }> {
+  const lines: Array<{ key: string; params: Record<string, string> }> = [];
+  if (draft.tenantNif.trim().toUpperCase() !== loaded.tenantNif.trim().toUpperCase()) {
+    lines.push({ key: "invoices.fiscalSettings.confirmTaxId", params: { taxId: draft.tenantNif.trim().toUpperCase() } });
+  }
+  if (draft.defaultSeries.trim().toUpperCase() !== loaded.defaultSeries.trim().toUpperCase()) {
+    lines.push({
+      key: "invoices.fiscalSettings.confirmSeries",
+      params: { series: draft.defaultSeries.trim().toUpperCase() },
+    });
+  }
+  const regimeChanged = draft.taxRegime !== loaded.taxRegime;
+  if (regimeChanged) {
+    lines.push({
+      key: "invoices.fiscalSettings.confirmRegime",
+      params: {
+        tax: TAX_LABEL[draft.taxRegime],
+        previous: TAX_LABEL[loaded.taxRegime],
+        rate: String(draft.defaultTaxRate).replace(".", ","),
+      },
+    });
+  }
+  if (regimeChanged || draft.pricesIncludeTax !== loaded.pricesIncludeTax) {
+    const before = clientTotal(loaded.defaultTaxRate, loaded.pricesIncludeTax);
+    const after = clientTotal(draft.defaultTaxRate, draft.pricesIncludeTax);
+    if (before !== after || draft.pricesIncludeTax !== loaded.pricesIncludeTax) {
+      lines.push({
+        key: "invoices.fiscalSettings.confirmPrices",
+        params: { price: euros(3000), before: euros(before), after: euros(after), tax: TAX_LABEL[draft.taxRegime] },
+      });
+    }
+  }
+  return lines;
+}

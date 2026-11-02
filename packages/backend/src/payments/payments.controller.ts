@@ -32,7 +32,6 @@ import { Public } from "../auth/decorators/public.decorator";
 import { AllowWhenReadOnly } from "../common/decorators/allow-when-read-only.decorator";
 import { ReadOnlyNoticeService } from "./read-only-notice.service";
 import {
-  CancelSubscriptionDto,
   CreatePaymentBodyDto,
   RefundPaymentDto,
   SubscriptionPlanDto,
@@ -301,12 +300,9 @@ export class PaymentsController {
   @ApiOperation({ summary: "Cancel subscription" })
   async cancelSubscription(
     @Req() req: any,
-    @Body() body: CancelSubscriptionDto,
   ) {
-    const { newlyCancelled, ...result } = await this.subscriptionsService.cancelSubscription(
-      req.user.tenantId,
-      body.immediately,
-    );
+    // No body: the "immediately" flag it took was never read.
+    const { newlyCancelled, ...result } = await this.subscriptionsService.cancelSubscription(req.user.tenantId);
     // Confirmation to the owner. Only here: a SaaS-console deletion also
     // cancels, and that salon is not told its account is read-only.
     if (newlyCancelled) {

@@ -41,11 +41,72 @@ export class RebookingController {
   ) {
     const tenantId = this.requireTenantId(req);
     const current = await this.cadence.getTenantConfig(tenantId);
-    const merged = { ...current, ...dto };
+    const sent = Object.fromEntries(Object.entries(dto).filter(([, v]) => v !== undefined));
+    const merged = { ...current, ...sent };
     await this.prisma.tenant.update({
       where: { id: tenantId },
       data: { rebookingSettings: merged as any } });
-    return merged;
+    // The next reminder date of each client was only worked out at her next
+    // visit, so a new "días de antelación" or "mínimo de visitas" did nothing
+    // for weeks. They are recomputed now, in the background: the save
+    // answers at once.
+    const recompute =
+      merged.leadDays !== current.leadDays ||
+      merged.minVisits !== current.minVisits ||
+      (merged.enabled && !current.enabled);
+    if (recompute) {
+      void this.cadence.recomputeTenantInBackground(tenantId);
+    }
+    return { ...merged, recomputing: recompute };
+  }
+
+  /**
+   * The salon's latest rebooking reminders, for Ajustes > Recordatorios:
+   * client and service by name (not ids), the channel and the status. Dates
+   * are ISO; the salon's timezone goes with them so the page shows them in
+   * the salon's day.
+   */
+  @Get("log")
+  @Roles(UserRole.owner, UserRole.admin)
+  async getTenantLog(@Req() req: AuthedRequest, @Query("limit") limit?: string) {
+    const tenantId = this.requireTenantId(req);
+    const take = Math.min(Math.max(Number.parseInt(limit ?? "", 10) || 20, 1), 100);
+    const [tenant, rows] = await Promise.all([
+      this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } }),
+      this.prisma.rebookingReminder.findMany({
+        where: { tenantId },
+        orderBy: { createdAt: "desc" },
+        take,
+        select: {
+          id: true,
+          serviceId: true,
+          scheduledAt: true,
+          sentAt: true,
+          channel: true,
+          status: true,
+          createdAt: true,
+          client: { select: { firstName: true, lastName: true } },
+        },
+      }),
+    ]);
+    const serviceIds = [...new Set(rows.map((r) => r.serviceId).filter((id): id is string => !!id))];
+    const services = serviceIds.length
+      ? await this.prisma.service.findMany({ where: { tenantId, id: { in: serviceIds } }, select: { id: true, name: true } })
+      : [];
+    const serviceName = new Map(services.map((s) => [s.id, s.name]));
+    return {
+      timezone: tenant?.timezone || "Europe/Madrid",
+      items: rows.map((r) => ({
+        id: r.id,
+        clientName: [r.client?.firstName, r.client?.lastName].filter(Boolean).join(" ").trim() || null,
+        serviceName: (r.serviceId && serviceName.get(r.serviceId)) || null,
+        channel: r.channel,
+        status: r.status,
+        scheduledAt: r.scheduledAt,
+        sentAt: r.sentAt,
+        createdAt: r.createdAt,
+      })),
+    };
   }
 
   @Get("clients/:id/prediction")

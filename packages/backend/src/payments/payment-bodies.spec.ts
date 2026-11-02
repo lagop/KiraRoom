@@ -1,7 +1,6 @@
 import { PaymentsController } from "./payments.controller";
 import { AddOnsAdminController } from "./controllers/addons.controller";
 import {
-  CancelSubscriptionDto,
   CreatePaymentBodyDto,
   RefundPaymentDto,
   SubscriptionPlanDto,
@@ -20,7 +19,6 @@ describe("payments bodies", () => {
     expect(bodyMetatype(P, "createPayment")).toBe(CreatePaymentBodyDto);
     expect(bodyMetatype(P, "createCheckout")).toBe(SubscriptionPlanDto);
     expect(bodyMetatype(P, "changePlan")).toBe(SubscriptionPlanDto);
-    expect(bodyMetatype(P, "cancelSubscription")).toBe(CancelSubscriptionDto);
     expect(bodyMetatype(P, "updateLocationCount")).toBe(UpdateLocationCountDto);
     expect(bodyMetatype(P, "depositWallet")).toBe(WalletDepositDto);
     expect(bodyMetatype(P, "withdrawWallet")).toBe(WalletWithdrawDto);
@@ -99,8 +97,6 @@ describe("payments bodies", () => {
   it("subscription bodies: a plan key, a boolean, a whole location count", async () => {
     expect(await bodyParser(PaymentsController, "changePlan")({ plan: "pro" })).toEqual({ plan: "pro" });
     await expect(bodyParser(PaymentsController, "changePlan")({ plan: { toString: 1 } })).rejects.toBeDefined();
-    expect(await bodyParser(PaymentsController, "cancelSubscription")({})).toEqual({});
-    await expect(bodyParser(PaymentsController, "cancelSubscription")({ immediately: "yes" })).rejects.toBeDefined();
     await expect(bodyParser(PaymentsController, "updateLocationCount")({ locationCount: 0 })).rejects.toBeDefined();
   });
 
