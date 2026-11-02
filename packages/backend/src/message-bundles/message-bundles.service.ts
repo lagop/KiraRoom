@@ -51,8 +51,9 @@ export class MessageBundlesService {
   }
 
   /**
-   * Read the current balance for a tenant. Auto-creates the wallet
-   * at 0 credits if missing.
+   * Read the current balance for a tenant: zero when it has no wallet yet.
+   * A read creates nothing (it used to create a wallet row for every salon
+   * that opened Facturación); the wallet is created by its first top-up.
    */
   async getBalance(tenantId: string): Promise<{
     creditsRemaining: number;
@@ -60,13 +61,11 @@ export class MessageBundlesService {
     creditsUsedTotal: number;
     lastTopupAt: Date | null;
   }> {
-    let row = await this.prisma.messageCreditWallet.findUnique({
+    const row = await this.prisma.messageCreditWallet.findUnique({
       where: { tenantId },
     });
     if (!row) {
-      row = await this.prisma.messageCreditWallet.create({
-        data: { tenantId },
-      });
+      return { creditsRemaining: 0, creditsPurchasedTotal: 0, creditsUsedTotal: 0, lastTopupAt: null };
     }
     return {
       creditsRemaining: row.creditsRemaining,

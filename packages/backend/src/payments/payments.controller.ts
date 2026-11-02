@@ -301,14 +301,32 @@ export class PaymentsController {
   async cancelSubscription(
     @Req() req: any,
   ) {
-    // No body: the "immediately" flag it took was never read.
+    // No body: the "immediately" flag it took was never read. A paid
+    // subscription now ends with its period (cancelAt): the read-only
+    // notice goes out when it ends (webhook), not now.
     const { newlyCancelled, ...result } = await this.subscriptionsService.cancelSubscription(req.user.tenantId);
     // Confirmation to the owner. Only here: a SaaS-console deletion also
     // cancels, and that salon is not told its account is read-only.
-    if (newlyCancelled) {
+    if (newlyCancelled && result.readOnlyUntil) {
       await this.readOnlyNotices.notify(req.user.tenantId, "cancelled", result.readOnlyUntil);
     }
     return result;
+  }
+
+  @Post("subscription/undo-cancel")
+  @AllowWhenReadOnly()
+  @Roles("owner")
+  @ApiOperation({ summary: "Undo a cancellation set for the end of the paid period (it renews again)" })
+  async undoCancellation(@Req() req: any) {
+    return this.subscriptionsService.undoCancellation(req.user.tenantId);
+  }
+
+  @Get("subscription/plan-check")
+  @Roles("owner")
+  @ApiOperation({ summary: "What the salon must deactivate before moving to a plan (empty when it fits)" })
+  async planCheck(@Req() req: any, @Query() query: SubscriptionPlanDto) {
+    const blockers = await this.subscriptionsService.planLimitBlockers(req.user.tenantId, query.plan);
+    return { plan: query.plan, blockers };
   }
 
   @Post("subscription/reactivate")

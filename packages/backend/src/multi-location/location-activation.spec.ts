@@ -47,7 +47,11 @@ describe("the plan limit counts active locations only", () => {
 
   it("at the limit of active locations, creating is refused in Spanish", async () => {
     const { service, prisma } = makeService({ activeCount: 2, maxLocations: 2 });
-    await expect(service.create("t1", { name: "Norte" })).rejects.toThrow(/máximo de locales activos \(2\)/);
+    const err: any = await service.create("t1", { name: "Norte" }).catch((e) => e);
+    expect(err.message).toMatch(/Tu plan Empresa incluye 2 locales activos/);
+    // B8: it says how to get one more (each location is paid for), with a link.
+    expect(err.message).toMatch(/añadir un local en Ajustes > Facturación/);
+    expect(err.getResponse()).toEqual(expect.objectContaining({ code: "LOCATION_LIMIT_REACHED", billingUrl: "/dashboard/billing" }));
     expect(prisma.location.create).not.toHaveBeenCalled();
   });
 });

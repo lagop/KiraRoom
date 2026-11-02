@@ -6,7 +6,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { DASHBOARD_NAV, NavEntry, NavLink, activeGroup, badgesIn, isActive, navFor } from "./dashboard-nav";
+import { DASHBOARD_NAV, NavEntry, NavLink, activeGroup, badgesIn, isActive, isOwner, navFor } from "./dashboard-nav";
 
 let pass = 0;
 let fail = 0;
@@ -33,6 +33,9 @@ console.log("who sees what");
   check("staff ask for their time off; the owner answers the requests", staff.includes("my-time-off") && !staff.includes("time-off-requests") && owner.includes("time-off-requests") && !owner.includes("my-time-off"));
   check("only the owner and managers fetch the pending requests badge", badgesIn(navFor("owner")).join() === "time-off-requests" && badgesIn(navFor("admin")).join() === "time-off-requests" && badgesIn(navFor("staff")).length === 0);
   check("the owner finds the plan and subscription in the menu", owner.includes("billing"));
+  check("admins do not see Facturación (billing is the owner's, B7)", !ids(navFor("admin")).includes("billing"));
+  check("admins still see the invoices", ids(navFor("admin")).includes("invoices"));
+  check("before the user is read nobody counts as the owner", !isOwner(null) && !isOwner("admin") && isOwner("owner"));
   check("the website widget is in Ajustes, for managers only", owner.includes("widget") && !staff.includes("widget") && activeGroup(navFor("owner"), "/dashboard/settings/widget") === "settings");
   check("the calendar feeds are in Ajustes, for managers only", owner.includes("calendar-feeds") && ids(navFor("admin")).includes("calendar-feeds") && !staff.includes("calendar-feeds") && activeGroup(navFor("owner"), "/dashboard/settings/calendar-feeds") === "settings");
   check("staff keep their daily screens", ["dashboard", "appointments", "clients", "wait-list", "pos", "share"].every((id) => staff.includes(id)), staff);
@@ -68,6 +71,8 @@ console.log("plan badges");
   // Not in Esencial (PLAN_MATRIX, backend subscriptions.service.ts): the menu says so.
   check("Promociones and Fidelización show the Pro badge", pro.includes("promotions") && pro.includes("loyalty"), pro);
   check("gift cards keep theirs", pro.includes("gift-cards"), pro);
+  // C4: in every plan, the backend gates none of them.
+  check("Fiscal, Contabilidad and Rebooking carry no Pro badge", !["fiscal", "accounting", "rebooking"].some((id) => pro.includes(id)), pro);
   const empresa = links(DASHBOARD_NAV).filter((l) => l.empresa).map((l) => l.id);
   check("Multi-local is in Ajustes with the Empresa badge", empresa.join() === "multi-location", empresa);
   check(

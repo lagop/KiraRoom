@@ -585,8 +585,17 @@
       "confirm": "¿Cancelar la suscripción?",
       "cta": "Cancelar suscripción",
       "doing": "Cancelando...",
-      "description": "Pasarás a modo lectura durante 30 días. Mientras tanto puedes reactivarla desde esta página.",
-      "keep": "Mantenerla"
+      "description": "Mantienes todo hasta el final del período que ya has pagado (el {date}). Después pasarás a modo lectura durante 30 días. Puedes anular la cancelación hasta entonces.",
+      "keep": "Mantenerla",
+      "descriptionNoDate": "Mantienes todo hasta el final del período que ya has pagado. Después pasarás a modo lectura durante 30 días. Puedes anular la cancelación hasta entonces.",
+      "scheduled": "Se cancelará el {date}",
+      "scheduledHint": "Hasta entonces mantienes todo. Después pasarás a modo lectura durante 30 días.",
+      "undo": "Anular cancelación",
+      "undoing": "Anulando...",
+      "undone": "Cancelación anulada: tu suscripción se renovará con normalidad.",
+      "undoError": "No se ha podido anular la cancelación.",
+      "scheduledToast": "Suscripción cancelada: mantienes todo hasta el {date}.",
+      "descriptionNow": "Pasarás a modo lectura desde ahora durante 30 días. Mientras tanto puedes reactivarla desde esta página."
     },
     "reactivate": {
       "cta": "Reactivar plan",
@@ -644,13 +653,6 @@
       "legend": "{pct}% de los mensajes de IA de este mes. Al llegar al límite, la recepcionista pasa las conversaciones a tu equipo; puedes añadir 1.000 mensajes (unas 140 conversaciones) por 19 €/mes en los complementos.",
       "capConversations": "mensajes · unas {count} conversaciones"
     },
-    "bundles": {
-      "title": "Bonos de mensajes",
-      "creditsRemaining": "creditos disponibles",
-      "consumedFmt": "Consumidos {used} de {purchased} comprados",
-      "lastTopupFmt": "Última recarga: {date}",
-      "desc": "Los recordatorios siguen incluidos sin coste. Los bonos se consumen al enviar campañas por SMS. Las campañas de WhatsApp las cobra Meta directamente a la cuenta de WhatsApp Business de tu salón."
-    },
     "invoices": {
       "title": "Facturas",
       "empty": "Aún no hay facturas. Aparecerán aquí después del primer cobro.",
@@ -698,10 +700,10 @@
     "switchPlan": "Cambiar a este plan",
     "switchConfirm": "¿Cambiar al plan {plan}?",
     "switchDone": "Listo: ya estás en el plan {plan}.",
-    "trialCheckoutNote": "Puedes contratar ya sin perder la prueba: guardas la tarjeta ahora y el primer cobro llega cuando acaba la prueba, el {date}. Si contratas en sus dos últimos días, se cobra al momento.",
-    "checkoutDescription": "Irás a la página de pago segura de Stripe para poner la tarjeta.",
+    "trialCheckoutNote": "Puedes contratar ya sin perder la prueba: sigues con Pro hasta el {date} y el primer cobro llega ese día. Si contratas en sus dos últimos días, se cobra al momento, pero mantienes Pro hasta el final de la prueba.",
+    "checkoutDescription": "Irás a la página de pago segura de Stripe para poner la tarjeta. {price} al mes + IVA.",
     "checkoutGo": "Ir al pago",
-    "switchDescription": "Stripe ajusta el próximo cobro según los días que quedan del mes.",
+    "switchDescription": "{price} al mes + IVA. Stripe ajusta el próximo cobro según los días que quedan del período. Si bajas de plan, dejas de tener lo que el nuevo no incluye.",
     "back": "Volver",
     "trialPlanBadge": "Tu prueba",
     "checkoutReturn": {
@@ -709,6 +711,26 @@
       "successBody": "Estamos activando tu plan: en unos segundos lo verás aquí.",
       "cancelTitle": "No se ha completado el pago",
       "cancelBody": "No se ha cobrado nada y tu plan sigue como estaba."
+    },
+    "plusVat": "+ IVA",
+    "trialSubscribedNote": "Has contratado el plan {plan}. Sigues con la prueba Pro hasta el {date}; ese día empieza tu plan y llega el primer cobro.",
+    "limits": {
+      "title": "Antes de pasar al plan {plan}",
+      "intro": "Tu salón tiene más de lo que permite ese plan. Desactiva lo que sobra y vuelve a intentarlo:",
+      "go": "Ir a desactivar"
+    },
+    "locations": {
+      "title": "Locales contratados",
+      "desc": "El plan Empresa se paga por local: {price} al mes + IVA cada uno. Tienes {active} {activeLabel} y pagas {paid}.",
+      "activeOne": "local activo",
+      "activeMany": "locales activos",
+      "label": "Locales que pagas",
+      "save": "Guardar",
+      "min": "No puedes pagar menos locales de los que tienes activos ({min}). Desactiva alguno en Multi-local primero.",
+      "confirm": "¿Pagar {count} locales?",
+      "confirmDescription": "{price} al mes + IVA por local. Stripe prorratea el cambio en tu próxima factura.",
+      "done": "Listo: ahora pagas {count} locales.",
+      "error": "No se ha podido cambiar el número de locales."
     }
   },
   "plans": {
@@ -792,7 +814,8 @@
       "saveError": "Error al guardar",
       "isActiveHint": "Los locales inactivos no cuentan para el límite de locales de tu plan. Puedes reactivarlo cuando quieras.",
       "reactivated": "Local reactivado",
-      "deactivated": "Local desactivado"
+      "deactivated": "Local desactivado",
+      "addLocationInBilling": "Añadir un local en Facturación"
     },
     "deactivate": {
       "noUpcoming": "No tiene citas pendientes a partir de hoy.",

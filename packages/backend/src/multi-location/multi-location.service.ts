@@ -19,6 +19,15 @@ import {
 import { timeOffBetween } from "../time-off/time-off-query";
 import { ANALYTICS_APPOINTMENT_SELECT } from "../analytics/analytics.service";
 
+/**
+ * Why the salon cannot open (or reopen) another location: on Empresa each
+ * location is paid for, and the owner adds one in Facturación.
+ */
+export function locationLimitMessage(maxLocations: number): string {
+  const paid = maxLocations === 1 ? "1 local activo" : `${maxLocations} locales activos`;
+  return `Tu plan Empresa incluye ${paid}. Para abrir otro, la cuenta principal puede añadir un local en Ajustes > Facturación (149 € al mes + IVA por local), o desactiva otro local antes.`;
+}
+
 @Injectable()
 export class MultiLocationService {
   constructor(
@@ -126,9 +135,15 @@ export class MultiLocationService {
     const active = await this.prisma.location.count({ where: { tenantId, isActive: true } });
     const max = maxLocations ?? 1;
     if (active >= max) {
-      throw new BadRequestException(
-        `Has alcanzado el máximo de locales activos (${max}) de tu plan. Desactiva otro local antes.`,
-      );
+      // Empresa pays per location (maxLocations is the quantity paid in
+      // Stripe): the way to open one more is to add it in Facturación, not
+      // a dead end (B8). The panel links the code to the billing page.
+      throw new BadRequestException({
+        code: "LOCATION_LIMIT_REACHED",
+        message: locationLimitMessage(max),
+        limit: max,
+        billingUrl: "/dashboard/billing",
+      });
     }
   }
 

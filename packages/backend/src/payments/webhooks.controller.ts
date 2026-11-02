@@ -8,7 +8,7 @@ import { EmailService } from '../notifications/services/email.service';
 import { AddOnsService, addOnStatusFromStripe } from './services/addons.service';
 import { MessageBundlesService } from '../message-bundles/message-bundles.service';
 import { Public } from '../auth/decorators/public.decorator';
-import { activationFromCheckout, activationFromSubscription, PlanActivation } from './plan-activation';
+import { activationFromCheckout, activationFromSubscription, liveStatusFor, PlanActivation } from './plan-activation';
 import { ReadOnlyNoticeService } from './read-only-notice.service';
 import { PlatformStripeConfigService } from '../platform/platform-stripe-config.service';
 import { creditEmailPackFromCheckout, isEmailPackSession } from '../email-campaigns/email-packs.service';
@@ -351,14 +351,18 @@ export class WebhooksController {
           );
           return;
         }
-        // Conditional, so a cancellation made from the dashboard (already
-        // `cancelled` here) is neither re-stamped nor emailed twice.
+        // The end of a subscription the owner cancelled at the end of its
+        // period (cancel_at_period_end) arrives here too: the salon kept
+        // full access until now, and its 30 days of read-only start now.
+        // Conditional, so a cancellation already applied here (an
+        // immediate one) is neither re-stamped nor emailed twice.
         const readOnlyUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
         const { count } = await this.prisma.tenant.updateMany({
           where: { id: tenantId, subscriptionStatus: { not: 'cancelled' } },
           data: {
             subscriptionStatus: 'cancelled',
             cancelledAt: new Date(),
+            subscriptionCancelAt: null,
             readOnlyUntil } });
         if (count === 1) {
           this.logger.log(
@@ -375,7 +379,8 @@ export class WebhooksController {
   }
 
   /**
-   * Moves a tenant onto the plan it paid for: status active, the plan and
+   * Moves a tenant onto the plan it paid for: status active (trialing while
+   * its free trial runs, see liveStatusFor), the plan and
    * number of locations from the checkout, and the Stripe ids that later
    * events (invoice.paid / payment_failed) look it up by. Idempotent:
    * checkout.session.completed and customer.subscription.created both
@@ -404,7 +409,7 @@ export class WebhooksController {
     if (!activation) return;
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: activation.tenantId },
-      select: { id: true, subscriptionStatus: true, stripeSubscriptionId: true },
+      select: { id: true, subscriptionStatus: true, stripeSubscriptionId: true, trialEnd: true },
     });
     if (!tenant) {
       this.logger.warn(`Plan activation for unknown tenant ${activation.tenantId}`);
@@ -450,10 +455,18 @@ export class WebhooksController {
       }
     }
 
+    // Subscribed during the free trial: it stays in the trial (Pro) until
+    // the trial ends, and only then becomes active (B6).
+    const status = liveStatusFor(tenant, current, new Date());
     await this.prisma.tenant.update({
       where: { id: tenant.id },
       data: {
-        subscriptionStatus: 'active',
+        subscriptionStatus: status,
+        ...(status === 'trialing' && current.trialEnd ? { trialEnd: current.trialEnd } : {}),
+        ...(current.periodStart ? { currentPeriodStart: current.periodStart } : {}),
+        ...(current.periodEnd ? { currentPeriodEnd: current.periodEnd } : {}),
+        // Cancelled at the end of the period (or the cancellation undone).
+        ...(current.cancelAt !== undefined ? { subscriptionCancelAt: current.cancelAt } : {}),
         ...(current.plan ? { plan: current.plan as any } : {}),
         ...(current.locations ? { maxLocations: current.locations } : {}),
         ...(current.customerId ? { stripeCustomerId: current.customerId } : {}),
@@ -465,7 +478,7 @@ export class WebhooksController {
       },
     });
     this.logger.log(
-      `Tenant ${tenant.id}: ${tenant.subscriptionStatus} -> active on plan ${current.plan ?? '(unchanged)'}`,
+      `Tenant ${tenant.id}: ${tenant.subscriptionStatus} -> ${status} on plan ${current.plan ?? '(unchanged)'}`,
     );
   }
 

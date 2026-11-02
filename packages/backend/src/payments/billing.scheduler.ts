@@ -40,6 +40,12 @@ export class BillingScheduler {
    * Each tenant is flipped by its own conditional update (still
    * `trialing`), and only the ones this run flipped get the email: a second
    * run, or a plan bought in between, sends nothing.
+   *
+   * A salon that subscribed during its trial kept the trial (Pro) until its
+   * end with its Stripe subscription already in place (see liveStatusFor):
+   * it becomes `active` instead, on the plan it pays for. Stripe's own
+   * webhook usually gets there first; this covers the last-two-days case,
+   * where Stripe was already charging, and a webhook that never arrived.
    */
   @Cron(CronExpression.EVERY_DAY_AT_4AM)
   async expireTrials(): Promise<void> {
@@ -55,7 +61,7 @@ export class BillingScheduler {
           trialEnd: { lt: now },
           deletedAt: null,
         },
-        select: { id: true, name: true, plan: true, trialEnd: true },
+        select: { id: true, name: true, plan: true, trialEnd: true, stripeSubscriptionId: true },
       }),
     );
 
@@ -63,6 +69,18 @@ export class BillingScheduler {
 
     const flipped: typeof expired = [];
     for (const t of expired) {
+      if (t.stripeSubscriptionId) {
+        const { count } = await runUnscoped(() =>
+          this.prisma.tenant.updateMany({
+            where: { id: t.id, subscriptionStatus: 'trialing', deletedAt: null },
+            data: { subscriptionStatus: 'active' },
+          }),
+        );
+        if (count === 1) {
+          this.logger.log(`Trial of ${t.name} (${t.id}) ended with a paid subscription: active on ${t.plan}`);
+        }
+        continue;
+      }
       const { count } = await runUnscoped(() =>
         this.prisma.tenant.updateMany({
           where: { id: t.id, subscriptionStatus: 'trialing', deletedAt: null },

@@ -83,6 +83,8 @@ function setup(opts: { tenant?: any } = {}) {
       update: async () => ({}),
     },
     user: { findFirst: async () => null },
+    location: { count: async () => 1 },
+    professional: { count: async () => 2 },
     tenantAddOn: {
       findUnique: async ({ where }: any) =>
         rows.find(
