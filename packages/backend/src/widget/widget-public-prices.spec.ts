@@ -34,6 +34,9 @@ function build(fiscalSettings: unknown) {
       })),
     },
     professional: { findMany: jest.fn(async () => []) },
+    // One location or none: no location step.
+    location: { findMany: jest.fn(async () => []) },
+    professionalLocation: { findMany: jest.fn(async () => []) },
     service: {
       findMany: jest.fn(async () => [
         { id: "s1", name: "Corte", description: null, category: "hair", duration: 30, price: "30.00", currency: "EUR", images: [] },

@@ -1,10 +1,12 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
+import type { Prisma } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
 import type { Response } from "express";
 import * as Papa from "papaparse";
 import ExcelJS from "exceljs";
 import { PaymentFilters, paymentWhere } from "../payments/payments-query";
 import { scheduledDateRange } from "../analytics/analytics-metrics";
+import { LocationScope, appointmentLocationWhere } from "../analytics/analytics-location";
 
 export type ExportEntity =
   | "clients"
@@ -116,6 +118,18 @@ export function paymentConcept(p: {
   return desc;
 }
 
+/**
+ * The payments export's filter for one location (Empresa): the payments of
+ * the location's appointments, by Analítica's rule (booked there, or with no
+ * location and a professional who works there). A till sale with no
+ * appointment cannot be placed (a till sale has no location), so it is left
+ * out while a location is chosen, as Analítica leaves products out.
+ */
+export function paymentsExportWhere(where: Prisma.PaymentWhereInput, scope?: LocationScope): Prisma.PaymentWhereInput {
+  if (!scope) return where;
+  return { AND: [where, { appointment: { is: appointmentLocationWhere(scope) as Prisma.AppointmentWhereInput } }] };
+}
+
 @Injectable()
 export class ExportsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -130,12 +144,17 @@ export class ExportsService {
      * Appointments: dateFrom / dateTo only, salon days (appointmentDayFilter).
      */
     filters: PaymentFilters = {},
+    /**
+     * Appointments and payments only, Empresa: one location
+     * (analytics-location.ts), checked by the controller to be this salon's.
+     */
+    scope?: LocationScope,
   ): Promise<void> {
     const timeZone = entity === "payments" ? await this.timezoneOf(tenantId) : "Europe/Madrid";
     const fetchPage = (cursor?: any) =>
       entity === "payments"
-        ? this.fetchPayments(tenantId, filters, timeZone, format, cursor)
-        : this.fetchPage(tenantId, entity, cursor, filters);
+        ? this.fetchPayments(tenantId, filters, timeZone, format, cursor, scope)
+        : this.fetchPage(tenantId, entity, cursor, filters, scope);
     const csvOptions = entity === "payments" ? PAYMENTS_CSV_OPTIONS : CSV_OPTIONS;
 
     const filename = `${entity === "payments" ? "pagos" : entity}-${new Date().toISOString().slice(0, 10)}.${format}`;
@@ -236,10 +255,11 @@ export class ExportsService {
     timeZone: string,
     format: ExportFormat,
     cursor?: string,
+    scope?: LocationScope,
   ): Promise<{ rows: any[]; nextCursor?: any }> {
     const take = PAGE_SIZE;
     const rows = await this.prisma.payment.findMany({
-      where: paymentWhere(tenantId, filters, timeZone),
+      where: paymentsExportWhere(paymentWhere(tenantId, filters, timeZone), scope),
       take,
       skip: cursor ? 1 : 0,
       cursor: cursor ? { id: cursor } : undefined,
@@ -274,6 +294,7 @@ export class ExportsService {
     entity: ExportEntity,
     cursor?: any,
     filters: PaymentFilters = {},
+    scope?: LocationScope,
   ): Promise<{ rows: any[]; nextCursor?: any }> {
     const take = PAGE_SIZE;
     switch (entity) {
@@ -302,7 +323,7 @@ export class ExportsService {
       case "appointments": {
         const scheduledDate = appointmentDayFilter(filters.dateFrom, filters.dateTo);
         const rows = await this.prisma.appointment.findMany({
-          where: { tenantId, ...(scheduledDate ? { scheduledDate } : {}) },
+          where: { tenantId, ...(scheduledDate ? { scheduledDate } : {}), ...appointmentLocationWhere(scope) },
           take,
           skip: cursor ? 1 : 0,
           cursor: cursor ? { id: cursor } : undefined,
