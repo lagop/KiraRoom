@@ -18,6 +18,8 @@ export interface NavLink {
   exact?: boolean;
   /** Owner and admin only. */
   managers?: boolean;
+  /** The owner only (billing: the subscription is charged to her card). */
+  ownerOnly?: boolean;
   /** Everyone but owner and admin (they find it inside a group). */
   staffOnly?: boolean;
   /** Shows the Pro badge. */
@@ -113,7 +115,9 @@ export const DASHBOARD_NAV: NavEntry[] = [
     managers: true,
     items: [
       link("settings", "/dashboard/settings", "nav.settings_general", "sliders", { exact: true }),
-      link("billing", "/dashboard/billing", "nav.billing", "euro", { exact: true }),
+      // The subscription, its add-ons and payment method are the owner's
+      // (every billing route answers admins 403).
+      link("billing", "/dashboard/billing", "nav.billing", "euro", { exact: true, ownerOnly: true }),
       link("salon", "/dashboard/settings/salon", "nav.salon", "store"),
       // Locations and the consolidated report (Empresa), also linked from Analítica.
       link("multi-location", "/dashboard/multi-location", "nav.multi_location", "map-pin", { empresa: true }),
@@ -124,9 +128,11 @@ export const DASHBOARD_NAV: NavEntry[] = [
       // Subscribe links (Google, Apple, Outlook) for the salon and each professional.
       link("calendar-feeds", "/dashboard/settings/calendar-feeds", "nav.calendar_feeds", "calendar"),
       link("security", "/dashboard/settings/seguridad", "nav.security", "shield"),
-      link("rebooking", "/dashboard/settings/rebooking", "rebooking.settings.title", "repeat", { pro: true }),
-      link("fiscal", "/dashboard/settings/fiscal", "invoices.fiscalSettings.title", "scroll", { pro: true }),
-      link("accounting", "/dashboard/settings/accounting", "accounting.title", "calculator", { pro: true }),
+      // Rebooking, Fiscal and Contabilidad are in every plan (no plan gate
+      // in the backend): no Pro badge. Esencial sells legal invoices.
+      link("rebooking", "/dashboard/settings/rebooking", "rebooking.settings.title", "repeat"),
+      link("fiscal", "/dashboard/settings/fiscal", "invoices.fiscalSettings.title", "scroll"),
+      link("accounting", "/dashboard/settings/accounting", "accounting.title", "calculator"),
       link("channels", "/dashboard/settings/channels", "billing.channels.title", "message", { pro: true }),
     ],
   },
@@ -142,11 +148,17 @@ export function isManager(role: string | null | undefined): boolean {
   return role === "owner" || role === "admin";
 }
 
+/** The salon's owner: billing (plan, add-ons, card) is hers only. */
+export function isOwner(role: string | null | undefined): boolean {
+  return role === "owner";
+}
+
 /** The menu for a role: links it may not open removed, empty groups dropped. */
 export function navFor(role: string | null | undefined, nav: NavEntry[] = DASHBOARD_NAV): NavEntry[] {
   const manager = isManager(role);
-  const visible = (l: { managers?: boolean; staffOnly?: boolean }) =>
-    (!l.managers || manager) && (!l.staffOnly || !manager);
+  const owner = isOwner(role);
+  const visible = (l: { managers?: boolean; staffOnly?: boolean; ownerOnly?: boolean }) =>
+    (!l.managers || manager) && (!l.staffOnly || !manager) && (!l.ownerOnly || owner);
   return nav.flatMap((entry): NavEntry[] => {
     if (!visible(entry)) return [];
     if (entry.kind === "link") return [entry];

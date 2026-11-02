@@ -147,10 +147,11 @@ describe("cancelling when Stripe fails (B4)", () => {
   afterEach(() => warn.mockRestore());
 
   it("keeps the salon as it was and says so, so the owner can retry", async () => {
-    const cancel = jest.fn(async () => {
+    // A paid subscription is set to end with its period (B3): that call fails.
+    const update = jest.fn(async () => {
       throw new Error("Stripe unreachable");
     });
-    const { subs, prisma } = service(paying, { subscriptions: { cancel } });
+    const { subs, prisma } = service(paying, { subscriptions: { update } });
     const err = await subs.cancelSubscription("t1").catch((e) => e);
     expect(err).toBeInstanceOf(HttpException);
     expect(err.getStatus()).toBe(503);
@@ -159,13 +160,13 @@ describe("cancelling when Stripe fails (B4)", () => {
     expect(prisma.tenant.update).not.toHaveBeenCalled();
   });
 
-  it("cancels in Stripe first, then marks the salon cancelled", async () => {
+  it("a salon that is not paying (past_due) is cancelled in Stripe first, then here", async () => {
     const order: string[] = [];
     const cancel = jest.fn(async () => {
       order.push("stripe");
       return {};
     });
-    const { subs, prisma } = service(paying, { subscriptions: { cancel } });
+    const { subs, prisma } = service({ ...paying, subscriptionStatus: "past_due" }, { subscriptions: { cancel } });
     prisma.tenant.updateMany.mockImplementation(async () => {
       order.push("local");
       return { count: 1 };
@@ -177,10 +178,10 @@ describe("cancelling when Stripe fails (B4)", () => {
   });
 
   it("a subscription Stripe no longer has counts as cancelled", async () => {
-    const cancel = jest.fn(async () => {
+    const update = jest.fn(async () => {
       throw stripeError("resource_missing");
     });
-    const { subs, prisma } = service(paying, { subscriptions: { cancel } });
+    const { subs, prisma } = service(paying, { subscriptions: { update } });
     await subs.cancelSubscription("t1");
     expect(prisma.tenant.updateMany).toHaveBeenCalled();
   });

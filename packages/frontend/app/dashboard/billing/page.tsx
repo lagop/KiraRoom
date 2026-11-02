@@ -3,13 +3,15 @@
 import { useCallback, useEffect, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import apiClient from "../../../lib/api";
-import type { SubscriptionInvoice } from "../../../lib/api";
+import type { PlanLimitBlocker, SubscriptionInvoice } from "../../../lib/api";
 import { useTenantContext } from "@/hooks/useFeatureAccess";
 import { UsageMeters } from "@/components/billing/UsageMeters";
 import { TrialBanner } from "@/components/billing/TrialBanner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { PlanId } from "@/lib/plans";
-import { planAction, paysSubscription } from "@/lib/billing-plan";
+import { empresaLocations, planAction, paysSubscription, scheduledCancellation, subscribedInTrial } from "@/lib/billing-plan";
+import { getCurrentUser } from "@/lib/utils";
+import { isOwner } from "@/lib/dashboard-nav";
 import { aiConversationsApprox } from "@kira/shared";
 import { Check, Loader2, Sparkles, X } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
@@ -22,6 +24,16 @@ function BillingPageContent() {
   const ctx = useTenantContext();
   const router = useRouter();
   const searchParams = useSearchParams();
+  // Facturación is the owner's (every billing route answers admins 403):
+  // read the role after mount (the server has no token) and send anyone
+  // else to the dashboard before any request is made.
+  const [role, setRole] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    setRole(getCurrentUser()?.role ?? null);
+  }, []);
+  useEffect(() => {
+    if (role !== undefined && !isOwner(role)) router.replace("/dashboard");
+  }, [role, router]);
   const [sub, setSub] = useState<any>(null);
   const [plans, setPlans] = useState<any[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -36,18 +48,21 @@ function BillingPageContent() {
   const [aiUsage, setAiUsage] = useState<
     { used: number; cap: number | null; resetsAt: string | null } | null
   >(null);
-  const [bundles, setBundles] = useState<{
-    creditsRemaining: number;
-    creditsPurchasedTotal: number;
-    creditsUsedTotal: number;
-    lastTopupAt: string | null;
-  } | null>(null);
 
   // M-2: confirm dialog state for add-on purchase + cancel.
   // The plan the salon is about to subscribe to or switch to, and whether it
   // is about to cancel: confirmed in the panel's dialog, not window.confirm.
-  const [pendingPlan, setPendingPlan] = useState<{ planId: string; change: boolean } | null>(null);
+  // `blockers`: what the salon must deactivate first (B9); the dialog then
+  // lists it instead of going to Stripe.
+  const [pendingPlan, setPendingPlan] = useState<{
+    planId: string;
+    change: boolean;
+    blockers: PlanLimitBlocker[];
+  } | null>(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
+  // Empresa: the locations the subscription pays for (B8).
+  const [locationsDraft, setLocationsDraft] = useState<number | null>(null);
+  const [confirmLocations, setConfirmLocations] = useState(false);
   const [confirmAddOn, setConfirmAddOn] = useState<{
     key: string;
     action: "purchase" | "cancel";
@@ -177,6 +192,7 @@ function BillingPageContent() {
   // subscription again now and twice more, instead of staying on "En
   // prueba" or "Cancelada" without a word.
   useEffect(() => {
+    if (!isOwner(role)) return;
     const result = searchParams?.get("subscription");
     if (!result) return;
     const timers: ReturnType<typeof setTimeout>[] = [];
@@ -190,7 +206,7 @@ function BillingPageContent() {
     cleanupQueryParams(["subscription"]);
     return () => timers.forEach(clearTimeout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
+  }, [searchParams, role]);
 
   const load = async () => {
     setLoading(true);
@@ -220,19 +236,19 @@ function BillingPageContent() {
       setPlans((p as any) || []);
       setInvoices((i as SubscriptionInvoice[]) || []);
 
-      // P2A-receptionist-v2 -- fetch add-ons + AI counter + bundles
+      // P2A-receptionist-v2 -- fetch add-ons + AI counter. (The SMS
+      // "Bonos de mensajes" card was here: SMS campaigns do not exist.)
       // No catalogue for a plan we could not read.
       const plan = failed.includes("subscription") ? null : ((s as any)?.plan ?? "esencial");
-      const [catalog, installed, ai, wallet] = await Promise.all([
+      const [catalog, installed, ai] = await Promise.all([
         plan ? soft("addOns", apiClient.getAvailableAddOns(plan), [] as any[]) : Promise.resolve([] as any[]),
         soft("installedAddOns", apiClient.getTenantAddOns(), [] as any[]),
         soft("aiUsage", apiClient.getAiUsage(), null as any),
-        soft("bundles", apiClient.getMessageBundlesBalance(), null as any),
       ]);
       setAddOns(catalog);
       setInstalledAddOns(installed);
       setAiUsage(ai);
-      setBundles(wallet);
+      setLocationsDraft(null);
       if (failed.length > 0) setError(t("billing.loadError"));
     } catch (e: any) {
       setError(e?.message || t("billing.loadError"));
@@ -242,19 +258,36 @@ function BillingPageContent() {
   };
 
   useEffect(() => {
-    load();
+    if (isOwner(role)) load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [role]);
 
-  const handleChoosePlan = (planId: string) => {
+  const handleChoosePlan = async (planId: string) => {
+    // What the salon must deactivate first (B9), asked before Stripe. If
+    // the check itself fails, the dialog goes on: the backend checks again.
+    setWorking(`check:${planId}`);
+    let blockers: PlanLimitBlocker[] = [];
+    try {
+      blockers = (await apiClient.getPlanCheck(planId))?.blockers ?? [];
+    } catch (err) {
+      console.error("Billing: plan check failed:", err);
+    } finally {
+      setWorking(null);
+    }
     // A salon that already pays changes the plan of its subscription: a
     // checkout would open a second one, billed on top.
-    setPendingPlan({ planId, change: paysSubscription(sub) });
+    setPendingPlan({ planId, change: paysSubscription(sub), blockers });
   };
 
   const performChoosePlan = async () => {
     if (!pendingPlan) return;
-    const { planId, change } = pendingPlan;
+    const { planId, change, blockers } = pendingPlan;
+    if (blockers.length > 0) {
+      // Nothing to send to Stripe yet: take the owner to the first thing to deactivate.
+      setPendingPlan(null);
+      router.push(blockers[0].href);
+      return;
+    }
     const plan = t(`plans.${planId}`);
     if (change) {
       setWorking(planId);
@@ -296,12 +329,47 @@ function BillingPageContent() {
     setConfirmCancel(false);
     setWorking("cancel");
     try {
-      await apiClient.cancelSubscription();
+      // A paid subscription ends with its period (cancelAt); until then
+      // the salon keeps everything (B3).
+      const res: any = await apiClient.cancelSubscription();
       await load();
+      if (res?.cancelAt) {
+        toast({ title: t("billing.cancel.scheduledToast", { date: new Date(res.cancelAt).toLocaleDateString(dateLocale) }) });
+      }
     } catch (e: any) {
       setError(e?.message || t("billing.cancelError"));
     } finally {
       setWorking(null);
+    }
+  };
+
+  const handleUndoCancel = async () => {
+    setWorking("undo-cancel");
+    setError(null);
+    try {
+      await apiClient.undoCancelSubscription();
+      await load();
+      toast({ title: t("billing.cancel.undone") });
+    } catch (e: any) {
+      setError(e?.message || t("billing.cancel.undoError"));
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  const handleSaveLocations = async () => {
+    if (locationsDraft === null) return;
+    setWorking("locations");
+    setError(null);
+    try {
+      await apiClient.updateSubscriptionLocations(locationsDraft);
+      await load();
+      toast({ title: t("billing.locations.done", { count: locationsDraft }) });
+    } catch (e: any) {
+      setError(e?.message || t("billing.locations.error"));
+    } finally {
+      setWorking(null);
+      setConfirmLocations(false);
     }
   };
 
@@ -394,7 +462,7 @@ function BillingPageContent() {
     }
   };
 
-  if (loading) {
+  if (loading || !isOwner(role)) {
     return (
       <div className="flex items-center gap-2 p-8 text-gray-500">
         <Loader2 className="h-4 w-4 animate-spin" /> {t("billing.loading")}
@@ -411,6 +479,26 @@ function BillingPageContent() {
   const inTrial: boolean =
     sub?.inTrial ?? (isTrialing && !!sub?.trialEnd && new Date(sub.trialEnd).getTime() > Date.now());
   const canBuyAddOns = canBuyAddOnsOf(sub);
+  // Cancelled at the end of the paid period: still everything until then (B3).
+  const cancelsOn = scheduledCancellation(sub);
+  const cancelsOnText = cancelsOn ? new Date(cancelsOn).toLocaleDateString(dateLocale) : null;
+  // Subscribed during the trial: the trial (Pro) goes on until it ends (B6).
+  const trialSubscribed = subscribedInTrial(sub);
+  // Empresa: paid locations against the ones open (B8).
+  const locations = empresaLocations(sub);
+  const locationsValue = locationsDraft ?? locations?.paid ?? 1;
+  const planById = (id: string) => plans?.find((p: any) => p.id === id);
+  // "49 €" or, on Empresa, "149 € por local": the copy adds "al mes + IVA".
+  const planPriceText = (id: string) => {
+    const p = planById(id);
+    if (!p) return "";
+    const amount = t("landing.pricing.price", { amount: p.price / 100 });
+    return p.pricePerLocation ? `${amount} ${t("landing.pricing.perLocation")}` : amount;
+  };
+  const empresaPriceText = (() => {
+    const p = planById("empresa");
+    return p ? t("landing.pricing.price", { amount: (p.pricePerLocation ?? p.price) / 100 }) : "";
+  })();
   const confirmAddOnPrice = (() => {
     const row = confirmAddOn ? addOns?.find((a) => a?.key === confirmAddOn.key) : null;
     return row?.monthlyPriceCents ? formatSubscriptionAmount(row.monthlyPriceCents, row.currency) : "";
@@ -425,7 +513,8 @@ function BillingPageContent() {
         </p>
       </header>
 
-      {ctx.inTrial && <TrialBanner />}
+      {/* Already subscribed in the trial: nothing left to choose. */}
+      {ctx.inTrial && !paysSubscription(sub) && <TrialBanner />}
 
       {flowBanner && (
         <div
@@ -494,14 +583,27 @@ function BillingPageContent() {
               })}
             </span>
           )}
-          {sub?.currentPeriodEnd && !isCancelled && (
+          {sub?.currentPeriodEnd && !isCancelled && !cancelsOn && !trialSubscribed && paysSubscription(sub) && (
             <span className="text-xs text-gray-500">
               {t("billing.nextCharge", {
                 date: new Date(sub.currentPeriodEnd).toLocaleDateString(dateLocale),
               })}
             </span>
           )}
-          {!isCancelled && (
+          {cancelsOnText && (
+            <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">
+              {t("billing.cancel.scheduled", { date: cancelsOnText })}
+            </span>
+          )}
+          {cancelsOn ? (
+            <button
+              onClick={handleUndoCancel}
+              disabled={working === "undo-cancel"}
+              className="ml-auto rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50"
+            >
+              {working === "undo-cancel" ? t("billing.cancel.undoing") : t("billing.cancel.undo")}
+            </button>
+          ) : !isCancelled && (
             <button
               onClick={() => setConfirmCancel(true)}
               disabled={working === "cancel"}
@@ -513,7 +615,59 @@ function BillingPageContent() {
             </button>
           )}
         </div>
+        {cancelsOnText && <p className="mt-2 text-xs text-gray-600">{t("billing.cancel.scheduledHint")}</p>}
       </section>
+
+      {locations && (
+        <section>
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-700">
+            {t("billing.locations.title")}
+          </h2>
+          <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+            <p className="text-sm text-gray-600">
+              {t("billing.locations.desc", {
+                price: empresaPriceText,
+                active: sub?.activeLocations ?? 0,
+                activeLabel: t((sub?.activeLocations ?? 0) === 1 ? "billing.locations.activeOne" : "billing.locations.activeMany"),
+                paid: locations.paid,
+              })}
+            </p>
+            <div className="mt-3 flex flex-wrap items-end gap-3">
+              <label className="text-sm text-gray-700">
+                <span className="mb-1 block text-xs font-medium text-gray-600">{t("billing.locations.label")}</span>
+                <input
+                  type="number"
+                  min={locations.min}
+                  max={1000}
+                  step={1}
+                  value={locationsValue}
+                  onChange={(e) => {
+                    const n = Math.floor(Number(e.target.value));
+                    setLocationsDraft(Number.isFinite(n) ? n : locations.min);
+                  }}
+                  className="w-24 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                />
+              </label>
+              <button
+                onClick={() => setConfirmLocations(true)}
+                disabled={
+                  working !== null ||
+                  !!cancelsOn ||
+                  locationsValue === locations.paid ||
+                  locationsValue < locations.min ||
+                  locationsValue > 1000
+                }
+                className="rounded-md bg-violet-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50"
+              >
+                {working === "locations" ? t("billing.processing") : t("billing.locations.save")}
+              </button>
+            </div>
+            {locationsValue < locations.min && (
+              <p className="mt-2 text-xs text-red-700">{t("billing.locations.min", { min: locations.min })}</p>
+            )}
+          </div>
+        </section>
+      )}
 
       <section>
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-700">
@@ -529,6 +683,14 @@ function BillingPageContent() {
         {isTrialing && !paysSubscription(sub) && sub?.trialEnd && (
           <p className="mb-3 text-sm text-gray-600">
             {t("billing.trialCheckoutNote", {
+              date: new Date(sub.trialEnd).toLocaleDateString(dateLocale),
+            })}
+          </p>
+        )}
+        {trialSubscribed && sub?.trialEnd && (
+          <p className="mb-3 text-sm text-gray-600">
+            {t("billing.trialSubscribedNote", {
+              plan: t(`plans.${currentPlan}`),
               date: new Date(sub.trialEnd).toLocaleDateString(dateLocale),
             })}
           </p>
@@ -562,7 +724,7 @@ function BillingPageContent() {
                 <p className="mt-1 text-2xl font-bold text-gray-900">
                   {t("landing.pricing.price", { amount: p.price / 100 })}
                   <span className="ml-1 text-sm font-normal text-gray-500">
-                    {t("landing.pricing.perMonth")}
+                    {t("landing.pricing.perMonth")} {t("billing.plusVat")}
                   </span>
                 </p>
                 {p.pricePerLocation && (
@@ -580,12 +742,12 @@ function BillingPageContent() {
                 </ul>
                 <button
                   onClick={() => handleChoosePlan(p.id)}
-                  disabled={action === "current" || working !== null}
+                  disabled={action === "current" || working !== null || !!cancelsOn}
                   className={"mt-4 w-full rounded-md px-3 py-2 text-sm font-medium " + (action === "current" ? "bg-gray-100 text-gray-400" : "bg-violet-600 text-white hover:bg-violet-700") + " disabled:opacity-50"}
                 >
                   {action === "current"
                     ? t("billing.currentPlanLabel")
-                    : working === p.id
+                    : working === p.id || working === `check:${p.id}`
                       ? t("billing.processing")
                       : action === "subscribe"
                         ? t("billing.subscribeCurrent")
@@ -634,16 +796,6 @@ function BillingPageContent() {
         </section>
       )}
 
-      {/* P2A-receptionist-v2 -- message bundles balance (metered) */}
-      {bundles && (
-        <section>
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-700">
-            {t("billing.bundles.title")}
-          </h2>
-          <BundlesBalanceCard bundles={bundles} t={t} />
-        </section>
-      )}
-
       <section>
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-700">
           {t("billing.managePortal.title")}
@@ -673,14 +825,37 @@ function BillingPageContent() {
       <ConfirmDialog
         open={!!pendingPlan}
         title={
-          pendingPlan
-            ? t(pendingPlan.change ? "billing.switchConfirm" : "billing.checkoutConfirm", {
-                plan: t(`plans.${pendingPlan.planId}`),
-              })
-            : ""
+          !pendingPlan
+            ? ""
+            : pendingPlan.blockers.length > 0
+              ? t("billing.limits.title", { plan: t(`plans.${pendingPlan.planId}`) })
+              : t(pendingPlan.change ? "billing.switchConfirm" : "billing.checkoutConfirm", {
+                  plan: t(`plans.${pendingPlan.planId}`),
+                })
         }
-        description={pendingPlan && t(pendingPlan.change ? "billing.switchDescription" : "billing.checkoutDescription")}
-        confirmLabel={pendingPlan?.change ? t("billing.switchPlan") : t("billing.checkoutGo")}
+        description={
+          !pendingPlan ? null : pendingPlan.blockers.length > 0 ? (
+            <div>
+              <p>{t("billing.limits.intro")}</p>
+              <ul className="mt-2 list-disc space-y-1 pl-5">
+                {pendingPlan.blockers.map((b) => (
+                  <li key={b.kind}>{b.message}</li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            t(pendingPlan.change ? "billing.switchDescription" : "billing.checkoutDescription", {
+              price: planPriceText(pendingPlan.planId),
+            })
+          )
+        }
+        confirmLabel={
+          pendingPlan && pendingPlan.blockers.length > 0
+            ? t("billing.limits.go")
+            : pendingPlan?.change
+              ? t("billing.switchPlan")
+              : t("billing.checkoutGo")
+        }
         cancelLabel={t("billing.back")}
         loading={!!pendingPlan && working === pendingPlan.planId}
         onCancel={() => setPendingPlan(null)}
@@ -690,12 +865,33 @@ function BillingPageContent() {
       <ConfirmDialog
         open={confirmCancel}
         title={t("billing.cancel.confirm")}
-        description={t("billing.cancel.description")}
+        description={
+          // A paid subscription ends with its period (B3); without one
+          // (a trial that never subscribed) read-only starts now.
+          paysSubscription(sub) && (sub?.status === "active" || sub?.status === "trialing")
+            ? sub?.currentPeriodEnd && !trialSubscribed
+              ? t("billing.cancel.description", { date: new Date(sub.currentPeriodEnd).toLocaleDateString(dateLocale) })
+              : trialSubscribed && sub?.trialEnd
+                ? t("billing.cancel.description", { date: new Date(sub.trialEnd).toLocaleDateString(dateLocale) })
+                : t("billing.cancel.descriptionNoDate")
+            : t("billing.cancel.descriptionNow")
+        }
         confirmLabel={t("billing.cancel.cta")}
         cancelLabel={t("billing.cancel.keep")}
         destructive
         onCancel={() => setConfirmCancel(false)}
         onConfirm={handleCancel}
+      />
+
+      <ConfirmDialog
+        open={confirmLocations}
+        title={t("billing.locations.confirm", { count: locationsValue })}
+        description={t("billing.locations.confirmDescription", { price: empresaPriceText })}
+        confirmLabel={t("billing.locations.save")}
+        cancelLabel={t("billing.back")}
+        loading={working === "locations"}
+        onCancel={() => setConfirmLocations(false)}
+        onConfirm={handleSaveLocations}
       />
 
       <ConfirmDialog
@@ -1045,71 +1241,6 @@ function AddOnGrid({
           </article>
         );
       })}
-    </div>
-  );
-}
-
-/** Message-bundles wallet balance. Pure read-only. Top-up happens via
- *  the SaaS-admin / Stripe flow (Phase 4 webhook). */
-function BundlesBalanceCard({
-  bundles,
-  t,
-}: {
-  bundles: {
-    creditsRemaining: number;
-    creditsPurchasedTotal: number;
-    creditsUsedTotal: number;
-    lastTopupAt: string | null;
-  };
-  t: (key: string, params?: any) => string;
-}) {
-  const pct = bundles.creditsPurchasedTotal
-    ? Math.min(
-        100,
-        Math.round(
-          (bundles.creditsUsedTotal / bundles.creditsPurchasedTotal) * 100,
-        ),
-      )
-    : 0;
-  return (
-    <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
-      <div className="mb-3 flex items-baseline justify-between">
-        <p className="text-sm font-medium text-gray-900">
-          {t("billing.bundles.title")}
-        </p>
-        <p className="text-xs text-gray-500">
-          {t("billing.bundles.consumedFmt", {
-            used: bundles.creditsUsedTotal,
-            purchased: bundles.creditsPurchasedTotal,
-          })}
-        </p>
-      </div>
-      <div className="mb-2 flex items-baseline gap-2">
-        <p className="text-3xl font-bold text-gray-900">
-          {bundles.creditsRemaining}
-        </p>
-        <p className="text-sm text-gray-500">{t("billing.bundles.creditsRemaining")}</p>
-      </div>
-      {bundles.creditsPurchasedTotal > 0 && (
-        <div className="h-2 w-full overflow-hidden rounded-full bg-gray-100">
-          <div
-            className="h-full bg-indigo-500 transition-all"
-            style={{ width: `${pct}%` }}
-          />
-        </div>
-      )}
-      <p className="mt-3 text-xs text-gray-500">
-        {t("billing.bundles.desc")}
-      </p>
-      {bundles.lastTopupAt && (
-        <p className="mt-1 text-xs text-gray-400">
-          {t("billing.bundles.lastTopupFmt", {
-            date: new Date(bundles.lastTopupAt).toLocaleDateString(
-              t("billing.invoices.dateFmt") || "es-ES",
-            ),
-          })}
-        </p>
-      )}
     </div>
   );
 }
