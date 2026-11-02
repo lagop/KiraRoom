@@ -40,6 +40,7 @@ import {
 import { professionalAfterServiceChange, servicesForPinned } from "@/lib/booking-professional";
 import {
   bookingLocations,
+  choiceAtLocation,
   chosenLocation,
   confirmedPlace,
   locationForProfessional,
@@ -387,23 +388,12 @@ export default function SalonBookingPage({
   const handleLocationChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const locationId = e.target.value;
     setAvailableSlots([]);
-    setBookingData((prev) => {
-      const serviceStays =
-        !prev.serviceId ||
-        servicesAtLocation(bookableServices, professionals, locations, locationId).some((s) => s.id === prev.serviceId);
-      const professional = professionals.find((p) => p.id === prev.professionalId);
-      const professionalStays =
-        serviceStays &&
-        !!professional &&
-        professionalsAtLocation([professional], locations, locationId).length > 0;
-      return {
-        ...prev,
-        locationId,
-        serviceId: serviceStays ? prev.serviceId : "",
-        professionalId: professionalStays ? prev.professionalId : "",
-        time: "",
-      };
-    });
+    setBookingData((prev) => ({
+      ...prev,
+      locationId,
+      ...choiceAtLocation(prev, bookableServices, professionals, locations, locationId),
+      time: "",
+    }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {

@@ -9,6 +9,7 @@ import * as fs from "fs";
 import * as path from "path";
 import {
   bookingLocations,
+  choiceAtLocation,
   chosenLocation,
   confirmedPlace,
   locationForProfessional,
@@ -89,6 +90,28 @@ same("several, one of hers chosen: it stays", locationForProfessional(BEA, LOCAT
 same("no location step: none", locationForProfessional(ANA, [], ""), "");
 same("no professional: none", locationForProfessional(undefined, LOCATIONS, ""), "");
 
+console.log("changing location");
+same(
+  "to Norte: the colour and Bea stay (she works there)",
+  choiceAtLocation({ serviceId: "colour", professionalId: "bea" }, SERVICES, TEAM, LOCATIONS, "l-norte"),
+  { serviceId: "colour", professionalId: "bea" },
+);
+same(
+  "to Norte: the cut goes (only Ana, at Centro), and Ana with it",
+  choiceAtLocation({ serviceId: "cut", professionalId: "ana" }, SERVICES, TEAM, LOCATIONS, "l-norte"),
+  { serviceId: "", professionalId: "" },
+);
+same(
+  "to Centro: a service anyone does stays, Carla (Norte only) goes",
+  choiceAtLocation({ serviceId: "brow", professionalId: "carla" }, SERVICES, TEAM, LOCATIONS, "l-centro"),
+  { serviceId: "brow", professionalId: "" },
+);
+same(
+  "nothing picked yet, or «Cualquiera»: nothing to drop",
+  choiceAtLocation({ serviceId: "", professionalId: "" }, SERVICES, TEAM, LOCATIONS, "l-centro"),
+  { serviceId: "", professionalId: "" },
+);
+
 console.log("ready for times");
 check("no step: always", locationReady([], ""));
 check("step: not without a location", !locationReady(LOCATIONS, ""));
@@ -114,6 +137,11 @@ check("shows the location step only with locations", page.includes("locations.le
 check("asks for slots at the location", /bookingData\.locationId \|\| undefined,\s*\);/.test(page));
 check("books at the location", page.includes("locationId: bookingData.locationId"));
 check("the confirmation names the location", page.includes("bookingPublic.booked_at_address"));
+const embed = read("app/embed/[token]/page.tsx");
+check("the widget shows the location step only with locations", embed.includes("locations.length > 0 && ("));
+check("the widget asks for slots at the location", embed.includes(`params.append("locationId", locationId)`));
+check("the widget books at the location", embed.includes("...(locationId ? { locationId } : {})"));
+check("the widget waits for a location before the times", embed.includes("locationReady(locations, locationId)"));
 const api = read("lib/api.ts");
 check("the slots request carries locationId", api.includes("&locationId=${encodeURIComponent(locationId)}"));
 const es = JSON.parse(read("messages/es.json"));

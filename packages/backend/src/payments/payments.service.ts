@@ -20,6 +20,7 @@ import { needsTimezone, PaymentFilters, paymentWhere, PAYMENT_SORT_FIELDS } from
 import { openCashSessionId } from "../pos/cash-session-lock";
 import { recordRefundClawbacks } from "../commissions/commission-clawback";
 import { releaseIfSaleRefundedIn } from "../promotions/promotion-at-till";
+import { returnGiftIfSaleRefundedIn } from "../pos/pos-loyalty-gift";
 import {
   centsLeft,
   linesPaidBy,
@@ -675,6 +676,9 @@ export class PaymentsService {
       const tillSaleId = (payment.metadata as { posSaleId?: unknown } | null)?.posSaleId;
       if (full && typeof tillSaleId === "string" && tillSaleId) {
         await releaseIfSaleRefundedIn(tx, tenantId, tillSaleId);
+        // ...and a loyalty reward's product handed over with it goes back to
+        // stock, as the points spent on it come back (pos-loyalty-gift.ts).
+        await returnGiftIfSaleRefundedIn(tx, tenantId, tillSaleId);
       }
 
       return { refund, appointment, restocked: given.restocked };

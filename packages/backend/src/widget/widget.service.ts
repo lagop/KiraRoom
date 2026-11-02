@@ -5,6 +5,30 @@ import { salonOffersWhatsAppPromotions, salonWhatsAppConnected } from "../consen
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
 import { publicPrice, publicPriceSettings } from "../common/public-price";
 import { frameAncestorOrigins } from "./frame-origins";
+import {
+  clientLocations,
+  formatLocationAddress,
+  professionalLocationsOf,
+  type ClientLocation,
+  type LocationLinkRow,
+} from "../multi-location/client-locations";
+
+/**
+ * The widget's location step (multi-local), as the public booking page has
+ * it (#216): the salon's locations to book at (clientLocations: open, with an
+ * active professional, two or more) narrowed to those where one of the
+ * professionals this widget offers works. Fewer than two left: no step.
+ */
+export function widgetLocations(
+  where: { locations: ClientLocation[]; links: LocationLinkRow[] },
+  widgetProfessionalIds: string[],
+): { locations: ClientLocation[]; links: LocationLinkRow[] } {
+  const offered = new Set(widgetProfessionalIds);
+  const locations = where.locations.filter((l) => l.professionalIds.some((id) => offered.has(id)));
+  if (locations.length < 2) return { locations: [], links: [] };
+  const ids = new Set(locations.map((l) => l.id));
+  return { locations, links: where.links.filter((l) => ids.has(l.locationId) && offered.has(l.professionalId)) };
+}
 
 export interface CreateWidgetInstanceInput {
   name: string;
@@ -133,6 +157,9 @@ export class WidgetService {
         bio: true,
         profileImage: true,
         specialties: true,
+        // Which services each one does, so the location step offers only
+        // the services someone at the chosen location does.
+        services: { select: { serviceId: true } },
       },
     });
     // Only what can be booked from here: a service the salon takes by phone
@@ -158,6 +185,12 @@ export class WidgetService {
       },
     });
     const prices = publicPriceSettings(widget.tenant.fiscalSettings);
+    // Two or more locations to book at among this widget's professionals:
+    // the client picks one, as on the public booking page. None otherwise.
+    const where = widgetLocations(
+      await clientLocations(this.prisma as any, widget.tenantId),
+      allProfessionals.map((p) => p.id),
+    );
     return {
       tenant: {
         id: widget.tenant.id,
@@ -182,7 +215,20 @@ export class WidgetService {
       // The final price, tax included (common/public-price.ts), never the
       // net catalogue figure of a salon that writes its prices without it.
       services: allServices.map((s) => ({ ...s, price: publicPrice(s.price, prices) })),
-      professionals: allProfessionals,
+      // With locations to pick from, each one also says where they work and
+      // their main location (the location follows from who she picks).
+      professionals: allProfessionals.map((p) =>
+        where.locations.length > 0 ? { ...p, ...professionalLocationsOf(p.id, where.locations, where.links) } : p,
+      ),
+      // Empty unless there is a location to choose. Only what the client
+      // needs to choose one and find it.
+      locations: where.locations.map((l) => ({
+        id: l.id,
+        name: l.name,
+        slug: l.slug,
+        address: formatLocationAddress(l),
+        phone: l.phone,
+      })),
       // The salon has its WhatsApp number connected: the form offers
       // "Recibir los avisos de mi cita por WhatsApp".
       whatsappNotices: await salonWhatsAppConnected(this.prisma, widget.tenantId),

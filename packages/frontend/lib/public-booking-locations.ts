@@ -135,3 +135,28 @@ export function confirmedPlace(
   const picked = chosenLocation(locations, locationId);
   return picked ? { name: picked.name, address: picked.address ?? "" } : null;
 }
+
+/**
+ * What stays picked when the client changes location (the public page and
+ * the widget): the service while someone there does it, the professional
+ * while the service stayed and they work there. Anything else is dropped,
+ * so she is never offered times for someone at another location.
+ */
+export function choiceAtLocation<S extends { id: string }, T extends LocatedProfessional>(
+  picked: { serviceId: string; professionalId: string },
+  services: S[],
+  professionals: T[],
+  locations: PublicSalonLocation[],
+  locationId: string,
+): { serviceId: string; professionalId: string } {
+  const serviceStays =
+    !picked.serviceId ||
+    servicesAtLocation(services, professionals, locations, locationId).some((s) => s.id === picked.serviceId);
+  const professional = professionals.find((p) => p.id === picked.professionalId);
+  const professionalStays =
+    serviceStays && !!professional && professionalsAtLocation([professional], locations, locationId).length > 0;
+  return {
+    serviceId: serviceStays ? picked.serviceId : "",
+    professionalId: professionalStays ? picked.professionalId : "",
+  };
+}

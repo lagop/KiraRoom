@@ -1,5 +1,13 @@
 import { BadRequestException } from '@nestjs/common';
-import { giftInvoiceLine, giftLineOf, giftSaleLine, takeGiftFromStock, LOYALTY_GIFT_KIND } from './pos-loyalty-gift';
+import {
+  giftInvoiceLine,
+  giftLineOf,
+  giftSaleLine,
+  returnGiftIfSaleRefundedIn,
+  takeGiftFromStock,
+  LOYALTY_GIFT_KIND,
+  LOYALTY_GIFT_RETURN_REASON,
+} from './pos-loyalty-gift';
 
 /**
  * A loyalty reward handed over at the till (audit L11): a zero-price line
@@ -74,5 +82,90 @@ describe('pos-loyalty-gift', () => {
     tx.product.updateMany.mockClear();
     await takeGiftFromStock(tx, 't1', { ...line, productId: null, trackInventory: false }, 's3');
     expect(tx.product.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('returnGiftIfSaleRefundedIn (the whole sale given back)', () => {
+  const makeTx = (over: { stillPaid?: number; lines?: any[]; taken?: any; tracked?: boolean } = {}) => {
+    const lines = over.lines ?? [{ id: 'g1', productId: 'p1', quantity: 1, refundedQuantity: 0 }];
+    return {
+      payment: { count: jest.fn(async () => over.stillPaid ?? 0) },
+      posSaleLine: {
+        findMany: jest.fn(async () => lines),
+        updateMany: jest.fn(async ({ where }: any) => {
+          const l = lines.find((x) => x.id === where.id);
+          if (!l || l.refundedQuantity !== where.refundedQuantity) return { count: 0 };
+          return { count: 1 };
+        }),
+      },
+      inventoryTransaction: {
+        findFirst: jest.fn(async () => ('taken' in over ? over.taken : { id: 'm1' })),
+        create: jest.fn(async () => ({})),
+      },
+      product: {
+        updateMany: jest.fn(async () => ({ count: over.tracked === false ? 0 : 1 })),
+        findFirst: jest.fn(async () => ({ quantity: 5 })),
+      },
+    } as any;
+  };
+
+  it('puts the unit back with a «devolución regalo fidelidad» movement', async () => {
+    const tx = makeTx();
+    expect(await returnGiftIfSaleRefundedIn(tx, 't1', 's1')).toBe(1);
+    expect(tx.posSaleLine.updateMany).toHaveBeenCalledWith({
+      where: { id: 'g1', tenantId: 't1', refundedQuantity: 0 },
+      data: { refundedQuantity: 1 },
+    });
+    expect(tx.product.updateMany).toHaveBeenCalledWith({
+      where: { id: 'p1', tenantId: 't1', trackInventory: true },
+      data: { quantity: { increment: 1 } },
+    });
+    expect(tx.inventoryTransaction.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        productId: 'p1',
+        tenantId: 't1',
+        type: 'adjustment',
+        quantity: 1,
+        previousQty: 4,
+        newQty: 5,
+        reason: LOYALTY_GIFT_RETURN_REASON,
+        notes: 'Venta s1',
+      }),
+    });
+    expect(LOYALTY_GIFT_RETURN_REASON).toBe('devolución regalo fidelidad');
+  });
+
+  it('nothing while a payment of the sale is still paid (a partial or first-of-two refund)', async () => {
+    const tx = makeTx({ stillPaid: 1 });
+    expect(await returnGiftIfSaleRefundedIn(tx, 't1', 's1')).toBe(0);
+    expect(tx.posSaleLine.findMany).not.toHaveBeenCalled();
+    expect(tx.product.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('exactly once: a gift line already given back, or claimed by a concurrent refund, moves nothing', async () => {
+    const done = makeTx({ lines: [{ id: 'g1', productId: 'p1', quantity: 1, refundedQuantity: 1 }] });
+    expect(await returnGiftIfSaleRefundedIn(done, 't1', 's1')).toBe(0);
+    expect(done.posSaleLine.updateMany).not.toHaveBeenCalled();
+
+    const raced = makeTx();
+    raced.posSaleLine.updateMany.mockResolvedValueOnce({ count: 0 });
+    expect(await returnGiftIfSaleRefundedIn(raced, 't1', 's1')).toBe(0);
+    expect(raced.product.updateMany).not.toHaveBeenCalled();
+    expect(raced.inventoryTransaction.create).not.toHaveBeenCalled();
+  });
+
+  it('«otro regalo», a gift that never left the stock, or a product no longer counted: the line is closed, no stock moves', async () => {
+    const other = makeTx({ lines: [{ id: 'g1', productId: null, quantity: 1, refundedQuantity: 0 }] });
+    expect(await returnGiftIfSaleRefundedIn(other, 't1', 's1')).toBe(0);
+    expect(other.posSaleLine.updateMany).toHaveBeenCalled();
+    expect(other.product.updateMany).not.toHaveBeenCalled();
+
+    const untracked = makeTx({ taken: null });
+    expect(await returnGiftIfSaleRefundedIn(untracked, 't1', 's1')).toBe(0);
+    expect(untracked.product.updateMany).not.toHaveBeenCalled();
+
+    const notCounted = makeTx({ tracked: false });
+    expect(await returnGiftIfSaleRefundedIn(notCounted, 't1', 's1')).toBe(0);
+    expect(notCounted.inventoryTransaction.create).not.toHaveBeenCalled();
   });
 });

@@ -18,9 +18,16 @@ import { AppointmentsService } from "./appointments.service";
 
 const at = (hhmm: string) => new Date(`2026-11-02T${hhmm}:00.000Z`); // UTC; Madrid is +1 in November
 
-// These cases move appointments on fixed days; "now" is pinned before them
-// so the "already passed" check does not depend on when the suite runs. Only
-// Date is faked: timers and promises run as usual.
+// Cut with Ana 09:00-09:30 UTC, then colour with Bea 09:30-10:30 UTC.
+const visit: VisitService[] = [
+  { id: "cut", professionalId: "ana", start: at("09:00"), end: at("09:30"), isParallel: false },
+  { id: "colour", professionalId: "bea", start: at("09:30"), end: at("10:30"), isParallel: false },
+];
+
+
+// The fixtures are on 2026-11-02; a move to the past is refused, so "now" is
+// pinned before it (only Date: promises and timers run as usual). Without
+// it these tests started failing on the fixtures' own day.
 beforeAll(() => {
   jest.useFakeTimers({
     now: new Date("2026-10-30T10:00:00Z"),
@@ -28,12 +35,6 @@ beforeAll(() => {
   });
 });
 afterAll(() => jest.useRealTimers());
-
-// Cut with Ana 09:00-09:30 UTC, then colour with Bea 09:30-10:30 UTC.
-const visit: VisitService[] = [
-  { id: "cut", professionalId: "ana", start: at("09:00"), end: at("09:30"), isParallel: false },
-  { id: "colour", professionalId: "bea", start: at("09:30"), end: at("10:30"), isParallel: false },
-];
 
 describe("planning a move", () => {
   it("the whole visit shifts together, keeping its order and gaps", () => {
