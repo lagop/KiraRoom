@@ -70,7 +70,20 @@ describe("A1/A2/B5: routes that rewrote the till's history are gone", () => {
       expect(svc[m]).toBeUndefined();
     }
     const stripe = StripeService.prototype as any;
-    for (const m of ["createPaymentIntent", "createPaymentIntentWithDetails", "createRefund"]) {
+    for (const m of [
+      "createPaymentIntent",
+      "createPaymentIntentWithDetails",
+      "createRefund",
+      "retrievePaymentIntent",
+      "updatePaymentIntent",
+      "cancelPaymentIntent",
+      "createCustomer",
+      "getCustomer",
+      "updateCustomer",
+      "createSubscription",
+      "cancelSubscription",
+      "getSubscription",
+    ]) {
       expect(stripe[m]).toBeUndefined();
     }
   });

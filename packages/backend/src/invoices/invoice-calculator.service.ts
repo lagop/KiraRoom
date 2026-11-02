@@ -288,3 +288,30 @@ export function aggregateTaxBreakdown(
   }
   return [...buckets.values()].sort((a, b) => b.rate - a.rate);
 }
+
+/** The line amounts the breakdown is worked out from (Prisma's Decimal rate included). */
+export interface BreakdownSourceLine {
+  taxRate: number | string | { toString(): string };
+  taxCents: number;
+  totalCents: number;
+}
+
+/**
+ * An issued invoice's breakdown by rate, worked out again from its lines
+ * rather than read from the one stored on it: invoices issued before rates
+ * were kept to two decimals have IGIC's 9,5 % stored as 10 % there (their
+ * lines always had 9,5). Stored invoices are not rewritten. Without lines
+ * the stored breakdown is all there is.
+ *
+ * Used by the Modelo 303/420 drafts and the libro de facturas, so the two
+ * reconcile.
+ */
+export function effectiveTaxBreakdown(inv: {
+  taxBreakdown: unknown;
+  lines?: BreakdownSourceLine[] | null;
+}): unknown {
+  if (!inv.lines?.length) return inv.taxBreakdown;
+  return aggregateTaxBreakdown(
+    inv.lines.map((l) => ({ taxRate: Number(l.taxRate), taxCents: l.taxCents, totalCents: l.totalCents })),
+  );
+}

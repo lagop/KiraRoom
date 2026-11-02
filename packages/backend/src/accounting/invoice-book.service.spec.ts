@@ -16,6 +16,8 @@ import {
   buildInvoiceBookRows,
   invoiceBookCsv,
 } from "./invoice-book.service";
+import { aggregateModelo420 } from "../invoices/tax-reports/modelo-420";
+import { effectiveTaxBreakdown } from "../invoices/invoice-calculator.service";
 
 const twoRates = {
   series: "A",
@@ -152,5 +154,55 @@ describe("InvoiceBookService.build", () => {
     await expect(svc.build("t", "2026-02-30", "2026-03-01", "csv")).rejects.toThrow(/AAAA-MM-DD/);
     await expect(svc.build("t", "2026-03-01", "2026-02-01", "csv")).rejects.toThrow(/anterior/);
     await expect(svc.build("t", "2025-01-01", "2026-06-01", "csv")).rejects.toThrow(/un año/);
+  });
+});
+
+describe("the book reconciles with the Modelo 303/420 drafts", () => {
+  // Issued before rates were kept to two decimals: the stored breakdown says
+  // 10 %, the lines (what the 420 draft reads) say 9,5 %.
+  const oldIgic = {
+    ...simplified,
+    number: "000012",
+    subtotalCents: 3000,
+    totalCents: 3285,
+    taxBreakdown: [{ rate: 10, baseCents: 3000, taxCents: 285 }],
+    lines: [
+      { taxRate: "9.5", taxCents: 190, totalCents: 2190 },
+      { taxRate: "9.5", taxCents: 95, totalCents: 1095 },
+    ],
+  };
+
+  it("works the rows out from the lines, not the stored 9,5 -> 10 breakdown", () => {
+    const rows = buildInvoiceBookRows([oldIgic], "IGIC");
+    expect(rows.map((r) => [r.rate, r.baseCents, r.taxCents])).toEqual([[9.5, 3000, 285]]);
+  });
+
+  it("gives the same base and cuota per rate as the 420 draft", () => {
+    const fromBook = buildInvoiceBookRows([oldIgic, { ...simplified, lines: [{ taxRate: 7, taxCents: 140, totalCents: 2140 }] }], "IGIC");
+    const boxes = aggregateModelo420(
+      [oldIgic, simplified].map((inv) => ({ taxBreakdown: effectiveTaxBreakdown(inv as any) })),
+    );
+    // Rows low to high: 7 % then 9,5 %.
+    expect([boxes["01"], boxes["02"], boxes["03"]]).toEqual([2000, 7, 140]);
+    expect([boxes["04"], boxes["05"], boxes["06"]]).toEqual([3000, 9.5, 285]);
+    const byRate = new Map(fromBook.map((r) => [r.rate, [r.baseCents, r.taxCents]]));
+    expect(byRate.get(7)).toEqual([2000, 140]);
+    expect(byRate.get(9.5)).toEqual([3000, 285]);
+  });
+
+  it("asks the database for the lines", async () => {
+    const prisma: any = {
+      tenant: { findUnique: jest.fn(async () => ({ fiscalSettings: { taxRegime: "igic" } })) },
+      invoice: { findMany: jest.fn(async () => [oldIgic]) },
+    };
+    const file = await new InvoiceBookService(prisma).build("tenant-1", "2026-07-01", "2026-09-30", "csv");
+    expect(prisma.invoice.findMany.mock.calls[0][0].select.lines).toEqual({
+      select: { taxRate: true, taxCents: true, totalCents: true },
+    });
+    expect(String(file.body)).toContain(";IGIC;9,5;30,00;2,85;");
+  });
+
+  it("an invoice without lines keeps its stored breakdown", () => {
+    expect(buildInvoiceBookRows([{ ...twoRates, lines: [] }], "IVA").map((r) => r.rate)).toEqual([21, 10]);
   });
 });
