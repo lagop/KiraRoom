@@ -33,6 +33,7 @@ import {
   type RectificationLineRequest,
 } from "./rectification-lines";
 import type { InvoiceLineInput } from "./invoice-calculator.service";
+import { ISSUER_SELECT, IssuerIncompleteException, issuerProblem, issuerStatus, type IssuerField } from "./invoice-issuer";
 
 interface CreateInvoiceInput {
   tenantId: string;
@@ -188,16 +189,27 @@ export class InvoiceService {
    * issued, from its lines and the salon's fiscal settings. Read with `db`:
    * the caller's transaction when the invoice is issued inside one.
    */
-  private async prepare(input: CreateInvoiceInput, db: Prisma.TransactionClient = this.prisma) {
+  private async prepare(
+    input: CreateInvoiceInput,
+    db: Prisma.TransactionClient = this.prisma,
+    options: { rectification?: boolean } = {},
+  ) {
     if (!input.lines?.length) {
       throw new BadRequestException("Invoice must have at least one line");
     }
     const tenant = await db.tenant.findUnique({
       where: { id: input.tenantId },
-      select: { fiscalMode: true, fiscalSettings: true, timezone: true, name: true, legalName: true, taxId: true },
+      select: { ...ISSUER_SELECT, fiscalMode: true, timezone: true, name: true },
     });
     if (!tenant) {
       throw new NotFoundException("Tenant not found");
+    }
+    // No NIF, razón social or fiscal address: refused (422) from the day in
+    // INVOICE_ISSUER_BLOCK_FROM, warned about until then (invoice-issuer.ts).
+    // A rectificativa corrects an invoice already issued and is never held up.
+    if (!options.rectification) {
+      const missing = issuerProblem(tenant);
+      if (missing) throw new IssuerIncompleteException(missing);
     }
     const settings = (tenant.fiscalSettings as Record<string, unknown>) ?? {};
     const lines = input.taxIncludedFromSalon
@@ -220,6 +232,28 @@ export class InvoiceService {
       taxId: tenant.taxId ?? (typeof settings.tenantNif === "string" ? settings.tenantNif : null),
     };
     return { computation, series, issueDate, year: Number(day.slice(0, 4)), fiscalMode: tenant.fiscalMode, issuer };
+  }
+
+  /**
+   * The issuer data the salon is missing (NIF, razón social, fiscal
+   * address), whether invoices are refused for it yet, and the message.
+   */
+  async issuerStatus(tenantId: string) {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { ...ISSUER_SELECT, timezone: true },
+    });
+    return issuerStatus(tenant);
+  }
+
+  /**
+   * What refuses an invoice of this salon now (invoice-issuer.ts), or null.
+   * The till asks before its sale, so the sale goes through without the
+   * invoice instead of failing.
+   */
+  async issuerProblem(tenantId: string, db: Prisma.TransactionClient = this.prisma): Promise<IssuerField[] | null> {
+    const tenant = await db.tenant.findUnique({ where: { id: tenantId }, select: { ...ISSUER_SELECT, timezone: true } });
+    return issuerProblem(tenant);
   }
 
   /** Numbers and stores the invoice, inside `tx`. */
@@ -719,7 +753,7 @@ export class InvoiceService {
       }),
       notes: `${rectificationNotePrefix(original)} ${reason}`,
     };
-    const { id, fiscalMode } = await this.insert(tx, input, await this.prepare(input, tx));
+    const { id, fiscalMode } = await this.insert(tx, input, await this.prepare(input, tx, { rectification: true }));
     return { id, fiscalMode };
   }
 
@@ -839,6 +873,18 @@ export class InvoiceService {
     const settings =
       (appt.tenant.fiscalSettings as Record<string, unknown>) ?? {};
     if (!settings.autoInvoiceAppointments && !options.requested) return null;
+    // The automatic invoice is skipped, not failed, while the salon has no
+    // issuer data and invoices are refused for it. Asked for by hand, the
+    // 422 from prepare() says what is missing.
+    if (!options.requested) {
+      const missing = await this.issuerProblem(appt.tenantId);
+      if (missing) {
+        this.logger.warn(
+          `Appointment ${appt.id}: automatic invoice skipped, the salon ${appt.tenantId} is missing its issuer data (${missing.join(", ")})`,
+        );
+        return null;
+      }
+    }
 
     try {
       return await this.create({

@@ -1,7 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { Cron, CronExpression } from "@nestjs/schedule";
 import { PrismaService } from "../common/prisma/prisma.service";
-import { ClientCadenceService } from "./client-cadence.service";
+import { ClientCadenceService, rebookingChannelOf } from "./client-cadence.service";
 import { AppointmentStatus, RebookChannel, RebookStatus } from "@prisma/client";
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
 import { EmailService } from "../notifications/services/email.service";
@@ -318,7 +318,8 @@ export class RebookingDispatcherService {
       return { ok: false, reason: "high_variability" };
     }
 
-    const channel = cfg.channelFallback as RebookChannel;
+    // Email whatever was stored: WhatsApp is not wired (rebookingChannelOf).
+    const channel: RebookChannel = rebookingChannelOf(cfg.channelFallback);
     const client = (await this.prisma.client.findUnique({
       where: { id: cadence.clientId },
       select: { id: true, firstName: true, email: true, phone: true, status: true },
@@ -382,7 +383,7 @@ export class RebookingDispatcherService {
         {
           serviceId,
           sentAt: new Date().toISOString(),
-          channel: cfg.channelFallback,
+          channel,
         },
       ];
       await this.prisma.clientCadence.update({

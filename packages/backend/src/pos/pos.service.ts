@@ -53,6 +53,7 @@ import {
   type SimplifiedSaleInvoice,
 } from '../invoices/invoices.service';
 import { productTaxRatePercent, salonTaxRate } from '../invoices/salon-tax-settings';
+import { issuerSkippedMessage } from '../invoices/invoice-issuer';
 import { taxLabelOf } from '@kira/shared';
 import { CLIENT_POS_SELECT } from '../clients/client-select';
 import {
@@ -706,6 +707,11 @@ export class PosService {
       client,
     );
     if (invoiceKind.problem) throw new BadRequestException(invoiceKind.problem);
+    // No issuer data (NIF, razón social, fiscal address) once invoices are
+    // refused for it (invoice-issuer.ts): the sale is still recorded, without
+    // its invoice, and the answer says why. A sale never fails for it.
+    const issuerMissing =
+      invoiceKind.kind !== 'none' && this.invoices ? await this.invoices.issuerProblem(tenantId) : null;
 
     const giftCodes = new Set(payments.filter((p) => p.method === 'gift_card').map((p) => (p.giftCardCode ?? '').trim().toUpperCase()));
     if (giftCodes.size > 1) {
@@ -1104,7 +1110,9 @@ export class PosService {
         }
 
         // The sale's own invoice (series T, or a full one over 3.000 EUR).
-        if (invoiceKind.kind !== 'none' && this.invoices) {
+        if (invoiceKind.kind !== 'none' && issuerMissing) {
+          this.logger.warn(`sale ${saleId}: invoice skipped, the salon is missing its issuer data (${issuerMissing.join(', ')})`);
+        } else if (invoiceKind.kind !== 'none' && this.invoices) {
           const invoiceLines = invoiceable.map((l) => invoiceLineOf(l, loyaltyOfLine.get(l) ?? 0, promotion?.code));
           // The loyalty gift as a zero line. IVA treatment (autoconsumo)
           // pending the salon's gestor: pos-loyalty-gift.ts.
@@ -1202,6 +1210,9 @@ export class PosService {
             invoice: invoice
               ? { id: (invoice as SimplifiedSaleInvoice).id, series: (invoice as SimplifiedSaleInvoice).series, number: `${(invoice as SimplifiedSaleInvoice).series}${(invoice as SimplifiedSaleInvoice).number}`, full: invoiceKind.kind === 'full' }
               : null,
+            ...(issuerMissing && invoiceKind.kind !== 'none'
+              ? { invoiceSkipped: { reason: issuerSkippedMessage(issuerMissing), missing: issuerMissing } }
+              : {}),
             ...(rectifications.size
               ? {
                   rectifications: [...rectifications].map(([appointmentId, issued]) => ({

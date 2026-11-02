@@ -341,8 +341,15 @@ describe("ClientCadenceService.getTenantConfig", () => {
     const cfg = await svc.getTenantConfig("tenant-1");
     expect(cfg.enabled).toBe(true); // default true (only `=== false` disables)
     expect(cfg.leadDays).toBe(3);
-    expect(cfg.channelFallback).toBe("both");
+    expect(cfg.channelFallback).toBe("email");
     expect(cfg.minVisits).toBe(3);
+  });
+
+  it.each(["whatsapp", "both"])("reads a stored %s channel as email: only email delivers", async (stored) => {
+    const m = makePrismaMock();
+    m.tenant.rebookingSettings = { channelFallback: stored };
+    const cfg = await new ClientCadenceService(m.prisma).getTenantConfig("tenant-1");
+    expect(cfg.channelFallback).toBe("email");
   });
 
   it("respects explicit disabled flag", async () => {

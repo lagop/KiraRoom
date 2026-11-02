@@ -77,6 +77,17 @@ export class InvoicesController {
     return this.certs.listActiveCertificates(this.requireTenantId(req));
   }
 
+  /**
+   * Whether the salon has the issuer data every invoice needs (NIF, razón
+   * social, fiscal address), for the panel's warning; and from when invoices
+   * without it are refused (INVOICE_ISSUER_BLOCK_FROM). Before ":id".
+   */
+  @Get("issuer-status")
+  @Roles(...SALON_MANAGERS)
+  issuerStatus(@Req() req: AuthedRequest) {
+    return this.invoices.issuerStatus(this.requireTenantId(req));
+  }
+
   @Get(":id")
   @Roles(...SALON_MANAGERS)
   findOne(@Req() req: AuthedRequest, @Param("id", ParseUUIDPipe) id: string) {

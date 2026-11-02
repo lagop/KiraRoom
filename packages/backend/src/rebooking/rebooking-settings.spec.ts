@@ -53,6 +53,13 @@ describe("PATCH /rebooking/config", () => {
     expect(recompute).not.toHaveBeenCalled();
   });
 
+  it.each(["whatsapp", "both"])("saves email when an older panel sends %s", async (channelFallback) => {
+    const { controller, req, dto, update } = controllerWith();
+    const res = await controller.updateConfig(req, dto({ channelFallback }));
+    expect((update.mock.calls[0] as any)[0].data.rebookingSettings.channelFallback).toBe("email");
+    expect(res.channelFallback).toBe("email");
+  });
+
   it("a field that was not sent keeps its stored value", async () => {
     const { controller, req, dto, update } = controllerWith();
     await controller.updateConfig(req, dto({ leadDays: 5, minVisits: undefined }));
