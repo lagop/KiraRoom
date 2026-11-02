@@ -28,7 +28,7 @@ const STAFF = { id: "u-me", role: "staff" };
 const LONER = { id: "u-nopro", role: "staff" };
 const SALE_ID = "0b8f2c3a-5d4e-4f6a-9b1c-2d3e4f5a6b7c";
 
-function harness(opts: { fiscal?: Row; clients?: Row[]; stock?: number; appointments?: Row[] } = {}) {
+function harness(opts: { fiscal?: Row; clients?: Row[]; stock?: number; appointments?: Row[]; tenant?: Row } = {}) {
   const fiscalSettings = { defaultSeries: "A", ...(opts.fiscal ?? TAX_INCLUDED) };
   const store = invoiceStore(fiscalSettings);
   const prisma: any = store.prisma;
@@ -67,6 +67,7 @@ function harness(opts: { fiscal?: Row; clients?: Row[]; stock?: number; appointm
         city: "Madrid",
         postalCode: "28001",
         phone: null,
+        ...opts.tenant,
       })),
     },
     ...tables,
@@ -307,6 +308,45 @@ describe("the sale's invoice", () => {
     expect(err.message).toMatch(/pasa de 3\.000 €.*NIF/);
     expect(t.payments).toHaveLength(0);
     expect(t.tables.store.sales).toHaveLength(0);
+  });
+
+  describe("without the salon's issuer data (NIF, razón social, address)", () => {
+    const saved = process.env.INVOICE_ISSUER_BLOCK_FROM;
+    afterEach(() => {
+      if (saved === undefined) delete process.env.INVOICE_ISSUER_BLOCK_FROM;
+      else process.env.INVOICE_ISSUER_BLOCK_FROM = saved;
+    });
+    const noIssuer = { taxId: null, legalName: null, street: null };
+
+    it("once invoices are refused for it, the sale still completes, without its invoice, and says why", async () => {
+      process.env.INVOICE_ISSUER_BLOCK_FROM = "2020-01-01";
+      const t = harness({ tenant: noIssuer });
+      const out = await t.sell({ items: [{ serviceId: "svc1", quantity: 1 }], payments: [{ method: "card", amount: 4000 }] });
+      expect(out.status).toBe("completed");
+      expect(out.total).toBe(4000);
+      expect(t.payments.reduce((sum, p) => sum + p.amount, 0)).toBe(4000);
+      expect(t.tables.store.sales).toHaveLength(1);
+      expect(t.issued()).toHaveLength(0);
+      expect(out.invoice).toBeNull();
+      expect(out.invoiceSkipped).toMatchObject({ missing: ["taxId", "legalName", "address"] });
+      expect(out.invoiceSkipped.reason).toMatch(/^Venta cobrada sin factura: faltan el NIF, la razón social y la dirección fiscal/);
+    });
+
+    it("before the date (warn only), the sale is invoiced as always", async () => {
+      delete process.env.INVOICE_ISSUER_BLOCK_FROM;
+      const t = harness({ tenant: noIssuer });
+      const out = await t.sell({ items: [{ serviceId: "svc1", quantity: 1 }], payments: [{ method: "cash", amount: 4000 }] });
+      expect(t.issued()).toHaveLength(1);
+      expect(out.invoiceSkipped).toBeUndefined();
+    });
+
+    it("with the data filled in, blocking changes nothing", async () => {
+      process.env.INVOICE_ISSUER_BLOCK_FROM = "2020-01-01";
+      const t = harness();
+      const out = await t.sell({ items: [{ serviceId: "svc1", quantity: 1 }], payments: [{ method: "cash", amount: 4000 }] });
+      expect(t.issued()).toHaveLength(1);
+      expect(out.invoiceSkipped).toBeUndefined();
+    });
   });
 });
 

@@ -222,6 +222,9 @@ services:
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       STRIPE_TAX_ENABLED: ${STRIPE_TAX_ENABLED:-false}
 
+      # Invoices without the salon's issuer data: refused from this day (empty = warn only)
+      INVOICE_ISSUER_BLOCK_FROM: ${INVOICE_ISSUER_BLOCK_FROM:-}
+
       # Notifications
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       RESEND_WEBHOOK_SECRET: ${RESEND_WEBHOOK_SECRET:-}

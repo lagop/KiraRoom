@@ -5,7 +5,7 @@ import { Roles } from "../auth/decorators/roles.decorator";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { UserRole } from "@prisma/client";
 import { Public } from "../auth/decorators/public.decorator";
-import { ClientCadenceService } from "./client-cadence.service";
+import { ClientCadenceService, rebookingChannelOf } from "./client-cadence.service";
 import { RebookingDispatcherService } from "./rebooking-dispatcher.service";
 import { UpdateRebookingConfigDto } from "./dto/rebooking.dto";
 import { PrismaService } from "../common/prisma/prisma.service";
@@ -42,7 +42,9 @@ export class RebookingController {
     const tenantId = this.requireTenantId(req);
     const current = await this.cadence.getTenantConfig(tenantId);
     const sent = Object.fromEntries(Object.entries(dto).filter(([, v]) => v !== undefined));
-    const merged = { ...current, ...sent };
+    // Email is the only channel (rebookingChannelOf): an older panel that
+    // still sends "whatsapp" or "both" saves email.
+    const merged = { ...current, ...sent, channelFallback: rebookingChannelOf(sent.channelFallback) };
     await this.prisma.tenant.update({
       where: { id: tenantId },
       data: { rebookingSettings: merged as any } });

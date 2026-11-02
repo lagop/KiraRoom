@@ -51,7 +51,8 @@ export default function RebookingSettingsPage() {
     if (config.data) {
       const { recomputing: _ignored, ...stored } = config.data;
       void _ignored;
-      setDraft(stored);
+      // Email is the only channel; a stored "whatsapp" or "both" is email.
+      setDraft({ ...stored, channelFallback: "email" });
     }
   }, [config.data]);
 
@@ -113,20 +114,12 @@ export default function RebookingSettingsPage() {
             <label className="text-sm font-medium text-gray-900">
               {t("rebooking.settings.channelFallback")}
             </label>
-            <select
-              value={draft.channelFallback ?? "both"}
-              onChange={(e) =>
-                setDraft((d) => ({
-                  ...d,
-                  channelFallback: e.target.value as RebookingConfig["channelFallback"],
-                }))
-              }
-              className="mt-1 block w-64 rounded-md border border-gray-300 px-3 py-2 text-sm"
-            >
-              <option value="email">{t("rebooking.settings.channelEmail")}</option>
-              <option value="whatsapp">{t("rebooking.settings.channelWhatsapp")}</option>
-              <option value="both">{t("rebooking.settings.channelBoth")}</option>
-            </select>
+            {/* Email only: WhatsApp is not wired for these reminders, and a
+                salon that picked it stopped getting any sent. Salons that had
+                "WhatsApp" or "Email y WhatsApp" send by email (the backend
+                reads them as email). */}
+            <p className="mt-1 text-sm text-gray-900">{t("rebooking.settings.channelEmail")}</p>
+            <p className="mt-1 text-xs text-gray-500">{t("rebooking.settings.channelEmailOnly")}</p>
           </div>
 
           <div>

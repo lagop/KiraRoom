@@ -1,5 +1,5 @@
 /**
- * Tests for the Modelo 303 + 130 draft generator (the 303 box layout itself
+ * Tests for the Modelo 303 draft generator and the Modelo 130 income card (the 303 box layout itself
  * is pinned in modelo-303.spec.ts).
  *
  * Uses an in-memory Prisma mock so no DB is needed. The cron submission
@@ -7,7 +7,7 @@
  * final roadmap note about Modelo 303 needing legal review.
  */
 
-import { TaxReportsService } from "./tax-reports.service";
+import { MODELO_130_INCOME_NOTE, TaxReportsService } from "./tax-reports.service";
 
 function makePrisma() {
   const stored: any[] = [];
@@ -64,9 +64,10 @@ function makePrisma() {
         );
       },
       findMany: async (args: any) => {
-        const list = args?.where?.tenantId
-          ? stored.filter((r) => r.tenantId === args.where.tenantId)
-          : stored;
+        const types: string[] | undefined = args?.where?.type?.in;
+        const list = (args?.where?.tenantId ? stored.filter((r) => r.tenantId === args.where.tenantId) : stored).filter(
+          (r) => !types || types.includes(r.type),
+        );
         return list
           .sort((a, b) => b.year - a.year || b.quarter - a.quarter)
           .slice(0, args?.take ?? 50);
@@ -126,7 +127,7 @@ describe("TaxReportsService.generate — Modelo 303", () => {
     const svc = new TaxReportsService(m.prisma);
     await expect(
       svc.generate("tenant-1", "modelo_303" as any, 2026, 5),
-    ).rejects.toThrow(/Invalid quarter/);
+    ).rejects.toThrow(/El trimestre 5 no existe/);
   });
 
   it("is idempotent — re-running overwrites the existing row", async () => {
@@ -181,26 +182,100 @@ describe("TaxReportsService.generate — Modelo 303", () => {
   });
 });
 
-describe("TaxReportsService.generate — Modelo 130", () => {
-  it("computes 20% flat over total invoiced (MVP)", async () => {
-    const m = makePrisma();
-    m.invoices.push(
-      sampleInvoice(12100, [{ rate: 21, baseCents: 10000, taxCents: 2100 }]),
-    );
-    const svc = new TaxReportsService(m.prisma);
-    const r = await svc.generate("tenant-1", "modelo_130" as any, 2026, 2);
-    expect(r.totalsJson["01"]).toBe(12100); // ingresos
-    expect(r.totalsJson["02"]).toBe(2420); // rendimiento 20%
-    expect(r.totalsJson["03"]).toBe(0); // retenciones
-    expect(r.totalsJson["18"]).toBe(2420); // cuota diferencial
+describe("TaxReportsService.income130 — the income for the Modelo 130", () => {
+  function incomeFor(tenant: Record<string, unknown>, invoices: any[]) {
+    const findMany = jest.fn(async () => invoices);
+    const prisma: any = {
+      tenant: { findUnique: jest.fn(async () => ({ timezone: "Europe/Madrid", fiscalSettings: {}, ...tenant })) },
+      invoice: { findMany },
+    };
+    return { svc: new TaxReportsService(prisma), findMany };
+  }
+  const inv = (issueDate: string, base: number, tax: number, series = "A") => ({
+    series,
+    totalCents: base + tax,
+    issueDate: new Date(issueDate),
+    taxBreakdown: [{ rate: 21, baseCents: base, taxCents: tax }],
+    lines: [],
   });
 
-  it("returns zeroes when no invoices in the period", async () => {
+  it("gives an autónomo the base without VAT per quarter and cumulative, rectificativas subtracted", async () => {
+    const { svc, findMany } = incomeFor({ taxId: "12345678Z", taxIdType: "nif" }, [
+      inv("2026-02-10T00:00:00.000Z", 10000, 2100),
+      inv("2026-03-31T00:00:00.000Z", 5000, 1050),
+      inv("2026-05-01T00:00:00.000Z", 20000, 4200),
+      inv("2026-05-20T00:00:00.000Z", -2000, -420, "R"),
+      inv("2026-12-31T00:00:00.000Z", 1000, 210),
+    ]);
+    const r = await svc.income130("tenant-1", 2026);
+    expect(r.applies).toBe(true);
+    expect(r.note).toBe("Los gastos y el cálculo final del modelo 130 los hace tu gestor.");
+    expect(r.quarters).toEqual([
+      { quarter: 1, invoicedCents: 15000, rectifiedCents: 0, incomeCents: 15000, cumulativeCents: 15000 },
+      { quarter: 2, invoicedCents: 20000, rectifiedCents: -2000, incomeCents: 18000, cumulativeCents: 33000 },
+      { quarter: 3, invoicedCents: 0, rectifiedCents: 0, incomeCents: 0, cumulativeCents: 33000 },
+      { quarter: 4, invoicedCents: 1000, rectifiedCents: 0, incomeCents: 1000, cumulativeCents: 34000 },
+    ]);
+    // Issued invoices only: cancelled ones are not income.
+    expect((findMany.mock.calls[0] as any)[0].where.status).toEqual({ in: ["issued", "paid", "refunded"] });
+  });
+
+  it("puts an invoice in the quarter of the salon's day, not UTC's", async () => {
+    // 23:30 UTC on 31 March is 1 April in Madrid (an issue date stored as an instant).
+    const { svc } = incomeFor({ taxId: "X1234567L", taxIdType: "nie" }, [inv("2026-03-31T23:30:00.000Z", 10000, 2100)]);
+    const r = await svc.income130("tenant-1", 2026);
+    expect(r.quarters[0].incomeCents).toBe(0);
+    expect(r.quarters[1].incomeCents).toBe(10000);
+  });
+
+  it("leaves out the days of the year before and after", async () => {
+    const { svc } = incomeFor({ taxId: "12345678Z", taxIdType: "nif" }, [
+      inv("2025-12-31T00:00:00.000Z", 9000, 1890),
+      inv("2027-01-01T00:00:00.000Z", 8000, 1680),
+    ]);
+    const r = await svc.income130("tenant-1", 2026);
+    expect(r.quarters.map((q) => q.incomeCents)).toEqual([0, 0, 0, 0]);
+  });
+
+  it("counts IGIC bases too", async () => {
+    const { svc } = incomeFor({ taxId: "12345678Z", taxIdType: "nif", fiscalSettings: { taxRegime: "igic" } }, [
+      { series: "A", totalCents: 10700, issueDate: new Date("2026-07-01T00:00:00.000Z"), taxBreakdown: [{ rate: 7, baseCents: 10000, taxCents: 700 }], lines: [] },
+    ]);
+    expect((await svc.income130("tenant-1", 2026)).quarters[2].incomeCents).toBe(10000);
+  });
+
+  it.each([
+    ["a company (CIF)", { taxId: "B12345674", taxIdType: "cif" }],
+    ["a salon with no NIF yet", { taxId: null, taxIdType: null }],
+  ])("does not apply to %s", async (_label, tenant) => {
+    const { svc, findMany } = incomeFor(tenant, []);
+    const r = await svc.income130("tenant-1", 2026);
+    expect(r.applies).toBe(false);
+    expect(r.quarters).toEqual([]);
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
+  it("reads the type from the NIF itself when the column is empty", async () => {
+    const { svc } = incomeFor({ taxId: "12345678Z", taxIdType: null }, []);
+    expect((await svc.income130("tenant-1", 2026)).applies).toBe(true);
+  });
+
+  it("refuses a year that is not one, in Spanish", async () => {
+    const { svc } = incomeFor({ taxId: "12345678Z", taxIdType: "nif" }, []);
+    await expect(svc.income130("tenant-1", 99999)).rejects.toThrow(/El año 99999 no es válido/);
+  });
+
+  it("the note is the one the card shows", () => {
+    expect(MODELO_130_INCOME_NOTE).toMatch(/tu gestor/);
+  });
+});
+
+describe("TaxReportsService.generate — no Modelo 130 draft", () => {
+  it("refuses it in Spanish and stores nothing", async () => {
     const m = makePrisma();
     const svc = new TaxReportsService(m.prisma);
-    const r = await svc.generate("tenant-1", "modelo_130" as any, 2026, 4);
-    expect(r.totalsJson["01"]).toBe(0);
-    expect(r.totalsJson["18"]).toBe(0);
+    await expect(svc.generate("tenant-1", "modelo_130" as any, 2026, 2)).rejects.toThrow(/ya no prepara el modelo 130/);
+    expect(m.upsertCalls.length).toBe(0);
   });
 });
 
@@ -237,11 +312,11 @@ describe("TaxReportsService.find / listForTenant", () => {
     const svc = new TaxReportsService(m.prisma);
     await svc.generate("tenant-1", "modelo_303" as any, 2026, 1);
     await svc.generate("tenant-1", "modelo_303" as any, 2026, 4);
-    await svc.generate("tenant-1", "modelo_130" as any, 2026, 2);
+    // An old Modelo 130 draft, from before it was removed: not listed.
+    m.stored.push({ tenantId: "tenant-1", type: "modelo_130", year: 2026, quarter: 2 });
     const list = await svc.listForTenant("tenant-1");
     expect(list.map((r) => `${r.type}:${r.year}Q${r.quarter}`)).toEqual([
       "modelo_303:2026Q4",
-      "modelo_130:2026Q2",
       "modelo_303:2026Q1",
     ]);
   });

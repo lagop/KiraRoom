@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Get, Post, Delete, Body, Param, Req, UseGuards, Query, Headers, Res, BadRequestException, HttpCode, HttpStatus } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Delete, Body, Param, Req, UseGuards, Query, Headers, Res, BadRequestException, GoneException, HttpCode, HttpStatus } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
 import { createHmac, randomBytes } from "crypto";
@@ -35,6 +35,17 @@ export class ManualWhatsAppConnectDto {
   displayName?: string;
 }
 
+/**
+ * "Conectar con Meta" (OAuth) is switched off: it saved the token only, with
+ * no WhatsApp Business account or number, so the panel said "Conectado"
+ * while nothing could be sent. The panel no longer offers it; these routes
+ * answer 410 until the embedded signup (or reading the account and number
+ * from the Graph API) is built. The manual connection is unaffected.
+ */
+export const WHATSAPP_OAUTH_AVAILABLE = false;
+export const WHATSAPP_OAUTH_UNAVAILABLE =
+  "La conexión automática con Meta no está disponible todavía. Conecta tu número de WhatsApp Business con la conexión manual, en Ajustes > WhatsApp Business.";
+
 interface AuthedRequest extends Request {
   user: { id: string; tenantId: string; role: string };
 }
@@ -52,6 +63,7 @@ export class WhatsAppController {
   @Get("connect/start")
   @Roles(...SALON_MANAGERS)
   start(@Req() req: AuthedRequest, @Res() res: Response) {
+    if (!WHATSAPP_OAUTH_AVAILABLE) throw new GoneException(WHATSAPP_OAUTH_UNAVAILABLE);
     const state = this.signState(req.user.tenantId);
     const url = this.whatsapp.buildConnectUrl(state);
     return res.json({ url, state });
@@ -60,6 +72,7 @@ export class WhatsAppController {
   @Get("connect/callback")
   @Public()
   async callback(@Query("code") code: string, @Query("state") state: string) {
+    if (!WHATSAPP_OAUTH_AVAILABLE) throw new GoneException(WHATSAPP_OAUTH_UNAVAILABLE);
     if (!code || !state) throw new BadRequestException("code and state required");
     const tenantId = this.verifyState(state);
     return this.whatsapp.completeOAuth(tenantId, code);

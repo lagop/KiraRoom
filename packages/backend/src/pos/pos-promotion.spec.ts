@@ -145,6 +145,7 @@ function till(opts: { promotions?: TillPromotion[]; usages?: Row[]; fiscal?: Row
       return { id: "inv-1", series: "T", number: "000001", created: false };
     }),
     afterIssue: jest.fn(),
+    issuerProblem: jest.fn(async () => null),
   };
   const giftCards: any = {
     redeemInTx: jest.fn(async () => ({ card: { id: "gc1" } })),

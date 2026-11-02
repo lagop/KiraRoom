@@ -4,7 +4,7 @@ import { JwtAuthGuard } from "../../auth/guards/jwt-auth.guard";
 import { Roles, SALON_MANAGERS } from "../../auth/decorators/roles.decorator";
 import { RolesGuard } from "../../auth/guards/roles.guard";
 import { UserRole, TaxReportType } from "@prisma/client";
-import { TaxReportsService } from "./tax-reports.service";
+import { TaxReportsService, unknownReportType } from "./tax-reports.service";
 
 interface AuthedRequest extends Request {
   user: { tenantId?: string };
@@ -44,6 +44,17 @@ export class TaxReportsController {
     return this.reports.quarterlyReturnFor(this.tenantId(req));
   }
 
+  /**
+   * The income of an autónomo for the Modelo 130 (no draft of the return:
+   * the gestor does the expenses and the calculation). applies: false for a
+   * salon with a CIF.
+   */
+  @Get("modelo-130-income/:year")
+  @Roles(...SALON_MANAGERS)
+  income130(@Req() req: AuthedRequest, @Param("year", ParseIntPipe) year: number) {
+    return this.reports.income130(this.tenantId(req), year);
+  }
+
   @Get(":type/:year/:quarter")
   @Roles(...SALON_MANAGERS)
   async findOne(
@@ -56,7 +67,7 @@ export class TaxReportsController {
     const r = await this.reports.find(this.tenantId(req), t, year, quarter);
     if (!r) {
       throw new BadRequestException(
-        "No tax report generated yet for this period",
+        "Todavía no has generado el borrador de este trimestre.",
       );
     }
     return r;
@@ -72,13 +83,13 @@ export class TaxReportsController {
   private parseType(type: string): TaxReportType {
     if (type === TaxReportType.modelo_303) return TaxReportType.modelo_303;
     if (type === TaxReportType.modelo_420) return TaxReportType.modelo_420;
-    if (type === TaxReportType.modelo_130) return TaxReportType.modelo_130;
-    throw new BadRequestException(`Unknown tax report type: ${type}`);
+    // The Modelo 130 draft is gone (modelo-130-income instead).
+    throw new BadRequestException(unknownReportType(type));
   }
 
   private tenantId(req: AuthedRequest): string {
     const t = req.user?.tenantId;
-    if (!t) throw new BadRequestException("Missing tenantId");
+    if (!t) throw new BadRequestException("Falta el salón en la sesión.");
     return t;
   }
 }

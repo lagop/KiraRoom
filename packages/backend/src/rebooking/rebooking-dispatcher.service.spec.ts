@@ -300,17 +300,12 @@ describe("RebookingDispatcherService commercial-communication rules", () => {
     expect(m.emailService.sendEmail).not.toHaveBeenCalled();
   });
 
-  it("WhatsApp needs the client's explicit opt-in", async () => {
+  it.each(["whatsapp", "both"])("a salon set to %s gets its reminders by email (WhatsApp is not wired)", async (stored) => {
     const m = makeMocks();
-    m.cadenceSvc.getTenantConfig.mockResolvedValue({ enabled: true, leadDays: 3, channelFallback: "whatsapp", minVisits: 3 });
-    expect(await build(m).processOne("client-1")).toEqual({ ok: false, reason: "no_whatsapp_marketing_consent" });
-    expect(m.prisma.rebookingReminder.create).not.toHaveBeenCalled();
-
-    const n = makeMocks();
-    n.cadenceSvc.getTenantConfig.mockResolvedValue({ enabled: true, leadDays: 3, channelFallback: "whatsapp", minVisits: 3 });
-    n.consents.push({ purpose: "marketing_whatsapp", accepts: true });
-    // Allowed; WhatsApp itself is not wired yet.
-    expect(await build(n).processOne("client-1")).toEqual({ ok: false, reason: "whatsapp_not_wired" });
+    m.cadenceSvc.getTenantConfig.mockResolvedValue({ enabled: true, leadDays: 3, channelFallback: stored, minVisits: 3 });
+    expect(await build(m).processOne("client-1")).toEqual({ ok: true });
+    expect(m.emailService.sendEmail).toHaveBeenCalledTimes(1);
+    expect(m.prisma.rebookingReminder.create.mock.calls[0][0].data.channel).toBe("email");
   });
 });
 

@@ -21,6 +21,7 @@ import { StatusDonut } from "./components/dashboard/status-donut";
 import { TodayTimeline } from "./components/dashboard/today-timeline";
 import { UnreadNotificationsBadge } from "./components/dashboard/unread-notifications-badge";
 import { useDashboardData } from "./components/dashboard/use-dashboard-data";
+import { IssuerDataBanner } from "@/components/invoices/issuer-data-banner";
 
 /**
  * The analytics endpoints return monetary values in **cents** (matching
@@ -113,6 +114,8 @@ export default function DashboardPage() {
         </div>
       )}
     <div className="space-y-6">
+      {/* No NIF, razón social or address for the invoices: owner and admins only. */}
+      <IssuerDataBanner />
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>

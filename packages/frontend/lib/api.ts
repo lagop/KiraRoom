@@ -7,6 +7,7 @@ import { requestBody } from "./time-off";
 import type { TimeOff, TimeOffConflict, TimeOffInput, TimeOffStatus } from "./time-off";
 import type { CreateClientPayload, UpdateClientPayload } from "./client-form";
 import type { RefundableSaleLine } from "./payments-format";
+import type { InvoiceIssuerStatus } from "./invoice-issuer";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1";
@@ -642,15 +643,31 @@ export interface WhatsAppConnection {
   tokenExpiresAt?: string | null;
   isActive: boolean;
 }
-/** A quarterly tax return draft (Modelo 303 / 420 / 130): box -> value. */
+/** A quarterly tax return draft (Modelo 303 / 420): box -> value. */
 export interface TaxReportDraft {
   id: string;
-  type: "modelo_303" | "modelo_420" | "modelo_130";
+  type: "modelo_303" | "modelo_420";
   year: number;
   quarter: number;
   /** Amounts in cents; the tipo boxes of the 420 (02, 05...) are percentages. */
   totalsJson: Record<string, number>;
   status: string;
+}
+
+/** GET /tax-reports/modelo-130-income/:year: an autónomo's income for the Modelo 130. Cents, tax not included. */
+export interface Modelo130Income {
+  /** False for a salon with a CIF, or with no NIF yet: no card. */
+  applies: boolean;
+  year: number;
+  taxIdType: string | null;
+  quarters: Array<{
+    quarter: number;
+    invoicedCents: number;
+    rectifiedCents: number;
+    incomeCents: number;
+    cumulativeCents: number;
+  }>;
+  note: string;
 }
 
 export type WhatsAppCampaignStatus = "draft" | "scheduled" | "sending" | "paused" | "completed" | "failed" | "cancelled";
@@ -5592,6 +5609,14 @@ class ApiClient implements ApiClientInterface {
   async getQuarterlyReturnType(): Promise<{ regime: string; type: string | null }> {
     return this.request(`/tax-reports/quarterly-type`);
   }
+  /** The income of the year for the Modelo 130 (autónomos only; applies: false otherwise). */
+  async getModelo130Income(year: number): Promise<Modelo130Income> {
+    return this.request(`/tax-reports/modelo-130-income/${year}`);
+  }
+  /** What issuer data (NIF, razón social, fiscal address) the salon is missing for its invoices. */
+  async getInvoiceIssuerStatus(): Promise<InvoiceIssuerStatus> {
+    return this.request(`/invoices/issuer-status`);
+  }
   /** Generates (or regenerates) the draft for a quarter. */
   async generateTaxReport(type: string, year: number, quarter: number): Promise<TaxReportDraft> {
     return this.request(`/tax-reports/${type}/${year}/${quarter}/generate`, { method: "POST" });
@@ -6211,6 +6236,8 @@ export interface PosSale {
   giftCards?: Array<{ id: string; code: string; amountCents: number; recipientEmail?: string; emailSent?: boolean }>;
   /** Visits whose loyalty reward their issued invoice could not take: a rectificativa to issue by hand. */
   loyaltyNotOnInvoice?: Array<{ appointmentId: string; invoiceId?: string; invoice: string; amountCents: number }>;
+  /** The sale was charged without its invoice: the salon is missing its issuer data (NIF, razón social, address). */
+  invoiceSkipped?: { reason: string; missing: string[] };
   /** True when this answer is the first one of a sale sent again. */
   replayed?: boolean;
   [key: string]: unknown;

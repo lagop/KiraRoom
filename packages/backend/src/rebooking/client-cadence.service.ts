@@ -23,6 +23,14 @@ const LOOKBACK_APPOINTMENTS = 10;
 /** Clients read per page when a whole salon is recomputed. */
 export const TENANT_RECOMPUTE_PAGE = 200;
 
+/**
+ * The channel a rebooking reminder goes out on. Only email delivers today,
+ * so "whatsapp" and "both" (and anything else) are email.
+ */
+export function rebookingChannelOf(_stored: unknown): "email" {
+  return "email";
+}
+
 function clampStdDev(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.min(value, STD_DEV_CAP_DAYS);
@@ -46,10 +54,11 @@ export class ClientCadenceService {
     return {
       enabled: raw.enabled !== false,
       leadDays: typeof raw.leadDays === "number" ? (raw.leadDays as number) : DEFAULT_LEAD_DAYS,
-      channelFallback:
-        raw.channelFallback === "email" || raw.channelFallback === "whatsapp"
-          ? (raw.channelFallback as "email" | "whatsapp")
-          : ("both" as const),
+      // Email only: WhatsApp is not wired for these reminders, and a salon
+      // that had picked "WhatsApp" or "Email y WhatsApp" silently stopped
+      // getting any sent. Those salons send by email now
+      // (rebookingChannelOf); the stored value is left as it was.
+      channelFallback: rebookingChannelOf(raw.channelFallback),
       minVisits:
         typeof raw.minVisits === "number"
           ? (raw.minVisits as number)
