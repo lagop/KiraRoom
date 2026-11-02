@@ -5,7 +5,9 @@
  * - "current": its plan, nothing to do.
  * - "subscribe": its plan while in the free trial: it can pay for it now
  *   (the first charge waits for the trial to end, see the backend's
- *   checkoutTrialEnd).
+ *   checkoutTrialEnd). Also its plan once cancelled: the plan it had is no
+ *   longer paid, so it can contract it again (it used to be a disabled
+ *   "Tu plan actual", and a cancelled salon could not pay for its plan).
  * - "checkout": another plan, through Stripe Checkout (no subscription yet).
  * - "change": another plan on the subscription it already pays; a checkout
  *   there would start a second subscription, billed on top.
@@ -25,6 +27,8 @@ export function paysSubscription(sub: BillingSubscription | null | undefined): b
 export function planAction(sub: BillingSubscription | null | undefined, planId: string): PlanAction {
   const current = (sub?.plan || "esencial") === planId;
   if (paysSubscription(sub)) return current ? "current" : "change";
-  if (current) return sub?.status === "trialing" ? "subscribe" : "current";
+  if (current) {
+    return sub?.status === "trialing" || sub?.status === "cancelled" ? "subscribe" : "current";
+  }
   return "checkout";
 }
