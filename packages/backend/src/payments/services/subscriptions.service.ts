@@ -1,8 +1,8 @@
-﻿import { Injectable, NotFoundException, BadRequestException, HttpException, ServiceUnavailableException } from '@nestjs/common';
+﻿import { Injectable, NotFoundException, BadRequestException, ConflictException, HttpException, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import Stripe from 'stripe';
-import { checkoutTrialEnd, hasLivePlanSubscription, isAddOnItem, planItemOf } from '../plan-activation';
+import { cancelAtOf, checkoutTrialEnd, hasLivePlanSubscription, isAddOnItem, planItemOf } from '../plan-activation';
 import { PlatformStripeConfigService } from '../../platform/platform-stripe-config.service';
 import { aiConversationsApprox, aiMessageCap, formatCountEs, PLAN_AI_CONVERSATIONS } from '@kira/shared';
 
@@ -56,6 +56,22 @@ export const EMAIL_MARKETING_MONTHLY_CAP: Readonly<Record<'esencial' | 'pro' | '
   pro: 2000,
   empresa: 5000,
 };
+
+/**
+ * Something the salon has above what a plan allows, so it cannot move to
+ * that plan until it deactivates the rest (B9). `href` is the panel page
+ * where it does so.
+ */
+export interface PlanLimitBlocker {
+  kind: 'professionals' | 'locations';
+  current: number;
+  limit: number;
+  message: string;
+  href: string;
+}
+
+/** Empresa's price per location, for the messages that send the owner to Facturación. */
+const EMPRESA_LOCATION_PRICE_TEXT = '149 € al mes + IVA por local';
 
 export interface CreateSubscriptionDto {
   tenantId: string;
@@ -398,6 +414,7 @@ export class SubscriptionsService {
       tenant.subscriptionStatus === "trialing" &&
       !!tenant.trialEnd &&
       tenant.trialEnd.getTime() > Date.now();
+    const cancelAt = tenant.subscriptionCancelAt ?? null;
 
     return {
       plan: planId,
@@ -409,6 +426,13 @@ export class SubscriptionsService {
       cancelledAt: tenant.cancelledAt,
       readOnlyUntil: tenant.readOnlyUntil,
       maxLocations: tenant.maxLocations,
+      // Empresa pays per location: the billing page shows how many are
+      // paid (maxLocations) against how many are open.
+      activeLocations: planId === 'empresa' ? await this.activeLocationCount(tenantId) : null,
+      // Cancelled at the end of the paid period: full access until then
+      // ("Se cancelará el …", with "Anular cancelación").
+      cancelAt,
+      cancelAtPeriodEnd: !!cancelAt && tenant.subscriptionStatus !== 'cancelled',
       addons: tenant.addons,
       stripeCustomerId: tenant.stripeCustomerId,
       stripeSubscriptionId: tenant.stripeSubscriptionId,
@@ -451,14 +475,20 @@ export class SubscriptionsService {
         'Ya tienes una suscripción activa: cambia de plan en lugar de contratar otra.',
       );
     }
+    // A salon that can still edit its team (in trial, say) contracts a plan
+    // it fits in (B9). A cancelled or suspended one is read-only and could
+    // not deactivate anything: it is not blocked (the professionals limit
+    // still stops it adding more).
+    if (tenant.subscriptionStatus !== 'cancelled' && tenant.subscriptionStatus !== 'suspended') {
+      await this.assertWithinPlanLimits(tenantId, planId);
+    }
     const trialEnd = checkoutTrialEnd(tenant, new Date());
 
-    // Empresa bills per location from 1 upwards. It used to clamp to a
-    // minimum of 2, which charged 298 EUR at a checkout that the catalogue
-    // and the marketing site both advertised as 149 EUR.
-    const quantity = planId === 'empresa'
-      ? Math.max(1, locationCount ?? 1)
-      : 1;
+    // Empresa bills per location from 1 upwards, and never fewer than the
+    // locations the salon has open (B8): it was always 1, so the second
+    // location could not be opened. (It once clamped to a minimum of 2,
+    // which charged 298 EUR at a checkout advertised as 149 EUR.)
+    const quantity = await this.billedLocations(tenantId, planId, locationCount);
 
     let customerId = tenant.stripeCustomerId;
 
@@ -570,16 +600,24 @@ export class SubscriptionsService {
   }
 
   /**
-   * Rev3 cancellation: tenant enters READ-ONLY mode (30 days) and is then
-   * archived. The plan field is preserved for historical reporting.
-   * Subscription in Stripe is also cancelled.
+   * The owner cancels: the subscription ends at the END of the period
+   * already paid (Stripe cancel_at_period_end, B3). Until then the salon
+   * keeps full access and the page says "Se cancelará el <fecha>", with
+   * "Anular cancelación" (undoCancellation). When Stripe ends it, the
+   * customer.subscription.deleted webhook starts the 30 days of read-only
+   * and emails the owner. It used to cancel at once, losing the days
+   * already paid.
    *
-   * Stripe is cancelled first; if that fails, a Spanish 503 is thrown and
-   * the salon's state is left as it was, so the owner can try again. The
-   * local row then changes conditionally: `newlyCancelled` says this call
-   * made the transition (the caller emails the owner on it). If the
-   * webhook of the Stripe cancellation gets in first, it makes the
-   * transition and emails instead, so the owner still gets one email.
+   * Cancelled at once instead (read-only from now, `newlyCancelled` for
+   * the caller's email): without a live subscription (a trial that never
+   * subscribed), one Stripe no longer has, one that is not being paid
+   * (past_due / suspended: no paid period to keep), or `immediately` (the
+   * SaaS console deleting a salon). The local row then changes
+   * conditionally: if the webhook of the Stripe cancellation gets in
+   * first, it makes the transition and emails instead.
+   *
+   * Stripe goes first; if it fails, a Spanish 503 and nothing changes, so
+   * the owner can try again (B4).
    */
   async cancelSubscription(tenantId: string, immediately: boolean = false) {
     const tenant = await this.prisma.tenant.findUnique({
@@ -590,11 +628,37 @@ export class SubscriptionsService {
       throw new NotFoundException('Tenant not found');
     }
 
+    const paidPeriod =
+      !immediately &&
+      !!tenant.stripeSubscriptionId &&
+      (tenant.subscriptionStatus === 'active' || tenant.subscriptionStatus === 'trialing');
+    if (paidPeriod) {
+      const scheduled = await this.cancelAtPeriodEndInStripe(tenant);
+      if (scheduled) {
+        await this.prisma.tenant.update({
+          where: { id: tenantId },
+          data: {
+            subscriptionCancelAt: scheduled.cancelAt,
+            ...(scheduled.periodEnd ? { currentPeriodEnd: scheduled.periodEnd } : {}),
+          },
+        });
+        return {
+          subscriptionId: tenant.stripeSubscriptionId,
+          status: tenant.subscriptionStatus,
+          cancelAt: scheduled.cancelAt,
+          cancelledAt: null,
+          readOnlyUntil: null,
+          newlyCancelled: false,
+        };
+      }
+      // Stripe no longer has it: no paid period to keep, cancelled now.
+    }
+
     // Stripe first. A salon marked cancelled here while Stripe kept its
     // subscription was charged every month for an account in read-only (no
     // job reconciled it), and the renewal's webhook reactivated it. If Stripe
     // cannot cancel it now, nothing changes and the owner can try again.
-    await this.cancelInStripe(tenant);
+    if (!paidPeriod) await this.cancelInStripe(tenant);
 
     const now = new Date();
     const readOnlyUntil = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
@@ -602,6 +666,7 @@ export class SubscriptionsService {
       subscriptionStatus: 'cancelled' as const,
       cancelledAt: now,
       readOnlyUntil,
+      subscriptionCancelAt: null,
       // plan preserved on purpose (memory for reporting / reactivation)
     };
 
@@ -618,9 +683,91 @@ export class SubscriptionsService {
     return {
       subscriptionId: tenant.stripeSubscriptionId,
       status: 'cancelled',
+      cancelAt: null,
       cancelledAt: now,
       readOnlyUntil,
       newlyCancelled,
+    };
+  }
+
+  /**
+   * Sets the subscription to end with its paid period. Returns when it
+   * ends, or null when Stripe no longer has it (or it has already ended).
+   * Any other failure is a Spanish 503 and nothing changes.
+   */
+  private async cancelAtPeriodEndInStripe(tenant: {
+    id: string;
+    stripeSubscriptionId: string | null;
+    currentPeriodEnd?: Date | null;
+  }): Promise<{ cancelAt: Date; periodEnd?: Date } | null> {
+    const stripe = this.stripe;
+    if (!stripe) {
+      throw new ServiceUnavailableException(
+        'No se ha podido cancelar la suscripción porque el sistema de pagos no está disponible ahora mismo. No se ha cambiado nada: inténtalo de nuevo en unos minutos.',
+      );
+    }
+    let updated: Stripe.Subscription;
+    try {
+      updated = await stripe.subscriptions.update(tenant.stripeSubscriptionId as string, {
+        cancel_at_period_end: true,
+      });
+    } catch (err) {
+      if ((err as { code?: string })?.code === 'resource_missing') return null;
+      console.warn('Stripe cancel_at_period_end failed for tenant', tenant.id, err);
+      throw new ServiceUnavailableException(
+        'No se ha podido cancelar la suscripción en el sistema de pagos. No se ha cambiado nada y no se ha dejado de cobrar: inténtalo de nuevo en unos minutos.',
+      );
+    }
+    if (updated?.status === 'canceled' || updated?.status === 'incomplete_expired') return null;
+    const periodEnd =
+      typeof updated?.current_period_end === 'number' && updated.current_period_end > 0
+        ? new Date(updated.current_period_end * 1000)
+        : undefined;
+    const cancelAt = (updated ? cancelAtOf(updated) : null) ?? periodEnd ?? tenant.currentPeriodEnd ?? new Date();
+    return { cancelAt, periodEnd };
+  }
+
+  /**
+   * "Anular cancelación": a subscription set to end with its period renews
+   * again (cancel_at_period_end: false). Only before it ends: once Stripe
+   * has ended it, the salon reactivates through a new checkout. A Stripe
+   * failure is a Spanish 503 and nothing changes.
+   */
+  async undoCancellation(tenantId: string) {
+    const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId } });
+    if (!tenant) {
+      throw new NotFoundException('Tenant not found');
+    }
+    if (tenant.subscriptionStatus === 'cancelled' || !tenant.stripeSubscriptionId) {
+      throw new ConflictException(
+        'Tu suscripción ya ha terminado: para volver, reactiva el plan desde Facturación.',
+      );
+    }
+    const stripe = this.stripe;
+    if (!stripe) {
+      throw new ServiceUnavailableException(
+        'No se ha podido anular la cancelación porque el sistema de pagos no está disponible ahora mismo. No se ha cambiado nada: inténtalo de nuevo en unos minutos.',
+      );
+    }
+    let updated: Stripe.Subscription;
+    try {
+      updated = await stripe.subscriptions.update(tenant.stripeSubscriptionId, {
+        cancel_at_period_end: false,
+      });
+    } catch (err) {
+      console.warn('Stripe undo of cancel_at_period_end failed for tenant', tenantId, err);
+      throw new ServiceUnavailableException(
+        'No se ha podido anular la cancelación en el sistema de pagos. No se ha cambiado nada: inténtalo de nuevo en unos minutos.',
+      );
+    }
+    await this.prisma.tenant.update({
+      where: { id: tenantId },
+      data: { subscriptionCancelAt: null },
+    });
+    return {
+      subscriptionId: updated?.id ?? tenant.stripeSubscriptionId,
+      status: tenant.subscriptionStatus,
+      cancelAt: null,
     };
   }
 
@@ -759,13 +906,21 @@ export class SubscriptionsService {
     if (!planDetails) {
       throw new Error('Invalid plan');
     }
+    if (tenant.subscriptionCancelAt) {
+      throw new ConflictException(
+        'Tu suscripción está programada para cancelarse: anula la cancelación antes de cambiar de plan.',
+      );
+    }
+    // Down to a plan the salon does not fit in: refused, with what to
+    // deactivate first (B9). Nothing is sent to Stripe.
+    await this.assertWithinPlanLimits(tenantId, planId);
 
     const subscription = await this.stripe.subscriptions.retrieve(
       tenant.stripeSubscriptionId
     );
 
-    const targetQuantity =
-      planId === 'empresa' ? Math.max(1, locationCount ?? 1) : 1;
+    // Empresa: one per location open (B8), or more if asked.
+    const targetQuantity = await this.billedLocations(tenantId, planId, locationCount);
 
     // A subscription item's price_data needs the id of an existing product
     // (unlike Checkout, it has no product_data), so the inline { name } it
@@ -851,14 +1006,20 @@ export class SubscriptionsService {
       where: { id: tenantId },
     });
 
-    if (!tenant || !tenant.stripeSubscriptionId) {
-      throw new NotFoundException('No active subscription found');
+    if (!tenant || !tenant.stripeSubscriptionId || tenant.subscriptionStatus === 'cancelled') {
+      throw new NotFoundException('No tienes una suscripción activa: contrata el plan Empresa primero.');
     }
     if (this.normalizePlan(tenant.plan) !== 'empresa') {
-      throw new Error('updateLocationCount only valid for plan=empresa');
+      throw new BadRequestException('Solo el plan Empresa se paga por local.');
     }
-    if (newCount < 1) {
-      throw new Error('Empresa plan requires at least 1 location');
+    if (!Number.isInteger(newCount) || newCount < 1) {
+      throw new BadRequestException('El plan Empresa incluye al menos 1 local.');
+    }
+    const active = await this.activeLocationCount(tenantId);
+    if (newCount < active) {
+      throw new ConflictException(
+        `Tienes ${active} locales activos: para pagar ${newCount}, desactiva antes ${active - newCount} en Ajustes > Multi-local.`,
+      );
     }
 
     const subscription = await this.stripe.subscriptions.retrieve(
@@ -895,6 +1056,78 @@ export class SubscriptionsService {
       subscriptionId: updated.id,
       locationCount: newCount,
     };
+  }
+
+  // ============ PLAN LIMITS ============
+
+  /** Locations open now (closed ones do not count, as when opening one). */
+  private async activeLocationCount(tenantId: string): Promise<number> {
+    return this.prisma.location.count({ where: { tenantId, isActive: true } });
+  }
+
+  /**
+   * How many locations a plan subscription bills: 1 outside Empresa; on
+   * Empresa the locations open now (at least 1), or more if asked.
+   */
+  private async billedLocations(tenantId: string, planId: PlanId, requested?: number): Promise<number> {
+    if (planId !== 'empresa') return 1;
+    const active = await this.activeLocationCount(tenantId);
+    return Math.max(1, active, Number.isInteger(requested) ? (requested as number) : 0);
+  }
+
+  /**
+   * What the salon has above a plan's limits: active professionals over its
+   * cap, and active locations over the one a plan other than Empresa
+   * includes. The catalogue's other limits (clients, appointments) are
+   * unlimited on every plan. Empty when it fits.
+   */
+  async planLimitBlockers(tenantId: string, plan: string): Promise<PlanLimitBlocker[]> {
+    const planId = this.normalizePlan(plan);
+    const details = this.plans[planId];
+    const name = details?.name ?? planId;
+    const blockers: PlanLimitBlocker[] = [];
+
+    const maxProfessionals = details?.maxProfessionals;
+    if (!isUnlimited(maxProfessionals)) {
+      const limit = maxProfessionals as number;
+      const current = await this.prisma.professional.count({ where: { tenantId, isActive: true } });
+      if (current > limit) {
+        blockers.push({
+          kind: 'professionals',
+          current,
+          limit,
+          message: `Tienes ${current} profesionales activos y el plan ${name} permite ${limit}: desactiva ${current - limit} en Equipo > Profesionales.`,
+          href: '/dashboard/professionals',
+        });
+      }
+    }
+
+    if (planId !== 'empresa') {
+      const current = await this.activeLocationCount(tenantId);
+      if (current > 1) {
+        blockers.push({
+          kind: 'locations',
+          current,
+          limit: 1,
+          message: `Tienes ${current} locales activos y el plan ${name} incluye 1: desactiva ${current - 1} en Ajustes > Multi-local.`,
+          href: '/dashboard/multi-location',
+        });
+      }
+    }
+    return blockers;
+  }
+
+  /** A Spanish 409 listing what to deactivate, when the salon does not fit in the plan. */
+  private async assertWithinPlanLimits(tenantId: string, planId: PlanId): Promise<void> {
+    const blockers = await this.planLimitBlockers(tenantId, planId);
+    if (blockers.length === 0) return;
+    const name = this.plans[planId]?.name ?? planId;
+    throw new ConflictException({
+      code: 'PLAN_LIMITS_EXCEEDED',
+      message: `Antes de pasar al plan ${name}: ${blockers.map((b) => b.message).join(' ')}`,
+      plan: planId,
+      blockers,
+    });
   }
 
   // ============ ADD-ONS ON THE PLAN SUBSCRIPTION ============

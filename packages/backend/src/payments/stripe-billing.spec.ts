@@ -160,6 +160,8 @@ describe("checkout session", () => {
         findUnique: jest.fn(async () => ({ id: "t1", email: "a@b.test", name: "Salón", stripeCustomerId: "cus_1" })),
         update: jest.fn(),
       },
+      location: { count: jest.fn(async () => 1) },
+      professional: { count: jest.fn(async () => 2) },
     };
     const config: any = { get: (_k: string, d?: string) => d };
     const platformStripe: any = { client: () => ({ checkout: { sessions: { create } } }), current: () => ({ taxEnabled: false }) };
@@ -188,7 +190,11 @@ describe("subscribing during the free trial", () => {
 
   function service(tenant: any) {
     const create = jest.fn(async () => ({ url: "https://checkout", id: "cs_1" }));
-    const prisma: any = { tenant: { findUnique: jest.fn(async () => tenant), update: jest.fn() } };
+    const prisma: any = {
+      tenant: { findUnique: jest.fn(async () => tenant), update: jest.fn() },
+      location: { count: jest.fn(async () => 1) },
+      professional: { count: jest.fn(async () => 2) },
+    };
     const config: any = { get: (_k: string, d?: string) => d };
     const platformStripe: any = { client: () => ({ checkout: { sessions: { create } } }), current: () => ({ taxEnabled: false }) };
     return { subs: new SubscriptionsService(prisma, config, platformStripe), create };

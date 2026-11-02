@@ -77,6 +77,8 @@ export class TrialExpiryScheduler {
         subscriptionStatus: "trialing",
         trialEnd: { gte: lower, lte: upper },
         deletedAt: null,
+        // Already subscribed during the trial: nothing to choose.
+        stripeSubscriptionId: null,
       },
       select: {
         id: true,

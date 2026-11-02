@@ -69,7 +69,10 @@ export class TenantAddOnsController {
    * Stripe left it, so the page shows "Activo" only when it is.
    */
   @Post('tenants/current/add-ons/:key')
-  @Roles(...SALON_MANAGERS)
+  // A charge on the owner's card: billing is the owner's (B7), like the
+  // subscription routes in PaymentsController. Admins still read the
+  // catalogue and what is installed.
+  @Roles('owner')
   async purchase(@Param('key') key: string, @Req() req: any) {
     const tenantId = this.tenantId(req);
     const row = await this.addons.purchase(tenantId, key);
@@ -83,7 +86,7 @@ export class TenantAddOnsController {
 
   /** Stop an add-on: removed from the Stripe subscription, then ended here. */
   @Delete('tenants/current/add-ons/:key')
-  @Roles(...SALON_MANAGERS)
+  @Roles('owner')
   async cancel(
     @Param('key') key: string,
     @Req() req: any,

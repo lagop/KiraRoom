@@ -60,6 +60,10 @@ model Tenant {
   /// Plan rev3: cancellation lifecycle + add-ons + multi-location
   cancelledAt            DateTime?
   readOnlyUntil          DateTime?
+  /// When the paid subscription ends because the owner cancelled it
+  /// (Stripe cancel_at_period_end): full access until then, read-only
+  /// after. Null when it renews.
+  subscriptionCancelAt   DateTime?
   /// Sprint 2 / 2.2 Ã¢â‚¬â€ payment-failure grace lifecycle. Set on the
   /// first Stripe `invoice.payment_failed` webhook; cleared on the
   /// next successful payment. When `gracePeriodEndsAt < now` the
