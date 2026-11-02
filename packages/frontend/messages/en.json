@@ -154,6 +154,7 @@
       "certFingerprint": "Fingerprint",
       "certNotAfter": "Expires",
       "saved": "Settings saved",
+      "saveError": "Not saved",
       "taxRegime": "Territory tax regime",
       "taxRegimeHint": "VAT in mainland Spain and the Balearics, IGIC in the Canary Islands, IPSI in Ceuta and Melilla. Changing it adjusts the default rate.",
       "pricesIncludeTax": "My prices already include the tax",
