@@ -1714,14 +1714,16 @@ export interface FiscalSettings {
     /** P2A â€” emitter NIF/CIF/NIE (mirrored to Tenant.taxId on the backend). */
     tenantNif?: string;
   };
-  taxId?: string;
-  taxIdType?: "nif" | "cif" | "nie" | "passport" | "other";
-  legalName?: string;
+  /** The issuer NIF (Tenant.taxId; the settings mirror when it is empty). */
+  taxId?: string | null;
+  taxIdType?: "nif" | "cif" | "nie" | "passport" | "other" | null;
+  /** Razón social printed on the invoices. */
+  legalName?: string | null;
 }
 
+/** A certificate as the list sends it: metadata only, never the key. */
 export interface FiscalCertificate {
   id: string;
-  tenantId: string;
   provider: "p12" | "cloud_dnie";
   alias: string;
   fingerprint: string;

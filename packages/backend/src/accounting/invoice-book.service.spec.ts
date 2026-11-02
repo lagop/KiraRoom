@@ -83,6 +83,28 @@ describe("invoiceBookCsv", () => {
     );
     expect(invoiceBookCsv(rows)).toContain(";-0,05;0,00;-0,05;");
   });
+
+  it("a client name that a spreadsheet would run as a formula stays text; the amounts stay numbers", () => {
+    const rows = buildInvoiceBookRows(
+      [
+        { ...simplified, recipientName: "=SUM(1)" },
+        { ...simplified, number: "000012", recipientName: "@SUM(1)", recipientTaxId: "-1" },
+        {
+          ...simplified,
+          number: "000013",
+          recipientName: "+1",
+          series: "R",
+          totalCents: -2140,
+          taxBreakdown: [{ rate: 7, baseCents: -2000, taxCents: -140 }],
+        },
+      ],
+      "IVA",
+    );
+    const lines = invoiceBookCsv(rows).slice(1).trimEnd().split("\r\n");
+    expect(lines[1]).toBe(`04/07/2026;A;000011;A000011;Simplificada (F2);;"'=SUM(1)";IVA;7;20,00;1,40;21,40;Emitida`);
+    expect(lines[2]).toBe(`04/07/2026;A;000012;A000012;Completa (F1);"'-1";"'@SUM(1)";IVA;7;20,00;1,40;21,40;Emitida`);
+    expect(lines[3]).toBe(`04/07/2026;R;000013;R000013;Rectificativa;;"'+1";IVA;7;-20,00;-1,40;-21,40;Emitida`);
+  });
 });
 
 describe("InvoiceBookService.build", () => {

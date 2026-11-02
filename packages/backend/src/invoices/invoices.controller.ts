@@ -37,6 +37,7 @@ import {
 } from "./dto/invoice.dto";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { RESERVED_SERIES } from "./invoice-numbering";
+import { FISCAL_SETTINGS_SELECT, fiscalSettingsView, issuerIdentityPatch } from "./fiscal-identity";
 import { taxLabelOf, taxRegimeOf, TAX_REGIME_DEFAULT_RATE } from "@kira/shared";
 
 interface AuthedRequest extends Request {
@@ -235,10 +236,12 @@ export class InvoicesController {
   async getFiscalSettings(@Req() req: AuthedRequest) {
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: this.requireTenantId(req) },
-      select: { fiscalMode: true, fiscalSettings: true },
+      select: FISCAL_SETTINGS_SELECT,
     });
-    // The settings page uses this to say that nothing is sent to the AEAT yet.
-    return { ...tenant, submissionAvailable: fiscalSubmissionAvailable() };
+    // The NIF, its type and the razón social go too: the page loads its form
+    // from this, and without them it saved them back empty.
+    // submissionAvailable: the page says that nothing is sent to the AEAT yet.
+    return { ...fiscalSettingsView(tenant), submissionAvailable: fiscalSubmissionAvailable() };
   }
 
   @Patch("settings/fiscal")
@@ -248,6 +251,8 @@ export class InvoicesController {
     @Body() dto: UpdateTenantFiscalSettingsDto,
   ) {
     const tenantId = this.requireTenantId(req);
+    // An empty razón social or NIF is refused, never stored over the real one.
+    const identity = issuerIdentityPatch(dto);
     if (dto.defaultSeries !== undefined && RESERVED_SERIES.includes(dto.defaultSeries.trim().toUpperCase())) {
       throw new BadRequestException(
         `La serie "${dto.defaultSeries}" está reservada: R es la de las rectificativas y T la de los tickets. Usa otra serie.`,
@@ -268,7 +273,7 @@ export class InvoicesController {
         ? { autoInvoiceAppointments: dto.autoInvoiceAppointments }
         : {}),
       ...(dto.diputacion !== undefined ? { diputacion: dto.diputacion } : {}),
-      ...(dto.tenantNif !== undefined ? { tenantNif: dto.tenantNif } : {}),
+      ...(identity.taxId !== undefined ? { tenantNif: identity.taxId } : {}),
       ...(dto.taxRegime !== undefined ? { taxRegime: dto.taxRegime } : {}),
       ...(typeof dto.pricesIncludeTax === "boolean" ? { pricesIncludeTax: dto.pricesIncludeTax } : {}),
     };
@@ -288,36 +293,19 @@ export class InvoicesController {
         TAX_REGIME_DEFAULT_RATE[dto.taxRegime];
     }
 
-    // The fiscalSettings.tenantNif field feeds the AEAT Verifactu /
-    // TicketBAI `<Verifactu>` block. We also mirror it (along with
-    // taxIdType and legalName) to the new Tenant columns for the
-    // dashboard + future analytics.
-    const tenantNifInSettings = (merged as any).tenantNif;
-    const taxIdUpdate = tenantNifInSettings
-      ? { taxId: tenantNifInSettings }
-      : {};
-    const taxIdTypeUpdate =
-      dto.taxIdType !== undefined ? { taxIdType: dto.taxIdType } : {};
-    const legalNameUpdate =
-      dto.legalName !== undefined ? { legalName: dto.legalName } : {};
-
-    return this.prisma.tenant.update({
+    // fiscalSettings.tenantNif feeds the VERI*FACTU / TicketBAI blocks; the
+    // Tenant columns are what invoices copy and the page shows. Both get the
+    // same NIF. Fields that were not sent are left as they are.
+    const updated = await this.prisma.tenant.update({
       where: { id: tenantId },
       data: {
         fiscalMode: dto.fiscalMode as FiscalMode | undefined,
         fiscalSettings: merged as any,
-        ...taxIdUpdate,
-        ...taxIdTypeUpdate,
-        ...legalNameUpdate,
+        ...identity,
       },
-      select: {
-        fiscalMode: true,
-        fiscalSettings: true,
-        taxId: true,
-        taxIdType: true,
-        legalName: true,
-      },
+      select: FISCAL_SETTINGS_SELECT,
     });
+    return { ...fiscalSettingsView(updated), submissionAvailable: fiscalSubmissionAvailable() };
   }
 
   // ---- Certificates ----
