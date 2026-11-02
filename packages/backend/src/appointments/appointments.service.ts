@@ -101,6 +101,7 @@ import { appointmentTotalCents, assertVisitChargeable } from "../payments/appoin
 import { moneyOfCatalogueCents, salonTaxBasis, type SalonTaxBasis } from "../payments/appointment-charge";
 import { appointmentDeleteBlocker, deleteAppointmentRow } from "./appointment-delete";
 import { isForeignKeyViolation } from "../common/prisma/history-deletes";
+import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
 import {
   assertTransition,
   concurrentChange,
@@ -204,6 +205,9 @@ export class AppointmentsService {
     @Optional() private readonly waitListService?: WaitListService,
     @Optional() private readonly loyaltyService?: LoyaltyService,
     @Optional() private readonly whatsappTemplates?: WhatsAppTemplateService,
+    // Whether the salon still has multi-location (Empresa) for the booking
+    // locations (client-locations.ts). Global FeatureFlagModule.
+    @Optional() private readonly featureFlags?: FeatureFlagService,
   ) {}
 
   /**
@@ -2926,7 +2930,7 @@ export class AppointmentsService {
     locations: Array<{ id: string; name: string; slug: string; address: string; phone: string | null }>;
     professionals: Array<{ id: string; locationIds: string[]; primaryLocationId: string | null }>;
   }> {
-    const { locations, links } = await clientLocations(this.prisma as any, tenantId);
+    const { locations, links } = await clientLocations(this.prisma as any, tenantId, this.featureFlags);
     if (locations.length === 0) return { locations: [], professionals: [] };
     const ids = [...new Set(links.map((l) => l.professionalId))];
     return {

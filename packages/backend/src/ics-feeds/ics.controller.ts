@@ -48,19 +48,33 @@ function feedWhere(timeZone: string | null | undefined) {
 }
 
 /**
+ * What a feed reads of an appointment's client and service: the client's
+ * first name only. A feed lives in Google, Apple or Outlook, outside
+ * KiraRoom, so it carries no surname, phone, email or notes.
+ */
+const FEED_INCLUDE = {
+  client: { select: { firstName: true } },
+  service: { select: { name: true } },
+} as const;
+
+/**
  * The calendar events of a feed. An appointment's date and "HH:MM" are the
  * salon's wall clock: the instant comes from the salon's timezone and goes
  * out in UTC ("…Z"), so Google, Apple and Outlook show it at the right hour
  * wherever the server runs. It used to read the time in the server's zone
  * (UTC in the container) and send it as UTC: every appointment was an hour
  * late in winter and two in summer.
+ *
+ * Every feed type shows the service and the client's first name, nothing
+ * else about her: no surname, no phone or email, and no notes (they held
+ * allergies and health remarks, copied into third-party calendars).
  */
 export function buildIcsEvents(appointments: any[], tenant: any): ics.EventAttributes[] {
   const timeZone: string = tenant.timezone || DEFAULT_TIMEZONE;
   return appointments.map<ics.EventAttributes>((a) => {
     const start = salonInstant(a.scheduledDate, validClock(a.scheduledTime), timeZone).getTime();
     const duration: number = a.duration ?? 60;
-    const clientName = a.client ? `${a.client.firstName} ${a.client.lastName}` : "Cliente";
+    const clientName = String(a.client?.firstName ?? "").trim() || "Cliente";
     const serviceName = a.service?.name ?? "Servicio";
     const pending = a.status === "pending";
     return {
@@ -73,7 +87,6 @@ export function buildIcsEvents(appointments: any[], tenant: any): ics.EventAttri
       endOutputType: "utc",
       status: pending ? "TENTATIVE" : "CONFIRMED",
       location: [tenant.street, tenant.city, tenant.country].filter(Boolean).join(", "),
-      description: a.notes || "",
       uid: `${a.id}@${tenant.slug}.kiraroom.app`,
       productId: "KiraRoom/ICS-Feed",
       calName: `${tenant.name} — Calendario`,
@@ -153,8 +166,8 @@ export class IcsController {
   }
 
   /**
-   * Revokes every feed link of the caller's salon (salon, professional and
-   * staff feeds) and returns the new ones.
+   * Revokes every feed link of the caller's salon (salon and professional
+   * feeds) and returns the new ones.
    *
    * One atomic UPDATE: the version is incremented inside Postgres, so two
    * clicks can never land on the same version, and the rest of `features` is
@@ -219,7 +232,7 @@ export class IcsController {
         professionalId: id,
         ...feedWhere(professional.tenant?.timezone),
       },
-      include: { client: true, service: true },
+      include: FEED_INCLUDE,
       orderBy: [{ scheduledDate: "asc" }, { scheduledTime: "asc" }],
       take: ICS_MAX_EVENTS,
     });
@@ -227,41 +240,8 @@ export class IcsController {
     return this.send(res, events, `professional-${id}.ics`);
   }
 
-  @Get("staff/:id")
-  @Public()
-  @Throttle({ default: { ttl: 60_000, limit: 120 } })
-  @ApiOperation({ summary: "ICS feed for a staff member (any professional they cover)" })
-  async staffFeed(
-    @Param("id", ParseUUIDPipe) id: string,
-    @Query("token") token: string,
-    @Res() res: Response,
-  ) {
-    this.requireToken(token);
-    const user = await this.prisma.user.findUnique({
-      where: { id },
-      include: { professional: true, tenant: true },
-    });
-    this.verifyToken(`staff:${id}`, token, user?.tenant ? icsFeedVersion(user.tenant.features) : null);
-    // A login that was taken away (or a professional who left) has no feed either.
-    if (!user || !user.tenant || !user.isActive || (user.professional && !user.professional.isActive)) {
-      throw new NotFoundException("Staff not found");
-    }
-    // The link lives on Professional.userId; User.professionalId is never set.
-    const profIds = user.professional ? [user.professional.id] : [];
-    const appointments = await this.prisma.appointment.findMany({
-      where: {
-        tenantId: user.tenantId,
-        ...(profIds.length > 0
-          ? { professionalId: { in: profIds } }
-          : { tenantId: user.tenantId }),
-        ...feedWhere(user.tenant.timezone),
-      },
-      include: { client: true, service: true },
-      orderBy: [{ scheduledDate: "asc" }, { scheduledTime: "asc" }],
-      take: ICS_MAX_EVENTS,
-    });
-    return this.send(res, buildIcsEvents(appointments, user.tenant), `staff-${id}.ics`);
-  }
+  // No /ics/staff/:id: nothing ever issued a staff token (tokens() signs
+  // only the salon and its professionals), so the route was dead.
 
   @Get("salon/:slug")
   @Public()
@@ -281,7 +261,7 @@ export class IcsController {
         tenantId: tenant.id,
         ...feedWhere(tenant.timezone),
       },
-      include: { client: true, service: true },
+      include: FEED_INCLUDE,
       orderBy: [{ scheduledDate: "asc" }, { scheduledTime: "asc" }],
       take: ICS_MAX_EVENTS,
     });
@@ -291,8 +271,8 @@ export class IcsController {
   /**
    * Version 0 signs the bare scope, exactly as before versions existed, so
    * links handed out earlier keep verifying. Later versions sign
-   * `v<n>:<scope>`; every scope starts with a word (salon:, professional:,
-   * staff:), so no versioned input can equal an unversioned one.
+   * `v<n>:<scope>`; every scope starts with a word (salon:, professional:),
+   * so no versioned input can equal an unversioned one.
    */
   static signToken(scope: string, secret: string, version = 0): string {
     const input = version > 0 ? `v${version}:${scope}` : scope;

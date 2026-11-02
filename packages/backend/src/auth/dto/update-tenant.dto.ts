@@ -1,6 +1,7 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
 import { Transform } from "class-transformer";
-import { IsString, IsOptional, IsIn, IsUrl, IsEmail, IsInt, Min, Max, Matches, IsTimeZone, IsBoolean } from "class-validator";
+import { IsString, IsOptional, IsIn, IsUrl, IsEmail, IsInt, Min, Max, MaxLength, Matches, IsTimeZone, IsBoolean } from "class-validator";
+import { CANCELLATION_POLICY_MAX } from "../../virtual-receptionist/prompts/templates";
 import { EmptyStringToUndefined } from "../../common/dto/empty-to-undefined";
 import { PHONE_PATTERN } from "../../common/phone";
 import { IsWorkingHours } from "../../professionals/working-hours-input";
@@ -42,12 +43,26 @@ export class UpdateTenantDto {
   @IsEmail({}, { message: "Introduce un correo electrónico válido o déjalo vacío" })
   email?: string | null;
 
-  @ApiPropertyOptional({ description: "Minimum notice to cancel, in hours" })
+  // Informational: the receptionist tells clients; nothing charges a fee or
+  // stops a cancellation. 0 = no minimum ("Sin política").
+  @ApiPropertyOptional({ description: "Notice the salon asks for to cancel, in hours (informational); 0 = none" })
   @IsInt()
   @Min(0)
   @Max(720)
   @IsOptional()
   minCancelHours?: number;
+
+  @ApiPropertyOptional({
+    description: "The salon's cancellation policy, in its own words (informational); blank or null clears it",
+    nullable: true,
+  })
+  @BlankToNull()
+  @IsOptional()
+  @IsString()
+  @MaxLength(CANCELLATION_POLICY_MAX, {
+    message: `La política de cancelación puede tener como mucho ${CANCELLATION_POLICY_MAX} caracteres`,
+  })
+  cancellationPolicy?: string | null;
 
   // The salon's own week, in the format of a professional's workingHours:
   // [{ day: "monday", openTime: "10:00", closeTime: "14:00" }, ...], several
@@ -107,10 +122,9 @@ export class UpdateTenantDto {
   @IsOptional()
   language?: string;
 
-  @ApiPropertyOptional({ description: "Tenant currency" })
-  @IsString()
-  @IsOptional()
-  currency?: string;
+  // No currency, dateFormat or timeFormat: the product is euros, DD/MM/YYYY
+  // and 24 h, and those settings changed nothing. The global ValidationPipe
+  // strips them (whitelist), so an old tab that still sends them saves fine.
 
   // A zone the runtime does not know made every salon-time computation
   // (reminders, availability, the calendar) throw a RangeError.
@@ -119,16 +133,6 @@ export class UpdateTenantDto {
   @IsOptional()
   @IsTimeZone()
   timezone?: string;
-
-  @ApiPropertyOptional({ description: "Tenant date format" })
-  @IsString()
-  @IsOptional()
-  dateFormat?: string;
-
-  @ApiPropertyOptional({ description: "Tenant time format" })
-  @IsString()
-  @IsOptional()
-  timeFormat?: string;
 
   // ─── Identity fields used by the onboarding wizard (workspace_business) ───
   // These are persisted on Tenant and read by the `hasBusinessIdentity`

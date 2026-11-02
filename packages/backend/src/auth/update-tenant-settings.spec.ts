@@ -1,8 +1,10 @@
+import * as fs from "fs";
+import * as path from "path";
 import { plainToInstance } from "class-transformer";
 import { validateSync } from "class-validator";
 import { BadRequestException, ConflictException } from "@nestjs/common";
 import { TENANT_PHONE_INVALID, UpdateTenantDto } from "./dto/update-tenant.dto";
-import { AuthService, TENANT_NAME_TAKEN, TENANT_SETTINGS_SELECT } from "./auth.service";
+import { AuthService, TENANT_SETTINGS_SELECT, TENANT_SLUG_TAKEN } from "./auth.service";
 
 /**
  * /dashboard/settings showed invented business data ("Kira Room", "Calle
@@ -28,10 +30,34 @@ describe("UpdateTenantDto", () => {
         email: "hola@salon.test",
         minCancelHours: 24,
         openingHours: { open: "09:30", close: "19:00" },
-        dateFormat: "DD/MM/YYYY",
-        timeFormat: "24h",
+        cancellationPolicy: "Avísanos con 24 horas si no puedes venir.",
       }),
     ).toEqual([]);
+  });
+
+  it("no longer takes currency, date format or time format; the app's pipe strips them", () => {
+    // Spain-only, euros, DD/MM/YYYY and 24 h: those settings changed nothing.
+    expect(errorsFor({ currency: "USD", dateFormat: "MM/DD/YYYY", timeFormat: "12h" })).toEqual([
+      "currency",
+      "dateFormat",
+      "timeFormat",
+    ]);
+    const stripped = plainToInstance(UpdateTenantDto, { name: "Salón Ana", currency: "USD", timeFormat: "12h" });
+    validateSync(stripped, { whitelist: true, forbidNonWhitelisted: false });
+    expect(stripped).toEqual({ name: "Salón Ana" });
+    for (const field of ["currency", "dateFormat", "timeFormat"]) {
+      expect(TENANT_SETTINGS_SELECT).not.toHaveProperty(field);
+    }
+  });
+
+  it("the cancellation policy text: blank clears it, at most 1000 characters, Spanish message", () => {
+    expect(dtoOf({ cancellationPolicy: "  " })).toMatchObject({ cancellationPolicy: null });
+    expect(errorsFor({ cancellationPolicy: null })).toEqual([]);
+    expect(errorsFor({ cancellationPolicy: "x".repeat(1000) })).toEqual([]);
+    const errors = validateSync(dtoOf({ cancellationPolicy: "x".repeat(1001) }));
+    expect(errors.map((e) => e.property)).toEqual(["cancellationPolicy"]);
+    expect(Object.values(errors[0].constraints ?? {})[0]).toContain("política de cancelación");
+    expect(TENANT_SETTINGS_SELECT).toHaveProperty("cancellationPolicy", true);
   });
 
   it("rejects malformed values", () => {
@@ -213,13 +239,23 @@ describe("updateTenant answers the safe shape", () => {
     expect((findUnique.mock.calls[0] as any[])[0].select).toBe(TENANT_SETTINGS_SELECT);
   });
 
-  it("a name another salon already has is a Spanish 409, not a 500", async () => {
+  it("a name another salon already has is saved: names are not unique, only the slug is", async () => {
+    const service = serviceWith(async ({ data }: any) => ({ id: "t1", name: data.name }));
+    await expect(service.updateTenant("t1", { name: "Salón Ana" })).resolves.toMatchObject({ name: "Salón Ana" });
+    const schema = fs.readFileSync(path.join(__dirname, "../../prisma/schema.prisma"), "utf8");
+    const start = schema.indexOf("model Tenant {");
+    const tenant = schema.slice(start, schema.indexOf("\n}", start));
+    expect(tenant).toMatch(/^\s+name\s+String\s*$/m);
+    expect(tenant).toMatch(/^\s+slug\s+String\s+@unique/m);
+  });
+
+  it("a slug clash (a caller that skips the DTO) is a Spanish 409, not a 500", async () => {
     const service = serviceWith(async () => {
-      throw Object.assign(new Error("Unique constraint failed"), { code: "P2002", meta: { target: ["name"] } });
+      throw Object.assign(new Error("Unique constraint failed"), { code: "P2002", meta: { target: ["slug"] } });
     });
-    const err = await service.updateTenant("t1", { name: "Salón Ana" }).catch((e: unknown) => e);
+    const err = await service.updateTenant("t1", { slug: "salon-ana" }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ConflictException);
-    expect((err as Error).message).toBe(TENANT_NAME_TAKEN);
+    expect((err as Error).message).toBe(TENANT_SLUG_TAKEN);
   });
 
   it("other database errors are not dressed up as a name clash", async () => {

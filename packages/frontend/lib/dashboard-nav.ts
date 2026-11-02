@@ -121,6 +121,8 @@ export const DASHBOARD_NAV: NavEntry[] = [
       link("domain", "/dashboard/settings/domain", "nav.domain", "globe"),
       // The booking widget for the salon's own website (also linked from Compartir).
       link("widget", "/dashboard/settings/widget", "nav.widget", "code"),
+      // Subscribe links (Google, Apple, Outlook) for the salon and each professional.
+      link("calendar-feeds", "/dashboard/settings/calendar-feeds", "nav.calendar_feeds", "calendar"),
       link("security", "/dashboard/settings/seguridad", "nav.security", "shield"),
       link("rebooking", "/dashboard/settings/rebooking", "rebooking.settings.title", "repeat", { pro: true }),
       link("fiscal", "/dashboard/settings/fiscal", "invoices.fiscalSettings.title", "scroll", { pro: true }),

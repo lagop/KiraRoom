@@ -1069,6 +1069,16 @@ export default function SalonBookingPage({
                   </div>
                 )}
 
+                {/* The salon's own words; plain text, never HTML. */}
+                {initialData.cancellationPolicy && (
+                  <div data-test="cancellation-policy">
+                    <h3 className="font-semibold text-gray-900 mb-2">{t("sites.cancellationPolicy")}</h3>
+                    <p className="whitespace-pre-line break-words text-sm text-gray-600">
+                      {initialData.cancellationPolicy}
+                    </p>
+                  </div>
+                )}
+
                 {professionals.length > 0 && (
                   <div>
                     <h3 className="font-semibold text-gray-900 mb-2">

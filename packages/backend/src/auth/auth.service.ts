@@ -71,7 +71,8 @@ export const TENANT_SETTINGS_SELECT = {
   name: true,
   slug: true,
   timezone: true,
-  currency: true,
+  // Not currency, dateFormat or timeFormat: the product is euros, DD/MM/YYYY
+  // and 24 h, and those settings changed nothing in the panel.
   country: true,
   language: true,
   // Plan / subscription status (consumed by /dashboard/settings/channels
@@ -91,9 +92,9 @@ export const TENANT_SETTINGS_SELECT = {
   // Consumed by /dashboard/settings, which used to show invented
   // values for all of these and save none of them.
   email: true,
-  dateFormat: true,
-  timeFormat: true,
+  // Informational: the receptionist explains them, nothing is charged.
   minCancelHours: true,
+  cancellationPolicy: true,
   openingHours: true,
   instagram: true,
   facebook: true,
@@ -105,8 +106,12 @@ export const TENANT_SETTINGS_SELECT = {
   legalName: true,
 } as const satisfies Prisma.TenantSelect;
 
-/** Tenant.name is unique (the decision whether it should be is pending): a clash is a 409, not a 500. */
-export const TENANT_NAME_TAKEN = "Ya hay otro salón con ese nombre en KiraRoom. Prueba con otro, por ejemplo añadiendo tu ciudad.";
+/**
+ * Two salons may share a name; the slug is what must be unique. Nothing on
+ * the settings pages changes the slug (the DTO has no slug), but a caller
+ * that skips the DTO gets a 409 for a clash, not a 500.
+ */
+export const TENANT_SLUG_TAKEN = "Ya hay otro salón con esa dirección en KiraRoom. Prueba con otra.";
 
 /** How a new token pair relates to the sign-in it continues. */
 type SessionOptions = { session?: { sid: string; jti: string }; accessOnly?: boolean };
@@ -129,7 +134,7 @@ export interface AuthUser {
 function targetIncludes(e: any, column: string): boolean {
   const target = e?.meta?.target;
   if (Array.isArray(target)) return target.includes(column);
-  // Postgres reports the index name ("tenants_name_key") on some paths.
+  // Postgres reports the index name ("tenants_slug_key") on some paths.
   return typeof target === "string" ? target.includes(column) : true;
 }
 
@@ -846,7 +851,7 @@ export class AuthService {
         select: TENANT_SETTINGS_SELECT,
       });
     } catch (e: any) {
-      if (e?.code === "P2002" && targetIncludes(e, "name")) throw new ConflictException(TENANT_NAME_TAKEN);
+      if (e?.code === "P2002" && targetIncludes(e, "slug")) throw new ConflictException(TENANT_SLUG_TAKEN);
       throw e;
     }
   }

@@ -6,7 +6,9 @@
  * few; then it showed the unsaved ones disabled under "Próximamente". Every
  * field it shows now is one the tenant stores. Those that would have needed a
  * feature of their own (fees, roles, session and password policies, goals,
- * themes...) were taken off the page.
+ * themes...) were taken off the page. So were Moneda, Formato de fecha and
+ * Formato de hora: the product is euros, DD/MM/YYYY and 24 h, and changing
+ * them did nothing in the panel.
  *
  * No React and no Next imports, so lib/general-settings.spec.ts can run them.
  */
@@ -33,12 +35,10 @@ export function settingsFromTenant(tenant: TenantSettingsRow): Record<string, an
     salonHours: salonHoursSettingFrom(tenant.openingHours),
     language: tenant.language,
     timezone: tenant.timezone,
-    currency: tenant.currency,
-    // Stored as "DD/MM/YYYY" and "24h"; the page's options are "dd/mm/yyyy"
-    // and "24".
-    dateFormat: (tenant.dateFormat ?? "DD/MM/YYYY").toLowerCase(),
-    timeFormat: tenant.timeFormat === "12h" ? "12" : "24",
-    cancellationPolicy: String(tenant.minCancelHours ?? 24),
+    // Informational, both: the receptionist explains them and the booking
+    // page shows the text; nothing charges a fee or stops a cancellation.
+    minCancelHours: String(tenant.minCancelHours ?? 24),
+    cancellationPolicyText: tenant.cancellationPolicy ?? "",
     bookingSlotMinutes: String(tenant.bookingSlotMinutes ?? 30),
     // Switches hold "true" / "false".
     autoConfirmOnlineBookings: tenant.autoConfirmOnlineBookings ? "true" : "false",
@@ -62,10 +62,11 @@ export function tenantUpdateFrom(
   if (changed("facebook")) update.facebook = String(settings.facebook ?? "").trim();
   if (changed("language")) update.language = settings.language;
   if (changed("timezone")) update.timezone = settings.timezone;
-  if (changed("currency")) update.currency = settings.currency;
-  if (changed("dateFormat")) update.dateFormat = String(settings.dateFormat).toUpperCase();
-  if (changed("timeFormat")) update.timeFormat = settings.timeFormat === "12" ? "12h" : "24h";
-  if (changed("cancellationPolicy")) update.minCancelHours = Number(settings.cancellationPolicy);
+  if (changed("minCancelHours")) update.minCancelHours = Number(settings.minCancelHours);
+  // Blank clears it (stored as null).
+  if (changed("cancellationPolicyText")) {
+    update.cancellationPolicy = String(settings.cancellationPolicyText ?? "").trim() || null;
+  }
   if (changed("bookingSlotMinutes")) update.bookingSlotMinutes = Number(settings.bookingSlotMinutes);
   if (changed("autoConfirmOnlineBookings")) {
     update.autoConfirmOnlineBookings = settings.autoConfirmOnlineBookings === "true";

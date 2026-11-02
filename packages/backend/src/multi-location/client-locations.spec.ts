@@ -11,6 +11,10 @@ const CENTRO = { id: "l-centro", name: "Centro", slug: "centro", street: "Calle 
 const NORTE = { id: "l-norte", name: "Norte", slug: "norte", street: "Av. Norte 5", city: "Madrid", state: "Madrid", postalCode: "28035", phone: null };
 const SUR = { id: "l-sur", name: "Sur", slug: "sur", street: null, city: "Getafe", state: "Madrid", postalCode: null, phone: null };
 
+/** A salon on Empresa (multi_location), and one that left it. */
+const EMPRESA = { isFeatureUnlocked: jest.fn(async () => true) };
+const PRO = { isFeatureUnlocked: jest.fn(async () => false) };
+
 function db(locations: any[], links: any[]) {
   return {
     location: { findMany: jest.fn(async () => locations) },
@@ -27,6 +31,7 @@ describe("clientLocations", () => {
         { professionalId: "bea", locationId: "l-norte", isPrimary: true },
       ]),
       "t1",
+      EMPRESA,
     );
     expect(out.locations.map((l) => [l.id, l.professionalIds])).toEqual([
       ["l-centro", ["ana"]],
@@ -35,10 +40,11 @@ describe("clientLocations", () => {
   });
 
   it("one location, or a second one nobody works at: no choice", async () => {
-    expect((await clientLocations(db([CENTRO], [{ professionalId: "ana", locationId: "l-centro", isPrimary: true }]), "t1")).locations).toEqual([]);
+    expect((await clientLocations(db([CENTRO], [{ professionalId: "ana", locationId: "l-centro", isPrimary: true }]), "t1", EMPRESA)).locations).toEqual([]);
     const lonely = await clientLocations(
       db([CENTRO, NORTE, SUR], [{ professionalId: "ana", locationId: "l-centro", isPrimary: true }]),
       "t1",
+      EMPRESA,
     );
     expect(lonely).toEqual({ locations: [], links: [] });
   });
@@ -50,18 +56,50 @@ describe("clientLocations", () => {
         { professionalId: "bea", locationId: "l-norte", isPrimary: true },
       ]),
       "t1",
+      EMPRESA,
     );
     expect(out.locations.map((l) => l.id)).toEqual(["l-centro", "l-norte"]);
   });
 
   it("reads only the salon's open locations and its active professionals' links", async () => {
     const d = db([], []);
-    await clientLocations(d, "t1");
+    await clientLocations(d, "t1", EMPRESA);
     expect((d.location.findMany.mock.calls[0] as any[])[0].where).toEqual({ tenantId: "t1", isActive: true });
     expect((d.professionalLocation.findMany.mock.calls[0] as any[])[0].where).toEqual({
       location: { tenantId: "t1", isActive: true },
       professional: { tenantId: "t1", isActive: true },
     });
+  });
+});
+
+describe("clientLocations after leaving Empresa (A13)", () => {
+  const TWO = () =>
+    db([CENTRO, NORTE], [
+      { professionalId: "ana", locationId: "l-centro", isPrimary: true },
+      { professionalId: "bea", locationId: "l-norte", isPrimary: true },
+    ]);
+
+  it("no multi-location feature: no location is offered, the salon books as a one-location salon", async () => {
+    const d = TWO();
+    expect(await clientLocations(d, "t1", PRO)).toEqual({ locations: [], links: [] });
+    expect(PRO.isFeatureUnlocked).toHaveBeenCalledWith("t1", "multi_location");
+    // Not even read.
+    expect(d.location.findMany).not.toHaveBeenCalled();
+  });
+
+  it("no gate, or one that fails: none either (never offer what the salon can't manage)", async () => {
+    expect((await clientLocations(TWO(), "t1", undefined)).locations).toEqual([]);
+    const broken = { isFeatureUnlocked: jest.fn(async () => Promise.reject(new Error("db down"))) };
+    expect((await clientLocations(TWO(), "t1", broken)).locations).toEqual([]);
+  });
+
+  it("on Empresa the same two are offered", async () => {
+    expect((await clientLocations(TWO(), "t1", EMPRESA)).locations.map((l) => l.id)).toEqual(["l-centro", "l-norte"]);
+  });
+
+  it("an appointment already booked at a location still names it in its notices", async () => {
+    // bookingPlace does not depend on the plan.
+    expect(await bookingPlace(db([CENTRO, NORTE], []), "t1", "l-norte")).toMatchObject({ name: "Norte" });
   });
 });
 
@@ -104,8 +142,13 @@ describe("bookingPlace", () => {
 });
 
 describe("GET /appointments/booking-locations (the panel's picker)", () => {
-  const svc = (locations: any[], links: any[]) =>
-    new AppointmentsService(db(locations, links) as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+  const svc = (locations: any[], links: any[], gate: any = EMPRESA) =>
+    new AppointmentsService(
+      db(locations, links) as any,
+      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+      undefined, undefined, undefined, undefined, undefined,
+      gate,
+    );
 
   it("the locations with their address, and where each professional works", async () => {
     const out = await svc([CENTRO, NORTE], [
@@ -121,6 +164,14 @@ describe("GET /appointments/booking-locations (the panel's picker)", () => {
       { id: "ana", locationIds: ["l-centro", "l-norte"], primaryLocationId: "l-centro" },
       { id: "bea", locationIds: ["l-norte"], primaryLocationId: "l-norte" },
     ]);
+  });
+
+  it("after leaving Empresa the panel's picker is empty too", async () => {
+    const out = await svc([CENTRO, NORTE], [
+      { professionalId: "ana", locationId: "l-centro", isPrimary: true },
+      { professionalId: "bea", locationId: "l-norte", isPrimary: true },
+    ], PRO).bookingLocations("t1");
+    expect(out).toEqual({ locations: [], professionals: [] });
   });
 
   it("a salon with one location gets nothing: the panel books as before", async () => {

@@ -166,6 +166,7 @@ export class VirtualReceptionistService {
           prisma: this.prisma,
           tenantId: dto.salonId,
           appointmentsService: this.appointmentsService,
+          featureFlags: this.featureFlags,
           // Booking is tied to this conversation: the proposal is stored on
           // it, and the client's reply this turn is what confirms it.
           conversation: {

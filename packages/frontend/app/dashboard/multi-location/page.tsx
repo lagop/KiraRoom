@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import apiClient from "../../../lib/api";
 import { Plus, MapPin, Phone, Mail, Trash2, Edit2, BarChart3 } from "lucide-react";
 import { PlanGate } from "@/components/billing/PlanGate";
+import { useFeatureAccess } from "@/hooks/useFeatureAccess";
+import { getCurrentUser } from "@/lib/utils";
 import { useTranslations } from "@/lib/use-translation";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/components/ui/use-toast";
@@ -48,12 +50,24 @@ export default function MultiLocationPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState<Location | null>(null);
   const [stats, setStats] = useState<Record<string, LocationStats>>({});
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // Creating, editing and the KPIs are Empresa; the list and closing a
+  // location are not (a salon that left Empresa can still close one).
+  const { enabled: multiLocation, loading: planLoading } = useFeatureAccess("multi_location");
+  // DELETE /locations/:id is owner-only. Read after mount (localStorage).
+  const [isOwner, setIsOwner] = useState(false);
+  useEffect(() => {
+    setIsOwner(getCurrentUser()?.role === "owner");
+  }, []);
 
   const load = async () => {
     try {
       const data = (await apiClient.request("/locations")) as Location[];
       setLocations(data);
-    } catch {
+      setLoadError(null);
+    } catch (e: any) {
+      // It used to show as "you have no locations yet".
+      setLoadError(e?.message || "Error");
       setLocations([]);
     }
   };
@@ -66,6 +80,9 @@ export default function MultiLocationPage() {
   if (locations === null) {
     return <div className="p-8 text-gray-500">{t("multiLocation.loading")}</div>;
   }
+
+  // Left Empresa with locations still on file: the list stays, read-only but closable.
+  const downgraded = !planLoading && !multiLocation;
 
   const activeCount = locations.filter((l) => l.isActive).length;
 
@@ -80,15 +97,18 @@ export default function MultiLocationPage() {
             {t("multiLocation.subtitle")}
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            onClick={() => setShowAdd(true)}
-            className="inline-flex items-center gap-2 rounded-md bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700"
-          >
-            <Plus className="h-4 w-4" />
-            {t("multiLocation.add")}
-          </button>
-        </div>
+        {/* Creating a location is Empresa: on other plans the button 403ed. */}
+        <PlanGate feature="multi_location" fallback={null}>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => setShowAdd(true)}
+              className="inline-flex items-center gap-2 rounded-md bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700"
+            >
+              <Plus className="h-4 w-4" />
+              {t("multiLocation.add")}
+            </button>
+          </div>
+        </PlanGate>
       </div>
 
       {showAdd && (
@@ -113,8 +133,25 @@ export default function MultiLocationPage() {
         />
       )}
 
-      <PlanGate feature="multi_location">
-        {locations.length === 0 ? (
+      {loadError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          {t("multiLocation.loadError")}: {loadError}
+        </div>
+      )}
+
+      {downgraded && locations.length === 0 && !loadError && <PlanGate feature="multi_location">{null}</PlanGate>}
+
+      {downgraded && locations.length > 0 && (
+        <div className="space-y-3">
+          <p className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            {t("multiLocation.downgraded")}
+          </p>
+          <PlanGate feature="multi_location">{null}</PlanGate>
+        </div>
+      )}
+
+      {loadError ? null : locations.length === 0 ? (
+        !downgraded && (
           <div className="rounded-lg border border-dashed border-gray-300 bg-white p-12 text-center">
             <MapPin className="mx-auto h-10 w-10 text-gray-400" />
             <h3 className="mt-3 text-sm font-semibold text-gray-900">
@@ -124,31 +161,33 @@ export default function MultiLocationPage() {
               {t("multiLocation.empty.desc")}
             </p>
           </div>
-        ) : (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {locations.map((loc) => (
-              <LocationCard
-                key={loc.id}
-                location={loc}
-                stats={stats[loc.id]}
-                t={t}
-                onStats={async () => {
-                  try {
-                    const s = (await apiClient.request(
-                      `/locations/${loc.id}/stats`,
-                    )) as LocationStats;
-                    setStats((prev) => ({ ...prev, [loc.id]: s }));
-                  } catch {
-                    /* ignore */
-                  }
-                }}
-                onEdit={() => setEditing(loc)}
-                onDeleted={load}
-              />
-            ))}
-          </div>
-        )}
-      </PlanGate>
+        )
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {locations.map((loc) => (
+            <LocationCard
+              key={loc.id}
+              location={loc}
+              stats={stats[loc.id]}
+              t={t}
+              onStats={async () => {
+                try {
+                  const s = (await apiClient.request(
+                    `/locations/${loc.id}/stats`,
+                  )) as LocationStats;
+                  setStats((prev) => ({ ...prev, [loc.id]: s }));
+                } catch {
+                  /* ignore */
+                }
+              }}
+              onEdit={() => setEditing(loc)}
+              onDeleted={load}
+              canManage={multiLocation}
+              canDeactivate={isOwner}
+            />
+          ))}
+        </div>
+      )}
 
       {/* Per-location comparison: only meaningful with several active
           locations (Empresa itself works from one). */}
@@ -174,6 +213,8 @@ function LocationCard({
   onStats,
   onEdit,
   onDeleted,
+  canManage,
+  canDeactivate,
 }: {
   location: Location;
   stats?: LocationStats;
@@ -181,6 +222,10 @@ function LocationCard({
   onStats: () => void;
   onEdit: () => void;
   onDeleted: () => void;
+  /** Empresa: edit and KPIs. */
+  canManage: boolean;
+  /** The owner (DELETE is owner-only), on any plan. */
+  canDeactivate: boolean;
 }) {
   const { toast } = useToast();
   // Deactivating is confirmed in the panel's dialog.
@@ -292,23 +337,27 @@ function LocationCard({
       )}
 
       <div className="mt-4 flex items-center gap-2">
-        <button
-          onClick={onStats}
-          className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2.5 py-1 text-xs text-gray-700 hover:bg-gray-50"
-        >
-          <BarChart3 className="h-3.5 w-3.5" />
-          {stats
-            ? t("multiLocation.card.refreshKpis")
-            : t("multiLocation.card.viewKpis")}
-        </button>
-        <button
-          onClick={onEdit}
-          className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2.5 py-1 text-xs text-gray-700 hover:bg-gray-50"
-        >
-          <Edit2 className="h-3.5 w-3.5" />
-          {t("multiLocation.card.edit")}
-        </button>
-        {location.isActive && (
+        {canManage && (
+          <>
+            <button
+              onClick={onStats}
+              className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2.5 py-1 text-xs text-gray-700 hover:bg-gray-50"
+            >
+              <BarChart3 className="h-3.5 w-3.5" />
+              {stats
+                ? t("multiLocation.card.refreshKpis")
+                : t("multiLocation.card.viewKpis")}
+            </button>
+            <button
+              onClick={onEdit}
+              className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2.5 py-1 text-xs text-gray-700 hover:bg-gray-50"
+            >
+              <Edit2 className="h-3.5 w-3.5" />
+              {t("multiLocation.card.edit")}
+            </button>
+          </>
+        )}
+        {location.isActive && canDeactivate && (
           <button
             onClick={askDeactivate}
             disabled={checking}
