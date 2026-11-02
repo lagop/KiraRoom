@@ -10,6 +10,8 @@ import apiClient, { FiscalSettings } from "@/lib/api";
 import { Loader2, Save, Upload, ShieldOff } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
 import { pricesTaxExampleMessage } from "@/lib/prices-tax-example";
+import { changedFiscalFields, issuerFieldsFromSettings, type TaxIdType } from "@/lib/fiscal-settings-form";
+import { useToast } from "@/components/ui/use-toast";
 import {
   TAX_REGIMES,
   TAX_REGIME_LABELS,
@@ -22,6 +24,7 @@ import {
 export default function FiscalSettingsPage() {
   const t = useTranslations();
   const qc = useQueryClient();
+  const { toast } = useToast();
   const settings = useQuery<FiscalSettings>({
     queryKey: ["invoices", "fiscal-settings"],
     queryFn: () => apiClient.getFiscalSettings(),
@@ -35,6 +38,12 @@ export default function FiscalSettingsPage() {
     mutationFn: (patch: Parameters<typeof apiClient.updateFiscalSettings>[0]) =>
       apiClient.updateFiscalSettings(patch),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["invoices", "fiscal-settings"] }),
+    onError: (err: unknown) =>
+      toast({
+        title: t("invoices.fiscalSettings.saveError"),
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      }),
   });
 
   const deactivateCert = useMutation({
@@ -42,7 +51,7 @@ export default function FiscalSettingsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["invoices", "certificates"] }),
   });
 
-  const [draft, setDraft] = useState<{
+  type Draft = {
     fiscalMode: FiscalSettings["fiscalMode"];
     defaultSeries: string;
     defaultTaxRate: number;
@@ -51,9 +60,10 @@ export default function FiscalSettingsPage() {
     taxRegime: TaxRegime;
     pricesIncludeTax: boolean;
     tenantNif: string;
-    taxIdType: "nif" | "cif" | "nie" | "passport" | "other";
+    taxIdType: TaxIdType;
     legalName: string;
-  }>({
+  };
+  const [draft, setDraft] = useState<Draft>({
     fiscalMode: "none",
     defaultSeries: "A",
     defaultTaxRate: 21,
@@ -66,10 +76,15 @@ export default function FiscalSettingsPage() {
     legalName: "",
   });
 
+  // What was loaded: a save sends only the fields that differ from it, so a
+  // field nobody touched (the razón social, the ID type...) is never sent
+  // back over what is stored.
+  const [loaded, setLoaded] = useState<Draft | null>(null);
+
   useEffect(() => {
     if (settings.data) {
       const fs = settings.data.fiscalSettings ?? {};
-      setDraft({
+      const next: Draft = {
         fiscalMode: settings.data.fiscalMode,
         defaultSeries: (fs.defaultSeries as string) ?? "A",
         defaultTaxRate: (fs.defaultTaxRate as number) ?? 21,
@@ -80,18 +95,15 @@ export default function FiscalSettingsPage() {
         taxRegime: taxRegimeOf(fs),
         // Missing (a salon from before the setting): tax on top, as always.
         pricesIncludeTax: fs.pricesIncludeTax === true,
-        tenantNif:
-          (fs.tenantNif as string) ??
-          (settings.data.taxId as string | undefined) ??
-          "",
-        taxIdType:
-          (settings.data.taxIdType as
-            | "nif" | "cif" | "nie" | "passport" | "other"
-            | undefined) ?? "nif",
-        legalName: (settings.data.legalName as string) ?? "",
-      });
+        ...issuerFieldsFromSettings(settings.data),
+      };
+      setDraft(next);
+      setLoaded(next);
     }
   }, [settings.data]);
+
+  const changes = loaded ? changedFiscalFields(draft, loaded) : {};
+  const hasChanges = Object.keys(changes).length > 0;
 
   if (settings.isLoading) {
     return (
@@ -356,8 +368,8 @@ export default function FiscalSettingsPage() {
         <div className="mt-6 flex justify-end">
           <button
             type="button"
-            disabled={save.isPending}
-            onClick={() => save.mutate(draft)}
+            disabled={save.isPending || !hasChanges}
+            onClick={() => save.mutate(changes)}
             className="inline-flex items-center gap-2 rounded-md bg-violet-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-violet-700 disabled:opacity-50"
           >
             {save.isPending ? (

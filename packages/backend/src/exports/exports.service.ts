@@ -7,6 +7,7 @@ import ExcelJS from "exceljs";
 import { PaymentFilters, paymentWhere } from "../payments/payments-query";
 import { scheduledDateRange } from "../analytics/analytics-metrics";
 import { LocationScope, appointmentLocationWhere } from "../analytics/analytics-location";
+import { CSV_FORMULA_START } from "../common/csv-cell";
 
 export type ExportEntity =
   | "clients"
@@ -25,10 +26,12 @@ const MAX_XLSX_ROWS = 100_000;
 /**
  * A client's name or notes starting with `=`, `+`, `-`, `@`, a tab or a
  * carriage return is read as a formula when the CSV is opened in a
- * spreadsheet. `escapeFormulae` prefixes those cells with a quote so they
- * stay text. (XLSX cells are written as strings, never formulas.)
+ * spreadsheet. `escapeFormulae` prefixes those cells with a quote (and
+ * quotes them) so they stay text; Papa applies it to string values only, so
+ * numbers stay numbers. The pattern is the one every CSV of the backend uses
+ * (common/csv-cell.ts). (XLSX cells are written as strings, never formulas.)
  */
-const CSV_OPTIONS = { escapeFormulae: true } as const;
+const CSV_OPTIONS = { escapeFormulae: CSV_FORMULA_START } as const;
 
 /**
  * The payments file is read by a salon in a Spanish spreadsheet: amounts in
