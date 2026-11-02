@@ -1,65 +1,78 @@
 ---
 import BaseLayout from "../layouts/BaseLayout.astro";
+import planMatrix from "../data/planMatrix.json";
 
-const plans = [
-  {
-    id: "esencial",
-    name: "Esencial",
-    price: 29,
-    blurb: "Para salones que empiezan a digitalizarse.",
-    features: [
-      { label: "Salones incluidos", value: "1" },
-      { label: "Agenda y clientas", value: "Ilimitadas" },
-      { label: "Profesionales", value: "Hasta 3" },
-      { label: "Facturas y rectificativas", value: "✓" },
-      { label: "Recordatorios por email", value: "✓" },
-      { label: "Recordatorios por WhatsApp", value: "—" },
-      { label: "Integración contable (Holded / Sage)", value: "—" },
-      { label: "Multi-local", value: "—" },
-      { label: "Soporte", value: "Email · 48 h" },
-    ],
-  },
-  {
-    id: "pro",
-    name: "Pro",
-    price: 59,
-    blurb: "El más popular. Pensado para salones en crecimiento.",
-    features: [
-      { label: "Salones incluidos", value: "1" },
-      { label: "Agenda y clientas", value: "Ilimitadas" },
-      { label: "Profesionales", value: "Ilimitados" },
-      { label: "Facturas y rectificativas", value: "✓" },
-      { label: "Recordatorios por email", value: "✓" },
-      { label: "Recordatorios por WhatsApp", value: "✓" },
-      { label: "Integración contable (Holded / Sage)", value: "✓" },
-      { label: "Multi-local", value: "—" },
-      { label: "Soporte", value: "Email · 12 h" },
-    ],
-    featured: true,
-  },
-  {
-    id: "empresa",
-    name: "Empresa",
-    price: 119,
-    blurb: "Para cadenas y multi-local.",
-    features: [
-      { label: "Salones incluidos", value: "Hasta 5" },
-      { label: "Agenda y clientas", value: "Ilimitadas" },
-      { label: "Profesionales", value: "Ilimitados" },
-      { label: "Facturas y rectificativas", value: "✓" },
-      { label: "Recordatorios por email", value: "✓" },
-      { label: "Recordatorios por WhatsApp", value: "✓" },
-      { label: "Integración contable (Holded / Sage)", value: "✓" },
-      { label: "Multi-local", value: "✓" },
-      { label: "Soporte", value: "Email + chat · 4 h" },
-    ],
-  },
-];
+/**
+ * Names and prices come from planMatrix.json (the home reads it too), which
+ * the backend's plan-catalog-drift spec checks against what the panel and
+ * Stripe charge. This page used to hard-code 29 / 59 / 119 EUR, "hasta 5
+ * salones" and unlimited professionals on Pro: a salon saw 29 EUR and was
+ * charged 49 EUR. The comparison rows below say what each plan does in
+ * the panel (packages/backend/src/payments/services/subscriptions.service.ts).
+ */
+const rows: Record<string, Array<{ label: string; value: string }>> = {
+  esencial: [
+    { label: "Locales", value: "1" },
+    { label: "Agenda y clientas", value: "Ilimitadas" },
+    { label: "Profesionales", value: "Hasta 4" },
+    { label: "Recepcionista IA", value: "500 mensajes al mes (unas 70 conversaciones)" },
+    { label: "Canales de la recepcionista", value: "Web y WhatsApp" },
+    { label: "Facturas y rectificativas", value: "✓" },
+    { label: "Recordatorios por WhatsApp y email", value: "✓" },
+    { label: "Email marketing", value: "Add-on" },
+    { label: "Campañas de WhatsApp", value: "—" },
+    { label: "Fidelización y tarjetas regalo", value: "Add-on" },
+    { label: "Multi-local e informes consolidados", value: "—" },
+    { label: "Soporte", value: "Email" },
+  ],
+  pro: [
+    { label: "Locales", value: "1" },
+    { label: "Agenda y clientas", value: "Ilimitadas" },
+    { label: "Profesionales", value: "Hasta 10" },
+    { label: "Recepcionista IA", value: "2.000 mensajes al mes (unas 280 conversaciones)" },
+    { label: "Canales de la recepcionista", value: "Web, WhatsApp, Messenger, Instagram y Telegram" },
+    { label: "Facturas y rectificativas", value: "✓" },
+    { label: "Recordatorios por WhatsApp y email", value: "✓" },
+    { label: "Email marketing", value: "✓" },
+    { label: "Campañas de WhatsApp", value: "✓" },
+    { label: "Fidelización y tarjetas regalo", value: "✓" },
+    { label: "Multi-local e informes consolidados", value: "—" },
+    { label: "Soporte", value: "Prioritario" },
+  ],
+  empresa: [
+    { label: "Locales", value: "Desde 1 (precio por local)" },
+    { label: "Agenda y clientas", value: "Ilimitadas" },
+    { label: "Profesionales", value: "Ilimitados" },
+    { label: "Recepcionista IA", value: "3.000 mensajes al mes por local (unas 420 conversaciones)" },
+    { label: "Canales de la recepcionista", value: "Web, WhatsApp, Messenger, Instagram y Telegram" },
+    { label: "Facturas y rectificativas", value: "✓" },
+    { label: "Recordatorios por WhatsApp y email", value: "✓" },
+    { label: "Email marketing", value: "✓" },
+    { label: "Campañas de WhatsApp", value: "✓" },
+    { label: "Fidelización y tarjetas regalo", value: "✓" },
+    { label: "Multi-local e informes consolidados", value: "✓" },
+    { label: "Soporte", value: "Account manager" },
+  ],
+};
+
+const plans = planMatrix.plans.map((p) => ({
+  id: p.id,
+  name: p.name,
+  price: p.price,
+  perLocation: p.period === "month_per_location",
+  blurb: p.tagline,
+  featured: p.featured,
+  features: rows[p.id] ?? [],
+}));
+
+const priceText = (p: (typeof plans)[number]) =>
+  `${p.name} ${p.price} €/mes${p.perLocation ? " por local" : ""}`;
+const description = `Tres planes para tu salón: ${plans.map(priceText).join(", ")}. 14 días gratis sin tarjeta.`;
 
 const faq = [
   {
     q: "¿Cuánto dura la prueba gratuita?",
-    a: "14 días con acceso completo al plan Pro. No pedimos tarjeta de crédito. Si al cabo de 14 días no has añadido un método de pago, la cuenta pasa a modo lectura (puedes exportar tus datos, pero no emitir facturas ni registrar citas nuevas).",
+    a: "14 días con todo el plan Pro (la recepcionista IA, con 500 mensajes durante la prueba). No pedimos tarjeta de crédito. Si al cabo de 14 días no has añadido un método de pago, la cuenta pasa a modo lectura (puedes exportar tus datos, pero no emitir facturas ni registrar citas nuevas).",
   },
   {
     q: "¿Puedo cancelar cuando quiera?",
@@ -78,7 +91,7 @@ const faq = [
 
 <BaseLayout
   title="Precios"
-  description="Tres planes simples para tu salón: Esencial 29 €/mes, Pro 59 €/mes, Empresa 119 €/mes. 14 días gratis sin tarjeta."
+  description={description}
 >
   <section class="section-tight">
     <div class="container pricing-hero">
@@ -101,7 +114,7 @@ const faq = [
             <div class="price__amount">
               <span class="price__currency">€</span>
               <span class="price__value">{p.price}</span>
-              <span class="price__suffix">/mes</span>
+              <span class="price__suffix">{p.perLocation ? "/local/mes" : "/mes"}</span>
             </div>
             <p class="muted">{p.blurb}</p>
             <table class="price__table">
@@ -124,7 +137,7 @@ const faq = [
         ))}
       </div>
       <p class="pricing-footnote muted">
-        Precios sin IVA. Factura mensual. Cancelas cuando quieras.
+        Factura mensual. Cancelas cuando quieras.
       </p>
     </div>
   </section>

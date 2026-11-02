@@ -519,7 +519,8 @@
     },
     "reactivate": {
       "cta": "Reactivar plan",
-      "doing": "Procesando..."
+      "doing": "Procesando...",
+      "hint": "Irás a la página de pago segura de Stripe. Tu plan se reactiva en cuanto se confirma el pago; hasta entonces sigues en modo lectura."
     },
     "cancelled": {
       "title": "Tu suscripción está cancelada",

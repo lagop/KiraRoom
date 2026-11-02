@@ -1,4 +1,4 @@
-﻿import { Injectable, NotFoundException, BadRequestException, ServiceUnavailableException } from '@nestjs/common';
+﻿import { Injectable, NotFoundException, BadRequestException, HttpException, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import Stripe from 'stripe';
@@ -483,6 +483,11 @@ export class SubscriptionsService {
         where: { id: tenantId },
         data: { stripeCustomerId: customerId },
       });
+    } else {
+      // Two plan checkouts left open side by side could both be paid: two
+      // subscriptions billing the same salon. Only the newest stays open
+      // (the webhook also cancels a second one that gets through).
+      await this.expireOpenPlanCheckouts(customerId, tenantId);
     }
 
     const session = await this.stripe.checkout.sessions.create({
@@ -548,6 +553,27 @@ export class SubscriptionsService {
       checkoutUrl: session.url,
       sessionId: session.id,
     };
+  }
+
+  /**
+   * Expires the salon's plan checkouts that are still open. Best effort: a
+   * failure here does not stop the new checkout.
+   */
+  private async expireOpenPlanCheckouts(customerId: string, tenantId: string) {
+    try {
+      const open = await this.stripe.checkout.sessions.list({
+        customer: customerId,
+        status: 'open',
+        limit: 20,
+      });
+      for (const session of open?.data ?? []) {
+        if (session.mode !== 'subscription') continue;
+        if (session.metadata?.tenantId !== tenantId || !session.metadata?.plan) continue;
+        await this.stripe.checkout.sessions.expire(session.id);
+      }
+    } catch (err) {
+      console.warn('Could not expire open plan checkouts for tenant', tenantId, err);
+    }
   }
 
   async createSubscription(tenantId: string, priceId: string, paymentMethodId?: string) {
@@ -625,10 +651,12 @@ export class SubscriptionsService {
    * archived. The plan field is preserved for historical reporting.
    * Subscription in Stripe is also cancelled.
    *
-   * The local row changes first, conditionally: `newlyCancelled` says this
-   * call made the transition (the caller emails the owner on it), and the
-   * Stripe webhook that follows finds the tenant already cancelled and stays
-   * quiet.
+   * Stripe is cancelled first; if that fails, a Spanish 503 is thrown and
+   * the salon's state is left as it was, so the owner can try again. The
+   * local row then changes conditionally: `newlyCancelled` says this call
+   * made the transition (the caller emails the owner on it). If the
+   * webhook of the Stripe cancellation gets in first, it makes the
+   * transition and emails instead, so the owner still gets one email.
    */
   async cancelSubscription(tenantId: string, immediately: boolean = false) {
     const tenant = await this.prisma.tenant.findUnique({
@@ -638,6 +666,12 @@ export class SubscriptionsService {
     if (!tenant) {
       throw new NotFoundException('Tenant not found');
     }
+
+    // Stripe first. A salon marked cancelled here while Stripe kept its
+    // subscription was charged every month for an account in read-only (no
+    // job reconciled it), and the renewal's webhook reactivated it. If Stripe
+    // cannot cancel it now, nothing changes and the owner can try again.
+    await this.cancelInStripe(tenant);
 
     const now = new Date();
     const readOnlyUntil = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
@@ -658,16 +692,6 @@ export class SubscriptionsService {
       await this.prisma.tenant.update({ where: { id: tenantId }, data });
     }
 
-    if (this.isEnabled && tenant.stripeSubscriptionId) {
-      try {
-        await this.stripe.subscriptions.cancel(tenant.stripeSubscriptionId);
-      } catch (err) {
-        // We continue the local cancellation even if Stripe is unreachable;
-        // the daily cron / reconciliation job will sync later.
-        console.warn('Stripe cancel failed for tenant', tenantId, err);
-      }
-    }
-
     return {
       subscriptionId: tenant.stripeSubscriptionId,
       status: 'cancelled',
@@ -678,9 +702,51 @@ export class SubscriptionsService {
   }
 
   /**
-   * Reactivate a previously cancelled subscription. Clears read-only flags
-   * and returns the tenant to `active` (or `trialing` if trialEnd is in the
-   * future). If Stripe is configured, opens a new Checkout session.
+   * Cancels the tenant's plan subscription in Stripe, or throws a Spanish
+   * 503 and leaves everything as it was. Nothing to cancel without a
+   * subscription id; one Stripe no longer has counts as cancelled. A salon
+   * already cancelled here (cancelling again restarts its read-only window)
+   * is not blocked by a failure: its subscription was cancelled before.
+   */
+  private async cancelInStripe(tenant: {
+    id: string;
+    subscriptionStatus: string | null;
+    stripeSubscriptionId: string | null;
+  }) {
+    const subscriptionId = tenant.stripeSubscriptionId;
+    if (!subscriptionId) return;
+    const alreadyCancelled = tenant.subscriptionStatus === 'cancelled';
+    const stripe = this.stripe;
+    if (!stripe) {
+      if (alreadyCancelled) return;
+      throw new ServiceUnavailableException(
+        'No se ha podido cancelar la suscripción porque el sistema de pagos no está disponible ahora mismo. No se ha cambiado nada: inténtalo de nuevo en unos minutos.',
+      );
+    }
+    try {
+      await stripe.subscriptions.cancel(subscriptionId);
+    } catch (err) {
+      if ((err as { code?: string })?.code === 'resource_missing') return;
+      console.warn('Stripe cancel failed for tenant', tenant.id, err);
+      if (alreadyCancelled) return;
+      throw new ServiceUnavailableException(
+        'No se ha podido cancelar la suscripción en el sistema de pagos. No se ha cambiado nada y no se ha dejado de cobrar: inténtalo de nuevo en unos minutos.',
+      );
+    }
+  }
+
+  /**
+   * Reactivate a previously cancelled subscription.
+   *
+   * Out of trial it only opens a Stripe Checkout for the salon's plan: the
+   * salon stays cancelled (read-only) until the payment's webhook
+   * (checkout.session.completed / customer.subscription.created) activates
+   * it. It used to switch the salon to `active` and clear read-only before
+   * any payment, so closing Stripe's page left it active for free, with its
+   * plan card disabled as "Tu plan actual" and no way to pay.
+   *
+   * Still in the free trial, it returns the salon to `trialing` (nothing to
+   * pay yet).
    */
   async reactivateSubscription(tenantId: string) {
     const tenant = await this.prisma.tenant.findUnique({
@@ -702,34 +768,52 @@ export class SubscriptionsService {
     const now = new Date();
     const inTrial = !!tenant.trialEnd && tenant.trialEnd.getTime() > now.getTime();
 
-    await this.prisma.tenant.update({
-      where: { id: tenantId },
-      data: {
-        subscriptionStatus: inTrial ? 'trialing' : 'active',
-        cancelledAt: null,
-        readOnlyUntil: null,
-        // Cancelled in Stripe with the subscription; the checkout below
-        // starts a new one.
-        stripeSubscriptionId: null,
-      },
-    });
+    if (inTrial) {
+      await this.prisma.tenant.update({
+        where: { id: tenantId },
+        data: {
+          subscriptionStatus: 'trialing',
+          cancelledAt: null,
+          readOnlyUntil: null,
+          // Cancelled in Stripe with the subscription; contracting again
+          // during the trial starts a new one.
+          stripeSubscriptionId: null,
+        },
+      });
+      return { tenantId, status: 'trialing', checkoutUrl: null };
+    }
 
-    // If we have a previous plan, open a checkout for the same plan.
+    if (!this.isEnabled) {
+      throw new ServiceUnavailableException(
+        'El pago no está disponible ahora mismo, así que no se puede reactivar el plan. Inténtalo de nuevo más tarde.',
+      );
+    }
+
+    // A checkout for the plan it had. The status, read-only window and
+    // stored subscription stay as they are until Stripe confirms the
+    // payment (the webhook tells this new subscription from the cancelled
+    // one by its id).
     const planId = this.normalizePlan(tenant.plan);
-    let checkoutUrl: string | null = null;
-    if (!inTrial) {
-      try {
-        const session = await this.createCheckoutSession(tenantId, planId);
-        checkoutUrl = session.checkoutUrl;
-      } catch (err) {
-        // Stripe not configured / not enabled â€“ that's ok, tenant is active again.
-        console.warn('Reactivation checkout skipped:', err);
-      }
+    let checkoutUrl: string | null;
+    try {
+      const session = await this.createCheckoutSession(tenantId, planId);
+      checkoutUrl = session.checkoutUrl;
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      console.warn('Reactivation checkout failed for tenant', tenantId, err);
+      throw new ServiceUnavailableException(
+        'No se ha podido abrir la página de pago. Inténtalo de nuevo en unos minutos.',
+      );
+    }
+    if (!checkoutUrl) {
+      throw new ServiceUnavailableException(
+        'No se ha podido abrir la página de pago. Inténtalo de nuevo en unos minutos.',
+      );
     }
 
     return {
       tenantId,
-      status: inTrial ? 'trialing' : 'active',
+      status: tenant.subscriptionStatus,
       checkoutUrl,
     };
   }

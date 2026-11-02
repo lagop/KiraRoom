@@ -29,6 +29,8 @@ check("paying, its plan is just the current one", planAction(paying, "pro") === 
 check("paying, another plan is a plan change, not a second checkout", planAction(paying, "esencial") === "change");
 check("past due still pays: change, not checkout", planAction({ ...paying, status: "past_due" }, "empresa") === "change");
 check("cancelled: no live subscription, so a checkout", planAction({ ...paying, status: "cancelled" }, "empresa") === "checkout" && !paysSubscription({ ...paying, status: "cancelled" }));
+check("cancelled: its own plan can be contracted again, not a disabled «Tu plan actual»", planAction({ ...paying, status: "cancelled" }, "pro") === "subscribe");
+check("cancelled with no Stripe subscription left: its own plan too", planAction({ plan: "pro", status: "cancelled", stripeSubscriptionId: null }, "pro") === "subscribe");
 check("active with no Stripe subscription (set by the platform): its plan stays current", planAction({ plan: "pro", status: "active" }, "pro") === "current");
 check("no plan read yet counts as Esencial", planAction({ status: "trialing" }, "esencial") === "subscribe");
 
