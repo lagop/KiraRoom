@@ -8,7 +8,7 @@ import { NotificationBell } from "./notification-bell";
 import { LanguageSwitcher } from "./language-switcher";
 import { TenantIdentityBadge } from "./tenant-identity-badge";
 import { getCurrentUser } from "@/lib/utils";
-import { isManager } from "@/lib/dashboard-nav";
+import { isManager, isOwner } from "@/lib/dashboard-nav";
 import { signOut } from "@/lib/sign-out";
 import { useTranslations } from "@/lib/use-translation";
 
@@ -40,6 +40,8 @@ export function DashboardHeader({
   }, []);
   const t = useTranslations();
   const manager = isManager(currentUser?.role);
+  // Facturación is the owner's: every billing route answers admins 403.
+  const owner = isOwner(currentUser?.role);
 
   return (
     <header className="bg-white/90 backdrop-blur-md border-b border-gray-200 px-4 py-3 sm:px-6 sticky top-0 z-10">
@@ -99,7 +101,7 @@ export function DashboardHeader({
                 <DropdownMenu.Label className="px-3 py-2 text-xs text-gray-500 truncate">
                   {currentUser?.email || t("nav.account")}
                 </DropdownMenu.Label>
-                {manager && (
+                {owner && (
                   <DropdownMenu.Item asChild>
                     <Link href="/dashboard/billing" className={MENU_ITEM}>
                       <BadgeEuro className="h-4 w-4" />

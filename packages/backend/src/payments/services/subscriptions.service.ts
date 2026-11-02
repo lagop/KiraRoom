@@ -70,9 +70,6 @@ export interface PlanLimitBlocker {
   href: string;
 }
 
-/** Empresa's price per location, for the messages that send the owner to Facturación. */
-const EMPRESA_LOCATION_PRICE_TEXT = '149 € al mes + IVA por local';
-
 export interface CreateSubscriptionDto {
   tenantId: string;
   plan: PlanId;

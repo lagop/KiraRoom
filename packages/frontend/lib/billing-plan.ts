@@ -18,6 +18,10 @@ export interface BillingSubscription {
   plan?: string | null;
   status?: string | null;
   stripeSubscriptionId?: string | null;
+  cancelAtPeriodEnd?: boolean | null;
+  cancelAt?: string | null;
+  maxLocations?: number | null;
+  activeLocations?: number | null;
 }
 
 export function paysSubscription(sub: BillingSubscription | null | undefined): boolean {
@@ -31,6 +35,38 @@ export function planAction(sub: BillingSubscription | null | undefined, planId: 
     return sub?.status === "trialing" || sub?.status === "cancelled" ? "subscribe" : "current";
   }
   return "checkout";
+}
+
+/**
+ * When a subscription cancelled at the end of its paid period ends (ISO
+ * date), or null when it renews or has already ended. Until then the salon
+ * keeps everything and can undo the cancellation.
+ */
+export function scheduledCancellation(sub: BillingSubscription | null | undefined): string | null {
+  if (!sub || sub.status === "cancelled" || !sub.cancelAtPeriodEnd || !sub.cancelAt) return null;
+  return sub.cancelAt;
+}
+
+/**
+ * Subscribed during the free trial: it keeps the trial (Pro) until the
+ * trial ends, when the first charge comes.
+ */
+export function subscribedInTrial(sub: BillingSubscription | null | undefined): boolean {
+  return sub?.status === "trialing" && paysSubscription(sub);
+}
+
+/**
+ * Empresa pays one per location: how many the subscription pays for, and
+ * the fewest it can pay for (the locations open now). Null outside a paid
+ * Empresa subscription.
+ */
+export function empresaLocations(
+  sub: BillingSubscription | null | undefined,
+): { paid: number; min: number } | null {
+  if (sub?.plan !== "empresa" || !paysSubscription(sub)) return null;
+  const paid = Math.max(1, sub.maxLocations ?? 1);
+  const min = Math.max(1, sub.activeLocations ?? 1);
+  return { paid, min };
 }
 
 /**

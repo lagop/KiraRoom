@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import apiClient from "../../../lib/api";
 import { Plus, MapPin, Phone, Mail, Trash2, Edit2, BarChart3 } from "lucide-react";
 import { PlanGate } from "@/components/billing/PlanGate";
@@ -407,6 +408,8 @@ function LocationForm({
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Empresa at its paid locations: the owner adds one in Facturación (B8).
+  const [atLocationLimit, setAtLocationLimit] = useState(false);
   // Switching a location off from the form asks first, with its upcoming appointments.
   const [confirmOff, setConfirmOff] = useState<{ upcoming: number | null } | null>(null);
 
@@ -430,6 +433,7 @@ function LocationForm({
       onSaved();
     } catch (e: any) {
       setError(e?.message || t("multiLocation.form.saveError"));
+      setAtLocationLimit(e?.code === "LOCATION_LIMIT_REACHED");
     } finally {
       setSaving(false);
       setConfirmOff(null);
@@ -511,6 +515,11 @@ function LocationForm({
           )}
         </div>
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+        {error && atLocationLimit && getCurrentUser()?.role === "owner" && (
+          <Link href="/dashboard/billing" className="mt-1 inline-block text-sm font-medium text-violet-700 underline">
+            {t("multiLocation.form.addLocationInBilling")}
+          </Link>
+        )}
         <div className="mt-5 flex items-center justify-end gap-2">
           <button
             type="button"

@@ -1184,7 +1184,22 @@ export interface Subscription {
   maxLocations?: number;
   addons?: Record<string, any>;
   stripeSubscriptionId?: string;
+  /** Cancelled at the end of the paid period: full access until cancelAt. */
   cancelAtPeriodEnd: boolean;
+  cancelAt?: string | null;
+  /** Empresa: locations open now (maxLocations is how many are paid). */
+  activeLocations?: number | null;
+}
+
+/** What the salon must deactivate before moving to a plan (B9). */
+export interface PlanLimitBlocker {
+  kind: "professionals" | "locations";
+  current: number;
+  limit: number;
+  /** In Spanish, ready to show. */
+  message: string;
+  /** The panel page where it is done. */
+  href: string;
 }
 
 export interface SubscriptionInvoice {
@@ -1482,14 +1497,6 @@ export interface TenantAddOnView {
   startedAt: string;
   currentPeriodEnd: string | null;
   cancelledAt: string | null;
-}
-
-/** P2A-receptionist-v2 â€” message bundles (metered) credit balance. */
-export interface MessageBundlesBalance {
-  creditsRemaining: number;
-  creditsPurchasedTotal: number;
-  creditsUsedTotal: number;
-  lastTopupAt: string | null;
 }
 
 export interface CreatePaymentDto {
@@ -2033,6 +2040,9 @@ export interface ApiClientInterface {
   createSubscriptionCheckout(plan: string): Promise<{ url: string }>;
   changeSubscriptionPlan(plan: string): Promise<Subscription>;
   cancelSubscription(): Promise<Subscription>;
+  undoCancelSubscription(): Promise<{ status: string; cancelAt: null }>;
+  getPlanCheck(plan: string): Promise<{ plan: string; blockers: PlanLimitBlocker[] }>;
+  updateSubscriptionLocations(locationCount: number): Promise<{ subscriptionId: string; locationCount: number }>;
   getSubscriptionInvoices(limit?: number): Promise<SubscriptionInvoice[]>;
   getBillingPortalUrl(): Promise<{ url: string }>;
   getSubscriptionUsage(): Promise<SubscriptionUsage>;
@@ -2047,9 +2057,6 @@ export interface ApiClientInterface {
 
   // P2A-receptionist-v2 â€” AI usage counter for the billing dashboard.
   getAiUsage(): Promise<{ used: number; cap: number | null; resetsAt: string | null }>;
-
-  // P2A-receptionist-v2 â€” message bundles (metered WhatsApp marketing + SMS).
-  getMessageBundlesBalance(): Promise<MessageBundlesBalance>;
 
   // Client Wallet
   getClientWallet(clientId: string): Promise<ClientWallet>;
@@ -4015,6 +4022,26 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
+  /** "Anular cancelación": the subscription renews again. */
+  async undoCancelSubscription(): Promise<{ status: string; cancelAt: null }> {
+    return this.request("/payments/subscription/undo-cancel", { method: "POST" });
+  }
+
+  /** What to deactivate before moving to `plan`; empty when the salon fits. */
+  async getPlanCheck(plan: string): Promise<{ plan: string; blockers: PlanLimitBlocker[] }> {
+    return this.request(`/payments/subscription/plan-check?plan=${encodeURIComponent(plan)}`);
+  }
+
+  /** Empresa: how many locations the subscription pays for (prorated by Stripe). */
+  async updateSubscriptionLocations(
+    locationCount: number,
+  ): Promise<{ subscriptionId: string; locationCount: number }> {
+    return this.request("/payments/subscription/update-locations", {
+      method: "POST",
+      body: JSON.stringify({ locationCount }),
+    });
+  }
+
   async reactivateSubscription(): Promise<{
     tenantId: string;
     status: string;
@@ -4081,15 +4108,6 @@ class ApiClient implements ApiClientInterface {
   /** The salon page address, name and logo, for sharing and printing (QrController.share). */
   async getShareInfo(): Promise<import("./share-page").ShareInfo> {
     return this.request("/qr/share");
-  }
-
-  async getMessageBundlesBalance(): Promise<MessageBundlesBalance> {
-    // The salon's own route (TenantAddOnsController, owner/admin). The
-    // similar-looking /message-bundles/tenants/:tenantId/balance is the
-    // SaaS-admin one and answers 403 to a salon.
-    return this.request<MessageBundlesBalance>(
-      "/payments/message-bundles/tenants/current/balance",
-    );
   }
 
   async getSubscriptionInvoices(

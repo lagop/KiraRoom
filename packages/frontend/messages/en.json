@@ -569,8 +569,17 @@
       "confirm": "Cancel your subscription?",
       "cta": "Cancel subscription",
       "doing": "Cancelling...",
-      "description": "You will be in read-only mode for 30 days. You can reactivate it from this page in that time.",
-      "keep": "Keep it"
+      "description": "You keep everything until the end of the period you have already paid for ({date}). Then you will be in read-only mode for 30 days. You can undo the cancellation until then.",
+      "keep": "Keep it",
+      "descriptionNoDate": "You keep everything until the end of the period you have already paid for. Then you will be in read-only mode for 30 days. You can undo the cancellation until then.",
+      "scheduled": "Ends on {date}",
+      "scheduledHint": "You keep everything until then. After that, read-only mode for 30 days.",
+      "undo": "Undo cancellation",
+      "undoing": "Undoing...",
+      "undone": "Cancellation undone: your subscription will renew as usual.",
+      "undoError": "The cancellation could not be undone.",
+      "scheduledToast": "Subscription cancelled: you keep everything until {date}.",
+      "descriptionNow": "You will be in read-only mode from now on for 30 days. You can reactivate it from this page in that time."
     },
     "reactivate": {
       "cta": "Reactivate plan",
@@ -628,13 +637,6 @@
       "legend": "{pct}% of this month’s AI messages. At the limit the receptionist hands conversations to your team; you can add 1,000 messages (about 140 conversations) for €19/month in the add-ons.",
       "capConversations": "messages · about {count} conversations"
     },
-    "bundles": {
-      "title": "Message bundles",
-      "creditsRemaining": "credits remaining",
-      "consumedFmt": "Consumed {used} of {purchased} purchased",
-      "lastTopupFmt": "Last top-up: {date}",
-      "desc": "Appointment reminders remain free. Bundles are spent when you send SMS campaigns. Meta bills WhatsApp campaigns directly to your salon's WhatsApp Business account."
-    },
     "invoices": {
       "title": "Invoices",
       "empty": "No invoices yet. They will appear here after the first charge.",
@@ -682,10 +684,10 @@
     "switchPlan": "Switch to this plan",
     "switchConfirm": "Switch to the {plan} plan?",
     "switchDone": "Done: you are now on the {plan} plan.",
-    "trialCheckoutNote": "You can subscribe now without losing your trial: your card is saved today and the first charge comes when the trial ends, on {date}. In its last two days, you are charged at once.",
-    "checkoutDescription": "You will go to Stripe's secure payment page to enter your card.",
+    "trialCheckoutNote": "You can subscribe now without losing your trial: you keep Pro until {date} and the first charge comes that day. In its last two days you are charged at once, but you keep Pro until the trial ends.",
+    "checkoutDescription": "You will go to Stripe's secure payment page to enter your card. {price} a month + VAT.",
     "checkoutGo": "Go to payment",
-    "switchDescription": "Stripe adjusts your next charge for the days left this month.",
+    "switchDescription": "{price} a month + VAT. Stripe adjusts your next charge for the days left in the period. If you move down, you lose what the new plan does not include.",
     "back": "Back",
     "trialPlanBadge": "Your trial",
     "checkoutReturn": {
@@ -693,6 +695,26 @@
       "successBody": "We are activating your plan: you will see it here in a few seconds.",
       "cancelTitle": "The payment was not completed",
       "cancelBody": "Nothing was charged and your plan is as it was."
+    },
+    "plusVat": "+ VAT",
+    "trialSubscribedNote": "You have subscribed to {plan}. You keep the Pro trial until {date}; your plan and the first charge start that day.",
+    "limits": {
+      "title": "Before moving to {plan}",
+      "intro": "Your salon has more than that plan allows. Deactivate the rest and try again:",
+      "go": "Go and deactivate"
+    },
+    "locations": {
+      "title": "Paid locations",
+      "desc": "Empresa is paid per location: {price} a month + VAT each. You have {active} {activeLabel} and pay for {paid}.",
+      "activeOne": "active location",
+      "activeMany": "active locations",
+      "label": "Locations you pay for",
+      "save": "Save",
+      "min": "You cannot pay for fewer locations than you have active ({min}). Deactivate one in Multi-location first.",
+      "confirm": "Pay for {count} locations?",
+      "confirmDescription": "{price} a month + VAT per location. Stripe prorates the change on your next invoice.",
+      "done": "Done: you now pay for {count} locations.",
+      "error": "The number of locations could not be changed."
     }
   },
   "plans": {
@@ -776,7 +798,8 @@
       "saveError": "Error saving",
       "isActiveHint": "Inactive locations don't count towards your plan's location limit. You can reactivate it at any time.",
       "reactivated": "Location reactivated",
-      "deactivated": "Location deactivated"
+      "deactivated": "Location deactivated",
+      "addLocationInBilling": "Add a location in Billing"
     },
     "deactivate": {
       "noUpcoming": "It has no upcoming appointments.",
