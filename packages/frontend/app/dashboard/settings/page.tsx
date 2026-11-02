@@ -109,39 +109,8 @@ const defaultSettingsData = {
       description:
         "Decide la hora de las citas y de los recordatorios que se envían",
     },
-    {
-      id: "currency",
-      label: "Moneda",
-      type: "select",
-      options: [
-        { id: "EUR", label: "Euro (€)" },
-        { id: "USD", label: "Dólar (USD)" },
-        { id: "GBP", label: "Libra (GBP)" },
-        { id: "JPY", label: "Yen (JPY)" },
-      ],
-      description: "Moneda utilizada en las transacciones",
-    },
-    {
-      id: "dateFormat",
-      label: "Formato de fecha",
-      type: "select",
-      options: [
-        { id: "dd/mm/yyyy", label: "DD/MM/YYYY" },
-        { id: "mm/dd/yyyy", label: "MM/DD/YYYY" },
-        { id: "yyyy/mm/dd", label: "YYYY/MM/DD" },
-      ],
-      description: "Formato de visualización de fechas",
-    },
-    {
-      id: "timeFormat",
-      label: "Formato de hora",
-      type: "select",
-      options: [
-        { id: "24", label: "24 horas" },
-        { id: "12", label: "12 horas" },
-      ],
-      description: "Formato de visualización de horas",
-    },
+    // No Moneda, Formato de fecha or Formato de hora: euros, DD/MM/YYYY and
+    // 24 h everywhere, and changing them did nothing in the panel.
   ],
   services: [
     {
@@ -158,8 +127,10 @@ const defaultSettingsData = {
         "Cada cuánto se ofrece una hora libre en tu página de reservas, el widget, la recepcionista virtual y las sugerencias de la agenda",
     },
     {
-      id: "cancellationPolicy",
-      label: "Tiempo máximo para cancelar",
+      // Informational: clients cancel by telling the salon and nothing
+      // charges a fee. It said "sin cargo", as if a fee applied after it.
+      id: "minCancelHours",
+      label: "Aviso para cancelar (informativo)",
       type: "select",
       options: [
         { id: "0", label: "Sin política" },
@@ -169,7 +140,17 @@ const defaultSettingsData = {
         { id: "24", label: "24 horas" },
         { id: "48", label: "48 horas" },
       ],
-      description: "Tiempo máximo para cancelar una cita sin cargo",
+      description:
+        "Con cuánta antelación pides que te avisen. La recepcionista virtual lo explica a tus clientes; KiraRoom no cobra nada ni impide cancelar.",
+    },
+    {
+      id: "cancellationPolicyText",
+      label: "Política de cancelación (informativa)",
+      type: "textarea",
+      maxLength: 1000,
+      placeholder: "Por ejemplo: si no puedes venir, avísanos por WhatsApp con un día de antelación.",
+      description:
+        "Se muestra en tu página de reservas y la recepcionista virtual la explica. No se cobra nada automáticamente.",
     },
     {
       id: "autoConfirmOnlineBookings",
@@ -373,6 +354,19 @@ export default function SettingsPage() {
           />
         );
 
+      case "textarea":
+        return (
+          <textarea
+            value={settings[field.id]}
+            placeholder={field.placeholder}
+            maxLength={field.maxLength}
+            rows={3}
+            onChange={(e) => handleFieldChange(field.id, e.target.value)}
+            disabled={locked}
+            className={className}
+          />
+        );
+
       case "select":
         return (
           <select
@@ -513,7 +507,7 @@ export default function SettingsPage() {
                 {(defaultSettingsData as any)[activeTab].map((field: any) => (
                   <div
                     key={field.id}
-                    className={`space-y-2 ${field.type === "salon-hours" ? "sm:col-span-2" : ""}`}
+                    className={`space-y-2 ${field.type === "salon-hours" || field.type === "textarea" ? "sm:col-span-2" : ""}`}
                   >
                     <label className="block text-sm font-medium text-gray-700">
                       {field.label}

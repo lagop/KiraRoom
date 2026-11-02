@@ -10,11 +10,17 @@ import { Feature } from "../common/decorators/feature.decorator";
 import { MultiLocationService } from "./multi-location.service";
 import { CreateLocationDto, UpdateLocationDto } from "./location.dto";
 
+/**
+ * The salon's locations. Creating, editing and the per-location KPIs are
+ * Empresa (multi_location). Reading the list and closing a location are not:
+ * after a downgrade every route answered 403, so a salon could neither see
+ * its locations nor close the ones it no longer runs. Clients are offered
+ * none of them then (client-locations.ts).
+ */
 @ApiTags("multi-location")
 @Controller("locations")
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, FeatureGuard)
-@Feature("multi_location")
 export class MultiLocationController {
   constructor(private readonly service: MultiLocationService) {}
 
@@ -33,6 +39,7 @@ export class MultiLocationController {
   }
 
   @Post()
+  @Feature("multi_location")
   @Roles(UserRole.owner, UserRole.admin)
   @ApiOperation({ summary: "Crear un local (plan Empresa)" })
   create(@Req() req: any, @Body() dto: CreateLocationDto) {
@@ -40,6 +47,7 @@ export class MultiLocationController {
   }
 
   @Patch(":id")
+  @Feature("multi_location")
   @Roles(UserRole.owner, UserRole.admin)
   @ApiOperation({ summary: "Actualizar un local" })
   update(
@@ -50,6 +58,7 @@ export class MultiLocationController {
     return this.service.update(req.user.tenantId, id, dto);
   }
 
+  // Not gated: a salon that left Empresa can still close a location.
   @Delete(":id")
   @Roles(UserRole.owner)
   @ApiOperation({ summary: "Desactivar un local (soft delete)" })
@@ -65,6 +74,7 @@ export class MultiLocationController {
   }
 
   @Get(":id/stats")
+  @Feature("multi_location")
   @ApiOperation({ summary: "KPIs del local (ultimos 30 dias)" })
   @Roles(...SALON_MANAGERS)
   stats(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {

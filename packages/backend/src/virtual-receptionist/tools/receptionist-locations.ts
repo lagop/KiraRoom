@@ -51,7 +51,7 @@ export async function salonPlaces(ctx: SalonToolContext): Promise<SalonPlaces> {
   const db = ctx.prisma as any;
   if (!db?.location?.findMany || !db?.professionalLocation?.findMany) return NONE;
   try {
-    return await clientLocations(db, ctx.tenantId);
+    return await clientLocations(db, ctx.tenantId, ctx.featureFlags);
   } catch {
     // Booking as before (no location) beats a receptionist that cannot book.
     return NONE;

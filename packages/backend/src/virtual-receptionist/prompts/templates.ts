@@ -239,8 +239,7 @@ R: {{answer}}
 
 ## POLÍTICAS DEL SALÓN
 
-- Política de cancelación: {{CANCELLATION_POLICY}}
-- Tiempo mínimo de aviso para cancelar: {{MIN_CANCEL_HOURS}} horas
+{{CANCELLATION_POLICY}}
 
 ### Cómo manejar cancelaciones, cambios y retrasos
 
@@ -254,9 +253,7 @@ para hacerlo. Nunca digas que la has cancelado o movido, ni pidas datos
 - **Cancelar:** dile que puede cancelarla avisando al salón: teléfono
   {{SALON_PHONE}}, WhatsApp {{SALON_WHATSAPP}} o {{SALON_EMAIL}}. Las
   clientas no tienen cuenta en la web: no le digas que lo haga desde una
-  cuenta ni que se registre. Si faltan
-  menos de {{MIN_CANCEL_HOURS}} horas, explícale la política con amabilidad
-  y sin regañarle.
+  cuenta ni que se registre. {{LATE_CANCELLATION}}
 - **Cambiar de fecha u hora:** puedes reservarle la cita nueva aquí, pero
   la anterior sigue en pie hasta que la cancele ella o el salón. Díselo
   claramente para que no quede con dos citas.
@@ -371,8 +368,7 @@ A: {{answer}}
 
 ## SALON POLICIES
 
-- Cancellation policy: {{CANCELLATION_POLICY}}
-- Minimum notice to cancel: {{MIN_CANCEL_HOURS}} hours
+{{CANCELLATION_POLICY}}
 
 ### Handling cancellations, changes and lateness
 
@@ -383,11 +379,10 @@ written above, and do not promise anything you cannot verify.
 say you have cancelled or moved one, and never ask for details "to find and
 cancel it": you could not.
 
-- **Cancelling:** tell them they can cancel from "My account" at
-  {{BOOKING_URL}} if they have an account, or by telling the salon: phone
-  {{SALON_PHONE}}, WhatsApp {{SALON_WHATSAPP}} or {{SALON_EMAIL}}. If it is
-  less than {{MIN_CANCEL_HOURS}} hours away, explain the policy kindly and
-  without scolding.
+- **Cancelling:** tell them they can cancel by telling the salon: phone
+  {{SALON_PHONE}}, WhatsApp {{SALON_WHATSAPP}} or {{SALON_EMAIL}}. Clients
+  have no account on the website: do not tell them to cancel from an account
+  or to sign up. {{LATE_CANCELLATION}}
 - **Changing date or time:** you can book the new appointment here, but the
   old one stands until they or the salon cancel it. Say so plainly, so they
   do not end up with two.
@@ -864,6 +859,57 @@ export function getSystemPrompt(language: string, salonName: string, assistantNa
     .replace(/{{ASSISTANT_NAME}}/g, assistantName);
 }
 
+/** Longest policy text the prompt carries (the settings field allows the same). */
+export const CANCELLATION_POLICY_MAX = 1000;
+
+/**
+ * The salon's cancellation policy, as the receptionist is told it. It is
+ * informational: nothing in KiraRoom charges a fee or stops a cancellation,
+ * so the receptionist must never say otherwise. 0 hours ("Sin política")
+ * means there is no minimum notice; it used to become 24 through `|| 24`.
+ */
+export function cancellationPolicyLines(
+  language: string,
+  policyText: string | null | undefined,
+  minCancelHours: number | null | undefined,
+): string {
+  const text = (policyText ?? "").replace(/\s+/g, " ").trim().slice(0, CANCELLATION_POLICY_MAX);
+  const hours = typeof minCancelHours === "number" && minCancelHours > 0 ? minCancelHours : 0;
+  if (language === "es") {
+    return [
+      text
+        ? `- Política de cancelación (la escribe el salón, es informativa): "${text}"`
+        : "- Política de cancelación: sin política escrita. Si preguntan por condiciones, di que lo consulten con el salón.",
+      hours > 0
+        ? `- Aviso que pide el salón para cancelar: ${hours} ${hours === 1 ? "hora" : "horas"} antes de la cita.`
+        : "- Aviso mínimo para cancelar: sin política (no hay plazo mínimo).",
+      "- KiraRoom no cobra nada por cancelar ni impide cancelar: no digas nunca que se cobrará un cargo o una penalización si no lo dice el texto del salón.",
+    ].join("\n");
+  }
+  return [
+    text
+      ? `- Cancellation policy (written by the salon, informational): "${text}"`
+      : "- Cancellation policy: none written. If asked about conditions, say to check with the salon.",
+    hours > 0
+      ? `- Notice the salon asks for to cancel: ${hours} ${hours === 1 ? "hour" : "hours"} before the appointment.`
+      : "- Minimum notice to cancel: no policy (no minimum notice).",
+    "- KiraRoom charges nothing for cancelling and never stops a cancellation: never say a fee or penalty applies unless the salon's text says so.",
+  ].join("\n");
+}
+
+/** What the receptionist does when a client cancels late (or not at all, without a minimum). */
+export function lateCancellationLine(language: string, minCancelHours: number | null | undefined): string {
+  const hours = typeof minCancelHours === "number" && minCancelHours > 0 ? minCancelHours : 0;
+  if (language === "es") {
+    return hours > 0
+      ? `Si faltan menos de ${hours} ${hours === 1 ? "hora" : "horas"}, explícale con amabilidad y sin regañarle lo que pide el salón.`
+      : "El salón no pide un plazo mínimo: no le hables de plazos ni de penalizaciones.";
+  }
+  return hours > 0
+    ? `If it is less than ${hours} ${hours === 1 ? "hour" : "hours"} away, explain kindly and without scolding what the salon asks for.`
+    : "The salon asks for no minimum notice: do not talk about deadlines or penalties.";
+}
+
 /**
  * Get the appropriate dynamic context based on language
  */
@@ -877,8 +923,10 @@ export function getDynamicContext(
     salonEmail: string;
     salonTimezone: string;
     salonHours: string;
-    cancellationPolicy: string;
-    minCancelHours: number;
+    /** The salon's own policy text (Ajustes > Generales); blank = none written. */
+    cancellationPolicy?: string | null;
+    /** Notice the salon asks for, in hours; 0 = no minimum ("Sin política"). */
+    minCancelHours?: number | null;
     /** The salon's public booking page, where a client completes a booking. */
     bookingUrl?: string;
     services: Array<{ name: string; category: string; duration: number; price: number; currency: string }>;
@@ -896,8 +944,7 @@ export function getDynamicContext(
     .replace(/{{SALON_EMAIL}}/g, context.salonEmail || 'Not available')
     .replace(/{{SALON_TIMEZONE}}/g, context.salonTimezone || 'Europe/Madrid')
     .replace(/{{SALON_HOURS}}/g, context.salonHours || 'Not available')
-    .replace(/{{CANCELLATION_POLICY}}/g, context.cancellationPolicy || 'Contact the salon')
-    .replace(/{{MIN_CANCEL_HOURS}}/g, String(context.minCancelHours || 24))
+    .replace(/{{LATE_CANCELLATION}}/g, () => lateCancellationLine(language, context.minCancelHours))
     .replace(/{{BOOKING_URL}}/g, context.bookingUrl || 'Not available');
 
   // Add services
@@ -929,6 +976,12 @@ export function getDynamicContext(
   } else {
     result = result.replace(/{{#each FAQS}}[\s\S]*?{{\/each}}/g, 'No FAQs available');
   }
+
+  // Last: the salon's own text goes in as written, never scanned for the
+  // placeholders above. A function, so a "$&" in it stays literal.
+  result = result.replace(/{{CANCELLATION_POLICY}}/g, () =>
+    cancellationPolicyLines(language, context.cancellationPolicy, context.minCancelHours),
+  );
 
   return result;
 }

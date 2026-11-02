@@ -85,6 +85,11 @@ export interface PublicSalonPage {
   currency: string;
   timezone: string;
   language: string;
+  /**
+   * The salon's cancellation policy in its own words, set in Ajustes >
+   * Generales. Informational: nothing charges a fee. Absent from older servers.
+   */
+  cancellationPolicy?: string | null;
   updatedAt: string;
   services: PublicSalonService[];
   professionals: PublicSalonProfessional[];

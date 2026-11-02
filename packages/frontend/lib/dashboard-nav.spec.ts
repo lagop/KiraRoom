@@ -34,6 +34,7 @@ console.log("who sees what");
   check("only the owner and managers fetch the pending requests badge", badgesIn(navFor("owner")).join() === "time-off-requests" && badgesIn(navFor("admin")).join() === "time-off-requests" && badgesIn(navFor("staff")).length === 0);
   check("the owner finds the plan and subscription in the menu", owner.includes("billing"));
   check("the website widget is in Ajustes, for managers only", owner.includes("widget") && !staff.includes("widget") && activeGroup(navFor("owner"), "/dashboard/settings/widget") === "settings");
+  check("the calendar feeds are in Ajustes, for managers only", owner.includes("calendar-feeds") && ids(navFor("admin")).includes("calendar-feeds") && !staff.includes("calendar-feeds") && activeGroup(navFor("owner"), "/dashboard/settings/calendar-feeds") === "settings");
   check("staff keep their daily screens", ["dashboard", "appointments", "clients", "wait-list", "pos", "share"].every((id) => staff.includes(id)), staff);
   check("staff do not see the salon's management screens", !["payments", "professionals", "billing", "analytics", "whatsapp", "invoices"].some((id) => staff.includes(id)), staff);
   check("staff keep their own two-step verification", staff.includes("security-staff"));
