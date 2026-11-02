@@ -156,7 +156,7 @@ export default function AnalyticsPage() {
             </Link>
           )}
           {showPagePeriod && data?.period && (
-            <ExportMenu t={t} period={data.period} filteredByLocation={!!data.location} />
+            <ExportMenu t={t} period={data.period} location={data.location ?? null} />
           )}
           {showPagePeriod && (
             <PeriodSelector

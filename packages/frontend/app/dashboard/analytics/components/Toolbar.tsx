@@ -65,17 +65,20 @@ type ExportKind = "appointments" | "payments";
 
 /**
  * S3: the period's appointments (by visit day) and payments (by the day they
- * were charged) as CSV, through the exports the panel already has. Exports
- * are always the whole salon's: they have no location filter.
+ * were charged) as CSV, through the exports the panel already has. With a
+ * location chosen (Empresa), only that location's: its appointments by
+ * Analítica's rule and the payments of those appointments (a till sale with
+ * no appointment cannot be placed, so it is left out).
  */
 export function ExportMenu({
   t,
   period,
-  filteredByLocation,
+  location,
 }: {
   t: Translate;
   period: { start: string; end: string };
-  filteredByLocation: boolean;
+  /** The location the page shows, or null for the whole salon. */
+  location: { id: string; name: string } | null;
 }) {
   const { toast } = useToast();
   const [busy, setBusy] = useState<ExportKind | null>(null);
@@ -85,8 +88,8 @@ export function ExportMenu({
     try {
       const { blob, filename } =
         kind === "appointments"
-          ? await apiClient.downloadAppointmentsCsv(period.start, period.end)
-          : await apiClient.downloadPaymentsCsv({ dateFrom: period.start, dateTo: period.end });
+          ? await apiClient.downloadAppointmentsCsv(period.start, period.end, location?.id)
+          : await apiClient.downloadPaymentsCsv({ dateFrom: period.start, dateTo: period.end, locationId: location?.id });
       saveFile(blob, filename);
     } catch (error) {
       toast({
@@ -130,8 +133,8 @@ export function ExportMenu({
         </p>
         {item("appointments", t("analytics.export_appointments"))}
         {item("payments", t("analytics.export_payments"))}
-        {filteredByLocation && (
-          <p className="px-3 pt-2 text-xs text-gray-500">{t("analytics.export_whole_salon")}</p>
+        {location && (
+          <p className="px-3 pt-2 text-xs text-gray-500">{t("analytics.export_location", { name: location.name })}</p>
         )}
       </PopoverContent>
     </Popover>

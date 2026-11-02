@@ -14,6 +14,7 @@
  * they are left out while a location is chosen.
  */
 
+import { BadRequestException, ForbiddenException } from "@nestjs/common";
 import { LocationLink, homeLocations } from "../multi-location/consolidated-report";
 
 export interface LocationScope {
@@ -64,4 +65,33 @@ export function tillLocationWhere(
 /** A location id as the API takes it: a UUID. */
 export function isLocationId(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+/**
+ * The scope a request asks for with `locationId` (Analítica and its exports):
+ * none without one; a 400 for a malformed id, a 403 when the plan has no
+ * per-location reports (consolidated_reports, Empresa), a 404 when the
+ * location is not this salon's (`locationScope` throws it).
+ */
+export async function requestedLocationScope(
+  tenantId: string,
+  locationId: string | undefined,
+  deps: {
+    hasLocationFilter: (tenantId: string) => Promise<boolean>;
+    locationScope: (tenantId: string, locationId: string) => Promise<LocationScope>;
+  },
+  planMessage: string,
+): Promise<LocationScope | undefined> {
+  if (locationId === undefined || locationId === "") return undefined;
+  if (typeof locationId !== "string" || !isLocationId(locationId)) {
+    throw new BadRequestException("El local no es válido.");
+  }
+  if (!(await deps.hasLocationFilter(tenantId))) {
+    throw new ForbiddenException({
+      code: "FEATURE_NOT_IN_PLAN",
+      message: planMessage,
+      upgradeUrl: "/dashboard/billing",
+    });
+  }
+  return deps.locationScope(tenantId, locationId);
 }
