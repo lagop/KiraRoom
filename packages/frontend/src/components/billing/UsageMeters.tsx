@@ -2,11 +2,22 @@
 
 import { useEffect, useState } from "react";
 import apiClient from "../../../lib/api";
+import { useTranslations } from "@/lib/use-translation";
 
 interface UsageBucket {
   current: number;
-  limit: number;
+  /** null (or -1 from an older backend) when the plan has no limit. */
+  limit: number | null;
   unlimited: boolean;
+}
+
+/**
+ * Unlimited when the backend says so or the limit is null / -1: the
+ * catalogue marks unlimited with null, and the backend used to check -1, so
+ * an unlimited plan printed "120 /  clientes".
+ */
+export function isUnlimitedBucket(bucket: UsageBucket): boolean {
+  return bucket.unlimited || bucket.limit === null || bucket.limit === undefined || bucket.limit < 0;
 }
 
 interface UsageResponse {
@@ -32,6 +43,7 @@ interface UsageMetersProps {
  * compact summary on the dashboard.
  */
 export function UsageMeters({ refreshKey = 0 }: UsageMetersProps) {
+  const t = useTranslations();
   const [data, setData] = useState<UsageResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -96,19 +108,22 @@ export function UsageMeters({ refreshKey = 0 }: UsageMetersProps) {
   return (
     <div className="grid gap-4 sm:grid-cols-3">
       <Meter
-        label="Clientas"
+        label={t("billing.usage.clients")}
         bucket={data.usage.clients}
-        cap="clientes"
+        cap={t("billing.usage.capClients")}
+        unlimitedLabel={t("billing.usage.unlimited")}
       />
       <Meter
-        label="Profesionales"
+        label={t("billing.usage.professionals")}
         bucket={data.usage.professionals}
-        cap="profesionales"
+        cap={t("billing.usage.capProfessionals")}
+        unlimitedLabel={t("billing.usage.unlimited")}
       />
       <Meter
-        label="Citas este mes"
+        label={t("billing.usage.appointments")}
         bucket={data.usage.appointments}
-        cap="citas"
+        cap={t("billing.usage.capAppointments")}
+        unlimitedLabel={t("billing.usage.unlimited")}
       />
     </div>
   );
@@ -118,26 +133,31 @@ function Meter({
   label,
   bucket,
   cap,
+  unlimitedLabel,
 }: {
   label: string;
   bucket: UsageBucket;
   cap: string;
+  unlimitedLabel: string;
 }) {
-  const pct = bucket.unlimited
-    ? 0
-    : Math.min(100, bucket.limit > 0 ? (bucket.current / bucket.limit) * 100 : 0);
+  const unlimited = isUnlimitedBucket(bucket);
+  const limit = bucket.limit ?? 0;
+  const pct = unlimited ? 0 : Math.min(100, limit > 0 ? (bucket.current / limit) * 100 : 0);
 
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
       <div className="flex items-center justify-between">
         <span className="text-sm font-medium text-gray-700">{label}</span>
-        {bucket.unlimited ? (
-          <span className="rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
-            Ilimitado
+        {unlimited ? (
+          <span className="flex items-center gap-2">
+            <span className="text-xs text-gray-500">{bucket.current}</span>
+            <span className="rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
+              {unlimitedLabel}
+            </span>
           </span>
         ) : (
           <span className="text-xs text-gray-500">
-            {bucket.current} / {bucket.limit} {cap}
+            {bucket.current} / {limit} {cap}
           </span>
         )}
       </div>
@@ -150,7 +170,7 @@ function Meter({
                 ? "bg-amber-500"
                 : "bg-violet-500"
           }`}
-          style={{ width: bucket.unlimited ? "100%" : `${pct}%` }}
+          style={{ width: unlimited ? "100%" : `${pct}%` }}
         />
       </div>
     </div>

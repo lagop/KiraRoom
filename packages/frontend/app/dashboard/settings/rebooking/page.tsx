@@ -6,33 +6,53 @@ import {
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
-import apiClient, { RebookingConfig, RebookingReminder } from "@/lib/api";
+import apiClient, { RebookingConfig, RebookingTenantLog } from "@/lib/api";
 import { Loader2, Save } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
+import { useToast } from "@/components/ui/use-toast";
+import { formatSalonDateTime, rebookingChannelKey, rebookingStatusKey } from "@/lib/rebooking-log";
 
 export default function RebookingSettingsPage() {
   const t = useTranslations();
   const qc = useQueryClient();
+  const { toast } = useToast();
   const config = useQuery<RebookingConfig>({
     queryKey: ["rebooking", "config"],
     queryFn: () => apiClient.getRebookingConfig(),
   });
-  const recent = useQuery<RebookingReminder[]>({
+  // The salon's latest reminders, by name (GET /rebooking/log).
+  const recent = useQuery<RebookingTenantLog>({
     queryKey: ["rebooking", "log", "tenant"],
-    queryFn: async () => {
-      return [];
-    },
+    queryFn: () => apiClient.getRebookingTenantLog(20),
   });
 
   const save = useMutation({
     mutationFn: (patch: Partial<RebookingConfig>) =>
       apiClient.updateRebookingConfig(patch),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["rebooking", "config"] }),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ["rebooking", "config"] });
+      toast({
+        title: t("rebooking.settings.saved"),
+        // A new lead time or minimum of visits reaches the clients the salon
+        // already has: their next reminder date is recomputed now.
+        description: res?.recomputing ? t("rebooking.settings.recomputing") : undefined,
+      });
+    },
+    onError: (err: unknown) =>
+      toast({
+        title: t("rebooking.settings.saveError"),
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      }),
   });
 
   const [draft, setDraft] = useState<Partial<RebookingConfig>>({});
   useEffect(() => {
-    if (config.data) setDraft(config.data);
+    if (config.data) {
+      const { recomputing: _ignored, ...stored } = config.data;
+      void _ignored;
+      setDraft(stored);
+    }
   }, [config.data]);
 
   if (config.isLoading) {
@@ -42,6 +62,9 @@ export default function RebookingSettingsPage() {
       </div>
     );
   }
+
+  const timeZone = recent.data?.timezone ?? "Europe/Madrid";
+  const items = recent.data?.items ?? [];
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -120,6 +143,7 @@ export default function RebookingSettingsPage() {
               }
               className="mt-1 block w-32 rounded-md border border-gray-300 px-3 py-2 text-sm"
             />
+            <p className="mt-1 text-xs text-gray-500">{t("rebooking.settings.recomputeHint")}</p>
           </div>
         </div>
 
@@ -138,40 +162,45 @@ export default function RebookingSettingsPage() {
             {t("rebooking.settings.save")}
           </button>
         </div>
-        {save.isSuccess && (
-          <p className="mt-2 text-right text-xs text-green-600">
-            {t("rebooking.settings.saved")}
-          </p>
-        )}
       </div>
 
       <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
         <h2 className="text-base font-semibold text-gray-900">
           {t("rebooking.settings.logTitle")}
         </h2>
-        {recent.data && recent.data.length > 0 ? (
-          <table className="mt-3 w-full text-sm">
-            <thead className="text-xs text-gray-500">
-              <tr>
-                <th className="text-left">Cliente</th>
-                <th className="text-left">Servicio</th>
-                <th className="text-left">Estado</th>
-                <th className="text-left">Enviado</th>
-              </tr>
-            </thead>
-            <tbody>
-              {recent.data.map((r) => (
-                <tr key={r.id} className="border-t border-gray-100">
-                  <td>{r.clientId}</td>
-                  <td>{r.serviceId ?? "—"}</td>
-                  <td>{t(`rebooking.status.${r.status}`)}</td>
-                  <td>{r.sentAt ?? "—"}</td>
+        {recent.isLoading ? (
+          <Loader2 className="mt-3 h-4 w-4 animate-spin text-gray-400" />
+        ) : recent.isError ? (
+          <p className="mt-3 text-sm text-red-600">{t("rebooking.settings.logError")}</p>
+        ) : items.length > 0 ? (
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full min-w-[520px] text-sm">
+              <thead className="text-left text-xs text-gray-500">
+                <tr>
+                  <th className="py-1 pr-2 font-medium">{t("rebooking.settings.logClient")}</th>
+                  <th className="py-1 pr-2 font-medium">{t("rebooking.settings.logService")}</th>
+                  <th className="py-1 pr-2 font-medium">{t("rebooking.settings.logDate")}</th>
+                  <th className="py-1 pr-2 font-medium">{t("rebooking.settings.logChannel")}</th>
+                  <th className="py-1 font-medium">{t("rebooking.settings.logStatus")}</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {items.map((r) => (
+                  <tr key={r.id} className="border-t border-gray-100">
+                    <td className="py-1.5 pr-2">{r.clientName ?? "—"}</td>
+                    <td className="py-1.5 pr-2">{r.serviceName ?? "—"}</td>
+                    <td className="whitespace-nowrap py-1.5 pr-2 text-xs text-gray-600">
+                      {formatSalonDateTime(r.sentAt ?? r.scheduledAt, timeZone)}
+                    </td>
+                    <td className="py-1.5 pr-2 text-xs">{t(rebookingChannelKey(r.channel))}</td>
+                    <td className="py-1.5 text-xs">{t(rebookingStatusKey(r.status))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         ) : (
-          <p className="mt-3 text-sm text-gray-500">—</p>
+          <p className="mt-3 text-sm text-gray-500">{t("rebooking.settings.logEmpty")}</p>
         )}
       </div>
     </div>

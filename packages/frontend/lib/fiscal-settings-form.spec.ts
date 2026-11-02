@@ -7,7 +7,7 @@
  * The page used to load the razón social and the ID type empty and send the
  * whole form on every save, so it erased the stored razón social.
  */
-import { changedFiscalFields, issuerFieldsFromSettings } from "./fiscal-settings-form";
+import { changedFiscalFields, fiscalChangeSummary, issuerFieldsFromSettings } from "./fiscal-settings-form";
 
 let pass = 0;
 let fail = 0;
@@ -72,6 +72,40 @@ check(
   "a salon without a razón social that does not type one sends nothing",
   changedFiscalFields({ ...loaded, legalName: "", pricesIncludeTax: true }, { ...loaded, legalName: "" }),
   { pricesIncludeTax: true },
+);
+
+// The confirmation before risky fiscal changes (C12).
+const risk = { tenantNif: "B12345674", defaultSeries: "A", defaultTaxRate: 21, taxRegime: "iva" as const, pricesIncludeTax: true };
+check("no risky change: no dialog", fiscalChangeSummary({ ...risk }, risk), []);
+check("the rate alone does not ask", fiscalChangeSummary({ ...risk, defaultTaxRate: 10 }, risk), []);
+check(
+  "a new NIF and series say what the new invoices carry",
+  fiscalChangeSummary({ ...risk, tenantNif: "12345678z", defaultSeries: "b" }, risk).map((l) => [l.key, l.params]),
+  [
+    ["invoices.fiscalSettings.confirmTaxId", { taxId: "12345678Z" }],
+    ["invoices.fiscalSettings.confirmSeries", { series: "B" }],
+  ],
+);
+check(
+  "switching to tax on top: 30,00 € now costs 36,30 €",
+  fiscalChangeSummary({ ...risk, pricesIncludeTax: false }, risk),
+  [
+    {
+      key: "invoices.fiscalSettings.confirmPrices",
+      params: { price: "30,00 €", before: "30,00 €", after: "36,30 €", tax: "IVA" },
+    },
+  ],
+);
+check(
+  "to IGIC at 9,5 % with tax on top: regime and price lines",
+  fiscalChangeSummary(
+    { ...risk, taxRegime: "igic", defaultTaxRate: 9.5, pricesIncludeTax: false },
+    { ...risk, pricesIncludeTax: false },
+  ).map((l) => l.params),
+  [
+    { tax: "IGIC", previous: "IVA", rate: "9,5" },
+    { price: "30,00 €", before: "36,30 €", after: "32,85 €", tax: "IGIC" },
+  ],
 );
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -354,13 +354,21 @@ export class InvoicesController {
     @Req() req: AuthedRequest,
     @Body() body: UploadCertificateDto,
   ) {
-    return this.certs.saveCertificate({
-      tenantId: this.requireTenantId(req),
-      alias: body.alias,
-      provider: body.provider,
-      pkcs12Base64: body.pkcs12Base64,
-      passphrase: body.passphrase,
-    });
+    try {
+      return await this.certs.saveCertificate({
+        tenantId: this.requireTenantId(req),
+        alias: body.alias,
+        provider: body.provider,
+        pkcs12Base64: body.pkcs12Base64,
+        passphrase: body.passphrase,
+      });
+    } catch (err) {
+      // A file that is not a PKCS#12 bundle answered a bare 500.
+      this.logger.warn(`Certificate upload refused: ${(err as Error).message}`);
+      throw new BadRequestException(
+        "No se pudo leer el certificado. Sube el archivo .p12 o .pfx que te dio la FNMT (o tu proveedor) y comprueba la contraseña.",
+      );
+    }
   }
 
   @Patch("certificates/:id/deactivate")

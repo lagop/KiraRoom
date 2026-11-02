@@ -93,9 +93,11 @@ export function StripeSettingsContent() {
       loadStripeSettings();
     } catch (error) {
       console.error('Error saving Stripe settings:', error);
+      // The backend says what is wrong (a secret key that does not start
+      // with sk_live_, a wrong publishable key...): show it.
       toast({
-        title: 'Error',
-        description: 'No se pudieron guardar los ajustes de Stripe',
+        title: 'No se pudieron guardar los ajustes de Stripe',
+        description: error instanceof Error && error.message ? error.message : undefined,
         variant: 'destructive',
       });
     } finally {
