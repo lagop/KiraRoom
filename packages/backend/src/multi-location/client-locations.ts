@@ -12,6 +12,12 @@
  * least one active professional assigned to it. A second location created in
  * the panel but with nobody assigned yet does not turn the booking page into
  * a two-step form whose second option has nobody to book.
+ *
+ * And only while the salon has the multi-location feature (Empresa). After a
+ * downgrade the panel can no longer edit its locations, so clients are not
+ * offered them either: the salon books as a one-location salon again, at its
+ * own address (Datos del salón). Appointments already booked at a location
+ * keep it, and their notices still name it (bookingPlace).
  */
 
 export interface ClientLocationRow {
@@ -36,6 +42,11 @@ export interface LocationLinkRow {
   isPrimary: boolean;
 }
 
+/** Whether the salon has the multi-location feature (FeatureFlagService fits). */
+export interface MultiLocationGate {
+  isFeatureUnlocked(tenantId: string, key: "multi_location"): Promise<boolean>;
+}
+
 /** The part of a Prisma client these helpers read. */
 export interface ClientLocationsDb {
   location: { findMany(args: any): Promise<any[]> };
@@ -58,11 +69,18 @@ export const CLIENT_LOCATION_SELECT = {
  * an active professional, in name order -- or none at all when there are
  * fewer than two (one location is no choice). `links` are the professionals'
  * links to those locations, for "where does this professional work".
+ *
+ * None either when the salon no longer has the multi-location feature, or
+ * when `gate` is missing or cannot answer: booking without a location step
+ * beats offering locations the salon can no longer manage.
  */
 export async function clientLocations(
   db: ClientLocationsDb,
   tenantId: string,
+  gate: MultiLocationGate | null | undefined,
 ): Promise<{ locations: ClientLocation[]; links: LocationLinkRow[] }> {
+  const multiLocation = gate ? await gate.isFeatureUnlocked(tenantId, "multi_location").catch(() => false) : false;
+  if (!multiLocation) return { locations: [], links: [] };
   const [rows, allLinks] = await Promise.all([
     db.location.findMany({
       where: { tenantId, isActive: true },

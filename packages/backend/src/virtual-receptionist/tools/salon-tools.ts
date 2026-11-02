@@ -4,7 +4,7 @@ import { AppointmentsService } from '../../appointments/appointments.service';
 import { confirmAppointment, notBookableOnline, proposeAppointment } from './receptionist-booking';
 import { resolveIds } from './resolve-ids';
 import { locationOption, resolveLocation, salonPlaces } from './receptionist-locations';
-import { professionalLocationsOf } from '../../multi-location/client-locations';
+import { MultiLocationGate, professionalLocationsOf } from '../../multi-location/client-locations';
 import { clientPrices, clientPriceText, priceNote } from './client-prices';
 import { taxIncludedNote } from '../../common/public-price';
 import { dayBlocks, salonClosedOn } from '../../time-off/time-off-rules';
@@ -28,6 +28,8 @@ export interface SalonToolContext {
   prisma: PrismaService;
   tenantId: string;
   appointmentsService?: AppointmentsService;
+  /** Whether the salon still has multi-location (receptionist-locations.ts); without it, no location step. */
+  featureFlags?: MultiLocationGate;
   /** The conversation the tools run in; booking needs it. */
   conversation?: {
     id: string;

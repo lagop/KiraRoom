@@ -21,7 +21,7 @@ Para cualquier consulta relativa al tratamiento de datos, puede escribir a `priv
 Para prestar el servicio de gestión de citas y facturación, recabamos:
 
 - **Datos de la cuenta del salón**: nombre del negocio, dirección fiscal, NIF/CIF, email del propietario, contraseña (almacenada con hash + sal), teléfono de contacto.
-- **Datos de clientes finales**: nombre, apellidos, email, teléfono, NIF (opcional), historial de citas y compras, consentimientos firmados (RGPD + LSSI).
+- **Datos de clientes finales**: nombre, apellidos, email, teléfono, NIF (opcional), historial de citas y compras, consentimientos registrados (RGPD + LSSI).
 - **Datos de facturación**: importes, fechas, NIF del receptor, número de serie de facturas. Conservados durante **4 años** conforme al Art. 66 del Reglamento General Tributario.
 - **Datos fiscales remitidos a la AEAT**: facturas enviadas al sistema Verifactu o TicketBAI con su NIF, importe y hash de firma. Conservados mientras esté vigente la obligación fiscal.
 

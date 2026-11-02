@@ -62,9 +62,10 @@ export class PublicSiteService {
         state: true,
         postalCode: true,
         country: true,
-        currency: true,
         timezone: true,
         language: true,
+        // The salon's own words, shown next to its hours (informational).
+        cancellationPolicy: true,
         // Read into openingHours/openingShifts below, never sent as stored.
         openingHours: true,
         // Read for the prices (common/public-price.ts), never sent.
@@ -131,7 +132,8 @@ export class PublicSiteService {
       salonWhatsAppConnected(this.prisma, tenant.id),
       // Two or more locations someone can be booked at: the client picks one
       // (multi-location/client-locations.ts). None for every other salon.
-      clientLocations(this.prisma as any, tenant.id),
+      // ...and only while it has the multi-location feature (Empresa).
+      clientLocations(this.prisma as any, tenant.id, this.featureFlags),
       salonOffersWhatsAppPromotions(this.prisma, this.featureFlags, tenant.id),
     ]);
     const horizonDay = horizon.toISOString().slice(0, 10);
@@ -169,8 +171,13 @@ export class PublicSiteService {
         postalCode: tenant.postalCode,
         country: tenant.country,
       },
-      currency: tenant.currency,
+      // Euros: the till, invoices, deposits and Stripe charge in euros, and
+      // the Moneda setting is gone (a salon that picked another one had its
+      // prices relabelled but still charged in euros).
+      currency: "EUR",
       timezone: tenant.timezone,
+      // Informational: nothing charges a fee or stops a cancellation.
+      cancellationPolicy: tenant.cancellationPolicy?.trim() || null,
       language: tenant.language,
       updatedAt: tenant.updatedAt,
       // The final price, tax included, whichever way the salon writes its

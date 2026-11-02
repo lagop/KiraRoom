@@ -1,6 +1,9 @@
 import { NotFoundException } from "@nestjs/common";
 import { PublicSiteService } from "./public-site.service";
 
+// Empresa: the multi-location feature only (client-locations.ts asks).
+const EMPRESA: any = { isFeatureUnlocked: async (_t: string, key: string) => key === "multi_location", isEnabled: async (_t: string, key: string) => key === "multi_location" };
+
 /**
  * The data behind a salon's server-rendered public page, its sitemap entry
  * and its custom-domain lookup. All three are anonymous endpoints.
@@ -119,7 +122,7 @@ function makeService({
     servingEnabled: () => tlsReady,
     liveSubdomain: (slug: string) => (subdomains ? `${slug}.kiraroom.net` : null),
   };
-  return { svc: new PublicSiteService(prisma as any, webDomain as any), prisma };
+  return { svc: new PublicSiteService(prisma as any, webDomain as any, EMPRESA), prisma };
 }
 
 describe("PublicSiteService.getPage", () => {

@@ -735,6 +735,8 @@
     "subtitle": "Gestiona los locales de tu negocio (plan Empresa).",
     "add": "Añadir local",
     "loading": "Cargando locales...",
+    "loadError": "No se pudieron cargar los locales",
+    "downgraded": "Tu plan ya no incluye varios locales. Tus clientes ya no eligen local al reservar (en tu página, el widget y la recepcionista virtual): reservan en el salón, con la dirección de Datos del salón. Las citas ya reservadas en un local lo conservan. Puedes cerrar los locales que ya no uses; para editarlos o abrir otros, vuelve al plan Empresa.",
     "empty": {
       "title": "Aún no tienes locales",
       "desc": "Crea tu primer local. El plan Empresa funciona desde 1 local; añade más cuando abras otro."
@@ -1911,7 +1913,8 @@
     "time_off_requests": "Solicitudes de ausencia",
     "account": "Tu cuenta",
     "pos_products": "Productos",
-    "multi_location": "Multi-local"
+    "multi_location": "Multi-local",
+    "calendar_feeds": "Calendarios"
   },
   "Failed to add points": "Failed to add points",
   "Failed to create professional": {
@@ -2729,7 +2732,8 @@
     "showLess": "Ver menos",
     "yearsExperience": "años de experiencia",
     "languages": "Idiomas:",
-    "portfolioWork": "Trabajo {n}"
+    "portfolioWork": "Trabajo {n}",
+    "cancellationPolicy": "Cancelaciones"
   },
   "platform_llm": {
     "title": "Proveedor de IA del chatbot",

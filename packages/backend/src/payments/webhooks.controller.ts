@@ -609,7 +609,6 @@ export class WebhooksController {
         select: {
           id: true,
           name: true,
-          currency: true,
           subscriptionStatus: true,
           paymentFailedAt: true } });
       if (!tenant) {
@@ -679,7 +678,8 @@ export class WebhooksController {
         to: owner.email,
         tenantName: tenant.name,
         amount: amountDue,
-        currency: tenant.currency || invoice.currency || "EUR",
+        // The Stripe invoice's own currency, not the salon's old Moneda setting.
+        currency: (invoice.currency || "eur").toUpperCase(),
         retryDate,
         updatePaymentUrl: `${baseUrl.replace(/\/+$/, "")}/dashboard/billing` });
     } catch (err) {
