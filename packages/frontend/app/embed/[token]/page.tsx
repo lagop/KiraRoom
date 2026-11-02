@@ -9,8 +9,9 @@ import {
   User as UserIcon,
   Check,
   AlertCircle,
+  MapPin,
 } from "lucide-react";
-import { formatPrice } from "@/lib/salon-seo";
+import { formatPrice, type PublicSalonLocation } from "@/lib/salon-seo";
 import {
   BOOKING_CHOICE_TEXT,
   bookingErrorMessage,
@@ -18,6 +19,17 @@ import {
   privacyPolicyUrl,
   whatsappPromotionsLabel,
 } from "@/lib/public-booking";
+import {
+  bookingLocations,
+  choiceAtLocation,
+  chosenLocation,
+  confirmedPlace,
+  locationForProfessional,
+  locationFromQuery,
+  locationReady,
+  professionalsAtLocation,
+  servicesAtLocation,
+} from "@/lib/public-booking-locations";
 
 interface WidgetConfig {
   tenant: {
@@ -60,7 +72,18 @@ interface WidgetConfig {
     bio?: string;
     profileImage?: string;
     specialties: any;
+    /** Which services they do (absent from older servers). */
+    services?: Array<{ serviceId: string }>;
+    /** Where they work, when the salon has locations to pick from. */
+    locationIds?: string[];
+    primaryLocationId?: string | null;
   }>;
+  /**
+   * Two or more locations to book at (multi-local), as on the public booking
+   * page: the client picks one, or it follows from the professional. Empty
+   * or absent for a salon with one location: no location step.
+   */
+  locations?: PublicSalonLocation[];
   /**
    * The salon has its WhatsApp number connected: the form offers
    * "Recibir los avisos de mi cita por WhatsApp". Absent from older servers.
@@ -89,6 +112,8 @@ export default function EmbedWidgetPage() {
   const [step, setStep] = useState<"select" | "details" | "done">("select");
   const [serviceId, setServiceId] = useState("");
   const [professionalId, setProfessionalId] = useState("");
+  // One of the salon's locations, when it has several (lib/public-booking-locations.ts).
+  const [locationId, setLocationId] = useState("");
   const [date, setDate] = useState("");
   const [slots, setSlots] = useState<Slot[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
@@ -108,6 +133,8 @@ export default function EmbedWidgetPage() {
   const [wantsWhatsAppPromotions, setWantsWhatsAppPromotions] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [bookingId, setBookingId] = useState<string | null>(null);
+  // Where the server booked it (POST /appointments answers with the location).
+  const [bookedPlace, setBookedPlace] = useState<{ name: string; address: string } | null>(null);
   const [bookingError, setBookingError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -117,9 +144,17 @@ export default function EmbedWidgetPage() {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
       })
-      .then(setConfig)
+      .then((data: WidgetConfig) => {
+        setConfig(data);
+        // ?locationId=<id> or ?location=<slug> on the embed URL: that location.
+        const linked = locationFromQuery(new URLSearchParams(window.location.search), bookingLocations(data));
+        if (linked) setLocationId(linked);
+      })
       .catch((err) => setError(err.message ?? "No se pudo cargar"));
   }, [token]);
+
+  // The locations to choose from: none unless the salon has two or more.
+  const locations = config ? bookingLocations(config) : [];
 
   useEffect(() => {
     setToday(localDateString());
@@ -129,11 +164,11 @@ export default function EmbedWidgetPage() {
   // changing any of them drops it, or the old time went out with the new ones.
   useEffect(() => {
     setTime("");
-  }, [serviceId, professionalId, date]);
+  }, [serviceId, professionalId, date, locationId]);
 
   useEffect(() => {
     setSlots([]);
-    if (!config || !serviceId || !date) {
+    if (!config || !serviceId || !date || !locationReady(bookingLocations(config), locationId)) {
       setSlotsLoading(false);
       return;
     }
@@ -148,6 +183,8 @@ export default function EmbedWidgetPage() {
       ),
     });
     if (professionalId) params.append("professionalId", professionalId);
+    // At that location (multi-local): only the times of who works there.
+    if (locationId) params.append("locationId", locationId);
     fetch(`${API}/appointments/available-slots?${params.toString()}`)
       .then(async (r) => (r.ok ? r.json() : []))
       .then((data: Slot[]) => {
@@ -166,7 +203,7 @@ export default function EmbedWidgetPage() {
     return () => {
       cancelled = true;
     };
-  }, [config, serviceId, professionalId, date, slotsRefresh]);
+  }, [config, serviceId, professionalId, date, locationId, slotsRefresh]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -185,6 +222,8 @@ export default function EmbedWidgetPage() {
         notes: notes || undefined,
         source: "widget",
         widgetInstanceId: config.widget.id,
+        // The location she picked, when the salon has several.
+        ...(locationId ? { locationId } : {}),
         // The phone is required (the salon's way to reach the client about a
         // change); the email is optional.
         clientInfo: { firstName, lastName, phone, email: email.trim() || undefined },
@@ -205,6 +244,7 @@ export default function EmbedWidgetPage() {
       }
       const appt = await res.json();
       setBookingId(appt.id);
+      setBookedPlace(confirmedPlace(bookingLocations(config), locationId, appt));
       setStep("done");
     } catch (err: any) {
       setBookingError(err.message || "No se pudo reservar la cita. Inténtalo de nuevo.");
@@ -238,6 +278,17 @@ export default function EmbedWidgetPage() {
   }
 
   const selectedService = config.services.find((s) => s.id === serviceId);
+  // With a location step: only what can be booked at the chosen location
+  // (before one is chosen, every service and whoever works at any of them).
+  const servicesHere = servicesAtLocation(config.services, config.professionals, locations, locationId);
+  const professionalsHere = professionalsAtLocation(config.professionals, locations, locationId);
+  const locationHere = chosenLocation(locations, locationId);
+  const pickLocation = (id: string) => {
+    setLocationId(id);
+    const kept = choiceAtLocation({ serviceId, professionalId }, config.services, config.professionals, locations, id);
+    setServiceId(kept.serviceId);
+    setProfessionalId(kept.professionalId);
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 to-white">
@@ -258,12 +309,37 @@ export default function EmbedWidgetPage() {
       <main className="max-w-3xl mx-auto p-6">
         {step === "select" && (
           <div className="space-y-6">
+            {locations.length > 0 && (
+              <div data-test="widget-location-step">
+                <h2 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                  <MapPin className="w-4 h-4 text-purple-600" /> Local
+                </h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {locations.map((l) => (
+                    <button
+                      key={l.id}
+                      type="button"
+                      aria-pressed={locationId === l.id}
+                      onClick={() => pickLocation(l.id)}
+                      className={`text-left p-4 border rounded-lg transition ${
+                        locationId === l.id
+                          ? "border-purple-500 bg-purple-50"
+                          : "border-gray-200 hover:border-purple-300"
+                      }`}
+                    >
+                      <div className="font-medium text-gray-900">{l.name}</div>
+                      {l.address && <div className="text-xs text-gray-500 mt-1">{l.address}</div>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <div>
               <h2 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
                 <Scissors className="w-4 h-4 text-purple-600" /> Servicio
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {config.services.map((s) => (
+                {servicesHere.map((s) => (
                   <button
                     key={s.id}
                     onClick={() => setServiceId(s.id)}
@@ -313,10 +389,14 @@ export default function EmbedWidgetPage() {
                 >
                   Cualquiera
                 </button>
-                {config.professionals.map((p) => (
+                {professionalsHere.map((p) => (
                   <button
                     key={p.id}
-                    onClick={() => setProfessionalId(p.id)}
+                    onClick={() => {
+                      setProfessionalId(p.id);
+                      // No location chosen yet: hers (her main one when she works at several).
+                      setLocationId((current) => locationForProfessional(p, locations, current));
+                    }}
                     className={`p-3 border rounded-lg text-sm transition ${
                       professionalId === p.id
                         ? "border-purple-500 bg-purple-50"
@@ -329,7 +409,12 @@ export default function EmbedWidgetPage() {
               </div>
             </div>
 
-            {serviceId && (
+            {serviceId && !locationReady(locations, locationId) && (
+              <p className="text-sm text-gray-500" aria-live="polite">
+                Elige el local para ver las horas libres.
+              </p>
+            )}
+            {serviceId && locationReady(locations, locationId) && (
               <div>
                 <h2 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
                   <Calendar className="w-4 h-4 text-purple-600" /> Fecha y hora
@@ -377,6 +462,7 @@ export default function EmbedWidgetPage() {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 text-sm">
               <strong>{selectedService?.name}</strong> · {time || "--:--"} · {date}
+              {locationHere && ` · ${locationHere.name}`}
             </div>
             {!time && (
               <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
@@ -505,6 +591,12 @@ export default function EmbedWidgetPage() {
                 ? "Te enviaremos un email de confirmación. Si el salón requiere firma de consentimiento, te llegará un enlace en los próximos minutos."
                 : "El salón te contactará en tu teléfono si hay algún cambio."}
             </p>
+            {bookedPlace && (
+              <p data-test="widget-booked-at" className="text-sm text-gray-700">
+                En {bookedPlace.name}
+                {bookedPlace.address ? ` · ${bookedPlace.address}` : ""}
+              </p>
+            )}
             {bookingId && (
               <p className="text-xs text-gray-400">Ref: {bookingId.slice(0, 8)}</p>
             )}

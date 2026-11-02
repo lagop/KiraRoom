@@ -1946,7 +1946,7 @@
     "export_period": "Period: {period}",
     "export_appointments": "Appointments of the period (CSV)",
     "export_payments": "Payments charged in the period (CSV)",
-    "export_whole_salon": "Exports include every location.",
+    "export_location": "{name} only: its appointments and the payments of those appointments. Till sales with no appointment cannot be placed at a location and are left out.",
     "export_error": "Could not export",
     "rates": "Rates",
     "rates_note": "Over appointments closed up to yesterday",

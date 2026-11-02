@@ -6,6 +6,7 @@ import { PaymentsService } from "../payments/payments.service";
 import { LoyaltyService } from "./loyalty.service";
 import { InvoiceService } from "../invoices/invoices.service";
 import { InvoiceCalculator } from "../invoices/invoice-calculator.service";
+import { returnGiftIfSaleRefundedIn } from "../pos/pos-loyalty-gift";
 
 /**
  * L2: points that expire, balances that go negative and rewards handed
@@ -19,6 +20,8 @@ import { InvoiceCalculator } from "../invoices/invoice-calculator.service";
  *     pays it off.
  *   - A product reward leaves a zero-price line and a stock movement
  *     ("regalo fidelidad"); "otro regalo" a zero line and no movement.
+ *   - The whole sale refunded: the gift goes back to stock once
+ *     ("devolución regalo fidelidad") and its points come back.
  *   - The receipt tells her the points earned, her balance and the rule.
  *
  * Skipped when no database is reachable, so `npm test` stays green on a
@@ -278,6 +281,48 @@ describe("a negative balance and rewards handed over at the till (L2, real datab
     } as any);
     expect(await points(dora)).toBe(17);
   }, 90_000);
+
+  it("the whole sale with a product gift refunded: the gift back in stock once, its points back", async () => {
+    if (!reachable) return;
+    const gema = await client("Gema");
+    await loyalty.enroll(tenantId, gema, "staff");
+    await db.loyaltyMember.updateMany({ where: { clientId: gema }, data: { currentPoints: 40 } });
+    const reward = await loyalty.createReward(tenantId, {
+      name: "Champú de regalo (devolución)",
+      type: "product",
+      pointsCost: 25,
+      productId: giftProductId,
+    } as any);
+    const stock = async () => (await db.product.findUnique({ where: { id: giftProductId } })).quantity as number;
+    const before = await stock();
+    const sale: any = await pos.processCheckout({
+      tenantId,
+      actor: OWNER,
+      clientId: gema,
+      items: [{ productId, quantity: 1 }],
+      loyaltyRewardId: reward.id,
+      payments: [{ method: "card", amount: 1200 }],
+    } as any);
+    expect(await stock()).toBe(before - 1);
+    expect(await points(gema)).toBe(40 - 25 + 12);
+
+    const row = (await db.payment.findMany({ where: { tenantId, metadata: { path: ["posSaleId"], equals: sale.saleId } } }))[0];
+    await payments.refundPayment(tenantId, row.id, { reason: "No le gustó" } as any, OWNER.id);
+    expect(await stock()).toBe(before);
+    const back = await db.inventoryTransaction.findMany({
+      where: { tenantId, productId: giftProductId, reason: "devolución regalo fidelidad", notes: `Venta ${sale.saleId}` },
+    });
+    expect(back).toHaveLength(1);
+    expect(back[0]).toMatchObject({ type: "adjustment", quantity: 1, previousQty: before - 1, newQty: before });
+    // The points spent on the gift came back with it, and the purchase earns nothing any more.
+    expect(await points(gema)).toBe(40);
+    const giftLine = await db.posSaleLine.findFirst({ where: { saleId: sale.saleId, kind: "loyalty_gift" } });
+    expect(giftLine.refundedQuantity).toBe(1);
+
+    // Run again (a retry): nothing more.
+    expect(await returnGiftIfSaleRefundedIn(db, tenantId, sale.saleId)).toBe(0);
+    expect(await stock()).toBe(before);
+  }, 60_000);
 
   it("«otro regalo»: a zero line with its description and no stock movement", async () => {
     if (!reachable) return;

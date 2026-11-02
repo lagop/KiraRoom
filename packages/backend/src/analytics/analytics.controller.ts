@@ -1,7 +1,6 @@
 import {
   BadRequestException,
   Controller,
-  ForbiddenException,
   Get,
   Query,
   Req,
@@ -21,7 +20,7 @@ import { Request } from "express";
 import { FeatureGuard } from "../common/guards/feature.guard";
 import { Feature } from "../common/decorators/feature.decorator";
 import { PeriodWindow, RANGE_KEYS, parseRangeKey, rangePeriod } from "./analytics-metrics";
-import { LocationScope, isLocationId } from "./analytics-location";
+import { LocationScope, requestedLocationScope } from "./analytics-location";
 
 const RANGE_MESSAGE = `El período no es válido. Usa uno de: ${RANGE_KEYS.join(", ")}.`;
 const RANGE_DESCRIPTION = `A named period of the salon calendar (${RANGE_KEYS.join(", ")}), cut to the plan's months. Takes precedence over months.`;
@@ -89,18 +88,16 @@ export class AnalyticsController {
    * a malformed id, a 403 when the plan has no per-location reports, a 404
    * when the location is not this salon's.
    */
-  private async scope(request: AuthenticatedRequest, locationId: string | undefined): Promise<LocationScope | undefined> {
-    if (locationId === undefined || locationId === "") return undefined;
-    if (!isLocationId(locationId)) throw new BadRequestException("El local no es válido.");
-    const tenantId = request.user.tenantId;
-    if (!(await this.analyticsFlagsService.hasLocationFilter(tenantId))) {
-      throw new ForbiddenException({
-        code: "FEATURE_NOT_IN_PLAN",
-        message: "Ver la analítica por local está disponible en el plan Empresa.",
-        upgradeUrl: "/dashboard/billing",
-      });
-    }
-    return this.analyticsService.locationScope(tenantId, locationId);
+  private scope(request: AuthenticatedRequest, locationId: string | undefined): Promise<LocationScope | undefined> {
+    return requestedLocationScope(
+      request.user.tenantId,
+      locationId,
+      {
+        hasLocationFilter: (t) => this.analyticsFlagsService.hasLocationFilter(t),
+        locationScope: (t, id) => this.analyticsService.locationScope(t, id),
+      },
+      "Ver la analítica por local está disponible en el plan Empresa.",
+    );
   }
 
   @Get("features")

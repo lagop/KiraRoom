@@ -1993,7 +1993,7 @@ export interface ApiClientInterface {
   getPaymentByAppointment(appointmentId: string): Promise<Payment[]>;
   getPaymentByClient(clientId: string): Promise<Payment[]>;
   getPaymentSummary(filters?: PaymentFilters): Promise<PaymentSummary>;
-  downloadPaymentsCsv(filters?: PaymentFilters): Promise<{ blob: Blob; filename: string }>;
+  downloadPaymentsCsv(filters?: PaymentFilters & { locationId?: string | null }): Promise<{ blob: Blob; filename: string }>;
   // Stripe Settings
   getStripeSettings(): Promise<StripeSettings>;
   updateStripeSettings(
@@ -3809,8 +3809,13 @@ class ApiClient implements ApiClientInterface {
    * inclusive. A file download needs the bearer token, so it cannot be a
    * plain link.
    */
-  async downloadAppointmentsCsv(dateFrom: string, dateTo: string): Promise<{ blob: Blob; filename: string }> {
-    const qs = new URLSearchParams({ dateFrom, dateTo });
+  /** `locationId` (Empresa): only that location's appointments. */
+  async downloadAppointmentsCsv(
+    dateFrom: string,
+    dateTo: string,
+    locationId?: string | null,
+  ): Promise<{ blob: Blob; filename: string }> {
+    const qs = new URLSearchParams({ dateFrom, dateTo, ...(locationId ? { locationId } : {}) });
     return this.downloadWithToken(
       `${API_BASE_URL}/exports/appointments.csv?${qs}`,
       `citas_${dateFrom}_${dateTo}.csv`,
@@ -3916,7 +3921,10 @@ class ApiClient implements ApiClientInterface {
    * The Pagos list as a CSV (owner/admin), with the page's filters. A file
    * download needs the bearer token, so it cannot be a plain link.
    */
-  async downloadPaymentsCsv(filters: PaymentFilters = {}): Promise<{ blob: Blob; filename: string }> {
+  /** `locationId` (Empresa): only the payments of that location's appointments. */
+  async downloadPaymentsCsv(
+    filters: PaymentFilters & { locationId?: string | null } = {},
+  ): Promise<{ blob: Blob; filename: string }> {
     const query = paymentQuery(filters);
     const url = `${API_BASE_URL}/exports/payments.csv${query ? `?${query}` : ""}`;
     const get = () => {

@@ -1946,7 +1946,7 @@
     "export_period": "Período: {period}",
     "export_appointments": "Citas del período (CSV)",
     "export_payments": "Pagos cobrados en el período (CSV)",
-    "export_whole_salon": "Las exportaciones incluyen todos los locales.",
+    "export_location": "Solo de {name}: sus citas y los cobros de esas citas. Las ventas en caja sin cita no se pueden asignar a un local y no se incluyen.",
     "export_error": "No se ha podido exportar",
     "rates": "Tasas",
     "rates_note": "Sobre citas cerradas hasta ayer",
