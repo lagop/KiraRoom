@@ -281,3 +281,45 @@ describe("the candidate slot grid", () => {
     expect(slots).toHaveLength(22);
   });
 });
+
+/**
+ * The wait list is offered a cancelled appointment's slot only when it can
+ * be booked again (wait-list.service.ts onAppointmentCancelled). Cancelling
+ * the visits of a professional who has just been given time off, or of a day
+ * the salon closes, used to message the waiting clients about slots the
+ * booking page then did not have.
+ */
+describe("freedSlotBookable (the wait list's check)", () => {
+  const day = new Date(`${MONDAY}T00:00:00.000Z`);
+  const vacation: Row = { professionalId: ANA, kind: "vacation", startDate: MONDAY, endDate: MONDAY };
+
+  it("a free slot is bookable, an approved absence's is not", async () => {
+    const free = build({ professionals: [{ id: ANA, workingHours: MON_10_TO_14 }] });
+    expect(await free.svc.freedSlotBookable(TENANT_ID, day, ANA, SERVICE_ID, "10:00", 60)).toBe(true);
+    const away = build({ professionals: [{ id: ANA, workingHours: MON_10_TO_14 }], timeOff: [vacation] });
+    expect(await away.svc.freedSlotBookable(TENANT_ID, day, ANA, SERVICE_ID, "10:00", 60)).toBe(false);
+    const hours = build({
+      professionals: [{ id: ANA, workingHours: MON_10_TO_14 }],
+      timeOff: [{ ...vacation, kind: "other", startTime: "10:00", endTime: "12:00" }],
+    });
+    expect(await hours.svc.freedSlotBookable(TENANT_ID, day, ANA, SERVICE_ID, "10:00", 60)).toBe(false);
+    expect(await hours.svc.freedSlotBookable(TENANT_ID, day, ANA, SERVICE_ID, "12:00", 60)).toBe(true);
+  });
+
+  it("a closure blocks it for everybody", async () => {
+    const { svc } = build({ professionals: [{ id: ANA }, { id: BEA }], timeOff: [closure()] });
+    expect(await svc.freedSlotBookable(TENANT_ID, day, null, SERVICE_ID, "10:00", 60)).toBe(false);
+  });
+
+  it("for anybody, one free professional is enough", async () => {
+    const { svc } = build({ professionals: [{ id: ANA }, { id: BEA }], timeOff: [vacation] });
+    expect(await svc.freedSlotBookable(TENANT_ID, day, null, SERVICE_ID, "10:00", 60)).toBe(true);
+  });
+
+  it("an appointment off the slot grid counts when a free start falls inside its time", async () => {
+    const { svc } = build({ professionals: [{ id: ANA, workingHours: MON_10_TO_14 }] });
+    expect(await svc.freedSlotBookable(TENANT_ID, day, ANA, SERVICE_ID, "10:10", 60)).toBe(true);
+    // 13:10 for 10 minutes holds no grid start, and 13:30 for an hour runs past 14:00.
+    expect(await svc.freedSlotBookable(TENANT_ID, day, ANA, SERVICE_ID, "13:10", 10)).toBe(false);
+  });
+});

@@ -2015,6 +2015,7 @@ export class AppointmentsService {
       cancelled.tenant?.timezone || "Europe/Madrid",
     );
     if (startsAt.getTime() <= Date.now()) return;
+    const time = clockOf(cancelled.scheduledTime ?? "", cancelled.tenant?.timezone || "Europe/Madrid");
     this.waitListService
       .onAppointmentCancelled({
         tenantId: cancelled.tenantId,
@@ -2022,12 +2023,56 @@ export class AppointmentsService {
         professionalId: cancelled.professionalId,
         date: cancelled.scheduledDate,
         time: cancelled.scheduledTime,
+        // Time off or a closure may be why it was cancelled: then the slot is
+        // not free, and nobody on the wait list is offered it.
+        slotBookable: (professionalId) =>
+          this.freedSlotBookable(
+            cancelled.tenantId,
+            cancelled.scheduledDate,
+            professionalId,
+            cancelled.serviceId,
+            time,
+            Number(cancelled.duration) || 0,
+          ),
       })
       .catch((err) =>
         this.logger.warn(
           `wait-list notification failed for cancelled appointment ${cancelled.id}: ${err.message}`,
         ),
       );
+  }
+
+  /**
+   * Whether a freed slot can be booked again -- by `professionalId`, or with
+   * null by anybody who offers the service -- with the booking pages' own
+   * availability (getAvailableSlots: shifts, the salon's hours, time off,
+   * closures, the rest of the agenda). An appointment that started off the
+   * slot grid (10:10) counts as bookable when a free start falls inside the
+   * time it held.
+   */
+  async freedSlotBookable(
+    tenantId: string,
+    date: Date,
+    professionalId: string | null,
+    serviceId: string,
+    time: string | null,
+    heldMinutes: number,
+  ): Promise<boolean> {
+    const slots: Array<{ time: string; isAvailable: boolean }> = await this.getAvailableSlots(
+      tenantId,
+      date,
+      professionalId ?? undefined,
+      serviceId,
+    );
+    const start = time ? minutesOf(time) : null;
+    if (start === null) return slots.some((s) => s.isAvailable);
+    const exact = slots.find((s) => s.time === time);
+    if (exact) return exact.isAvailable;
+    const end = start + Math.max(heldMinutes, 1);
+    return slots.some((s) => {
+      const m = minutesOf(s.time);
+      return s.isAvailable && m !== null && m >= start && m < end;
+    });
   }
 
   /**

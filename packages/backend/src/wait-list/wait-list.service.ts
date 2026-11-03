@@ -444,6 +444,14 @@ export class WaitListService {
    * passed. Otherwise -- automatic notices off, at night, or nobody could be
    * reached -- the salon's managers get an in-app note so they can press
    * "Avisar".
+   *
+   * Only while the slot can really be booked: `slotBookable` answers with
+   * the salon's availability (getAvailableSlots: shifts, time off, closures,
+   * other appointments). Cancelling the visits of a professional who has just
+   * been given time off, or of a day the salon closes, frees nothing -- and
+   * nobody is told, neither the clients nor the managers. An entry for that
+   * professional needs them free; one for anyone needs somebody free, and is
+   * offered the slot without a name when it is someone else.
    */
   async onAppointmentCancelled(args: {
     tenantId: string;
@@ -451,6 +459,8 @@ export class WaitListService {
     professionalId: string | null;
     date: Date;
     time?: string | null;
+    /** Is the slot bookable for this professional (null: for anybody who offers the service)? */
+    slotBookable?: (professionalId: string | null) => Promise<boolean>;
   }): Promise<NotifyResult[]> {
     if (!(await this.isEnabled(args.tenantId))) return [];
     const now = this.clock();
@@ -496,15 +506,36 @@ export class WaitListService {
       if (stale) await this.expire([r.id], stale);
       else fresh.push(r);
     }
+    if (fresh.length === 0) return [];
+
+    // Still bookable? Asked only once somebody is waiting: it reads the
+    // day's agenda.
+    let professionalFree = true;
+    let anyoneFree = true;
+    if (args.slotBookable) {
+      professionalFree = args.professionalId ? await args.slotBookable(args.professionalId) : false;
+      anyoneFree = professionalFree || (fresh.some((r) => !r.professionalId) && (await args.slotBookable(null)));
+    }
+    const bookable = fresh.filter((r) => (r.professionalId ? professionalFree : anyoneFree));
+    if (bookable.length === 0) {
+      this.logger.log(
+        `wait-list: freed slot tenant=${args.tenantId} service=${args.serviceId} is not bookable ` +
+          `(time off, closure or taken meanwhile): nobody told`,
+      );
+      return [];
+    }
+
     // One notice per client, even if she is on the list twice.
     const seen = new Set<string>();
-    const matches = fresh.filter((r) => (seen.has(r.clientId) ? false : (seen.add(r.clientId), true)));
+    const matches = bookable.filter((r) => (seen.has(r.clientId) ? false : (seen.add(r.clientId), true)));
     if (matches.length === 0) return [];
 
     const slot: NotifyWaitListDto = {
       date: args.date.toISOString().slice(0, 10),
       time: args.time ?? undefined,
-      professionalId: args.professionalId ?? undefined,
+      // The professional who left the slot while they are still free in it;
+      // otherwise whoever is free (the booking page picks).
+      professionalId: professionalFree ? args.professionalId ?? undefined : undefined,
     };
 
     if (!tenant?.waitListAutoNotify) {

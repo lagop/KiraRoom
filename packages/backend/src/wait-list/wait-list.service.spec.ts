@@ -455,6 +455,44 @@ describe("WaitListService.onAppointmentCancelled", () => {
     expect(managerNotes()[0].data.reason).toBe("unreachable");
   });
 
+  it("a slot that time off or a closure blocks is offered to nobody, and the managers are not told either", async () => {
+    for (const autoNotify of [true, false]) {
+      const slotBookable = jest.fn(async (_pro: string | null) => false);
+      const { service, email, managerNotes, prisma } = setup({ emailConfigured: true, autoNotify, entries: many() });
+      expect(await service.onAppointmentCancelled({ ...cancelled, slotBookable })).toEqual([]);
+      expect(email.sendEmail).not.toHaveBeenCalled();
+      expect(managerNotes()).toHaveLength(0);
+      expect(prisma.waitList.updateMany).not.toHaveBeenCalled();
+      // The professional, then anybody (the entries are for any professional).
+      expect(slotBookable.mock.calls).toEqual([["p1"], [null]]);
+    }
+  });
+
+  it("when only someone else is free, the entries for anybody are offered it without a name", async () => {
+    const entries = [row(0, { professionalId: "p1" }), row(1), row(2)];
+    const slotBookable = jest.fn(async (pro: string | null) => pro === null);
+    const { service, email } = setup({ emailConfigured: true, autoNotify: true, entries });
+    const out = await service.onAppointmentCancelled({ ...cancelled, slotBookable });
+    expect(email.sendEmail.mock.calls.map((c: any[]) => c[0].to)).toEqual(["x1@example.test", "x2@example.test"]);
+    expect(out[0].bookingUrl).not.toContain("professionalId=");
+  });
+
+  it("when the professional is still free, nobody else needs checking", async () => {
+    const slotBookable = jest.fn(async (_pro: string | null) => true);
+    const { service, email } = setup({ emailConfigured: true, autoNotify: true, entries: many() });
+    const out = await service.onAppointmentCancelled({ ...cancelled, slotBookable });
+    expect(slotBookable.mock.calls).toEqual([["p1"]]);
+    expect(email.sendEmail).toHaveBeenCalledTimes(3);
+    expect(out[0].bookingUrl).toContain("professionalId=p1");
+  });
+
+  it("with nobody waiting, the agenda is not even read", async () => {
+    const slotBookable = jest.fn(async (_pro: string | null) => true);
+    const { service } = setup({ emailConfigured: true, autoNotify: true, entries: [] });
+    await service.onAppointmentCancelled({ ...cancelled, slotBookable });
+    expect(slotBookable).not.toHaveBeenCalled();
+  });
+
   it("sends nothing at night: the managers get a note to decide in the morning", async () => {
     // 22:30 in Madrid.
     const { service, email, managerNotes } = setup({
