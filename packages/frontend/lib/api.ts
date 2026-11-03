@@ -932,6 +932,8 @@ export interface Professional {
   commissionRate?: number;
   hireDate?: string;
   isActive: boolean;
+  /** The team member's user account, when the professional has one (managers see it). */
+  userId?: string | null;
   /**
    * One entry per shift, several per day for a split shift:
    * `[{ day: "monday", openTime: "10:00", closeTime: "14:00" }, ...]`. Read it
@@ -2138,6 +2140,8 @@ export interface ApiClientInterface {
     paymentMethod: string;
     clientId?: string;
     saleId?: string;
+    /** Who did the service (its commission). */
+    professionalId?: string;
   }): Promise<PosSale>;
 
   // Email Campaigns
@@ -3921,17 +3925,6 @@ class ApiClient implements ApiClientInterface {
     return this.request<any[]>("/commissions/all");
   }
 
-  async calculateCommission(
-    appointmentId: string,
-    amount?: number,
-    rate?: number,
-  ): Promise<any> {
-    return this.request<any>(`/commissions/calculate/${appointmentId}`, {
-      method: "POST",
-      body: JSON.stringify({ amount, rate }),
-    });
-  }
-
   /**
    * Marks a professional's commission paid. Without dates or ids: all that is
    * pending up to the end of today (the summary's "Pagar"). `expectedAmount`
@@ -4273,6 +4266,7 @@ class ApiClient implements ApiClientInterface {
     paymentMethod: string;
     clientId?: string;
     saleId?: string;
+    professionalId?: string;
   }): Promise<PosSale> {
     return this.request<PosSale>("/pos/quick-sale", {
       method: "POST",

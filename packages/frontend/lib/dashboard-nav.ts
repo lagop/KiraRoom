@@ -72,7 +72,8 @@ export const DASHBOARD_NAV: NavEntry[] = [
         badge: "time-off-requests",
       }),
       link("services", "/dashboard/services", "nav.services", "scissors", { managers: true }),
-      link("commissions", "/dashboard/commissions", "nav.commissions", "dollar", { managers: true }),
+      // Not in Esencial (PLAN_MATRIX): the Pro badge, like promotions.
+      link("commissions", "/dashboard/commissions", "nav.commissions", "dollar", { managers: true, pro: true }),
     ],
   },
   {

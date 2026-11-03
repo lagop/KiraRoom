@@ -4,7 +4,7 @@ import { PosService } from "./pos.service";
 import { InvoiceService } from "../invoices/invoices.service";
 import { InvoiceCalculator } from "../invoices/invoice-calculator.service";
 import { invoiceStore } from "../invoices/invoice-store.testing";
-import { CommissionsService } from "../commissions/commissions.service";
+import { appointmentCommission } from "../commissions/appointment-commission";
 import { cashDrawerRaw, saleTables } from "./pos-test-kit.testing";
 
 /**
@@ -184,8 +184,8 @@ describe("a till discount on an appointment already invoiced", () => {
     });
 
     // The commission follows what was charged: 20 % of 36,00.
-    const commission = await new CommissionsService(t.prisma).calculateCommission("t1", { appointmentId: "a1" });
-    expect(commission).toEqual({ commissionRate: 20, commissionAmount: 720 });
+    const visit: any = t.appointments.get("a1")!;
+    expect(appointmentCommission({ ...visit, commissionPaid: false }, visit.professional.commissionRate)).toEqual({ rate: 20, amount: 720 });
   });
 
   it("with the tax on top: the till works in money, 12,10 off is 10,00 + 2,10 credited", async () => {

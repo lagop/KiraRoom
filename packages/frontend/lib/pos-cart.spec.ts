@@ -18,6 +18,7 @@ import {
   parseEurosInput,
   remainingCents,
   removeLine,
+  serviceLineWithoutProfessional,
   setProfessional,
   setQuantity,
   tenderProblem,
@@ -143,6 +144,25 @@ console.log("amounts typed and the sale id");
   const a = newSaleId();
   const b = newSaleId();
   check("a sale id is a UUID, new each time", /^[0-9a-f-]{36}$/.test(a) && a !== b, [a, b]);
+}
+
+console.log("who did the service, when the cashier is not a professional");
+{
+  let cart: CartLine[] = addLine([], { kind: "service", serviceId: "s1", name: "Corte", unitCents: 2000 });
+  cart = addLine(cart, { kind: "product", productId: "p1", name: "Champú", unitCents: 1200 });
+  const reception = { cashierIsProfessional: false, professionalsToChoose: 2 };
+  check("a receptionist must choose: the service line is flagged", serviceLineWithoutProfessional(cart, reception)?.serviceId === "s1");
+  check(
+    "a professional at the till is the default: nothing to choose",
+    serviceLineWithoutProfessional(cart, { ...reception, cashierIsProfessional: true }) === null,
+  );
+  check(
+    "no professionals to choose from: not blocked",
+    serviceLineWithoutProfessional(cart, { ...reception, professionalsToChoose: 0 }) === null,
+  );
+  const chosen = setProfessional(cart, cart[0].key, "pro-1");
+  check("once chosen, nothing flagged", serviceLineWithoutProfessional(chosen, reception) === null);
+  check("products never need one", serviceLineWithoutProfessional([cart[1]], reception) === null);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

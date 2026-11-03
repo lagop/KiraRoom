@@ -507,7 +507,7 @@ describe("refunds and their side effects (L2, real database)", () => {
         data: { tenantId, firstName: "Clawback", lastName: "Pro", email: `claw-${run}@example.test`, hireDate: new Date(), commissionRate: 10 },
       })
     ).id;
-    // A walk-in service (30,00, commission 3,00) and a visit (30,00, commission 4,00), both charged by card.
+    // A walk-in service (30,00, commission 3,00) and a visit (30,00 at 10 %, commission 3,00), both charged by card.
     const sale: any = await pos.processCheckout({
       tenantId,
       actor: OWNER,
@@ -519,7 +519,7 @@ describe("refunds and their side effects (L2, real database)", () => {
     const apt = await db.appointment.create({
       data: {
         tenantId, clientId, serviceId, professionalId: pro, scheduledDate: new Date(), scheduledTime: "11:00",
-        duration: 30, endTime: "11:30", price: 30, totalAmount: 3000, status: "completed", commissionAmount: 400,
+        duration: 30, endTime: "11:30", price: 30, totalAmount: 3000, status: "completed",
       },
     });
     await pos.processCheckout({ tenantId, actor: OWNER, clientId, appointmentIds: [apt.id], payments: [{ method: "card", amount: 3000 }] } as any);
@@ -530,14 +530,17 @@ describe("refunds and their side effects (L2, real database)", () => {
     await payments.refundPayment(tenantId, linePayment.id, { amount: 300, reason: "Retoque" }, OWNER.id);
     expect(await db.commissionAdjustment.count({ where: { tenantId, professionalId: pro } })).toBe(0);
     const paid = await commissions.payCommission(tenantId, pro, {} as any);
-    expect(paid.totalAmount).toBe(270 + 400);
+    expect(paid.totalAmount).toBe(270 + 300);
+    // The visit keeps the commission it was paid with (appointment-commission.ts).
+    expect(await db.appointment.findUnique({ where: { id: apt.id } })).toMatchObject({ commissionPaid: true });
+    expect(Number((await db.appointment.findUnique({ where: { id: apt.id } })).commissionAmount)).toBe(300);
 
     // After it: the refund takes its share back, linked to it.
     const r1: any = await payments.refundPayment(tenantId, linePayment.id, { amount: 900, reason: "Queja" }, OWNER.id);
     const r2: any = await payments.refundPayment(tenantId, aptPayment.id, { amount: 1500, reason: "Queja" }, OWNER.id);
     const rows = await db.commissionAdjustment.findMany({ where: { tenantId, professionalId: pro }, orderBy: { amount: "asc" } });
     expect(rows.map((r: any) => [r.refundId, r.sourceKey, Number(r.amount), r.settled])).toEqual([
-      [r2.refund.id, `appointment:${apt.id}`, -200, false],
+      [r2.refund.id, `appointment:${apt.id}`, -150, false],
       [r1.refund.id, `sale_line:${line.id}`, -90, false],
     ]);
     // Recording the same refund again changes nothing.
@@ -548,22 +551,22 @@ describe("refunds and their side effects (L2, real database)", () => {
 
     // The summary: pending, "Ajuste por devolución".
     const summary = await commissions.getCommissionSummary(tenantId, pro);
-    expect(summary.appointments.filter((a) => a.source === "refund_adjustment").map((a) => a.commissionAmount).sort()).toEqual([-200, -90]);
+    expect(summary.appointments.filter((a) => a.source === "refund_adjustment").map((a) => a.commissionAmount).sort()).toEqual([-150, -90]);
     expect(summary.appointments.every((a) => a.source !== "refund_adjustment" || a.serviceName.startsWith("Ajuste por devolución"))).toBe(true);
-    expect(summary.pendingCommission).toBe(-290);
+    expect(summary.pendingCommission).toBe(-240);
 
     // Recorded next month: this period keeps what was paid, the next one carries the adjustment.
     const nextMonth = new Date(Date.now() + 40 * 864e5);
     await db.commissionAdjustment.updateMany({ where: { tenantId, professionalId: pro }, data: { createdAt: nextMonth } });
     const now = await commissions.getPayrollReport(tenantId, new Date(Date.now() - 864e5), new Date(Date.now() + 864e5));
-    expect(now.professionals.find((p) => p.id === pro)).toMatchObject({ commission: 670, refundAdjustments: 0 });
+    expect(now.professionals.find((p) => p.id === pro)).toMatchObject({ commission: 570, refundAdjustments: 0 });
     const later = await commissions.getPayrollReport(tenantId, new Date(nextMonth.getTime() - 864e5), new Date(nextMonth.getTime() + 864e5));
-    expect(later.professionals.find((p) => p.id === pro)).toMatchObject({ commission: -290, refundAdjustments: -290 });
+    expect(later.professionals.find((p) => p.id === pro)).toMatchObject({ commission: -240, refundAdjustments: -240 });
 
     // The next payout, made next month (Pagar pays what is pending up to that day), nets and settles them.
     const payDay = new Date(nextMonth.getTime() + 864e5);
     const next = await commissions.payCommission(tenantId, pro, {} as any, payDay);
-    expect(next.totalAmount).toBe(-290);
+    expect(next.totalAmount).toBe(-240);
     expect(await db.commissionAdjustment.count({ where: { tenantId, professionalId: pro, settled: false } })).toBe(0);
     expect((await commissions.getCommissionSummary(tenantId, pro, payDay)).pendingCommission).toBe(0);
   }, 60_000);

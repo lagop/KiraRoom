@@ -83,6 +83,22 @@ export function setProfessional(cart: CartLine[], key: string, professionalId: s
   return cart.map((l) => (l.key === key ? { ...moved, key: newKey } : l));
 }
 
+/**
+ * Who did each walk-in service, for its commission. A line with nobody
+ * named goes to the professional of whoever charges it ("Lo hizo: quien
+ * cobra"); when the cashier has no professional profile (a receptionist,
+ * an owner who does not work the chair) it would be nobody's commission,
+ * silently. Then a professional has to be chosen: this is the first service
+ * line still without one, or null.
+ */
+export function serviceLineWithoutProfessional(
+  cart: CartLine[],
+  opts: { cashierIsProfessional: boolean; professionalsToChoose: number },
+): CartLine | null {
+  if (opts.cashierIsProfessional || opts.professionalsToChoose === 0) return null;
+  return cart.find((l) => l.kind === "service" && !l.professionalId) ?? null;
+}
+
 /** The lines as POST /pos/checkout and /pos/quote take them: what is sold, never a price. */
 export function itemsForServer(cart: CartLine[]) {
   return cart.map((l) => ({

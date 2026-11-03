@@ -101,6 +101,7 @@ import { appointmentTotalCents, assertVisitChargeable } from "../payments/appoin
 import { moneyOfCatalogueCents, salonTaxBasis, type SalonTaxBasis } from "../payments/appointment-charge";
 import { appointmentDeleteBlocker, deleteAppointmentRow } from "./appointment-delete";
 import { isForeignKeyViolation } from "../common/prisma/history-deletes";
+import { snapshotAppointmentCommissions } from "../commissions/appointment-commission";
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
 import {
   assertTransition,
@@ -237,6 +238,15 @@ export class AppointmentsService {
     } catch (err) {
       this.logger.warn(`loyalty for appointment ${appointmentId} failed: ${(err as Error).message}`);
     }
+  }
+
+  /**
+   * The visit's commission snapshot once it is completed and paid, and
+   * recomputed while it is not paid out (commissions/appointment-commission.ts).
+   * Never fails the change that set it off.
+   */
+  private async commissionAfterChange(tenantId: string, appointmentId: string) {
+    await snapshotAppointmentCommissions(this.prisma as any, tenantId, [appointmentId], this.logger);
   }
 
   /**
@@ -1760,6 +1770,9 @@ export class AppointmentsService {
         await this.afterStatusChange(user, updatedAppointment, oldStatus, statusTo, {
           reason: dto.cancellationReason,
         });
+      } else {
+        // Its total or its rate may have changed: an unpaid commission follows.
+        await this.commissionAfterChange(user.tenantId, id);
       }
 
       return this.enrichAppointment(updatedAppointment);
@@ -1989,6 +2002,8 @@ export class AppointmentsService {
 
     // Points: completed and paid earns, cancelled gives them back.
     await this.loyaltyAfterStatus(updated.tenantId, id);
+    // Completed and paid: its commission is worked out and kept (commissions/appointment-commission.ts).
+    await this.commissionAfterChange(updated.tenantId, id);
 
     // Her visits (count, first, last, average) follow her completed
     // appointments (client-stats.ts).
@@ -2201,6 +2216,7 @@ export class AppointmentsService {
     // Refunded: the points go back. Paid: points only from recorded
     // payments, once the visit is also completed.
     await this.loyaltyAfterStatus(updatedAppointment.tenantId, id);
+    await this.commissionAfterChange(updatedAppointment.tenantId, id);
 
     return this.enrichAppointment(updatedAppointment);
   }
