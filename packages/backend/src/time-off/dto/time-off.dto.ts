@@ -30,7 +30,7 @@ const emptyToNull = Transform(({ value }) => (value === "" ? null : value));
 const trimmed = Transform(({ value }) => (typeof value === "string" ? value.trim() || null : value));
 
 /**
- * The rules between fields (end after start, hours only on one day, a closure
+ * The rules between fields (end after start, hours with both ends, a closure
  * has no professional, at most 366 days), on the whole body. Pair with a
  * create: an edit checks the merged row in the service instead.
  */
@@ -92,7 +92,7 @@ export class CreateTimeOffDto {
   @IsTimeOffInput()
   endDate!: string;
 
-  @ApiPropertyOptional({ example: "10:00", description: "With endTime: a few hours of one day" })
+  @ApiPropertyOptional({ example: "10:00", description: "With endTime: those hours on every day of the range" })
   @emptyToNull
   @IsOptional()
   @Matches(TIME_PATTERN, { message: TIME_MESSAGE })
@@ -198,7 +198,7 @@ export class CreateTimeOffRequestDto {
   @IsTimeOffRequest()
   endDate!: string;
 
-  @ApiPropertyOptional({ example: "10:00", description: "With endTime: a few hours of one day" })
+  @ApiPropertyOptional({ example: "10:00", description: "With endTime: those hours on every day of the range" })
   @emptyToNull
   @IsOptional()
   @Matches(TIME_PATTERN, { message: TIME_MESSAGE })

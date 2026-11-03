@@ -238,7 +238,9 @@ describe("create, update and delete", () => {
     const edited = await service.update(OWNER, row.id, { endTime: "13:00" });
     expect(edited.timeOff).toMatchObject({ startTime: "10:00", endTime: "13:00", note: "Médico" });
 
-    await expect(service.update(OWNER, row.id, { endDate: "2026-12-16" })).rejects.toThrow(/un único día/);
+    // Those hours on each day now.
+    const mornings = await service.update(OWNER, row.id, { endDate: "2026-12-16" });
+    expect(mornings.timeOff).toMatchObject({ startTime: "10:00", endTime: "13:00", endDate: "2026-12-16" });
     const allDay = await service.update(OWNER, row.id, { startTime: null, endTime: null, endDate: "2026-12-16" });
     expect(allDay.timeOff).toMatchObject({ startTime: null, endTime: null, endDate: "2026-12-16" });
   });
@@ -478,8 +480,8 @@ describe("request bodies (the global ValidationPipe)", () => {
     expect(await refusal(create({ kind: "closure", startDate: "2026-12-25", endDate: "2026-12-25", note: "Navidad" }))).toBeNull();
   });
 
-  it("refuses hours over several days, and an end before the start", async () => {
-    expect(await refusal(create({ ...ok, startTime: "10:00", endTime: "12:00" }))).toMatch(/un único día/);
+  it("accepts the same hours over several days, and refuses an end before the start", async () => {
+    expect(await refusal(create({ ...ok, startTime: "10:00", endTime: "12:00" }))).toBeNull();
     expect(await refusal(create({ ...ok, endDate: "2026-11-30" }))).toMatch(/anterior/);
     expect(await refusal(preview({ ...ok, endDate: ok.startDate, startTime: "12:00", endTime: "11:00" }))).toMatch(/posterior/);
   });
@@ -533,5 +535,26 @@ describe("who may call what", () => {
     expect(guard.canActivate(ctx(TimeOffController.prototype.create, "admin"))).toBe(true);
     expect(guard.canActivate(ctx(TimeOffController.prototype.list, "staff"))).toBe(true);
     expect(guard.canActivate(ctx(TimeOffController.prototype.list, "client"))).toBe(false);
+  });
+});
+
+describe("the same hours over several days", () => {
+  it("clashes with appointments inside those hours on any of the days, and not outside them", async () => {
+    const { service } = build({
+      appointments: [
+        { id: "monday-10", professionalId: ANA, day: "2026-12-14", scheduledTime: "10:00", duration: 30 },
+        { id: "wednesday-12", professionalId: ANA, day: "2026-12-16", scheduledTime: "12:00", duration: 60 },
+        { id: "wednesday-16", professionalId: ANA, day: "2026-12-16", scheduledTime: "16:00", duration: 60 },
+      ],
+    });
+    const out = await service.preview(OWNER, {
+      professionalId: ANA,
+      kind: "other",
+      startDate: "2026-12-14",
+      endDate: "2026-12-18",
+      startTime: "09:00",
+      endTime: "14:00",
+    });
+    expect(out.conflicts.map((c) => c.id)).toEqual(["monday-10", "wednesday-12"]);
   });
 });

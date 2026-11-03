@@ -323,3 +323,21 @@ describe("freedSlotBookable (the wait list's check)", () => {
     expect(await svc.freedSlotBookable(TENANT_ID, day, ANA, SERVICE_ID, "13:10", 10)).toBe(false);
   });
 });
+
+describe("the same hours over several days", () => {
+  it("takes those hours out of every day of the range", async () => {
+    const mornings: Row = {
+      professionalId: ANA,
+      kind: "other",
+      startDate: "2026-10-30",
+      endDate: "2026-11-06",
+      startTime: "10:00",
+      endTime: "12:00",
+    };
+    expect(await named({ professionals: [{ id: ANA, workingHours: MON_10_TO_14 }], timeOff: [mornings] })).toEqual([
+      "12:00",
+      "12:30",
+      "13:00",
+    ]);
+  });
+});

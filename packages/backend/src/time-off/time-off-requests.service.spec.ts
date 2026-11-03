@@ -46,25 +46,31 @@ function matches(row: any, where: any): boolean {
     if (cond !== null && typeof cond === "object" && !(cond instanceof Date)) {
       if ("in" in cond) return cond.in.includes(value);
       if ("not" in cond) return value !== cond.not && value !== undefined;
-      if ("lte" in cond || "gte" in cond) {
-        return (cond.lte === undefined || value <= cond.lte) && (cond.gte === undefined || value >= cond.gte);
+      if ("lte" in cond || "gte" in cond || "lt" in cond) {
+        return (
+          (cond.lte === undefined || value <= cond.lte) &&
+          (cond.gte === undefined || value >= cond.gte) &&
+          (cond.lt === undefined || value < cond.lt)
+        );
       }
     }
     return value === cond;
   });
 }
 
-function build(opts: { timeOff?: any[]; appointments?: any[]; notifyFails?: boolean } = {}) {
+function build(
+  opts: { timeOff?: any[]; appointments?: any[]; notifyFails?: boolean; email?: boolean; emailNotices?: boolean } = {},
+) {
   const people: Record<string, any> = {
     [ANA]: { id: ANA, userId: ANA_USER.id, firstName: "Ana", lastName: "Gil", tenantId: TENANT },
     [BEA]: { id: BEA, userId: BEA_USER.id, firstName: "Bea", lastName: "Ruiz", tenantId: TENANT },
   };
   const users = [
-    { id: OWNER.id, tenantId: TENANT, role: "owner", isActive: true },
-    { id: ADMIN.id, tenantId: TENANT, role: "admin", isActive: true },
-    { id: "u-old-admin", tenantId: TENANT, role: "admin", isActive: false },
-    { id: ANA_USER.id, tenantId: TENANT, role: "staff", isActive: true },
-    { id: "u-elsewhere", tenantId: OTHER, role: "owner", isActive: true },
+    { id: OWNER.id, tenantId: TENANT, role: "owner", isActive: true, email: "owner@example.test", firstName: "Olga" },
+    { id: ADMIN.id, tenantId: TENANT, role: "admin", isActive: true, email: "admin@example.test", firstName: "Alba" },
+    { id: "u-old-admin", tenantId: TENANT, role: "admin", isActive: false, email: "old@example.test" },
+    { id: ANA_USER.id, tenantId: TENANT, role: "staff", isActive: true, email: "ana@example.test", firstName: "Ana" },
+    { id: "u-elsewhere", tenantId: OTHER, role: "owner", isActive: true, email: "else@example.test" },
   ];
   const rows: any[] = [...(opts.timeOff ?? [])];
   const withPro = (r: any) => (r ? { ...r, professional: r.professionalId ? people[r.professionalId] : null } : null);
@@ -79,8 +85,13 @@ function build(opts: { timeOff?: any[]; appointments?: any[]; notifyFails?: bool
     ...a,
   }));
   const prisma: any = {
-    tenant: { findUnique: jest.fn(async () => ({ timezone: "Europe/Madrid" })) },
-    user: { findMany: jest.fn(async ({ where }: any) => users.filter((u) => matches(u, where))) },
+    tenant: {
+      findUnique: jest.fn(async () => ({ timezone: "Europe/Madrid", timeOffEmailNotices: opts.emailNotices ?? true })),
+    },
+    user: {
+      findMany: jest.fn(async ({ where }: any) => users.filter((u) => matches(u, where))),
+      findFirst: jest.fn(async ({ where }: any) => users.find((u) => matches(u, where)) ?? null),
+    },
     professional: {
       findFirst: jest.fn(async ({ where }: any) =>
         Object.values(people).find((p) => matches(p, where)) ?? null,
@@ -127,8 +138,13 @@ function build(opts: { timeOff?: any[]; appointments?: any[]; notifyFails?: bool
   const timeOff = new TimeOffService(prisma);
   // 10:00 in Madrid on 2 Nov 2026: DAY (14 Dec) is ahead.
   timeOff.clock = () => new Date("2026-11-02T09:00:00.000Z");
-  const service = new TimeOffRequestsService(prisma, timeOff, notifications as any);
-  return { service, timeOff, prisma, rows, notifications };
+  const email = {
+    isConfigured: () => opts.email ?? false,
+    sendEmail: jest.fn(async (_o: any) => ({ success: true, id: "e1" })),
+  };
+  const service = new TimeOffRequestsService(prisma, timeOff, notifications as any, email as any);
+  service.clock = () => new Date("2026-11-02T09:00:00.000Z");
+  return { service, timeOff, prisma, rows, notifications, email };
 }
 
 const stored = (r: Record<string, unknown>) => ({
@@ -190,7 +206,8 @@ describe("asking for time off", () => {
     expect(await refusal(parse(request({ endDate: DAY, startTime: "10:00", endTime: "12:00" })))).toBeNull();
     expect(await refusal(parse(request({ kind: "closure" })))).toMatch(/responsable/);
     expect(await refusal(parse(request({ kind: "sick_leave" })))).toMatch(/responsable/);
-    expect(await refusal(parse(request({ startTime: "10:00", endTime: "12:00" })))).toMatch(/un único día/);
+    // The same hours every day of a range: the mornings of a week.
+    expect(await refusal(parse(request({ startTime: "10:00", endTime: "12:00" })))).toBeNull();
     expect(await refusal(parse(request({ endDate: "2026-12-01" })))).toMatch(/anterior/);
     expect(await refusal(parse(request({ note: "x".repeat(201) })))).toMatch(/200/);
     // The service says the same if a body ever reached it unvalidated.
@@ -457,6 +474,77 @@ describe("the salon's answer", () => {
     await expect(parse({ note: "x".repeat(201) })).rejects.toBeInstanceOf(BadRequestException);
     await expect(parse({ note: "  Temporada alta " })).resolves.toEqual({ note: "Temporada alta" });
     await expect(parse({})).resolves.toEqual({});
+  });
+});
+
+describe("by email too (Resend)", () => {
+  it("a new request is emailed to every active owner and admin, with a link to answer it", async () => {
+    const { service, email } = build({ email: true });
+    await service.create(ANA_USER, request({ note: "Boda" }));
+    const sent = email.sendEmail.mock.calls.map((c: any[]) => c[0]);
+    expect(sent.map((m: any) => m.to).sort()).toEqual(["admin@example.test", "owner@example.test"]);
+    expect(sent[0].subject).toBe("Nueva solicitud de ausencia de Ana Gil");
+    expect(sent[0].html).toContain("vacaciones del 14/12/2026 al 16/12/2026");
+    expect(sent[0].html).toContain("/dashboard/solicitudes-ausencia");
+    // The professional's private note stays in the panel.
+    expect(sent[0].html).not.toContain("Boda");
+  });
+
+  it("the answer is emailed to the professional, with the reason", async () => {
+    const pending = stored({ kind: "day_off" });
+    const { service, email } = build({ timeOff: [pending], email: true });
+    await service.reject(OWNER, pending.id, { note: "Temporada <alta>" });
+    const [mail] = email.sendEmail.mock.calls.map((c: any[]) => c[0]);
+    expect(mail).toMatchObject({ to: "ana@example.test", subject: "Ausencia rechazada" });
+    expect(mail.html).toContain("Motivo: Temporada &lt;alta&gt;");
+    expect(mail.html).toContain("/dashboard/mis-ausencias");
+  });
+
+  it("nothing by email when the salon turned it off, or no email provider is set up; the panel still tells", async () => {
+    for (const o of [{ email: true, emailNotices: false }, { email: false }]) {
+      const pending = stored({});
+      const { service, email, notifications } = build({ timeOff: [pending], ...o });
+      await service.create(ANA_USER, request({ startDate: "2026-12-20", endDate: "2026-12-20" }));
+      await service.approve(OWNER, pending.id, {});
+      expect(email.sendEmail).not.toHaveBeenCalled();
+      expect(notifications.create).toHaveBeenCalled();
+    }
+  });
+});
+
+describe("requests nobody answered in time", () => {
+  it("are closed as rejected once their last day is gone, by the salon's calendar, and the professional is told", async () => {
+    const yesterday = stored({ startDate: new Date("2026-10-30T00:00:00.000Z"), endDate: new Date("2026-11-01T00:00:00.000Z") });
+    const today = stored({ startDate: new Date("2026-11-02T00:00:00.000Z"), endDate: new Date("2026-11-02T00:00:00.000Z") });
+    const answered = stored({ status: "approved", endDate: new Date("2026-11-01T00:00:00.000Z") });
+    const { service, rows, notifications, email } = build({ timeOff: [yesterday, today, answered], email: true });
+    expect(await service.expireStale()).toBe(1);
+    expect(rows.find((r) => r.id === yesterday.id)).toMatchObject({
+      status: "rejected",
+      decisionNote: "Caducada: no se respondió a tiempo",
+      decidedById: null,
+    });
+    expect(rows.find((r) => r.id === today.id)!.status).toBe("pending");
+    expect(rows.find((r) => r.id === answered.id)!.status).toBe("approved");
+    expect(notifications.create.mock.calls[0][0]).toMatchObject({
+      userId: ANA_USER.id,
+      title: "Solicitud caducada",
+      data: { event: "time_off_expired", link: "/dashboard/mis-ausencias" },
+    });
+    expect(email.sendEmail.mock.calls[0][0]).toMatchObject({ to: "ana@example.test", subject: "Solicitud caducada" });
+    // A second run changes nothing.
+    expect(await service.expireStale()).toBe(0);
+    expect(notifications.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("goes by each salon's own midnight: 23:30 UTC is already the next day in Madrid", async () => {
+    const lastNight = stored({ endDate: new Date("2026-11-02T00:00:00.000Z"), startDate: new Date("2026-11-02T00:00:00.000Z") });
+    const { service, rows } = build({ timeOff: [lastNight] });
+    service.clock = () => new Date("2026-11-02T22:30:00.000Z");
+    expect(await service.expireStale()).toBe(0);
+    service.clock = () => new Date("2026-11-02T23:30:00.000Z");
+    expect(await service.expireStale()).toBe(1);
+    expect(rows[0].status).toBe("rejected");
   });
 });
 
