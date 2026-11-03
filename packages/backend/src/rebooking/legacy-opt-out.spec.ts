@@ -28,7 +28,7 @@ describe("RebookingController legacy opt-out link", () => {
       tokenFor: jest.fn(({ id }: { id: string }) => `signed-${id}`),
       unsubscribe: jest.fn().mockResolvedValue({ salonName: "Salón", unsubscribed: true }),
     };
-    const controller = new RebookingController(cadence, {} as any, {} as any, unsubscribes);
+    const controller = new RebookingController(cadence, {} as any, {} as any, unsubscribes, {} as any);
     return { controller, cadence, unsubscribes };
   }
 

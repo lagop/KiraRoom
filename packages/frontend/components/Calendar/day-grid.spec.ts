@@ -22,6 +22,7 @@ import {
   salonClosureOn,
   salonClosedWeekday,
   timeOffBands,
+  agendaAbsences,
   visibleProfessionals,
 } from "./day-grid";
 
@@ -297,6 +298,32 @@ console.log("time off bands");
   check(
     "a partial closure is not a closed day",
     salonClosureOn("2026-12-14", [{ ...closure, startTime: "14:00", endTime: "20:00" }]) === null,
+  );
+
+  // The mobile agenda has no columns to shade: it says who is away in words.
+  check(
+    "the agenda lists a professional's own absences, approved first, then pending",
+    same(
+      agendaAbsences("2026-12-14", "ana", [
+        block({ status: "pending", kind: "day_off" }),
+        block({ kind: "other", startTime: "10:00", endTime: "12:00" }),
+        block({ professionalId: "bea" }),
+        block({ status: "rejected" }),
+        block({ startDate: "2026-12-15", endDate: "2026-12-16" }),
+      ]),
+      [
+        { label: "Ausencia", startTime: "10:00", endTime: "12:00", pending: false },
+        { label: "Día libre", startTime: null, endTime: null, pending: true },
+      ],
+    ),
+    agendaAbsences("2026-12-14", "ana", [block({ status: "pending", kind: "day_off" })]),
+  );
+  check(
+    "the agenda leaves an all-day closure to the banner, but lists a partial one",
+    same(
+      agendaAbsences("2026-12-14", "ana", [closure, { ...closure, startTime: "16:00", endTime: "20:00" }]).map((a) => a.label),
+      ["Salón cerrado — Navidad"],
+    ),
   );
 }
 

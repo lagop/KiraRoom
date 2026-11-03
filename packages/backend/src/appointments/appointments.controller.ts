@@ -132,13 +132,15 @@ export class AppointmentsController {
   /**
    * Inicio's lists (home-summary.service.ts): today's appointments, the
    * pending ones from today on and the visits still owed, five rows each
-   * with the true totals, in the salon's day. Staff: their own.
+   * with the true totals, in the salon's day. Staff: their own. Owner and
+   * admins may ask for one location (Empresa), as in Analítica.
    */
   @Get("home")
   @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
   @ApiOperation({ summary: "The panel's home lists: today, to confirm and to charge" })
-  async home(@Req() req: any) {
-    return this.homeSummary.getHome(req.user);
+  @ApiQuery({ name: "locationId", required: false, type: String })
+  async home(@Req() req: any, @Query("locationId") locationId?: string) {
+    return this.homeSummary.getHome(req.user, { locationId });
   }
 
   // Literal paths must be declared before ":id". Declared after it,
@@ -181,7 +183,8 @@ export class AppointmentsController {
   @ApiResponse({ status: 200, description: "Appointment found" })
   @ApiResponse({ status: 404, description: "Appointment not found" })
   async findOne(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
-    return this.appointmentsService.findOne(req.user, id);
+    // Staff: also a colleague's visit where they do a service, read only.
+    return this.appointmentsService.findOne(req.user, id, "read");
   }
 
   // A professional edits or moves their own appointments (the service checks

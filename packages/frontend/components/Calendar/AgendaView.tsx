@@ -8,13 +8,16 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 import { pickedDay, salonClock, salonTime } from "./salon-time";
 import { useSalonTimeZone } from "./SalonTimeZone";
-import { holdsSlot } from "./day-grid";
+import { agendaAbsences, holdsSlot } from "./day-grid";
+import type { TimeOff } from "@/lib/time-off";
 
 interface AgendaViewProps {
   date: Date;
   professionals: Professional[];
   appointments: Appointment[];
   onAppointmentClick?: (appointmentId: string) => void;
+  /** Time off and closures of the day (pending requests too, for managers). */
+  timeOff?: TimeOff[];
   t: (key: string, params?: Record<string, any>) => string;
 }
 
@@ -45,6 +48,7 @@ export const AgendaView: React.FC<AgendaViewProps> = ({
   professionals,
   appointments,
   onAppointmentClick,
+  timeOff,
   t,
 }) => {
   const timeZone = useSalonTimeZone();
@@ -147,6 +151,20 @@ export const AgendaView: React.FC<AgendaViewProps> = ({
                     ? t("appointments.calendarView.dayOff")
                     : countText(items.filter((a) => holdsSlot(a.status)).length)}
                 </p>
+                {agendaAbsences(day, pro.id, timeOff ?? []).map((a, i) => {
+                  const text = a.startTime
+                    ? t("appointments.calendarView.awayHours", { label: a.label, from: a.startTime, to: a.endTime })
+                    : t("appointments.calendarView.awayAllDay", { label: a.label });
+                  return (
+                    <p
+                      key={i}
+                      data-test="agenda-absence"
+                      className={cn("text-xs", a.pending ? "text-amber-700 italic" : "text-amber-800 font-medium")}
+                    >
+                      {a.pending ? t("appointments.calendarView.awayPending", { text }) : text}
+                    </p>
+                  );
+                })}
               </div>
             </header>
 

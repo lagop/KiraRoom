@@ -4,10 +4,11 @@ import type { TaxRegime } from "@kira/shared";
 import type { PublicSalonPage } from "./salon-seo";
 import type { WorkingHoursEntry } from "./weekly-schedule";
 import { requestBody } from "./time-off";
-import type { TimeOff, TimeOffConflict, TimeOffInput, TimeOffStatus } from "./time-off";
+import type { TimeOff, TimeOffConflict, TimeOffInput, TimeOffStatus, UpcomingTimeOffConflict } from "./time-off";
 import type { CreateClientPayload, UpdateClientPayload } from "./client-form";
 import type { RefundableSaleLine } from "./payments-format";
 import type { InvoiceIssuerStatus } from "./invoice-issuer";
+import { apiErrorMessage } from "./api-error-message";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1";
@@ -1153,8 +1154,14 @@ export interface HomeSummary {
   today: string;
   /** The salon's clock, "HH:mm". */
   now: string;
+  /** The location the lists are cut to (Empresa); null for the whole salon. */
+  location: { id: string; name: string } | null;
   /** Today's pending, confirmed and in-progress appointments, by time. */
   todayAppointments: HomeAppointmentRow[];
+  /** Active professionals (of the location), by name; a professional: themselves. */
+  professionals: { id: string; firstName: string; lastName: string }[];
+  /** Today's occupancy, Analítica's definition; null for staff. */
+  occupancy: AnalyticsOccupancy | null;
   /** Pending from today on: the first five and how many there are. */
   pendingConfirmations: { total: number; items: HomeAppointmentRow[] };
   /** Visits up to today still owed: the five latest, how many and how much (cents). */
@@ -1974,6 +1981,13 @@ export interface ApiClientInterface {
   previewTimeOff(input: TimeOffInput): Promise<{ conflicts: TimeOffConflict[] }>;
   createTimeOff(input: TimeOffInput): Promise<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }>;
   deleteTimeOff(id: string): Promise<{ deleted: boolean }>;
+  previewUpdateTimeOff(id: string, input: Omit<TimeOffInput, "professionalId">): Promise<{ conflicts: TimeOffConflict[] }>;
+  updateTimeOff(
+    id: string,
+    input: Omit<TimeOffInput, "professionalId">,
+  ): Promise<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }>;
+  getUpcomingTimeOffConflicts(): Promise<{ count: number; appointments: UpcomingTimeOffConflict[] }>;
+  previewApproveTimeOff(id: string): Promise<{ conflicts: TimeOffConflict[] }>;
   getMyTimeOff(): Promise<TimeOff[]>;
   previewTimeOffRequest(input: TimeOffInput): Promise<{ conflicts: TimeOffConflict[] }>;
   createTimeOffRequest(input: TimeOffInput): Promise<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }>;
@@ -2454,11 +2468,14 @@ class ApiClient implements ApiClientInterface {
       // offending field: ["website must be a URL address"]. Passed straight to
       // Error it was coerced to a comma-joined blob, so a form could report a
       // 400 without naming the field that caused it. Joining as sentences is
-      // what turns "Failed to update salon" into something actionable.
-      const raw = errorData.message;
-      const message = Array.isArray(raw)
-        ? raw.join(". ")
-        : raw || `API Error: ${response.status} ${response.statusText}`;
+      // what turns "Failed to update salon" into something actionable. A
+      // role refusal's English default ("Forbidden resource") is said in
+      // Spanish (api-error-message.ts).
+      const message = apiErrorMessage(
+        response.status,
+        errorData.message,
+        `API Error: ${response.status} ${response.statusText}`,
+      );
       throw new ApiError(
         message,
         response.status,
@@ -3208,6 +3225,33 @@ class ApiClient implements ApiClientInterface {
     return this.request<{ deleted: boolean }>(`/time-off/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
 
+  // The appointments an edit would clash with; nothing is saved. Who it is
+  // for is not editable, so the body never carries a professional.
+  async previewUpdateTimeOff(
+    id: string,
+    input: Omit<TimeOffInput, "professionalId">,
+  ): Promise<{ conflicts: TimeOffConflict[] }> {
+    return this.request<{ conflicts: TimeOffConflict[] }>(`/time-off/${encodeURIComponent(id)}/preview`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async updateTimeOff(
+    id: string,
+    input: Omit<TimeOffInput, "professionalId">,
+  ): Promise<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }> {
+    return this.request<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }>(`/time-off/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    });
+  }
+
+  // Appointments still booked inside approved time off and closures, from today on.
+  async getUpcomingTimeOffConflicts(): Promise<{ count: number; appointments: UpcomingTimeOffConflict[] }> {
+    return this.request<{ count: number; appointments: UpcomingTimeOffConflict[] }>("/time-off/conflicts");
+  }
+
   // Time off requests. A professional asks for their own (who it is for comes
   // from the session); the owner or a manager approves or rejects it.
   async getMyTimeOff(): Promise<TimeOff[]> {
@@ -3238,6 +3282,13 @@ class ApiClient implements ApiClientInterface {
 
   async getTimeOffRequestCount(): Promise<{ count: number }> {
     return this.request<{ count: number }>("/time-off/requests/count");
+  }
+
+  // Before approving a request: its clashes (409 when it overlaps other time off).
+  async previewApproveTimeOff(id: string): Promise<{ conflicts: TimeOffConflict[] }> {
+    return this.request<{ conflicts: TimeOffConflict[] }>(`/time-off/${encodeURIComponent(id)}/approve/preview`, {
+      method: "POST",
+    });
   }
 
   async approveTimeOff(id: string, note?: string | null): Promise<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }> {
@@ -3602,8 +3653,9 @@ class ApiClient implements ApiClientInterface {
   }
 
   /** Inicio's lists: today, to confirm and to charge, with their totals. */
-  async getHomeSummary(): Promise<HomeSummary> {
-    return this.request<HomeSummary>("/appointments/home");
+  async getHomeSummary(locationId?: string | null): Promise<HomeSummary> {
+    const query = locationId ? `?locationId=${encodeURIComponent(locationId)}` : "";
+    return this.request<HomeSummary>(`/appointments/home${query}`);
   }
 
   async getPendingPaymentAppointments(params?: {
@@ -4017,7 +4069,7 @@ class ApiClient implements ApiClientInterface {
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       const raw = (body as { message?: unknown }).message;
-      throw new ApiError(Array.isArray(raw) ? raw.join(". ") : String(raw || `Error ${res.status}`), res.status);
+      throw new ApiError(apiErrorMessage(res.status, raw, `Error ${res.status}`), res.status);
     }
     const disposition = res.headers.get("Content-Disposition") ?? "";
     const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "pagos.csv";
@@ -5765,7 +5817,7 @@ class ApiClient implements ApiClientInterface {
       const body = await res.json().catch(() => ({}));
       const raw = (body as { message?: unknown }).message;
       throw new ApiError(
-        Array.isArray(raw) ? raw.join(". ") : String(raw || `Error ${res.status}`),
+        apiErrorMessage(res.status, raw, `Error ${res.status}`),
         res.status,
       );
     }

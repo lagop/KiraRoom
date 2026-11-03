@@ -140,6 +140,9 @@ export interface PosActor {
   role: string;
 }
 
+/** Shortest client search staff may run at the till (getClients). */
+export const POS_STAFF_CLIENT_SEARCH_MIN = 2;
+
 /** What a checkout answers (stored on PosSale.result and returned again on a retry). */
 export type PosSaleResult = Record<string, any>;
 
@@ -400,9 +403,19 @@ export class PosService {
   }
 
   /**
-   * Get clients for POS
+   * The till's client search.
+   *
+   * The till finds any client of the salon (a product sale, a walk-in), but
+   * staff only by a search of two characters or more: with no search the
+   * first 50 came back, and one-letter searches walked a professional
+   * through the whole client base with contact details. Managers unchanged.
    */
-  async getClients(tenantId: string, search?: string) {
+  async getClients(tenantId: string, search?: string, actor?: Pick<PosActor, 'role'>) {
+    search = search?.trim() || undefined;
+    if (actor && !(SALON_MANAGERS as string[]).includes(actor.role) && (search?.length ?? 0) < POS_STAFF_CLIENT_SEARCH_MIN) {
+      return [];
+    }
+
     const where: any = { tenantId, status: 'active' };
 
     if (search) {

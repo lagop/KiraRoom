@@ -1246,7 +1246,16 @@
     "appointments_count_other": "{count} appointments",
     "no_appointments_today": "No appointments today",
     "unread_notifications_one": "1 unread notification",
-    "unread_notifications_other": "{count} unread notifications"
+    "unread_notifications_other": "{count} unread notifications",
+    "revenue_with_till_month": "Revenue + till (this month)",
+    "whole_salon": "whole salon",
+    "location_line": "Location: {name}",
+    "occupancy_today": "Occupancy today",
+    "occupancy_today_sub": "{booked} booked of {available}",
+    "my_agenda_today": "Your schedule today",
+    "agenda_by_professional": "Today by professional",
+    "no_professional": "No professional",
+    "free_today": "Free today"
   },
   "appointments": {
     "title": "Appointments",
@@ -1472,7 +1481,10 @@
       "cancelAppointment": "Cancel appointment",
       "cancelConfirmTitle": "Cancel this appointment?",
       "cancelConfirmDescription": "It will stay as cancelled in the client's history.",
-      "keepAppointment": "Keep appointment"
+      "keepAppointment": "Keep appointment",
+      "awayAllDay": "{label} (all day)",
+      "awayHours": "{label} {from}–{to}",
+      "awayPending": "Pending · {text}"
     },
     "quantity": "Quantity",
     "actions": "Actions",
@@ -1967,6 +1979,11 @@
     "min_advance_invalid": "The minimum notice must be a whole number of hours between 0 and 720",
     "max_advance_invalid": "The maximum advance must be a whole number of days between 1 and 730",
     "inactive_badge": "Inactive"
+  },
+  "managersOnly": {
+    "title": "This section is for the salon's management",
+    "body": "If you need something from this section, ask the salon's management.",
+    "home": "Back to home"
   },
   "nav": {
     "dashboard": "Dashboard",
@@ -3173,6 +3190,34 @@
       "news": "News",
       "waitlist_slot_available": "Wait list",
       "other": "Notification"
+    }
+  },
+  "timeOff": {
+    "answerRequest": "Answer",
+    "answerRequestTitle": "Pending requests are approved or rejected in Time off requests",
+    "edit": "Edit",
+    "editAria": "Edit {what} of {dates}",
+    "editTitleAbsence": "Edit the absence",
+    "editTitleClosure": "Edit the closure",
+    "editWillNotify": "{name} asked for it: we will let them know of the change in their notifications.",
+    "saveChanges": "Save changes",
+    "cancelEdit": "Cancel",
+    "updatedAbsence": "Absence updated",
+    "updatedClosure": "Closure updated",
+    "requesterNotified": "We let {name} know in their notifications.",
+    "deleteWillNotify": "We will let {name} know in their notifications.",
+    "pastRequest": "You cannot ask for time off on days that have already passed.",
+    "othersAway": "Also away those days:",
+    "approveNoteLabel": "Note for {name} (optional, they will see it in their notifications)",
+    "approveNotePlaceholder": "Approved; please move your Tuesday clients…",
+    "upcoming": {
+      "titleOne": "1 appointment falls inside approved time off",
+      "titleMany": "{count} appointments fall inside approved time off",
+      "help": "They have not been cancelled: move them or let the clients know. They leave this list once moved or cancelled.",
+      "absenceReason": "{kind} of {name} ({dates})",
+      "closureReason": "Salon closed ({dates})",
+      "more": "and {count} more.",
+      "goToAgenda": "Go to the calendar"
     }
   }
 }

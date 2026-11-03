@@ -21,6 +21,11 @@ import {
   pendingBadge,
   requestBody,
   statusOf,
+  agendaLink,
+  isPastRequest,
+  managerRowActions,
+  othersAway,
+  type TimeOff,
 } from "./time-off";
 
 let pass = 0;
@@ -114,6 +119,53 @@ eq("approved with nothing to move", approvedToast("Ana Gil", 0), {
   description: "Ya no se ofrecerán citas en ese tiempo.",
 });
 eq("approved with clashes", approvedToast(null, 2).description, "Recuerda mover o avisar a las 2 citas que coinciden.");
+
+console.log("\nfollow-ups of the time off audit");
+check(
+  "a request whose last day is gone is refused before sending; today is not",
+  isPastRequest("2026-11-01", "2026-11-02") && !isPastRequest("2026-11-02", "2026-11-02") && !isPastRequest("", "2026-11-02"),
+);
+const away = (b: Partial<TimeOff>): TimeOff => ({
+  id: Math.random().toString(36).slice(2),
+  professionalId: "bea",
+  professionalName: "Bea Ruiz",
+  kind: "vacation",
+  startDate: "2026-12-14",
+  endDate: "2026-12-14",
+  startTime: null,
+  endTime: null,
+  status: "approved",
+  ...b,
+});
+const request = away({ id: "req", professionalId: "ana", professionalName: "Ana Gil", startDate: "2026-12-14", endDate: "2026-12-16", status: "pending" });
+eq(
+  "who else is away: other professionals' approved time off touching those days, soonest first",
+  othersAway(
+    [
+      request,
+      away({ professionalName: "Carla", startDate: "2026-12-16", endDate: "2026-12-20" }),
+      away({ startDate: "2026-12-10", endDate: "2026-12-14", kind: "day_off" }),
+      away({ professionalId: "ana", professionalName: "Ana Gil" }),
+      away({ professionalId: null, kind: "closure", professionalName: null }),
+      away({ status: "pending", professionalName: "Dani" }),
+      away({ startDate: "2026-12-17", endDate: "2026-12-18", professionalName: "Eva" }),
+    ],
+    request,
+  ).map((b) => b.professionalName),
+  ["Bea Ruiz", "Carla"],
+);
+eq("the agenda link opens the day", agendaLink("2026-12-14"), "/dashboard/appointments?date=2026-12-14");
+eq(
+  "and the appointment when given",
+  agendaLink("2026-12-14", "apt-1"),
+  "/dashboard/appointments?date=2026-12-14&appointment=apt-1",
+);
+check(
+  "a pending request in a professional's file is answered, not edited or deleted",
+  managerRowActions({ status: "pending" }) === "answer" &&
+    managerRowActions({ status: "approved" }) === "edit" &&
+    managerRowActions({}) === "edit",
+);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

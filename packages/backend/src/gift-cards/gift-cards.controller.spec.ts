@@ -13,16 +13,15 @@ const feature = (name: keyof GiftCardsController) =>
   Reflect.getMetadata(FEATURE_KEY_METADATA, GiftCardsController);
 
 describe("GiftCardsController access", () => {
-  it("the till (whole team) looks cards up and redeems them, whatever the plan", () => {
-    for (const name of ["lookup", "redeem"] as const) {
-      expect(roles(name)).toEqual(["owner", "admin", "staff"]);
-      // Clients paid for their cards: a downgrade must not block spending them.
-      expect(feature(name)).toBeUndefined();
-    }
+  it("the till (whole team) looks cards up, whatever the plan", () => {
+    expect(roles("lookup")).toEqual(["owner", "admin", "staff"]);
+    // Clients paid for their cards: a downgrade must not block spending them
+    // at the till, which spends them inside the sale.
+    expect(feature("lookup")).toBeUndefined();
   });
 
-  it("listing, detail, issuing, editing and deactivating are for managers on a plan with gift cards", () => {
-    for (const name of ["findAll", "findOne", "create", "update", "remove"] as const) {
+  it("listing, detail, issuing, editing, redeeming outside a sale and deactivating are for managers on a plan with gift cards", () => {
+    for (const name of ["findAll", "findOne", "create", "update", "redeem", "remove"] as const) {
       expect(roles(name)).toEqual(["owner", "admin"]);
       expect(feature(name)).toBe("gift_cards");
     }
