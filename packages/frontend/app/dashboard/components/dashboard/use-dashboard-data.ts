@@ -1,11 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import apiClient from "@/lib/api";
+import apiClient, { type HomeAppointmentRow, type HomeSummary } from "@/lib/api";
 import { isManager } from "@/lib/dashboard-nav";
+import { todayPaymentsFigures, type TodayPaymentRow } from "@/lib/home-dashboard";
 import { getCurrentUser } from "@/lib/utils";
 
+export type { HomeAppointmentRow };
+
 export interface DashboardStats {
+  /** Appointments' revenue (cents), Analítica's "Ingresos de citas". */
   totalRevenue: number;
   totalAppointments: number;
   newClients: number;
@@ -17,128 +21,38 @@ export interface DashboardStats {
   orderValueChange: number | null;
 }
 
-export interface RevenueDataPoint {
-  month: string;
-  revenue: number;
-}
-
-export interface ServicePopularity {
-  name: string;
-  count: number;
-  percentage: number;
-}
-
-export interface AppointmentStatusData {
-  name: string;
-  count: number;
-  color: string;
-}
-
-export interface TopService {
-  name: string;
-  count: number;
-  revenue: number;
-}
-
-export interface TopProfessional {
-  name: string;
-  appointments: number;
-  revenue: number;
-}
-
 export interface DailyMetric {
   date: string;
   appointments: number;
   revenue: number;
 }
 
-export interface UpcomingAppointment {
-  id: string;
-  scheduledDate: string;
-  scheduledTime: string;
-  status: string;
-  paymentStatus?: string;
-  totalAmount?: number | null;
-  client?:
-    | string
-    | {
-        id: string;
-        firstName: string;
-        lastName: string;
-      };
-  professional?:
-    | string
-    | {
-        id: string;
-        firstName: string;
-        lastName: string;
-      };
-  service?:
-    | string
-    | {
-        id: string;
-        name: string;
-      };
-}
-
-export interface PendingPaymentAppointment {
-  id: string;
-  scheduledDate: string;
-  scheduledTime: string;
-  status: string;
-  paymentStatus?: string;
-  totalAmount?: number | null;
-  amountPaid?: number;
-  amountDue?: number;
-  client?: {
-    id: string;
-    firstName: string;
-    lastName: string;
-  };
-  professional?: {
-    id: string;
-    firstName: string;
-    lastName: string;
-  };
-  service?: {
-    id: string;
-    name: string;
-  };
-}
-
-export interface TodayPayment {
-  id: string;
-  amount: number;
-  status: string;
-  createdAt: string;
-  client?: {
-    id: string;
-    firstName: string;
-    lastName: string;
-  };
+/** One slice of the status donut: `status` decides its colour and its name. */
+export interface AppointmentStatusData {
+  status?: string;
+  name: string;
+  count: number;
 }
 
 export interface DashboardData {
-  // From /analytics/overview
+  // From /analytics/overview (owner and admins)
   stats: DashboardStats;
-  revenueData: RevenueDataPoint[];
-  servicePopularity: ServicePopularity[];
-  appointmentStatus: AppointmentStatusData[];
-  topServices: TopService[];
-  topProfessionals: TopProfessional[];
   dailyMetrics: DailyMetric[];
-  // From /analytics/appointment-status-by-days
+  // From /analytics/appointment-status-by-days (owner and admins)
   statusByDays: AppointmentStatusData[];
-  // From /payments/today + /clients + /professionals
-  todayPayments: TodayPayment[];
+  /** Paid today less refunds, in cents, and how many payments. */
   todayPaymentsTotal: number;
+  todayPaymentsCount: number;
+  /** Owner and admins only (staff cannot list the team). */
   activeProfessionals: number;
+  /** Active clients; a professional's own. */
   totalClients: number;
-  // Lists
-  upcomingAppointments: UpcomingAppointment[];
-  pendingConfirmations: UpcomingAppointment[];
-  pendingPayments: PendingPaymentAppointment[];
-  // Notifications
+  /** GET /appointments/home: the salon's day and clock, and the lists. */
+  today: string;
+  now: string;
+  todayAppointments: HomeAppointmentRow[];
+  pendingConfirmations: HomeSummary["pendingConfirmations"];
+  pendingPayments: HomeSummary["pendingPayments"];
   unreadNotificationsCount: number;
 }
 
@@ -148,38 +62,36 @@ const EMPTY: DashboardData = {
     totalAppointments: 0,
     newClients: 0,
     avgOrderValue: 0,
-    revenueChange: 0,
-    appointmentsChange: 0,
-    clientsChange: 0,
-    orderValueChange: 0,
+    revenueChange: null,
+    appointmentsChange: null,
+    clientsChange: null,
+    orderValueChange: null,
   },
-  revenueData: [],
-  servicePopularity: [],
-  appointmentStatus: [],
-  topServices: [],
-  topProfessionals: [],
   dailyMetrics: [],
   statusByDays: [],
-  todayPayments: [],
   todayPaymentsTotal: 0,
+  todayPaymentsCount: 0,
   activeProfessionals: 0,
   totalClients: 0,
-  upcomingAppointments: [],
-  pendingConfirmations: [],
-  pendingPayments: [],
+  today: "",
+  now: "",
+  todayAppointments: [],
+  pendingConfirmations: { total: 0, items: [] },
+  pendingPayments: { total: 0, totalDue: 0, items: [] },
   unreadNotificationsCount: 0,
 };
 
 /**
- * Fetches every piece of data the dashboard overview needs.
+ * Everything Inicio shows, each piece asked of the server already counted:
+ * Analítica's overview and status breakdown (owner and admins), today's
+ * payments, the number of active clients (a page of one row: its `total`),
+ * the team (owner and admins), the home lists (GET /appointments/home: today,
+ * to confirm and to charge, five rows each with the true totals) and the
+ * unread notifications.
  *
- * Uses the dedicated analytics endpoints (`getAnalyticsOverview`,
- * `getAppointmentStatusByDays`) instead of pulling the entire
- * `clients` and `appointments` collections and aggregating in the
- * browser, which is what the previous implementation did.
- *
- * Also fetches supporting widgets: today's payments, pending
- * payments, upcoming appointments, unread notifications.
+ * It used to download every client, every "pending" appointment of a year
+ * back and ahead and every unpaid visit of the salon's history -- thousands
+ * of rows -- to show five of each and two counters.
  */
 export function useDashboardData() {
   const [data, setData] = useState<DashboardData>(EMPTY);
@@ -189,9 +101,10 @@ export function useDashboardData() {
   // value so one failure does not blank the whole dashboard -- but it used to
   // do so silently, showing €0 and 0 clients as if they were real figures.
   const [partialFailures, setPartialFailures] = useState<string[]>([]);
-  // The salon's figures (Analítica's overview and status counts) are the
-  // owner's and admins': the API answers staff with a 403, so they are not
-  // asked for, and the page leaves those cards out.
+  // The salon's figures (Analítica's overview and status counts, the team)
+  // are the owner's and admins': the API answers staff with a 403, so they
+  // are not asked for, and the page leaves those cards out. Asking anyway
+  // showed every professional a "some data could not be loaded" banner.
   const [salonFigures, setSalonFigures] = useState(false);
 
   const fetchData = useCallback(async () => {
@@ -207,86 +120,37 @@ export function useDashboardData() {
         return fallback;
       });
     try {
-      const [
-        overview,
-        statusByDays,
-        todayPayments,
-        clients,
-        professionals,
-        upcoming,
-        pendingPayments,
-        unread,
-      ] = await Promise.all([
+      const [overview, statusByDays, todayPayments, clients, professionals, home, unread] = await Promise.all([
         manager ? soft("overview", apiClient.getAnalyticsOverview(1), null) : null,
         manager ? soft("statusByDays", apiClient.getAppointmentStatusByDays(14), [] as any[]) : ([] as any[]),
         soft("todayPayments", apiClient.getTodayPayments(), [] as any[]),
-        soft("clients", apiClient.getClients(), [] as any[]),
-        soft("professionals", apiClient.getProfessionals(), [] as any[]),
-        soft(
-          "upcoming",
-          apiClient.getAppointments({ status: "pending" }),
-          [] as any[],
-        ),
-        soft("pendingPayments", apiClient.getPendingPaymentAppointments(), [] as any[]),
+        soft("clients", apiClient.getClientsPage({ page: 1, pageSize: 1, status: "active" }), null),
+        manager ? soft("professionals", apiClient.getProfessionals(), [] as any[]) : ([] as any[]),
+        soft("home", apiClient.getHomeSummary(), null as HomeSummary | null),
         soft("unread", apiClient.getUnreadNotificationCount(), { count: 0 }),
       ]);
 
-      const todayPaymentsTotal = (todayPayments as TodayPayment[]).reduce(
-        (sum, p) => sum + Number((p as any).amount ?? 0),
-        0,
-      );
-
-      const pendingConfirmations = (
-        upcoming as UpcomingAppointment[]
-      ).filter((a) => a.status === "pending").slice(0, 5);
-
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
-      const todaysUpcoming = (
-        upcoming as UpcomingAppointment[]
-      ).filter((a) => {
-        const aptDate = new Date(a.scheduledDate);
-        return (
-          aptDate >= today && (a.status === "pending" || a.status === "confirmed")
-        );
-      })
-        .sort(
-          (a, b) =>
-            new Date(a.scheduledDate).getTime() -
-            new Date(b.scheduledDate).getTime(),
-        )
-        .slice(0, 5);
+      const payments = todayPaymentsFigures((todayPayments ?? []) as TodayPaymentRow[]);
 
       setData({
         stats: overview?.stats ?? EMPTY.stats,
-        revenueData: overview?.revenueData ?? [],
-        servicePopularity: overview?.servicePopularity ?? [],
-        appointmentStatus: overview?.appointmentStatus ?? [],
-        topServices: overview?.topServices ?? [],
-        topProfessionals: overview?.topProfessionals ?? [],
         dailyMetrics: overview?.dailyMetrics ?? [],
         statusByDays: (statusByDays as AppointmentStatusData[]) ?? [],
-        todayPayments: (todayPayments as TodayPayment[]) ?? [],
-        todayPaymentsTotal,
-        activeProfessionals: (professionals as any[]).filter(
-          (p) => p.isActive !== false,
-        ).length,
-        totalClients: (clients as any[]).length,
-        upcomingAppointments: todaysUpcoming,
-        pendingConfirmations,
-        pendingPayments: (pendingPayments as PendingPaymentAppointment[]).slice(
-          0,
-          5,
-        ),
+        todayPaymentsTotal: payments.totalCents,
+        todayPaymentsCount: payments.count,
+        activeProfessionals: (professionals as any[]).filter((p) => p.isActive !== false).length,
+        totalClients: clients?.total ?? 0,
+        today: home?.today ?? "",
+        now: home?.now ?? "",
+        todayAppointments: home?.todayAppointments ?? [],
+        pendingConfirmations: home?.pendingConfirmations ?? EMPTY.pendingConfirmations,
+        pendingPayments: home?.pendingPayments ?? EMPTY.pendingPayments,
         unreadNotificationsCount: (unread as any)?.count ?? 0,
       });
       setPartialFailures(failed);
     } catch (err) {
       console.error("Failed to load dashboard data:", err);
-      setError(
-        err instanceof Error ? err.message : "Failed to load dashboard data",
-      );
+      setError(err instanceof Error ? err.message : "");
     } finally {
       setLoading(false);
     }

@@ -4,6 +4,7 @@ import { PublicViewerModule } from "../common/tenancy/public-viewer.service";
 import { AppointmentsService } from "./appointments.service";
 import { AppointmentServicesController } from "./appointment-services.controller";
 import { AppointmentServicesService } from "./appointment-services.service";
+import { HomeSummaryService } from "./home-summary.service";
 import { NotificationsModule } from "../notifications/notifications.module";
 import { TranslationsModule } from "../translations/translations.module";
 import { ConsentModule } from "../consent/consent.module";
@@ -29,7 +30,7 @@ import { WhatsAppMessagingModule } from "../whatsapp/whatsapp-messaging.module";
     WaitListModule,
   ],
   controllers: [AppointmentsController, AppointmentServicesController],
-  providers: [AppointmentsService, AppointmentServicesService],
-  exports: [AppointmentsService, AppointmentServicesService],
+  providers: [AppointmentsService, AppointmentServicesService, HomeSummaryService],
+  exports: [AppointmentsService, AppointmentServicesService, HomeSummaryService],
 })
 export class AppointmentsModule {}

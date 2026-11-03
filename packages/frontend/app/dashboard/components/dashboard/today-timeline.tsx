@@ -1,14 +1,18 @@
 "use client";
 
 import React, { useMemo } from "react";
+import { countKey, hourOf } from "@/lib/home-dashboard";
+import { useTranslations } from "@/lib/use-translation";
 
 interface TodayTimelineProps {
   /**
    * Today's appointments with a `scheduledTime` field formatted as
    * "HH:mm" (24-hour). Anything outside 08:00–20:00 is still
-   * rendered but compressed into the last bucket.
+   * rendered but compressed into the first or last bucket.
    */
   appointments: { scheduledTime: string }[];
+  /** The salon's clock ("HH:mm"), for the "now" marker; the browser's when empty. */
+  now?: string;
   startHour?: number;
   endHour?: number;
   className?: string;
@@ -18,16 +22,17 @@ interface TodayTimelineProps {
  * Hour-by-hour appointment density strip for "today's schedule at a
  * glance" on the dashboard. Each bar represents one hour and its
  * height encodes the number of appointments booked in that hour. A
- * subtle "now" marker overlays the current hour so the salon owner
- * sees where they are in the day without leaving the dashboard.
+ * subtle "now" marker overlays the salon's current hour.
  */
 export const TodayTimeline: React.FC<TodayTimelineProps> = ({
   appointments,
+  now,
   startHour = 8,
   endHour = 20,
   className = "",
 }) => {
-  const { buckets, maxCount, currentHour, currentBucketIndex } = useMemo(() => {
+  const t = useTranslations();
+  const { buckets, maxCount, currentBucketIndex } = useMemo(() => {
     const hours = endHour - startHour;
     const buckets = Array.from({ length: hours }, (_, i) => ({
       hour: startHour + i,
@@ -35,9 +40,8 @@ export const TodayTimeline: React.FC<TodayTimelineProps> = ({
     }));
 
     appointments.forEach((apt) => {
-      const match = (apt.scheduledTime || "").match(/^(\d{1,2})/);
-      if (!match) return;
-      const hour = parseInt(match[1], 10);
+      const hour = hourOf(apt.scheduledTime);
+      if (hour === null) return;
       const idx = hour - startHour;
       if (idx >= 0 && idx < hours) {
         buckets[idx].count += 1;
@@ -49,14 +53,12 @@ export const TodayTimeline: React.FC<TodayTimelineProps> = ({
     });
 
     const maxCount = Math.max(...buckets.map((b) => b.count), 1);
-    const currentHour = new Date().getHours();
-    const currentBucketIndex = Math.min(
-      Math.max(currentHour - startHour, 0),
-      hours - 1,
-    );
+    const currentHour = hourOf(now) ?? new Date().getHours();
+    const currentBucketIndex =
+      currentHour < startHour || currentHour >= endHour ? -1 : currentHour - startHour;
 
-    return { buckets, maxCount, currentHour, currentBucketIndex };
-  }, [appointments, startHour, endHour]);
+    return { buckets, maxCount, currentBucketIndex };
+  }, [appointments, now, startHour, endHour]);
 
   const totalAppointments = buckets.reduce((sum, b) => sum + b.count, 0);
 
@@ -80,9 +82,10 @@ export const TodayTimeline: React.FC<TodayTimelineProps> = ({
                     : "bg-gray-100"
                 }`}
                 style={{ height: `${Math.max(heightPct, bucket.count > 0 ? 8 : 4)}%` }}
-                title={`${bucket.hour}:00 – ${bucket.count} appointment${
-                  bucket.count === 1 ? "" : "s"
-                }`}
+                title={`${bucket.hour.toString().padStart(2, "0")}:00 – ${t(
+                  countKey("dashboard.appointments_count", bucket.count),
+                  { count: bucket.count },
+                )}`}
               />
               {isCurrentHour && (
                 <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 rounded-full bg-red-500" />
@@ -106,9 +109,7 @@ export const TodayTimeline: React.FC<TodayTimelineProps> = ({
         ))}
       </div>
       {totalAppointments === 0 && (
-        <p className="text-xs text-gray-400 text-center mt-2">
-          No appointments scheduled today
-        </p>
+        <p className="text-xs text-gray-400 text-center mt-2">{t("dashboard.no_appointments_today")}</p>
       )}
     </div>
   );

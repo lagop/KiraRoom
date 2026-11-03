@@ -99,7 +99,7 @@ describe("GET /appointments/available-slots", () => {
     const svc = build();
     const spy = jest.spyOn(svc, "getAvailableSlots").mockResolvedValue([] as any);
     const viewer: any = { resolve: async () => ({ tenantId: TENANT, staff }) };
-    return { controller: new AppointmentsController(svc, viewer), spy };
+    return { controller: new AppointmentsController(svc, viewer, {} as any), spy };
   }
   const query: any = { tenantId: TENANT, date: "2026-10-05", serviceId: SERVICE };
 

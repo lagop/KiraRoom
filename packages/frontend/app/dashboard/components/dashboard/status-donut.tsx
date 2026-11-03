@@ -1,11 +1,15 @@
 "use client";
 
 import React from "react";
+import { donutColor, donutLabelKey } from "@/lib/home-dashboard";
+import { useTranslations } from "@/lib/use-translation";
 
 interface StatusSlice {
+  /** The appointment status: it decides the slice's colour and its name. */
+  status?: string;
+  /** The API's English name, only for a status without a translation. */
   name: string;
   count: number;
-  color?: string;
 }
 
 interface StatusDonutProps {
@@ -15,25 +19,10 @@ interface StatusDonutProps {
   className?: string;
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  Completed: "#10b981", // emerald-500
-  Confirmed: "#3b82f6", // blue-500
-  Pending: "#eab308", // yellow-500
-  Cancelled: "#ef4444", // red-500
-  "No Show": "#6b7280", // gray-500
-  "In Progress": "#8b5cf6", // violet-500
-};
-
 /**
- * Compact donut chart for the appointment status breakdown shown on
- * the dashboard overview.
- *
- * - Slices are computed proportionally and drawn as overlapping
- *   `<circle>` elements with stroke-dasharray offsets (no third-party
- *   chart library).
- * - The center of the donut shows the total count, with the title
- *   configurable.
- * - A legend underneath lists each status with its color and count.
+ * Donut of the appointments by status, with a legend. Colours come from the
+ * status (DONUT_COLORS): the API's `color` is a Tailwind class, which as an
+ * SVG stroke drew a grey ring with no slices. Names are Analítica's.
  */
 export const StatusDonut: React.FC<StatusDonutProps> = ({
   data,
@@ -41,6 +30,7 @@ export const StatusDonut: React.FC<StatusDonutProps> = ({
   thickness = 18,
   className = "",
 }) => {
+  const t = useTranslations();
   const total = data.reduce((sum, s) => sum + (s.count || 0), 0);
   const radius = (size - thickness) / 2;
   const circumference = 2 * Math.PI * radius;
@@ -51,7 +41,7 @@ export const StatusDonut: React.FC<StatusDonutProps> = ({
         className={`flex items-center justify-center text-xs text-gray-400 ${className}`}
         style={{ minHeight: size }}
       >
-        No data
+        {t("dashboard.no_data")}
       </div>
     );
   }
@@ -64,26 +54,27 @@ export const StatusDonut: React.FC<StatusDonutProps> = ({
       const strokeLength = fraction * circumference;
       const offset = cumulative * circumference;
       cumulative += fraction;
+      const labelKey = donutLabelKey(s.status);
       return {
-        ...s,
+        key: s.status ?? s.name,
+        label: labelKey ? t(labelKey) : s.name,
+        count: s.count,
         strokeLength,
         offset,
-        color: s.color || STATUS_COLORS[s.name] || "#9ca3af",
+        color: donutColor(s.status),
       };
     });
 
   return (
     <div className={`flex flex-col items-center ${className}`}>
-      <div
-        className="relative"
-        style={{ width: size, height: size }}
-      >
+      <div className="relative" style={{ width: size, height: size }}>
         <svg
           viewBox={`0 0 ${size} ${size}`}
           className="transform -rotate-90"
           width={size}
           height={size}
-          aria-label="Appointment status breakdown"
+          role="img"
+          aria-label={`${t("analytics.appointment_status")}: ${slices.map((s) => `${s.label} ${s.count}`).join(", ")}`}
         >
           <circle
             cx={size / 2}
@@ -93,9 +84,9 @@ export const StatusDonut: React.FC<StatusDonutProps> = ({
             stroke="#f3f4f6"
             strokeWidth={thickness}
           />
-          {slices.map((s, i) => (
+          {slices.map((s) => (
             <circle
-              key={i}
+              key={s.key}
               cx={size / 2}
               cy={size / 2}
               r={radius}
@@ -110,24 +101,22 @@ export const StatusDonut: React.FC<StatusDonutProps> = ({
           ))}
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <span className="text-2xl font-bold text-gray-900 leading-none">
-            {total}
-          </span>
+          <span className="text-2xl font-bold text-gray-900 leading-none">{total}</span>
           <span className="text-[10px] uppercase tracking-wide text-gray-500 mt-1">
-            Total
+            {t("analytics.total")}
           </span>
         </div>
       </div>
       <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 mt-3">
-        {slices.map((s, i) => (
-          <div key={i} className="flex items-center text-xs">
+        {slices.map((s) => (
+          <div key={s.key} className="flex items-center text-xs">
             <span
               className="w-2 h-2 rounded-full mr-1.5 flex-shrink-0"
               style={{ backgroundColor: s.color }}
+              aria-hidden
             />
             <span className="text-gray-600">
-              {s.name}:{" "}
-              <span className="font-medium text-gray-900">{s.count}</span>
+              {s.label}: <span className="font-medium text-gray-900">{s.count}</span>
             </span>
           </div>
         ))}
