@@ -6,6 +6,7 @@ import { salonInstant } from "../appointments/salon-time";
 import { appointmentLocationId } from "../multi-location/appointment-location";
 import { placeholderEmail } from "../common/placeholder-email";
 import { workingHoursProblem } from "../professionals/working-hours-input";
+import { salonHoursEntries } from "../appointments/working-hours";
 
 interface StepStatusRecord {
   status: "pending" | "done" | "skipped" | "dismissed";
@@ -174,9 +175,12 @@ export class OnboardingService {
       this.prisma.appointment.count({ where: { tenantId } }),
     ]);
 
-    // A non-empty week (the list format), or what an earlier wizard stored.
-    const hours = (tenant.openingHours as Record<string, unknown> | null) ?? {};
-    const hasWorkingHours = Object.keys(hours).length > 0;
+    // The salon's week as availability reads it (list format, or the old
+    // { open, close } pair). Sent to the wizard so its editor starts from
+    // the saved hours instead of Monday-Friday 09-19, which saving used to
+    // write over whatever the owner had set in Ajustes.
+    const openingHours = salonHoursEntries(tenant.openingHours) ?? [];
+    const hasWorkingHours = openingHours.length > 0;
 
     return {
       tenantId: tenant.id,
@@ -185,6 +189,7 @@ export class OnboardingService {
       hasServices: services > 0,
       hasStaff: professionals > 0,
       hasWorkingHours,
+      openingHours,
       hasFirstAppointment: appointments > 0,
       serviceTemplates: this.serviceTemplates,
     };

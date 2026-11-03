@@ -89,6 +89,7 @@ export const TENANT_SETTINGS_SELECT = {
   state: true,
   phone: true,
   logo: true,
+  coverImage: true,
   // Consumed by /dashboard/settings, which used to show invented
   // values for all of these and save none of them.
   email: true,

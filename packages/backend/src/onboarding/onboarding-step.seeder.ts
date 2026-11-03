@@ -85,8 +85,12 @@ const DEFAULT_STEP_DEFS: Array<{
     group: OnboardingGroup.checklist_optional,
     titleI18nKey: "onboarding.reminders_enabled.title",
     descI18nKey: "onboarding.reminders_enabled.desc",
-    href: "/dashboard/notifications",
-    detectName: "hasActiveReminderTemplate",
+    // Reminders go by email on their own to every client with an email
+    // (NotificationsScheduler); the one thing the salon can add is WhatsApp
+    // from its own number. The step used to count NotificationTemplate rows,
+    // which nothing creates, and link to the notification inbox.
+    href: "/dashboard/settings/whatsapp",
+    detectName: "hasReminderChannel",
   },
   {
     key: "widget_qr_setup",
