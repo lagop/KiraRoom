@@ -54,7 +54,7 @@ describe("PUT /appointments/:id/cancel and /complete bodies", () => {
 
   it("reach the service as before", async () => {
     const svc: any = { cancel: jest.fn(async () => ({})), complete: jest.fn(async () => ({})) };
-    const c = new AppointmentsController(svc, {} as any);
+    const c = new AppointmentsController(svc, {} as any, {} as any);
     const req = { user: { id: "u1", role: "owner", tenantId: "t1" } };
     await c.cancel(req, "apt-1", (await parse("cancel", { reason: "Enferma" })) as CancelAppointmentDto);
     await c.complete(req, "apt-1", (await parse("complete", { notes: "Mechas" })) as CompleteAppointmentDto);

@@ -6,7 +6,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { DASHBOARD_NAV, NavEntry, NavLink, activeGroup, badgesIn, isActive, isOwner, managersOnlyPage, navFor } from "./dashboard-nav";
+import { DASHBOARD_NAV, NavEntry, NavLink, activeGroup, badgesIn, isActive, isOwner, managersOnlyPage, navFor, pageTitleKey } from "./dashboard-nav";
 
 let pass = 0;
 let fail = 0;
@@ -165,6 +165,19 @@ console.log("the notice's texts");
   check(
     "every key in es.json and en.json",
     ["title", "body", "home"].every((k) => messages.every((m) => typeof m.managersOnly?.[k] === "string" && m.managersOnly[k])),
+  );
+}
+
+console.log("the header's title follows the page (it said Dashboard everywhere)");
+{
+  check("Inicio", pageTitleKey("/dashboard") === "nav.dashboard");
+  check("an appointment's page is the agenda's", pageTitleKey("/dashboard/appointments/abc") === "nav.appointments");
+  check("the most specific link wins", pageTitleKey("/dashboard/pos/products") === "nav.pos_products" && pageTitleKey("/dashboard/pos") === "nav.pos");
+  check("a settings page of its own", pageTitleKey("/dashboard/settings/cierres") === "nav.closures");
+  check("a trailing slash is the same page", pageTitleKey("/dashboard/clients/") === "nav.clients");
+  check(
+    "a page the menu does not list has no title",
+    pageTitleKey("/dashboard/notifications") === null && pageTitleKey("/dashboard/settings/whatsapp") === null,
   );
 }
 

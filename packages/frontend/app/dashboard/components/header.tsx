@@ -1,14 +1,15 @@
 "use client";
 
-import { BadgeEuro, ChevronDown, LogOut, Menu, Search, Settings, ShieldCheck, User } from "lucide-react";
+import { BadgeEuro, ChevronDown, LogOut, Menu, Settings, ShieldCheck, User } from "lucide-react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { NotificationBell } from "./notification-bell";
 import { LanguageSwitcher } from "./language-switcher";
 import { TenantIdentityBadge } from "./tenant-identity-badge";
 import { getCurrentUser } from "@/lib/utils";
-import { isManager, isOwner } from "@/lib/dashboard-nav";
+import { isManager, isOwner, pageTitleKey } from "@/lib/dashboard-nav";
 import { signOut } from "@/lib/sign-out";
 import { useTranslations } from "@/lib/use-translation";
 
@@ -42,6 +43,9 @@ export function DashboardHeader({
   const manager = isManager(currentUser?.role);
   // Facturación is the owner's: every billing route answers admins 403.
   const owner = isOwner(currentUser?.role);
+  // The page's own name (the menu's label); none for a page the menu does
+  // not list. It said "Dashboard" on every page.
+  const titleKey = pageTitleKey(usePathname() ?? "");
 
   return (
     <header className="bg-white/90 backdrop-blur-md border-b border-gray-200 px-4 py-3 sm:px-6 sticky top-0 z-10">
@@ -53,24 +57,18 @@ export function DashboardHeader({
               className={`p-2 -ml-2 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors flex-shrink-0 ${
                 mobileOnly ? "md:hidden" : ""
               }`}
-              title="Toggle sidebar"
+              title={t("dashboard.toggle_menu")}
+              aria-label={t("dashboard.toggle_menu")}
             >
               <Menu className="h-5 w-5" />
             </button>
           )}
-          <h2 className="text-lg sm:text-xl font-semibold text-gray-800 truncate">
-            Dashboard
-          </h2>
-          <div className="relative hidden md:block">
-            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-              <Search className="h-5 w-5 text-gray-400" />
-            </div>
-            <input
-              type="text"
-              placeholder="Search..."
-              className="block w-64 pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-purple-500 focus:border-purple-500 sm:text-sm"
-            />
-          </div>
+          {/* No search box: it searched nothing. Clients and the agenda have their own. */}
+          {titleKey && (
+            <h2 className="text-lg sm:text-xl font-semibold text-gray-800 truncate">
+              {t(titleKey)}
+            </h2>
+          )}
         </div>
 
         <div className="flex items-center flex-shrink-0 gap-2 sm:gap-3">

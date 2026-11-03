@@ -17,6 +17,7 @@ import { UpdateAppointmentDto } from "./dto/update-appointment.dto";
 import { UpdateAppointmentPaymentDto } from "./dto/update-appointment-payment.dto";
 import { CancelAppointmentDto, CompleteAppointmentDto } from "./dto/appointment-status.dto";
 import { AvailableSlotsDto } from "./dto/available-slots.dto";
+import { HomeSummaryService } from "./home-summary.service";
 import { OnlineBookingDto, StaffBookingDto } from "./dto/book-appointment.dto";
 import { PublicViewerService } from "../common/tenancy/public-viewer.service";
 import { ScrubSecretsInterceptor, publicBooking } from "./appointment-response";
@@ -46,6 +47,7 @@ export class AppointmentsController {
   constructor(
     private readonly appointmentsService: AppointmentsService,
     private readonly publicViewer: PublicViewerService,
+    private readonly homeSummary: HomeSummaryService,
   ) {}
 
   @Post()
@@ -125,6 +127,18 @@ export class AppointmentsController {
       profIds,
       { onlineWindow: !staff, locationId },
     );
+  }
+
+  /**
+   * Inicio's lists (home-summary.service.ts): today's appointments, the
+   * pending ones from today on and the visits still owed, five rows each
+   * with the true totals, in the salon's day. Staff: their own.
+   */
+  @Get("home")
+  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
+  @ApiOperation({ summary: "The panel's home lists: today, to confirm and to charge" })
+  async home(@Req() req: any) {
+    return this.homeSummary.getHome(req.user);
   }
 
   // Literal paths must be declared before ":id". Declared after it,
