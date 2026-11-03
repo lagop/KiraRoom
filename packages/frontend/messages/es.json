@@ -389,10 +389,6 @@
       "title": "Define los horarios",
       "desc": "Configura los bloques semanales de cada profesional para que los huecos sean visibles."
     },
-    "payment_method": {
-      "title": "Conecta los pagos",
-      "desc": "Añade tu cuenta de Stripe para cobrar online y depositos."
-    },
     "branding": {
       "title": "Imagen de portada y descripción",
       "desc": "Sube una foto de portada y escribe una descripción atractiva."
@@ -738,6 +734,13 @@
     "esencial": "Esencial",
     "pro": "Pro",
     "empresa": "Empresa"
+  },
+  "trialBanner": {
+    "daysLeft": "Te quedan {days} días de prueba del plan {plan}.",
+    "lastDay": "Te queda 1 día de prueba del plan {plan}.",
+    "body": "Elige un plan para seguir usándolo todo sin cortes.",
+    "cta": "Elegir plan",
+    "dismiss": "Ocultar hasta mañana"
   },
   "multiLocation": {
     "consolidated": {

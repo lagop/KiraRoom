@@ -9,6 +9,7 @@ import { ShieldAlert } from "lucide-react";
 import { OnboardingHost } from "./_components/onboarding/OnboardingHost";
 import CookieBanner from "../components/cookie-banner";
 import { ReadOnlyBanner } from "@/components/billing/ReadOnlyBanner";
+import { TrialEndingBanner } from "@/components/billing/TrialEndingBanner";
 import { managersOnlyPage } from "@/lib/dashboard-nav";
 import { getCurrentUser } from "@/lib/utils";
 import { ManagersOnlyNotice } from "./components/managers-only-notice";
@@ -221,6 +222,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         />
         {/* Trial ended without a plan, or the subscription was cancelled or suspended. */}
         <ReadOnlyBanner />
+        {/* Last 7 days of the trial, owner only (D25). */}
+        <TrialEndingBanner />
 
         {/* Page content */}
         <main className="flex-1 p-6 bg-white shadow-sm min-w-0 overflow-x-hidden">

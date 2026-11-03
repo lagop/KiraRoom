@@ -1240,6 +1240,8 @@ export interface Subscription {
   id?: string;
   tenantId?: string;
   plan: string;
+  /** The plan the salon uses now: Pro during the trial, else its plan. */
+  effectivePlan?: string;
   legacyPlan?: string;
   subscriptionStatus?: string;
   status: "active" | "cancelled" | "past_due" | "trialing";
