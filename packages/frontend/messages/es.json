@@ -1249,7 +1249,16 @@
     "appointments_count_other": "{count} citas",
     "no_appointments_today": "No hay citas hoy",
     "unread_notifications_one": "1 notificación sin leer",
-    "unread_notifications_other": "{count} notificaciones sin leer"
+    "unread_notifications_other": "{count} notificaciones sin leer",
+    "revenue_with_till_month": "Ingresos + caja (este mes)",
+    "whole_salon": "todo el salón",
+    "location_line": "Local: {name}",
+    "occupancy_today": "Ocupación de hoy",
+    "occupancy_today_sub": "{booked} reservadas de {available}",
+    "my_agenda_today": "Tu agenda de hoy",
+    "agenda_by_professional": "Agenda de hoy por profesional",
+    "no_professional": "Sin profesional",
+    "free_today": "Libre hoy"
   },
   "appointments": {
     "title": "Citas",

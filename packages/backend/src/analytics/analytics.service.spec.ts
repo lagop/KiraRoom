@@ -333,4 +333,36 @@ describe("AnalyticsService", () => {
       endDate: { gte: new Date("2026-10-01T00:00:00.000Z") },
     });
   });
+
+  it("today's occupancy (Inicio): the same definition over the salon's today", async () => {
+    // 23:30 UTC on Wednesday 30 Sept is already Thursday 1 Oct in Madrid.
+    jest.useFakeTimers().setSystemTime(new Date("2026-09-30T23:30:00Z"));
+    const prisma = makePrisma();
+    prisma.professional.findMany.mockResolvedValue([
+      { id: "p1", workingHours: [{ day: "thursday", openTime: "10:00", closeTime: "14:00" }] },
+    ]);
+    prisma.appointment.findMany.mockResolvedValue([
+      { status: "confirmed", professionalId: "p1", duration: 60, scheduledDate: new Date("2026-10-01T00:00:00Z"), scheduledTime: "10:00" },
+      { status: "cancelled", professionalId: "p1", duration: 60, scheduledDate: new Date("2026-10-01T00:00:00Z"), scheduledTime: "11:00" },
+    ]);
+    const service = new AnalyticsService(prisma as any);
+
+    const today = await service.getTodayOccupancy("t1");
+
+    expect(today).toEqual({ bookedMinutes: 60, availableMinutes: 240, rate: 25, professionalsWithSchedule: 1 });
+    const where = prisma.appointment.findMany.mock.calls[0][0].where;
+    expect(where.scheduledDate).toEqual({ gte: new Date("2026-10-01T00:00:00.000Z"), lt: new Date("2026-10-02T00:00:00.000Z") });
+  });
+
+  it("today's occupancy of one location: its appointments and professionals", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-10-01T10:00:00Z"));
+    const prisma = makePrisma();
+    const service = new AnalyticsService(prisma as any);
+    await service.getTodayOccupancy("t1", { locationId: "loc-1", name: "Centro", professionalIds: ["p1"] });
+    expect(prisma.appointment.findMany.mock.calls[0][0].where.OR).toEqual([
+      { locationId: "loc-1" },
+      { locationId: null, professionalId: { in: ["p1"] } },
+    ]);
+    expect(prisma.professional.findMany.mock.calls[0][0].where).toEqual({ tenantId: "t1", isActive: true, id: { in: ["p1"] } });
+  });
 });

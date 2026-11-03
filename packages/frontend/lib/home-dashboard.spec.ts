@@ -8,11 +8,13 @@ import * as fs from "fs";
 import * as path from "path";
 import {
   AGENDA_FOCUS_HREF,
+  agendaByProfessional,
   agendaFocusFromQuery,
   countKey,
   donutColor,
   donutLabelKey,
   hourOf,
+  isPast,
   matchesAgendaFocus,
   personName,
   remainingToday,
@@ -69,6 +71,42 @@ console.log("\n[remainingToday] by the salon's clock");
   check("no clock: all of them", remainingToday(rows, "").length, 4);
 }
 check("hourOf", [hourOf("09:30"), hourOf("23:05"), hourOf("")], [9, 23, null]);
+
+console.log("\n[agendaByProfessional] today under each professional (D30)");
+{
+  const ana = { id: "ana", firstName: "Ana", lastName: "Gil" };
+  const bea = { id: "bea", firstName: "Bea", lastName: "Ruiz" };
+  const old = { id: "old", firstName: "Olga", lastName: "Mar" };
+  const rows = [
+    { id: "1", professional: bea },
+    { id: "2", professional: ana },
+    { id: "3", professional: old },
+    { id: "4", professional: null },
+    { id: "5", professional: bea },
+  ];
+  const groups = agendaByProfessional([ana, bea, { id: "eva", firstName: "Eva", lastName: "Sol" }], rows);
+  check(
+    "the team in order, the free one too, then whoever else was booked, then no professional",
+    groups.map((g) => [g.professional?.id ?? null, g.appointments.map((a) => a.id)]),
+    [
+      ["ana", ["2"]],
+      ["bea", ["1", "5"]],
+      ["eva", []],
+      ["old", ["3"]],
+      [null, ["4"]],
+    ],
+  );
+  check("nobody, nothing", agendaByProfessional([], []), []);
+}
+check(
+  "isPast: behind the clock unless in progress",
+  [
+    isPast({ scheduledTime: "09:00", status: "confirmed" }, "10:00"),
+    isPast({ scheduledTime: "09:00", status: "in_progress" }, "10:00"),
+    isPast({ scheduledTime: "11:00", status: "pending" }, "10:00"),
+  ],
+  [true, false, false],
+);
 
 console.log("\n[texts]");
 check("count keys", [countKey("dashboard.x", 1), countKey("dashboard.x", 0), countKey("dashboard.x", 7)], [
