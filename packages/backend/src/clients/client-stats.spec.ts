@@ -73,7 +73,7 @@ describe("recomputeClientStats", () => {
     const stats = await recomputeClientStats(d, "t1", "c1");
 
     expect(d.appointment.aggregate).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { tenantId: "t1", clientId: "c1", status: "completed" } }),
+      expect.objectContaining({ where: { tenantId: "t1", clientId: "c1", isTest: false, status: "completed" } }),
     );
     expect(d.payment.aggregate).toHaveBeenCalledWith({
       where: { tenantId: "t1", clientId: "c1", status: "paid", method: { not: "loyalty_points" } },

@@ -335,6 +335,8 @@ export class OnboardingService {
           firstSpace > 0 ? trimmedName.slice(0, firstSpace) : trimmedName;
         const lastName = firstSpace > 0 ? trimmedName.slice(firstSpace + 1) : "";
 
+        // A client of the same name is reused (and kept: she is real). One
+        // created here is a test client, deleted with the booking (D27).
         let client = await this.prisma.client.findFirst({
           where: { tenantId, firstName, lastName },
         });
@@ -345,6 +347,7 @@ export class OnboardingService {
               firstName,
               lastName,
               email: placeholderEmail(`wizard-${Date.now()}`),
+              isTest: true,
             },
           });
         }
@@ -391,7 +394,11 @@ export class OnboardingService {
             servicePrice: service.price,
             serviceDuration: service.duration,
             locationId: await appointmentLocationId(this.prisma, tenantId, professional.id),
-            notes: "Created from onboarding wizard",
+            // D27: a test booking. It shows in the agenda, stays out of every
+            // figure (Analítica, Inicio, payments, client stats, the
+            // copilot) and the cleanup job deletes it the next salon day.
+            isTest: true,
+            notes: "Cita de prueba del configurador: se borra sola mañana.",
           },
         });
         completed++;

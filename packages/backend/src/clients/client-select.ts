@@ -28,6 +28,8 @@ export const CLIENT_LIST_SELECT = {
   createdAt: true,
   updatedAt: true,
   tenantId: true,
+  /** The onboarding wizard's test client (D27). */
+  isTest: true,
   firstName: true,
   lastName: true,
   email: true,

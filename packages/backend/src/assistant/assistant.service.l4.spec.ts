@@ -228,6 +228,25 @@ describe('AssistantService.getDailyBriefing (L-4)', () => {
     expect(res.gaps.total).toBe(0);
   });
 
+  it('staff see only their own clients at risk, as in Clientas (D28)', async () => {
+    const old = new Date('2026-08-01T00:00:00.000Z');
+    const clients = [
+      { id: 'c-mine', tenantId: TENANT_ID, firstName: 'Mía', status: 'active', lastVisit: old, createdAt: old, servedBy: ['staff-1'] },
+      { id: 'c-other', tenantId: TENANT_ID, firstName: 'Otra', status: 'active', lastVisit: old, createdAt: old, servedBy: ['other-prof'] },
+    ];
+    const prisma = makePrisma({ clients, professionals: [{ id: 'staff-1', userId: STAFF_USER.id, firstName: 'María' }] });
+    const inner = prisma.client.findMany.getMockImplementation();
+    prisma.client.findMany.mockImplementation(async (args: any) => {
+      const rows = await inner(args);
+      const pro = args.where?.appointments?.some?.professionalId;
+      return pro ? rows.filter((c: any) => c.servedBy.includes(pro)) : rows;
+    });
+    const staff = await makeService(prisma).getDailyBriefing({ id: STAFF_USER.id, tenantId: TENANT_ID, role: 'staff' });
+    expect(staff.clientsAtRisk.items.map((c) => c.id)).toEqual(['c-mine']);
+    const manager = await makeService(prisma).getDailyBriefing({ id: MANAGER_USER.id, tenantId: TENANT_ID, role: 'manager' });
+    expect(manager.clientsAtRisk.items.map((c) => c.id).sort()).toEqual(['c-mine', 'c-other']);
+  });
+
   it('gaps are per professional, inside each one\'s hours (I16)', async () => {
     const shift = (openTime: string, closeTime: string) => [{ day: 'tuesday', openTime, closeTime }];
     const appts = [

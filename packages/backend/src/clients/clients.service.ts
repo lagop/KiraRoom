@@ -36,6 +36,17 @@ export interface ClientScope {
   professionalId?: string;
 }
 
+/**
+ * The clients a scope reaches: staff only those they have served or will
+ * serve. Shared with the copilot's briefing, so "clientas en riesgo" shows a
+ * professional the same clients Clientas does.
+ */
+export function clientScopeWhere(scope: ClientScope): Prisma.ClientWhereInput {
+  return scope.professionalId
+    ? { appointments: { some: { professionalId: scope.professionalId } } }
+    : {};
+}
+
 export const STAFF_MAY_NOT_CHANGE =
   "Solo el propietario o un administrador pueden cambiar el email o el estado de un cliente";
 
@@ -101,7 +112,9 @@ export class ClientsService {
     scope: ClientScope,
     query: ClientListQuery,
   ): Promise<ClientPage<Prisma.ClientGetPayload<{ select: typeof CLIENT_LIST_SELECT }>>> {
-    const where: Prisma.ClientWhereInput = { tenantId, ...this.scopeWhere(scope) };
+    // The wizard's test client is not counted among hers (D27); she still
+    // opens from the test booking until the cleanup job deletes both.
+    const where: Prisma.ClientWhereInput = { tenantId, isTest: false, ...this.scopeWhere(scope) };
     if (query.status) where.status = query.status;
     const empty = { data: [], total: 0, page: query.page, pageSize: query.pageSize, totalPages: 0 };
     if (query.search || query.phoneDigits.length > 0) {
@@ -124,9 +137,7 @@ export class ClientsService {
 
   /** Staff see only the clients they have served or will serve. */
   private scopeWhere(scope: ClientScope): Prisma.ClientWhereInput {
-    return scope.professionalId
-      ? { appointments: { some: { professionalId: scope.professionalId } } }
-      : {};
+    return clientScopeWhere(scope);
   }
 
   async findAllWithFilters(tenantId: string, filters: ClientFilters) {

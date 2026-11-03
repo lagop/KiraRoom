@@ -59,6 +59,22 @@ describe("onboarding wizard: first appointment", () => {
     );
   });
 
+  it("is a test booking, with a test client when it creates one (D27)", async () => {
+    const { prisma, svc } = setup();
+    await svc.submitWizard("t1", { firstAppointment: FIRST });
+    expect(prisma.appointment.create.mock.calls[0][0].data.isTest).toBe(true);
+    expect(prisma.client.create.mock.calls[0][0].data).toMatchObject({ firstName: "Lucía", isTest: true });
+  });
+
+  it("reuses a real client of the same name without marking her (D27)", async () => {
+    const { prisma, svc } = setup();
+    prisma.client.findFirst.mockResolvedValueOnce({ id: "real-1", isTest: false });
+    await svc.submitWizard("t1", { firstAppointment: FIRST });
+    expect(prisma.client.create).not.toHaveBeenCalled();
+    const data = prisma.appointment.create.mock.calls[0][0].data;
+    expect(data).toMatchObject({ clientId: "real-1", isTest: true });
+  });
+
   it("stores the professional's location", async () => {
     const { prisma, svc } = setup("Europe/Madrid", [{ professionalId: "p1", locationId: "loc-1", isPrimary: false }]);
     await svc.submitWizard("t1", { firstAppointment: FIRST });
