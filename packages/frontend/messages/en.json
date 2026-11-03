@@ -1246,7 +1246,16 @@
     "appointments_count_other": "{count} appointments",
     "no_appointments_today": "No appointments today",
     "unread_notifications_one": "1 unread notification",
-    "unread_notifications_other": "{count} unread notifications"
+    "unread_notifications_other": "{count} unread notifications",
+    "revenue_with_till_month": "Revenue + till (this month)",
+    "whole_salon": "whole salon",
+    "location_line": "Location: {name}",
+    "occupancy_today": "Occupancy today",
+    "occupancy_today_sub": "{booked} booked of {available}",
+    "my_agenda_today": "Your schedule today",
+    "agenda_by_professional": "Today by professional",
+    "no_professional": "No professional",
+    "free_today": "Free today"
   },
   "appointments": {
     "title": "Appointments",
