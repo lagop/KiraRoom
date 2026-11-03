@@ -61,6 +61,13 @@ export class TimeOffController {
     return this.timeOff.preview(user, dto);
   }
 
+  @Get("conflicts")
+  @Roles(...SALON_MANAGERS)
+  @ApiOperation({ summary: "Appointments still booked inside approved time off and closures, from today on" })
+  upcomingConflicts(@CurrentUser() user: TimeOffUser) {
+    return this.timeOff.upcomingConflicts(user);
+  }
+
   // Requests: a professional asks for their own time off.
 
   @Get("requests/mine")

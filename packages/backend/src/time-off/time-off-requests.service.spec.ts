@@ -125,6 +125,8 @@ function build(opts: { timeOff?: any[]; appointments?: any[]; notifyFails?: bool
     }),
   };
   const timeOff = new TimeOffService(prisma);
+  // 10:00 in Madrid on 2 Nov 2026: DAY (14 Dec) is ahead.
+  timeOff.clock = () => new Date("2026-11-02T09:00:00.000Z");
   const service = new TimeOffRequestsService(prisma, timeOff, notifications as any);
   return { service, timeOff, prisma, rows, notifications };
 }
@@ -195,6 +197,29 @@ describe("asking for time off", () => {
     const { service } = build();
     await expect(service.create(ANA_USER, request({ kind: "closure" }))).rejects.toBeInstanceOf(BadRequestException);
     await expect(service.create(ANA_USER, request({ kind: "sick_leave" }))).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("refuses days already gone, by the salon's calendar", async () => {
+    const { service, rows } = build();
+    await expect(service.create(ANA_USER, request({ startDate: "2026-11-01", endDate: "2026-11-01" }))).rejects.toThrow(
+      /días que ya han pasado/,
+    );
+    await expect(service.preview(ANA_USER, request({ startDate: "2026-10-30", endDate: "2026-11-01" }))).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    // Today, and a stretch that started yesterday but is still running, can be asked for.
+    await expect(service.create(ANA_USER, request({ startDate: "2026-11-02", endDate: "2026-11-02" }))).resolves.toBeDefined();
+    await expect(service.create(ANA_USER, request({ startDate: "2026-11-01", endDate: "2026-11-03", kind: "other" }))).rejects.toThrow(
+      /Ya tienes una solicitud pendiente el 02\/11\/2026/,
+    );
+    expect(rows).toHaveLength(1);
+  });
+
+  it("refuses days the professional already has approved or asked for", async () => {
+    const { service } = build({ timeOff: [stored({ status: "approved", requestedById: null })] });
+    await expect(service.create(ANA_USER, request())).rejects.toThrow(/Ya tienes una ausencia aprobada el 14\/12\/2026/);
+    await expect(service.preview(ANA_USER, request())).rejects.toBeInstanceOf(ConflictException);
+    await expect(service.create(BEA_USER, request())).resolves.toBeDefined();
   });
 
   it("a staff account with no professional record cannot ask", async () => {
@@ -380,6 +405,35 @@ describe("the salon's answer", () => {
     const { service, rows } = build({ timeOff: [foreign] });
     await expect(service.approve(OWNER, foreign.id, {})).rejects.toBeInstanceOf(NotFoundException);
     expect(rows[0].status).toBe("pending");
+  });
+
+  it("approving keeps the manager's note for the requester", async () => {
+    const pending = stored({});
+    const { service, rows, notifications } = build({ timeOff: [pending] });
+    await service.approve(OWNER, pending.id, { note: "Mueve tú a tus clientas del martes" });
+    expect(rows[0].decisionNote).toBe("Mueve tú a tus clientas del martes");
+    expect(notifications.create.mock.calls[0][0].message).toMatch(/aprobada\. Nota: Mueve tú a tus clientas del martes$/);
+  });
+
+  it("approving on top of the professional's approved time off, or another pending request of theirs, is a 409", async () => {
+    const pending = stored({});
+    const approved = stored({ status: "approved", requestedById: null, kind: "day_off" });
+    const { service, rows, notifications } = build({ timeOff: [pending, approved] });
+    await expect(service.approve(OWNER, pending.id, {})).rejects.toThrow(/Ana Gil ya tiene una ausencia aprobada el 14\/12\/2026/);
+    expect(rows[0].status).toBe("pending");
+    expect(notifications.create).not.toHaveBeenCalled();
+
+    const twice = build({ timeOff: [stored({}), stored({ endDate: new Date("2026-12-20T00:00:00.000Z") })] });
+    await expect(twice.service.approve(OWNER, twice.rows[0].id, {})).rejects.toThrow(/solicitud pendiente del 14\/12\/2026 al 20\/12\/2026/);
+    // Bea's days, or Ana's other days, are no obstacle.
+    const fine = build({
+      timeOff: [
+        stored({}),
+        stored({ professionalId: BEA, status: "approved" }),
+        stored({ status: "approved", startDate: new Date("2026-12-15T00:00:00.000Z"), endDate: new Date("2026-12-15T00:00:00.000Z") }),
+      ],
+    });
+    await expect(fine.service.approve(OWNER, fine.rows[0].id, {})).resolves.toBeDefined();
   });
 
   it("a decision note is at most 200 characters", async () => {
