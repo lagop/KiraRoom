@@ -95,8 +95,12 @@ export class LoyaltyController {
     return this.loyalty.deleteTier(req.user.tenantId, id);
   }
 
+  /**
+   * The whole membership list, with email and phone: the Fidelización
+   * screen (managers). For staff it was the salon's client base in one call.
+   */
   @Get("members")
-  @Roles(...SALON_TEAM)
+  @Roles(...SALON_MANAGERS)
   listMembers(@Req() req: any, @Query("search") search?: string) {
     return this.loyalty.listMembers(req.user.tenantId, search);
   }

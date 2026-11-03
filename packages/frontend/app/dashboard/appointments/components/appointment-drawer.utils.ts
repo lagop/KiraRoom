@@ -593,14 +593,18 @@ export function activityLabelKey(action: string): string | null {
 
 /**
  * The activity list: the panel's "created" entry and the server's entries
- * (GET /appointments/:id/activity), newest first, without duplicates.
+ * (GET /appointments/:id/activity), newest first, without duplicates. The
+ * server records the creation of a booking made from the panel (with who
+ * made it); then that entry is the creation and the panel adds none.
  */
 export function mergeActivity(
   createdAt: string,
   entries: ReadonlyArray<{ createdAt: string; action: string; details?: unknown }> | null | undefined,
 ): Array<{ timestamp: string; action: string; details?: string }> {
   const byKey = new Map<string, { timestamp: string; action: string; details?: string }>();
-  byKey.set(`${createdAt}-${CREATED_ACTIVITY}`, { timestamp: createdAt, action: CREATED_ACTIVITY });
+  if (!(entries ?? []).some((entry) => entry.action === CREATED_ACTIVITY)) {
+    byKey.set(`${createdAt}-${CREATED_ACTIVITY}`, { timestamp: createdAt, action: CREATED_ACTIVITY });
+  }
   for (const entry of entries ?? []) {
     const key = `${entry.createdAt}-${entry.action}`;
     if (byKey.has(key)) continue;
@@ -663,7 +667,9 @@ export function toDrawerAppointment(
             id: s.professional.id,
             firstName: s.professional.firstName,
             lastName: s.professional.lastName,
-            email: s.professional.email,
+            // The server sends a service's professional as name and photo
+            // only (no contact details): empty here.
+            email: s.professional.email || "",
             phone: s.professional.phone || "",
             specialties: s.professional.specialties || [],
           }

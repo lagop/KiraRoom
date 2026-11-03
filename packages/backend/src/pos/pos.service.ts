@@ -83,6 +83,7 @@ import {
   type TillPromotion,
 } from '../promotions/promotion-at-till';
 import { effectiveCommissionRate } from '../commissions/commission-rate';
+import { commissionCents, snapshotAppointmentCommissions } from '../commissions/appointment-commission';
 import { safeTimeZone } from '../gift-cards/gift-card-expiry';
 import { salonInstant } from '../appointments/salon-time';
 import { salonDayAndTime } from '../appointments/reschedule-check';
@@ -138,6 +139,9 @@ export interface PosActor {
   id: string;
   role: string;
 }
+
+/** Shortest client search staff may run at the till (getClients). */
+export const POS_STAFF_CLIENT_SEARCH_MIN = 2;
 
 /** What a checkout answers (stored on PosSale.result and returned again on a retry). */
 export type PosSaleResult = Record<string, any>;
@@ -399,9 +403,19 @@ export class PosService {
   }
 
   /**
-   * Get clients for POS
+   * The till's client search.
+   *
+   * The till finds any client of the salon (a product sale, a walk-in), but
+   * staff only by a search of two characters or more: with no search the
+   * first 50 came back, and one-letter searches walked a professional
+   * through the whole client base with contact details. Managers unchanged.
    */
-  async getClients(tenantId: string, search?: string) {
+  async getClients(tenantId: string, search?: string, actor?: Pick<PosActor, 'role'>) {
+    search = search?.trim() || undefined;
+    if (actor && !(SALON_MANAGERS as string[]).includes(actor.role) && (search?.length ?? 0) < POS_STAFF_CLIENT_SEARCH_MIN) {
+      return [];
+    }
+
     const where: any = { tenantId, status: 'active' };
 
     if (search) {
@@ -1159,7 +1173,8 @@ export class PosService {
               taxCents: tax,
               commissionBaseCents: base,
               // Appointments keep theirs on the appointment (commissions.service.ts).
-              ...(prof !== undefined ? { commissionRate: prof, commissionAmount: (base * prof) / 100 } : {}),
+              // Whole cents, rounded once here: the rows add up to the total.
+              ...(prof !== undefined ? { commissionRate: prof, commissionAmount: commissionCents(base, prof) } : {}),
             };
           }),
           ...soldCards.map((c, i) => ({
@@ -1296,6 +1311,9 @@ export class PosService {
     }
     // What each client has spent (client-stats.ts).
     await refreshClientStats(this.prisma, tenantId, [finalClientId, ...created.map((p) => p?.clientId)]);
+    // Each visit charged, once completed and paid, keeps its commission
+    // (commissions/appointment-commission.ts).
+    await snapshotAppointmentCommissions(this.prisma as any, tenantId, appointmentIds, this.logger);
 
     return {
       ...result,
@@ -1900,9 +1918,11 @@ export class PosService {
     serviceId: string,
     paymentMethod: string,
     clientId?: string,
-    options: { saleId?: string; actor?: PosActor } = {},
+    options: { saleId?: string; actor?: PosActor; professionalId?: string } = {},
   ) {
-    const items = [{ serviceId, quantity: 1 }] as PosCartItemDto[];
+    const items = [
+      { serviceId, quantity: 1, ...(options.professionalId ? { professionalId: options.professionalId } : {}) },
+    ] as PosCartItemDto[];
     if (options.saleId) {
       const prior = await this.priorSale(tenantId, options.saleId);
       if (prior) return this.quickSaleAnswer(prior, paymentMethod);

@@ -271,6 +271,23 @@ export class AnalyticsService {
   }
 
   /**
+   * "Ocupación de hoy" on Inicio (D30): the overview's occupancy over the
+   * salon's today alone -- booked time of today's appointments over the
+   * professionals' working time today, less approved time off. With a
+   * scope, that location's appointments and professionals.
+   */
+  async getTodayOccupancy(tenantId: string, scope?: LocationScope): Promise<Occupancy> {
+    const { today, timezone } = await this.todayFor(tenantId);
+    const period = { start: today, end: today };
+    const [rows, professionals, timeOff] = await Promise.all([
+      this.loadAppointments(tenantId, period, scope),
+      this.activeProfessionals(tenantId, scope),
+      timeOffBetween(this.prisma as any, tenantId, today, today),
+    ]);
+    return occupancy(professionals, rows, period, timeOff, timezone);
+  }
+
+  /**
    * The lines the till sold without an appointment in the period (salon
    * days, by when they were sold): products and services
    * (REFUNDABLE_KINDS, what the till itself sells), each with what is left

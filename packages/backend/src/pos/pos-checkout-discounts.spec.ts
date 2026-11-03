@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException } from "@nestjs/common";
 import { PosService } from "./pos.service";
-import { CommissionsService } from "../commissions/commissions.service";
+import { appointmentCommission } from "../commissions/appointment-commission";
 import { saleTables, salonTenant } from "./pos-test-kit.testing";
 
 /**
@@ -458,10 +458,9 @@ describe("POS discounts: an appointment", () => {
       payments: [{ method: "card", amount: 3000 }],
       actor: OWNER,
     } as any);
-    const commissions = new CommissionsService(t.prisma);
     // 20 % of the 30,00 EUR charged, not of the 40,00 list price.
-    const out = await commissions.calculateCommission("t1", { appointmentId: "a1" });
-    expect(out).toEqual({ commissionRate: 20, commissionAmount: 600 });
+    const visit: any = t.committed.appointments.get("a1")!;
+    expect(appointmentCommission({ ...visit, commissionPaid: false }, visit.professional.commissionRate)).toEqual({ rate: 20, amount: 600 });
   });
 
   it("a staff member charging their own appointment is held to the same limit", async () => {

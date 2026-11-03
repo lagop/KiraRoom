@@ -79,6 +79,7 @@ import {
 import { editChangesRows, planRowEdit } from "./visit-edit";
 import { priceIsFrozen } from "./visit-sync";
 import { bookedAddon, bookedService, bookedServiceName, snapshotAddons, snapshotOf, withBookedService } from "./appointment-snapshot";
+import { VISIT_LINE_PROFESSIONAL, colleagueProfessional } from "./appointment-response";
 import { appointmentLocationId } from "../multi-location/appointment-location";
 import { assertProfessionalsAt, professionalsAt } from "../multi-location/professional-locations";
 import {
@@ -102,6 +103,7 @@ import { appointmentTotalCents, assertVisitChargeable } from "../payments/appoin
 import { moneyOfCatalogueCents, salonTaxBasis, type SalonTaxBasis } from "../payments/appointment-charge";
 import { appointmentDeleteBlocker, deleteAppointmentRow } from "./appointment-delete";
 import { isForeignKeyViolation } from "../common/prisma/history-deletes";
+import { snapshotAppointmentCommissions } from "../commissions/appointment-commission";
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
 import {
   assertTransition,
@@ -188,6 +190,36 @@ export interface PendingPaymentFiltersDto {
  */
 const DEFAULT_SLOT_GRID: ShiftWindow = { startMinutes: 9 * 60, endMinutes: 20 * 60 };
 
+/**
+ * A professional's agenda as an appointment filter: their appointments and
+ * the colleagues' visits where they do one of the services. A visit "corte
+ * con Ana + color con Marta" has Ana as its professional; Marta only
+ * appeared on its service row, so her calendar (and her pending payments)
+ * left out the colour she had to do.
+ */
+export function staffAgendaWhere(ownProfessionalId: string) {
+  return {
+    OR: [
+      { professionalId: ownProfessionalId },
+      { services: { some: { professionalId: ownProfessionalId } } },
+    ],
+  };
+}
+
+/**
+ * An appointment as a staff member sees it (`own` is their professional;
+ * null for the owner and managers, who see it whole): a colleague's visit
+ * they take part in carries its professional's name and photo only, not the
+ * colleague's whole record (commission, personal email and phone...).
+ */
+export function asSeenBy<T extends { professionalId?: string | null; professional?: unknown }>(
+  appointment: T,
+  own: string | null,
+): T {
+  if (!own || !appointment || appointment.professionalId === own) return appointment;
+  return { ...appointment, professional: colleagueProfessional(appointment.professional) };
+}
+
 @Injectable()
 export class AppointmentsService {
   private readonly logger = new Logger(AppointmentsService.name);
@@ -238,6 +270,15 @@ export class AppointmentsService {
     } catch (err) {
       this.logger.warn(`loyalty for appointment ${appointmentId} failed: ${(err as Error).message}`);
     }
+  }
+
+  /**
+   * The visit's commission snapshot once it is completed and paid, and
+   * recomputed while it is not paid out (commissions/appointment-commission.ts).
+   * Never fails the change that set it off.
+   */
+  private async commissionAfterChange(tenantId: string, appointmentId: string) {
+    await snapshotAppointmentCommissions(this.prisma as any, tenantId, [appointmentId], this.logger);
   }
 
   /**
@@ -1123,6 +1164,15 @@ export class AppointmentsService {
       { timeout: 15_000 },
     );
 
+    // Who booked it, in the appointment's history (cancellations and edits
+    // are recorded there already): a booking made by a professional for a
+    // client is on record.
+    await this.logAppointmentActivity(appointment.id, "appointment_created", user, {
+      source: AppointmentSource.staff,
+      professionalId,
+      clientId: dto.clientId,
+    });
+
     // After the commit: notifications never run for a booking that rolled back.
     await this.afterAppointmentCreated(appointment);
     return appointment;
@@ -1142,20 +1192,19 @@ export class AppointmentsService {
     // the filters is not the caller's to choose.
     const where: any = { tenantId: user.tenantId };
 
-    // Aplicar filtro automático para usuarios STAFF - solo ven sus propias citas
+    // A professional (staff) sees their own agenda: their appointments and
+    // the colleagues' visits where they do a service (staffAgendaWhere).
+    let own: string | null = null;
     if (user.role === "staff") {
-      const professional = await this.prisma.professional.findFirst({
-        where: { userId: user.id, tenantId: user.tenantId },
-        select: { id: true },
-      });
+      own = await this.ownProfessionalId(user);
 
       // A staff account not linked to a professional sees no appointment.
       // Without this it saw every appointment of the salon: the filter was
       // only added when the record was found.
-      if (!professional) return [];
-      where.professionalId = professional.id;
+      if (!own) return [];
+      Object.assign(where, staffAgendaWhere(own));
       // Ignorar cualquier professionalId enviado por el cliente para evitar bypass
-      filters.professionalId = professional.id;
+      if (filters) filters.professionalId = own;
     }
 
     if (filters) {
@@ -1236,7 +1285,7 @@ export class AppointmentsService {
         services: {
           include: {
             service: true,
-            professional: true,
+            professional: VISIT_LINE_PROFESSIONAL,
           },
           orderBy: {
             order: "asc",
@@ -1248,13 +1297,22 @@ export class AppointmentsService {
     const appointments = (newestFirst as any[]).reverse();
     const basis = await this.chargeBasisOf(user.tenantId);
 
-    return appointments.map((apt: any) => this.enrichAppointment(apt, basis));
+    return appointments.map((apt: any) => this.enrichAppointment(asSeenBy(apt, own), basis));
   }
 
   /** The most appointments GET /appointments returns. */
   static readonly FIND_ALL_MAX = 5000;
 
-  async findOne(user: any, id: string) {
+  /**
+   * One appointment, for the caller.
+   *
+   * A professional (staff) reads their own appointments and the colleagues'
+   * visits where they do a service (`access: "read"`, GET /appointments/:id
+   * and its activity), but acts only on their own: every other caller of
+   * this method (edit, status, move, delete) asks for `"write"`, the
+   * default, and a colleague's visit answers 404 as before.
+   */
+  async findOne(user: any, id: string, access: "read" | "write" = "write") {
     const appointment = await (this.prisma.appointment.findUnique as any)({
       where: { id, tenantId: user.tenantId },
       include: {
@@ -1265,7 +1323,7 @@ export class AppointmentsService {
         services: {
           include: {
             service: true,
-            professional: true,
+            professional: VISIT_LINE_PROFESSIONAL,
           },
           orderBy: {
             order: "asc",
@@ -1279,19 +1337,19 @@ export class AppointmentsService {
     }
 
     // Validar que STAFF solo pueda ver sus propias citas
+    let own: string | null = null;
     if (user.role === "staff") {
-      const professional = await this.prisma.professional.findFirst({
-        where: { userId: user.id, tenantId: user.tenantId },
-        select: { id: true },
-      });
-
-      if (!professional || appointment.professionalId !== professional.id) {
+      own = await this.ownProfessionalId(user);
+      const theirs = !!own && appointment.professionalId === own;
+      const servesIn =
+        !!own && (appointment.services ?? []).some((s: any) => s.professionalId === own);
+      if (!theirs && !(access === "read" && servesIn)) {
         throw new NotFoundException("No tienes permiso para ver esta cita");
       }
     }
 
     return this.enrichAppointment(
-      appointment,
+      asSeenBy(appointment, own),
       appointment.tenant?.fiscalSettings !== undefined ? salonTaxBasis(appointment.tenant.fiscalSettings) : null,
     );
   }
@@ -1352,6 +1410,9 @@ export class AppointmentsService {
     if (user.role === "staff") {
       // STAFF no puede cambiar el profesional asignado
       delete updateData.professionalId;
+      // Nor the client: moving one of their appointments to another client
+      // made that client "theirs" and opened her whole file to them.
+      delete updateData.clientId;
 
       // STAFF solo puede actualizar citas que le pertenecen
       const professional = await this.prisma.professional.findFirst({
@@ -1718,7 +1779,7 @@ export class AppointmentsService {
             services: {
               include: {
                 service: true,
-                professional: true,
+                professional: VISIT_LINE_PROFESSIONAL,
               },
               orderBy: { order: "asc" },
             },
@@ -1761,6 +1822,9 @@ export class AppointmentsService {
         await this.afterStatusChange(user, updatedAppointment, oldStatus, statusTo, {
           reason: dto.cancellationReason,
         });
+      } else {
+        // Its total or its rate may have changed: an unpaid commission follows.
+        await this.commissionAfterChange(user.tenantId, id);
       }
 
       return this.enrichAppointment(updatedAppointment);
@@ -1990,6 +2054,8 @@ export class AppointmentsService {
 
     // Points: completed and paid earns, cancelled gives them back.
     await this.loyaltyAfterStatus(updated.tenantId, id);
+    // Completed and paid: its commission is worked out and kept (commissions/appointment-commission.ts).
+    await this.commissionAfterChange(updated.tenantId, id);
 
     // Her visits (count, first, last, average) follow her completed
     // appointments (client-stats.ts).
@@ -2094,14 +2160,12 @@ export class AppointmentsService {
 
     // Apply user role filtering
     if (user.role === "staff") {
-      const professional = await this.prisma.professional.findFirst({
-        where: { userId: user.id, tenantId: user.tenantId },
-        select: { id: true },
-      });
+      const own = await this.ownProfessionalId(user);
 
       // Unlinked staff account: nothing, not the whole salon (see findAll).
-      if (!professional) return [];
-      where.professionalId = professional.id;
+      if (!own) return [];
+      // Their appointments and the visits where they do a service (findAll).
+      Object.assign(where, staffAgendaWhere(own));
     }
 
     // Apply search query (client name or appointment ID)
@@ -2247,6 +2311,7 @@ export class AppointmentsService {
     // Refunded: the points go back. Paid: points only from recorded
     // payments, once the visit is also completed.
     await this.loyaltyAfterStatus(updatedAppointment.tenantId, id);
+    await this.commissionAfterChange(updatedAppointment.tenantId, id);
 
     return this.enrichAppointment(updatedAppointment);
   }

@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, Redirect, Req, UseGuards } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, Redirect, Req, UseGuards } from "@nestjs/common";
 import { Request } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { Roles } from "../auth/decorators/roles.decorator";
@@ -12,9 +12,10 @@ import { PrismaService } from "../common/prisma/prisma.service";
 import { createHmac, timingSafeEqual } from "crypto";
 import { Throttle } from "@nestjs/throttler";
 import { EmailUnsubscribeService } from "../email-campaigns/email-unsubscribe.service";
+import { ConsentService } from "../consent/consent.service";
 
 interface AuthedRequest extends Request {
-  user: { tenantId?: string };
+  user: { tenantId?: string; id?: string; role?: string };
 }
 
 @Controller("rebooking")
@@ -25,6 +26,7 @@ export class RebookingController {
     private readonly dispatcher: RebookingDispatcherService,
     private readonly prisma: PrismaService,
     private readonly unsubscribes: EmailUnsubscribeService,
+    private readonly consent: ConsentService,
   ) {}
 
   @Get("config")
@@ -111,9 +113,18 @@ export class RebookingController {
     };
   }
 
+  /*
+   * One client's cadence, reminder log and opt-out. The client must be in
+   * the caller's reach, as her file (ConsentService.assertClientInReach):
+   * a client of the caller's salon and, for staff, one with an appointment
+   * with them. Anyone else answers 404. These routes used to take any id:
+   * a professional could read or stop the reminders of any client.
+   */
+
   @Get("clients/:id/prediction")
   @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  async getPrediction(@Param("id") clientId: string) {
+  async getPrediction(@Req() req: AuthedRequest, @Param("id", ParseUUIDPipe) clientId: string) {
+    await this.assertClientInReach(req, clientId);
     await this.cadence.computeForClient(clientId);
     return this.prisma.clientCadence.findUnique({
       where: { clientId } });
@@ -121,7 +132,8 @@ export class RebookingController {
 
   @Get("clients/:id/log")
   @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  async getLog(@Param("id") clientId: string) {
+  async getLog(@Req() req: AuthedRequest, @Param("id", ParseUUIDPipe) clientId: string) {
+    await this.assertClientInReach(req, clientId);
     return this.prisma.rebookingReminder.findMany({
       where: { clientId },
       orderBy: { createdAt: "desc" },
@@ -130,16 +142,25 @@ export class RebookingController {
 
   @Post("clients/:id/opt-out")
   @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  async optOut(@Param("id") clientId: string) {
+  async optOut(@Req() req: AuthedRequest, @Param("id", ParseUUIDPipe) clientId: string) {
+    await this.assertClientInReach(req, clientId);
     await this.cadence.optOutClient(clientId);
     return { ok: true };
   }
 
   @Post("recompute/:clientId")
   @Roles(UserRole.owner, UserRole.admin)
-  async recompute(@Param("clientId") clientId: string) {
+  async recompute(@Req() req: AuthedRequest, @Param("clientId", ParseUUIDPipe) clientId: string) {
+    await this.assertClientInReach(req, clientId);
     await this.cadence.computeForClient(clientId);
     return { ok: true };
+  }
+
+  private assertClientInReach(req: AuthedRequest, clientId: string): Promise<void> {
+    return this.consent.assertClientInReach(this.requireTenantId(req), clientId, {
+      id: req.user?.id ?? "",
+      role: req.user?.role ?? "",
+    });
   }
 
   /**

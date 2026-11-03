@@ -18,7 +18,8 @@ import { WalletService } from "./services/wallet.service";
 import { GiftCardsService } from "../gift-cards/gift-cards.service";
 import { needsTimezone, PaymentFilters, paymentWhere, PAYMENT_SORT_FIELDS } from "./payments-query";
 import { openCashSessionId } from "../pos/cash-session-lock";
-import { recordRefundClawbacks } from "../commissions/commission-clawback";
+import { lockCommissionsOfRefund, recordRefundClawbacks } from "../commissions/commission-clawback";
+import { snapshotAppointmentCommissions } from "../commissions/appointment-commission";
 import { releaseIfSaleRefundedIn } from "../promotions/promotion-at-till";
 import { returnGiftIfSaleRefundedIn } from "../pos/pos-loyalty-gift";
 import {
@@ -398,6 +399,10 @@ export class PaymentsService {
     }
 
     await this.loyaltyAfter(tenantId, payment);
+    // Completed and paid: the visit's commission is worked out (commissions/appointment-commission.ts).
+    if (status === "paid" && appointmentId) {
+      await snapshotAppointmentCommissions(this.prisma as any, tenantId, [appointmentId], this.logger);
+    }
     await this.clientStatsAfter(tenantId, clientId);
 
     return payment;
@@ -552,6 +557,15 @@ export class PaymentsService {
       new ConflictException("El cobro acaba de cambiar. Recarga y vuelve a intentarlo.");
 
     const { refund, appointment, restocked } = await this.prisma.$transaction(async (tx) => {
+      // First of all, the commission lock of the professionals it may touch
+      // (commission-lock.ts): "Pagar" takes it too, and writes the same
+      // lines and appointment, so taking it before them means the two never
+      // wait on each other. The clawback below runs under it.
+      await lockCommissionsOfRefund(tx, {
+        tenantId,
+        appointmentId: payment.method === PaymentMethod.loyalty_points ? null : payment.appointmentId,
+        saleId,
+      });
       // Over the payment as just read: a second refund at the same time
       // finds it changed and gets a 409, so the two cannot add up past it.
       const { count } = await tx.payment.updateMany({

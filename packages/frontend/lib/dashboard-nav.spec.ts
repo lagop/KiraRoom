@@ -6,7 +6,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { DASHBOARD_NAV, NavEntry, NavLink, activeGroup, badgesIn, isActive, isOwner, navFor, pageTitleKey } from "./dashboard-nav";
+import { DASHBOARD_NAV, NavEntry, NavLink, activeGroup, badgesIn, isActive, isOwner, managersOnlyPage, navFor, pageTitleKey } from "./dashboard-nav";
 
 let pass = 0;
 let fail = 0;
@@ -71,6 +71,7 @@ console.log("plan badges");
   // Not in Esencial (PLAN_MATRIX, backend subscriptions.service.ts): the menu says so.
   check("Promociones and Fidelización show the Pro badge", pro.includes("promotions") && pro.includes("loyalty"), pro);
   check("gift cards keep theirs", pro.includes("gift-cards"), pro);
+  check("Comisiones shows it too (Pro and up)", pro.includes("commissions"), pro);
   // C4: in every plan, the backend gates none of them.
   check("Fiscal, Contabilidad and Rebooking carry no Pro badge", !["fiscal", "accounting", "rebooking"].some((id) => pro.includes(id)), pro);
   const empresa = links(DASHBOARD_NAV).filter((l) => l.empresa).map((l) => l.id);
@@ -78,6 +79,93 @@ console.log("plan badges");
   check(
     "Multi-local opens Ajustes, for managers only",
     activeGroup(DASHBOARD_NAV, "/dashboard/multi-location") === "settings" && !ids(navFor("staff")).includes("multi-location"),
+  );
+}
+
+console.log("management pages a professional opens by their address");
+{
+  // The pages found open to staff by URL, all of them, and the rest of the
+  // management screens.
+  const managementPages = [
+    "/dashboard/professionals",
+    "/dashboard/professionals/new",
+    "/dashboard/professionals/pro-1/edit",
+    "/dashboard/services",
+    "/dashboard/services/new",
+    "/dashboard/commissions",
+    "/dashboard/pos/products",
+    "/dashboard/gift-cards",
+    "/dashboard/reviews",
+    "/dashboard/solicitudes-ausencia",
+    "/dashboard/promotions",
+    "/dashboard/loyalty",
+    "/dashboard/email-campaigns",
+    "/dashboard/marketing/whatsapp",
+    "/dashboard/settings",
+    "/dashboard/settings/salon",
+    "/dashboard/settings/cierres",
+    "/dashboard/settings/rebooking",
+    "/dashboard/settings/calendar-feeds",
+    "/dashboard/settings/widget",
+    "/dashboard/settings/domain",
+    "/dashboard/settings/whatsapp",
+    "/dashboard/settings/stripe",
+    "/dashboard/settings/consent-forms",
+    "/dashboard/clients/import",
+    "/dashboard/copilot/usage",
+    "/dashboard/analytics",
+    "/dashboard/payments",
+    "/dashboard/billing",
+    "/dashboard/billing/invoices",
+    "/dashboard/billing/invoices/new",
+    "/dashboard/multi-location",
+  ];
+  const open = managementPages.filter((p) => !managersOnlyPage("staff", p));
+  check("staff get the notice on every management page", open.length === 0, open);
+  check("a trailing slash changes nothing", managersOnlyPage("staff", "/dashboard/services/"));
+
+  const staffPages = [
+    "/dashboard",
+    "/dashboard/appointments",
+    "/dashboard/appointments/apt-1",
+    "/dashboard/clients",
+    "/dashboard/clients/c-1",
+    "/dashboard/wait-list",
+    "/dashboard/mis-ausencias",
+    "/dashboard/pos",
+    "/dashboard/compartir",
+    "/dashboard/settings/seguridad",
+    "/dashboard/notifications",
+    "/dashboard/copilot",
+    // "Ver perfil" from an appointment: a professional's profile.
+    "/dashboard/professionals/pro-1",
+  ];
+  const shut = staffPages.filter((p) => managersOnlyPage("staff", p));
+  check("staff keep their own screens", shut.length === 0, shut);
+  const menuShut = links(navFor("staff")).filter((l) => managersOnlyPage("staff", l.href)).map((l) => l.href);
+  check("no page of the staff menu shows the notice", menuShut.length === 0, menuShut);
+
+  const managersShut = [...managementPages, ...staffPages].filter(
+    (p) => managersOnlyPage("owner", p) || managersOnlyPage("admin", p),
+  );
+  check("the owner and admins never get it", managersShut.length === 0, managersShut);
+  check(
+    "before the user is read, nobody gets it (the page decides, as before)",
+    !managersOnlyPage(null, "/dashboard/services") && !managersOnlyPage(undefined, "/dashboard/services"),
+  );
+  const pages = managementPages.filter(
+    (p) => !/pro-1/.test(p) && !fs.existsSync(path.join(__dirname, "../app", p, "page.tsx")),
+  );
+  check("the management pages listed are real pages", pages.length === 0, pages);
+}
+
+console.log("the notice's texts");
+{
+  const messages = ["es", "en"].map((lang) => JSON.parse(fs.readFileSync(path.join(__dirname, "../messages", `${lang}.json`), "utf8")));
+  check("Spanish first", messages[0].managersOnly?.title === "Esta sección es de la dirección del salón");
+  check(
+    "every key in es.json and en.json",
+    ["title", "body", "home"].every((k) => messages.every((m) => typeof m.managersOnly?.[k] === "string" && m.managersOnly[k])),
   );
 }
 

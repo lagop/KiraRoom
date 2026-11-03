@@ -1,10 +1,12 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import apiClient from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/components/ui/use-toast";
+import { errorMessage, isPlanBlocked } from "@/lib/email-campaigns";
 import {
   commissionShare,
   defaultPayrollRange,
@@ -12,12 +14,11 @@ import {
   formatCommissionDay,
 } from "@/lib/commissions-format";
 import {
-  DollarSign,
   TrendingUp,
-  Calendar,
   CheckCircle,
   Clock,
   AlertCircle,
+  Lock,
 } from "lucide-react";
 
 // Type definitions for commissions
@@ -43,6 +44,8 @@ interface CommissionAppointment {
 interface CommissionSummary {
   professionalId: string;
   professionalName: string;
+  /** false: deactivated, listed because something is still pending ("De baja"). */
+  isActive?: boolean;
   totalEarnings: number;
   pendingCommission: number;
   paidCommission: number;
@@ -57,6 +60,8 @@ interface PayrollReport {
   professionals: {
     id: string;
     name: string;
+    /** false: deactivated, listed for their work in the period ("De baja"). */
+    isActive?: boolean;
     totalHours: number;
     totalSales: number;
     /** Net of the period's refund adjustments. */
@@ -64,6 +69,8 @@ interface PayrollReport {
     /** "Ajuste por devolución": the period's refund adjustments (0 or negative). */
     refundAdjustments?: number;
   }[];
+  /** Walk-in services sold with no professional named: nobody's commission. */
+  unassignedServices?: { count: number; totalSales: number };
 }
 
 export default function CommissionsPage() {
@@ -73,6 +80,13 @@ export default function CommissionsPage() {
     null,
   );
   const [loading, setLoading] = useState(true);
+  // The summary could not be loaded (not an empty salon): shown with "Reintentar".
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // The plan does not include commissions (403 FEATURE_NOT_IN_PLAN).
+  const [planBlocked, setPlanBlocked] = useState(false);
+  // The payroll report has its own loading and error: the page stays as it is.
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"summary" | "payroll">("summary");
   const [selectedProfessional, setSelectedProfessional] = useState<
     string | null
@@ -92,10 +106,12 @@ export default function CommissionsPage() {
   const loadCommissions = async () => {
     try {
       setLoading(true);
+      setLoadError(null);
       const data = await apiClient.getAllCommissionSummaries();
       setCommissions(data);
     } catch (error) {
-      console.error("Failed to load commissions:", error);
+      if (isPlanBlocked(error)) setPlanBlocked(true);
+      else setLoadError(errorMessage(error, t("commissions.load_error")));
     } finally {
       setLoading(false);
     }
@@ -103,16 +119,19 @@ export default function CommissionsPage() {
 
   const loadPayrollReport = async () => {
     try {
-      setLoading(true);
+      setReportLoading(true);
+      setReportError(null);
       const data = await apiClient.getPayrollReport(
         dateRange.startDate,
         dateRange.endDate,
       );
       setPayrollReport(data);
     } catch (error) {
-      console.error("Failed to load payroll report:", error);
+      // The previous report is not left on screen as if it were this one.
+      setPayrollReport(null);
+      setReportError(errorMessage(error, t("commissions.report_error")));
     } finally {
-      setLoading(false);
+      setReportLoading(false);
     }
   };
 
@@ -129,7 +148,6 @@ export default function CommissionsPage() {
       await loadCommissions();
       toast({ title: t("commissions.commissions_paid_success") });
     } catch (error) {
-      console.error("Failed to pay commission:", error);
       toast({
         title: t("commissions.failed_to_pay_commissions"),
         description: error instanceof Error && error.message ? error.message : undefined,
@@ -154,9 +172,14 @@ export default function CommissionsPage() {
     return commissions.reduce((sum, c) => sum + c.paidCommission, 0);
   };
 
-  const getTotalEarnings = () => {
-    return commissions.reduce((sum, c) => sum + c.totalEarnings, 0);
-  };
+  const itemsLabel = (n: number) =>
+    n === 1 ? t("commissions.item_one") : t("commissions.items", { count: n });
+
+  const inactiveBadge = (
+    <span className="ml-2 inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 align-middle text-xs font-medium text-gray-600">
+      {t("commissions.inactive")}
+    </span>
+  );
 
   if (loading) {
     return (
@@ -166,19 +189,50 @@ export default function CommissionsPage() {
     );
   }
 
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 truncate">
-            {t("commissions.page_title")}
-          </h1>
-          <p className="text-gray-600">{t("commissions.page_subtitle")}</p>
+  const header = (
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900 truncate">
+          {t("commissions.page_title")}
+        </h1>
+        <p className="text-gray-600">{t("commissions.page_subtitle")}</p>
+      </div>
+    </div>
+  );
+
+  if (planBlocked) {
+    return (
+      <div className="space-y-6">
+        {header}
+        <div className="rounded-lg border border-blue-200 bg-blue-50 p-6">
+          <div className="flex items-start gap-3">
+            <Lock className="mt-0.5 h-5 w-5 shrink-0 text-blue-600" />
+            <div className="space-y-2">
+              <h2 className="font-semibold text-gray-900">
+                {t("commissions.plan_blocked_title")}
+              </h2>
+              <p className="text-sm text-gray-700">
+                {t("commissions.plan_blocked_body")}
+              </p>
+              <Link
+                href="/dashboard/billing"
+                className="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+              >
+                {t("commissions.plan_blocked_cta")}
+              </Link>
+            </div>
+          </div>
         </div>
       </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {header}
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="bg-white rounded-lg shadow p-6">
           <div className="flex items-center justify-between">
             <div>
@@ -210,20 +264,6 @@ export default function CommissionsPage() {
             </div>
           </div>
         </div>
-
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">
-                {t("commissions.title")}
-              </h1>
-              <p className="text-gray-600">{t("commissions.description")}</p>
-            </div>
-            <div className="bg-green-100 p-3 rounded-full">
-              <CheckCircle className="w-6 h-6 text-green-600" />
-            </div>
-          </div>
-        </div>
       </div>
 
       {/* Tabs */}
@@ -242,7 +282,7 @@ export default function CommissionsPage() {
           <button
             onClick={() => {
               setActiveTab("payroll");
-              if (!payrollReport) loadPayrollReport();
+              if (!payrollReport && !reportLoading) loadPayrollReport();
             }}
             className={`py-4 px-1 border-b-2 font-medium text-sm ${
               activeTab === "payroll"
@@ -258,7 +298,21 @@ export default function CommissionsPage() {
       {/* Summary Tab */}
       {activeTab === "summary" && (
         <div className="space-y-6">
-          {commissions.length === 0 ? (
+          {loadError ? (
+            <div role="alert" className="bg-white rounded-lg shadow p-12 text-center">
+              <AlertCircle className="w-12 h-12 text-red-400 mx-auto mb-4" />
+              <h3 className="text-lg font-medium text-gray-900 mb-2">
+                {t("commissions.load_error")}
+              </h3>
+              <p className="text-gray-500 mb-4">{loadError}</p>
+              <button
+                onClick={loadCommissions}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm font-medium"
+              >
+                {t("commissions.retry")}
+              </button>
+            </div>
+          ) : commissions.length === 0 ? (
             <div className="bg-white rounded-lg shadow p-12 text-center">
               <AlertCircle className="w-12 h-12 text-gray-400 mx-auto mb-4" />
               <h3 className="text-lg font-medium text-gray-900 mb-2">
@@ -275,21 +329,23 @@ export default function CommissionsPage() {
                 className="bg-white rounded-lg shadow overflow-hidden"
               >
                 <div className="p-6 border-b border-gray-200">
-                  <div className="flex items-center justify-between">
-                    <div>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
                       <h3 className="text-lg font-semibold text-gray-900">
                         {commission.professionalName}
+                        {commission.isActive === false && inactiveBadge}
                       </h3>
                       <p className="text-sm text-gray-500">
-                        {commission.appointments.length}{" "}
-                        {t("commissions.appointments")} •
+                        {itemsLabel(commission.appointments.length)}
+                        {" • "}
                         {t("commissions.pending")}:{" "}
-                        {formatCurrency(commission.pendingCommission)} •
+                        {formatCurrency(commission.pendingCommission)}
+                        {" • "}
                         {t("commissions.paid")}:{" "}
                         {formatCurrency(commission.paidCommission)}
                       </p>
                     </div>
-                    <div className="flex space-x-3">
+                    <div className="flex flex-wrap items-center gap-3">
                       <button
                         onClick={() =>
                           setSelectedProfessional(
@@ -436,19 +492,41 @@ export default function CommissionsPage() {
               </div>
               <button
                 onClick={loadPayrollReport}
-                disabled={loading}
+                disabled={reportLoading}
                 className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50"
               >
-                {t("commissions.generate_report")}
+                {reportLoading
+                  ? t("commissions.generating")
+                  : t("commissions.generate_report")}
               </button>
             </div>
           </div>
 
-          {payrollReport && (
+          {reportLoading && (
+            <div className="flex items-center justify-center h-32" aria-busy="true">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            </div>
+          )}
+
+          {!reportLoading && reportError && (
+            <div role="alert" className="bg-white rounded-lg shadow p-6 text-center">
+              <AlertCircle className="w-8 h-8 text-red-400 mx-auto mb-2" />
+              <p className="font-medium text-gray-900">{t("commissions.report_error")}</p>
+              <p className="text-sm text-gray-500 mb-4">{reportError}</p>
+              <button
+                onClick={loadPayrollReport}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm font-medium"
+              >
+                {t("commissions.retry")}
+              </button>
+            </div>
+          )}
+
+          {!reportLoading && payrollReport && (
             <>
               {/* Payroll Summary */}
               <div className="bg-white rounded-lg shadow p-6">
-                <div className="flex items-center justify-between mb-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <h3 className="text-lg font-semibold text-gray-900">
                       {t("commissions.payroll_summary")}
@@ -458,7 +536,7 @@ export default function CommissionsPage() {
                       {formatDate(payrollReport.period.end)}
                     </p>
                   </div>
-                  <div className="text-right">
+                  <div className="sm:text-right">
                     <p className="text-sm text-gray-500">
                       {t("commissions.total_payroll")}
                     </p>
@@ -497,6 +575,7 @@ export default function CommissionsPage() {
                         <tr key={prof.id} className="hover:bg-gray-50">
                           <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                             {prof.name}
+                            {prof.isActive === false && inactiveBadge}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right">
                             {formatCurrency(prof.totalSales)}
@@ -512,6 +591,25 @@ export default function CommissionsPage() {
                           </td>
                         </tr>
                       ))}
+                      {/* Sold at the till with nobody named: nobody's commission, but seen. */}
+                      {payrollReport.unassignedServices && payrollReport.unassignedServices.count > 0 && (
+                        <tr className="bg-amber-50">
+                          <td className="px-6 py-4 text-sm font-medium text-amber-900">
+                            {t("commissions.unassigned_services")}
+                            <span className="block text-xs font-normal text-amber-800">
+                              {t("commissions.unassigned_services_hint", {
+                                count: payrollReport.unassignedServices.count,
+                              })}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-amber-900 text-right">
+                            {formatCurrency(payrollReport.unassignedServices.totalSales)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-amber-900 text-right">—</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-amber-900 text-right">—</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-amber-900 text-right">—</td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>

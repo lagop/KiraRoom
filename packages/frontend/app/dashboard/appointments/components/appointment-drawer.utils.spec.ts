@@ -239,6 +239,14 @@ const merged = mergeActivity("2026-03-01T09:00:00.000Z", [
 check("newest first, the creation once", merged.map((a) => a.action), ["appointment_updated", CREATED_ACTIVITY]);
 check("known actions have a label", activityLabelKey("appointment_cancelled"), "appointments.activityActions.cancelled");
 check("unknown ones do not", activityLabelKey("something_else"), null);
+const recorded = mergeActivity("2026-03-01T09:00:00.000Z", [
+  { createdAt: "2026-03-01T09:00:00.120Z", action: CREATED_ACTIVITY, details: { userRole: "staff" } },
+]);
+check(
+  "the server's record of the booking (with who made it) is the creation, once",
+  recorded.map((a) => [a.timestamp, a.action]),
+  [["2026-03-01T09:00:00.120Z", CREATED_ACTIVITY]],
+);
 
 // ----- getTotalPrice -----
 

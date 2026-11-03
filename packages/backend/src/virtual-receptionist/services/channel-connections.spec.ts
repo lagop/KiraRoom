@@ -75,7 +75,10 @@ describe('ChannelConnectionsService: Meta', () => {
   it('rejects a tampered or expired state', () => {
     const { svc } = setup();
     const state = svc.signState(TENANT);
-    expect(svc.verifyState(state.slice(0, -2) + 'aa')).toBeNull();
+    // Swap the last character for a different one: a fixed 'aa' was the real
+    // signature now and then, which made this test fail at random.
+    const last = state.slice(-1);
+    expect(svc.verifyState(state.slice(0, -1) + (last === 'a' ? 'b' : 'a'))).toBeNull();
     expect(svc.verifyState(svc.signState(TENANT, Date.now() - 60 * 60 * 1000))).toBeNull();
   });
 

@@ -8,6 +8,7 @@ import type { TimeOff, TimeOffConflict, TimeOffInput, TimeOffStatus, UpcomingTim
 import type { CreateClientPayload, UpdateClientPayload } from "./client-form";
 import type { RefundableSaleLine } from "./payments-format";
 import type { InvoiceIssuerStatus } from "./invoice-issuer";
+import { apiErrorMessage } from "./api-error-message";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1";
@@ -932,6 +933,8 @@ export interface Professional {
   commissionRate?: number;
   hireDate?: string;
   isActive: boolean;
+  /** The team member's user account, when the professional has one (managers see it). */
+  userId?: string | null;
   /**
    * One entry per shift, several per day for a split shift:
    * `[{ day: "monday", openTime: "10:00", closeTime: "14:00" }, ...]`. Read it
@@ -1151,8 +1154,14 @@ export interface HomeSummary {
   today: string;
   /** The salon's clock, "HH:mm". */
   now: string;
+  /** The location the lists are cut to (Empresa); null for the whole salon. */
+  location: { id: string; name: string } | null;
   /** Today's pending, confirmed and in-progress appointments, by time. */
   todayAppointments: HomeAppointmentRow[];
+  /** Active professionals (of the location), by name; a professional: themselves. */
+  professionals: { id: string; firstName: string; lastName: string }[];
+  /** Today's occupancy, Analítica's definition; null for staff. */
+  occupancy: AnalyticsOccupancy | null;
   /** Pending from today on: the first five and how many there are. */
   pendingConfirmations: { total: number; items: HomeAppointmentRow[] };
   /** Visits up to today still owed: the five latest, how many and how much (cents). */
@@ -2179,6 +2188,8 @@ export interface ApiClientInterface {
     paymentMethod: string;
     clientId?: string;
     saleId?: string;
+    /** Who did the service (its commission). */
+    professionalId?: string;
   }): Promise<PosSale>;
 
   // Email Campaigns
@@ -2457,11 +2468,14 @@ class ApiClient implements ApiClientInterface {
       // offending field: ["website must be a URL address"]. Passed straight to
       // Error it was coerced to a comma-joined blob, so a form could report a
       // 400 without naming the field that caused it. Joining as sentences is
-      // what turns "Failed to update salon" into something actionable.
-      const raw = errorData.message;
-      const message = Array.isArray(raw)
-        ? raw.join(". ")
-        : raw || `API Error: ${response.status} ${response.statusText}`;
+      // what turns "Failed to update salon" into something actionable. A
+      // role refusal's English default ("Forbidden resource") is said in
+      // Spanish (api-error-message.ts).
+      const message = apiErrorMessage(
+        response.status,
+        errorData.message,
+        `API Error: ${response.status} ${response.statusText}`,
+      );
       throw new ApiError(
         message,
         response.status,
@@ -3639,8 +3653,9 @@ class ApiClient implements ApiClientInterface {
   }
 
   /** Inicio's lists: today, to confirm and to charge, with their totals. */
-  async getHomeSummary(): Promise<HomeSummary> {
-    return this.request<HomeSummary>("/appointments/home");
+  async getHomeSummary(locationId?: string | null): Promise<HomeSummary> {
+    const query = locationId ? `?locationId=${encodeURIComponent(locationId)}` : "";
+    return this.request<HomeSummary>(`/appointments/home${query}`);
   }
 
   async getPendingPaymentAppointments(params?: {
@@ -4002,17 +4017,6 @@ class ApiClient implements ApiClientInterface {
     return this.request<any[]>("/commissions/all");
   }
 
-  async calculateCommission(
-    appointmentId: string,
-    amount?: number,
-    rate?: number,
-  ): Promise<any> {
-    return this.request<any>(`/commissions/calculate/${appointmentId}`, {
-      method: "POST",
-      body: JSON.stringify({ amount, rate }),
-    });
-  }
-
   /**
    * Marks a professional's commission paid. Without dates or ids: all that is
    * pending up to the end of today (the summary's "Pagar"). `expectedAmount`
@@ -4065,7 +4069,7 @@ class ApiClient implements ApiClientInterface {
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       const raw = (body as { message?: unknown }).message;
-      throw new ApiError(Array.isArray(raw) ? raw.join(". ") : String(raw || `Error ${res.status}`), res.status);
+      throw new ApiError(apiErrorMessage(res.status, raw, `Error ${res.status}`), res.status);
     }
     const disposition = res.headers.get("Content-Disposition") ?? "";
     const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "pagos.csv";
@@ -4354,6 +4358,7 @@ class ApiClient implements ApiClientInterface {
     paymentMethod: string;
     clientId?: string;
     saleId?: string;
+    professionalId?: string;
   }): Promise<PosSale> {
     return this.request<PosSale>("/pos/quick-sale", {
       method: "POST",
@@ -5812,7 +5817,7 @@ class ApiClient implements ApiClientInterface {
       const body = await res.json().catch(() => ({}));
       const raw = (body as { message?: unknown }).message;
       throw new ApiError(
-        Array.isArray(raw) ? raw.join(". ") : String(raw || `Error ${res.status}`),
+        apiErrorMessage(res.status, raw, `Error ${res.status}`),
         res.status,
       );
     }

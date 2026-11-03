@@ -1246,7 +1246,16 @@
     "appointments_count_other": "{count} appointments",
     "no_appointments_today": "No appointments today",
     "unread_notifications_one": "1 unread notification",
-    "unread_notifications_other": "{count} unread notifications"
+    "unread_notifications_other": "{count} unread notifications",
+    "revenue_with_till_month": "Revenue + till (this month)",
+    "whole_salon": "whole salon",
+    "location_line": "Location: {name}",
+    "occupancy_today": "Occupancy today",
+    "occupancy_today_sub": "{booked} booked of {available}",
+    "my_agenda_today": "Your schedule today",
+    "agenda_by_professional": "Today by professional",
+    "no_professional": "No professional",
+    "free_today": "Free today"
   },
   "appointments": {
     "title": "Appointments",
@@ -1971,6 +1980,11 @@
     "max_advance_invalid": "The maximum advance must be a whole number of days between 1 and 730",
     "inactive_badge": "Inactive"
   },
+  "managersOnly": {
+    "title": "This section is for the salon's management",
+    "body": "If you need something from this section, ask the salon's management.",
+    "home": "Back to home"
+  },
   "nav": {
     "dashboard": "Dashboard",
     "clients": "Clients",
@@ -2148,9 +2162,9 @@
     "commission": "Commission",
     "commission_summary": "Commission Summary",
     "commissions_paid_success": "Commissions marked as paid",
-    "complete_appointments_message": "Complete Appointments Message",
+    "complete_appointments_message": "Complete and charge some appointments to see the commissions",
     "date": "Date",
-    "description": "Description",
+    "description": "Your team's commission summary",
     "end_date": "End Date",
     "failed_to_pay_commissions": "The commissions could not be marked as paid",
     "generate_report": "Generate Report",
@@ -2164,13 +2178,13 @@
     "pending": "Pending",
     "pending_commission": "Pending Commission",
     "percentage_of_sales": "Percentage Of Sales",
-    "processing": "Processing",
+    "processing": "Processing…",
     "professional": "Professional",
     "rate": "Rate",
     "service": "Service",
     "start_date": "Start Date",
     "status": "Status",
-    "title": "Title",
+    "title": "Commissions",
     "total_payroll": "Total Payroll",
     "total_sales": "Total Sales",
     "view_details": "View Details",
@@ -2178,7 +2192,19 @@
     "confirm_mark_paid_description": "Everything pending for {name} up to today ({date}), refund adjustments included, will be marked as paid: {amount}. The payroll report's dates do not apply here.",
     "payroll_report_only": "This report only shows a period. \"Pay Commission\" in the summary pays everything pending up to today.",
     "mark_paid": "Mark as paid",
-    "refund_adjustment": "Refund adjustment"
+    "refund_adjustment": "Refund adjustment",
+    "item_one": "1 item",
+    "items": "{count} items",
+    "inactive": "Inactive",
+    "load_error": "The commissions could not be loaded",
+    "report_error": "The report could not be generated",
+    "retry": "Retry",
+    "generating": "Generating…",
+    "unassigned_services": "Services without a professional",
+    "unassigned_services_hint": "{count} sold at the till without saying who did them: they earn nobody a commission.",
+    "plan_blocked_title": "Commissions are not included in your plan",
+    "plan_blocked_body": "With a higher plan you can work out and pay your team's commissions on their appointments and till sales.",
+    "plan_blocked_cta": "See plans in Billing"
   },
   "description": "Description",
   "email_campaigns": {

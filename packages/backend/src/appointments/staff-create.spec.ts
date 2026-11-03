@@ -129,6 +129,7 @@ function build({
 
   const prisma: any = {
     ...reads,
+    appointmentActivity: { create: jest.fn(async ({ data }: any) => data) },
     $transaction: jest.fn(async (fn: any) => {
       const staged = { appointments: [] as any[], serviceRows: [] as any[] };
       const tx = {
@@ -275,6 +276,24 @@ describe("source and lock", () => {
     const { service, locks } = build();
     await service.createByStaff(BOOKING as any, STAFF);
     expect(locks).toEqual([`booking:${TENANT}:${DAY}`]);
+  });
+
+  it("records who booked it, and for which client, in the appointment's history", async () => {
+    const { service, db, prisma } = build();
+    await service.createByStaff(BOOKING as any, STAFF);
+    expect(prisma.appointmentActivity.create).toHaveBeenCalledWith({
+      data: {
+        appointmentId: db.appointments[0].id,
+        action: "appointment_created",
+        details: expect.objectContaining({
+          source: "staff",
+          professionalId: ME.id,
+          clientId: CLIENT,
+          userId: STAFF.id,
+          userRole: "staff",
+        }),
+      },
+    });
   });
 });
 

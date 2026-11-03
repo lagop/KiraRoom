@@ -13,9 +13,13 @@ import { UpdateGiftCardDto } from "./dto/update-gift-card.dto";
 
 /**
  * Who does what:
- * - Looking a card up by its code and redeeming it is a till action: the
- *   whole team (staff included). Neither depends on the plan: a client who
- *   paid for a card can spend it after the salon downgrades.
+ * - Looking a card up by its code is a till action: the whole team (staff
+ *   included), whatever the plan. The till spends the card inside the sale
+ *   (a gift-card tender), so a client who paid for a card can still spend
+ *   it after the salon downgrades.
+ * - Redeeming a card on its own, outside a sale, is the Tarjetas regalo
+ *   screen: managers, on a plan with gift cards. For staff it lowered the
+ *   balance with no sale behind it, off the takings and the till count.
  * - Listing every card, the detail with its movements, issuing, editing and
  *   deactivating are for managers (as the menu), and need the plan feature
  *   (as the menu).
@@ -70,7 +74,8 @@ export class GiftCardsController {
   }
 
   @Post("redeem")
-  @Roles(...SALON_TEAM)
+  @Roles(...SALON_MANAGERS)
+  @Feature("gift_cards")
   redeem(@Req() req: any, @Body() dto: RedeemGiftCardDto) {
     return this.service.redeem(req.user.tenantId, dto, req.user.id);
   }

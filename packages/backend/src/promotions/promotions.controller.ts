@@ -7,7 +7,7 @@ import {
 } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
-import { Roles } from "../auth/decorators/roles.decorator";
+import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 import { UserRole } from "@prisma/client";
 import { PromotionsService } from "./promotions.service";
 import { CreatePromotionDto, UpdatePromotionDto } from "./dto/promotion.dto";
@@ -49,8 +49,9 @@ export class PromotionsController {
     return this.promotionsService.getAll(tenantId);
   }
 
+  /** Uses and total discounted per promotion: the Promociones screen (managers). */
   @Get("statistics")
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
+  @Roles(...SALON_MANAGERS)
   @ApiOperation({ summary: "Get promotion usage statistics" })
   @ApiQuery({ name: "promotionId", required: false })
   async getStatistics(

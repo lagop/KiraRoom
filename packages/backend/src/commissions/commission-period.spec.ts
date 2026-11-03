@@ -137,6 +137,8 @@ describe("CommissionsService periods", () => {
       posSaleLine: store("posSaleLine", [LAST_DAY_SALE], "createdAt"),
       commissionAdjustment: store("commissionAdjustment", [LAST_DAY_ADJUSTMENT], "createdAt"),
     };
+    prisma.$executeRaw = jest.fn(async () => 0);
+    prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
     return { svc: new CommissionsService(prisma), where, prisma };
   }
 
@@ -171,7 +173,7 @@ describe("CommissionsService periods", () => {
 
   it("the payroll refuses a missing date instead of failing in the database", async () => {
     const { svc } = service();
-    await expect(svc.getPayrollReport("t1", "", "2026-11-30")).rejects.toThrow("startDate and endDate");
+    await expect(svc.getPayrollReport("t1", "", "2026-11-30")).rejects.toThrow("Indica las fechas de inicio y fin");
   });
 
   it("the payout pays the last day too, by the same filters", async () => {
