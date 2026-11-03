@@ -2,33 +2,41 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { CalendarOff, Check, Loader2, X } from "lucide-react";
+import { AlertTriangle, CalendarOff, Check, Loader2, X } from "lucide-react";
 import apiClient from "@/lib/api";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/components/ui/use-toast";
+import { useTranslations } from "@/lib/use-translation";
 import {
   TIME_OFF_KIND_LABELS,
   TIME_OFF_REQUESTS_CHANGED,
   TIME_OFF_STATUS_LABELS,
   TIME_OFF_STATUS_STYLES,
+  agendaLink,
   approvedToast,
   conflictLine,
   conflictTitle,
   dateRangeLabel,
   hoursLabel,
+  othersAway,
   statusOf,
   type TimeOff,
   type TimeOffConflict,
+  type UpcomingTimeOffConflict,
 } from "@/lib/time-off";
 
 /** How many clashes a dialog lists before "y N más". */
 const LISTED_CONFLICTS = 8;
 /** How many answered requests the page recalls. */
 const RECENT_ANSWERS = 10;
+/** How many appointments inside approved time off the card lists before "y N más". */
+const LISTED_UPCOMING = 15;
 
 const errorText = (err: unknown) => (err instanceof Error && err.message ? err.message : "Inténtalo de nuevo.");
 
-const who = (b: TimeOff) => b.professionalName?.trim() || "Profesional";
+const who = (b: Pick<TimeOff, "professionalName">) => b.professionalName?.trim() || "Profesional";
+
+type Translate = (key: string, params?: Record<string, any>) => string;
 
 function ConflictList({ conflicts }: { conflicts: TimeOffConflict[] }) {
   return (
@@ -43,32 +51,59 @@ function ConflictList({ conflicts }: { conflicts: TimeOffConflict[] }) {
   );
 }
 
+/** What an appointment of the card falls inside: "Vacaciones de Ana Gil (14–16 dic 2026)". */
+function reasonOf(c: UpcomingTimeOffConflict, t: Translate): string {
+  const dates = dateRangeLabel(c.timeOff.startDate, c.timeOff.endDate);
+  if (c.timeOff.professionalId === null) return t("timeOff.upcoming.closureReason", { dates });
+  return t("timeOff.upcoming.absenceReason", {
+    kind: TIME_OFF_KIND_LABELS[c.timeOff.kind] ?? "Ausencia",
+    name: who(c.timeOff),
+    dates,
+  });
+}
+
 /**
  * The time off the professionals asked for, for the owner and managers to
  * approve or reject. Approving shows first the appointments that fall inside
- * it (they are not cancelled: the salon moves them or warns the client);
- * rejecting may carry a reason, which the professional reads.
+ * it (they are not cancelled: the salon moves them or warns the client) and
+ * who else is away those days; rejecting may carry a reason, and approving a
+ * note, which the professional reads.
+ *
+ * Above them, the appointments still booked inside any approved time off or
+ * closure ahead, worked out by the server on every visit: they stay in sight
+ * until each one is moved or cancelled, not only in the dialog that listed
+ * them on approval.
  */
 export default function TimeOffRequestsPage() {
   const { toast } = useToast();
+  const t = useTranslations();
   const [pending, setPending] = useState<TimeOff[]>([]);
   const [answered, setAnswered] = useState<TimeOff[]>([]);
+  const [upcoming, setUpcoming] = useState<UpcomingTimeOffConflict[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
 
-  const [approving, setApproving] = useState<{ request: TimeOff; conflicts: TimeOffConflict[] } | null>(null);
+  const [approving, setApproving] = useState<{
+    request: TimeOff;
+    conflicts: TimeOffConflict[];
+    others: TimeOff[];
+  } | null>(null);
+  const [approveNote, setApproveNote] = useState("");
   const [rejecting, setRejecting] = useState<TimeOff | null>(null);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
-  // After an approval with clashes: what is left to move.
-  const [toMove, setToMove] = useState<{ name: string; conflicts: TimeOffConflict[] } | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [open, approved, rejected] = await Promise.all([
+      const [open, approved, rejected, clashes] = await Promise.all([
         apiClient.getTimeOffRequests("pending"),
         apiClient.getTimeOffRequests("approved"),
         apiClient.getTimeOffRequests("rejected"),
+        // The card is a reminder: the requests still load without it.
+        apiClient.getUpcomingTimeOffConflicts().catch((err) => {
+          console.error("Failed to load the appointments inside time off:", err);
+          return null;
+        }),
       ]);
       setPending(open);
       setAnswered(
@@ -76,6 +111,7 @@ export default function TimeOffRequestsPage() {
           .sort((a, b) => (b.decidedAt ?? "").localeCompare(a.decidedAt ?? ""))
           .slice(0, RECENT_ANSWERS),
       );
+      if (clashes) setUpcoming(clashes.appointments);
       setLoadError(false);
     } catch (err) {
       console.error("Failed to load time off requests:", err);
@@ -94,21 +130,19 @@ export default function TimeOffRequestsPage() {
     await load();
   };
 
-  /** The clashes first, then the confirmation. */
+  /** The clashes and who else is away first, then the confirmation. */
   const askApprove = async (request: TimeOff) => {
     setBusy(request.id);
     try {
-      const { conflicts } = await apiClient.previewTimeOff({
-        professionalId: request.professionalId,
-        kind: request.kind,
-        startDate: request.startDate,
-        endDate: request.endDate,
-        startTime: request.startTime,
-        endTime: request.endTime,
-      });
-      setApproving({ request, conflicts });
+      const [{ conflicts }, away] = await Promise.all([
+        apiClient.previewApproveTimeOff(request.id),
+        // Who else is away is a help, not a condition: without it the dialog still opens.
+        apiClient.getTimeOff(request.startDate, request.endDate).catch(() => [] as TimeOff[]),
+      ]);
+      setApproveNote("");
+      setApproving({ request, conflicts, others: othersAway(away, request) });
     } catch (err) {
-      toast({ title: "No se han podido comprobar las citas", description: errorText(err), variant: "destructive" });
+      toast({ title: "No se puede aprobar", description: errorText(err), variant: "destructive" });
     } finally {
       setBusy(null);
     }
@@ -119,10 +153,10 @@ export default function TimeOffRequestsPage() {
     const { request } = approving;
     setBusy(request.id);
     try {
-      const { conflicts } = await apiClient.approveTimeOff(request.id);
+      const { conflicts } = await apiClient.approveTimeOff(request.id, approveNote.trim() || null);
       toast(approvedToast(request.professionalName, conflicts.length));
-      setToMove(conflicts.length ? { name: who(request), conflicts } : null);
       setApproving(null);
+      setApproveNote("");
       await changed();
     } catch (err) {
       toast({ title: "No se ha aprobado", description: errorText(err), variant: "destructive" });
@@ -161,28 +195,43 @@ export default function TimeOffRequestsPage() {
         </p>
       </div>
 
-      {toMove && (
-        <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          <div className="flex items-start justify-between gap-3">
-            <p className="font-medium">
-              {conflictTitle(toMove.conflicts.length, "ausencia")} de {toMove.name}: muévelas o avisa a los clientes.
-            </p>
-            <button
-              type="button"
-              onClick={() => setToMove(null)}
-              aria-label="Cerrar"
-              className="rounded p-1 text-amber-700 hover:bg-amber-100"
-            >
-              <X className="h-4 w-4" aria-hidden="true" />
-            </button>
+      {upcoming.length > 0 && (
+        <section
+          role="status"
+          data-test="time-off-upcoming-conflicts"
+          className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"
+        >
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <div className="min-w-0 flex-1 space-y-2">
+              <p className="font-medium">
+                {upcoming.length === 1
+                  ? t("timeOff.upcoming.titleOne")
+                  : t("timeOff.upcoming.titleMany", { count: upcoming.length })}
+              </p>
+              <p>{t("timeOff.upcoming.help")}</p>
+              <ul className="max-h-72 space-y-1 overflow-y-auto">
+                {upcoming.slice(0, LISTED_UPCOMING).map((c) => (
+                  <li key={c.id}>
+                    <Link
+                      href={agendaLink(c.date, c.id)}
+                      className="underline decoration-amber-400 underline-offset-2 hover:decoration-amber-700"
+                    >
+                      {conflictLine(c)}
+                    </Link>
+                    <span className="text-amber-800"> · {reasonOf(c, t)}</span>
+                  </li>
+                ))}
+              </ul>
+              {upcoming.length > LISTED_UPCOMING && (
+                <p>{t("timeOff.upcoming.more", { count: upcoming.length - LISTED_UPCOMING })}</p>
+              )}
+              <Link href={agendaLink(upcoming[0].date)} className="inline-block font-medium underline">
+                {t("timeOff.upcoming.goToAgenda")}
+              </Link>
+            </div>
           </div>
-          <div className="mt-2 space-y-1">
-            <ConflictList conflicts={toMove.conflicts} />
-          </div>
-          <Link href="/dashboard/appointments" className="mt-2 inline-block font-medium underline">
-            Ir a la agenda
-          </Link>
-        </div>
+        </section>
       )}
 
       <section className="rounded-xl border border-gray-200 bg-white p-6 space-y-4">
@@ -302,6 +351,32 @@ export default function TimeOffRequestsPage() {
               ) : (
                 <p>No coincide con ninguna cita. Desde ahora no se ofrecerán citas en ese tiempo.</p>
               )}
+              {approving.others.length > 0 && (
+                <div data-test="time-off-others-away">
+                  <p className="font-medium">{t("timeOff.othersAway")}</p>
+                  <ul className="max-h-40 space-y-1 overflow-y-auto">
+                    {approving.others.map((b) => (
+                      <li key={b.id}>
+                        {who(b)} · {TIME_OFF_KIND_LABELS[b.kind]} · {dateRangeLabel(b.startDate, b.endDate)} ·{" "}
+                        {hoursLabel(b)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <label className="block text-sm">
+                <span className="mb-1 block text-gray-700">
+                  {t("timeOff.approveNoteLabel", { name: who(approving.request) })}
+                </span>
+                <textarea
+                  value={approveNote}
+                  maxLength={200}
+                  rows={2}
+                  onChange={(e) => setApproveNote(e.target.value)}
+                  placeholder={t("timeOff.approveNotePlaceholder")}
+                  className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                />
+              </label>
             </div>
           )
         }
