@@ -10,7 +10,14 @@ import { TimeOffKind } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { NotificationType } from "../notifications/dto";
-import { TimeOffService, TimeOffUser, timeOffView } from "./time-off.service";
+import {
+  MY_TIME_OFF_PAGE,
+  REQUESTS_PAGE,
+  TimeOffService,
+  TimeOffUser,
+  inputOfRow,
+  timeOffView,
+} from "./time-off.service";
 import {
   REQUESTABLE_KINDS,
   TimeOffBlock,
@@ -24,10 +31,7 @@ import {
 } from "./time-off-rules";
 import { CreateTimeOffRequestDto, DecideTimeOffDto, TimeOffRequestsQueryDto } from "./dto/time-off.dto";
 
-/** Where the panel lists the requests (the notification's link). */
-export const REQUESTS_PAGE = "/dashboard/solicitudes-ausencia";
-/** Where a professional follows their own. */
-export const MY_TIME_OFF_PAGE = "/dashboard/mis-ausencias";
+export { MY_TIME_OFF_PAGE, REQUESTS_PAGE };
 
 /** How far back "my absences" reaches: a request answered last month is still worth seeing. */
 const MINE_LOOKBACK_DAYS = 60;
@@ -151,9 +155,26 @@ export class TimeOffRequestsService {
    * Approves a pending request: from now on it blocks the agenda. Answers
    * with the appointments inside it, for the salon to move or warn.
    */
+  /**
+   * Before approving: the appointments the request clashes with, and a 409
+   * when it overlaps the professional's other time off (as approving would).
+   */
+  async previewApprove(user: TimeOffUser, id: string) {
+    const row = await this.prisma.timeOff.findFirst({ where: { id, tenantId: user.tenantId } });
+    if (!row) throw new NotFoundException("Solicitud no encontrada");
+    if (row.status !== "pending") throw new ConflictException("Esta solicitud ya está respondida.");
+    const input = inputOfRow(row);
+    await this.timeOff.assertNoOverlap(user.tenantId, input, { excludeId: row.id });
+    return { conflicts: await this.timeOff.conflicts(user.tenantId, input) };
+  }
+
   async approve(user: TimeOffUser, id: string, dto: DecideTimeOffDto = {}) {
+    // Not on top of time off the professional already has, or another
+    // request of theirs for the same days: one of them has to go first.
+    const pending = await this.prisma.timeOff.findFirst({ where: { id, tenantId: user.tenantId, status: "pending" } });
+    if (pending) await this.timeOff.assertNoOverlap(user.tenantId, inputOfRow(pending), { excludeId: pending.id });
     const row = await this.decide(user, id, "approved", dto.note);
-    const conflicts = await this.timeOff.conflicts(user.tenantId, inputOf(row));
+    const conflicts = await this.timeOff.conflicts(user.tenantId, inputOfRow(row));
     await this.tellRequester(user, row);
     return { timeOff: timeOffView(row, "manager"), conflicts };
   }
@@ -207,6 +228,12 @@ export class TimeOffRequestsService {
     };
     const problem = timeOffInputProblem(input);
     if (problem) throw new BadRequestException(problem);
+    // Days already gone are not asked for: nobody can be booked on them. The
+    // salon's own day, not the server's.
+    if (input.endDate < (await this.timeOff.salonToday(user.tenantId))) {
+      throw new BadRequestException("No puedes pedir una ausencia para días que ya han pasado.");
+    }
+    await this.timeOff.assertNoOverlap(user.tenantId, input, { own: true });
     return { input, professionalName: fullName(own) };
   }
 
@@ -272,17 +299,4 @@ export class TimeOffRequestsService {
       this.logger.warn(`Could not notify the requester of time off ${row.id}: ${(err as Error).message}`);
     }
   }
-}
-
-/** A stored row as the rules read it. */
-function inputOf(row: any): TimeOffInput {
-  return {
-    professionalId: row.professionalId,
-    kind: row.kind,
-    startDate: dayOf(row.startDate),
-    endDate: dayOf(row.endDate),
-    startTime: row.startTime ?? null,
-    endTime: row.endTime ?? null,
-    note: row.note ?? null,
-  };
 }

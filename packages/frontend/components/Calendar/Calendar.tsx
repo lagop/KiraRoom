@@ -444,6 +444,7 @@ export const Calendar: React.FC<{
                 professionals={columns}
                 appointments={shownAppointments}
                 onAppointmentClick={onAppointmentClick}
+                timeOff={timeOff}
                 t={t}
               />
             </div>

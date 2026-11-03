@@ -1481,7 +1481,10 @@
       "cancelAppointment": "Cancelar cita",
       "cancelConfirmTitle": "¿Cancelar esta cita?",
       "cancelConfirmDescription": "Quedará como cancelada en el historial de la clienta.",
-      "keepAppointment": "Mantener cita"
+      "keepAppointment": "Mantener cita",
+      "awayAllDay": "{label} (todo el día)",
+      "awayHours": "{label} {from}–{to}",
+      "awayPending": "Pendiente · {text}"
     },
     "quantity": "Cantidad",
     "actions": "Acciones",
@@ -3175,6 +3178,34 @@
       "news": "Novedades",
       "waitlist_slot_available": "Lista de espera",
       "other": "Notificación"
+    }
+  },
+  "timeOff": {
+    "answerRequest": "Responder",
+    "answerRequestTitle": "Las solicitudes pendientes se aprueban o se rechazan en Solicitudes de ausencia",
+    "edit": "Editar",
+    "editAria": "Editar {what} del {dates}",
+    "editTitleAbsence": "Editar la ausencia",
+    "editTitleClosure": "Editar el cierre",
+    "editWillNotify": "La pidió {name}: le avisaremos del cambio en sus notificaciones.",
+    "saveChanges": "Guardar cambios",
+    "cancelEdit": "Cancelar",
+    "updatedAbsence": "Ausencia actualizada",
+    "updatedClosure": "Cierre actualizado",
+    "requesterNotified": "Avisamos a {name} en sus notificaciones.",
+    "deleteWillNotify": "Avisaremos a {name} en sus notificaciones.",
+    "pastRequest": "No puedes pedir una ausencia para días que ya han pasado.",
+    "othersAway": "También están fuera esos días:",
+    "approveNoteLabel": "Nota para {name} (opcional, la verá en sus notificaciones)",
+    "approveNotePlaceholder": "Aprobada; mueve tú a tus clientas del martes…",
+    "upcoming": {
+      "titleOne": "1 cita coincide con una ausencia aprobada",
+      "titleMany": "{count} citas coinciden con ausencias aprobadas",
+      "help": "No se han cancelado: muévelas o avisa a los clientes. Dejan de salir aquí cuando las mueves o las cancelas.",
+      "absenceReason": "{kind} de {name} ({dates})",
+      "closureReason": "Salón cerrado ({dates})",
+      "more": "y {count} más.",
+      "goToAgenda": "Ir a la agenda"
     }
   }
 }

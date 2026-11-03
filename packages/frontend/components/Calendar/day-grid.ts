@@ -281,6 +281,44 @@ export function salonClosureOn<T extends CalendarTimeOff>(day: string, blocks: R
   return blocks.find((b) => statusOf(b) === "approved" && b.professionalId === null && !b.startTime && b.startDate <= day && day <= b.endDate) ?? null;
 }
 
+/** A line under a professional's name in the mobile agenda: why they are away. */
+export interface AgendaAbsence {
+  /** "Vacaciones", "Salón cerrado — Reforma". */
+  label: string;
+  /** "10:00", "12:00"; null for the whole day. */
+  startTime: string | null;
+  endTime: string | null;
+  /** A request not yet answered (managers only): it blocks nothing. */
+  pending: boolean;
+}
+
+/**
+ * Who is away in the mobile agenda (the list has no columns to shade): the
+ * professional's own time off on `day`, all day or its hours, pending
+ * requests included, and the salon's partial closures. An all-day closure is
+ * left out: the banner above the agenda says it for everyone.
+ */
+export function agendaAbsences(
+  day: string,
+  professionalId: string,
+  blocks: ReadonlyArray<CalendarTimeOff>,
+): AgendaAbsence[] {
+  return blocks
+    .filter((b) => statusOf(b) !== "rejected" && b.startDate <= day && day <= b.endDate)
+    .filter((b) => b.professionalId === professionalId || (b.professionalId === null && !!b.startTime && !!b.endTime))
+    .map((b) => {
+      const pending = statusOf(b) === "pending";
+      const hours = !!b.startTime && !!b.endTime;
+      return {
+        label: pending ? (TIME_OFF_KIND_LABELS[b.kind] ?? "Ausencia") : calendarLabel(b),
+        startTime: hours ? (b.startTime as string) : null,
+        endTime: hours ? (b.endTime as string) : null,
+        pending,
+      };
+    })
+    .sort((a, b) => Number(a.pending) - Number(b.pending) || (a.startTime ?? "").localeCompare(b.startTime ?? ""));
+}
+
 /** Pixels from the top of the hours (below the professionals' row). */
 export function minutesToTop(minutes: number, startHour: number): number {
   return ((minutes - startHour * 60) / 15) * SLOT_HEIGHT;
