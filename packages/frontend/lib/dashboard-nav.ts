@@ -178,6 +178,22 @@ export function badgesIn(nav: NavEntry[]): NavBadge[] {
   return [...new Set(all)];
 }
 
+/**
+ * The header's title for a page: the label of the menu link it belongs to
+ * (the most specific one, so /dashboard/pos/products is "Productos", not
+ * "TPV"), or null for a page the menu does not list. The header used to say
+ * "Dashboard" everywhere.
+ */
+export function pageTitleKey(pathname: string, nav: NavEntry[] = DASHBOARD_NAV): string | null {
+  const path = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+  let best: NavLink | null = null;
+  for (const item of nav.flatMap((e) => (e.kind === "link" ? [e] : e.items))) {
+    if (!isActive(item, path)) continue;
+    if (!best || item.href.length > best.href.length) best = item;
+  }
+  return best ? best.label : null;
+}
+
 /** The group holding the current page, so it opens by itself; null if none. */
 export function activeGroup(nav: NavEntry[], pathname: string): string | null {
   for (const entry of nav) {
