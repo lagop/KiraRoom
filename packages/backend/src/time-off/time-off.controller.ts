@@ -113,6 +113,14 @@ export class TimeOffController {
     return this.requests.cancel(user, id);
   }
 
+  @Post(":id/approve/preview")
+  @HttpCode(200)
+  @Roles(...SALON_MANAGERS)
+  @ApiOperation({ summary: "Appointments a pending request clashes with, before approving it (nothing is saved)" })
+  previewApprove(@CurrentUser() user: TimeOffUser, @Param("id", ParseUUIDPipe) id: string) {
+    return this.requests.previewApprove(user, id);
+  }
+
   @Post(":id/approve")
   @HttpCode(200)
   @Roles(...SALON_MANAGERS)
@@ -144,6 +152,18 @@ export class TimeOffController {
   @ApiOperation({ summary: "Record time off, or a closure of the whole salon" })
   create(@CurrentUser() user: TimeOffUser, @Body() dto: CreateTimeOffDto) {
     return this.timeOff.create(user, dto);
+  }
+
+  @Post(":id/preview")
+  @HttpCode(200)
+  @Roles(...SALON_MANAGERS)
+  @ApiOperation({ summary: "Appointments an edit of time off would clash with (nothing is saved)" })
+  previewUpdate(
+    @CurrentUser() user: TimeOffUser,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() dto: UpdateTimeOffDto,
+  ) {
+    return this.timeOff.previewUpdate(user, id, dto);
   }
 
   @Patch(":id")

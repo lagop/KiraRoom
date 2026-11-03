@@ -407,6 +407,22 @@ describe("the salon's answer", () => {
     expect(rows[0].status).toBe("pending");
   });
 
+  it("the approval preview lists the clashes, without the request counting against itself", async () => {
+    const pending = stored({});
+    const { service, rows } = build({
+      timeOff: [pending],
+      appointments: [{ id: "a1", professionalId: ANA, scheduledTime: "10:00", duration: 30 }],
+    });
+    expect((await service.previewApprove(OWNER, pending.id)).conflicts.map((c) => c.id)).toEqual(["a1"]);
+    expect(rows[0].status).toBe("pending");
+
+    const overlapping = build({ timeOff: [stored({}), stored({ status: "approved", requestedById: null })] });
+    await expect(overlapping.service.previewApprove(OWNER, overlapping.rows[0].id)).rejects.toBeInstanceOf(ConflictException);
+    const answered = build({ timeOff: [stored({ status: "rejected" })] });
+    await expect(answered.service.previewApprove(OWNER, answered.rows[0].id)).rejects.toThrow(/ya está respondida/);
+    await expect(answered.service.previewApprove(OWNER, randomUUID())).rejects.toBeInstanceOf(NotFoundException);
+  });
+
   it("approving keeps the manager's note for the requester", async () => {
     const pending = stored({});
     const { service, rows, notifications } = build({ timeOff: [pending] });

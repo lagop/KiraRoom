@@ -356,6 +356,17 @@ describe("overlapping time off of one professional", () => {
     await expect(service.create(OWNER, hours("11:00", "13:00"))).rejects.toBeInstanceOf(ConflictException);
   });
 
+  it("the preview of an edit lists its clashes, not comparing it with itself", async () => {
+    const row = stored({});
+    const { service, rows } = build({
+      timeOff: [row],
+      appointments: [{ id: "a1", professionalId: ANA, day: "2026-12-15", scheduledTime: "10:00", duration: 30 }],
+    });
+    expect((await service.previewUpdate(OWNER, row.id, { endDate: "2026-12-15" })).conflicts.map((c) => c.id)).toEqual(["a1"]);
+    // Nothing saved.
+    expect(rows[0].endDate).toEqual(new Date(`${DAY}T00:00:00.000Z`));
+  });
+
   it("an edit is not compared with itself, but is with the rest", async () => {
     const row = stored({});
     const other = stored({
@@ -503,7 +514,7 @@ describe("who may call what", () => {
 
   it("the whole team reads; only owner and admin write", () => {
     expect(roles("list")).toEqual([UserRole.owner, UserRole.admin, UserRole.staff]);
-    for (const method of ["preview", "create", "update", "remove", "upcomingConflicts"] as const) {
+    for (const method of ["preview", "previewUpdate", "create", "update", "remove", "upcomingConflicts", "previewApprove"] as const) {
       expect(roles(method)).toEqual([UserRole.owner, UserRole.admin]);
     }
   });

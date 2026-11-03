@@ -258,10 +258,38 @@ export class TimeOffService {
     return { timeOff: timeOffView(row, "manager"), conflicts: await this.conflicts(user.tenantId, input) };
   }
 
+  /** The appointments an edit would clash with, before it is saved. */
+  async previewUpdate(user: TimeOffUser, id: string, dto: UpdateTimeOffDto) {
+    const { input } = await this.editedInput(user, id, dto);
+    return { conflicts: await this.conflicts(user.tenantId, input) };
+  }
+
   async update(user: TimeOffUser, id: string, dto: UpdateTimeOffDto) {
+    const { existing, input } = await this.editedInput(user, id, dto);
+    const before = inputOfRow(existing);
+    const row = await this.prisma.timeOff.update({
+      where: { id: existing.id, tenantId: user.tenantId },
+      data: {
+        kind: input.kind as TimeOffKind,
+        startDate: dateOfDay(input.startDate)!,
+        endDate: dateOfDay(input.endDate)!,
+        startTime: input.startTime ?? null,
+        endTime: input.endTime ?? null,
+        note: input.note ?? null,
+      },
+      include: { professional: { select: { firstName: true, lastName: true } } },
+    });
+    const moved = (["kind", "startDate", "endDate", "startTime", "endTime"] as const).some(
+      (key) => (before[key] ?? null) !== (input[key] ?? null),
+    );
+    if (moved) await this.tellRequester(user, row, "time_off_changed", before as TimeOffBlock);
+    return { timeOff: timeOffView(row, "manager"), conflicts: await this.conflicts(user.tenantId, input) };
+  }
+
+  /** The stored row with an edit applied, checked: the rules, and no overlap with the rest. */
+  private async editedInput(user: TimeOffUser, id: string, dto: UpdateTimeOffDto) {
     const existing = await this.prisma.timeOff.findFirst({ where: { id, tenantId: user.tenantId } });
     if (!existing) throw new NotFoundException("Ausencia no encontrada");
-    const before = inputOfRow(existing);
     // A field left out keeps its value; null clears the hours (all day).
     const pick = <K extends keyof UpdateTimeOffDto>(key: K, current: unknown) =>
       dto[key] !== undefined ? dto[key] : current;
@@ -280,23 +308,7 @@ export class TimeOffService {
     if (existing.status !== "rejected") {
       await this.assertNoOverlap(user.tenantId, input, { excludeId: existing.id });
     }
-    const row = await this.prisma.timeOff.update({
-      where: { id: existing.id, tenantId: user.tenantId },
-      data: {
-        kind: input.kind as TimeOffKind,
-        startDate: dateOfDay(input.startDate)!,
-        endDate: dateOfDay(input.endDate)!,
-        startTime: input.startTime ?? null,
-        endTime: input.endTime ?? null,
-        note: input.note ?? null,
-      },
-      include: { professional: { select: { firstName: true, lastName: true } } },
-    });
-    const moved = (["kind", "startDate", "endDate", "startTime", "endTime"] as const).some(
-      (key) => (before[key] ?? null) !== (input[key] ?? null),
-    );
-    if (moved) await this.tellRequester(user, row, "time_off_changed", before as TimeOffBlock);
-    return { timeOff: timeOffView(row, "manager"), conflicts: await this.conflicts(user.tenantId, input) };
+    return { existing, input };
   }
 
   /**

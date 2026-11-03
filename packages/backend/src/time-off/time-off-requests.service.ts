@@ -155,6 +155,19 @@ export class TimeOffRequestsService {
    * Approves a pending request: from now on it blocks the agenda. Answers
    * with the appointments inside it, for the salon to move or warn.
    */
+  /**
+   * Before approving: the appointments the request clashes with, and a 409
+   * when it overlaps the professional's other time off (as approving would).
+   */
+  async previewApprove(user: TimeOffUser, id: string) {
+    const row = await this.prisma.timeOff.findFirst({ where: { id, tenantId: user.tenantId } });
+    if (!row) throw new NotFoundException("Solicitud no encontrada");
+    if (row.status !== "pending") throw new ConflictException("Esta solicitud ya está respondida.");
+    const input = inputOfRow(row);
+    await this.timeOff.assertNoOverlap(user.tenantId, input, { excludeId: row.id });
+    return { conflicts: await this.timeOff.conflicts(user.tenantId, input) };
+  }
+
   async approve(user: TimeOffUser, id: string, dto: DecideTimeOffDto = {}) {
     // Not on top of time off the professional already has, or another
     // request of theirs for the same days: one of them has to go first.
