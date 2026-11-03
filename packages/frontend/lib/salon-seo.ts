@@ -105,6 +105,8 @@ export interface PublicSalonPage {
   openingShifts?: Record<string, Array<{ openTime: string; closeTime: string }>>;
   /** "YYYY-MM-DD" days ahead the salon is closed all day. Absent from older servers. */
   closedDays?: string[];
+  /** With locations to pick from: each one's closed days, the salon's included. */
+  closedDaysByLocation?: Record<string, string[]>;
   /** Set only once the salon's own domain serves the page over HTTPS. */
   customDomain: string | null;
   /** salon-lucia.kiraroom.net, set only once subdomains serve over HTTPS. */

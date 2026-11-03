@@ -17,6 +17,9 @@ export interface TimeOff {
   /** Null: the whole salon is closed. */
   professionalId: string | null;
   professionalName?: string | null;
+  /** A closure of one location only (multi-local); null: every location. */
+  locationId?: string | null;
+  locationName?: string | null;
   kind: TimeOffKind;
   startDate: string;
   endDate: string;
@@ -35,6 +38,8 @@ export interface TimeOff {
 
 export interface TimeOffInput {
   professionalId?: string | null;
+  /** Closures only, multi-local: one location, or null for every location. Absent: not sent. */
+  locationId?: string | null;
   kind: TimeOffKind;
   startDate: string;
   endDate: string;
@@ -123,7 +128,14 @@ export function requestBody(input: TimeOffInput): Omit<TimeOffInput, "profession
     startTime: input.startTime ?? null,
     endTime: input.endTime ?? null,
     note: input.note ?? null,
+    ...(input.locationId !== undefined ? { locationId: input.locationId } : {}),
   };
+}
+
+/** Which locations a closure closes, for a salon with several; null otherwise. */
+export function closureWhere(block: Pick<TimeOff, "locationId" | "locationName">, severalLocations: boolean): string | null {
+  if (block.locationId) return `Solo ${block.locationName?.trim() || "un local"}`;
+  return severalLocations ? "Todos los locales" : null;
 }
 
 /**

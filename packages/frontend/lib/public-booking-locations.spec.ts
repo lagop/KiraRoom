@@ -11,6 +11,7 @@ import {
   bookingLocations,
   choiceAtLocation,
   chosenLocation,
+  closedDaysAt,
   confirmedPlace,
   locationForProfessional,
   locationFromQuery,
@@ -137,6 +138,11 @@ check("shows the location step only with locations", page.includes("locations.le
 check("asks for slots at the location", /bookingData\.locationId \|\| undefined,\s*\);/.test(page));
 check("books at the location", page.includes("locationId: bookingData.locationId"));
 check("the confirmation names the location", page.includes("bookingPublic.booked_at_address"));
+const closures = { closedDays: ["2026-12-25"], closedDaysByLocation: { norte: ["2026-12-08", "2026-12-25"], centro: ["2026-12-25"] } };
+check("a location's closed days are its own and the salon's", JSON.stringify(closedDaysAt(closures, "norte")) === JSON.stringify(["2026-12-08", "2026-12-25"]));
+check("before picking one, the salon's", JSON.stringify(closedDaysAt(closures, "")) === JSON.stringify(["2026-12-25"]));
+check("from an older server, the salon's", JSON.stringify(closedDaysAt({ closedDays: ["2026-12-25"] }, "norte")) === JSON.stringify(["2026-12-25"]));
+check("the booking page greys the picked location's closed days", read("app/sites/[salonName]/salon-booking-page.tsx").includes("closedDaysAt(initialData, bookingData.locationId)"));
 const embed = read("app/embed/[token]/page.tsx");
 check("the widget shows the location step only with locations", embed.includes("locations.length > 0 && ("));
 check("the widget asks for slots at the location", embed.includes(`params.append("locationId", locationId)`));

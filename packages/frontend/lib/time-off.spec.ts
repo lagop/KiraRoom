@@ -20,6 +20,7 @@ import {
   myAbsences,
   pendingBadge,
   changesPendingRequests,
+  closureWhere,
   requestBody,
   statusOf,
   agendaLink,
@@ -117,6 +118,9 @@ eq(
 eq("no badge for none", pendingBadge(0), null);
 eq("the badge counts", pendingBadge(3), "3");
 eq("and stops at 9+", pendingBadge(12), "9+");
+eq("a closure of one location says which", closureWhere({ locationId: "n", locationName: "Norte" }, true), "Solo Norte");
+eq("one of every location, with several", closureWhere({ locationId: null }, true), "Todos los locales");
+eq("nothing to say with one location", closureWhere({ locationId: null }, false), null);
 check("a new request recounts the badge", changesPendingRequests({ data: { event: "time_off_requested" } }));
 check("other notifications do not", !changesPendingRequests({ data: { event: "time_off_approved" } }) && !changesPendingRequests({ data: {} }) && !changesPendingRequests(null));
 eq("approved with nothing to move", approvedToast("Ana Gil", 0), {

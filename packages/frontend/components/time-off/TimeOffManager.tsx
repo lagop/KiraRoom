@@ -8,6 +8,8 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/components/ui/use-toast";
 import { localDay } from "@/components/Calendar/day-grid";
 import { useTranslations } from "@/lib/use-translation";
+import { useBookingLocations } from "@/lib/use-booking-locations";
+import { hasLocations } from "@/lib/panel-booking-locations";
 import {
   PERSONAL_KINDS,
   REQUESTABLE_KINDS,
@@ -15,6 +17,7 @@ import {
   TIME_OFF_STATUS_LABELS,
   TIME_OFF_STATUS_STYLES,
   canWithdraw,
+  closureWhere,
   addDays,
   conflictLine,
   conflictTitle,
@@ -82,6 +85,10 @@ export function TimeOffManager({ professionalId, self = false }: TimeOffManagerP
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
   const [note, setNote] = useState("");
+  // A closure of one location ("" = every location), multi-local only.
+  const [locationId, setLocationId] = useState("");
+  const places = useBookingLocations(salon);
+  const byLocation = salon && hasLocations(places);
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   // The row being edited (managers): the form holds its values.
@@ -134,6 +141,7 @@ export function TimeOffManager({ professionalId, self = false }: TimeOffManagerP
     setFormError(null);
     setEditing(null);
     setKind(salon ? "closure" : "vacation");
+    setLocationId("");
   };
 
   /** The form takes the row's values; saving changes it (PATCH) instead of adding one. */
@@ -146,6 +154,7 @@ export function TimeOffManager({ professionalId, self = false }: TimeOffManagerP
     setStartTime(b.startTime ?? "");
     setEndTime(b.endTime ?? "");
     setNote(b.note ?? "");
+    setLocationId(b.locationId ?? "");
     setFormError(null);
     formRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
   };
@@ -213,6 +222,7 @@ export function TimeOffManager({ professionalId, self = false }: TimeOffManagerP
       startTime: allDay ? null : startTime,
       endTime: allDay ? null : endTime,
       note: note.trim() || null,
+      ...(byLocation ? { locationId: locationId || null } : {}),
     };
     setSaving(true);
     try {
@@ -297,6 +307,7 @@ export function TimeOffManager({ professionalId, self = false }: TimeOffManagerP
                   </p>
                   <p className="text-sm text-gray-500">
                     {hoursLabel(b)}
+                    {salon && closureWhere(b, byLocation) ? ` · ${closureWhere(b, byLocation)}` : ""}
                     {!salon && b.note ? ` · ${b.note}` : ""}
                   </p>
                   {self && b.decisionNote && (
@@ -392,6 +403,25 @@ export function TimeOffManager({ professionalId, self = false }: TimeOffManagerP
                 {kinds.map((k) => (
                   <option key={k} value={k}>
                     {TIME_OFF_KIND_LABELS[k]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {byLocation && (
+            <label className="block text-sm">
+              <span className="mb-1 block text-gray-700">Local</span>
+              <select
+                value={locationId}
+                onChange={(e) => setLocationId(e.target.value)}
+                disabled={saving}
+                data-test="closure-location"
+                className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+              >
+                <option value="">Todos los locales</option>
+                {places.locations.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}
                   </option>
                 ))}
               </select>
