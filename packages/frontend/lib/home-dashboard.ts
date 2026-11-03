@@ -145,3 +145,49 @@ export function personName(p: { firstName?: string | null; lastName?: string | n
   if (!p) return "";
   return `${p.firstName ?? ""} ${p.lastName ?? ""}`.replace(/\s+/g, " ").trim();
 }
+
+// ----- Agenda de hoy por profesional (D30) ---------------------------------
+
+interface AgendaPerson {
+  id: string;
+  firstName: string;
+  lastName: string;
+}
+
+export interface ProfessionalAgenda<T> {
+  /** null: appointments with no professional. */
+  professional: AgendaPerson | null;
+  appointments: T[];
+}
+
+/**
+ * Today's appointments under each professional: every one of the team, in
+ * its order, those with nothing booked too (who is free shows at a glance),
+ * then anyone booked who is not in it (e.g. made inactive since), then
+ * appointments with no professional. Each list keeps the order it came in.
+ */
+export function agendaByProfessional<T extends { professional?: AgendaPerson | null }>(
+  team: readonly AgendaPerson[],
+  appointments: readonly T[],
+): ProfessionalAgenda<T>[] {
+  const groups = new Map<string, ProfessionalAgenda<T>>();
+  for (const p of team) groups.set(p.id, { professional: p, appointments: [] });
+  const unassigned: T[] = [];
+  for (const a of appointments) {
+    const p = a.professional;
+    if (!p) {
+      unassigned.push(a);
+      continue;
+    }
+    if (!groups.has(p.id)) groups.set(p.id, { professional: p, appointments: [] });
+    groups.get(p.id)!.appointments.push(a);
+  }
+  const out = [...groups.values()];
+  if (unassigned.length) out.push({ professional: null, appointments: unassigned });
+  return out;
+}
+
+/** Whether a today's appointment is already behind the salon's clock (not started, its time gone). */
+export function isPast(row: { scheduledTime: string; status: string }, now: string): boolean {
+  return remainingToday([row], now).length === 0;
+}
