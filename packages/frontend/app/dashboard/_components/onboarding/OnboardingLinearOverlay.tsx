@@ -25,9 +25,8 @@ import {
  */
 export function OnboardingLinearOverlay() {
   const t = useTranslations();
-  const { data, isLoading, refetch } = useOnboardingState({
-    refetchInterval: 15_000,
-  });
+  // No timer: each step's onDone refetches, as do page moves and tab focus.
+  const { data, isLoading, refetch } = useOnboardingState();
 
   if (isLoading || !data) {
     return (

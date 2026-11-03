@@ -6,13 +6,21 @@
 export interface ReadOnlyNotice {
   title: string;
   body: string;
-  cta: string;
+  /** The button to Facturación; null for whoever cannot pay (only the owner can). */
+  cta: string | null;
+}
+
+/** Who can choose a plan or fix the payment: Facturación is the owner's only. */
+export function canManageBilling(role: string | null | undefined): boolean {
+  return role === "owner" || role === "saas_owner";
 }
 
 export function readOnlyNotice(ctx: {
   confirmed: boolean;
   subscriptionStatus: string;
   readOnlyUntil: string | null;
+  /** Defaults to true. Admins and staff are told to ask the owner instead. */
+  canManageBilling?: boolean;
 }): ReadOnlyNotice | null {
   // Before the server answers, the status is the token's fallback
   // ("cancelled"): a paying salon must never see the notice flash.
@@ -25,13 +33,19 @@ export function readOnlyNotice(ctx: {
     ? new Date(ctx.readOnlyUntil).toLocaleDateString("es-ES", { day: "numeric", month: "long", year: "numeric" })
     : null;
 
+  const owner = ctx.canManageBilling ?? true;
   return {
     title: suspended
       ? "Tu suscripción está suspendida por un pago pendiente."
       : "Tu cuenta está en modo solo lectura.",
     body:
       "Puedes consultar y exportar tus datos, pero no crear ni cambiar citas, clientas ni servicios, y tu página no acepta reservas." +
-      (until ? ` Tus datos se conservan hasta el ${until}.` : ""),
-    cta: suspended ? "Actualizar el pago" : "Elegir un plan",
+      (until ? ` Tus datos se conservan hasta el ${until}.` : "") +
+      (owner
+        ? ""
+        : suspended
+          ? " Pide a la dueña del salón que actualice el pago."
+          : " Pide a la dueña del salón que elija un plan."),
+    cta: owner ? (suspended ? "Actualizar el pago" : "Elegir un plan") : null,
   };
 }

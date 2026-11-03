@@ -15,10 +15,12 @@ import apiClient from "@/lib/api";
 import { WeeklyScheduleEditor } from "@/components/professionals/WeeklyScheduleEditor";
 import {
   defaultSchedule,
+  scheduleFromWorkingHours,
   scheduleProblems,
   workingHoursFromSchedule,
   type WeeklySchedule,
 } from "@/lib/weekly-schedule";
+import { wizardHoursToSend } from "@/lib/onboarding-wizard";
 
 type WizardData = {
   tenantId: string;
@@ -27,6 +29,7 @@ type WizardData = {
   hasServices: boolean;
   hasStaff: boolean;
   hasWorkingHours: boolean;
+  openingHours?: Array<{ day: string; openTime: string; closeTime: string }>;
   hasFirstAppointment: boolean;
   serviceTemplates: Array<{
     name: string;
@@ -51,8 +54,13 @@ export default function OwnerOnboardingWizardPage() {
   >([]);
 
   // The salon's week, with shifts (a salon that closes at midday has two a
-  // day). Monday to Friday, 09:00 to 19:00 until the owner changes it.
+  // day): the saved one when there is one, else Monday to Friday, 09:00 to
+  // 19:00 until the owner changes it.
   const [hours, setHours] = useState<WeeklySchedule>(defaultSchedule);
+  // Only a week the owner touched (or the first one, when none is saved) is
+  // sent: "Guardar y empezar" used to overwrite the salon's hours with the
+  // default week.
+  const [hoursTouched, setHoursTouched] = useState(false);
 
   const [clientName, setClientName] = useState("");
   const [apDate, setApDate] = useState("");
@@ -61,7 +69,11 @@ export default function OwnerOnboardingWizardPage() {
   useEffect(() => {
     apiClient
       .getOwnerOnboardingWizard()
-      .then((d) => setData(d))
+      .then((d) => {
+        setData(d);
+        const saved = scheduleFromWorkingHours(d.openingHours ?? []);
+        if (saved) setHours(saved);
+      })
       .catch((e) => {
         const msg =
           e?.response?.data?.message ||
@@ -121,7 +133,11 @@ export default function OwnerOnboardingWizardPage() {
       if (c.name.trim()) services.push(c);
     }
 
-    const openingHours = workingHoursFromSchedule(hours);
+    const openingHours = wizardHoursToSend(
+      workingHoursFromSchedule(hours),
+      hoursTouched,
+      data.hasWorkingHours,
+    );
 
     // The appointment block only makes sense once the owner has added
     // at least one Professional — without one, the server silently
@@ -134,7 +150,7 @@ export default function OwnerOnboardingWizardPage() {
     try {
       const res = await apiClient.submitOwnerOnboardingWizard({
         services: services.length ? services : undefined,
-        openingHours: openingHours.length ? openingHours : undefined,
+        openingHours,
         firstAppointment: appointmentRequested
           ? {
               clientName: clientName.trim(),
@@ -326,10 +342,20 @@ export default function OwnerOnboardingWizardPage() {
           <h2 className="text-lg font-semibold">2. Horario de apertura</h2>
           {data.hasWorkingHours && <Check className="w-4 h-4 text-emerald-600 ml-auto" />}
         </div>
+        <p className="text-sm text-slate-600 mb-3">
+          {data.hasWorkingHours
+            ? "Este es el horario que tienes guardado. Si no lo cambias, se queda como está."
+            : "Marca los días y las horas en que abre el salón."}{" "}
+          Las reservas online solo ofrecen horas dentro de este horario, aunque el
+          horario de cada profesional sea más amplio.
+        </p>
         <WeeklyScheduleEditor
           variant="salon"
           value={hours}
-          onChange={setHours}
+          onChange={(next) => {
+            setHours(next);
+            setHoursTouched(true);
+          }}
           disabled={submitting}
           weekProblem={null}
         />
@@ -360,7 +386,7 @@ export default function OwnerOnboardingWizardPage() {
                 Para crear una cita necesitas haber añadido al menos un
                 profesional a tu equipo.{" "}
                 <Link
-                  href="/dashboard/team"
+                  href="/dashboard/professionals"
                   className="text-indigo-600 underline"
                 >
                   Ir a Equipo →

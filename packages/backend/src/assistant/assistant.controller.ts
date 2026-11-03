@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Post, Get, Req, Body, Param, Query, UseGuards, ValidationPipe, Logger, ForbiddenException } from "@nestjs/common";
+import { BadRequestException, ParseUUIDPipe, Controller, Post, Get, Req, Body, Param, Query, UseGuards, ValidationPipe, Logger, ForbiddenException } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -52,8 +52,13 @@ export class AssistantController {
   @ApiOperation({ summary: 'Get-or-create the persistent staff-copilot conversation for the calling user' })
   async createConversation(
     @Req() req: AuthedRequest,
-    @Body(new ValidationPipe()) body: CreateAssistantConversationDto,
+    @Body(new ValidationPipe()) body: CreateAssistantConversationDto & { fresh?: boolean },
   ) {
+    // "Nueva conversación" asks for an empty thread; otherwise the
+    // persistent one, created on first use.
+    if (body?.fresh === true) {
+      return this.assistantService.startConversation(req.user.id, req.user.tenantId);
+    }
     return this.assistantService.getOrCreateConversation(
       req.user.id,
       req.user.tenantId,
@@ -85,7 +90,13 @@ export class AssistantController {
     @Req() req: AuthedRequest,
     @Body(new ValidationPipe()) body: SendAssistantMessageDto,
   ) {
-    const dto: SendAssistantMessageDto = body;
+    // The DTO is a zod type, which ValidationPipe cannot see: parse it here
+    // so an empty or 50 kB message never reaches the LLM.
+    const parsed = SendAssistantMessageSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.issues.map((i) => i.message).join('; '));
+    }
+    const dto: SendAssistantMessageDto = parsed.data;
     return this.assistantService.sendMessage(
       {
         id: req.user.id,
@@ -93,6 +104,32 @@ export class AssistantController {
         role: req.user.role,
       },
       dto,
+    );
+  }
+
+  /**
+   * Thumbs up/down under a copilot reply (feedback-bar.tsx). Stored in
+   * CopilotFeedback for the platform team to review answer quality.
+   */
+  @Post('feedback')
+  @Feature('copilot_read' as any)
+  @Throttle({ default: { ttl: 60_000, limit: 30 } })
+  @ApiOperation({ summary: 'Rate a copilot reply (1 = useful, -1 = not useful)' })
+  async submitFeedback(
+    @Req() req: AuthedRequest,
+    @Body() body: { messageId?: unknown; rating?: unknown; comment?: unknown },
+  ) {
+    const messageId = typeof body?.messageId === 'string' ? body.messageId : '';
+    const rating = body?.rating === 1 || body?.rating === -1 ? body.rating : null;
+    if (!messageId || messageId.length > 64 || rating === null) {
+      throw new BadRequestException('messageId and rating (1 or -1) are required');
+    }
+    if (body.comment != null && (typeof body.comment !== 'string' || body.comment.length > 500)) {
+      throw new BadRequestException('comment must be text of at most 500 characters');
+    }
+    return this.assistantService.submitFeedback(
+      { id: req.user.id, tenantId: req.user.tenantId },
+      { messageId, rating, comment: (body.comment as string | undefined) ?? null },
     );
   }
 

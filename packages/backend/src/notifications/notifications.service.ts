@@ -92,6 +92,9 @@ export class NotificationsService {
     if (filter.isRead !== undefined) {
       where.isRead = filter.isRead;
     }
+    if (filter.unreadOnly === true) {
+      where.isRead = false;
+    }
 
     if (filter.type) {
       where.type = filter.type;

@@ -42,6 +42,7 @@ import {
   WhatsAppTemplateService,
 } from "../whatsapp/whatsapp-template.service";
 import { NotificationType } from "../notifications/dto";
+import { salonTeamRecipients } from "./salon-team-recipients";
 import { TranslationsService } from "../translations/translations.service";
 import { ConsentService } from "../consent/consent.service";
 import { refreshClientStats } from "../clients/client-stats";
@@ -3251,23 +3252,17 @@ export class AppointmentsService {
         });
       }
 
-      // 3. Notify admins (users with admin role in the tenant)
-      const admins = await this.prisma.user.findMany({
-        where: {
-          tenantId: appointment.tenantId,
-          role: "admin",
-        },
-      });
+      // 3. Notify the owner and the admins (not the professional again;
+      // per-user in-app preferences respected): salon-team-recipients.ts
+      const admins = await salonTeamRecipients(
+        this.prisma as any,
+        this.notificationsService,
+        appointment.tenantId,
+        NotificationType.APPOINTMENT_CREATED,
+        appointment.professional?.userId,
+      );
 
       for (const admin of admins) {
-        // Skip if this admin is also the professional (avoid duplicate)
-        if (
-          appointment.professional &&
-          admin.id === appointment.professional.userId
-        ) {
-          continue;
-        }
-
         await this.notificationsService.create({
           tenantId: appointment.tenantId,
           userId: admin.id,
@@ -3370,23 +3365,17 @@ export class AppointmentsService {
         });
       }
 
-      // 3. Notify admins
-      const admins = await this.prisma.user.findMany({
-        where: {
-          tenantId: appointment.tenantId,
-          role: "admin",
-        },
-      });
+      // 3. Notify the owner and the admins (not the professional again;
+      // per-user in-app preferences respected): salon-team-recipients.ts
+      const admins = await salonTeamRecipients(
+        this.prisma as any,
+        this.notificationsService,
+        appointment.tenantId,
+        NotificationType.APPOINTMENT_COMPLETED,
+        appointment.professional?.userId,
+      );
 
       for (const admin of admins) {
-        // Skip if this admin is also the professional (avoid duplicate)
-        if (
-          appointment.professional &&
-          admin.id === appointment.professional.userId
-        ) {
-          continue;
-        }
-
         await this.notificationsService.create({
           tenantId: appointment.tenantId,
           userId: admin.id,
@@ -3615,22 +3604,17 @@ export class AppointmentsService {
         });
       }
 
-      // 3. Notify admins
-      const admins = await this.prisma.user.findMany({
-        where: {
-          tenantId: appointment.tenantId,
-          role: "admin",
-        },
-      });
+      // 3. Notify the owner and the admins (not the professional again;
+      // per-user in-app preferences respected): salon-team-recipients.ts
+      const admins = await salonTeamRecipients(
+        this.prisma as any,
+        this.notificationsService,
+        appointment.tenantId,
+        NotificationType.APPOINTMENT_CANCELLED,
+        appointment.professional?.userId,
+      );
 
       for (const admin of admins) {
-        if (
-          appointment.professional &&
-          admin.id === appointment.professional.userId
-        ) {
-          continue;
-        }
-
         const message = reason
           ? `La cita de ${clientName} con ${professionalName} el ${dateStr} ha sido cancelada. Motivo: ${reason}`
           : `La cita de ${clientName} con ${professionalName} el ${dateStr} ha sido cancelada.`;
@@ -3866,22 +3850,17 @@ export class AppointmentsService {
         });
       }
 
-      // 3. Notify admins
-      const admins = await this.prisma.user.findMany({
-        where: {
-          tenantId: appointment.tenantId,
-          role: "admin",
-        },
-      });
+      // 3. Notify the owner and the admins (not the professional again;
+      // per-user in-app preferences respected): salon-team-recipients.ts
+      const admins = await salonTeamRecipients(
+        this.prisma as any,
+        this.notificationsService,
+        appointment.tenantId,
+        NotificationType.APPOINTMENT_RESCHEDULED,
+        appointment.professional?.userId,
+      );
 
       for (const admin of admins) {
-        if (
-          appointment.professional &&
-          admin.id === appointment.professional.userId
-        ) {
-          continue;
-        }
-
         await this.notificationsService.create({
           tenantId: appointment.tenantId,
           userId: admin.id,
@@ -3964,22 +3943,17 @@ export class AppointmentsService {
         });
       }
 
-      // 2. Notify admins
-      const admins = await this.prisma.user.findMany({
-        where: {
-          tenantId: appointment.tenantId,
-          role: "admin",
-        },
-      });
+      // 2. Notify the owner and the admins (not the professional again;
+      // per-user in-app preferences respected): salon-team-recipients.ts
+      const admins = await salonTeamRecipients(
+        this.prisma as any,
+        this.notificationsService,
+        appointment.tenantId,
+        NotificationType.APPOINTMENT_NO_SHOW,
+        appointment.professional?.userId,
+      );
 
       for (const admin of admins) {
-        if (
-          appointment.professional &&
-          admin.id === appointment.professional.userId
-        ) {
-          continue;
-        }
-
         await this.notificationsService.create({
           tenantId: appointment.tenantId,
           userId: admin.id,
@@ -4193,22 +4167,17 @@ export class AppointmentsService {
         });
       }
 
-      // 3. Notify admins
-      const admins = await this.prisma.user.findMany({
-        where: {
-          tenantId: appointment.tenantId,
-          role: "admin",
-        },
-      });
+      // 3. Notify the owner and the admins (not the professional again;
+      // per-user in-app preferences respected): salon-team-recipients.ts
+      const admins = await salonTeamRecipients(
+        this.prisma as any,
+        this.notificationsService,
+        appointment.tenantId,
+        NotificationType.APPOINTMENT_CONFIRMED,
+        appointment.professional?.userId,
+      );
 
       for (const admin of admins) {
-        if (
-          appointment.professional &&
-          admin.id === appointment.professional.userId
-        ) {
-          continue;
-        }
-
         await this.notificationsService.create({
           tenantId: appointment.tenantId,
           userId: admin.id,

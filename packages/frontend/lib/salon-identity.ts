@@ -15,6 +15,8 @@ export interface SalonIdentityFields {
   state: string;
   phone: string;
   logo: string;
+  /** The public page's cover photo; blank clears it. Left out when absent. */
+  coverImage?: string;
 }
 
 export function salonIdentityUpdate(f: SalonIdentityFields) {
@@ -28,5 +30,6 @@ export function salonIdentityUpdate(f: SalonIdentityFields) {
     state: orNull(f.state),
     phone: orNull(f.phone),
     logo: f.logo.trim(),
+    ...(f.coverImage !== undefined ? { coverImage: orNull(f.coverImage) } : {}),
   };
 }

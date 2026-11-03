@@ -11,6 +11,8 @@ import { salonIdentityUpdate } from "@/lib/salon-identity";
 const LOGO_MAX_BYTES = 500 * 1024;
 const LOGO_RECOMMENDED_PX = 512;
 const LOGO_ACCEPT = "image/png,image/jpeg,image/webp,image/svg+xml";
+const COVER_MAX_BYTES = 1024 * 1024;
+const COVER_ACCEPT = "image/png,image/jpeg,image/webp";
 
 /**
  * Salon identity page. Owns the Tenant's public-facing fields:
@@ -44,6 +46,7 @@ export default function SalonSettingsPage() {
   const [state, setState] = useState("");
   const [phone, setPhone] = useState("");
   const [logo, setLogo] = useState("");
+  const [coverImage, setCoverImage] = useState("");
 
   useEffect(() => {
     if (!tenant.data) return;
@@ -56,7 +59,17 @@ export default function SalonSettingsPage() {
     setState(d.state ?? "");
     setPhone(d.phone ?? "");
     setLogo(d.logo ?? "");
+    setCoverImage(d.coverImage ?? "");
   }, [tenant.data]);
+
+  // The form renders after the tenant loads, so a link to #branding (the
+  // onboarding checklist) finds nothing to scroll to on its own.
+  const loaded = Boolean(tenant.data);
+  useEffect(() => {
+    if (!loaded || typeof window === "undefined" || !window.location.hash) return;
+    const el = document.getElementById(window.location.hash.slice(1));
+    el?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [loaded]);
 
   if (tenant.isLoading) {
     return (
@@ -82,7 +95,7 @@ export default function SalonSettingsPage() {
           e.preventDefault();
           // Blank optional fields go as null, which clears them.
           update.mutate(
-            salonIdentityUpdate({ name, description, street, city, postalCode, state, phone, logo }),
+            salonIdentityUpdate({ name, description, street, city, postalCode, state, phone, logo, coverImage }),
           );
         }}
         className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm space-y-5"
@@ -178,11 +191,21 @@ export default function SalonSettingsPage() {
           address={{ street, city, postalCode, state, country: tenant.data?.country }}
         />
 
-        <LogoUploadField
-          value={logo}
-          onChange={setLogo}
-          label={t("settings.salon.logo")}
-        />
+        {/* The onboarding checklist's "Imagen de portada" step links here. */}
+        <div id="branding" className="scroll-mt-24 space-y-5">
+          <LogoUploadField
+            value={logo}
+            onChange={setLogo}
+            label={t("settings.salon.logo")}
+          />
+          <CoverUploadField
+            value={coverImage}
+            onChange={setCoverImage}
+            label={t("settings.salon.cover")}
+            hint={t("settings.salon.coverHint")}
+            removeLabel={t("settings.salon.coverRemove")}
+          />
+        </div>
 
         <div className="flex items-center justify-end gap-3">
           {update.isSuccess && (
@@ -312,6 +335,86 @@ function LogoUploadField({
           {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
         </div>
       </div>
+    </div>
+  );
+}
+
+function CoverUploadField({
+  value,
+  onChange,
+  label,
+  hint,
+  removeLabel,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  label: string;
+  hint: string;
+  removeLabel: string;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  function handleFile(file: File) {
+    setError(null);
+    if (!COVER_ACCEPT.split(",").includes(file.type)) {
+      setError("Formato no soportado. Usa PNG, JPG o WebP.");
+      return;
+    }
+    if (file.size > COVER_MAX_BYTES) {
+      const kb = Math.round(file.size / 1024);
+      setError(`La imagen pesa ${kb} KB. El máximo es 1 MB.`);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => onChange(String(reader.result || ""));
+    reader.onerror = () => setError("No se pudo leer el archivo.");
+    reader.readAsDataURL(file);
+  }
+
+  return (
+    <div>
+      <span className="block text-sm font-medium text-gray-900 mb-1">{label}</span>
+      <div className="aspect-[3/1] w-full max-w-xl overflow-hidden rounded-lg border border-gray-200 bg-gray-50 flex items-center justify-center">
+        {value ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={value} alt={label} className="h-full w-full object-cover" />
+        ) : (
+          <span className="text-xs text-gray-400">Sin imagen de portada</span>
+        )}
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          className="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+        >
+          <Upload className="h-4 w-4" />
+          {value ? "Cambiar imagen" : "Subir imagen"}
+        </button>
+        {value && (
+          <button
+            type="button"
+            onClick={() => onChange("")}
+            className="text-sm text-red-600 hover:underline"
+          >
+            {removeLabel}
+          </button>
+        )}
+        <input
+          ref={inputRef}
+          type="file"
+          accept={COVER_ACCEPT}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) handleFile(file);
+            e.target.value = "";
+          }}
+          className="hidden"
+        />
+      </div>
+      <p className="mt-1 text-xs text-gray-500">{hint}</p>
+      {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
     </div>
   );
 }
