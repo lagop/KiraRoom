@@ -9,6 +9,9 @@ import { ShieldAlert } from "lucide-react";
 import { OnboardingHost } from "./_components/onboarding/OnboardingHost";
 import CookieBanner from "../components/cookie-banner";
 import { ReadOnlyBanner } from "@/components/billing/ReadOnlyBanner";
+import { managersOnlyPage } from "@/lib/dashboard-nav";
+import { getCurrentUser } from "@/lib/utils";
+import { ManagersOnlyNotice } from "./components/managers-only-notice";
 
 /**
  * Decode the current access token's impersonation claims and update
@@ -89,6 +92,18 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   useEffect(() => {
     setImpersonation(readImpersonationFromStorage());
   }, [pathname]);
+
+  // The signed-in role, read after mount (the server has no user) and again
+  // on each page, as the sidebar does. Undefined until read: the page is not
+  // mounted before, so a management page opened by a professional never
+  // sends its requests; on later pages the role is already known.
+  const [role, setRole] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    setRole(getCurrentUser()?.role ?? null);
+  }, [pathname]);
+  // A management page a professional opened by its address: the notice, not
+  // the page (whose buttons the API would refuse).
+  const blocked = managersOnlyPage(role, pathname ?? "");
 
   // Effect 2: cross-tab sync. If the user logs out in another tab, the
   // `storage` event fires here so this tab's banner disappears too.
@@ -208,7 +223,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         <ReadOnlyBanner />
 
         {/* Page content */}
-        <main className="flex-1 p-6 bg-white shadow-sm min-w-0 overflow-x-hidden">{children}</main>
+        <main className="flex-1 p-6 bg-white shadow-sm min-w-0 overflow-x-hidden">
+          {role === undefined ? null : blocked ? <ManagersOnlyNotice /> : children}
+        </main>
       </div>
       {/* P1 — Onboarding wizard surfaces */}
       <OnboardingHost />

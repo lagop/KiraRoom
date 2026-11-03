@@ -1,7 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { AppointmentStatus } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
-import { AppointmentsService } from "./appointments.service";
+import { AppointmentsService, staffAgendaWhere } from "./appointments.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { AnalyticsFlagsService } from "../analytics/analytics-flags.service";
 import { appointmentLocationWhere, requestedLocationScope, type LocationScope } from "../analytics/analytics-location";
@@ -28,8 +28,10 @@ import type { Occupancy } from "../analytics/analytics-metrics";
  *   GET /appointments/pending-payment), latest first, five rows, the true
  *   total and what is owed in all.
  *
- * A staff member sees only their own appointments (findAll and
- * findPendingPayment scope them; the count here does the same), only
+ * A staff member sees only their own agenda: their appointments and the
+ * colleagues' visits where they do a service (findAll and
+ * findPendingPayment scope them; the pending count and list here use the
+ * same filter, staffAgendaWhere), only
  * themselves among the professionals, and no occupancy (a salon figure).
  *
  * `locationId` (Empresa, D24): owner and admins get one location's lists,
@@ -199,7 +201,7 @@ export class HomeSummaryService {
       pendingPayments: { total: 0, totalDue: 0, items: [] },
     };
 
-    // Staff: their own appointments. An account with no professional sees
+    // Staff: their own agenda (staffAgendaWhere). An account with no professional sees
     // none (as findAll and findPendingPayment answer it).
     let professionalId: string | undefined;
     if (staff) {
@@ -217,8 +219,9 @@ export class HomeSummaryService {
       tenantId: user.tenantId,
       status: AppointmentStatus.pending,
       scheduledDate: { gte: dayStart },
-      ...(professionalId ? { professionalId } : {}),
-      ...appointmentLocationWhere(scope),
+      // Staff: their agenda (the location filter is ignored for them); the
+      // others: the location asked for, if any. Both are an OR, never both.
+      ...(professionalId ? staffAgendaWhere(professionalId) : appointmentLocationWhere(scope)),
     };
     const refSelect = { select: { id: true, firstName: true, lastName: true } };
 

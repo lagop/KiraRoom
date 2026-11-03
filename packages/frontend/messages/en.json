@@ -1977,6 +1977,11 @@
     "max_advance_invalid": "The maximum advance must be a whole number of days between 1 and 730",
     "inactive_badge": "Inactive"
   },
+  "managersOnly": {
+    "title": "This section is for the salon's management",
+    "body": "If you need something from this section, ask the salon's management.",
+    "home": "Back to home"
+  },
   "nav": {
     "dashboard": "Dashboard",
     "clients": "Clients",

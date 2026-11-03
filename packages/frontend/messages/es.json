@@ -1977,6 +1977,11 @@
     "max_advance_invalid": "La antelación máxima tiene que ser un número entero de días entre 1 y 730",
     "inactive_badge": "Desactivado"
   },
+  "managersOnly": {
+    "title": "Esta sección es de la dirección del salón",
+    "body": "Si necesitas algo de esta sección, pídeselo a la dirección del salón.",
+    "home": "Volver al inicio"
+  },
   "nav": {
     "dashboard": "Panel",
     "clients": "Clientas",

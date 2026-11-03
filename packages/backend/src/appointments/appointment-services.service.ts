@@ -6,6 +6,7 @@ import { AppointmentsService } from './appointments.service';
 import { canTransition } from './appointment-status';
 import { syncVisitTotals } from './visit-sync';
 import { snapshotOf } from './appointment-snapshot';
+import { VISIT_LINE_PROFESSIONAL } from './appointment-response';
 import {
   VISIT_ROW_ORDER,
   VISIT_ROW_SELECT,
@@ -145,7 +146,7 @@ export class AppointmentServicesService {
       },
       include: {
         service: true,
-        professional: true,
+        professional: VISIT_LINE_PROFESSIONAL,
         appointment: true,
       },
     });
@@ -196,7 +197,7 @@ export class AppointmentServicesService {
       where,
       include: {
         service: true,
-        professional: true,
+        professional: VISIT_LINE_PROFESSIONAL,
         appointment: {
           include: {
             client: true,
@@ -219,7 +220,7 @@ export class AppointmentServicesService {
       where: { ...visible, appointmentId },
       include: {
         service: true,
-        professional: true,
+        professional: VISIT_LINE_PROFESSIONAL,
       },
       orderBy: { order: 'asc' },
     });
@@ -238,7 +239,7 @@ export class AppointmentServicesService {
       where: { ...visible, id },
       include: {
         service: true,
-        professional: true,
+        professional: VISIT_LINE_PROFESSIONAL,
         appointment: {
           include: {
             client: true,
@@ -372,7 +373,7 @@ export class AppointmentServicesService {
       },
       include: {
         service: true,
-        professional: true,
+        professional: VISIT_LINE_PROFESSIONAL,
         appointment: true,
       },
     });
@@ -409,7 +410,7 @@ export class AppointmentServicesService {
       data: { status },
       include: {
         service: true,
-        professional: true,
+        professional: VISIT_LINE_PROFESSIONAL,
       },
     });
 
@@ -527,7 +528,7 @@ export class AppointmentServicesService {
           },
           include: {
             service: true,
-            professional: true,
+            professional: VISIT_LINE_PROFESSIONAL,
           },
         }),
       ),

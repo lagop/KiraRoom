@@ -180,11 +180,13 @@ describe("HomeSummaryService.getHome", () => {
     expect(calls.findPendingPayment[0].filters).toEqual({ dateTo: "2026-11-04T23:59:59.999Z" });
   });
 
-  it("staff: the count is of their own appointments", async () => {
+  it("staff: the count is of their own agenda, the colleagues' visits where they do a service included", async () => {
     const { service, calls } = build({ pendingCount: 2 });
     await service.getHome(STAFF, {}, LATE_EVENING_UTC);
-    expect(calls.count[0].where.professionalId).toBe("p-ana");
-    expect(calls.findMany[0].where.professionalId).toBe("p-ana");
+    const agenda = [{ professionalId: "p-ana" }, { services: { some: { professionalId: "p-ana" } } }];
+    expect(calls.count[0].where.OR).toEqual(agenda);
+    expect(calls.findMany[0].where.OR).toEqual(agenda);
+    expect(calls.findMany[0].where.professionalId).toBeUndefined();
     expect(calls.findAll[0].user).toBe(STAFF);
     expect(calls.findPendingPayment[0].user).toBe(STAFF);
   });
@@ -264,7 +266,12 @@ describe("HomeSummaryService.getHome by location (Empresa, D24)", () => {
     const { service, calls } = build();
     const home = await service.getHome(STAFF, { locationId: LOC_TRIANA }, LATE_EVENING_UTC);
     expect(home.location).toBeNull();
-    expect(calls.count[0].where.OR).toBeUndefined();
+    // Their agenda only (staffAgendaWhere), no location filter.
+    expect(calls.count[0].where.OR).toEqual([
+      { professionalId: "p-ana" },
+      { services: { some: { professionalId: "p-ana" } } },
+    ]);
+    expect(JSON.stringify(calls.count[0].where)).not.toContain("locationId");
   });
 
   it("inLocation: booked there, or with no location by one of its professionals", () => {

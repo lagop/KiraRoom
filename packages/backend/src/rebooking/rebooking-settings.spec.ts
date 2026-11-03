@@ -21,7 +21,7 @@ function controllerWith(stored: Record<string, unknown> = STORED) {
   };
   const cadence = new ClientCadenceService(prisma);
   const recompute = jest.spyOn(cadence, "recomputeTenantInBackground").mockResolvedValue(undefined);
-  const controller = new RebookingController(cadence, {} as any, prisma, {} as any);
+  const controller = new RebookingController(cadence, {} as any, prisma, {} as any, {} as any);
   const req = { user: { tenantId: "tenant-1" } } as any;
   const dto = (fields: Record<string, unknown>) => Object.assign(new UpdateRebookingConfigDto(), fields);
   return { controller, req, dto, update, recompute, prisma };
