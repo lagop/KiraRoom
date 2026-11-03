@@ -141,9 +141,7 @@ export function BriefingCard({ onDismiss }: BriefingCardProps) {
             <SummaryLine
               icon={<Clock className="w-3.5 h-3.5 text-blue-600" />}
               label="Huecos"
-              value={`${briefing.gaps.total} hueco(s) — el mayor de ${Math.max(
-                ...briefing.gaps.items.map((g) => g.minutes),
-              )} min`}
+              value={biggestGapText(briefing.gaps.items, briefing.gaps.total)}
             />
           )}
           {briefing.lowStock.total > 0 && (
@@ -215,4 +213,14 @@ function formatDate(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+/** "3 huecos — el mayor, Lucía 10:00–12:00 (120 min)": per professional now (briefing-gaps.ts). */
+function biggestGapText(
+  items: Array<{ start: string; end: string; minutes: number; professionalFirstName?: string }>,
+  total: number,
+): string {
+  const biggest = items.reduce((a, b) => (b.minutes > a.minutes ? b : a), items[0]);
+  const who = biggest.professionalFirstName ? `${biggest.professionalFirstName} ` : "";
+  return `${total} ${total === 1 ? "hueco" : "huecos"} — el mayor, ${who}${biggest.start}–${biggest.end} (${biggest.minutes} min)`;
 }

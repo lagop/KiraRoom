@@ -374,7 +374,8 @@
       "restore": "Restore checklist",
       "skip": "Skip",
       "done": "Done",
-      "pending": "Pending"
+      "pending": "Pending",
+      "fold": "Fold"
     },
     "workspace_business": {
       "title": "Business identity",
@@ -398,7 +399,7 @@
     },
     "reminders_enabled": {
       "title": "Enable automatic reminders",
-      "desc": "24h and 1h reminders reduce no-shows by up to 40%."
+      "desc": "They go out by email on their own 24 h and 1 h before, to clients with an email. Connect the salon's WhatsApp to send them by WhatsApp too."
     },
     "widget_qr_setup": {
       "title": "Publish your widget or QR",
@@ -1557,7 +1558,10 @@
       "state": "Province / state",
       "phone": "Phone",
       "logo": "Logo",
-      "saveError": "The salon details could not be saved."
+      "saveError": "The salon details could not be saved.",
+      "cover": "Cover image",
+      "coverHint": "Shown at the top of your booking page and widget. Recommended: landscape, 1500×500 px, ≤ 1 MB. PNG, JPG or WebP.",
+      "coverRemove": "Remove image"
     },
     "saved": "Saved",
     "theme": "Theme",
@@ -2876,7 +2880,7 @@
     "title": "Salon Copilot",
     "fab_label": "Open Copilot",
     "panel_title": "Copilot · {salon}",
-    "intro": "Hi, I'm {name}, your in-house copilot. Ask me about your day, your clients, your stock or your gaps.",
+    "intro": "Hi, I'm Kira, your copilot. Ask me about your day, your clients, your stock or your gaps.",
     "placeholder": "Ask anything…",
     "send": "Send",
     "sending": "Sending…",
@@ -2894,7 +2898,32 @@
     "approval_expired": "The approval has expired. Ask again if you want it.",
     "approval_yes_label": "Approve",
     "approval_no_label": "Reject",
-    "free_input_intro": "Your next question will be sent as-is. The Copilot will answer it by reading your data in real time."
+    "free_input_intro": "Your next question will be sent as-is. The Copilot will answer it by reading your data in real time.",
+    "plan_label": "Copilot · {plan} plan",
+    "not_in_plan": "Not included in your current plan",
+    "cost_cap": "You've reached the copilot's monthly usage limit. It comes back on the 1st of next month.",
+    "not_ready": "The conversation is not ready yet. Try again in a moment.",
+    "plans": {
+      "free": "Esencial",
+      "pro": "Pro",
+      "premium": "Empresa"
+    },
+    "roles": {
+      "owner": "Owner",
+      "admin": "Manager",
+      "manager": "Manager",
+      "receptionist": "Reception",
+      "staff": "Professional",
+      "saas_owner": "KiraRoom support"
+    },
+    "upgrade": {
+      "title": "This is only in the {plan} plan",
+      "only_in": "Only in {plan}",
+      "read_reason": "The copilot is in the Pro and Empresa plans.",
+      "write_reason": "The copilot's actions (moving appointments, sending WhatsApp, creating coupons) are in the Empresa plan.",
+      "cta": "See plans",
+      "ask_owner": "Ask the salon owner to switch to the {plan} plan."
+    }
   },
   "password_reset": {
     "title": "Reset your password",
@@ -3087,5 +3116,63 @@
     "connected": "WhatsApp connected",
     "connectError": "WhatsApp could not be connected",
     "tokenStored": "The access token is stored encrypted and never shown again; it is only used to send your WhatsApp messages."
+  },
+  "notifications": {
+    "title": "Notifications",
+    "bell_label": "Notifications",
+    "mark_all_read": "Mark all as read",
+    "mark_read": "Mark as read",
+    "empty": "No notifications yet",
+    "empty_unread": "No unread notifications",
+    "load_error": "Notifications could not be loaded",
+    "retry": "Try again",
+    "view_all": "View all notifications",
+    "loading_more": "Loading more…",
+    "no_more": "No more notifications",
+    "end": "You've reached the end",
+    "filter_all": "All",
+    "filter_unread": "Unread",
+    "summary": "{total} total",
+    "summary_unread": "{total} total, {unread} unread",
+    "open": "Open",
+    "back": "Back to the dashboard",
+    "locale": "en-GB",
+    "time": {
+      "just_now": "Just now",
+      "minutes_one": "1 minute ago",
+      "minutes_other": "{count} minutes ago",
+      "hours_one": "1 hour ago",
+      "hours_other": "{count} hours ago",
+      "days_one": "1 day ago",
+      "days_other": "{count} days ago",
+      "weeks_one": "1 week ago",
+      "weeks_other": "{count} weeks ago"
+    },
+    "types": {
+      "appointment_created": "New appointment",
+      "appointment_reminder": "Reminder",
+      "appointment_reminder_24h": "Reminder",
+      "appointment_reminder_1h": "Reminder",
+      "appointment_confirmed": "Appointment confirmed",
+      "appointment_completed": "Appointment completed",
+      "appointment_cancelled": "Appointment cancelled",
+      "appointment_rescheduled": "Appointment moved",
+      "appointment_no_show": "No-show",
+      "new_appointment_assigned": "Appointment assigned",
+      "schedule_change": "Schedule change",
+      "payment_received": "Payment",
+      "payment_failed": "Payment failed",
+      "refund_processed": "Refund",
+      "promotion": "Promotion",
+      "special_offer": "Promotion",
+      "system_alert": "System notice",
+      "account_update": "Account",
+      "password_change": "Security",
+      "new_message": "Message",
+      "review_request": "Review",
+      "news": "News",
+      "waitlist_slot_available": "Wait list",
+      "other": "Notification"
+    }
   }
 }

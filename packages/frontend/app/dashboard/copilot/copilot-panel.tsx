@@ -44,11 +44,11 @@ export function CopilotPanel({ fullPage = false, onClose }: CopilotPanelProps) {
     }
   }, [state.messages.length]);
 
+  // Always Kira: the intro used to put "" in {name} once signed in
+  // ("Hola, soy , tu copiloto").
   const assistantName = "Kira";
-  const intro = t("copilot.intro").replace(
-    "{name}",
-    user?.id ? "" : assistantName,
-  );
+  const intro = t("copilot.intro");
+  const roleLabel = t(`copilot.roles.${role}`);
 
   // P2A-staff-copilot-sprint15: free-tier tenants can't reach this
   // component (FeatureGuard returns 403). But if the user just
@@ -63,9 +63,9 @@ export function CopilotPanel({ fullPage = false, onClose }: CopilotPanelProps) {
             </div>
             <div className="min-w-0">
               <h2 className="text-base font-semibold text-gray-900 truncate">
-                Copiloto · Plan {tier}
+                {t("copilot.plan_label", { plan: t(`copilot.plans.${tier}`) })}
               </h2>
-              <p className="text-xs text-gray-500">No incluido en tu plan actual</p>
+              <p className="text-xs text-gray-500">{t("copilot.not_in_plan")}</p>
             </div>
           </div>
           {onClose && (
@@ -75,7 +75,7 @@ export function CopilotPanel({ fullPage = false, onClose }: CopilotPanelProps) {
           )}
         </header>
         <div className="flex-1 overflow-y-auto p-5 bg-gray-50">
-          <UpgradePrompt />
+          <UpgradePrompt plan="pro" />
         </div>
       </div>
     );
@@ -100,7 +100,7 @@ export function CopilotPanel({ fullPage = false, onClose }: CopilotPanelProps) {
               {t("copilot.title")}
             </h2>
             <p className="text-xs text-gray-500">
-              {assistantName} · {role}
+              {assistantName} · {roleLabel.startsWith("copilot.") ? role : roleLabel}
             </p>
           </div>
         </div>
@@ -130,7 +130,7 @@ export function CopilotPanel({ fullPage = false, onClose }: CopilotPanelProps) {
       >
         {costCapReached && (
           <div className="bg-amber-50 border border-amber-300 text-amber-900 text-sm rounded-lg p-3">
-            Has alcanzado el límite de uso mensual del copiloto. Se reactiva el día 1 del próximo mes.
+            {t("copilot.cost_cap")}
           </div>
         )}
         {state.loading && state.messages.length === 0 && (

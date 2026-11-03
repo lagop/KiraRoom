@@ -1,4 +1,4 @@
-import { Injectable, Logger, ForbiddenException } from '@nestjs/common';
+import { Injectable, Logger, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { LLMService } from '../virtual-receptionist/services/llm.service';
 import {
@@ -15,6 +15,10 @@ import { SalonCopilotToolsService, COPILOT_TOOLS } from './tools/salon-copilot-t
 import { ActionApprovalService } from './action-approval.service';
 import { AssistantTierService } from './assistant-tier.service';
 import { VISIT_ROW_ORDER, minutesUntilFree } from '../appointments/visit-totals';
+import { addDays, salonToday } from '../analytics/analytics-metrics';
+import { safeTimeZone } from '../gift-cards/gift-card-expiry';
+import { timeOffBetween } from '../time-off/time-off-query';
+import { briefingGaps, salonNowMinutes } from './briefing-gaps';
 
 /**
  * P2A-staff-copilot sprint 16 — billing hook.
@@ -160,6 +164,76 @@ export class AssistantService {
     return toPublicConversation(created);
   }
 
+  /**
+   * A new, empty thread for "Nueva conversación". getOrCreateConversation
+   * returns the existing one, so the panel's clear button used to show the
+   * old messages again on the next reply.
+   */
+  async startConversation(userId: string, tenantId: string): Promise<AssistantConversationPublic> {
+    const created = await this.prisma.assistantConversation.create({
+      data: { tenantId, userId, title: null, sessionId: null },
+    });
+    return toPublicConversation(created);
+  }
+
+  /**
+   * The thread a message goes to: the one the panel names, which must be the
+   * caller's own in their salon, else the persistent one.
+   */
+  private async resolveConversation(
+    user: { id: string; tenantId: string },
+    dto: Pick<SendAssistantMessageDto, 'conversationId' | 'sessionId'>,
+  ): Promise<AssistantConversationPublic> {
+    if (dto.conversationId) {
+      const own = await this.prisma.assistantConversation.findFirst({
+        where: { id: dto.conversationId, userId: user.id, tenantId: user.tenantId },
+      });
+      if (!own) throw new ForbiddenException('You do not own this conversation');
+      return toPublicConversation(own);
+    }
+    return this.getOrCreateConversation(user.id, user.tenantId, undefined, dto.sessionId ?? null);
+  }
+
+  /**
+   * Thumbs up/down on one of the copilot's replies (CopilotFeedback). Only
+   * on an assistant message of the caller's own conversation; a second vote
+   * on the same reply replaces the first.
+   */
+  async submitFeedback(
+    user: { id: string; tenantId: string },
+    input: { messageId: string; rating: 1 | -1; comment?: string | null },
+  ): Promise<{ id: string; rating: number; createdAt: string }> {
+    const message = await this.prisma.assistantMessage.findFirst({
+      where: {
+        id: input.messageId,
+        role: 'assistant',
+        conversation: { userId: user.id, tenantId: user.tenantId },
+      },
+      select: { id: true },
+    });
+    if (!message) throw new NotFoundException('Message not found');
+    const comment = input.comment?.trim() ? input.comment.trim().slice(0, 500) : null;
+    const existing = await this.prisma.copilotFeedback.findFirst({
+      where: { messageId: message.id, userId: user.id },
+      select: { id: true },
+    });
+    const row = existing
+      ? await this.prisma.copilotFeedback.update({
+          where: { id: existing.id },
+          data: { rating: input.rating, comment },
+        })
+      : await this.prisma.copilotFeedback.create({
+          data: {
+            tenantId: user.tenantId,
+            userId: user.id,
+            messageId: message.id,
+            rating: input.rating,
+            comment,
+          },
+        });
+    return { id: row.id, rating: row.rating, createdAt: row.createdAt.toISOString() };
+  }
+
   async listConversations(userId: string, tenantId: string, sessionId?: string | null) {
     const where: Record<string, unknown> = {
       userId,
@@ -209,7 +283,7 @@ export class AssistantService {
     // run away.
     if (await this.tiers.isOverCostCap(user.tenantId)) {
       this.logger.warn(`Copilot cost cap reached for tenant=${user.tenantId}`);
-      const conversation = await this.getOrCreateConversation(user.id, user.tenantId);
+      const conversation = await this.resolveConversation(user, dto);
       const reply =
         'Has alcanzado el límite de uso mensual del copiloto. Lo reactivamos automáticamente el día 1 del próximo mes. Si necesitas más capacidad antes, escríbenos a soporte.';
       const msg = await this.prisma.assistantMessage.create({
@@ -234,14 +308,10 @@ export class AssistantService {
     // gated us, so the counter increment here is safe.
     await bumpUsageCounter(this.prisma, user.tenantId, 1);
 
-    // 1. Find or create the conversation (keyed by sessionId when
-    // the caller provided one — see getOrCreateConversation).
-    const conversation = await this.getOrCreateConversation(
-      user.id,
-      user.tenantId,
-      undefined,
-      dto.sessionId ?? null,
-    );
+    // 1. The conversation the panel is showing (conversationId), else the
+    // persistent one (keyed by sessionId when the caller provided one —
+    // see getOrCreateConversation).
+    const conversation = await this.resolveConversation(user, dto);
 
     // 2. Load recent history (last 10 messages) for context. We filter
     // out messages whose role isn't valid for the LLM (Anthropic
@@ -321,7 +391,7 @@ export class AssistantService {
         return {
           kind: 'tier_blocked',
           toolName: name,
-          message: 'Tu plan actual no incluye acciones de escritura en el copiloto. Upgrade a Premium para habilitarlas.',
+          message: 'Tu plan actual no incluye acciones de escritura en el copiloto. Están en el plan Empresa.',
           upgradeUrl: '/dashboard/billing?source=copilot',
         };
       }
@@ -522,10 +592,16 @@ export class AssistantService {
     role: string;
   }): Promise<DailyBriefingPublic> {
     const role = this.normaliseRole(user.role);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(today.getDate() + 1);
+    // "Today" is the salon's day, not the server's (UTC): between midnight
+    // and 01:00/02:00 in Madrid the briefing used to be yesterday's.
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: user.tenantId },
+      select: { timezone: true, openingHours: true },
+    });
+    const timeZone = safeTimeZone(tenant?.timezone);
+    const todayDay = salonToday(timeZone);
+    const today = new Date(`${todayDay}T00:00:00.000Z`);
+    const tomorrow = new Date(`${addDays(todayDay, 1)}T00:00:00.000Z`);
 
     // 1. Today's appointments — staff sees only their own.
     const apptWhere: Record<string, unknown> = {
@@ -533,13 +609,14 @@ export class AssistantService {
       scheduledDate: { gte: today, lt: tomorrow },
       status: { in: ['confirmed', 'pending', 'in_progress'] },
     };
+    let staffProfessionalId: string | null = null;
     if (role === 'staff') {
       const prof = await this.prisma.professional.findFirst({
-        where: { user: { id: user.id } },
+        where: { tenantId: user.tenantId, user: { id: user.id } },
         select: { id: true },
       });
-      if (prof) apptWhere.professionalId = prof.id;
-      else apptWhere.professionalId = '__no_match__';
+      staffProfessionalId = prof?.id ?? '__no_match__';
+      apptWhere.professionalId = staffProfessionalId;
     }
 
     const appts = await this.prisma.appointment.findMany({
@@ -549,6 +626,7 @@ export class AssistantService {
         id: true,
         scheduledTime: true,
         status: true,
+        professionalId: true,
         client: { select: { firstName: true } },
         professional: { select: { firstName: true } },
         duration: true,
@@ -570,24 +648,30 @@ export class AssistantService {
         professionalFirstName: a.professional?.firstName ?? null,
       }));
 
-    // 3. Gaps ≥ 30 min between consecutive appointments, from when the
-    // professional is free again: after the appointment (30 min when it has
-    // no length) and the cleanup time after it.
-    const gaps: Array<{ start: string; end: string; minutes: number }> = [];
-    for (let i = 0; i + 1 < appts.length; i++) {
-      const endA =
-        timeToMinutes(appts[i].scheduledTime) +
-        minutesUntilFree(appts[i] as any, 30);
-      const startB = timeToMinutes(appts[i + 1].scheduledTime);
-      const gap = startB - endA;
-      if (gap >= 30) {
-        gaps.push({
-          start: minutesToTime(endA),
-          end: minutesToTime(startB),
-          minutes: gap,
-        });
-      }
-    }
+    // 3. Gaps ≥ 30 min per professional, inside their bookable hours and
+    // from now on (briefing-gaps.ts). A professional is free again after the
+    // appointment (30 min when it has no length) and its cleanup time.
+    const professionals = await this.prisma.professional.findMany({
+      where: {
+        tenantId: user.tenantId,
+        isActive: true,
+        ...(staffProfessionalId ? { id: staffProfessionalId } : {}),
+      },
+      select: { id: true, firstName: true, workingHours: true },
+    });
+    const blocks = await timeOffBetween(this.prisma as any, user.tenantId, todayDay);
+    const gaps = briefingGaps({
+      day: todayDay,
+      nowMinutes: salonNowMinutes(timeZone),
+      openingHours: tenant?.openingHours,
+      professionals,
+      busy: appts.map((a) => ({
+        professionalId: a.professionalId,
+        start: a.scheduledTime,
+        minutes: minutesUntilFree(a as any, 30),
+      })),
+      blocks,
+    });
 
     // 4. Low stock — manager/owner/receptionist only.
     let lowStockCount = 0;
@@ -621,7 +705,7 @@ export class AssistantService {
     let clientsAtRisk: Array<{ id: string; firstName: string; daysSinceLastVisit: number | null }> = [];
     if (['owner', 'admin', 'manager', 'receptionist', 'staff', 'saas_owner'].includes(role)) {
       const cutoff = new Date(today);
-      cutoff.setDate(cutoff.getDate() - 60);
+      cutoff.setUTCDate(cutoff.getUTCDate() - 60);
       const stale = await this.prisma.client.findMany({
         where: {
           tenantId: user.tenantId,
@@ -647,7 +731,7 @@ export class AssistantService {
     }
 
     return {
-      date: today.toISOString().slice(0, 10),
+      date: todayDay,
       role,
       appointments: {
         total: appts.length,
@@ -697,10 +781,13 @@ export class AssistantService {
    */
   private async computeTodayBriefing(tenantId: string): Promise<string | undefined> {
     try {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const tomorrow = new Date(today);
-      tomorrow.setDate(today.getDate() + 1);
+      const tenant = await this.prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { timezone: true },
+      });
+      const todayDay = salonToday(safeTimeZone(tenant?.timezone));
+      const today = new Date(`${todayDay}T00:00:00.000Z`);
+      const tomorrow = new Date(`${addDays(todayDay, 1)}T00:00:00.000Z`);
 
       const appts = await this.prisma.appointment.findMany({
         where: {
@@ -813,7 +900,13 @@ export interface DailyBriefingPublic {
   };
   gaps: {
     total: number;
-    items: Array<{ start: string; end: string; minutes: number }>;
+    items: Array<{
+      start: string;
+      end: string;
+      minutes: number;
+      professionalId: string;
+      professionalFirstName: string;
+    }>;
   };
   lowStock: {
     total: number;
@@ -824,15 +917,4 @@ export interface DailyBriefingPublic {
     items: Array<{ id: string; firstName: string; daysSinceLastVisit: number | null }>;
   };
   generatedAt: string;
-}
-
-function timeToMinutes(t: string): number {
-  const parts = t.split(':');
-  return Number(parts[0]) * 60 + Number(parts[1] || 0);
-}
-
-function minutesToTime(m: number): string {
-  const h = Math.floor(m / 60);
-  const mm = m % 60;
-  return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
 }

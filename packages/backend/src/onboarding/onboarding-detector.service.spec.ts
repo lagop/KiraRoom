@@ -33,6 +33,7 @@ function buildPrismaMock() {
     services: [] as any[],
     professionals: [] as any[],
     notificationTemplates: [] as any[],
+    clients: [] as any[],
     widgetInstances: [] as any[],
     whatsAppConnections: [] as any[],
     stateRows: new Map<string, any>(),
@@ -89,8 +90,8 @@ function buildPrismaMock() {
       group: OnboardingGroup.checklist_optional,
       titleI18nKey: "onboarding.reminders_enabled.title",
       descI18nKey: "onboarding.reminders_enabled.desc",
-      href: "/dashboard/notifications",
-      detectName: "hasActiveReminderTemplate",
+      href: "/dashboard/settings/whatsapp",
+      detectName: "hasReminderChannel",
       enabled: true,
     },
     {
@@ -193,8 +194,21 @@ function buildPrismaMock() {
     return next;
   });
 
+  const clientFindFirst = jest.fn(async (args: any) => {
+    const ends = (args?.where?.NOT ?? []).map((n: any) => n.email.endsWith.toLowerCase());
+    return (
+      state.clients.find(
+        (c: any) =>
+          typeof c.email === "string" &&
+          c.email.includes(args?.where?.email?.contains ?? "") &&
+          !ends.some((e: string) => c.email.toLowerCase().endsWith(e)),
+      ) ?? null
+    );
+  });
+
   const prisma: any = {
     tenant: { findUnique: tenantFindUnique },
+    client: { findFirst: clientFindFirst },
     service: { count: serviceCount },
     professional: { findMany: proFindMany },
     notificationTemplate: { count: notificationTemplateCount },
@@ -252,11 +266,7 @@ describe("OnboardingDetectorService.detectAll", () => {
       isActive: true,
       workingHours: [{ day: "mon", from: "09:00", to: "17:00" }],
     });
-    m.state.notificationTemplates.push({
-      id: "t1",
-      type: "appointment_reminder_24h",
-      isActive: true,
-    });
+    m.state.clients.push({ id: "c1", email: "ana@example.com" });
     m.state.widgetInstances.push({ id: "w1" });
     m.state.whatsAppConnections.push({ id: "wc1", isActive: true });
 
@@ -302,29 +312,23 @@ describe("OnboardingDetectorService.detectAll", () => {
     expect(result2.schedule_set).toBe(true);
   });
 
-  it("hasActiveReminderTemplate accepts either 24h or 1h reminder templates", async () => {
+  it("reminders: done once a client can get them by email, or the salon's WhatsApp is connected", async () => {
     const m = buildPrismaMock();
-    m.state.notificationTemplates.push({
-      id: "t1",
-      type: "appointment_reminder_24h",
-      isActive: true,
-    });
     const svc = new OnboardingDetectorService(m.prisma, stubEvents());
-    expect((await svc.detectAll("tenant-1")).reminders_enabled).toBe(true);
-
-    m.state.notificationTemplates = [
-      {
-        id: "t2",
-        type: "appointment_reminder_1h",
-        isActive: true,
-      },
-    ];
-    expect((await svc.detectAll("tenant-1")).reminders_enabled).toBe(true);
-
-    m.state.notificationTemplates = [
-      { id: "t3", type: "review_request", isActive: true },
-    ];
+    // Notification templates are not what sends reminders (nothing creates them).
+    m.state.notificationTemplates.push({ id: "t1", type: "appointment_reminder_24h", isActive: true });
     expect((await svc.detectAll("tenant-1")).reminders_enabled).toBe(false);
+
+    // A stand-in address never gets an email.
+    m.state.clients.push({ id: "c0", email: "wizard-1@placeholder.local" });
+    expect((await svc.detectAll("tenant-1")).reminders_enabled).toBe(false);
+
+    m.state.clients.push({ id: "c1", email: "ana@example.com" });
+    expect((await svc.detectAll("tenant-1")).reminders_enabled).toBe(true);
+
+    m.state.clients = [];
+    m.state.whatsAppConnections.push({ id: "wc1", isActive: true });
+    expect((await svc.detectAll("tenant-1")).reminders_enabled).toBe(true);
   });
 
   it("unknown detector names don't crash (returned as false)", async () => {
@@ -418,5 +422,22 @@ describe("OnboardingDetectorService.recomputeLinearStep", () => {
     await svc.detectAll("tenant-1");
     const row = m.state.stateRows.get("tenant-1");
     expect(row.finishedAt).toBeInstanceOf(Date);
+  });
+
+  it("keeps the first finishedAt and stops writing once nothing changes (I13)", async () => {
+    const m = buildPrismaMock();
+    Object.assign(m.state.tenant, { name: "Kira Room", street: "Calle 1", city: "Madrid", phone: "+34123456789" });
+    m.state.services.push({ id: "svc-1" });
+    m.state.professionals.push({ id: "pro-1", isActive: true, workingHours: [{ day: "mon", from: "09:00", to: "17:00" }] });
+    const svc = new OnboardingDetectorService(m.prisma, stubEvents());
+    await svc.detectAll("tenant-1");
+    const first = m.state.stateRows.get("tenant-1").finishedAt as Date;
+    expect(first).toBeInstanceOf(Date);
+
+    await new Promise((r) => setTimeout(r, 5));
+    const upserts = m.prisma.onboardingState.upsert.mock.calls.length;
+    await svc.detectAll("tenant-1");
+    expect(m.state.stateRows.get("tenant-1").finishedAt).toBe(first);
+    expect(m.prisma.onboardingState.upsert.mock.calls.length).toBe(upserts);
   });
 });

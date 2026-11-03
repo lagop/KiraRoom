@@ -19,23 +19,28 @@ const STAFF_USER = { id: 'staff-1', role: 'staff' as const };
 const MANAGER_USER = { id: 'mgr-1', role: 'manager' as const };
 const RECEPTIONIST_USER = { id: 'rec-1', role: 'receptionist' as const };
 
-function todayAt(hours: number, minutes = 0): Date {
-  const d = new Date();
-  d.setHours(hours, minutes, 0, 0);
-  return d;
+// 07:00 in Madrid: the clock the briefing reads "today" and "now" from.
+const NOW = new Date('2026-11-03T06:00:00.000Z');
+
+/** The salon's day as stored: its UTC midnight. */
+function dayStart(day = '2026-11-03'): Date {
+  return new Date(`${day}T00:00:00.000Z`);
 }
 
-function dayStart(d: Date = new Date()): Date {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x;
-}
+beforeEach(() => {
+  jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
+  jest.setSystemTime(NOW);
+});
+afterEach(() => {
+  jest.useRealTimers();
+});
 
 function makePrisma(opts: {
   appointments?: any[];
   products?: any[];
   clients?: any[];
   professionals?: any[];
+  timeOff?: any[];
   tenant?: any;
   user?: any;
 }): any {
@@ -93,6 +98,14 @@ function makePrisma(opts: {
       findFirst: jest.fn().mockImplementation(async ({ where }: any) => {
         return pros.find((p: any) => p.userId === where?.user?.id) ?? null;
       }),
+      findMany: jest.fn().mockImplementation(async ({ where }: any) => {
+        return pros
+          .filter((p: any) => (where?.id ? p.id === where.id : true))
+          .map((p: any) => ({ workingHours: [], ...p }));
+      }),
+    },
+    timeOff: {
+      findMany: jest.fn().mockImplementation(async () => opts.timeOff ?? []),
     },
     tenant: {
       findUnique: jest.fn().mockImplementation(async () => opts.tenant ?? null),
@@ -129,16 +142,18 @@ describe('AssistantService.getDailyBriefing (L-4)', () => {
       // Created long ago but never came: not "at risk" of being lost.
       { id: 'c-0', tenantId: TENANT_ID, firstName: 'Nunca', status: 'active', lastVisit: null, createdAt: cutoff },
     ];
-    const prisma = makePrisma({ appointments: appts, products, clients });
+    const prisma = makePrisma({ appointments: appts, products, clients, professionals: [{ id: 'p-1', firstName: 'María' }] });
     const svc = makeService(prisma);
     const res = await svc.getDailyBriefing({ id: MANAGER_USER.id, tenantId: TENANT_ID, role: 'manager' });
     expect(res.role).toBe('manager');
+    expect(res.date).toBe('2026-11-03');
     expect(res.appointments.total).toBe(2);
     expect(res.appointments.confirmed).toBe(1);
     expect(res.appointments.pending).toBe(1);
     // 09:00 → 11:00 with 1 service → 30 min → 90 min gap
     expect(res.gaps.total).toBe(1);
     expect(res.gaps.items[0].minutes).toBe(90);
+    expect(res.gaps.items[0].professionalFirstName).toBe('María');
     expect(res.lowStock.total).toBe(1);
     expect(res.lowStock.items[0].name).toBe('Tinte 7.3');
     expect(res.clientsAtRisk.total).toBe(1);
@@ -206,10 +221,58 @@ describe('AssistantService.getDailyBriefing (L-4)', () => {
       { id: 'a-1', tenantId: TENANT_ID, professionalId: 'p-1', clientId: 'c-1', scheduledDate: dayStart(), scheduledTime: '09:00', status: 'confirmed', client: { firstName: 'C' }, professional: { firstName: 'M' } },
       { id: 'a-2', tenantId: TENANT_ID, professionalId: 'p-1', clientId: 'c-2', scheduledDate: dayStart(), scheduledTime: '09:20', status: 'confirmed', client: { firstName: 'L' }, professional: { firstName: 'M' } },
     ];
-    const prisma = makePrisma({ appointments: appts });
+    const prisma = makePrisma({ appointments: appts, professionals: [{ id: 'p-1', firstName: 'M' }] });
     const svc = makeService(prisma);
     const res = await svc.getDailyBriefing({ id: MANAGER_USER.id, tenantId: TENANT_ID, role: 'manager' });
     // gap = 9:20 - (9:00 + 30min) = -10 → not ≥ 30
+    expect(res.gaps.total).toBe(0);
+  });
+
+  it('gaps are per professional, inside each one\'s hours (I16)', async () => {
+    const shift = (openTime: string, closeTime: string) => [{ day: 'tuesday', openTime, closeTime }];
+    const appts = [
+      // Ana 09:00-10:00, Marta 10:00-11:00: back to back across the salon,
+      // but not a gap for either of them on its own.
+      { id: 'a-1', tenantId: TENANT_ID, professionalId: 'ana', scheduledDate: dayStart(), scheduledTime: '09:00', duration: 60, status: 'confirmed', client: { firstName: 'C' }, professional: { firstName: 'Ana' } },
+      { id: 'a-2', tenantId: TENANT_ID, professionalId: 'marta', scheduledDate: dayStart(), scheduledTime: '10:00', duration: 60, status: 'confirmed', client: { firstName: 'L' }, professional: { firstName: 'Marta' } },
+    ];
+    const pros = [
+      { id: 'ana', firstName: 'Ana', workingHours: shift('09:00', '10:00') },
+      { id: 'marta', firstName: 'Marta', workingHours: shift('10:00', '11:00') },
+      { id: 'lucia', firstName: 'Lucía', workingHours: shift('10:00', '12:00') },
+    ];
+    const prisma = makePrisma({ appointments: appts, professionals: pros });
+    const res = await makeService(prisma).getDailyBriefing({ id: MANAGER_USER.id, tenantId: TENANT_ID, role: 'manager' });
+    expect(res.gaps.items).toEqual([
+      { start: '10:00', end: '12:00', minutes: 120, professionalId: 'lucia', professionalFirstName: 'Lucía' },
+    ]);
+  });
+
+  it('a gap that already started counts from now, in the salon\'s clock', async () => {
+    jest.setSystemTime(new Date('2026-11-03T09:30:00.000Z')); // 10:30 in Madrid
+    const pros = [{ id: 'lucia', firstName: 'Lucía', workingHours: [{ day: 'tuesday', openTime: '10:00', closeTime: '12:00' }] }];
+    const prisma = makePrisma({ appointments: [], professionals: pros });
+    const res = await makeService(prisma).getDailyBriefing({ id: MANAGER_USER.id, tenantId: TENANT_ID, role: 'manager' });
+    expect(res.gaps.items.map((g) => [g.start, g.end, g.minutes])).toEqual([['10:30', '12:00', 90]]);
+  });
+
+  it('"today" is the salon\'s day: 00:30 in Madrid is already the next day', async () => {
+    jest.setSystemTime(new Date('2026-11-03T23:30:00.000Z')); // 00:30 on the 4th in Madrid
+    const appts = [
+      { id: 'a-3', tenantId: TENANT_ID, professionalId: 'p-1', scheduledDate: dayStart('2026-11-03'), scheduledTime: '18:00', status: 'confirmed', client: { firstName: 'Ayer' }, professional: { firstName: 'M' } },
+      { id: 'a-4', tenantId: TENANT_ID, professionalId: 'p-1', scheduledDate: dayStart('2026-11-04'), scheduledTime: '10:00', status: 'confirmed', client: { firstName: 'Hoy' }, professional: { firstName: 'M' } },
+    ];
+    const prisma = makePrisma({ appointments: appts, tenant: { timezone: 'Europe/Madrid', openingHours: {} } });
+    const res = await makeService(prisma).getDailyBriefing({ id: MANAGER_USER.id, tenantId: TENANT_ID, role: 'manager' });
+    expect(res.date).toBe('2026-11-04');
+    expect(res.appointments.items.map((a) => a.id)).toEqual(['a-4']);
+  });
+
+  it('a salon closure today leaves no gaps', async () => {
+    const pros = [{ id: 'lucia', firstName: 'Lucía', workingHours: [{ day: 'tuesday', openTime: '10:00', closeTime: '12:00' }] }];
+    const timeOff = [{ id: 'x', professionalId: null, kind: 'closure', startDate: dayStart(), endDate: dayStart(), startTime: null, endTime: null, note: null, status: 'approved' }];
+    const prisma = makePrisma({ appointments: [], professionals: pros, timeOff });
+    const res = await makeService(prisma).getDailyBriefing({ id: MANAGER_USER.id, tenantId: TENANT_ID, role: 'manager' });
     expect(res.gaps.total).toBe(0);
   });
 });

@@ -374,7 +374,8 @@
       "restore": "Restaurar checklist",
       "skip": "Omitir",
       "done": "Hecho",
-      "pending": "Pendiente"
+      "pending": "Pendiente",
+      "fold": "Plegar"
     },
     "workspace_business": {
       "title": "Identidad del negocio",
@@ -398,7 +399,7 @@
     },
     "reminders_enabled": {
       "title": "Activa recordatorios automáticos",
-      "desc": "Los recordatorios 24h y 1h antes reducen los no-shows hasta un 40%."
+      "desc": "Salen solos por email 24 h y 1 h antes a las clientas con email. Conecta el WhatsApp del salón para enviarlos también por WhatsApp."
     },
     "widget_qr_setup": {
       "title": "Publica tu widget o QR",
@@ -1557,7 +1558,10 @@
       "state": "Provincia",
       "phone": "Teléfono",
       "logo": "Logo",
-      "saveError": "No se han podido guardar los datos del salón."
+      "saveError": "No se han podido guardar los datos del salón.",
+      "cover": "Imagen de portada",
+      "coverHint": "Sale arriba en tu página de reservas y en el widget. Recomendado: horizontal, 1500×500 px, ≤ 1 MB. PNG, JPG o WebP.",
+      "coverRemove": "Quitar imagen"
     },
     "saved": "Guardado",
     "theme": "Tema",
@@ -2876,7 +2880,7 @@
     "title": "Copiloto del salón",
     "fab_label": "Abrir copiloto",
     "panel_title": "Copiloto · {salon}",
-    "intro": "Hola, soy {name}, tu copiloto interno. Pregúntame lo que quieras sobre tu agenda, tus clientas, tu stock o tus huecos.",
+    "intro": "Hola, soy Kira, tu copiloto. Pregúntame lo que quieras sobre tu agenda, tus clientas, tu stock o tus huecos.",
     "placeholder": "Pregunta lo que quieras…",
     "send": "Enviar",
     "sending": "Enviando…",
@@ -2894,7 +2898,32 @@
     "approval_expired": "La aprobación ha expirado. Pide otra vez si quieres.",
     "approval_yes_label": "Aprobar",
     "approval_no_label": "Rechazar",
-    "free_input_intro": "Tu próxima pregunta la enviaré tal cual. El copiloto la responderá leyendo tus datos en tiempo real."
+    "free_input_intro": "Tu próxima pregunta la enviaré tal cual. El copiloto la responderá leyendo tus datos en tiempo real.",
+    "plan_label": "Copiloto · Plan {plan}",
+    "not_in_plan": "No incluido en tu plan actual",
+    "cost_cap": "Has alcanzado el límite de uso mensual del copiloto. Se reactiva el día 1 del próximo mes.",
+    "not_ready": "La conversación aún no está lista. Inténtalo en un momento.",
+    "plans": {
+      "free": "Esencial",
+      "pro": "Pro",
+      "premium": "Empresa"
+    },
+    "roles": {
+      "owner": "Dueña",
+      "admin": "Encargada",
+      "manager": "Encargada",
+      "receptionist": "Recepción",
+      "staff": "Profesional",
+      "saas_owner": "Soporte KiraRoom"
+    },
+    "upgrade": {
+      "title": "Esta función solo está en el plan {plan}",
+      "only_in": "Solo en {plan}",
+      "read_reason": "El copiloto está en los planes Pro y Empresa.",
+      "write_reason": "Las acciones del copiloto (mover citas, enviar WhatsApp, crear cupones) están en el plan Empresa.",
+      "cta": "Ver planes",
+      "ask_owner": "Pide a la dueña del salón que cambie al plan {plan}."
+    }
   },
   "password_reset": {
     "title": "Recupera tu contraseña",
@@ -3087,5 +3116,63 @@
     "connected": "WhatsApp conectado",
     "connectError": "No se ha podido conectar WhatsApp",
     "tokenStored": "El token de acceso se guarda cifrado y no se vuelve a mostrar; solo se usa para enviar tus mensajes de WhatsApp."
+  },
+  "notifications": {
+    "title": "Notificaciones",
+    "bell_label": "Notificaciones",
+    "mark_all_read": "Marcar todas como leídas",
+    "mark_read": "Marcar como leída",
+    "empty": "Aún no tienes notificaciones",
+    "empty_unread": "No tienes notificaciones sin leer",
+    "load_error": "No se pudieron cargar las notificaciones",
+    "retry": "Reintentar",
+    "view_all": "Ver todas las notificaciones",
+    "loading_more": "Cargando más…",
+    "no_more": "No hay más notificaciones",
+    "end": "Has llegado al final",
+    "filter_all": "Todas",
+    "filter_unread": "No leídas",
+    "summary": "{total} en total",
+    "summary_unread": "{total} en total, {unread} sin leer",
+    "open": "Abrir",
+    "back": "Volver al inicio",
+    "locale": "es-ES",
+    "time": {
+      "just_now": "Ahora mismo",
+      "minutes_one": "hace 1 minuto",
+      "minutes_other": "hace {count} minutos",
+      "hours_one": "hace 1 hora",
+      "hours_other": "hace {count} horas",
+      "days_one": "hace 1 día",
+      "days_other": "hace {count} días",
+      "weeks_one": "hace 1 semana",
+      "weeks_other": "hace {count} semanas"
+    },
+    "types": {
+      "appointment_created": "Cita nueva",
+      "appointment_reminder": "Recordatorio",
+      "appointment_reminder_24h": "Recordatorio",
+      "appointment_reminder_1h": "Recordatorio",
+      "appointment_confirmed": "Cita confirmada",
+      "appointment_completed": "Cita completada",
+      "appointment_cancelled": "Cita cancelada",
+      "appointment_rescheduled": "Cita cambiada",
+      "appointment_no_show": "No se presentó",
+      "new_appointment_assigned": "Cita asignada",
+      "schedule_change": "Cambio de horario",
+      "payment_received": "Cobro",
+      "payment_failed": "Cobro fallido",
+      "refund_processed": "Devolución",
+      "promotion": "Promoción",
+      "special_offer": "Promoción",
+      "system_alert": "Aviso del sistema",
+      "account_update": "Cuenta",
+      "password_change": "Seguridad",
+      "new_message": "Mensaje",
+      "review_request": "Reseña",
+      "news": "Novedades",
+      "waitlist_slot_available": "Lista de espera",
+      "other": "Notificación"
+    }
   }
 }

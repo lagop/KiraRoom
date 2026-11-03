@@ -141,3 +141,40 @@ describe("onboarding wizard: the salon's hours", () => {
     expect(prisma.tenant.update).not.toHaveBeenCalled();
   });
 });
+
+describe("onboarding wizard: loading the saved hours (I5)", () => {
+  function wizardWith(openingHours: unknown) {
+    const prisma: any = {
+      tenant: { findUnique: jest.fn(async () => ({ id: "t1", currency: "EUR", timezone: "Europe/Madrid", openingHours })) },
+      service: { count: jest.fn(async () => 0) },
+      professional: { count: jest.fn(async () => 0) },
+      appointment: { count: jest.fn(async () => 0) },
+    };
+    return new OnboardingService(prisma, {} as any).getWizard("t1");
+  }
+
+  it("sends the saved week so the editor starts from it", async () => {
+    const week = [
+      { day: "tuesday", openTime: "10:00", closeTime: "14:00" },
+      { day: "saturday", openTime: "09:00", closeTime: "15:00" },
+    ];
+    const w = await wizardWith(week);
+    expect(w.hasWorkingHours).toBe(true);
+    expect(w.openingHours).toEqual(week);
+  });
+
+  it("reads the old { open, close } pair as that window every day", async () => {
+    const w = await wizardWith({ open: "09:00", close: "20:00" });
+    expect(w.hasWorkingHours).toBe(true);
+    expect(w.openingHours).toHaveLength(7);
+    expect(w.openingHours[5]).toEqual({ day: "friday", openTime: "09:00", closeTime: "20:00" });
+  });
+
+  it("no hours saved: empty, and hasWorkingHours false", async () => {
+    for (const empty of [{}, [], null]) {
+      const w = await wizardWith(empty);
+      expect(w.hasWorkingHours).toBe(false);
+      expect(w.openingHours).toEqual([]);
+    }
+  });
+});
