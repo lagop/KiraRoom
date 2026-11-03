@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { agendaFocusFromQuery, matchesAgendaFocus, type AgendaFocus } from "@/lib/home-dashboard";
 import { ImportLink } from "@/components/import-link";
 import {
   Search,
@@ -151,6 +152,7 @@ const parseTimeToMinutes = (timeStr: string): number => {
 
 function AppointmentsPageContent() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const t = useTranslations();
   const { toast } = useToast();
   // The browser's calendar day. toISOString() gave the UTC one: after
@@ -185,6 +187,23 @@ function AppointmentsPageContent() {
     [],
   );
   const [hasSearched, setHasSearched] = useState(false);
+
+  // Inicio's "Ver todas": ?status=pending lists the appointments to confirm
+  // from today on, ?paymentStatus=pending the visits not charged up to today
+  // (the agenda used to ignore both and show today's day).
+  const [focus, setFocus] = useState<AgendaFocus | null>(null);
+  useEffect(() => {
+    const next = agendaFocusFromQuery(searchParams);
+    if (!next) return;
+    setFocus(next);
+    setDateFilter("");
+    setView("list");
+  }, [searchParams]);
+  const clearFocus = () => {
+    setFocus(null);
+    setDateFilter(localDay());
+    router.replace("/dashboard/appointments");
+  };
 
   // ?new=true opens the drawer for a new appointment; ?appointment=<id>
   // (&edit=1) opens an existing one -- the detail page's "Editar" lands here.
@@ -412,6 +431,10 @@ function AppointmentsPageContent() {
       return false;
     }
 
+    if (focus && !matchesAgendaFocus(apt, focus, today)) {
+      return false;
+    }
+
     // Date filter (only apply if dateFilter is set)
     if (dateFilter && dateFilter.trim() !== "") {
       if (String(apt.scheduledDate).split("T")[0] !== dateFilter) {
@@ -441,6 +464,12 @@ function AppointmentsPageContent() {
   };
 
   const sortedAppointments = filteredAppointments.sort((a, b) => {
+    // Days apart in Inicio's lists: to confirm soonest first, to charge latest first.
+    if (focus) {
+      const byDay = String(a.scheduledDate).slice(0, 10).localeCompare(String(b.scheduledDate).slice(0, 10));
+      const byTime = parseTimeToMinutes(a.scheduledTime) - parseTimeToMinutes(b.scheduledTime);
+      return focus === "unpaid" ? -byDay || -byTime : byDay || byTime;
+    }
     const aPriority = getStatusPriority(a.status as AppointmentStatus);
     const bPriority = getStatusPriority(b.status as AppointmentStatus);
     if (aPriority !== bPriority) {
@@ -774,6 +803,21 @@ function AppointmentsPageContent() {
           </div>
         )}
       </div>
+
+      {focus && view === "list" && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-900">
+          <span className="font-medium">
+            {t(`appointments.focus_${focus}`)} · {sortedAppointments.length}
+          </span>
+          <button
+            type="button"
+            onClick={clearFocus}
+            className="rounded-lg border border-indigo-300 bg-white px-3 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100"
+          >
+            {t("appointments.focus_clear")}
+          </button>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="bg-white rounded-xl border border-gray-200 p-4">
