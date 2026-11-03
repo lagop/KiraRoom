@@ -112,7 +112,9 @@ export class ClientsService {
     scope: ClientScope,
     query: ClientListQuery,
   ): Promise<ClientPage<Prisma.ClientGetPayload<{ select: typeof CLIENT_LIST_SELECT }>>> {
-    const where: Prisma.ClientWhereInput = { tenantId, ...this.scopeWhere(scope) };
+    // The wizard's test client is not counted among hers (D27); she still
+    // opens from the test booking until the cleanup job deletes both.
+    const where: Prisma.ClientWhereInput = { tenantId, isTest: false, ...this.scopeWhere(scope) };
     if (query.status) where.status = query.status;
     const empty = { data: [], total: 0, page: query.page, pageSize: query.pageSize, totalPages: 0 };
     if (query.search || query.phoneDigits.length > 0) {

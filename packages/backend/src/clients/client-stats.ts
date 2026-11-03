@@ -92,7 +92,8 @@ export async function recomputeClientStats(
   const [client, visits, paid, refunded] = await Promise.all([
     db.client.findFirst({ where: { id: clientId, tenantId }, select: { createdAt: true } }),
     db.appointment.aggregate({
-      where: { tenantId, clientId, status: AppointmentStatus.completed },
+      // The wizard's test booking is not a visit (D27).
+      where: { tenantId, clientId, isTest: false, status: AppointmentStatus.completed },
       _count: { _all: true },
       _min: { scheduledDate: true },
       _max: { scheduledDate: true },

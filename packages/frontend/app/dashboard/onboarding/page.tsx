@@ -371,8 +371,9 @@ export default function OwnerOnboardingWizardPage() {
           )}
         </div>
         <p className="text-sm text-slate-600 mb-3">
-          Crea una cita de prueba con un cliente ficticio para verificar
-          que el sistema funciona.
+          Crea una cita de prueba para ver cómo queda en la agenda. No
+          cuenta en las cifras ni queda pendiente de cobro, y se borra sola
+          al día siguiente.
         </p>
         {!data.hasStaff && (
           // A1.2 follow-up: the appointment step is gated on having at

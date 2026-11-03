@@ -215,7 +215,7 @@ export class MultiLocationService {
       // The columns Analítica reads, so both apply the same definitions
       // (loyalty rewards, multi-service visits).
       this.prisma.appointment.findMany({
-        where: { tenantId, scheduledDate: scheduledDateRange(period) },
+        where: { tenantId, isTest: false, scheduledDate: scheduledDateRange(period) },
         select: ANALYTICS_APPOINTMENT_SELECT,
       }),
       this.prisma.professional.findMany({

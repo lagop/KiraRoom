@@ -215,6 +215,7 @@ export class HomeSummaryService {
     const dayEnd = new Date(`${day}T23:59:59.999Z`);
     const pendingWhere = {
       tenantId: user.tenantId,
+      isTest: false,
       status: AppointmentStatus.pending,
       scheduledDate: { gte: dayStart },
       ...(professionalId ? { professionalId } : {}),
@@ -254,8 +255,9 @@ export class HomeSummaryService {
       staff ? Promise.resolve(null) : this.analytics.getTodayOccupancy(user.tenantId, scope),
     ]);
 
+    // The wizard's test booking stays in the agenda but out of Inicio (D27).
     const todayAppointments = (todays as any[])
-      .filter((a) => ACTIVE_TODAY.includes(a.status) && inLocation(a, scope))
+      .filter((a) => !a.isTest && ACTIVE_TODAY.includes(a.status) && inLocation(a, scope))
       .map(homeRow)
       .sort(byDateAndTime);
 

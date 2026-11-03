@@ -228,7 +228,7 @@ export class AnalyticsService {
   /** Appointments scheduled in the period (of the location, with a scope), with what every metric needs. */
   async loadAppointments(tenantId: string, period: SalonPeriod, scope?: LocationScope): Promise<AnalyticsAppointment[]> {
     const rows = await this.prisma.appointment.findMany({
-      where: { tenantId, scheduledDate: scheduledDateRange(period), ...appointmentLocationWhere(scope) },
+      where: { tenantId, isTest: false, scheduledDate: scheduledDateRange(period), ...appointmentLocationWhere(scope) },
       select: ANALYTICS_APPOINTMENT_SELECT,
     });
     return rows as unknown as AnalyticsAppointment[];
@@ -240,6 +240,7 @@ export class AnalyticsService {
     const rows = await this.prisma.appointment.findMany({
       where: {
         tenantId,
+        isTest: false,
         status: "completed",
         clientId: { in: clientIds },
         scheduledDate: { lt: scheduledDateRange({ start: day, end: day }).gte },
@@ -439,7 +440,7 @@ export class AnalyticsService {
     const n = Math.max(1, Math.min(366, Math.floor(days) || 7));
     const period = { start: addDays(today, -(n - 1)), end: today };
     const rows = await this.prisma.appointment.findMany({
-      where: { tenantId, scheduledDate: scheduledDateRange(period), ...appointmentLocationWhere(scope) },
+      where: { tenantId, isTest: false, scheduledDate: scheduledDateRange(period), ...appointmentLocationWhere(scope) },
       select: { status: true },
     });
     return this.statusBreakdown(rows);
@@ -467,6 +468,7 @@ export class AnalyticsService {
     const rows = await this.prisma.appointment.findMany({
       where: {
         tenantId,
+        isTest: false,
         scheduledDate: scheduledDateRange(period),
         status: { in: ["completed", "cancelled", "no_show"] },
         ...appointmentLocationWhere(scope),
@@ -490,7 +492,7 @@ export class AnalyticsService {
     const { today } = await this.todayFor(tenantId);
     const period = lastMonthsPeriod(today, months);
     const rows = await this.prisma.appointment.findMany({
-      where: { tenantId, scheduledDate: scheduledDateRange(period), ...appointmentLocationWhere(scope) },
+      where: { tenantId, isTest: false, scheduledDate: scheduledDateRange(period), ...appointmentLocationWhere(scope) },
       select: { status: true, scheduledDate: true },
     });
     return monthlyStatusCounts(rows, period);
@@ -538,11 +540,11 @@ export class AnalyticsService {
 
     const [completed, totalAppointments] = await Promise.all([
       this.prisma.appointment.findMany({
-        where: { tenantId, status: "completed", scheduledDate: range, ...where },
+        where: { tenantId, isTest: false, status: "completed", scheduledDate: range, ...where },
         select: { clientId: true },
       }),
       this.prisma.appointment.count({
-        where: { tenantId, scheduledDate: range, status: { not: "cancelled" }, ...where },
+        where: { tenantId, isTest: false, scheduledDate: range, status: { not: "cancelled" }, ...where },
       }),
     ]);
 

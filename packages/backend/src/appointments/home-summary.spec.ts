@@ -130,6 +130,17 @@ describe("HomeSummaryService.getHome", () => {
     expect(filters.endDate.toISOString()).toBe("2026-11-04T23:59:59.999Z");
   });
 
+  it("today leaves out the onboarding wizard's test booking (D27)", async () => {
+    const { service } = build({
+      todays: [
+        apt("real", "2026-11-04", "10:00", "confirmed"),
+        { ...apt("test", "2026-11-04", "11:00", "confirmed"), isTest: true },
+      ],
+    });
+    const home = await service.getHome(OWNER, {}, LATE_EVENING_UTC);
+    expect(home.todayAppointments.map((a) => a.id)).toEqual(["real"]);
+  });
+
   it("rows carry what the page shows, not the salon record", async () => {
     const { service } = build({ todays: [apt("a", "2026-11-04", "10:00", "confirmed")] });
     const [row] = (await service.getHome(OWNER, {}, LATE_EVENING_UTC)).todayAppointments;
@@ -157,6 +168,7 @@ describe("HomeSummaryService.getHome", () => {
     const [query] = calls.findMany;
     expect(query.where).toEqual({
       tenantId: TENANT,
+      isTest: false,
       status: "pending",
       scheduledDate: { gte: new Date("2026-11-04T00:00:00.000Z") },
     });

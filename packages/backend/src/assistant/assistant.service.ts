@@ -607,6 +607,8 @@ export class AssistantService {
     // 1. Today's appointments — staff sees only their own.
     const apptWhere: Record<string, unknown> = {
       tenantId: user.tenantId,
+      // The wizard's test booking is not part of the day (D27).
+      isTest: false,
       scheduledDate: { gte: today, lt: tomorrow },
       status: { in: ['confirmed', 'pending', 'in_progress'] },
     };
@@ -711,6 +713,7 @@ export class AssistantService {
         where: {
           tenantId: user.tenantId,
           status: 'active',
+          isTest: false,
           lastVisit: { lt: cutoff },
           // Staff: only their own clients, as in Clientas. It was the whole
           // salon's list.
@@ -796,6 +799,7 @@ export class AssistantService {
       const appts = await this.prisma.appointment.findMany({
         where: {
           tenantId,
+          isTest: false,
           scheduledDate: { gte: today, lt: tomorrow },
           status: { in: ['confirmed', 'pending'] },
         },
