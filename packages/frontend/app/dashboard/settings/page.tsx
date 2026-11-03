@@ -157,6 +157,13 @@ const defaultSettingsData = {
       description:
         "Las citas que piden tus clientes por la web, el widget o la recepcionista virtual entran ya confirmadas. Desactivado, entran como pendientes hasta que las confirmes.",
     },
+    {
+      id: "timeOffEmailNotices",
+      label: "Avisar por email de las solicitudes de ausencia",
+      type: "switch",
+      description:
+        "Cada solicitud nueva llega por email a la dueña y a los administradores, y cada respuesta al profesional que la pidió. Desactivado, solo se avisa en las notificaciones del panel.",
+    },
   ],
   users: [
     {

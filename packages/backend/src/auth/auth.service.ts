@@ -101,6 +101,7 @@ export const TENANT_SETTINGS_SELECT = {
   facebook: true,
   bookingSlotMinutes: true,
   autoConfirmOnlineBookings: true,
+  timeOffEmailNotices: true,
   // Tax identifiers (consumed by /dashboard/settings/fiscal).
   taxId: true,
   taxIdType: true,

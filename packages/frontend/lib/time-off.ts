@@ -126,8 +126,16 @@ export function requestBody(input: TimeOffInput): Omit<TimeOffInput, "profession
   };
 }
 
-/** Fired on window when a request is answered, so the menu badge recounts. */
+/**
+ * Fired on window when a request is answered here, or a new one arrives by
+ * the live notifications, so the menu badge recounts.
+ */
 export const TIME_OFF_REQUESTS_CHANGED = "kira:time-off-requests-changed";
+
+/** Whether a live notification changes the requests waiting for an answer (a new one came in). */
+export function changesPendingRequests(notification: { data?: Record<string, unknown> | null } | null | undefined): boolean {
+  return notification?.data?.event === "time_off_requested";
+}
 
 /** The menu badge: nothing for none, "9+" past nine. */
 export function pendingBadge(count: number): string | null {
@@ -187,9 +195,13 @@ export function dateRangeLabel(startDate: string, endDate: string): string {
   return `${shortDay(startDate)} – ${shortDay(endDate)}`;
 }
 
-/** "Todo el día" or "10:00–12:00". */
-export function hoursLabel(block: Pick<TimeOff, "startTime" | "endTime">): string {
-  return block.startTime && block.endTime ? `${block.startTime}–${block.endTime}` : "Todo el día";
+/** "Todo el día", "10:00–12:00", or "10:00–12:00 cada día" over several days. */
+export function hoursLabel(
+  block: Pick<TimeOff, "startTime" | "endTime"> & Partial<Pick<TimeOff, "startDate" | "endDate">>,
+): string {
+  if (!(block.startTime && block.endTime)) return "Todo el día";
+  const hours = `${block.startTime}–${block.endTime}`;
+  return block.startDate && block.endDate && block.startDate !== block.endDate ? `${hours} cada día` : hours;
 }
 
 /** What the calendar writes on a block: "Vacaciones", "Salón cerrado — Navidad". */
@@ -226,7 +238,6 @@ export function timeOffFormProblem(input: {
     return `Una ausencia puede durar como máximo ${MAX_SPAN_DAYS} días.`;
   }
   if (!input.allDay) {
-    if (input.startDate !== input.endDate) return "Las horas solo se pueden indicar para un único día.";
     if (!/^\d{2}:\d{2}$/.test(input.startTime) || !/^\d{2}:\d{2}$/.test(input.endTime)) {
       return "Indica la hora de inicio y la de fin.";
     }

@@ -193,7 +193,7 @@ export function TimeOffManager({ professionalId, self = false }: TimeOffManagerP
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     const end = endDate || startDate;
-    const problem = timeOffFormProblem({ startDate, endDate: end, allDay: allDay || !singleDay, startTime, endTime, note });
+    const problem = timeOffFormProblem({ startDate, endDate: end, allDay, startTime, endTime, note });
     if (problem) {
       setFormError(problem);
       return;
@@ -210,8 +210,8 @@ export function TimeOffManager({ professionalId, self = false }: TimeOffManagerP
       kind: salon ? "closure" : kind,
       startDate,
       endDate: end,
-      startTime: allDay || !singleDay ? null : startTime,
-      endTime: allDay || !singleDay ? null : endTime,
+      startTime: allDay ? null : startTime,
+      endTime: allDay ? null : endTime,
       note: note.trim() || null,
     };
     setSaving(true);
@@ -429,14 +429,14 @@ export function TimeOffManager({ professionalId, self = false }: TimeOffManagerP
           <label className="inline-flex items-center gap-2 text-sm text-gray-700">
             <input
               type="checkbox"
-              checked={allDay || !singleDay}
+              checked={allDay}
               onChange={(e) => setAllDay(e.target.checked)}
-              disabled={saving || !singleDay}
+              disabled={saving}
               className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
             />
             Todo el día
           </label>
-          {!allDay && singleDay && (
+          {!allDay && (
             <div className="flex items-center gap-2">
               <input
                 type="time"
@@ -457,8 +457,8 @@ export function TimeOffManager({ professionalId, self = false }: TimeOffManagerP
               />
             </div>
           )}
-          {!singleDay && startDate && (
-            <span className="text-xs text-gray-500">Las horas solo se pueden indicar para un único día.</span>
+          {!allDay && !singleDay && startDate && (
+            <span className="text-xs text-gray-500">Esas horas, cada día del periodo.</span>
           )}
         </div>
 

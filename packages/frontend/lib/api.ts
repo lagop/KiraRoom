@@ -4826,6 +4826,7 @@ class ApiClient implements ApiClientInterface {
     bookingSlotMinutes?: number;
     /** Online bookings start confirmed instead of pending. */
     autoConfirmOnlineBookings?: boolean;
+    timeOffEmailNotices?: boolean;
   }> {
     return this.request("/auth/tenant");
   }
@@ -4855,6 +4856,7 @@ class ApiClient implements ApiClientInterface {
     facebook?: string;
     bookingSlotMinutes?: number;
     autoConfirmOnlineBookings?: boolean;
+    timeOffEmailNotices?: boolean;
   }): Promise<{
     id: string;
     name: string;
