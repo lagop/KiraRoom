@@ -52,8 +52,8 @@ export class PosController {
     @Req() req: any,
     @Query('search') search?: string,
   ) {
-    const tenantId = req.user.tenantId;
-    return this.posService.getClients(tenantId, search);
+    // Staff: only with a search of two characters or more (PosService.getClients).
+    return this.posService.getClients(req.user.tenantId, search, { role: req.user.role });
   }
 
   /** The till's settings; staff read them too, to know their discount limit. */
@@ -218,9 +218,10 @@ export class PosController {
 
   // ============ INVENTORY ============
 
+  // The stock movements log: managers (no staff screen reads it).
   @Get('inventory')
   @ApiOperation({ summary: 'Get inventory transactions' })
-  @Roles(...SALON_TEAM)
+  @Roles(...SALON_MANAGERS)
   async getInventoryTransactions(
     @Req() req: any,
     @Query('productId') productId?: string,
@@ -249,10 +250,12 @@ export class PosController {
   }
 
   // ============ ORDERS ============
+  // The old order model (nothing writes it any more), with clients' contact
+  // details: managers only, no screen reads it.
 
   @Get('orders')
   @ApiOperation({ summary: 'Get orders' })
-  @Roles(...SALON_TEAM)
+  @Roles(...SALON_MANAGERS)
   async getOrders(
     @Req() req: any,
     @Query('status') status?: string,
@@ -266,7 +269,7 @@ export class PosController {
 
   @Get('orders/:id')
   @ApiOperation({ summary: 'Get order details' })
-  @Roles(...SALON_TEAM)
+  @Roles(...SALON_MANAGERS)
   async getOrderDetails(@Req() req: any, @Param('id', ParseUUIDPipe) id: string) {
     return this.productService.getOrder(req.user.tenantId, id);
   }

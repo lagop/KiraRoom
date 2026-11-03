@@ -8,6 +8,7 @@ import type { TimeOff, TimeOffConflict, TimeOffInput, TimeOffStatus } from "./ti
 import type { CreateClientPayload, UpdateClientPayload } from "./client-form";
 import type { RefundableSaleLine } from "./payments-format";
 import type { InvoiceIssuerStatus } from "./invoice-issuer";
+import { apiErrorMessage } from "./api-error-message";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1";
@@ -2416,11 +2417,14 @@ class ApiClient implements ApiClientInterface {
       // offending field: ["website must be a URL address"]. Passed straight to
       // Error it was coerced to a comma-joined blob, so a form could report a
       // 400 without naming the field that caused it. Joining as sentences is
-      // what turns "Failed to update salon" into something actionable.
-      const raw = errorData.message;
-      const message = Array.isArray(raw)
-        ? raw.join(". ")
-        : raw || `API Error: ${response.status} ${response.statusText}`;
+      // what turns "Failed to update salon" into something actionable. A
+      // role refusal's English default ("Forbidden resource") is said in
+      // Spanish (api-error-message.ts).
+      const message = apiErrorMessage(
+        response.status,
+        errorData.message,
+        `API Error: ${response.status} ${response.statusText}`,
+      );
       throw new ApiError(
         message,
         response.status,
@@ -3984,7 +3988,7 @@ class ApiClient implements ApiClientInterface {
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       const raw = (body as { message?: unknown }).message;
-      throw new ApiError(Array.isArray(raw) ? raw.join(". ") : String(raw || `Error ${res.status}`), res.status);
+      throw new ApiError(apiErrorMessage(res.status, raw, `Error ${res.status}`), res.status);
     }
     const disposition = res.headers.get("Content-Disposition") ?? "";
     const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "pagos.csv";
@@ -5727,7 +5731,7 @@ class ApiClient implements ApiClientInterface {
       const body = await res.json().catch(() => ({}));
       const raw = (body as { message?: unknown }).message;
       throw new ApiError(
-        Array.isArray(raw) ? raw.join(". ") : String(raw || `Error ${res.status}`),
+        apiErrorMessage(res.status, raw, `Error ${res.status}`),
         res.status,
       );
     }

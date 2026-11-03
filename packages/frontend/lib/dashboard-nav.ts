@@ -172,6 +172,43 @@ export function isActive(item: NavLink, pathname: string): boolean {
   return pathname === item.href || pathname.startsWith(item.href + "/");
 }
 
+/** Pages outside the menu (or under a link staff have) that only the owner and managers open. */
+const MANAGER_PAGES = ["/dashboard/clients/import", "/dashboard/copilot/usage"];
+
+/** Whole areas for the owner and managers: every page under them, in the menu or not. */
+const MANAGER_AREAS = ["/dashboard/settings", "/dashboard/billing"];
+
+/**
+ * Pages under a managers' entry that staff open from their own screens: a
+ * professional's profile ("Ver perfil" in an appointment), not the list,
+ * the new form or the edit form.
+ */
+const STAFF_PAGES_UNDER_MANAGERS = [/^\/dashboard\/professionals\/(?!new$)[^/]+$/];
+
+const under = (path: string, prefix: string) => path === prefix || path.startsWith(prefix + "/");
+
+/**
+ * Whether a page of the panel is for the owner and managers only and `role`
+ * is not one of them, so the layout shows "this section is for the salon's
+ * management" instead of the page. The menu hides these pages from staff;
+ * typed into the address bar they opened with buttons that failed (the API
+ * refuses them all). A page in the role's menu is theirs; a page under a
+ * link the menu hides from them is not.
+ *
+ * False until the user is read (`role` null or undefined): the page itself
+ * then decides, as before, and the first render matches the server's.
+ */
+export function managersOnlyPage(role: string | null | undefined, pathname: string): boolean {
+  if (!role || isManager(role)) return false;
+  const path = pathname.replace(/\/+$/, "") || "/";
+  if (STAFF_PAGES_UNDER_MANAGERS.some((re) => re.test(path))) return false;
+  if (MANAGER_PAGES.some((p) => under(path, p))) return true;
+  const all = (nav: NavEntry[]) => nav.flatMap((e) => (e.kind === "link" ? [e] : e.items));
+  if (all(navFor(role)).some((l) => isActive(l, path))) return false;
+  if (all(DASHBOARD_NAV).some((l) => isActive(l, path))) return true;
+  return MANAGER_AREAS.some((p) => under(path, p));
+}
+
 /** The badges a menu shows, so the sidebar fetches only those. */
 export function badgesIn(nav: NavEntry[]): NavBadge[] {
   const all = nav.flatMap((e) => (e.kind === "link" ? [e] : e.items)).flatMap((l) => (l.badge ? [l.badge] : []));

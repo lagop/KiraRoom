@@ -165,4 +165,58 @@ describe("ICS feed endpoints", () => {
     await c.tokens({ user: { tenantId: "t1" } });
     expect((professionals.mock.calls[0] as any[])[0].where).toEqual({ tenantId: "t1", isActive: true });
   });
+
+  it("a professional's feed also has the services they do in a colleague's visit, as their part of it", async () => {
+    // Ana's cut 10:00-10:30, then Marta's colour 10:30-11:30 (Madrid, UTC+1).
+    const shared = appt({
+      id: "shared",
+      professionalId: "ana",
+      duration: 90,
+      services: [
+        { professionalId: "marta", status: "pending", scheduledStart: new Date("2026-11-10T09:30:00.000Z"), scheduledEnd: new Date("2026-11-10T10:30:00.000Z"), service: { name: "Color" } },
+      ],
+    });
+    const own = appt({ id: "own", professionalId: "marta", scheduledTime: "16:00" });
+    const { c, findMany, res } = build([shared, own]);
+    const prisma = (c as any).prisma;
+    prisma.professional.findUnique = jest.fn(async () => ({
+      id: "marta",
+      tenantId: "t1",
+      isActive: true,
+      tenant: { ...tenant, features: {} },
+    }));
+    await c.professionalFeed("marta", IcsController.signToken("professional:marta", SECRET), res);
+
+    const args = (findMany.mock.calls[0] as any[])[0];
+    expect(args.where).toMatchObject({
+      tenantId: "t1",
+      OR: [
+        { professionalId: "marta" },
+        { services: { some: { professionalId: "marta", status: { not: "cancelled" } } } },
+      ],
+    });
+    // Only her own rows are read, and still only the client's first name.
+    expect(args.include.services.where).toEqual({ professionalId: "marta" });
+    expect(args.include.client).toEqual({ select: { firstName: true } });
+
+    const body: string = res.send.mock.calls[0][0];
+    // The colour, at its own time, not Ana's cut at 10:00 for the whole visit.
+    expect(body).toContain("SUMMARY:Color - Lucía");
+    expect(body).toContain("DTSTART:20261110T093000Z");
+    expect(body).toContain("DTEND:20261110T103000Z");
+    expect(body).toContain("UID:shared-marta@salon-ana.kiraroom.app");
+    // Her own appointment as before.
+    expect(body).toContain("UID:own@salon-ana.kiraroom.app");
+    expect(body).toContain("DTSTART:20261110T150000Z");
+  });
+
+  it("a colleague's visit whose rows carry no times shows as the whole visit", () => {
+    const events = buildIcsEvents(
+      [appt({ professionalId: "ana", services: [{ professionalId: "marta", status: "pending", scheduledStart: null, scheduledEnd: null }] })],
+      tenant,
+      "marta",
+    );
+    expect(events[0].title).toBe("Corte - Lucía");
+    expect(events[0].end).toBe((events[0].start as number) + 45 * 60_000);
+  });
 });
