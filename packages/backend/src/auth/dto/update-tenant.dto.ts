@@ -161,6 +161,18 @@ export class UpdateTenantDto {
   @IsOptional()
   logo?: string;
 
+  /**
+   * The cover photo of the salon's public page and booking widget (the
+   * onboarding "Imagen de portada" step). Only the SaaS console could set
+   * it before, so that step could never be completed by the salon.
+   */
+  @ApiPropertyOptional({ description: "Cover image URL or data: URL; blank or null clears it", nullable: true })
+  @BlankToNull()
+  @IsOptional()
+  @IsString()
+  @MaxLength(1_500_000)
+  coverImage?: string | null;
+
   @ApiPropertyOptional({ description: "Tenant postal code; blank or null clears it", nullable: true })
   @BlankToNull()
   @IsOptional()

@@ -10,6 +10,37 @@ import {
 } from "./useOnboardingState";
 import { Loader2, ChevronRight, X, RotateCcw } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
+import {
+  checklistStartsOpen,
+  pendingChecklistSteps,
+  showChecklistRestore,
+} from "@/lib/onboarding-wizard";
+
+/** Remembered in this browser: the owner folded the checklist away. */
+const FOLDED_KEY = "kira_onboarding_checklist_folded";
+
+function readFolded(): boolean {
+  try {
+    return window.localStorage.getItem(FOLDED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeFolded(folded: boolean) {
+  try {
+    if (folded) window.localStorage.setItem(FOLDED_KEY, "1");
+    else window.localStorage.removeItem(FOLDED_KEY);
+  } catch {
+    // Private mode or blocked storage: it just opens again next time.
+  }
+}
+
+/**
+ * Bottom-right, but above the copilot's button (bottom-6 right-6, 56 px),
+ * which the panel and its pill used to cover.
+ */
+const CORNER = "fixed bottom-24 right-4 z-30";
 
 /**
  * Persistent right-side drawer showing optional checklist items.
@@ -17,13 +48,17 @@ import { useTranslations } from "@/lib/use-translation";
  * Open on the dashboard home only. It used to open on every page, where
  * this 320 px panel covered buttons -- the import screen's "Siguiente",
  * the till's cart -- until it was closed. Elsewhere it starts as the small
- * pill and opens on demand.
+ * pill and opens on demand. Once folded it stays folded, on the home too.
  */
 export function OnboardingChecklist() {
   const t = useTranslations();
-  const { data, isLoading } = useOnboardingState({ refetchInterval: 30_000 });
+  const { data, isLoading } = useOnboardingState();
   const pathname = usePathname();
-  const [open, setOpen] = useState(pathname === "/dashboard");
+  const [open, setOpenState] = useState(() => checklistStartsOpen(pathname, readFolded()));
+  const setOpen = (next: boolean) => {
+    setOpenState(next);
+    writeFolded(!next);
+  };
   const dismiss = useDismissOnboardingChecklist();
   const skip = useSkipOnboardingStep();
 
@@ -31,27 +66,24 @@ export function OnboardingChecklist() {
   if (data.checklistDismissed) return null;
 
   const items = data.defs.filter((d) => d.group === "checklist_optional");
-  const pending = items.filter((d) => {
-    const s = data.steps[d.key];
-    return !s || s.status === "pending";
-  });
-  if (pending.length === 0) return null;
+  const pendingCount = pendingChecklistSteps(data);
+  if (pendingCount === 0) return null;
 
   if (!open) {
     return (
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="fixed bottom-4 right-4 z-30 inline-flex items-center gap-2 rounded-full bg-violet-600 px-4 py-2 text-xs font-medium text-white shadow-lg hover:bg-violet-700"
+        className={`${CORNER} inline-flex items-center gap-2 rounded-full bg-violet-600 px-4 py-2 text-xs font-medium text-white shadow-lg hover:bg-violet-700`}
       >
         <ChevronRight className="h-3.5 w-3.5" />
-        {t("onboarding.checklist.title")} ({pending.length})
+        {t("onboarding.checklist.title")} ({pendingCount})
       </button>
     );
   }
 
   return (
-    <div className="fixed bottom-4 right-4 z-30 w-80 rounded-xl bg-white shadow-2xl ring-1 ring-gray-200">
+    <div className={`${CORNER} w-80 max-w-[calc(100vw-2rem)] rounded-xl bg-white shadow-2xl ring-1 ring-gray-200`}>
       <div className="flex items-start justify-between border-b border-gray-100 p-4">
         <div>
           <div className="text-sm font-semibold text-gray-900">
@@ -66,7 +98,8 @@ export function OnboardingChecklist() {
             type="button"
             onClick={() => dismiss.mutate()}
             className="rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
-            aria-label="Dismiss"
+            aria-label={t("onboarding.checklist.dismiss")}
+            title={t("onboarding.checklist.dismiss")}
           >
             <X className="h-3.5 w-3.5" />
           </button>
@@ -127,6 +160,8 @@ export function OnboardingChecklist() {
         <button
           type="button"
           onClick={() => setOpen(false)}
+          aria-label={t("onboarding.checklist.fold")}
+          title={t("onboarding.checklist.fold")}
           className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-gray-500 hover:bg-gray-50"
         >
           <ChevronRight className="h-3 w-3 rotate-180" />
@@ -152,18 +187,20 @@ export function OnboardingRestoreButton() {
 }
 
 export function OnboardingChecklistOrLoader() {
-  const { data, isLoading } = useOnboardingState({ refetchInterval: 30_000 });
+  const { data, isLoading } = useOnboardingState();
   if (isLoading) {
     return (
-      <div className="fixed bottom-4 right-4 z-30 inline-flex items-center gap-2 rounded-full bg-white px-3 py-2 text-xs text-gray-500 shadow-lg">
+      <div className={`${CORNER} inline-flex items-center gap-2 rounded-full bg-white px-3 py-2 text-xs text-gray-500 shadow-lg`}>
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
       </div>
     );
   }
   if (!data) return null;
   if (data.checklistDismissed) {
+    // Nothing would come back: no button left in the corner for ever.
+    if (!showChecklistRestore(data)) return null;
     return (
-      <div className="fixed bottom-4 right-4 z-30">
+      <div className={CORNER}>
         <OnboardingRestoreButton />
       </div>
     );

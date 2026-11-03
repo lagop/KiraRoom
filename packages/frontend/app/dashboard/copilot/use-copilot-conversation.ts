@@ -3,7 +3,9 @@
 /**
  * P2A-staff-copilot: polling-based conversation hook.
  *
- * The panel polls /assistant/messages every 1.5 s while the user is
+ * Messages go to POST /assistant/messages with the conversation's id (the
+ * per-conversation POST it used to call does not exist: every message was
+ * a 404). The panel polls the conversation's messages every 1.5 s while the user is
  * waiting for the assistant to finish; on a settled reply
  * (lastRole === 'assistant' and no pendingApprovals) the polling
  * stops. We don't use SSE/WebSocket in sprint 12 — polling is
@@ -156,7 +158,7 @@ export function useCopilotConversation() {
         return;
       }
       if (!state.conversation) {
-        setState((s) => ({ ...s, error: "Conversation not ready" }));
+        setState((s) => ({ ...s, error: "La conversación aún no está lista. Inténtalo en un momento." }));
         return;
       }
       setState((s) => ({ ...s, sending: true, error: null }));
@@ -210,7 +212,9 @@ export function useCopilotConversation() {
 
   const clear = useCallback(async () => {
     try {
-      const fresh = await apiClient.createAssistantConversation({});
+      // A new, empty thread: without `fresh` the server returns the
+      // existing one and the old messages came back on the next reply.
+      const fresh = await apiClient.createAssistantConversation({ fresh: true });
       setState({
         conversation: fresh,
         messages: [],
