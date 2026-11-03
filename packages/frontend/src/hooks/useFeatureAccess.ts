@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import apiClient, { getToken, decodeJwtToken } from "../../lib/api";
+import { paysSubscription } from "../../lib/billing-plan";
 import {
   FeatureKey,
   PlanId,
@@ -11,9 +12,13 @@ import {
 
 interface TenantContext {
   plan: PlanId;
+  /** What the salon uses now: Pro during the trial, else its plan. */
+  effectivePlan: PlanId;
   inTrial: boolean;
   trialEnd: string | null;
   subscriptionStatus: string;
+  /** A paid subscription exists (it may have been taken during the trial). */
+  subscribed: boolean;
   cancelledAt: string | null;
   readOnlyUntil: string | null;
   addons: Record<string, any>;
@@ -28,9 +33,11 @@ interface TenantContext {
 
 const EMPTY: TenantContext = {
   plan: "esencial",
+  effectivePlan: "esencial",
   inTrial: false,
   trialEnd: null,
   subscriptionStatus: "cancelled",
+  subscribed: false,
   cancelledAt: null,
   readOnlyUntil: null,
   addons: {},
@@ -70,11 +77,18 @@ export function useTenantContext(): TenantContext {
           trialEnd !== null &&
           trialEnd > now;
 
+        const plan = normalizePlan(sub.plan);
         setCtx({
-          plan: normalizePlan(sub.plan),
+          plan,
+          effectivePlan: sub.effectivePlan
+            ? normalizePlan(sub.effectivePlan)
+            : inTrial
+              ? "pro"
+              : plan,
           inTrial,
           trialEnd: sub.trialEnd ?? null,
           subscriptionStatus: sub.subscriptionStatus ?? sub.status ?? 'cancelled',
+          subscribed: paysSubscription(sub),
           cancelledAt: sub.cancelledAt ?? null,
           readOnlyUntil: sub.readOnlyUntil ?? null,
           addons: (sub.addons as Record<string, any>) ?? {},
@@ -111,11 +125,14 @@ function readFromJwt(): TenantContext {
     trialEndMs !== null &&
     trialEndMs > now;
 
+  const plan = normalizePlan(decoded.plan);
   return {
-    plan: normalizePlan(decoded.plan),
+    plan,
+    effectivePlan: inTrial ? "pro" : plan,
     inTrial,
     trialEnd: decoded.trialEnd ?? null,
     subscriptionStatus: decoded.subscriptionStatus ?? "cancelled",
+    subscribed: false,
     cancelledAt: null,
     readOnlyUntil: null,
     addons: {},

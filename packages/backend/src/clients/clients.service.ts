@@ -36,6 +36,17 @@ export interface ClientScope {
   professionalId?: string;
 }
 
+/**
+ * The clients a scope reaches: staff only those they have served or will
+ * serve. Shared with the copilot's briefing, so "clientas en riesgo" shows a
+ * professional the same clients Clientas does.
+ */
+export function clientScopeWhere(scope: ClientScope): Prisma.ClientWhereInput {
+  return scope.professionalId
+    ? { appointments: { some: { professionalId: scope.professionalId } } }
+    : {};
+}
+
 export const STAFF_MAY_NOT_CHANGE =
   "Solo el propietario o un administrador pueden cambiar el email o el estado de un cliente";
 
@@ -124,9 +135,7 @@ export class ClientsService {
 
   /** Staff see only the clients they have served or will serve. */
   private scopeWhere(scope: ClientScope): Prisma.ClientWhereInput {
-    return scope.professionalId
-      ? { appointments: { some: { professionalId: scope.professionalId } } }
-      : {};
+    return clientScopeWhere(scope);
   }
 
   async findAllWithFilters(tenantId: string, filters: ClientFilters) {

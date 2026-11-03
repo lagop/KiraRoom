@@ -81,8 +81,6 @@ export class OnboardingDetectorService {
         return this.hasFirstService(tenantId);
       case "allProsHaveWorkingHours":
         return this.allProsHaveWorkingHours(tenantId);
-      case "hasStripeCustomer":
-        return this.hasStripeCustomer(tenantId);
       case "hasCoverImageAndDescription":
         return this.hasCoverImageAndDescription(tenantId);
       // hasActiveReminderTemplate: the old name, until the seeder rewrites
@@ -153,14 +151,6 @@ export class OnboardingDetectorService {
       }
       return false;
     });
-  }
-
-  private async hasStripeCustomer(tenantId: string): Promise<boolean> {
-    const t = await this.prisma.tenant.findUnique({
-      where: { id: tenantId },
-      select: { stripeCustomerId: true },
-    });
-    return Boolean(t?.stripeCustomerId);
   }
 
   private async hasCoverImageAndDescription(tenantId: string): Promise<boolean> {

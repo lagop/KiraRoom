@@ -19,6 +19,7 @@ import { addDays, salonToday } from '../analytics/analytics-metrics';
 import { safeTimeZone } from '../gift-cards/gift-card-expiry';
 import { timeOffBetween } from '../time-off/time-off-query';
 import { briefingGaps, salonNowMinutes } from './briefing-gaps';
+import { clientScopeWhere } from '../clients/clients.service';
 
 /**
  * P2A-staff-copilot sprint 16 — billing hook.
@@ -711,6 +712,9 @@ export class AssistantService {
           tenantId: user.tenantId,
           status: 'active',
           lastVisit: { lt: cutoff },
+          // Staff: only their own clients, as in Clientas. It was the whole
+          // salon's list.
+          ...(staffProfessionalId ? clientScopeWhere({ professionalId: staffProfessionalId }) : {}),
         },
         orderBy: { lastVisit: 'asc' },
         take: 5,
