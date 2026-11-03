@@ -1,12 +1,22 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  Optional,
+} from "@nestjs/common";
 import { AppointmentStatus, TimeOffKind } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
+import { NotificationsService } from "../notifications/notifications.service";
+import { NotificationType } from "../notifications/dto";
 import {
   VISIT_ROW_ORDER,
   VISIT_ROW_SELECT,
   appointmentBusyBlocks,
   clockOf as salonClockOf,
 } from "../appointments/visit-totals";
+import { salonDayAndTime } from "../appointments/reschedule-check";
 import {
   MAX_QUERY_DAYS,
   TimeOffBlock,
@@ -15,9 +25,19 @@ import {
   dateOfDay,
   dayOf,
   daysInRange,
+  periodLabel,
+  requestSummary,
   timeOffInputProblem,
 } from "./time-off-rules";
 import { CreateTimeOffDto, TimeOffQueryDto, UpdateTimeOffDto } from "./dto/time-off.dto";
+
+/** Where the panel lists the requests (the notification's link). */
+export const REQUESTS_PAGE = "/dashboard/solicitudes-ausencia";
+/** Where a professional follows their own. */
+export const MY_TIME_OFF_PAGE = "/dashboard/mis-ausencias";
+
+/** Enough approved time off ahead for any salon; the clash list reads each one. */
+const UPCOMING_LIMIT = 200;
 
 /** Who is calling: the token's user. */
 export interface TimeOffUser {
@@ -38,6 +58,20 @@ export interface TimeOffConflict {
   /** Whoever of the visit is caught by the block (a closure catches everyone). */
   professionalName: string;
   status: string;
+}
+
+/** A clash of approved time off ahead with an appointment still booked. */
+export interface UpcomingTimeOffConflict extends TimeOffConflict {
+  timeOff: {
+    id: string;
+    professionalId: string | null;
+    professionalName: string | null;
+    kind: string;
+    startDate: string;
+    endDate: string;
+    startTime: string | null;
+    endTime: string | null;
+  };
 }
 
 /** Appointments that still hold their time: not cancelled, not done, not missed. */
@@ -64,7 +98,112 @@ const fullName = (p?: { firstName?: string | null; lastName?: string | null } | 
  */
 @Injectable()
 export class TimeOffService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(TimeOffService.name);
+  /** Now, replaceable in specs. */
+  clock: () => Date = () => new Date();
+
+  constructor(
+    private readonly prisma: PrismaService,
+    // The professional is told when the salon changes or removes time off
+    // they asked for. Optional: specs that do not care leave it out.
+    @Optional() private readonly notifications?: NotificationsService,
+  ) {}
+
+  /** The salon's calendar day now ("YYYY-MM-DD", in its time zone). */
+  async salonToday(tenantId: string): Promise<string> {
+    const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } });
+    return salonDayAndTime(this.clock(), tenant?.timezone || "Europe/Madrid").day;
+  }
+
+  /**
+   * The appointments still booked inside approved time off and closures from
+   * today on: what the salon has yet to move or warn about. Approving leaves
+   * them where they are, so this keeps them in sight after the dialog that
+   * listed them is closed. An appointment two blocks catch counts once.
+   */
+  async upcomingConflicts(user: TimeOffUser): Promise<{ count: number; appointments: UpcomingTimeOffConflict[] }> {
+    const today = await this.salonToday(user.tenantId);
+    const rows = await this.prisma.timeOff.findMany({
+      where: { tenantId: user.tenantId, status: "approved", endDate: { gte: dateOfDay(today)! } },
+      include: { professional: { select: { firstName: true, lastName: true } } },
+      orderBy: [{ startDate: "asc" }, { startTime: "asc" }],
+      take: UPCOMING_LIMIT,
+    });
+    const seen = new Set<string>();
+    const out: UpcomingTimeOffConflict[] = [];
+    for (const row of rows) {
+      const input = inputOfRow(row);
+      // Only what is still ahead: yesterday's clashes are history.
+      if (input.startDate < today) input.startDate = today;
+      const view = timeOffView(row, "manager");
+      for (const conflict of await this.conflicts(user.tenantId, input)) {
+        if (seen.has(conflict.id)) continue;
+        seen.add(conflict.id);
+        out.push({
+          ...conflict,
+          timeOff: {
+            id: view.id,
+            professionalId: view.professionalId,
+            professionalName: view.professionalName,
+            kind: view.kind,
+            startDate: view.startDate,
+            endDate: view.endDate,
+            startTime: view.startTime,
+            endTime: view.endTime,
+          },
+        });
+      }
+    }
+    out.sort((a, b) => (a.date === b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date)));
+    return { count: out.length, appointments: out };
+  }
+
+  /**
+   * A professional's approved or pending time off that overlaps `input` (the
+   * same days, and the same hours when both are a few hours of one day):
+   * recording it twice would leave two rows, and removing one would keep the
+   * other blocking without anyone seeing why. A 409 that names the other.
+   * Closures are not checked: they are the salon's, not anyone's.
+   */
+  async assertNoOverlap(
+    tenantId: string,
+    input: TimeOffInput,
+    opts: { excludeId?: string; own?: boolean } = {},
+  ): Promise<void> {
+    if (!input.professionalId) return;
+    const rows = await this.prisma.timeOff.findMany({
+      where: {
+        tenantId,
+        professionalId: input.professionalId,
+        status: { in: ["approved", "pending"] },
+        startDate: { lte: dateOfDay(input.endDate)! },
+        endDate: { gte: dateOfDay(input.startDate)! },
+        ...(opts.excludeId ? { id: { not: opts.excludeId } } : {}),
+      },
+      include: { professional: { select: { firstName: true, lastName: true } } },
+      orderBy: [{ startDate: "asc" }, { startTime: "asc" }],
+    });
+    const mine = blockWindow(input as TimeOffBlock);
+    const clash = rows.find((row) => {
+      const theirs = blockWindow(row as TimeOffBlock);
+      return theirs.startMinutes < mine.endMinutes && mine.startMinutes < theirs.endMinutes;
+    });
+    if (!clash) return;
+    const period = periodLabel(clash as TimeOffBlock);
+    const who = fullName(clash.professional) || "Este profesional";
+    if (clash.status === "pending") {
+      throw new ConflictException(
+        opts.own
+          ? `Ya tienes una solicitud pendiente ${period} que coincide con estas fechas.`
+          : `${who} ya tiene una solicitud pendiente ${period} que coincide con estas fechas: apruébala o recházala en Solicitudes de ausencia.`,
+      );
+    }
+    throw new ConflictException(
+      opts.own
+        ? `Ya tienes una ausencia aprobada ${period} que coincide con estas fechas.`
+        : `${who} ya tiene una ausencia aprobada ${period} que coincide con estas fechas: cámbiala en lugar de registrar otra.`,
+    );
+  }
 
   /**
    * The salon's blocks touching `from`..`to`, the salon's closures included:
@@ -119,7 +258,36 @@ export class TimeOffService {
     return { timeOff: timeOffView(row, "manager"), conflicts: await this.conflicts(user.tenantId, input) };
   }
 
+  /** The appointments an edit would clash with, before it is saved. */
+  async previewUpdate(user: TimeOffUser, id: string, dto: UpdateTimeOffDto) {
+    const { input } = await this.editedInput(user, id, dto);
+    return { conflicts: await this.conflicts(user.tenantId, input) };
+  }
+
   async update(user: TimeOffUser, id: string, dto: UpdateTimeOffDto) {
+    const { existing, input } = await this.editedInput(user, id, dto);
+    const before = inputOfRow(existing);
+    const row = await this.prisma.timeOff.update({
+      where: { id: existing.id, tenantId: user.tenantId },
+      data: {
+        kind: input.kind as TimeOffKind,
+        startDate: dateOfDay(input.startDate)!,
+        endDate: dateOfDay(input.endDate)!,
+        startTime: input.startTime ?? null,
+        endTime: input.endTime ?? null,
+        note: input.note ?? null,
+      },
+      include: { professional: { select: { firstName: true, lastName: true } } },
+    });
+    const moved = (["kind", "startDate", "endDate", "startTime", "endTime"] as const).some(
+      (key) => (before[key] ?? null) !== (input[key] ?? null),
+    );
+    if (moved) await this.tellRequester(user, row, "time_off_changed", before as TimeOffBlock);
+    return { timeOff: timeOffView(row, "manager"), conflicts: await this.conflicts(user.tenantId, input) };
+  }
+
+  /** The stored row with an edit applied, checked: the rules, and no overlap with the rest. */
+  private async editedInput(user: TimeOffUser, id: string, dto: UpdateTimeOffDto) {
     const existing = await this.prisma.timeOff.findFirst({ where: { id, tenantId: user.tenantId } });
     if (!existing) throw new NotFoundException("Ausencia no encontrada");
     // A field left out keeps its value; null clears the hours (all day).
@@ -136,25 +304,31 @@ export class TimeOffService {
     };
     const problem = timeOffInputProblem(input);
     if (problem) throw new BadRequestException(problem);
-    const row = await this.prisma.timeOff.update({
-      where: { id: existing.id, tenantId: user.tenantId },
-      data: {
-        kind: input.kind as TimeOffKind,
-        startDate: dateOfDay(input.startDate)!,
-        endDate: dateOfDay(input.endDate)!,
-        startTime: input.startTime ?? null,
-        endTime: input.endTime ?? null,
-        note: input.note ?? null,
-      },
-      include: { professional: { select: { firstName: true, lastName: true } } },
-    });
-    return { timeOff: timeOffView(row, "manager"), conflicts: await this.conflicts(user.tenantId, input) };
+    // A rejected request blocks nothing, so it cannot double anything up.
+    if (existing.status !== "rejected") {
+      await this.assertNoOverlap(user.tenantId, input, { excludeId: existing.id });
+    }
+    return { existing, input };
   }
 
-  /** Hard delete: a removed absence frees its time again, nothing else refers to it. */
+  /**
+   * Hard delete: a removed absence frees its time again, nothing else refers
+   * to it. Not a request still waiting for an answer: that one is rejected,
+   * so the professional gets one.
+   */
   async remove(user: TimeOffUser, id: string) {
-    const { count } = await this.prisma.timeOff.deleteMany({ where: { id, tenantId: user.tenantId } });
+    const existing = await this.prisma.timeOff.findFirst({ where: { id, tenantId: user.tenantId } });
+    if (!existing) throw new NotFoundException("Ausencia no encontrada");
+    if (existing.status === "pending") {
+      throw new ConflictException("Esta solicitud está pendiente: recházala para que quede respuesta.");
+    }
+    // Never a pending request, whatever was read.
+    const { count } = await this.prisma.timeOff.deleteMany({
+      where: { id, tenantId: user.tenantId, status: { not: "pending" } },
+    });
     if (count === 0) throw new NotFoundException("Ausencia no encontrada");
+    // A rejected request blocked nothing: removing it changes nothing for them.
+    if (existing.status !== "rejected") await this.tellRequester(user, existing, "time_off_deleted");
     return { deleted: true };
   }
 
@@ -262,8 +436,52 @@ export class TimeOffService {
       });
       if (!professional) throw new NotFoundException("Profesional no encontrado en este salón");
     }
+    await this.assertNoOverlap(user.tenantId, input);
     return input;
   }
+
+  /**
+   * In the panel of the professional who asked for this time off, when
+   * whoever runs the salon changes or removes it: their agenda opens (or
+   * shifts) without them knowing otherwise. Not for one's own changes, nor
+   * for time off the salon recorded itself. Never fails the change.
+   */
+  private async tellRequester(
+    user: TimeOffUser,
+    row: any,
+    event: "time_off_changed" | "time_off_deleted",
+    before?: TimeOffBlock,
+  ) {
+    if (!this.notifications || !row.requestedById || row.requestedById === user.id) return;
+    try {
+      await this.notifications.create({
+        tenantId: user.tenantId,
+        userId: row.requestedById,
+        type: NotificationType.SCHEDULE_CHANGE,
+        title: event === "time_off_deleted" ? "Ausencia eliminada" : "Ausencia modificada",
+        message:
+          event === "time_off_deleted"
+            ? `El responsable del salón ha eliminado tu ausencia (${requestSummary(row as TimeOffBlock)}). Ese tiempo vuelve a estar disponible para citas.`
+            : `El responsable del salón ha cambiado tu ausencia: antes ${requestSummary(before as TimeOffBlock)}, ahora ${requestSummary(row as TimeOffBlock)}.`,
+        data: { event, timeOffId: row.id, link: MY_TIME_OFF_PAGE },
+      });
+    } catch (err) {
+      this.logger.warn(`Could not tell the requester of time off ${row.id}: ${(err as Error).message}`);
+    }
+  }
+}
+
+/** A stored row as the rules read it. */
+export function inputOfRow(row: any): TimeOffInput {
+  return {
+    professionalId: row.professionalId,
+    kind: row.kind,
+    startDate: dayOf(row.startDate),
+    endDate: dayOf(row.endDate),
+    startTime: row.startTime ?? null,
+    endTime: row.endTime ?? null,
+    note: row.note ?? null,
+  };
 }
 
 /**

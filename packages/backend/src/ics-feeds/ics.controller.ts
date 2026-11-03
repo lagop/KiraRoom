@@ -69,29 +69,55 @@ const FEED_INCLUDE = {
  * else about her: no surname, no phone or email, and no notes (they held
  * allergies and health remarks, copied into third-party calendars).
  */
-export function buildIcsEvents(appointments: any[], tenant: any): ics.EventAttributes[] {
+export function buildIcsEvents(
+  appointments: any[],
+  tenant: any,
+  forProfessionalId?: string,
+): ics.EventAttributes[] {
   const timeZone: string = tenant.timezone || DEFAULT_TIMEZONE;
   return appointments.map<ics.EventAttributes>((a) => {
-    const start = salonInstant(a.scheduledDate, validClock(a.scheduledTime), timeZone).getTime();
-    const duration: number = a.duration ?? 60;
+    let start = salonInstant(a.scheduledDate, validClock(a.scheduledTime), timeZone).getTime();
+    let end = start + (a.duration ?? 60) * 60 * 1000;
     const clientName = String(a.client?.firstName ?? "").trim() || "Cliente";
-    const serviceName = a.service?.name ?? "Servicio";
+    let serviceName = a.service?.name ?? "Servicio";
+    let uid = `${a.id}@${tenant.slug}.kiraroom.app`;
+    // A colleague's visit in a professional's feed: the part they do (their
+    // services and times), when the rows carry their times.
+    const part = forProfessionalId && a.professionalId !== forProfessionalId ? ownPart(a, forProfessionalId) : null;
+    if (part) {
+      ({ start, end } = part);
+      serviceName = part.serviceName || serviceName;
+      uid = `${a.id}-${forProfessionalId}@${tenant.slug}.kiraroom.app`;
+    }
     const pending = a.status === "pending";
     return {
       title: `${pending ? "Por confirmar · " : ""}${serviceName} - ${clientName}`,
       start,
       startInputType: "utc",
       startOutputType: "utc",
-      end: start + duration * 60 * 1000,
+      end,
       endInputType: "utc",
       endOutputType: "utc",
       status: pending ? "TENTATIVE" : "CONFIRMED",
       location: [tenant.street, tenant.city, tenant.country].filter(Boolean).join(", "),
-      uid: `${a.id}@${tenant.slug}.kiraroom.app`,
+      uid,
       productId: "KiraRoom/ICS-Feed",
       calName: `${tenant.name} — Calendario`,
     };
   });
+}
+
+/** The span and names of a professional's own (not cancelled) services in a visit, or null without times. */
+function ownPart(a: any, professionalId: string): { start: number; end: number; serviceName: string } | null {
+  const rows = (a.services ?? []).filter(
+    (s: any) => s.professionalId === professionalId && s.status !== "cancelled" && s.scheduledStart && s.scheduledEnd,
+  );
+  if (rows.length === 0) return null;
+  const start = Math.min(...rows.map((s: any) => new Date(s.scheduledStart).getTime()));
+  const end = Math.max(...rows.map((s: any) => new Date(s.scheduledEnd).getTime()));
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+  const names = rows.map((s: any) => s.service?.name).filter(Boolean);
+  return { start, end, serviceName: names.join(" + ") };
 }
 
 /** "HH:MM", or 09:00 for a missing or malformed time (as before). */
@@ -227,16 +253,29 @@ export class IcsController {
     // A professional who has left (deactivated) no longer has a feed: their
     // calendar link stops answering, as their panel login does.
     if (!professional || !professional.isActive) throw new NotFoundException("Professional not found");
+    // Their appointments and the colleagues' visits where they do a service
+    // (as their agenda in the panel), each of those as the part they do.
     const appointments = await this.prisma.appointment.findMany({
       where: {
-        professionalId: id,
+        tenantId: professional.tenantId,
+        OR: [
+          { professionalId: id },
+          { services: { some: { professionalId: id, status: { not: "cancelled" } } } },
+        ],
         ...feedWhere(professional.tenant?.timezone),
       },
-      include: FEED_INCLUDE,
+      include: {
+        ...FEED_INCLUDE,
+        services: {
+          where: { professionalId: id },
+          select: { professionalId: true, status: true, scheduledStart: true, scheduledEnd: true, service: { select: { name: true } } },
+          orderBy: { order: "asc" },
+        },
+      },
       orderBy: [{ scheduledDate: "asc" }, { scheduledTime: "asc" }],
       take: ICS_MAX_EVENTS,
     });
-    const events = buildIcsEvents(appointments, professional.tenant);
+    const events = buildIcsEvents(appointments, professional.tenant, id);
     return this.send(res, events, `professional-${id}.ics`);
   }
 

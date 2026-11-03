@@ -207,8 +207,11 @@ function AppointmentsPageContent() {
 
   // ?new=true opens the drawer for a new appointment; ?appointment=<id>
   // (&edit=1) opens an existing one -- the detail page's "Editar" lands here.
+  // ?date=YYYY-MM-DD opens that day (the appointments inside time off link here).
   const [drawerStartsInEdit, setDrawerStartsInEdit] = useState(false);
   useEffect(() => {
+    const day = searchParams?.get("date");
+    if (day && /^\d{4}-\d{2}-\d{2}$/.test(day)) setDateFilter(day);
     const target = drawerTargetFromQuery(searchParams);
     if (!target) return;
     setSelectedAppointmentId(target.mode === "existing" ? target.appointmentId : null);

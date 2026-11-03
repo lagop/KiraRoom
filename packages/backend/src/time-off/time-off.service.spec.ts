@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { BadRequestException, ExecutionContext, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, ExecutionContext, NotFoundException } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { UserRole } from "@prisma/client";
 import { TimeOffService, TimeOffUser } from "./time-off.service";
@@ -42,7 +42,7 @@ interface Apt {
   services?: any[];
 }
 
-function build(opts: { appointments?: Apt[]; timeOff?: any[] } = {}) {
+function build(opts: { appointments?: Apt[]; timeOff?: any[]; now?: Date } = {}) {
   const people: Record<string, { id: string; firstName: string; lastName: string; tenantId: string }> = {
     [ANA]: { id: ANA, firstName: "Ana", lastName: "Gil", tenantId: TENANT },
     [BEA]: { id: BEA, firstName: "Bea", lastName: "Ruiz", tenantId: TENANT },
@@ -85,9 +85,10 @@ function build(opts: { appointments?: Apt[]; timeOff?: any[] } = {}) {
         rows.filter(
           (r) =>
             r.tenantId === where.tenantId &&
-            r.startDate <= where.startDate.lte &&
+            (!where.startDate || r.startDate <= where.startDate.lte) &&
             r.endDate >= where.endDate.gte &&
             (!where.professionalId || r.professionalId === where.professionalId) &&
+            (!where.id?.not || r.id !== where.id.not) &&
             (typeof where.status === "string"
               ? (r.status ?? "approved") === where.status
               : where.status.in.includes(r.status ?? "approved")),
@@ -105,14 +106,23 @@ function build(opts: { appointments?: Apt[]; timeOff?: any[] } = {}) {
         return row;
       }),
       deleteMany: jest.fn(async ({ where }: any) => {
-        const i = rows.findIndex((r) => r.id === where.id && r.tenantId === where.tenantId);
+        const i = rows.findIndex(
+          (r) =>
+            r.id === where.id &&
+            r.tenantId === where.tenantId &&
+            (!where.status?.not || (r.status ?? "approved") !== where.status.not),
+        );
         if (i === -1) return { count: 0 };
         rows.splice(i, 1);
         return { count: 1 };
       }),
     },
   };
-  return { service: new TimeOffService(prisma), prisma, rows };
+  const notifications = { create: jest.fn(async (dto: any) => ({ id: randomUUID(), ...dto })) };
+  const service = new TimeOffService(prisma, notifications as any);
+  // 10:00 in Madrid on 2 Nov 2026: DAY (14 Dec) is ahead.
+  service.clock = () => opts.now ?? new Date("2026-11-02T09:00:00.000Z");
+  return { service, prisma, rows, notifications };
 }
 
 const stored = (r: Record<string, unknown>) => ({
@@ -249,6 +259,171 @@ describe("create, update and delete", () => {
   });
 });
 
+describe("time off the professional asked for, changed by the salon", () => {
+  const requested = (r: Record<string, unknown> = {}) =>
+    stored({ requestedById: "u-ana", createdById: "u-ana", status: "approved", ...r });
+
+  it("removing it tells the professional, in Spanish, with a link to their absences", async () => {
+    const row = requested();
+    const { service, notifications } = build({ timeOff: [row] });
+    await service.remove(OWNER, row.id);
+    expect(notifications.create).toHaveBeenCalledTimes(1);
+    expect(notifications.create.mock.calls[0][0]).toMatchObject({
+      tenantId: TENANT,
+      userId: "u-ana",
+      title: "Ausencia eliminada",
+      message: expect.stringMatching(/ha eliminado tu ausencia \(vacaciones el 14\/12\/2026\)/),
+      data: { event: "time_off_deleted", timeOffId: row.id, link: "/dashboard/mis-ausencias" },
+    });
+  });
+
+  it("changing its days tells them what it was and what it is; a new note alone does not", async () => {
+    const row = requested();
+    const { service, notifications } = build({ timeOff: [row] });
+    await service.update(OWNER, row.id, { note: "ok" });
+    expect(notifications.create).not.toHaveBeenCalled();
+    await service.update(OWNER, row.id, { endDate: "2026-12-16" });
+    expect(notifications.create.mock.calls[0][0]).toMatchObject({
+      userId: "u-ana",
+      title: "Ausencia modificada",
+      message: expect.stringMatching(/antes vacaciones el 14\/12\/2026, ahora vacaciones del 14\/12\/2026 al 16\/12\/2026/),
+      data: expect.objectContaining({ event: "time_off_changed" }),
+    });
+  });
+
+  it("time off the salon recorded itself, or a rejected request, tells nobody", async () => {
+    const own = stored({ requestedById: null });
+    const rejected = requested({
+      status: "rejected",
+      startDate: new Date("2026-12-20T00:00:00.000Z"),
+      endDate: new Date("2026-12-20T00:00:00.000Z"),
+    });
+    const { service, notifications } = build({ timeOff: [own, rejected] });
+    await service.update(OWNER, own.id, { endDate: "2026-12-15" });
+    await service.remove(OWNER, own.id);
+    await service.remove(OWNER, rejected.id);
+    expect(notifications.create).not.toHaveBeenCalled();
+  });
+
+  it("a pending request is not deleted: it is rejected, so it gets an answer", async () => {
+    const row = requested({ status: "pending" });
+    const { service, rows, notifications } = build({ timeOff: [row] });
+    await expect(service.remove(OWNER, row.id)).rejects.toThrow(/recházala para que quede respuesta/);
+    await expect(service.remove(OWNER, row.id)).rejects.toBeInstanceOf(ConflictException);
+    expect(rows).toHaveLength(1);
+    expect(notifications.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("overlapping time off of one professional", () => {
+  it("recording time off over an approved or pending one is a 409 naming it, at the preview already", async () => {
+    const approved = stored({
+      startDate: new Date("2026-12-13T00:00:00.000Z"),
+      endDate: new Date("2026-12-15T00:00:00.000Z"),
+    });
+    const { service, rows } = build({ timeOff: [approved] });
+    const body = { professionalId: ANA, kind: "day_off" as const, startDate: DAY, endDate: DAY };
+    await expect(service.create(OWNER, body)).rejects.toThrow(
+      /Ana Gil ya tiene una ausencia aprobada del 13\/12\/2026 al 15\/12\/2026/,
+    );
+    await expect(service.preview(OWNER, body)).rejects.toBeInstanceOf(ConflictException);
+    expect(rows).toHaveLength(1);
+
+    const pending = build({ timeOff: [stored({ status: "pending", requestedById: "u-ana" })] });
+    await expect(pending.service.create(OWNER, { ...body, kind: "vacation" })).rejects.toThrow(
+      /solicitud pendiente el 14\/12\/2026 .*Solicitudes de ausencia/,
+    );
+  });
+
+  it("another professional, other hours of the same day, a rejected request or a closure do not count", async () => {
+    const { service } = build({
+      timeOff: [
+        stored({ startTime: "10:00", endTime: "12:00", kind: "other" }),
+        stored({ professionalId: BEA }),
+        stored({ status: "rejected", startTime: "12:00", endTime: "14:00", kind: "other" }),
+        stored({ professionalId: null, kind: "closure", startTime: "16:00", endTime: "18:00" }),
+      ],
+    });
+    const hours = (startTime: string, endTime: string) => ({
+      professionalId: ANA,
+      kind: "other" as const,
+      startDate: DAY,
+      endDate: DAY,
+      startTime,
+      endTime,
+    });
+    await expect(service.create(OWNER, hours("12:00", "14:00"))).resolves.toBeDefined();
+    await expect(service.create(OWNER, hours("11:00", "13:00"))).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it("the preview of an edit lists its clashes, not comparing it with itself", async () => {
+    const row = stored({});
+    const { service, rows } = build({
+      timeOff: [row],
+      appointments: [{ id: "a1", professionalId: ANA, day: "2026-12-15", scheduledTime: "10:00", duration: 30 }],
+    });
+    expect((await service.previewUpdate(OWNER, row.id, { endDate: "2026-12-15" })).conflicts.map((c) => c.id)).toEqual(["a1"]);
+    // Nothing saved.
+    expect(rows[0].endDate).toEqual(new Date(`${DAY}T00:00:00.000Z`));
+  });
+
+  it("an edit is not compared with itself, but is with the rest", async () => {
+    const row = stored({});
+    const other = stored({
+      startDate: new Date("2026-12-16T00:00:00.000Z"),
+      endDate: new Date("2026-12-16T00:00:00.000Z"),
+    });
+    const { service } = build({ timeOff: [row, other] });
+    await expect(service.update(OWNER, row.id, { endDate: "2026-12-15" })).resolves.toBeDefined();
+    await expect(service.update(OWNER, row.id, { endDate: "2026-12-16" })).rejects.toBeInstanceOf(ConflictException);
+  });
+});
+
+describe("appointments still booked inside approved time off", () => {
+  it("lists each clash ahead once, soonest first, with the time off it falls in", async () => {
+    const { service } = build({
+      appointments: [
+        { id: "late", professionalId: ANA, day: "2026-12-15", scheduledTime: "17:00", duration: 30 },
+        { id: "early", professionalId: ANA, scheduledTime: "10:00", duration: 30 },
+        { id: "bea", professionalId: BEA, scheduledTime: "11:00", duration: 30 },
+        { id: "past", professionalId: ANA, day: "2026-11-01", scheduledTime: "10:00", duration: 30 },
+      ],
+      timeOff: [
+        stored({ startDate: new Date("2026-10-30T00:00:00.000Z"), endDate: new Date("2026-12-15T00:00:00.000Z") }),
+        // A closure that day catches Ana again, and Bea.
+        stored({ professionalId: null, kind: "closure", professional: null, note: "Fiesta" }),
+        // Pending: blocks nothing yet.
+        stored({
+          professionalId: BEA,
+          status: "pending",
+          startDate: new Date("2026-12-15T00:00:00.000Z"),
+          endDate: new Date("2026-12-15T00:00:00.000Z"),
+        }),
+      ],
+    });
+    const out = await service.upcomingConflicts(OWNER);
+    expect(out.count).toBe(3);
+    expect(out.appointments.map((a) => a.id)).toEqual(["early", "bea", "late"]);
+    expect(out.appointments[0]).toMatchObject({
+      date: DAY,
+      time: "10:00",
+      clientName: "Lucía Pérez",
+      timeOff: { kind: "vacation", professionalId: ANA },
+    });
+    expect(out.appointments[1].timeOff).toMatchObject({ kind: "closure", professionalId: null });
+  });
+
+  it("is empty without approved time off ahead", async () => {
+    const { service } = build({
+      appointments: [{ id: "a", professionalId: ANA, day: "2026-11-01", scheduledTime: "10:00", duration: 30 }],
+      timeOff: [
+        stored({ startDate: new Date("2026-11-01T00:00:00.000Z"), endDate: new Date("2026-11-01T00:00:00.000Z") }),
+      ],
+    });
+    expect(await service.upcomingConflicts(OWNER)).toEqual({ count: 0, appointments: [] });
+  });
+});
+
 describe("listing", () => {
   const rows = () => [
     stored({ note: "Operación" , kind: "sick_leave" }),
@@ -339,7 +514,7 @@ describe("who may call what", () => {
 
   it("the whole team reads; only owner and admin write", () => {
     expect(roles("list")).toEqual([UserRole.owner, UserRole.admin, UserRole.staff]);
-    for (const method of ["preview", "create", "update", "remove"] as const) {
+    for (const method of ["preview", "previewUpdate", "create", "update", "remove", "upcomingConflicts", "previewApprove"] as const) {
       expect(roles(method)).toEqual([UserRole.owner, UserRole.admin]);
     }
   });

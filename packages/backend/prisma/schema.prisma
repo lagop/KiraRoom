@@ -758,9 +758,14 @@ model Appointment {
   locationId             String?
   salonLocation          Location?           @relation(fields: [locationId], references: [id], onDelete: SetNull)
 
-  /// Commission tracking
+  /// Commission tracking: a snapshot taken when the visit is completed
+  /// and paid (commissions/appointment-commission.ts). commissionRate is
+  /// the rate that applies (set at booking by the salon, else filled from
+  /// the professional's); commissionAmount, whole cents of totalAmount x
+  /// rate, is null until worked out (a real 0 % stores 0). Recomputed while
+  /// commissionPaid is false; once paid, what was paid.
   commissionRate   Decimal?
-  commissionAmount Decimal?  @default(0)
+  commissionAmount Decimal?
   commissionPaid   Boolean   @default(false)
   commissionDate   DateTime?
 

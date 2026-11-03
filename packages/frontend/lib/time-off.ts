@@ -248,3 +248,51 @@ export function conflictLine(c: TimeOffConflict): string {
   const who = c.professionalName ? ` (${c.professionalName})` : "";
   return `${shortDay(c.date)} · ${c.time} · ${c.clientName}${services}${who}`;
 }
+
+/** An appointment still booked inside approved time off ahead (GET /time-off/conflicts). */
+export interface UpcomingTimeOffConflict extends TimeOffConflict {
+  timeOff: Pick<
+    TimeOff,
+    "id" | "professionalId" | "professionalName" | "kind" | "startDate" | "endDate" | "startTime" | "endTime"
+  >;
+}
+
+/**
+ * A request whose last day is already gone: nobody can be booked on it, so
+ * the server refuses it (the salon's day; the browser's is close enough to
+ * say so before sending).
+ */
+export function isPastRequest(endDate: string, today: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(endDate) && endDate < today;
+}
+
+/**
+ * The approved time off of other professionals that touches the days of
+ * `request`: who else is away, for the salon to weigh before approving. No
+ * closures (the salon's, not someone's), soonest first.
+ */
+export function othersAway<T extends TimeOff>(blocks: ReadonlyArray<T>, request: Pick<TimeOff, "id" | "professionalId" | "startDate" | "endDate">): T[] {
+  return blocks
+    .filter(
+      (b) =>
+        b.id !== request.id &&
+        b.professionalId !== null &&
+        b.professionalId !== request.professionalId &&
+        blocksAgenda(b) &&
+        b.startDate <= request.endDate &&
+        request.startDate <= b.endDate,
+    )
+    .sort((a, b) => a.startDate.localeCompare(b.startDate) || (a.professionalName ?? "").localeCompare(b.professionalName ?? ""));
+}
+
+/** The agenda on `day`, with an appointment's drawer open when one is given. */
+export function agendaLink(day: string, appointmentId?: string): string {
+  const params = new URLSearchParams({ date: day });
+  if (appointmentId) params.set("appointment", appointmentId);
+  return `/dashboard/appointments?${params.toString()}`;
+}
+
+/** What a manager may do with a row of a professional's file: answer a request in Solicitudes, or edit/delete. */
+export function managerRowActions(block: Pick<TimeOff, "status">): "answer" | "edit" {
+  return statusOf(block) === "pending" ? "answer" : "edit";
+}

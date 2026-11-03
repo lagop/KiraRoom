@@ -72,8 +72,11 @@ function setup() {
       findMany: jest.fn(async () => [{ appointmentId: "a-today", amount: 4000, status: "paid", refunds: [{ amount: 1000 }] }]),
     },
   };
+  // "Pagar" runs in a transaction under the professional's lock (commission-lock.ts).
+  prisma.$executeRaw = jest.fn(async () => 0);
+  prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
   const svc = new CommissionsService(prisma);
-  return { svc, appointments, lines, adjustments };
+  return { svc, prisma, appointments, lines, adjustments };
 }
 
 describe("Pagar pays exactly what the dialog shows", () => {

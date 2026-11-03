@@ -1,6 +1,8 @@
 import { Prisma } from "@prisma/client";
 import { numberOrNull } from "./commission-rate";
 import { keptShare, roundCommission } from "./commission-refunds";
+import { appointmentCommission } from "./appointment-commission";
+import { lockProfessionalCommissions } from "./commission-lock";
 
 /**
  * Commission clawback: a refund given after the commission was paid.
@@ -30,7 +32,12 @@ import { keptShare, roundCommission } from "./commission-refunds";
  *     same refund again changes nothing.
  *
  * The commission read is the one the payout and the payroll report use:
- * the stored commissionAmount (0 when none).
+ * for a visit, its snapshot as paid (appointment-commission.ts; a row never
+ * worked out is computed from its rate and total), for a line, the amount
+ * stored when it was sold.
+ *
+ * It runs under the professionals' commission lock (commission-lock.ts), the
+ * one "Pagar" takes, so a payout and a refund never interleave.
  */
 
 export const REFUND_ADJUSTMENT_LABEL = "Ajuste por devolución";
@@ -39,7 +46,7 @@ export const appointmentSourceKey = (id: string) => `appointment:${id}`;
 export const saleLineSourceKey = (id: string) => `sale_line:${id}`;
 
 /**
- * What a refund takes off a commission: negative, two decimals; 0 when it
+ * What a refund takes off a commission: negative, whole cents; 0 when it
  * takes nothing (nothing charged, nothing left to give back).
  */
 export function clawbackAmount(
@@ -76,18 +83,31 @@ export interface RefundForClawback {
  */
 export async function recordRefundClawbacks(db: Db, refund: RefundForClawback): Promise<number> {
   if (!db.commissionAdjustment?.createMany) return 0;
+  await lockCommissionsOfRefund(db, {
+    tenantId: refund.tenantId,
+    appointmentId: refund.method !== "loyalty_points" ? refund.appointmentId : null,
+    lineIds: (refund.lines ?? []).map((l) => l.lineId),
+  });
   const rows: Prisma.CommissionAdjustmentCreateManyInput[] = [];
 
   // A visit: its commission scaled by the share of its money payments kept.
   if (refund.appointmentId && refund.method !== "loyalty_points") {
     const apt = await db.appointment.findFirst({
       where: { id: refund.appointmentId, tenantId: refund.tenantId },
-      select: { id: true, professionalId: true, commissionPaid: true, commissionAmount: true },
+      select: {
+        id: true,
+        professionalId: true,
+        commissionPaid: true,
+        commissionAmount: true,
+        commissionRate: true,
+        totalAmount: true,
+        professional: { select: { commissionRate: true } },
+      },
     });
     if (apt?.commissionPaid && apt.professionalId) {
       const { charged, refunded } = await appointmentMoney(db, refund.tenantId, apt.id);
       const amount = clawbackAmount(
-        numberOrNull(apt.commissionAmount) ?? 0,
+        appointmentCommission(apt, apt.professional?.commissionRate).amount,
         charged,
         Math.max(0, refunded - refund.amount),
         refunded,
@@ -157,6 +177,41 @@ export async function recordRefundClawbacks(db: Db, refund: RefundForClawback): 
   if (rows.length === 0) return 0;
   const created = await db.commissionAdjustment.createMany({ data: rows, skipDuplicates: true });
   return created?.count ?? 0;
+}
+
+/**
+ * Takes the commission lock (commission-lock.ts) of every professional a
+ * refund may touch: the visit's and the sale lines'. The refund takes it at
+ * the start of its transaction, before writing anything a payout writes too
+ * (the lines, the appointment), so the two never wait on each other.
+ * Taking it again later in the same transaction is free (reentrant).
+ */
+export async function lockCommissionsOfRefund(
+  db: Db,
+  refund: { tenantId: string; appointmentId?: string | null; saleId?: string | null; lineIds?: string[] },
+): Promise<void> {
+  if (typeof db?.$executeRaw !== "function") return;
+  const ids: Array<string | null | undefined> = [];
+  if (refund.appointmentId && db.appointment?.findFirst) {
+    const apt = await db.appointment.findFirst({
+      where: { id: refund.appointmentId, tenantId: refund.tenantId },
+      select: { professionalId: true },
+    });
+    ids.push(apt?.professionalId);
+  }
+  const lineFilter = refund.saleId
+    ? { saleId: refund.saleId }
+    : refund.lineIds?.length
+      ? { id: { in: refund.lineIds } }
+      : null;
+  if (lineFilter && db.posSaleLine?.findMany) {
+    const lines: Array<{ professionalId: string | null }> = await db.posSaleLine.findMany({
+      where: { tenantId: refund.tenantId, kind: "service", professionalId: { not: null }, ...lineFilter },
+      select: { professionalId: true },
+    });
+    ids.push(...(lines ?? []).map((l) => l.professionalId));
+  }
+  await lockProfessionalCommissions(db, refund.tenantId, ids);
 }
 
 /** What was charged in money for a visit and what was given back of it (as appointmentKeptShares reads it). */

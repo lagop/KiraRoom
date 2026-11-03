@@ -3,7 +3,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { Roles, SALON_MANAGERS } from '../auth/decorators/roles.decorator';
 import { FeatureGuard } from '../common/guards/feature.guard';
 import { Feature } from '../common/decorators/feature.decorator';
 import { AssistantService } from './assistant.service';
@@ -171,8 +171,12 @@ export class AssistantController {
    * P2A-staff-copilot-sprint15: monthly usage stats for the
    * admin/debug panel. Returns message counts, action counts,
    * top users, and the cost-protection flag.
+   *
+   * The whole salon's month (the Uso del copiloto screen): managers and
+   * the platform owner, not staff.
    */
   @Get('usage')
+  @Roles(...SALON_MANAGERS, 'saas_owner' as any)
   @Feature('copilot_read' as any)
   @ApiOperation({ summary: 'Monthly copilot usage stats for the calling tenant' })
   async getUsage(@Req() req: AuthedRequest) {

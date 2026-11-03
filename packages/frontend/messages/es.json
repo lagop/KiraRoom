@@ -1484,7 +1484,10 @@
       "cancelAppointment": "Cancelar cita",
       "cancelConfirmTitle": "¿Cancelar esta cita?",
       "cancelConfirmDescription": "Quedará como cancelada en el historial de la clienta.",
-      "keepAppointment": "Mantener cita"
+      "keepAppointment": "Mantener cita",
+      "awayAllDay": "{label} (todo el día)",
+      "awayHours": "{label} {from}–{to}",
+      "awayPending": "Pendiente · {text}"
     },
     "quantity": "Cantidad",
     "actions": "Acciones",
@@ -1980,6 +1983,11 @@
     "max_advance_invalid": "La antelación máxima tiene que ser un número entero de días entre 1 y 730",
     "inactive_badge": "Desactivado"
   },
+  "managersOnly": {
+    "title": "Esta sección es de la dirección del salón",
+    "body": "Si necesitas algo de esta sección, pídeselo a la dirección del salón.",
+    "home": "Volver al inicio"
+  },
   "nav": {
     "dashboard": "Panel",
     "clients": "Clientas",
@@ -2157,7 +2165,7 @@
     "commission": "Comisión",
     "commission_summary": "Resumen de comisiones",
     "commissions_paid_success": "Comisiones pagadas correctamente",
-    "complete_appointments_message": "Completa algunas citas para ver las comisiones",
+    "complete_appointments_message": "Completa y cobra algunas citas para ver las comisiones",
     "date": "Fecha",
     "description": "Resumen de comisiones de tu equipo",
     "end_date": "Fecha fin",
@@ -2168,26 +2176,38 @@
     "paid": "Pagado",
     "paid_commission": "Comisión pagada",
     "pay_commission": "Pagar comisión",
-    "payroll_report": "Informe de nominas",
-    "payroll_summary": "Resumen de nominas",
+    "payroll_report": "Informe de nóminas",
+    "payroll_summary": "Resumen de nóminas",
     "pending": "Pendiente",
     "pending_commission": "Comisión pendiente",
     "percentage_of_sales": "Porcentaje sobre ventas",
-    "processing": "Processing",
-    "professional": "Professional",
+    "processing": "Procesando…",
+    "professional": "Profesional",
     "rate": "Tasa",
     "service": "Servicio",
     "start_date": "Fecha inicio",
     "status": "Estado",
     "title": "Comisiones",
-    "total_payroll": "Total nominas",
+    "total_payroll": "Total nóminas",
     "total_sales": "Ventas totales",
     "view_details": "Ver detalles",
     "confirm_mark_all_paid": "¿Seguro que quieres marcar todas las comisiones pendientes como pagadas?",
     "confirm_mark_paid_description": "Se marcará como pagado todo lo pendiente de {name} hasta hoy ({date}), con los ajustes por devolución incluidos: {amount}. Las fechas del informe de nóminas no cuentan aquí.",
     "payroll_report_only": "Este informe es solo para consultar un período. «Pagar comisión», en el resumen, paga todo lo pendiente hasta hoy.",
     "mark_paid": "Marcar como pagadas",
-    "refund_adjustment": "Ajuste por devolución"
+    "refund_adjustment": "Ajuste por devolución",
+    "item_one": "1 elemento",
+    "items": "{count} elementos",
+    "inactive": "De baja",
+    "load_error": "No se han podido cargar las comisiones",
+    "report_error": "No se ha podido generar el informe",
+    "retry": "Reintentar",
+    "generating": "Generando…",
+    "unassigned_services": "Servicios sin profesional",
+    "unassigned_services_hint": "{count} vendidos en caja sin indicar quién los hizo: no generan comisión para nadie.",
+    "plan_blocked_title": "Las comisiones no están incluidas en tu plan",
+    "plan_blocked_body": "Con un plan superior puedes calcular y liquidar las comisiones de tu equipo por sus citas y ventas en caja.",
+    "plan_blocked_cta": "Ver planes en Facturación"
   },
   "description": "Resumen de comisiones de tu equipo",
   "email_campaigns": {
@@ -3173,6 +3193,34 @@
       "news": "Novedades",
       "waitlist_slot_available": "Lista de espera",
       "other": "Notificación"
+    }
+  },
+  "timeOff": {
+    "answerRequest": "Responder",
+    "answerRequestTitle": "Las solicitudes pendientes se aprueban o se rechazan en Solicitudes de ausencia",
+    "edit": "Editar",
+    "editAria": "Editar {what} del {dates}",
+    "editTitleAbsence": "Editar la ausencia",
+    "editTitleClosure": "Editar el cierre",
+    "editWillNotify": "La pidió {name}: le avisaremos del cambio en sus notificaciones.",
+    "saveChanges": "Guardar cambios",
+    "cancelEdit": "Cancelar",
+    "updatedAbsence": "Ausencia actualizada",
+    "updatedClosure": "Cierre actualizado",
+    "requesterNotified": "Avisamos a {name} en sus notificaciones.",
+    "deleteWillNotify": "Avisaremos a {name} en sus notificaciones.",
+    "pastRequest": "No puedes pedir una ausencia para días que ya han pasado.",
+    "othersAway": "También están fuera esos días:",
+    "approveNoteLabel": "Nota para {name} (opcional, la verá en sus notificaciones)",
+    "approveNotePlaceholder": "Aprobada; mueve tú a tus clientas del martes…",
+    "upcoming": {
+      "titleOne": "1 cita coincide con una ausencia aprobada",
+      "titleMany": "{count} citas coinciden con ausencias aprobadas",
+      "help": "No se han cancelado: muévelas o avisa a los clientes. Dejan de salir aquí cuando las mueves o las cancelas.",
+      "absenceReason": "{kind} de {name} ({dates})",
+      "closureReason": "Salón cerrado ({dates})",
+      "more": "y {count} más.",
+      "goToAgenda": "Ir a la agenda"
     }
   }
 }

@@ -10,18 +10,19 @@ import {
   saleLineSourceKey,
 } from "./commission-clawback";
 import { CommissionPeriodFilters, commissionPeriodFilters, periodDay } from "./commission-period";
+import { appointmentCommission, commissionCents } from "./appointment-commission";
+import { lockProfessionalCommissions } from "./commission-lock";
 import { salonToday } from "../analytics/analytics-metrics";
 import { safeTimeZone } from "../gift-cards/gift-card-expiry";
 
-export interface CalculateCommissionDto {
-  appointmentId: string;
-  amount?: number;
-  rate?: number;
-}
+/** The Prisma client or a transaction on it. */
+type Db = any;
 
 export interface CommissionSummary {
   professionalId: string;
   professionalName: string;
+  /** false: the professional was deactivated ("De baja") and still has something pending. */
+  isActive?: boolean;
   totalEarnings: number;
   pendingCommission: number;
   paidCommission: number;
@@ -88,7 +89,7 @@ type SaleLineRow = {
 /** A line's commission and base after its refunds (commission-refunds.ts). */
 function lineFigures(l: SaleLineRow, defaultRate: number) {
   const rate = effectiveCommissionRate(l.commissionRate, defaultRate);
-  const commission = numberOrNull(l.commissionAmount) ?? (l.commissionBaseCents * rate) / 100;
+  const commission = numberOrNull(l.commissionAmount) ?? commissionCents(l.commissionBaseCents, rate);
   const after = saleLineAfterRefunds({
     commissionBaseCents: l.commissionBaseCents,
     commissionAmount: commission,
@@ -115,9 +116,9 @@ export class CommissionsService {
 
   constructor(private prisma: PrismaService) {}
 
-  /** The till's walk-in service lines with a professional (none on a database without them). */
-  private async saleLines(where: Record<string, unknown>): Promise<SaleLineRow[]> {
-    const model = (this.prisma as any).posSaleLine;
+  /** The till's walk-in service lines (none on a database without them). */
+  private async saleLines(where: Record<string, unknown>, db: Db = this.prisma): Promise<SaleLineRow[]> {
+    const model = db.posSaleLine;
     if (!model?.findMany) return [];
     return model.findMany({ where: { kind: "service", ...where }, orderBy: { createdAt: "desc" } });
   }
@@ -148,8 +149,9 @@ export class CommissionsService {
     tenantId: string,
     professionalId: string,
     filters: { createdAt?: { gte?: Date; lt?: Date }; id?: { in: string[] } } = {},
+    db: Db = this.prisma,
   ): Promise<CommissionSummary["appointments"]> {
-    const model = (this.prisma as any).commissionAdjustment;
+    const model = db.commissionAdjustment;
     if (!model?.findMany) return [];
     const rows: Array<{
       id: string;
@@ -165,10 +167,10 @@ export class CommissionsService {
     if (rows.length === 0) return [];
     const aptIds = rows.map((r) => r.appointmentId).filter((id): id is string => !!id);
     const lineIds = rows.map((r) => r.posSaleLineId).filter((id): id is string => !!id);
-    const lineModel = (this.prisma as any).posSaleLine;
+    const lineModel = db.posSaleLine;
     const [apts, lines]: [any[], any[]] = await Promise.all([
       aptIds.length
-        ? this.prisma.appointment.findMany({
+        ? db.appointment.findMany({
             where: { tenantId, id: { in: aptIds } },
             select: {
               id: true,
@@ -205,118 +207,31 @@ export class CommissionsService {
   }
 
   /**
-   * Calculate commission for an appointment
-   */
-  async calculateCommission(
-    tenantId: string,
-    dto: CalculateCommissionDto,
-  ): Promise<{ commissionRate: number; commissionAmount: number }> {
-    const appointment = await this.prisma.appointment.findFirst({
-      where: {
-        id: dto.appointmentId,
-        tenantId,
-      },
-      include: {
-        professional: true,
-        service: true,
-      },
-    });
-
-    if (!appointment) {
-      throw new NotFoundException("Appointment not found");
-    }
-
-    // Use provided amount or the appointment total
-    const amount = dto.amount ?? Number(appointment.totalAmount);
-
-    // Use provided rate or professional's commission rate
-    // 0 is a rate: only a missing one falls through (commission-rate.ts).
-    const rate = effectiveCommissionRate(
-      dto.rate,
-      appointment.commissionRate,
-      appointment.professional.commissionRate,
-    );
-
-    const commissionAmount = (amount * rate) / 100;
-
-    // Update appointment with commission details
-    await this.prisma.appointment.update({
-      where: { id: dto.appointmentId },
-      data: {
-        commissionRate: rate,
-        commissionAmount,
-      },
-    });
-
-    return {
-      commissionRate: rate,
-      commissionAmount,
-    };
-  }
-
-  /**
-   * Calculate commissions for all completed appointments for a professional
-   */
-  async calculatePendingCommissions(
-    tenantId: string,
-    professionalId: string,
-  ): Promise<number> {
-    const appointments = await this.prisma.appointment.findMany({
-      where: {
-        tenantId,
-        professionalId,
-        status: "completed",
-        paymentStatus: "paid",
-        commissionPaid: false,
-      },
-    });
-
-    const professional = await this.prisma.professional.findFirst({
-      where: { id: professionalId, tenantId },
-    });
-
-    if (!professional) {
-      throw new NotFoundException("Professional not found");
-    }
-
-    const defaultRate = effectiveCommissionRate(professional.commissionRate);
-
-    let totalCommission = 0;
-
-    for (const appointment of appointments) {
-      const rate = effectiveCommissionRate(appointment.commissionRate, defaultRate);
-      const amount = Number(appointment.totalAmount);
-      const commissionAmount = (amount * rate) / 100;
-
-      await this.prisma.appointment.update({
-        where: { id: appointment.id },
-        data: {
-          commissionRate: rate,
-          commissionAmount,
-        },
-      });
-
-      totalCommission += commissionAmount;
-    }
-
-    return totalCommission;
-  }
-
-  /**
    * What a professional has pending, item by item, as the summary lists it
    * and "Pagar" pays it: completed and paid visits not paid out yet (their
    * commission after refunds), walk-in services sold at the till, and the
    * refund adjustments not settled ("Ajuste por devolución", negative).
    * Limited to the given dates (`scheduledDate` for visits, `createdAt` for
    * the rest) and ids, when given.
+   *
+   * A visit's commission is its snapshot (appointment-commission.ts): its
+   * rate x its total while it is not paid out, so a stored 0 left by the old
+   * column default is never taken for a commission of 0. `snapshots` holds,
+   * per visit, the full commission (before refunds) and the rate that
+   * "Pagar" stores on it.
    */
   private async pendingItems(
     tenantId: string,
     professional: { id: string; commissionRate: unknown },
     filters: CommissionPeriodFilters & { ids?: string[] },
-  ): Promise<{ entries: CommissionSummary["appointments"]; total: number }> {
+    db: Db = this.prisma,
+  ): Promise<{
+    entries: CommissionSummary["appointments"];
+    total: number;
+    snapshots: Map<string, { rate: number; amount: number }>;
+  }> {
     const ids = filters.ids && filters.ids.length > 0 ? { id: { in: filters.ids } } : {};
-    const appointments = await this.prisma.appointment.findMany({
+    const appointments = await db.appointment.findMany({
       where: {
         tenantId,
         professionalId: professional.id,
@@ -337,9 +252,11 @@ export class CommissionsService {
 
     const defaultRate = effectiveCommissionRate(professional.commissionRate as any);
     // Partly refunded visits count the share the salon kept (commission-refunds.ts).
-    const kept = await appointmentKeptShares(this.prisma, tenantId, appointments.map((a) => a.id));
+    const kept = await appointmentKeptShares(db, tenantId, appointments.map((a: any) => a.id));
+    const snapshots = new Map<string, { rate: number; amount: number }>();
     const visits: CommissionSummary["appointments"] = appointments.map((apt: any) => {
-      const rate = effectiveCommissionRate(apt.commissionRate, defaultRate);
+      const snapshot = appointmentCommission(apt, professional.commissionRate);
+      snapshots.set(apt.id, snapshot);
       const share = kept.get(apt.id) ?? 1;
       return {
         id: apt.id,
@@ -347,33 +264,40 @@ export class CommissionsService {
         clientName: apt.client ? `${apt.client.firstName} ${apt.client.lastName}` : "Clienta",
         serviceName: apt.service?.name ?? apt.serviceName ?? "Servicio",
         amount: Math.round(Number(apt.totalAmount) * share),
-        commissionRate: rate,
-        commissionAmount: roundCommission(
-          (numberOrNull(apt.commissionAmount) ?? (Number(apt.totalAmount) * rate) / 100) * share,
-        ),
+        commissionRate: snapshot.rate,
+        commissionAmount: roundCommission(snapshot.amount * share),
         paid: !!apt.commissionPaid,
         source: "appointment" as const,
       };
     });
 
     const sales = this.saleEntries(
-      await this.saleLines({
-        tenantId,
-        professionalId: professional.id,
-        commissionPaid: false,
-        ...(filters.createdAt ? { createdAt: filters.createdAt } : {}),
-        ...ids,
-      }),
+      await this.saleLines(
+        {
+          tenantId,
+          professionalId: professional.id,
+          commissionPaid: false,
+          ...(filters.createdAt ? { createdAt: filters.createdAt } : {}),
+          ...ids,
+        },
+        db,
+      ),
       defaultRate,
     );
-    const adjustments = await this.pendingAdjustmentEntries(tenantId, professional.id, {
-      ...(filters.createdAt ? { createdAt: filters.createdAt } : {}),
-      ...ids,
-    });
+    const adjustments = await this.pendingAdjustmentEntries(
+      tenantId,
+      professional.id,
+      {
+        ...(filters.createdAt ? { createdAt: filters.createdAt } : {}),
+        ...ids,
+      },
+      db,
+    );
 
     const entries = [...visits, ...sales, ...adjustments];
-    const total = roundCommission(entries.reduce((sum, e) => sum + (e.paid ? 0 : e.commissionAmount), 0));
-    return { entries, total };
+    // Each entry is whole cents already: the total adds up integers.
+    const total = entries.reduce((sum, e) => sum + (e.paid ? 0 : e.commissionAmount), 0);
+    return { entries, total, snapshots };
   }
 
   /** Everything up to the end of today on the salon's clock: what "Pagar" pays. */
@@ -383,13 +307,14 @@ export class CommissionsService {
   }
 
   private toSummary(
-    professional: { id: string; firstName: string; lastName: string },
+    professional: { id: string; firstName: string; lastName: string; isActive?: boolean | null },
     pending: { entries: CommissionSummary["appointments"]; total: number },
     upTo: string,
   ): CommissionSummary {
     return {
       professionalId: professional.id,
       professionalName: `${professional.firstName} ${professional.lastName}`,
+      isActive: professional.isActive !== false,
       totalEarnings: pending.entries.reduce((sum, a) => sum + a.amount, 0),
       pendingCommission: pending.total,
       paidCommission: 0,
@@ -413,7 +338,7 @@ export class CommissionsService {
     });
 
     if (!professional) {
-      throw new NotFoundException("Professional not found");
+      throw new NotFoundException("Profesional no encontrado");
     }
 
     const cutoff = this.upToToday(await this.salonTimeZone(tenantId), now);
@@ -434,6 +359,14 @@ export class CommissionsService {
    *
    * With dates or ids (API callers), the same, limited to them. Exactly the
    * items counted are marked paid.
+   *
+   * All of it in one transaction, under the professional's commission lock
+   * (commission-lock.ts), the one a refund's clawback takes too: two "Pagar"
+   * at once run one after the other (the second finds the figure changed, or
+   * nothing left, instead of a second success), and a refund lands either
+   * before the payout or after it. Every item counted must be marked, or
+   * nothing is (409). Each visit keeps the commission it was paid with: its
+   * rate and full amount (appointment-commission.ts).
    */
   async payCommission(
     tenantId: string,
@@ -445,7 +378,7 @@ export class CommissionsService {
       where: { id: professionalId, tenantId },
     });
     if (!professional) {
-      throw new NotFoundException("Professional not found");
+      throw new NotFoundException("Profesional no encontrado");
     }
 
     const timeZone = await this.salonTimeZone(tenantId);
@@ -454,86 +387,124 @@ export class CommissionsService {
       dto.startDate || dto.endDate
         ? commissionPeriodFilters(dto.startDate, dto.endDate, timeZone)
         : this.upToToday(timeZone, now);
-    const pending = await this.pendingItems(tenantId, professional, {
-      scheduledDate: period.scheduledDate,
-      createdAt: period.createdAt,
-      ids: dto.appointmentIds,
-    });
 
-    if (
-      dto.expectedAmount !== undefined &&
-      dto.expectedAmount !== null &&
-      Math.abs(pending.total - Number(dto.expectedAmount)) > 0.005
-    ) {
-      throw new ConflictException(
-        `Lo pendiente ha cambiado desde que abriste el aviso: ahora es ${eurosFromCents(pending.total)}. ` +
-          "No se ha pagado nada. Revísalo y vuelve a pagar.",
-      );
-    }
+    return this.prisma.$transaction(
+      async (tx: Db) => {
+        await lockProfessionalCommissions(tx, tenantId, [professionalId]);
+        const pending = await this.pendingItems(
+          tenantId,
+          professional,
+          {
+            scheduledDate: period.scheduledDate,
+            createdAt: period.createdAt,
+            ids: dto.appointmentIds,
+          },
+          tx,
+        );
 
-    const idsOf = (source: string) => pending.entries.filter((e) => e.source === source).map((e) => e.id);
-    const paidAt = new Date();
-    let count = 0;
+        if (
+          dto.expectedAmount !== undefined &&
+          dto.expectedAmount !== null &&
+          Math.abs(pending.total - Number(dto.expectedAmount)) > 0.005
+        ) {
+          throw new ConflictException(
+            `Lo pendiente ha cambiado desde que abriste el aviso: ahora es ${eurosFromCents(pending.total)}. ` +
+              "No se ha pagado nada. Revísalo y vuelve a pagar.",
+          );
+        }
 
-    const visitIds = idsOf("appointment");
-    if (visitIds.length > 0) {
-      const result = await this.prisma.appointment.updateMany({
-        where: { tenantId, professionalId, id: { in: visitIds }, commissionPaid: false },
-        data: { commissionPaid: true, commissionDate: paidAt },
-      });
-      count += result.count ?? 0;
-    }
+        const idsOf = (source: string) => pending.entries.filter((e) => e.source === source).map((e) => e.id);
+        const paidAt = new Date();
+        let count = 0;
 
-    const lineIds = idsOf("sale");
-    const lineModel = (this.prisma as any).posSaleLine;
-    if (lineIds.length > 0 && lineModel?.updateMany) {
-      const result = await lineModel.updateMany({
-        where: { tenantId, professionalId, kind: "service", id: { in: lineIds }, commissionPaid: false },
-        data: { commissionPaid: true, commissionDate: paidAt },
-      });
-      count += result.count ?? 0;
-    }
+        // Visits, grouped by the commission they are paid with (stored on them).
+        const groups = new Map<string, { rate: number; amount: number; ids: string[] }>();
+        for (const id of idsOf("appointment")) {
+          const s = pending.snapshots.get(id)!;
+          const key = `${s.rate}|${s.amount}`;
+          const group = groups.get(key) ?? { ...s, ids: [] };
+          group.ids.push(id);
+          groups.set(key, group);
+        }
+        for (const group of groups.values()) {
+          const result = await tx.appointment.updateMany({
+            where: { tenantId, professionalId, id: { in: group.ids }, commissionPaid: false },
+            data: {
+              commissionPaid: true,
+              commissionDate: paidAt,
+              commissionRate: group.rate,
+              commissionAmount: group.amount,
+            },
+          });
+          count += result?.count ?? 0;
+        }
 
-    // Refund adjustments not settled yet (commission-clawback.ts): netted into this payout.
-    const adjustmentIds = idsOf("refund_adjustment");
-    const adjustmentModel = (this.prisma as any).commissionAdjustment;
-    if (adjustmentIds.length > 0 && adjustmentModel?.updateMany) {
-      const result = await adjustmentModel.updateMany({
-        where: { tenantId, professionalId, id: { in: adjustmentIds }, settled: false },
-        data: { settled: true, settledAt: paidAt },
-      });
-      count += result.count ?? 0;
-    }
+        const lineIds = idsOf("sale");
+        if (lineIds.length > 0 && tx.posSaleLine?.updateMany) {
+          const result = await tx.posSaleLine.updateMany({
+            where: { tenantId, professionalId, kind: "service", id: { in: lineIds }, commissionPaid: false },
+            data: { commissionPaid: true, commissionDate: paidAt },
+          });
+          count += result?.count ?? 0;
+        }
 
-    return { count, totalAmount: pending.total };
+        // Refund adjustments not settled yet (commission-clawback.ts): netted into this payout.
+        const adjustmentIds = idsOf("refund_adjustment");
+        if (adjustmentIds.length > 0 && tx.commissionAdjustment?.updateMany) {
+          const result = await tx.commissionAdjustment.updateMany({
+            where: { tenantId, professionalId, id: { in: adjustmentIds }, settled: false },
+            data: { settled: true, settledAt: paidAt },
+          });
+          count += result?.count ?? 0;
+        }
+
+        if (count !== pending.entries.length) {
+          // Someone else paid or changed an item meanwhile: all of it is rolled back.
+          throw new ConflictException(
+            "Lo pendiente ha cambiado mientras se pagaba. No se ha pagado nada. Recarga y vuelve a pagar.",
+          );
+        }
+        return { count, totalAmount: pending.total };
+      },
+      { timeout: 20_000 },
+    );
   }
 
   /**
-   * Every active professional's pending commission (the Comisiones summary
-   * tab), each as getCommissionSummary works it out.
+   * Every professional's pending commission (the Comisiones summary tab),
+   * each as getCommissionSummary works it out: the active ones, and the
+   * deactivated ones that still have something pending ("De baja"), so what
+   * is owed to someone who left can still be paid.
    */
   async getAllCommissionSummaries(
     tenantId: string,
     now: Date = new Date(),
   ): Promise<CommissionSummary[]> {
-    const professionals = await this.prisma.professional.findMany({
-      where: {
-        tenantId,
-        isActive: true,
-      },
+    const professionals: any[] = await this.prisma.professional.findMany({
+      where: { tenantId },
     });
     const cutoff = this.upToToday(await this.salonTimeZone(tenantId), now);
 
     const summaries: CommissionSummary[] = [];
-    for (const professional of professionals) {
+    // Active first, then those who left.
+    const ordered = [
+      ...professionals.filter((p) => p.isActive !== false),
+      ...professionals.filter((p) => p.isActive === false),
+    ];
+    for (const professional of ordered) {
+      const active = professional.isActive !== false;
       try {
-        summaries.push(this.toSummary(professional, await this.pendingItems(tenantId, professional, cutoff), cutoff.day));
+        const pending = await this.pendingItems(tenantId, professional, cutoff);
+        if (!active && pending.entries.length === 0) continue;
+        summaries.push(this.toSummary(professional, pending, cutoff.day));
       } catch (error) {
         // One professional's data failing does not hide the others.
         this.logger.error(`Commission summary failed for professional ${professional.id}: ${(error as Error).message}`);
+        if (!active) continue;
         summaries.push({
           professionalId: professional.id,
           professionalName: `${professional.firstName} ${professional.lastName}`,
+          isActive: true,
           totalEarnings: 0,
           pendingCommission: 0,
           paidCommission: 0,
@@ -546,7 +517,17 @@ export class CommissionsService {
   }
 
   /**
-   * Get payroll report for a date range
+   * The payroll report for a date range: per professional, what the
+   * period's work sold and earned.
+   *
+   * The same criterion as the summary and "Pagar": completed visits that are
+   * paid (`paymentStatus` paid), with their commission snapshot
+   * (appointment-commission.ts). A visit whose commission was already paid
+   * out stays in its period even if it was refunded since (its clawback
+   * counts in its own period). Deactivated professionals with work or
+   * adjustments in the period are listed too, `isActive: false`. Walk-in
+   * services sold without a professional are totalled apart
+   * (`unassignedServices`): they earn nobody a commission.
    */
   async getPayrollReport(
     tenantId: string,
@@ -559,6 +540,8 @@ export class CommissionsService {
     professionals: {
       id: string;
       name: string;
+      /** false: deactivated ("De baja"), listed for their work in the period. */
+      isActive: boolean;
       totalHours: number;
       totalSales: number;
       /** Net: what the period's work earned, plus its refund adjustments (negative). */
@@ -567,56 +550,68 @@ export class CommissionsService {
       refundAdjustments: number;
       adjustments: PayrollAdjustment[];
     }[];
+    /** "Servicios sin profesional": walk-in services sold in the period with nobody named. */
+    unassignedServices: { count: number; totalSales: number };
   }> {
     // Both days included, whole salon days (commission-period.ts).
     const start = periodDay(startDate);
     const end = periodDay(endDate);
-    if (!start || !end) throw new BadRequestException("startDate and endDate must be dates (YYYY-MM-DD)");
+    if (!start || !end) throw new BadRequestException("Indica las fechas de inicio y fin del periodo (AAAA-MM-DD).");
     const range = commissionPeriodFilters(start, end, await this.salonTimeZone(tenantId));
     const scheduledDate = range.scheduledDate!;
     const createdAt = range.createdAt!;
 
-    // Get all active professionals first
-    const allProfessionals = await this.prisma.professional.findMany({
-      where: {
-        tenantId,
-        isActive: true,
-      },
+    // Every professional: the active ones are always listed, the others
+    // only with something in the period.
+    const allProfessionals: any[] = await this.prisma.professional.findMany({
+      where: { tenantId },
     });
+    const professionalById = new Map(allProfessionals.map((p) => [p.id, p]));
 
-    const appointments = await this.prisma.appointment.findMany({
+    const appointments: any[] = await this.prisma.appointment.findMany({
       where: {
         tenantId,
         scheduledDate,
         status: "completed",
+        OR: [{ paymentStatus: "paid" }, { commissionPaid: true }],
       },
       include: {
         professional: true,
       },
     });
 
-    const professionalMap = new Map<
-      string,
-      {
-        id: string;
-        name: string;
-        totalSales: number;
-        commission: number;
-        refundAdjustments: number;
-        adjustments: PayrollAdjustment[];
-      }
-    >();
-
-    // Initialize all active professionals with zero values
-    for (const prof of allProfessionals) {
-      professionalMap.set(prof.id, {
+    type Row = {
+      id: string;
+      name: string;
+      isActive: boolean;
+      totalSales: number;
+      commission: number;
+      refundAdjustments: number;
+      adjustments: PayrollAdjustment[];
+    };
+    const professionalMap = new Map<string, Row>();
+    const rowOf = (professionalId: string | null | undefined): Row | undefined => {
+      if (!professionalId) return undefined;
+      const existing = professionalMap.get(professionalId);
+      if (existing) return existing;
+      const prof = professionalById.get(professionalId);
+      if (!prof) return undefined;
+      const row: Row = {
         id: prof.id,
         name: `${prof.firstName} ${prof.lastName}`,
+        isActive: prof.isActive !== false,
         totalSales: 0,
         commission: 0,
         refundAdjustments: 0,
         adjustments: [],
-      });
+      };
+      professionalMap.set(professionalId, row);
+      return row;
+    };
+
+    // Every active professional, with zero values to start with.
+    for (const prof of allProfessionals) {
+      if (prof.isActive !== false) rowOf(prof.id);
     }
 
     // Update with actual appointment data: what was refunded of a visit
@@ -631,28 +626,33 @@ export class CommissionsService {
       lineIds: periodLines.filter((l) => l.commissionPaid).map((l) => l.id),
     });
     for (const apt of appointments) {
-      const profId = apt.professionalId;
-      const existing = professionalMap.get(profId);
+      const existing = rowOf(apt.professionalId);
+      if (!existing) continue;
       const share = kept.get(apt.id) ?? 1;
-
-      if (existing) {
-        existing.totalSales += Math.round(Number(apt.totalAmount) * share);
-        existing.commission += roundCommission(Number(apt.commissionAmount || 0) * share);
-        if (apt.commissionPaid) existing.commission += clawedBack.get(appointmentSourceKey(apt.id)) ?? 0;
-        professionalMap.set(profId, existing);
-      }
+      const { amount } = appointmentCommission(apt, apt.professional?.commissionRate);
+      existing.totalSales += Math.round(Number(apt.totalAmount) * share);
+      existing.commission += roundCommission(amount * share);
+      if (apt.commissionPaid) existing.commission += clawedBack.get(appointmentSourceKey(apt.id)) ?? 0;
     }
 
     // Walk-in services sold at the till in the period.
+    const unassignedServices = { count: 0, totalSales: 0 };
     for (const line of periodLines) {
-      const existing = line.professionalId ? professionalMap.get(line.professionalId) : undefined;
+      const after = saleLineAfterRefunds({
+        commissionBaseCents: line.commissionBaseCents,
+        commissionAmount: numberOrNull(line.commissionAmount) ?? 0,
+        totalCents: Number(line.totalCents ?? 0),
+        refundedCents: line.refundedCents ?? 0,
+      });
+      if (!line.professionalId) {
+        if (after.kept > 0) {
+          unassignedServices.count += 1;
+          unassignedServices.totalSales += after.baseCents;
+        }
+        continue;
+      }
+      const existing = rowOf(line.professionalId);
       if (existing) {
-        const after = saleLineAfterRefunds({
-          commissionBaseCents: line.commissionBaseCents,
-          commissionAmount: numberOrNull(line.commissionAmount) ?? 0,
-          totalCents: Number(line.totalCents ?? 0),
-          refundedCents: line.refundedCents ?? 0,
-        });
         existing.totalSales += after.baseCents;
         existing.commission += after.commission;
         if (line.commissionPaid) existing.commission += clawedBack.get(saleLineSourceKey(line.id)) ?? 0;
@@ -668,7 +668,7 @@ export class CommissionsService {
           orderBy: { createdAt: "asc" },
         });
       for (const r of rows) {
-        const existing = professionalMap.get(r.professionalId);
+        const existing = rowOf(r.professionalId);
         if (!existing) continue;
         const amount = roundCommission(numberOrNull(r.amount) ?? 0);
         existing.refundAdjustments = roundCommission(existing.refundAdjustments + amount);
@@ -677,18 +677,21 @@ export class CommissionsService {
       }
     }
 
-    const professionals = Array.from(professionalMap.values()).map((p) => ({
+    // Active first, then those who left.
+    const rows = Array.from(professionalMap.values());
+    const professionals = [...rows.filter((p) => p.isActive), ...rows.filter((p) => !p.isActive)].map((p) => ({
       ...p,
       commission: roundCommission(p.commission),
     }));
 
     return {
       period: start <= end ? { start, end } : { start: end, end: start },
-      totalPayroll: roundCommission(professionals.reduce((sum, p) => sum + p.commission, 0)),
+      totalPayroll: professionals.reduce((sum, p) => sum + p.commission, 0),
       professionals: professionals.map((p) => ({
         ...p,
         totalHours: 0, // Placeholder - would require time tracking
       })),
+      unassignedServices,
     };
   }
 

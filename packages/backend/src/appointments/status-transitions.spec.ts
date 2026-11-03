@@ -260,6 +260,18 @@ describe("the dedicated endpoints", () => {
     );
   });
 
+  it("cancel: the wait-list checks the slot with the booking pages' availability", async () => {
+    const b = build(S.confirmed);
+    const slots = jest.fn(async () => [{ time: b.row.scheduledTime, isAvailable: false }]);
+    (b.service as any).getAvailableSlots = slots;
+    await b.service.cancel(OWNER, "apt-1");
+    const { slotBookable } = b.waitList.onAppointmentCancelled.mock.calls[0][0] as any;
+    expect(await slotBookable("p1")).toBe(false);
+    expect(slots).toHaveBeenCalledWith("t1", b.row.scheduledDate, "p1", "s1");
+    await slotBookable(null);
+    expect(slots).toHaveBeenLastCalledWith("t1", b.row.scheduledDate, undefined, "s1");
+  });
+
   it("cancel: a slot already past goes to nobody on the wait-list", async () => {
     const b = build(S.confirmed, { startsInMs: -2 * 3_600_000 });
     await b.service.cancel(OWNER, "apt-1");
