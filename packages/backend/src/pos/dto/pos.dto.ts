@@ -265,6 +265,10 @@ export class PosQuickSaleDto {
   /** As CreatePosOrderDto.saleId: a retry returns the first sale. */
   @IsOptional() @IsUUID("all", { message: "El identificador de la venta no es válido." })
   saleId?: string;
+
+  /** Who did the service (its commission), as a ticket line's professionalId. */
+  @IsOptional() @IsUUID()
+  professionalId?: string;
 }
 
 /**

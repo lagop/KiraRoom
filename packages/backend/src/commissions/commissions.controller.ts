@@ -6,7 +6,7 @@ import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { UserRole } from "@prisma/client";
 import { CommissionsService } from "./commissions.service";
-import { CalculateCommissionBodyDto, PayCommissionDto } from "./dto/commission.dto";
+import { PayCommissionDto } from "./dto/commission.dto";
 import { FeatureGuard } from "../common/guards/feature.guard";
 import { Feature } from "../common/decorators/feature.decorator";
 
@@ -37,37 +37,6 @@ export class CommissionsController {
     return this.commissionsService.getCommissionSummary(
       user.tenantId,
       professional.id,
-    );
-  }
-
-  /**
-   * Calculate commission for a specific appointment
-   */
-  @Post("calculate/:appointmentId")
-  @Roles(...SALON_MANAGERS)
-  async calculateCommission(
-    @CurrentUser() user: any,
-    @Param("appointmentId") appointmentId: string,
-    @Body() dto: CalculateCommissionBodyDto,
-  ) {
-    return this.commissionsService.calculateCommission(user.tenantId, {
-      appointmentId,
-      amount: dto?.amount,
-      rate: dto?.rate });
-  }
-
-  /**
-   * Calculate pending commissions for a professional
-   */
-  @Get("pending/:professionalId")
-  @Roles(...SALON_MANAGERS)
-  async getPendingCommissions(
-    @CurrentUser() user: any,
-    @Param("professionalId") professionalId: string,
-  ) {
-    return this.commissionsService.calculatePendingCommissions(
-      user.tenantId,
-      professionalId,
     );
   }
 

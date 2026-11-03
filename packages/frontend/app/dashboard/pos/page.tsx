@@ -26,6 +26,7 @@ import {
   itemsForServer,
   newSaleId,
   removeLine,
+  serviceLineWithoutProfessional,
   setProfessional,
   setQuantity,
   tenderProblem,
@@ -122,6 +123,8 @@ export default function POSPage() {
   // The payment being refunded ("Devolver"), in the refund dialog.
   const [pendingVoid, setPendingVoid] = useState<TodayPayment | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  // Who is at the till (the token's user), to know whether they are one of the professionals.
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [showGiftCardSale, setShowGiftCardSale] = useState(false);
   // The receipt of the sale just charged.
   const [receiptOf, setReceiptOf] = useState<{ saleId: string; email?: string | null } | null>(null);
@@ -130,7 +133,13 @@ export default function POSPage() {
   const [drawerOpen, setDrawerOpen] = useState<boolean | null>(null);
   const [drawerKey, setDrawerKey] = useState(0);
   // "Venta rápida": confirmed first, with its amount and concept.
-  const [quickSale, setQuickSale] = useState<{ service: Service; method: TenderMethod; saleId: string } | null>(null);
+  const [quickSale, setQuickSale] = useState<{
+    service: Service;
+    method: TenderMethod;
+    saleId: string;
+    /** Who did it, when the cashier is not a professional (commissions). */
+    professionalId?: string;
+  } | null>(null);
 
   // Loyalty: the selected client's rewards, and the one being redeemed.
   const [loyalty, setLoyalty] = useState<ClientLoyaltySummary | null>(null);
@@ -188,6 +197,20 @@ export default function POSPage() {
     return isAdmin ? null : staffLimitProblem(ticketLines, orderDiscount, maxStaffDiscount);
   };
   const issue = discountIssue();
+
+  // Who did each walk-in service (commissions). Staff are themselves; a
+  // manager who is one of the professionals defaults to "quien cobra"; one
+  // who is not (a receptionist, an owner off the chair) has to choose, or
+  // the commission would be nobody's.
+  const cashierIsProfessional = !isAdmin || professionals.some((p) => !!currentUserId && p.userId === currentUserId);
+  const mustChooseProfessional = isAdmin && !cashierIsProfessional && professionals.length > 0;
+  const unassignedLine = serviceLineWithoutProfessional(cart, {
+    cashierIsProfessional,
+    professionalsToChoose: isAdmin ? professionals.length : 0,
+  });
+  const professionalIssue = unassignedLine
+    ? `Elige quién hizo «${unassignedLine.name}»: no tienes ficha de profesional y su comisión no sería de nadie.`
+    : null;
   const discountReasons = [
     ...new Set([...cart.map((i) => i.discount?.reason), orderDiscount?.reason].filter((r): r is string => !!r)),
   ];
@@ -339,6 +362,7 @@ export default function POSPage() {
       try {
         const payload = JSON.parse(atob(token.split(".")[1]));
         setIsAdmin(payload.role === "admin" || payload.role === "owner");
+        setCurrentUserId(typeof payload.sub === "string" ? payload.sub : null);
       } catch (e) {
         console.error("Failed to parse token:", e);
       }
@@ -487,7 +511,7 @@ export default function POSPage() {
   // A discounted ticket is confirmed first, in the panel's dialog.
   const requestCheckout = () => {
     if (empty) return;
-    const problem = issue ?? quoteError ?? invoiceProblem ?? tenderIssue;
+    const problem = issue ?? professionalIssue ?? quoteError ?? invoiceProblem ?? tenderIssue;
     if (problem) {
       toast({ title: "Revisa el ticket", description: problem, variant: "destructive" });
       return;
@@ -564,6 +588,14 @@ export default function POSPage() {
   // A quick sale does not touch the ticket being built (nor its client).
   const processQuickSale = async () => {
     if (!quickSale) return;
+    if (mustChooseProfessional && !quickSale.professionalId) {
+      toast({
+        title: t("pos.quick_sale_failed"),
+        description: `Elige quién hizo «${quickSale.service.name}»: no tienes ficha de profesional y su comisión no sería de nadie.`,
+        variant: "destructive",
+      });
+      return;
+    }
     const closedDrawer = drawerProblem([{ method: quickSale.method, amount: quickSale.service.chargeCents }], drawerOpen);
     if (closedDrawer) {
       toast({ title: t("pos.quick_sale_failed"), description: t(closedDrawer), variant: "destructive" });
@@ -576,6 +608,7 @@ export default function POSPage() {
         paymentMethod: quickSale.method,
         clientId: selectedClient?.id,
         saleId: quickSale.saleId,
+        ...(quickSale.professionalId ? { professionalId: quickSale.professionalId } : {}),
       });
       const clientName = selectedClient ? `${selectedClient.firstName} ${selectedClient.lastName}` : t("pos.walk_in");
       const quickSkipped = result.invoiceSkipped?.reason;
@@ -634,7 +667,8 @@ export default function POSPage() {
   };
 
   const breakdown = (method: string) => summary?.paymentBreakdown?.find((p) => p.method === method)?.amount ?? 0;
-  const checkoutBlocked = empty || processing || !!issue || !quoteFresh || !!quoteError || !!invoiceProblem || !!tenderIssue;
+  const checkoutBlocked =
+    empty || processing || !!issue || !!professionalIssue || !quoteFresh || !!quoteError || !!invoiceProblem || !!tenderIssue;
 
   if (loading) {
     return (
@@ -928,7 +962,13 @@ export default function POSPage() {
                             onChange={(e) => setCart((c) => setProfessional(c, item.key, e.target.value || undefined))}
                             className="mt-1 w-full rounded border px-1 py-0.5 text-xs"
                           >
-                            <option value="">Lo hizo: quien cobra</option>
+                            {mustChooseProfessional ? (
+                              <option value="" disabled>
+                                Elige quién lo hizo
+                              </option>
+                            ) : (
+                              <option value="">Lo hizo: quien cobra</option>
+                            )}
                             {professionals.map((p) => (
                               <option key={p.id} value={p.id}>
                                 Lo hizo: {p.firstName} {p.lastName}
@@ -1134,9 +1174,9 @@ export default function POSPage() {
                   </div>
                 )}
                 {!empty && !quoteFresh && !quoteError && !issue && <div className="text-xs text-gray-400">Calculando el total…</div>}
-                {(issue || quoteError || invoiceProblem) && (
+                {(issue || professionalIssue || quoteError || invoiceProblem) && (
                   <div role="alert" className="mt-2 rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">
-                    {issue ?? quoteError ?? invoiceProblem}
+                    {issue ?? professionalIssue ?? quoteError ?? invoiceProblem}
                   </div>
                 )}
               </div>
@@ -1712,6 +1752,26 @@ export default function POSPage() {
                   ))}
                 </select>
               </label>
+              {mustChooseProfessional && (
+                <label className="flex items-center gap-2 text-sm">
+                  Lo hizo
+                  <select
+                    aria-label={`Quién hizo ${quickSale.service.name}`}
+                    value={quickSale.professionalId ?? ""}
+                    onChange={(e) => setQuickSale({ ...quickSale, professionalId: e.target.value || undefined })}
+                    className="rounded border px-2 py-1"
+                  >
+                    <option value="" disabled>
+                      Elige quién lo hizo
+                    </option>
+                    {professionals.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.firstName} {p.lastName}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
             </div>
           ) : null
         }

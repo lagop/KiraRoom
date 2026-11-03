@@ -83,6 +83,7 @@ import {
   type TillPromotion,
 } from '../promotions/promotion-at-till';
 import { effectiveCommissionRate } from '../commissions/commission-rate';
+import { commissionCents, snapshotAppointmentCommissions } from '../commissions/appointment-commission';
 import { safeTimeZone } from '../gift-cards/gift-card-expiry';
 import { salonInstant } from '../appointments/salon-time';
 import { salonDayAndTime } from '../appointments/reschedule-check';
@@ -1172,7 +1173,8 @@ export class PosService {
               taxCents: tax,
               commissionBaseCents: base,
               // Appointments keep theirs on the appointment (commissions.service.ts).
-              ...(prof !== undefined ? { commissionRate: prof, commissionAmount: (base * prof) / 100 } : {}),
+              // Whole cents, rounded once here: the rows add up to the total.
+              ...(prof !== undefined ? { commissionRate: prof, commissionAmount: commissionCents(base, prof) } : {}),
             };
           }),
           ...soldCards.map((c, i) => ({
@@ -1309,6 +1311,9 @@ export class PosService {
     }
     // What each client has spent (client-stats.ts).
     await refreshClientStats(this.prisma, tenantId, [finalClientId, ...created.map((p) => p?.clientId)]);
+    // Each visit charged, once completed and paid, keeps its commission
+    // (commissions/appointment-commission.ts).
+    await snapshotAppointmentCommissions(this.prisma as any, tenantId, appointmentIds, this.logger);
 
     return {
       ...result,
@@ -1913,9 +1918,11 @@ export class PosService {
     serviceId: string,
     paymentMethod: string,
     clientId?: string,
-    options: { saleId?: string; actor?: PosActor } = {},
+    options: { saleId?: string; actor?: PosActor; professionalId?: string } = {},
   ) {
-    const items = [{ serviceId, quantity: 1 }] as PosCartItemDto[];
+    const items = [
+      { serviceId, quantity: 1, ...(options.professionalId ? { professionalId: options.professionalId } : {}) },
+    ] as PosCartItemDto[];
     if (options.saleId) {
       const prior = await this.priorSale(tenantId, options.saleId);
       if (prior) return this.quickSaleAnswer(prior, paymentMethod);

@@ -9,8 +9,8 @@
  *     (refundedCents, payments/refund-lines.ts); the commission counts what
  *     is left: amount x (totalCents - refundedCents) / totalCents. A line
  *     refunded in full earns nothing.
- *   - An appointment: computed on the fly from the visit (its total x the
- *     rate, or the amount stored on it). Its refunds are the refunds of its
+ *   - An appointment: its commission snapshot (appointment-commission.ts:
+ *     its total x its rate, fixed once paid out). Its refunds are the refunds of its
  *     payments, so its commission is scaled by the share of what was paid
  *     for it that the salon kept: (paid - refunded) / paid. A visit refunded
  *     in full (paymentStatus refunded) earns nothing; one never paid with
@@ -26,9 +26,15 @@ export function keptShare(chargedCents: number, refundedCents: number): number {
   return Math.min(1, Math.max(0, (chargedCents - Math.max(0, refundedCents)) / chargedCents));
 }
 
-/** Two decimals, as commissions are shown and stored (Decimal(12, 2)). */
+/**
+ * Whole cents (commissions are cents): each item is rounded once, where it
+ * is worked out, and totals add up integers -- so the rows the panel shows
+ * add up to the total it shows (they used to carry fractions of a cent,
+ * 449,25 + 449,25 shown as 4,49 + 4,49 = 8,99).
+ */
 export function roundCommission(value: number): number {
-  return Math.round(value * 100) / 100;
+  const rounded = Math.round(value);
+  return rounded === 0 ? 0 : rounded;
 }
 
 /** A till sale line's commission figures after its refunds. */

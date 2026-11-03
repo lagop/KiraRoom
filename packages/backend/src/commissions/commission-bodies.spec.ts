@@ -1,5 +1,5 @@
 import { CommissionsController } from "./commissions.controller";
-import { CalculateCommissionBodyDto, PayCommissionDto } from "./dto/commission.dto";
+import { PayCommissionDto } from "./dto/commission.dto";
 import { bodyMetatype, bodyParser } from "../common/validation/validated-body.testing";
 
 const uuid = (first: number) => `${first}f1c2a9e-8b7d-4c6e-9a5f-1b2c3d4e5f60`;
@@ -31,23 +31,10 @@ describe("POST /commissions/pay/:professionalId body", () => {
   });
 });
 
-describe("POST /commissions/calculate/:appointmentId body", () => {
-  const parse = bodyParser(CommissionsController, "calculateCommission");
-
-  it("is the validated class", () => {
-    expect(bodyMetatype(CommissionsController, "calculateCommission")).toBe(CalculateCommissionBodyDto);
-  });
-
-  it("accepts the overrides and a Decimal sent back as a string", async () => {
-    expect(await parse({ amount: 45.5, rate: 40 })).toEqual({ amount: 45.5, rate: 40 });
-    expect((await parse({ rate: "12.5" })).rate).toBe(12.5);
-    expect(await parse({})).toEqual({});
-  });
-
-  it("refuses rates outside 0-100 and negative amounts", async () => {
-    await expect(parse({ rate: 900 })).rejects.toBeDefined();
-    await expect(parse({ rate: -5 })).rejects.toBeDefined();
-    await expect(parse({ amount: -1 })).rejects.toBeDefined();
-    await expect(parse({ amount: "abc" })).rejects.toBeDefined();
+describe("the old writing endpoints", () => {
+  it("are gone: GET /commissions/pending/:id and POST /commissions/calculate/:id rewrote commissions", () => {
+    const proto = CommissionsController.prototype as unknown as Record<string, unknown>;
+    expect(proto.calculateCommission).toBeUndefined();
+    expect(proto.getPendingCommissions).toBeUndefined();
   });
 });

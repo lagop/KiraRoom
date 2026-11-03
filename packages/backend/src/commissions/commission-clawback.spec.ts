@@ -58,7 +58,8 @@ describe("clawbackAmount", () => {
   it("takes back the refund's share of the commission, negative, to the cent", () => {
     expect(clawbackAmount(300, 3000, 0, 1000)).toBe(-100);
     expect(clawbackAmount(300, 3000, 1000, 3000)).toBe(-200);
-    expect(clawbackAmount(400, 3000, 0, 1000)).toBe(-133.33);
+    // Whole cents: 133,33 cents is 133.
+    expect(clawbackAmount(400, 3000, 0, 1000)).toBe(-133);
   });
 
   it("never more than what is left of it, and nothing when there is nothing to take", () => {
@@ -137,7 +138,7 @@ describe("recordRefundClawbacks", () => {
     });
     await recordRefundClawbacks(d, { tenantId: "t1", refundId: "r2", amount: 1000, appointmentId: "a1", method: "card" });
     expect(store.rows).toEqual([
-      expect.objectContaining({ professionalId: "p2", appointmentId: "a1", sourceKey: "appointment:a1", refundId: "r2", amount: -133.33 }),
+      expect.objectContaining({ professionalId: "p2", appointmentId: "a1", sourceKey: "appointment:a1", refundId: "r2", amount: -133 }),
     ]);
   });
 
@@ -224,7 +225,9 @@ describe("commissions with refund adjustments", () => {
         updateMany: jest.fn(async () => ({ count: 0 })),
       },
       commissionAdjustment: adjustments,
+      $executeRaw: jest.fn(async () => 0),
     };
+    prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
     return { svc: new CommissionsService(prisma), adjustments };
   }
 

@@ -122,6 +122,7 @@ export class PosController {
     const tenantId = req.user.tenantId;
     return this.posService.quickSale(tenantId, body.serviceId, body.paymentMethod, body.clientId, {
       saleId: body.saleId,
+      professionalId: body.professionalId,
       actor: { id: req.user.id, role: req.user.role },
     });
   }

@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { CommissionsService } from "./commissions.service";
 import { DEFAULT_COMMISSION_RATE, effectiveCommissionRate, numberOrNull } from "./commission-rate";
+import { appointmentCommission, commissionCents, snapshotAppointmentCommission } from "./appointment-commission";
 
 /**
  * A commission rate of 0 is 0 %, whether it arrives as a Prisma Decimal or as
@@ -59,36 +60,105 @@ const apt = (extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
-describe("CommissionsService with a plain 0", () => {
-  it("calculateCommission: a professional at 0 % earns nothing, not the 10 % default", async () => {
-    const { svc, updates } = service(pro(0), [apt()]);
-    expect(await svc.calculateCommission("t1", { appointmentId: "apt-1" })).toEqual({ commissionRate: 0, commissionAmount: 0 });
-    expect(updates[0]).toEqual({ commissionRate: 0, commissionAmount: 0 });
+describe("appointmentCommission (the snapshot)", () => {
+  it("a professional at 0 % earns nothing, not the 10 % default", () => {
+    expect(appointmentCommission(apt(), 0)).toEqual({ rate: 0, amount: 0 });
   });
 
-  it("calculateCommission: an appointment at 0 % overrides the professional's rate", async () => {
-    const { svc } = service(pro(40), [apt({ commissionRate: 0 })]);
-    expect((await svc.calculateCommission("t1", { appointmentId: "apt-1" })).commissionRate).toBe(0);
+  it("an appointment at 0 % overrides the professional's rate", () => {
+    expect(appointmentCommission(apt({ commissionRate: 0 }), 40)).toEqual({ rate: 0, amount: 0 });
   });
 
-  it("calculateCommission: no rate anywhere is still the 10 % default", async () => {
-    const { svc } = service(pro(null), [apt()]);
-    expect(await svc.calculateCommission("t1", { appointmentId: "apt-1" })).toEqual({ commissionRate: 10, commissionAmount: 5 });
+  it("no rate anywhere is still the 10 % default", () => {
+    expect(appointmentCommission(apt(), null)).toEqual({ rate: 10, amount: 5 });
   });
 
-  it("calculatePendingCommissions: 0 % from the professional", async () => {
-    const { svc, updates } = service(pro(0), [apt()]);
-    expect(await svc.calculatePendingCommissions("t1", "pro-1")).toBe(0);
-    expect(updates[0].commissionRate).toBe(0);
+  it("whole cents, rounded once: 29,95 EUR at 15 % is 4,49 EUR", () => {
+    expect(commissionCents(2995, 15)).toBe(449);
+    expect(appointmentCommission(apt({ totalAmount: 2995 }), 15).amount).toBe(449);
   });
 
-  it("getCommissionSummary: 0 % rate, and a stored amount of 0 is kept, not recomputed", async () => {
+  it("not paid out: a stored 0 (the old column default) is not a commission, rate x total is", () => {
+    expect(appointmentCommission(apt({ commissionAmount: 0 }), 20)).toEqual({ rate: 20, amount: 10 });
+    expect(appointmentCommission(apt({ commissionAmount: new Prisma.Decimal(0) }), 20).amount).toBe(10);
+  });
+
+  it("not paid out: it follows the total and the appointment's rate when they change", () => {
+    // Snapshot taken at 15 % of 60,00; the total is now 50,00.
+    expect(appointmentCommission(apt({ totalAmount: 5000, commissionRate: 15, commissionAmount: 900 }), 30)).toEqual({
+      rate: 15,
+      amount: 750,
+    });
+  });
+
+  it("paid out: what was paid, never rewritten (a 0 paid stays 0)", () => {
+    expect(appointmentCommission(apt({ commissionPaid: true, commissionAmount: 0 }), 20).amount).toBe(0);
+    expect(appointmentCommission(apt({ commissionPaid: true, commissionAmount: 420 }), 20).amount).toBe(420);
+    // Never worked out (null): computed.
+    expect(appointmentCommission(apt({ commissionPaid: true, commissionAmount: null }), 20).amount).toBe(10);
+  });
+});
+
+describe("snapshotAppointmentCommission", () => {
+  function db(row: Record<string, unknown> | null) {
+    const writes: any[] = [];
+    return {
+      writes,
+      db: {
+        appointment: {
+          findFirst: jest.fn(async () => row),
+          updateMany: jest.fn(async (args: any) => (writes.push(args), { count: 1 })),
+        },
+      },
+    };
+  }
+  const done = (extra: Record<string, unknown> = {}) =>
+    apt({ status: "completed", paymentStatus: "paid", professional: { commissionRate: 15 }, totalAmount: 6000, ...extra });
+
+  it("completed and paid: stores the rate that applies and the amount, only while not paid out", async () => {
+    const t = db(done());
+    expect(await snapshotAppointmentCommission(t.db, "t1", "apt-1")).toBe(true);
+    expect(t.writes).toEqual([
+      { where: { id: "apt-1", tenantId: "t1", commissionPaid: false }, data: { commissionRate: 15, commissionAmount: 900 } },
+    ]);
+  });
+
+  it("an explicit 0 % stores 0", async () => {
+    const t = db(done({ commissionRate: 0 }));
+    await snapshotAppointmentCommission(t.db, "t1", "apt-1");
+    expect(t.writes[0].data).toEqual({ commissionRate: 0, commissionAmount: 0 });
+  });
+
+  it("nothing before it is completed and paid, nothing once paid out, nothing when already up to date", async () => {
+    for (const row of [
+      done({ paymentStatus: "partially_paid" }),
+      done({ status: "in_progress" }),
+      done({ commissionPaid: true, commissionAmount: 0 }),
+      done({ commissionRate: 15, commissionAmount: 900 }),
+      null,
+    ]) {
+      const t = db(row);
+      expect(await snapshotAppointmentCommission(t.db, "t1", "apt-1")).toBe(false);
+      expect(t.writes).toEqual([]);
+    }
+  });
+});
+
+describe("CommissionsService: the stored 0 of the old default", () => {
+  it("getCommissionSummary: 0 % stays 0; a stored 0 with a rate above 0 is worked out", async () => {
     const { svc } = service(pro(0), [apt(), apt({ id: "apt-2", commissionRate: 20, commissionAmount: 0 })]);
     const summary = await svc.getCommissionSummary("t1", "pro-1");
     expect(summary.appointments.map((a) => [a.commissionRate, a.commissionAmount])).toEqual([
       [0, 0],
-      [20, 0],
+      [20, 10],
     ]);
-    expect(summary.pendingCommission).toBe(0);
+    expect(summary.pendingCommission).toBe(10);
+  });
+
+  it("the rows add up to the total: two 29,95 EUR services at 15 % are 4,49 + 4,49 = 8,98", async () => {
+    const { svc } = service(pro(15), [apt({ totalAmount: 2995 }), apt({ id: "apt-2", totalAmount: 2995 })]);
+    const summary = await svc.getCommissionSummary("t1", "pro-1");
+    expect(summary.appointments.map((a) => a.commissionAmount)).toEqual([449, 449]);
+    expect(summary.pendingCommission).toBe(898);
   });
 });
