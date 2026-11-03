@@ -1130,6 +1130,35 @@ export interface PaymentSummary {
   byMethod: { method: Payment["method"]; amount: number; count: number }[];
 }
 
+/** One appointment in Inicio's lists (GET /appointments/home). Money in cents. */
+export interface HomeAppointmentRow {
+  id: string;
+  /** "YYYY-MM-DD". */
+  scheduledDate: string;
+  scheduledTime: string;
+  status: string;
+  paymentStatus?: string;
+  /** What is still owed (money, tax included), for the visits to charge. */
+  amountDue?: number;
+  client: { id: string; firstName: string; lastName: string } | null;
+  professional: { id: string; firstName: string; lastName: string } | null;
+  service: { id: string; name: string } | null;
+}
+
+/** GET /appointments/home: Inicio's lists in the salon's day; staff get their own. */
+export interface HomeSummary {
+  /** The salon's calendar day, "YYYY-MM-DD". */
+  today: string;
+  /** The salon's clock, "HH:mm". */
+  now: string;
+  /** Today's pending, confirmed and in-progress appointments, by time. */
+  todayAppointments: HomeAppointmentRow[];
+  /** Pending from today on: the first five and how many there are. */
+  pendingConfirmations: { total: number; items: HomeAppointmentRow[] };
+  /** Visits up to today still owed: the five latest, how many and how much (cents). */
+  pendingPayments: { total: number; totalDue: number; items: HomeAppointmentRow[] };
+}
+
 /** The Pagos page's filters, sent to the list, the summary and the CSV. */
 export interface PaymentFilters {
   status?: Payment["status"];
@@ -3566,6 +3595,11 @@ class ApiClient implements ApiClientInterface {
 
   async getPaymentByAppointment(appointmentId: string): Promise<Payment[]> {
     return this.request<Payment[]>(`/payments/appointment/${appointmentId}`);
+  }
+
+  /** Inicio's lists: today, to confirm and to charge, with their totals. */
+  async getHomeSummary(): Promise<HomeSummary> {
+    return this.request<HomeSummary>("/appointments/home");
   }
 
   async getPendingPaymentAppointments(params?: {

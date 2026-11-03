@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useMemo } from "react";
+import { useTranslations } from "@/lib/use-translation";
 
 interface RevenueSparklineProps {
   /**
@@ -28,6 +29,7 @@ export const RevenueSparkline: React.FC<RevenueSparklineProps> = ({
   height = 60,
   className = "",
 }) => {
+  const t = useTranslations();
   const padding = { top: 6, right: 4, bottom: 6, left: 4 };
 
   const { points, areaPath, linePath, lastPoint, width } = useMemo(() => {
@@ -79,7 +81,7 @@ export const RevenueSparkline: React.FC<RevenueSparklineProps> = ({
         className={`flex items-center justify-center text-xs text-gray-400 ${className}`}
         style={{ height }}
       >
-        No data
+        {t("dashboard.no_data")}
       </div>
     );
   }
@@ -91,7 +93,8 @@ export const RevenueSparkline: React.FC<RevenueSparklineProps> = ({
       height={height}
       className={className}
       preserveAspectRatio="none"
-      aria-label="Revenue trend"
+      role="img"
+      aria-label={t("dashboard.revenue_trend")}
     >
       <defs>
         <linearGradient id="revSparkFill" x1="0" y1="0" x2="0" y2="1">
