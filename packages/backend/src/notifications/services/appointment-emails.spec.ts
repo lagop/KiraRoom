@@ -100,6 +100,18 @@ describe("appointment emails to the client", () => {
     expect(calls[1].html).toContain("<strong>Antes:</strong>");
   });
 
+  it("a cancellation for time off links to the booking page, in the HTML and the text", async () => {
+    const { service, calls } = makeService();
+    const bookingUrl = "https://example.test/sites/salon-lucia?serviceId=s1&x=<y>";
+    await service.sendAppointmentCancellation(data({ bookingUrl }), "No podremos atenderte en ese horario.");
+    expect(calls[0].html).toContain("Reserva otra cita</a>");
+    expect(calls[0].html).toContain("serviceId=s1&amp;x=&lt;y&gt;");
+    expect(calls[0].text).toContain(bookingUrl);
+    // Without one, the usual words.
+    await service.sendAppointmentCancellation(data());
+    expect(calls[1].html).not.toContain("Reserva otra cita</a>");
+  });
+
   it("subjects say what happened, in Spanish", async () => {
     const { service, calls } = makeService();
     await service.sendAppointmentConfirmation(data());
