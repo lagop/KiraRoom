@@ -134,13 +134,18 @@ export function ServicePickerSection({
                 (s) => s.serviceId === service.id,
               );
 
-              const serviceProfessionals = professionals.filter((pro) =>
-                pro.services?.some((ps) => ps.serviceId === service.id),
+              // Who does this service, and whoever is already picked for it
+              // (a professional booking themself for a service not linked
+              // to them, with cross-booking on): the select shows the truth.
+              const serviceProfessionals = professionals.filter(
+                (pro) =>
+                  pro.services?.some((ps) => ps.serviceId === service.id) ||
+                  pro.id === selection?.professionalId,
               );
 
-              // For staff users, always pre-bind to themselves (unless
-              // cross-booking is enabled). Otherwise leave it undefined
-              // so the suggestion engine can auto-assign.
+              // For staff users, pre-bind to themselves (with cross-booking
+              // they may then pick a colleague). Otherwise leave it
+              // undefined so the suggestion engine can auto-assign.
               const suggestedProfessionalId =
                 currentUser?.role === "staff"
                   ? currentUser.professionalId
@@ -217,7 +222,7 @@ export function ServicePickerSection({
                   {isSelected && (
                     <div className="mt-3 pt-3 border-t border-indigo-200 space-y-3">
                       {/* Professional selector — only shown for owners/admins or when cross-booking is enabled */}
-                      {currentUser?.role !== "staff" && (
+                      {(currentUser?.role !== "staff" || allowProfessionalCrossBooking) && (
                         <div>
                           <label className="text-xs font-medium text-gray-500 block mb-1">
                             {labels.professional}
@@ -232,7 +237,10 @@ export function ServicePickerSection({
                             }
                             className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-white"
                           >
-                            <option value="">{labels.autoAssign}</option>
+                            {/* Staff book themselves unless they pick a colleague: no "anyone". */}
+                            {currentUser?.role !== "staff" && (
+                              <option value="">{labels.autoAssign}</option>
+                            )}
                             {serviceProfessionals.map((pro) => (
                               <option key={pro.id} value={pro.id}>
                                 {pro.firstName} {pro.lastName}
@@ -242,8 +250,8 @@ export function ServicePickerSection({
                         </div>
                       )}
 
-                      {/* For staff users, show assignment indicator */}
-                      {currentUser?.role === "staff" && isSelected && (
+                      {/* For staff users booking on their own agenda, show assignment indicator */}
+                      {currentUser?.role === "staff" && !allowProfessionalCrossBooking && isSelected && (
                         <div className="text-xs text-gray-500 bg-gray-50 px-2 py-1 rounded">
                           {labels.assignedTo(
                             `${currentUser.firstName} ${currentUser.lastName}`,
@@ -326,10 +334,11 @@ export function ServicePickerSection({
               >
                 <option value="">{labels.selectAProfessional}</option>
                 {professionals
-                  .filter((pro) =>
-                    pro.services?.some(
-                      (ps) => ps.serviceId === newAppointment.serviceId,
-                    ),
+                  .filter(
+                    (pro) =>
+                      pro.services?.some(
+                        (ps) => ps.serviceId === newAppointment.serviceId,
+                      ) || pro.id === newAppointment.professionalId,
                   )
                   .map((professional) => (
                     <option

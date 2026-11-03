@@ -713,6 +713,11 @@ export function toDrawerAppointment(
  * A professional with no services linked sees every service, as the
  * booking engine treats them as able to do any (findFreeProfessional).
  * Null when the account is not linked to a professional of the salon.
+ *
+ * When the salon lets professionals book for their colleagues (Ajustes:
+ * "los profesionales pueden reservar para compañeros", `crossBooking`),
+ * the form offers the whole team (themself first) and every service; the
+ * server checks the setting again when they book.
  */
 export function staffOwnCatalog<
   P extends { id: string; userId?: string | null; services?: ReadonlyArray<{ serviceId: string }> },
@@ -721,10 +726,14 @@ export function staffOwnCatalog<
   userId: string | undefined,
   professionals: ReadonlyArray<P>,
   services: ReadonlyArray<S>,
+  crossBooking = false,
 ): { me: P; professionals: P[]; services: S[] } | null {
   if (!userId) return null;
   const me = professionals.find((p) => p.userId === userId);
   if (!me) return null;
+  if (crossBooking) {
+    return { me, professionals: [me, ...professionals.filter((p) => p !== me)], services: [...services] };
+  }
   const mine = new Set((me.services ?? []).map((s) => s.serviceId));
   return {
     me,
@@ -768,6 +777,12 @@ export function buildStaffBookingPayload(input: {
   role?: string;
   /** The caller's own professional, for staff. */
   ownProfessionalId?: string;
+  /**
+   * The salon lets professionals book for colleagues: a staff caller's
+   * choice of professional per service is kept (their own when none).
+   * Without it a staff booking is always on their own agenda.
+   */
+  crossBooking?: boolean;
   clientId: string;
   serviceId: string;
   professionalId: string;
@@ -785,14 +800,16 @@ export function buildStaffBookingPayload(input: {
 }): StaffBookingPayload | null {
   const staff = input.role === "staff";
   const own = staff ? input.ownProfessionalId || undefined : undefined;
+  // Staff without the salon's cross-booking: always their own agenda.
+  const pinned = staff && !input.crossBooking ? own : undefined;
   const rows = input.selectedServices.map((s) => ({
     serviceId: s.serviceId,
-    professionalId: own ?? (s.professionalId || input.autoAssign?.[s.serviceId] || undefined),
+    professionalId: pinned ?? (s.professionalId || input.autoAssign?.[s.serviceId] || own),
     isParallel: !!s.isParallel,
   }));
   const serviceId = rows[0]?.serviceId || input.serviceId;
   const professionalId =
-    own ?? (rows.find((r) => r.professionalId)?.professionalId || input.professionalId || undefined);
+    pinned ?? (rows.find((r) => r.professionalId)?.professionalId || input.professionalId || own);
   if (!input.clientId || !serviceId || !input.date || !input.time) return null;
   if (!staff && !professionalId) return null;
 

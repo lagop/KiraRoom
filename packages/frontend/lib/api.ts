@@ -832,7 +832,8 @@ export interface Client {
   lastVisit?: string | null;
   lastReengagementSent?: string | null;
   visitCount?: number;
-  totalSpent?: number;
+  /** Null for staff: the salon's money from every visit, not shown to a professional. */
+  totalSpent?: number | null;
   tags?: string[];
   notes?: string | null;
   loyaltyPoints?: number;
@@ -849,14 +850,20 @@ export interface ClientAppointmentSummary {
   scheduledTime: string;
   duration: number;
   status: "pending" | "confirmed" | "in_progress" | "completed" | "cancelled" | "no_show";
-  /** Euros. */
-  price: number | string;
-  /** Cents: every service and add-on, after discounts. */
-  totalAmount: number | string;
-  /** Cents. */
-  amountPaid: number | string;
-  paymentStatus: string;
+  /** Euros. Null in a visit with another professional, seen by staff (`restricted`). */
+  price: number | string | null;
+  /** Cents: every service and add-on, after discounts. Null when `restricted`. */
+  totalAmount: number | string | null;
+  /** Cents. Null when `restricted`. */
+  amountPaid: number | string | null;
+  paymentStatus: string | null;
   notes?: string | null;
+  /**
+   * A professional (staff) looking at a visit with a colleague: only when,
+   * what and with whom (no price, payment or notes). Their own visits and
+   * every visit seen by a manager come whole.
+   */
+  restricted?: boolean;
   service?: { id: string; name: string } | null;
   professional?: { id: string; firstName: string; lastName: string } | null;
   services?: Array<{

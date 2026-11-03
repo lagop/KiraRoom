@@ -27,6 +27,7 @@ import {
   type ClientPage,
 } from "./client-search";
 import { countryForPhone, normalizeClientEmail } from "./client-contact";
+import { clientAsStaffSees, clientReachWhere } from "./client-reach";
 
 /**
  * Whose clients a caller may reach. Owner/admin: {} (the whole salon).
@@ -85,10 +86,11 @@ export class ClientsService {
    * the clients with at least one appointment with that professional.
    */
   async findAll(tenantId: string, scope: ClientScope = {}) {
-    return this.prisma.client.findMany({
+    const rows = await this.prisma.client.findMany({
       where: { tenantId, ...this.scopeWhere(scope) },
       select: CLIENT_LIST_SELECT,
     });
+    return this.asSeen(rows, scope);
   }
 
   /**
@@ -119,14 +121,24 @@ export class ClientsService {
       }),
       this.prisma.client.count({ where }),
     ]);
-    return { data, total, page: query.page, pageSize: query.pageSize, totalPages: Math.ceil(total / query.pageSize) };
+    return {
+      data: this.asSeen(data, scope),
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
+      totalPages: Math.ceil(total / query.pageSize),
+    };
   }
 
-  /** Staff see only the clients they have served or will serve. */
+  /** Rows as the caller sees them: staff through clientAsStaffSees (client-reach.ts). */
+  private asSeen<T extends Record<string, any>>(rows: T[], scope: ClientScope): T[] {
+    const own = scope.professionalId;
+    return own ? rows.map((row) => clientAsStaffSees(row, own)) : rows;
+  }
+
+  /** Staff see only the clients they have served or will serve (client-reach.ts: not through a cancelled appointment). */
   private scopeWhere(scope: ClientScope): Prisma.ClientWhereInput {
-    return scope.professionalId
-      ? { appointments: { some: { professionalId: scope.professionalId } } }
-      : {};
+    return scope.professionalId ? clientReachWhere({ professionalId: scope.professionalId }) : {};
   }
 
   async findAllWithFilters(tenantId: string, filters: ClientFilters) {
@@ -216,8 +228,10 @@ export class ClientsService {
   /**
    * One client's file: her details (health data included), and her visits
    * with what each one cost. Staff (`scope.professionalId`) only reach
-   * clients they have an appointment with; any other id is a 404, as if
-   * it did not exist.
+   * clients they have an appointment with (not cancelled); any other id is
+   * a 404, as if it did not exist. They see their own visits whole and the
+   * other professionals' without price, payment or notes, and no spend
+   * totals (clientAsStaffSees).
    */
   async findOne(tenantId: string, id: string, scope: ClientScope = {}) {
     const client = await this.prisma.client.findFirst({
@@ -236,7 +250,7 @@ export class ClientsService {
       throw new NotFoundException("Cliente no encontrado");
     }
 
-    return client;
+    return scope.professionalId ? clientAsStaffSees(client, scope.professionalId) : client;
   }
 
   /**
@@ -275,11 +289,12 @@ export class ClientsService {
     const country = await countryForPhone(this.prisma, tenantId, updateClientDto.phone);
     const data = buildClientUpdateData(updateClientDto, client, country);
     try {
-      return await this.prisma.client.update({
+      const updated = await this.prisma.client.update({
         where: { id, tenantId },
         data,
         select: CLIENT_DETAIL_SELECT,
       });
+      return scope.professionalId ? clientAsStaffSees(updated, scope.professionalId) : updated;
     } catch (error) {
       rethrowClientWriteError(error);
     }

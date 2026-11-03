@@ -267,6 +267,7 @@ export function AppointmentDrawer({
     const payload = buildStaffBookingPayload({
       role: currentUser?.role,
       ownProfessionalId: currentUser?.professionalId,
+      crossBooking: allowProfessionalCrossBooking,
       clientId: newAppointment.clientId,
       serviceId: newAppointment.serviceId,
       professionalId: newAppointment.professionalId,
@@ -660,10 +661,10 @@ export function AppointmentDrawer({
                   setNewAppointment({ ...newAppointment, time: "" });
                 }}
                 onSingleServiceChange={(serviceId) => {
+                  // Staff start on their own agenda (with cross-booking
+                  // they may switch to a colleague below).
                   const professionalId =
-                    currentUser?.role === "staff" &&
-                    !allowProfessionalCrossBooking &&
-                    currentUser.professionalId
+                    currentUser?.role === "staff" && currentUser.professionalId
                       ? currentUser.professionalId
                       : "";
                   // Picking from the dropdown seeds `selectedServices` so

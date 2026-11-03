@@ -21,7 +21,10 @@ import { ConsentService } from "../consent/consent.service";
  *   orders (with clients' contact details); no staff screen reads them.
  * - GET /pos/clients: staff find any client at the till, but only with a
  *   search of two characters or more (an empty search returned 50 clients,
- *   one letter walked the whole base).
+ *   one letter walked the whole base). A client who is not theirs comes
+ *   back as id, name and a masked phone (D16).
+ * - GET /pos/products(/:id) carry the cost price: managers only (D20); the
+ *   staff till reads /pos/sale-products.
  * - The rebooking routes of one client took any id: a professional read
  *   any client's cadence and reminders, and could stop them. The client
  *   must now be in reach, as her file; the id must be a UUID.
@@ -37,6 +40,8 @@ describe("routes now for managers only", () => {
     [PosController, "getInventoryTransactions"],
     [PosController, "getOrders"],
     [PosController, "getOrderDetails"],
+    [PosController, "getProducts"],
+    [PosController, "getProduct"],
   ])("%p.%s is owner and admin only", (cls, name) => {
     expect(roles(cls, name)).toEqual(SALON_MANAGERS);
   });
@@ -53,16 +58,26 @@ describe("routes now for managers only", () => {
     [PromotionsController, "validateCode"],
     [PosController, "getClients"],
     [PosController, "getProductCategories"],
+    [PosController, "saleProducts"],
   ])("%p.%s stays open to the team (the till)", (cls, name) => {
     expect(roles(cls, name)).toEqual(SALON_TEAM);
   });
 });
 
 describe("GET /pos/clients for staff", () => {
-  function pos() {
-    const findMany = jest.fn(async () => [{ id: "c1" }]);
-    const service = new PosService({ client: { findMany } } as any, {} as any);
-    return { service, findMany };
+  const ANA = { id: "u-ana", role: "staff" as const };
+  const rows = [
+    { id: "c-mine", firstName: "Lucía", lastName: "Mía", email: "lucia@example.test", phone: "+34 600 111 222", status: "active", loyaltyPoints: 30 },
+    { id: "c-other", firstName: "Luisa", lastName: "Otra", email: "luisa@example.test", phone: "600 333 444", status: "active", loyaltyPoints: 80 },
+  ];
+  /** Ana (professional p-ana) has a live appointment with c-mine only. */
+  function pos({ professional = { id: "p-ana" } as { id: string } | null } = {}) {
+    const findMany = jest.fn(async ({ where }: any) =>
+      where.id?.in ? rows.filter((r) => where.id.in.includes(r.id) && r.id === "c-mine").map(({ id }) => ({ id })) : rows,
+    );
+    const findFirst = jest.fn(async () => professional);
+    const service = new PosService({ client: { findMany }, professional: { findFirst } } as any, {} as any);
+    return { service, findMany, findFirst };
   }
 
   it("asks for at least two characters", () => {
@@ -71,30 +86,61 @@ describe("GET /pos/clients for staff", () => {
 
   it.each([[undefined], [""], ["   "], ["a"], [" 6 "]])("a search of %p is nothing for staff, without asking the database", async (search) => {
     const { service, findMany } = pos();
-    expect(await service.getClients("t1", search as any, { role: "staff" })).toEqual([]);
+    expect(await service.getClients("t1", search as any, ANA)).toEqual([]);
     expect(findMany).not.toHaveBeenCalled();
   });
 
-  it("two characters or more search as before", async () => {
-    const { service, findMany } = pos();
-    expect(await service.getClients("t1", " lu ", { role: "staff" })).toEqual([{ id: "c1" }]);
-    const where = (findMany.mock.calls[0] as any[])[0].where;
-    expect(where.tenantId).toBe("t1");
-    expect(where.OR[0]).toEqual({ firstName: { contains: "lu", mode: "insensitive" } });
+  it("their own clients come whole; anyone else's as id, name and a masked phone (D16)", async () => {
+    const { service } = pos();
+    expect(await service.getClients("t1", " lu ", ANA)).toEqual([
+      rows[0],
+      { id: "c-other", firstName: "Luisa", lastName: "Otra", phone: "···· 444", masked: true },
+    ]);
   });
 
-  it.each([["owner"], ["admin"]])("%s: unchanged, an empty search lists clients", async (role) => {
+  it("theirs = an appointment with them that is not cancelled, the client file's rule (D17)", async () => {
     const { service, findMany } = pos();
-    expect(await service.getClients("t1", undefined, { role })).toEqual([{ id: "c1" }]);
-    expect(await service.getClients("t1", "a", { role })).toEqual([{ id: "c1" }]);
+    await service.getClients("t1", "lu", ANA);
+    const mine = (findMany.mock.calls[1] as any[])[0].where;
+    expect(mine).toEqual({
+      tenantId: "t1",
+      id: { in: ["c-mine", "c-other"] },
+      appointments: { some: { professionalId: "p-ana", status: { not: "cancelled" } } },
+    });
+  });
+
+  it("searching by email finds only their own clients", async () => {
+    const { service, findMany } = pos();
+    await service.getClients("t1", "example", ANA);
+    const where = (findMany.mock.calls[0] as any[])[0].where;
+    expect(where.tenantId).toBe("t1");
+    expect(where.OR[0]).toEqual({ firstName: { contains: "example", mode: "insensitive" } });
+    expect(where.OR[3]).toEqual({
+      email: { contains: "example", mode: "insensitive" },
+      appointments: { some: { professionalId: "p-ana", status: { not: "cancelled" } } },
+    });
+  });
+
+  it("an account with no professional: every row masked, no email search", async () => {
+    const { service, findMany } = pos({ professional: null });
+    const out = await service.getClients("t1", "lu", ANA);
+    expect(out.every((r: any) => r.masked && !("email" in r))).toBe(true);
+    expect((findMany.mock.calls[0] as any[])[0].where.OR).toHaveLength(3);
+    expect(findMany).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([["owner"], ["admin"]])("%s: unchanged, every row whole, an empty search lists clients", async (role) => {
+    const { service, findMany } = pos();
+    expect(await service.getClients("t1", undefined, { id: "u-boss", role } as any)).toEqual(rows);
+    expect(await service.getClients("t1", "a", { id: "u-boss", role } as any)).toEqual(rows);
     expect(findMany).toHaveBeenCalledTimes(2);
   });
 
-  it("the controller passes the caller's role", async () => {
+  it("the controller passes who is asking", async () => {
     const getClients = jest.fn(async () => []);
     const controller = new PosController({ getClients } as any, {} as any);
-    await controller.getClients({ user: { tenantId: "t1", role: "staff" } }, "a");
-    expect(getClients).toHaveBeenCalledWith("t1", "a", { role: "staff" });
+    await controller.getClients({ user: { tenantId: "t1", id: "u-ana", role: "staff" } }, "a");
+    expect(getClients).toHaveBeenCalledWith("t1", "a", { id: "u-ana", role: "staff" });
   });
 });
 

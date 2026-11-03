@@ -1744,6 +1744,7 @@
     "charged": "Amount",
     "paid": "Paid",
     "with_professional": "with {name}",
+    "others_visits_restricted": "Visits with other professionals show the date and the services, without amounts or notes.",
     "allergies": "Allergies",
     "medical_conditions": "Medical conditions",
     "no_history": "No appointments yet",

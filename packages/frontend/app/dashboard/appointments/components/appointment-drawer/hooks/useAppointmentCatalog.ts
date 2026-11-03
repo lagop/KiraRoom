@@ -22,7 +22,9 @@ import { staffOwnCatalog } from "../../appointment-drawer.utils";
  *
  * A professional (role `staff`) gets their own professional and the
  * services they perform, and `currentUser` carries that professional's id
- * and name: the token has neither. See staffOwnCatalog.
+ * and name: the token has neither. When the salon lets professionals book
+ * for colleagues (read by every role; only managers change it), they get
+ * the whole team and every service. See staffOwnCatalog.
  */
 
 export interface CatalogService {
@@ -114,24 +116,19 @@ export function useAppointmentCatalog(
         const user = getCurrentUser();
         setCurrentUser(user);
 
-        // Load professional cross-booking setting (only for owners/admins)
-        if (user?.role === "owner" || user?.role === "admin") {
-          try {
-            const settings =
-              await apiClient.getProfessionalCrossBookingSetting();
-            setAllowProfessionalCrossBooking(
-              settings.allowProfessionalCrossBooking,
-            );
-          } catch (error) {
-            console.error(
-              "Error loading professional cross-booking settings:",
-              error,
-            );
-            // Default to false if API fails
-            setAllowProfessionalCrossBooking(false);
-          }
-        } else {
-          // Staff users always have cross-booking disabled by default
+        // The salon's "professionals may book for colleagues": every role
+        // reads it (staff, to be offered their colleagues). Off if it fails.
+        try {
+          const settings =
+            await apiClient.getProfessionalCrossBookingSetting();
+          setAllowProfessionalCrossBooking(
+            settings.allowProfessionalCrossBooking === true,
+          );
+        } catch (error) {
+          console.error(
+            "Error loading professional cross-booking settings:",
+            error,
+          );
           setAllowProfessionalCrossBooking(false);
         }
       } catch (error) {
@@ -228,7 +225,7 @@ export function useAppointmentCatalog(
     if (user?.role !== "staff") {
       return { currentUser: user, professionals: allProfessionals, services: allServices };
     }
-    const own = staffOwnCatalog(user.id, allProfessionals, allServices);
+    const own = staffOwnCatalog(user.id, allProfessionals, allServices, allowProfessionalCrossBooking);
     if (!own) return { currentUser: user, professionals: [], services: [] };
     return {
       currentUser: {
@@ -240,7 +237,7 @@ export function useAppointmentCatalog(
       professionals: own.professionals,
       services: own.services,
     };
-  }, [user, allProfessionals, allServices]);
+  }, [user, allProfessionals, allServices, allowProfessionalCrossBooking]);
 
   return {
     services,
