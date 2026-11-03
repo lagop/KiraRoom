@@ -1121,6 +1121,7 @@ export class AppointmentsService {
             {
               tenantId,
               professionalId: s.professionalId,
+              locationId: (booking as { locationId?: string | null }).locationId || null,
               day: at.day,
               time: at.time,
               durationMinutes: Math.round((s.end.getTime() - s.start.getTime()) / 60_000),
@@ -2835,7 +2836,10 @@ export class AppointmentsService {
     // closed has nothing to offer, whoever is asked for; otherwise each
     // professional's shifts lose their own blocks and the salon's partial
     // closures, and a professional away all day has no shifts left.
-    const timeOff = await timeOffBetween(this.prisma as any, tenantId, dateString);
+    // At a location: its own closures and the general ones (multi-local).
+    const timeOff = await timeOffBetween(this.prisma as any, tenantId, dateString, dateString, {
+      locationId: opts.locationId,
+    });
     if (salonClosedOn(timeOff, dateString)) return [];
     // The salon's own hours that weekday (working-hours.ts salonWindowsFor):
     // none recorded imposes nothing, a weekday without hours is closed --

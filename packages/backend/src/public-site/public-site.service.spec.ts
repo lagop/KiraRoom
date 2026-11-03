@@ -314,6 +314,26 @@ describe("PublicSiteService.getPage", () => {
       });
     });
 
+    it("a location's own closure closes only that location; the salon's close both", async () => {
+      const { svc, prisma } = makeService({
+        locations: [CENTRO, NORTE],
+        links: [
+          { professionalId: "p1", locationId: "l-centro", isPrimary: true },
+          { professionalId: "p1", locationId: "l-norte", isPrimary: false },
+        ],
+      });
+      const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Madrid" }).format(new Date());
+      const at = (offset: number) => new Date(Date.parse(`${today}T00:00:00.000Z`) + offset * 86_400_000);
+      const day = (offset: number) => at(offset).toISOString().slice(0, 10);
+      prisma.timeOff.findMany.mockImplementation((async () => [
+        { professionalId: null, locationId: null, kind: "closure", startDate: at(2), endDate: at(2) },
+        { professionalId: null, locationId: "l-norte", kind: "closure", startDate: at(5), endDate: at(6) },
+      ]) as any);
+      const page = await svc.getPage("x");
+      expect(page.closedDays).toEqual([day(2)]);
+      expect(page.closedDaysByLocation).toEqual({ "l-centro": [day(2)], "l-norte": [day(2), day(5), day(6)] });
+    });
+
     it("a second location with nobody assigned is no choice: the page stays single-location", async () => {
       const page = await makeService({
         locations: [CENTRO, NORTE],

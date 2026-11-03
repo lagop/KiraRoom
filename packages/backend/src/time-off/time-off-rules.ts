@@ -46,6 +46,8 @@ export interface TimeOffBlock {
   status?: TimeOffStatusName | string | null;
   /** Null: the whole salon is closed. */
   professionalId: string | null;
+  /** A closure of one location only (multi-local); null or absent: every location. */
+  locationId?: string | null;
   kind: TimeOffKindName | string;
   startDate: Date | string;
   endDate: Date | string;
@@ -219,6 +221,8 @@ export function timeOffProblem(input: {
 /** What a create or an edit may store, before it reaches the database. */
 export interface TimeOffInput {
   professionalId?: string | null;
+  /** Closures only: one location (multi-local); null for every location. */
+  locationId?: string | null;
   kind: string;
   startDate: string;
   endDate: string;
@@ -237,6 +241,7 @@ export function timeOffInputProblem(input: TimeOffInput): string | null {
   const salonWide = !input.professionalId;
   if (salonWide && input.kind !== "closure") return "Elige un profesional, o registra un cierre del salón.";
   if (!salonWide && input.kind === "closure") return "Un cierre es de todo el salón: no lleva profesional.";
+  if (!salonWide && input.locationId) return "Solo un cierre puede ser de un local.";
 
   if (!dateOfDay(input.startDate ?? "") || !dateOfDay(input.endDate ?? "")) {
     return "Las fechas tienen que ser días válidos (AAAA-MM-DD).";

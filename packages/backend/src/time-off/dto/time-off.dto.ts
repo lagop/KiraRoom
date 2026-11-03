@@ -78,6 +78,13 @@ export class CreateTimeOffDto {
   @IsUUID(undefined, { message: "El profesional no es válido." })
   professionalId?: string | null;
 
+  /** A closure of one location only (multi-local); absent or null: every location. */
+  @ApiPropertyOptional({ description: "Closures only: one location (multi_location); null for every location" })
+  @emptyToNull
+  @IsOptional()
+  @IsUUID(undefined, { message: "El local no es válido." })
+  locationId?: string | null;
+
   @ApiProperty({ enum: TIME_OFF_KINDS })
   @IsIn(TIME_OFF_KINDS as unknown as string[], { message: "El tipo de ausencia no es válido." })
   kind!: TimeOffKindName;
@@ -117,6 +124,13 @@ export class CreateTimeOffDto {
  * professional is a different absence (delete it and record the new one).
  */
 export class UpdateTimeOffDto {
+  /** A closure of one location only (multi-local); absent or null: every location. */
+  @ApiPropertyOptional({ description: "Closures only: one location (multi_location); null for every location" })
+  @emptyToNull
+  @IsOptional()
+  @IsUUID(undefined, { message: "El local no es válido." })
+  locationId?: string | null;
+
   @ApiPropertyOptional({ enum: TIME_OFF_KINDS })
   @IsOptional()
   @IsIn(TIME_OFF_KINDS as unknown as string[], { message: "El tipo de ausencia no es válido." })

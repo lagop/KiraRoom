@@ -1,5 +1,11 @@
 import { randomUUID } from "crypto";
-import { BadRequestException, ConflictException, ExecutionContext, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  ExecutionContext,
+  ForbiddenException,
+  NotFoundException,
+} from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { UserRole } from "@prisma/client";
 import { TimeOffService, TimeOffUser } from "./time-off.service";
@@ -35,6 +41,7 @@ interface Apt {
   id: string;
   tenantId?: string;
   professionalId: string;
+  locationId?: string | null;
   day?: string;
   scheduledTime: string;
   duration: number;
@@ -42,7 +49,9 @@ interface Apt {
   services?: any[];
 }
 
-function build(opts: { appointments?: Apt[]; timeOff?: any[]; now?: Date } = {}) {
+function build(
+  opts: { appointments?: Apt[]; timeOff?: any[]; now?: Date; multiLocation?: boolean; locations?: string[] } = {},
+) {
   const people: Record<string, { id: string; firstName: string; lastName: string; tenantId: string }> = {
     [ANA]: { id: ANA, firstName: "Ana", lastName: "Gil", tenantId: TENANT },
     [BEA]: { id: BEA, firstName: "Bea", lastName: "Ruiz", tenantId: TENANT },
@@ -75,6 +84,9 @@ function build(opts: { appointments?: Apt[]; timeOff?: any[]; now?: Date } = {})
           if (!where.status.in.includes(a.status)) return false;
           if (a.scheduledDate < where.scheduledDate.gte || a.scheduledDate > where.scheduledDate.lte) return false;
           if (!where.OR) return true;
+          if (where.OR[0].locationId !== undefined) {
+            return where.OR.some((o: any) => (a.locationId ?? null) === o.locationId);
+          }
           const pro = where.OR[0].professionalId;
           return a.professionalId === pro || a.services.some((s: any) => s.professionalId === pro);
         }),
@@ -119,7 +131,13 @@ function build(opts: { appointments?: Apt[]; timeOff?: any[]; now?: Date } = {})
     },
   };
   const notifications = { create: jest.fn(async (dto: any) => ({ id: randomUUID(), ...dto })) };
-  const service = new TimeOffService(prisma, notifications as any);
+  prisma.location = {
+    findFirst: jest.fn(async ({ where }: any) =>
+      where.tenantId === TENANT && (opts.locations ?? []).includes(where.id) ? { id: where.id } : null,
+    ),
+  };
+  const flags = { isEnabled: jest.fn(async () => opts.multiLocation ?? false) };
+  const service = new TimeOffService(prisma, notifications as any, flags as any);
   // 10:00 in Madrid on 2 Nov 2026: DAY (14 Dec) is ahead.
   service.clock = () => opts.now ?? new Date("2026-11-02T09:00:00.000Z");
   return { service, prisma, rows, notifications };
@@ -535,6 +553,57 @@ describe("who may call what", () => {
     expect(guard.canActivate(ctx(TimeOffController.prototype.create, "admin"))).toBe(true);
     expect(guard.canActivate(ctx(TimeOffController.prototype.list, "staff"))).toBe(true);
     expect(guard.canActivate(ctx(TimeOffController.prototype.list, "client"))).toBe(false);
+  });
+});
+
+describe("a closure of one location (multi-local)", () => {
+  const NORTE = randomUUID();
+  const CENTRO = randomUUID();
+  const closure = { kind: "closure" as const, startDate: DAY, endDate: DAY, locationId: NORTE };
+
+  it("is stored with its location, and clashes only with that location's visits and those with none recorded", async () => {
+    const { service, rows } = build({
+      multiLocation: true,
+      locations: [NORTE, CENTRO],
+      appointments: [
+        { id: "norte", professionalId: ANA, locationId: NORTE, scheduledTime: "10:00", duration: 30 },
+        { id: "centro", professionalId: BEA, locationId: CENTRO, scheduledTime: "10:00", duration: 30 },
+        { id: "unknown", professionalId: BEA, locationId: null, scheduledTime: "12:00", duration: 30 },
+      ],
+    });
+    const out = await service.create(OWNER, closure);
+    expect(rows[0]).toMatchObject({ professionalId: null, locationId: NORTE });
+    expect(out.timeOff).toMatchObject({ locationId: NORTE });
+    expect(out.conflicts.map((c) => c.id).sort()).toEqual(["norte", "unknown"]);
+    // The whole salon's closure still clashes with every visit.
+    const all = await service.preview(OWNER, { kind: "closure", startDate: DAY, endDate: DAY });
+    expect(all.conflicts).toHaveLength(3);
+  });
+
+  it("needs multi-local, an open location of this salon, and is for closures only", async () => {
+    await expect(build({ multiLocation: false, locations: [NORTE] }).service.create(OWNER, closure)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    await expect(build({ multiLocation: true, locations: [] }).service.create(OWNER, closure)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    await expect(
+      build({ multiLocation: true, locations: [NORTE] }).service.create(OWNER, {
+        professionalId: ANA,
+        kind: "vacation",
+        startDate: DAY,
+        endDate: DAY,
+        locationId: NORTE,
+      }),
+    ).rejects.toThrow(/Solo un cierre/);
+  });
+
+  it("an edit moves it to another location, or to every location with null", async () => {
+    const row = stored({ professionalId: null, kind: "closure", locationId: NORTE, professional: null });
+    const { service } = build({ timeOff: [row], multiLocation: true, locations: [NORTE, CENTRO] });
+    expect((await service.update(OWNER, row.id, { locationId: CENTRO })).timeOff.locationId).toBe(CENTRO);
+    expect((await service.update(OWNER, row.id, { locationId: null })).timeOff.locationId).toBeNull();
+    await expect(service.update(OWNER, row.id, { locationId: randomUUID() })).rejects.toBeInstanceOf(BadRequestException);
   });
 });
 
