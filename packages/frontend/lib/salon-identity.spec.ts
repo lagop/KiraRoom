@@ -39,6 +39,12 @@ check("filled fields are sent trimmed", salonIdentityUpdate(fields), {
   logo: "",
 });
 
+check("a cover image is sent, and blank clears it", [
+  salonIdentityUpdate({ ...fields, coverImage: "data:image/jpeg;base64,AAAA" }).coverImage,
+  salonIdentityUpdate({ ...fields, coverImage: " " }).coverImage,
+  "coverImage" in salonIdentityUpdate(fields),
+], ["data:image/jpeg;base64,AAAA", null, false]);
+
 const cleared = salonIdentityUpdate({ ...fields, description: "  ", postalCode: "", state: "", phone: " " });
 check("emptied description, postal code, province and phone are sent as null (cleared)", [
   cleared.description,

@@ -1,9 +1,11 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Lock } from "lucide-react";
 import { useTenantContext } from "../../hooks/useFeatureAccess";
-import { readOnlyNotice } from "../../../lib/read-only-notice";
+import { canManageBilling, readOnlyNotice } from "../../../lib/read-only-notice";
+import { getCurrentUser } from "../../../lib/utils";
 
 /**
  * Across the dashboard while the salon is read-only: its trial ended without
@@ -12,8 +14,14 @@ import { readOnlyNotice } from "../../../lib/read-only-notice";
  * bookings; without this, the owner only found out from errors on each save.
  */
 export function ReadOnlyBanner() {
-  const notice = readOnlyNotice(useTenantContext());
-  if (!notice) return null;
+  const ctx = useTenantContext();
+  // Read after mount (localStorage). Facturación is the owner's only: an
+  // admin or a professional is asked to tell her instead of a link they
+  // cannot use.
+  const [role, setRole] = useState<string | null | undefined>(undefined);
+  useEffect(() => setRole(getCurrentUser()?.role ?? null), []);
+  const notice = readOnlyNotice({ ...ctx, canManageBilling: canManageBilling(role) });
+  if (role === undefined || !notice) return null;
 
   return (
     <div
@@ -26,12 +34,14 @@ export function ReadOnlyBanner() {
           <strong className="font-semibold">{notice.title}</strong> {notice.body}
         </p>
       </div>
-      <Link
-        href="/dashboard/billing"
-        className="self-start whitespace-nowrap rounded-md bg-red-700 px-3 py-1.5 font-medium text-white hover:bg-red-800 sm:self-auto"
-      >
-        {notice.cta}
-      </Link>
+      {notice.cta && (
+        <Link
+          href="/dashboard/billing"
+          className="self-start whitespace-nowrap rounded-md bg-red-700 px-3 py-1.5 font-medium text-white hover:bg-red-800 sm:self-auto"
+        >
+          {notice.cta}
+        </Link>
+      )}
     </div>
   );
 }

@@ -1021,6 +1021,11 @@ export type NotificationType =
   | "appointment_cancelled"
   | "appointment_confirmed"
   | "appointment_completed"
+  | "appointment_rescheduled"
+  | "appointment_no_show"
+  | "appointment_reminder_24h"
+  | "appointment_reminder_1h"
+  | "waitlist_slot_available"
   | "review_request"
   | "payment_received"
   | "payment_failed"
@@ -3413,7 +3418,8 @@ class ApiClient implements ApiClientInterface {
     const searchParams = new URLSearchParams();
     if (params?.limit) searchParams.append("limit", params.limit.toString());
     if (params?.offset) searchParams.append("offset", params.offset.toString());
-    if (params?.unreadOnly) searchParams.append("unreadOnly", "true");
+    // The API filters on isRead (NotificationFilterDto).
+    if (params?.unreadOnly) searchParams.append("isRead", "false");
     if (params?.type) searchParams.append("type", params.type);
 
     const query = searchParams.toString();
@@ -4831,6 +4837,8 @@ class ApiClient implements ApiClientInterface {
     state?: string | null;
     phone?: string | null;
     logo?: string;
+    /** The public page's cover photo; null clears it. */
+    coverImage?: string | null;
     email?: string | null;
     minCancelHours?: number;
     /** null (or "") clears it. */
@@ -5245,6 +5253,8 @@ class ApiClient implements ApiClientInterface {
     hasServices: boolean;
     hasStaff: boolean;
     hasWorkingHours: boolean;
+    /** The salon's saved week (list format); [] when none is set. */
+    openingHours?: Array<{ day: string; openTime: string; closeTime: string }>;
     hasFirstAppointment: boolean;
     serviceTemplates: Array<{ name: string; durationMinutes: number; price: number }>;
   }> {
@@ -5916,19 +5926,14 @@ class ApiClient implements ApiClientInterface {
     return this.request(`/assistant/conversations/${conversationId}/messages`);
   }
 
+  /** POST /assistant/messages: the backend has no per-conversation POST route. */
   async sendAssistantMessage(
     conversationId: string,
     body: SendAssistantMessageDto,
   ): Promise<AssistantSendResponse> {
-    return this.request(`/assistant/conversations/${conversationId}/messages`, {
+    return this.request('/assistant/messages', {
       method: 'POST',
-      body: JSON.stringify(body),
-    });
-  }
-
-  async markAssistantConversationRead(conversationId: string): Promise<void> {
-    return this.request(`/assistant/conversations/${conversationId}/read`, {
-      method: 'POST',
+      body: JSON.stringify({ ...body, conversationId }),
     });
   }
 
@@ -5966,13 +5971,6 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  async getAssistantFeedbackForMessage(messageId: string): Promise<{
-    messageId: string;
-    up: number;
-    down: number;
-  }> {
-    return this.request(`/assistant/messages/${messageId}/feedback`);
-  }
 
   /**
    * Re-exported for component imports.
@@ -6099,6 +6097,8 @@ export interface SendAssistantMessageDto {
 export interface CreateAssistantConversationDto {
   sessionId?: string;
   title?: string;
+  /** true: a new, empty thread ("Nueva conversación"). */
+  fresh?: boolean;
 }
 
 export interface DailyBriefing {
@@ -6127,7 +6127,14 @@ export interface DailyBriefing {
   };
   gaps: {
     total: number;
-    items: Array<{ start: string; end: string; minutes: number }>;
+    /** Per professional, inside their hours, from now on. */
+    items: Array<{
+      start: string;
+      end: string;
+      minutes: number;
+      professionalId?: string;
+      professionalFirstName?: string;
+    }>;
   };
   lowStock: {
     total: number;
