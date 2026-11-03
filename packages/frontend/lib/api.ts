@@ -1152,8 +1152,14 @@ export interface HomeSummary {
   today: string;
   /** The salon's clock, "HH:mm". */
   now: string;
+  /** The location the lists are cut to (Empresa); null for the whole salon. */
+  location: { id: string; name: string } | null;
   /** Today's pending, confirmed and in-progress appointments, by time. */
   todayAppointments: HomeAppointmentRow[];
+  /** Active professionals (of the location), by name; a professional: themselves. */
+  professionals: { id: string; firstName: string; lastName: string }[];
+  /** Today's occupancy, Analítica's definition; null for staff. */
+  occupancy: AnalyticsOccupancy | null;
   /** Pending from today on: the first five and how many there are. */
   pendingConfirmations: { total: number; items: HomeAppointmentRow[] };
   /** Visits up to today still owed: the five latest, how many and how much (cents). */
@@ -3602,8 +3608,9 @@ class ApiClient implements ApiClientInterface {
   }
 
   /** Inicio's lists: today, to confirm and to charge, with their totals. */
-  async getHomeSummary(): Promise<HomeSummary> {
-    return this.request<HomeSummary>("/appointments/home");
+  async getHomeSummary(locationId?: string | null): Promise<HomeSummary> {
+    const query = locationId ? `?locationId=${encodeURIComponent(locationId)}` : "";
+    return this.request<HomeSummary>(`/appointments/home${query}`);
   }
 
   async getPendingPaymentAppointments(params?: {
