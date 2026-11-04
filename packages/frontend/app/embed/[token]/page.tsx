@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   Calendar,
@@ -10,8 +10,10 @@ import {
   Check,
   AlertCircle,
   MapPin,
+  Phone,
 } from "lucide-react";
-import { formatPrice, type PublicSalonLocation } from "@/lib/salon-seo";
+import { formatPrice, priceOnRequest, publicImageSrc, type PublicSalonLocation } from "@/lib/salon-seo";
+import { postEmbedHeight } from "@/lib/embed-snippet";
 import {
   BOOKING_CHOICE_TEXT,
   bookingErrorMessage,
@@ -40,8 +42,11 @@ interface WidgetConfig {
     id: string;
     name: string;
     slug: string;
-    logo?: string;
-    coverImage?: string;
+    /** URLs (publicImageSrc), never the uploaded data: URLs. */
+    logoUrl?: string | null;
+    coverImageUrl?: string | null;
+    /** Shown instead of the steps while the salon takes no bookings. */
+    phone?: string | null;
     city?: string;
     country?: string;
     timezone: string;
@@ -98,6 +103,12 @@ interface WidgetConfig {
    * optional WhatsApp promotions box. Absent from older servers.
    */
   whatsappPromotions?: boolean;
+  /**
+   * False while the salon is read-only (trial ended, cancelled, suspended):
+   * the widget gives its phone instead of the steps. Absent from older
+   * servers (= true).
+   */
+  acceptsBookings?: boolean;
 }
 
 interface Slot {
@@ -144,6 +155,27 @@ export default function EmbedWidgetPage() {
   // /appointments/booking-window): the date picker stops there.
   const [bookingWindow, setBookingWindow] = useState<{ serviceId: string; lastDay: string } | null>(null);
   const lastDay = bookingWindow && bookingWindow.serviceId === serviceId ? bookingWindow.lastDay : null;
+  // What the widget shows, measured for the salon's page (postEmbedHeight).
+  const contentRef = useRef<HTMLDivElement | null>(null);
+
+  // The salon's site sizes the iframe to the widget (the snippet's script,
+  // lib/embed-snippet.ts): it is told the height, a bare number, on every
+  // change. Without it a fixed 640 px put a scroll inside the page's scroll.
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el || typeof window === "undefined" || window.parent === window) return;
+    const send = () => postEmbedHeight(window.parent, el.getBoundingClientRect().height);
+    send();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(send);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [config, error]);
+
+  // The tab and screen readers name the widget after the salon.
+  useEffect(() => {
+    if (config?.tenant.name) document.title = `Reservar en ${config.tenant.name}`;
+  }, [config?.tenant.name]);
 
   useEffect(() => {
     if (!token) return;
@@ -331,24 +363,62 @@ export default function EmbedWidgetPage() {
     setProfessionalId(kept.professionalId);
   };
 
+  const logo = publicImageSrc(config.tenant.logoUrl);
+  const cover = publicImageSrc(config.tenant.coverImageUrl);
+  const takesBookings = config.acceptsBookings !== false;
+  const salonPhone = config.tenant.phone?.trim() || null;
+  const priceLabel = (s: { price: number; currency: string }) =>
+    priceOnRequest(s.price) ? "Consultar" : formatPrice(Number(s.price), s.currency || config.tenant.currency);
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 to-white">
-      <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center gap-3">
-        {config.tenant.logo && (
+      <div ref={contentRef}>
+      {/* The salon's cover photo (Ajustes > Salón) above its name. */}
+      {cover && (
+        <img
+          src={cover}
+          alt=""
+          width={1200}
+          height={300}
+          className="block h-28 w-full object-cover sm:h-40"
+        />
+      )}
+      <header className="bg-white border-b border-gray-200 px-4 sm:px-6 py-4 flex items-center gap-3">
+        {logo && (
           <img
-            src={config.tenant.logo}
-            alt={config.tenant.name}
+            src={logo}
+            alt=""
+            width={40}
+            height={40}
             className="w-10 h-10 rounded-full object-cover"
           />
         )}
-        <div>
-          <h1 className="font-semibold text-gray-900">{config.tenant.name}</h1>
+        <div className="min-w-0">
+          <h1 className="font-semibold text-gray-900 break-words">{config.tenant.name}</h1>
           <p className="text-xs text-gray-500">Reserva online</p>
         </div>
       </header>
 
-      <main className="max-w-3xl mx-auto p-6">
-        {step === "select" && (
+      <main className="max-w-3xl mx-auto p-4 sm:p-6">
+        {/* No online booking while the salon is read-only: its phone. */}
+        {!takesBookings && (
+          <div data-test="widget-booking-unavailable" className="text-center space-y-4 py-8">
+            <p className="text-gray-700">
+              Ahora mismo no se puede reservar online. Llama al salón para pedir cita.
+            </p>
+            {salonPhone && (
+              <a
+                href={`tel:${salonPhone.replace(/\s+/g, "")}`}
+                target="_top"
+                className="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-5 py-2.5 font-medium text-white hover:bg-purple-700"
+              >
+                <Phone className="w-4 h-4" aria-hidden="true" />
+                Llamar al {salonPhone}
+              </a>
+            )}
+          </div>
+        )}
+        {takesBookings && step === "select" && (
           <div className="space-y-6">
             {locations.length > 0 && (
               <div data-test="widget-location-step">
@@ -403,9 +473,7 @@ export default function EmbedWidgetPage() {
                         <Clock className="inline w-3 h-3 mr-1" />
                         {s.duration} min
                       </span>
-                      <span className="font-semibold text-purple-600">
-                        {formatPrice(Number(s.price), s.currency || config.tenant.currency)}
-                      </span>
+                      <span className="font-semibold text-purple-600">{priceLabel(s)}</span>
                     </div>
                   </button>
                 ))}
@@ -421,7 +489,7 @@ export default function EmbedWidgetPage() {
               <h2 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
                 <UserIcon className="w-4 h-4 text-purple-600" /> Profesional
               </h2>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 min-[360px]:grid-cols-2 md:grid-cols-3 gap-3">
                 <button
                   type="button"
                   aria-pressed={!professionalId}
@@ -444,7 +512,7 @@ export default function EmbedWidgetPage() {
                       // No location chosen yet: hers (her main one when she works at several).
                       setLocationId((current) => locationForProfessional(p, locations, current));
                     }}
-                    className={`p-3 border rounded-lg text-sm transition ${
+                    className={`p-3 border rounded-lg text-sm transition break-words ${
                       professionalId === p.id
                         ? "border-purple-500 bg-purple-50"
                         : "border-gray-200 hover:border-purple-300"
@@ -470,6 +538,7 @@ export default function EmbedWidgetPage() {
                 <input
                   id="widget-date"
                   type="date"
+                  aria-label="Fecha"
                   value={date}
                   min={today || undefined}
                   max={lastDay || undefined}
@@ -512,7 +581,7 @@ export default function EmbedWidgetPage() {
           </div>
         )}
 
-        {step === "details" && (
+        {takesBookings && step === "details" && (
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 text-sm">
               <strong>{selectedService?.name}</strong> · {time || "--:--"} · {date}
@@ -523,29 +592,55 @@ export default function EmbedWidgetPage() {
                 Esa hora ya no está libre. Vuelve atrás y elige otra.
               </div>
             )}
-            <input
-              required
-              placeholder="Nombre completo"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2"
-            />
-            <input
-              required
-              type="tel"
-              placeholder="Teléfono"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2"
-            />
-            <input
-              type="email"
-              placeholder="Email (opcional, para recibir la confirmación)"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2"
-            />
+            {/* Labelled: a placeholder goes as soon as she types, and a
+                screen reader then has no name for the field. */}
+            <div>
+              <label htmlFor="widget-name" className="block text-sm font-medium text-gray-700 mb-1">
+                Nombre y apellidos *
+              </label>
+              <input
+                id="widget-name"
+                required
+                autoComplete="name"
+                placeholder="Nombre y apellidos"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2"
+              />
+            </div>
+            <div>
+              <label htmlFor="widget-phone" className="block text-sm font-medium text-gray-700 mb-1">
+                Teléfono *
+              </label>
+              <input
+                id="widget-phone"
+                required
+                type="tel"
+                autoComplete="tel"
+                placeholder="+34 600 123 456"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2"
+              />
+            </div>
+            <div>
+              <label htmlFor="widget-email" className="block text-sm font-medium text-gray-700 mb-1">
+                Email (opcional, para recibir la confirmación)
+              </label>
+              <input
+                id="widget-email"
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2"
+              />
+            </div>
+            <label htmlFor="widget-notes" className="sr-only">
+              Notas (opcional)
+            </label>
             <textarea
+              id="widget-notes"
               placeholder="Notas (opcional)"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
@@ -652,11 +747,12 @@ export default function EmbedWidgetPage() {
               </p>
             )}
             {bookingId && (
-              <p className="text-xs text-gray-400">Ref: {bookingId.slice(0, 8)}</p>
+              <p className="text-xs text-gray-500">Ref: {bookingId.slice(0, 8)}</p>
             )}
           </div>
         )}
       </main>
+      </div>
     </div>
   );
 }

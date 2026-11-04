@@ -18,13 +18,17 @@ import apiClient from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { useTenantTranslations } from "@/lib/use-translation";
 import {
+  acceptsBookings,
   formatAddress,
   formatPrice,
   openingHoursRows,
+  priceOnRequest,
+  publicImageSrc,
   socialLinks,
   type PublicSalonPage,
   type SocialLink,
 } from "@/lib/salon-seo";
+import type { PublicReviews } from "@/lib/public-site-server";
 import {
   bookingDateFromQuery,
   bookingErrorMessage,
@@ -76,7 +80,9 @@ interface SalonData {
   address: string;
   phone: string;
   email: string;
+  /** Where to load them from (publicImageSrc), never a data: URL. */
   logo: string | null;
+  cover: string | null;
   currency: string;
   /** Instagram and Facebook, from the salon's general settings. */
   social: SocialLink[];
@@ -162,7 +168,8 @@ function fromPublicPage(page: PublicSalonPage) {
     address: formatAddress(page.address),
     phone: page.phone ?? "",
     email: page.email ?? "",
-    logo: page.logo,
+    logo: publicImageSrc(page.logoUrl),
+    cover: publicImageSrc(page.coverImageUrl),
     currency: page.currency,
     social: socialLinks(page),
   };
@@ -198,9 +205,12 @@ function fromPublicPage(page: PublicSalonPage) {
 export default function SalonBookingPage({
   salonName,
   initialData,
+  initialReviews,
 }: {
   salonName: string;
   initialData: PublicSalonPage;
+  /** Fetched with the page on the server; undefined when that failed. */
+  initialReviews?: PublicReviews;
 }) {
   const { toast } = useToast();
   const { t, language, setLanguage } = useTenantTranslations();
@@ -218,6 +228,10 @@ export default function SalonBookingPage({
   // without it); said once per list: "Precios con IVA incluido".
   const taxIncluded = initialData.taxLabel ? t("sites.taxIncluded", { label: initialData.taxLabel }) : null;
   const hoursRows = openingHoursRows(initialData.openingHours, initialData.openingShifts);
+  // A read-only salon (trial ended, cancelled, suspended): its details and
+  // phone, no form, which would be refused at the very end.
+  const takesBookings = acceptsBookings(initialData);
+  const phoneHref = salonData.phone ? `tel:${salonData.phone.replace(/\s+/g, "")}` : null;
   const [availableSlots, setAvailableSlots] = useState<AvailableTimeSlot[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
   // Bumped to ask the server for the slots again (after a failed booking).
@@ -644,7 +658,9 @@ export default function SalonBookingPage({
                 <div className="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center">
                   <img
                     src={salonData.logo}
-                    alt={`${salonData.name} Logo`}
+                    alt=""
+                    width={24}
+                    height={24}
                     className="w-6 h-6 rounded-full object-cover"
                   />
                 </div>
@@ -658,14 +674,28 @@ export default function SalonBookingPage({
         </div>
       </nav>
 
-      <div className="container mx-auto px-4 py-12">
+      <div className="container mx-auto px-4 py-8 sm:py-12">
+        {/* The salon's cover photo (Ajustes > Salón), as the page's header. */}
+        {salonData.cover && (
+          <div className="mb-8 -mt-2 overflow-hidden rounded-2xl bg-purple-100 shadow-sm">
+            <img
+              src={salonData.cover}
+              alt={t("sites.coverAlt", { name: salonData.name })}
+              width={1200}
+              height={400}
+              className="h-40 w-full object-cover sm:h-64"
+            />
+          </div>
+        )}
         {/* Salon Header */}
         <div className="text-center mb-12">
           {salonData?.logo && (
             <div className="mx-auto w-24 h-24 bg-purple-100 rounded-full flex items-center justify-center mb-4">
               <img
                 src={salonData.logo}
-                alt={`${salonData.name} Logo`}
+                alt={t("sites.logoAlt", { name: salonData.name })}
+                width={64}
+                height={64}
                 className="w-16 h-16 rounded-full object-cover"
               />
             </div>
@@ -686,8 +716,8 @@ export default function SalonBookingPage({
                 <span>{salonData.address}</span>
               </span>
             )}
-            {salonData.phone && (
-              <a href={`tel:${salonData.phone.replace(/\s+/g, "")}`} className="flex items-center space-x-1 hover:text-purple-700">
+            {salonData.phone && phoneHref && (
+              <a href={phoneHref} className="flex items-center space-x-1 hover:text-purple-700">
                 <Phone className="w-4 h-4 text-purple-600" />
                 <span>{salonData.phone}</span>
               </a>
@@ -718,7 +748,24 @@ export default function SalonBookingPage({
 
         {/* Booking Form */}
         <div className="max-w-4xl mx-auto">
-          <div className="bg-white rounded-2xl shadow-lg p-8">
+          {/* No online booking while the salon is read-only: its phone. */}
+          {!takesBookings && (
+            <div data-test="booking-unavailable" className="bg-white rounded-2xl shadow-lg p-4 sm:p-8 text-center">
+              <h2 className="text-2xl font-bold text-purple-900 mb-3">{t("sites.noOnlineBookingTitle")}</h2>
+              <p className="text-gray-700">{t("sites.noOnlineBooking")}</p>
+              {phoneHref && (
+                <a
+                  href={phoneHref}
+                  className="mt-6 inline-flex items-center gap-2 rounded-lg bg-purple-600 px-6 py-3 font-medium text-white hover:bg-purple-700"
+                >
+                  <Phone className="w-4 h-4" aria-hidden="true" />
+                  {t("sites.callSalon", { phone: salonData.phone })}
+                </a>
+              )}
+            </div>
+          )}
+          {takesBookings && (
+          <div className="bg-white rounded-2xl shadow-lg p-4 sm:p-8">
             <h2 className="text-2xl font-bold text-purple-900 mb-6 text-center">
               {t("bookingPublic.title")}
             </h2>
@@ -827,7 +874,7 @@ export default function SalonBookingPage({
                         htmlFor="clientName"
                         className="block text-sm font-medium text-gray-700 mb-1"
                       >
-                        {t("bookingPublic.first_name")} {t("bookingPublic.last_name")} *
+                        {t("bookingPublic.full_name")} *
                       </label>
                       <input
                         type="text"
@@ -836,6 +883,7 @@ export default function SalonBookingPage({
                         value={bookingData.clientName}
                         onChange={handleInputChange}
                         required
+                        autoComplete="name"
                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors"
                         placeholder={t("bookingPublic.name_placeholder")}
                       />
@@ -857,6 +905,7 @@ export default function SalonBookingPage({
                         name="clientEmail"
                         value={bookingData.clientEmail}
                         onChange={handleInputChange}
+                        autoComplete="email"
                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors"
                         placeholder={t("bookingPublic.email_placeholder")}
                       />
@@ -876,6 +925,7 @@ export default function SalonBookingPage({
                         value={bookingData.clientPhone}
                         onChange={handleInputChange}
                         required
+                        autoComplete="tel"
                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors"
                         placeholder="+34 600 123 456"
                       />
@@ -937,7 +987,11 @@ export default function SalonBookingPage({
                   <option value="">-- {t("bookingPublic.select_service")} --</option>
                   {offeredServices.map((service) => (
                     <option key={service.id} value={service.id}>
-                      {service.name} - {formatPrice(service.price, salonData.currency)} ({service.duration} min)
+                      {service.name} -{" "}
+                      {priceOnRequest(service.price)
+                        ? t("sites.priceOnRequest")
+                        : formatPrice(service.price, salonData.currency)}{" "}
+                      ({service.duration} min)
                     </option>
                   ))}
                 </select>
@@ -956,7 +1010,7 @@ export default function SalonBookingPage({
                 </h3>
 
                 {bookingData.serviceId ? (
-                  <div role="group" aria-labelledby="booking-professional-heading" className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  <div role="group" aria-labelledby="booking-professional-heading" className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                     {filteredProfessionals.map((professional) => (
                       <button
                         key={professional.id}
@@ -984,18 +1038,21 @@ export default function SalonBookingPage({
                         }`}
                       >
                         <div className="flex items-center space-x-3">
-                          <div className="w-12 h-12 rounded-full bg-purple-100 flex items-center justify-center">
+                          <div className="w-12 h-12 shrink-0 rounded-full bg-purple-100 flex items-center justify-center">
                             {professional.profileImage ? (
                               <img
                                 src={professional.profileImage}
-                                alt={professional.firstName}
+                                alt=""
+                                width={48}
+                                height={48}
+                                loading="lazy"
                                 className="w-12 h-12 rounded-full object-cover"
                               />
                             ) : (
-                              <User className="w-6 h-6 text-purple-600" />
+                              <User className="w-6 h-6 text-purple-600" aria-hidden="true" />
                             )}
                           </div>
-                          <div>
+                          <div className="min-w-0 break-words">
                             <p className="font-medium text-gray-900">
                               {professional.firstName} {professional.lastName}
                             </p>
@@ -1170,11 +1227,12 @@ export default function SalonBookingPage({
             </>
             )}
           </div>
+          )}
 
           {/* Salon Information Section. Every service with its price and
               every professional are in the HTML (no "show more" that only
               renders on click): this is what a search engine reads. */}
-          <section className="mt-8 bg-white rounded-2xl shadow-lg p-8">
+          <section className="mt-8 bg-white rounded-2xl shadow-lg p-4 sm:p-8">
             <h2 className="text-xl font-bold text-purple-900 mb-4">
               {t("sites.about", { name: salonData.name })}
             </h2>
@@ -1191,18 +1249,32 @@ export default function SalonBookingPage({
                 <ul className="space-y-2 text-gray-600">
                   {services.map((service) => (
                     <li key={service.id} className="flex items-start justify-between gap-4">
-                      <span className="flex items-start space-x-2">
+                      <span className="flex min-w-0 items-start space-x-2">
                         <span className="mt-2 w-2 h-2 shrink-0 bg-purple-500 rounded-full" />
-                        <span>
+                        <span className="min-w-0 break-words">
                           <span className="text-gray-800">{service.name}</span>
                           {service.description && (
                             <span className="block text-xs text-gray-500">{service.description}</span>
                           )}
+                          {/* Not in the form: say why, and how to book it. */}
+                          {!service.isOnlineBookable && (
+                            <span data-test="price-list-phone-only" className="block text-xs text-purple-700">
+                              {phoneHref ? (
+                                <a href={phoneHref} className="underline hover:text-purple-900">
+                                  {t("sites.phoneOnly")}
+                                </a>
+                              ) : (
+                                t("sites.phoneOnly")
+                              )}
+                            </span>
+                          )}
                         </span>
                       </span>
                       <span className="whitespace-nowrap text-sm">
-                        {formatPrice(service.price, salonData.currency)}
-                        <span className="text-gray-400"> · {service.duration} min</span>
+                        {priceOnRequest(service.price)
+                          ? t("sites.priceOnRequest")
+                          : formatPrice(service.price, salonData.currency)}
+                        <span className="text-gray-500"> · {service.duration} min</span>
                       </span>
                     </li>
                   ))}
@@ -1214,14 +1286,14 @@ export default function SalonBookingPage({
                   <div>
                     <h3 className="font-semibold text-gray-900 mb-2 flex items-center">
                       <Clock className="w-4 h-4 mr-2 text-purple-600" />
-                      Horario
+                      {t("sites.hours")}
                     </h3>
                     <table className="text-sm text-gray-600">
                       <tbody>
                         {hoursRows.map((row) => (
-                          <tr key={row.day}>
-                            <td className="pr-6 py-0.5">{row.day}</td>
-                            <td className="py-0.5">{row.hours ?? "Cerrado"}</td>
+                          <tr key={row.key}>
+                            <td className="pr-6 py-0.5">{t(`sites.days.${row.key}`)}</td>
+                            <td className="py-0.5">{row.hours ?? t("sites.closed")}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -1251,7 +1323,7 @@ export default function SalonBookingPage({
                           <span>
                             {professional.firstName} {professional.lastName}
                             {professional.position && (
-                              <span className="text-gray-400"> · {professional.position}</span>
+                              <span className="text-gray-500"> · {professional.position}</span>
                             )}
                           </span>
                         </li>
@@ -1270,7 +1342,8 @@ export default function SalonBookingPage({
                 {t("sites.ourTeam")}
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                {professionals.slice(0, 6).map((professional) => (
+                {/* Everyone: there was a cut at six with no way to see the rest. */}
+                {professionals.map((professional) => (
                   <div
                     key={professional.id}
                     className="bg-white rounded-xl shadow-md overflow-hidden hover:shadow-lg transition-shadow"
@@ -1281,6 +1354,9 @@ export default function SalonBookingPage({
                         <img
                           src={professional.profileImage}
                           alt={`${professional.firstName} ${professional.lastName}`}
+                          width={96}
+                          height={96}
+                          loading="lazy"
                           className="w-24 h-24 rounded-full object-cover border-4 border-white"
                         />
                       ) : (
@@ -1291,7 +1367,7 @@ export default function SalonBookingPage({
                       )}
                     </div>
                     {/* Professional Info */}
-                    <div className="p-4">
+                    <div className="p-4 min-w-0 break-words">
                       <h4 className="font-bold text-gray-900 text-lg">
                         {professional.firstName} {professional.lastName}
                       </h4>
@@ -1307,7 +1383,8 @@ export default function SalonBookingPage({
                       )}
                       {/* Portfolio Info */}
                       <div className="mt-3 space-y-1">
-                        {professional.yearsExperience && (
+                        {/* "> 0": a 0 rendered as a stray "0". */}
+                        {(professional.yearsExperience ?? 0) > 0 && (
                           <p className="text-xs text-gray-500">
                             <span className="font-medium">
                               {professional.yearsExperience}
@@ -1354,6 +1431,9 @@ export default function SalonBookingPage({
                                   key={idx}
                                   src={img}
                                   alt={t("sites.portfolioWork", { n: idx + 1 })}
+                                  width={48}
+                                  height={48}
+                                  loading="lazy"
                                   className="w-12 h-12 object-cover rounded-lg"
                                 />
                               ))}
@@ -1371,7 +1451,7 @@ export default function SalonBookingPage({
             </div>
           )}
 
-          {salonData?.id && <PublicReviewsSection tenantId={salonData.id} />}
+          {salonData?.id && <PublicReviewsSection tenantId={salonData.id} initial={initialReviews} t={t} />}
         </div>
       </div>
 
@@ -1418,8 +1498,9 @@ export default function SalonBookingPage({
         </div>
       </footer>
 
-      {/* Virtual Receptionist Widget */}
-      {salonData && (
+      {/* Virtual Receptionist Widget: it books, so not while the salon
+          takes no bookings (it would be refused at the end too). */}
+      {salonData && takesBookings && (
         <ChatWidget salonId={salonData.id} />
       )}
     </div>

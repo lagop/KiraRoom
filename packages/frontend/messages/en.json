@@ -2926,7 +2926,8 @@
     "done_email": "We will send the details to {email}.",
     "done_phone": "To change or cancel it, call the salon:",
     "done_ref": "Reference: {ref}",
-    "book_another": "Make another booking"
+    "book_another": "Make another booking",
+    "full_name": "Full name"
   },
   "sites": {
     "notFoundTitle": "Salon not found",
@@ -2941,7 +2942,39 @@
     "yearsExperience": "years of experience",
     "languages": "Languages:",
     "portfolioWork": "Work {n}",
-    "cancellationPolicy": "Cancellations"
+    "cancellationPolicy": "Cancellations",
+    "hours": "Opening hours",
+    "closed": "Closed",
+    "days": {
+      "monday": "Monday",
+      "tuesday": "Tuesday",
+      "wednesday": "Wednesday",
+      "thursday": "Thursday",
+      "friday": "Friday",
+      "saturday": "Saturday",
+      "sunday": "Sunday"
+    },
+    "priceOnRequest": "Ask",
+    "phoneOnly": "Book by phone",
+    "noOnlineBooking": "Online booking is not available right now. Call the salon to book an appointment.",
+    "noOnlineBookingTitle": "Book by phone",
+    "callSalon": "Call {phone}",
+    "coverAlt": "Photo of {name}",
+    "logoAlt": "{name} logo",
+    "reviews": {
+      "title": "Client reviews",
+      "ratingOne": "rating",
+      "ratingOther": "ratings",
+      "summary": "Only clients with a completed appointment can leave a review. We publish every review, positive and negative, except those that break these rules. The average counts every rating except those removed under these rules.",
+      "seeRules": "See the rules",
+      "notPublished": "Reviews with any of the following are not published and do not count in the average:",
+      "withoutConsent": "Reviews from clients who did not agree to show them count in the average, without name or comment."
+    },
+    "error": {
+      "title": "We can't show this page right now",
+      "description": "Please try again in a few minutes.",
+      "retry": "Try again"
+    }
   },
   "platform_llm": {
     "title": "Chatbot AI provider",
