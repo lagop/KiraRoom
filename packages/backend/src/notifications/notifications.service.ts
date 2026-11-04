@@ -258,7 +258,8 @@ export class NotificationsService {
     // If sendToAllClients is true, get all client IDs for the tenant
     if (dto.sendToAllClients) {
       const clients = await this.prisma.client.findMany({
-        where: { tenantId: dto.tenantId },
+        // Not the onboarding test client (O5).
+        where: { tenantId: dto.tenantId, isTest: false },
         select: { id: true },
       });
       clientIds = clients.map((c) => c.id);

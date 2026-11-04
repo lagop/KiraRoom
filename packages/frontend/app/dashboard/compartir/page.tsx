@@ -113,7 +113,15 @@ export default function SharePage() {
   if (error) return <p className="text-sm text-red-700">{error}</p>;
   if (!info) return <p className="text-sm text-gray-500">Cargando…</p>;
 
+  // The link or the QR taken from here: the checklist's "Publica tu widget
+  // o QR" is done (it only counted website widgets, which a salon without
+  // a website never has).
+  const shared = (how: "qr_download" | "link_copy" | "link_share") => {
+    void apiClient.recordBookingLinkShared(how);
+  };
+
   const copy = async () => {
+    shared("link_copy");
     try {
       await navigator.clipboard.writeText(info.url);
       setCopied(true);
@@ -126,6 +134,7 @@ export default function SharePage() {
   const nativeShare = async () => {
     try {
       await navigator.share({ title: info.name, text: message, url: info.url });
+      shared("link_share");
     } catch {
       /* the client closed the share sheet */
     }
@@ -137,6 +146,7 @@ export default function SharePage() {
     if (navigator.canShare?.({ files: [file] })) {
       try {
         await navigator.share({ files: [file], text: message });
+        shared("link_share");
       } catch {
         /* closed */
       }
@@ -206,10 +216,16 @@ export default function SharePage() {
           <div className="mt-4 flex items-center gap-4">
             <Qr url={qrTargetUrl(info.url)} className="h-36 w-36 shrink-0 [&>svg]:h-full [&>svg]:w-full" />
             <div className="flex flex-col gap-2">
-              <button type="button" className={btn} onClick={() => downloadQrPng(qrTargetUrl(info.url), shareFileName(info.slug, "qr", "png"))}>
+              <button type="button" className={btn} onClick={() => {
+                shared("qr_download");
+                downloadQrPng(qrTargetUrl(info.url), shareFileName(info.slug, "qr", "png"));
+              }}>
                 <Download className="h-4 w-4" /> Descargar PNG
               </button>
-              <button type="button" className={btn} onClick={() => downloadQrSvg(qrTargetUrl(info.url), shareFileName(info.slug, "qr", "svg"))}>
+              <button type="button" className={btn} onClick={() => {
+                shared("qr_download");
+                downloadQrSvg(qrTargetUrl(info.url), shareFileName(info.slug, "qr", "svg"));
+              }}>
                 <Download className="h-4 w-4" /> Descargar SVG
               </button>
               <p className="text-xs text-gray-500">El SVG es para imprenta: se amplía sin perder calidad.</p>
@@ -231,7 +247,11 @@ export default function SharePage() {
               </div>
             )}
             <div className="flex flex-col gap-2">
-              <button type="button" className={btn} disabled={!social} onClick={() => social && saveBlob(social.blob, shareFileName(info.slug, "redes", "png"))}>
+              <button type="button" className={btn} disabled={!social} onClick={() => {
+                if (!social) return;
+                shared("link_share");
+                saveBlob(social.blob, shareFileName(info.slug, "redes", "png"));
+              }}>
                 <Download className="h-4 w-4" /> Descargar imagen
               </button>
               {canShare && (
@@ -252,7 +272,7 @@ export default function SharePage() {
         </p>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {PRINT_FORMATS.map((f) => (
-            <a key={f.id} href={printHref(f.id)} target="_blank" rel="noreferrer" className="rounded-lg border border-gray-200 p-4 hover:border-violet-300 hover:bg-violet-50">
+            <a key={f.id} href={printHref(f.id)} onClick={() => shared("qr_download")} target="_blank" rel="noreferrer" className="rounded-lg border border-gray-200 p-4 hover:border-violet-300 hover:bg-violet-50">
               <div className="flex items-center gap-2 font-medium text-gray-900">
                 <Printer className="h-4 w-4 text-violet-700" /> {f.title}
               </div>
@@ -291,14 +311,17 @@ export default function SharePage() {
                             <button
                               type="button"
                               className="text-violet-700 hover:underline"
-                              onClick={() => downloadQrPng(target, shareFileName(info.slug, "qr", "png", it.label))}
+                              onClick={() => {
+                                shared("qr_download");
+                                downloadQrPng(target, shareFileName(info.slug, "qr", "png", it.label));
+                              }}
                             >
                               PNG
                             </button>
-                            <a className="text-violet-700 hover:underline" href={printHref("cartel-a5", { [g.print]: it.id })} target="_blank" rel="noreferrer">
+                            <a className="text-violet-700 hover:underline" href={printHref("cartel-a5", { [g.print]: it.id })} onClick={() => shared("qr_download")} target="_blank" rel="noreferrer">
                               Cartel
                             </a>
-                            <a className="text-violet-700 hover:underline" href={printHref("pegatinas", { [g.print]: it.id })} target="_blank" rel="noreferrer">
+                            <a className="text-violet-700 hover:underline" href={printHref("pegatinas", { [g.print]: it.id })} onClick={() => shared("qr_download")} target="_blank" rel="noreferrer">
                               Pegatinas
                             </a>
                           </span>

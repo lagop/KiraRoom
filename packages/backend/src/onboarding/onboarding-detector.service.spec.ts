@@ -35,6 +35,8 @@ function buildPrismaMock() {
     notificationTemplates: [] as any[],
     clients: [] as any[],
     widgetInstances: [] as any[],
+    productEvents: [] as any[],
+    appointments: [] as any[],
     whatsAppConnections: [] as any[],
     stateRows: new Map<string, any>(),
     stepDefs: [] as any[],
@@ -213,6 +215,16 @@ function buildPrismaMock() {
     professional: { findMany: proFindMany },
     notificationTemplate: { count: notificationTemplateCount },
     widgetInstance: { count: widgetCount },
+    productEvent: {
+      findFirst: jest.fn(async ({ where }: any) => state.productEvents.find((e: any) => e.name === where.name) ?? null),
+    },
+    appointment: {
+      count: jest.fn(async () => state.appointments.filter((a: any) => !a.isTest).length),
+      findFirst: jest.fn(
+        async ({ where }: any) =>
+          state.appointments.find((a: any) => !a.isTest && (!where.source || where.source.in.includes(a.source))) ?? null,
+      ),
+    },
     whatsAppConnection: { findFirst: whatsAppFindFirst },
     onboardingStepDef: {
       findMany: stepDefFindMany,
@@ -439,5 +451,23 @@ describe("OnboardingDetectorService.recomputeLinearStep", () => {
     await svc.detectAll("tenant-1");
     expect(m.state.stateRows.get("tenant-1").finishedAt).toBe(first);
     expect(m.prisma.onboardingState.upsert.mock.calls.length).toBe(upserts);
+  });
+});
+describe("widget_qr_setup: the QR or the link taken from Compartir (O10)", () => {
+  it("is done by a widget, a booking_link_shared event or an online booking, not by a test one", async () => {
+    const m = buildPrismaMock();
+    const svc = new OnboardingDetectorService(m.prisma, stubEvents());
+    expect((await svc.detectAll("tenant-1")).widget_qr_setup).toBe(false);
+
+    m.state.appointments.push({ id: "a0", source: "online", isTest: true });
+    m.state.appointments.push({ id: "a1", source: "staff", isTest: false });
+    expect((await svc.detectAll("tenant-1")).widget_qr_setup).toBe(false);
+
+    m.state.productEvents.push({ name: "booking_link_shared" });
+    expect((await svc.detectAll("tenant-1")).widget_qr_setup).toBe(true);
+
+    m.state.productEvents.length = 0;
+    m.state.appointments.push({ id: "a2", source: "widget", isTest: false });
+    expect((await svc.detectAll("tenant-1")).widget_qr_setup).toBe(true);
   });
 });
