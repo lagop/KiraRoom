@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import { AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
+import { AlertCircle, CheckCircle2, Loader2, Mail } from "lucide-react";
 import apiClient, { getToken } from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
 
@@ -22,6 +22,23 @@ function VerifyEmailPageContent() {
   // Read after mount: localStorage does not exist on the server render.
   const [signedIn, setSignedIn] = useState(false);
   const sent = useRef(false);
+  // "Reenviar el email" on an expired link: needs the session (the endpoint
+  // sends to the signed-in account's own address).
+  const [resend, setResend] = useState<"idle" | "sending" | "sent" | "already" | "error">("idle");
+  const [resendError, setResendError] = useState("");
+
+  const resendEmail = async () => {
+    setResend("sending");
+    setResendError("");
+    try {
+      const r = await apiClient.resendVerificationEmail();
+      setResend(r.alreadyVerified ? "already" : r.sent ? "sent" : "error");
+      if (!r.sent && !r.alreadyVerified) setResendError(t("email_verify.resend_failed"));
+    } catch (e) {
+      setResend("error");
+      setResendError(e instanceof Error && e.message ? e.message : t("email_verify.resend_failed"));
+    }
+  };
 
   const verify = useCallback(async () => {
     setStatus("checking");
@@ -77,6 +94,38 @@ function VerifyEmailPageContent() {
               <AlertCircle className="w-5 h-5 mr-2 flex-shrink-0" />
               <span>{t("email_verify.invalid")}</span>
             </div>
+            {signedIn ? (
+              <div className="mt-6">
+                {resend === "sent" ? (
+                  <p className="bg-green-50 text-green-800 p-3 rounded-lg text-sm" role="status">
+                    {t("email_verify.resend_sent")}
+                  </p>
+                ) : resend === "already" ? (
+                  <p className="bg-green-50 text-green-800 p-3 rounded-lg text-sm" role="status">
+                    {t("email_verify.already_verified")}
+                  </p>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void resendEmail()}
+                      disabled={resend === "sending"}
+                      className="w-full inline-flex items-center justify-center gap-2 bg-purple-600 text-white py-2 px-4 rounded-lg hover:bg-purple-700 disabled:opacity-50"
+                    >
+                      {resend === "sending" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
+                      {t("email_verify.resend")}
+                    </button>
+                    {resendError && (
+                      <p className="mt-2 text-sm text-red-600" role="alert">
+                        {resendError}
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-600 mt-4">{t("email_verify.resend_signed_out")}</p>
+            )}
           </>
         )}
 

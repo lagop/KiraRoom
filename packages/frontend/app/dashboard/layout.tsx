@@ -10,6 +10,7 @@ import { OnboardingHost } from "./_components/onboarding/OnboardingHost";
 import CookieBanner from "../components/cookie-banner";
 import { ReadOnlyBanner } from "@/components/billing/ReadOnlyBanner";
 import { TrialEndingBanner } from "@/components/billing/TrialEndingBanner";
+import { EmailVerificationBanner } from "@/components/auth/email-verification-banner";
 import { managersOnlyPage } from "@/lib/dashboard-nav";
 import { getCurrentUser } from "@/lib/utils";
 import { ManagersOnlyNotice } from "./components/managers-only-notice";
@@ -224,6 +225,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         <ReadOnlyBanner />
         {/* Last 7 days of the trial, owner only (D25). */}
         <TrialEndingBanner />
+        {/* Owner whose email is not confirmed: a new link (audit 7A, S1). */}
+        <EmailVerificationBanner />
 
         {/* Page content */}
         <main className="flex-1 p-6 bg-white shadow-sm min-w-0 overflow-x-hidden">
