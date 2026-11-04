@@ -17,8 +17,11 @@ import { postEmbedHeight } from "@/lib/embed-snippet";
 import {
   BOOKING_CHOICE_TEXT,
   bookingErrorMessage,
+  formatBookingDate,
+  isBeyondWindow,
   localDateString,
   privacyPolicyUrl,
+  splitClientName,
   whatsappPromotionsLabel,
 } from "@/lib/public-booking";
 import {
@@ -30,6 +33,7 @@ import {
   locationFromQuery,
   locationReady,
   professionalsAtLocation,
+  professionalsForService,
   servicesAtLocation,
 } from "@/lib/public-booking-locations";
 
@@ -147,6 +151,10 @@ export default function EmbedWidgetPage() {
   // Where the server booked it (POST /appointments answers with the location).
   const [bookedPlace, setBookedPlace] = useState<{ name: string; address: string } | null>(null);
   const [bookingError, setBookingError] = useState<string | null>(null);
+  // The last day the chosen service can be booked online (GET
+  // /appointments/booking-window): the date picker stops there.
+  const [bookingWindow, setBookingWindow] = useState<{ serviceId: string; lastDay: string } | null>(null);
+  const lastDay = bookingWindow && bookingWindow.serviceId === serviceId ? bookingWindow.lastDay : null;
   // What the widget shows, measured for the salon's page (postEmbedHeight).
   const contentRef = useRef<HTMLDivElement | null>(null);
 
@@ -199,8 +207,30 @@ export default function EmbedWidgetPage() {
   }, [serviceId, professionalId, date, locationId]);
 
   useEffect(() => {
+    if (!config || !serviceId) return;
+    let cancelled = false;
+    const q = new URLSearchParams({ tenantId: config.tenant.id, serviceId });
+    fetch(`${API}/appointments/booking-window?${q.toString()}`)
+      .then(async (r) => (r.ok ? r.json() : null))
+      .then((w) => {
+        if (!cancelled && w?.lastDay) setBookingWindow({ serviceId, lastDay: w.lastDay });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [config, serviceId]);
+
+  useEffect(() => {
     setSlots([]);
-    if (!config || !serviceId || !date || !locationReady(bookingLocations(config), locationId)) {
+    if (
+      !config ||
+      !serviceId ||
+      !date ||
+      !locationReady(bookingLocations(config), locationId) ||
+      // Too far ahead: the message says so, nothing to ask.
+      isBeyondWindow(date, lastDay)
+    ) {
       setSlotsLoading(false);
       return;
     }
@@ -215,6 +245,8 @@ export default function EmbedWidgetPage() {
       ),
     });
     if (professionalId) params.append("professionalId", professionalId);
+    // "Cualquiera": only this widget's professionals, as the booking assigns.
+    else params.append("widgetInstanceId", config.widget.id);
     // At that location (multi-local): only the times of who works there.
     if (locationId) params.append("locationId", locationId);
     fetch(`${API}/appointments/available-slots?${params.toString()}`)
@@ -235,7 +267,7 @@ export default function EmbedWidgetPage() {
     return () => {
       cancelled = true;
     };
-  }, [config, serviceId, professionalId, date, locationId, slotsRefresh]);
+  }, [config, serviceId, professionalId, date, locationId, slotsRefresh, lastDay]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -243,8 +275,8 @@ export default function EmbedWidgetPage() {
     setSubmitting(true);
     setBookingError(null);
     try {
-      const [firstName, ...rest] = name.split(" ");
-      const lastName = rest.join(" ") || firstName;
+      // "Ana" is Ana with no last name, not "Ana Ana".
+      const { firstName, lastName } = splitClientName(name);
       const body = {
         tenantId: config.tenant.id,
         serviceId,
@@ -313,7 +345,16 @@ export default function EmbedWidgetPage() {
   // With a location step: only what can be booked at the chosen location
   // (before one is chosen, every service and whoever works at any of them).
   const servicesHere = servicesAtLocation(config.services, config.professionals, locations, locationId);
-  const professionalsHere = professionalsAtLocation(config.professionals, locations, locationId);
+  // Who does the chosen service (as on the salon's page): picking one who
+  // does not only ever showed "No hay huecos".
+  const professionalsAtHere = professionalsAtLocation(config.professionals, locations, locationId);
+  const professionalsHere = serviceId ? professionalsForService(professionalsAtHere, serviceId) : professionalsAtHere;
+  const pickService = (id: string) => {
+    setServiceId(id);
+    if (professionalId && !professionalsForService(config.professionals, id).some((p) => p.id === professionalId)) {
+      setProfessionalId("");
+    }
+  };
   const locationHere = chosenLocation(locations, locationId);
   const pickLocation = (id: string) => {
     setLocationId(id);
@@ -414,7 +455,7 @@ export default function EmbedWidgetPage() {
                     key={s.id}
                     type="button"
                     aria-pressed={serviceId === s.id}
-                    onClick={() => setServiceId(s.id)}
+                    onClick={() => pickService(s.id)}
                     className={`text-left p-4 border rounded-lg transition ${
                       serviceId === s.id
                         ? "border-purple-500 bg-purple-50"
@@ -491,13 +532,16 @@ export default function EmbedWidgetPage() {
             {serviceId && locationReady(locations, locationId) && (
               <div>
                 <h2 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                  <Calendar className="w-4 h-4 text-purple-600" /> Fecha y hora
+                  <Calendar className="w-4 h-4 text-purple-600" aria-hidden="true" />
+                  <label htmlFor="widget-date">Fecha y hora</label>
                 </h2>
                 <input
+                  id="widget-date"
                   type="date"
                   aria-label="Fecha"
                   value={date}
                   min={today || undefined}
+                  max={lastDay || undefined}
                   onChange={(e) => setDate(e.target.value)}
                   className="w-full md:w-1/3 border border-gray-300 rounded-lg px-3 py-2"
                 />
@@ -505,9 +549,11 @@ export default function EmbedWidgetPage() {
                   <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-3">
                     {slots.length === 0 && (
                       <div className="col-span-full text-sm text-gray-500" aria-live="polite">
-                        {slotsLoading
-                          ? "Buscando horas libres…"
-                          : "No hay huecos disponibles este día. Prueba con otra fecha u otro profesional."}
+                        {isBeyondWindow(date, lastDay) && lastDay
+                          ? `Solo se puede reservar online hasta el ${formatBookingDate(lastDay)}. Elige un día anterior.`
+                          : slotsLoading
+                            ? "Buscando horas libres…"
+                            : "No hay huecos disponibles este día. Prueba con otra fecha u otro profesional."}
                       </div>
                     )}
                     {slots.map((slot) => (

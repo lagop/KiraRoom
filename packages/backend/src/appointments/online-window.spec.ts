@@ -115,3 +115,47 @@ describe("GET /appointments/available-slots", () => {
     expect(spy.mock.calls[0][6]).toEqual({ onlineWindow: false });
   });
 });
+
+/**
+ * R19: a day past the service's maxAdvanceBooking showed "No quedan horas
+ * libres este día", as if the salon were full. GET
+ * /appointments/booking-window tells the page and the widget the last day.
+ */
+describe("publicBookingWindow", () => {
+  function windowFor(service: Record<string, unknown> | null, timezone = "Europe/Madrid") {
+    const prisma: any = {
+      tenant: { findUnique: async () => ({ timezone }) },
+      service: {
+        findFirst: async ({ where }: any) =>
+          service && (where.isOnlineBookable === undefined || service.isOnlineBookable !== false)
+            ? { id: SERVICE, minAdvanceBooking: 2, maxAdvanceBooking: 30, ...service }
+            : null,
+      },
+    };
+    const stub = {} as any;
+    return new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
+  }
+  const NOW = Date.parse("2026-11-04T23:30:00Z"); // 00:30 on the 5th in Madrid
+
+  it("is the day maxAdvanceBooking days ahead, in the salon's calendar", async () => {
+    await expect(windowFor({ maxAdvanceBooking: 30 }).publicBookingWindow(TENANT, SERVICE, NOW)).resolves.toEqual({
+      maxAdvanceDays: 30,
+      lastDay: "2026-12-05",
+    });
+    await expect(windowFor({ maxAdvanceBooking: 7 }, "Atlantic/Canary").publicBookingWindow(TENANT, SERVICE, NOW)).resolves.toEqual({
+      maxAdvanceDays: 7,
+      lastDay: "2026-11-11",
+    });
+  });
+
+  it("answers only for a service offered online", async () => {
+    await expect(windowFor({ isOnlineBookable: false }).publicBookingWindow(TENANT, SERVICE, NOW)).rejects.toThrow(
+      "Servicio no encontrado",
+    );
+    await expect(windowFor(null).publicBookingWindow(TENANT, SERVICE, NOW)).rejects.toThrow("Servicio no encontrado");
+  });
+
+  it("is public and checks its ids", () => {
+    expect(Reflect.getMetadata("isPublic", AppointmentsController.prototype.bookingWindow)).toBe(true);
+  });
+});

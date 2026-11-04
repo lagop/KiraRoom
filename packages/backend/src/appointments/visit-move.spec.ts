@@ -89,6 +89,20 @@ describe("planning a move", () => {
 });
 
 /** A salon where Ana and Bea work Mondays 09:00-17:00 (Madrid), with one visit. */
+/**
+ * A transaction client: the database's reads, the writes a test records,
+ * and the per-salon, per-day booking lock a move takes before its checks.
+ */
+function asTx(db: any, writes: any) {
+  return {
+    ...db,
+    ...writes,
+    appointment: { ...db.appointment, ...writes.appointment },
+    appointmentService: { ...db.appointmentService, ...writes.appointmentService },
+    $executeRaw: db.$executeRaw ?? (async () => 0),
+  };
+}
+
 function salon(opts: { busy?: Record<string, Array<{ scheduledTime: string; duration: number }>>; ownProfessional?: string } = {}) {
   const rows = [
     { id: "cut", professionalId: "ana", scheduledStart: null, scheduledEnd: null, isParallel: false, service: { name: "Corte", duration: 30 } },
@@ -133,7 +147,7 @@ function salon(opts: { busy?: Record<string, Array<{ scheduledTime: string; dura
           : { firstName: args.where.id === "ana" ? "Ana" : "Bea", lastName: "", workingHours: [{ day: "monday", openTime: "09:00", closeTime: "17:00" }] },
       ),
     },
-    $transaction: async (fn: any) => fn(tx),
+    $transaction: async (fn: any) => fn(asTx(prisma, tx)),
   };
   const stub = {} as any;
   const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);

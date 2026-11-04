@@ -5,8 +5,10 @@ import { Button } from "@/components/ui/Button";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Calendar, Clock, User, CheckCircle } from "lucide-react";
-import { useToast } from "@/components/ui/use-toast";
-import apiClient from "@/lib/api";
+// A demo (the landing page's "Ver demo de reservas"): example times, never
+// the API, and nothing is booked (lib/demo-booking.ts).
+import { demoSlots } from "@/lib/demo-booking";
+import { localDateString, parseDateOnly } from "@/lib/public-booking";
 import { useTranslations, useTenantTranslations } from "@/lib/use-translation";
 
 // Types for the widget
@@ -83,7 +85,6 @@ export const BookingWidget: React.FC<BookingWidgetProps> = ({
   language = "es",
   onBookingComplete,
 }) => {
-  const { toast } = useToast();
   const [step, setStep] = useState<
     "service" | "professional" | "datetime" | "client" | "confirmation"
   >("service");
@@ -105,61 +106,28 @@ export const BookingWidget: React.FC<BookingWidgetProps> = ({
 
   const t = useTranslations();
 
-  // Get available dates (next 30 days)
+  // The next 30 days but Sundays, in the visitor's calendar.
   const getAvailableDates = (): string[] => {
     const dates: string[] = [];
     const today = new Date();
 
     for (let i = 1; i <= 30; i++) {
-      const date = new Date(today);
-      date.setDate(today.getDate() + i);
-
-      // Skip weekends (optional)
+      const date = new Date(today.getFullYear(), today.getMonth(), today.getDate() + i);
       if (date.getDay() !== 0) {
-        dates.push(date.toISOString().split("T")[0]);
+        dates.push(localDateString(date));
       }
     }
 
     return dates;
   };
+  // "2026-11-10" as that local day (new Date("2026-11-10") is UTC midnight).
+  const localDay = (date: string) => parseDateOnly(date) ?? new Date(date);
 
-  // Get available slots for a date and professional
-  const getAvailableSlots = async (
-    date: string,
-    professionalId: string,
-  ): Promise<string[]> => {
-    try {
-      const response = await apiClient.getAvailableSlots(
-        salon.id,
-        professionalId,
-        selectedService?.id || "",
-        date,
-      );
-
-      return response
-        .filter((slot: { isAvailable: boolean }) => slot.isAvailable)
-        .map((slot: { time: string }) => slot.time);
-    } catch (error) {
-      console.error("Error fetching available slots:", error);
-      toast({
-        title: "Error",
-        description: t("noSlots"),
-        variant: "destructive",
-      });
-      return [];
-    }
-  };
-
+  // Example times. The demo's salon and team are invented, so the real
+  // availability endpoint refused them (400) and the demo never showed one.
   useEffect(() => {
     if (selectedDate && selectedProfessional) {
-      const loadSlots = async () => {
-        const slots = await getAvailableSlots(
-          selectedDate,
-          selectedProfessional.id,
-        );
-        setAvailableSlots(slots);
-      };
-      loadSlots();
+      setAvailableSlots(demoSlots(selectedDate));
     }
   }, [selectedDate, selectedProfessional]);
 
@@ -253,7 +221,7 @@ export const BookingWidget: React.FC<BookingWidgetProps> = ({
     setIsLoading(true);
 
     try {
-      // Simulate booking creation
+      // A demo: nothing is sent anywhere, and the confirmation says so.
       const appointment: Appointment = {
         id: `apt-${Date.now()}`,
         salonId: salon.id,
@@ -272,10 +240,6 @@ export const BookingWidget: React.FC<BookingWidgetProps> = ({
 
       setBookingComplete(true);
       onBookingComplete(appointment);
-
-      console.log(
-        `Appointment booked for ${clientData.name} on ${selectedDate} at ${selectedTime}`,
-      );
     } catch (error) {
       setError("No se pudo procesar la reserva. Inténtalo de nuevo.");
     } finally {
@@ -383,13 +347,13 @@ export const BookingWidget: React.FC<BookingWidgetProps> = ({
                 className="p-2 h-auto flex flex-col"
               >
                 <span className="text-xs">
-                  {new Date(date).toLocaleDateString(
+                  {localDay(date).toLocaleDateString(
                     language === "es" ? "es-ES" : "en-US",
                     { weekday: "short" },
                   )}
                 </span>
                 <span className="font-medium">
-                  {new Date(date).toLocaleDateString(
+                  {localDay(date).toLocaleDateString(
                     language === "es" ? "es-ES" : "en-US",
                     { day: "numeric" },
                   )}
@@ -476,7 +440,7 @@ export const BookingWidget: React.FC<BookingWidgetProps> = ({
           <p>
             <strong>Fecha:</strong>{" "}
             {selectedDate
-              ? new Date(selectedDate).toLocaleDateString(
+              ? localDay(selectedDate).toLocaleDateString(
                   language === "es" ? "es-ES" : "en-US",
                 )
               : ""}
@@ -502,9 +466,9 @@ export const BookingWidget: React.FC<BookingWidgetProps> = ({
       </div>
       <div>
         <h3 className="text-lg font-semibold">{t("success")}</h3>
-        <p className="text-gray-600">
-          Tu cita ha sido confirmada. Recibirás un email de confirmación en
-          breve.
+        <p className="text-gray-600" data-test="demo-booking-done">
+          Esto es una demostración: no se ha reservado ninguna cita ni se ha
+          enviado ningún mensaje. Así es como lo verán tus clientas.
         </p>
       </div>
       <div className="mt-6 p-4 bg-gray-50 rounded-lg text-left">
@@ -522,7 +486,7 @@ export const BookingWidget: React.FC<BookingWidgetProps> = ({
           <p>
             <strong>Fecha:</strong>{" "}
             {selectedDate
-              ? new Date(selectedDate).toLocaleDateString(
+              ? localDay(selectedDate).toLocaleDateString(
                   language === "es" ? "es-ES" : "en-US",
                 )
               : ""}
@@ -549,6 +513,9 @@ export const BookingWidget: React.FC<BookingWidgetProps> = ({
         <h2 className="text-xl font-bold">{salon.name}</h2>
         <p className="text-pink-100">{t("title")}</p>
       </div>
+      <p role="note" className="bg-amber-50 border-b border-amber-200 px-6 py-2 text-xs text-amber-800">
+        Demostración: los horarios son de ejemplo y no se reserva nada.
+      </p>
 
       <Card className="border-0 rounded-none">
         <CardContent className="p-6">

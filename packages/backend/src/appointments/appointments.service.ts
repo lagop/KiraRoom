@@ -106,6 +106,7 @@ import { appointmentDeleteBlocker, deleteAppointmentRow } from "./appointment-de
 import { isForeignKeyViolation } from "../common/prisma/history-deletes";
 import { snapshotAppointmentCommissions } from "../commissions/appointment-commission";
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
+import { reservePublicBookingSms } from "./public-booking-sms-cap";
 import {
   assertTransition,
   concurrentChange,
@@ -507,7 +508,9 @@ export class AppointmentsService {
         .catch((err) => this.logger.warn(`Booking choices not recorded: ${(err as Error).message}`));
     }
 
-    const notified = await this.afterAppointmentCreated(appointment, dto.source);
+    // From outside the salon: its SMS count against the daily caps
+    // (public-booking-sms-cap.ts).
+    const notified = await this.afterAppointmentCreated(appointment, dto.source, { publicBooking: true });
     // Not columns: tell the chat receptionist whether it may say the
     // confirmation email or SMS was sent.
     return Object.assign(appointment, {
@@ -607,6 +610,29 @@ export class AppointmentsService {
     };
   }
 
+  /**
+   * The last salon-calendar day a client may book a service online (GET
+   * /appointments/booking-window): the booking page and the widget stop the
+   * date picker there and, for a later day, say "solo se puede reservar hasta
+   * el …" instead of "no quedan horas libres". Only a service offered online.
+   */
+  async publicBookingWindow(
+    tenantId: string,
+    serviceId: string,
+    now: number = Date.now(),
+  ): Promise<{ maxAdvanceDays: number; lastDay: string }> {
+    const service = await this.prisma.service.findFirst({
+      where: { id: serviceId, tenantId, isActive: true, isOnlineBookable: true },
+      select: { id: true },
+    });
+    const window = service ? await this.onlineBookingWindow(tenantId, serviceId) : null;
+    if (!window) throw new NotFoundException("Servicio no encontrado");
+    const lastDay = new Intl.DateTimeFormat("en-CA", { timeZone: window.timeZone }).format(
+      new Date(now + window.maxHours * 3_600_000),
+    );
+    return { maxAdvanceDays: window.maxHours / 24, lastDay };
+  }
+
   fitsOnlineWindow(
     day: string,
     time: string,
@@ -617,6 +643,19 @@ export class AppointmentsService {
     if (hoursAhead < window.minHours) return "too-soon";
     if (hoursAhead > window.maxHours) return "too-far";
     return "ok";
+  }
+
+  /**
+   * The per-salon, per-day booking lock (`booking:<tenant>:<YYYY-MM-DD>`)
+   * that online and panel bookings take before their check and insert, for
+   * each day given, in order so two callers never wait on each other. Moves
+   * from the panel take it too (update, applyVisit). Inside `tx`; released
+   * when it commits.
+   */
+  private async lockBookingDays(tx: any, tenantId: string, days: string[]): Promise<void> {
+    for (const day of [...new Set(days.map((d) => d.slice(0, 10)))].sort()) {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`booking:${tenantId}:${day}`}))`;
+    }
   }
 
   private async isSlotFree(
@@ -647,14 +686,19 @@ export class AppointmentsService {
   ): Promise<string> {
     const here = locationId ? await professionalsAt(this.prisma as any, tenantId, locationId) : null;
     const active = await this.prisma.professional.findMany({
-      where: { tenantId, isActive: true, ...(allowed.length ? { id: { in: allowed } } : {}) },
+      where: { tenantId, isActive: true },
       select: { id: true, services: { select: { serviceId: true } } },
       orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
     });
     const offering = active.filter((p) => p.services.some((s) => s.serviceId === serviceId));
     // Who offers the service is decided salon-wide (nobody linked to it means
-    // everyone); the location then narrows that down.
-    const candidates = (offering.length > 0 ? offering : active).filter((p) => !here || here.has(p.id));
+    // everyone), as for a named professional (offersService) and as
+    // getAvailableSlots offers it; the widget's list and the location then
+    // narrow that down. Deciding it within the widget's list gave the
+    // service to a widget professional who does not do it.
+    const candidates = (offering.length > 0 ? offering : active).filter(
+      (p) => (allowed.length === 0 || allowed.includes(p.id)) && (!here || here.has(p.id)),
+    );
     for (const candidate of candidates) {
       if (await this.isSlotFree(tenantId, date, candidate.id, serviceId, time)) return candidate.id;
     }
@@ -976,9 +1020,10 @@ export class AppointmentsService {
   private async afterAppointmentCreated(
     appointment: any,
     source?: string,
+    opts: { publicBooking?: boolean } = {},
   ): Promise<{ emailSent: boolean; smsSent: boolean }> {
     // Send notifications for appointment creation
-    const notified = await this.sendAppointmentCreatedNotifications(appointment);
+    const notified = await this.sendAppointmentCreatedNotifications(appointment, opts);
 
     // P1.4 — Cancel any pending rebooking reminders for this client/service
     // now that they have a fresh booking.
@@ -1647,6 +1692,12 @@ export class AppointmentsService {
     // stays what it is (an imported appointment may have its own).
     const duration = totals ? totals.durationMinutes : appointment.duration;
 
+    // The slot checks run with the write, under the same per-salon, per-day
+    // lock as online and panel bookings (lockBookingDays): checked first and
+    // written after, a drag to 10:00 and an online booking for 10:00 could
+    // both pass and overlap.
+    const slotChecks: Array<(db: any) => Promise<void>> = [];
+    const lockDays = new Set<string>();
     if (holdsSlot) {
       if (liveAfter.length > 0) {
         if (rowsMove) {
@@ -1668,7 +1719,7 @@ export class AppointmentsService {
               continue;
             }
             const at = salonDayAndTime(s.start, timeZone);
-            await assertCanReschedule(this.prisma as any, {
+            const check = {
               tenantId: user.tenantId,
               appointmentId: appointment.id,
               professionalId: s.professionalId,
@@ -1676,14 +1727,16 @@ export class AppointmentsService {
               time: at.time,
               durationMinutes: Math.round((s.end.getTime() - s.start.getTime()) / 60_000),
               cleanupMinutes: i === cleanup.index ? cleanup.minutes : 0,
-            });
+            };
+            lockDays.add(at.day);
+            slotChecks.push((db) => assertCanReschedule(db, check));
           }
         }
       } else {
         const cleanupBefore = cleanupMinutesOf((appointment as any).service);
         const cleanupAfter = serviceChanged ? cleanupMinutesOf(fromCatalog(dto.serviceId!)) : cleanupBefore;
         if (moved || duration > appointment.duration || cleanupAfter > cleanupBefore) {
-          await assertCanReschedule(this.prisma as any, {
+          const check = {
             tenantId: user.tenantId,
             appointmentId: appointment.id,
             professionalId: target.professionalId,
@@ -1691,7 +1744,9 @@ export class AppointmentsService {
             time: target.time,
             durationMinutes: duration,
             cleanupMinutes: cleanupAfter,
-          });
+          };
+          lockDays.add(target.day);
+          slotChecks.push((db) => assertCanReschedule(db, check));
         }
       }
     }
@@ -1814,9 +1869,22 @@ export class AppointmentsService {
         });
       };
       try {
-        // Rows and appointment together, or neither.
-        updatedAppointment =
-          rowWrites.length > 0 ? await this.prisma.$transaction(write) : await write(this.prisma);
+        // Rows and appointment together, or neither. A move: checked and
+        // written under the booking lock of the days it leaves and lands on.
+        if (slotChecks.length > 0) {
+          lockDays.add(dayOf(appointment.scheduledDate));
+          updatedAppointment = await this.prisma.$transaction(
+            async (tx: any) => {
+              await this.lockBookingDays(tx, user.tenantId, [...lockDays]);
+              for (const check of slotChecks) await check(tx);
+              return write(tx);
+            },
+            { timeout: 15_000 },
+          );
+        } else {
+          updatedAppointment =
+            rowWrites.length > 0 ? await this.prisma.$transaction(write) : await write(this.prisma);
+        }
       } catch (err) {
         if (statusTo && isStaleWrite(err)) throw concurrentChange();
         throw err;
@@ -2693,20 +2761,24 @@ export class AppointmentsService {
       })),
     );
     const cleanupId = cleanup.index === -1 ? null : after[cleanup.index].id;
-    for (const s of changed) {
+    // Checked inside the write's transaction, under the booking lock of each
+    // day involved (lockBookingDays), as online bookings are: checked first
+    // and written after, a drag and an online booking could both pass.
+    const checks = changed
       // While a colour sets, its professional is free: nothing to check.
-      if (visit.processing?.has(s.id)) continue;
-      const { day, time } = salonDayAndTime(s.start, timeZone);
-      await assertCanReschedule(this.prisma as any, {
-        tenantId: user.tenantId,
-        appointmentId: appointment.id,
-        professionalId: s.professionalId,
-        day,
-        time,
-        durationMinutes: Math.round((s.end.getTime() - s.start.getTime()) / 60_000),
-        cleanupMinutes: s.id === cleanupId ? cleanup.minutes : 0,
+      .filter((s) => !visit.processing?.has(s.id))
+      .map((s) => {
+        const { day, time } = salonDayAndTime(s.start, timeZone);
+        return {
+          tenantId: user.tenantId,
+          appointmentId: appointment.id,
+          professionalId: s.professionalId,
+          day,
+          time,
+          durationMinutes: Math.round((s.end.getTime() - s.start.getTime()) / 60_000),
+          cleanupMinutes: s.id === cleanupId ? cleanup.minutes : 0,
+        };
       });
-    }
 
     // The appointment's own time and length: from its first to its last
     // service, plus what it held beyond them (add-ons).
@@ -2723,6 +2795,13 @@ export class AppointmentsService {
     const startChanged = !appointment.startTime || new Date(appointment.startTime).getTime() !== span.start.getTime();
 
     const updated = await this.prisma.$transaction(async (tx: any) => {
+      if (checks.length > 0) {
+        await this.lockBookingDays(tx, user.tenantId, [
+          new Date(oldDate).toISOString().slice(0, 10),
+          ...checks.map((c) => c.day),
+        ]);
+        for (const check of checks) await assertCanReschedule(tx, check);
+      }
       const changedIds = new Set(changed.map((s) => s.id));
       for (const s of after) {
         const extra = rowData.get(s.id);
@@ -2857,6 +2936,13 @@ export class AppointmentsService {
        * never booked twice at once.
        */
       locationId?: string;
+      /**
+       * The booking widget's "any professional" (no professional named): only
+       * the professionals the widget offers, the same candidates the booking
+       * then picks from (findFreeProfessional). Without it a colleague who is
+       * not on the widget made a time look free, and the booking refused it.
+       */
+      widgetInstanceId?: string;
     } = {},
   ) {
     // Get the tenant's working hours and timezone
@@ -2896,6 +2982,17 @@ export class AppointmentsService {
 
     const here = opts.locationId ? await professionalsAt(this.prisma as any, tenantId, opts.locationId) : null;
     if (here && professionalsToCheck.some((id) => !here.has(id))) return [];
+    // The widget's professionals (none listed: the whole team), only for
+    // "any professional". Never another salon's widget.
+    let widgetOnly: Set<string> | null = null;
+    if (opts.widgetInstanceId && professionalsToCheck.length === 0) {
+      const widget = await this.prisma.widgetInstance.findFirst({
+        where: { id: opts.widgetInstanceId, tenantId },
+        select: { professionals: true },
+      });
+      if (!widget) throw new NotFoundException("Widget no encontrado");
+      if ((widget.professionals ?? []).length > 0) widgetOnly = new Set(widget.professionals);
+    }
 
     // "Any professional" still has to obey somebody's shift.
     //
@@ -2922,10 +3019,11 @@ export class AppointmentsService {
     // Who offers the service is decided salon-wide; a location then narrows
     // it to who works there -- and nobody there means nothing to offer, not
     // "no professionals recorded".
+    // The widget's list narrows it the same way.
     const anyProfessionalRows = (offeringRows.length > 0 ? offeringRows : activeRows).filter(
-      (p: { id: string }) => !here || here.has(p.id),
+      (p: { id: string }) => (!here || here.has(p.id)) && (!widgetOnly || widgetOnly.has(p.id)),
     );
-    if (here && professionalsToCheck.length === 0 && anyProfessionalRows.length === 0) return [];
+    if ((here || widgetOnly) && professionalsToCheck.length === 0 && anyProfessionalRows.length === 0) return [];
 
     // Get the service duration if specified
     let serviceDuration = duration;
@@ -3187,23 +3285,54 @@ export class AppointmentsService {
   /**
    * Where the appointment is, for the client's emails: its location's name
    * and address (and phone) when the salon has two or more open locations
-   * (client-locations.ts, bookingPlace). Nothing otherwise, so a
-   * single-location salon's emails stay as they were. Never fails an email.
+   * (client-locations.ts, bookingPlace). Otherwise -- almost every salon --
+   * the salon's own address and phone: the email used to give neither, and
+   * told her "avísanos cuanto antes" with no number to call. A location
+   * without them falls back to the salon's too. Never fails an email.
    */
   private async emailPlace(
     appointment: any,
   ): Promise<{ locationName?: string; salonAddress?: string; salonPhone?: string }> {
     try {
       const place = await bookingPlace(this.prisma as any, appointment?.tenantId, appointment?.locationId);
-      if (!place) return {};
+      // Only what the location lacks is asked of the salon.
+      const salon =
+        place?.address && place?.phone ? { address: "", phone: "" } : await this.salonContactOrNone(appointment);
+      const address = place?.address || salon.address;
+      const phone = place?.phone || salon.phone;
       return {
-        locationName: place.name,
-        ...(place.address ? { salonAddress: place.address } : {}),
-        ...(place.phone ? { salonPhone: place.phone } : {}),
+        ...(place ? { locationName: place.name } : {}),
+        ...(address ? { salonAddress: address } : {}),
+        ...(phone ? { salonPhone: phone } : {}),
       };
     } catch (err) {
       this.logger.warn(`Location for the email not read: ${(err as Error).message}`);
       return {};
+    }
+  }
+
+  /** The salon's own address ("Calle Mayor 1, 28013 Madrid") and phone, from the appointment's tenant row or the database. */
+  private async salonContact(appointment: any): Promise<{ address: string; phone: string }> {
+    const has = (t: any) => t && ("street" in t || "phone" in t);
+    const tenant = has(appointment?.tenant)
+      ? appointment.tenant
+      : appointment?.tenantId
+        ? await this.prisma.tenant.findUnique({
+            where: { id: appointment.tenantId },
+            select: { street: true, city: true, state: true, postalCode: true, phone: true },
+          })
+        : null;
+    if (!tenant) return { address: "", phone: "" };
+    return { address: formatLocationAddress(tenant), phone: (tenant.phone ?? "").trim() };
+  }
+
+  /** salonContact, or nothing when it cannot be read: never fails an email. */
+  private async salonContactOrNone(appointment: any): Promise<{ address: string; phone: string }> {
+    try {
+      return await this.salonContact(appointment);
+    } catch (err) {
+      this.logger.warn(`Salon address for the email not read: ${(err as Error).message}`);
+      return { address: "", phone: "" };
     }
   }
 
@@ -3213,6 +3342,7 @@ export class AppointmentsService {
    */
   private async sendAppointmentCreatedNotifications(
     appointment: any,
+    opts: { publicBooking?: boolean } = {},
   ): Promise<{ emailSent: boolean; smsSent: boolean }> {
     // The service as booked, not as the catalog has it today.
     appointment = withBookedService(appointment);
@@ -3312,8 +3442,26 @@ export class AppointmentsService {
         );
       }
 
+      // A booking from outside the salon: within the daily caps per salon
+      // and per number, or the SMS is held back (and logged without the
+      // number); the booking stands either way.
+      const smsHeld =
+        !!(appointment.client?.phone && canSendSms && opts.publicBooking && this.smsService.isConfigured?.() !== false) &&
+        !(
+          await reservePublicBookingSms(this.prisma as any, {
+            tenantId: appointment.tenantId,
+            appointmentId: appointment.id,
+            phone: appointment.client.phone,
+          })
+        ).allowed;
+      if (smsHeld) {
+        this.logger.warn(
+          `Confirmation SMS for public booking ${appointment.id} (salon ${appointment.tenantId}) held back: daily SMS cap`,
+        );
+      }
+
       // Send confirmation SMS to client
-      if (appointment.client?.phone && canSendSms) {
+      if (appointment.client?.phone && canSendSms && !smsHeld) {
         try {
           // Like the email: failure comes back in the result, not as a throw.
           const sent: any = await this.smsService.sendAppointmentConfirmation({
