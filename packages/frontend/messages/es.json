@@ -2921,7 +2921,8 @@
     "step_location": "Elige el local",
     "select_location": "Selecciona un local",
     "booked_at": "Te esperamos en {location}.",
-    "booked_at_address": "Te esperamos en {location}: {address}."
+    "booked_at_address": "Te esperamos en {location}: {address}.",
+    "full_name": "Nombre y apellidos"
   },
   "sites": {
     "notFoundTitle": "Salón no encontrado",
@@ -2936,7 +2937,39 @@
     "yearsExperience": "años de experiencia",
     "languages": "Idiomas:",
     "portfolioWork": "Trabajo {n}",
-    "cancellationPolicy": "Cancelaciones"
+    "cancellationPolicy": "Cancelaciones",
+    "hours": "Horario",
+    "closed": "Cerrado",
+    "days": {
+      "monday": "Lunes",
+      "tuesday": "Martes",
+      "wednesday": "Miércoles",
+      "thursday": "Jueves",
+      "friday": "Viernes",
+      "saturday": "Sábado",
+      "sunday": "Domingo"
+    },
+    "priceOnRequest": "Consultar",
+    "phoneOnly": "Reserva por teléfono",
+    "noOnlineBooking": "Ahora mismo no se puede reservar online. Llama al salón para pedir cita.",
+    "noOnlineBookingTitle": "Pide tu cita por teléfono",
+    "callSalon": "Llamar al {phone}",
+    "coverAlt": "Foto de {name}",
+    "logoAlt": "Logo de {name}",
+    "reviews": {
+      "title": "Opiniones de clientas",
+      "ratingOne": "valoración",
+      "ratingOther": "valoraciones",
+      "summary": "Solo pueden opinar clientas con una cita completada. Publicamos todas las opiniones, positivas y negativas, salvo las que incumplen las normas de abajo. La media cuenta todas las valoraciones salvo las retiradas por esas normas.",
+      "seeRules": "Ver normas",
+      "notPublished": "No se publican, ni cuentan en la media, las opiniones con:",
+      "withoutConsent": "Las opiniones de quien no dio permiso para mostrarlas cuentan en la media sin nombre ni comentario."
+    },
+    "error": {
+      "title": "No podemos mostrar la página ahora",
+      "description": "Inténtalo de nuevo en unos minutos.",
+      "retry": "Volver a intentarlo"
+    }
   },
   "platform_llm": {
     "title": "Proveedor de IA del chatbot",

@@ -114,6 +114,8 @@ function setup(over: {
         logo: null,
         timezone: over.timezone ?? "Europe/Madrid",
       })),
+      // The salon exists (not deleted): publicForTenant checks.
+      findFirst: jest.fn(async () => ({ id: "t1" })),
     },
     notificationPreference: {
       findUnique: jest.fn(async () => over.existingPrefs ?? (over.whatsappNotices ? { preferences: WHATSAPP_NOTICES_ON } : null)),
@@ -596,6 +598,14 @@ describe("ReviewsService panel", () => {
       reviews: [{ id: "r1", rating: 5, comment: "Genial", author: "Ana G.", date: NOW }],
       rejectionReasons: ["Insultos o contenido ofensivo", "Datos personales", "No habla del servicio", "Spam o duplicada"],
     });
+  });
+
+  it("a deleted salon's reviews are not public", async () => {
+    const { service, prisma } = setup();
+    prisma.tenant.findFirst.mockResolvedValueOnce(null);
+    await expect(service.publicForTenant("t1")).rejects.toThrow("Salon not found");
+    expect(prisma.tenant.findFirst.mock.calls[0][0].where).toEqual({ id: "t1", deletedAt: null });
+    expect(prisma.review.findMany).not.toHaveBeenCalled();
   });
 });
 
