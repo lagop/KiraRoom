@@ -4,6 +4,7 @@ import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { EmailService } from "../notifications/services/email.service";
 import { appBaseUrl } from "../common/app-base-url";
+import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /**
@@ -60,6 +61,7 @@ export class TrialExpiryScheduler {
   }
 
   @Cron(CronExpression.EVERY_DAY_AT_7AM)
+  @MonitoredJob("TrialExpiryScheduler.sendTrialWarnings")
   async sendTrialWarnings(): Promise<void> {
     const now = this.now();
     const results = { t3: 0, t1: 0, skipped: 0, errors: 0 };

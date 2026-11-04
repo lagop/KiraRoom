@@ -14,6 +14,7 @@ import {
 } from "./custom-domain";
 import { normaliseSubdomainBase, salonSubdomainHost } from "@kira/shared";
 import { traefikDynamicConfig } from "./traefik-provider";
+import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
 
 export interface DnsRecordInstruction {
   type: "CNAME" | "A" | "TXT";
@@ -274,6 +275,7 @@ export class WebDomainService {
    * un-verified only when two consecutive daily checks fail.
    */
   @Cron(CronExpression.EVERY_DAY_AT_4AM)
+  @MonitoredJob("WebDomainService.recheckVerified")
   async recheckVerified(): Promise<void> {
     const rows = await runUnscoped(() =>
       this.prisma.customDomain.findMany({ where: { verifiedAt: { not: null } } }),

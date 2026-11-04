@@ -6,6 +6,7 @@ import { runUnscoped } from "../common/tenancy/tenant.context";
 import { NotificationsService } from "../notifications/notifications.service";
 import { EmailService } from "../notifications/services/email.service";
 import { appBaseUrl } from "../common/app-base-url";
+import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
 
 export type AttentionChannel = "whatsapp" | "facebook" | "telegram";
 
@@ -58,6 +59,7 @@ export class ChannelAttentionScheduler {
   ) {}
 
   @Cron(CronExpression.EVERY_5_MINUTES)
+  @MonitoredJob("ChannelAttentionScheduler.sweep")
   async sweep(): Promise<void> {
     try {
       await runUnscoped(() => this.notifyPending());

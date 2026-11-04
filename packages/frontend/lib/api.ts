@@ -6359,7 +6359,6 @@ class ApiClient implements ApiClientInterface {
     provider?: string;
     apiKey?: string;          // empty/undefined = keep existing
     defaultModel?: string;
-    baseUrl?: string | null;
     workspaceId?: string | null;
   }): Promise<PlatformLlmConfig> {
     return this.request(`/platform/llm-config`, {
@@ -6367,7 +6366,17 @@ class ApiClient implements ApiClientInterface {
       body: JSON.stringify(input),
     });
   }
-  async testPlatformLlmConnection(): Promise<{
+  /** "Quitar": removes the console's key; the server's .env applies again. */
+  async clearPlatformLlmKey(): Promise<PlatformLlmConfig> {
+    return this.request(`/platform/llm-config/api-key`, { method: "DELETE" });
+  }
+  /** Tests the typed values (not saved); each one left out falls back to the one in force. */
+  async testPlatformLlmConnection(typed: {
+    provider?: string;
+    apiKey?: string;
+    defaultModel?: string;
+    workspaceId?: string | null;
+  } = {}): Promise<{
     ok: boolean;
     message: string;
     model?: string;
@@ -6375,6 +6384,18 @@ class ApiClient implements ApiClientInterface {
   }> {
     return this.request(`/platform/llm-config/test`, {
       method: "POST",
+      body: JSON.stringify(typed),
+    });
+  }
+  /** The workspaces an Anthropic key can use; the key is sent once and never stored. */
+  async discoverAnthropicWorkspaces(apiKey: string): Promise<{
+    ok: boolean;
+    workspaces: Array<{ id: string; name?: string; type?: string; default?: boolean }>;
+    message?: string;
+  }> {
+    return this.request(`/platform/llm-config/anthropic/workspaces`, {
+      method: "POST",
+      body: JSON.stringify({ apiKey }),
     });
   }
 
@@ -6401,8 +6422,9 @@ class ApiClient implements ApiClientInterface {
       body: JSON.stringify(input),
     });
   }
-  async sendPlatformTestEmail(): Promise<{ ok: boolean; message: string }> {
-    return this.request(`/platform/email-config/test`, { method: "POST" });
+  /** With typed values (not saved), tests those; else the settings in force. */
+  async sendPlatformTestEmail(typed: { apiKey?: string; from?: string } = {}): Promise<{ ok: boolean; message: string }> {
+    return this.request(`/platform/email-config/test`, { method: "POST", body: JSON.stringify(typed) });
   }
 
   // KiraRoom's own Stripe account. Secret key and webhook secret are
@@ -6411,19 +6433,25 @@ class ApiClient implements ApiClientInterface {
     return this.request(`/platform/stripe-config`);
   }
   /** A value sets a field, null clears it (the server's .env applies), absent keeps it. */
-  async updatePlatformStripeConfig(input: {
-    secretKey?: string | null;
-    publishableKey?: string | null;
-    webhookSecret?: string | null;
-    taxEnabled?: boolean | null;
-  }): Promise<PlatformStripeConfig> {
+  async updatePlatformStripeConfig(input: PlatformStripeUpdate): Promise<PlatformStripeConfig> {
     return this.request(`/platform/stripe-config`, {
       method: "PUT",
       body: JSON.stringify(input),
     });
   }
-  async testPlatformStripe(): Promise<{ ok: boolean; message: string }> {
-    return this.request(`/platform/stripe-config/test`, { method: "POST" });
+  /** What saving `input` would do (mode before and after, why it would be refused, salons affected), without saving. */
+  async previewPlatformStripeConfig(input: PlatformStripeUpdate): Promise<PlatformStripePreview> {
+    return this.request(`/platform/stripe-config/preview`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+  /** With a typed secret key (not saved), tests that one; else the key in force. */
+  async testPlatformStripe(secretKey?: string): Promise<{ ok: boolean; message: string }> {
+    return this.request(`/platform/stripe-config/test`, {
+      method: "POST",
+      body: JSON.stringify(secretKey ? { secretKey } : {}),
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -6525,7 +6553,8 @@ const apiClient = new ApiClient();
 export default apiClient;
 export { ApiClient, apiClient };
 
-export type EmailSettingSource = "console" | "server" | "none";
+/** "unreadable": stored in the console but cannot be decrypted; counts as not configured. */
+export type EmailSettingSource = "console" | "server" | "none" | "unreadable";
 
 export interface PlatformEmailConfig {
   apiKey: { source: EmailSettingSource; lastFour: string | null };
@@ -6537,21 +6566,51 @@ export interface PlatformEmailConfig {
   updatedBy: string | null;
 }
 
+export type StripeMode = "test" | "live" | "none";
+
 export interface PlatformStripeConfig {
-  mode: "test" | "live" | "none";
+  mode: StripeMode;
   secretKey: { source: EmailSettingSource; lastFour: string | null };
   publishableKey: { source: EmailSettingSource; value: string | null };
   webhookSecret: { source: EmailSettingSource; lastFour: string | null };
-  taxEnabled: { source: EmailSettingSource; value: boolean };
+  /** The other mode's webhook secret: its events are verified and ignored. */
+  otherWebhookSecret: { source: EmailSettingSource; lastFour: string | null; mode: StripeMode };
+  /** What the server's .env holds, for "Volver a lo del servidor". */
+  server: { mode: StripeMode; hasWebhookSecret: boolean };
+  /** Why the settings in force cannot take payments safely; null when they can. */
+  problem: string | null;
+  /** Stripe Tax is switched on somewhere and ignored (no VAT, D6). */
+  taxIgnored: boolean;
   updatedAt: string | null;
   updatedBy: string | null;
+}
+
+/** A string sets a field, null clears it (the server's .env applies), absent keeps it. */
+export interface PlatformStripeUpdate {
+  secretKey?: string | null;
+  publishableKey?: string | null;
+  webhookSecret?: string | null;
+  otherWebhookSecret?: string | null;
+}
+
+export interface PlatformStripePreview {
+  modeBefore: StripeMode;
+  modeAfter: StripeMode;
+  problem: string | null;
+  impact: {
+    otherModeSalons: number;
+    activePlansTotal: number;
+    activePlans: Array<{ id: string; name: string; slug: string | null; plan: string | null; subscriptionStatus: string | null }>;
+  } | null;
 }
 
 export interface PlatformLlmConfig {
   provider: string;
   defaultModel: string;
-  baseUrl: string | null;
   workspaceId: string | null;   // Anthropic identity-linked keys only
+  keyState: "set" | "none" | "unreadable";
+  serverKey: boolean;          // ANTHROPIC_API_KEY in the server's .env (never its value)
+  inUse: "console" | "server" | "none" | "unreadable";
   apiKeyMasked: string;        // e.g. "sk-an••••23"
   apiKeyLastFour: string;      // last-4 chars only
   apiKeyHash: string;          // SHA-256 fingerprint, never reversible

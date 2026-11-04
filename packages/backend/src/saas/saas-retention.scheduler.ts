@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { Cron, CronExpression } from "@nestjs/schedule";
 import { PrismaService } from "../common/prisma/prisma.service";
+import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
 
 /**
  * Retention cron for SaaS audit-trail tables that can grow without bound.
@@ -31,6 +32,7 @@ export class SaaSRetentionScheduler {
   constructor(private readonly prisma: PrismaService) {}
 
   @Cron(CronExpression.EVERY_DAY_AT_3AM)
+  @MonitoredJob("SaaSRetentionScheduler.pruneConsumedImpersonationTokens")
   async pruneConsumedImpersonationTokens(): Promise<void> {
     const cutoff = new Date(
       Date.now() -

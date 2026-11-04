@@ -4,7 +4,7 @@ import { LLMProviderFactory } from '../factories/llm-provider.factory';
 import { salonOpenShifts } from '../../appointments/working-hours';
 import { salonClock } from '../prompts/clock';
 import { CLOSURE_HORIZON_DAYS, SalonClosure, salonClosuresNotice } from '../prompts/closures';
-import { PlatformLlmConfigService } from '../../platform/platform-llm-config.service';
+import { PlatformLlmConfigService, StoredLlmKeyUnreadableError } from '../../platform/platform-llm-config.service';
 import { LLMProvider, LLMGenerationConfig, LLMCompletion } from '@kira/shared';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -132,7 +132,7 @@ export class NoToolProviderError extends Error {
 interface LlmRoute {
   provider: LLMProvider;
   model: string;
-  credentials?: { apiKey: string; baseUrl?: string | null; workspaceId?: string | null };
+  credentials?: { apiKey: string; workspaceId?: string | null };
 }
 
 /** The model a provider uses when nothing names one. */
@@ -684,7 +684,6 @@ export class LLMService {
             ? {
                 credentials: {
                   apiKey: platform.apiKey,
-                  baseUrl: platform.baseUrl ?? null,
                   workspaceId: platform.workspaceId ?? null,
                 },
               }
@@ -692,6 +691,10 @@ export class LLMService {
         };
       }
     } catch (err) {
+      // A key stored in the console that cannot be decrypted is not
+      // replaced by the .env's in silence (audit 8 P4): the request fails,
+      // and the console shows it in red until it is typed again or removed.
+      if (err instanceof StoredLlmKeyUnreadableError) throw err;
       this.logger.warn(
         `Platform LLM config lookup failed (${(err as Error).message}); falling back to env defaults`,
       );

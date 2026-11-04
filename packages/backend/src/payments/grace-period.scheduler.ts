@@ -4,6 +4,7 @@ import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { EmailService } from "../notifications/services/email.service";
 import { appBaseUrl } from "../common/app-base-url";
+import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const READ_ONLY_DAYS = 30;
@@ -37,6 +38,7 @@ export class GracePeriodScheduler {
   ) {}
 
   @Cron(CronExpression.EVERY_DAY_AT_4AM)
+  @MonitoredJob("GracePeriodScheduler.suspendExpiredGraces")
   async suspendExpiredGraces(): Promise<void> {
     const now = new Date();
     const expired = await this.prisma.tenant.findMany({

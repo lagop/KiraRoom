@@ -17,6 +17,7 @@ import {
 import apiClient from "@/lib/api";
 import { LineChart } from "../../components/line-chart";
 import { useTranslations } from "@/lib/use-translation";
+import { formatEuros } from "@/lib/console-metrics";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/components/ui/use-toast";
 import { GrowthIndicator } from "../../components/metric-card";
@@ -56,30 +57,31 @@ interface TenantStats {
   subscriptionStatus: string;
   totalClients: number;
   totalAppointments: number;
-  totalRevenue: number;
+  /** Euros the salon charged for paid appointments: its takings, not KiraRoom's. */
+  salonTakingsTotal: number;
   appointmentsThisMonth: number;
-  appointmentsChange: number;
-  revenueThisMonth: number;
-  revenueLastMonth: number;
-  revenueChange: number;
+  appointmentsChange: number | null;
+  salonTakingsThisMonth: number;
+  salonTakingsLastMonth: number;
+  salonTakingsChange: number | null;
 }
 
 interface GrowthMetrics {
   salonId: string;
   period: string;
-  revenueEvolution: { month: string; value: number }[];
+  salonTakingsEvolution: { month: string; value: number }[];
   appointmentsEvolution: { month: string; value: number }[];
   clientsEvolution: { month: string; value: number; newClients: number; returningClients: number }[];
   summary: {
-    revenueThisMonth: number;
-    revenueLastMonth: number;
-    revenueChangePercent: number;
+    salonTakingsThisMonth: number;
+    salonTakingsLastMonth: number;
+    salonTakingsChangePercent: number | null;
     appointmentsThisMonth: number;
     appointmentsLastMonth: number;
-    appointmentsChangePercent: number;
+    appointmentsChangePercent: number | null;
     newClientsThisMonth: number;
     newClientsLastMonth: number;
-    newClientsChangePercent: number;
+    newClientsChangePercent: number | null;
   };
 }
 
@@ -260,10 +262,10 @@ export default function TenantDetailPage() {
             )}
           </div>
           <h3 className="text-2xl font-bold text-gray-900">{stats?.totalClients || 0}</h3>
-          <p className="text-gray-500 text-sm">Total Clients</p>
+          <p className="text-gray-500 text-sm">{t("saas.metrics.total_clients_salon")}</p>
           {growth && (
             <p className="text-gray-400 text-xs mt-1">
-              +{growth.summary.newClientsThisMonth} new this month
+              {t("saas.metrics.new_clients_month", { n: growth.summary.newClientsThisMonth })}
             </p>
           )}
         </div>
@@ -278,9 +280,9 @@ export default function TenantDetailPage() {
             )}
           </div>
           <h3 className="text-2xl font-bold text-gray-900">{stats?.totalAppointments || 0}</h3>
-          <p className="text-gray-500 text-sm">Total Appointments</p>
+          <p className="text-gray-500 text-sm">{t("saas.metrics.appointments")}</p>
           <p className="text-gray-400 text-xs mt-1">
-            {stats?.appointmentsThisMonth || 0} this month
+            {t("saas.metrics.appointments_month", { n: stats?.appointmentsThisMonth || 0 })}
           </p>
         </div>
 
@@ -290,15 +292,16 @@ export default function TenantDetailPage() {
               <DollarSign className="w-5 h-5 text-slate-700" />
             </div>
             {stats && (
-              <GrowthIndicator value={stats.revenueChange} />
+              <GrowthIndicator value={stats.salonTakingsChange} />
             )}
           </div>
+          {/* Already euros (Appointment.price): not cents. The salon's money, not KiraRoom's. */}
           <h3 className="text-2xl font-bold text-gray-900">
-            €{((stats?.totalRevenue || 0) / 100).toFixed(2)}
+            {formatEuros(stats?.salonTakingsTotal)}
           </h3>
-          <p className="text-gray-500 text-sm">Total Revenue</p>
+          <p className="text-gray-500 text-sm">{t("saas.metrics.salon_takings")}</p>
           <p className="text-gray-400 text-xs mt-1">
-            €{((stats?.revenueThisMonth || 0) / 100).toFixed(2)} this month
+            {t("saas.metrics.salon_takings_month", { amount: formatEuros(stats?.salonTakingsThisMonth) })}
           </p>
         </div>
       </div>
@@ -307,12 +310,12 @@ export default function TenantDetailPage() {
       {growth && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
           <LineChart
-            data={growth.revenueEvolution.map((d) => ({
+            data={growth.salonTakingsEvolution.map((d) => ({
               month: d.month,
-              value: d.value / 100,
+              value: d.value,
             }))}
-            title={t("saas.revenueEvolution")}
-            valuePrefix="€"
+            title={t("saas.metrics.salon_takings")}
+            valueSuffix=" €"
             color="#4f46e5"
           />
           <LineChart

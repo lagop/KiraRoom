@@ -13,6 +13,7 @@ import {
   retentionEnabled,
   retentionStep,
 } from "./salon-retention";
+import { MonitoredJob, reportJobFailure } from "../../common/ops-alerts/ops-alert-sink";
 
 /** Who the GdprRequest of an automatic anonymisation names as its actor (not a user id). */
 export const RETENTION_ACTOR = "system:retention";
@@ -59,11 +60,13 @@ export class SalonRetentionScheduler {
 
   /** 04:40 UTC, after the 04:00 billing jobs that start the read-only periods. */
   @Cron("40 4 * * *")
+  @MonitoredJob("SalonRetentionScheduler.daily")
   async daily(): Promise<RetentionRun> {
     try {
       return await this.run(new Date());
     } catch (err) {
-      this.logger.error(`Retention run failed: ${(err as Error).message}`);
+      // Caught to return an empty run, so report it here (audit 8 D15).
+      await reportJobFailure("SalonRetentionScheduler.daily", err);
       return { enabled: false, warned: [], anonymized: [], wouldWarn: [], wouldAnonymize: [], failed: [] };
     }
   }

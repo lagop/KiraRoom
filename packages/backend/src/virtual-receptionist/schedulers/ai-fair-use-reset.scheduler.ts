@@ -2,6 +2,7 @@
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AiConversationCounterService } from '../services/ai-conversation-counter.service';
+import { MonitoredJob } from "../../common/ops-alerts/ops-alert-sink";
 
 /**
  * Monthly AI fair-use reset cron.
@@ -27,6 +28,7 @@ export class AiFairUseResetScheduler {
   ) {}
 
   @Cron('30 0 1 * *', { name: 'ai-fair-use-reset', timeZone: 'UTC' })
+  @MonitoredJob("AiFairUseResetScheduler.resetForNewMonth")
   async resetForNewMonth(): Promise<void> {
     await this.resetAllTenants();
   }

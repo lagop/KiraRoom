@@ -9,7 +9,13 @@
  * server configured before the console existed keeps working.
  */
 
-export type EmailSettingSource = "console" | "server" | "none";
+/**
+ * "unreadable": a value is stored in the console but cannot be decrypted
+ * (META_TOKEN_ENCRYPTION_KEY changed, or the value is corrupt). The setting
+ * then counts as not configured: falling back to the .env in silence could
+ * swap one account for another (for Stripe, test mode for live mode).
+ */
+export type EmailSettingSource = "console" | "server" | "none" | "unreadable";
 
 export interface EmailSettings {
   apiKey: string | null;
@@ -27,8 +33,13 @@ function present(value: string | null | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-export function resolveEmailSettings(stored: Partial<EmailSettings>, server: Partial<EmailSettings>): EmailSettingsWithSources {
+export function resolveEmailSettings(
+  stored: Partial<EmailSettings>,
+  server: Partial<EmailSettings>,
+  unreadable: Partial<Record<keyof EmailSettings, boolean>> = {},
+): EmailSettingsWithSources {
   const pick = (key: keyof EmailSettings): [string | null, EmailSettingSource] => {
+    if (unreadable[key]) return [null, "unreadable"];
     const fromConsole = present(stored[key]);
     if (fromConsole) return [fromConsole, "console"];
     const fromServer = present(server[key]);

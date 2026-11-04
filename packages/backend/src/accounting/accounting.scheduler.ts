@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { Cron, CronExpression } from "@nestjs/schedule";
 import { AccountingService } from "./accounting.service";
+import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
 
 /**
  * Retries invoices whose push to Holded -- or whose cancellation there --
@@ -19,6 +20,7 @@ export class AccountingScheduler {
   constructor(private readonly accounting: AccountingService) {}
 
   @Cron(CronExpression.EVERY_10_MINUTES)
+  @MonitoredJob("AccountingScheduler.retryPending")
   async retryPending(): Promise<void> {
     // A slow Holded can make one run outlast the interval.
     if (this.running) return;

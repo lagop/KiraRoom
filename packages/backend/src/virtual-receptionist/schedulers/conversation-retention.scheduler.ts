@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { MonitoredJob } from "../../common/ops-alerts/ops-alert-sink";
 
 /**
  * How long a receptionist conversation is kept after its last message, in
@@ -45,6 +46,7 @@ export class ConversationRetentionScheduler {
   constructor(private readonly prisma: PrismaService) {}
 
   @Cron('45 3 * * *')
+  @MonitoredJob("ConversationRetentionScheduler.purgeInactiveConversations")
   async purgeInactiveConversations(now: Date = new Date()): Promise<number> {
     const cutoff = conversationRetentionCutoff(now);
     let total = 0;

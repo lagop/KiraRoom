@@ -39,3 +39,18 @@ export class UpdatePlatformEmailConfigDto {
   @Max(100_000_000)
   marketingPackPriceCents?: number | null;
 }
+
+/** Body of POST /platform/email-config/test: typed values to test without saving them. */
+export class TestPlatformEmailDto {
+  @ApiPropertyOptional({ description: "Resend API key to test instead of the one in force. Never stored." })
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  apiKey?: string;
+
+  @ApiPropertyOptional({ description: "Sender to test instead of the one in force." })
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  from?: string;
+}

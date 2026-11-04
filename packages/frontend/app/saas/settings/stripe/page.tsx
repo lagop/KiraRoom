@@ -2,11 +2,20 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { AlertCircle, Check, CreditCard, FlaskConical, PlugZap, Save } from "lucide-react";
-import apiClient, { PlatformStripeConfig } from "@/lib/api";
+import { AlertCircle, Check, CreditCard, FlaskConical, PlugZap, RotateCcw, Save } from "lucide-react";
+import apiClient, { PlatformStripeConfig, PlatformStripeUpdate } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { STRIPE_WEBHOOK_EVENTS, StripeForm, stripeStatus, stripeUpdate } from "@/lib/platform-stripe";
+import {
+  BACK_TO_SERVER,
+  STRIPE_WEBHOOK_EVENTS,
+  StripeForm,
+  hasConsoleKeys,
+  modeName,
+  previewWarning,
+  stripeStatus,
+  stripeUpdate,
+} from "@/lib/platform-stripe";
 import { SettingField as Field } from "../setting-field";
 
 // Where Stripe sends KiraRoom's payment events; shown so it can be copied.
@@ -18,28 +27,37 @@ const TONE = {
   off: "border-red-200 bg-red-50 text-red-800",
 };
 
+const EMPTY_FORM: StripeForm = { secretKey: "", publishableKey: "", webhookSecret: "", otherWebhookSecret: "" };
+
+/** A save waiting for the admin to confirm what it does. */
+interface PendingSave {
+  input: PlatformStripeUpdate;
+  title: string;
+  lines: string[];
+  confirmLabel: string;
+  destructive: boolean;
+}
+
 /**
  * KiraRoom's own Stripe account (it bills the salons), for the saas_owner.
- * The secret key and the webhook secret are write-only: the page shows where
- * each comes from and its last characters, never the value.
+ * The secret key and the webhook secrets are write-only: the page shows where
+ * each comes from and its last characters, never the value. The secret key
+ * and its webhook secret always come from the same place (console or .env);
+ * a change of mode is confirmed with the salons it affects.
  */
 export default function PlatformStripePage() {
   const { toast } = useToast();
   const [cfg, setCfg] = useState<PlatformStripeConfig | null>(null);
-  const [form, setForm] = useState<StripeForm>({ secretKey: "", publishableKey: "", webhookSecret: "", taxEnabled: false });
+  const [form, setForm] = useState<StripeForm>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // The console setting about to be removed, confirmed in the panel's dialog.
-  const [pendingClear, setPendingClear] = useState<{
-    field: "secretKey" | "publishableKey" | "webhookSecret" | "taxEnabled";
-    what: string;
-  } | null>(null);
+  const [pendingSave, setPendingSave] = useState<PendingSave | null>(null);
 
   function show(next: PlatformStripeConfig) {
     setCfg(next);
-    setForm({ secretKey: "", publishableKey: next.publishableKey.value ?? "", webhookSecret: "", taxEnabled: next.taxEnabled.value });
+    setForm({ ...EMPTY_FORM, publishableKey: next.publishableKey.value ?? "" });
   }
 
   useEffect(() => {
@@ -49,15 +67,54 @@ export default function PlatformStripePage() {
       .catch((err: any) => setError(err?.message ?? "No se ha podido cargar la configuración."));
   }, []);
 
-  async function save(input: Parameters<typeof apiClient.updatePlatformStripeConfig>[0]) {
+  async function save(input: PlatformStripeUpdate) {
     setSaving(true);
     setError(null);
     try {
       show(await apiClient.updatePlatformStripeConfig(input));
       setTestResult(null);
+      setPendingSave(null);
       toast({ title: "Guardado", description: "Los cambios se aplican ya, sin reiniciar nada." });
     } catch (err: any) {
+      setPendingSave(null);
       setError(err?.message ?? "No se ha podido guardar.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /**
+   * Asks the server what saving would do first: refused (shown as the
+   * error), a change of mode (confirmed with the salons it affects), or
+   * nothing to confirm (saved at once).
+   */
+  async function saveChecked(input: PlatformStripeUpdate, always?: { title: string; confirmLabel: string }) {
+    setSaving(true);
+    setError(null);
+    try {
+      const preview = await apiClient.previewPlatformStripeConfig(input);
+      if (preview.problem) {
+        setError(preview.problem);
+        return;
+      }
+      const warning = previewWarning(preview);
+      if (warning) {
+        setPendingSave({ input, ...warning, confirmLabel: `Sí, pasar a modo ${modeName(preview.modeAfter)}` });
+      } else if (always) {
+        setPendingSave({
+          input,
+          title: always.title,
+          lines: [`Seguirás en modo ${modeName(preview.modeAfter)}: el servidor (.env) tiene claves del mismo modo.`],
+          confirmLabel: always.confirmLabel,
+          destructive: false,
+        });
+      } else {
+        setSaving(false);
+        await save(input);
+        return;
+      }
+    } catch (err: any) {
+      setError(err?.message ?? "No se ha podido comprobar el cambio.");
     } finally {
       setSaving(false);
     }
@@ -67,22 +124,13 @@ export default function PlatformStripePage() {
     setTesting(true);
     setTestResult(null);
     try {
-      setTestResult(await apiClient.testPlatformStripe());
+      // The typed key if there is one (not saved), else the one in force.
+      setTestResult(await apiClient.testPlatformStripe(form.secretKey.trim() || undefined));
     } catch (err: any) {
       setTestResult({ ok: false, message: err?.message ?? "Error" });
     } finally {
       setTesting(false);
     }
-  }
-
-  function clear(field: "secretKey" | "publishableKey" | "webhookSecret" | "taxEnabled", what: string) {
-    setPendingClear({ field, what });
-  }
-
-  async function performClear() {
-    if (!pendingClear) return;
-    await save({ [pendingClear.field]: null });
-    setPendingClear(null);
   }
 
   if (!cfg) {
@@ -91,6 +139,7 @@ export default function PlatformStripePage() {
 
   const status = stripeStatus(cfg);
   const pending = stripeUpdate(form, cfg);
+  const otherMode = modeName(cfg.otherWebhookSecret.mode);
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -119,7 +168,6 @@ export default function PlatformStripePage() {
           source={cfg.secretKey.source}
           current={cfg.secretKey.lastFour ? `…${cfg.secretKey.lastFour}` : null}
           hint="Stripe → Desarrolladores → Claves de API. «sk_test_…» para pruebas, «sk_live_…» para cobrar de verdad. Se guarda cifrada y no se vuelve a mostrar."
-          onClear={cfg.secretKey.source === "console" ? () => clear("secretKey", "la clave secreta") : undefined}
         >
           <input
             type="password"
@@ -136,7 +184,6 @@ export default function PlatformStripePage() {
           source={cfg.publishableKey.source}
           current={null}
           hint="En la misma página que la secreta: «pk_test_…» o «pk_live_…», del mismo modo que la secreta."
-          onClear={cfg.publishableKey.source === "console" ? () => clear("publishableKey", "la clave publicable") : undefined}
         >
           <input
             type="text"
@@ -154,18 +201,18 @@ export default function PlatformStripePage() {
           current={cfg.webhookSecret.lastFour ? `whsec_…${cfg.webhookSecret.lastFour}` : null}
           hint={
             <>
-              Obligatorio con la clave secreta. En Stripe → Desarrolladores → Webhooks, crea uno de «tu cuenta» a{" "}
-              <code className="font-mono">{WEBHOOK_URL}</code> con estos eventos:{" "}
+              Obligatorio con la clave secreta, y del mismo sitio que ella (las dos aquí, o las dos en el servidor). En Stripe →
+              Desarrolladores → Webhooks, crea uno de «tu cuenta» a <code className="font-mono">{WEBHOOK_URL}</code> con estos
+              eventos:{" "}
               {STRIPE_WEBHOOK_EVENTS.map((e, i) => (
                 <span key={e}>
                   <code className="font-mono">{e}</code>
                   {i < STRIPE_WEBHOOK_EVENTS.length - 1 ? ", " : ""}
                 </span>
               ))}
-              . Copia aquí su «Signing secret». En modo real hace falta otro webhook, con su propio secreto.
+              . Copia aquí su «Signing secret». Cada modo (pruebas y real) tiene su propio webhook y su propio secreto.
             </>
           }
-          onClear={cfg.webhookSecret.source === "console" ? () => clear("webhookSecret", "el secreto del webhook") : undefined}
         >
           <input
             type="password"
@@ -177,23 +224,45 @@ export default function PlatformStripePage() {
           />
         </Field>
 
-        <Field
-          label="IVA con Stripe Tax"
-          source={cfg.taxEnabled.source}
-          current={null}
-          hint="Stripe calcula el IVA de cada pago y pide el NIF del salón para su factura. Actívalo solo después de configurar Stripe Tax en Stripe (Ajustes → Impuestos: dirección de origen y registro de IVA en España); si no, los pagos fallarán."
-          onClear={cfg.taxEnabled.source === "console" ? () => clear("taxEnabled", "el ajuste del IVA") : undefined}
-        >
-          <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+        {cfg.mode !== "none" && (
+          <Field
+            label={`Secreto del webhook de modo ${otherMode} (opcional)`}
+            source={cfg.otherWebhookSecret.source}
+            current={cfg.otherWebhookSecret.lastFour ? `whsec_…${cfg.otherWebhookSecret.lastFour}` : null}
+            hint={`Con él, los avisos de Stripe del modo ${otherMode} (reintentos tras cambiar de modo, renovaciones de suscripciones antiguas) se reciben y se descartan, en vez de fallar hasta que Stripe desactive el webhook. Nunca activan un plan. Al cambiar de modo, el secreto anterior pasa aquí solo.`}
+            onClear={
+              cfg.otherWebhookSecret.source === "console" || cfg.otherWebhookSecret.source === "unreadable"
+                ? () =>
+                    setPendingSave({
+                      input: { otherWebhookSecret: null },
+                      title: `¿Quitar el secreto del webhook de modo ${otherMode}?`,
+                      lines: [`Los avisos que aún lleguen del modo ${otherMode} fallarán. Quítalo cuando hayas borrado ese webhook en Stripe.`],
+                      confirmLabel: "Quitar",
+                      destructive: true,
+                    })
+                : undefined
+            }
+          >
             <input
-              type="checkbox"
-              checked={form.taxEnabled}
-              onChange={(e) => setForm({ ...form, taxEnabled: e.target.checked })}
-              className="h-4 w-4"
+              type="password"
+              autoComplete="off"
+              value={form.otherWebhookSecret}
+              onChange={(e) => setForm({ ...form, otherWebhookSecret: e.target.value })}
+              placeholder="whsec_…"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono"
             />
-            Cobrar el IVA con Stripe Tax
-          </label>
-        </Field>
+          </Field>
+        )}
+
+        <div className="text-xs text-gray-500">
+          IVA: KiraRoom no cobra IVA ni IGIC en sus planes, así que Stripe Tax está siempre desactivado y el precio que ve el
+          salón es el final.
+          {cfg.taxIgnored && (
+            <span className="block mt-1 text-amber-700">
+              El servidor tiene STRIPE_TAX_ENABLED activado (o se activó antes aquí): se ignora.
+            </span>
+          )}
+        </div>
 
         {error && (
           <p className="text-sm text-red-600 flex items-start gap-2">
@@ -215,7 +284,7 @@ export default function PlatformStripePage() {
         <div className="flex flex-wrap items-center gap-3 pt-2">
           <button
             type="button"
-            onClick={() => pending && save(pending)}
+            onClick={() => pending && saveChecked(pending)}
             disabled={!pending || saving}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-900 text-white text-sm disabled:opacity-40"
           >
@@ -225,13 +294,36 @@ export default function PlatformStripePage() {
           <button
             type="button"
             onClick={testConnection}
-            disabled={testing || cfg.mode === "none"}
+            disabled={testing || (cfg.mode === "none" && !form.secretKey.trim())}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-300 text-sm disabled:opacity-40"
           >
             <PlugZap className="w-4 h-4" />
-            {testing ? "Comprobando…" : "Comprobar la conexión"}
+            {testing ? "Comprobando…" : form.secretKey.trim() ? "Probar la clave escrita" : "Comprobar la conexión"}
           </button>
+          {hasConsoleKeys(cfg) && (
+            <button
+              type="button"
+              onClick={() =>
+                saveChecked(BACK_TO_SERVER, {
+                  title: "¿Volver a lo del servidor (.env)?",
+                  confirmLabel: "Volver a lo del servidor",
+                })
+              }
+              disabled={saving}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-300 text-sm disabled:opacity-40"
+            >
+              <RotateCcw className="w-4 h-4" />
+              Volver a lo del servidor (.env)
+            </button>
+          )}
         </div>
+        {hasConsoleKeys(cfg) && (
+          <p className="text-xs text-gray-500">
+            «Volver a lo del servidor» quita de aquí a la vez la clave secreta, la publicable y el secreto del webhook. El servidor
+            tiene {cfg.server.mode === "none" ? "ninguna clave secreta" : `claves de modo ${modeName(cfg.server.mode)}`}
+            {cfg.server.mode !== "none" && !cfg.server.hasWebhookSecret ? " pero no el secreto del webhook" : ""}.
+          </p>
+        )}
 
         {testResult && (
           <p className={`text-sm ${testResult.ok ? "text-green-700" : "text-red-600"}`}>{testResult.message}</p>
@@ -242,8 +334,9 @@ export default function PlatformStripePage() {
         <CreditCard className="w-4 h-4 mt-0.5 shrink-0" />
         <span>
           Para cambiar esta configuración hace falta la verificación en dos pasos. Lo que se ponga aquí tiene prioridad sobre
-          el servidor; si se quita, vuelve a usarse lo del servidor. KiraRoom no acepta la clave secreta sin el secreto del
-          webhook, ni claves de modos distintos.
+          el servidor. Para pasar a modo real: crea en Stripe (modo real) el webhook con los eventos de arriba, pega aquí a la vez
+          la clave secreta, la publicable y el secreto de ese webhook, y guarda; antes de guardar verás los salones que tienen
+          datos del modo de pruebas. Los avisos del modo que no está en uso nunca activan un plan.
           {cfg.updatedAt && (
             <>
               {" "}
@@ -255,14 +348,20 @@ export default function PlatformStripePage() {
       </div>
 
       <ConfirmDialog
-        open={!!pendingClear}
-        title={`¿Quitar ${pendingClear?.what ?? ""} de la consola?`}
-        description="Se usará lo del servidor (.env), si lo hay."
-        confirmLabel="Quitar de la consola"
-        destructive
+        open={!!pendingSave}
+        title={pendingSave?.title ?? ""}
+        description={
+          <div className="space-y-2">
+            {pendingSave?.lines.map((line) => (
+              <p key={line}>{line}</p>
+            ))}
+          </div>
+        }
+        confirmLabel={pendingSave?.confirmLabel ?? "Confirmar"}
+        destructive={pendingSave?.destructive ?? false}
         loading={saving}
-        onCancel={() => setPendingClear(null)}
-        onConfirm={performClear}
+        onCancel={() => setPendingSave(null)}
+        onConfirm={() => pendingSave && save(pendingSave.input)}
       />
     </div>
   );
