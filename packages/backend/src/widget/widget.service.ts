@@ -5,6 +5,8 @@ import { salonOffersWhatsAppPromotions, salonWhatsAppConnected } from "../consen
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
 import { publicPrice, publicPriceSettings } from "../common/public-price";
 import { frameAncestorOrigins } from "./frame-origins";
+import { isReadOnlyStatus } from "../common/guards/read-only-tenant.guard";
+import { publicImageUrl } from "../public-site/public-images";
 import {
   clientLocations,
   formatLocationAddress,
@@ -28,6 +30,28 @@ export function widgetLocations(
   if (locations.length < 2) return { locations: [], links: [] };
   const ids = new Set(locations.map((l) => l.id));
   return { locations, links: where.links.filter((l) => ids.has(l.locationId) && offered.has(l.professionalId)) };
+}
+
+/** A widget token: not a secret (it sits in the salon's iframe), just unguessable. */
+export function newWidgetToken(): string {
+  return randomBytes(24).toString("base64url");
+}
+
+/**
+ * When a salon is deleted (SaaS console): every widget it embedded stops
+ * loading. The rows stay (appointments point at them as their source); only
+ * the token is replaced, so every copy of the old snippet answers 404.
+ * Takes the caller's transaction client.
+ */
+export async function invalidateTenantWidgets(
+  db: { widgetInstance: Pick<PrismaService["widgetInstance"], "findMany" | "update"> },
+  tenantId: string,
+): Promise<number> {
+  const widgets = await db.widgetInstance.findMany({ where: { tenantId }, select: { id: true } });
+  for (const w of widgets) {
+    await db.widgetInstance.update({ where: { id: w.id }, data: { token: newWidgetToken() } });
+  }
+  return widgets.length;
 }
 
 export interface CreateWidgetInstanceInput {
@@ -122,13 +146,19 @@ export class WidgetService {
     return { allowedOrigins: frameAncestorOrigins(stored), restricted: stored.length > 0 };
   }
 
+  /**
+   * The widget behind a token, while its salon exists. A deleted salon's
+   * widget answers 404 like a revoked one: its page is gone, and the iframe
+   * on its own site went on showing its prices and team (deleting a salon
+   * also replaces its widgets' tokens, see invalidateForTenant).
+   */
   async findByToken(token: string) {
     const widget = await this.prisma.widgetInstance.findUnique({
       where: { token },
-      include: { tenant: true },
+      include: { tenant: { select: { id: true, deletedAt: true } } },
     });
     if (!widget) throw new NotFoundException("Invalid widget token");
-    if (!widget.tenant) throw new NotFoundException("Tenant not found");
+    if (!widget.tenant || widget.tenant.deletedAt) throw new NotFoundException("Invalid widget token");
     await this.prisma.widgetInstance.update({
       where: { id: widget.id },
       data: { lastUsedAt: new Date() },
@@ -139,9 +169,29 @@ export class WidgetService {
   async getPublicConfig(widgetId: string) {
     const widget = await this.prisma.widgetInstance.findUnique({
       where: { id: widgetId },
-      include: { tenant: true },
+      // Only what the answer uses: the whole row carried the salon's keys
+      // and settings into memory for nothing.
+      include: {
+        tenant: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            logo: true,
+            coverImage: true,
+            city: true,
+            country: true,
+            phone: true,
+            timezone: true,
+            language: true,
+            fiscalSettings: true,
+            subscriptionStatus: true,
+            deletedAt: true,
+          },
+        },
+      },
     });
-    if (!widget) throw new NotFoundException("Widget not found");
+    if (!widget || !widget.tenant || widget.tenant.deletedAt) throw new NotFoundException("Widget not found");
     const allProfessionals = await this.prisma.professional.findMany({
       where: {
         tenantId: widget.tenantId,
@@ -196,10 +246,13 @@ export class WidgetService {
         id: widget.tenant.id,
         name: widget.tenant.name,
         slug: widget.tenant.slug,
-        logo: widget.tenant.logo,
-        coverImage: widget.tenant.coverImage,
+        // URLs, never the stored data: URLs (public-site/public-images.ts).
+        logoUrl: publicImageUrl(widget.tenant.id, "logo", widget.tenant.logo),
+        coverImageUrl: publicImageUrl(widget.tenant.id, "cover", widget.tenant.coverImage),
         city: widget.tenant.city,
         country: widget.tenant.country,
+        // Shown, with acceptsBookings false, instead of the booking steps.
+        phone: widget.tenant.phone,
         timezone: widget.tenant.timezone,
         // Euros, as everything is charged (the Moneda setting is gone).
         currency: "EUR",
@@ -207,6 +260,10 @@ export class WidgetService {
         // The tax the prices below include (IVA, IGIC, IPSI): "IVA incluido".
         taxLabel: prices.taxLabel,
       },
+      // False while the salon is read-only (trial ended, cancelled,
+      // suspended), as on its public page: the booking would be refused at
+      // the end, so the widget says to phone the salon instead.
+      acceptsBookings: !isReadOnlyStatus(widget.tenant.subscriptionStatus),
       widget: {
         id: widget.id,
         name: widget.name,
@@ -247,6 +304,6 @@ export class WidgetService {
   }
 
   private generateToken(): string {
-    return randomBytes(24).toString("base64url");
+    return newWidgetToken();
   }
 }

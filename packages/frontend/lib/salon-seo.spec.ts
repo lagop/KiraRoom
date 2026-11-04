@@ -20,7 +20,11 @@ import {
   metaDescription,
   metaTitle,
   openingHoursRows,
+  priceOnRequest,
+  publicImageSrc,
   salonJsonLd,
+  salonRobotsTxt,
+  salonSitemapXml,
   serializeJsonLd,
   shareImage,
   socialLinks,
@@ -57,8 +61,8 @@ const PAGE: PublicSalonPage = {
   name: "Salón Luna",
   slug: "salon-luna",
   description: null,
-  logo: "data:image/png;base64,AAAA",
-  coverImage: null,
+  logoUrl: null,
+  coverImageUrl: null,
   website: "https://salonluna.example",
   email: "hola@salonluna.example",
   phone: "+34 600 000 000",
@@ -105,14 +109,38 @@ check(
 check("address keeps the parts that exist", formatAddress(PAGE.address), "Calle Mayor 1, 28013 Madrid");
 
 console.log("\n=== images ===");
-check("data: logos are not offered to crawlers", shareImage(PAGE), null);
-check("a web cover image wins", shareImage({ ...PAGE, coverImage: "https://cdn.example/c.jpg" }), "https://cdn.example/c.jpg");
+const API = "https://api.kiraroom.net/api/v1";
+check("no images, no share image", shareImage(PAGE, API), null);
+check(
+  "a web cover image wins",
+  shareImage({ ...PAGE, coverImageUrl: "https://cdn.example/c.jpg", logoUrl: "/public-site/image/t1/logo?v=x" }, API),
+  "https://cdn.example/c.jpg",
+);
+check(
+  "an uploaded logo is shared from the API",
+  shareImage({ ...PAGE, logoUrl: "/public-site/image/t1/logo?v=abc" }, API),
+  "https://api.kiraroom.net/api/v1/public-site/image/t1/logo?v=abc",
+);
+check("a data: URL from an older server is not used", publicImageSrc("data:image/png;base64,AAAA", API), null);
+check(
+  "an API base that is not absolute gives crawlers nothing",
+  shareImage({ ...PAGE, logoUrl: "/public-site/image/t1/logo" }, "/api/v1"),
+  null,
+);
+check(
+  "schema.org image and logo from the API",
+  ((ld: any) => [ld.image, ld.logo])(salonJsonLd({ ...PAGE, logoUrl: "/public-site/image/t1/logo?v=abc" }, "https://x", API)),
+  [
+    "https://api.kiraroom.net/api/v1/public-site/image/t1/logo?v=abc",
+    "https://api.kiraroom.net/api/v1/public-site/image/t1/logo?v=abc",
+  ],
+);
 
 console.log("\n=== opening hours ===");
 const rows = openingHoursRows(PAGE.openingHours);
 check("seven rows, Monday first", rows.map((r) => r.day)[0], "Lunes");
 check("Monday's hours", rows[0].hours, "09:00 – 18:00");
-check("a day nobody works is closed", rows[6], { day: "Domingo", hours: null });
+check("a day nobody works is closed", rows[6], { key: "sunday", day: "Domingo", hours: null });
 check("no schedule at all says nothing", openingHoursRows({}), []);
 
 console.log("\n=== schema.org ===");
@@ -244,6 +272,29 @@ check("schema.org sameAs: the website, then the profiles", (salonJsonLd(SOCIAL, 
   "https://www.facebook.com/profile.php?id=100012345678",
 ]);
 check("no website and no profiles: no sameAs", "sameAs" in (salonJsonLd({ ...PAGE, website: null }, "https://x") as any), false);
+
+console.log("\n=== prices on request ===");
+check("0 is 'Consultar'", [priceOnRequest(0), priceOnRequest("0.00"), priceOnRequest(18.5)], [true, true, false]);
+const ldFree = salonJsonLd(
+  { ...PAGE, taxLabel: "IVA", services: [{ ...PAGE.services[0], price: 0 }] },
+  "https://x",
+) as any;
+check(
+  "an offer at 0 goes without a price",
+  ["price" in ldFree.hasOfferCatalog.itemListElement[0], "priceSpecification" in ldFree.hasOfferCatalog.itemListElement[0]],
+  [false, false],
+);
+
+console.log("\n=== robots.txt and sitemap.xml on the salon's host ===");
+check(
+  "robots points at the salon's own sitemap",
+  salonRobotsTxt("https://reservas.salonluna.es/").split("\n").filter((l) => l.startsWith("Sitemap")),
+  ["Sitemap: https://reservas.salonluna.es/sitemap.xml"],
+);
+const sm = salonSitemapXml(PAGE, "https://reservas.salonluna.es/");
+check("the sitemap lists only the salon's page", (sm.match(/<loc>/g) ?? []).length, 1);
+check("at its canonical URL", sm.includes("<loc>https://reservas.salonluna.es/</loc>"), true);
+check("a read-only salon lists nothing", salonSitemapXml({ ...PAGE, acceptsBookings: false }, "https://x/").includes("<url>"), false);
 
 console.log("\n=== Summary ===");
 console.log(`Pass: ${pass}, Fail: ${fail}`);

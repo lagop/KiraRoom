@@ -1,3 +1,8 @@
+import type { Metadata } from "next";
+
+// Its own title: it showed the root layout's, in English.
+export const metadata: Metadata = { title: "Política de privacidad · KiraRoom" };
+
 export default function PrivacyPage() {
   return (
     <main style={{ maxWidth: 760, margin: "0 auto", padding: "32px 16px", lineHeight: 1.6 }}>

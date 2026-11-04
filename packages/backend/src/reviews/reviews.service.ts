@@ -538,6 +538,10 @@ export class ReviewsService {
    * approved reviews whose author agreed to it, with first name and initial.
    */
   async publicForTenant(tenantId: string) {
+    // A deleted salon's page is gone; its clients' reviews are not shown
+    // anywhere either (they used to be, to anyone holding its id).
+    const salon = await this.prisma.tenant.findFirst({ where: { id: tenantId, deletedAt: null }, select: { id: true } });
+    if (!salon) throw new NotFoundException("Salon not found");
     const counted = { tenantId, status: { in: COUNTED_STATUSES }, rating: { gte: 1, lte: 5 } };
     const listed = {
       tenantId,

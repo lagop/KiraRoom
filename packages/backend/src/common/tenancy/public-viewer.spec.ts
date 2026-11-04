@@ -112,6 +112,13 @@ describe("GET /professionals", () => {
     for (const secret of ["email", "phone", "commissionRate", "userId", "hireDate", "settings", "stats"]) {
       expect(PUBLIC_PROFESSIONAL).not.toHaveProperty(secret);
     }
+    // Nor her weekly schedule, nor the salon's catalogue rows: the services
+    // she does by id, only active ones bookable online.
+    expect(PUBLIC_PROFESSIONAL).not.toHaveProperty("workingHours");
+    expect(PUBLIC_PROFESSIONAL.services).toEqual({
+      where: { service: { isActive: true, isOnlineBookable: true } },
+      select: { serviceId: true },
+    });
   });
 
   it("gives full rows to the salon's own staff", async () => {
@@ -125,6 +132,23 @@ describe("GET /professionals", () => {
 });
 
 describe("GET /professionals/:id", () => {
+  it("gives an anonymous caller no schedule and only bookable services, by id", async () => {
+    const row = {
+      ...FULL_PRO,
+      workingHours: { monday: { start: "09:00", end: "14:00" } },
+      services: [
+        { serviceId: "s-ok", service: { id: "s-ok", isActive: true, isOnlineBookable: true, price: 30, products: [] } },
+        { serviceId: "s-phone", service: { id: "s-phone", isActive: true, isOnlineBookable: false } },
+        { serviceId: "s-old", service: { id: "s-old", isActive: false, isOnlineBookable: true } },
+      ],
+    };
+    const prisma: any = { professional: { findUnique: async () => row } };
+    const controller = new ProfessionalsController(new ProfessionalsService(prisma), {} as any, viewerService(), {} as any);
+    const pub: any = await controller.findOne({ headers: {} }, "pro-1");
+    expect(pub.workingHours).toBeUndefined();
+    expect(pub.services).toEqual([{ serviceId: "s-ok" }]);
+  });
+
   it("strips private fields for anyone but the salon's staff", async () => {
     const { controller } = professionalsController();
 
@@ -184,6 +208,15 @@ describe("GET /professionals for a professional (role staff)", () => {
     expect(ana.email).toBe("ana@salon.test");
     expect(luis).toMatchObject({ id: "pro-2", firstName: "Luis" });
     for (const secret of ["email", "phone", "commissionRate", "userId"]) expect(luis[secret]).toBeUndefined();
+  });
+
+  it("a colleague keeps her schedule and services for the calendar", async () => {
+    const ana = { ...FULL_PRO, workingHours: { monday: { start: "09:00", end: "14:00" } }, services: [{ serviceId: "s1", service: { id: "s1" } }] };
+    const { controller } = controllerFor([ana, LUIS]);
+    const colleague: any = await controller.findOne(bearer(STAFF_LUIS), "pro-1");
+    expect(colleague.workingHours).toEqual(ana.workingHours);
+    expect(colleague.services).toEqual(ana.services);
+    expect(colleague.email).toBeUndefined();
   });
 
   it("by id: their own in full, a colleague's public", async () => {
