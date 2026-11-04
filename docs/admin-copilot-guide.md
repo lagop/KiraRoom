@@ -109,6 +109,6 @@ ese idioma. Por defecto sale en español.
 
 ---
 
-Si encuentras algo que no funciona como esperabas: `soporte@kiraroom.com`
+Si encuentras algo que no funciona como esperabas: `info@kiraroom.com`
 o pulsa 🐛 en la barra superior del panel — el reporte llega directo a
 producto.
