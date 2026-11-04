@@ -11,7 +11,7 @@ jest.mock("./saas.helpers", () => {
 });
 
 import { createTenantWithOwner } from "./saas.helpers";
-import { CONSOLE_USER_SELECT, SaasService, unusablePassword } from "./saas.service";
+import { CONSOLE_TENANT_SORT_FIELDS, CONSOLE_USER_SELECT, SaasService, unusablePassword } from "./saas.service";
 import { SaasController } from "./saas.controller";
 import { CreateTenantDto } from "./dto/create-tenant.dto";
 import { bodyParser } from "../common/validation/validated-body.testing";
@@ -95,5 +95,18 @@ describe("console: user list (C5)", () => {
     expect(prisma.user.findMany.mock.calls[0][0].orderBy).toEqual({ createdAt: "asc" });
     await service.getAllUsers({ page: 1, limit: 10, sortBy: "email" } as any);
     expect(prisma.user.findMany.mock.calls[1][0].orderBy).toEqual({ email: "desc" });
+  });
+});
+
+describe("console: tenant list sort", () => {
+  it("sorts only by listed columns", async () => {
+    const prisma: any = { tenant: { findMany: jest.fn(async () => []), count: jest.fn(async () => 0) } };
+    const service = new SaasService(prisma, {} as any, {} as any, {} as any);
+    (service as any).sharedIdentity = async () => new Map();
+    await service.getAllTenants({ page: 1, limit: 10, sortBy: "stripeSecretKeyEncrypted", sortOrder: "asc" } as any);
+    expect(prisma.tenant.findMany.mock.calls[0][0].orderBy).toEqual({ createdAt: "asc" });
+    await service.getAllTenants({ page: 1, limit: 10, sortBy: "name" } as any);
+    expect(prisma.tenant.findMany.mock.calls[1][0].orderBy).toEqual({ name: "desc" });
+    expect(CONSOLE_TENANT_SORT_FIELDS).not.toContain("stripeSecretKeyEncrypted");
   });
 });

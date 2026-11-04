@@ -4195,3 +4195,14 @@ model PublicBookingSms {
   @@index([appointmentId])
   @@map("public_booking_sms")
 }
+
+/// One-time maintenance jobs that run after boot (auth/default-password-sweep.service.ts):
+/// a row means the job finished and must not run again.
+model MaintenanceTask {
+  name        String   @id
+  completedAt DateTime @default(now())
+  /// Counts only, never personal data.
+  result      Json     @default("{}")
+
+  @@map("maintenance_tasks")
+}
