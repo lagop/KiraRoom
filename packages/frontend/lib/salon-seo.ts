@@ -105,6 +105,11 @@ export interface PublicSalonPage {
    * Generales. Informational: nothing charges a fee. Absent from older servers.
    */
   cancellationPolicy?: string | null;
+  /**
+   * How many hours before the appointment the client's "Cancelar mi cita"
+   * link still works (Tenant.minCancelHours). Absent from older servers.
+   */
+  minCancelHours?: number | null;
   updatedAt: string;
   services: PublicSalonService[];
   professionals: PublicSalonProfessional[];
@@ -128,6 +133,13 @@ export interface PublicSalonPage {
    * not indexed. Absent from older servers (= true).
    */
   acceptsBookings?: boolean;
+  /**
+   * Why acceptsBookings is false: "read_only" (as above) or
+   * "no_professional" (nobody active to book with yet: "Este salón todavía
+   * no acepta reservas online"). Null when it takes bookings; absent from
+   * older servers.
+   */
+  bookingUnavailable?: "read_only" | "no_professional" | null;
   /** Set only once the salon's own domain serves the page over HTTPS. */
   customDomain: string | null;
   /** salon-lucia.kiraroom.net, set only once subdomains serve over HTTPS. */
@@ -179,6 +191,25 @@ export function publicImageSrc(url: string | null | undefined, apiBase = publicA
   if (!url) return null;
   if (url.startsWith("/public-site/image/") || url.startsWith("/public-site/professional-image/")) return `${apiBase}${url}`;
   return /^https?:\/\//i.test(url) ? url : null;
+}
+
+/**
+ * Whether search engines may index the salon's page: not while it takes no
+ * bookings, nor while it has no active service yet (a page created a minute
+ * ago, with nothing on it).
+ */
+export function salonPageIndexable(page: Pick<PublicSalonPage, "acceptsBookings" | "services">): boolean {
+  return acceptsBookings(page) && page.services.length > 0;
+}
+
+/**
+ * "Puedes cancelar online hasta 24 h antes", when the salon wrote no policy
+ * of its own. Null with a policy, or from an older server.
+ */
+export function cancelDeadlineHours(page: Pick<PublicSalonPage, "cancellationPolicy" | "minCancelHours">): number | null {
+  if (page.cancellationPolicy?.trim()) return null;
+  const hours = page.minCancelHours;
+  return typeof hours === "number" && Number.isFinite(hours) && hours > 0 ? Math.round(hours) : null;
 }
 
 /** Whether the salon takes bookings online: older servers did not say, and took them. */

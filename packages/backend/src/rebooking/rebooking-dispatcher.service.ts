@@ -132,6 +132,8 @@ export class RebookingDispatcherService {
         where: {
           optedOut: false,
           nextRecommendedReminderAt: { gte: from, lt: until },
+          // Not for a salon deleted from the console (audit 7 N7).
+          tenant: { deletedAt: null },
           OR: [{ dispatchClaimedAt: null }, { dispatchClaimedAt: { lt: claimableBefore } }],
         },
         select: {

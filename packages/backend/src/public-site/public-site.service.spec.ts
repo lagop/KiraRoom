@@ -343,6 +343,19 @@ describe("PublicSiteService.getPage", () => {
     });
   });
 
+  it("takes no bookings yet with nobody active, and says why (audit 7 N11)", async () => {
+    const t = makeService();
+    t.prisma.professional.findMany.mockResolvedValue([]);
+    const page = await t.svc.getPage("x");
+    expect(page.acceptsBookings).toBe(false);
+    expect(page.bookingUnavailable).toBe("no_professional");
+    expect((await makeService().svc.getPage("x")).bookingUnavailable).toBeNull();
+  });
+
+  it("sends the online cancellation deadline (audit 7 N15)", async () => {
+    expect((await makeService({ tenant: { minCancelHours: 12 } }).svc.getPage("x")).minCancelHours).toBe(12);
+  });
+
   it("takes bookings unless the salon is read-only (trial ended, cancelled, suspended)", async () => {
     expect((await makeService({ tenant: { subscriptionStatus: "trialing" } }).svc.getPage("x")).acceptsBookings).toBe(true);
     expect((await makeService({ tenant: { subscriptionStatus: "past_due" } }).svc.getPage("x")).acceptsBookings).toBe(true);

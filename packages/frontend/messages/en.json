@@ -273,6 +273,12 @@
       "done": "Corrective invoice issued",
       "error": "The corrective invoice could not be issued"
     },
+    "territoryTaxNotice": {
+      "title": "Check the tax on your invoices",
+      "igic": "Your salon is in the Canary Islands, but it invoices with {current}. IGIC applies there (7 % general rate).",
+      "ipsi": "Your salon is in Ceuta or Melilla, but it invoices with {current}. IPSI applies there.",
+      "link": "Change it in Tax settings"
+    },
     "issuerBanner": {
       "title": "Your salon's details are missing from your invoices",
       "missing": "Every invoice must show the salon's {fields}.",
@@ -2995,6 +3001,10 @@
     "phoneOnly": "Book by phone",
     "noOnlineBooking": "Online booking is not available right now. Call the salon to book an appointment.",
     "noOnlineBookingTitle": "Book by phone",
+    "notTakingBookingsYetTitle": "This salon does not take online bookings yet",
+    "notTakingBookingsYet": "Call the salon to book an appointment.",
+    "notTakingBookingsYetNoPhone": "You will soon be able to book here.",
+    "cancelOnlineUntil": "You can cancel online up to {hours} h before.",
     "callSalon": "Call {phone}",
     "coverAlt": "Photo of {name}",
     "logoAlt": "{name} logo",

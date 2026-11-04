@@ -11,7 +11,7 @@ import { AppointmentsService } from "./appointments.service";
  * caps (public-booking-sms-cap.ts); over them the SMS is held back and the
  * booking still stands.
  */
-function harness(opts: { tenant?: any; smsAllowed?: boolean; locations?: any[] } = {}) {
+function harness(opts: { tenant?: any; smsAllowed?: boolean; locations?: any[]; smsPlan?: boolean } = {}) {
   const smsRows: any[] = [];
   const prisma: any = {
     location: { findMany: jest.fn(async () => opts.locations ?? []) },
@@ -33,7 +33,13 @@ function harness(opts: { tenant?: any; smsAllowed?: boolean; locations?: any[] }
     shouldSendNotification: jest.fn(async (_c: string, _t: string, ch: string) => ch === "email" || ch === "sms"),
   };
   const stub = {} as any;
-  const svc = new AppointmentsService(prisma, stub, notifications as any, email as any, sms as any, stub, stub);
+  // The plan check of the automatic SMS (audit 7 N8); none wired: as before.
+  const flags =
+    opts.smsPlan === undefined ? undefined : { isFeatureUnlocked: jest.fn(async () => opts.smsPlan) };
+  const svc = new AppointmentsService(
+    prisma, stub, notifications as any, email as any, sms as any, stub, stub,
+    undefined, undefined, undefined, undefined, undefined, flags as any,
+  );
   const appointment = {
     id: "apt-1",
     tenantId: "t1",
@@ -65,14 +71,54 @@ describe("the confirmation email of a salon with one location (R6)", () => {
 
   it("uses the tenant row the appointment already carries", async () => {
     const { send, email, prisma } = harness({
-      tenant: { name: "Salón Luna", language: "es", street: "Rúa Nova 3", city: "Lugo", postalCode: "27001", state: null, phone: "982 000 000" },
+      tenant: {
+        name: "Salón Luna",
+        language: "es",
+        street: "Rúa Nova 3",
+        city: "Lugo",
+        postalCode: "27001",
+        state: null,
+        phone: "982 000 000",
+        email: "hola@salonluna.test",
+        minCancelHours: 12,
+        cancellationPolicy: null,
+      },
     });
     await send(false);
     expect(prisma.tenant.findUnique).not.toHaveBeenCalled();
     expect(email.sendAppointmentConfirmation.mock.calls[0][0]).toMatchObject({
       salonAddress: "Rúa Nova 3, 27001 Lugo",
       salonPhone: "982 000 000",
+      // Replies go to the salon; no policy text, so the deadline (audit 7 N5, N15).
+      salonEmail: "hola@salonluna.test",
+      minCancelHours: 12,
     });
+  });
+
+  it("with a policy of its own, the email does not add the deadline", async () => {
+    const { send, email } = harness({
+      tenant: { name: "Salón Luna", language: "es", street: null, phone: null, email: null, minCancelHours: 24, cancellationPolicy: "Avísanos un día antes." },
+    });
+    await send(false);
+    const data = email.sendAppointmentConfirmation.mock.calls[0][0];
+    expect(data).not.toHaveProperty("minCancelHours");
+    expect(data).not.toHaveProperty("salonEmail");
+  });
+});
+
+describe("automatic SMS only on a plan with SMS notices (audit 7 N8)", () => {
+  it("a salon without sms_notifications gets the email, not the SMS", async () => {
+    const { send, email, sms } = harness({ smsPlan: false });
+    await send(false);
+    expect(email.sendAppointmentConfirmation).toHaveBeenCalledTimes(1);
+    expect(sms.sendAppointmentConfirmation).not.toHaveBeenCalled();
+  });
+
+  it("a salon with it gets both", async () => {
+    const { send, email, sms } = harness({ smsPlan: true });
+    await send(false);
+    expect(email.sendAppointmentConfirmation).toHaveBeenCalledTimes(1);
+    expect(sms.sendAppointmentConfirmation).toHaveBeenCalledTimes(1);
   });
 
   it("leaves out what the salon has not filled in", async () => {

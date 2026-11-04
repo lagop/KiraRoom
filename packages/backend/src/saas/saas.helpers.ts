@@ -15,7 +15,7 @@ import {
 } from "./saas.constants";
 import type { Tenant } from "@prisma/client";
 import { RESERVED_SUBDOMAINS } from "@kira/shared";
-import { NEW_SALON_FISCAL_SETTINGS } from "../invoices/salon-tax-settings";
+import { newSalonFiscalSettings } from "../invoices/salon-tax-settings";
 
 /** Read an "active" (non-soft-deleted) tenant by id. */
 export async function getActiveTenant(
@@ -220,8 +220,13 @@ async function createTenantAndUserOnTx(
       trialEnd,
       // A new salon's prices include the tax (pricesIncludeTax: true); one
       // created before the setting keeps the column default, with no key,
-      // which reads as tax on top. See salon-tax-settings.ts.
-      fiscalSettings: { ...NEW_SALON_FISCAL_SETTINGS },
+      // which reads as tax on top. See salon-tax-settings.ts. A salon in the
+      // Canaries starts on IGIC 7 %, one in Ceuta or Melilla on IPSI (audit 7
+      // N6), from its address or, with none yet, a Canary timezone.
+      fiscalSettings: newSalonFiscalSettings(
+        { street: input.street, city: input.city, state: input.state, postalCode: input.postalCode, country: input.country ?? "ES" },
+        input.timezone,
+      ) as any,
     },
     select: { id: true },
   });
