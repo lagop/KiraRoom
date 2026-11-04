@@ -127,9 +127,9 @@ function notices(status: "pending" | "confirmed", source = "online", opts: { hel
     sendAppointmentCancellation: jest.fn(async (_d: any, _r?: string) => ({ success: true })),
     sendBookingNotConfirmed: jest.fn(async (_d: any) => ({ success: true })),
   };
+  // The salon's WhatsApp template: the only WhatsApp sender (channels audit M7).
   const whatsapp = {
-    sendAppointmentConfirmation: jest.fn(async () => ({})),
-    sendAppointmentCancellation: jest.fn(async () => ({})),
+    sendAppointmentNotice: jest.fn(async (..._args: any[]) => ({ sent: true, messageId: "wamid.1" })),
   };
   const notifications = {
     shouldSendNotification: jest.fn(async () => true),
@@ -139,7 +139,8 @@ function notices(status: "pending" | "confirmed", source = "online", opts: { hel
   const translations = { translate: jest.fn((_l: string, k: string) => k) };
   const stub = {} as any;
   const svc = new AppointmentsService(
-    prisma, stub, notifications as any, email as any, sms as any, whatsapp as any, translations as any, stub,
+    prisma, stub, notifications as any, email as any, sms as any, translations as any, stub,
+    undefined, undefined, undefined, undefined, whatsapp as any,
   );
   const appointment = {
     id: APT,
@@ -168,14 +169,15 @@ describe("a pending online booking's notices (D1)", () => {
       cancelUrl: expect.stringContaining("/public/cita/"),
     });
     expect(sms.sendAppointmentConfirmation.mock.calls[0][0]).toMatchObject({ pending: true });
-    expect(whatsapp.sendAppointmentConfirmation).not.toHaveBeenCalled();
+    expect(whatsapp.sendAppointmentNotice).not.toHaveBeenCalled();
   });
 
   it("an auto-confirmed booking gets the confirmed texts and WhatsApp once, at creation", async () => {
     const { svc, email, whatsapp, appointment } = notices("confirmed");
     await (svc as any).sendAppointmentCreatedNotifications(appointment, { publicBooking: true });
     expect(email.sendAppointmentConfirmation.mock.calls[0][0]).not.toHaveProperty("pending");
-    expect(whatsapp.sendAppointmentConfirmation).toHaveBeenCalledTimes(1);
+    expect(whatsapp.sendAppointmentNotice).toHaveBeenCalledTimes(1);
+    expect(whatsapp.sendAppointmentNotice.mock.calls[0][1]).toBe("confirmed");
   });
 
   it("a booking made in the panel carries no cancel link", async () => {
@@ -218,7 +220,7 @@ describe("a booking the salon did not confirm in time (D2)", () => {
       { id: "a2", tenantId: "t1", scheduledDate: new Date("2026-12-01T00:00:00Z"), scheduledTime: "09:00", tenant: { name: "Salón Luna", timezone: "Europe/Madrid" } },
     ];
     const prisma: any = { appointment: { findMany: jest.fn(async () => rows) } };
-    const svc = new AppointmentsService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const svc = new AppointmentsService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
     const change = jest.spyOn(svc, "changeStatus").mockResolvedValue({} as any);
     expect(await svc.expireUnconfirmedOnlineBookings(now, 48)).toBe(1);
     const where = prisma.appointment.findMany.mock.calls[0][0].where;
@@ -236,7 +238,7 @@ describe("a booking the salon did not confirm in time (D2)", () => {
 describe("cancelling from the link (D3)", () => {
   function linkHarness(row: any) {
     const prisma: any = { appointment: { findUnique: jest.fn(async () => row) } };
-    const svc = new AppointmentsService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const svc = new AppointmentsService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
     const change = jest.spyOn(svc, "changeStatus").mockImplementation(async () => {
       row.status = "cancelled";
       return {} as any;
@@ -305,7 +307,7 @@ describe("'Cualquier profesional' from the salon page (D4)", () => {
       tenant: { findFirst: jest.fn(async () => tenant) },
       widgetInstance: { findUnique: jest.fn() },
     };
-    const svc = new AppointmentsService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const svc = new AppointmentsService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
     const book = jest.spyOn(svc, "bookOnline").mockResolvedValue({ id: "x" } as any);
     return { svc, book, prisma };
   }
