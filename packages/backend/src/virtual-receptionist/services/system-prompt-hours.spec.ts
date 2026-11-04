@@ -149,7 +149,7 @@ describe("an unknown week is admitted, not invented", () => {
     // correct; making up a Monday-to-Friday default is how this started.
     const prompt = promptFor({ ...BASE, language: "es", workingHours: {} });
 
-    expect(prompt).toContain("Not available");
+    expect(prompt).toContain("No disponible");
     expect(prompt).not.toContain("- lunes:");
   });
 

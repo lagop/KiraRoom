@@ -341,3 +341,88 @@ describe("isAffirmative", () => {
     (text) => expect(isAffirmative(text)).toBe(false),
   );
 });
+
+describe("only a reply to the latest summary books it (audit V4)", () => {
+  it("a yes two messages after the summary does not book it", async () => {
+    // Summary of a cut; "¿hacéis uñas?"; the model asks "¿te miro hueco?"; "sí".
+    const { run, say, booked } = setup();
+
+    await run("propose_appointment", DETAILS);
+    say("¿Hacéis uñas?");
+    say("sí");
+
+    expect(await run("create_appointment")).toMatchObject({ created: false, error: "not_confirmed" });
+    expect(booked).toHaveLength(0);
+  });
+
+  it("the summary shown again is proposed again, and that one can be booked", async () => {
+    const { run, say, booked } = setup();
+
+    await run("propose_appointment", DETAILS);
+    say("¿Hacéis uñas?");
+    await run("propose_appointment", DETAILS);
+    say("sí");
+
+    expect(await run("create_appointment")).toMatchObject({ created: true });
+    expect(booked).toHaveLength(1);
+  });
+
+  it("a stale summary is not booked", async () => {
+    jest.useFakeTimers({ now: new Date("2026-10-01T10:00:00Z") });
+    try {
+      const { run, say, booked } = setup();
+      await run("propose_appointment", DETAILS);
+      jest.setSystemTime(new Date("2026-10-01T11:00:00Z"));
+      say("sí");
+      expect(await run("create_appointment")).toMatchObject({ created: false, error: "not_confirmed" });
+      expect(booked).toHaveLength(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
+
+describe("after booking (audit V1, V7)", () => {
+  it("links the conversation to the client and keeps no copy of her contact details", async () => {
+    const { run, say, state } = setup({
+      book: async () => ({ id: "apt-3", clientId: "client-3", service: { name: "Corte" }, professional: { firstName: "Ana", lastName: "García" } }) as any,
+    });
+
+    await run("propose_appointment", DETAILS);
+    say("sí");
+    await run("create_appointment");
+
+    const pending = (state() as any).pendingBooking;
+    expect(pending).toMatchObject({ bookedAppointmentId: "apt-3", date: "2026-10-05", time: "10:00" });
+    expect(pending.phone).toBeUndefined();
+    expect(pending.email).toBeUndefined();
+    expect(pending.firstName).toBe("");
+  });
+
+  it("does not pass an internal error's text to the model", async () => {
+    const { run, say } = setup({
+      book: async () => {
+        throw new Error("Invalid `prisma.appointment.create()` invocation: column x");
+      },
+    });
+
+    await run("propose_appointment", DETAILS);
+    say("sí");
+    const out = await run("create_appointment");
+
+    expect(out).toMatchObject({ created: false, error: "booking_failed", message: "The booking could not be made." });
+  });
+
+  it("keeps the booking service's own refusal, written for the client", async () => {
+    const { run, say } = setup({
+      book: async () => {
+        throw new ConflictException("Ese hueco ya no está libre.");
+      },
+    });
+
+    await run("propose_appointment", DETAILS);
+    say("sí");
+
+    expect(await run("create_appointment")).toMatchObject({ error: "slot_unavailable", message: "Ese hueco ya no está libre." });
+  });
+});

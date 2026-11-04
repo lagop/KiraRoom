@@ -32,7 +32,7 @@ export function rememberVisitorToken(storage: Storage | undefined, salonId: stri
   }
 }
 
-const GENERIC = "Lo sentimos, estamos experimentando problemas. Por favor, inténtalo de nuevo.";
+const GENERIC = "Ahora mismo no puedo responder. Inténtalo de nuevo en un momento.";
 
 /**
  * What the visitor reads when a message fails. The daily limit and "too fast"

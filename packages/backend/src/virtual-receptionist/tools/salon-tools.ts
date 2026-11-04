@@ -563,7 +563,12 @@ export class SalonToolsService {
       this.logger.warn(
         `checkAvailability failed tenant=${ctx.tenantId} date=${input.date}: ${(err as Error).message}`,
       );
-      return { error: 'availability_check_failed', message: (err as Error).message };
+      // The reason is in the log. The model gets a code: the raw text (a
+      // database or service message) reached the public chat's response.
+      return {
+        error: 'availability_check_failed',
+        message: 'Availability could not be checked right now. Offer the booking page or the salon phone.',
+      };
     }
   }
 
