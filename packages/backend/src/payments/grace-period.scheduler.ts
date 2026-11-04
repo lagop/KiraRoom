@@ -3,6 +3,7 @@ import { Cron, CronExpression } from "@nestjs/schedule";
 import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { EmailService } from "../notifications/services/email.service";
+import { appBaseUrl } from "../common/app-base-url";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const READ_ONLY_DAYS = 30;
@@ -73,11 +74,7 @@ export class GracePeriodScheduler {
 
     // Notify each owner individually. Email failures are logged and
     // skipped — we never re-flip the row even if the email bounces.
-    const baseUrl =
-      this.config.get<string>("APP_BASE_URL") ||
-      this.config.get<string>("FRONTEND_URL") ||
-      "https://app.kiraroom.com";
-    const updatePaymentUrl = `${baseUrl.replace(/\/+$/, "")}/dashboard/billing`;
+    const updatePaymentUrl = `${appBaseUrl((k) => this.config.get<string>(k))}/dashboard/billing`;
 
     for (const tenant of expired) {
       try {

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { PrismaService } from "../../common/prisma/prisma.service";
 import { EmailService } from "../../notifications/services/email.service";
+import { appBaseUrl } from "../../common/app-base-url";
 
 /**
  * In-process retry scheduler for fiscal Spain dispatches.
@@ -141,7 +142,7 @@ export class FiscalRetryQueue {
         subject: `Factura ${invoice.series}${invoice.number} rechazada por AEAT`,
         html: `<p>Tu factura <strong>${invoice.series}${invoice.number}</strong> de ${invoice.tenant.name} fue rechazada tras ${FISCAL_RETRY_MAX_ATTEMPTS} intentos.</p>
 <p>Detalle: ${lastError ?? ""}</p>
-<p>Resolver desde el dashboard: <a href="https://app.kiraroom.com/dashboard/billing/invoices/${invoiceId}">abrir factura</a></p>`,
+<p>Resolver desde el panel: <a href="${appBaseUrl()}/dashboard/billing/invoices">abrir Facturas</a></p>`,
       });
     } catch (err) {
       // Email is best-effort; keep the invoice marked permanent.
