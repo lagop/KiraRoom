@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { Star, Filter, ExternalLink, AlertCircle, CheckCircle2, MessageCircle } from "lucide-react";
 import apiClient, { Review, ReviewAnalytics, ReviewSettings } from "@/lib/api";
+import { safeHttpUrl } from "@/lib/safe-url";
 import { useToast } from "@/components/ui/use-toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
@@ -501,9 +502,9 @@ function SettingsCard({
           >
             Guardar
           </button>
-          {settings.googleReviewLink ? (
+          {safeHttpUrl(settings.googleReviewLink) ? (
             <a
-              href={settings.googleReviewLink}
+              href={safeHttpUrl(settings.googleReviewLink)!}
               target="_blank"
               rel="noreferrer"
               className="inline-flex items-center gap-1 text-sm text-blue-700 hover:underline"
