@@ -68,6 +68,10 @@ beforeAll(async () => {
       currentPeriodEnd: new Date(Date.now() + 864e5),
       // Prices with the tax included (every new salon): money = catalogue.
       fiscalSettings: { pricesIncludeTax: true, defaultTaxRate: 21, defaultSeries: "A" },
+      // Commissions on the price with the tax ("Comisión sobre", commission-terms.ts):
+      // the figures below are rate x the price charged, and the salon's default 10 %.
+      commissionBase: "gross",
+      commissionDefaultRate: 10,
     },
   });
   tenantId = tenant.id;
