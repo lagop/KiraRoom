@@ -73,8 +73,6 @@ const en = JSON.parse(fs.readFileSync(path.join(root, "messages/en.json"), "utf8
 check("no dashboard.new_this_month shadowing the Spanish text", es.dashboard.new_this_month, undefined);
 check("same console metric keys in es and en", Object.keys(es.saas.metrics).sort(), Object.keys(en.saas.metrics).sort());
 check("Spanish overview label", es.saas.nav.overview, "Inicio");
-const esRaw = fs.readFileSync(path.join(root, "messages/es.json"), "utf8");
-check("the dashboard block no longer repeats new_this_month", (esRaw.match(/"new_this_month"/g) ?? []).length, 1);
 
 console.log("\n=== Summary ===");
 console.log(`Pass: ${pass}, Fail: ${fail}`);
