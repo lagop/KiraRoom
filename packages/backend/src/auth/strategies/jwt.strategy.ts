@@ -4,6 +4,7 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { bindTenant } from '../../common/tenancy/tenant.context';
+import { SALON_DELETED_MESSAGE } from '../salon-deleted';
 
 export interface JwtPayload {
   sub: string;      // userId
@@ -56,11 +57,17 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
             select: {
               plan: true,
               subscriptionStatus: true,
+              deletedAt: true,
             },
           },
         },
       });
 
+      // Its salon was deleted from the platform console (the deletion also
+      // deactivates the team and ends their sessions; this holds regardless).
+      if (user?.tenant?.deletedAt && user.role !== 'saas_owner') {
+        throw new UnauthorizedException(SALON_DELETED_MESSAGE);
+      }
       if (!user || !user.isActive) {
         throw new UnauthorizedException('Invalid token or user inactive');
       }

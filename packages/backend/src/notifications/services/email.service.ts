@@ -4,7 +4,7 @@ import { Resend } from "resend";
 import { TranslationsService } from "../../translations/translations.service";
 import { PrismaService } from "../../common/prisma/prisma.service";
 import { PlatformEmailConfigService } from "../../platform/platform-email-config.service";
-import { EmailSettings, senderDomain, senderWithName } from "../../platform/email-settings";
+import { EmailSettings, senderWithName } from "../../platform/email-settings";
 import { isPlaceholderEmail } from "../../common/placeholder-email";
 import { escapeHtml } from "../../common/html-escape";
 
@@ -31,20 +31,8 @@ export interface EmailOptions {
   text?: string;
   replyTo?: string;
   sendAt?: Date; // For scheduling emails with Resend
-  /**
-   * Extra RFC 822 headers (e.g. `List-Unsubscribe`). Pass-through to
-   * Resend. The service also auto-adds List-Unsubscribe for any
-   * single-recipient transactional email when `listUnsubscribe: true`
-   * is set (default for `sendTransactional` callers).
-   */
+  /** Extra RFC 822 headers, passed through to Resend as given. */
   headers?: Record<string, string>;
-  /**
-   * Set to `true` to auto-add a `List-Unsubscribe: <mailto:…>` header
-   * pointing at `unsubscribe@<EMAIL_FROM_DOMAIN>`. Recommended for
-   * all transactional emails per RFC 8058. Defaults to `false` to
-   * preserve the historical behavior of one-off `sendEmail` callers.
-   */
-  listUnsubscribe?: boolean;
   /**
    * Resend's Idempotency-Key: a retry with the same key within 24 hours is
    * not delivered twice (e.g. after a send that timed out but went through).
@@ -130,6 +118,17 @@ export interface AppointmentEmailData {
   /** The client's "Cancelar mi cita" page (appointments/public-cancel-link.ts), when she may use it. */
   cancelUrl?: string;
   /**
+   * The salon's contact email (Tenant.email): replies go there, not to the
+   * platform's sender. Empty: no Reply-To.
+   */
+  salonEmail?: string | null;
+  /**
+   * The salon's online cancellation deadline (Tenant.minCancelHours), passed
+   * when it has no policy text of its own: the confirmation with a cancel
+   * link then says "Puedes cancelar online hasta N h antes".
+   */
+  minCancelHours?: number;
+  /**
    * Not used: the appointment emails are in Spanish. No caller knows the
    * salon's language today, and the dates they pass are already Spanish.
    */
@@ -137,12 +136,12 @@ export interface AppointmentEmailData {
 }
 
 /** "23 de noviembre de 2026", in Madrid time so a late-UTC instant shows the right day. */
-export function formatLongDateEs(date: Date): string {
+export function formatLongDateEs(date: Date, timeZone = "Europe/Madrid"): string {
   return date.toLocaleDateString("es-ES", {
     day: "numeric",
     month: "long",
     year: "numeric",
-    timeZone: "Europe/Madrid",
+    timeZone,
   });
 }
 
@@ -247,7 +246,7 @@ export class EmailService {
 
     const from = options.fromName ? senderWithName(options.fromName, this.fromAddress()) : this.fromAddress();
 
-    const headers = this.buildHeaders(options, from);
+    const headers = this.buildHeaders(options);
 
     try {
       const { data, error } = await withTimeout(
@@ -318,7 +317,7 @@ export class EmailService {
         html: options.html,
         text: options.text,
         replyTo: options.replyTo,
-        headers: this.buildHeaders(options, from),
+        headers: this.buildHeaders(options),
       };
 
       // Add scheduled time if provided (Resend accepts send_at as Unix timestamp)
@@ -390,6 +389,26 @@ export class EmailService {
     }
   }
 
+  /**
+   * An appointment email goes out in the salon's name (like its campaigns),
+   * and the client's reply reaches the salon when it has an email.
+   */
+  private salonSender(data: AppointmentEmailData): Pick<EmailOptions, "fromName" | "replyTo"> {
+    const replyTo = (data.salonEmail ?? "").trim();
+    return {
+      ...(data.salonName ? { fromName: data.salonName } : {}),
+      ...(replyTo && !isPlaceholderEmail(replyTo) ? { replyTo } : {}),
+    };
+  }
+
+  /** "Puedes cancelar online hasta 24 h antes.", when the email has a cancel link and the salon no policy text. */
+  private cancelDeadline(data: AppointmentEmailData): string {
+    if (!data.cancelUrl || data.minCancelHours === undefined || data.minCancelHours === null) return "";
+    const hours = Math.max(0, Math.round(Number(data.minCancelHours)));
+    if (!Number.isFinite(hours)) return "";
+    return hours > 0 ? `Puedes cancelar online hasta ${hours} h antes.` : "Puedes cancelar online hasta la hora de la cita.";
+  }
+
   /** The recipients without KiraRoom's placeholder addresses (never deliverable). */
   private deliverableRecipients(to: string | string[]): string[] {
     return (Array.isArray(to) ? to : [to]).filter((address) => !isPlaceholderEmail(address));
@@ -415,6 +434,7 @@ export class EmailService {
       subject,
       html: this.generateConfirmationHtml(data),
       text: this.generateConfirmationText(data),
+      ...this.salonSender(data),
     });
   }
 
@@ -429,6 +449,7 @@ export class EmailService {
     return this.sendEmail({
       to: data.clientEmail,
       subject: `${data.salonName} no ha podido confirmar tu cita`,
+      ...this.salonSender(data),
       html: this.appointmentHtml(data, {
         title: "Cita no confirmada",
         intro: `${this.escapeHtml(data.salonName)} no ha podido confirmar tu cita a tiempo y se ha anulado. Estos eran sus datos:`,
@@ -467,6 +488,7 @@ export class EmailService {
       subject,
       html: this.generateReminderHtml(data, hoursBefore),
       text: this.generateReminderText(data, hoursBefore),
+      ...this.salonSender(data),
       idempotencyKey: options.idempotencyKey,
     });
   }
@@ -484,6 +506,7 @@ export class EmailService {
       subject,
       html: this.generateCancellationHtml(data, reason),
       text: this.generateCancellationText(data, reason),
+      ...this.salonSender(data),
     });
   }
 
@@ -501,6 +524,7 @@ export class EmailService {
       subject,
       html: this.generateRescheduledHtml(data, oldDate, oldTime),
       text: this.generateRescheduledText(data, oldDate, oldTime),
+      ...this.salonSender(data),
     });
   }
 
@@ -617,7 +641,6 @@ export class EmailService {
       subject,
       html,
       text,
-      listUnsubscribe: true,
     });
   }
 
@@ -646,6 +669,10 @@ export class EmailService {
     daysLeft: 3 | 1;
     trialEnd: Date;
     upgradeUrl: string;
+    /** Length of this salon's trial; the console can create trials other than 14 days. */
+    trialDays?: number;
+    /** The salon's time zone, so a trial ending near midnight shows its own day. */
+    timeZone?: string;
   }): Promise<{ success: boolean; id?: string; error?: string; skipped?: boolean }> {
     if (await this.shouldSkipBouncedUser(data.to)) {
       return { success: false, skipped: true, error: "email_bounced" };
@@ -656,11 +683,19 @@ export class EmailService {
         ? `Mañana termina tu prueba gratuita en KiraRoom`
         : `Tu prueba gratuita en KiraRoom termina en ${data.daysLeft} días`;
 
-    const formattedDate = data.trialEnd.toLocaleDateString("es-ES", {
-      day: "2-digit",
-      month: "long",
-      year: "numeric",
-    });
+    let formattedDate: string;
+    try {
+      formattedDate = formatLongDateEs(data.trialEnd, data.timeZone || "Europe/Madrid");
+    } catch {
+      // An unknown time zone name: fall back to Madrid.
+      formattedDate = formatLongDateEs(data.trialEnd);
+    }
+    const trialLength =
+      data.trialDays && data.trialDays > 0
+        ? data.trialDays === 1
+          ? "1 día"
+          : `${data.trialDays} días`
+        : null;
 
     const html = `
 <!DOCTYPE html>
@@ -677,7 +712,7 @@ export class EmailService {
             Hola,
           </p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
-            Tu prueba gratuita de <strong>14 días</strong> de KiraRoom para
+            Tu prueba gratuita${trialLength ? ` de <strong>${trialLength}</strong>` : ""} de KiraRoom para
             <strong>${this.escapeHtml(data.tenantName)}</strong> termina el
             <strong>${formattedDate}</strong>.
             ${data.daysLeft === 1
@@ -722,7 +757,6 @@ export class EmailService {
       subject,
       html,
       text,
-      listUnsubscribe: true,
     });
   }
 
@@ -820,7 +854,6 @@ export class EmailService {
       subject,
       html,
       text,
-      listUnsubscribe: true,
     });
   }
 
@@ -883,7 +916,6 @@ export class EmailService {
       subject,
       html,
       text,
-      listUnsubscribe: true,
     });
   }
 
@@ -976,7 +1008,6 @@ export class EmailService {
       subject,
       html,
       text,
-      listUnsubscribe: true,
     });
   }
 
@@ -1073,7 +1104,6 @@ export class EmailService {
       subject,
       html,
       text,
-      listUnsubscribe: true,
     });
   }
 
@@ -1152,7 +1182,6 @@ export class EmailService {
       subject,
       html,
       text,
-      listUnsubscribe: true,
     });
   }
 
@@ -1183,30 +1212,13 @@ export class EmailService {
   }
 
   /**
-   * Build the RFC 822 headers for a transactional send. If the caller
-   * requested `listUnsubscribe: true` (or supplied their own
-   * `List-Unsubscribe`), the header is auto-derived from `EMAIL_FROM`.
-   * The header value follows RFC 8058: a `mailto:` URI + an `https:`
-   * URI pointing at the app's notification settings page.
+   * The headers for a send: the caller's own, as given. Emails to the
+   * salon's team are service emails (verification, billing, invites) and
+   * carry no List-Unsubscribe; the marketing sends to clients add their own
+   * signed one-click link (email-unsubscribe.service).
    */
-  private buildHeaders(
-    options: EmailOptions,
-    from: string,
-  ): Record<string, string> | undefined {
+  private buildHeaders(options: EmailOptions): Record<string, string> | undefined {
     const out: Record<string, string> = { ...(options.headers ?? {}) };
-    if (options.listUnsubscribe) {
-      // The address's domain, also when the sender has a name in front
-      // ("KiraRoom <notificaciones@kiraroom.com>").
-      const domain = senderDomain(from) ?? "kiraroom.com";
-      const baseUrl =
-        this.configService.get<string>("APP_BASE_URL") ||
-        this.configService.get<string>("FRONTEND_URL") ||
-        "https://app.kiraroom.com";
-      const mailto = `mailto:unsubscribe@${domain}`;
-      const http = `${baseUrl.replace(/\/+$/, "")}/dashboard/settings/notifications`;
-      out["List-Unsubscribe"] = `<${mailto}>, <${http}>`;
-      out["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
-    }
     return Object.keys(out).length > 0 ? out : undefined;
   }
 
@@ -1343,8 +1355,9 @@ export class EmailService {
   }
 
   private generateConfirmationHtml(data: AppointmentEmailData): string {
+    const deadline = this.cancelDeadline(data);
     const cancel = data.cancelUrl
-      ? ` <a href="${this.escapeHtml(data.cancelUrl)}" style="color: #7c3aed; font-weight: 600;">Cancelar mi cita</a>`
+      ? ` <a href="${this.escapeHtml(data.cancelUrl)}" style="color: #7c3aed; font-weight: 600;">Cancelar mi cita</a>${deadline ? ` ${deadline}` : ""}`
       : "";
     if (data.pending) {
       return this.appointmentHtml(data, {
@@ -1438,7 +1451,8 @@ export class EmailService {
   }
 
   private generateConfirmationText(data: AppointmentEmailData): string {
-    const cancel = data.cancelUrl ? `\nCancelar mi cita: ${data.cancelUrl}` : "";
+    const deadline = this.cancelDeadline(data);
+    const cancel = data.cancelUrl ? `\nCancelar mi cita: ${data.cancelUrl}${deadline ? `\n${deadline}` : ""}` : "";
     if (data.pending) {
       return this.appointmentText(data, {
         title: "Solicitud recibida",
@@ -1663,7 +1677,7 @@ export class EmailService {
       `Responde a este correo si te atascas. Contesta una persona.`,
     ].join("\n");
 
-    return this.sendEmail({ to: data.to, subject, html, text, listUnsubscribe: true });
+    return this.sendEmail({ to: data.to, subject, html, text });
   }
 
   /**
@@ -1731,7 +1745,7 @@ export class EmailService {
       `El enlace caduca en ${hours} hora(s).`,
     ].join("\n");
 
-    return this.sendEmail({ to: data.to, subject, html, text, listUnsubscribe: true });
+    return this.sendEmail({ to: data.to, subject, html, text });
   }
 
   /**

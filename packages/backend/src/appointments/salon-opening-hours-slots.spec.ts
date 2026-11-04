@@ -105,12 +105,16 @@ describe("only one of the two recorded", () => {
     expect(slots).toEqual(["10:00", "10:30", "11:00", "11:30", "12:00", "12:30", "13:00", "17:00", "17:30", "18:00", "18:30", "19:00"]);
   });
 
-  it("only the salon's hours, and no professionals at all", async () => {
-    const slots = await anyone({ professionals: [], openingHours: SALON_WEEK });
+  it("no professional at all: nothing to book (audit 7 N11)", async () => {
+    expect(await anyone({ professionals: [], openingHours: SALON_WEEK })).toEqual([]);
+  });
+
+  it("only the salon's hours, for anyone, with a professional who has no schedule", async () => {
+    const slots = await anyone({ professionals: [{ id: ANA }], openingHours: SALON_WEEK });
     expect(slots[0]).toBe("10:00");
     expect(slots).not.toContain("14:00");
     expect(slots[slots.length - 1]).toBe("19:00");
-    expect(await anyone({ professionals: [], openingHours: SALON_WEEK }, SUNDAY)).toEqual([]);
+    expect(await anyone({ professionals: [{ id: ANA }], openingHours: SALON_WEEK }, SUNDAY)).toEqual([]);
   });
 
   it("only the professional's: no salon-level limit, as before", async () => {

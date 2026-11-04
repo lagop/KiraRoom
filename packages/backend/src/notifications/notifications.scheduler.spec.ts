@@ -12,9 +12,12 @@ const NOW = new Date("2026-11-02T09:00:00.000Z");
 
 function matches(row: any, where: any): boolean {
   return Object.entries(where).every(([key, cond]: [string, any]) => {
+    // The salon relation (tenant: { deletedAt: null }).
+    if (key === "tenant") return matches(row.tenant ?? {}, cond);
     const value = row[key];
     // A row with no isTest is not a test booking (the column defaults to false).
     if (key === "isTest") return (value ?? false) === cond;
+    if (cond === null) return value === null || value === undefined;
     if (cond instanceof Date) return value instanceof Date && value.getTime() === cond.getTime();
     // A relation filter (client: { isTest: false }).
     if (cond && typeof cond === "object" && !["in", "gt", "gte", "lt", "lte"].some((op) => op in cond)) {
@@ -90,7 +93,10 @@ function appointment(overrides: any = {}) {
   };
 }
 
-function makeScheduler(prisma: any, opts: { sms?: boolean; prefs?: (channel: string) => boolean } = {}) {
+function makeScheduler(
+  prisma: any,
+  opts: { sms?: boolean; prefs?: (channel: string) => boolean; smsPlan?: boolean } = {},
+) {
   const email = {
     isConfigured: jest.fn(() => true),
     sendAppointmentReminder: jest.fn(async (..._args: unknown[]) => ({ success: true, id: "email-1" })),
@@ -115,6 +121,8 @@ function makeScheduler(prisma: any, opts: { sms?: boolean; prefs?: (channel: str
     sms as any,
     notifications as any,
     templates as any,
+    // The plan check of the automatic SMS; not wired: as before.
+    opts.smsPlan === undefined ? undefined : ({ isFeatureUnlocked: jest.fn(async () => opts.smsPlan) } as any),
   );
   return { scheduler, email, sms, notifications, templates };
 }
@@ -440,5 +448,48 @@ describe("the onboarding test booking (O5)", () => {
     expect(email.sendAppointmentReminder).toHaveBeenCalledTimes(1);
     expect(testBooking.reminder24hSent).toBe(false);
     expect(testClient.reminder24hSent).toBe(false);
+  });
+});
+
+describe("audit 7: deleted salons, the SMS plan and replies to the salon", () => {
+  it("a salon deleted from the console reminds no one (N7)", async () => {
+    const gone = appointment({ tenant: { name: "Salón", country: "ES", deletedAt: new Date("2026-11-01T00:00:00Z") } });
+    const live = appointment({ tenant: { name: "Salón", country: "ES", deletedAt: null } });
+    const prisma = makePrisma([gone, live]);
+    const { scheduler, email } = makeScheduler(prisma);
+    await scheduler.send24HourReminders(NOW);
+    expect(email.sendAppointmentReminder).toHaveBeenCalledTimes(1);
+    expect(gone.reminder24hSent).toBe(false);
+    expect(live.reminder24hSent).toBe(true);
+  });
+
+  it("no SMS without sms_notifications on the plan; the 1-hour reminder goes by email (N8)", async () => {
+    const soon = appointment({
+      startTime: new Date(NOW.getTime() + 60 * MINUTE),
+      createdAt: new Date(NOW.getTime() - 7 * 24 * HOUR),
+      client: { firstName: "Ana", lastName: "Gil", email: "ana@mail.test", phone: "+34600000000" },
+    });
+    const { scheduler, sms, email } = makeScheduler(makePrisma([soon]), { sms: true, smsPlan: false });
+    await scheduler.send1HourReminders(NOW);
+    expect(sms.sendAppointmentReminder).not.toHaveBeenCalled();
+    expect(email.sendAppointmentReminder).toHaveBeenCalledTimes(1);
+  });
+
+  it("with sms_notifications the SMS goes as before (N8)", async () => {
+    const soon = appointment({
+      startTime: new Date(NOW.getTime() + 60 * MINUTE),
+      client: { firstName: "Ana", lastName: "Gil", email: "ana@mail.test", phone: "+34600000000" },
+    });
+    const { scheduler, sms, email } = makeScheduler(makePrisma([soon]), { sms: true, smsPlan: true });
+    await scheduler.send1HourReminders(NOW);
+    expect(sms.sendAppointmentReminder).toHaveBeenCalledTimes(1);
+    expect(email.sendAppointmentReminder).not.toHaveBeenCalled();
+  });
+
+  it("the reminder email carries the salon's email for replies (N5)", async () => {
+    const row = appointment({ tenant: { name: "Salón", country: "ES", email: "hola@salon.test" } });
+    const { scheduler, email } = makeScheduler(makePrisma([row]));
+    await scheduler.send24HourReminders(NOW);
+    expect((email.sendAppointmentReminder.mock.calls[0] as any[])[0]).toMatchObject({ salonEmail: "hola@salon.test" });
   });
 });

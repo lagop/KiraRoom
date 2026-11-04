@@ -74,6 +74,8 @@ export class EmailCampaignsScheduler {
         where: {
           campaignType: 'reengagement' as CampaignType,
           status: 'active', // Campaigns must be activated manually
+          // Not for a salon deleted from the console (audit 7 N7).
+          tenant: { deletedAt: null },
         },
         include: {
           linkedPromotion: true,

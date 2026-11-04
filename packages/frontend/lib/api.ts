@@ -1348,6 +1348,39 @@ export interface Subscription {
   activeLocations?: number | null;
 }
 
+/**
+ * The plan as the whole team sees it (GET /payments/subscription/context):
+ * open to owner, admin and staff, without Stripe ids. Billing itself
+ * (getCurrentSubscription) stays the owner's.
+ */
+export interface SubscriptionContext {
+  plan: string;
+  effectivePlan: string;
+  status: string;
+  inTrial: boolean;
+  trialEnd: string | null;
+  readOnlyUntil: string | null;
+  cancelledAt: string | null;
+  cancelAt: string | null;
+  /** A paid subscription exists (it may have been taken during the trial). */
+  subscribed: boolean;
+  /** Keys of the salon's active add-ons. */
+  addOns: string[];
+  /** Features those add-ons unlock on top of the plan. */
+  addOnFeatures: string[];
+}
+
+/** Back from a plan checkout: what Stripe says about the session. */
+export interface CheckoutSessionStatus {
+  status: "open" | "complete" | "expired" | null;
+  paymentStatus: "paid" | "unpaid" | "no_payment_required" | null;
+  plan: string;
+  /** Subscribed in the free trial: the day of the first charge. */
+  firstChargeAt: string | null;
+  /** The webhook has applied it. */
+  applied: boolean;
+}
+
 /** What the salon must deactivate before moving to a plan (B9). */
 export interface PlanLimitBlocker {
   kind: "professionals" | "locations";
@@ -1883,6 +1916,11 @@ export interface FiscalSettings {
   fiscalMode: "none" | "verifactu" | "ticketbai" | "sii_only";
   /** False while sending invoices to the AEAT is not available (production). */
   submissionAvailable?: boolean;
+  /**
+   * The regime the salon's address calls for (igic in the Canaries, ipsi in
+   * Ceuta and Melilla) when it is on another one; null otherwise.
+   */
+  territoryTaxRegime?: "igic" | "ipsi" | null;
   fiscalSettings: {
     enabled?: boolean;
     syncOnIssue?: boolean;
@@ -2207,6 +2245,8 @@ export interface ApiClientInterface {
 
   // Subscriptions
   getCurrentSubscription(): Promise<Subscription | null>;
+  getSubscriptionContext(): Promise<SubscriptionContext | null>;
+  getCheckoutSessionStatus(sessionId: string): Promise<CheckoutSessionStatus>;
   createSubscriptionCheckout(plan: string): Promise<{ url: string }>;
   changeSubscriptionPlan(plan: string): Promise<Subscription>;
   cancelSubscription(): Promise<Subscription>;
@@ -4304,6 +4344,16 @@ class ApiClient implements ApiClientInterface {
   // Subscriptions
   async getCurrentSubscription(): Promise<Subscription | null> {
     return this.request<Subscription | null>("/payments/subscription/current");
+  }
+
+  async getSubscriptionContext(): Promise<SubscriptionContext | null> {
+    return this.request<SubscriptionContext | null>("/payments/subscription/context");
+  }
+
+  async getCheckoutSessionStatus(sessionId: string): Promise<CheckoutSessionStatus> {
+    return this.request<CheckoutSessionStatus>(
+      `/payments/subscription/checkout-session/${encodeURIComponent(sessionId)}`,
+    );
   }
 
   async createSubscriptionCheckout(plan: string): Promise<{ url: string }> {

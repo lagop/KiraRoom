@@ -36,6 +36,8 @@ import {
 } from "../professionals/working-hours-input";
 import { TwoFactorService } from "./two-factor/two-factor.service";
 import { sessionRevocations } from "./sessions/session-revocations";
+import { SALON_DELETED_MESSAGE } from "./salon-deleted";
+import { fiscalSettingsForTerritory, territoryTaxRegime } from "../invoices/salon-tax-settings";
 
 /** Audience of the short-lived token that stands between password and code. */
 const TWO_FACTOR_AUDIENCE = "kira-2fa-login";
@@ -334,10 +336,14 @@ export class AuthService {
     // First, try to find user by email
     const user = await this.prisma.user.findUnique({
       where: { email: loginDto.email },
-      include: { professional: true },
+      include: { professional: true, tenant: { select: { deletedAt: true } } },
     });
 
     if (user) {
+      // A salon deleted from the platform console: nobody in it signs in.
+      if (user.tenant?.deletedAt && user.role !== UserRole.saas_owner) {
+        throw new UnauthorizedException(SALON_DELETED_MESSAGE);
+      }
       // Check if user is active
       if (!user.isActive) {
         throw new UnauthorizedException("Esta cuenta está desactivada. Pide acceso a quien gestiona el salón.");
@@ -867,6 +873,8 @@ export class AuthService {
     }
     const timezone = await this.timezoneForAddressChange(tenantId, updateData);
     if (timezone) data.timezone = timezone;
+    const fiscalSettings = await this.fiscalSettingsForAddressChange(tenantId, updateData, data.timezone);
+    if (fiscalSettings) data.fiscalSettings = fiscalSettings;
     try {
       // The same shape as GET /auth/tenant, never the whole row (secrets).
       return await this.prisma.tenant.update({
@@ -905,6 +913,51 @@ export class AuthService {
     });
     if (suggested) this.logger.log(`tenant ${tenantId}: address in the Canary Islands, timezone set to ${suggested}`);
     return suggested;
+  }
+
+  /**
+   * IGIC 7 % for a salon whose new address is in the Canary Islands (or that
+   * moved to Canary time), IPSI for Ceuta and Melilla, while it is still on
+   * another regime and has issued no invoice yet: its invoices would say
+   * 21 % "IVA" otherwise (audit 7 N6). With invoices issued the regime is
+   * the owner's to change in Ajustes fiscales; the panel says so
+   * (GET /invoices/settings/fiscal territoryTaxRegime). Else null.
+   */
+  private async fiscalSettingsForAddressChange(
+    tenantId: string,
+    update: { timezone?: string; street?: string; city?: string; postalCode?: string; state?: string; fiscalSettings?: unknown },
+    newTimezone: string | undefined,
+  ): Promise<Record<string, unknown> | null> {
+    if (update.fiscalSettings !== undefined) return null;
+    if ([update.street, update.city, update.postalCode, update.state, newTimezone].every((v) => v === undefined)) return null;
+    const current = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { timezone: true, street: true, city: true, postalCode: true, state: true, country: true, fiscalSettings: true },
+    });
+    if (!current) return null;
+    const regime = territoryTaxRegime(
+      {
+        street: update.street ?? current.street,
+        city: update.city ?? current.city,
+        postalCode: update.postalCode ?? current.postalCode,
+        state: update.state ?? current.state,
+        country: current.country,
+      },
+      newTimezone ?? current.timezone,
+    );
+    // Only when the territory itself changes: an owner who chose another
+    // regime in Ajustes fiscales keeps it when she saves her address again.
+    const before = territoryTaxRegime(current, current.timezone);
+    if (regime === before) return null;
+    const next = fiscalSettingsForTerritory(current.fiscalSettings, regime);
+    if (!next) return null;
+    const invoices = await this.prisma.invoice.count({ where: { tenantId } });
+    if (invoices > 0) {
+      this.logger.log(`tenant ${tenantId}: address in an ${regime} territory, but it has invoices: regime left as it is`);
+      return null;
+    }
+    this.logger.log(`tenant ${tenantId}: address in an ${regime} territory, tax regime set to ${regime}`);
+    return next;
   }
 
   private async generateTokens(

@@ -8,6 +8,7 @@ import {
   Logger,
   Optional,
 } from "@nestjs/common";
+import { salonHasSmsNotices } from "../notifications/sms-plan-gate";
 import { PrismaService } from "../common/prisma/prisma.service";
 import {
   ShiftWindow,
@@ -3216,7 +3217,11 @@ export class AppointmentsService {
     const anyProfessionalRows = (offeringRows.length > 0 ? offeringRows : activeRows).filter(
       (p: { id: string }) => (!here || here.has(p.id)) && (!widgetOnly || widgetOnly.has(p.id)),
     );
-    if ((here || widgetOnly) && professionalsToCheck.length === 0 && anyProfessionalRows.length === 0) return [];
+    // Nobody active (a new salon between its first service and its first
+    // professional, or a team all switched off), or nobody at that location
+    // or on that widget: no slot, rather than a day of free times every
+    // booking then refuses (audit 7 N11).
+    if (professionalsToCheck.length === 0 && anyProfessionalRows.length === 0) return [];
 
     // Get the service duration if specified
     let serviceDuration = duration;
@@ -3485,7 +3490,10 @@ export class AppointmentsService {
    */
   private async emailPlace(
     appointment: any,
-  ): Promise<{ locationName?: string; salonAddress?: string; salonPhone?: string }> {
+  ): Promise<{ locationName?: string; salonAddress?: string; salonPhone?: string; salonEmail?: string }> {
+    // Replies to the email go to the salon (email.service salonSender).
+    const salonEmail = (await this.salonEmailSettings(appointment)).email;
+    const withEmail = <T extends object>(o: T) => (salonEmail ? { ...o, salonEmail } : o);
     try {
       const place = await bookingPlace(this.prisma as any, appointment?.tenantId, appointment?.locationId);
       // Only what the location lacks is asked of the salon.
@@ -3493,15 +3501,57 @@ export class AppointmentsService {
         place?.address && place?.phone ? { address: "", phone: "" } : await this.salonContactOrNone(appointment);
       const address = place?.address || salon.address;
       const phone = place?.phone || salon.phone;
-      return {
+      return withEmail({
         ...(place ? { locationName: place.name } : {}),
         ...(address ? { salonAddress: address } : {}),
         ...(phone ? { salonPhone: phone } : {}),
-      };
+      });
     } catch (err) {
       this.logger.warn(`Location for the email not read: ${(err as Error).message}`);
-      return {};
+      return withEmail({});
     }
+  }
+
+  /**
+   * The salon's contact email and its online cancellation rule, from the
+   * appointment's tenant row or the database. Never fails an email.
+   */
+  private async salonEmailSettings(
+    appointment: any,
+  ): Promise<{ email: string; minCancelHours: number | null; cancellationPolicy: string }> {
+    const none = { email: "", minCancelHours: null, cancellationPolicy: "" };
+    try {
+      const t = appointment?.tenant;
+      const tenant =
+        t && "email" in t && "minCancelHours" in t
+          ? t
+          : appointment?.tenantId
+            ? await this.prisma.tenant.findUnique({
+                where: { id: appointment.tenantId },
+                select: { email: true, minCancelHours: true, cancellationPolicy: true },
+              })
+            : null;
+      if (!tenant) return none;
+      return {
+        email: (tenant.email ?? "").trim(),
+        minCancelHours: typeof tenant.minCancelHours === "number" ? tenant.minCancelHours : null,
+        cancellationPolicy: (tenant.cancellationPolicy ?? "").trim(),
+      };
+    } catch (err) {
+      this.logger.warn(`Salon email settings not read: ${(err as Error).message}`);
+      return none;
+    }
+  }
+
+  /**
+   * The confirmation tells a client who can cancel online until when, if the
+   * salon wrote no policy of its own (audit 7 N15).
+   */
+  private async cancelDeadlineForEmail(appointment: any): Promise<{ minCancelHours?: number }> {
+    const settings = await this.salonEmailSettings(appointment);
+    return !settings.cancellationPolicy && settings.minCancelHours !== null
+      ? { minCancelHours: settings.minCancelHours }
+      : {};
   }
 
   /** The salon's own address ("Calle Mayor 1, 28013 Madrid") and phone, from the appointment's tenant row or the database. */
@@ -3598,7 +3648,9 @@ export class AppointmentsService {
           appointment.clientId,
           "appointment_confirmed",
           "sms",
-        ));
+        )) &&
+        // Only on a plan with SMS notices (audit 7 N8); the email still goes.
+        (await salonHasSmsNotices(this.featureFlags, appointment.tenantId, this.logger));
       const canSendWhatsapp =
         appointment.clientId &&
         (await this.notificationsService.shouldSendNotification(
@@ -3623,6 +3675,8 @@ export class AppointmentsService {
             ...extra,
             // Which location and its address, when the salon has several.
             ...(await this.emailPlace(appointment)),
+            // No policy text: "Puedes cancelar online hasta N h antes".
+            ...(await this.cancelDeadlineForEmail(appointment)),
           });
           if (sent?.success === false) {
             this.logger.warn(
@@ -4012,7 +4066,9 @@ export class AppointmentsService {
           appointment.clientId,
           "appointment_cancelled",
           "sms",
-        ));
+        )) &&
+        // Only on a plan with SMS notices (audit 7 N8); the email still goes.
+        (await salonHasSmsNotices(this.featureFlags, appointment.tenantId, this.logger));
       const canSendWhatsapp =
         appointment.clientId &&
         (await this.notificationsService.shouldSendNotification(
@@ -4261,7 +4317,9 @@ export class AppointmentsService {
           appointment.clientId,
           "appointment_confirmed",
           "sms",
-        ));
+        )) &&
+        // Only on a plan with SMS notices (audit 7 N8); the email still goes.
+        (await salonHasSmsNotices(this.featureFlags, appointment.tenantId, this.logger));
 
       // Send rescheduled email to client
       if (appointment.client?.email && canSendEmail) {
@@ -4583,7 +4641,9 @@ export class AppointmentsService {
           appointment.clientId,
           "appointment_confirmed",
           "sms",
-        ));
+        )) &&
+        // Only on a plan with SMS notices (audit 7 N8); the email still goes.
+        (await salonHasSmsNotices(this.featureFlags, appointment.tenantId, this.logger));
       // An online booking whose SMS were held back (daily caps, a number
       // outside the EU/EEA) is not texted now either.
       const smsHeld =
@@ -4604,6 +4664,8 @@ export class AppointmentsService {
             ...(cancelUrl ? { cancelUrl } : {}),
             // Which location and its address, when the salon has several.
             ...(await this.emailPlace(appointment)),
+            // No policy text: "Puedes cancelar online hasta N h antes".
+            ...(await this.cancelDeadlineForEmail(appointment)),
           });
           this.logger.log(
             `Sent confirmation email to client ${appointment.clientId}`,

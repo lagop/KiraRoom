@@ -14,6 +14,17 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const WINDOW_MS = 12 * 60 * 60 * 1000;
 
 /**
+ * The length of a trial in whole days, from the signup to its end (the
+ * console can create salons with trials other than 14 days). Undefined
+ * when it cannot be told, and the email then leaves the length out.
+ */
+export function trialDaysOf(createdAt: Date | null | undefined, trialEnd: Date): number | undefined {
+  if (!createdAt) return undefined;
+  const days = Math.round((trialEnd.getTime() - createdAt.getTime()) / DAY_MS);
+  return days > 0 ? days : undefined;
+}
+
+/**
  * Sprint 2 / Workstream 2.3 — daily trial-expiry warning cron.
  *
  * Scans for tenants with `subscriptionStatus='trialing'` whose
@@ -25,9 +36,8 @@ const WINDOW_MS = 12 * 60 * 60 * 1000;
  * on (tenantId, daysLeft, trialEnd), so a re-run on the same day
  * (e.g. a deploy) cannot double-email.
  *
- * Runs at 09:00 Europe/Madrid daily. The actual schedule is set to
- * `EVERY_DAY_AT_7AM` UTC, which is 09:00 Madrid in winter (CET) and
- * 09:00 Madrid in summer (CEST) — same wall-clock hour all year.
+ * Runs daily at 07:00 UTC (`EVERY_DAY_AT_7AM`; the server runs in UTC):
+ * 08:00 in Madrid in winter (CET) and 09:00 in summer (CEST).
  */
 @Injectable()
 export class TrialExpiryScheduler {
@@ -84,6 +94,8 @@ export class TrialExpiryScheduler {
         id: true,
         name: true,
         trialEnd: true,
+        createdAt: true,
+        timezone: true,
       },
     });
 
@@ -103,7 +115,13 @@ export class TrialExpiryScheduler {
   }
 
   private async sendOne(
-    tenant: { id: string; name: string; trialEnd: Date | null },
+    tenant: {
+      id: string;
+      name: string;
+      trialEnd: Date | null;
+      createdAt?: Date | null;
+      timezone?: string | null;
+    },
     daysLeft: 1 | 3,
   ): Promise<void> {
     if (!tenant.trialEnd) return;
@@ -153,6 +171,8 @@ export class TrialExpiryScheduler {
       daysLeft,
       trialEnd: tenant.trialEnd,
       upgradeUrl,
+      trialDays: trialDaysOf(tenant.createdAt, tenant.trialEnd),
+      timeZone: tenant.timezone || undefined,
     });
 
     if (sent.skipped) {

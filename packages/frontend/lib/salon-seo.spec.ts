@@ -15,6 +15,7 @@
  */
 
 import {
+  cancelDeadlineHours,
   canonicalUrl,
   formatAddress,
   metaDescription,
@@ -23,6 +24,7 @@ import {
   priceOnRequest,
   publicImageSrc,
   salonJsonLd,
+  salonPageIndexable,
   salonRobotsTxt,
   salonSitemapXml,
   serializeJsonLd,
@@ -305,6 +307,14 @@ const sm = salonSitemapXml(PAGE, "https://reservas.salonluna.es/");
 check("the sitemap lists only the salon's page", (sm.match(/<loc>/g) ?? []).length, 1);
 check("at its canonical URL", sm.includes("<loc>https://reservas.salonluna.es/</loc>"), true);
 check("a read-only salon lists nothing", salonSitemapXml({ ...PAGE, acceptsBookings: false }, "https://x/").includes("<url>"), false);
+
+// Audit 7 N12 / N15.
+check("a salon with services that takes bookings is indexable", salonPageIndexable(PAGE), PAGE.services.length > 0);
+check("one with no active service is not", salonPageIndexable({ ...PAGE, services: [] }), false);
+check("nor one that takes no bookings", salonPageIndexable({ ...PAGE, acceptsBookings: false }), false);
+check("no policy text: the online cancellation deadline", cancelDeadlineHours({ cancellationPolicy: null, minCancelHours: 24 }), 24);
+check("with a policy of its own: none", cancelDeadlineHours({ cancellationPolicy: "Avísanos", minCancelHours: 24 }), null);
+check("an older server that does not send it: none", cancelDeadlineHours({ cancellationPolicy: null }), null);
 
 console.log("\n=== Summary ===");
 console.log(`Pass: ${pass}, Fail: ${fail}`);

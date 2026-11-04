@@ -41,7 +41,10 @@ import { PrismaService } from "../common/prisma/prisma.service";
 import { RESERVED_SERIES } from "./invoice-numbering";
 import { FISCAL_SETTINGS_SELECT, fiscalSettingsView, issuerIdentityPatch, normalizeSeries } from "./fiscal-identity";
 import { AuditLogService } from "../saas/audit-log.service";
+import { PlatformStripeConfigService } from "../platform/platform-stripe-config.service";
+import { BILLING_IDENTITY_SELECT, syncBillingCustomer } from "../payments/billing-customer";
 import { taxLabelOf, taxRegimeOf, TAX_REGIME_DEFAULT_RATE } from "@kira/shared";
+import { territoryTaxRegime } from "./salon-tax-settings";
 
 interface AuthedRequest extends Request {
   user: { tenantId?: string; id?: string; role?: UserRole; impersonatedBy?: string };
@@ -57,6 +60,7 @@ export class InvoicesController {
     private readonly prisma: PrismaService,
     private readonly invoiceEmail: InvoiceEmailService,
     @Optional() private readonly auditLog?: AuditLogService,
+    @Optional() private readonly platformStripe?: PlatformStripeConfigService,
   ) {}
 
   private readonly logger = new Logger(InvoicesController.name);
@@ -253,12 +257,31 @@ export class InvoicesController {
   async getFiscalSettings(@Req() req: AuthedRequest) {
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: this.requireTenantId(req) },
-      select: FISCAL_SETTINGS_SELECT,
+      select: {
+        ...FISCAL_SETTINGS_SELECT,
+        // For territoryTaxRegime below, never sent.
+        street: true,
+        city: true,
+        state: true,
+        postalCode: true,
+        country: true,
+        timezone: true,
+      },
     });
+    // The regime the salon's address calls for (IGIC in the Canaries, IPSI
+    // in Ceuta and Melilla) when it is on another one: the panel shows a
+    // notice, as the switch is only automatic before the first invoice
+    // (audit 7 N6). Null otherwise.
+    const territory = tenant ? territoryTaxRegime(tenant, tenant.timezone) : null;
+    const territoryRegime = territory && taxRegimeOf(tenant?.fiscalSettings) !== territory ? territory : null;
     // The NIF, its type and the razón social go too: the page loads its form
     // from this, and without them it saved them back empty.
     // submissionAvailable: the page says that nothing is sent to the AEAT yet.
-    return { ...fiscalSettingsView(tenant), submissionAvailable: fiscalSubmissionAvailable() };
+    return {
+      ...fiscalSettingsView(tenant),
+      submissionAvailable: fiscalSubmissionAvailable(),
+      territoryTaxRegime: territoryRegime,
+    };
   }
 
   @Patch("settings/fiscal")
@@ -329,7 +352,31 @@ export class InvoicesController {
     if (identity.taxId !== undefined && identity.taxId !== taxIdBefore) {
       await this.auditTaxIdChange(req, tenantId, taxIdBefore, identity.taxId);
     }
+    if (Object.keys(identity).length > 0) {
+      // Not awaited: Stripe's answer must not slow the save, and it never fails it.
+      void this.syncStripeBillingIdentity(tenantId);
+    }
     return { ...fiscalSettingsView(updated), submissionAvailable: fiscalSubmissionAvailable() };
+  }
+
+  /**
+   * KiraRoom bills the salon as its Stripe customer: a new razón social or
+   * NIF goes there too, so the next Stripe invoice to the salon carries
+   * them (B1). Best effort, and only for a salon that has a customer.
+   */
+  private async syncStripeBillingIdentity(tenantId: string): Promise<void> {
+    try {
+      const stripe = this.platformStripe?.client();
+      if (!stripe) return;
+      const tenant = await this.prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { ...BILLING_IDENTITY_SELECT, stripeCustomerId: true },
+      });
+      if (!tenant?.stripeCustomerId) return;
+      await syncBillingCustomer(stripe, tenant.stripeCustomerId, tenant, this.logger);
+    } catch (err) {
+      this.logger.warn(`Stripe billing identity of tenant ${tenantId} not updated: ${(err as Error).message}`);
+    }
   }
 
   /**

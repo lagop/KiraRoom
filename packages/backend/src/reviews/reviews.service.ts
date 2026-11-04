@@ -598,7 +598,7 @@ export class ReviewsService {
     );
     try {
       const profiles = await this.prisma.googleBusinessProfile.findMany({
-        where: { enableReviewRequests: true },
+        where: { enableReviewRequests: true, tenant: { deletedAt: null } },
         select: { tenantId: true },
       });
       for (const { tenantId } of profiles) {

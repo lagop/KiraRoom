@@ -273,6 +273,12 @@
       "done": "Rectificativa emitida",
       "error": "No se pudo emitir la rectificativa"
     },
+    "territoryTaxNotice": {
+      "title": "Revisa el impuesto de tus facturas",
+      "igic": "Tu salón está en Canarias, pero factura con {current}. Allí se aplica el IGIC (7 % general).",
+      "ipsi": "Tu salón está en Ceuta o Melilla, pero factura con {current}. Allí se aplica el IPSI.",
+      "link": "Cambiarlo en Ajustes fiscales"
+    },
     "issuerBanner": {
       "title": "Faltan datos del salón para tus facturas",
       "missing": "Toda factura tiene que llevar {fields} del salón.",
@@ -472,7 +478,7 @@
   "signup": {
     "badge": "14 días gratis",
     "title": "Crea tu cuenta",
-    "subtitle": "Empieza en 30 segundos. Sin tarjeta, sin compromiso.",
+    "subtitle": "Empieza en 30 segundos, sin tarjeta ni compromiso. Durante 14 días tienes las funciones del plan Pro, con 500 mensajes de la recepcionista IA.",
     "fields": {
       "salon": "Nombre del salón",
       "owner": "Tu nombre",
@@ -715,10 +721,16 @@
     "checkoutReturn": {
       "successTitle": "Pago recibido",
       "successBody": "Estamos activando tu plan: en unos segundos lo verás aquí.",
+      "cardSavedTitle": "Tarjeta guardada: el primer cobro será el {date}",
+      "cardSavedBody": "Hasta entonces sigues con tu prueba y no se te cobra nada.",
+      "pendingTitle": "Stripe aún no ha confirmado el pago",
+      "pendingBody": "Lo estamos comprobando. Si en unos minutos tu plan no aparece aquí, vuelve a cargar la página o escríbenos.",
+      "slowBody": "Stripe ya ha confirmado el pago, pero tu plan tarda en activarse. Vuelve a cargar la página en un minuto.",
       "cancelTitle": "No se ha completado el pago",
       "cancelBody": "No se ha cobrado nada y tu plan sigue como estaba."
     },
     "plusVat": "+ IVA",
+    "desiredPlanBadge": "El que elegiste",
     "trialSubscribedNote": "Has contratado el plan {plan}. Sigues con la prueba Pro hasta el {date}; ese día empieza tu plan y llega el primer cobro.",
     "limits": {
       "title": "Antes de pasar al plan {plan}",
@@ -2991,6 +3003,10 @@
     "phoneOnly": "Reserva por teléfono",
     "noOnlineBooking": "Ahora mismo no se puede reservar online. Llama al salón para pedir cita.",
     "noOnlineBookingTitle": "Pide tu cita por teléfono",
+    "notTakingBookingsYetTitle": "Este salón todavía no acepta reservas online",
+    "notTakingBookingsYet": "Llama al salón para pedir cita.",
+    "notTakingBookingsYetNoPhone": "Muy pronto podrás reservar aquí tu cita.",
+    "cancelOnlineUntil": "Puedes cancelar online hasta {hours} h antes.",
     "callSalon": "Llamar al {phone}",
     "coverAlt": "Foto de {name}",
     "logoAlt": "Logo de {name}",

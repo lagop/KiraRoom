@@ -7,7 +7,7 @@ import { WidgetService, invalidateTenantWidgets, widgetTheme } from "./widget.se
  * prices and team, and a read-only one's let the client fill everything in
  * to be refused at the end.
  */
-function build(tenant: Record<string, unknown>) {
+function build(tenant: Record<string, unknown>, professionals: any[] = [{ id: "p1", firstName: "Ana", lastName: "M", services: [] }]) {
   const row = {
     id: "w1",
     tenantId: "t1",
@@ -36,7 +36,7 @@ function build(tenant: Record<string, unknown>) {
   };
   const prisma: any = {
     widgetInstance: { findUnique: jest.fn(async () => row), update: jest.fn(async () => row) },
-    professional: { findMany: jest.fn(async () => []) },
+    professional: { findMany: jest.fn(async () => professionals) },
     location: { findMany: jest.fn(async () => []) },
     professionalLocation: { findMany: jest.fn(async () => []) },
     service: { findMany: jest.fn(async () => []) },
@@ -62,6 +62,15 @@ describe("widget availability", () => {
       // What the widget shows instead of the steps.
       expect(config.tenant.phone).toBe("+34 600 000 000");
     }
+  });
+
+  it("with nobody active it takes no bookings yet, and says why (audit 7 N11)", async () => {
+    const config = await build({}, []).service.getPublicConfig("w1");
+    expect(config.acceptsBookings).toBe(false);
+    expect(config.bookingUnavailable).toBe("no_professional");
+    expect((await build({}).service.getPublicConfig("w1")).bookingUnavailable).toBeNull();
+    const readOnly = await build({ subscriptionStatus: "suspended", readOnlyUntil: new Date(Date.now() + 86_400_000) }, []).service.getPublicConfig("w1");
+    expect(readOnly.bookingUnavailable).toBe("read_only");
   });
 
   it("sends image URLs, not the stored data: URLs", async () => {

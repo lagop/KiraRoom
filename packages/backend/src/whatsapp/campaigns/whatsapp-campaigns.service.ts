@@ -363,6 +363,8 @@ export class WhatsAppCampaignsService {
         status: WhatsAppCampaignStatus.scheduled,
         templateStatus: "APPROVED",
         OR: [{ scheduledAt: null }, { scheduledAt: { lte: now } }],
+        // Not for a salon deleted from the console (audit 7 N7).
+        tenant: { deletedAt: null },
       },
       include: { tenant: { select: { timezone: true } } },
       take: 20,
@@ -413,7 +415,7 @@ export class WhatsAppCampaignsService {
   /** One batch per sending campaign; finishes the ones with nobody left. */
   async sendBatches(now = new Date()): Promise<void> {
     const sending = await this.prisma.whatsAppCampaign.findMany({
-      where: { status: WhatsAppCampaignStatus.sending },
+      where: { status: WhatsAppCampaignStatus.sending, tenant: { deletedAt: null } },
       include: { tenant: { select: { country: true, timezone: true } } },
       take: 20,
     });

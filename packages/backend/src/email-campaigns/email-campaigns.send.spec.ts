@@ -20,6 +20,8 @@ type Row = Record<string, any>;
 function matches(row: Row, where: Row = {}): boolean {
   return Object.entries(where).every(([key, cond]) => {
     if (key === "OR") return (cond as Row[]).some((c) => matches(row, c));
+    // The salon relation: only its deletedAt is asked about (tenantDeletedAt on the row).
+    if (key === "tenant") return matches({ deletedAt: row.tenantDeletedAt ?? null }, cond);
     const value = row[key];
     // isTest defaults to false in the database.
     if (key === "isTest") return (value ?? false) === cond;
