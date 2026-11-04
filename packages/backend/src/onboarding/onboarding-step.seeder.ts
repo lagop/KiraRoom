@@ -63,6 +63,18 @@ const DEFAULT_STEP_DEFS: Array<{
     detectName: "hasFirstBooking",
   },
   {
+    // D15: the salon's legal data (razón social, NIF) and contact email: the
+    // aviso legal of its web page and every invoice need them. Done once all
+    // three are set; nothing is blocked while they are missing.
+    key: "legal_data",
+    order: 9,
+    group: OnboardingGroup.checklist_optional,
+    titleI18nKey: "onboarding.legal_data.title",
+    descI18nKey: "onboarding.legal_data.desc",
+    href: "/dashboard/settings/fiscal",
+    detectName: "hasLegalData",
+  },
+  {
     key: "branding",
     order: 10,
     group: OnboardingGroup.checklist_optional,

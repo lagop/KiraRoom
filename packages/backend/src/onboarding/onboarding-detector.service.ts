@@ -96,6 +96,8 @@ export class OnboardingDetectorService {
         return this.hasWidgetOrQr(tenantId);
       case "hasWhatsAppConnection":
         return this.hasWhatsAppConnection(tenantId);
+      case "hasLegalData":
+        return this.hasLegalData(tenantId);
       default:
         this.logger.warn(`Unknown detector: ${name}`);
         return false;
@@ -121,6 +123,16 @@ export class OnboardingDetectorService {
     });
     if (!t) return false;
     return Boolean(t.name && t.street && t.city && t.phone);
+  }
+
+  /** D15: razón social, NIF and the salon's contact email are all set. */
+  private async hasLegalData(tenantId: string): Promise<boolean> {
+    const t = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { legalName: true, taxId: true, email: true },
+    });
+    if (!t) return false;
+    return Boolean(t.legalName?.trim() && t.taxId?.trim() && t.email?.trim());
   }
 
   private async hasFirstService(tenantId: string): Promise<boolean> {

@@ -31,6 +31,8 @@ function setup(
     client?: any;
     payments?: number;
     invoices?: number;
+    posLines?: number;
+    adjustments?: number;
     clientAppointments?: number;
     testLeft?: number;
   } = {},
@@ -47,6 +49,8 @@ function setup(
     // On the booking itself (the delete blocker) vs on the client (her history).
     payment: { count: jest.fn(async ({ where }: any) => (where.appointmentId ? 0 : (opts.payments ?? 0))) },
     invoice: { count: jest.fn(async () => opts.invoices ?? 0) },
+    posSaleLine: { count: jest.fn(async () => opts.posLines ?? 0) },
+    commissionAdjustment: { count: jest.fn(async () => opts.adjustments ?? 0) },
     order: { count: jest.fn(async () => 0) },
     clientWallet: { count: jest.fn(async () => 0) },
     loyaltyMember: { count: jest.fn(async () => 0) },
@@ -111,6 +115,44 @@ describe("TestBookingCleanupService", () => {
 
   it("keeps an invoiced test booking", async () => {
     const { prisma, svc } = setup([row()], { invoices: 1, clientAppointments: 1 });
+    await svc.cleanup(NOW);
+    expect(prisma.appointment.delete).not.toHaveBeenCalled();
+  });
+
+  it("D11: deletes a completed test booking with no money, till line or invoice", async () => {
+    const { prisma, svc } = setup([row({ status: "completed" })]);
+    const r = await svc.cleanup(NOW);
+    expect(prisma.appointment.delete).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(r).toEqual({ deletedAppointments: 1, deletedClients: 1, keptAsReal: 0 });
+  });
+
+  it("D11: keeps a completed test booking with a till (POS) line", async () => {
+    const { prisma, svc } = setup([row({ status: "completed" })], { posLines: 1, clientAppointments: 1 });
+    const r = await svc.cleanup(NOW);
+    expect(prisma.appointment.delete).not.toHaveBeenCalled();
+    expect(prisma.posSaleLine.count).toHaveBeenCalledWith({ where: { tenantId: "t1", appointmentId: "a1" } });
+    expect(r.keptAsReal).toBe(1);
+  });
+
+  it("D11: keeps a completed test booking with a payment row", async () => {
+    const { prisma, svc } = setup([row({ status: "completed" })], { clientAppointments: 1 });
+    prisma.payment.count.mockImplementation(async ({ where }: any) => (where.appointmentId ? 1 : 0));
+    const r = await svc.cleanup(NOW);
+    expect(prisma.appointment.delete).not.toHaveBeenCalled();
+    expect(r.keptAsReal).toBe(1);
+  });
+
+  it("D11: keeps one with a paid commission or a commission adjustment", async () => {
+    const a = setup([row({ status: "completed", commissionPaid: true })], { clientAppointments: 1 });
+    await a.svc.cleanup(NOW);
+    expect(a.prisma.appointment.delete).not.toHaveBeenCalled();
+    const b = setup([row({ status: "completed" })], { adjustments: 1, clientAppointments: 1 });
+    await b.svc.cleanup(NOW);
+    expect(b.prisma.appointment.delete).not.toHaveBeenCalled();
+  });
+
+  it("D11: keeps a completed and invoiced one", async () => {
+    const { prisma, svc } = setup([row({ status: "completed" })], { invoices: 1, clientAppointments: 1 });
     await svc.cleanup(NOW);
     expect(prisma.appointment.delete).not.toHaveBeenCalled();
   });

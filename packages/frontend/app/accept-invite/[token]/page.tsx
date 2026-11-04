@@ -124,8 +124,8 @@ export default function AcceptInvitePage() {
         localStorage.removeItem("kira_refresh_token");
       }
       setStep(4);
-      // Redirect to the onboarding wizard after a short pause.
-      setTimeout(() => router.push("/dashboard/onboarding"), 1500);
+      // To the panel, where the setup overlay takes it from here (D10).
+      setTimeout(() => router.push("/dashboard"), 1500);
     } catch (e: any) {
       const msg =
         e?.response?.data?.message ||
@@ -383,7 +383,7 @@ export default function AcceptInvitePage() {
               </div>
               <h2 className="text-xl font-bold mb-2">¡Listo!</h2>
               <p className="text-sm text-slate-600">
-                Te estamos llevando al configurador de tu salón…
+                Te llevamos a tu panel para configurar el salón…
               </p>
             </div>
           )}

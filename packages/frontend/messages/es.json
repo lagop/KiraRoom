@@ -375,6 +375,7 @@
       "later": "¿Prefieres seguir en otro momento? Lo que ya hayas guardado se queda."
     },
     "checklist": {
+      "more_settings": "Más ajustes",
       "title": "Optimiza tu salón",
       "subtitle": "Recomendaciones para activar todo el potencial de Kira.",
       "dismiss": "Cerrar checklist",
@@ -395,6 +396,10 @@
     "schedule_set": {
       "title": "Define los horarios",
       "desc": "Configura los bloques semanales de cada profesional para que los huecos sean visibles."
+    },
+    "legal_data": {
+      "title": "Datos legales (razón social, NIF y email)",
+      "desc": "Aparecen en el aviso legal de tu web y en tus facturas."
     },
     "branding": {
       "title": "Imagen de portada y descripción",

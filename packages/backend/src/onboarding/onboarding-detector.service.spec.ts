@@ -471,3 +471,30 @@ describe("widget_qr_setup: the QR or the link taken from Compartir (O10)", () =>
     expect((await svc.detectAll("tenant-1")).widget_qr_setup).toBe(true);
   });
 });
+
+describe("legal_data: razón social, NIF and contact email (D15)", () => {
+  it("is done only when the three are set", async () => {
+    const m = buildPrismaMock();
+    m.state.stepDefs.push({
+      key: "legal_data",
+      order: 9,
+      group: OnboardingGroup.checklist_optional,
+      titleI18nKey: "onboarding.legal_data.title",
+      descI18nKey: "onboarding.legal_data.desc",
+      href: "/dashboard/settings/fiscal",
+      detectName: "hasLegalData",
+      enabled: true,
+    });
+    const svc = new OnboardingDetectorService(m.prisma, stubEvents());
+    expect((await svc.detectAll("tenant-1")).legal_data).toBe(false);
+
+    Object.assign(m.state.tenant, { legalName: "Salón Ana SL", taxId: "B00000000" });
+    expect((await svc.detectAll("tenant-1")).legal_data).toBe(false);
+
+    m.state.tenant.email = "  ";
+    expect((await svc.detectAll("tenant-1")).legal_data).toBe(false);
+
+    m.state.tenant.email = "hola@salon.test";
+    expect((await svc.detectAll("tenant-1")).legal_data).toBe(true);
+  });
+});
