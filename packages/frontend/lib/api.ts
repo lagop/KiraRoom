@@ -314,9 +314,17 @@ export interface ImportPreviewResult {
     invalidCount: number;
     skipCount?: number;
   };
-  errors: Array<{ row: number; fields: Array<{ col: string; msg: string }> }>;
+  /** Every row not imported, with the reason and the row as it came (for the CSV of errors). */
+  errors: ImportRowError[];
   /** Appointments: clients that will be (or were) created. */
   newClients?: number;
+  /** File-wide notices (e.g. dates read as month/day). */
+  warnings?: string[];
+}
+export interface ImportRowError {
+  row: number;
+  fields: Array<{ col: string; msg: string }>;
+  data?: Record<string, unknown>;
 }
 export interface ImportCommitResult {
   jobId: string;
@@ -329,6 +337,8 @@ export interface ImportCommitResult {
   newClients?: number;
   /** Clients: refusals of advertising recorded from the file. */
   marketingRefusals?: number;
+  /** The rows not imported, as in the preview. */
+  errors?: ImportRowError[];
 }
 export interface ImportJob {
   id: string;
@@ -5574,6 +5584,8 @@ class ApiClient implements ApiClientInterface {
     openingHours?: Array<{ day: string; openTime: string; closeTime: string }>;
     hasFirstAppointment: boolean;
     serviceTemplates: Array<{ name: string; durationMinutes: number; price: number }>;
+    /** The salon's active services, for the test booking's picker. */
+    services?: Array<{ id: string; name: string }>;
   }> {
     return this.request(`/onboarding/wizard`);
   }
@@ -5598,6 +5610,8 @@ class ApiClient implements ApiClientInterface {
     ok: true;
     completed: number;
     total: number;
+    /** What this submission actually saved. */
+    saved?: { services: number; hours: boolean; appointment: boolean };
     skipped: { appointment: "no_staff" | "no_service" | null };
   }> {
     return this.request(`/onboarding/wizard`, {
@@ -5856,6 +5870,19 @@ class ApiClient implements ApiClientInterface {
   async getOnboardingState(): Promise<OnboardingState> {
     return this.request(`/onboarding/state`);
   }
+  /**
+   * Compartir: the QR downloaded or the booking link copied or shared. Marks
+   * the checklist's "Publica tu widget o QR" done. Never throws: it is a
+   * side note to what the owner did.
+   */
+  async recordBookingLinkShared(how: "qr_download" | "link_copy" | "link_share" | "widget_copy"): Promise<void> {
+    try {
+      await this.request(`/onboarding/events/booking-link-shared`, { method: "POST", body: JSON.stringify({ how }) });
+    } catch {
+      /* best effort */
+    }
+  }
+
   async skipOnboardingStep(key: string): Promise<{ ok: boolean }> {
     return this.request(`/onboarding/step/${key}/skip`, { method: "POST" });
   }

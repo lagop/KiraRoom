@@ -108,6 +108,7 @@ import { isForeignKeyViolation } from "../common/prisma/history-deletes";
 import { snapshotAppointmentCommissions } from "../commissions/appointment-commission";
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
 import { publicBookingSmsHeld, reservePublicBookingSms } from "./public-booking-sms-cap";
+import { isTestBooking } from "../onboarding/test-booking";
 import { appointmentCancelUrl, bookedOnline, parseAppointmentCancelToken } from "./public-cancel-link";
 import {
   assertTransition,
@@ -2465,6 +2466,8 @@ export class AppointmentsService {
     if (!this.waitListService || !cancelled.serviceId || !cancelled.professionalId) {
       return;
     }
+    // A test booking never held a client's slot: no wait-list offer (O5).
+    if (isTestBooking(cancelled)) return;
     const startsAt = salonInstant(
       cancelled.scheduledDate,
       cancelled.scheduledTime || "23:59",
@@ -3593,6 +3596,8 @@ export class AppointmentsService {
   ): Promise<{ emailSent: boolean; smsSent: boolean }> {
     // The service as booked, not as the catalog has it today.
     appointment = withBookedService(appointment);
+    // The onboarding test booking tells nobody anything (O5, D27).
+    if (isTestBooking(appointment)) return { emailSent: false, smsSent: false };
     // Whether the client's confirmation email and SMS actually went out. The
     // chat receptionist said "te hemos enviado la confirmación" either way.
     let emailSent = false;
@@ -3910,6 +3915,8 @@ export class AppointmentsService {
   private async sendAppointmentCompletedNotifications(appointment: any) {
     // The service as booked, not as the catalog has it today.
     appointment = withBookedService(appointment);
+    // The onboarding test booking tells nobody anything (O5, D27).
+    if (isTestBooking(appointment)) return;
     try {
       const dateStr = new Date(appointment.scheduledDate).toLocaleDateString(
         "es-ES",
@@ -4016,6 +4023,8 @@ export class AppointmentsService {
   ) {
     // The service as booked, not as the catalog has it today.
     appointment = withBookedService(appointment);
+    // The onboarding test booking tells nobody anything (O5, D27).
+    if (isTestBooking(appointment)) return;
     // The salon's booking page, to book again (cancelForTimeOff, and a
     // booking the salon did not confirm in time).
     const bookingUrl =
@@ -4268,6 +4277,8 @@ export class AppointmentsService {
   ) {
     // The service as booked, not as the catalog has it today.
     appointment = withBookedService(appointment);
+    // The onboarding test booking tells nobody anything (O5, D27).
+    if (isTestBooking(appointment)) return;
     try {
       this.logger.log(
         `Sending appointment rescheduled notifications for appointment ${appointment.id}`,
@@ -4502,6 +4513,8 @@ export class AppointmentsService {
   private async sendAppointmentNoShowNotifications(appointment: any) {
     // The service as booked, not as the catalog has it today.
     appointment = withBookedService(appointment);
+    // The onboarding test booking tells nobody anything (O5, D27).
+    if (isTestBooking(appointment)) return;
     try {
       this.logger.log(
         `Sending appointment no-show notifications for appointment ${appointment.id}`,
@@ -4593,6 +4606,8 @@ export class AppointmentsService {
   private async sendAppointmentConfirmedNotifications(appointment: any) {
     // The service as booked, not as the catalog has it today.
     appointment = withBookedService(appointment);
+    // The onboarding test booking tells nobody anything (O5, D27).
+    if (isTestBooking(appointment)) return;
     try {
       this.logger.log(
         `Sending appointment confirmed notifications for appointment ${appointment.id}`,

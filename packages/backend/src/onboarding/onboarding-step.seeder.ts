@@ -58,7 +58,8 @@ const DEFAULT_STEP_DEFS: Array<{
     group: OnboardingGroup.checklist_optional,
     titleI18nKey: "onboarding.first_booking.title",
     descI18nKey: "onboarding.first_booking.desc",
-    href: "/dashboard/appointments",
+    // "Comparte tu enlace o tu QR": where the link and the QR are (O10).
+    href: "/dashboard/compartir",
     detectName: "hasFirstBooking",
   },
   {
@@ -89,7 +90,8 @@ const DEFAULT_STEP_DEFS: Array<{
     group: OnboardingGroup.checklist_optional,
     titleI18nKey: "onboarding.widget_qr_setup.title",
     descI18nKey: "onboarding.widget_qr_setup.desc",
-    href: "/dashboard/settings/widget",
+    // Compartir has the link, the QR and the widget code (O10).
+    href: "/dashboard/compartir",
     detectName: "hasWidgetOrQr",
   },
   {

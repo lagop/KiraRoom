@@ -367,11 +367,12 @@
   "onboarding": {
     "linear": {
       "title": "Vamos a configurar tu salón en 3 pasos",
-      "subtitle": "Empezaras a recibir reservas en menos de 5 minutos.",
+      "subtitle": "Empezarás a recibir reservas en menos de 5 minutos.",
       "step": "Paso {current} de {total}",
       "goTo": "Ir al paso",
       "skip": "Omitir de momento",
-      "finish": "Listo"
+      "finish": "Listo",
+      "later": "¿Prefieres seguir en otro momento? Lo que ya hayas guardado se queda."
     },
     "checklist": {
       "title": "Optimiza tu salón",
@@ -413,7 +414,7 @@
     },
     "clients_import": {
       "title": "Importa tus clientas",
-      "desc": "Sube un CSV y las traemos con su historial. Puedes probar antes sin guardar nada."
+      "desc": "Sube la exportación de tu programa anterior (CSV o Excel) con sus datos de contacto y notas. Puedes probar antes sin guardar nada."
     },
     "first_booking": {
       "title": "Recibe tu primera reserva",
@@ -1459,6 +1460,7 @@
     "load_failed": "No se pudieron cargar las citas",
     "statusChangeFailed": "No se ha podido cambiar el estado de la cita.",
     "calendarView": {
+      "test": "Prueba",
       "loading": "Cargando el calendario...",
       "loadError": "No se ha podido cargar el calendario.",
       "retry": "Reintentar",

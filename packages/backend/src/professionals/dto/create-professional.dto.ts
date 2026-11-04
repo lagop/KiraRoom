@@ -10,18 +10,20 @@ import { CommissionRateInput } from '../optional-fields';
  */
 export class CreateProfessionalDto {
   @ApiProperty({ description: 'First name' })
-  @IsString()
-  @IsNotEmpty()
+  @IsString({ message: 'El nombre no es válido.' })
+  @IsNotEmpty({ message: 'Escribe el nombre del profesional.' })
   firstName: string;
 
   @ApiProperty({ description: 'Last name' })
-  @IsString()
-  @IsNotEmpty()
+  @IsString({ message: 'Los apellidos no son válidos.' })
+  @IsNotEmpty({ message: 'Escribe los apellidos del profesional.' })
   lastName: string;
 
+  // In Spanish: the onboarding's professional step shows it as it comes
+  // ("email must be an email" reached the owner; O14).
   @ApiProperty({ description: 'Email address' })
-  @IsEmail()
-  @IsNotEmpty()
+  @IsEmail({}, { message: 'El email del profesional no es válido.' })
+  @IsNotEmpty({ message: 'Escribe el email del profesional.' })
   email: string;
 
   @ApiProperty({ description: 'Phone number', required: false })

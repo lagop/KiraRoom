@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useOnboardingState } from "./useOnboardingState";
-import { Loader2, Check, AlertCircle, Building2, Scissors, Clock, Upload } from "lucide-react";
+import { Loader2, Check, AlertCircle, Building2, Scissors, Clock, Upload, LogOut } from "lucide-react";
+import { signOut } from "@/lib/sign-out";
 import { useTranslations } from "@/lib/use-translation";
 import apiClient from "@/lib/api";
 import { CanaryTimezoneHint } from "@/components/settings/CanaryTimezoneHint";
@@ -79,7 +80,33 @@ export function OnboardingLinearOverlay() {
             <UnknownStepFallback title={t(def.titleI18nKey)} desc={t(def.descI18nKey)} />
           )}
         </div>
+
+        {/* A way out (O3): on a shared computer, or to carry on later, the
+            only exit used to be closing the tab. */}
+        <SignOutFooter />
       </div>
+    </div>
+  );
+}
+
+function SignOutFooter() {
+  const t = useTranslations();
+  const [leaving, setLeaving] = useState(false);
+  return (
+    <div className="mt-8 flex flex-col gap-2 border-t border-slate-100 pt-4 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+      <span>{t("onboarding.linear.later")}</span>
+      <button
+        type="button"
+        disabled={leaving}
+        onClick={async () => {
+          setLeaving(true);
+          await signOut();
+        }}
+        className="inline-flex items-center gap-1.5 self-start rounded-md px-2 py-1 font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 disabled:opacity-50 sm:self-auto"
+      >
+        <LogOut className="h-4 w-4" aria-hidden="true" />
+        {leaving ? t("common.loading") : t("nav.logout")}
+      </button>
     </div>
   );
 }
@@ -265,6 +292,10 @@ function ServiceCreateStep({ onDone }: { onDone: () => Promise<unknown> }) {
       setError("Indica un nombre, una duración en minutos y un precio.");
       return;
     }
+    if (durationMinutes < 5) {
+      setError("El servicio tiene que durar al menos 5 minutos.");
+      return;
+    }
     setSubmitting(true);
     try {
       await apiClient.createService({
@@ -381,6 +412,12 @@ function ScheduleSetStep({ onDone }: { onDone: () => Promise<unknown> }) {
     }
     if (Object.keys(problems.days).length > 0) {
       setError("Revisa el horario: hay tramos que no se pueden guardar.");
+      return;
+    }
+    // Checked here, in Spanish: the server's refusal reached the owner as
+    // "email must be an email" (O14).
+    if (email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setError("El email del profesional no es válido. Corrígelo o déjalo vacío.");
       return;
     }
     // [{ day, openTime, closeTime }, ...]: one entry per shift.
