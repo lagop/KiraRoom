@@ -6,7 +6,6 @@ import {
   parseMonthsParam,
   percentChange,
   PAYING_TENANT_WHERE,
-  PLATFORM_TENANT_WHERE,
   scheduledInMonth,
 } from "./platform-metrics";
 import { SaasAnalyticsService } from "./saas-analytics.service";
@@ -106,7 +105,7 @@ describe("platform metrics", () => {
   });
 
   it("keeps test salons and unbilled active salons out of MRR", () => {
-    expect(PLATFORM_TENANT_WHERE).toEqual({ deletedAt: null, isInternal: false });
+    expect(PAYING_TENANT_WHERE).toMatchObject({ deletedAt: null, isInternal: false });
     expect(PAYING_TENANT_WHERE).toMatchObject({
       subscriptionStatus: "active",
       stripeSubscriptionId: { not: null },

@@ -8,12 +8,13 @@ import { salonToday } from "../../analytics/analytics-metrics";
 import { usagePeriod } from "../../common/telemetry/llm-usage.service";
 import { estimateCostUsd } from "../../virtual-receptionist/providers/anthropic-models";
 import { DAY_MS, RETENTION_FLAG, retentionEnabled, retentionStep } from "../retention/salon-retention";
-import { CONSOLE_TIME_ZONE, PLATFORM_TENANT_WHERE } from "../platform-metrics";
+import { CONSOLE_TIME_ZONE } from "../platform-metrics";
+import { COUNTABLE_TENANT_WHERE } from "../saas.constants";
 
 /**
  * "Esta semana" (audit 8 D12, owner decision): what the platform owner has
  * to look at, on one console page, a block of the home page, and the Monday
- * email (WeeklyDigestScheduler). Only salons that count (PLATFORM_TENANT_WHERE:
+ * email (WeeklyDigestScheduler). Only salons that count (COUNTABLE_TENANT_WHERE:
  * not deleted, not internal).
  */
 export interface WeeklyDigest {
@@ -76,19 +77,19 @@ export class WeeklyDigestService {
     const [pastDue, trials, deletions, retentionCandidates, usage, stuck, bugCount, bugs] = await runUnscoped(() =>
       Promise.all([
         this.prisma.tenant.findMany({
-          where: { ...PLATFORM_TENANT_WHERE, subscriptionStatus: "past_due" },
+          where: { ...COUNTABLE_TENANT_WHERE, subscriptionStatus: "past_due" },
           select: { id: true, name: true, paymentFailedAt: true, gracePeriodEndsAt: true },
           orderBy: { gracePeriodEndsAt: "asc" },
           take: WEEKLY_LIST_LIMIT,
         }),
         this.prisma.tenant.findMany({
-          where: { ...PLATFORM_TENANT_WHERE, subscriptionStatus: "trialing", trialEnd: { gte: now, lte: in7 } },
+          where: { ...COUNTABLE_TENANT_WHERE, subscriptionStatus: "trialing", trialEnd: { gte: now, lte: in7 } },
           select: { id: true, name: true, trialEnd: true, stripeSubscriptionId: true },
           orderBy: { trialEnd: "asc" },
           take: WEEKLY_LIST_LIMIT,
         }),
         this.prisma.tenant.findMany({
-          where: { ...PLATFORM_TENANT_WHERE, deletionRequestedAt: { not: null } },
+          where: { ...COUNTABLE_TENANT_WHERE, deletionRequestedAt: { not: null } },
           select: { id: true, name: true, deletionRequestedAt: true },
           orderBy: { deletionRequestedAt: "asc" },
           take: WEEKLY_LIST_LIMIT,
@@ -96,7 +97,7 @@ export class WeeklyDigestService {
         // The same candidates as SalonRetentionScheduler.run.
         this.prisma.tenant.findMany({
           where: {
-            ...PLATFORM_TENANT_WHERE,
+            ...COUNTABLE_TENANT_WHERE,
             subscriptionStatus: { in: ["cancelled", "suspended"] },
             readOnlyUntil: { not: null },
             anonymizedAt: null,
@@ -115,7 +116,7 @@ export class WeeklyDigestService {
         this.prisma.tenantLlmUsage.findMany({ where: { period } }),
         this.prisma.tenant.findMany({
           where: {
-            ...PLATFORM_TENANT_WHERE,
+            ...COUNTABLE_TENANT_WHERE,
             subscriptionStatus: { in: ["trialing", "active", "past_due"] },
             createdAt: { lt: ago7 },
             OR: [{ onboardingState: null }, { onboardingState: { finishedAt: null } }],
@@ -153,7 +154,7 @@ export class WeeklyDigestService {
     // AI spend this month, per counted salon.
     const counted = await runUnscoped(() =>
       this.prisma.tenant.findMany({
-        where: { ...PLATFORM_TENANT_WHERE, id: { in: [...new Set(usage.map((u) => u.tenantId))] } },
+        where: { ...COUNTABLE_TENANT_WHERE, id: { in: [...new Set(usage.map((u) => u.tenantId))] } },
         select: { id: true, name: true },
       }),
     );
@@ -256,10 +257,10 @@ export function renderWeeklyDigestEmail(d: WeeklyDigest): { subject: string; htm
       title: `Retención${d.retention.enabled ? "" : " (ensayo: está apagada, no se hace nada)"} (${d.retention.items.length})`,
       empty: "Nada esta semana.",
       html: d.retention.items.map(
-        (r) => `${salon(r.id, r.name)}: ${r.kind === "warn" ? "aviso a la dueña" : "anonimizar"}${r.dueNow ? " (esta noche)" : ""}, anonimización el ${day(r.anonymizeOn)}`,
+        (r) => `${salon(r.id, r.name)}: ${r.kind === "warn" ? "aviso al salón" : "anonimizar"}${r.dueNow ? " (esta noche)" : ""}, anonimización el ${day(r.anonymizeOn)}`,
       ),
       text: d.retention.items.map(
-        (r) => `${r.name}: ${r.kind === "warn" ? "aviso a la dueña" : "anonimizar"}${r.dueNow ? " (esta noche)" : ""}, anonimización el ${day(r.anonymizeOn)}`,
+        (r) => `${r.name}: ${r.kind === "warn" ? "aviso al salón" : "anonimizar"}${r.dueNow ? " (esta noche)" : ""}, anonimización el ${day(r.anonymizeOn)}`,
       ),
     },
     {
@@ -293,7 +294,7 @@ ${sections
   )
   .join("\n")}
 <p><a href="${base}/saas/weekly">Ver en la consola</a></p>
-<p style="color:#64748b;font-size:12px">Resumen automático de los lunes. No cuentan los salones eliminados ni los de prueba.</p>
+<p style="color:#64748b;font-size:12px">Resumen automático de los lunes. No cuentan los salones eliminados ni los internos o de prueba (marcados en la consola).</p>
 </body></html>`;
   const text = [
     `KiraRoom, esta semana (${d.week})`,

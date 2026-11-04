@@ -3,6 +3,7 @@ import { Prisma, UserRole } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { getActiveTenant } from "./saas.helpers";
 import { safeTimeZone } from "../gift-cards/gift-card-expiry";
+import { COUNTABLE_TENANT_WHERE } from "./saas.constants";
 import { monthlyPlanRevenue } from "./saas.service";
 import {
   consoleMonths,
@@ -10,7 +11,6 @@ import {
   paidChurnRate,
   percentChange,
   PAYING_TENANT_WHERE,
-  PLATFORM_TENANT_WHERE,
   scheduledInMonth,
   type ConsoleMonth,
 } from "./platform-metrics";
@@ -28,7 +28,7 @@ import {
  * platform total.
  *
  * Months are Madrid calendar months. Test appointments (`isTest`), deleted
- * salons and our own test salons (PLATFORM_TENANT_WHERE) are left out.
+ * salons and internal or test salons (COUNTABLE_TENANT_WHERE, Tenant.isInternal) are left out.
  */
 export interface SaasAnalytics {
   totalTenants: number;
@@ -65,7 +65,7 @@ export interface SaasAnalytics {
 const PLATFORM_USER_WHERE: Prisma.UserWhereInput = {
   role: { not: UserRole.saas_owner },
   isActive: true,
-  tenant: PLATFORM_TENANT_WHERE,
+  tenant: COUNTABLE_TENANT_WHERE,
 };
 
 const PAID_APPOINTMENT_WHERE: Prisma.AppointmentWhereInput = {
@@ -94,10 +94,10 @@ export class SaasAnalyticsService {
       newUsersThisMonth,
       lifecycleRows,
     ] = await Promise.all([
-      this.prisma.tenant.count({ where: PLATFORM_TENANT_WHERE }),
+      this.prisma.tenant.count({ where: COUNTABLE_TENANT_WHERE }),
       this.prisma.user.count({ where: PLATFORM_USER_WHERE }),
-      this.prisma.client.count({ where: { tenant: PLATFORM_TENANT_WHERE } }),
-      this.prisma.appointment.count({ where: { isTest: false, tenant: PLATFORM_TENANT_WHERE } }),
+      this.prisma.client.count({ where: { tenant: COUNTABLE_TENANT_WHERE } }),
+      this.prisma.appointment.count({ where: { isTest: false, tenant: COUNTABLE_TENANT_WHERE } }),
       // Every paying tenant with its location count: Empresa is billed per
       // location, so a per-plan count undercounts it.
       this.prisma.tenant.findMany({
@@ -117,19 +117,19 @@ export class SaasAnalyticsService {
       }),
       this.prisma.tenant.groupBy({
         by: ["subscriptionStatus"],
-        where: PLATFORM_TENANT_WHERE,
+        where: COUNTABLE_TENANT_WHERE,
         _count: true,
       }),
       this.prisma.tenant.groupBy({
         by: ["country"],
-        where: PLATFORM_TENANT_WHERE,
+        where: COUNTABLE_TENANT_WHERE,
         _count: true,
         orderBy: { _count: { country: "desc" } },
         take: 5,
       }),
       this.prisma.tenant.groupBy({
         by: ["plan"],
-        where: PLATFORM_TENANT_WHERE,
+        where: COUNTABLE_TENANT_WHERE,
         _count: true,
         orderBy: { _count: { plan: "desc" } },
       }),
@@ -182,7 +182,7 @@ export class SaasAnalyticsService {
       trialConversionRateThisMonth: month.trialConversionRate,
       topCountries: countryAggregation.map((c) => ({ country: c.country, count: c._count })),
       planDistribution: planAggregation.map((p) => ({ plan: p.plan, count: p._count })),
-      excludedTenantsRule: "deleted, or marked internal",
+      excludedTenantsRule: "deleted, or internal or test salons (marked in the console)",
     };
   }
 
@@ -317,7 +317,7 @@ export class SaasAnalyticsService {
   private lifecycleRows(since: Date) {
     return this.prisma.tenant.findMany({
       where: {
-        ...PLATFORM_TENANT_WHERE,
+        ...COUNTABLE_TENANT_WHERE,
         OR: [{ createdAt: { gte: since } }, { cancelledAt: { gte: since } }, { trialEnd: { gte: since } }],
       },
       select: { createdAt: true, cancelledAt: true, firstPaidAt: true, trialEnd: true },
@@ -326,11 +326,11 @@ export class SaasAnalyticsService {
 
   private async platformMonth(w: ConsoleMonth) {
     const [totalSalons, totalUsers, newUsers, appointments] = await Promise.all([
-      this.prisma.tenant.count({ where: { ...PLATFORM_TENANT_WHERE, createdAt: { lt: w.end } } }),
+      this.prisma.tenant.count({ where: { ...COUNTABLE_TENANT_WHERE, createdAt: { lt: w.end } } }),
       this.prisma.user.count({ where: { ...PLATFORM_USER_WHERE, createdAt: { lt: w.end } } }),
       this.prisma.user.count({ where: { ...PLATFORM_USER_WHERE, createdAt: { gte: w.start, lt: w.end } } }),
       this.prisma.appointment.count({
-        where: { isTest: false, tenant: PLATFORM_TENANT_WHERE, scheduledDate: scheduledInMonth(w) },
+        where: { isTest: false, tenant: COUNTABLE_TENANT_WHERE, scheduledDate: scheduledInMonth(w) },
       }),
     ]);
     return { totalSalons, totalUsers, newUsers, appointments };
