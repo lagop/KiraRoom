@@ -12,10 +12,11 @@ import { ChannelsConfigService } from './channels-config.service';
  *    they were never subscribed to Meta's webhook / Telegram's setWebhook
  */
 
-function makePrisma(initialFeatures: any = {}) {
+function makePrisma(initialFeatures: any = {}, lost: Array<{ channel: string }> = []) {
   const state: any = { features: initialFeatures };
   return {
     prisma: {
+      channelAccount: { findMany: jest.fn(async () => lost) },
       tenant: {
         findUnique: jest.fn(async () => ({ id: 't-1', features: state.features })),
         update: jest.fn(async ({ data }: any) => {
@@ -63,12 +64,14 @@ describe('ChannelsConfigService (H-4)', () => {
       instagramUsername: 'salonlucia',
       hasAccessToken: true,
       needsReconnect: false,
+      accessLost: false,
     });
     expect(view.telegram).toEqual({
       configured: true,
       botUsername: 'salon_lucia_bot',
       hasBotToken: true,
       needsReconnect: false,
+      accessLost: false,
     });
     expect(JSON.stringify(view)).not.toMatch(/cipher|abc/);
   });
@@ -121,5 +124,20 @@ describe('ChannelsConfigService (H-4)', () => {
     const prisma = { tenant: { findUnique: jest.fn(async () => null) } } as any;
     const svc = new ChannelsConfigService(prisma);
     await expect(svc.getConfig('missing')).rejects.toThrow(/not found/);
+  });
+
+  it('says when Facebook or Telegram refused the token (channels audit M5)', async () => {
+    const { prisma } = makePrisma(
+      {
+        multichannel: {
+          meta: { pageId: 'p1', pageName: 'Salón', pageAccessTokenEnc: 'enc' },
+          telegram: { botId: 42, botUsername: 'salon_bot', botTokenEnc: 'enc' },
+        },
+      },
+      [{ channel: 'facebook' }],
+    );
+    const view = await new ChannelsConfigService(prisma).getConfig('t-1');
+    expect(view.meta).toMatchObject({ accessLost: true, needsReconnect: true });
+    expect(view.telegram).toMatchObject({ accessLost: false });
   });
 });

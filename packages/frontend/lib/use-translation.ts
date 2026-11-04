@@ -78,6 +78,20 @@ function getTranslation(
   return value;
 }
 
+/**
+ * A translator in a fixed language, for pages that speak the salon's
+ * language whoever visits (its public page, widget, error page): never the
+ * visitor's panel language from localStorage. Anything but "en" is Spanish.
+ */
+export function salonLanguage(language: string | null | undefined): "es" | "en" {
+  return language === "en" ? "en" : "es";
+}
+
+export function translatorFor(language: string | null | undefined) {
+  const lang = salonLanguage(language);
+  return (key: string, params?: Record<string, any>) => getTranslation(lang, key, params);
+}
+
 export function useTranslations() {
   // Initialize with localStorage value or default to "es"
   // For SSR consistency, always start with "es" and let client update after hydration

@@ -99,6 +99,10 @@ export const TENANT_SETTINGS_SELECT = {
   openingHours: true,
   instagram: true,
   facebook: true,
+  // The public page's links (Ajustes > Salón).
+  website: true,
+  whatsapp: true,
+  privacyPolicyUrl: true,
   bookingSlotMinutes: true,
   autoConfirmOnlineBookings: true,
   timeOffEmailNotices: true,

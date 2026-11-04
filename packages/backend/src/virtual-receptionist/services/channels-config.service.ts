@@ -2,6 +2,15 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ChannelsConfigView } from '@kira/shared';
 
+/**
+ * The view, plus whether Meta / Telegram refused the stored token (M5).
+ * Declared here rather than in @kira/shared: the field is backend-made.
+ */
+export type ChannelsView = Omit<ChannelsConfigView, 'meta' | 'telegram'> & {
+  meta: (NonNullable<ChannelsConfigView['meta']> & { accessLost: boolean }) | null;
+  telegram: (NonNullable<ChannelsConfigView['telegram']> & { accessLost: boolean }) | null;
+};
+
 /** The switches the settings page can change directly. */
 export interface ChannelsSwitches {
   enabled?: boolean;
@@ -26,7 +35,7 @@ export class ChannelsConfigService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async getConfig(tenantId: string): Promise<ChannelsConfigView> {
+  async getConfig(tenantId: string): Promise<ChannelsView> {
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
       select: { features: true },
@@ -34,10 +43,10 @@ export class ChannelsConfigService {
     if (!tenant) {
       throw new Error(`Tenant ${tenantId} not found`);
     }
-    return this.toView((tenant.features as any) ?? {});
+    return this.toView((tenant.features as any) ?? {}, await this.accessLost(tenantId));
   }
 
-  async updateConfig(tenantId: string, dto: ChannelsSwitches): Promise<ChannelsConfigView> {
+  async updateConfig(tenantId: string, dto: ChannelsSwitches): Promise<ChannelsView> {
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
       select: { features: true },
@@ -64,10 +73,25 @@ export class ChannelsConfigService {
     this.logger.log(
       `Updated multichannel config for tenant ${tenantId}: channels=${(next.enabledChannels ?? []).join(',')}`,
     );
-    return this.toView(nextFeatures);
+    return this.toView(nextFeatures, await this.accessLost(tenantId));
   }
 
-  private toView(features: Record<string, any>): ChannelsConfigView {
+  /** Tokens Meta (the Page's, shared by Instagram) or Telegram refused: see ChannelHealthService. */
+  private async accessLost(tenantId: string): Promise<{ facebook: boolean; telegram: boolean }> {
+    const rows = await this.prisma.channelAccount.findMany({
+      where: { tenantId, channel: { in: ['facebook', 'telegram'] }, authErrorAt: { not: null } },
+      select: { channel: true },
+    });
+    return {
+      facebook: rows.some((r) => r.channel === 'facebook'),
+      telegram: rows.some((r) => r.channel === 'telegram'),
+    };
+  }
+
+  private toView(
+    features: Record<string, any>,
+    lost: { facebook: boolean; telegram: boolean } = { facebook: false, telegram: false },
+  ): ChannelsView {
     const mc = features.multichannel ?? {};
     const enabledChannels: string[] = Array.isArray(mc.enabledChannels)
       ? mc.enabledChannels
@@ -90,7 +114,9 @@ export class ChannelsConfigService {
             hasAccessToken: !!(meta.pageAccessTokenEnc || meta.pageAccessToken),
             // Pages saved by the first version (token pasted in a form) were
             // never subscribed to the webhook: they must be connected again.
-            needsReconnect: !meta.pageAccessTokenEnc,
+            // So must one whose token Facebook no longer accepts.
+            needsReconnect: !meta.pageAccessTokenEnc || lost.facebook,
+            accessLost: lost.facebook,
           }
         : null,
       metaPagesPending: pendingValid,
@@ -100,8 +126,10 @@ export class ChannelsConfigService {
             botUsername: telegram.botUsername,
             hasBotToken: !!(telegram.botTokenEnc || telegram.botToken),
             // Bots configured by the first version never had their webhook
-            // registered: they must be connected again.
-            needsReconnect: !telegram.botTokenEnc,
+            // registered: they must be connected again. So must one whose
+            // token Telegram no longer accepts.
+            needsReconnect: !telegram.botTokenEnc || lost.telegram,
+            accessLost: lost.telegram,
           }
         : null,
     };

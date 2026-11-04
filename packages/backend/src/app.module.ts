@@ -241,7 +241,7 @@ import { PublicModule } from "./public-site/public.module";
     // (invite flow + accept-invite wizard + trial state machine)
     InvitesModule,
 
-    // Public site resolution — `/public-site/tenant/:slug` (@Public)
+    // Public site resolution — `/public-site/page/:slug` (@Public)
     PublicModule,
   ],
   controllers: [

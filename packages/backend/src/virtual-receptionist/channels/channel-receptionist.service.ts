@@ -1,6 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { FeatureFlagService } from '../../common/feature-flags/feature-flag.service';
+import { RedisService } from '../../common/cache/redis.service';
+import { InboundGuard } from '../../common/cache/inbound-guard';
+import { mediaReply } from '../../whatsapp/inbound-kinds';
 import { VirtualReceptionistService } from '../virtual-receptionist.service';
 import { ChannelRegistry } from './channel.registry';
 import { ChannelCredentialsService } from './channel-credentials.service';
@@ -16,13 +19,12 @@ export interface InboundChatMessage {
   /** Who wrote: Page-scoped id, Instagram-scoped id or Telegram chat id. */
   from: string;
   text?: string;
-  /** A photo, voice note, sticker... with no text the receptionist can read. */
+  /** A photo, voice note, file... with no text the receptionist can read (stickers are dropped earlier). */
   hasAttachment?: boolean;
   /** The person's display name, when the channel gives it (Telegram). */
   name?: string;
 }
 
-const SEEN_TTL_MS = 60 * 60 * 1000;
 const PER_SENDER_PER_HOUR = 30;
 
 /**
@@ -37,8 +39,12 @@ const PER_SENDER_PER_HOUR = 30;
  * - The webhook is answered at once (Meta wants a 200 within 5 s) and the
  *   work happens afterwards, one message at a time per sender, so replies
  *   keep their order.
- * - Meta and Telegram retry deliveries: each message id is handled once.
- * - A cap per sender and hour limits what a flood of messages can cost.
+ * - Meta and Telegram retry deliveries: each message id is handled once,
+ *   and the cap per sender and hour holds, across restarts and instances
+ *   (Redis, InboundGuard).
+ * - A channel the salon switched off in the panel, or whose token Meta or
+ *   Telegram refused, is not answered and spends no AI: the message stays
+ *   in the salon's own inbox (Meta Business Suite).
  *
  * When the receptionist fails, or answers without sending (the monthly AI
  * allowance ran out), the person still gets a reply from here.
@@ -46,9 +52,8 @@ const PER_SENDER_PER_HOUR = 30;
 @Injectable()
 export class ChannelReceptionistService {
   private readonly logger = new Logger(ChannelReceptionistService.name);
-  private readonly seen = new Map<string, number>();
   private readonly chains = new Map<string, Promise<void>>();
-  private readonly recent = new Map<string, number[]>();
+  private readonly guard: InboundGuard;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -57,16 +62,23 @@ export class ChannelReceptionistService {
     private readonly registry: ChannelRegistry,
     private readonly credentials: ChannelCredentialsService,
     private readonly telegram: TelegramBotClient,
-  ) {}
+    redis: RedisService,
+  ) {
+    this.guard = new InboundGuard(redis, 'vr:chan');
+  }
 
   /** Queues the message and returns at once. */
   enqueue(tenantId: string, message: InboundChatMessage): Promise<void> {
     if (!message.id || !message.from) return Promise.resolve();
-    if (this.alreadySeen(`${message.channel}:${tenantId}:${message.id}`)) return Promise.resolve();
     const key = `${tenantId}:${message.channel}:${message.from}`;
     const previous = this.chains.get(key) ?? Promise.resolve();
+    // The repeat check runs inside the sender's chain, so messages keep
+    // their order even though it is asynchronous now.
     const next = previous
-      .then(() => this.handle(tenantId, message))
+      .then(async () => {
+        if (!(await this.guard.firstDelivery(`${message.channel}:${tenantId}:${message.id}`))) return;
+        await this.handle(tenantId, message);
+      })
       .catch((err) =>
         this.logger.error(`${message.channel} message ${message.id} failed: ${(err as Error).message}`),
       )
@@ -79,8 +91,17 @@ export class ChannelReceptionistService {
 
   private async handle(tenantId: string, message: InboundChatMessage): Promise<void> {
     if (!(await this.flags.isEnabled(tenantId, 'virtual_receptionist' as any))) return;
+    // Switched off in Ajustes > Canales ("puedes apagar un canal sin
+    // desconectarlo"): it used to go through the model, count against the
+    // monthly allowance, and have its answer dropped by the registry.
+    if (!(await this.registry.isChannelEnabled(tenantId, message.channel))) return;
+    const lost = await this.credentials.accessLost(tenantId);
+    if (message.channel === 'telegram' ? lost.telegram : lost.facebook) {
+      this.logger.warn(`${message.channel} message for tenant ${tenantId} not answered: the token was refused`);
+      return;
+    }
 
-    if (!this.withinRate(`${tenantId}:${message.channel}:${message.from}`)) {
+    if (!(await this.guard.withinHourlyCap(`${tenantId}:${message.channel}:${message.from}`, PER_SENDER_PER_HOUR))) {
       this.logger.warn(
         `${message.channel} sender over ${PER_SENDER_PER_HOUR}/h for tenant ${tenantId}; ignored`,
       );
@@ -97,7 +118,8 @@ export class ChannelReceptionistService {
     const text = message.text?.trim();
     if (!text) {
       if (message.hasAttachment) {
-        await reply('Por ahora solo puedo leer mensajes de texto. Escríbeme lo que necesites y te ayudo.');
+        const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { phone: true } });
+        await reply(mediaReply(message.channel, tenant?.phone));
       }
       return;
     }
@@ -142,23 +164,5 @@ export class ChannelReceptionistService {
     return tenant?.phone
       ? `Ahora mismo no puedo responderte. Si es urgente, llama al salón al ${tenant.phone}.`
       : 'Ahora mismo no puedo responderte. Vuelve a escribirme en unos minutos, por favor.';
-  }
-
-  private alreadySeen(id: string): boolean {
-    const now = Date.now();
-    if (this.seen.size > 5000) {
-      for (const [k, at] of this.seen) if (now - at > SEEN_TTL_MS) this.seen.delete(k);
-    }
-    if (this.seen.has(id)) return true;
-    this.seen.set(id, now);
-    return false;
-  }
-
-  private withinRate(key: string): boolean {
-    const now = Date.now();
-    const times = (this.recent.get(key) ?? []).filter((t) => now - t < 60 * 60 * 1000);
-    times.push(now);
-    this.recent.set(key, times);
-    return times.length <= PER_SENDER_PER_HOUR;
   }
 }

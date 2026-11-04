@@ -1,4 +1,5 @@
 import type { PublicSalonPage } from "./salon-seo";
+import type { SalonLegal } from "./salon-legal";
 
 /**
  * Server-side reads of the public site API, for server components, the
@@ -20,13 +21,17 @@ const SERVER_API_URL = (
  */
 export const SALON_PAGE_REVALIDATE_SECONDS = 300;
 
-/** The salon's page data, or null when there is no such salon. */
+/**
+ * The salon's page data, or null when there is no such salon, or it is gone
+ * (410: past its read-only period). The middleware answers 410 itself for a
+ * gone salon (salonGone); this is the fallback if it could not ask.
+ */
 export async function fetchPublicSalonPage(slug: string): Promise<PublicSalonPage | null> {
   const res = await fetch(`${SERVER_API_URL}/public-site/page/${encodeURIComponent(slug)}`, {
     headers: { accept: "application/json" },
     next: { revalidate: SALON_PAGE_REVALIDATE_SECONDS },
   });
-  if (res.status === 404) return null;
+  if (res.status === 404 || res.status === 410) return null;
   if (!res.ok) {
     // Thrown, not turned into "not found": a 404 would tell search engines
     // the salon is gone because the API had a bad minute.
@@ -84,4 +89,18 @@ export async function fetchPublicReviews(tenantId: string): Promise<PublicReview
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Who runs the salon, for its privacy page and aviso legal; null when there
+ * is no such salon or it is gone.
+ */
+export async function fetchSalonLegal(slug: string): Promise<SalonLegal | null> {
+  const res = await fetch(`${SERVER_API_URL}/public-site/legal/${encodeURIComponent(slug)}`, {
+    headers: { accept: "application/json" },
+    next: { revalidate: SALON_PAGE_REVALIDATE_SECONDS },
+  });
+  if (res.status === 404 || res.status === 410) return null;
+  if (!res.ok) throw new Error(`public-site/legal/${slug} answered ${res.status}`);
+  return (await res.json()) as SalonLegal;
 }

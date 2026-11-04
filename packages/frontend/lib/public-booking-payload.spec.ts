@@ -205,7 +205,8 @@ check("absolute, on the app's host", privacyPolicyUrl("https://app.kiraroom.net"
 check("the page exists", fs.existsSync(path.join(ROOT, "app/legal/privacy/page.tsx")), true);
 for (const rel of [...SCREENS, "app/embed/[token]/page.tsx", "app/public/r/[token]/page.tsx"]) {
   const src = fs.readFileSync(path.join(ROOT, rel), "utf8");
-  check(`${rel} shows the privacy notice`, src.includes("privacyPolicyUrl()"), true);
+  // The salon's own policy or the one generated for it (lib/salon-legal.ts); KiraRoom's elsewhere.
+  check(`${rel} shows the privacy notice`, src.includes("privacyPolicyUrl()") || src.includes("salonPrivacyHref("), true);
 }
 
 console.log("\n=== the promotions and WhatsApp boxes ===");

@@ -623,6 +623,8 @@ export interface ChannelsConfig {
     instagramUsername?: string;
     hasAccessToken: boolean;
     needsReconnect: boolean;
+    /** Facebook refused the Page token (expired or revoked): reconnect. */
+    accessLost?: boolean;
   } | null;
   metaPagesPending: boolean;
   telegram: {
@@ -630,6 +632,8 @@ export interface ChannelsConfig {
     botUsername?: string;
     hasBotToken: boolean;
     needsReconnect: boolean;
+    /** Telegram no longer accepts the bot token: reconnect. */
+    accessLost?: boolean;
   } | null;
   /** What the server can offer, and why not (e.g. "meta_app_not_configured"). */
   availability?: {
@@ -650,6 +654,16 @@ export interface WhatsAppConnection {
   qualityScore?: string | null;
   tokenExpiresAt?: string | null;
   isActive: boolean;
+  /** When Meta confirmed KiraRoom receives this number's messages (subscribed_apps). */
+  webhookSubscribedAt?: string | null;
+  /** Why the subscription failed, in Spanish, ready to show. */
+  webhookError?: string | null;
+  /** Last message or status Meta delivered for this number. */
+  lastInboundAt?: string | null;
+  /** When Meta refused the token (expired or revoked); null while it works. */
+  authErrorAt?: string | null;
+  /** What to tell the salon about the refused token, in Spanish; null while it works. */
+  accessProblem?: string | null;
 }
 /** A quarterly tax return draft (Modelo 303 / 420): box -> value. */
 export interface TaxReportDraft {
@@ -3176,23 +3190,6 @@ class ApiClient implements ApiClientInterface {
     return this.request<Professional[]>(`/professionals${params}`);
   }
 
-  // Public tenant resolution (no auth required)
-  async getPublicTenant(slug: string): Promise<{
-    id: string;
-    name: string;
-    slug: string;
-    logo: string | null;
-    address: string | null;
-    city: string | null;
-    state: string | null;
-    country: string | null;
-    phone: string | null;
-    email: string | null;
-    description: string | null;
-  }> {
-    return this.request(`/public-site/tenant/${encodeURIComponent(slug)}`);
-  }
-
   // Everything the salon's public page shows, opening hours included (no auth).
   async getPublicSalonPage(slug: string): Promise<PublicSalonPage> {
     return this.request<PublicSalonPage>(`/public-site/page/${encodeURIComponent(slug)}`);
@@ -3392,6 +3389,9 @@ class ApiClient implements ApiClientInterface {
     locationIds?: string[];
     primaryLocationId?: string | null;
     workingHours?: WorkingHoursEntry[];
+    /** "Mostrar en la web"; left out: name and initial, no photo. */
+    webNameDisplay?: "full" | "initial" | "hidden";
+    webShowPhoto?: boolean;
   }): Promise<Professional> {
     return this.request<Professional>("/admin/professionals", {
       method: "POST",
@@ -3427,6 +3427,9 @@ class ApiClient implements ApiClientInterface {
     primaryLocationId?: string | null;
       /** Owners and admins only; leave it out to keep the current schedule. */
       workingHours: WorkingHoursEntry[];
+      /** "Mostrar en la web" and "Mostrar foto". */
+      webNameDisplay: "full" | "initial" | "hidden";
+      webShowPhoto: boolean;
     }>,
   ): Promise<Professional> {
     return this.request<Professional>(`/admin/professionals/${id}`, {
@@ -4963,6 +4966,11 @@ class ApiClient implements ApiClientInterface {
     /** Online bookings start confirmed instead of pending. */
     autoConfirmOnlineBookings?: boolean;
     timeOffEmailNotices?: boolean;
+    /** The public page's links (Ajustes > Salón). */
+    website?: string | null;
+    whatsapp?: string | null;
+    /** The salon's own privacy policy; null: the one generated for it. */
+    privacyPolicyUrl?: string | null;
   }> {
     return this.request("/auth/tenant");
   }
@@ -4993,6 +5001,10 @@ class ApiClient implements ApiClientInterface {
     bookingSlotMinutes?: number;
     autoConfirmOnlineBookings?: boolean;
     timeOffEmailNotices?: boolean;
+    /** null clears them. */
+    website?: string | null;
+    whatsapp?: string | null;
+    privacyPolicyUrl?: string | null;
   }): Promise<{
     id: string;
     name: string;
@@ -5050,7 +5062,7 @@ class ApiClient implements ApiClientInterface {
     return this.request("/virtual-receptionist/channels/meta/pages");
   }
 
-  async selectMetaChannelPage(pageId: string): Promise<{ connected: boolean }> {
+  async selectMetaChannelPage(pageId: string): Promise<{ connected: boolean; instagramTaken?: boolean; message?: string }> {
     return this.request("/virtual-receptionist/channels/meta/select", {
       method: "POST",
       body: JSON.stringify({ pageId }),
@@ -5607,20 +5619,20 @@ class ApiClient implements ApiClientInterface {
       throw err;
     }
   }
-  async startWhatsAppConnect(): Promise<{ url: string; state: string }> {
-    return this.request(`/whatsapp/connect/start`);
-  }
   async manualWhatsAppConnect(input: {
     accessToken: string;
     wabaId: string;
     phoneNumberId: string;
-    displayPhone: string;
     displayName?: string;
   }): Promise<WhatsAppConnection> {
     return this.request(`/whatsapp/connect/manual`, {
       method: "POST",
       body: JSON.stringify(input),
     });
+  }
+  /** Asks Meta again whether the stored token, number and subscription work. */
+  async checkWhatsAppConnection(): Promise<WhatsAppConnection> {
+    return this.request(`/whatsapp/connection/check`, { method: "POST" });
   }
   async disconnectWhatsApp(): Promise<{ disconnected: boolean }> {
     return this.request(`/whatsapp/connection`, { method: "DELETE" });

@@ -17,6 +17,14 @@ export interface SalonIdentityFields {
   logo: string;
   /** The public page's cover photo; blank clears it. Left out when absent. */
   coverImage?: string;
+  /**
+   * The public page's links: the salon's own website, its WhatsApp number
+   * ("Escríbenos por WhatsApp") and its own privacy policy (instead of the
+   * generated one). Blank clears them; left out when absent.
+   */
+  website?: string;
+  whatsapp?: string;
+  privacyPolicyUrl?: string;
 }
 
 export function salonIdentityUpdate(f: SalonIdentityFields) {
@@ -31,5 +39,8 @@ export function salonIdentityUpdate(f: SalonIdentityFields) {
     phone: orNull(f.phone),
     logo: f.logo.trim(),
     ...(f.coverImage !== undefined ? { coverImage: orNull(f.coverImage) } : {}),
+    ...(f.website !== undefined ? { website: orNull(f.website) } : {}),
+    ...(f.whatsapp !== undefined ? { whatsapp: orNull(f.whatsapp) } : {}),
+    ...(f.privacyPolicyUrl !== undefined ? { privacyPolicyUrl: orNull(f.privacyPolicyUrl) } : {}),
   };
 }

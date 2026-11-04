@@ -17,7 +17,55 @@ import apiClient, {
 } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { draftFrom, parseOrigins, toggleId, widgetUpdateFrom, type WidgetDraft } from "@/lib/widget-edit";
+import {
+  draftFrom,
+  parseOrigins,
+  suggestedOrigins,
+  toggleId,
+  widgetUpdateFrom,
+  type WidgetDraft,
+} from "@/lib/widget-edit";
+import { validHexColor } from "@/lib/embed-theme";
+
+/** The widget's default colour, the app's purple (no theme). */
+const DEFAULT_WIDGET_COLOR = "#9333ea";
+
+/** Said wherever the allowed sites are edited and the list is empty. */
+function AnySiteWarning() {
+  return (
+    <p role="status" className="mt-1 rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-800">
+      Con la lista vacía, cualquier web puede mostrar tu widget.
+    </p>
+  );
+}
+
+/** The widget's main colour: a picker plus "use the default". */
+function ColorField({ value, onChange, id }: { value: string; onChange: (v: string) => void; id: string }) {
+  const valid = validHexColor(value);
+  return (
+    <div>
+      <label htmlFor={id} className="block text-sm font-medium text-gray-700 mb-1">
+        Color principal
+      </label>
+      <div className="flex flex-wrap items-center gap-3">
+        <input
+          id={id}
+          type="color"
+          value={valid ?? DEFAULT_WIDGET_COLOR}
+          onChange={(e) => onChange(e.target.value)}
+          className="h-9 w-14 cursor-pointer rounded border border-gray-300"
+        />
+        <span className="text-sm text-gray-600">{valid ?? "Morado de KiraRoom"}</span>
+        {valid && (
+          <button type="button" onClick={() => onChange("")} className="text-sm text-purple-600 hover:underline">
+            Usar el de KiraRoom
+          </button>
+        )}
+      </div>
+      <p className="mt-1 text-xs text-gray-500">Botones y opciones elegidas del widget.</p>
+    </div>
+  );
+}
 // The iframe, named for the salon, and the script that sizes it to the widget.
 import { buildEmbedSnippet } from "@/lib/embed-snippet";
 
@@ -29,6 +77,10 @@ export default function WidgetSettingsPage() {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [allowedOriginsText, setAllowedOriginsText] = useState("");
+  const [primaryColor, setPrimaryColor] = useState("");
+  // The salon's website and live domains, offered as the new widget's
+  // allowed sites (filled in once, the salon can change them).
+  const [suggested, setSuggested] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   // The widget being edited (allowed sites, services, professionals).
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -51,10 +103,18 @@ export default function WidgetSettingsPage() {
       } catch {
         setServices([]);
       }
+      let website: string | null = null;
       try {
-        setSalonName((await apiClient.getTenant()).name ?? null);
+        const tenant = await apiClient.getTenant();
+        setSalonName(tenant.name ?? null);
+        website = tenant.website ?? null;
       } catch {
         setSalonName(null);
+      }
+      try {
+        setSuggested(suggestedOrigins(website, await apiClient.getWebDomain()));
+      } catch {
+        setSuggested(suggestedOrigins(website, null));
       }
       try {
         const profs = await apiClient.getProfessionals();
@@ -75,6 +135,12 @@ export default function WidgetSettingsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Offer the salon's own sites in the new widget's list, until it types.
+  const [originsTouched, setOriginsTouched] = useState(false);
+  useEffect(() => {
+    if (!originsTouched && suggested.length > 0) setAllowedOriginsText(suggested.join("\n"));
+  }, [suggested, originsTouched]);
+
   async function handleCreate() {
     if (!name.trim()) {
       toast({ title: "El nombre es obligatorio", variant: "destructive" });
@@ -83,12 +149,16 @@ export default function WidgetSettingsPage() {
     setCreating(true);
     try {
       const allowedOrigins = parseOrigins(allowedOriginsText);
+      const color = validHexColor(primaryColor);
       await apiClient.createWidgetInstance({
         name: name.trim(),
         allowedOrigins,
+        ...(color ? { theme: { primaryColor: color } } : {}),
       });
       setName("");
-      setAllowedOriginsText("");
+      setAllowedOriginsText(suggested.join("\n"));
+      setOriginsTouched(false);
+      setPrimaryColor("");
       toast({ title: "Widget creado" });
       await load();
     } catch (err: any) {
@@ -186,16 +256,21 @@ export default function WidgetSettingsPage() {
             </label>
             <textarea
               value={allowedOriginsText}
-              onChange={(e) => setAllowedOriginsText(e.target.value)}
+              onChange={(e) => {
+                setOriginsTouched(true);
+                setAllowedOriginsText(e.target.value);
+              }}
               rows={3}
               placeholder={"https://misalon.com\nhttps://misalon.es"}
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
             />
             <p className="mt-1 text-xs text-gray-500">
-              Solo direcciones https, sin ruta (https://misalon.com). Con la lista vacía, el widget se puede
-              insertar en cualquier web.
+              Solo direcciones https, sin ruta (https://misalon.com).
+              {suggested.length > 0 && " Te proponemos tu web y tu dominio."}
             </p>
+            {parseOrigins(allowedOriginsText).length === 0 && <AnySiteWarning />}
           </div>
+          <ColorField id="widget-new-color" value={primaryColor} onChange={setPrimaryColor} />
         </div>
         <div className="flex justify-end mt-4">
           <button
@@ -276,9 +351,15 @@ export default function WidgetSettingsPage() {
                     />
                   )}
 
-                  {editingId !== w.id && (w.allowedOrigins.length > 0 || w.services.length > 0 || w.professionals.length > 0) && (
+                  {editingId !== w.id && (
                     <p className="text-xs text-gray-500">
-                      {w.allowedOrigins.length > 0 ? `Solo en: ${w.allowedOrigins.join(", ")}` : "En cualquier web"}
+                      {w.allowedOrigins.length > 0 ? (
+                        `Solo en: ${w.allowedOrigins.join(", ")}`
+                      ) : (
+                        <span data-test="widget-any-site" className="font-medium text-amber-700">
+                          Cualquier web puede mostrar tu widget
+                        </span>
+                      )}
                       {w.services.length > 0 ? ` · ${w.services.length} servicios` : ""}
                       {w.professionals.length > 0 ? ` · ${w.professionals.length} profesionales` : ""}
                     </p>
@@ -396,7 +477,13 @@ function WidgetEditor({
           placeholder={"https://misalon.com\nhttps://misalon.es"}
           className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
         />
+        {parseOrigins(draft.allowedOriginsText).length === 0 && <AnySiteWarning />}
       </div>
+      <ColorField
+        id="widget-edit-color"
+        value={draft.primaryColor ?? ""}
+        onChange={(v) => onChange({ ...draft, primaryColor: v })}
+      />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <PickList
           legend="Servicios (ninguno marcado = todos los reservables)"

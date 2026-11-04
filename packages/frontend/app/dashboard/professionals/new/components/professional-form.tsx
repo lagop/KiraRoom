@@ -11,6 +11,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { useTranslations } from '@/lib/use-translation';
 import { WeeklyScheduleEditor } from '@/components/professionals/WeeklyScheduleEditor';
 import { LocationsPicker } from '@/components/professionals/LocationsPicker';
+import { NEW_PROFESSIONAL_WEB, WebVisibilityFields } from '@/components/professionals/WebVisibilityFields';
 import { NO_LOCATIONS, locationsPayload, type LocationChoice } from '@/lib/professional-locations';
 import {
   defaultSchedule,
@@ -39,6 +40,8 @@ export function ProfessionalForm() {
   // bookable at any hour the salon opens.
   const [schedule, setSchedule] = useState<WeeklySchedule>(defaultSchedule);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
+  // Shown on the salon's page as "Ana G.", without photo, until she agrees to more.
+  const [web, setWeb] = useState(NEW_PROFESSIONAL_WEB);
   const [formData, setFormData] = useState({
     email: '',
     password: '',
@@ -102,6 +105,8 @@ export function ProfessionalForm() {
         serviceIds: selectedServices,
         workingHours: workingHoursFromSchedule(schedule),
         ...locationsPayload(locations, locationsTouched),
+        webNameDisplay: web.webNameDisplay,
+        webShowPhoto: web.webShowPhoto,
       });
 
       router.push('/dashboard/professionals');
@@ -250,6 +255,16 @@ export function ProfessionalForm() {
               {t('professionals.fields.noServices')}
             </p>
           )}
+        </div>
+
+        <div className="sm:col-span-2">
+          <WebVisibilityFields
+            nameDisplay={web.webNameDisplay}
+            showPhoto={web.webShowPhoto}
+            onChange={setWeb}
+            disabled={isLoading}
+            t={t}
+          />
         </div>
 
         <div className="sm:col-span-2">
