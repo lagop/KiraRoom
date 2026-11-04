@@ -1,5 +1,6 @@
 import { NestFactory } from "@nestjs/core";
-import { Logger, ValidationPipe } from "@nestjs/common";
+import { Logger } from "@nestjs/common";
+import { createGlobalValidationPipe } from "./common/validation/global-validation-pipe";
 import { SwaggerModule, DocumentBuilder } from "@nestjs/swagger";
 import { json, urlencoded } from "express";
 import * as Sentry from "@sentry/node";
@@ -155,17 +156,8 @@ async function bootstrap(): Promise<void> {
   );
   app.use(urlencoded({ extended: true }));
 
-  app.useGlobalPipes(
-    new ValidationPipe({
-      transform: true,
-      whitelist: true,
-      forbidNonWhitelisted: false,
-      validationError: {
-        target: true,
-        value: true,
-      },
-    }),
-  );
+  // Shared with the specs (common/validation/global-validation-pipe.ts).
+  app.useGlobalPipes(createGlobalValidationPipe());
 
   // Salons' pages on <slug>.kiraroom.net and on their verified domains
   // call the API for slots and bookings.

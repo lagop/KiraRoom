@@ -22,6 +22,20 @@ const at = (hhmm: string) => {
 const MONDAYS = [{ day: "monday", openTime: "09:00", closeTime: "19:00" }];
 const NAMES: Record<string, string> = { ana: "Ana", bea: "Bea" };
 const stub = {} as any;
+
+/**
+ * A transaction client: the database's reads, the writes a test records,
+ * and the per-salon, per-day booking lock a move takes before its checks.
+ */
+function asTx(db: any, writes: any) {
+  return {
+    ...db,
+    ...writes,
+    appointment: { ...db.appointment, ...writes.appointment },
+    appointmentService: { ...db.appointmentService, ...writes.appointmentService },
+    $executeRaw: db.$executeRaw ?? (async () => 0),
+  };
+}
 const owner = { id: "u0", role: "owner", tenantId: TENANT };
 
 /** Ana's colour at 10:00, with Bea doing the rinse after it. */
@@ -154,7 +168,7 @@ function editHarness(appointment: any, catalog: any[] = [], others: any[] = []) 
       count: jest.fn(async ({ where }: any) => where.id.in.length),
       findMany: jest.fn(async ({ where }: any) => catalog.filter((s) => where.id.in.includes(s.id))),
     },
-    $transaction: jest.fn(async (fn: any) => fn(tx)),
+    $transaction: jest.fn(async (fn: any) => fn(asTx(prisma, tx))),
   };
   const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
   for (const m of ["sendAppointmentRescheduledNotifications", "logAppointmentActivity"]) (svc as any)[m] = jest.fn();
@@ -369,7 +383,7 @@ function calendarVisit() {
     ...salonReads([]),
     appointmentService: { findUnique: jest.fn(async () => ({ appointmentId: "visit-1" })) },
     appointment: { ...salonReads([]).appointment, findFirst: jest.fn(async () => appointment) },
-    $transaction: async (fn: any) => fn(tx),
+    $transaction: async (fn: any) => fn(asTx(prisma, tx)),
   };
   const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
   jest.spyOn(svc as any, "sendAppointmentRescheduledNotifications").mockResolvedValue(undefined);
@@ -451,6 +465,9 @@ describe("the copilot's reschedule_appointment takes the panel's path", () => {
         findFirst: jest.fn(async () => appointment),
         update: jest.fn(async () => appointment),
       },
+      // A move checks and saves under the booking lock (R16).
+      $executeRaw: jest.fn(async () => 0),
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
     };
     const appointments = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
     for (const m of ["sendAppointmentRescheduledNotifications", "logAppointmentActivity"]) (appointments as any)[m] = jest.fn();

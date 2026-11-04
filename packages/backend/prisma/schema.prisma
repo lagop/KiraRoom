@@ -4063,3 +4063,23 @@ model StripeWebhookEvent {
   @@index([receivedAt])
   @@map("stripe_webhook_events")
 }
+
+/// One SMS a booking made from outside the salon (its page, the widget, the
+/// chat receptionist) would send: allowed, or held back because the salon or
+/// the number reached its daily cap (appointments/public-booking-sms-cap.ts).
+/// Anyone can book, and each booking texted the number typed in, so a bot
+/// could make KiraRoom pay for unlimited SMS. No phone number is stored:
+/// `phoneHash` is an HMAC of its last nine digits, enough to count.
+model PublicBookingSms {
+  id            String   @id @default(uuid())
+  tenantId      String
+  appointmentId String?
+  phoneHash     String
+  allowed       Boolean
+  createdAt     DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([phoneHash, createdAt])
+  @@index([appointmentId])
+  @@map("public_booking_sms")
+}

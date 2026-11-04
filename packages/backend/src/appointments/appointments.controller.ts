@@ -27,6 +27,7 @@ import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { UserRole } from "@prisma/client";
 import { Throttle } from "@nestjs/throttler";
+import { clientIp } from "../common/client-ip";
 
 interface AuthenticatedRequest extends Request {
   user: {
@@ -58,10 +59,8 @@ export class AppointmentsController {
   async create(@Body() dto: OnlineBookingDto, @Req() req: any) {
     // The booker's IP, hashed into the record of what she ticked (promotions,
     // WhatsApp notices), as the consent routes do.
-    const ip =
-      (req?.headers?.["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ||
-      req?.socket?.remoteAddress ||
-      "";
+    // From the trusted proxy, as the rate limiter counts it (clientIp).
+    const ip = clientIp(req);
     // Public: whoever booked gets the booking back, not the client record it
     // attached to nor the salon's row.
     return publicBooking(await this.appointmentsService.createOnline(dto, { ip }));
@@ -110,6 +109,7 @@ export class AppointmentsController {
       serviceId,
       duration,
       locationId,
+      widgetInstanceId,
     } = query;
     // Parse professionalIds if provided as comma-separated string
     const profIds = professionalIds
@@ -125,8 +125,27 @@ export class AppointmentsController {
       serviceId,
       duration,
       profIds,
-      { onlineWindow: !staff, locationId },
+      { onlineWindow: !staff, locationId, widgetInstanceId },
     );
+  }
+
+  /**
+   * Until which day a client may book a service online (its
+   * maxAdvanceBooking, in the salon's calendar), so the booking page and the
+   * widget can stop the date picker there and say why a later day has no
+   * times, instead of "no free times this day".
+   */
+  @Get("booking-window")
+  @Throttle({ default: { ttl: 60_000, limit: 60 } })
+  @Public()
+  @ApiOperation({ summary: "Last day a service can be booked online (public)" })
+  @ApiQuery({ name: "tenantId", required: true })
+  @ApiQuery({ name: "serviceId", required: true })
+  async bookingWindow(
+    @Query("tenantId", ParseUUIDPipe) tenantId: string,
+    @Query("serviceId", ParseUUIDPipe) serviceId: string,
+  ) {
+    return this.appointmentsService.publicBookingWindow(tenantId, serviceId);
   }
 
   /**

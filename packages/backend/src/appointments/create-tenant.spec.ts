@@ -546,6 +546,21 @@ describe("the widget's 'any professional'", () => {
     ).rejects.toThrow(ConflictException);
   });
 
+  // R11: who does the service is decided salon-wide, as for a named
+  // professional. Deciding it within the widget's list gave the cut to a
+  // widget professional who does not do it because none of them was linked.
+  it("never gives the service to a widget professional who does not do it", async () => {
+    const { service } = build({
+      widgetProfessionals: [PRO_2.id],
+      offering: [PRO.id],
+      freeTimes: { [PRO.id]: ["10:00"], [PRO_2.id]: ["10:00"] },
+    });
+
+    await expect(
+      service.createOnline({ ...BOOKING, professionalId: "", widgetInstanceId: WIDGET_ID } as any),
+    ).rejects.toThrow(ConflictException);
+  });
+
   it("needs the widget to know which salon", async () => {
     const { service } = build();
     await expect(service.createOnline({ ...BOOKING, professionalId: "" } as any)).rejects.toThrow(
