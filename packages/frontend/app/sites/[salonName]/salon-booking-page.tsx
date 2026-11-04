@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Calendar,
   Clock,
@@ -12,6 +12,7 @@ import {
   Mail,
   Instagram,
   Facebook,
+  CheckCircle,
 } from "lucide-react";
 import apiClient from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
@@ -32,12 +33,14 @@ import {
   bookingDateFromQuery,
   bookingErrorMessage,
   formatBookingDate,
+  isBeyondWindow,
   isClosedDay,
   isOfferedTime,
   localDateString,
   localTomorrow,
   privacyPolicyUrl,
   slotsState,
+  splitClientName,
   BOOKING_CHOICE_TEXT,
   whatsappPromotionsLabel,
 } from "@/lib/public-booking";
@@ -123,6 +126,33 @@ interface Service {
 interface AvailableTimeSlot {
   time: string;
   available: boolean;
+}
+
+/**
+ * What the page shows once the server has the booking: it used to be a toast
+ * that vanished while the form went blank, so on a phone she could not tell
+ * whether she had booked and tried again.
+ */
+interface BookedSummary {
+  /** The appointment's status in the answer: "confirmed", or waiting for the salon. */
+  confirmed: boolean;
+  serviceName: string;
+  professionalName: string;
+  date: string;
+  time: string;
+  /** Where: the location (multi-local) or the salon's own address. */
+  place: { name: string; address: string } | null;
+  email: string;
+  ref: string;
+}
+
+/** A per-visitor convenience: a strict private window throws on localStorage. */
+function rememberLanguage(language: string): void {
+  try {
+    localStorage.setItem("kira_language", language);
+  } catch {
+    // Not remembered; the page still switches.
+  }
 }
 
 /**
@@ -232,6 +262,11 @@ export default function SalonBookingPage({
   // The professional a QR code or link chose (?professionalId=), until the
   // client asks to see the whole team.
   const [pinnedProfessionalId, setPinnedProfessionalId] = useState("");
+  // The booking just made: the form gives way to its summary (R9).
+  const [confirmation, setConfirmation] = useState<BookedSummary | null>(null);
+  const doneRef = useRef<HTMLDivElement>(null);
+  // The last day the chosen service can be booked online, from the server.
+  const [bookingWindow, setBookingWindow] = useState<{ serviceId: string; lastDay: string } | null>(null);
   const pinnedProfessional = professionals.find((p) => p.id === pinnedProfessionalId);
   // Links from a wait-list notice (and rebooking reminders) carry the
   // service, professional and day of the freed slot: start the form there.
@@ -278,6 +313,31 @@ export default function SalonBookingPage({
     }));
   }, []);
 
+  // How far ahead the chosen service can be booked: the date picker stops
+  // there, and a later day says why it has no times. Without an answer
+  // (older server) nothing changes.
+  useEffect(() => {
+    const serviceId = bookingData.serviceId;
+    if (!serviceId || !salonData?.id) return;
+    let cancelled = false;
+    apiClient
+      .getBookingWindow(salonData.id, serviceId)
+      .then((w) => {
+        if (!cancelled && w?.lastDay) setBookingWindow({ serviceId, lastDay: w.lastDay });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [bookingData.serviceId, salonData?.id]);
+  const lastDay = bookingWindow && bookingWindow.serviceId === bookingData.serviceId ? bookingWindow.lastDay : null;
+
+  // The summary takes the focus, so a screen reader reads it and a phone
+  // scrolls to it.
+  useEffect(() => {
+    if (confirmation) doneRef.current?.focus();
+  }, [confirmation]);
+
   // Fetch available time slots
   useEffect(() => {
     // The list on screen belongs to the previous service, professional or
@@ -294,6 +354,11 @@ export default function SalonBookingPage({
       }
 
       if (!salonData?.id || !bookingData.date || !locationReady(locations, bookingData.locationId)) {
+        setSlotsLoading(false);
+        return;
+      }
+      // Too far ahead: nothing to ask (the message says why).
+      if (isBeyondWindow(bookingData.date, lastDay)) {
         setSlotsLoading(false);
         return;
       }
@@ -369,6 +434,7 @@ export default function SalonBookingPage({
     locations,
     salonData?.id,
     slotsRefresh,
+    lastDay,
   ]);
 
   const handleInputChange = (
@@ -440,7 +506,8 @@ export default function SalonBookingPage({
         throw new Error("Salon not loaded");
       }
 
-      const [firstName, ...restOfName] = bookingData.clientName.trim().split(" ");
+      // One box for the name: first word, then the rest (may be empty).
+      const { firstName, lastName } = splitClientName(bookingData.clientName);
 
       const booked = await apiClient.createAppointment({
         tenantId: salonData.id,
@@ -449,7 +516,7 @@ export default function SalonBookingPage({
         // phone in this salon.
         clientInfo: {
           firstName,
-          lastName: restOfName.join(" "),
+          lastName,
           email: bookingData.clientEmail.trim() || undefined,
           phone: bookingData.clientPhone,
         },
@@ -468,16 +535,27 @@ export default function SalonBookingPage({
         ...(offersWhatsAppPromotions && wantsWhatsAppPromotions ? { wantsWhatsAppPromotions: true } : {}),
       });
 
-      // Only now. The confirmation has to mean the appointment exists. At
-      // one of several locations it says which one and where it is.
-      const place = confirmedPlace(locations, bookingData.locationId, booked);
-      toast({
-        title: t("bookingPublic.booking_confirmed"),
-        description: place
-          ? place.address
-            ? t("bookingPublic.booked_at_address", { location: place.name, address: place.address })
-            : t("bookingPublic.booked_at", { location: place.name })
-          : t("bookingPublic.booking_confirmed"),
+      // Only now. The confirmation has to mean the appointment exists: a
+      // summary that stays on screen, from what the server booked. At one of
+      // several locations it says which one and where it is; otherwise the
+      // salon's address. "Confirmada" only when the answer says so: by
+      // default a salon confirms online bookings itself.
+      const place =
+        confirmedPlace(locations, bookingData.locationId, booked) ??
+        (salonData.address ? { name: salonData.name, address: salonData.address } : null);
+      const answer = booked as any;
+      const service = services.find((s) => s.id === bookingData.serviceId);
+      const professional = professionals.find((p) => p.id === bookingData.professionalId);
+      const bookedPro = answer?.professional ?? professional;
+      setConfirmation({
+        confirmed: answer?.status === "confirmed",
+        serviceName: answer?.service?.name ?? service?.name ?? "",
+        professionalName: bookedPro ? `${bookedPro.firstName ?? ""} ${bookedPro.lastName ?? ""}`.trim() : "",
+        date: answer?.scheduledDate ? String(answer.scheduledDate).slice(0, 10) : bookingData.date,
+        time: answer?.scheduledTime ?? bookingData.time,
+        place,
+        email: bookingData.clientEmail.trim(),
+        ref: typeof answer?.id === "string" ? answer.id.slice(0, 8) : "",
       });
 
       // Reset form, with tomorrow as the date again. The location stays: a
@@ -495,6 +573,8 @@ export default function SalonBookingPage({
       }));
       setRefusesMarketingEmail(false);
       setWantsWhatsAppNotices(false);
+      // The next person on this device (the salon's tablet) ticks her own.
+      setWantsWhatsAppPromotions(false);
     } catch (error) {
       console.error("Error booking appointment:", error);
       // Pass the server's reason through. The slot may have been taken while
@@ -564,6 +644,7 @@ export default function SalonBookingPage({
     loading: slotsLoading,
     slots: availableSlots,
     closed: isClosedDay(bookingData.date, initialData.openingHours, closedDaysAt(initialData, bookingData.locationId)),
+    lastDay,
   });
 
   return (
@@ -689,6 +770,73 @@ export default function SalonBookingPage({
               {t("bookingPublic.title")}
             </h2>
 
+            {confirmation ? (
+              <div
+                ref={doneRef}
+                tabIndex={-1}
+                role="status"
+                aria-live="polite"
+                data-test="booking-done"
+                className="space-y-5 text-center outline-none"
+              >
+                <CheckCircle className="mx-auto h-12 w-12 text-green-600" aria-hidden="true" />
+                <div>
+                  <h3 className="text-xl font-semibold text-gray-900">{t("bookingPublic.booking_received")}</h3>
+                  <p data-test="booking-done-status" className="mt-1 text-gray-700">
+                    {confirmation.confirmed ? t("bookingPublic.status_confirmed") : t("bookingPublic.status_pending")}
+                  </p>
+                </div>
+                <dl className="mx-auto grid max-w-md grid-cols-[auto,1fr] gap-x-4 gap-y-1 rounded-lg bg-purple-50 p-4 text-left text-sm">
+                  <dt className="text-gray-500">{t("bookingPublic.summary_service")}</dt>
+                  <dd className="font-medium text-gray-900">{confirmation.serviceName}</dd>
+                  {confirmation.professionalName && (
+                    <>
+                      <dt className="text-gray-500">{t("bookingPublic.summary_professional")}</dt>
+                      <dd className="font-medium text-gray-900">{confirmation.professionalName}</dd>
+                    </>
+                  )}
+                  <dt className="text-gray-500">{t("bookingPublic.summary_date")}</dt>
+                  <dd className="font-medium text-gray-900">{formatDate(confirmation.date)}</dd>
+                  <dt className="text-gray-500">{t("bookingPublic.summary_time")}</dt>
+                  <dd className="font-medium text-gray-900">{confirmation.time}</dd>
+                </dl>
+                {confirmation.place && (
+                  <p data-test="booking-done-place" className="text-sm text-gray-700">
+                    {confirmation.place.address
+                      ? t("bookingPublic.booked_at_address", {
+                          location: confirmation.place.name,
+                          address: confirmation.place.address,
+                        })
+                      : t("bookingPublic.booked_at", { location: confirmation.place.name })}
+                  </p>
+                )}
+                {confirmation.email && (
+                  <p className="text-sm text-gray-600">
+                    {t("bookingPublic.done_email", { email: confirmation.email })}
+                  </p>
+                )}
+                {salonData.phone && (
+                  <p data-test="booking-done-phone" className="text-sm text-gray-600">
+                    {t("bookingPublic.done_phone")}{" "}
+                    <a href={`tel:${salonData.phone.replace(/\s+/g, "")}`} className="font-medium text-purple-700 underline">
+                      {salonData.phone}
+                    </a>
+                  </p>
+                )}
+                {confirmation.ref && (
+                  <p className="text-xs text-gray-400">{t("bookingPublic.done_ref", { ref: confirmation.ref })}</p>
+                )}
+                <button
+                  type="button"
+                  data-test="booking-another"
+                  onClick={() => setConfirmation(null)}
+                  className="rounded-lg bg-purple-600 px-6 py-3 font-medium text-white hover:bg-purple-700"
+                >
+                  {t("bookingPublic.book_another")}
+                </button>
+              </div>
+            ) : (
+            <>
             {pinnedProfessional && (
               <div
                 data-test="booking-pinned-professional"
@@ -789,12 +937,13 @@ export default function SalonBookingPage({
                   also be left for later: picking a professional sets it. */}
               {locations.length > 0 && (
                 <div className="space-y-4">
-                  <h3 className="text-lg font-semibold text-gray-900 flex items-center">
-                    <MapPin className="w-5 h-5 mr-2 text-purple-600" />
+                  <h3 id="booking-location-heading" className="text-lg font-semibold text-gray-900 flex items-center">
+                    <MapPin className="w-5 h-5 mr-2 text-purple-600" aria-hidden="true" />
                     {t("bookingPublic.step_location")}
                   </h3>
                   <select
                     id="locationId"
+                    aria-labelledby="booking-location-heading"
                     data-test="booking-location"
                     name="locationId"
                     value={bookingData.locationId}
@@ -820,13 +969,14 @@ export default function SalonBookingPage({
 
               {/* Step 2: Service Selection */}
               <div className="space-y-4">
-                <h3 className="text-lg font-semibold text-gray-900 flex items-center">
-                  <Scissors className="w-5 h-5 mr-2 text-purple-600" />
+                <h3 id="booking-service-heading" className="text-lg font-semibold text-gray-900 flex items-center">
+                  <Scissors className="w-5 h-5 mr-2 text-purple-600" aria-hidden="true" />
                   {t("bookingPublic.step_1")}
                 </h3>
 
                 <select
                   id="serviceId"
+                  aria-labelledby="booking-service-heading"
                   data-test="booking-service"
                   name="serviceId"
                   value={bookingData.serviceId}
@@ -854,17 +1004,18 @@ export default function SalonBookingPage({
 
               {/* Step 3: Professional Selection */}
               <div className="space-y-4">
-                <h3 className="text-lg font-semibold text-gray-900 flex items-center">
-                  <User className="w-5 h-5 mr-2 text-purple-600" />
+                <h3 id="booking-professional-heading" className="text-lg font-semibold text-gray-900 flex items-center">
+                  <User className="w-5 h-5 mr-2 text-purple-600" aria-hidden="true" />
                   {t("bookingPublic.step_2")}
                 </h3>
 
                 {bookingData.serviceId ? (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                  <div role="group" aria-labelledby="booking-professional-heading" className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                     {filteredProfessionals.map((professional) => (
                       <button
                         key={professional.id}
                         type="button"
+                        // The choice is said, not only shown in colour.
                         aria-pressed={bookingData.professionalId === professional.id}
                         onClick={() =>
                           setBookingData((prev) => ({
@@ -924,8 +1075,8 @@ export default function SalonBookingPage({
               {/* Step 4: Date Selection */}
               <div className="space-y-4">
                 <h3 className="text-lg font-semibold text-gray-900 flex items-center">
-                  <Calendar className="w-5 h-5 mr-2 text-purple-600" />
-                  {t("bookingPublic.step_3")}
+                  <Calendar className="w-5 h-5 mr-2 text-purple-600" aria-hidden="true" />
+                  <label htmlFor="date">{t("bookingPublic.step_3")}</label>
                 </h3>
 
                 <input
@@ -937,6 +1088,8 @@ export default function SalonBookingPage({
                   onChange={handleDateChange}
                   required
                   min={today || undefined}
+                  // No later than the service can be booked online.
+                  max={lastDay || undefined}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors"
                 />
 
@@ -949,13 +1102,13 @@ export default function SalonBookingPage({
 
               {/* Step 5: Time Selection */}
               <div className="space-y-4">
-                <h3 className="text-lg font-semibold text-gray-900 flex items-center">
-                  <Clock className="w-5 h-5 mr-2 text-purple-600" />
+                <h3 id="booking-time-heading" className="text-lg font-semibold text-gray-900 flex items-center">
+                  <Clock className="w-5 h-5 mr-2 text-purple-600" aria-hidden="true" />
                   {t("bookingPublic.select_time")}
                 </h3>
 
                 {slotsView === "ready" ? (
-                  <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                  <div role="group" aria-labelledby="booking-time-heading" className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
                     {availableSlots.map((slot, index) => (
                       <button
                         key={index}
@@ -982,7 +1135,9 @@ export default function SalonBookingPage({
                   </div>
                 ) : (
                   <div className="text-center py-8 text-gray-500" aria-live="polite">
-                    {t(`bookingPublic.${slotsView}`)}
+                    {slotsView === "beyond_window" && lastDay
+                      ? t("bookingPublic.beyond_window", { date: formatDate(lastDay) })
+                      : t(`bookingPublic.${slotsView}`)}
                   </div>
                 )}
               </div>
@@ -1069,6 +1224,8 @@ export default function SalonBookingPage({
                 </p>
               </div>
             </form>
+            </>
+            )}
           </div>
           )}
 
@@ -1307,9 +1464,11 @@ export default function SalonBookingPage({
                 {t("settings.language")}:
               </span>
               <button
+                type="button"
+                aria-pressed={language === "es"}
                 onClick={() => {
                   setLanguage("es");
-                  localStorage.setItem("kira_language", "es");
+                  rememberLanguage("es");
                 }}
                 className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
                   language === "es"
@@ -1320,9 +1479,11 @@ export default function SalonBookingPage({
                 {t("common.spanish")}
               </button>
               <button
+                type="button"
+                aria-pressed={language === "en"}
                 onClick={() => {
                   setLanguage("en");
-                  localStorage.setItem("kira_language", "en");
+                  rememberLanguage("en");
                 }}
                 className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
                   language === "en"

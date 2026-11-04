@@ -198,7 +198,9 @@ export class SmsService {
    * with "KiraRoom:", a name the client never booked with.
    */
   private signature(data: AppointmentSmsData): string {
-    return (data.salonName ?? "").replace(/s+/g, " ").trim().slice(0, 40) || "Tu salón";
+    // Runs of whitespace, not of the letter "s" (it was /s+/g: "Peluquería
+    // Rosas" went out as "Peluquería Ro a").
+    return (data.salonName ?? "").replace(/\s+/g, " ").trim().slice(0, 40) || "Tu salón";
   }
 
   /**

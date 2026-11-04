@@ -11,6 +11,7 @@ import { NotificationType } from './dto';
 import { WhatsAppTemplateService } from '../whatsapp/whatsapp-template.service';
 import { withBookedService } from '../appointments/appointment-snapshot';
 import { bookingPlace } from '../multi-location/client-locations';
+import { publicBookingSmsHeld } from '../appointments/public-booking-sms-cap';
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -297,7 +298,11 @@ export class NotificationsScheduler {
       outcomes.push(await this.emailReminder(appointment, kind));
     }
 
-    if (appointment.client.phone && (await this.allowed(appointment, kind, 'sms'))) {
+    if (
+      appointment.client.phone &&
+      (await this.allowed(appointment, kind, 'sms')) &&
+      !(await this.smsHeldAtBooking(appointment))
+    ) {
       outcomes.push(
         this.smsService.isConfigured()
           ? await this.attempt(appointment, kind, 'SMS', async () => {
@@ -349,6 +354,8 @@ export class NotificationsScheduler {
         time: appointment.scheduledTime,
         salonName: appointment.tenant.name,
         salonAddress: place?.address || this.formatAddress(appointment.tenant),
+        // And a number to call, as in the confirmation.
+        ...(place?.phone || appointment.tenant?.phone ? { salonPhone: place?.phone || appointment.tenant.phone } : {}),
         ...(place ? { locationName: place.name } : {}),
       }, kind.hoursBefore, {
         // A retry after a send that timed out but went through is not delivered twice.
@@ -425,6 +432,18 @@ export class NotificationsScheduler {
   /**
    * Helper method to format tenant address
    */
+  /**
+   * A booking from outside the salon whose confirmation SMS went over the
+   * daily caps (appointments/public-booking-sms-cap.ts): its reminders are
+   * not texted either. Only online and widget bookings can have been held.
+   */
+  private async smsHeldAtBooking(appointment: any): Promise<boolean> {
+    if (appointment.source !== 'online' && appointment.source !== 'widget') return false;
+    const held = await publicBookingSmsHeld(this.prisma as any, appointment.id);
+    if (held) this.logger.warn(`SMS reminder for appointment ${appointment.id} held back: daily SMS cap at booking`);
+    return held;
+  }
+
   private formatAddress(tenant: any): string {
     const parts = [
       tenant.street,

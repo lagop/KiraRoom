@@ -35,6 +35,7 @@ import {
   localTomorrow,
   privacyPolicyUrl,
   slotsState,
+  splitClientName,
   weekdayKey,
   whatsappPromotionsLabel,
 } from "./public-booking";
@@ -151,10 +152,23 @@ const allTaken = [{ time: "10:00", available: false }];
 check("nothing free", slotsState({ ...base, slots: allTaken }), "no_slots");
 check("nothing free on a closed day", slotsState({ ...base, slots: [], closed: true }), "closed_day");
 check("a closed day with free slots still shows them", slotsState({ ...base, closed: true }), "ready");
+// R19: past the service's maxAdvanceBooking it is "too far ahead", not "full".
+check("a day past the last bookable one", slotsState({ ...base, slots: [], lastDay: "2026-11-01" }), "beyond_window");
+check("even while the slots load", slotsState({ ...base, loading: true, lastDay: "2026-11-01" }), "beyond_window");
+check("the last bookable day itself", slotsState({ ...base, slots: [], lastDay: "2026-11-02" }), "no_slots");
+check("no window known (older server)", slotsState({ ...base, slots: [], lastDay: null }), "no_slots");
+
+console.log("\n=== the name box (R12) ===");
+check("one word: a first name, no last name", splitClientName("Ana"), { firstName: "Ana", lastName: "" });
+check("leading and doubled spaces", splitClientName("  Ana   García  López "), { firstName: "Ana", lastName: "García López" });
+check("empty", splitClientName("   "), { firstName: "", lastName: "" });
+const embedSrc = fs.readFileSync(path.join(ROOT, "app/embed/[token]/page.tsx"), "utf8");
+check("the widget no longer repeats the first name as the last", embedSrc.includes("|| firstName"), false);
+check("the widget splits the name like the page", embedSrc.includes("splitClientName(name)"), true);
 
 const es = JSON.parse(fs.readFileSync(path.join(ROOT, "messages/es.json"), "utf8"));
 const en = JSON.parse(fs.readFileSync(path.join(ROOT, "messages/en.json"), "utf8"));
-for (const key of ["select_service_first", "select_professional_first", "loading_slots", "closed_day", "no_slots"]) {
+for (const key of ["select_service_first", "select_professional_first", "loading_slots", "closed_day", "no_slots", "beyond_window"]) {
   check(`bookingPublic.${key} exists in es and en`, [typeof es.bookingPublic[key], typeof en.bookingPublic[key]], ["string", "string"]);
 }
 

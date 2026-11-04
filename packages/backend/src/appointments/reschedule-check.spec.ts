@@ -237,6 +237,9 @@ describe("moving an appointment (PATCH /appointments/:id)", () => {
           throw new Error("saved");
         }),
       },
+      // The booking lock a move takes, and its transaction (R16).
+      $executeRaw: jest.fn(async () => 0),
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
     };
     const stub = {} as any;
     const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
@@ -257,6 +260,32 @@ describe("moving an appointment (PATCH /appointments/:id)", () => {
     const { svc, prisma } = service({});
     await svc.update(owner, "a1", { scheduledTime: "12:00" } as any).catch(() => undefined);
     expect(prisma.appointment.update).toHaveBeenCalled();
+  });
+
+  // R16: a drag to 10:00 and an online booking for 10:00 could both pass
+  // their checks. The move now checks and saves under the same per-salon,
+  // per-day lock as online bookings (`booking:<tenant>:<day>`).
+  it("checks and saves under the online booking's lock, for the day it leaves and the one it lands on", async () => {
+    const { svc, prisma } = service({});
+    const order: string[] = [];
+    prisma.$executeRaw.mockImplementation(async (_sql: unknown, key: string) => {
+      order.push(`lock ${key}`);
+      return 0;
+    });
+    prisma.appointment.findMany.mockImplementation(async () => {
+      order.push("check");
+      return [];
+    });
+    prisma.appointment.update.mockImplementation(async () => {
+      order.push("save");
+      throw new Error("saved");
+    });
+    await svc.update(owner, "a1", { scheduledDate: "2026-11-09", scheduledTime: "12:00" } as any).catch(() => undefined);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    const locks = order.filter((o) => o.startsWith("lock"));
+    expect(locks).toEqual([`lock booking:${TENANT}:${DAY}`, `lock booking:${TENANT}:2026-11-09`]);
+    expect(order.indexOf(locks[1])).toBeLessThan(order.indexOf("check"));
+    expect(order.indexOf("check")).toBeLessThan(order.indexOf("save"));
   });
 
   it("the same day and time resent with a note is not a move", async () => {
