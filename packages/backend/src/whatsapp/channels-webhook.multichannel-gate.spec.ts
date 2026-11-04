@@ -190,3 +190,50 @@ describe('ChannelsWebhookController: Telegram', () => {
     expect(receptionist.enqueue).not.toHaveBeenCalled();
   });
 });
+
+describe('ChannelsWebhookController: what is not answered (M10)', () => {
+  it('a like, a sticker, a story mention or an unsupported message is not queued', async () => {
+    const { ctrl, receptionist } = setup();
+    for (const extra of [
+      { text: undefined, sticker_id: 369239263222822, attachments: [{ type: 'image', payload: { sticker_id: 1 } }] },
+      { text: undefined, attachments: [{ type: 'story_mention', payload: { url: 'u' } }] },
+      { text: undefined, is_unsupported: true },
+    ]) {
+      await ctrl.handleMeta(messengerBody(undefined as any, extra), { headers: {} } as any, res());
+    }
+    expect(receptionist.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('the "Empezar" button is queued as a hello', async () => {
+    const { ctrl, receptionist } = setup();
+    const body = {
+      object: 'page',
+      entry: [
+        {
+          id: 'page-1',
+          messaging: [
+            { sender: { id: 'psid-1' }, recipient: { id: 'page-1' }, postback: { mid: 'pb1', title: 'Empezar', payload: 'GET_STARTED' } },
+          ],
+        },
+      ],
+    };
+    await ctrl.handleMeta(body, { headers: {} } as any, res());
+    expect(receptionist.enqueue).toHaveBeenCalledWith(
+      TENANT,
+      expect.objectContaining({ channel: 'facebook', id: 'pb1', text: 'Hola', hasAttachment: false }),
+    );
+  });
+
+  it('a Telegram sticker is not queued', async () => {
+    const { ctrl, receptionist } = setup();
+    const r = res();
+    await ctrl.handleTelegram(
+      TENANT,
+      'sekret',
+      { update_id: 9, message: { message_id: 1, chat: { id: 55, type: 'private' }, from: { id: 55 }, sticker: { file_id: 'x' } } },
+      r,
+    );
+    expect(receptionist.enqueue).not.toHaveBeenCalled();
+    expect(r.json).toHaveBeenCalledWith({ received: true });
+  });
+});

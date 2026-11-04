@@ -49,6 +49,11 @@ describe("WhatsApp webhook: opt-out words anywhere", () => {
     const prisma: any = {
       whatsAppCampaignRecipient: { findFirst: jest.fn(async () => null), updateMany: jest.fn(async () => ({ count: 1 })) },
       $queryRaw: jest.fn(async () => [{ id: "c1" }]),
+      // The BAJA is written down first (M11).
+      whatsAppOptOut: {
+        upsert: jest.fn(async (args: any) => ({ id: "o1", processedAt: null, ...args.create })),
+        update: jest.fn(async () => ({})),
+      },
     };
     const consent: any = { recordMarketingChoice: jest.fn(async () => ({ status: "refused" })) };
     const s = new WhatsAppService(prisma, {} as any, {} as any, consent, receptionist, {} as any);

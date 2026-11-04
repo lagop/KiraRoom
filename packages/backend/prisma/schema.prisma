@@ -156,6 +156,10 @@ model Tenant {
   consents                      Consent[]
   reviews                       Review[]
   whatsappConnection            WhatsAppConnection?
+  /// Messenger Page, Instagram account and Telegram bot of the salon (unique across salons).
+  channelAccounts               ChannelAccount[]
+  /// "BAJA" replies to the salon's WhatsApp, kept until applied.
+  whatsappOptOuts               WhatsAppOptOut[]
   /// The salon's own domain for its public page (see CustomDomain).
   customDomain                  CustomDomain?
   whatsappCampaigns             WhatsAppCampaign[]
@@ -2791,10 +2795,73 @@ model WhatsAppConnection {
   messagingLimit  Json?
   isActive        Boolean   @default(true)
   lastSyncAt      DateTime?
+  /// KiraRoom's Meta app confirmed as subscribed to the WhatsApp Business account (POST /{waba}/subscribed_apps).
+  webhookSubscribedAt DateTime?
+  /// Why the subscription failed or could not be confirmed, in Spanish; null when it is active.
+  webhookError    String?
+  /// The last webhook event received for this number: the proof that messages arrive.
+  lastInboundAt   DateTime?
+  /// Meta refused the access token (expired, revoked): nothing is sent until the salon reconnects.
+  authErrorAt     DateTime?
+  /// The send result's reason ("meta_190"), see campaigns/meta-account-errors.ts.
+  authError       String?
+  /// When the owner was told about authErrorAt (once per occurrence).
+  attentionNotifiedAt DateTime?
   tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  /// Plus a partial unique index on phoneNumberId for active connections
+  /// (raw SQL in migration 20261104040000: Prisma cannot declare it).
   @@index([phoneNumberId])
   @@map("whatsapp_connections")
+}
+
+/// A "BAJA" (opt-out) reply to the salon's WhatsApp, written before anything
+/// else is done with it so it cannot be lost: then applied to the clients
+/// with that number, and retried by a sweep while that fails. Unique per
+/// message, so Meta's retries are idempotent. The phone is cleared once the
+/// opt-out is applied (the consent record keeps the proof).
+model WhatsAppOptOut {
+  id           String    @id @default(uuid())
+  createdAt    DateTime  @default(now())
+  tenantId     String
+  /// Meta's message id (wamid).
+  messageId    String
+  /// The sender's WhatsApp id (digits), until the opt-out is applied.
+  phone        String
+  processedAt  DateTime?
+  clientsFound Int?
+  attempts     Int       @default(0)
+  lastError    String?
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, messageId])
+  @@index([processedAt])
+  @@map("whatsapp_opt_outs")
+}
+
+/// A Facebook Page, Instagram professional account or Telegram bot connected
+/// to a salon. The unique index keeps one account in one salon (the lookups
+/// by JSON path on Tenant.features could not, and raced), and inbound
+/// messages are routed by it. The health of the Page or bot token lives
+/// here too (on the facebook row for the Page token Instagram shares).
+model ChannelAccount {
+  id                  String      @id @default(uuid())
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+  tenantId            String
+  channel             ChatChannel
+  /// Page id, Instagram account id or bot id.
+  externalId          String
+  /// Meta / Telegram refused the token (expired, revoked).
+  authErrorAt         DateTime?
+  authError           String?
+  /// When the owner was told about authErrorAt (once per occurrence).
+  attentionNotifiedAt DateTime?
+  tenant              Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([channel, externalId])
+  @@unique([tenantId, channel])
+  @@map("channel_accounts")
 }
 
 enum WhatsAppCampaignStatus {

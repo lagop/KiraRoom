@@ -565,7 +565,15 @@
       "metaResultNoPages": "Tu cuenta de Facebook no gestiona ninguna página, o no diste permiso para usarla. Crea la página del salón y vuelve a intentarlo.",
       "metaResultDenied": "No se dio permiso en Facebook. No se ha conectado nada.",
       "metaResultError": "No se pudo completar la conexión con Facebook. Vuelve a intentarlo.",
-      "telegramConnectedAs": "Bot: @{username}"
+      "telegramConnectedAs": "Bot: @{username}",
+      "metaResultNoInstagramPermission": "Página conectada: el recepcionista ya responde en Messenger. Instagram no, porque no diste el permiso de mensajes de Instagram; vuelve a conectar y acéptalo si quieres usarlo.",
+      "metaResultInstagramTaken": "Messenger conectado. La cuenta de Instagram de esta página ya está conectada a otro salón de KiraRoom, así que Instagram no se ha conectado.",
+      "metaResultPageTaken": "Esta página de Facebook ya está conectada a otro salón de KiraRoom. No se ha conectado nada.",
+      "metaResultSubscribeFailed": "Facebook no permitió que KiraRoom reciba los mensajes de esta página. No se ha conectado nada; comprueba que eres administradora de la página y vuelve a intentarlo.",
+      "metaResultMissingPermissions": "No diste a KiraRoom el permiso para gestionar los mensajes de la página. No se ha conectado nada; vuelve a conectar y acepta todos los permisos.",
+      "metaResultSession": "La conexión con Facebook se empezó en otra ventana o caducó. No se ha conectado nada; vuelve a pulsar «Conectar» desde aquí.",
+      "metaAccessLost": "Facebook ya no acepta el permiso de KiraRoom sobre esta página (ha caducado o se ha retirado). La recepcionista no contesta en Messenger ni en Instagram: vuelve a conectarla.",
+      "telegramAccessLost": "Telegram ya no reconoce el token de este bot (se ha cambiado o revocado en @BotFather). La recepcionista no contesta en Telegram: vuelve a conectarlo."
     },
     "currentPlan": "Plan actual",
     "currentPlanLabel": "Tu plan actual",
@@ -3214,7 +3222,6 @@
       "wabaId": "ID de la cuenta de WhatsApp Business",
       "phoneNumberId": "ID del número en Meta",
       "accessToken": "Token de acceso",
-      "displayPhone": "Número de teléfono (con prefijo, por ejemplo +34…)",
       "displayName": "Nombre que verán tus clientas (opcional)"
     },
     "templatesTitle": "Plantillas de mensaje",
@@ -3232,7 +3239,8 @@
       "approved": "Aprobada",
       "rejected": "Rechazada",
       "pending": "En revisión",
-      "notSubmitted": "Sin enviar"
+      "notSubmitted": "Sin enviar",
+      "unknown": "No se pudo consultar"
     },
     "submitTemplates": "Enviar a revisión",
     "templatesSubmitted": "Plantillas enviadas a Meta para su revisión",
@@ -3252,7 +3260,23 @@
     "connecting": "Conectando…",
     "connected": "WhatsApp conectado",
     "connectError": "No se ha podido conectar WhatsApp",
-    "tokenStored": "El token de acceso se guarda cifrado y no se vuelve a mostrar; solo se usa para enviar tus mensajes de WhatsApp."
+    "tokenStored": "El token de acceso se guarda cifrado y no se vuelve a mostrar; solo se usa para enviar tus mensajes de WhatsApp.",
+    "templatesUnknown": "No hemos podido preguntar a Meta por el estado de las plantillas. Vuelve a intentarlo más tarde; mientras tanto los avisos salen por el canal de siempre.",
+    "templatesSubmitPartial": "Meta no aceptó algunas plantillas",
+    "receivingLabel": "Recibiendo mensajes",
+    "receivingYes": "Sí",
+    "receivingNo": "No",
+    "receivingNoHelp": "Meta todavía no envía a KiraRoom los mensajes de este número: la recepcionista no los contestará y no se registrarán las respuestas «BAJA».",
+    "lastInbound": "Último aviso de Meta recibido: {date}",
+    "accessLostTitle": "Meta ha retirado el acceso de KiraRoom",
+    "checkAgain": "Comprobar de nuevo",
+    "checking": "Comprobando…",
+    "checkOk": "La conexión con Meta funciona",
+    "checkError": "La conexión con Meta sigue sin funcionar",
+    "reconnectTitle": "Actualizar el token de acceso",
+    "reconnectIntro": "Pega un token nuevo (un token de usuario del sistema que no caduque) del Administrador comercial de Meta. Los demás datos de la conexión se mantienen.",
+    "reconnect": "Guardar el token nuevo",
+    "webhookWarning": "Conectado, pero Meta no envía los mensajes a KiraRoom"
   },
   "notifications": {
     "title": "Notificaciones",

@@ -1,27 +1,43 @@
 import { WhatsAppReceptionistService, toWhatsAppText } from "./whatsapp-receptionist.service";
-import { WhatsAppService } from "./whatsapp.service";
+import { OptOutNotRecordedError, WhatsAppService } from "./whatsapp.service";
+import { RedisService } from "../common/cache/redis.service";
+
+/** RedisService with nothing configured: its in-memory fallback, as in a test or dev box. */
+const memoryRedis = () => new RedisService({ get: () => undefined } as any);
 
 /**
  * WhatsApp messages to a salon's number used to be dropped (the webhook only
  * looked for opt-out words). They now reach the receptionist.
  */
-function setup(over: { enabled?: boolean; reply?: any; active?: boolean } = {}) {
+function setup(over: { enabled?: boolean; reply?: any; active?: boolean; authErrorAt?: Date; redis?: RedisService; sendText?: any } = {}) {
   const prisma: any = {
     whatsAppConnection: {
-      findUnique: jest.fn(async () => ({ phoneNumberId: "pn1", accessTokenEnc: "enc", isActive: over.active ?? true })),
+      findUnique: jest.fn(async () => ({
+        phoneNumberId: "pn1",
+        accessTokenEnc: "enc",
+        isActive: over.active ?? true,
+        authErrorAt: over.authErrorAt ?? null,
+      })),
     },
     tenant: { findUnique: jest.fn(async () => ({ phone: "+34 928 000 000" })) },
   };
   const meta: any = {
     decryptToken: jest.fn(() => "token"),
-    sendText: jest.fn(async () => ({ messages: [{ id: "out" }] })),
+    sendText: over.sendText ?? jest.fn(async () => ({ messages: [{ id: "out" }] })),
     markRead: jest.fn(async () => undefined),
   };
   const flags: any = { isEnabled: jest.fn(async () => over.enabled ?? true) };
   const receptionist: any = {
     sendMessage: jest.fn(async () => over.reply ?? { id: "m1", content: "Tenemos hueco a las **10:00**." }),
   };
-  return { service: new WhatsAppReceptionistService(prisma, meta, flags, receptionist), meta, receptionist, flags };
+  const health: any = { whatsAppError: jest.fn(async () => true) };
+  return {
+    service: new WhatsAppReceptionistService(prisma, meta, flags, receptionist, over.redis ?? memoryRedis(), health),
+    meta,
+    receptionist,
+    flags,
+    health,
+  };
 }
 
 const msg = (over: any = {}) => ({ id: "wamid.1", from: "34600111222", type: "text", text: "¿Tenéis hueco mañana?", ...over });
@@ -50,6 +66,17 @@ describe("WhatsAppReceptionistService", () => {
     expect(receptionist.sendMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("remembers it across a restart or another instance: the record is in Redis, not in the process (M12)", async () => {
+    const redis = memoryRedis();
+    const first = setup({ redis });
+    await first.service.enqueue("t1", msg());
+    // A new process (after a deploy), same Redis.
+    const second = setup({ redis });
+    await second.service.enqueue("t1", msg());
+    expect(first.receptionist.sendMessage).toHaveBeenCalledTimes(1);
+    expect(second.receptionist.sendMessage).not.toHaveBeenCalled();
+  });
+
   it("answers one sender's messages in the order they arrived", async () => {
     const order: string[] = [];
     const { service, receptionist } = setup();
@@ -73,11 +100,28 @@ describe("WhatsAppReceptionistService", () => {
     expect(inactive.meta.sendText).not.toHaveBeenCalled();
   });
 
-  it("says it only reads text when sent audio or images", async () => {
+  it("answers a voice note or a photo with a short text: write, or call the salon (M10)", async () => {
     const { service, meta, receptionist } = setup();
-    await service.enqueue("t1", msg({ type: "audio", text: undefined }));
+    await service.enqueue("t1", msg({ type: "media", text: undefined }));
     expect(receptionist.sendMessage).not.toHaveBeenCalled();
-    expect(meta.sendText.mock.calls[0][3]).toMatch(/solo puedo leer mensajes de texto/);
+    expect(meta.sendText.mock.calls[0][3]).toBe(
+      "No puedo escuchar audios ni ver fotos o archivos. Escríbeme lo que necesitas y te ayudo, o llama al salón al +34 928 000 000.",
+    );
+  });
+
+  it("spends no AI while Meta refuses the salon's token (M5)", async () => {
+    const { service, meta, receptionist } = setup({ authErrorAt: new Date() });
+    await service.enqueue("t1", msg());
+    expect(receptionist.sendMessage).not.toHaveBeenCalled();
+    expect(meta.sendText).not.toHaveBeenCalled();
+  });
+
+  it("a reply Meta refuses for the token marks the connection (M5)", async () => {
+    const { service, health } = setup({
+      sendText: jest.fn(async () => ({ error: { code: 190, message: "Session has expired" } })),
+    });
+    await service.enqueue("t1", msg());
+    expect(health.whatsAppError).toHaveBeenCalledWith("t1", 190);
   });
 
   it("apologises with the salon's phone when the receptionist fails", async () => {
@@ -86,10 +130,13 @@ describe("WhatsAppReceptionistService", () => {
     expect(meta.sendText.mock.calls[0][3]).toContain("+34 928 000 000");
   });
 
-  it("caps how many messages one sender can trigger in an hour", async () => {
-    const { service, receptionist } = setup();
-    for (let i = 0; i < 35; i++) await service.enqueue("t1", msg({ id: `m${i}` }));
-    expect(receptionist.sendMessage).toHaveBeenCalledTimes(30);
+  it("caps how many messages one sender can trigger in an hour, across restarts (M12)", async () => {
+    const redis = memoryRedis();
+    const { service, receptionist } = setup({ redis });
+    for (let i = 0; i < 20; i++) await service.enqueue("t1", msg({ id: `m${i}` }));
+    const restarted = setup({ redis });
+    for (let i = 20; i < 35; i++) await restarted.service.enqueue("t1", msg({ id: `m${i}` }));
+    expect(receptionist.sendMessage.mock.calls.length + restarted.receptionist.sendMessage.mock.calls.length).toBe(30);
   });
 });
 
@@ -102,22 +149,43 @@ describe("toWhatsAppText", () => {
 });
 
 describe("WhatsApp webhook routing", () => {
-  function service() {
+  function service(over: { optOutUpsert?: any; consent?: any } = {}) {
     const receptionist: any = { enqueue: jest.fn(async () => undefined) };
+    const optOuts = new Map<string, any>();
     const prisma: any = {
       client: { findFirst: jest.fn(async () => null) },
       whatsAppCampaignRecipient: { findFirst: jest.fn(async () => null), updateMany: jest.fn(async () => ({ count: 1 })) },
       // The client file says "600 111 222"; Meta sends "34600111222".
       $queryRaw: jest.fn(async () => [{ id: "c1" }]),
+      whatsAppOptOut: {
+        upsert: jest.fn(
+          over.optOutUpsert ??
+            (async (args: any) => {
+              const key = `${args.where.tenantId_messageId.tenantId}:${args.where.tenantId_messageId.messageId}`;
+              if (!optOuts.has(key)) {
+                optOuts.set(key, { id: `o${optOuts.size + 1}`, processedAt: null, attempts: 0, ...args.create });
+              }
+              return optOuts.get(key);
+            }),
+        ),
+        update: jest.fn(async (args: any) => {
+          const row = [...optOuts.values()].find((r) => r.id === args.where.id);
+          const data = { ...args.data };
+          if (data.attempts?.increment) data.attempts = row.attempts + data.attempts.increment;
+          Object.assign(row, data);
+          return row;
+        }),
+        findMany: jest.fn(async () => [...optOuts.values()].filter((r) => !r.processedAt)),
+      },
     };
-    const consent: any = { recordMarketingChoice: jest.fn(async () => ({ status: "refused" })) };
+    const consent: any = over.consent ?? { recordMarketingChoice: jest.fn(async () => ({ status: "refused" })) };
     const s = new WhatsAppService(prisma, {} as any, {} as any, consent, receptionist, {} as any);
-    return { s, receptionist, prisma, consent };
+    return { s, receptionist, prisma, consent, optOuts };
   }
-  const change = (body: string) => ({
+  const change = (body: string, message: any = {}) => ({
     value: {
       contacts: [{ wa_id: "34600111222", profile: { name: "Ana" } }],
-      messages: [{ id: "wamid.9", from: "34600111222", type: "text", text: { body } }],
+      messages: [{ id: "wamid.9", from: "34600111222", type: "text", text: { body }, ...message }],
     },
   });
 
@@ -147,5 +215,67 @@ describe("WhatsApp webhook routing", () => {
       where: { clientId: "c1", status: "pending" },
       data: { status: "opted_out" },
     });
+  });
+
+  it("writes the BAJA down before anything else, and clears the number once applied (M11)", async () => {
+    const { s, prisma, optOuts } = service();
+    await (s as any).handleChange("t1", change("BAJA"));
+    expect(prisma.whatsAppOptOut.upsert).toHaveBeenCalledWith({
+      where: { tenantId_messageId: { tenantId: "t1", messageId: "wamid.9" } },
+      create: { tenantId: "t1", messageId: "wamid.9", phone: "34600111222" },
+      update: {},
+    });
+    expect(prisma.whatsAppOptOut.upsert.mock.invocationCallOrder[0]).toBeLessThan(
+      prisma.$queryRaw.mock.invocationCallOrder[0],
+    );
+    expect([...optOuts.values()][0]).toMatchObject({ processedAt: expect.any(Date), clientsFound: 1, phone: "" });
+  });
+
+  it("Meta delivering the same BAJA again changes nothing (M11)", async () => {
+    const { s, consent } = service();
+    await (s as any).handleChange("t1", change("BAJA"));
+    await (s as any).handleChange("t1", change("BAJA"));
+    expect(consent.recordMarketingChoice).toHaveBeenCalledTimes(1);
+  });
+
+  it("if the BAJA cannot even be written, the webhook fails so Meta retries it (M11)", async () => {
+    const { s } = service({
+      optOutUpsert: async () => {
+        throw new Error("db down");
+      },
+    });
+    await expect((s as any).handleChange("t1", change("BAJA"))).rejects.toBeInstanceOf(OptOutNotRecordedError);
+  });
+
+  it("a BAJA whose consent could not be recorded stays pending and the sweep applies it (M11)", async () => {
+    const consent = {
+      recordMarketingChoice: jest
+        .fn()
+        .mockRejectedValueOnce(new Error("deadlock"))
+        .mockResolvedValue({ status: "refused" }),
+    };
+    const { s, optOuts } = service({ consent });
+    await (s as any).handleChange("t1", change("BAJA"));
+    const row = [...optOuts.values()][0];
+    expect(row).toMatchObject({ processedAt: null, attempts: 1, lastError: "deadlock", phone: "34600111222" });
+    expect(await s.retryPendingOptOuts()).toBe(1);
+    expect(row.processedAt).toBeInstanceOf(Date);
+    expect(consent.recordMarketingChoice).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores reactions, stickers, system and unsupported messages: no reply, no AI (M10)", async () => {
+    const { s, receptionist } = service();
+    for (const type of ["reaction", "sticker", "system", "unsupported"]) {
+      await (s as any).handleChange("t1", change("", { type, text: undefined, id: `w-${type}` }));
+    }
+    expect(receptionist.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("passes a voice note on as media, and a reminder's quick-reply button as its text (M10)", async () => {
+    const { s, receptionist } = service();
+    await (s as any).handleChange("t1", change("", { type: "audio", text: undefined, id: "w-a" }));
+    await (s as any).handleChange("t1", change("", { type: "button", text: undefined, button: { text: "Confirmar" }, id: "w-b" }));
+    expect(receptionist.enqueue.mock.calls[0][1]).toMatchObject({ type: "media", text: undefined });
+    expect(receptionist.enqueue.mock.calls[1][1]).toMatchObject({ type: "text", text: "Confirmar" });
   });
 });

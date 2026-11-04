@@ -1,7 +1,9 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Optional } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
+import { ChannelHealthService } from "../channel-health/channel-health.service";
 import { normalizePhone } from "../common/phone";
 import { MetaCloudApiClient } from "./meta-cloud-api.client";
+import { accountLevelReason } from "./campaigns/meta-account-errors";
 import {
   APPOINTMENT_CANCELLED,
   APPOINTMENT_CONFIRMED,
@@ -61,12 +63,22 @@ export class WhatsAppTemplateService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly meta: MetaCloudApiClient,
+    // Optional so the unit tests that build this service by hand still can.
+    @Optional() private readonly health?: ChannelHealthService,
   ) {}
 
-  /** Asks Meta to review every standard template. Ones that exist already are left alone. */
+  /**
+   * Asks Meta to review every standard template. Ones that exist already are
+   * left alone; one Meta refused comes back as "ERROR: <Meta's message>".
+   */
   async submitStandardTemplates(tenantId: string): Promise<Record<string, string>> {
     const conn = await this.connection(tenantId);
     if (!conn?.wabaId) return {};
+    // Meta already refused the token: every request would fail the same way.
+    if (conn.authErrorAt) {
+      const reason = accountLevelReason(conn.authError ?? "meta_190") ?? "meta_190";
+      return Object.fromEntries(STANDARD_TEMPLATES.map((t) => [t.name, `ERROR: ${reason}`]));
+    }
     const token = this.meta.decryptToken(conn.accessTokenEnc);
     const result: Record<string, string> = {};
     for (const t of STANDARD_TEMPLATES) {
@@ -84,6 +96,7 @@ export class WhatsAppTemplateService {
   async submitTemplate(tenantId: string, template: TemplateDefinition): Promise<{ status: string } | { error: string }> {
     const conn = await this.connection(tenantId);
     if (!conn?.isActive || !conn.wabaId) return { error: "not_connected" };
+    if (conn.authErrorAt) return { error: accountLevelReason(conn.authError ?? "meta_190") ?? "meta_190" };
     const status = await this.create(tenantId, this.meta.decryptToken(conn.accessTokenEnc), conn.wabaId, template);
     this.statusCache.delete(tenantId);
     return status.startsWith("ERROR: ") ? { error: status.slice("ERROR: ".length) } : { status };
@@ -94,29 +107,59 @@ export class WhatsAppTemplateService {
     if (!res?.error) return res?.status ?? "PENDING";
     // 2388024 / "already exists": submitted before, keep its status.
     const exists = /already exists|2388024/i.test(`${res.error.code} ${res.error.message}`);
-    if (!exists) this.logger.warn(`Template ${t.name} for tenant ${tenantId} refused: ${res.error.message}`);
+    if (!exists) {
+      this.logger.warn(`Template ${t.name} for tenant ${tenantId} refused: ${res.error.message}`);
+      await this.health?.whatsAppError(tenantId, res.error.code);
+    }
     return exists ? "EXISTS" : `ERROR: ${res.error.message}`;
   }
 
   /** Meta's review status of each template on the salon's account (cached for 30 min). */
   async statuses(tenantId: string): Promise<Record<string, string>> {
+    return (await this.readStatuses(tenantId)).statuses;
+  }
+
+  /**
+   * The statuses, and whether Meta could be asked. An error from Meta used
+   * to become an empty list, cached for 30 minutes: every template then
+   * showed "Sin enviar" (and was sent for review again) when the real
+   * problem was an expired token or a wrong account id. Errors are no
+   * longer cached, and say so.
+   */
+  private async readStatuses(tenantId: string): Promise<{ statuses: Record<string, string>; known: boolean }> {
     const cached = this.statusCache.get(tenantId);
-    if (cached && Date.now() - cached.at < STATUS_TTL_MS) return cached.statuses;
+    if (cached && Date.now() - cached.at < STATUS_TTL_MS) return { statuses: cached.statuses, known: true };
     const conn = await this.connection(tenantId);
-    if (!conn?.wabaId) return {};
-    const list = await this.meta.listTemplates(this.meta.decryptToken(conn.accessTokenEnc), conn.wabaId);
+    if (!conn?.wabaId) return { statuses: {}, known: true };
+    if (conn.authErrorAt) return { statuses: {}, known: false };
+    let list: any;
+    try {
+      list = await this.meta.listTemplates(this.meta.decryptToken(conn.accessTokenEnc), conn.wabaId);
+    } catch (err) {
+      this.logger.warn(`Templates of tenant ${tenantId} could not be read: ${(err as Error).message}`);
+      return { statuses: {}, known: false };
+    }
+    if (list?.error) {
+      this.logger.warn(`Templates of tenant ${tenantId} could not be read: ${list.error.code} ${list.error.message}`);
+      await this.health?.whatsAppError(tenantId, list.error.code);
+      return { statuses: {}, known: false };
+    }
     const statuses: Record<string, string> = {};
     for (const t of list?.data ?? []) statuses[`${t.name}:${t.language}`] = t.status;
     this.statusCache.set(tenantId, { at: Date.now(), statuses });
-    return statuses;
+    return { statuses, known: true };
   }
 
-  /** Review status of KiraRoom's standard templates, for the settings page. */
+  /**
+   * Review status of KiraRoom's standard templates, for the settings page:
+   * UNKNOWN for all when Meta could not be asked (the page then says so
+   * instead of "Sin enviar").
+   */
   async standardStatus(tenantId: string): Promise<Array<{ name: string; status: string }>> {
-    const statuses = await this.statuses(tenantId);
+    const { statuses, known } = await this.readStatuses(tenantId);
     return STANDARD_TEMPLATES.map((t) => ({
       name: t.name,
-      status: statuses[`${t.name}:${t.language}`] ?? "NOT_SUBMITTED",
+      status: known ? (statuses[`${t.name}:${t.language}`] ?? "NOT_SUBMITTED") : "UNKNOWN",
     }));
   }
 
@@ -165,6 +208,7 @@ export class WhatsAppTemplateService {
   async canSend(tenantId: string, template: TemplateDefinition): Promise<{ ok: boolean; reason?: string }> {
     const conn = await this.connection(tenantId);
     if (!conn?.isActive || !conn.phoneNumberId) return { ok: false, reason: "not_connected" };
+    if (conn.authErrorAt) return { ok: false, reason: conn.authError ?? "meta_190" };
     const status = (await this.statuses(tenantId))[`${template.name}:${template.language}`];
     if (status !== "APPROVED") return { ok: false, reason: `template_${(status ?? "missing").toLowerCase()}` };
     return { ok: true };
@@ -198,7 +242,12 @@ export class WhatsAppTemplateService {
   ): Promise<ReminderResult> {
     const conn = await this.connection(tenantId);
     if (!conn?.isActive || !conn.phoneNumberId) return { sent: false, reason: "not_connected" };
-    const status = (await this.statuses(tenantId))[`${template.name}:${template.language}`];
+    // Meta refused the token: no call until the salon reconnects (the
+    // caller falls back to another channel; a campaign pauses with the reason).
+    if (conn.authErrorAt) return { sent: false, reason: conn.authError ?? "meta_190" };
+    const { statuses, known } = await this.readStatuses(tenantId);
+    if (!known) return { sent: false, reason: "template_unknown" };
+    const status = statuses[`${template.name}:${template.language}`];
     if (status !== "APPROVED") {
       if (!status) this.autoSubmit(tenantId);
       return { sent: false, reason: `template_${(status ?? "missing").toLowerCase()}` };
@@ -213,7 +262,10 @@ export class WhatsAppTemplateService {
       template.language,
       bodyParameters(values),
     );
-    if (res?.error) return { sent: false, reason: `meta_${res.error.code}` };
+    if (res?.error) {
+      await this.health?.whatsAppError(tenantId, res.error.code);
+      return { sent: false, reason: `meta_${res.error.code}` };
+    }
     return { sent: true, messageId: res?.messages?.[0]?.id };
   }
 
@@ -231,6 +283,7 @@ export class WhatsAppTemplateService {
   ): Promise<ReminderResult> {
     const conn = await this.connection(tenantId);
     if (!conn?.isActive || !conn.phoneNumberId) return { sent: false, reason: "not_connected" };
+    if (conn.authErrorAt) return { sent: false, reason: conn.authError ?? "meta_190" };
     const to = normalizePhone(phone, country ?? "ES").replace(/\D/g, "");
     const res = await this.meta.sendTemplate(
       this.meta.decryptToken(conn.accessTokenEnc),
@@ -240,7 +293,10 @@ export class WhatsAppTemplateService {
       template.language,
       values.length > 0 ? bodyParameters(values) : [],
     );
-    if (res?.error) return { sent: false, reason: `meta_${res.error.code}` };
+    if (res?.error) {
+      await this.health?.whatsAppError(tenantId, res.error.code);
+      return { sent: false, reason: `meta_${res.error.code}` };
+    }
     return { sent: true, messageId: res?.messages?.[0]?.id };
   }
 
@@ -262,8 +318,12 @@ export class WhatsAppTemplateService {
   ): Promise<{ status: string } | { error: string }> {
     const conn = await this.connection(tenantId);
     if (!conn?.isActive || !conn.wabaId) return { error: "not_connected" };
+    if (conn.authErrorAt) return { error: accountLevelReason(conn.authError ?? "meta_190") ?? "meta_190" };
     const res = await this.meta.createTemplate(this.meta.decryptToken(conn.accessTokenEnc), conn.wabaId, payload);
-    if (res?.error) return { error: res.error.message || `Meta ${res.error.code}` };
+    if (res?.error) {
+      await this.health?.whatsAppError(tenantId, res.error.code);
+      return { error: res.error.message || `Meta ${res.error.code}` };
+    }
     return { status: res?.status ?? "PENDING" };
   }
 
@@ -296,7 +356,7 @@ export class WhatsAppTemplateService {
   private connection(tenantId: string) {
     return this.prisma.whatsAppConnection.findUnique({
       where: { tenantId },
-      select: { wabaId: true, phoneNumberId: true, accessTokenEnc: true, isActive: true },
+      select: { wabaId: true, phoneNumberId: true, accessTokenEnc: true, isActive: true, authErrorAt: true, authError: true },
     });
   }
 }

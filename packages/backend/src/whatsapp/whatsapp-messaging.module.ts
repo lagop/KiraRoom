@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { PrismaModule } from "../common/prisma/prisma.module";
 import { MetaCloudApiClient } from "./meta-cloud-api.client";
 import { WhatsAppTemplateService } from "./whatsapp-template.service";
+import { ChannelHealthModule } from "../channel-health/channel-health.module";
 
 /**
  * Sending through a salon's WhatsApp Business number, with no dependency on
@@ -10,8 +11,8 @@ import { WhatsAppTemplateService } from "./whatsapp-template.service";
  * the whole WhatsAppModule there would be a cycle.
  */
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, ChannelHealthModule],
   providers: [MetaCloudApiClient, WhatsAppTemplateService],
-  exports: [MetaCloudApiClient, WhatsAppTemplateService],
+  exports: [MetaCloudApiClient, WhatsAppTemplateService, ChannelHealthModule],
 })
 export class WhatsAppMessagingModule {}

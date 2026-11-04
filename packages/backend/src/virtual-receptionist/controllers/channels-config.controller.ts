@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, Logger, Post, Put, Query, Req, Res, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
 import { Roles } from '../../auth/decorators/roles.decorator';
@@ -10,7 +10,38 @@ import { FeatureGuard } from '../../common/guards/feature.guard';
 import { Feature } from '../../common/decorators/feature.decorator';
 import { UserRole } from '@prisma/client';
 import { ChannelsConfigService } from '../services/channels-config.service';
-import { ChannelConnectionsService } from '../services/channel-connections.service';
+import {
+  ChannelConnectionsService,
+  META_OAUTH_COOKIE,
+  META_OAUTH_COOKIE_PATH,
+  META_OAUTH_TTL_MS,
+} from '../services/channel-connections.service';
+
+/** The login nonce's cookie: httpOnly, only sent to the callback, 15 minutes. */
+function nonceCookieOptions() {
+  return {
+    httpOnly: true,
+    // Local development runs on http://localhost, where a Secure cookie is dropped.
+    secure: process.env.NODE_ENV === 'production',
+    // Lax: sent on the top-level redirect back from facebook.com.
+    sameSite: 'lax' as const,
+    path: META_OAUTH_COOKIE_PATH,
+  };
+}
+
+/** A cookie's value from the header, without a cookie-parsing middleware. */
+function readCookie(header: string | undefined, name: string): string | undefined {
+  for (const part of (header ?? '').split(';')) {
+    const eq = part.indexOf('=');
+    if (eq === -1 || part.slice(0, eq).trim() !== name) continue;
+    try {
+      return decodeURIComponent(part.slice(eq + 1).trim()) || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
 
 const CHANNELS = ['web', 'whatsapp', 'facebook', 'instagram', 'telegram'];
 
@@ -97,11 +128,17 @@ export class ChannelsConfigController {
     return { ...view, availability: this.connections.availability() };
   }
 
-  /** Facebook Login URL: the salon picks the Page (and its Instagram) to connect. */
+  /**
+   * Facebook Login URL: the salon picks the Page (and its Instagram) to
+   * connect. The response also sets the nonce cookie that ties the login to
+   * this browser (M6): a link forwarded to someone else no longer works.
+   */
   @Get('meta/connect')
   @ApiOperation({ summary: 'Start connecting a Facebook Page (Messenger + Instagram)' })
-  metaConnect(@Req() req: any) {
-    return { url: this.connections.metaLoginUrl(req.user.tenantId) };
+  metaConnect(@Req() req: any, @Res({ passthrough: true }) res: Response) {
+    const { url, nonce } = this.connections.startMetaLogin(req.user.tenantId, req.user.id);
+    res.cookie(META_OAUTH_COOKIE, nonce, { ...nonceCookieOptions(), maxAge: META_OAUTH_TTL_MS });
+    return { url };
   }
 
   @Get('meta/pages')
@@ -145,7 +182,8 @@ export class ChannelsConfigController {
 /**
  * Where Facebook Login sends the browser back. Public because the browser
  * comes from facebook.com without our session; the HMAC-signed `state`
- * says which salon started the login, and expires in 15 minutes.
+ * says which salon and user started the login (it expires in 15 minutes),
+ * and the nonce cookie proves this is the browser that started it.
  */
 @ApiTags('virtual-receptionist')
 @Controller('channels/meta')
@@ -158,13 +196,17 @@ export class ChannelsMetaCallbackController {
     @Query('code') code: string,
     @Query('state') state: string,
     @Query('error') error: string,
+    @Req() req: Request,
     @Res() res: Response,
   ) {
     const back = `${this.connections.frontendBase()}/dashboard/settings/channels`;
+    const nonce = readCookie(req.headers?.cookie, META_OAUTH_COOKIE);
+    // One use: the cookie goes whatever the outcome.
+    res.clearCookie(META_OAUTH_COOKIE, nonceCookieOptions());
     if (error || !code || !state) {
       return res.redirect(302, `${back}?meta=${error ? 'denied' : 'error'}`);
     }
-    const { outcome } = await this.connections.completeMetaLogin(code, state);
+    const { outcome } = await this.connections.completeMetaLogin(code, state, nonce);
     return res.redirect(302, `${back}?meta=${outcome}`);
   }
 }

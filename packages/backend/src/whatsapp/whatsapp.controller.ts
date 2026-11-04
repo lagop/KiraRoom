@@ -1,16 +1,13 @@
-import { ParseUUIDPipe, Controller, Get, Post, Delete, Body, Param, Req, UseGuards, Query, Headers, Res, BadRequestException, GoneException, HttpCode, HttpStatus } from "@nestjs/common";
+import { Controller, Get, Post, Delete, Body, Req, UseGuards, Query, Headers, Res, GoneException, HttpCode, HttpStatus, Logger } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
-import { createHmac, randomBytes } from "crypto";
 import type { Request, Response } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 import { FeatureGuard } from "../common/guards/feature.guard";
-import { Feature } from "../common/decorators/feature.decorator";
 import { Public } from "../auth/decorators/public.decorator";
-import { ConfigService } from "@nestjs/config";
-import { WhatsAppService } from "./whatsapp.service";
+import { OptOutNotRecordedError, WhatsAppService } from "./whatsapp.service";
 import { IsNotEmpty, IsOptional, IsString, Matches, MaxLength } from "class-validator";
 
 /**
@@ -28,8 +25,9 @@ export class ManualWhatsAppConnectDto {
   @Matches(/^\d{1,30}$/, { message: "phoneNumberId must be the numeric id Meta shows" })
   phoneNumberId!: string;
 
-  @IsString() @IsNotEmpty() @MaxLength(30)
-  displayPhone!: string;
+  /** Optional: the number is read from Meta. Kept for older panels that still send it. */
+  @IsOptional() @IsString() @MaxLength(30)
+  displayPhone?: string;
 
   @IsOptional() @IsString() @MaxLength(200)
   displayName?: string;
@@ -39,10 +37,13 @@ export class ManualWhatsAppConnectDto {
  * "Conectar con Meta" (OAuth) is switched off: it saved the token only, with
  * no WhatsApp Business account or number, so the panel said "Conectado"
  * while nothing could be sent. The panel no longer offers it; these routes
- * answer 410 until the embedded signup (or reading the account and number
- * from the Graph API) is built. The manual connection is unaffected.
+ * answer 410 until the embedded signup (a pending decision) is built. Its
+ * code is gone: a weakly signed state (no expiry, a "kira-dev" fallback
+ * secret, not bound to the session) and a callback that answered JSON.
+ * The embedded signup should reuse ChannelConnectionsService's state
+ * (expiry, OAUTH_STATE_SECRET, session nonce). The manual connection is
+ * unaffected.
  */
-export const WHATSAPP_OAUTH_AVAILABLE = false;
 export const WHATSAPP_OAUTH_UNAVAILABLE =
   "La conexión automática con Meta no está disponible todavía. Conecta tu número de WhatsApp Business con la conexión manual, en Ajustes > WhatsApp Business.";
 
@@ -55,27 +56,18 @@ interface AuthedRequest extends Request {
 @UseGuards(JwtAuthGuard, RolesGuard, FeatureGuard)
 @Controller("whatsapp")
 export class WhatsAppController {
-  constructor(
-    private readonly whatsapp: WhatsAppService,
-    private config: ConfigService,
-  ) {}
+  constructor(private readonly whatsapp: WhatsAppService) {}
 
   @Get("connect/start")
   @Roles(...SALON_MANAGERS)
-  start(@Req() req: AuthedRequest, @Res() res: Response) {
-    if (!WHATSAPP_OAUTH_AVAILABLE) throw new GoneException(WHATSAPP_OAUTH_UNAVAILABLE);
-    const state = this.signState(req.user.tenantId);
-    const url = this.whatsapp.buildConnectUrl(state);
-    return res.json({ url, state });
+  start() {
+    throw new GoneException(WHATSAPP_OAUTH_UNAVAILABLE);
   }
 
   @Get("connect/callback")
   @Public()
-  async callback(@Query("code") code: string, @Query("state") state: string) {
-    if (!WHATSAPP_OAUTH_AVAILABLE) throw new GoneException(WHATSAPP_OAUTH_UNAVAILABLE);
-    if (!code || !state) throw new BadRequestException("code and state required");
-    const tenantId = this.verifyState(state);
-    return this.whatsapp.completeOAuth(tenantId, code);
+  callback() {
+    throw new GoneException(WHATSAPP_OAUTH_UNAVAILABLE);
   }
 
   @Post("connect/manual")
@@ -91,6 +83,14 @@ export class WhatsAppController {
   @Roles(...SALON_MANAGERS)
   async getConnection(@Req() req: AuthedRequest) {
     return this.whatsapp.getConnection(req.user.tenantId);
+  }
+
+  /** Checks the stored token and number with Meta again and re-subscribes the webhook. */
+  @Post("connection/check")
+  @Roles(...SALON_MANAGERS)
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  async check(@Req() req: AuthedRequest) {
+    return this.whatsapp.checkConnection(req.user.tenantId);
   }
 
   @Delete("connection")
@@ -118,38 +118,14 @@ export class WhatsAppController {
   }
 
   // Campaigns: WhatsAppCampaignsController (campaigns/), scoped to the salon.
-
-  private signState(tenantId: string): string {
-    const nonce = randomBytes(8).toString("hex");
-    const secret = this.config.get<string>("JWT_SECRET") || "kira-dev";
-    const sig = createHmac("sha256", secret)
-      .update(`${tenantId}.${nonce}`)
-      .digest("hex")
-      .slice(0, 24);
-    return `${tenantId}.${nonce}.${sig}`;
-  }
-
-  private verifyState(state: string): string {
-    const parts = state.split(".");
-    if (parts.length !== 3) throw new BadRequestException("Invalid state");
-    const [tenantId, nonce, sig] = parts;
-    const secret = this.config.get<string>("JWT_SECRET") || "kira-dev";
-    const expected = createHmac("sha256", secret)
-      .update(`${tenantId}.${nonce}`)
-      .digest("hex")
-      .slice(0, 24);
-    if (expected !== sig) throw new BadRequestException("Bad state signature");
-    return tenantId;
-  }
 }
 
 @ApiTags("whatsapp-webhooks")
 @Controller("webhooks/meta/whatsapp")
 export class MetaWebhookController {
-  constructor(
-    private readonly whatsapp: WhatsAppService,
-    private config: ConfigService,
-  ) {}
+  private readonly logger = new Logger(MetaWebhookController.name);
+
+  constructor(private readonly whatsapp: WhatsAppService) {}
 
   @Get()
   @Public() // Meta checks hub.verify_token in verifyChallenge
@@ -159,11 +135,7 @@ export class MetaWebhookController {
     @Query("hub.challenge") challenge: string,
     @Res() res: Response,
   ) {
-    const value = this.whatsapp.verifyChallenge(mode, token, challenge);
-    if (value === null) {
-      return res.status(HttpStatus.FORBIDDEN).send("Forbidden");
-    }
-    return res.status(HttpStatus.OK).send(value);
+    return sendChallenge(res, this.whatsapp.verifyChallenge(mode, token, challenge));
   }
 
   @Post()
@@ -184,8 +156,26 @@ export class MetaWebhookController {
     try {
       await this.whatsapp.routeWebhook(body);
     } catch (err: any) {
-      console.error("Meta webhook handler error:", err.message);
+      // A "BAJA" that could not even be written down must not be lost:
+      // a 500 makes Meta deliver the event again (the receptionist and the
+      // statuses handle a repeat once).
+      if (err instanceof OptOutNotRecordedError) {
+        this.logger.error(err.message);
+        return res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({ received: false });
+      }
+      this.logger.error(`Meta webhook handler error: ${err?.message}`);
     }
     return res.json({ received: true });
   }
+}
+/**
+ * The answer to Meta's verification GET: the challenge as plain text (with
+ * nosniff, so no browser renders it as a page) only when it was accepted;
+ * 403 otherwise. Used by /webhooks/meta/whatsapp and /channels/webhooks/meta.
+ */
+export function sendChallenge(res: Response, value: string | null) {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.type("text/plain");
+  if (value === null) return res.status(HttpStatus.FORBIDDEN).send("Forbidden");
+  return res.status(HttpStatus.OK).send(value);
 }
