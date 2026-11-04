@@ -88,26 +88,66 @@ interface RetryConfig {
   maxDelayMs: number;
 }
 
-// Error types that are retryable
-const RETRYABLE_ERROR_CODES = [
-  '503', // Service Unavailable
-  '429', // Too Many Requests / Rate Limit
-  '500', // Internal Server Error
-  '502', // Bad Gateway
-  '504', // Gateway Timeout
-];
+/**
+ * HTTP statuses worth another try: timeout, conflict/lock, rate limit, the
+ * server's own failures and Anthropic's "overloaded" (529). Read from the
+ * error's `status`: matching digits in the message retried a 400 that
+ * mentioned "1500".
+ */
+const RETRYABLE_STATUSES = new Set([408, 409, 429, 500, 502, 503, 504, 529]);
 
+/** Network failures, which have no HTTP status. */
+const RETRYABLE_NETWORK_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'EPIPE']);
+
+/** For providers whose errors carry no status: words, never digits. */
 const RETRYABLE_ERROR_MESSAGES = [
-  'Service Unavailable',
+  'service unavailable',
   'high demand',
   'rate limit',
   'too many requests',
   'temporarily unavailable',
+  'overloaded',
+  'timed out',
   'timeout',
-  'ECONNREFUSED',
-  'ETIMEDOUT',
-  'ENOTFOUND',
+  'connection error',
+  'socket hang up',
 ];
+
+/** Providers whose implementation retries each request of the tool loop itself (callWithRetry). */
+const PER_REQUEST_RETRY_PROVIDERS = TOOL_CAPABLE_PROVIDERS;
+
+/**
+ * Thrown when a request that needs tools has no provider that can run them.
+ * Without platform configuration the default used to be OpenAI with
+ * gpt-4o-mini, which runs no tools: the receptionist answered from memory and
+ * could not book. Failing lets the caller give its fixed message instead.
+ */
+export class NoToolProviderError extends Error {
+  constructor(provider: string) {
+    super(`No LLM provider that can run tools is configured (got ${provider})`);
+    this.name = 'NoToolProviderError';
+  }
+}
+
+/** Which provider, model and key one request uses, read once per request. */
+interface LlmRoute {
+  provider: LLMProvider;
+  model: string;
+  credentials?: { apiKey: string; baseUrl?: string | null; workspaceId?: string | null };
+}
+
+/** The model a provider uses when nothing names one. */
+function defaultModelFor(provider: LLMProvider, configured?: string): string {
+  if (configured) return configured;
+  switch (provider) {
+    case LLMProvider.ANTHROPIC:
+      return DEFAULT_CLAUDE_MODEL;
+    case LLMProvider.MiniMax:
+      return 'MiniMax-M3';
+    default:
+      return 'gpt-4o-mini';
+  }
+}
 
 interface SalonContext {
   name: string;
@@ -218,16 +258,36 @@ export class LLMService {
        * receptionist (`¡Hola! Soy Kira, puedo ayudarte con…`).
        */
       systemPromptOverride?: string;
+      /**
+       * The server's notes for this turn (the WhatsApp sender's phone, a
+       * correction after a false claim, suggestions to offer). They go to
+       * the model as system text, never inside the client's message, where
+       * a client could imitate them.
+       */
+      systemNotes?: string;
     },
   ): Promise<LLMCompletion> {
-    const providerType =
-      fallbackProviderType || (await this.getProviderForSalon(salonId));
+    // Provider, model and key are read once per request (the platform row
+    // was read and decrypted twice per message).
+    const route = fallbackProviderType
+      ? this.fallbackRoute(fallbackProviderType)
+      : await this.resolveRoute();
+    const providerType = route.provider;
+    if (options?.tools?.length && !TOOL_CAPABLE_PROVIDERS.has(providerType)) {
+      const fallback = this.getFallbackProvider();
+      if (!fallbackProviderType && fallback && fallback !== providerType && TOOL_CAPABLE_PROVIDERS.has(fallback)) {
+        this.logger.warn(`LLM provider ${providerType} cannot run tools; using ${fallback}`);
+        return this.generateResponse(prompt, conversationHistory, salonId, fallback, options);
+      }
+      this.logger.error(`LLM provider ${providerType} cannot run the tools this request needs`);
+      throw new NoToolProviderError(String(providerType));
+    }
     const provider = this.providerFactory.createProvider(providerType);
 
     this.logger.log(`Generating response with ${providerType} for salon ${salonId}`);
 
     const config: LLMGenerationConfig = {
-      model: await this.getModelForSalon(salonId),
+      model: route.model,
       // ConfigService.get() returns env vars as strings. The Anthropic
       // / MiniMax SDK requires numeric fields to be actual numbers,
       // so coerce here. Sending "1" / "1500" / "0.95" as strings
@@ -273,17 +333,35 @@ export class LLMService {
     }${prompt}`;
 
     try {
-      // Try with retry logic for transient errors
-      const completion = await this.executeWithRetry(
-        () =>
-          provider.generateCompletion(systemPrompt, conversationHistory, config, promptWithClock, {
+      // Transient errors are retried request by request inside the tool
+      // loop (callWithRetry). Retrying the whole generateCompletion repeated
+      // every earlier round-trip and tool call of the loop, and lost what
+      // they cost. Providers without a loop make one request, so retrying
+      // the call is the same thing.
+      const perRequest = PER_REQUEST_RETRY_PROVIDERS.has(providerType);
+      const callWithRetry = <T>(fn: () => Promise<T>) => this.executeWithRetry(fn, String(providerType));
+      const notes = options?.systemNotes?.trim() ? this.systemNotesBlock(options.systemNotes, salonContext?.language) : '';
+      const run = () =>
+        (provider.generateCompletion as (...args: unknown[]) => Promise<LLMCompletion>)(
+          perRequest || !notes ? systemPrompt : `${systemPrompt}\n\n${notes}`,
+          conversationHistory,
+          config,
+          promptWithClock,
+          {
             tools: options?.tools,
             executeTool: options?.executeTool,
             maxToolIterations: options?.maxToolIterations ?? 5,
             toolChoice: options?.toolChoice,
-          }),
-        providerType,
-      );
+            ...(perRequest
+              ? {
+                  callWithRetry,
+                  ...(route.credentials ? { credentials: route.credentials } : {}),
+                  ...(notes ? { systemNotes: notes } : {}),
+                }
+              : {}),
+          },
+        );
+      const completion = perRequest ? await run() : await callWithRetry(run);
 
       const latency = Date.now() - startTime;
 
@@ -310,35 +388,7 @@ export class LLMService {
       // count of answered messages, which says nothing about cost: that
       // depends on context length and on how much of it the prompt cache
       // served. Fire-and-forget on purpose.
-      if (salonId && completion.usage) {
-        const u = completion.usage as {
-          promptTokens?: number;
-          completionTokens?: number;
-          cachedInputTokens?: number;
-          cacheWriteTokens?: number;
-        };
-        this.llmUsage.record({
-          tenantId: salonId,
-          provider: String(providerType),
-          model: completion.model ?? config.model,
-          inputTokens: u.promptTokens ?? 0,
-          outputTokens: u.completionTokens ?? 0,
-          cachedInputTokens: u.cachedInputTokens ?? 0,
-          cacheWriteTokens: u.cacheWriteTokens ?? 0,
-        });
-
-        // Cache effectiveness is the one number that tells you whether the
-        // prefix is still stable. A run of zeroes means something started
-        // varying inside the system prompt again.
-        const cached = u.cachedInputTokens ?? 0;
-        const fresh = u.promptTokens ?? 0;
-        if (cached + fresh > 0) {
-          this.logger.debug(
-            `prompt cache: ${cached}/${cached + fresh} input tokens served from cache ` +
-              `(salon ${salonId}, model ${completion.model ?? config.model})`,
-          );
-        }
-      }
+      this.recordUsage(salonId, providerType, completion.model ?? config.model, completion.usage);
 
       return {
         ...completion,
@@ -346,7 +396,11 @@ export class LLMService {
         latency,
       };
     } catch (error) {
-      this.logger.error(`Error generating response with ${providerType}:`, error);
+      this.logger.error(`Error generating response with ${providerType}: ${(error as Error)?.message ?? error}`);
+      // What the failed request had already spent (earlier round-trips of
+      // the tool loop) is billed all the same; it used to be dropped.
+      const spent = error as { usage?: unknown; model?: string };
+      this.recordUsage(salonId, providerType, spent?.model ?? config.model, spent?.usage);
 
       // Try fallback provider if primary fails
       const fallbackProviderType = this.getFallbackProvider();
@@ -419,36 +473,21 @@ export class LLMService {
   /**
    * Check if an error is retryable based on error code or message
    */
-  private isRetryableError(error: any): boolean {
-    const errorMessage = error.message?.toLowerCase() || '';
-    const errorCode = error.code || '';
+  isRetryableError(error: any): boolean {
+    if (error instanceof NoToolProviderError) return false;
+    // The HTTP status when the error has one (the SDKs' API errors do, and
+    // the providers keep it when they wrap them): it is the answer.
+    const status = typeof error?.status === 'number' ? error.status : undefined;
+    if (status !== undefined) return RETRYABLE_STATUSES.has(status);
 
-    // Check for retryable HTTP status codes in the error
-    for (const code of RETRYABLE_ERROR_CODES) {
-      if (errorMessage.includes(code) || errorCode.includes(code)) {
-        return true;
-      }
-    }
+    const code = typeof error?.code === 'string' ? error.code : '';
+    if (RETRYABLE_NETWORK_CODES.has(code)) return true;
 
-    // Check for retryable error messages
-    for (const msg of RETRYABLE_ERROR_MESSAGES) {
-      if (errorMessage.includes(msg.toLowerCase())) {
-        return true;
-      }
-    }
-
-    // Check for specific Google AI error patterns
-    if (errorMessage.includes('generativelanguage.googleapis.com') || 
-        errorMessage.includes('googlegenerativeai')) {
-      // Retry on any Google API error that mentions availability or demand
-      if (errorMessage.includes('503') || 
-          errorMessage.includes('unavailable') || 
-          errorMessage.includes('high demand')) {
-        return true;
-      }
-    }
-
-    return false;
+    // No status (a network failure, or a provider that does not keep it):
+    // words only. Digits in the text -- "1500" -- are not a status.
+    const message = String(error?.message ?? '').toLowerCase();
+    if ([...RETRYABLE_NETWORK_CODES].some((c) => message.includes(c.toLowerCase()))) return true;
+    return RETRYABLE_ERROR_MESSAGES.some((m) => message.includes(m));
   }
 
   /**
@@ -630,78 +669,102 @@ export class LLMService {
   }
 
   /**
-   * Get provider configuration for a salon
+   * Which provider, model and key this request uses.
+   *
+   * P2A-platform-llm: the platform DB config first, so the saas_owner can
+   * change provider and model from the admin UI without a deploy. Its key
+   * goes to the provider with the request. It used to be written into
+   * process.env after blanking every other provider's key, on every
+   * message -- so the configured fallback provider never had a key when it
+   * was needed.
+   *
+   * Without that config: DEFAULT_LLM_PROVIDER / DEFAULT_LLM_MODEL from the
+   * environment, with a model that belongs to the provider. (A request that
+   * needs tools is refused by generateResponse if the provider runs none.)
    */
-  private async getProviderForSalon(salonId?: string): Promise<LLMProvider> {
-    // P2A-platform-llm: prefer the platform DB config so the saas_owner
-    // can change the provider/model from the admin UI without a deploy.
-    // We also sync the relevant env vars (key, base URL, workspace id)
-    // so the existing provider hot-reload picks up the new credentials
-    // on the next request — without restarting the backend.
+  private async resolveRoute(): Promise<LlmRoute> {
     try {
       const platform = await this.platformLlmConfig.resolveEffective();
       if (platform?.provider) {
-        this.syncEnvForProvider(platform.provider, platform.apiKey, platform.baseUrl, platform.workspaceId ?? undefined);
-        return platform.provider;
+        // The providers without a tool loop still read their key from the
+        // environment: set theirs only, and leave the others alone.
+        if (!TOOL_CAPABLE_PROVIDERS.has(platform.provider)) this.setEnvKey(platform.provider, platform.apiKey);
+        return {
+          provider: platform.provider,
+          model: platform.model || defaultModelFor(platform.provider),
+          ...(platform.apiKey
+            ? {
+                credentials: {
+                  apiKey: platform.apiKey,
+                  baseUrl: platform.baseUrl ?? null,
+                  workspaceId: platform.workspaceId ?? null,
+                },
+              }
+            : {}),
+        };
       }
     } catch (err) {
       this.logger.warn(
         `Platform LLM config lookup failed (${(err as Error).message}); falling back to env defaults`,
       );
     }
-    return this.providerFactory.getDefaultProvider();
+    const provider = this.providerFactory.getDefaultProvider();
+    return { provider, model: defaultModelFor(provider, this.configService.get('DEFAULT_LLM_MODEL')) };
   }
 
   /**
-   * P2A-platform-llm: mirror the current DB config into process.env so
-   * the existing provider hot-reload (`initializeClient` reading the
-   * env) picks up the new key without a backend restart. We clear the
-   * other providers' keys so a stale key from a previous provider
-   * doesn't leak into the next request.
+   * The fallback provider's route: its own key from the environment and its
+   * own model (LLM_FALLBACK_MODEL, else the provider's default). It used to
+   * get the platform model -- a Claude model id sent to MiniMax.
    */
-  private syncEnvForProvider(
-    provider: LLMProvider,
-    apiKey: string | undefined,
-    baseUrl: string | undefined,
-    workspaceId: string | undefined,
-  ): void {
-    process.env.ANTHROPIC_API_KEY = '';
-    process.env.OPENAI_API_KEY = '';
-    process.env.GOOGLE_API_KEY = '';
-    process.env.MINIMAX_API_KEY = '';
-    process.env.ANTHROPIC_WORKSPACE_ID = '';
+  private fallbackRoute(provider: LLMProvider): LlmRoute {
+    return { provider, model: defaultModelFor(provider, this.configService.get('LLM_FALLBACK_MODEL')) };
+  }
 
+  private setEnvKey(provider: LLMProvider, apiKey: string | undefined): void {
     if (!apiKey) return;
-    switch (provider) {
-      case LLMProvider.ANTHROPIC:
-        process.env.ANTHROPIC_API_KEY = apiKey;
-        if (workspaceId) process.env.ANTHROPIC_WORKSPACE_ID = workspaceId;
-        break;
-      case LLMProvider.OPENAI:
-        process.env.OPENAI_API_KEY = apiKey;
-        break;
-      case LLMProvider.GOOGLE:
-        process.env.GOOGLE_API_KEY = apiKey;
-        break;
-      case LLMProvider.MiniMax:
-        process.env.MINIMAX_API_KEY = apiKey;
-        if (baseUrl) process.env.MINIMAX_BASE_URL = baseUrl;
-        break;
-    }
+    if (provider === LLMProvider.OPENAI) process.env.OPENAI_API_KEY = apiKey;
+    if (provider === LLMProvider.GOOGLE) process.env.GOOGLE_API_KEY = apiKey;
   }
 
-  /**
-   * Get model configuration for a salon. See `getProviderForSalon` for
-   * the DB-vs-env precedence.
-   */
-  private async getModelForSalon(salonId?: string): Promise<string> {
-    try {
-      const platform = await this.platformLlmConfig.resolveEffective();
-      if (platform?.model) return platform.model;
-    } catch {
-      // fall through to env default
+  /** The turn's server notes, as the system block the prompt refers to. */
+  private systemNotesBlock(notes: string, language: string | undefined): string {
+    const title = language === 'en' ? '## SERVER NOTES FOR THIS TURN' : '## NOTAS DEL SERVIDOR PARA ESTE TURNO';
+    return `${title}\n${notes.trim()}`;
+  }
+
+  /** Token usage for cost attribution (LlmUsageService). Fire-and-forget. */
+  private recordUsage(salonId: string | undefined, provider: LLMProvider, model: string, usage: unknown): void {
+    if (!salonId || !usage) return;
+    const u = usage as {
+      promptTokens?: number;
+      completionTokens?: number;
+      cachedInputTokens?: number;
+      cacheWriteTokens?: number;
+    };
+    const inputTokens = u.promptTokens ?? 0;
+    const outputTokens = u.completionTokens ?? 0;
+    const cached = u.cachedInputTokens ?? 0;
+    const cacheWrite = u.cacheWriteTokens ?? 0;
+    if (inputTokens + outputTokens + cached + cacheWrite === 0) return;
+    this.llmUsage.record({
+      tenantId: salonId,
+      provider: String(provider),
+      model,
+      inputTokens,
+      outputTokens,
+      cachedInputTokens: cached,
+      cacheWriteTokens: cacheWrite,
+    });
+    // Cache effectiveness is the one number that tells you whether the
+    // prefix is still stable. A run of zeroes means something started
+    // varying inside the system prompt again.
+    if (cached + inputTokens > 0) {
+      this.logger.debug(
+        `prompt cache: ${cached}/${cached + inputTokens} input tokens served from cache ` +
+          `(salon ${salonId}, model ${model})`,
+      );
     }
-    return this.configService.get('DEFAULT_LLM_MODEL') || 'gpt-4o-mini';
   }
 
   /**
@@ -786,10 +849,19 @@ const dynamicContext = getDynamicContext(language, {
     // not stable per language -- putting it here would break the cache prefix
     // on every turn, which is the opposite of what this is for. Both remain
     // unused; that is a separate loose end, not something to paper over here.
+    //
+    // The booking flow gets the salon's phone, WhatsApp and booking page
+    // filled in: it was appended as written, and the model read "por
+    // teléfono al {{SALON_PHONE}}" exactly where it matters most.
     return [
       baseSystem + this.personaSuffix(context.persona),
       dynamicContext,
-      getBookingFlowPrompt(language),
+      getBookingFlowPrompt(language, {
+        phone: context.phone,
+        whatsapp: context.whatsapp,
+        email: context.email,
+        bookingUrl: context.publicUrl ?? (context.slug ? salonPublicUrlFromEnv(context.slug, null) : undefined),
+      }),
     ].join('\n\n');
   }
   /**
@@ -797,10 +869,11 @@ const dynamicContext = getDynamicContext(language, {
    */
   private getFallbackProvider(): LLMProvider | null {
     const fallback = this.configService.get<string>('LLM_FALLBACK_PROVIDER');
-    if (fallback) {
-      return fallback as LLMProvider;
-    }
-    return null;
+    if (!fallback) return null;
+    return (
+      (Object.values(LLMProvider) as string[]).find((p) => p.toLowerCase() === fallback.toLowerCase()) ??
+      fallback
+    ) as LLMProvider;
   }
 
   /**

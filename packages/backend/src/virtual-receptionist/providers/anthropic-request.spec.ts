@@ -205,7 +205,9 @@ describe("AnthropicProvider requests", () => {
       { tools: TOOLS, executeTool: async () => ({}) },
     );
     expect(completion.finishReason).toBe("refusal");
-    expect(completion.text).toContain("equipo del salón");
+    expect(completion.text).toBe("Ahora mismo no puedo responder a eso por aquí.");
+    // No promise that someone will pass the message on: nothing does.
+    expect(completion.text).not.toMatch(/equipo/);
   });
 });
 

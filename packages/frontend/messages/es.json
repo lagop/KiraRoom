@@ -3350,5 +3350,22 @@
       "back": "Volver",
       "approveHelp": "No se cancelan solas: pásalas o cancélalas aquí, apruébala y hazlo luego, o vuelve atrás."
     }
+  },
+  "publicChat": {
+    "title": "Asistente del salón",
+    "open": "Abrir el chat con el asistente",
+    "minimize": "Minimizar el chat",
+    "restore": "Mostrar el chat",
+    "close": "Cerrar el chat",
+    "send": "Enviar mensaje",
+    "input": "Tu mensaje",
+    "placeholder": "Escribe tu mensaje...",
+    "messages": "Conversación con el asistente",
+    "disclosure": "Te atiende un asistente automático (IA) de {salon}.",
+    "disclosureNoName": "Te atiende un asistente automático (IA) del salón.",
+    "hello": "¡Hola!",
+    "howCanIHelp": "¿En qué puedo ayudarte hoy?",
+    "callSalonPrompt": "¿Prefieres hablar con el salón?",
+    "callSalon": "Llamar al salón ({phone})"
   }
 }

@@ -365,34 +365,7 @@ export class ConversationMemoryRepository {
     };
   }
 
-  /**
-   * Delete old conversations (older than 30 days)
-   */
-  async deleteOldConversations(daysToKeep: number = 30): Promise<number> {
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
-
-    const conversationsToDelete = await this.prisma.chatConversation.findMany({
-      where: {
-        createdAt: { lt: cutoffDate },
-        status: 'completed',
-      },
-    });
-
-    const conversationIds = conversationsToDelete.map((conv) => conv.id);
-
-    await Promise.all([
-      this.prisma.chatMessage.deleteMany({
-        where: { conversationId: { in: conversationIds } },
-      }),
-      this.prisma.intentHistoryItem.deleteMany({
-        where: { conversationId: { in: conversationIds } },
-      }),
-      this.prisma.chatConversation.deleteMany({
-        where: { id: { in: conversationIds } },
-      }),
-    ]);
-
-    return conversationsToDelete.length;
-  }
+  // deleteOldConversations(30) used to be here: nobody called it, and it only
+  // looked at "completed" conversations, a status the code almost never sets.
+  // ConversationRetentionScheduler deletes by last activity, any status.
 }

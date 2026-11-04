@@ -14,7 +14,9 @@ import { LLMService } from './services/llm.service';
 import { ReceptionistStatsService } from './services/receptionist-stats.service';
 import { PublicChatAccessService } from './public-chat/public-chat-access.service';
 import { PublicChatMessageDto } from './public-chat/public-chat-message.dto';
-import { SendMessageDto, MessageResponseDto } from '@kira/shared';
+import { publicChatReply } from './public-chat/public-chat-reply';
+import { logId } from './log-id';
+import { SendMessageDto } from '@kira/shared';
 import {
   CreateConversationBodyDto,
   CreateFaqItemDto,
@@ -103,7 +105,7 @@ export class VirtualReceptionistController {
   @ApiOperation({ summary: 'Create new conversation' })
   @Roles(...SALON_MANAGERS)
   async createConversation(@CurrentUser() user: any, @Body() data: CreateConversationBodyDto) {
-    this.logger.log(`Creating new conversation: ${data.clientId} - ${user.tenantId}`);
+    this.logger.log(`Creating new conversation: ${logId(data.clientId)} - ${user.tenantId}`);
     // The caller's salon: the body used to name salonId and tenantId.
     return this.conversationService.createConversation({
       clientId: data.clientId,
@@ -158,17 +160,24 @@ export class VirtualReceptionistController {
    * The chat on a salon's site. Public, because visitors have no account;
    * who is writing is decided here (see PublicChatAccessService), never taken
    * from the body: a signed visitor token this endpoint issued (salon
-   * clients have no accounts). Then a daily limit per person, on top of the
-   * per-IP limit, before the paid model call.
+   * clients have no accounts). Then a daily limit per person and one per
+   * address, on top of the per-minute limit, before the paid model call.
+   *
+   * The answer carries only what the widget shows. It used to be the whole
+   * internal result: every tool call with its input and output (service and
+   * professional ids, raw exception text), the model, the intent and, with
+   * the cap reached, the salon's AI usage -- to any visitor.
    */
   @Post('messages')
   @Throttle({ default: { ttl: 60_000, limit: 20 } }) // each message is a paid model call
   @Public()
   @ApiOperation({ summary: 'Send message to virtual receptionist' })
-  async sendMessage(@Body() body: PublicChatMessageDto) {
+  async sendMessage(@Body() body: PublicChatMessageDto, @Req() req?: { ip?: string; socket?: { remoteAddress?: string } }) {
     const identity = this.publicChat.identify(body);
-    await this.publicChat.assertWithinDailyLimit(identity, body.salonId);
-    this.logger.log(`Processing web message from ${identity.clientId}`);
+    // The address the rate limiter counts (ThrottlerBehindProxyGuard).
+    const ip = req?.ip ?? req?.socket?.remoteAddress ?? undefined;
+    await this.publicChat.assertWithinDailyLimit(identity, body.salonId, new Date(), ip);
+    this.logger.log(`Processing web message from ${logId(identity.clientId)}`);
     const reply = await this.virtualReceptionistService.sendMessage({
       clientId: identity.clientId,
       salonId: body.salonId,
@@ -177,7 +186,7 @@ export class VirtualReceptionistController {
       // A visitor's name is whatever they type in the chat, not a field.
       metadata: { serviceId: body.metadata?.serviceId },
     } as SendMessageDto);
-    return { ...reply, visitorToken: identity.visitorToken };
+    return publicChatReply(reply, identity.visitorToken);
   }
 
   @Get('conversations/:id/messages')

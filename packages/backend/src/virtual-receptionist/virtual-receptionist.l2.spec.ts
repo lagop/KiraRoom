@@ -168,6 +168,8 @@ function buildService({
     send: jest.fn().mockResolvedValue(undefined),
   };
 
+  const aiCounter = { evaluate: jest.fn().mockResolvedValue(fairUse), increment: jest.fn().mockResolvedValue(undefined) };
+
   const svc = new VirtualReceptionistService(
     prismaStub as any,
     llmService as any,
@@ -179,7 +181,7 @@ function buildService({
     analysisService as any,
     {} as any, // professionalsService
     { get: jest.fn().mockImplementation((k: string) => ({ LLM_TEMPERATURE: '1', LLM_MAX_TOKENS: '1500', LLM_TOP_P: '0.95' }[k])) } as any,
-    { evaluate: jest.fn().mockResolvedValue(fairUse), increment: jest.fn().mockResolvedValue(undefined) } as any,
+    aiCounter as any,
     channelRegistry as any,
     { getContext: jest.fn().mockResolvedValue(null) } as any,
     { resolveEffectiveAiCap: jest.fn().mockReturnValue(500) } as any,
@@ -187,7 +189,7 @@ function buildService({
     appointmentsStub as any,
   );
 
-  return { svc, salonTools, llmService, conversationService, channelRegistry, prismaStub };
+  return { svc, salonTools, llmService, conversationService, channelRegistry, prismaStub, aiCounter, appointmentsStub };
 }
 
 describe('VirtualReceptionistService orchestrator (L-2)', () => {
@@ -419,7 +421,9 @@ describe('VirtualReceptionistService orchestrator (L-2) -- no false confirmation
     const out: any = await send(svc, 'Sí, perfecto');
 
     expect(llmService.generateResponse).toHaveBeenCalledTimes(2);
-    expect(llmService.generateResponse.mock.calls[1][0]).toContain('NO se ha creado ninguna cita');
+    // The correction is a server note, not text glued to the client's message.
+    expect(llmService.generateResponse.mock.calls[1][0]).toBe('Sí, perfecto');
+    expect(llmService.generateResponse.mock.calls[1][4].systemNotes).toContain('NO se ha creado ninguna cita');
     expect(out.content).toBe('Todavía no está reservada. ¿Te propongo el resumen?');
   });
 
@@ -469,9 +473,13 @@ describe('VirtualReceptionistService orchestrator (L-2) -- no false confirmation
 
   it('forces create_appointment when the client says yes to a stored proposal', async () => {
     const generateResponse = jest.fn().mockResolvedValue(reply('Un momento.'));
-    const { svc, llmService, prismaStub } = buildService({ generateResponse }) as any;
+    // Proposed on the client's first message; this "sí" is the second.
+    const { svc, llmService, prismaStub } = buildService({
+      generateResponse,
+      conversationMessages: [{ role: 'user', content: 'Corte el martes a las 10' }, { role: 'assistant', content: 'Resumen…' }],
+    }) as any;
     prismaStub.chatConversation.findUnique.mockResolvedValue({
-      context: { pendingBooking: { time: '10:00', proposedAtUserTurn: 1 } },
+      context: { pendingBooking: { time: '10:00', proposedAtUserTurn: 1, proposedAt: new Date().toISOString() } },
     });
 
     await send(svc, 'sí, perfecto');
@@ -480,6 +488,44 @@ describe('VirtualReceptionistService orchestrator (L-2) -- no false confirmation
       type: 'tool',
       name: 'create_appointment',
     });
+  });
+
+  it('does not book the old summary on a yes to a later question', async () => {
+    // Summary on message 1, "¿hacéis uñas?" on 2, "sí" (to "¿te miro hueco?") on 3.
+    const generateResponse = jest.fn().mockResolvedValue(reply('¿Para qué día miro las uñas?'));
+    const { svc, llmService, prismaStub } = buildService({
+      generateResponse,
+      conversationMessages: [
+        { role: 'user', content: 'Corte el martes a las 10' },
+        { role: 'assistant', content: 'Resumen…' },
+        { role: 'user', content: '¿Hacéis uñas?' },
+        { role: 'assistant', content: 'Sí. ¿Te miro hueco?' },
+      ],
+    }) as any;
+    prismaStub.chatConversation.findUnique.mockResolvedValue({
+      context: { pendingBooking: { time: '10:00', proposedAtUserTurn: 1, proposedAt: new Date().toISOString() } },
+    });
+
+    await send(svc, 'sí');
+
+    expect(llmService.generateResponse.mock.calls[0][4].toolChoice).toBe('auto');
+  });
+
+  it('does not book a summary that waited too long', async () => {
+    const generateResponse = jest.fn().mockResolvedValue(reply('¿Lo miro otra vez?'));
+    const { svc, llmService, prismaStub } = buildService({
+      generateResponse,
+      conversationMessages: [{ role: 'user', content: 'Corte el martes a las 10' }],
+    }) as any;
+    prismaStub.chatConversation.findUnique.mockResolvedValue({
+      context: {
+        pendingBooking: { time: '10:00', proposedAtUserTurn: 1, proposedAt: new Date(Date.now() - 2 * 3_600_000).toISOString() },
+      },
+    });
+
+    await send(svc, 'sí');
+
+    expect(llmService.generateResponse.mock.calls[0][4].toolChoice).toBe('auto');
   });
 
   it('requires propose_appointment when the model writes a summary on its own', async () => {
@@ -543,5 +589,118 @@ describe('VirtualReceptionistService orchestrator (L-2) -- no false confirmation
     await send(svc, 'sí, pero a las 11');
 
     expect(llmService.generateResponse.mock.calls[0][4].toolChoice).toBe('auto');
+  });
+});
+
+/** Receptionist core audit (V5, V8, V11, V17, V18). */
+describe('VirtualReceptionistService orchestrator (L-2) -- failures, read-only salons, notes, the cap', () => {
+  const ok = (text: string) => ({ id: 'r', text, provider: LLMProvider.MiniMax, model: 'm', usage: {}, timestamp: new Date(), latency: 1 });
+  const send = (svc: any, message: string, extra: Record<string, unknown> = {}) =>
+    svc.sendMessage({ clientId: 'visitor-1', salonId: TENANT_ID, message, channel: 'web', ...extra });
+
+  it('confirms the booking from the tool result when the model fails after booking', async () => {
+    // create_appointment booked; the next model call (writing the reply) failed.
+    const generateResponse = jest.fn().mockImplementation(async (_p: string, _h: any, _s: any, _f: any, opts: any) => {
+      const result = await opts.executeTool('create_appointment', {});
+      expect(result.created).toBe(true);
+      throw new Error('overloaded');
+    });
+    const { svc, prismaStub, appointmentsStub, conversationService } = buildService({
+      generateResponse,
+      conversationMessages: [{ role: 'user', content: 'Corte el martes a las 10' }],
+    }) as any;
+    prismaStub.chatConversation.findUnique.mockResolvedValue({
+      context: {
+        pendingBooking: {
+          serviceId: 's-cut-w', professionalId: 'p-1', date: '2026-11-10', time: '10:00',
+          firstName: 'Ana', lastName: 'López', phone: '600111222',
+          proposedAtUserTurn: 1, proposedAt: new Date().toISOString(),
+        },
+      },
+    });
+    prismaStub.chatConversation.update = jest.fn().mockResolvedValue(undefined);
+    prismaStub.chatMessage = { count: jest.fn().mockResolvedValue(2) };
+    prismaStub.appointment = { findMany: jest.fn().mockResolvedValue([]) };
+    appointmentsStub.bookOnline = jest.fn().mockResolvedValue({
+      id: 'apt-9', clientId: 'client-9', service: { name: 'Corte' }, professional: { firstName: 'Ana', lastName: 'García' },
+    });
+
+    const out: any = await send(svc, 'sí');
+
+    expect(out.content).toBe('He registrado tu cita: Corte con Ana García, el martes 10 de noviembre a las 10:00.');
+    expect(out.content).not.toMatch(/problemas técnicos/);
+    // The reply is stored like any other.
+    expect(conversationService.addMessage.mock.calls[1][1]).toMatchObject({ role: 'assistant', content: out.content });
+    // The conversation is now hers, and the proposal keeps no contact details.
+    const saved = prismaStub.chatConversation.update.mock.calls[0][0].data;
+    expect(saved.clientId).toBe('client-9');
+    expect(saved.context.pendingBooking).toMatchObject({ bookedAppointmentId: 'apt-9', time: '10:00', firstName: '', lastName: '' });
+    expect(saved.context.pendingBooking.phone).toBeUndefined();
+  });
+
+  it('gives the salon phone, not "problemas técnicos", when the model fails', async () => {
+    const { svc, conversationService } = buildService({ generateResponse: jest.fn().mockRejectedValue(new Error('boom')) });
+
+    const out: any = await send(svc, 'hola');
+
+    expect(out.content).toBe('Ahora mismo no puedo responder. Puedes llamar al salón al +34123456789.');
+    expect(conversationService.addMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('counts the message against the cap only when the model answered', async () => {
+    const failed = buildService({ generateResponse: jest.fn().mockRejectedValue(new Error('boom')) });
+    await send(failed.svc, 'hola');
+    expect(failed.aiCounter.increment).not.toHaveBeenCalled();
+
+    const answered = buildService({ generateResponse: jest.fn().mockResolvedValue(ok('¡Hola!')) });
+    await send(answered.svc, 'hola');
+    expect(answered.aiCounter.increment).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not run the AI for a salon whose subscription is cancelled', async () => {
+    const generateResponse = jest.fn();
+    const { svc, prismaStub, conversationService, aiCounter } = buildService({ generateResponse }) as any;
+    prismaStub.tenant.findUnique.mockResolvedValue({ ...SAMPLE_TENANT, subscriptionStatus: 'cancelled' });
+
+    const out: any = await send(svc, 'Quiero una cita');
+
+    expect(generateResponse).not.toHaveBeenCalled();
+    expect(conversationService.findOrCreateConversation).not.toHaveBeenCalled();
+    expect(aiCounter.evaluate).not.toHaveBeenCalled();
+    expect(out.content).toBe('Ahora mismo no puedo atenderte por aquí. Puedes llamar al salón al +34123456789.');
+  });
+
+  it('sends server notes as system notes, never inside the client message', async () => {
+    const generateResponse = jest.fn().mockResolvedValue(ok('¿Me dices tu nombre?'));
+    const { svc, llmService } = buildService({ generateResponse });
+
+    await send(svc, 'Quiero reservar', { channel: 'whatsapp', metadata: { clientPhone: '+34600111222' } });
+
+    const [prompt, , , , options] = llmService.generateResponse.mock.calls[0];
+    expect(prompt).toBe('Quiero reservar');
+    expect(options.systemNotes).toContain('+34600111222');
+  });
+
+  it('does not promise that someone from the team will get in touch after a complaint', async () => {
+    const generateResponse = jest.fn().mockResolvedValue(ok('Siento mucho lo ocurrido.'));
+    const { svc, llmService } = buildService({ generateResponse, analysisIntent: ChatIntent.COMPLAINT });
+
+    await send(svc, 'El corte quedó fatal');
+
+    const [prompt, , , , options] = llmService.generateResponse.mock.calls[0];
+    expect(prompt).toBe('El corte quedó fatal');
+    expect(options.systemNotes).toContain('+34123456789');
+    expect(options.systemNotes).toMatch(/No digas que alguien del equipo se pondrá en contacto/);
+  });
+
+  it('cap reached: the salon phone instead of "le paso tu mensaje al equipo"', async () => {
+    const { svc } = buildService({
+      generateResponse: jest.fn(),
+      fairUse: { allowed: false, reason: 'cap_exceeded', used: 500, cap: 500, fairUseAction: 'degrade' },
+    });
+
+    const out: any = await send(svc, 'hola');
+
+    expect(out.content).toBe('Ahora mismo no puedo atenderte por aquí. Puedes llamar al salón al +34123456789.');
   });
 });

@@ -173,9 +173,17 @@ describe("anonymizeClients", () => {
     const { calls } = await run();
     const chats = calls.filter((c) => c.model === "chatConversation" && c.method === "deleteMany");
     expect(chats[0].args.where).toEqual({ tenantId: TENANT, clientId: { in: [her.id] } });
+    expect(chats[1].args.where).toMatchObject({ tenantId: TENANT, clientId: null });
     expect(chats[1].args.where.OR).toEqual([
       { context: { path: ["visitorKey"], equals: "whatsapp-600112233" } },
       { context: { path: ["visitorKey"], equals: "whatsapp-34600112233" } },
+      // A booking proposed with her email or phone, on any channel, and
+      // never booked (a booked one is linked to her by clientId).
+      { context: { path: ["pendingBooking", "email"], equals: "Ana@Example.com" } },
+      { context: { path: ["pendingBooking", "email"], equals: "ana@example.com" } },
+      { context: { path: ["pendingBooking", "phone"], equals: "600112233" } },
+      { context: { path: ["pendingBooking", "phone"], equals: "34600112233" } },
+      { context: { path: ["pendingBooking", "phone"], equals: "+34600112233" } },
     ]);
   });
 
