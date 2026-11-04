@@ -5,7 +5,6 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { realEmail } from '../common/placeholder-email';
 import { EmailService } from './services/email.service';
 import { SmsService } from './services/sms.service';
-import { WhatsAppService } from './services/whatsapp.service';
 import { NotificationsService } from './notifications.service';
 import { NotificationType } from './dto';
 import { WhatsAppTemplateService } from '../whatsapp/whatsapp-template.service';
@@ -85,7 +84,6 @@ export class NotificationsScheduler {
     private readonly prisma: PrismaService,
     private readonly emailService: EmailService,
     private readonly smsService: SmsService,
-    private readonly whatsappService: WhatsAppService,
     private readonly notificationsService: NotificationsService,
     private readonly whatsappTemplates: WhatsAppTemplateService,
   ) {}
@@ -93,10 +91,12 @@ export class NotificationsScheduler {
   /**
    * A WhatsApp reminder. From the salon's own WhatsApp Business number with
    * the approved template when it can (a free-text message a day before the
-   * appointment is outside WhatsApp's 24-hour window and is refused); the
-   * platform's Twilio sender otherwise, as before.
+   * appointment is outside WhatsApp's 24-hour window and is refused). There
+   * is no other WhatsApp sender: the platform's Twilio one is gone (channels
+   * audit M7). Without the salon's number the reminder goes by the other
+   * channels (email, SMS), and the 1-hour one falls back to email.
    */
-  private async sendWhatsAppReminder(appointment: any, hoursBefore: number): Promise<ChannelOutcome> {
+  private async sendWhatsAppReminder(appointment: any): Promise<ChannelOutcome> {
     const viaSalon = await this.whatsappTemplates.sendAppointmentReminder(appointment.tenantId, {
       phone: appointment.client.phone,
       clientName: appointment.client.firstName,
@@ -113,17 +113,7 @@ export class NotificationsScheduler {
     if (viaSalon.reason !== 'not_connected') {
       this.logger.log(`WhatsApp template not used for appointment ${appointment.id}: ${viaSalon.reason}`);
     }
-    if (!this.whatsappService.isConfigured()) return salonUnavailable ? 'skipped' : 'failed';
-    const result = await this.whatsappService.sendAppointmentReminder({
-      clientName: appointment.client.firstName,
-      clientPhone: appointment.client.phone,
-      serviceName: appointment.service.name,
-      professionalName: `${appointment.professional.firstName} ${appointment.professional.lastName}`,
-      date: appointment.scheduledDate.toISOString().split('T')[0],
-      time: appointment.scheduledTime,
-      salonName: appointment.tenant.name,
-    }, hoursBefore);
-    return result?.success ? 'sent' : 'failed';
+    return salonUnavailable ? 'skipped' : 'failed';
   }
 
   /**
@@ -323,7 +313,7 @@ export class NotificationsScheduler {
 
     if (appointment.client.phone && (await this.allowed(appointment, kind, 'whatsapp'))) {
       outcomes.push(
-        await this.attempt(appointment, kind, 'WhatsApp', () => this.sendWhatsAppReminder(appointment, kind.hoursBefore)),
+        await this.attempt(appointment, kind, 'WhatsApp', () => this.sendWhatsAppReminder(appointment)),
       );
     }
 

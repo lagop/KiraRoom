@@ -162,7 +162,7 @@ function build({
   };
 
   const stub = {} as any;
-  const service = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
+  const service = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub);
   const notify = jest.fn(async () => ({ emailSent: false, smsSent: false }));
   (service as any).sendAppointmentCreatedNotifications = notify;
   (service as any).events = { recordOnce: jest.fn() };

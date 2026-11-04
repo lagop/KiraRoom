@@ -5,12 +5,11 @@ import { RectifyInvoiceDto, UploadCertificateDto } from "./invoices/dto/invoice.
 import { MessageBundlesController, TopUpCreditsDto } from "./message-bundles/message-bundles.controller";
 import { PlatformLlmConfigController } from "./platform/platform-llm-config.controller";
 import { AnthropicWorkspacesDto, UpdatePlatformLlmConfigDto } from "./platform/platform-llm-config.dto";
-import { SmsController, TestSmsDto } from "./sms/sms.controller";
 import { ManualWhatsAppConnectDto, WhatsAppController } from "./whatsapp/whatsapp.controller";
 import { bodyMetatype, bodyParser } from "./common/validation/validated-body.testing";
 
 /**
- * Bodies that were inline object types: sessions, invoices, SMS, WhatsApp,
+ * Bodies that were inline object types: sessions, invoices, WhatsApp,
  * message credits, the platform LLM setting. Each one is a validated class
  * now; these check the panel's payloads still pass and bad values do not.
  */
@@ -24,7 +23,6 @@ describe("small bodies", () => {
     expect(bodyMetatype(MessageBundlesController, "topUp")).toBe(TopUpCreditsDto);
     expect(bodyMetatype(PlatformLlmConfigController, "update")).toBe(UpdatePlatformLlmConfigDto);
     expect(bodyMetatype(PlatformLlmConfigController, "listAnthropicWorkspaces")).toBe(AnthropicWorkspacesDto);
-    expect(bodyMetatype(SmsController, "test")).toBe(TestSmsDto);
     expect(bodyMetatype(WhatsAppController, "manual")).toBe(ManualWhatsAppConnectDto);
   });
 
@@ -66,13 +64,6 @@ describe("small bodies", () => {
     expect(await parse(body)).toEqual(body);
     await expect(parse({ ...body, phoneNumberId: "../me/accounts" })).rejects.toBeDefined();
     await expect(parse({ ...body, wabaId: "123?fields=access_token" })).rejects.toBeDefined();
-  });
-
-  it("a test SMS goes to a phone number, three segments at most", async () => {
-    const parse = bodyParser(SmsController, "test");
-    expect(await parse({ to: "+34600000000", body: "Prueba" })).toEqual({ to: "+34600000000", body: "Prueba" });
-    await expect(parse({ to: "premium-line", body: "x" })).rejects.toBeDefined();
-    await expect(parse({ to: "+34600000000", body: "x".repeat(460) })).rejects.toBeDefined();
   });
 
   it("credits are whole and positive", async () => {

@@ -149,7 +149,7 @@ function build(
   };
   const stub = {} as any;
   const service = new AppointmentsService(
-    prisma, stub, stub, stub, stub, stub, stub, consent as any,
+    prisma, stub, stub, stub, stub, stub, consent as any,
     cadence as any, invoice as any, waitList as any,
   );
   const sent: Record<string, jest.Mock> = {};

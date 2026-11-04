@@ -145,7 +145,7 @@ describe("GET /appointments/booking-locations (the panel's picker)", () => {
   const svc = (locations: any[], links: any[], gate: any = EMPRESA) =>
     new AppointmentsService(
       db(locations, links) as any,
-      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
       undefined, undefined, undefined, undefined, undefined,
       gate,
     );
@@ -187,7 +187,7 @@ describe("the booking confirmation email", () => {
     const sms = { sendAppointmentConfirmation: jest.fn(async () => ({ success: true })) };
     const notifications = { shouldSendNotification: jest.fn(async (_c: string, _t: string, ch: string) => ch === "email") };
     const stub = {} as any;
-    const svc = new AppointmentsService(prisma, stub, notifications as any, email as any, sms as any, stub, stub, stub);
+    const svc = new AppointmentsService(prisma, stub, notifications as any, email as any, sms as any, stub, stub);
     const appointment = {
       id: "apt-1",
       tenantId: "t1",

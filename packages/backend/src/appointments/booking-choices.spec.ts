@@ -20,7 +20,7 @@ function setup() {
     }),
   };
   const stub = {} as any;
-  const service = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, consent as any);
+  const service = new AppointmentsService(prisma, stub, stub, stub, stub, stub, consent as any);
   const s = service as any;
   s.assertBookableOnline = jest.fn(async () => undefined);
   s.onlineBookingWindow = jest.fn(async () => ({ minHours: 0, maxHours: 24 * 60 }));

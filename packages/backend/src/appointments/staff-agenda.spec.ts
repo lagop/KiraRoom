@@ -112,7 +112,7 @@ function harness() {
     },
   };
   const stub = {} as any;
-  const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
+  const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub);
   (svc as any).logAppointmentActivity = jest.fn();
   return { svc, prisma, writes };
 }

@@ -50,7 +50,7 @@ function build(appointments: Array<{ professionalId: string; scheduledTime: stri
     },
   };
   const stub = {} as any;
-  return new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
+  return new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub);
 }
 
 const slots = async (svc: AppointmentsService, professionalId: string | undefined, locationId?: string) =>

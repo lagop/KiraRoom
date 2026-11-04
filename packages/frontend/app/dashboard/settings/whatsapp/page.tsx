@@ -8,8 +8,15 @@ import {
   Check,
   ChevronDown,
   RefreshCw,
+  Radio,
 } from "lucide-react";
-import apiClient, { WhatsAppConnection } from "@/lib/api";
+import apiClient, { WhatsAppConnection, WhatsAppSetupStatus } from "@/lib/api";
+import {
+  RECEPTION_POLL_MS,
+  receptionPoll,
+  templateSubmitErrors,
+  type ReceptionTestState,
+} from "@/lib/whatsapp-reception";
 import { useToast } from "@/components/ui/use-toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useTranslations } from "@/lib/use-translation";
@@ -32,6 +39,9 @@ const TEMPLATE_STATUS_KEYS: Record<string, string> = {
   // Meta could not be asked (expired token, wrong account...): not "Sin enviar".
   UNKNOWN: "whatsappSettings.templateStatus.unknown",
 };
+
+/** The in-panel guide to the manual connection (D20), one translation key per step. */
+const GUIDE_STEPS = ["step1", "step2", "step3", "step4", "step5", "step6"];
 
 const EMPTY_MANUAL = { accessToken: "", wabaId: "", phoneNumberId: "", displayName: "" };
 
@@ -63,13 +73,20 @@ export default function WhatsAppSettingsPage() {
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [templates, setTemplates] = useState<Array<{ name: string; status: string }>>([]);
+  // Whether KiraRoom can receive WhatsApp at all (the platform's Meta app).
+  const [setup, setSetup] = useState<WhatsAppSetupStatus | null>(null);
+  const [receptionTest, setReceptionTest] = useState<ReceptionTestState>({ kind: "idle" });
 
   async function load() {
     setLoading(true);
     setLoadError(null);
     try {
-      const c = await apiClient.getWhatsAppConnection();
+      const [c, s] = await Promise.all([
+        apiClient.getWhatsAppConnection(),
+        apiClient.getWhatsAppSetup().catch(() => null),
+      ]);
       setConn(c);
+      setSetup(s);
       if (c) setTemplates(await apiClient.getWhatsAppStandardTemplates().catch(() => []));
     } catch (err: any) {
       setLoadError(err?.message || t("whatsappSettings.loadError"));
@@ -84,13 +101,11 @@ export default function WhatsAppSettingsPage() {
       const result = await apiClient.submitWhatsAppStandardTemplates();
       setTemplates(await apiClient.getWhatsAppStandardTemplates().catch(() => []));
       // Meta's refusals come back per template as "ERROR: <reason>".
-      const errors = Object.values(result ?? {})
-        .filter((v) => typeof v === "string" && v.startsWith("ERROR: "))
-        .map((v) => v.slice("ERROR: ".length));
+      const errors = templateSubmitErrors(result);
       if (errors.length > 0) {
         toast({
           title: t("whatsappSettings.templatesSubmitPartial"),
-          description: Array.from(new Set(errors)).join(" "),
+          description: errors.join(" "),
           variant: "destructive",
         });
       } else {
@@ -107,6 +122,40 @@ export default function WhatsAppSettingsPage() {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // While the reception test waits, the connection is read every few seconds.
+  const waiting = receptionTest.kind === "waiting";
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = setInterval(async () => {
+      const c = await apiClient.getWhatsAppConnection().catch(() => null);
+      if (c) setConn(c);
+      setReceptionTest((state) => receptionPoll(state, c?.lastInboundAt, Date.now()));
+    }, RECEPTION_POLL_MS);
+    return () => clearInterval(timer);
+  }, [waiting]);
+
+  async function startReceptionTest() {
+    try {
+      const test = await apiClient.startWhatsAppReceptionTest();
+      if (!test.receivingAvailable) {
+        setReceptionTest({ kind: "unavailable", reason: test.receivingProblem ?? t("whatsappSettings.receptionTest.unavailable") });
+      } else if (!test.subscribed) {
+        setReceptionTest({
+          kind: "unavailable",
+          reason: test.webhookError || t("whatsappSettings.receivingNoHelp"),
+        });
+      } else {
+        setReceptionTest({ kind: "waiting", since: test.since, startedAt: Date.now() });
+      }
+    } catch (err: any) {
+      toast({ title: t("whatsappSettings.receptionTest.error"), description: err?.message, variant: "destructive" });
+    }
+  }
+
+  // Sending works with the salon's token, but nothing is received while the
+  // platform's Meta app is not configured: not plainly "Conectado".
+  const sendOnly = !!setup && !setup.receivingAvailable;
 
   async function connect(input: typeof EMPTY_MANUAL) {
     setBusy(true);
@@ -196,7 +245,15 @@ export default function WhatsAppSettingsPage() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="font-semibold flex items-center gap-2">
-                <Check className="w-4 h-4 text-green-600" /> {t("whatsappSettings.connectedTitle")}
+                {sendOnly ? (
+                  <>
+                    <AlertCircle className="w-4 h-4 text-amber-600" /> {t("whatsappSettings.sendOnlyTitle")}
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4 text-green-600" /> {t("whatsappSettings.connectedTitle")}
+                  </>
+                )}
               </div>
               <div className="text-sm text-gray-500 mt-1">
                 {conn.displayName || conn.displayPhone}
@@ -229,9 +286,15 @@ export default function WhatsAppSettingsPage() {
               </div>
             </div>
           )}
+          {sendOnly && setup?.receivingProblem && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <p>{setup.receivingProblem}</p>
+            </div>
+          )}
           <div className="text-sm text-gray-700">
             <span className="font-medium">{t("whatsappSettings.receivingLabel")}:</span>{" "}
-            {conn.webhookSubscribedAt && !conn.webhookError ? (
+            {!sendOnly && conn.webhookSubscribedAt && !conn.webhookError ? (
               <span className="text-green-700">{t("whatsappSettings.receivingYes")}</span>
             ) : (
               <span className="text-red-700">{t("whatsappSettings.receivingNo")}</span>
@@ -241,18 +304,42 @@ export default function WhatsAppSettingsPage() {
                 {t("whatsappSettings.lastInbound", { date: formatDateTime(conn.lastInboundAt) })}
               </span>
             )}
-            {(!conn.webhookSubscribedAt || conn.webhookError) && (
+            {!sendOnly && (!conn.webhookSubscribedAt || conn.webhookError) && (
               <p className="mt-1 text-xs text-red-700">{conn.webhookError || t("whatsappSettings.receivingNoHelp")}</p>
             )}
           </div>
-          <button
-            onClick={checkAgain}
-            disabled={checking}
-            className="inline-flex items-center gap-2 rounded border border-gray-300 px-3 py-1.5 text-xs hover:bg-gray-50 disabled:opacity-50"
-          >
-            <RefreshCw className={`h-3 w-3 ${checking ? "animate-spin" : ""}`} />
-            {checking ? t("whatsappSettings.checking") : t("whatsappSettings.checkAgain")}
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={checkAgain}
+              disabled={checking}
+              className="inline-flex items-center gap-2 rounded border border-gray-300 px-3 py-1.5 text-xs hover:bg-gray-50 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3 w-3 ${checking ? "animate-spin" : ""}`} />
+              {checking ? t("whatsappSettings.checking") : t("whatsappSettings.checkAgain")}
+            </button>
+            <button
+              onClick={startReceptionTest}
+              disabled={waiting}
+              className="inline-flex items-center gap-2 rounded border border-gray-300 px-3 py-1.5 text-xs hover:bg-gray-50 disabled:opacity-50"
+            >
+              <Radio className={`h-3 w-3 ${waiting ? "animate-pulse" : ""}`} />
+              {t("whatsappSettings.receptionTest.cta")}
+            </button>
+          </div>
+          {receptionTest.kind === "waiting" && (
+            <p className="rounded-md bg-gray-50 p-3 text-xs text-gray-700">{t("whatsappSettings.receptionTest.waiting")}</p>
+          )}
+          {receptionTest.kind === "received" && (
+            <p className="rounded-md bg-green-50 p-3 text-xs text-green-800">
+              {t("whatsappSettings.receptionTest.received", { date: formatDateTime(receptionTest.at) })}
+            </p>
+          )}
+          {receptionTest.kind === "timeout" && (
+            <p className="rounded-md bg-amber-50 p-3 text-xs text-amber-900">{t("whatsappSettings.receptionTest.timeout")}</p>
+          )}
+          {receptionTest.kind === "unavailable" && (
+            <p className="rounded-md bg-red-50 p-3 text-xs text-red-800">{receptionTest.reason}</p>
+          )}
           {conn.accessProblem && (
             <div className="rounded-lg border border-gray-200 p-3">
               <div className="text-sm font-medium text-gray-900">{t("whatsappSettings.reconnectTitle")}</div>
@@ -362,9 +449,27 @@ export default function WhatsAppSettingsPage() {
               WhatsApp Business account or number, so it showed "Conectado"
               and sent nothing. Back once the embedded signup is built; the
               backend answers 410 meanwhile. */}
+          {sendOnly && setup?.receivingProblem && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <p>{setup.receivingProblem}</p>
+            </div>
+          )}
           <div className="bg-white border border-gray-200 rounded-xl p-6">
             <h2 className="font-semibold mb-2">{t("whatsappSettings.manualTitle")}</h2>
             <p className="text-sm text-gray-500 mb-3">{t("whatsappSettings.manualIntro")}</p>
+            <details open className="group mb-4 rounded-lg border border-gray-100 bg-gray-50 px-4 py-3 text-sm">
+              <summary className="flex cursor-pointer list-none items-center gap-1 font-medium text-gray-800">
+                <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
+                {t("whatsappSettings.guide.title")}
+              </summary>
+              <ol className="mt-3 list-decimal space-y-2 pl-5 text-gray-700">
+                {GUIDE_STEPS.map((key) => (
+                  <li key={key}>{t(`whatsappSettings.guide.${key}`)}</li>
+                ))}
+              </ol>
+              <p className="mt-3 text-xs text-gray-500">{t("whatsappSettings.guide.note")}</p>
+            </details>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <Input
                 label={t("whatsappSettings.fields.accessToken")}

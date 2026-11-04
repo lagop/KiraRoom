@@ -130,7 +130,7 @@ describe("what a professional may do with appointments", () => {
       appointment: { findMany: jest.fn(async () => [{ id: "everyone's" }]) },
     };
     const stub = {} as any;
-    const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
+    const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub);
     return { svc, prisma };
   }
 

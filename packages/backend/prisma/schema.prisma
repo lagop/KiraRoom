@@ -2858,12 +2858,14 @@ model WhatsAppOptOut {
   tenantId     String
   /// Meta's message id (wamid).
   messageId    String
-  /// The sender's WhatsApp id (digits), until the opt-out is applied.
+  /// The sender's WhatsApp id (digits), until the opt-out is applied and confirmed.
   phone        String
   processedAt  DateTime?
   clientsFound Int?
   attempts     Int       @default(0)
   lastError    String?
+  /// When the "Hecho..." reply was claimed: sent at most once per BAJA.
+  confirmedAt  DateTime?
   tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, messageId])

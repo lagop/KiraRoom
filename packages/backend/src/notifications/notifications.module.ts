@@ -8,7 +8,6 @@ import { NotificationsGateway } from "./notifications.gateway";
 import { NotificationsScheduler } from "./notifications.scheduler";
 import { EmailService } from "./services/email.service";
 import { SmsService } from "./services/sms.service";
-import { WhatsAppService } from "./services/whatsapp.service";
 import { NotificationQueue } from "./queue/notification.queue";
 import { PrismaModule } from "../common/prisma/prisma.module";
 import { TranslationsModule } from "../translations/translations.module";
@@ -38,7 +37,6 @@ import { PlatformModule } from "../platform/platform.module";
     NotificationsScheduler,
     EmailService,
     SmsService,
-    WhatsAppService,
     NotificationQueue,
   ],
   exports: [
@@ -47,7 +45,6 @@ import { PlatformModule } from "../platform/platform.module";
     NotificationsScheduler,
     EmailService,
     SmsService,
-    WhatsAppService,
     NotificationQueue,
   ],
 })

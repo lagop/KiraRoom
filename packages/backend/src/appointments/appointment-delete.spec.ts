@@ -40,7 +40,7 @@ function build(overrides: Apt = {}, counts: { payments?: number; invoices?: numb
     $transaction: jest.fn(async (steps: any[]) => steps),
   };
   const stub = {} as any;
-  const service = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
+  const service = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub);
   return { service, prisma, ops };
 }
 

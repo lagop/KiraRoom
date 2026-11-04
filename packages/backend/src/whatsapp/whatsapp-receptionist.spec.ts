@@ -156,7 +156,7 @@ describe("toWhatsAppText", () => {
 });
 
 describe("WhatsApp webhook routing", () => {
-  function service(over: { optOutUpsert?: any; consent?: any } = {}) {
+  function service(over: { optOutUpsert?: any; consent?: any; connection?: any; send?: any } = {}) {
     const receptionist: any = { enqueue: jest.fn(async () => undefined) };
     const optOuts = new Map<string, any>();
     const prisma: any = {
@@ -170,7 +170,7 @@ describe("WhatsApp webhook routing", () => {
             (async (args: any) => {
               const key = `${args.where.tenantId_messageId.tenantId}:${args.where.tenantId_messageId.messageId}`;
               if (!optOuts.has(key)) {
-                optOuts.set(key, { id: `o${optOuts.size + 1}`, processedAt: null, attempts: 0, ...args.create });
+                optOuts.set(key, { id: `o${optOuts.size + 1}`, createdAt: new Date(), processedAt: null, attempts: 0, ...args.create });
               }
               return optOuts.get(key);
             }),
@@ -182,13 +182,38 @@ describe("WhatsApp webhook routing", () => {
           Object.assign(row, data);
           return row;
         }),
-        findMany: jest.fn(async () => [...optOuts.values()].filter((r) => !r.processedAt)),
+        updateMany: jest.fn(async (args: any) => {
+          const row = [...optOuts.values()].find((r) => r.id === args.where.id);
+          if (!row || !row.processedAt || row.confirmedAt || !row.phone) return { count: 0 };
+          Object.assign(row, args.data);
+          return { count: 1 };
+        }),
+        findUnique: jest.fn(async (args: any) => [...optOuts.values()].find((r) => r.id === args.where.id) ?? null),
+        findMany: jest.fn(async (args: any) =>
+          [...optOuts.values()].filter((r) =>
+            args.where.processedAt === null ? !r.processedAt : !!r.processedAt && !r.confirmedAt && !!r.phone,
+          ),
+        ),
       },
+      whatsAppConnection: {
+        findUnique: jest.fn(async () =>
+          over.connection === undefined
+            ? { phoneNumberId: "pn1", accessTokenEnc: "enc", isActive: true, authErrorAt: null }
+            : over.connection,
+        ),
+      },
+      tenant: { findUnique: jest.fn(async () => ({ name: "Salón Lucía" })) },
+    };
+    const meta: any = {
+      decryptToken: jest.fn(() => "token"),
+      sendText: jest.fn(over.send ?? (async () => ({ messages: [{ id: "wamid.out" }] }))),
     };
     const consent: any = over.consent ?? { recordMarketingChoice: jest.fn(async () => ({ status: "refused" })) };
-    const s = new WhatsAppService(prisma, {} as any, {} as any, consent, receptionist, {} as any);
-    return { s, receptionist, prisma, consent, optOuts };
+    const s = new WhatsAppService(prisma, meta, {} as any, consent, receptionist, {} as any);
+    return { s, receptionist, prisma, consent, optOuts, meta };
   }
+  // The confirmation is sent without blocking the webhook.
+  const settle = () => new Promise((r) => setImmediate(r));
   const change = (body: string, message: any = {}) => ({
     value: {
       contacts: [{ wa_id: "34600111222", profile: { name: "Ana" } }],
@@ -227,6 +252,7 @@ describe("WhatsApp webhook routing", () => {
   it("writes the BAJA down before anything else, and clears the number once applied (M11)", async () => {
     const { s, prisma, optOuts } = service();
     await (s as any).handleChange("t1", change("BAJA"));
+    await settle();
     expect(prisma.whatsAppOptOut.upsert).toHaveBeenCalledWith({
       where: { tenantId_messageId: { tenantId: "t1", messageId: "wamid.9" } },
       create: { tenantId: "t1", messageId: "wamid.9", phone: "34600111222" },
@@ -243,6 +269,54 @@ describe("WhatsApp webhook routing", () => {
     await (s as any).handleChange("t1", change("BAJA"));
     await (s as any).handleChange("t1", change("BAJA"));
     expect(consent.recordMarketingChoice).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers a BAJA once: promotions stop, appointment notices do not (D23)", async () => {
+    const { s, meta, optOuts } = service();
+    await (s as any).handleChange("t1", change("BAJA"));
+    await settle();
+    expect(meta.sendText).toHaveBeenCalledWith(
+      "token",
+      "pn1",
+      "34600111222",
+      "Hecho. No te enviaremos más promociones de Salón Lucía. Los avisos de tus citas seguirán llegando.",
+    );
+    expect([...optOuts.values()][0]).toMatchObject({ confirmedAt: expect.any(Date), phone: "" });
+    // Meta delivering the same BAJA again: no second reply.
+    await (s as any).handleChange("t1", change("BAJA"));
+    await settle();
+    expect(meta.sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed confirmation is not retried, and the number is still wiped (D23)", async () => {
+    const { s, meta, optOuts } = service({ send: async () => ({ error: { code: 131047, message: "window" } }) });
+    await (s as any).handleChange("t1", change("BAJA"));
+    await settle();
+    expect([...optOuts.values()][0]).toMatchObject({ phone: "", processedAt: expect.any(Date) });
+    await s.retryPendingOptOuts();
+    expect(meta.sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it("no confirmation while the salon's WhatsApp is disconnected or its token refused (D23)", async () => {
+    for (const connection of [null, { phoneNumberId: "pn1", accessTokenEnc: "enc", isActive: true, authErrorAt: new Date() }]) {
+      const { s, meta, optOuts } = service({ connection });
+      await (s as any).handleChange("t1", change("BAJA"));
+      await settle();
+      expect(meta.sendText).not.toHaveBeenCalled();
+      expect([...optOuts.values()][0].phone).toBe("");
+    }
+  });
+
+  it("a BAJA applied by the sweep is confirmed then (D23)", async () => {
+    const consent = {
+      recordMarketingChoice: jest.fn().mockRejectedValueOnce(new Error("deadlock")).mockResolvedValue({ status: "refused" }),
+    };
+    const { s, meta } = service({ consent });
+    await (s as any).handleChange("t1", change("BAJA"));
+    await settle();
+    expect(meta.sendText).not.toHaveBeenCalled();
+    expect(await s.retryPendingOptOuts()).toBe(1);
+    expect(meta.sendText).toHaveBeenCalledTimes(1);
   });
 
   it("if the BAJA cannot even be written, the webhook fails so Meta retries it (M11)", async () => {

@@ -1,5 +1,5 @@
 import { Module } from "@nestjs/common";
-import { WhatsAppController, MetaWebhookController } from "./whatsapp.controller";
+import { WhatsAppController, MetaWebhookController, PlatformMetaStatusController } from "./whatsapp.controller";
 import { ChannelsWebhookController } from "./channels-webhook.controller";
 import { WhatsAppService } from "./whatsapp.service";
 import { MessageBundlesModule } from "../message-bundles/message-bundles.module";
@@ -14,7 +14,7 @@ import { ChannelAttentionScheduler } from "../channel-health/channel-attention.s
 
 @Module({
   imports: [MessageBundlesModule, VirtualReceptionistModule, WhatsAppMessagingModule, ConsentModule, NotificationsModule],
-  controllers: [WhatsAppController, WhatsAppCampaignsController, MetaWebhookController, ChannelsWebhookController],
+  controllers: [WhatsAppController, WhatsAppCampaignsController, MetaWebhookController, ChannelsWebhookController, PlatformMetaStatusController],
   // MetaCloudApiClient comes from WhatsAppMessagingModule; the Messenger,
   // Instagram and Telegram receptionist (ChannelReceptionistService) from
   // VirtualReceptionistModule.

@@ -150,7 +150,7 @@ function salon(opts: { busy?: Record<string, Array<{ scheduledTime: string; dura
     $transaction: async (fn: any) => fn(asTx(prisma, tx)),
   };
   const stub = {} as any;
-  const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
+  const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub);
   const notify = jest.spyOn(svc as any, "sendAppointmentRescheduledNotifications").mockResolvedValue(undefined);
   return { svc, updates, notify };
 }

@@ -3253,7 +3253,7 @@
       "displayName": "Name your clients will see (optional)"
     },
     "templatesTitle": "Message templates",
-    "templatesIntro": "To someone who has not written to you in the last 24 hours, WhatsApp only delivers messages with a Meta-approved template: appointment reminders, confirmations, cancellations and changes, wait-list notices and review requests. We submit them for review when you connect; they are usually approved within hours. Until one is approved, that notice goes out through the usual channel (email, SMS or the platform's WhatsApp).",
+    "templatesIntro": "To someone who has not written to you in the last 24 hours, WhatsApp only delivers messages with a Meta-approved template: appointment reminders, confirmations, cancellations and changes, wait-list notices and review requests. We submit them for review when you connect; they are usually approved within hours. Until one is approved, that notice goes out through the usual channel (email or SMS).",
     "templateNames": {
       "reminder": "Appointment reminder",
       "confirmed": "Appointment confirmed",
@@ -3304,7 +3304,26 @@
     "reconnectTitle": "Update the access token",
     "reconnectIntro": "Paste a new token (a system user token that does not expire) from Meta's Business Manager. The rest of the connection is kept.",
     "reconnect": "Save the new token",
-    "webhookWarning": "Connected, but Meta does not send the messages to KiraRoom"
+    "webhookWarning": "Connected, but Meta does not send the messages to KiraRoom",
+    "sendOnlyTitle": "Connected for sending only",
+    "receptionTest": {
+      "cta": "Test reception",
+      "waiting": "Now send a WhatsApp to your number from another phone (for example \"hola\"). We wait up to 3 minutes for Meta to deliver it to us.",
+      "received": "Received: Meta delivered a message from your number ({date}). The receptionist can answer.",
+      "timeout": "Nothing arrived in 3 minutes. Check that you sent the message to the connected number and try again; if it still does not arrive, contact support.",
+      "unavailable": "KiraRoom cannot receive messages from this number yet.",
+      "error": "The test could not be started"
+    },
+    "guide": {
+      "title": "How to get these details (about 10 minutes)",
+      "step1": "Go to business.facebook.com with the account that manages the salon's WhatsApp Business and open \"Business settings\".",
+      "step2": "Under \"Users\" → \"System users\", create one with the admin role (or use the one you have).",
+      "step3": "Press \"Assign assets\", choose your WhatsApp account and give it full control.",
+      "step4": "Press \"Generate new token\", tick the whatsapp_business_messaging and whatsapp_business_management permissions and choose that it never expires. Copy the token: it is the \"Access token\".",
+      "step5": "In WhatsApp Manager, under \"Phone numbers\", copy the number's id (\"Number id in Meta\") and the WhatsApp Business account id.",
+      "step6": "Paste them here and press \"Connect\". We check them with Meta before saving; then press \"Test reception\" to see that messages arrive.",
+      "note": "Do not use the temporary token from \"API Setup\": it expires in 24 hours. If the token belongs to another Meta app, sending works but received messages go to that app; we will tell you when you connect."
+    }
   },
   "notifications": {
     "title": "Notifications",

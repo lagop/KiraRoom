@@ -98,6 +98,27 @@ export function verifyTokenUsable(value: string | undefined | null): value is st
 const CHALLENGE = /^[A-Za-z0-9_-]{1,128}$/;
 
 /** A "BAJA" that could not be written down: the webhook answers 500 so Meta retries it. */
+/** The reply to a BAJA (D23): promotions stop, appointment notices do not. */
+export function optOutConfirmation(salonName?: string | null): string {
+  const salon = salonName?.trim() || "este salón";
+  return `Hecho. No te enviaremos más promociones de ${salon}. Los avisos de tus citas seguirán llegando.`;
+}
+
+/** A free-text reply is only allowed within 24 h of the person's message; a margin is kept. */
+const OPT_OUT_CONFIRM_WINDOW_MS = 23 * 60 * 60 * 1000;
+
+/**
+ * Shown to the salon when KiraRoom's own Meta app is not set up on the
+ * server (META_APP_ID / META_APP_SECRET): sending works with the salon's
+ * token, but every webhook from Meta is refused (its signature cannot be
+ * checked), so nothing is received.
+ */
+export const RECEIVING_UNAVAILABLE =
+  "KiraRoom todavía no puede recibir mensajes de WhatsApp: falta configurar la app de Meta de la plataforma. Los recordatorios y avisos sí salen desde tu número, pero la recepcionista no contestará y las respuestas «BAJA» no se registrarán hasta que lo activemos. Escríbenos a soporte si lo necesitas ya.";
+
+/** An event from Meta counts for the reception test this long before the test started (throttle below). */
+const INBOUND_TOUCH_MS = 60 * 1000;
+
 export class OptOutNotRecordedError extends Error {}
 
 /** A connection Meta refused: Spanish 400, with Meta's error code when there was one. */
@@ -376,6 +397,46 @@ export class WhatsAppService implements OnModuleInit {
     return safeWhatsAppConnection(conn);
   }
 
+  /**
+   * Whether KiraRoom can receive WhatsApp events at all: Meta's webhooks are
+   * signed with the platform app's secret and refused without it, and the
+   * subscription check needs the app id. Booleans only, never the values.
+   */
+  platformStatus(): { appIdSet: boolean; appSecretSet: boolean; verifyTokenSet: boolean; receiving: boolean } {
+    const appIdSet = !!this.config.get<string>("META_APP_ID")?.trim();
+    const appSecretSet = !!this.config.get<string>("META_APP_SECRET")?.trim();
+    const verifyTokenSet = verifyTokenUsable(this.config.get<string>("META_WEBHOOK_VERIFY_TOKEN"));
+    return { appIdSet, appSecretSet, verifyTokenSet, receiving: appIdSet && appSecretSet && verifyTokenSet };
+  }
+
+  /** For the salon's page: can messages be received, and if not, what to tell it. */
+  setupStatus(): { receivingAvailable: boolean; receivingProblem: string | null } {
+    const { receiving } = this.platformStatus();
+    return { receivingAvailable: receiving, receivingProblem: receiving ? null : RECEIVING_UNAVAILABLE };
+  }
+
+  /**
+   * "Probar recepción": the panel asks the salon to send a WhatsApp to its
+   * number and watches lastInboundAt pass `since`. The salon's throttle is
+   * reset so the next event is written at once (on this instance; another
+   * one writes it within INBOUND_TOUCH_MS, which `since` allows for).
+   */
+  async startReceptionTest(tenantId: string) {
+    const conn = await this.prisma.whatsAppConnection.findUnique({ where: { tenantId } });
+    if (!conn) throw new NotFoundException("No WhatsApp connection");
+    this.inboundTouched.delete(tenantId);
+    const { receivingAvailable, receivingProblem } = this.setupStatus();
+    const now = Date.now();
+    return {
+      startedAt: new Date(now).toISOString(),
+      since: new Date(now - INBOUND_TOUCH_MS).toISOString(),
+      receivingAvailable,
+      receivingProblem,
+      subscribed: !!conn.webhookSubscribedAt && !conn.webhookError,
+      webhookError: conn.webhookError,
+    };
+  }
+
   async disconnect(tenantId: string) {
     await this.prisma.whatsAppConnection
       .delete({ where: { tenantId } })
@@ -453,11 +514,12 @@ export class WhatsAppService implements OnModuleInit {
   /**
    * An event for this number reached KiraRoom: messages do arrive. Shown in
    * the panel ("Último mensaje recibido"), and it confirms the webhook
-   * subscription. Written at most every 5 minutes per salon; never throws.
+   * subscription. Written at most once a minute per salon (the reception
+   * test waits for it); never throws.
    */
   private async touchInbound(tenantId: string): Promise<void> {
     const now = Date.now();
-    if (now - (this.inboundTouched.get(tenantId) ?? 0) < 5 * 60 * 1000) return;
+    if (now - (this.inboundTouched.get(tenantId) ?? 0) < INBOUND_TOUCH_MS) return;
     this.inboundTouched.set(tenantId, now);
     try {
       await this.prisma.whatsAppConnection.updateMany({ where: { tenantId }, data: { lastInboundAt: new Date(now) } });
@@ -629,8 +691,56 @@ export class WhatsAppService implements OnModuleInit {
     } catch (err) {
       throw new OptOutNotRecordedError(`WhatsApp opt-out for tenant ${tenantId} not recorded: ${(err as Error).message}`);
     }
-    if (row.processedAt) return;
-    await this.applyOptOut(row);
+    if (!row.processedAt && !(await this.applyOptOut(row))) return;
+    // Not awaited: the webhook answers Meta at once. Claimed, so a retried
+    // delivery does not send it twice.
+    void this.confirmOptOut(row.id);
+  }
+
+  /**
+   * "Hecho. No te enviaremos más promociones de {salón}...": the reply to a
+   * BAJA, once it is applied. Inside the 24-hour window the BAJA opened, so
+   * a free text is allowed. At most once per BAJA (confirmedAt is claimed
+   * before sending); a failed send is not retried. The number is wiped
+   * afterwards either way. Never throws.
+   */
+  private async confirmOptOut(rowId: string): Promise<boolean> {
+    try {
+      const claimed = await this.prisma.whatsAppOptOut.updateMany({
+        where: { id: rowId, processedAt: { not: null }, confirmedAt: null, phone: { not: "" } },
+        data: { confirmedAt: new Date() },
+      });
+      if (claimed.count === 0) return false;
+      const row = await this.prisma.whatsAppOptOut.findUnique({ where: { id: rowId } });
+      if (!row) return false;
+      try {
+        const [conn, tenant] = await Promise.all([
+          this.prisma.whatsAppConnection.findUnique({
+            where: { tenantId: row.tenantId },
+            select: { phoneNumberId: true, accessTokenEnc: true, isActive: true, authErrorAt: true },
+          }),
+          this.prisma.tenant.findUnique({ where: { id: row.tenantId }, select: { name: true } }),
+        ]);
+        if (!conn?.isActive || conn.authErrorAt || !conn.phoneNumberId) return false;
+        const sent = await this.meta.sendText(
+          this.meta.decryptToken(conn.accessTokenEnc),
+          conn.phoneNumberId,
+          row.phone,
+          optOutConfirmation(tenant?.name),
+        );
+        if (sent?.error) {
+          this.logger.warn(`BAJA confirmation for tenant ${row.tenantId} not sent: ${sent.error.code} ${sent.error.message}`);
+          await this.health?.whatsAppError(row.tenantId, sent.error.code);
+          return false;
+        }
+        return true;
+      } finally {
+        await this.prisma.whatsAppOptOut.update({ where: { id: row.id }, data: { phone: "" } }).catch(() => undefined);
+      }
+    } catch (err) {
+      this.logger.warn(`BAJA confirmation ${rowId} failed: ${(err as Error).message}`);
+      return false;
+    }
   }
 
   /**
@@ -656,10 +766,11 @@ export class WhatsAppService implements OnModuleInit {
           data: { status: WhatsAppRecipientStatus.opted_out },
         });
       }
-      // Done: the number is no longer needed (the consent record keeps the proof).
+      // Done. The number is kept only for the confirmation (confirmOptOut
+      // wipes it); the consent record keeps the proof.
       await this.prisma.whatsAppOptOut.update({
         where: { id: row.id },
-        data: { processedAt: new Date(), clientsFound: rows.length, phone: "", lastError: null },
+        data: { processedAt: new Date(), clientsFound: rows.length, lastError: null },
       });
       this.logger.log(`WhatsApp opt-out for tenant ${tenantId}: ${rows.length} client(s)`);
       return true;
@@ -687,7 +798,32 @@ export class WhatsAppService implements OnModuleInit {
           take: 100,
         }),
       );
-      for (const row of pending) if (await runUnscoped(() => this.applyOptOut(row))) applied++;
+      for (const row of pending) {
+        if (!(await runUnscoped(() => this.applyOptOut(row)))) continue;
+        applied++;
+        // Still inside the BAJA's 24-hour window: it gets its confirmation now.
+        if (Date.now() - row.createdAt.getTime() < OPT_OUT_CONFIRM_WINDOW_MS) {
+          await runUnscoped(() => this.confirmOptOut(row.id));
+        }
+      }
+      // Applied but never confirmed (a restart in between): confirmed, or
+      // the number wiped once the window has passed.
+      const unconfirmed = await runUnscoped(() =>
+        this.prisma.whatsAppOptOut.findMany({
+          where: { processedAt: { not: null }, confirmedAt: null, phone: { not: "" } },
+          select: { id: true, createdAt: true },
+          take: 100,
+        }),
+      );
+      for (const row of unconfirmed) {
+        if (Date.now() - row.createdAt.getTime() < OPT_OUT_CONFIRM_WINDOW_MS) {
+          await runUnscoped(() => this.confirmOptOut(row.id));
+        } else {
+          await runUnscoped(() =>
+            this.prisma.whatsAppOptOut.update({ where: { id: row.id }, data: { phone: "" } }),
+          ).catch(() => undefined);
+        }
+      }
     } catch (err) {
       this.logger.error(`WhatsApp opt-out retry failed: ${(err as Error).message}`);
     }

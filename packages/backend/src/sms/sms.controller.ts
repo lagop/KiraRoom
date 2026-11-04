@@ -1,25 +1,10 @@
-import { Body, Controller, Get, Post, Req, UseGuards } from "@nestjs/common";
+import { Controller, Get, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 import { FeatureGuard } from "../common/guards/feature.guard";
-import { Feature } from "../common/decorators/feature.decorator";
 import { SmsService } from "../notifications/services/sms.service";
-import { IsNotEmpty, IsString, Matches, MaxLength } from "class-validator";
-
-/**
- * A test SMS. Was an inline type: any recipient string and any length of
- * text went to the provider. E.164 (or a national number) and three SMS
- * segments at most.
- */
-export class TestSmsDto {
-  @IsString() @Matches(/^\+?[0-9 ]{6,20}$/, { message: "to must be a phone number" })
-  to!: string;
-
-  @IsString() @IsNotEmpty() @MaxLength(459)
-  body!: string;
-}
 
 @ApiTags("sms")
 @ApiBearerAuth()
@@ -38,23 +23,6 @@ export class SmsController {
     return { configured: this.sms.isConfigured() };
   }
 
-  /**
-   * Sends a single test SMS — gated by `sms_notifications` (Pro+).
-   */
-  @Post("test")
-  @Roles("owner", "admin")
-  @Feature("sms_notifications")
-  async test(
-    @Req() req: any,
-    @Body() dto: TestSmsDto,
-  ) {
-    const result = await this.sms.sendSms({
-      to: dto.to,
-      body: dto.body });
-    return {
-      success: result.success,
-      id: result.id,
-      error: result.error,
-      tenantId: req.user.tenantId };
-  }
+  // POST /sms/test is gone (channels audit M8): it sent any text to any
+  // number from the platform's Twilio account at the platform's cost.
 }

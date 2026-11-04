@@ -1,7 +1,6 @@
 import { BadRequestException, ConflictException, HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash, randomBytes, timingSafeEqual } from 'crypto';
-import { PrismaService } from '../../common/prisma/prisma.service';
 import { EncryptionService } from '../../common/encryption/encryption.service';
 import { RedisService } from '../../common/cache/redis.service';
 import { ChannelCredentialsService } from '../channels/channel-credentials.service';
@@ -80,7 +79,6 @@ export class ChannelConnectionsService {
   private readonly logger = new Logger(ChannelConnectionsService.name);
 
   constructor(
-    private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly encryption: EncryptionService,
     private readonly credentials: ChannelCredentialsService,

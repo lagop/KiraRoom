@@ -78,7 +78,6 @@ function build({
     stub,
     stub,
     stub,
-    stub,
   );
   return { service, prisma };
 }

@@ -242,7 +242,7 @@ describe("moving an appointment (PATCH /appointments/:id)", () => {
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
     };
     const stub = {} as any;
-    const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
+    const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub);
     jest.spyOn(svc, "findOne").mockResolvedValue(appointment as any);
     return { svc, prisma };
   }
