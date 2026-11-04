@@ -18,6 +18,7 @@ import { Roles } from "../../auth/decorators/roles.decorator";
 import { CurrentUser } from "../../auth/decorators/current-user.decorator";
 import { AllowWhenReadOnly } from "../../common/decorators/allow-when-read-only.decorator";
 import { ClientGdprService } from "../../clients/client-gdpr.service";
+import { NotDuringSupport } from "../../common/decorators/not-during-support.decorator";
 
 /**
  * A client's RGPD rights, exercised by the salon (the data controller) on
@@ -28,6 +29,7 @@ import { ClientGdprService } from "../../clients/client-gdpr.service";
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.owner, UserRole.admin)
+@NotDuringSupport()
 @Controller("admin/clients")
 export class AdminClientGdprController {
   constructor(private readonly gdpr: ClientGdprService) {}

@@ -9,9 +9,10 @@ import { JwtStrategy } from "./strategies/jwt.strategy";
  */
 const NOW_S = () => Math.floor(Date.now() / 1000);
 
-function build(payload: Record<string, unknown>, impersonator: Record<string, unknown> | null) {
+function build(payload: Record<string, unknown>, impersonator: Record<string, unknown> | null, salon: Record<string, unknown> = { allowSupportAccess: true }) {
   const owner = { id: "owner-1", email: "o@salon.test", role: "owner", tenantId: "t1", isActive: true, tokenVersion: 0, professional: null };
   const prisma: any = {
+    tenant: { findUnique: jest.fn(async () => salon) },
     user: {
       findUnique: jest.fn(async (args: any) => {
         if (args.where.id === "owner-1") return owner;

@@ -947,6 +947,7 @@
     "subtitle": "Panel de administración de la plataforma",
     "nav": {
       "overview": "Inicio",
+      "weekly": "Esta semana",
       "salons": "Salones",
       "users": "Usuarios",
       "analytics": "Analítica",
@@ -966,8 +967,6 @@
       "arr": "ARR (MRR × 12)",
       "avg_per_paying": "Media por salón de pago",
       "active_without_billing": "Activos sin cobro (sin suscripción en Stripe, fuera del MRR)",
-      "salon_takings_title": "Cobrado por los salones",
-      "salon_takings_total": "Citas pagadas, todo el histórico",
       "salon_takings_note": "Lo que los salones cobran a sus clientas por las citas marcadas como pagadas. No es dinero de KiraRoom.",
       "salon_takings": "Cobrado por el salón (citas pagadas)",
       "salon_takings_month": "{amount} este mes",
@@ -993,7 +992,6 @@
       "salons_evolution": "Salones (total a fin de mes)",
       "users_evolution": "Usuarios (total a fin de mes)",
       "appointments_evolution": "Citas por mes (fecha de la cita)",
-      "takings_evolution": "Cobrado por los salones por mes (citas pagadas)",
       "churn_title": "Bajas y conversión este mes",
       "paid_cancellations": "Bajas de pago",
       "expired_trials": "Pruebas que acabaron sin pagar",
@@ -1265,6 +1263,45 @@
     "totalUsers": "Total de usuarios",
     "monthlyRecurringRevenue": "Ingresos recurrentes mensuales",
     "usersGrowth": "Crecimiento de usuarios",
+    "weekly": {
+      "title": "Esta semana",
+      "subtitle": "Lo que conviene mirar. El mismo resumen llega por correo cada lunes a las 08:00.",
+      "home_title": "Esta semana",
+      "home_link": "Ver todo",
+      "all_clear": "Nada pendiente esta semana.",
+      "load_error": "No se pudo cargar el resumen de la semana.",
+      "week": "Semana {week}",
+      "empty": "Nada.",
+      "past_due": "Pagos fallidos",
+      "past_due_row": "Falló el {failed}, gracia hasta el {grace}",
+      "trials_ending": "Pruebas que acaban en 7 días",
+      "trial_row": "Acaba el {date}",
+      "trial_has_subscription": "ya tiene suscripción",
+      "deletion_requests": "Borrados pedidos",
+      "deletion_row": "Pedido el {date}",
+      "retention": "Retención (aviso y anonimización)",
+      "retention_dry_run": "Ensayo: la retención está apagada (RETENTION_ANONYMIZE_ENABLED), así que no se avisa ni se anonimiza a nadie. Es lo que se haría.",
+      "retention_warn": "Aviso a la dueña",
+      "retention_anonymize": "Anonimizar",
+      "retention_tonight": "esta noche",
+      "retention_row": "Anonimización el {date}",
+      "ai_spend": "Gasto de IA este mes",
+      "ai_total": "{amount} USD estimados en {period}",
+      "ai_row": "{amount} USD · {calls} llamadas",
+      "ai_unpriced": "Sin precio conocido (no suman): {models}",
+      "onboarding_stuck": "Arranque sin terminar tras 7 días",
+      "onboarding_row": "{days} días desde el alta",
+      "bug_reports": "Reportes de bugs sin resolver",
+      "bug_reports_all": "Ver todos",
+      "excluded_note": "No cuentan los salones eliminados ni los de prueba.",
+      "count_past_due": "pagos fallidos",
+      "count_trials": "pruebas acaban",
+      "count_deletions": "borrados pedidos",
+      "count_retention": "retención",
+      "count_ai": "IA este mes",
+      "count_onboarding": "arranques parados",
+      "count_bugs": "bugs abiertos"
+    },
     "console": {
       "status_active": "Activo",
       "status_trialing": "En prueba",
@@ -1403,7 +1440,8 @@
       "explain": "Se abrirá en una pestaña nueva; tu sesión de la consola sigue abierta aquí. La sesión de soporte dura como máximo 2 horas, y lo que hagas queda en el registro de actividad a tu nombre.",
       "reason_label": "Motivo",
       "reason_placeholder": "Por ejemplo: la dueña pidió ayuda para configurar los horarios",
-      "open": "Abrir panel"
+      "open": "Abrir panel",
+      "owner_notified": "La dueña recibe un email con tu nombre, la hora y el motivo."
     },
     "security": {
       "title": "Seguridad",
@@ -1413,7 +1451,9 @@
       "sign_out_all_button": "Cerrar todas las sesiones",
       "sign_out_all_confirm_title": "¿Cerrar todas las sesiones?",
       "sign_out_all_confirm_body": "Tendrás que volver a entrar con tu contraseña (y el código, si tienes la verificación en dos pasos).",
-      "sign_out_all_failed": "No se han podido cerrar las sesiones."
+      "sign_out_all_failed": "No se han podido cerrar las sesiones.",
+      "two_factor_required_title": "Activa la verificación en dos pasos",
+      "two_factor_required_body": "La consola exige la verificación en dos pasos. Actívala aquí abajo y guarda los códigos de recuperación; después podrás usar el resto de la consola."
     },
     "audit": {
       "title": "Actividad",
@@ -1466,7 +1506,8 @@
         "client_anonymize": "Clienta anonimizada",
         "invoice_emailed": "Factura enviada por email"
       }
-    }
+    },
+    "forgot_password": "¿Has olvidado la contraseña?"
   },
   "dashboard": {
     "title": "Panel",
@@ -3884,6 +3925,33 @@
     "ends_at": "La sesión se cierra sola a las {time}.",
     "ends_max": "La sesión se cierra sola como máximo 2 horas después de entrar.",
     "session_id": "sesión",
-    "exit": "Salir del modo soporte"
+    "exit": "Salir del modo soporte",
+    "limits": "En modo soporte no se puede pagar ni cambiar el plan, tocar los datos fiscales, contraseñas, accesos ni la verificación en dos pasos, exportar clientas ni borrar el salón."
+  },
+  "supportAccess": {
+    "title": "Soporte de KiraRoom",
+    "body": "Si nos pides ayuda, el equipo de soporte puede entrar en tu panel para verlo como tú. Puede revisar todo y configurar la agenda, los servicios, el equipo y la web; nunca puede pagar ni cambiar tu plan, tocar tus datos fiscales, contraseñas o accesos, ni exportar tus clientas. Cada vez que entra te enviamos un email.",
+    "toggle": "Permitir que soporte de KiraRoom entre en mi panel",
+    "on": "Soporte puede entrar en tu panel cuando lo necesite.",
+    "off": "Soporte no puede entrar en tu panel. Si nos pides ayuda, tendrás que activarlo antes.",
+    "saved_on": "Soporte puede volver a entrar en tu panel",
+    "saved_off": "Soporte ya no puede entrar en tu panel",
+    "save_failed": "No se ha podido guardar",
+    "confirm_off_title": "¿Impedir que soporte entre en tu panel?",
+    "confirm_off_body": "Si hay una sesión de soporte abierta, se cierra ahora. Podrás volver a activarlo cuando quieras.",
+    "confirm_off": "Impedir el acceso",
+    "support_mode": "Solo la dueña puede cambiar esto, no una sesión de soporte.",
+    "sessions_title": "Últimas sesiones de soporte",
+    "sessions_empty": "Soporte no ha entrado en tu panel en los últimos 6 meses.",
+    "col_date": "Fecha",
+    "col_reason": "Motivo",
+    "col_duration": "Duración",
+    "col_who": "Quién",
+    "status_active": "Abierta ahora",
+    "status_expired": "Se cerró sola (máx. 2 h)",
+    "minutes": "{n} min",
+    "less_than_minute": "Menos de 1 min",
+    "hours_minutes": "{h} h {m} min",
+    "no_reason": "Sin motivo"
   }
 }

@@ -14,7 +14,6 @@ interface Analytics {
   totalUsers: number;
   totalClients: number;
   totalAppointments: number;
-  salonTakingsTotal: number;
   mrr: number;
   arr: number;
   payingTenants: number;
@@ -34,13 +33,9 @@ interface Analytics {
 interface GrowthMetrics {
   period: string;
   salonsEvolution: { month: string; total: number; new: number }[];
-  salonTakingsEvolution: { month: string; value: number }[];
   usersEvolution: { month: string; total: number; new: number }[];
   appointmentsEvolution: { month: string; value: number }[];
   summary: {
-    salonTakingsThisMonth: number;
-    salonTakingsLastMonth: number;
-    salonTakingsChangePercent: number | null;
     newSalonsThisMonth: number;
     newSalonsLastMonth: number;
     newSalonsChangePercent: number | null;
@@ -236,18 +231,11 @@ export default function SaasAnalyticsPage() {
             title={t("saas.metrics.appointments_evolution")}
             color="#4338ca"
           />
-          {/* Salons' takings, in euros: what they charged their clients. */}
-          <LineChart
-            data={growth.salonTakingsEvolution.map((d) => ({ month: d.month, value: d.value }))}
-            title={t("saas.metrics.takings_evolution")}
-            valueSuffix=" €"
-            color="#64748b"
-          />
         </div>
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
-        {/* KiraRoom revenue, then the salons' takings apart */}
+        {/* KiraRoom revenue. The salons' takings are shown per salon only (audit 8 D10). */}
         <div className="bg-white rounded-xl border border-gray-200 p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">{t("saas.metrics.kiraroom_revenue")}</h2>
           <div className="space-y-4">
@@ -269,15 +257,6 @@ export default function SaasAnalyticsPage() {
                 <span className="font-semibold text-amber-600">{analytics.activeWithoutBilling}</span>
               </div>
             )}
-            <div className="pt-4 border-t">
-              <div className="flex justify-between items-center gap-3">
-                <span className="text-gray-600">{t("saas.metrics.salon_takings_title")}</span>
-                <span className="font-semibold text-gray-900">{formatEuros(analytics.salonTakingsTotal)}</span>
-              </div>
-              <p className="text-xs text-gray-400 mt-1">
-                {t("saas.metrics.salon_takings_total")}. {t("saas.metrics.salon_takings_note")}
-              </p>
-            </div>
           </div>
         </div>
 

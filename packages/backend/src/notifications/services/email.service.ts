@@ -1409,6 +1409,63 @@ export class EmailService {
   }
 
   /**
+   * Audit 8 D2: KiraRoom support has just opened a session in the salon's
+   * panel. To the owner, in Spanish: who, when, the reason typed in the
+   * console, and the setting that turns support access off.
+   */
+  async sendSupportSessionStarted(data: {
+    to: string;
+    tenantName: string;
+    /** The platform owner's name, as the console shows it. */
+    supportName: string;
+    startedAt: Date;
+    endsAt: Date;
+    reason: string;
+    /** Ajustes > Seguridad, where the setting and the list of sessions are. */
+    settingsUrl: string;
+    timeZone?: string;
+  }): Promise<{ success: boolean; id?: string; error?: string; skipped?: boolean }> {
+    if (await this.shouldSkipBouncedUser(data.to)) {
+      return { success: false, skipped: true, error: "email_bounced" };
+    }
+    const timeZone = data.timeZone || "Europe/Madrid";
+    const when = (d: Date) =>
+      `${formatLongDateEs(d, timeZone)} a las ${d.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", timeZone })}`;
+    const subject = `Soporte de KiraRoom ha entrado en el panel de ${data.tenantName}`;
+    const lines = [
+      `${data.supportName}, del equipo de soporte de KiraRoom, ha entrado en el panel de tu salón el ${when(data.startedAt)}.`,
+      `Motivo: ${data.reason}`,
+      `La sesión termina sola, como muy tarde, el ${when(data.endsAt)}. Soporte no puede cambiar tu contraseña, pagar ni cambiar tu plan, tocar tus datos fiscales ni exportar tus clientas.`,
+      "Si no lo esperabas, o prefieres que soporte no pueda entrar, desactívalo en Ajustes > Seguridad. Allí ves también las últimas sesiones de soporte.",
+    ];
+    const e = (v: unknown) => this.escapeHtml(v);
+    const html = `
+<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:12px;padding:32px;">
+        <tr><td>
+          <div style="font-size:24px;font-weight:700;color:#0f172a;margin-bottom:8px;">KiraRoom</div>
+          <p style="font-size:14px;color:#64748b;margin:0 0 24px 0;">Aviso de seguridad: ${e(data.tenantName)}</p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">Hola,</p>
+          ${lines.map((l) => `<p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">${e(l)}</p>`).join("\n          ")}
+          <p style="font-size:15px;line-height:1.6;margin:0 0 8px 0;">
+            <a href="${e(data.settingsUrl)}" style="color:#4f46e5;font-weight:600;">Ir a Ajustes &gt; Seguridad</a>
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`.trim();
+    const text = ["Hola,", "", ...lines, "", `Ajustes > Seguridad: ${data.settingsUrl}`].join("\n");
+    return this.sendEmail({ to: data.to, subject, html, text });
+  }
+
+  /**
    * P2A-receptionist-v2 H-4: sent right after the tenant's first
    * successful Stripe charge for the `multichannel` add-on. Greets
    * the salon owner, points them to the channels wizard, and

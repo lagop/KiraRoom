@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { LogOut } from "lucide-react";
+import { useEffect, useState } from "react";
+import { LogOut, ShieldAlert } from "lucide-react";
 import apiClient from "@/lib/api";
 import { authStorage } from "@/lib/auth-storage";
 import { ChangePasswordForm } from "@/src/components/auth/change-password-form";
@@ -78,12 +78,26 @@ function SignOutEverywhere() {
 /** The platform owner's own security: password, sessions, two-step verification. */
 export default function SecurityPage() {
   const t = useTranslations();
+  // Audit 8 D15: sent here because the console requires 2FA (lib/api.ts).
+  const [twoFactorRequired, setTwoFactorRequired] = useState(false);
+  useEffect(() => {
+    setTwoFactorRequired(new URLSearchParams(window.location.search).get("2fa") === "required");
+  }, []);
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">{t("saas.security.title")}</h1>
         <p className="text-gray-500 mt-1">{t("saas.security.subtitle")}</p>
       </div>
+      {twoFactorRequired && (
+        <div role="alert" className="max-w-2xl flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4">
+          <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" aria-hidden />
+          <div>
+            <p className="font-semibold text-amber-900">{t("saas.security.two_factor_required_title")}</p>
+            <p className="text-sm text-amber-800">{t("saas.security.two_factor_required_body")}</p>
+          </div>
+        </div>
+      )}
       <ChangePasswordForm />
       <SignOutEverywhere />
       <TwoFactorSettings />

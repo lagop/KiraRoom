@@ -947,6 +947,7 @@
     "subtitle": "Platform administration panel",
     "nav": {
       "overview": "Overview",
+      "weekly": "This week",
       "salons": "Salons",
       "users": "Users",
       "analytics": "Analytics",
@@ -966,8 +967,6 @@
       "arr": "ARR (MRR × 12)",
       "avg_per_paying": "Average per paying salon",
       "active_without_billing": "Active without billing (no Stripe subscription, not in MRR)",
-      "salon_takings_title": "Taken by the salons",
-      "salon_takings_total": "Paid appointments, all time",
       "salon_takings_note": "What the salons charge their clients for appointments marked paid. Not KiraRoom's money.",
       "salon_takings": "Taken by the salon (paid appointments)",
       "salon_takings_month": "{amount} this month",
@@ -993,7 +992,6 @@
       "salons_evolution": "Salons (total at month end)",
       "users_evolution": "Users (total at month end)",
       "appointments_evolution": "Appointments per month (appointment date)",
-      "takings_evolution": "Taken by the salons per month (paid appointments)",
       "churn_title": "Cancellations and conversion this month",
       "paid_cancellations": "Paid cancellations",
       "expired_trials": "Trials that ended unpaid",
@@ -1265,6 +1263,45 @@
     "totalUsers": "Total Users",
     "monthlyRecurringRevenue": "Monthly Recurring Revenue",
     "usersGrowth": "Users Growth",
+    "weekly": {
+      "title": "This week",
+      "subtitle": "What is worth a look. The same summary arrives by email every Monday at 08:00.",
+      "home_title": "This week",
+      "home_link": "See all",
+      "all_clear": "Nothing pending this week.",
+      "load_error": "The weekly summary could not be loaded.",
+      "week": "Week {week}",
+      "empty": "Nothing.",
+      "past_due": "Failed payments",
+      "past_due_row": "Failed on {failed}, grace until {grace}",
+      "trials_ending": "Trials ending within 7 days",
+      "trial_row": "Ends on {date}",
+      "trial_has_subscription": "already subscribed",
+      "deletion_requests": "Deletion requests",
+      "deletion_row": "Requested on {date}",
+      "retention": "Retention (warning and anonymisation)",
+      "retention_dry_run": "Dry run: retention is off (RETENTION_ANONYMIZE_ENABLED), so nobody is warned or anonymised. This is what would happen.",
+      "retention_warn": "Warn the owner",
+      "retention_anonymize": "Anonymise",
+      "retention_tonight": "tonight",
+      "retention_row": "Anonymised on {date}",
+      "ai_spend": "AI spend this month",
+      "ai_total": "{amount} USD estimated in {period}",
+      "ai_row": "{amount} USD · {calls} calls",
+      "ai_unpriced": "No known price (not in the total): {models}",
+      "onboarding_stuck": "Onboarding unfinished after 7 days",
+      "onboarding_row": "{days} days since sign-up",
+      "bug_reports": "Unresolved bug reports",
+      "bug_reports_all": "See all",
+      "excluded_note": "Deleted salons and test salons are not counted.",
+      "count_past_due": "failed payments",
+      "count_trials": "trials ending",
+      "count_deletions": "deletion requests",
+      "count_retention": "retention",
+      "count_ai": "AI this month",
+      "count_onboarding": "stuck onboardings",
+      "count_bugs": "open bugs"
+    },
     "console": {
       "status_active": "Active",
       "status_trialing": "On trial",
@@ -1403,7 +1440,8 @@
       "explain": "It opens in a new tab; your console session stays open here. The support session lasts at most 2 hours, and what you do goes into the activity log under your name.",
       "reason_label": "Reason",
       "reason_placeholder": "For example: the owner asked for help setting up the opening hours",
-      "open": "Open panel"
+      "open": "Open panel",
+      "owner_notified": "The owner gets an email with your name, the time and the reason."
     },
     "security": {
       "title": "Security",
@@ -1413,7 +1451,9 @@
       "sign_out_all_button": "Sign out everywhere",
       "sign_out_all_confirm_title": "Sign out everywhere?",
       "sign_out_all_confirm_body": "You will have to sign in again with your password (and the code, if two-step verification is on).",
-      "sign_out_all_failed": "The sessions could not be closed."
+      "sign_out_all_failed": "The sessions could not be closed.",
+      "two_factor_required_title": "Turn on two-step verification",
+      "two_factor_required_body": "The console requires two-step verification. Turn it on below and keep the recovery codes; then the rest of the console opens."
     },
     "audit": {
       "title": "Activity",
@@ -1466,7 +1506,8 @@
         "client_anonymize": "Client anonymised",
         "invoice_emailed": "Invoice emailed"
       }
-    }
+    },
+    "forgot_password": "Forgot your password?"
   },
   "dashboard": {
     "title": "Dashboard",
@@ -3884,6 +3925,33 @@
     "ends_at": "The session closes by itself at {time}.",
     "ends_max": "The session closes by itself at most 2 hours after entering.",
     "session_id": "session",
-    "exit": "Leave support mode"
+    "exit": "Leave support mode",
+    "limits": "In support mode you cannot pay or change the plan, touch fiscal data, passwords, access or two-step verification, export clients or delete the salon."
+  },
+  "supportAccess": {
+    "title": "KiraRoom support",
+    "body": "If you ask us for help, the support team can enter your panel to see it as you do. They can review everything and set up the agenda, services, team and website; they can never pay or change your plan, touch your fiscal data, passwords or access, or export your clients. We email you every time they enter.",
+    "toggle": "Allow KiraRoom support to enter my panel",
+    "on": "Support can enter your panel when needed.",
+    "off": "Support cannot enter your panel. If you ask us for help, turn this on first.",
+    "saved_on": "Support can enter your panel again",
+    "saved_off": "Support can no longer enter your panel",
+    "save_failed": "Could not save",
+    "confirm_off_title": "Stop support from entering your panel?",
+    "confirm_off_body": "An open support session, if any, ends now. You can turn this back on at any time.",
+    "confirm_off": "Stop access",
+    "support_mode": "Only the owner can change this, not a support session.",
+    "sessions_title": "Recent support sessions",
+    "sessions_empty": "Support has not entered your panel in the last 6 months.",
+    "col_date": "Date",
+    "col_reason": "Reason",
+    "col_duration": "Duration",
+    "col_who": "Who",
+    "status_active": "Open now",
+    "status_expired": "Ended on its own (max. 2 h)",
+    "minutes": "{n} min",
+    "less_than_minute": "Under 1 min",
+    "hours_minutes": "{h} h {m} min",
+    "no_reason": "No reason"
   }
 }

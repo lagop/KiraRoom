@@ -9,6 +9,7 @@ import { PaymentFiltersDto } from "../payments/payments-query";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { AnalyticsFlagsService } from "../analytics/analytics-flags.service";
 import { LocationScope, requestedLocationScope } from "../analytics/analytics-location";
+import { NotDuringSupport } from "../common/decorators/not-during-support.decorator";
 
 const LOCATION_DESCRIPTION =
   "Empresa: only this location (appointments booked there, or with none and a professional who works there; payments of those appointments). 400 malformed, 403 on other plans, 404 for another salon's location.";
@@ -39,6 +40,7 @@ export class PaymentsExportQueryDto extends PaymentFiltersDto {
 @ApiTags("exports")
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
+@NotDuringSupport()
 @Controller("exports")
 export class ExportsController {
   constructor(

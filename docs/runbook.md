@@ -209,6 +209,18 @@ Then sign in at `/saas/login` and turn two-step verification on again in
 If only the password was lost and the authenticator app still works, add
 `--keep-2fa` to leave two-step verification as it is.
 
+A lost password with the authenticator still at hand can also go through
+"¿Has olvidado la contraseña?" on `/saas/login` (the usual reset email).
+
+**Mandatory 2FA for the platform owner (audit 8 D15).** `SAAS_OWNER_2FA_REQUIRED=true`
+in the backend's environment makes the console usable only with two-step
+verification on: without it, every console route answers 403
+`SAAS_OWNER_2FA_REQUIRED` and the console sends her to `/saas/seguridad`
+to set it up (sign-in, profile, 2FA setup, password change and sign-out keep
+working). Default `false`; turn it on only once 2FA is on and the recovery
+codes are kept somewhere safe. The seed recovery above still works with it on:
+it clears 2FA, and the next sign-in lands on the setup page.
+
 Wrong passwords for the platform owner lock the **address** they come from
 (5 in 30 minutes), not the account, so a stranger cannot keep you out; from
 another network you can still sign in.
@@ -533,7 +545,7 @@ Until revenue justifies PagerDuty (€21/user/mo), use:
 | --- | --- | --- |
 | Backend (OpsAlertService) | AEAT / TicketBAI / SII rejections, scheduled jobs that throw, more permanent bounces (20) or spam complaints (3) in a day than the threshold. One email per kind per hour. | `OPS_ALERT_EMAIL` (else `FOUNDER_EMAIL`, else admin@kiraroom.net), `OPS_ALERT_BOUNCES_PER_DAY`, `OPS_ALERT_COMPLAINTS_PER_DAY` |
 | GlitchTip | Every 5xx and unexpected exception (SentryExceptionFilter) and failed jobs | `SENTRY_DSN` on the backend; GlitchTip's own emails via `GLITCHTIP_EMAIL_URL` |
-| Alertmanager | The Prometheus rules in ops/prometheus/rules (API down, no inbound messages, outbound failures, gate) | docker-compose.observability.yml: `ALERTMANAGER_SMTP_PASSWORD` (the Resend API key), `OPS_ALERT_EMAIL`, `ALERTMANAGER_FROM` (a sender on a domain verified in Resend) |
+| Alertmanager | The Prometheus rules in ops/prometheus/rules (API down, no inbound messages, outbound failures, gate) | docker-compose.observability.yml: `ALERTMANAGER_SMTP_PASSWORD` (the Resend API key), `OPS_ALERT_EMAIL`, `ALERTMANAGER_FROM` (a sender on a domain verified in Resend; default `EMAIL_FROM`, else `noreply@kiraroom.net`) |
 | Uptime Kuma | The probes above | Its own UI (Telegram or email notification) |
 
 To activate the observability part on the server, next to
