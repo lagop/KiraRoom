@@ -5,6 +5,7 @@ import { CheckCircle2, Clock, Copy, ExternalLink, Globe, Loader2, AlertTriangle 
 import apiClient, { type WebDomainStatus } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { WebAddressSection } from "./web-address-section";
 
 /**
  * The salon's public page and its own domain.
@@ -126,6 +127,9 @@ export default function DomainSettingsPage() {
               </p>
             )}
           </section>
+
+          {/* D4: the address, changed once (owner). */}
+          <WebAddressSection onChanged={() => void apiClient.getWebDomain().then(setStatus).catch(() => undefined)} />
 
           <section className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
             <div>

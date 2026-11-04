@@ -1529,6 +1529,25 @@ export interface EmailCampaignTrackingStatus {
  * The month's marketing emails (GET /email-campaigns/quota): Pro 2.000,
  * Empresa 5.000 per location, plus the bono de emails.
  */
+/** D4: can a web address be used. */
+export interface WebAddressAvailability {
+  slug: string;
+  available: boolean;
+  problem: string | null;
+  /** Why not, in Spanish; null when it can. */
+  message: string | null;
+}
+
+/** D4: the salon's web address in Ajustes > Web. */
+export interface WebAddressInfo {
+  slug: string;
+  /** False once the owner has changed it (it can be changed once). */
+  canChange: boolean;
+  changedAt: string | null;
+  /** Old addresses still redirecting here, with when they stop. */
+  redirects: Array<{ oldSlug: string; expiresAt: string }>;
+}
+
 export interface EmailMarketingQuota {
   /** "YYYY-MM" on the salon's clock. */
   month: string;
@@ -2832,6 +2851,26 @@ class ApiClient implements ApiClientInterface {
     }
   }
 
+  /** D4: whether a web address can be used for a new salon (signup form; public). */
+  async checkWebAddressForSignup(slug: string): Promise<WebAddressAvailability> {
+    return this.request(`/web-address/availability?slug=${encodeURIComponent(slug)}`);
+  }
+
+  /** D4: Ajustes > Web: the salon's address and whether it can still be changed (owner). */
+  async getWebAddress(): Promise<WebAddressInfo> {
+    return this.request("/web-address");
+  }
+
+  /** D4: whether this salon could move to that address (owner). */
+  async checkWebAddress(slug: string): Promise<WebAddressAvailability> {
+    return this.request(`/web-address/check?slug=${encodeURIComponent(slug)}`);
+  }
+
+  /** D4: the once-only change; the old address redirects for 12 months. */
+  async changeWebAddress(slug: string): Promise<{ slug: string; previous: string; redirectsUntil: string }> {
+    return this.request("/web-address", { method: "PATCH", body: JSON.stringify({ slug }) });
+  }
+
   async register(data: {
     email: string;
     password: string;
@@ -2844,6 +2883,8 @@ class ApiClient implements ApiClientInterface {
     timezone?: string;
     /** Cloudflare Turnstile token, when the captcha is configured. */
     turnstileToken?: string;
+    /** D4: the web address she chose; absent, the server makes one from the name. */
+    slug?: string;
   }): Promise<LoginResponse> {
     /*
      * Signing up did not log anyone in.

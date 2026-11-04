@@ -612,3 +612,23 @@ describe("PublicSiteService: the team as the salon shows it", () => {
     expect(await svc.professionalImage("p1", "photo")).toBeNull();
   });
 });
+
+describe("D4: a salon's old web address", () => {
+  it("finds the salon for 12 months, and answers with its current address", async () => {
+    const { svc, prisma } = makeService();
+    const real = prisma.tenant.findFirst.getMockImplementation() as unknown as (args: any) => Promise<any>;
+    (prisma.tenant.findFirst as jest.Mock).mockImplementation(async (args: any) => (args.where.OR ? null : real(args)));
+    (prisma as any).tenantSlugRedirect = { findFirst: jest.fn(async () => ({ tenantId: "t1" })) };
+    const page = await svc.getPage("salon-luna-antes");
+    expect(page.slug).toBe("salon-luna");
+    expect((prisma.tenant.findFirst.mock.calls[1] as any[])[0].where).toEqual({ id: "t1", deletedAt: null });
+    const legal = await svc.legal("salon-luna-antes");
+    expect(legal.slug).toBe("salon-luna");
+  });
+
+  it("is a 404 once the redirect has expired (no row found)", async () => {
+    const { svc, prisma } = makeService({ tenant: null });
+    (prisma as any).tenantSlugRedirect = { findFirst: jest.fn(async () => null) };
+    await expect(svc.getPage("salon-luna-antes")).rejects.toBeInstanceOf(NotFoundException);
+  });
+});

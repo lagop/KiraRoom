@@ -7,7 +7,14 @@ import { AlertCircle, Loader2, Check, Eye, EyeOff, Globe } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
 import apiClient, { ApiError } from "@/lib/api";
 import { rememberDesiredPlan } from "@/lib/desired-plan";
-import { EMAIL_ALREADY_REGISTERED_CODE, salonWebPreview } from "@/lib/signup-form";
+import {
+  EMAIL_ALREADY_REGISTERED_CODE,
+  SALON_WEB_BASE,
+  WEB_ADDRESS_UNAVAILABLE_CODE,
+  salonWebPreview,
+  suggestedWebAddress,
+  typedWebAddress,
+} from "@/lib/signup-form";
 import { TurnstileWidget, isTurnstileConfigured } from "@/src/components/auth/turnstile-widget";
 
 /** The browser's IANA zone, if it can tell. */
@@ -42,6 +49,31 @@ export default function SignupPage() {
   useEffect(() => rememberDesiredPlan(window.location.search), []);
 
   const webPreview = salonWebPreview(salonName);
+  // D4: null = the address follows the name; a string = the one she typed.
+  const [customSlug, setCustomSlug] = useState<string | null>(null);
+  const [slugCheck, setSlugCheck] = useState<{ state: "idle" | "checking" | "ok" | "bad"; message: string }>({
+    state: "idle",
+    message: "",
+  });
+  useEffect(() => {
+    if (customSlug === null) {
+      setSlugCheck({ state: "idle", message: "" });
+      return;
+    }
+    const slug = customSlug.replace(/-+$/, "");
+    if (!slug) {
+      setSlugCheck({ state: "idle", message: "" });
+      return;
+    }
+    setSlugCheck({ state: "checking", message: "" });
+    const timer = window.setTimeout(() => {
+      apiClient
+        .checkWebAddressForSignup(slug)
+        .then((r) => setSlugCheck(r.available ? { state: "ok", message: "" } : { state: "bad", message: r.message ?? "" }))
+        .catch(() => setSlugCheck({ state: "idle", message: "" }));
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [customSlug]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -52,6 +84,10 @@ export default function SignupPage() {
     }
     if (password.length < 8) {
       setError(t("signup.passwordTooShort"));
+      return;
+    }
+    if (customSlug !== null && slugCheck.state === "bad") {
+      setError(slugCheck.message || t("signup.webAddress.unavailable"));
       return;
     }
     if (isTurnstileConfigured() && !captchaToken) {
@@ -73,6 +109,7 @@ export default function SignupPage() {
         // it is one a salon can be in (Las Palmas signs up on Canary time).
         timezone: browserTimeZone(),
         ...(captchaToken && { turnstileToken: captchaToken }),
+        ...(customSlug !== null && customSlug.replace(/-+$/, "") && { slug: customSlug.replace(/-+$/, "") }),
       });
       // apiClient.register stores both tokens, like login does. This used to
       // read res.accessToken — which register never returned — behind an
@@ -90,6 +127,9 @@ export default function SignupPage() {
       router.push("/dashboard");
     } catch (e: any) {
       if (e instanceof ApiError && e.code === EMAIL_ALREADY_REGISTERED_CODE) setEmailTaken(true);
+      if (e instanceof ApiError && e.code === WEB_ADDRESS_UNAVAILABLE_CODE) {
+        setSlugCheck({ state: "bad", message: e.message });
+      }
       const msg = e?.message || t("signup.errorGeneric");
       setError(typeof msg === "string" ? msg : JSON.stringify(msg));
       // A Turnstile token works once: a new challenge for the next try.
@@ -125,14 +165,55 @@ export default function SignupPage() {
               maxLength={80}
               autoComplete="organization"
             />
-            {/* Read-only for now: the address comes from the name. */}
-            {webPreview && (
-              <p className="mt-1 flex items-center gap-1 text-xs text-gray-500" aria-live="polite">
+            {/* D4: the address comes from the name; "Cambiar" lets her write her own. */}
+            {customSlug === null && webPreview && (
+              <p className="mt-1 flex flex-wrap items-center gap-1 text-xs text-gray-500" aria-live="polite">
                 <Globe className="h-3 w-3 flex-shrink-0" aria-hidden="true" />
                 <span>
                   {t("signup.webPreview")} <strong className="font-medium text-gray-700">{webPreview}</strong>
                 </span>
+                <button
+                  type="button"
+                  onClick={() => setCustomSlug(suggestedWebAddress(salonName))}
+                  className="font-medium text-violet-700 underline hover:text-violet-900"
+                >
+                  {t("signup.webAddress.change")}
+                </button>
               </p>
+            )}
+            {customSlug !== null && (
+              <div className="mt-2">
+                <label htmlFor="signup-web-address" className="block text-xs font-medium text-gray-700">
+                  {t("signup.webAddress.label")}
+                </label>
+                <div className="mt-1 flex items-center rounded-lg border border-gray-300 bg-white text-sm focus-within:border-violet-500 focus-within:ring-1 focus-within:ring-violet-500">
+                  <input
+                    id="signup-web-address"
+                    value={customSlug}
+                    onChange={(e) => setCustomSlug(typedWebAddress(e.target.value))}
+                    maxLength={63}
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    className="min-w-0 flex-1 rounded-l-lg px-3 py-2 outline-none"
+                    aria-describedby="signup-web-address-help"
+                  />
+                  <span className="whitespace-nowrap pr-3 text-gray-500">.{SALON_WEB_BASE}</span>
+                </div>
+                <p id="signup-web-address-help" className="mt-1 text-xs" aria-live="polite">
+                  {slugCheck.state === "checking" && <span className="text-gray-500">{t("signup.webAddress.checking")}</span>}
+                  {slugCheck.state === "ok" && <span className="text-green-700">{t("signup.webAddress.available")}</span>}
+                  {slugCheck.state === "bad" && <span className="text-red-700">{slugCheck.message}</span>}
+                  {slugCheck.state === "idle" && <span className="text-gray-500">{t("signup.webAddress.help")}</span>}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setCustomSlug(null)}
+                  className="mt-1 text-xs font-medium text-violet-700 underline hover:text-violet-900"
+                >
+                  {t("signup.webAddress.useName")}
+                </button>
+              </div>
             )}
           </div>
           <Field

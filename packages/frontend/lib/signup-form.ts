@@ -49,6 +49,30 @@ export function salonWebPreview(salonName: string): string | null {
   return `${slug}.${SALON_WEB_BASE}`;
 }
 
+/** D4: the address the form starts from, made from the name ("" without one). */
+export function suggestedWebAddress(salonName: string): string {
+  if (!salonName.trim()) return "";
+  return withoutPlatformWords(slugifySalonName(salonName)) || "salon";
+}
+
+/**
+ * D4: what the owner types in the address field, as she types it: lower-case,
+ * accents dropped, spaces and other characters as single hyphens. The
+ * trailing hyphen stays while typing ("ana-" on the way to "ana-sol").
+ */
+export function typedWebAddress(input: string): string {
+  return input
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+/, "")
+    .slice(0, 63);
+}
+
+/** The server's code for "that web address cannot be used" (400/409). */
+export const WEB_ADDRESS_UNAVAILABLE_CODE = "WEB_ADDRESS_UNAVAILABLE";
+
 /** The server's code for "this email already has an account" (409). */
 export const EMAIL_ALREADY_REGISTERED_CODE = "EMAIL_ALREADY_REGISTERED";
 

@@ -10,7 +10,7 @@ import {
 } from "./lib/custom-domain-host";
 import { retiredClientAreaRedirect } from "./lib/client-area-redirect";
 import { embedToken, frameAncestorsHeader } from "./lib/embed-frame";
-import { GONE_SALON_HTML, sitePathSlug } from "./lib/salon-legal";
+import { GONE_SALON_HTML, movedSitePath, sitePathSlug } from "./lib/salon-legal";
 
 // All authentication for `/saas/*` is enforced server-side by the NestJS
 // `SaasOwnerGuard` on the corresponding API endpoints. This middleware is
@@ -112,30 +112,62 @@ async function embedFrameHeader(token: string): Promise<string | null> {
 }
 
 /**
- * Whether a salon's page is gone (past its read-only period: the API
- * answers 410), per slug, cached like the host lookup. API trouble is not
- * an answer and is not remembered: the page then renders (or 404s) as usual.
+ * A salon's state by address, per slug, cached like the host lookup: gone
+ * (past its read-only period: the API answers 410), or its current address
+ * (D4: an old one the owner changed in the last 12 months answers with the
+ * new slug). API trouble is not an answer and is not remembered: the page
+ * then renders (or 404s) as usual.
  */
 const GONE_TTL_MS = 5 * 60_000;
-const goneCache = new Map<string, { gone: boolean; expires: number }>();
+type SalonState = { gone: boolean; slug: string | null };
+const stateCache = new Map<string, { state: SalonState; expires: number }>();
+const UNKNOWN_STATE: SalonState = { gone: false, slug: null };
 
-async function salonGone(slug: string): Promise<boolean> {
+async function salonState(slug: string): Promise<SalonState> {
   const now = Date.now();
-  const cached = goneCache.get(slug);
-  if (cached && cached.expires > now) return cached.gone;
+  const cached = stateCache.get(slug);
+  if (cached && cached.expires > now) return cached.state;
   try {
     const res = await fetch(`${API_URL}/public-site/legal/${encodeURIComponent(slug)}`, {
       headers: { accept: "application/json" },
       cache: "no-store",
     });
-    if (res.status !== 410 && !res.ok && res.status !== 404) return cached?.gone ?? false;
-    const gone = res.status === 410;
-    if (goneCache.size >= MAX_ENTRIES) goneCache.clear();
-    goneCache.set(slug, { gone, expires: now + GONE_TTL_MS });
-    return gone;
+    if (res.status !== 410 && !res.ok && res.status !== 404) return cached?.state ?? UNKNOWN_STATE;
+    let current: string | null = null;
+    if (res.ok) {
+      const body = (await res.json().catch(() => null)) as { slug?: unknown } | null;
+      current = typeof body?.slug === "string" && body.slug ? body.slug : null;
+    }
+    const state = { gone: res.status === 410, slug: current };
+    if (stateCache.size >= MAX_ENTRIES) stateCache.clear();
+    stateCache.set(slug, { state, expires: now + GONE_TTL_MS });
+    return state;
   } catch {
-    return cached?.gone ?? false;
+    return cached?.state ?? UNKNOWN_STATE;
   }
+}
+
+async function salonGone(slug: string): Promise<boolean> {
+  return (await salonState(slug)).gone;
+}
+
+/**
+ * D4: a salon's old address (changed in the last 12 months) answers a 301
+ * to the same page on the new one. `toUrl` builds the new URL from the
+ * current slug. Null when the address is the current one, or unknown.
+ */
+async function movedSalonResponse(
+  request: NextRequest,
+  slug: string | null,
+  toUrl: (current: string) => URL | null,
+): Promise<NextResponse | null> {
+  if (!slug || (request.method !== "GET" && request.method !== "HEAD")) return null;
+  const { slug: current } = await salonState(slug);
+  if (!current || current === slug) return null;
+  const url = toUrl(current);
+  if (!url) return null;
+  url.search = request.nextUrl.search;
+  return NextResponse.redirect(url, 301);
 }
 
 /**
@@ -190,6 +222,14 @@ export async function middleware(request: NextRequest) {
   if (subdomainSlug) {
     const retired = clientAreaRedirect(request, true);
     if (retired) return retired;
+    // old-name.kiraroom.net -> new-name.kiraroom.net, same path (D4).
+    const moved = await movedSalonResponse(request, subdomainSlug, (current) => {
+      const url = request.nextUrl.clone();
+      url.host = `${current}.${(SUBDOMAIN_BASE ?? "").replace(/^\.+/, "")}`;
+      url.port = "";
+      return url;
+    });
+    if (moved) return moved;
     const target = rewritePathFor(request.nextUrl.pathname, encodeURIComponent(subdomainSlug));
     const gone = await goneSalonResponse(request, target ?? request.nextUrl.pathname);
     if (gone) return gone;
@@ -203,6 +243,16 @@ export async function middleware(request: NextRequest) {
     const retired = clientAreaRedirect(request, false);
     if (retired) return retired;
   }
+
+  // app.kiraroom.net/sites/old-name/... -> /sites/new-name/... (D4).
+  const movedPath = await movedSalonResponse(request, sitePathSlug(request.nextUrl.pathname), (current) => {
+    const target = movedSitePath(request.nextUrl.pathname, current);
+    if (!target) return null;
+    const url = request.nextUrl.clone();
+    url.pathname = target;
+    return url;
+  });
+  if (movedPath) return movedPath;
 
   // app.kiraroom.net/sites/salon-lucia -> the salon's subdomain, once live.
   if (request.method === "GET" || request.method === "HEAD") {

@@ -221,6 +221,19 @@ export function sitePathSlug(pathname: string): string | null {
 }
 
 /**
+ * D4: the same path on the salon's new address, after the owner changed it
+ * (the old one answers a 301 for 12 months). "/sites/old/privacidad" with
+ * "nuevo" is "/sites/nuevo/privacidad". Null when the path is not a salon's,
+ * or it already is the current one.
+ */
+export function movedSitePath(pathname: string, currentSlug: string): string | null {
+  const slug = sitePathSlug(pathname);
+  if (!slug || !currentSlug || slug === currentSlug) return null;
+  const rest = pathname.replace(/^\/sites\/[^/]+/, "");
+  return `/sites/${encodeURIComponent(currentSlug)}${rest}`;
+}
+
+/**
  * What a salon's address answers once its page is gone (past its read-only
  * period): 410 with noindex, so search engines drop it for good. Plain
  * HTML: nothing of the salon is left to show.

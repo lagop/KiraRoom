@@ -501,6 +501,15 @@
     "termsDpa": "(incluido el encargo del tratamiento, art. 28 RGPD) y la",
     "privacyLink": "Política de privacidad",
     "webPreview": "Tu web:",
+    "webAddress": {
+      "change": "Cambiar",
+      "label": "La dirección de tu web",
+      "help": "Letras sin acentos, números y guiones. Podrás cambiarla una vez desde Ajustes > Web.",
+      "checking": "Comprobando...",
+      "available": "Disponible.",
+      "unavailable": "Esa dirección no se puede usar. Prueba con otra.",
+      "useName": "Usar la que sale del nombre"
+    },
     "showPassword": "Mostrar contraseña",
     "hidePassword": "Ocultar contraseña",
     "passwordTooShort": "La contraseña debe tener al menos 8 caracteres.",
@@ -3543,6 +3552,21 @@
     "you": "Clienta",
     "assistant": "Asistente",
     "notFound": "Esta conversación ya no existe."
+  },
+  "webAddress": {
+    "title": "La dirección de tu web",
+    "introCanChange": "Puedes cambiarla una vez. La dirección de ahora seguirá llevando a tu web durante 12 meses; después quedará libre para otro salón.",
+    "introChanged": "Ya cambiaste la dirección de tu web (solo se puede una vez). Si necesitas otra, escríbenos.",
+    "redirectNote": "La dirección anterior, {old}, lleva a la nueva hasta el {date}.",
+    "checking": "Comprobando...",
+    "available": "Disponible.",
+    "save": "Cambiar la dirección",
+    "confirmTitle": "¿Cambiar la dirección de tu web?",
+    "confirmBody": "Tu web pasará de {old} a {next}. Solo se puede cambiar una vez. Durante 12 meses, quien entre por la dirección anterior llegará a la nueva; actualiza tus enlaces, tarjetas y redes.",
+    "confirm": "Sí, cambiarla",
+    "cancel": "Cancelar",
+    "changedToast": "Dirección cambiada",
+    "failed": "No se ha podido cambiar la dirección"
   },
   "emailVerifyNotice": {
     "title": "Confirma tu email.",

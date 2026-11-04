@@ -204,6 +204,23 @@ describe("AuthService.register keeps what the form asked for (S3, S4, S6)", () =
     expect(created.legal.acceptedAt).toBeInstanceOf(Date);
   });
 
+  it("D4: uses the web address she chose, and refuses one that cannot be used", async () => {
+    const ok = signupAuth();
+    await ok.auth.register({ ...form, email: "duena@salon-ficticio.test", slug: " Ana-Sol " } as any, {});
+    expect(ok.created.tenant).toMatchObject({ slug: "ana-sol" });
+
+    const taken = signupAuth();
+    taken.prisma.tenant.findUnique.mockResolvedValue({ id: "other" });
+    const err = await taken.auth.register({ ...form, email: "duena@salon-ficticio.test", slug: "ana-sol" } as any, {}).catch((e) => e);
+    expect(err.getStatus()).toBe(400);
+    expect(err.getResponse()).toMatchObject({ code: "WEB_ADDRESS_UNAVAILABLE" });
+
+    const reserved = signupAuth();
+    const err2 = await reserved.auth.register({ ...form, email: "duena@salon-ficticio.test", slug: "kiraroom-ana" } as any, {}).catch((e) => e);
+    expect(err2.getResponse()).toMatchObject({ code: "WEB_ADDRESS_UNAVAILABLE" });
+    expect(reserved.created.tenant).toBeUndefined();
+  });
+
   it("an address already used, in other capitals, is a clear Spanish 409 (S11)", async () => {
     const { auth, prisma } = signupAuth();
     prisma.user.findFirst.mockResolvedValue({ id: "other" });
