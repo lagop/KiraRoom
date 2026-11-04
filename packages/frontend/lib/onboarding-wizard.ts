@@ -1,13 +1,15 @@
 /**
  * The onboarding wizard's week, and when it is sent.
  *
- * Every owner invited to KiraRoom lands on /dashboard/onboarding. Its
+ * Invited owners used to land on /dashboard/onboarding (now "Más ajustes"). Its
  * editor used to start at Monday-Friday 09:00-19:00 whatever the salon had
  * saved, and "Guardar y empezar" always sent it: the salon was left closed
  * on Saturdays and after 19:00, and online booking stopped offering those
  * hours. Now the editor starts from the saved week, and the week is sent
  * only when the owner changed it, or when the salon has none yet.
  */
+import { WEEK_DAYS, type WeeklySchedule } from "./weekly-schedule";
+
 export interface WizardHoursEntry {
   day: string;
   openTime: string;
@@ -120,7 +122,7 @@ export function wizardOutcome(
   if (saved.services === 1) lines.push("Se ha creado 1 servicio.");
   else if (saved.services > 1) lines.push(`Se han creado ${saved.services} servicios.`);
   if (saved.hours) lines.push("Se ha guardado el horario de apertura.");
-  if (saved.appointment) lines.push("Se ha creado la cita de prueba: la verás en la agenda con la etiqueta «Prueba» y se borra sola mañana.");
+  if (saved.appointment) lines.push("Se ha creado la cita de prueba: la verás en la agenda con la etiqueta «Prueba» y se borra sola mañana si no la cobras ni la facturas.");
   let warning: string | null = null;
   if (res.skipped?.appointment === "no_staff") {
     warning =
@@ -137,4 +139,23 @@ export function wizardOutcome(
     warning,
     readyForBookings,
   };
+}
+
+/**
+ * D10: the salon's opening hours proposed in the overlay's last step: the
+ * first professional's week, or Monday to Saturday 09:00 to 20:00 when that
+ * week has no working day. A copy: editing one does not change the other.
+ */
+export function salonHoursFromProfessional(pro: WeeklySchedule | null | undefined): WeeklySchedule {
+  const works = pro && WEEK_DAYS.some(({ key }) => pro[key]?.works && pro[key].shifts.length > 0);
+  const week = {} as WeeklySchedule;
+  for (const { key } of WEEK_DAYS) {
+    if (works && pro) {
+      week[key] = { works: pro[key].works, shifts: pro[key].shifts.map((s) => ({ ...s })) };
+    } else {
+      const open = key !== "sunday";
+      week[key] = { works: open, shifts: open ? [{ start: "09:00", end: "20:00" }] : [] };
+    }
+  }
+  return week;
 }

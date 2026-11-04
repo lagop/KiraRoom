@@ -3,7 +3,7 @@ import { Cron } from "@nestjs/schedule";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { salonToday } from "../analytics/analytics-metrics";
 import { safeTimeZone } from "../gift-cards/gift-card-expiry";
-import { appointmentDeleteBlocker, deleteAppointmentRow } from "../appointments/appointment-delete";
+import { deleteAppointmentRow } from "../appointments/appointment-delete";
 import { clientHasHistory, isForeignKeyViolation } from "../common/prisma/history-deletes";
 
 /** Rows looked at per run: the wizard makes at most one per salon. */
@@ -12,19 +12,20 @@ const BATCH = 200;
 export interface TestBookingCleanupResult {
   deletedAppointments: number;
   deletedClients: number;
-  /** Charged, invoiced or completed: kept, and counted from now on. */
+  /** With money, a till line or an invoice: kept, and counted from now on. */
   keptAsReal: number;
 }
 
 /**
  * D27: the onboarding wizard's test booking is deleted the salon day after
  * it was made, with its test client when she has nothing else (no other
- * appointment, payment, purchase or balance).
+ * appointment, payment, purchase or balance). D11: a completed one goes too.
  *
  * It runs every hour so "the next day" is the salon's, whatever its time
- * zone. A test booking the salon went on to charge, invoice or complete
- * is not deleted (appointmentDeleteBlocker: that is accounting and
- * history): it stops being a test and counts like any other. A test client
+ * zone. A test booking with money on it (a payment, a deposit, a paid
+ * commission), a till (POS) line or an invoice is not deleted: that is
+ * accounting. It stops being a test and counts like any other. Completing
+ * it in the agenda alone (trying the flow out) no longer keeps it. A test client
  * who has other history is kept the same way.
  */
 @Injectable()
@@ -61,6 +62,7 @@ export class TestBookingCleanupService {
         paymentStatus: true,
         amountPaid: true,
         depositPaid: true,
+        commissionPaid: true,
         createdAt: true,
         tenant: { select: { timezone: true } },
       },
@@ -71,8 +73,8 @@ export class TestBookingCleanupService {
       // Made today (the salon's day): it stays until tomorrow.
       if (salonToday(tz, row.createdAt) >= salonToday(tz, now)) continue;
       try {
-        const blocker = await appointmentDeleteBlocker(this.prisma, row);
-        if (blocker) {
+        const keep = await this.keepReason(row);
+        if (keep) {
           await this.prisma.appointment.updateMany({
             where: { id: row.id, tenantId: row.tenantId },
             data: { isTest: false },
@@ -90,6 +92,41 @@ export class TestBookingCleanupService {
       }
     }
     return result;
+  }
+
+  /**
+   * Why a test booking must stay (accounting), or null when it can go,
+   * whatever its status: money on the appointment or in a Payment, a paid
+   * or adjusted commission, a till sale line, or an invoice.
+   */
+  private async keepReason(row: {
+    id: string;
+    tenantId: string;
+    paymentStatus?: string | null;
+    amountPaid?: unknown;
+    depositPaid?: boolean | null;
+    commissionPaid?: boolean | null;
+  }): Promise<string | null> {
+    if (
+      row.paymentStatus === "paid" ||
+      row.paymentStatus === "refunded" ||
+      row.depositPaid === true ||
+      Number(row.amountPaid ?? 0) > 0
+    ) {
+      return "paid";
+    }
+    if (row.commissionPaid === true) return "commission";
+    const where = { tenantId: row.tenantId, appointmentId: row.id };
+    if ((await this.prisma.payment.count({ where })) > 0) return "payment";
+    if ((await this.prisma.posSaleLine.count({ where })) > 0) return "pos";
+    if ((await this.prisma.commissionAdjustment.count({ where })) > 0) return "commission";
+    const invoices = await this.prisma.invoice.count({
+      where: {
+        tenantId: row.tenantId,
+        OR: [{ sourceType: "appointment", sourceId: row.id }, { lines: { some: { appointmentId: row.id } } }],
+      },
+    });
+    return invoices > 0 ? "invoice" : null;
   }
 
   /** Deletes the wizard's test client when she has nothing left; true if deleted. */
