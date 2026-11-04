@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { SaasSidebar } from "./components/sidebar";
 import { SaasHeader } from "./components/header";
 import { getToken } from "@/lib/api";
+import { authStorage } from "@/lib/auth-storage";
 
 export default function SaasLayout({ children }: { children: ReactNode }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -22,7 +23,7 @@ export default function SaasLayout({ children }: { children: ReactNode }) {
 
     // Check if user is authenticated
     const token = getToken();
-    const userJson = localStorage.getItem("user");
+    const userJson = authStorage().getItem("user");
     const user = userJson ? JSON.parse(userJson) : null;
 
     if (!token || user?.role !== "saas_owner") {

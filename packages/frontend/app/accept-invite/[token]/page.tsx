@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import apiClient from "@/lib/api";
 import { SALON_TIMEZONES, DEFAULT_SALON_TIMEZONE } from "@kira/shared";
+import { authStorage } from "@/lib/auth-storage";
 
 type InviteContext = {
   email: string;
@@ -120,8 +121,8 @@ export default function AcceptInvitePage() {
       });
       if (res?.accessToken) {
         // The refresh token arrived as an httpOnly cookie.
-        localStorage.setItem("kira_auth_token", res.accessToken);
-        localStorage.removeItem("kira_refresh_token");
+        authStorage().setItem("kira_auth_token", res.accessToken);
+        authStorage().removeItem("kira_refresh_token");
       }
       setStep(4);
       // To the panel, where the setup overlay takes it from here (D10).

@@ -9,6 +9,7 @@ import { TwoFactorStep } from "@/src/components/auth/two-factor-step";
 import { useTranslations } from "@/lib/use-translation";
 import { LanguageSwitcher } from "@/app/dashboard/components/language-switcher";
 import { AlertCircle } from "lucide-react";
+import { authStorage, endSupportTab, startSupportTab, updateSupportTab } from "@/lib/auth-storage";
 
 function LoginPageContent() {
   const t = useTranslations();
@@ -28,50 +29,56 @@ function LoginPageContent() {
   const searchParams = useSearchParams();
 
   useEffect(() => {
-    if (!searchParams) return;
-    const asOwner = searchParams.get("as_owner");
-    const token = searchParams.get("token");
-    const ownerName = searchParams.get("owner");
+    if (typeof window === "undefined") return;
+    // A support tab whose session ended (2-hour cap, or the console signed
+    // out everywhere) lands here: say so instead of a bare login form.
+    if (searchParams?.get("support_ended") === "1") {
+      setError(t("login.support_ended"));
+      return;
+    }
 
-    // Impersonation entry: the SaaS panel always sends BOTH `as_owner`
-    // and `token` (see app/saas/tenants/page.tsx → onClick handler).
-    // We consume the token via POST /auth/impersonate, which mints a
-    // real session as the tenant owner and writes an AuditLog row.
-    //
-    // The previous version had a fallback that pre-filled the email
-    // via launchSalonDashboard if only `as_owner` was present. That
-    // branch was unreachable in normal use (the SaaS panel always
-    // sends both) and leaked the owner's email to anyone who knew
-    // a tenant id, so it has been removed.
-    if (!asOwner || !token) return;
+    // Support entry from the console (audit 8, C10/C17): a NEW tab opened at
+    // /login#support=<token>&tenant=<id>&name=<salon>&owner=<name>. The token
+    // is in the fragment, so it reaches neither the server's logs nor the
+    // Referer, and it is wiped from the address bar at once. It is consumed
+    // via POST /auth/impersonate (one-shot, 60 s, with the reason signed in
+    // it by the console), which mints the support session and its own cookie.
+    const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    const token = hash.get("support");
+    const tenantId = hash.get("tenant");
+    if (!token || !tenantId) return;
+    const tenantName = hash.get("name") || "";
+    const ownerName = hash.get("owner") || "";
+    window.history.replaceState(null, "", window.location.pathname);
 
+    // This tab keeps its session apart from the console's (sessionStorage):
+    // the console stays signed in, in this browser and its other tabs.
+    startSupportTab({ tenantId, tenantName });
     setIsLaunchMode(true);
-    setLaunchInfo({ tenantName: asOwner, ownerName: ownerName || "" });
+    setLaunchInfo({ tenantName: tenantName || tenantId, ownerName });
     setLoading(true);
     apiClient
       .impersonate(token)
       .then((response) => {
+        updateSupportTab({ endsAt: response.support?.endsAt });
         setToken(response.tokens.accessToken);
         // The refresh token is the httpOnly cookie the response set.
         removeRefreshToken();
-        if (typeof window !== "undefined") {
-          localStorage.setItem("user", JSON.stringify(response.user));
-        }
-        // Force a clean navigation with the impersonation flag so the
-        // tenant dashboard can show its "you are being impersonated"
-        // banner.
-        window.location.href = "/dashboard?impersonated=1";
+        authStorage().setItem("user", JSON.stringify(response.user));
+        window.location.href = "/dashboard";
       })
       .catch((err) => {
+        endSupportTab();
         setError(t("login.failed_to_launch", { message: err.message }));
         setLoading(false);
       });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
   const signedIn = (response: { accessToken: string; user: unknown }) => {
     setToken(response.accessToken);
     if (typeof window !== "undefined") {
-      localStorage.setItem("user", JSON.stringify(response.user));
+      authStorage().setItem("user", JSON.stringify(response.user));
     }
     router.push("/dashboard");
   };

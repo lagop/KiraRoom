@@ -1,4 +1,5 @@
 'use client'
+import { authStorage } from "@/lib/auth-storage";
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
@@ -96,7 +97,7 @@ export function NotificationBell() {
   useEffect(() => {
     if (typeof window !== 'undefined') {
       // Dashboard stores user info in 'user' key, not 'kira_user'
-      const userStr = localStorage.getItem('user')
+      const userStr = authStorage().getItem('user')
       if (userStr) {
         try {
           const user = JSON.parse(userStr)
@@ -123,7 +124,7 @@ export function NotificationBell() {
   const { isConnected } = useSocket({
     userId: userInfo?.id,
     tenantId: userInfo?.tenantId || '',
-    token: typeof window !== 'undefined' ? localStorage.getItem('kira_auth_token') || undefined : undefined,
+    token: typeof window !== 'undefined' ? authStorage().getItem('kira_auth_token') || undefined : undefined,
     onNotification: handleSocketNotification,
     enabled: !!userInfo?.tenantId,
   })
