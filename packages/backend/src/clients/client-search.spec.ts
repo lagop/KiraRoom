@@ -192,7 +192,7 @@ describe("GET /clients", () => {
     expect(calls.findMany[0].where).toEqual({
       tenantId: "t1",
       isTest: false,
-      appointments: { some: { professionalId: "p1" } },
+      appointments: { some: { professionalId: "p1", status: { not: "cancelled" } } },
       id: { in: ["c1", "c2"] },
     });
   });

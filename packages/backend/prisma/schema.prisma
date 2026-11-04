@@ -659,6 +659,9 @@ model Professional {
   commissionRate      Decimal?
   hireDate            DateTime
   terminationDate     DateTime?
+  /// Version of this professional's calendar feed link (ics.controller.ts),
+  /// added to the salon's: "Quitar acceso" bumps it, so the link stops working.
+  icsFeedVersion      Int                    @default(0)
   workingHours        Json                   @default("[]")
   availability        Json                   @default("{}")
   settings            Json                   @default("{}")

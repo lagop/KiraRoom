@@ -285,7 +285,7 @@ describe("staff reach only their own clients", () => {
     await controller.findAll(staff);
     expect(calls.findMany[0].where).toEqual({
       tenantId: "t1",
-      appointments: { some: { professionalId: "p1" } },
+      appointments: { some: { professionalId: "p1", status: { not: "cancelled" } } },
     });
     await controller.findAll(owner);
     expect(calls.findMany[1].where).toEqual({ tenantId: "t1" });

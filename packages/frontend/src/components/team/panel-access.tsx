@@ -190,7 +190,7 @@ export function PanelAccessBlock({ professionalId, name, email, access: initial,
       <ConfirmDialog
         open={confirmRevoke}
         title={`¿Quitar el acceso al panel a ${name}?`}
-        description="No podrá entrar hasta que se lo vuelvas a dar."
+        description="Se cierran sus sesiones y no podrá entrar hasta que se lo vuelvas a dar. El enlace de su calendario (si se suscribió a sus citas desde Google, Apple u Outlook) también deja de funcionar: si vuelve, dale el nuevo enlace de Ajustes > Calendarios."
         confirmLabel="Quitar acceso"
         destructive
         loading={busy}

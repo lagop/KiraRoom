@@ -1747,6 +1747,7 @@
     "charged": "Importe",
     "paid": "Cobrado",
     "with_professional": "con {name}",
+    "others_visits_restricted": "De las visitas con otros profesionales ves la fecha y los servicios, sin importes ni notas.",
     "allergies": "Alergias",
     "medical_conditions": "Condiciones médicas",
     "no_history": "Todavía no tiene citas",

@@ -142,6 +142,19 @@ export function icsFeedVersion(features: unknown): number {
   return Number.isSafeInteger(version) && version > 0 ? version : 0;
 }
 
+/**
+ * The version a professional's feed link is signed with: the salon's plus
+ * the professional's own (`Professional.icsFeedVersion`). Rotating the salon's
+ * links bumps the first; "Quitar acceso" bumps the second, which cuts only
+ * that professional's calendar. Both only grow, so their sum does too and a
+ * link signed with one sum never verifies again once either moves. A salon
+ * and a professional that never rotated are at 0: the old unversioned links.
+ */
+export function professionalFeedVersion(tenantFeatures: unknown, professionalVersion: unknown): number {
+  const own = Number.isSafeInteger(professionalVersion) && (professionalVersion as number) > 0 ? (professionalVersion as number) : 0;
+  return icsFeedVersion(tenantFeatures) + own;
+}
+
 @ApiTags("ics-feeds")
 @Controller("ics")
 export class IcsController {
@@ -176,7 +189,7 @@ export class IcsController {
     // Only those still working here: a deactivated professional's feed answers 404.
     const professionals = await this.prisma.professional.findMany({
       where: { tenantId, isActive: true },
-      select: { id: true, firstName: true, lastName: true },
+      select: { id: true, firstName: true, lastName: true, icsFeedVersion: true },
       orderBy: { firstName: "asc" },
     });
     return {
@@ -186,7 +199,7 @@ export class IcsController {
       professionals: professionals.map((p) => ({
         id: p.id,
         name: `${p.firstName} ${p.lastName}`.trim(),
-        token: IcsController.signToken(`professional:${p.id}`, secret, version),
+        token: IcsController.signToken(`professional:${p.id}`, secret, professionalFeedVersion(tenant.features, p.icsFeedVersion)),
       })),
     };
   }
@@ -249,7 +262,11 @@ export class IcsController {
       where: { id },
       include: { tenant: true },
     });
-    this.verifyToken(`professional:${id}`, token, professional ? icsFeedVersion(professional.tenant?.features) : null);
+    this.verifyToken(
+      `professional:${id}`,
+      token,
+      professional ? professionalFeedVersion(professional.tenant?.features, professional.icsFeedVersion) : null,
+    );
     // A professional who has left (deactivated) no longer has a feed: their
     // calendar link stops answering, as their panel login does.
     if (!professional || !professional.isActive) throw new NotFoundException("Professional not found");

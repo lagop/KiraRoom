@@ -503,6 +503,13 @@ console.log("\n=== staffOwnCatalog ===");
   );
   check("null for an account with no professional", staffOwnCatalog("u-nobody", pros, svcs), null);
   check("null without a user id", staffOwnCatalog(undefined, pros, svcs), null);
+
+  // D19: "los profesionales pueden reservar para compañeros".
+  const team = staffOwnCatalog("u-bea", pros, svcs, true);
+  check("with cross-booking: the whole team, themself first", team?.professionals.map((p) => p.id), ["p-bea", "p-ana", "p-eva"]);
+  check("with cross-booking: every service", team?.services.map((s) => s.id), ["cut", "colour", "nails"]);
+  check("with cross-booking: still knows who they are", team?.me.id, "p-bea");
+  check("with cross-booking but no professional: still null", staffOwnCatalog("u-nobody", pros, svcs, true), null);
 }
 
 // ----- buildStaffBookingPayload: one request for the whole visit -----
@@ -521,6 +528,32 @@ console.log("\n=== buildStaffBookingPayload ===");
     depositAmount: 0,
   };
 
+  const forColleague = {
+    ...form,
+    role: "staff",
+    ownProfessionalId: "p-ana",
+    selectedServices: [
+      { serviceId: "cut", professionalId: "p-bea" },
+      { serviceId: "nails", isParallel: true },
+    ],
+  };
+  check(
+    "staff without cross-booking: a colleague picked in a stale form still books on their own agenda",
+    buildStaffBookingPayload(forColleague)?.services?.map((r) => r.professionalId),
+    ["p-ana", "p-ana"],
+  );
+  const crossed = buildStaffBookingPayload({ ...forColleague, crossBooking: true });
+  check(
+    "staff with cross-booking: the colleague they picked, their own where they picked none",
+    crossed?.services?.map((r) => r.professionalId),
+    ["p-bea", "p-ana"],
+  );
+  check("staff with cross-booking: the visit's professional is the first service's", crossed?.professionalId, "p-bea");
+  check(
+    "crossBooking changes nothing for a manager",
+    buildStaffBookingPayload({ ...forColleague, role: "owner", crossBooking: true })?.services?.map((r) => r.professionalId),
+    buildStaffBookingPayload({ ...forColleague, role: "owner" })?.services?.map((r) => r.professionalId),
+  );
   check(
     "a professional's single service: their own professional, no commission",
     buildStaffBookingPayload({
