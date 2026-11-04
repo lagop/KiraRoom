@@ -295,6 +295,16 @@ export class NotificationsService {
       return { created: 0 };
     }
 
+    // Only the salon's own clients.
+    if (!dto.sendToAllClients) {
+      const own = await this.prisma.client.findMany({
+        where: { tenantId: dto.tenantId, id: { in: clientIds } },
+        select: { id: true },
+      });
+      clientIds = own.map((c) => c.id);
+      if (clientIds.length === 0) return { created: 0 };
+    }
+
     // Create notifications in batches
     const batchSize = 100;
     let created = 0;

@@ -41,6 +41,7 @@ import {
 import { useTranslations } from "@/lib/use-translation";
 import { useToast } from "@/components/ui/use-toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { EmailVerificationRequired } from "@/components/auth/email-verification-required";
 import {
   EXCLUSION_LABELS,
   campaignActions,
@@ -797,6 +798,8 @@ export default function EmailCampaignsPage() {
           </div>
         </div>
       )}
+
+      {!planBlocked && <EmailVerificationRequired />}
 
       {!planBlocked && tracking && !tracking.sendingConfigured && (
         <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">

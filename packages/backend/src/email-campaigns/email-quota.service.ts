@@ -47,6 +47,20 @@ export function marketingEmailCap(
   return EMAIL_MARKETING_MONTHLY_CAP[key] * perLocation;
 }
 
+/**
+ * D2 (owner's decision, 2026-11-04): a salon that has never paid KiraRoom
+ * sends at most this many campaign emails a month, whatever its plan says.
+ */
+export const NEVER_PAID_EMAIL_CAP = 200;
+
+/**
+ * Whether the salon has paid KiraRoom: a paid Stripe invoice (firstPaidAt),
+ * or an active subscription (also the ones the console activates by hand).
+ */
+export function hasPaidKiraRoom(tenant: { firstPaidAt?: Date | string | null; subscriptionStatus?: string | null }): boolean {
+  return !!tenant.firstPaidAt || tenant.subscriptionStatus === "active";
+}
+
 /** "YYYY-MM": the month `now` falls in on the salon's clock. */
 export function salonMonth(timeZone: string, now: Date = new Date()): string {
   return salonToday(timeZone, now).slice(0, 7);
@@ -70,6 +84,8 @@ export interface EmailQuotaLimits {
   cap: number;
   /** "YYYY-MM-DD": when the next month's emails start. */
   resetsOn: string;
+  /** The cap is the never-paid one (NEVER_PAID_EMAIL_CAP), not the plan's. */
+  neverPaidCap?: boolean;
 }
 
 /** What the campaigns page shows: "te quedan N este mes". */
@@ -93,6 +109,8 @@ export interface EmailQuota {
   resetsOn: string;
   /** The bono on sale, or null while the platform has not priced it. */
   pack: MarketingEmailPack | null;
+  /** The salon has not paid yet: the cap is the 200 of the trial, not the plan's. */
+  neverPaidCap: boolean;
 }
 
 /** One email's slot: from the plan's month or from the bono. */
@@ -101,9 +119,18 @@ export type EmailReservation =
   | { ok: false };
 
 /** Why a campaign stopped at the cap, for the card, in Spanish. */
-export function capPauseReason(limits: Pick<EmailQuotaLimits, "cap" | "resetsOn">, packOffered: boolean): string {
+export function capPauseReason(
+  limits: Pick<EmailQuotaLimits, "cap" | "resetsOn" | "neverPaidCap">,
+  packOffered: boolean,
+): string {
   const when = spanishDay(limits.resetsOn);
   const bono = packOffered ? ", o antes si compras un bono de emails" : "";
+  if (limits.neverPaidCap) {
+    return (
+      `En pausa: hasta que pagues tu primera cuota, puedes enviar ${formatCountEs(limits.cap)} emails de marketing al mes y ya se han enviado. ` +
+      `Lo que falta sigue pendiente y se enviará cuando actives tu suscripción, o solo el ${when}${bono}.`
+    );
+  }
   if (limits.cap <= 0) {
     return `En pausa: tu plan no incluye emails de marketing este mes. Lo que falta se enviará solo el ${when}${bono}.`;
   }
@@ -130,6 +157,7 @@ export class EmailQuotaService {
         plan: true,
         subscriptionStatus: true,
         trialEnd: true,
+        firstPaidAt: true,
         maxLocations: true,
         timezone: true,
         tenantAddOns: { where: { status: "active" }, select: { addOn: { select: { unlocks: true } } } },
@@ -144,11 +172,14 @@ export class EmailQuotaService {
     );
     const month = salonMonth(timeZone, now);
     await this.prisma.emailMarketingUsage.createMany({ data: [{ tenantId, month }], skipDuplicates: true });
+    const planCap = tenant ? marketingEmailCap(tenant.plan, { inTrial, locations: tenant.maxLocations, addOn }) : 0;
+    const neverPaidCap = !!tenant && !hasPaidKiraRoom(tenant) && planCap > NEVER_PAID_EMAIL_CAP;
     return {
       tenantId,
       month,
-      cap: tenant ? marketingEmailCap(tenant.plan, { inTrial, locations: tenant.maxLocations, addOn }) : 0,
+      cap: neverPaidCap ? NEVER_PAID_EMAIL_CAP : planCap,
       resetsOn: nextMonthStart(timeZone, now),
+      neverPaidCap,
     };
   }
 
@@ -173,6 +204,7 @@ export class EmailQuotaService {
       remaining: planRemaining + packRemaining,
       resetsOn: limits.resetsOn,
       pack: this.platformEmail.marketingPack(),
+      neverPaidCap: !!limits.neverPaidCap,
     };
   }
 

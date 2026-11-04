@@ -25,6 +25,7 @@ import { FeatureGuard } from "../common/guards/feature.guard";
 import { Feature } from "../common/decorators/feature.decorator";
 import { EmailQuotaService } from "./email-quota.service";
 import { EmailPacksService } from "./email-packs.service";
+import { VerifiedOwnerEmailGuard } from "../auth/email-verified/verified-owner-email.guard";
 
 @ApiTags("Email Campaigns")
 @ApiBearerAuth()
@@ -163,6 +164,7 @@ export class EmailCampaignsController {
   @Post(":id/retry-failed")
   @Roles(...SALON_MANAGERS)
   @ApiOperation({ summary: "Send again to the recipients whose email could not be sent" })
+  @UseGuards(VerifiedOwnerEmailGuard)
   async retryFailed(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
     return this.campaignsService.retryFailed(user.tenantId, id);
   }
@@ -171,6 +173,7 @@ export class EmailCampaignsController {
   @ApiOperation({ summary: "Schedule campaign" })
   @ApiResponse({ status: 200, description: "Campaign scheduled" })
   @Roles(...SALON_MANAGERS)
+  @UseGuards(VerifiedOwnerEmailGuard)
   async scheduleCampaign(
     @CurrentUser() user: User,
     @Param("id", ParseUUIDPipe) id: string,
@@ -187,6 +190,7 @@ export class EmailCampaignsController {
   @ApiOperation({ summary: "Start sending a campaign now (in the background)" })
   @ApiResponse({ status: 200, description: "Campaign queued" })
   @Roles(...SALON_MANAGERS)
+  @UseGuards(VerifiedOwnerEmailGuard)
   async sendCampaign(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
     return this.campaignsService.sendCampaignNow(user.tenantId, id);
   }
@@ -195,6 +199,7 @@ export class EmailCampaignsController {
   @ApiOperation({ summary: "Add every client the campaign may reach, then start sending" })
   @ApiResponse({ status: 200, description: "Campaign queued" })
   @Roles(...SALON_MANAGERS)
+  @UseGuards(VerifiedOwnerEmailGuard)
   async sendToAll(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
     return this.campaignsService.sendToAllClients(user.tenantId, id);
   }
@@ -282,6 +287,7 @@ export class EmailCampaignsController {
   @ApiOperation({ summary: "Broadcast to all clients" })
   @ApiResponse({ status: 201, description: "Broadcast sent" })
   @Roles(...SALON_MANAGERS)
+  @UseGuards(VerifiedOwnerEmailGuard)
   async broadcast(@CurrentUser() user: User, @Body() dto: SendCampaignDto) {
     return this.campaignsService.broadcastToAllClients(user.tenantId, dto);
   }
@@ -305,6 +311,7 @@ export class EmailCampaignsController {
   })
   @ApiResponse({ status: 200, description: "Campaign activated" })
   @Roles(...SALON_MANAGERS)
+  @UseGuards(VerifiedOwnerEmailGuard)
   async activateCampaign(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
     return this.campaignsService.activateCampaign(user.tenantId, id);
   }

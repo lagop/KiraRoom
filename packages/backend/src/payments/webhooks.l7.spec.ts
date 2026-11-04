@@ -17,6 +17,7 @@ describe('WebhooksController L-7 (invoice.paid reactivation rules)', () => {
       tenant: {
         findFirst: jest.fn().mockResolvedValue(tenant),
         findUnique: jest.fn().mockResolvedValue(tenant),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         update: jest.fn().mockImplementation(async ({ where, data }) => {
           Object.assign(tenant, data);
           return tenant;
@@ -62,6 +63,19 @@ describe('WebhooksController L-7 (invoice.paid reactivation rules)', () => {
       status: 'paid',
     };
   }
+
+  it('records the first paid invoice (D2: the never-paid email cap ends)', async () => {
+    const tenant = { id: 't-tr', name: 'A', subscriptionStatus: 'trialing', stripeCustomerId: 'cus_1' };
+    const { c, prisma } = makeController(tenant);
+    await c['handleInvoicePaid'](paidEvent('cus_1') as any);
+    expect(prisma.tenant.updateMany).toHaveBeenCalledWith({
+      where: { id: 't-tr', firstPaidAt: null },
+      data: { firstPaidAt: expect.any(Date) },
+    });
+    prisma.tenant.updateMany.mockClear();
+    await c['handleInvoicePaid']({ ...paidEvent('cus_1'), amount_paid: 0 } as any);
+    expect(prisma.tenant.updateMany).not.toHaveBeenCalled();
+  });
 
   it('reactivates a past_due tenant (plan recovery is OK)', async () => {
     const tenant = { id: 't-pd', name: 'A', subscriptionStatus: 'past_due', stripeCustomerId: 'cus_1' };

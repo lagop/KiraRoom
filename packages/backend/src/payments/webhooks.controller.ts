@@ -542,6 +542,15 @@ export class WebhooksController {
       return;
     }
 
+    // D2: the first invoice with money in it marks the salon as one that
+    // has paid (its trial-only email cap no longer applies).
+    if ((invoice.amount_paid ?? 0) > 0) {
+      await this.prisma.tenant.updateMany({
+        where: { id: tenant.id, firstPaidAt: null },
+        data: { firstPaidAt: new Date() },
+      });
+    }
+
     // Sprint 2 / 2.2 — a successful payment after past_due /
     // suspended clears the grace state and reactivates the tenant.
     // Skip if the tenant is in a different terminal state (cancelled,

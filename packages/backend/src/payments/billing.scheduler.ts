@@ -154,9 +154,9 @@ export class BillingScheduler {
   }
 
   /**
-   * Records tenants whose 30-day read-only window has closed. Deliberately
-   * observation-only: nothing is deleted here. Purging customer data is an
-   * explicit, audited action through the SaaS console, not a cron job.
+   * Records tenants whose 30-day read-only window has closed. Observation
+   * only: the owner is warned and the data anonymised 30 days later by the
+   * retention job (saas/retention/salon-retention.scheduler.ts).
    */
   @Cron(CronExpression.EVERY_DAY_AT_4AM)
   async archiveStaleReadOnly(): Promise<void> {
@@ -178,7 +178,7 @@ export class BillingScheduler {
     this.logger.warn(
       `${stale.length} tenant(s) past their read-only window: ${stale
         .map((t) => `${t.name} (${t.id}, since ${t.readOnlyUntil?.toISOString()})`)
-        .join(', ')}. Data is untouched; purge only via the SaaS console.`,
+        .join(', ')}. Data is anonymised 30 days later by the retention job (RETENTION_ANONYMIZE_ENABLED).`,
     );
   }
 }
