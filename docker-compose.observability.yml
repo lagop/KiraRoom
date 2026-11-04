@@ -33,7 +33,7 @@ services:
       # smtp://resend:<RESEND_API_KEY>@smtp.resend.com:587 -- set it in the
       # server environment, never in this file.
       EMAIL_URL: ${GLITCHTIP_EMAIL_URL:-consolemail://}
-      DEFAULT_FROM_EMAIL: ${ALERTMANAGER_FROM:-alertas@kiraroom.net}
+      DEFAULT_FROM_EMAIL: ${ALERTMANAGER_FROM:-${EMAIL_FROM:-noreply@kiraroom.net}}
       DEFAULT_PERMISSION: ${GLITCHTIP_DEFAULT_PERMISSION:-read}
       SENTRY_DSN: ${GLITCHTIP_PUBLIC_DSN:-}
       GLITCHTIP_MAX_EVENTS_PER_MINUTE: ${GLITCHTIP_MAX_EVENTS:-1000}
@@ -132,7 +132,7 @@ services:
       # The Resend API key (SMTP password for user "resend").
       ALERTMANAGER_SMTP_PASSWORD: ${ALERTMANAGER_SMTP_PASSWORD:?ALERTMANAGER_SMTP_PASSWORD must be set (the Resend API key)}
       OPS_ALERT_EMAIL: ${OPS_ALERT_EMAIL:-admin@kiraroom.net}
-      ALERTMANAGER_FROM: ${ALERTMANAGER_FROM:-alertas@kiraroom.net}
+      ALERTMANAGER_FROM: ${ALERTMANAGER_FROM:-${EMAIL_FROM:-noreply@kiraroom.net}}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >-

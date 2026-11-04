@@ -229,6 +229,14 @@ describe("GdprService.anonymize", () => {
     expect(sessions.args.where).toMatchObject({ subjectType: "user", subjectId: { in: ["user-1"] } });
   });
 
+  it("strips the personal data of the salon's bug reports and its users' (audit 8 D14)", async () => {
+    const m = await anonymized();
+    const call = m.calls.find((c) => c.model === "bugReport" && c.args?.data?.anonymizedAt)!;
+    expect(call.args.where).toEqual({ anonymizedAt: null, OR: [{ tenantId: "tenant-1" }, { authorId: { in: ["user-1"] } }] });
+    expect(call.args.data).toMatchObject({ subject: "[eliminado]", description: "[eliminado]", email: null, currentUrl: null });
+    expect(call.args.data.anonymizedAt).toBeInstanceOf(Date);
+  });
+
   it("anonymises the team (Professional)", async () => {
     const m = await anonymized();
     const p = m.professionals[0];
