@@ -3,7 +3,14 @@
  *
  * Run: npx ts-node --project tsconfig.test.json --transpile-only lib/chat-visitor.spec.ts
  */
-import { CHAT_MAX_MESSAGE, chatErrorText, readVisitorToken, rememberVisitorToken, visitorTokenKey } from "./chat-visitor";
+import {
+  CHAT_MAX_MESSAGE,
+  chatErrorText,
+  chatSessionExpired,
+  readVisitorToken,
+  rememberVisitorToken,
+  visitorTokenKey,
+} from "./chat-visitor";
 
 let pass = 0;
 let fail = 0;
@@ -54,6 +61,16 @@ check(
   chatErrorText({ status: 500, message: "Prisma error at ..." }) === "Ahora mismo no puedo responder. Inténtalo de nuevo en un momento.",
 );
 check("same limit as the API", CHAT_MAX_MESSAGE === 1000);
+check(
+  "a salon that turned its chat off says so",
+  chatErrorText({ status: 403, message: "El chat de este salón no está disponible." }) === "El chat de este salón no está disponible.",
+);
+check("any other refusal stays the plain apology", chatErrorText({ status: 403, message: "Forbidden" }).startsWith("Ahora mismo"));
+
+const t0 = Date.UTC(2026, 10, 4, 10, 0);
+check("nothing said yet: nothing to expire", !chatSessionExpired(null, t0));
+check("29 minutes later the conversation goes on", !chatSessionExpired(t0, t0 + 29 * 60_000));
+check("after 30 minutes idle it starts over", chatSessionExpired(t0, t0 + 31 * 60_000));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

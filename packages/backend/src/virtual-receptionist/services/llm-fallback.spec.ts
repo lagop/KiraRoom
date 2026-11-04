@@ -22,7 +22,7 @@ function setup(fallback: string) {
   const config: any = { get: (key: string) => (key === "LLM_FALLBACK_PROVIDER" ? fallback : undefined) };
   const platform: any = { resolveEffective: async () => ({ provider: LLMProvider.ANTHROPIC, model: "m" }) };
   const stub: any = {};
-  const service = new LLMService(providerFactory, config, stub, stub, stub, platform, stub);
+  const service = new LLMService(providerFactory, config, stub, stub, platform, stub);
   return { service, calls };
 }
 
@@ -36,18 +36,6 @@ describe("LLMService fallback provider", () => {
       service.generateResponse("hola", [], undefined, undefined, { tools: TOOLS, systemPromptOverride: "s" }),
     ).rejects.toThrow(/credit balance/);
     expect(calls).toEqual([LLMProvider.ANTHROPIC]);
-  });
-
-  it("still falls back to a provider that runs tools", async () => {
-    const { service, calls } = setup(LLMProvider.MiniMax);
-
-    const out = await service.generateResponse("hola", [], undefined, undefined, {
-      tools: TOOLS,
-      systemPromptOverride: "s",
-    });
-
-    expect(calls).toEqual([LLMProvider.ANTHROPIC, LLMProvider.MiniMax]);
-    expect(out.text).toBe("respuesta de MiniMax");
   });
 
   it("still falls back for a request without tools", async () => {

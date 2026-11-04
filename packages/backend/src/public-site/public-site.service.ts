@@ -99,6 +99,8 @@ export class PublicSiteService {
         // "Escríbenos por WhatsApp", as a wa.me link.
         whatsapp: true,
         privacyPolicyUrl: true,
+        // Ajustes > Recepcionista "Chat en mi web": off, no chat on the page.
+        webChatEnabled: true,
         updatedAt: true,
         customDomain: { select: { domain: true, verifiedAt: true } },
       },
@@ -212,6 +214,7 @@ export class PublicSiteService {
       // The salon's own privacy policy, when it set one: the page, widget
       // and chat link to it instead of /sites/<slug>/privacidad.
       privacyPolicyUrl: ownPrivacyPolicyUrl(tenant.privacyPolicyUrl),
+      webChatEnabled: tenant.webChatEnabled !== false,
       address: {
         street: tenant.street,
         city: tenant.city,

@@ -13,6 +13,7 @@ import {
 } from '../dto/addon.dto';
 import { SaasOwner } from "../../saas/decorators/saas-owner.decorator";
 import { AI_PACK_ADDON_KEYS } from '@kira/shared';
+import { aiUsageThisMonth, nextAiUsagePeriodStart } from '../../common/ai-usage/ai-monthly-usage';
 
 /**
  * SaaS-admin-only add-ons API. Mounted under `/saas/add-ons`.
@@ -80,7 +81,7 @@ export class AddOnsAdminController {
         trialEnd: true,
         maxLocations: true,
         aiConversationsUsed: true,
-        aiConversationsResetAt: true,
+        aiConversationsPeriod: true,
         tenantAddOns: {
           where: { status: 'active' },
           select: { addOn: { select: { key: true, unlocks: true } } },
@@ -103,9 +104,9 @@ export class AddOnsAdminController {
     }
     return {
       tenantId: id,
-      used: ctx.aiConversationsUsed ?? 0,
+      used: aiUsageThisMonth(ctx),
       cap,
-      resetsAt: ctx.aiConversationsResetAt?.toISOString() ?? null,
+      resetsAt: nextAiUsagePeriodStart().toISOString(),
       addonsUnlocked,
     };
   }

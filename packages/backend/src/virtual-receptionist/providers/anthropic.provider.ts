@@ -140,17 +140,9 @@ export class AnthropicProvider {
       // simply processed uncached, which is why cache_read_input_tokens sat
       // at 0 in production while this block looked correct.
       //
-      // Estimated for a salon with one short FAQ: ~600 tokens of tool
-      // schemas plus ~3000 of system prompt, about 3600. It was ~1970 until
-      // the booking flow and the handling rules went into the prompt.
+      // Estimated at ~600 tokens of tool schemas plus the system prompt;
       // prompt-cache-prefix.l4.spec.ts tracks this against the real
-      // buildSystemPrompt output.
-      //
-      // The size also varies by salon now: the FAQs are in the prompt, up to
-      // 20 entries of 200 + 200 characters, which is up to ~2200 tokens more.
-      // So a salon with a handful of full FAQs probably clears 4096 and is
-      // cached, while one with none probably is not. The estimate is too
-      // rough to say which salons are which -- per-tenant
+      // buildSystemPrompt output. The estimate is rough: per-tenant
       // cache_read_input_tokens in production is the only real answer.
       //
       // Leaving cache_control in place costs nothing and pays off wherever
@@ -216,7 +208,7 @@ export class AnthropicProvider {
         });
 
         // Execute every tool call and append tool_result blocks. The
-        // Anthropic / MiniMax API requires tool_result.content to be a
+        // The Anthropic API requires tool_result.content to be a
         // JSON-encoded string, not a raw object.
         const toolResultBlocks: Array<{
           type: 'tool_result';

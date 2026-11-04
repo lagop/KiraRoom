@@ -1637,7 +1637,8 @@
     "load_failed": "Could not load settings",
     "save_failed": "Could not save settings",
     "hours_need_both": "Set both the opening and the closing time",
-    "hours_open_before_close": "The opening time must be before the closing time"
+    "hours_open_before_close": "The opening time must be before the closing time",
+    "receptionist": "Receptionist"
   },
   "clients": {
     "title": "Clients",
@@ -2058,7 +2059,8 @@
     "pos_products": "Products",
     "multi_location": "Multi-location",
     "calendar_feeds": "Calendars",
-    "my_commissions": "My commissions"
+    "my_commissions": "My commissions",
+    "conversations": "Conversations"
   },
   "Failed to add points": "Failed to add points",
   "Failed to create professional": {
@@ -3448,6 +3450,64 @@
     "hello": "Hello!",
     "howCanIHelp": "How can I help you today?",
     "callSalonPrompt": "Would you rather talk to the salon?",
-    "callSalon": "Call the salon ({phone})"
+    "callSalon": "Call the salon ({phone})",
+    "noHealthData": "Do not share health information",
+    "privacy": "Privacy",
+    "newConversation": "New conversation"
+  },
+  "receptionistInbox": {
+    "title": "Conversations",
+    "subtitle": "What your clients talked about with the virtual receptionist, on the web and on every channel.",
+    "readOnly": "You cannot reply from here. If a client needs the salon, call or message them from the salon's phone.",
+    "views": {
+      "all": "All",
+      "attention": "Waiting for the salon",
+      "paused": "Assistant paused"
+    },
+    "channelAll": "All channels",
+    "channels": {
+      "web": "Web",
+      "whatsapp": "WhatsApp",
+      "facebook": "Facebook",
+      "instagram": "Instagram",
+      "telegram": "Telegram"
+    },
+    "search": "Search the messages",
+    "searchPlaceholder": "Name, service, word…",
+    "empty": "No conversations with the receptionist yet.",
+    "emptyFiltered": "No conversations match these filters.",
+    "loadError": "The conversations could not be loaded.",
+    "retry": "Try again",
+    "messageCount": "{count} messages",
+    "attention": {
+      "client_asked_person": "Asked to talk to the salon",
+      "assistant_could_not_answer": "The assistant could not answer"
+    },
+    "pausedBadge": "Paused",
+    "pause": "Pause the assistant in this conversation",
+    "resume": "Resume the assistant",
+    "markAttended": "Mark as attended",
+    "pauseTitle": "Pause the assistant in this conversation?",
+    "pauseBody": "The assistant stops answering this client on this channel. Their messages are still saved here. Resume it whenever you like.",
+    "pauseConfirm": "Pause",
+    "resumeTitle": "Resume the assistant?",
+    "resumeBody": "The assistant answers this client's next messages again.",
+    "resumeConfirm": "Resume",
+    "cancel": "Cancel",
+    "pausedToast": "Assistant paused in this conversation",
+    "pausedToastBody": "New messages arrive here with no automatic answer.",
+    "resumedToast": "Assistant resumed",
+    "attendedToast": "Conversation marked as attended",
+    "actionError": "It could not be saved",
+    "pausedNote": "The assistant is paused: this client's new messages get no automatic answer.",
+    "back": "Back to the list",
+    "select": "Pick a conversation to read it.",
+    "previous": "Previous",
+    "next": "Next",
+    "pageOf": "Page {page} of {pages}",
+    "clientFile": "Open the client's file",
+    "you": "Client",
+    "assistant": "Assistant",
+    "notFound": "This conversation no longer exists."
   }
 }

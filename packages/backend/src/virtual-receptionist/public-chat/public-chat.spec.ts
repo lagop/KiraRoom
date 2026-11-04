@@ -137,10 +137,11 @@ describe("PublicChatAccessService.assertWithinDailyLimit", () => {
 });
 
 describe("POST /virtual-receptionist/messages", () => {
-  function controller(sent = 0) {
+  function controller(sent = 0, webChatEnabled = true) {
+    const prisma = { tenant: { findUnique: jest.fn(async () => ({ webChatEnabled })) } };
     const receptionist = { sendMessage: jest.fn(async () => ({ id: "m1", content: "¡Hola!", requiresHandoff: false })) };
     const { svc } = accessService({ sent });
-    const c = new VirtualReceptionistController(receptionist as any, {} as any, {} as any, {} as any, {} as any, {} as any, svc);
+    const c = new VirtualReceptionistController(receptionist as any, {} as any, {} as any, {} as any, svc, {} as any, prisma as any);
     return { c, receptionist };
   }
 
@@ -165,5 +166,19 @@ describe("POST /virtual-receptionist/messages", () => {
     const body = plainToInstance(PublicChatMessageDto, { salonId: SALON, message: "hola" });
     await expect(c.sendMessage(body)).rejects.toBeInstanceOf(ChatDailyLimitException);
     expect(receptionist.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("refuses every message when the salon turned its web chat off (D16)", async () => {
+    const { c, receptionist } = controller(0, false);
+    const body = plainToInstance(PublicChatMessageDto, { salonId: SALON, message: "hola" });
+    await expect(c.sendMessage(body)).rejects.toMatchObject({ status: 403 });
+    expect(receptionist.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("passes on Nueva conversación (D19)", async () => {
+    const { c, receptionist } = controller();
+    const body = plainToInstance(PublicChatMessageDto, { salonId: SALON, message: "hola", metadata: { newConversation: true } });
+    await c.sendMessage(body);
+    expect((receptionist.sendMessage.mock.calls[0] as any)[0].metadata).toEqual({ serviceId: undefined, newConversation: true });
   });
 });

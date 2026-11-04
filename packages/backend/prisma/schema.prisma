@@ -81,7 +81,9 @@ model Tenant {
   /// an accidental delete can be reversed via Prisma Studio.
   deletedAt              DateTime?
   /// P2A-ia-fairuse - virtual receptionist usage counter (Esencial cap)
+  /// Messages in `aiConversationsPeriod` (YYYY-MM, UTC); another month reads as 0.
   aiConversationsUsed    Int                @default(0)
+  aiConversationsPeriod  String?
   aiConversationsResetAt DateTime?
   /// AI messages on `aiMessagesDay` (YYYY-MM-DD, UTC), for the daily cap
   /// that stops an attack or a runaway loop the same day.
@@ -187,6 +189,9 @@ model Tenant {
   /// Time off requests by email too (Resend), besides the panel: each new
   /// request to the owner and admins, each answer to the professional.
   timeOffEmailNotices Boolean @default(true)
+  /// Ajustes > Recepcionista "Chat en mi web": off, the salon page shows no
+  /// chat and the public chat endpoint refuses its messages.
+  webChatEnabled      Boolean @default(true)
 
   /// Till (POS) discounts: the most a staff member may take off a line, in
   /// percent (0-100). 0, the default: only the owner or a manager discount.
@@ -1052,6 +1057,14 @@ model ChatConversation {
   handoffAt      DateTime?
   lastActivityAt DateTime    @default(now())
   context        Json        @default("{}")
+  /// Set from the panel (Conversaciones): the assistant stores the client's
+  /// messages but does not answer, on every channel, until it is resumed.
+  assistantPausedAt   DateTime?
+  assistantPausedById String?
+  /// The salon was told this conversation needs it: client_asked_person or
+  /// assistant_could_not_answer. attentionAt is cleared when it is attended.
+  attentionReason     String?
+  attentionAt         DateTime?
 
   messages      ChatMessage[]
   intentHistory IntentHistoryItem[]
@@ -1064,6 +1077,7 @@ model ChatConversation {
   @@index([channel])
   @@index([status])
   @@index([lastActivityAt])
+  @@index([tenantId, lastActivityAt])
   @@map("chat_conversations")
 }
 
@@ -3603,8 +3617,8 @@ model PlatformLlmConfig {
   // last-4-chars hash is returned to the admin UI.
   apiKeyEncrypted String   @db.Text
   defaultModel    String   @default("claude-haiku-5-5")
-  // Optional fields that the provider factory needs (e.g. MiniMax
-  // requires MINIMAX_BASE_URL).
+  // Optional base URL for the provider (a proxy or gateway in front of
+  // the provider API).
   baseUrl         String?
   // P2A-anthropic-workspace: Identity-linked Anthropic keys (created
   // from console.anthropic.com since late 2025) require this header

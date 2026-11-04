@@ -44,6 +44,8 @@ export function settingsFromTenant(tenant: TenantSettingsRow): Record<string, an
     autoConfirmOnlineBookings: tenant.autoConfirmOnlineBookings ? "true" : "false",
     // On unless the salon turned it off (older answers lack the field).
     timeOffEmailNotices: tenant.timeOffEmailNotices === false ? "false" : "true",
+    // Ajustes > Recepcionista: on unless the salon turned it off.
+    webChatEnabled: tenant.webChatEnabled === false ? "false" : "true",
   };
 }
 
@@ -75,6 +77,9 @@ export function tenantUpdateFrom(
   }
   if (changed("timeOffEmailNotices")) {
     update.timeOffEmailNotices = settings.timeOffEmailNotices === "true";
+  }
+  if (changed("webChatEnabled")) {
+    update.webChatEnabled = settings.webChatEnabled === "true";
   }
   if (settings.salonHours && !sameSalonHours(settings.salonHours, saved.salonHours)) {
     update.openingHours = openingHoursForSave(settings.salonHours);

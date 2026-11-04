@@ -15,14 +15,19 @@ export class ConversationService {
    */
   async findOrCreateConversation(data: CreateConversationDto): Promise<ChatConversation> {
     const tenantId = data.tenantId || data.salonId;
-    const existingConversation = await this.findActiveConversation(data.clientId, tenantId);
+    // "Nueva conversación" in the web chat: start over.
+    if ((data.metadata as { newConversation?: boolean } | undefined)?.newConversation) {
+      await this.memoryRepository.closeActiveConversations(data.clientId, tenantId);
+    }
+    const existingConversation = await this.findActiveConversation(data.clientId, tenantId, String(data.channel ?? ''));
     
     if (existingConversation) {
       this.logger.log(`Found active conversation ${existingConversation.id} for ${logId(data.clientId)}`);
       return this.convertToSharedType(existingConversation);
     }
 
-    const newConversation = await this.createConversation(data);
+    const { newConversation: _restart, ...metadata } = (data.metadata ?? {}) as Record<string, unknown>;
+    const newConversation = await this.createConversation({ ...data, metadata } as CreateConversationDto);
     this.logger.log(`Created new conversation ${newConversation.id} for ${logId(data.clientId)}`);
     return newConversation;
   }
@@ -30,8 +35,8 @@ export class ConversationService {
   /**
    * Find active conversation for client
    */
-  private async findActiveConversation(clientId: string, tenantId: string): Promise<any | null> {
-    return this.memoryRepository.findActiveConversationByClientId(clientId, tenantId);
+  private async findActiveConversation(clientId: string, tenantId: string, channel?: string): Promise<any | null> {
+    return this.memoryRepository.findActiveConversationByClientId(clientId, tenantId, { channel });
   }
 
   /**

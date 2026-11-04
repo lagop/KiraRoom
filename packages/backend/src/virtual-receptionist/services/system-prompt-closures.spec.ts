@@ -33,11 +33,10 @@ function setup(closures: unknown[]) {
     },
     timeOff: { findMany: jest.fn(async () => closures) },
   };
-  const faqs: any = { getFAQs: async () => [] };
   const flags: any = { isFeatureUnlocked: async () => false };
   const platform: any = { resolveEffective: async () => ({ provider: LLMProvider.ANTHROPIC, model: 'm' }) };
   const usage: any = { record: jest.fn() };
-  const service = new LLMService(providerFactory, config, prisma as any, faqs, flags, platform, usage);
+  const service = new LLMService(providerFactory, config, prisma as any, flags, platform, usage);
   return { service, prisma, sent };
 }
 

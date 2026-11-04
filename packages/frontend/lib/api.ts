@@ -15,6 +15,8 @@ import type {
 import type { CreateClientPayload, UpdateClientPayload } from "./client-form";
 import type { RefundableSaleLine } from "./payments-format";
 import type { InvoiceIssuerStatus } from "./invoice-issuer";
+import type { InboxConversation, InboxFilters, InboxPage } from "./receptionist-inbox";
+import { inboxQuery } from "./receptionist-inbox";
 import { apiErrorMessage } from "./api-error-message";
 
 const API_BASE_URL =
@@ -3372,6 +3374,32 @@ class ApiClient implements ApiClientInterface {
     return this.request<{ count: number }>("/time-off/requests/count");
   }
 
+  // Conversaciones: the receptionist's conversations (owner and admins).
+  async getReceptionistInbox(filters: InboxFilters = {}): Promise<InboxPage> {
+    return this.request<InboxPage>(`/virtual-receptionist/inbox${inboxQuery(filters)}`);
+  }
+
+  async getReceptionistInboxAttentionCount(): Promise<{ count: number }> {
+    return this.request<{ count: number }>("/virtual-receptionist/inbox/attention-count");
+  }
+
+  async getReceptionistConversation(id: string): Promise<InboxConversation> {
+    return this.request<InboxConversation>(`/virtual-receptionist/inbox/${encodeURIComponent(id)}`);
+  }
+
+  /** The assistant stops answering in this conversation, on every channel. */
+  async pauseReceptionistConversation(id: string): Promise<InboxConversation> {
+    return this.request<InboxConversation>(`/virtual-receptionist/inbox/${encodeURIComponent(id)}/pause`, { method: "POST" });
+  }
+
+  async resumeReceptionistConversation(id: string): Promise<InboxConversation> {
+    return this.request<InboxConversation>(`/virtual-receptionist/inbox/${encodeURIComponent(id)}/resume`, { method: "POST" });
+  }
+
+  async markReceptionistConversationAttended(id: string): Promise<InboxConversation> {
+    return this.request<InboxConversation>(`/virtual-receptionist/inbox/${encodeURIComponent(id)}/attended`, { method: "POST" });
+  }
+
   // Before approving a request: its clashes (409 when it overlaps other time off).
   async previewApproveTimeOff(id: string): Promise<{ conflicts: TimeOffConflict[] }> {
     return this.request<{ conflicts: TimeOffConflict[] }>(`/time-off/${encodeURIComponent(id)}/approve/preview`, {
@@ -4991,6 +5019,8 @@ class ApiClient implements ApiClientInterface {
     /** Online bookings start confirmed instead of pending. */
     autoConfirmOnlineBookings?: boolean;
     timeOffEmailNotices?: boolean;
+    /** Ajustes > Recepcionista "Chat en mi web". */
+    webChatEnabled?: boolean;
     /** The public page's links (Ajustes > Salón). */
     website?: string | null;
     whatsapp?: string | null;
@@ -5026,6 +5056,7 @@ class ApiClient implements ApiClientInterface {
     bookingSlotMinutes?: number;
     autoConfirmOnlineBookings?: boolean;
     timeOffEmailNotices?: boolean;
+    webChatEnabled?: boolean;
     /** null clears them. */
     website?: string | null;
     whatsapp?: string | null;

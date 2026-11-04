@@ -161,6 +161,18 @@ describe("PlatformLlmConfigService (L-4)", () => {
       const eff = await svc.resolveEffective();
       expect(eff?.provider).toBe("anthropic");
     });
+
+    it("runs a stored MiniMax config on Anthropic, with a Claude model and no gateway URL", async () => {
+      // MiniMax was removed (audit D13): a row saved with it must not send
+      // Claude requests to the gateway, nor a MiniMax model id to Anthropic.
+      const prisma = makePrisma({
+        row: { ...REAL_ROW, provider: "MiniMax", defaultModel: "MiniMax-M3", baseUrl: "https://gateway.example" },
+      });
+      const svc = new PlatformLlmConfigService(prisma as any, makeEncryption(), {} as any);
+
+      const eff = await svc.resolveEffective();
+      expect(eff).toMatchObject({ provider: "anthropic", model: "claude-haiku-5-5", baseUrl: undefined });
+    });
   });
 
   describe("testConnection sanitization", () => {

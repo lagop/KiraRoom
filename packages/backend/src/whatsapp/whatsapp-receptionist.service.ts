@@ -118,6 +118,8 @@ export class WhatsAppReceptionistService {
       },
     } as any);
 
+    // Paused from the panel: the message is kept, nothing is sent.
+    if ((response as { paused?: boolean } | null)?.paused) return;
     const text =
       response?.id === "error-response" || !response?.content?.trim()
         ? await this.apology(tenantId)

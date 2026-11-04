@@ -182,6 +182,10 @@ export const SALON_TOOLS = [
         email: { type: 'string', description: 'Optional. Only if the client gives it.' },
         notes: { type: 'string' },
         locationId: LOCATION_INPUT,
+        refusesPromotions: {
+          type: 'boolean',
+          description: 'true only if the client said they do not want to receive promotions from the salon. Default: omit.',
+        },
       },
       required: ['serviceId', 'date', 'time', 'firstName', 'lastName', 'phone'],
     },
@@ -196,6 +200,20 @@ export const SALON_TOOLS = [
     input_schema: {
       type: 'object' as const,
       properties: {},
+    },
+  },
+  {
+    name: 'request_salon_attention',
+    description:
+      'Tell the salon that this conversation needs a person: the client asks to talk to someone at the salon, ' +
+      'or asks something you cannot answer with the tools. The salon gets a notice and sees the conversation ' +
+      'in its panel. Nobody replies here: never promise contact; give the salon phone.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        reason: { type: 'string', enum: ['asked_for_person', 'cannot_answer'] },
+      },
+      required: ['reason'],
     },
   },
   {
@@ -763,6 +781,9 @@ export async function executeSalonTool(
       return service.createAppointment(ctx);
     case 'get_salon_info':
       return service.getSalonInfo(ctx);
+    case 'request_salon_attention':
+      // Run by the receptionist service, which knows the conversation.
+      return { notified: false, error: 'not_available' };
     default:
       return { error: `unknown_tool:${name}` };
   }

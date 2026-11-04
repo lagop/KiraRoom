@@ -1,5 +1,6 @@
 import { Injectable, Logger, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { incrementAiUsage } from '../common/ai-usage/ai-monthly-usage';
 import { LLMService } from '../virtual-receptionist/services/llm.service';
 import {
   buildCopilotSystemPrompt,
@@ -39,12 +40,8 @@ import { clientScopeWhere } from '../clients/clients.service';
  * the shared counter when the volume justifies it.
  */
 async function bumpUsageCounter(prisma: PrismaService, tenantId: string, by = 1): Promise<number> {
-  const row = await prisma.tenant.update({
-    where: { id: tenantId },
-    data: { aiConversationsUsed: { increment: by } },
-    select: { aiConversationsUsed: true },
-  });
-  return row.aiConversationsUsed;
+  // This month's count: a new month starts again from 0.
+  return incrementAiUsage(prisma, tenantId, by);
 }
 
 /**

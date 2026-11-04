@@ -136,29 +136,6 @@ export const UpdateConversationSchema = z.object({
   handoffAt: z.date().optional()
 });
 
-// FAQ Management DTOs
-export const CreateFAQItemSchema = z.object({
-  question: z.string().min(1, 'Question is required'),
-  answer: z.string().min(1, 'Answer is required'),
-  category: z.string().min(1, 'Category is required'),
-  keywords: z.array(z.string()).default([]),
-  priority: z.number().min(1).max(10).default(5)
-});
-
-export const UpdateFAQItemSchema = CreateFAQItemSchema.partial();
-
-export const FAQItemResponseSchema = z.object({
-  id: z.string().uuid(),
-  question: z.string(),
-  answer: z.string(),
-  category: z.string(),
-  keywords: z.array(z.string()),
-  priority: z.number(),
-  isActive: z.boolean(),
-  createdAt: z.date(),
-  updatedAt: z.date()
-});
-
 // Booking Context DTOs
 export const BookingContextSchema = z.object({
   id: z.string().uuid(),
@@ -291,9 +268,6 @@ export type SendMessageDto = z.infer<typeof SendMessageSchema>;
 export type MessageResponseDto = z.infer<typeof MessageResponseSchema>;
 export type CreateConversationDto = z.infer<typeof CreateConversationSchema>;
 export type UpdateConversationDto = z.infer<typeof UpdateConversationSchema>;
-export type CreateFAQItem = z.infer<typeof CreateFAQItemSchema>;
-export type UpdateFAQItem = z.infer<typeof UpdateFAQItemSchema>;
-export type FAQItemResponse = z.infer<typeof FAQItemResponseSchema>;
 export type BookingRequest = z.infer<typeof BookingRequestSchema>;
 export type BookingResponse = z.infer<typeof BookingResponseSchema>;
 export type BookingContext = z.infer<typeof BookingContextSchema>;

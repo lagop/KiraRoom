@@ -114,7 +114,7 @@ export const SCENARIOS: Scenario[] = [
       // Accept either behavior:
       //   (a) the model calls check_availability (best)
       //   (b) the model calls list_services to show services (acceptable)
-      // — MiniMax-M3 refuses forced tool_choice for tools with
+      // — the model refused forced tool_choice for tools with
       // required params, so we accept both paths.
       {
         kind: 'toolCalled',
@@ -432,7 +432,7 @@ export const SCENARIOS: Scenario[] = [
     assertions: [
       // Accept either: check_availability called (preferred) OR
       // list_services called and manicura appears with a real price.
-      // MiniMax refuses to call check_availability because it has
+      // The model refused to call check_availability because it has
       // required params and the model wants clarification first.
       {
         kind: 'toolCalled',

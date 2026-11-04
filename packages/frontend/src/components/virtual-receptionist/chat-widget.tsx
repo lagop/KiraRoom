@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, X, Minimize, Maximize, MessageCircle, Phone } from 'lucide-react';
+import { Send, X, Minimize, Maximize, MessageCircle, Phone, RotateCcw } from 'lucide-react';
 import apiClient from '@/lib/api';
 import { useTranslations } from '@/lib/use-translation';
-import { CHAT_MAX_MESSAGE, chatErrorText, readVisitorToken, rememberVisitorToken } from '@/lib/chat-visitor';
+import { CHAT_MAX_MESSAGE, chatErrorText, chatSessionExpired, readVisitorToken, rememberVisitorToken } from '@/lib/chat-visitor';
 import { ChatInline, parseChatMarkdown } from '@/lib/chat-markdown';
 
 function Inline({ parts }: { parts: ChatInline[] }) {
@@ -108,6 +108,8 @@ interface ChatWidgetProps {
   salonPhone?: string;
   /** The page's translate function, so the chat follows its language switch. */
   t?: (key: string, params?: Record<string, unknown>) => string;
+  /** The salon's privacy policy (salonPrivacyHref): "No compartas datos de salud · Privacidad". */
+  privacyHref?: string;
 }
 
 const ChatWidget: React.FC<ChatWidgetProps> = ({ 
@@ -119,6 +121,7 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
   salonName,
   salonPhone,
   t: pageT,
+  privacyHref,
 }) => {
   const ownT = useTranslations();
   const t = pageT ?? ownT;
@@ -131,6 +134,11 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
   const [showHandoff, setShowHandoff] = useState(false);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  // "Nueva conversación": the next message tells the server to start over.
+  const startOverRef = useRef(false);
+  // When the visitor last heard back; after 30 idle minutes the server has
+  // started a new conversation, so the screen does too.
+  const lastActivityRef = useRef<number | null>(null);
   // Signed-in clients use their own id; everyone else a per-browser one.
   const visitorRef = useRef<string | null>(null);
   const effectiveClientId = () => {
@@ -157,9 +165,12 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
       timestamp: new Date(),
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    const expired = chatSessionExpired(lastActivityRef.current);
+    if (expired) setShowHandoff(false);
+    setMessages(prev => (expired ? [userMessage] : [...prev, userMessage]));
     setInputValue('');
     setIsLoading(true);
+    const startOver = startOverRef.current;
 
     try {
       const storage = typeof window !== 'undefined' ? window.localStorage : undefined;
@@ -170,18 +181,23 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
         message: inputValue,
         channel: 'web',
         // A signed-in client's name for the greeting; the server ignores it for visitors.
-        metadata: { clientName },
+        metadata: { clientName, ...(startOver ? { newConversation: true } : {}) },
       });
       rememberVisitorToken(storage, salonId, response.visitorToken);
+      if (startOver) startOverRef.current = false;
+      lastActivityRef.current = Date.now();
 
-      const assistantMessage: ChatMessage = {
-        id: response.id,
-        role: 'assistant',
-        content: response.content,
-        timestamp: new Date(),
-      };
-
-      setMessages(prev => [...prev, assistantMessage]);
+      // Empty: the salon paused the assistant in this conversation; the
+      // message reached the salon's panel and nobody answers here.
+      if (response.content?.trim()) {
+        const assistantMessage: ChatMessage = {
+          id: response.id,
+          role: 'assistant',
+          content: response.content,
+          timestamp: new Date(),
+        };
+        setMessages(prev => [...prev, assistantMessage]);
+      }
 
       if (response.requiresHandoff) {
         setShowHandoff(true);
@@ -199,6 +215,16 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
     } finally {
       setIsLoading(false);
     }
+  };
+
+  /** "Nueva conversación": a clean screen, and the server forgets the last one. */
+  const handleStartOver = () => {
+    if (isLoading) return;
+    setMessages([]);
+    setShowHandoff(false);
+    setInputValue('');
+    startOverRef.current = true;
+    lastActivityRef.current = null;
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -234,6 +260,18 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
             <span className="font-semibold">{t('publicChat.title')}</span>
           </div>
           <div className="flex items-center space-x-1">
+            {messages.length > 0 && !isMinimized && (
+              <button
+                type="button"
+                onClick={handleStartOver}
+                disabled={isLoading}
+                aria-label={t('publicChat.newConversation')}
+                title={t('publicChat.newConversation')}
+                className="p-1 hover:bg-purple-700 rounded disabled:opacity-50"
+              >
+                <RotateCcw className="w-4 h-4" aria-hidden="true" />
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setIsMinimized(!isMinimized)}
@@ -260,7 +298,22 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
             {/* Always shown: the visitor knows it is an AI before writing (AI Act art. 50). */}
             <div className="px-4 py-2 border-b border-gray-200 bg-white text-xs text-gray-600">
               <p>{salonName ? t('publicChat.disclosure', { salon: salonName }) : t('publicChat.disclosureNoName')}</p>
-              {/* The link to the chat's privacy notice goes here once it exists. */}
+              <p className="mt-0.5">
+                {t('publicChat.noHealthData')}
+                {privacyHref && (
+                  <>
+                    {' · '}
+                    <a
+                      href={privacyHref}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline hover:text-gray-800"
+                    >
+                      {t('publicChat.privacy')}
+                    </a>
+                  </>
+                )}
+              </p>
             </div>
             <div
               className="flex-1 overflow-y-auto px-4 py-3 space-y-4 bg-gray-50"
