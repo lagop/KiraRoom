@@ -10,6 +10,7 @@ import { BugReportAdminController } from "./bug-report-admin.controller";
 import { WeeklyDigestService } from "./weekly/weekly-digest.service";
 import { WeeklyDigestScheduler } from "./weekly/weekly-digest.scheduler";
 import { WeeklyDigestController } from "./weekly/weekly-digest.controller";
+import { AuditLogAdminController } from "./audit/audit-log-admin.controller";
 import { PrismaModule } from "../common/prisma/prisma.module";
 import { PaymentsModule } from "../payments/payments.module";
 import { GdprModule } from "./gdpr/gdpr.module";
@@ -42,7 +43,7 @@ import { AuthRateLimitsService } from "../auth/abuse/auth-rate-limits.service";
     PasswordResetService,
     AuthRateLimitsService,
   ],
-  controllers: [SaasController, BugReportAdminController, WeeklyDigestController],
+  controllers: [SaasController, BugReportAdminController, AuditLogAdminController, WeeklyDigestController],
   exports: [SaasService, AuditLogService],
 })
 export class SaasModule {}

@@ -21,13 +21,32 @@ export const STAFF_REFRESH_COOKIE = "kr_session";
 export const CLIENT_REFRESH_COOKIE = "kr_client_session";
 export const REFRESH_COOKIE_PATH = "/api/v1/auth";
 
-export type CookieKind = "staff" | "client";
+/**
+ * A support session (the platform owner inside a salon, audit 8 C10) has its
+ * own cookie per salon, kr_support_<tenantId>. It used to take kr_session, so
+ * entering a salon replaced the console's session in that browser and leaving
+ * meant signing in again. Per salon, so two salons open in two tabs do not
+ * swap sessions on their next refresh.
+ */
+export const SUPPORT_REFRESH_COOKIE_PREFIX = "kr_support_";
+
+export type CookieKind = "staff" | "client" | `support:${string}`;
 
 export function cookieKindForRole(role: string): CookieKind {
   return role === "client" ? "client" : "staff";
 }
 
+/** The cookie of the support session in this salon. */
+export function supportCookieKind(tenantId: string): CookieKind {
+  return `support:${tenantId}`;
+}
+
 function cookieName(kind: CookieKind): string {
+  if (kind.startsWith("support:")) {
+    // Cookie names allow letters, digits and dashes: a uuid is fine; anything
+    // else is dropped rather than trusted.
+    return SUPPORT_REFRESH_COOKIE_PREFIX + kind.slice("support:".length).replace(/[^A-Za-z0-9-]/g, "");
+  }
   return kind === "client" ? CLIENT_REFRESH_COOKIE : STAFF_REFRESH_COOKIE;
 }
 

@@ -37,6 +37,7 @@ import {
   type TenderMethod,
   type TenderRow,
 } from "@/lib/pos-cart";
+import { authStorage } from "@/lib/auth-storage";
 
 /**
  * La caja (TPV). Every amount here is money in cents, tax included: what
@@ -357,7 +358,7 @@ export default function POSPage() {
 
   // Owner and managers see the salon; staff, their own sales (the API decides).
   useEffect(() => {
-    const token = localStorage.getItem("kira_auth_token");
+    const token = authStorage().getItem("kira_auth_token");
     if (token) {
       try {
         const payload = JSON.parse(atob(token.split(".")[1]));

@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Module, UnauthorizedException } from "
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import { JwtModule, JwtService } from "@nestjs/jwt";
 import { PrismaService } from "../prisma/prisma.service";
+import { isAccessTokenPayload } from "../../auth/session-token";
 
 /** Who is asking a public list endpoint, and for which salon. */
 export interface PublicViewer {
@@ -89,6 +90,8 @@ export class PublicViewerService {
       const payload = this.jwt.verify(match[1], {
         secret: this.config.get<string>("JWT_SECRET"),
       });
+      // Only a session's access token says who is looking (audit 8, C11).
+      if (!isAccessTokenPayload(payload)) return { present: true, valid: false };
       return { present: true, valid: true, payload };
     } catch {
       return { present: true, valid: false };

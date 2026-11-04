@@ -16,10 +16,12 @@ import {
   Bug,
   ShieldCheck,
   CalendarCheck,
+  History,
 } from "lucide-react";
 import apiClient from "@/lib/api";
 import { removeToken } from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
+import { authStorage } from "@/lib/auth-storage";
 
 interface SaasSidebarProps {
   collapsed: boolean;
@@ -55,7 +57,7 @@ export function SaasSidebar({
     } finally {
       removeToken();
       if (typeof window !== "undefined") {
-        localStorage.removeItem("user");
+        authStorage().removeItem("user");
         document.cookie = "saas_user=; path=/; max-age=0";
       }
       window.location.href = "/saas/login";
@@ -69,6 +71,8 @@ export function SaasSidebar({
     { href: "/saas/users", icon: Users, labelKey: "saas.nav.users" },
     { href: "/saas/analytics", icon: BarChart2, labelKey: "saas.nav.analytics" },
     { href: "/saas/bug-reports", icon: Bug, labelKey: "saas.nav.bugReports" },
+    // The audit log, read-only (audit 8, C9).
+    { href: "/saas/actividad", icon: History, labelKey: "saas.nav.activity" },
     { href: "/saas/settings", icon: Settings, labelKey: "saas.nav.settings" },
     { href: "/saas/seguridad", icon: ShieldCheck, labelKey: "saas.nav.security" },
   ];

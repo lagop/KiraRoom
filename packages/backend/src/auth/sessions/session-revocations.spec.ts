@@ -49,7 +49,7 @@ function gateway(rows: { users?: any[] } = {}) {
   const connect = async (id: string, claims: object) => {
     const socket: any = {
       id,
-      handshake: { auth: { token: sign(claims, SECRET, { expiresIn: "15m" }) }, headers: {} },
+      handshake: { auth: { token: sign({ typ: "access", ...claims }, SECRET, { expiresIn: "15m" }) }, headers: {} },
       data: undefined,
       rooms: [] as string[],
       join(room: string) {
@@ -195,7 +195,7 @@ describe("a token from an ended session is not the salon's staff on public pages
     const prisma: any = { user: { findUnique: async ({ where }: any) => users[where.id] ?? null } };
     const viewer = new PublicViewerService(new JwtService({}), { get: () => SECRET } as any, prisma);
     const req = (tv: number) => ({
-      headers: { authorization: `Bearer ${sign({ sub: "user-a", role: "owner", tenantId: "tenant-a", tv }, SECRET)}` },
+      headers: { authorization: `Bearer ${sign({ typ: "access", sub: "user-a", role: "owner", tenantId: "tenant-a", tv }, SECRET)}` },
     });
     expect((await viewer.resolve(req(1))).staff).toBe(true);
     expect((await viewer.resolve(req(0))).staff).toBe(false);

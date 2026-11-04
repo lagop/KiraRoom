@@ -102,6 +102,8 @@ export async function seedSaasOwner(): Promise<void> {
     );
   }
 
+  const keep2fa = process.argv.includes("--keep-2fa");
+
   const prisma = new PrismaClient();
   try {
     const passwordHash = await bcrypt.hash(password, 12);
@@ -142,6 +144,23 @@ export async function seedSaasOwner(): Promise<void> {
         loginAttempts: 0,
         lockedUntil: null,
         isActive: true,
+        // Audit 8, C6: the recovery also covers a lost phone. Two-step
+        // verification is switched off and its secrets and recovery codes
+        // cleared, or the console would still ask for a code nobody can
+        // produce; turn it on again in /saas/seguridad after signing in.
+        // --keep-2fa leaves it as it is (only the password was lost).
+        ...(keep2fa
+          ? {}
+          : {
+              twoFactorEnabled: false,
+              twoFactorSecret: null,
+              twoFactorPendingSecret: null,
+              twoFactorLastStep: null,
+              twoFactorRecoveryCodes: [],
+            }),
+        // Every session ends: the old password's, and any support session
+        // opened from them.
+        tokenVersion: { increment: 1 },
       },
       create: {
         email,
@@ -156,6 +175,7 @@ export async function seedSaasOwner(): Promise<void> {
     // The password is never printed: whoever ran this already has it, and
     // stdout ends up in container logs.
     console.log('saas_owner ready:', user.email);
+    if (!keep2fa) console.log('Two-step verification is off for this account: turn it on again in /saas/seguridad.');
     console.log('Tenant:', platformTenant.name);
   } finally {
     await prisma.$disconnect();

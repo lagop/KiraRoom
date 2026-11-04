@@ -37,14 +37,14 @@ describe("NotificationsGateway", () => {
   });
 
   it("refuses a token signed with another key", async () => {
-    const token = sign({ sub: "u1", role: "owner" }, "another-secret-of-sufficient-length");
+    const token = sign({ typ: "access", sub: "u1", role: "owner" }, "another-secret-of-sufficient-length");
     const s = socket({ token });
     await gateway({ user: { id: "u1", tenantId: "t1", isActive: true, tokenVersion: 0 } }).handleConnection(s as any);
     expect(s.disconnect).toHaveBeenCalled();
   });
 
   it("takes the rooms from the token, not from what the socket claims", async () => {
-    const token = sign({ sub: "u1", role: "owner", tenantId: "t1" }, SECRET);
+    const token = sign({ typ: "access", sub: "u1", role: "owner", tenantId: "t1" }, SECRET);
     const s = socket({ token, tenantId: "someone-else", userId: "u9" });
     await gateway({ user: { id: "u1", tenantId: "t1", isActive: true, tokenVersion: 0 } }).handleConnection(s as any);
     expect(s.disconnect).not.toHaveBeenCalled();
@@ -52,14 +52,14 @@ describe("NotificationsGateway", () => {
   });
 
   it("accepts the token in the Authorization header too", async () => {
-    const token = sign({ sub: "u1", role: "staff" }, SECRET);
+    const token = sign({ typ: "access", sub: "u1", role: "staff" }, SECRET);
     const s = socket({}, { authorization: `Bearer ${token}` });
     await gateway({ user: { id: "u1", tenantId: "t1", isActive: true, tokenVersion: 0 } }).handleConnection(s as any);
     expect(s.rooms).toContain("user:u1");
   });
 
   it("refuses a client token: clients have no accounts, so no socket and no room", async () => {
-    const token = sign({ sub: "c1", role: "client" }, SECRET);
+    const token = sign({ typ: "access", sub: "c1", role: "client" }, SECRET);
     const s = socket({ token });
     const g = gateway({ user: { id: "c1", tenantId: "t1", isActive: true, tokenVersion: 0 } });
     await g.handleConnection(s as any);
@@ -68,7 +68,7 @@ describe("NotificationsGateway", () => {
   });
 
   it("refuses a deactivated user", async () => {
-    const userToken = sign({ sub: "u1", role: "owner" }, SECRET);
+    const userToken = sign({ typ: "access", sub: "u1", role: "owner" }, SECRET);
     const u = socket({ token: userToken });
     await gateway({ user: { id: "u1", tenantId: "t1", isActive: false } }).handleConnection(u as any);
     expect(u.disconnect).toHaveBeenCalled();

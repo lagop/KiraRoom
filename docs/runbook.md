@@ -190,6 +190,29 @@ If a key is revoked or rate-limited:
 The key is stored encrypted in the platform LLM config row, not per
 salon.
 
+## Recovering the platform owner (lost password or lost phone)
+
+Re-running the seed script is the recovery path. On an existing account it:
+sets the new password, clears the lockout, **switches two-step verification
+off and deletes its secret and recovery codes**, and ends every session
+(including any open support session):
+
+```bash
+printf '%s' 'the new password' | docker exec -i \
+  -e SAAS_OWNER_EMAIL='you@yourdomain.com' \
+  kiraroom-backend-prod node dist/scripts/seed-saas-owner.js --password-stdin
+```
+
+Then sign in at `/saas/login` and turn two-step verification on again in
+`/saas/seguridad` straight away (new QR, new recovery codes).
+
+If only the password was lost and the authenticator app still works, add
+`--keep-2fa` to leave two-step verification as it is.
+
+Wrong passwords for the platform owner lock the **address** they come from
+(5 in 30 minutes), not the account, so a stranger cannot keep you out; from
+another network you can still sign in.
+
 ## First deploy: creating the platform owner
 
 A fresh database has no users, so nobody can sign in to the SaaS console. After

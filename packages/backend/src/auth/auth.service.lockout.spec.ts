@@ -19,7 +19,7 @@ import { AuthService, INVALID_CREDENTIALS } from "./auth.service";
 
 const HASH = bcrypt.hashSync("correct-horse-battery", 4);
 
-function buildAuth(user: Record<string, unknown> | null): {
+function buildAuth(user: Record<string, unknown> | null, limits?: any): {
   auth: AuthService;
   prisma: any;
 } {
@@ -51,6 +51,7 @@ function buildAuth(user: Record<string, unknown> | null): {
     } as any,
     { start: jest.fn(async () => ({ sid: "sid-1", jti: "jti-1" })), rotate: jest.fn() } as any,
     {} as any,
+    limits,
   );
   return { auth, prisma };
 }
@@ -267,5 +268,49 @@ describe("SEC-8: AuthService.login honours lockedUntil", () => {
     await expect(
       auth.login({ email: "owner@salon.test", password: "correct-horse-battery" }),
     ).rejects.toThrow(/desactivada/);
+  });
+});
+
+describe("audit 8 C12: the platform owner is locked per address, not account-wide", () => {
+  function memoryLimits() {
+    const counts = new Map<string, number>();
+    const key = (u: string, ip?: string | null) => `${u}:${ip ?? "?"}`;
+    return {
+      platformOwnerLockedFrom: jest.fn(async (u: string, ip?: string | null) => (counts.get(key(u, ip)) ?? 0) >= 5),
+      platformOwnerFailedFrom: jest.fn(async (u: string, ip?: string | null) => {
+        counts.set(key(u, ip), (counts.get(key(u, ip)) ?? 0) + 1);
+      }),
+      platformOwnerSignedInFrom: jest.fn(async (u: string, ip?: string | null) => {
+        counts.delete(key(u, ip));
+      }),
+    };
+  }
+
+  it("wrong passwords from one address never lock the account itself", async () => {
+    const limits = memoryLimits();
+    const { auth, prisma } = buildAuth(activeUser(), limits);
+    for (let i = 0; i < 6; i++) {
+      await expect(auth.login({ email: "owner@salon.test", password: "wrong" }, { ip: "203.0.113.9" })).rejects.toThrow(
+        UnauthorizedException,
+      );
+    }
+    // No loginAttempts / lockedUntil write: the account is not locked.
+    expect(prisma.user.update).not.toHaveBeenCalled();
+    // That address is: even the right password waits.
+    await expect(
+      auth.login({ email: "owner@salon.test", password: "correct-horse-battery" }, { ip: "203.0.113.9" }),
+    ).rejects.toThrow(/desde esta conexión/);
+    // The owner from another address gets in.
+    await expect(
+      auth.login({ email: "owner@salon.test", password: "correct-horse-battery" }, { ip: "198.51.100.4" }),
+    ).resolves.toHaveProperty("tokens");
+  });
+
+  it("a salon owner keeps the account-wide lock", async () => {
+    const limits = memoryLimits();
+    const { auth, prisma } = buildAuth(activeUser({ role: "owner" }), limits);
+    await expect(auth.login({ email: "owner@salon.test", password: "wrong" }, { ip: "203.0.113.9" })).rejects.toThrow();
+    expect(prisma.user.update).toHaveBeenCalled();
+    expect(limits.platformOwnerFailedFrom).not.toHaveBeenCalled();
   });
 });

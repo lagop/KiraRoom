@@ -7,6 +7,7 @@ import { TwoFactorStep } from "@/src/components/auth/two-factor-step";
 import { LanguageSwitcher } from "../components/language-switcher";
 import { Building2, BarChart2, Users, Shield } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
+import { authStorage } from "@/lib/auth-storage";
 
 export default function SaasLoginPage() {
   const t = useTranslations();
@@ -26,7 +27,7 @@ export default function SaasLoginPage() {
     }
     setToken(response.accessToken);
     if (typeof window !== "undefined") {
-      localStorage.setItem("user", JSON.stringify(response.user));
+      authStorage().setItem("user", JSON.stringify(response.user));
       // Set cookie for middleware to detect SaaS user
       document.cookie = "saas_user=true; path=/; max-age=" + (7 * 24 * 60 * 60);
     }
