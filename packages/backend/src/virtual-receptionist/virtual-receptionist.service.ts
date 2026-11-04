@@ -534,9 +534,16 @@ export class VirtualReceptionistService {
           ? en ? ' We have sent you the confirmation by SMS.' : ' Te hemos enviado la confirmación por SMS.'
           : '';
     const details = [what, when].filter(Boolean).join(', ');
+    const said = details ? `: ${details}${where}` : '';
+    const salonName = salon?.name || (en ? 'the salon' : 'el salón');
+    // Pending until the salon confirms it (autoConfirmOnlineBookings off):
+    // "reservada, pendiente de que {salón} la confirme", never "confirmada".
+    if (result.confirmed === true) {
+      return en ? `Your appointment is confirmed${said}.${sent}` : `Tu cita está confirmada${said}.${sent}`;
+    }
     return en
-      ? `Your appointment is booked${details ? `: ${details}${where}` : ''}.${sent}`
-      : `He registrado tu cita${details ? `: ${details}${where}` : ''}.${sent}`;
+      ? `Your appointment is booked, pending confirmation by ${salonName}${said}.${sent}`
+      : `Tu cita queda reservada, pendiente de que ${salonName} la confirme${said}.${sent}`;
   }
 
   /** For a complaint: empathy, and the salon's phone instead of a promise. */

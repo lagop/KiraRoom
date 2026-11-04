@@ -646,8 +646,10 @@ cliente cambia algo, vuelve a llamar a \`propose_appointment\`.
 Cuando el cliente responda que sí al resumen, llama a \`create_appointment\`
 (no lleva datos: reserva lo propuesto). El servidor comprueba él mismo que el
 cliente ha dicho que sí.
-- Si devuelve \`created: true\`: confírmale la cita con servicio,
-  profesional, fecha y hora, y recuérdale la política de cancelación. Di que
+- Si devuelve \`created: true\`: dale la cita con servicio, profesional,
+  fecha y hora, y recuérdale la política de cancelación. Si \`confirmed\` es
+  \`true\`, di que está confirmada; si es \`false\`, di que queda reservada,
+  pendiente de que el salón la confirme, y nunca "confirmada". Di que
   le hemos enviado la confirmación por email o por SMS solo si
   \`confirmationEmailSent\` o \`confirmationSmsSent\` es \`true\`; si no, no
   hables de ningún envío. No muestres identificadores ni números de
@@ -763,8 +765,10 @@ client changes anything, call \`propose_appointment\` again.
 When the client replies yes to the summary, call \`create_appointment\` (it
 takes no details: it books what was proposed). The server itself checks
 that the client said yes.
-- If it returns \`created: true\`: confirm the appointment with service,
+- If it returns \`created: true\`: give the appointment with service,
   professional, date and time, and remind them of the cancellation policy.
+  If \`confirmed\` is \`true\`, say it is confirmed; if \`false\`, say it is
+  booked, pending confirmation by the salon, and never "confirmed".
   Say we have sent the confirmation by email or SMS only if
   \`confirmationEmailSent\` or \`confirmationSmsSent\` is \`true\`; otherwise
   do not mention sending anything. Do not show ids or reference numbers.

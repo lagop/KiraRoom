@@ -625,8 +625,11 @@ describe('VirtualReceptionistService orchestrator (L-2) -- failures, read-only s
 
     const out: any = await send(svc, 'sí');
 
-    expect(out.content).toBe('He registrado tu cita: Corte con Ana García, el martes 10 de noviembre a las 10:00.');
-    expect(out.content).not.toMatch(/problemas técnicos/);
+    // Booked as pending: the salon confirms online bookings itself (D1).
+    expect(out.content).toBe(
+      'Tu cita queda reservada, pendiente de que Kira Room Test la confirme: Corte con Ana García, el martes 10 de noviembre a las 10:00.',
+    );
+    expect(out.content).not.toMatch(/problemas técnicos|confirmada/);
     // The reply is stored like any other.
     expect(conversationService.addMessage.mock.calls[1][1]).toMatchObject({ role: 'assistant', content: out.content });
     // The conversation is now hers, and the proposal keeps no contact details.

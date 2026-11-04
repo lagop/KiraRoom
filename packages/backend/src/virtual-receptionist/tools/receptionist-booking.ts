@@ -465,6 +465,9 @@ export async function confirmAppointment(ctx: SalonToolContext): Promise<Record<
       // enviado un email" only then.
       confirmationEmailSent: appointment.confirmationEmailSent === true,
       confirmationSmsSent: appointment.confirmationSmsSent === true,
+      // false: the salon confirms online bookings itself. Say "reservada,
+      // pendiente de que el salón la confirme", never "confirmada".
+      confirmed: appointment.status === 'confirmed',
       service: appointment.service?.name,
       professional: [appointment.professional?.firstName, appointment.professional?.lastName]
         .filter(Boolean)
