@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { KIRAROOM_DOMAIN, KIRAROOM_PRIVACY_EMAIL, SUB_PROCESSORS } from "@/lib/salon-legal";
 
 // Its own title: it showed the root layout's, in English.
 export const metadata: Metadata = { title: "Política de privacidad · KiraRoom" };
@@ -10,7 +11,7 @@ export default function PrivacyPage() {
         Política de Privacidad
       </h1>
       <p style={{ color: "#64748b", marginBottom: 16 }}>
-        Última actualización: 17 de julio de 2026
+        Última actualización: 4 de noviembre de 2026
       </p>
       {/* SOURCE OF TRUTH — keep in sync with docs/privacy.md until the
           Sprint 2 legal-sync generator lands. */}
@@ -26,21 +27,26 @@ export default function PrivacyPage() {
         </a>{" "}
         y de la Guía del RGPD de la AEPD para PYMEs. Esta política cumple
         el deber de información del <strong>Art. 13 del RGPD</strong> y
-        se completa con la <a href="/legal/terms">Términos del Servicio</a>{" "}
-        y la información sobre cookies que se muestra en el banner de
-        consentimiento.
+        se completa con los <a href="/legal/terms">Términos del Servicio</a>.
       </p>
 
       <Section title="1. Responsable del tratamiento">
         <p>
-          <strong>KiraRoom SaaS</strong> (en adelante, "KiraRoom"),
-          con sede en España, es el responsable del tratamiento de los
-          datos personales recabados a través de la plataforma{" "}
-          <code>app.kiraroom.com</code>.
+          <strong>KiraRoom</strong> (en adelante, "KiraRoom"), con sede en
+          España, es el responsable del tratamiento de los datos de las
+          cuentas de los salones que usan la plataforma{" "}
+          <code>{KIRAROOM_DOMAIN}</code>.
+        </p>
+        <p>
+          De los datos de los <strong>clientes de cada salón</strong> (sus
+          citas, sus mensajes en el chat, sus avisos), el responsable es el
+          salón, y KiraRoom los trata por su cuenta como encargado del
+          tratamiento (art. 28 RGPD). Cada salón tiene su propia política de
+          privacidad, enlazada desde su web de reservas.
         </p>
         <p>
           Para cualquier consulta relativa al tratamiento de datos, puede
-          escribir a <code>privacy@kiraroom.com</code>.
+          escribir a <code>{KIRAROOM_PRIVACY_EMAIL}</code>.
         </p>
       </Section>
 
@@ -118,15 +124,24 @@ export default function PrivacyPage() {
             <strong>Holded, Sage Despachos, A3 (Wolters Kluwer), NCS</strong>{" "}
             si el cliente activa la integración contable correspondiente.
           </li>
-          <li>
-            <strong>Resend</strong> (transaccional de email) y{" "}
-            <strong>GlitchTip</strong> (monitorización de errores) —
-            ambos con servidores en la UE.
-          </li>
         </ul>
         <p>
-          KiraRoom no vende datos personales. No se realizan transferencias
-          internacionales fuera del EEE.
+          Y a los proveedores en los que KiraRoom se apoya para prestar el
+          servicio (encargados y subencargados del tratamiento):
+        </p>
+        <ul>
+          {SUB_PROCESSORS.map((s) => (
+            <li key={s.name}>
+              <strong>{s.name}</strong>: {s.purpose}
+              {s.onlyIf ? ` (${s.onlyIf})` : ""}. {s.location}.
+            </li>
+          ))}
+        </ul>
+        <p>
+          KiraRoom no vende datos personales. Algunos de estos proveedores
+          están en Estados Unidos: esas transferencias internacionales se
+          hacen con las garantías del RGPD (Marco de Privacidad de Datos
+          UE-EE. UU. o cláusulas contractuales tipo de la Comisión Europea).
         </p>
       </Section>
 
@@ -144,9 +159,7 @@ export default function PrivacyPage() {
         <ul>
           <li>
             <strong>Acceso</strong> (Art. 15): confirmación de si
-            tratamos sus datos y obtención de una copia. Ejercitable vía{" "}
-            <code>POST /api/v1/saas/tenants/:id/export</code>{" "}
-            (gestionado por el propietario del salón).
+            tratamos sus datos y obtención de una copia.
           </li>
           <li>
             <strong>Rectificación</strong> (Art. 16): corrección de
@@ -155,8 +168,6 @@ export default function PrivacyPage() {
           <li>
             <strong>Supresión / Derecho al olvido</strong> (Art. 17):
             eliminación de sus datos, salvo excepciones legales (facturas).
-            Ejercitable vía{" "}
-            <code>POST /api/v1/saas/tenants/:id/anonymize</code>.
           </li>
           <li>
             <strong>Limitación</strong> (Art. 18): tratamiento limitado
@@ -176,52 +187,30 @@ export default function PrivacyPage() {
           </li>
         </ul>
         <p>
-          Para ejercer estos derechos:{" "}
-          <code>privacy@kiraroom.com</code>. Responderemos en un
-          plazo máximo de <strong>30 días</strong>.
+          Para ejercer estos derechos, escriba a{" "}
+          <code>{KIRAROOM_PRIVACY_EMAIL}</code>. Responderemos en un
+          plazo máximo de <strong>un mes</strong>. Si es cliente de un
+          salón, puede dirigirse directamente a él (sus datos de contacto
+          están en su política de privacidad): el salón decide sobre sus
+          datos y KiraRoom le ayuda a atender su solicitud.
         </p>
       </Section>
 
       <Section title="8. Cookies">
         <p>
-          Este sitio utiliza cookies propias y de terceros conforme al{" "}
-          <strong>Art. 22.2 de la Ley 34/2002 de Servicios de la Sociedad
-          de la Información y de Comercio Electrónico (LSSI)</strong> y
-          al RGPD. Al visitar el sitio por primera vez se muestra un
-          banner de consentimiento que permite aceptar todas las
-          cookies, rechazar las no esenciales, o configurar las
-          preferencias por categoría. Una vez expresado el
-          consentimiento, el botón flotante "🍪 Configurar cookies"
-          (esquina inferior derecha) permite modificar o retirar el
-          consentimiento en cualquier momento.
+          Las webs de reservas de los salones y estas páginas legales no
+          usan cookies de analítica ni de publicidad: solo guardan en el
+          navegador lo necesario para funcionar (por ejemplo, la
+          conversación del chat abierta).
         </p>
-        <p>Las categorías de cookies utilizadas son:</p>
-        <ul>
-          <li>
-            <strong>Necesarias</strong> (siempre activas, no requieren
-            consentimiento): sesión, autenticación, token CSRF,
-            equilibrio de carga.
-          </li>
-          <li>
-            <strong>Preferencias</strong> (opt-in): idioma, tema visual,
-            último salón visitado.
-          </li>
-          <li>
-            <strong>Analítica</strong> (opt-in): páginas vistas y
-            reporte de errores enviado a GlitchTip (autoalojado en la
-            UE).
-          </li>
-          <li>
-            <strong>Marketing</strong> (opt-in, actualmente no
-            utilizada): píxeles de adquisición de Meta / Google Ads si
-            en el futuro se activan campañas de pago.
-          </li>
-        </ul>
         <p>
-          El consentimiento se almacena localmente en su navegador bajo
-          la clave <code>kira-cookie-consent-v2</code>. Puede retirarlo
-          en cualquier momento desde el botón "🍪 Configurar cookies"
-          del pie de página.
+          En el panel de los salones (tras iniciar sesión) se usan las
+          cookies y el almacenamiento necesarios para la sesión y la
+          seguridad. Las demás categorías (preferencias, analítica) solo se
+          usan si el usuario las acepta en el aviso de cookies del panel,
+          que permite rechazarlas y cambiar la elección en cualquier
+          momento desde &quot;Configurar cookies&quot;. Hoy no se usa
+          ninguna cookie de publicidad.
         </p>
       </Section>
 

@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsEmail, IsBoolean, IsOptional, IsNotEmpty, IsNumber, Min, Max, IsArray, ArrayMaxSize, IsUUID, ValidateIf } from 'class-validator';
+import { IsString, IsEmail, IsBoolean, IsOptional, IsNotEmpty, IsNumber, Min, Max, IsArray, ArrayMaxSize, IsUUID, ValidateIf, IsIn } from 'class-validator';
 import { IsWorkingHours } from '../working-hours-input';
 import { CommissionRateInput } from '../optional-fields';
 
@@ -57,6 +57,18 @@ export class CreateProfessionalDto {
   @IsString()
   @IsOptional()
   position?: string;
+
+  /** "Mostrar en la web" (public-site/public-professional.ts); left out: name and initial. */
+  @ApiProperty({ description: 'How the public page and widget name her: full, initial (default) or hidden', required: false, enum: ['full', 'initial', 'hidden'] })
+  @IsIn(['full', 'initial', 'hidden'], { message: 'Elige cómo se muestra en la web: nombre completo, nombre e inicial o no mostrar.' })
+  @IsOptional()
+  webNameDisplay?: 'full' | 'initial' | 'hidden';
+
+  /** "Mostrar foto"; left out: no photo. */
+  @ApiProperty({ description: 'Show her photo and portfolio on the public page and widget (default off)', required: false })
+  @IsBoolean()
+  @IsOptional()
+  webShowPhoto?: boolean;
 
   @ApiProperty({ description: 'Commission rate', required: false })
   @CommissionRateInput()

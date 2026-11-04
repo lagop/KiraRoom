@@ -66,9 +66,28 @@ const isWebUrl = (u: string) => /^https?:\/\//i.test(u);
  * base), or null when there is nothing we can show.
  */
 export function publicImageUrl(tenantId: string, kind: PublicImageKind, value: string | null | undefined): string | null {
-  const stored = value?.trim();
+  return servedImageUrl(`/public-site/image/${encodeURIComponent(tenantId)}/${kind}`, value);
+}
+
+/**
+ * A professional's photo ("photo") or one of her portfolio pictures
+ * ("portfolio-<n>", from 0), the same way: GET
+ * /public-site/professional-image/:professionalId/:slot.
+ */
+export function professionalImageUrl(professionalId: string, slot: string, value: string | null | undefined): string | null {
+  return servedImageUrl(`/public-site/professional-image/${encodeURIComponent(professionalId)}/${slot}`, value);
+}
+
+/** "photo", or "portfolio-3" -> 3; null for anything else. */
+export function portfolioIndex(slot: string): number | null {
+  const m = /^portfolio-(\d{1,2})$/.exec(slot);
+  return m ? Number(m[1]) : null;
+}
+
+function servedImageUrl(path: string, value: string | null | undefined): string | null {
+  const stored = typeof value === "string" ? value.trim() : "";
   if (!stored) return null;
   if (isWebUrl(stored)) return stored;
   if (!parseImageDataUrl(stored)) return null;
-  return `/public-site/image/${encodeURIComponent(tenantId)}/${kind}?v=${imageVersion(stored)}`;
+  return `${path}?v=${imageVersion(stored)}`;
 }
