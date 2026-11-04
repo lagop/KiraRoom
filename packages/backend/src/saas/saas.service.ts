@@ -15,7 +15,6 @@ import * as bcrypt from "bcryptjs";
 import {
   IMPERSONATION_TTL_SECONDS,
   IMPERSONATION_AUDIENCE,
-  IMPERSONATION_DEFAULT_REASON,
   TENANT_ACTIVE_WHERE,
 } from "./saas.constants";
 import {
@@ -29,6 +28,34 @@ import { loadSharedIdentityWarnings, type SharedIdentityWarning } from "./shared
 import { invalidateTenantWidgets } from "../widget/widget.service";
 import { SubscriptionsService } from "../payments/services/subscriptions.service";
 import { normalizePlan, PLAN_PRICES, PlanId } from "@kira/shared";
+import { assertNotPlatformTenant, NOT_PLATFORM_TENANT_WHERE } from "./platform-tenant";
+
+/** The platform owner doing something in the console, for the audit log. */
+export interface ConsoleActor {
+  id: string;
+  role?: string;
+}
+
+/** A value as the audit row keeps it (dates as ISO text). */
+function auditValue(v: unknown): unknown {
+  if (v instanceof Date) return v.toISOString();
+  return v === undefined ? null : v;
+}
+
+/** The fields this patch changes, each with its value before and after. */
+export function changedFields(
+  before: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): Record<string, { before: unknown; after: unknown }> {
+  const out: Record<string, { before: unknown; after: unknown }> = {};
+  for (const [key, next] of Object.entries(patch)) {
+    if (next === undefined) continue;
+    const prev = auditValue(before[key]);
+    const after = auditValue(next);
+    if (JSON.stringify(prev) !== JSON.stringify(after)) out[key] = { before: prev, after };
+  }
+  return out;
+}
 
 export interface PaginatedResult<T> {
   data: T[];
@@ -70,7 +97,8 @@ export class SaasService {
   async getAllTenants(filter: TenantFilterDto): Promise<PaginatedResult<any>> {
     const { page = 1, limit = 10, sortBy = "createdAt", sortOrder = "desc", search, plan, subscriptionStatus, country, createdAfter, createdBefore, includeDeleted } = filter;
 
-    const where: any = {};
+    // Not the Platform tenant: it is the platform owner's account, not a salon (C14).
+    const where: any = { ...NOT_PLATFORM_TENANT_WHERE };
 
     if (!includeDeleted) {
       where.deletedAt = null;
@@ -252,7 +280,7 @@ export class SaasService {
     return this.prisma.tenant.findUniqueOrThrow({ where: { id: tenant.id } });
   }
 
-  async updateTenant(id: string, updateTenantDto: UpdateTenantDto) {
+  async updateTenant(id: string, updateTenantDto: UpdateTenantDto, actor: ConsoleActor) {
     const existing = await getActiveTenant(this.prisma, id);
 
     // P2A — Normalize NIF before persisting. Don't accept malformed
@@ -269,40 +297,47 @@ export class SaasService {
       patch.taxId = v.normalized;
     }
 
-    // P2A — Audit log on taxId change. Persistence + observability so
-    // SaaS can trace who changed the emitter NIF and when — required for
-    // financial-compliance audits.
-    if (
-      patch.taxId !== undefined &&
-      patch.taxId !== existing.taxId
-    ) {
-      const before = existing.taxId ?? null;
-      const after = patch.taxId;
-      // Persist to the audit trail.
-      try {
-        await this.auditLog.record("tenant.taxId.change", {
-          actorId: "saas:system",
-          actorRole: "saas_owner" as any,
-          tenantId: id,
-          metadata: { before, after } as any,
-        });
-      } catch {
-        // Audit failure shouldn't break the update — keep the change
-        // committed; the audit row can be backfilled by an hourly job.
-      }
-      this.logger.warn(
-        `tenant.taxId.change actor=SaaS tenantId=${id} before=${before} after=${after}`,
-      );
+    // Audit 8, C8/C9: what changed, before and after, by the platform owner
+    // who did it, in the same transaction as the change: a change is never
+    // saved without its row. (The NIF row used to name "saas:system", which
+    // is not a user: the foreign key refused it, and an empty catch hid it.)
+    const changes = changedFields(existing as unknown as Record<string, unknown>, patch);
+    const taxIdChanged = patch.taxId !== undefined && patch.taxId !== existing.taxId;
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const updated = await tx.tenant.update({ where: { id }, data: patch });
+        if (Object.keys(changes).length > 0) {
+          await this.auditLog.record(
+            "tenant.update",
+            { actorId: actor.id, actorRole: UserRole.saas_owner, tenantId: id, metadata: { changes } },
+            tx,
+          );
+        }
+        // The emitter NIF has its own row, as the salon's own change does
+        // (invoices.controller): fiscal audits look for it by action.
+        if (taxIdChanged) {
+          await this.auditLog.record(
+            "tenant.taxId.change",
+            {
+              actorId: actor.id,
+              actorRole: UserRole.saas_owner,
+              tenantId: id,
+              metadata: { before: existing.taxId ?? null, after: patch.taxId, source: "saas/console" },
+            },
+            tx,
+          );
+        }
+        return updated;
+      });
+    } catch (err) {
+      this.logger.error(`Console update of tenant ${id} by ${actor.id} failed: ${(err as Error).message}`);
+      throw err;
     }
-
-    return this.prisma.tenant.update({
-      where: { id },
-      data: patch,
-    });
   }
 
   async deleteTenant(id: string, saasOwnerId: string) {
     await getActiveTenant(this.prisma, id);
+    await assertNotPlatformTenant(this.prisma, id);
 
     const deletedAt = new Date();
 
@@ -361,25 +396,38 @@ export class SaasService {
     };
   }
 
-  async suspendTenant(id: string) {
+  async suspendTenant(id: string, actor: ConsoleActor) {
     const tenant = await getActiveTenant(this.prisma, id);
-
-    return this.prisma.tenant.update({
-      where: { id },
-      data: {
-        subscriptionStatus: "cancelled",
-      },
-    });
+    await assertNotPlatformTenant(this.prisma, id);
+    return this.setStatusWithAudit(id, tenant.subscriptionStatus, "cancelled", "tenant.suspend", actor);
   }
 
-  async reactivateTenant(id: string) {
+  async reactivateTenant(id: string, actor: ConsoleActor) {
     const tenant = await getActiveTenant(this.prisma, id);
+    return this.setStatusWithAudit(id, tenant.subscriptionStatus, "active", "tenant.reactivate", actor);
+  }
 
-    return this.prisma.tenant.update({
-      where: { id },
-      data: {
-        subscriptionStatus: "active",
-      },
+  /** The status change and its audit row, together (C9). */
+  private setStatusWithAudit(
+    id: string,
+    before: string,
+    after: "cancelled" | "active",
+    action: string,
+    actor: ConsoleActor,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.tenant.update({ where: { id }, data: { subscriptionStatus: after } });
+      await this.auditLog.record(
+        action,
+        {
+          actorId: actor.id,
+          actorRole: UserRole.saas_owner,
+          tenantId: id,
+          metadata: { subscriptionStatus: { before, after } },
+        },
+        tx,
+      );
+      return updated;
     });
   }
 
@@ -679,8 +727,15 @@ export class SaasService {
       },
     };
   }
-  async launchSalonDashboard(tenantId: string, saasOwnerId: string) {
+  async launchSalonDashboard(tenantId: string, saasOwnerId: string, reason: string) {
     const tenant = await getActiveTenant(this.prisma, tenantId);
+    await assertNotPlatformTenant(this.prisma, tenantId);
+    // The console's session version goes into the token: logout everywhere
+    // or a new password between now and the redeem voids it (C13).
+    const saasOwner = await this.prisma.user.findUnique({
+      where: { id: saasOwnerId },
+      select: { tokenVersion: true },
+    });
 
     // The Tenant model has no owner relation. Look up the owner User
     // by role; this matches the SaaS owner flow where each tenant has
@@ -691,7 +746,7 @@ export class SaasService {
     });
 
     if (!owner) {
-      throw new Error("Tenant has no owner assigned");
+      throw new BadRequestException("Este salón no tiene dueña: no hay cuenta en la que entrar.");
     }
 
     // Issue a short-lived (60 s) impersonation token. The actual session
@@ -703,7 +758,10 @@ export class SaasService {
       {
         sub: saasOwnerId,
         jti,
-        impersonate: { tenantId, ownerId: owner.id },
+        // C17: the reason typed in the console, signed: the redeem records
+        // this one and nothing the browser sends.
+        impersonate: { tenantId, ownerId: owner.id, reason: reason.trim() },
+        tv: saasOwner?.tokenVersion ?? 0,
         aud: IMPERSONATION_AUDIENCE,
       },
       { expiresIn: IMPERSONATION_TTL_SECONDS },
