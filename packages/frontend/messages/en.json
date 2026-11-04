@@ -506,6 +506,15 @@
     "termsDpa": "(including the data processing agreement, art. 28 GDPR) and the",
     "privacyLink": "Privacy Policy",
     "webPreview": "Your website:",
+    "webAddress": {
+      "change": "Change",
+      "label": "Your website address",
+      "help": "Letters without accents, numbers and hyphens. You can change it once from Settings > Web.",
+      "checking": "Checking...",
+      "available": "Available.",
+      "unavailable": "That address can't be used. Try another one.",
+      "useName": "Use the one from the name"
+    },
     "showPassword": "Show password",
     "hidePassword": "Hide password",
     "passwordTooShort": "The password must be at least 8 characters.",
@@ -3548,6 +3557,21 @@
     "you": "Client",
     "assistant": "Assistant",
     "notFound": "This conversation no longer exists."
+  },
+  "webAddress": {
+    "title": "Your website address",
+    "introCanChange": "You can change it once. The current address will keep taking people to your website for 12 months; after that it becomes free for another salon.",
+    "introChanged": "You have already changed your website address (it can only be changed once). If you need another one, contact us.",
+    "redirectNote": "The previous address, {old}, takes people to the new one until {date}.",
+    "checking": "Checking...",
+    "available": "Available.",
+    "save": "Change the address",
+    "confirmTitle": "Change your website address?",
+    "confirmBody": "Your website will move from {old} to {next}. It can only be changed once. For 12 months, anyone using the previous address will reach the new one; update your links, cards and social profiles.",
+    "confirm": "Yes, change it",
+    "cancel": "Cancel",
+    "changedToast": "Address changed",
+    "failed": "The address could not be changed"
   },
   "emailVerifyNotice": {
     "title": "Confirm your email.",

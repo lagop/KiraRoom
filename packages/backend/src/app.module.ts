@@ -57,6 +57,8 @@ import { SmsModule } from "./sms/sms.module";
 // Controllers
 import { AppController } from "./app.controller";
 import { AuthController } from "./auth/auth.controller";
+import { WebAddressController } from "./web-address/web-address.controller";
+import { WebAddressService } from "./web-address/web-address.service";
 import { AuthSessionsModule } from "./auth/sessions/auth-sessions.module";
 import { SalonRetentionModule } from "./saas/retention/salon-retention.module";
 import { SalonDeletionController } from "./saas/retention/salon-deletion.controller";
@@ -254,6 +256,7 @@ import { PublicModule } from "./public-site/public.module";
   controllers: [
     AppController,
     AuthController,
+    WebAddressController,
     // "Borrar mi salón" (Ajustes > Seguridad); needs TwoFactorService below.
     SalonDeletionController,
     AppointmentsController,
@@ -284,6 +287,7 @@ import { PublicModule } from "./public-site/public.module";
     },
     AppService,
     AuthService,
+    WebAddressService,
     TwoFactorService,
     SalonDeletionService,
     PasswordResetService,

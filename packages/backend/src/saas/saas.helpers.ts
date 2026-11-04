@@ -96,8 +96,7 @@ export async function assertTenantSlugAvailable(
       "Ese nombre no se puede usar como dirección del salón. Añade algo más, por ejemplo la ciudad.",
     );
   }
-  const existing = await prisma.tenant.findUnique({ where: { slug } });
-  if (existing) {
+  if (await slugHeld(prisma, slug)) {
     throw new BadRequestException(errMessage);
   }
 }
@@ -120,7 +119,10 @@ const SLUG_NUMBERED_TRIES = 20;
  * create that lost a race), so a retry moves past them.
  */
 export async function availableTenantSlug(
-  prisma: { tenant: { findUnique: (args: any) => Promise<unknown> } },
+  prisma: {
+    tenant: { findUnique: (args: any) => Promise<unknown> };
+    tenantSlugRedirect?: { findFirst: (args: any) => Promise<unknown> };
+  },
   name: string,
   skip: ReadonlySet<string> = new Set(),
 ): Promise<string> {
@@ -133,16 +135,33 @@ export async function availableTenantSlug(
   for (let n = 1; n <= SLUG_NUMBERED_TRIES; n++) {
     const slug = tenantSlugCandidate(base, n);
     if (!usable(slug)) continue;
-    const taken = await prisma.tenant.findUnique({ where: { slug }, select: { id: true } });
-    if (!taken) return slug;
+    if (!(await slugHeld(prisma, slug))) return slug;
   }
   for (let i = 0; i < 5; i++) {
     const slug = `${base.slice(0, 56).replace(/-+$/, "")}-${randomBytes(3).toString("hex")}`;
     if (!usable(slug)) continue;
-    const taken = await prisma.tenant.findUnique({ where: { slug }, select: { id: true } });
-    if (!taken) return slug;
+    if (!(await slugHeld(prisma, slug))) return slug;
   }
   throw new ConflictException(TENANT_SLUG_UNAVAILABLE);
+}
+
+/**
+ * Taken by a salon, or still redirecting to one (D4: an address a salon left
+ * in the last 12 months). Past those months the address is free again.
+ */
+async function slugHeld(
+  prisma: {
+    tenant: { findUnique: (args: any) => Promise<unknown> };
+    tenantSlugRedirect?: { findFirst: (args: any) => Promise<unknown> };
+  },
+  slug: string,
+): Promise<boolean> {
+  if (await prisma.tenant.findUnique({ where: { slug }, select: { id: true } })) return true;
+  if (!prisma.tenantSlugRedirect) return false;
+  return !!(await prisma.tenantSlugRedirect.findFirst({
+    where: { oldSlug: slug, expiresAt: { gt: new Date() } },
+    select: { id: true },
+  }));
 }
 
 /** When no free address could be found for a new salon (practically never). */

@@ -13,6 +13,7 @@ import { UserRole } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { salonInstant } from "../appointments/salon-time";
 import { salonToday } from "../analytics/analytics-metrics";
+import { redirectedTenantId } from "../web-address/web-address.service";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_TIMEZONE = "Europe/Madrid";
@@ -309,7 +310,10 @@ export class IcsController {
     @Res() res: Response,
   ) {
     this.requireToken(token);
-    const tenant = await this.prisma.tenant.findUnique({ where: { slug } });
+    // D4: a feed link from before the salon changed its address still works
+    // for 12 months (the token signs the address it was made with).
+    const movedTo = await redirectedTenantId(this.prisma, slug);
+    const tenant = await this.prisma.tenant.findUnique({ where: movedTo ? { id: movedTo } : { slug } });
     this.verifyToken(`salon:${slug}`, token, tenant ? icsFeedVersion(tenant.features) : null);
     if (!tenant) throw new NotFoundException("Salon not found");
     const appointments = await this.prisma.appointment.findMany({

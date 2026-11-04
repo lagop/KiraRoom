@@ -31,6 +31,16 @@ export class RegisterDto {
   salonName!: string;
 
   @ApiProperty({
+    description: "D4: the web address the owner chose (kiraroom.net/<slug>). Absent: made from the salon name.",
+    example: "peluqueria-bella-vista",
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  slug?: string;
+
+  @ApiProperty({
     description: 'Contact phone number (saved as the salon phone)',
     example: '+34 600 123 456',
   })

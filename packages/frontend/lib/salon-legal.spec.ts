@@ -17,6 +17,7 @@ import {
   salonPrivacyHref,
   salonPrivacyPath,
   sitePathSlug,
+  movedSitePath,
   GONE_SALON_HTML,
   whatsappHref,
 } from "./salon-legal";
@@ -110,6 +111,9 @@ check("slug of the page", sitePathSlug("/sites/salon-luna"), "salon-luna");
 check("slug of a sub-page", sitePathSlug("/sites/salon-luna/privacidad"), "salon-luna");
 check("decoded", sitePathSlug("/sites/sal%C3%B3n"), "salón");
 check("not other paths", [sitePathSlug("/dashboard"), sitePathSlug("/sites/"), sitePathSlug("/sites/%E0%A4%A")], [null, null, null]);
+check("D4: old address to the new one, same sub-page", movedSitePath("/sites/salon-ana/privacidad", "ana-madrid"), "/sites/ana-madrid/privacidad");
+check("D4: the page itself", movedSitePath("/sites/salon-ana", "ana-madrid"), "/sites/ana-madrid");
+check("D4: already current, or not a salon path", [movedSitePath("/sites/ana-madrid", "ana-madrid"), movedSitePath("/dashboard", "x")], [null, null]);
 check("the gone page says noindex", GONE_SALON_HTML.includes('name="robots" content="noindex"'), true);
 
 console.log(`\n${pass} passed, ${fail} failed`);

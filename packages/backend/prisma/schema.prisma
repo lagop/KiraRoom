@@ -14,6 +14,9 @@ model Tenant {
   /// Not unique: two salons may share a name (the slug is the identifier).
   name                   String
   slug                   String             @unique
+  /// D4: when the owner changed the web address (once: Ajustes > Web).
+  /// The old one redirects for 12 months (TenantSlugRedirect).
+  slugChangedAt          DateTime?
   /// P2A Ã¢â‚¬â€ Spanish tax compliance: NIF/CIF/NIE del emisor (obligatorio si fiscalMode != 'none')
   taxId                  String?
   taxIdType              NifType?
@@ -258,6 +261,7 @@ model Tenant {
   trialNotifications   TrialNotificationLog[]
   /// Terms (with the art. 28 GDPR processing agreement) and privacy policy acceptances.
   legalAcceptances     LegalAcceptance[]
+  slugRedirects        TenantSlugRedirect[]
 
   @@index([deletedAt])
   @@index([subscriptionStatus, deletedAt])
@@ -507,6 +511,22 @@ model TenantInvite {
 /// Written on signup and on invite acceptance. acceptedByUserId is a plain
 /// id, not a relation, so the record outlives a removed user; it goes with
 /// the salon.
+/// D4: a salon's previous web address, redirected (301) to its current one
+/// until expiresAt (12 months after the change). After that the address is
+/// free again: lookups ignore the row and the next salon to take the address
+/// deletes it (web-address/web-address.service.ts).
+model TenantSlugRedirect {
+  id        String   @id @default(uuid())
+  oldSlug   String   @unique
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([tenantId])
+  @@map("tenant_slug_redirects")
+}
+
 model LegalAcceptance {
   id               String   @id @default(uuid())
   tenantId         String

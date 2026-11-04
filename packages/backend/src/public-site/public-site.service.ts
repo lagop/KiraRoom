@@ -1,6 +1,7 @@
 import { GoneException, Injectable, NotFoundException, Optional } from "@nestjs/common";
-import { SubscriptionStatus } from "@prisma/client";
+import { Prisma, SubscriptionStatus } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
+import { redirectedTenantId } from "../web-address/web-address.service";
 import { TENANT_OWNER_EMAIL_VERIFIED } from "../auth/email-verified/owner-email-verified";
 import { salonOpenShifts, salonOpenWeek, SalonDayWindow } from "../appointments/working-hours";
 import { normalizeDomain } from "../web-domain/custom-domain";
@@ -65,10 +66,29 @@ export class PublicSiteService {
     @Optional() private readonly featureFlags?: FeatureFlagService,
   ) {}
 
-  async getPage(slugOrId: string) {
-    const tenant = await this.prisma.tenant.findFirst({
+  /**
+   * D4: the salon by its address or id; an old address (changed in the last
+   * 12 months) finds the salon too. The answer carries the current slug, so
+   * the page and the middleware send a 301 to it.
+   */
+  private async findPublicTenant<S extends Prisma.TenantSelect>(
+    slugOrId: string,
+    select: S,
+  ): Promise<Prisma.TenantGetPayload<{ select: S }> | null> {
+    const found = await this.prisma.tenant.findFirst({
       where: { OR: [{ slug: slugOrId }, { id: slugOrId }], deletedAt: null },
-      select: {
+      select,
+    });
+    if (found) return found as Prisma.TenantGetPayload<{ select: S }>;
+    const movedTo = await redirectedTenantId(this.prisma, slugOrId);
+    if (!movedTo) return null;
+    return (await this.prisma.tenant.findFirst({ where: { id: movedTo, deletedAt: null }, select })) as Prisma.TenantGetPayload<{
+      select: S;
+    }> | null;
+  }
+
+  async getPage(slugOrId: string) {
+    const tenant = await this.findPublicTenant(slugOrId, {
         id: true,
         name: true,
         slug: true,
@@ -110,7 +130,6 @@ export class PublicSiteService {
         customDomain: { select: { domain: true, verifiedAt: true } },
         // D1: read for indexable below, never sent.
         users: { where: { role: "owner", isEmailVerified: true }, select: { id: true }, take: 1 },
-      },
     });
     if (!tenant) throw new NotFoundException("Salon not found");
     // Past its read-only period (or cancelled with none): the page is gone,
@@ -353,9 +372,7 @@ export class PublicSiteService {
    * public on its website). Only those fields.
    */
   async legal(slugOrId: string) {
-    const tenant = await this.prisma.tenant.findFirst({
-      where: { OR: [{ slug: slugOrId }, { id: slugOrId }], deletedAt: null },
-      select: {
+    const tenant = await this.findPublicTenant(slugOrId, {
         name: true,
         slug: true,
         legalName: true,
@@ -370,7 +387,6 @@ export class PublicSiteService {
         privacyPolicyUrl: true,
         subscriptionStatus: true,
         readOnlyUntil: true,
-      },
     });
     if (!tenant) throw new NotFoundException("Salon not found");
     if (publicPageGone(tenant)) throw new GoneException("Salon page no longer available");

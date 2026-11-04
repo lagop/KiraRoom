@@ -24,6 +24,9 @@ import {
 import { normalizeEmail } from "./email-normalize";
 import { tenantOwnerEmailVerified } from "./email-verified/owner-email-verified";
 import { TERMS_LAST_UPDATED_LABEL, TERMS_VERSION } from "./legal-terms";
+import { normalizeWebAddress, WEB_ADDRESS_MESSAGES, webAddressShapeProblem } from "../web-address/web-address-rules";
+import { webAddressTaken } from "../web-address/web-address.service";
+
 import { AuditLogService } from "../saas/audit-log.service";
 import { EmailService } from "../notifications/services/email.service";
 import { createHash, randomBytes } from "crypto";
@@ -43,6 +46,9 @@ import { TwoFactorService } from "./two-factor/two-factor.service";
 import { sessionRevocations } from "./sessions/session-revocations";
 import { SALON_DELETED_MESSAGE } from "./salon-deleted";
 import { fiscalSettingsForTerritory, territoryTaxRegime } from "../invoices/salon-tax-settings";
+
+/** D4: the chosen web address cannot be used (the form shows the message next to it). */
+export const WEB_ADDRESS_UNAVAILABLE_CODE = "WEB_ADDRESS_UNAVAILABLE";
 
 /** Audience of the short-lived token that stands between password and code. */
 const TWO_FACTOR_AUDIENCE = "kira-2fa-login";
@@ -265,10 +271,19 @@ export class AuthService {
     const firstName = nameParts[0] || "";
     const lastName = nameParts.slice(1).join(" ") || "";
 
+    // D4: the address the owner chose on the form, when she changed it.
+    const chosenSlug = registerDto.slug?.trim() ? normalizeWebAddress(registerDto.slug) : null;
+    if (chosenSlug) {
+      const problem = webAddressShapeProblem(chosenSlug) ?? ((await webAddressTaken(this.prisma, chosenSlug)) ? "taken" : null);
+      if (problem) {
+        throw new BadRequestException({ statusCode: 400, code: WEB_ADDRESS_UNAVAILABLE_CODE, message: WEB_ADDRESS_MESSAGES[problem] });
+      }
+    }
+
     const lostRace = new Set<string>();
     let created: Awaited<ReturnType<typeof createTenantWithOwner>> | undefined;
     for (let attempt = 0; !created; attempt++) {
-      const slug = await availableTenantSlug(this.prisma, salonName, lostRace);
+      const slug = chosenSlug ?? (await availableTenantSlug(this.prisma, salonName, lostRace));
       try {
         created = await createTenantWithOwner(this.prisma, {
           name: salonName,
@@ -302,6 +317,9 @@ export class AuthService {
           throw emailAlreadyRegistered();
         }
         if (!targetIncludes(e, "slug")) throw e;
+        if (chosenSlug) {
+          throw new ConflictException({ statusCode: 409, code: WEB_ADDRESS_UNAVAILABLE_CODE, message: WEB_ADDRESS_MESSAGES.taken });
+        }
         if (attempt >= 4) throw new ConflictException(TENANT_SLUG_UNAVAILABLE);
         lostRace.add(slug);
       }

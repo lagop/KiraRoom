@@ -10,6 +10,8 @@ import {
   showEmailVerificationNotice,
   turnstileSiteKey,
   withoutPlatformWords,
+  suggestedWebAddress,
+  typedWebAddress,
 } from "./signup-form";
 
 let pass = 0;
