@@ -6,7 +6,6 @@ import {
   Users,
   DollarSign,
   TrendingUp,
-  UserPlus,
   Building,
   AlertCircle,
   CheckCircle,
@@ -14,20 +13,27 @@ import {
 } from "lucide-react";
 import apiClient from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
+import { countryName, formatEuros } from "@/lib/console-metrics";
 import Link from "next/link";
 
+/** GET /saas/analytics/overview (backend saas-analytics.service.ts). Amounts in euros. */
 interface SaasAnalytics {
   totalTenants: number;
   totalUsers: number;
   totalClients: number;
   totalAppointments: number;
-  totalRevenue: number;
+  salonTakingsTotal: number;
   mrr: number;
+  arr: number;
+  payingTenants: number;
+  activeWithoutBilling: number;
+  avgMrrPerPayingSalon: number;
+  trialTenants: number;
+  pastDueTenants: number;
+  suspendedTenants: number;
+  cancelledTenants: number;
   newTenantsThisMonth: number;
   newUsersThisMonth: number;
-  activeSubscriptions: number;
-  trialTenants: number;
-  churnedTenants: number;
   topCountries: { country: string; count: number }[];
   planDistribution: { plan: string; count: number }[];
 }
@@ -83,37 +89,57 @@ export default function SaasOverviewPage() {
     );
   }
 
+  const planLabel = (plan: string) => {
+    const key = `saas.plan_${plan}`;
+    const label = t(key);
+    return label === key ? plan : label;
+  };
+
   const stats = [
     {
-      title: t("saas.total_tenants"),
+      title: t("saas.metrics.total_salons"),
       value: analytics?.totalTenants || 0,
       icon: Building2,
-      change: `+${analytics?.newTenantsThisMonth || 0} ${t("dashboard.new_this_month")}`,
+      change: t("saas.metrics.new_this_month", { n: analytics?.newTenantsThisMonth || 0 }),
       changeType: "positive" as const,
       href: "/saas/tenants",
     },
     {
-      title: t("saas.total_users"),
+      title: t("saas.metrics.total_users"),
       value: analytics?.totalUsers || 0,
       icon: Users,
-      change: `+${analytics?.newUsersThisMonth || 0} ${t("dashboard.new_this_month")}`,
+      change: t("saas.metrics.new_this_month", { n: analytics?.newUsersThisMonth || 0 }),
       changeType: "positive" as const,
       href: "/saas/users",
     },
     {
-      title: t("saas.platform_revenue"),
-      value: `€${(analytics?.mrr || 0).toFixed(2)}`,
+      // KiraRoom's own revenue: the paying salons' plans and add-ons.
+      title: t("saas.metrics.mrr_title"),
+      value: formatEuros(analytics?.mrr),
       icon: DollarSign,
-      change: "MRR",
-      changeType: "positive" as const,
+      change: t("saas.metrics.mrr_hint", { arr: formatEuros(analytics?.arr) }),
+      changeType: "neutral" as const,
+      href: "/saas/analytics",
     },
     {
-      title: t("saas.active_tenants"),
-      value: analytics?.activeSubscriptions || 0,
+      title: t("saas.metrics.paying_salons"),
+      value: analytics?.payingTenants || 0,
       icon: CheckCircle,
-      change: `${analytics?.trialTenants || 0} ${t("saas.trial")}`,
+      change: t("saas.metrics.paying_hint", {
+        trial: analytics?.trialTenants || 0,
+        pastDue: analytics?.pastDueTenants || 0,
+      }),
       changeType: "neutral" as const,
+      href: "/saas/tenants",
     },
+  ];
+
+  const statusRows = [
+    { label: t("saas.metrics.status_paying"), value: analytics?.payingTenants || 0, tone: "text-indigo-600" },
+    { label: t("saas.metrics.status_trialing"), value: analytics?.trialTenants || 0, tone: "text-blue-600" },
+    { label: t("saas.metrics.status_past_due"), value: analytics?.pastDueTenants || 0, tone: "text-amber-600" },
+    { label: t("saas.metrics.status_suspended"), value: analytics?.suspendedTenants || 0, tone: "text-red-600" },
+    { label: t("saas.metrics.status_cancelled"), value: analytics?.cancelledTenants || 0, tone: "text-gray-900" },
   ];
 
   return (
@@ -140,7 +166,7 @@ export default function SaasOverviewPage() {
                 <stat.icon className="w-6 h-6 text-slate-800" />
               </div>
               <span
-                className={`text-sm ${
+                className={`text-sm text-right ${
                   stat.changeType === "positive"
                     ? "text-indigo-600"
                     : "text-gray-500"
@@ -159,59 +185,88 @@ export default function SaasOverviewPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
         <div className="bg-white rounded-xl border border-gray-200 p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">
-            {t("saas.revenue_breakdown")}
+            {t("saas.metrics.kiraroom_revenue")}
           </h3>
           <div className="space-y-3">
-            <div className="flex justify-between items-center">
-              <span className="text-gray-600">{t("saas.total_revenue")}</span>
-              <span className="font-semibold text-gray-900">
-                €{((analytics?.totalRevenue || 0) / 100).toFixed(2)}
-              </span>
-            </div>
             <div className="flex justify-between items-center">
               <span className="text-gray-600">MRR</span>
-              <span className="font-semibold text-gray-900">
-                €{(analytics?.mrr || 0).toFixed(2)}
-              </span>
+              <span className="font-semibold text-gray-900">{formatEuros(analytics?.mrr)}</span>
             </div>
             <div className="flex justify-between items-center">
-              <span className="text-gray-600">{t("saas.avg_per_salon")}</span>
-              <span className="font-semibold text-gray-900">
-                €
-                {analytics?.totalTenants
-                  ? (analytics.mrr / analytics.totalTenants).toFixed(2)
-                  : "0.00"}
-              </span>
+              <span className="text-gray-600">{t("saas.metrics.arr")}</span>
+              <span className="font-semibold text-gray-900">{formatEuros(analytics?.arr)}</span>
             </div>
+            <div className="flex justify-between items-center">
+              <span className="text-gray-600">{t("saas.metrics.avg_per_paying")}</span>
+              <span className="font-semibold text-gray-900">{formatEuros(analytics?.avgMrrPerPayingSalon)}</span>
+            </div>
+            {(analytics?.activeWithoutBilling || 0) > 0 && (
+              <div className="flex justify-between items-center gap-3">
+                <span className="text-gray-600 text-sm">{t("saas.metrics.active_without_billing")}</span>
+                <span className="font-semibold text-amber-600">{analytics?.activeWithoutBilling}</span>
+              </div>
+            )}
+          </div>
+          {/* Where the salons' takings belong in the console is still an
+              owner decision (audit 8 D3); until then they stay here, apart
+              from KiraRoom's revenue and labelled as what they are. */}
+          <div className="mt-4 pt-4 border-t border-gray-100">
+            <div className="flex justify-between items-center gap-3">
+              <span className="text-gray-600">{t("saas.metrics.salon_takings_title")}</span>
+              <span className="font-semibold text-gray-900">{formatEuros(analytics?.salonTakingsTotal)}</span>
+            </div>
+            <p className="text-xs text-gray-400 mt-1">
+              {t("saas.metrics.salon_takings_total")}. {t("saas.metrics.salon_takings_note")}
+            </p>
           </div>
         </div>
 
         <div className="bg-white rounded-xl border border-gray-200 p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">
+            {t("saas.metrics.status_title")}
+          </h3>
+          <div className="space-y-3">
+            {statusRows.map((row) => (
+              <div key={row.label} className="flex justify-between items-center">
+                <span className="text-gray-600">{row.label}</span>
+                <span className={`font-semibold ${row.tone}`}>{row.value}</span>
+              </div>
+            ))}
+          </div>
+          <h4 className="text-sm font-semibold text-gray-700 mt-5 mb-2">
             {t("saas.subscription_plans")}
-          </h3>
-          <div className="space-y-3">
-            {analytics?.planDistribution.map((plan) => (
-              <div key={plan.plan} className="flex justify-between items-center">
-                <span className="text-gray-600 capitalize">{plan.plan}</span>
-                <span className="font-semibold text-gray-900">{plan.count}</span>
-              </div>
-            ))}
+          </h4>
+          <div className="space-y-2">
+            {(analytics?.planDistribution ?? []).length === 0 ? (
+              <p className="text-sm text-gray-400">{t("saas.metrics.no_salons")}</p>
+            ) : (
+              analytics?.planDistribution.map((plan) => (
+                <div key={plan.plan} className="flex justify-between items-center">
+                  <span className="text-gray-600">{planLabel(plan.plan)}</span>
+                  <span className="font-semibold text-gray-900">{plan.count}</span>
+                </div>
+              ))
+            )}
           </div>
         </div>
 
         <div className="bg-white rounded-xl border border-gray-200 p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">
-            {t("saas.top_countries")}
+            {t("saas.metrics.countries_title")}
           </h3>
           <div className="space-y-3">
-            {analytics?.topCountries.map((country) => (
-              <div key={country.country} className="flex justify-between items-center">
-                <span className="text-gray-600">{country.country}</span>
-                <span className="font-semibold text-gray-900">{country.count}</span>
-              </div>
-            ))}
+            {(analytics?.topCountries ?? []).length === 0 ? (
+              <p className="text-sm text-gray-400">{t("saas.metrics.no_salons")}</p>
+            ) : (
+              analytics?.topCountries.map((country) => (
+                <div key={country.country} className="flex justify-between items-center">
+                  <span className="text-gray-600">{countryName(country.country)}</span>
+                  <span className="font-semibold text-gray-900">{country.count}</span>
+                </div>
+              ))
+            )}
           </div>
+          <p className="text-xs text-gray-400 mt-4">{t("saas.metrics.excluded_note")}</p>
         </div>
       </div>
 
