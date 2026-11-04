@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { CreateConversationDto, UpdateConversationDto } from '@kira/shared';
 import type { ChatConversation, ChatMessage } from '@kira/shared';
 import { ConversationMemoryRepository } from '../repositories/conversation-memory.repository';
+import { logId } from '../log-id';
 
 @Injectable()
 export class ConversationService {
@@ -17,12 +18,12 @@ export class ConversationService {
     const existingConversation = await this.findActiveConversation(data.clientId, tenantId);
     
     if (existingConversation) {
-      this.logger.log(`Found active conversation for client ${data.clientId}`);
+      this.logger.log(`Found active conversation ${existingConversation.id} for ${logId(data.clientId)}`);
       return this.convertToSharedType(existingConversation);
     }
 
     const newConversation = await this.createConversation(data);
-    this.logger.log(`Created new conversation for client ${data.clientId}`);
+    this.logger.log(`Created new conversation ${newConversation.id} for ${logId(data.clientId)}`);
     return newConversation;
   }
 

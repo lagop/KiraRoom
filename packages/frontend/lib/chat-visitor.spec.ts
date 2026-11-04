@@ -43,7 +43,7 @@ check("blocked storage is not an error", readVisitorToken(throwing, "s") === und
 rememberVisitorToken(throwing, "s", "t");
 check("blocked storage on write is not an error either", true);
 
-const limit = { status: 429, message: "Has llegado al máximo de mensajes de hoy con la recepcionista. Puedes reservar desde esta página o llamar al salón." };
+const limit = { status: 429, message: "Has llegado al máximo de mensajes de hoy con el asistente. Puedes reservar desde esta página o llamar al salón." };
 check("the daily limit is explained in the server's words", chatErrorText(limit) === limit.message);
 check(
   "the per-minute limit says to wait",
@@ -51,7 +51,7 @@ check(
 );
 check(
   "anything else is the plain apology, without the server's details",
-  chatErrorText({ status: 500, message: "Prisma error at ..." }).startsWith("Lo sentimos"),
+  chatErrorText({ status: 500, message: "Prisma error at ..." }) === "Ahora mismo no puedo responder. Inténtalo de nuevo en un momento.",
 );
 check("same limit as the API", CHAT_MAX_MESSAGE === 1000);
 

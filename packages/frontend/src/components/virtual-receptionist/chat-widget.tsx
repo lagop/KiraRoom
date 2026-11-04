@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, X, Minimize, Maximize, MessageCircle, Phone } from 'lucide-react';
 import apiClient from '@/lib/api';
+import { useTranslations } from '@/lib/use-translation';
 import { CHAT_MAX_MESSAGE, chatErrorText, readVisitorToken, rememberVisitorToken } from '@/lib/chat-visitor';
 import { ChatInline, parseChatMarkdown } from '@/lib/chat-markdown';
 
@@ -101,6 +102,12 @@ interface ChatWidgetProps {
   clientPhone?: string;
   className?: string;
   isOpenByDefault?: boolean;
+  /** Shown in the AI disclosure: "Te atiende un asistente automático (IA) de {salon}". */
+  salonName?: string;
+  /** Offered as a tel: link when the assistant cannot help. */
+  salonPhone?: string;
+  /** The page's translate function, so the chat follows its language switch. */
+  t?: (key: string, params?: Record<string, unknown>) => string;
 }
 
 const ChatWidget: React.FC<ChatWidgetProps> = ({ 
@@ -108,8 +115,14 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
   clientId,
   clientName,
   className = '',
-  isOpenByDefault = false
+  isOpenByDefault = false,
+  salonName,
+  salonPhone,
+  t: pageT,
 }) => {
+  const ownT = useTranslations();
+  const t = pageT ?? ownT;
+  const phone = salonPhone?.trim() || undefined;
   const [isOpen, setIsOpen] = useState(isOpenByDefault);
   const [isMinimized, setIsMinimized] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -194,26 +207,16 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
     }
   };
 
-  const handleHandoff = () => {
-    // In a real implementation, this would connect to human agent
-    const handoffMessage: ChatMessage = {
-      id: Date.now().toString(),
-      role: 'assistant',
-      content: 'Te estamos conectando con un representante. Por favor, espera un momento.',
-      timestamp: new Date(),
-    };
-    setMessages(prev => [...prev, handoffMessage]);
-    setShowHandoff(false);
-  };
-
   if (!isOpen) {
     return (
       <div className={`fixed bottom-6 right-6 z-50 ${className}`}>
         <button
+          type="button"
           onClick={() => setIsOpen(true)}
+          aria-label={t('publicChat.open')}
           className="bg-purple-600 text-white rounded-full p-4 shadow-lg hover:bg-purple-700 transition-colors"
         >
-          <MessageCircle className="w-6 h-6" />
+          <MessageCircle className="w-6 h-6" aria-hidden="true" />
         </button>
       </div>
     );
@@ -221,27 +224,32 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
 
   return (
     <div className={`fixed bottom-6 right-6 z-50 ${className}`}>
-      <div className={`bg-white rounded-lg shadow-xl w-80 h-96 flex flex-col ${
+      <div className={`bg-white rounded-lg shadow-xl w-[calc(100vw-2rem)] max-w-80 h-96 flex flex-col ${
         isMinimized ? 'h-14' : ''
       }`}>
         {/* Header */}
         <div className="bg-purple-600 text-white px-4 py-3 rounded-t-lg flex justify-between items-center">
           <div className="flex items-center space-x-2">
-            <MessageCircle className="w-5 h-5" />
-            <span className="font-semibold">Asistente Virtual</span>
+            <MessageCircle className="w-5 h-5" aria-hidden="true" />
+            <span className="font-semibold">{t('publicChat.title')}</span>
           </div>
           <div className="flex items-center space-x-1">
             <button
+              type="button"
               onClick={() => setIsMinimized(!isMinimized)}
+              aria-label={t(isMinimized ? 'publicChat.restore' : 'publicChat.minimize')}
+              aria-expanded={!isMinimized}
               className="p-1 hover:bg-purple-700 rounded"
             >
-              {isMinimized ? <Maximize className="w-4 h-4" /> : <Minimize className="w-4 h-4" />}
+              {isMinimized ? <Maximize className="w-4 h-4" aria-hidden="true" /> : <Minimize className="w-4 h-4" aria-hidden="true" />}
             </button>
             <button
+              type="button"
               onClick={() => setIsOpen(false)}
+              aria-label={t('publicChat.close')}
               className="p-1 hover:bg-purple-700 rounded"
             >
-              <X className="w-4 h-4" />
+              <X className="w-4 h-4" aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -249,13 +257,23 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
         {/* Messages */}
         {!isMinimized && (
           <>
-            <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4 bg-gray-50">
+            {/* Always shown: the visitor knows it is an AI before writing (AI Act art. 50). */}
+            <div className="px-4 py-2 border-b border-gray-200 bg-white text-xs text-gray-600">
+              <p>{salonName ? t('publicChat.disclosure', { salon: salonName }) : t('publicChat.disclosureNoName')}</p>
+              {/* The link to the chat's privacy notice goes here once it exists. */}
+            </div>
+            <div
+              className="flex-1 overflow-y-auto px-4 py-3 space-y-4 bg-gray-50"
+              role="log"
+              aria-live="polite"
+              aria-label={t('publicChat.messages')}
+            >
               {/* Welcome message */}
               {messages.length === 0 && (
-                <div className="text-center text-gray-600 py-8">
-                  <MessageCircle className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-                  <p className="font-medium text-gray-800">¡Hola!</p>
-                  <p className="text-sm">¿En qué puedo ayudarte hoy?</p>
+                <div className="text-center text-gray-600 py-6">
+                  <MessageCircle className="w-12 h-12 text-gray-300 mx-auto mb-3" aria-hidden="true" />
+                  <p className="font-medium text-gray-800">{t('publicChat.hello')}</p>
+                  <p className="text-sm">{t('publicChat.howCanIHelp')}</p>
                 </div>
               )}
 
@@ -301,18 +319,18 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
 
             {/* Input */}
             <div className="p-4 border-t border-gray-200">
-              {showHandoff && (
+              {/* Nobody watches this chat live: when the assistant cannot
+                  help, the visitor gets the salon's phone, never a "human agent". */}
+              {showHandoff && phone && (
                 <div className="mb-3 p-2 bg-yellow-50 border border-yellow-200 rounded-lg">
-                  <p className="text-sm text-yellow-800">
-                    ¿Necesitas hablar con un representante humano?
-                  </p>
-                  <button
-                    onClick={handleHandoff}
-                    className="mt-2 text-sm text-purple-600 hover:text-purple-700 font-medium"
+                  <p className="text-sm text-yellow-800">{t('publicChat.callSalonPrompt')}</p>
+                  <a
+                    href={`tel:${phone.replace(/\s+/g, '')}`}
+                    className="mt-2 inline-flex items-center text-sm text-purple-600 hover:text-purple-700 font-medium"
                   >
-                    <Phone className="w-4 h-4 inline mr-1" />
-                    Conectar con agente
-                  </button>
+                    <Phone className="w-4 h-4 inline mr-1" aria-hidden="true" />
+                    {t('publicChat.callSalon', { phone })}
+                  </a>
                 </div>
               )}
 
@@ -323,16 +341,19 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({
                   onChange={(e) => setInputValue(e.target.value)}
                   maxLength={CHAT_MAX_MESSAGE}
                   onKeyPress={handleKeyPress}
-                  placeholder="Escribe tu mensaje..."
+                  placeholder={t('publicChat.placeholder')}
+                  aria-label={t('publicChat.input')}
                   className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                   disabled={isLoading}
                 />
                 <button
+                  type="button"
                   onClick={handleSendMessage}
                   disabled={isLoading || !inputValue.trim()}
+                  aria-label={t('publicChat.send')}
                   className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
-                  <Send className="w-4 h-4" />
+                  <Send className="w-4 h-4" aria-hidden="true" />
                 </button>
               </div>
             </div>

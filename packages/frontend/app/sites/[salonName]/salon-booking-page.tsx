@@ -1257,7 +1257,7 @@ export default function SalonBookingPage({
 
       {/* Virtual Receptionist Widget */}
       {salonData && (
-        <ChatWidget salonId={salonData.id} />
+        <ChatWidget salonId={salonData.id} salonName={salonData.name} salonPhone={salonData.phone} t={t} />
       )}
     </div>
   );
