@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { BookingContext } from '@kira/shared';
 import { ProfessionalsService } from '../../professionals/professionals.service';
+import { logId } from '../log-id';
 
 export enum BookingStage {
   INITIAL = 'initial',
@@ -105,7 +106,7 @@ export class BookingService {
    * Continue booking process from existing context
    */
   async continueBookingProcess(context: BookingContext, analysis: any): Promise<string> {
-    this.logger.log(`Continuing booking process for client ${context.clientId}`);
+    this.logger.log(`Continuing booking process for ${logId(context.clientId)}`);
 
     switch (context.stage) {
       case BookingStage.INITIAL:

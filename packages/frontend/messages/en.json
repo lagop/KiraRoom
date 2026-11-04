@@ -3363,5 +3363,22 @@
       "back": "Back",
       "approveHelp": "They are not cancelled on their own: pass or cancel them here, approve and do it later, or go back."
     }
+  },
+  "publicChat": {
+    "title": "Salon assistant",
+    "open": "Open the chat with the assistant",
+    "minimize": "Minimise the chat",
+    "restore": "Show the chat",
+    "close": "Close the chat",
+    "send": "Send message",
+    "input": "Your message",
+    "placeholder": "Type your message...",
+    "messages": "Conversation with the assistant",
+    "disclosure": "You are chatting with an automated assistant (AI) of {salon}.",
+    "disclosureNoName": "You are chatting with the salon's automated assistant (AI).",
+    "hello": "Hello!",
+    "howCanIHelp": "How can I help you today?",
+    "callSalonPrompt": "Would you rather talk to the salon?",
+    "callSalon": "Call the salon ({phone})"
   }
 }

@@ -1501,7 +1501,7 @@ export default function SalonBookingPage({
       {/* Virtual Receptionist Widget: it books, so not while the salon
           takes no bookings (it would be refused at the end too). */}
       {salonData && takesBookings && (
-        <ChatWidget salonId={salonData.id} />
+        <ChatWidget salonId={salonData.id} salonName={salonData.name} salonPhone={salonData.phone} t={t} />
       )}
     </div>
   );
