@@ -25,7 +25,7 @@ import { ANALYTICS_APPOINTMENT_SELECT } from "../analytics/analytics.service";
  */
 export function locationLimitMessage(maxLocations: number): string {
   const paid = maxLocations === 1 ? "1 local activo" : `${maxLocations} locales activos`;
-  return `Tu plan Empresa incluye ${paid}. Para abrir otro, la cuenta principal puede añadir un local en Ajustes > Facturación (149 € al mes + IVA por local), o desactiva otro local antes.`;
+  return `Tu plan Empresa incluye ${paid}. Para abrir otro, la cuenta principal puede añadir un local en Ajustes > Facturación (149 € al mes por local, precio final), o desactiva otro local antes.`;
 }
 
 @Injectable()

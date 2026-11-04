@@ -713,9 +713,9 @@
     "switchConfirm": "Switch to the {plan} plan?",
     "switchDone": "Done: you are now on the {plan} plan.",
     "trialCheckoutNote": "You can subscribe now without losing your trial: you keep Pro until {date} and the first charge comes that day. In its last two days you are charged at once, but you keep Pro until the trial ends.",
-    "checkoutDescription": "You will go to Stripe's secure payment page to enter your card. {price} a month + VAT.",
+    "checkoutDescription": "You will go to Stripe's secure payment page to enter your card. {price} a month, final price with no taxes added.",
     "checkoutGo": "Go to payment",
-    "switchDescription": "{price} a month + VAT. Stripe adjusts your next charge for the days left in the period. If you move down, you lose what the new plan does not include.",
+    "switchDescription": "{price} a month, final price with no taxes added. Stripe adjusts your next charge for the days left in the period. If you move down, you lose what the new plan does not include.",
     "back": "Back",
     "trialPlanBadge": "Your trial",
     "checkoutReturn": {
@@ -729,7 +729,7 @@
       "cancelTitle": "The payment was not completed",
       "cancelBody": "Nothing was charged and your plan is as it was."
     },
-    "plusVat": "+ VAT",
+    "finalPrice": "Final prices, no taxes added.",
     "desiredPlanBadge": "Your pick",
     "trialSubscribedNote": "You have subscribed to {plan}. You keep the Pro trial until {date}; your plan and the first charge start that day.",
     "limits": {
@@ -739,14 +739,14 @@
     },
     "locations": {
       "title": "Paid locations",
-      "desc": "Empresa is paid per location: {price} a month + VAT each. You have {active} {activeLabel} and pay for {paid}.",
+      "desc": "Empresa is paid per location: {price} a month each, final price with no taxes added. You have {active} {activeLabel} and pay for {paid}.",
       "activeOne": "active location",
       "activeMany": "active locations",
       "label": "Locations you pay for",
       "save": "Save",
       "min": "You cannot pay for fewer locations than you have active ({min}). Deactivate one in Multi-location first.",
       "confirm": "Pay for {count} locations?",
-      "confirmDescription": "{price} a month + VAT per location. Stripe prorates the change on your next invoice.",
+      "confirmDescription": "{price} a month per location, final price with no taxes added. Stripe prorates the change on your next invoice.",
       "done": "Done: you now pay for {count} locations.",
       "error": "The number of locations could not be changed."
     }

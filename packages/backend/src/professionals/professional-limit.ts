@@ -11,7 +11,9 @@ type SlotReader = Pick<Prisma.TransactionClient, "tenant" | "professional">;
  * none), checked before one is added or reactivated. It was only shown on
  * the billing page, so any salon could add as many as it liked.
  *
- * The trial counts as Pro, like everywhere else. Inactive professionals do
+ * The trial counts as Pro, like everywhere else, until the salon subscribes
+ * during it: from then on its limit is the plan it pays for (D8), so it
+ * cannot grow past it in the remaining trial days. Inactive professionals do
  * not count, so a salon over the cap after a downgrade keeps its team and
  * can swap people, but not add more.
  *
@@ -22,12 +24,10 @@ type SlotReader = Pick<Prisma.TransactionClient, "tenant" | "professional">;
 export async function assertProfessionalSlot(prisma: SlotReader, tenantId: string): Promise<void> {
   const tenant = await prisma.tenant.findUnique({
     where: { id: tenantId },
-    select: { plan: true, subscriptionStatus: true, trialEnd: true },
+    select: { plan: true, subscriptionStatus: true, trialEnd: true, stripeSubscriptionId: true },
   });
   if (!tenant) return;
-  const inTrial =
-    tenant.subscriptionStatus === "trialing" && !!tenant.trialEnd && tenant.trialEnd.getTime() > Date.now();
-  const plan: PlanId = inTrial ? "pro" : normalizePlan(tenant.plan);
+  const plan = professionalLimitPlan(tenant);
   const limit = PLAN_MAX_PROFESSIONALS[plan];
   if (limit === null) return;
 
@@ -40,6 +40,16 @@ export async function assertProfessionalSlot(prisma: SlotReader, tenantId: strin
       upgradeUrl: "/dashboard/billing",
     });
   }
+}
+
+/** The plan whose limit applies: Pro in a trial with no subscription, else the stored plan. */
+export function professionalLimitPlan(
+  tenant: { plan: string | null; subscriptionStatus: string | null; trialEnd: Date | null; stripeSubscriptionId?: string | null },
+  now: Date = new Date(),
+): PlanId {
+  const inTrial =
+    tenant.subscriptionStatus === "trialing" && !!tenant.trialEnd && tenant.trialEnd.getTime() > now.getTime();
+  return inTrial && !tenant.stripeSubscriptionId ? "pro" : normalizePlan(tenant.plan);
 }
 
 /**

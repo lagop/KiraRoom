@@ -544,7 +544,8 @@ function BillingPageContent() {
   const locations = empresaLocations(sub);
   const locationsValue = locationsDraft ?? locations?.paid ?? 1;
   const planById = (id: string) => plans?.find((p: any) => p.id === id);
-  // "49 €" or, on Empresa, "149 € por local": the copy adds "al mes + IVA".
+  // "49 €" or, on Empresa, "149 € por local": the copy adds "al mes". KiraRoom
+  // charges no VAT or IGIC: the price shown is the final price (D6).
   const planPriceText = (id: string) => {
     const p = planById(id);
     if (!p) return "";
@@ -751,6 +752,7 @@ function BillingPageContent() {
             })}
           </p>
         )}
+        <p className="mb-3 text-xs text-gray-500">{t("billing.finalPrice")}</p>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {plans?.map((p: any) => {
             // In trial the highlighted card is the Pro of the trial.
@@ -790,7 +792,7 @@ function BillingPageContent() {
                 <p className="mt-1 text-2xl font-bold text-gray-900">
                   {t("landing.pricing.price", { amount: p.price / 100 })}
                   <span className="ml-1 text-sm font-normal text-gray-500">
-                    {t("landing.pricing.perMonth")} {t("billing.plusVat")}
+                    {t("landing.pricing.perMonth")}
                   </span>
                 </p>
                 {p.pricePerLocation && (

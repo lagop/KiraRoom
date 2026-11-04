@@ -75,7 +75,7 @@ export function UpgradeCTA({
       </h3>
       <p className="mt-1 text-sm text-gray-600">{headline}.</p>
       <p className="mt-1 text-xs text-gray-500">
-        Desde <span className="font-semibold">€{price}/mes</span>{" "}
+        Desde <span className="font-semibold">{price} €/mes</span>{" "}
         {/* Empresa is priced per location and works from one. */}
         {requiredPlan === "empresa" && "por local"}
       </p>

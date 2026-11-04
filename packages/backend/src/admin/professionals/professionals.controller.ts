@@ -17,6 +17,7 @@ import { Roles } from "../../auth/decorators/roles.decorator";
 import { RolesGuard } from "../../auth/guards/roles.guard";
 import { UserRole } from "@prisma/client";
 import { CurrentUser } from "../../auth/decorators/current-user.decorator";
+import { AllowWhenReadOnly } from "../../common/decorators/allow-when-read-only.decorator";
 
 @ApiTags("Admin - Professionals")
 @ApiBearerAuth()
@@ -108,6 +109,21 @@ export class AdminProfessionalsController {
     @Body() updateProfessionalDto: UpdateProfessionalDto,
   ) {
     return this.adminProfessionalsService.update(user.tenantId, id, updateProfessionalDto);
+  }
+
+  /**
+   * Deactivates a professional, and only that. Allowed while the salon is
+   * read-only (D8): a cancelled salon over its plan's limit has to bring
+   * its team down to the plan before it can pay for it again, and the
+   * general PATCH above stays refused then.
+   */
+  @Post(":id/deactivate")
+  @AllowWhenReadOnly()
+  @ApiOperation({ summary: "Deactivate a professional (allowed in read-only)" })
+  @ApiResponse({ status: 200, description: "Professional deactivated" })
+  @ApiResponse({ status: 404, description: "Professional not found" })
+  async deactivate(@CurrentUser() user: any, @Param("id", ParseUUIDPipe) id: string) {
+    return this.adminProfessionalsService.update(user.tenantId, id, { isActive: false } as any);
   }
 
   @Delete(":id")

@@ -502,12 +502,12 @@ describe("moving down only within the new plan's limits (B9)", () => {
     expect(create).not.toHaveBeenCalled();
   });
 
-  it("a cancelled (read-only) salon is not blocked: it could not deactivate anyone", async () => {
+  it("a cancelled (read-only) salon is blocked too (D8): it can deactivate professionals while read-only", async () => {
     const create = jest.fn(async () => ({ url: "https://checkout.test", id: "cs_1" }));
     const stripe = { checkout: { sessions: { create, list: jest.fn(async () => ({ data: [] })), expire: jest.fn() } } };
     const { subs } = service({ ...paying(), subscriptionStatus: "cancelled" }, stripe, { professionals: 6 });
-    await subs.createCheckoutSession("t1", "esencial");
-    expect(create).toHaveBeenCalled();
+    await expect(subs.createCheckoutSession("t1", "esencial")).rejects.toThrow("desactiva 2");
+    expect(create).not.toHaveBeenCalled();
   });
 
   it("GET plan-check answers the list for the page", async () => {

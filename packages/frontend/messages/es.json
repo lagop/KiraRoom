@@ -713,9 +713,9 @@
     "switchConfirm": "¿Cambiar al plan {plan}?",
     "switchDone": "Listo: ya estás en el plan {plan}.",
     "trialCheckoutNote": "Puedes contratar ya sin perder la prueba: sigues con Pro hasta el {date} y el primer cobro llega ese día. Si contratas en sus dos últimos días, se cobra al momento, pero mantienes Pro hasta el final de la prueba.",
-    "checkoutDescription": "Irás a la página de pago segura de Stripe para poner la tarjeta. {price} al mes + IVA.",
+    "checkoutDescription": "Irás a la página de pago segura de Stripe para poner la tarjeta. {price} al mes, precio final, sin impuestos añadidos.",
     "checkoutGo": "Ir al pago",
-    "switchDescription": "{price} al mes + IVA. Stripe ajusta el próximo cobro según los días que quedan del período. Si bajas de plan, dejas de tener lo que el nuevo no incluye.",
+    "switchDescription": "{price} al mes, precio final, sin impuestos añadidos. Stripe ajusta el próximo cobro según los días que quedan del período. Si bajas de plan, dejas de tener lo que el nuevo no incluye.",
     "back": "Volver",
     "trialPlanBadge": "Tu prueba",
     "checkoutReturn": {
@@ -729,7 +729,7 @@
       "cancelTitle": "No se ha completado el pago",
       "cancelBody": "No se ha cobrado nada y tu plan sigue como estaba."
     },
-    "plusVat": "+ IVA",
+    "finalPrice": "Precios finales, sin impuestos añadidos.",
     "desiredPlanBadge": "El que elegiste",
     "trialSubscribedNote": "Has contratado el plan {plan}. Sigues con la prueba Pro hasta el {date}; ese día empieza tu plan y llega el primer cobro.",
     "limits": {
@@ -739,14 +739,14 @@
     },
     "locations": {
       "title": "Locales contratados",
-      "desc": "El plan Empresa se paga por local: {price} al mes + IVA cada uno. Tienes {active} {activeLabel} y pagas {paid}.",
+      "desc": "El plan Empresa se paga por local: {price} al mes cada uno, precio final, sin impuestos añadidos. Tienes {active} {activeLabel} y pagas {paid}.",
       "activeOne": "local activo",
       "activeMany": "locales activos",
       "label": "Locales que pagas",
       "save": "Guardar",
       "min": "No puedes pagar menos locales de los que tienes activos ({min}). Desactiva alguno en Multi-local primero.",
       "confirm": "¿Pagar {count} locales?",
-      "confirmDescription": "{price} al mes + IVA por local. Stripe prorratea el cambio en tu próxima factura.",
+      "confirmDescription": "{price} al mes por local, precio final, sin impuestos añadidos. Stripe prorratea el cambio en tu próxima factura.",
       "done": "Listo: ahora pagas {count} locales.",
       "error": "No se ha podido cambiar el número de locales."
     }
