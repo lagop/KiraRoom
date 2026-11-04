@@ -54,6 +54,11 @@ export interface InviteView {
   magicLink?: string;
   /** Internal token (only on the create response). */
   token?: string;
+  /**
+   * Whether the email really went out (create and resend only). The console
+   * said "Hemos enviado el email" even when sending failed (audit 8 T15).
+   */
+  emailSent?: boolean;
 }
 
 /** What the public accept-invite page needs to render the wizard. */
@@ -82,6 +87,14 @@ export interface InviteAcceptanceContext {
  *   - rotated on resend (the old row is marked revoked and a new row
  *     is created).
  */
+/** How an invite's status reads in the console's messages. */
+const INVITE_STATUS_ES: Record<string, string> = {
+  pending: "pendiente",
+  accepted: "aceptada",
+  revoked: "anulada",
+  expired: "caducada",
+};
+
 @Injectable()
 export class InvitesService {
   private readonly logger = new Logger(InvitesService.name);
@@ -107,9 +120,9 @@ export class InvitesService {
       return this.createInviteInTx(tx, dto, invitedById);
     });
 
-    await this.sendInviteEmail(invite);
+    const emailSent = await this.sendInviteEmail(invite);
 
-    return this.toView(invite, true);
+    return { ...this.toView(invite, true), emailSent };
   }
 
   /**
@@ -145,7 +158,7 @@ export class InvitesService {
     });
     if (existing) {
       throw new ConflictException(
-        `An active invite already exists for ${email} (${dto.tenantName}).`,
+        `Ya hay una invitación pendiente para ${email} (${dto.tenantName}). Reenvíala desde la lista de invitaciones.`,
       );
     }
 
@@ -156,7 +169,7 @@ export class InvitesService {
     });
     if (existingUser) {
       throw new ConflictException(
-        `${email} already has a KiraRoom account. If they're joining your team, add them as a user from your dashboard instead of minting a tenant invite.`,
+        `${email} ya tiene una cuenta en KiraRoom. Si se une a un equipo, la dueña del salón la añade desde su panel.`,
       );
     }
 
@@ -202,7 +215,7 @@ export class InvitesService {
    */
   async getInviteForAcceptance(token: string): Promise<InviteAcceptanceContext> {
     if (!token || token.length < 16) {
-      throw new NotFoundException("Invite not found");
+      throw new NotFoundException("Invitación no encontrada");
     }
 
     const invite = await this.prisma.tenantInvite.findUnique({
@@ -214,7 +227,7 @@ export class InvitesService {
       invite.status !== InviteStatus.pending ||
       invite.expiresAt.getTime() <= Date.now()
     ) {
-      throw new NotFoundException("Invite not found");
+      throw new NotFoundException("Invitación no encontrada");
     }
 
     return {
@@ -465,11 +478,11 @@ export class InvitesService {
       where: { id },
     });
     if (!invite) {
-      throw new NotFoundException("Invite not found");
+      throw new NotFoundException("Invitación no encontrada");
     }
     if (invite.status !== InviteStatus.pending) {
       throw new BadRequestException(
-        `Cannot revoke invite in status '${invite.status}'.`,
+        `Solo se puede anular una invitación pendiente (esta está ${INVITE_STATUS_ES[invite.status] ?? invite.status}).`,
       );
     }
     const updated = await this.prisma.tenantInvite.update({
@@ -507,26 +520,31 @@ export class InvitesService {
         where: { id },
       });
       if (!existing) {
-        throw new NotFoundException("Invite not found");
+        throw new NotFoundException("Invitación no encontrada");
       }
       if (existing.status === InviteStatus.accepted) {
-        throw new BadRequestException("Invite was already accepted.");
+        throw new BadRequestException("Esta invitación ya se aceptó: el salón existe.");
       }
-      if (existing.status !== InviteStatus.pending) {
-        // Already revoked or expired — refuse to layer a fresh token
-        // on top of an already-dead invite.
+      // Pending or expired: a fresh link (an expired one used to need a
+      // new invite by hand, audit 8 T15). A revoked one stays revoked.
+      const expired =
+        existing.status === InviteStatus.expired ||
+        (existing.status === InviteStatus.pending && existing.expiresAt.getTime() <= Date.now());
+      if (existing.status !== InviteStatus.pending && !expired) {
         throw new BadRequestException(
-          `Cannot resend an invite in status '${existing.status}'.`,
+          `No se puede reenviar una invitación ${INVITE_STATUS_ES[existing.status] ?? existing.status}.`,
         );
       }
 
-      await tx.tenantInvite.update({
-        where: { id },
-        data: {
-          status: InviteStatus.revoked,
-          revokedAt: new Date(),
-        },
-      });
+      if (existing.status === InviteStatus.pending) {
+        await tx.tenantInvite.update({
+          where: { id },
+          data: {
+            status: InviteStatus.revoked,
+            revokedAt: new Date(),
+          },
+        });
+      }
 
       await this.auditLog.record(
         "tenant.invite.revoke",
@@ -554,9 +572,9 @@ export class InvitesService {
       );
     });
 
-    await this.sendInviteEmail(newInvite);
+    const emailSent = await this.sendInviteEmail(newInvite);
 
-    return this.toView(newInvite, true);
+    return { ...this.toView(newInvite, true), emailSent };
   }
 
   // ────────────────────── private helpers
@@ -583,7 +601,8 @@ export class InvitesService {
     return `${base.replace(/\/+$/, "")}/accept-invite/${token}`;
   }
 
-  private async sendInviteEmail(invite: TenantInvite): Promise<void> {
+  /** Sends the invite; true only when the email provider accepted it. */
+  private async sendInviteEmail(invite: TenantInvite): Promise<boolean> {
     const link = this.buildMagicLink(invite.token);
     try {
       const sent = await this.emailService.sendTenantInvite({
@@ -597,13 +616,17 @@ export class InvitesService {
         this.logger.warn(
           `Invite email failed for ${invite.email}: ${sent.error}`,
         );
+        return false;
       }
+      // Email off in this environment: nothing went out.
+      return !(sent as { skipped?: boolean }).skipped;
     } catch (err) {
       // Email failure must NOT block invite creation — the SaaS admin
       // already gets the magicLink in the API response.
       this.logger.error(
         `Invite email threw for ${invite.email}: ${(err as Error).message}`,
       );
+      return false;
     }
   }
 

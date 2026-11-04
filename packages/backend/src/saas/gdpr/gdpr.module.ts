@@ -1,14 +1,17 @@
 import { Module } from "@nestjs/common";
 import { PrismaModule } from "../../common/prisma/prisma.module";
-import { GdprController } from "./gdpr.controller";
+import { PaymentsModule } from "../../payments/payments.module";
 import { AuditLogService } from "../audit-log.service";
+import { GdprController } from "./gdpr.controller";
 import { GdprService } from "./gdpr.service";
+import { GdprConsoleService } from "./gdpr-console.service";
 
 @Module({
-  imports: [PrismaModule],
+  // PaymentsModule: the console's erasure cancels the Stripe subscription first.
+  imports: [PrismaModule, PaymentsModule],
   controllers: [GdprController],
   // AuditLogService: the console's erasure is on the audit log (audit 8, C9).
-  providers: [GdprService, AuditLogService],
+  providers: [GdprService, GdprConsoleService, AuditLogService],
   exports: [GdprService],
 })
 export class GdprModule {}

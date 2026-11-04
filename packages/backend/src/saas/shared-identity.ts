@@ -1,4 +1,11 @@
+import { Prisma } from "@prisma/client";
 import type { PrismaService } from "../common/prisma/prisma.service";
+
+/** fiscalSettings.tenantNif, the older copy of the salon's NIF, when it is text. */
+function mirroredNif(settings: unknown): string | null {
+  const v = (settings as { tenantNif?: unknown } | null)?.tenantNif;
+  return typeof v === "string" && v.trim() ? v : null;
+}
 
 /**
  * Salons that share a phone or a fiscal NIF with another salon (D9): for
@@ -10,7 +17,8 @@ export interface SharedIdentityWarning {
   kind: "phone" | "taxId";
   /** The shared value as stored on this salon. */
   value: string;
-  others: { id: string; name: string; slug: string }[];
+  /** deleted: removed from the console and not anonymised yet (audit 8 T23). */
+  others: { id: string; name: string; slug: string; deleted?: boolean }[];
 }
 
 export interface IdentityRow {
@@ -20,6 +28,9 @@ export interface IdentityRow {
   /** The salon's phone and its owner's (the signup asks the owner for one). */
   phones: (string | null)[];
   taxId: string | null;
+  /** Other NIFs the salon holds: the older fiscalSettings.tenantNif mirror. */
+  otherTaxIds?: (string | null)[];
+  deleted?: boolean;
 }
 
 /** Digits only, without the Spanish prefix: "+34 600 11 22 33" and "600112233" are one phone. */
@@ -51,8 +62,12 @@ export function sharedIdentityWarnings(
       seen.add(phone);
       keys.push({ kind: "phone", key: `phone:${phone}`, value: raw! });
     }
-    const taxId = normalizeTaxId(r.taxId);
-    if (taxId) keys.push({ kind: "taxId", key: `taxId:${taxId}`, value: r.taxId! });
+    for (const raw of [r.taxId, ...(r.otherTaxIds ?? [])]) {
+      const taxId = normalizeTaxId(raw);
+      if (!taxId || seen.has(`nif:${taxId}`)) continue;
+      seen.add(`nif:${taxId}`);
+      keys.push({ kind: "taxId", key: `taxId:${taxId}`, value: raw! });
+    }
     return keys;
   };
   for (const r of rows) {
@@ -71,7 +86,7 @@ export function sharedIdentityWarnings(
     for (const k of keysOf(row)) {
       const others = (byKey.get(k.key) ?? [])
         .filter((o) => o.id !== id)
-        .map((o) => ({ id: o.id, name: o.name, slug: o.slug }));
+        .map((o) => ({ id: o.id, name: o.name, slug: o.slug, ...(o.deleted ? { deleted: true } : {}) }));
       if (others.length > 0) warnings.push({ kind: k.kind, value: k.value, others });
     }
     if (warnings.length > 0) out.set(id, warnings);
@@ -82,8 +97,11 @@ export function sharedIdentityWarnings(
 /**
  * Loads the salons with a phone or a NIF and returns the warnings for
  * `ids`. Normalised in memory (stored phones come in every format), which
- * reads every salon's two fields: fine at the console's scale. Deleted
- * salons are left out; if this query fails the console still loads.
+ * reads every salon's two fields: fine at the console's scale. Salons
+ * deleted from the console keep their phone and NIF until they are
+ * anonymised, so they are compared too and marked "deleted" (someone
+ * signing up again after being removed). Anonymised ones have nothing left
+ * to compare. If this query fails the console still loads.
  */
 export async function loadSharedIdentityWarnings(
   prisma: Pick<PrismaService, "tenant">,
@@ -92,10 +110,11 @@ export async function loadSharedIdentityWarnings(
   if (ids.length === 0) return new Map();
   const rows = await prisma.tenant.findMany({
     where: {
-      deletedAt: null,
+      anonymizedAt: null,
       OR: [
         { phone: { not: null } },
         { taxId: { not: null } },
+        { fiscalSettings: { path: ["tenantNif"], not: Prisma.AnyNull } },
         { users: { some: { role: "owner", phone: { not: null } } } },
       ],
     },
@@ -105,6 +124,8 @@ export async function loadSharedIdentityWarnings(
       slug: true,
       phone: true,
       taxId: true,
+      fiscalSettings: true,
+      deletedAt: true,
       users: { where: { role: "owner" }, select: { phone: true } },
     },
   });
@@ -115,6 +136,8 @@ export async function loadSharedIdentityWarnings(
       slug: r.slug,
       phones: [r.phone, ...(r.users ?? []).map((u) => u.phone)],
       taxId: r.taxId,
+      otherTaxIds: [mirroredNif(r.fiscalSettings)],
+      deleted: !!r.deletedAt,
     })),
     ids,
   );
