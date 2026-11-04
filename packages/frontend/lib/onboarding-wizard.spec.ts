@@ -7,8 +7,12 @@ import {
   checklistStartsOpen,
   onboardingSettled,
   pendingChecklistSteps,
+  customServiceProblem,
   showChecklistRestore,
+  showLinearOverlay,
+  todayIn,
   wizardHoursToSend,
+  wizardOutcome,
   type OnboardingStateLike,
 } from "./onboarding-wizard";
 
@@ -73,6 +77,41 @@ check(
   false,
 );
 check("no restore while the checklist is open", showChecklistRestore(base), false);
+
+// O3: no overlay while read-only or impersonating.
+const linear = { finishedAt: null, currentStep: 1, linearSteps: 3, readOnly: false, impersonating: false };
+check("overlay shown mid-way", showLinearOverlay(linear), true);
+check("no overlay once finished", showLinearOverlay({ ...linear, finishedAt: "2026-11-01" }), false);
+check("no overlay while read-only", showLinearOverlay({ ...linear, readOnly: true }), false);
+check("no overlay while impersonating", showLinearOverlay({ ...linear, impersonating: true }), false);
+
+// O12: today on the salon's clock.
+check("today in Madrid just after midnight", todayIn("Europe/Madrid", new Date("2026-11-04T23:30:00Z")), "2026-11-05");
+check("today in Canarias at the same moment", todayIn("Atlantic/Canary", new Date("2026-11-04T23:30:00Z")), "2026-11-04");
+
+// O14: custom services checked before sending.
+check("custom service fine", customServiceProblem({ name: "Mechas", durationMinutes: 90, price: 60 }), null);
+check("empty row ignored", customServiceProblem({ name: " ", durationMinutes: 0, price: 0 }), null);
+check(
+  "duration 0 refused in Spanish",
+  customServiceProblem({ name: "Mechas", durationMinutes: 0, price: 10 }),
+  "«Mechas»: la duración tiene que ser de al menos 5 minutos.",
+);
+check("negative price refused", customServiceProblem({ name: "Mechas", durationMinutes: 30, price: -1 }), "«Mechas»: el precio no puede ser negativo.");
+
+// O4: the closing screen says what was saved.
+const none = { hasServices: false, hasStaff: false, hasWorkingHours: false };
+const nothing = wizardOutcome({ saved: { services: 0, hours: false, appointment: false }, skipped: { appointment: "no_service" } }, none);
+check("nothing saved is not 'listo'", nothing.title, "No se ha guardado nada nuevo");
+check("the skipped booking is said", /no se ha creado/.test(nothing.warning ?? ""), true);
+const all = wizardOutcome(
+  { saved: { services: 2, hours: true, appointment: true }, skipped: { appointment: null } },
+  { ...none, hasStaff: true },
+);
+check("ready when services, staff and hours exist", all.readyForBookings, true);
+check("lists what was saved", all.lines.length, 3);
+const noStaff = wizardOutcome({ saved: { services: 1, hours: true, appointment: false }, skipped: { appointment: "no_staff" } }, none);
+check("not ready without a professional", noStaff.title, "Configuración guardada");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

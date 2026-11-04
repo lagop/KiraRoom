@@ -249,7 +249,7 @@ export class WhatsAppCampaignsService {
 
   /** Who would receive a campaign with this filter, now. */
   async audiencePreview(tenantId: string, inactiveDays?: number | null): Promise<AudiencePreview> {
-    const base: Prisma.ClientWhereInput = { tenantId, status: "active", ...inactiveFilter(inactiveDays) };
+    const base: Prisma.ClientWhereInput = { tenantId, status: "active", isTest: false, ...inactiveFilter(inactiveDays) };
     const [withPhone, withoutPhone] = await Promise.all([
       this.prisma.client.findMany({
         where: { ...base, phone: { not: null } },
@@ -383,7 +383,7 @@ export class WhatsAppCampaignsService {
 
       const inactiveDays = (campaign.segmentFilter as { inactiveDays?: number } | null)?.inactiveDays ?? null;
       const candidates = await this.prisma.client.findMany({
-        where: { tenantId: campaign.tenantId, status: "active", phone: { not: null }, ...inactiveFilter(inactiveDays, now) },
+        where: { tenantId: campaign.tenantId, status: "active", isTest: false, phone: { not: null }, ...inactiveFilter(inactiveDays, now) },
         select: { id: true, phone: true, communicationPreferences: true },
       });
       const audience = await this.eligibleAmong(campaign.tenantId, candidates);

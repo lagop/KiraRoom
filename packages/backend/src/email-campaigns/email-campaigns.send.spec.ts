@@ -21,6 +21,8 @@ function matches(row: Row, where: Row = {}): boolean {
   return Object.entries(where).every(([key, cond]) => {
     if (key === "OR") return (cond as Row[]).some((c) => matches(row, c));
     const value = row[key];
+    // isTest defaults to false in the database.
+    if (key === "isTest") return (value ?? false) === cond;
     if (cond === null) return value === null || value === undefined;
     if (cond && typeof cond === "object" && !(cond instanceof Date)) {
       if ("in" in cond) return (cond.in as unknown[]).includes(value);

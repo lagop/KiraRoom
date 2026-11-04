@@ -95,8 +95,16 @@ export interface ClientRow {
   action: "insert" | "update" | "skip";
 }
 
-export function readClientRows(rows: Record<string, unknown>[], country = "ES"): ClientRow[] {
+/** What reading a file found out about it as a whole. */
+export interface ReadInfo {
+  /** Its dates are month/day (an export in US English) and were read so (monthFirstDates). */
+  monthFirst?: boolean;
+}
+
+export function readClientRows(rows: Record<string, unknown>[], country = "ES", info: ReadInfo = {}): ClientRow[] {
   const cols = mapColumns(Object.keys(rows[0] ?? {}), CLIENT_ALIASES);
+  const monthFirst = monthFirstDates(rows.map((r) => cell(r, cols.dateOfBirth)));
+  info.monthFirst = monthFirst;
   // A single "Nombre" column with no "Apellidos" next to it is the full name.
   const fullNameCol = cols.fullName ?? (!cols.lastName ? cols.firstName : undefined);
   return rows.map((row) => {
@@ -114,7 +122,7 @@ export function readClientRows(rows: Record<string, unknown>[], country = "ES"):
       lastName,
       email: cell(row, cols.email).toLowerCase() || undefined,
       phone: rawPhone ? normalizePhone(rawPhone, country) : undefined,
-      dateOfBirth: parseDate(cell(row, cols.dateOfBirth)),
+      dateOfBirth: parseDate(cell(row, cols.dateOfBirth), monthFirst),
       gender: cell(row, cols.gender) || undefined,
       notes: cell(row, cols.notes) || undefined,
       marketing: parseYesNo(cell(row, cols.marketing)),
@@ -148,19 +156,42 @@ export function clientRowErrors(row: ClientRow, rawDate?: string): { col: string
   return errors;
 }
 
-/** yyyy-mm-dd, dd/mm/yyyy, dd-mm-yyyy or dd.mm.yyyy -> yyyy-mm-dd. */
-export function parseDate(value: string): string | undefined {
+/**
+ * yyyy-mm-dd, dd/mm/yyyy, dd-mm-yyyy or dd.mm.yyyy -> yyyy-mm-dd. With
+ * `monthFirst`, the day-month forms are read mm/dd/yyyy instead.
+ */
+export function parseDate(value: string, monthFirst = false): string | undefined {
   if (!value) return undefined;
   let m = value.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   let y: number, mo: number, d: number;
   if (m) [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  else if ((m = value.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2}|\d{4})$/))) {
-    [d, mo, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  else if ((m = value.match(DAY_MONTH_YEAR))) {
+    [d, mo, y] = monthFirst ? [Number(m[2]), Number(m[1]), Number(m[3])] : [Number(m[1]), Number(m[2]), Number(m[3])];
     if (y < 100) y += y > 30 ? 1900 : 2000;
   } else return undefined;
   const date = new Date(Date.UTC(y, mo - 1, d));
   if (date.getUTCFullYear() !== y || date.getUTCMonth() !== mo - 1 || date.getUTCDate() !== d) return undefined;
   return date.toISOString().slice(0, 10);
+}
+
+const DAY_MONTH_YEAR = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2}|\d{4})$/;
+
+/**
+ * Whether a column's dates are month/day: none has its first number over 12
+ * (so none is clearly a day) and some have the second one over 12 (which
+ * can only be a day). An export in US English ("11/05/2026" for 5 November)
+ * was read as 11 May, and the appointment dropped as past, without a word
+ * (O16). A date and time in one cell is judged by its date.
+ */
+export function monthFirstDates(values: string[]): boolean {
+  let secondOver12 = false;
+  for (const raw of values) {
+    const m = (raw ?? "").trim().split(/[\sT]+/)[0].match(DAY_MONTH_YEAR);
+    if (!m) continue;
+    if (Number(m[1]) > 12) return false;
+    if (Number(m[2]) > 12) secondOver12 = true;
+  }
+  return secondOver12;
 }
 
 export interface ServiceRow {
@@ -277,8 +308,11 @@ export interface AppointmentRow {
 export function readAppointmentRows(
   rows: Record<string, unknown>[],
   country = "ES",
+  info: ReadInfo = {},
 ): { row: AppointmentRow; raw: { date: string; time: string; duration: string; price: string } }[] {
   const cols = mapColumns(Object.keys(rows[0] ?? {}), APPOINTMENT_ALIASES);
+  const monthFirst = monthFirstDates(rows.map((r) => cell(r, cols.date)));
+  info.monthFirst = monthFirst;
   // "Nombre" with no "Apellidos" next to it is the client's full name.
   const fullNameCol = cols.fullName ?? (!cols.lastName ? cols.firstName : undefined);
   return rows.map((r) => {
@@ -298,7 +332,7 @@ export function readAppointmentRows(
     const rawPrice = cell(r, cols.price);
     return {
       row: {
-        date: parseDate(datePart ?? ""),
+        date: parseDate(datePart ?? "", monthFirst),
         time: parseTime(rawTime),
         clientName: [firstName, lastName].filter(Boolean).join(" "),
         firstName,
@@ -355,10 +389,19 @@ export function matchByName<T>(text: string, items: T[], names: (item: T) => str
 
 /** The items of the first rule that matches any (see matchByName); several = ambiguous. */
 export function nameCandidates<T>(text: string, items: T[], names: (item: T) => string[]): T[] {
+  return nameMatches(text, items, names).items;
+}
+
+/** nameCandidates, and whether they have exactly that name or matched it only in part. */
+export function nameMatches<T>(text: string, items: T[], names: (item: T) => string[]): { items: T[]; exact: boolean } {
   const key = nameKey(text);
-  if (!key) return [];
+  if (!key) return { items: [], exact: false };
   const exact = items.filter((i) => names(i).some((n) => nameKey(n) === key));
-  if (exact.length > 0) return exact;
+  if (exact.length > 0) return { items: exact, exact: true };
+  return { items: partialNameCandidates(key, items, names), exact: false };
+}
+
+function partialNameCandidates<T>(key: string, items: T[], names: (item: T) => string[]): T[] {
   const partial = items.filter((i) =>
     names(i).some((n) => {
       const k = nameKey(n);
@@ -375,4 +418,22 @@ export function nameCandidates<T>(text: string, items: T[], names: (item: T) => 
       return words.every((w) => other.includes(w));
     }),
   );
+}
+
+/**
+ * Whether two people's names are the same person's, as a salon writes them:
+ * the same first name (its first word), and the same first surname when
+ * both have one ("María García" is "María García López"; "Lucía Pérez" is
+ * not "Carmen Pérez"). Used to tell a client from a relative who shares her
+ * phone (O7).
+ */
+export function sameName(
+  a: { firstName?: string | null; lastName?: string | null },
+  b: { firstName?: string | null; lastName?: string | null },
+): boolean {
+  const first = (s?: string | null) => nameKey(s ?? "").split(" ")[0] ?? "";
+  if (!first(a.firstName) || first(a.firstName) !== first(b.firstName)) return false;
+  const la = first(a.lastName);
+  const lb = first(b.lastName);
+  return !la || !lb || la === lb;
 }

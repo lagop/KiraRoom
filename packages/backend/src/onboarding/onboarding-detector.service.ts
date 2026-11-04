@@ -1,7 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { ProductEventsService, PRODUCT_EVENTS } from "../common/telemetry/product-events.service";
-import { OnboardingGroup } from "@prisma/client";
+import { AppointmentSource, OnboardingGroup } from "@prisma/client";
 
 type StepStatus = "pending" | "done" | "skipped" | "dismissed";
 
@@ -202,9 +202,26 @@ export class OnboardingDetectorService {
     return count >= 1;
   }
 
+  /**
+   * "Publica tu widget o QR": a widget for the salon's website, the QR or
+   * the booking link taken from Compartir (downloaded, copied or shared,
+   * recorded as a BOOKING_LINK_SHARED event), or an online booking already
+   * in. It only counted widgets, so a salon without a website never got it
+   * done unless it pressed "Omitir" (O10).
+   */
   private async hasWidgetOrQr(tenantId: string): Promise<boolean> {
     const widgets = await this.prisma.widgetInstance.count({ where: { tenantId } });
-    return widgets >= 1;
+    if (widgets >= 1) return true;
+    const shared = await this.prisma.productEvent.findFirst({
+      where: { tenantId, name: PRODUCT_EVENTS.BOOKING_LINK_SHARED },
+      select: { id: true },
+    });
+    if (shared) return true;
+    const online = await this.prisma.appointment.findFirst({
+      where: { tenantId, isTest: false, source: { in: [AppointmentSource.online, AppointmentSource.widget] } },
+      select: { id: true },
+    });
+    return Boolean(online);
   }
 
   private async hasWhatsAppConnection(tenantId: string): Promise<boolean> {

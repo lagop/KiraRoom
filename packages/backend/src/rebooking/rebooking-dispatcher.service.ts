@@ -322,8 +322,10 @@ export class RebookingDispatcherService {
     const channel: RebookChannel = rebookingChannelOf(cfg.channelFallback);
     const client = (await this.prisma.client.findUnique({
       where: { id: cadence.clientId },
-      select: { id: true, firstName: true, email: true, phone: true, status: true },
-    })) as RebookClient | null;
+      select: { id: true, firstName: true, email: true, phone: true, status: true, isTest: true },
+    })) as (RebookClient & { isTest?: boolean }) | null;
+    // The onboarding test client is told nothing (O5).
+    if (client?.isTest) return { ok: false, reason: "test_client" };
 
     // A commercial message: not to someone who said no, or whose address
     // must not be emailed. Nothing to retry this cycle; her answer is read

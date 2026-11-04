@@ -2,7 +2,7 @@ import { Body, Controller, Get, Param, Post, Req, UseGuards } from "@nestjs/comm
 import { Request } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { OnboardingService } from "./onboarding.service";
-import { SubmitOnboardingWizardDto } from "./dto/onboarding-wizard.dto";
+import { BookingLinkSharedDto, SubmitOnboardingWizardDto } from "./dto/onboarding-wizard.dto";
 import { Roles, SALON_TEAM, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 
 interface AuthedRequest extends Request {
@@ -40,6 +40,14 @@ export class OnboardingController {
   async restore(@Req() req: AuthedRequest) {
     const tenantId = this.requireTenantId(req);
     return this.onboarding.restoreChecklist(tenantId);
+  }
+
+  /** Compartir: the QR downloaded, the booking link copied or shared (O10). */
+  @Post("events/booking-link-shared")
+  @Roles(...SALON_TEAM)
+  async bookingLinkShared(@Req() req: AuthedRequest, @Body() body: BookingLinkSharedDto) {
+    const tenantId = this.requireTenantId(req);
+    return this.onboarding.recordBookingLinkShared(tenantId, body?.how ?? "link");
   }
 
   // ==================== Sprint 2 / 2.1 — owner wizard ====================

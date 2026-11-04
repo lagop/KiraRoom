@@ -19,6 +19,8 @@ export const PRODUCT_EVENTS = {
   FIRST_BOOKING_RECEIVED: "first_booking_received",
   TRIAL_EXPIRED: "trial_expired",
   SUBSCRIPTION_STARTED: "subscription_started",
+  /** The salon took its booking link or QR from Compartir (onboarding widget_qr_setup). */
+  BOOKING_LINK_SHARED: "booking_link_shared",
 } as const;
 
 export type ProductEventName =

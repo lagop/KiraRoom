@@ -419,6 +419,8 @@ export class EmailCampaignsService {
         ...(clientIds ? { id: { in: clientIds } } : {}),
         tenantId,
         status: "active",
+        // Not the onboarding test client (O5).
+        isTest: false,
         email: { not: null },
         lastVisit: { not: null },
       },
@@ -444,7 +446,7 @@ export class EmailCampaignsService {
    */
   async getAudience(tenantId: string): Promise<CampaignAudience> {
     const clients = await this.prisma.client.findMany({
-      where: { tenantId },
+      where: { tenantId, isTest: false },
       select: { id: true, email: true, status: true, lastVisit: true },
     });
     const refused = await clientsWhoRefusedMarketing(this.prisma, tenantId);

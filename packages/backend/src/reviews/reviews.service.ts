@@ -21,6 +21,7 @@ import { reviewEmailPoints } from "../loyalty/loyalty-client-points";
 import { WhatsAppTemplateService } from "../whatsapp/whatsapp-template.service";
 import { REVIEW_REQUEST } from "../whatsapp/whatsapp-templates";
 import { MARKETING_FIELD_ID, WHATSAPP_NOTICES_PURPOSE } from "../consent/marketing-consent";
+import { NOT_TEST_APPOINTMENT } from "../onboarding/test-booking";
 import { noticeChannelsOf, salonWhatsAppConnected } from "../consent/client-notices";
 import {
   LEGACY_REJECTION_REASON,
@@ -657,6 +658,8 @@ export class ReviewsService {
           lte: new Date(now.getTime() - REQUEST_DELAY_HOURS * HOUR),
           gte: windowStart,
         },
+        // Not the onboarding test booking, nor a test client (O5).
+        ...NOT_TEST_APPOINTMENT,
       },
       select: {
         id: true,

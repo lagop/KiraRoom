@@ -365,7 +365,8 @@
       "step": "Step {current} of {total}",
       "goTo": "Go to step",
       "skip": "Skip for now",
-      "finish": "Done"
+      "finish": "Done",
+      "later": "Rather carry on later? Whatever you have saved stays."
     },
     "checklist": {
       "title": "Optimize your salon",
@@ -407,7 +408,7 @@
     },
     "clients_import": {
       "title": "Import your clients",
-      "desc": "Upload a CSV and we bring them across with their history. You can dry-run it first."
+      "desc": "Upload the export from your previous program (CSV or Excel) with their contact details and notes. You can dry-run it first."
     },
     "first_booking": {
       "title": "Get your first booking",
@@ -1436,6 +1437,7 @@
     "load_failed": "Could not load appointments",
     "statusChangeFailed": "The appointment status could not be changed.",
     "calendarView": {
+      "test": "Test",
       "loading": "Loading the calendar...",
       "loadError": "The calendar could not be loaded.",
       "retry": "Retry",

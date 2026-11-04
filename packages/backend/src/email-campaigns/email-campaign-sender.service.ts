@@ -232,7 +232,7 @@ export class EmailCampaignSender {
       clientIds.length === 0
         ? []
         : await this.prisma.client.findMany({
-            where: { tenantId, id: { in: clientIds }, status: "active" },
+            where: { tenantId, id: { in: clientIds }, status: "active", isTest: false },
             select: { id: true, lastVisit: true },
           });
     const active = new Set(clients.map((c) => c.id));

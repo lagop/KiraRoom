@@ -4,7 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { getCurrentUser } from "@/lib/utils";
-import { onboardingSettled } from "@/lib/onboarding-wizard";
+import { onboardingSettled, showLinearOverlay } from "@/lib/onboarding-wizard";
+import { decodeJwtToken, getToken } from "@/lib/api";
+import { readOnlyNotice } from "@/lib/read-only-notice";
+import { useTenantContext } from "@/hooks/useFeatureAccess";
 import { ONBOARDING_QUERY_KEY, useOnboardingState } from "./useOnboardingState";
 import { OnboardingLinearOverlay } from "./OnboardingLinearOverlay";
 import { OnboardingChecklistOrLoader } from "./OnboardingChecklist";
@@ -29,6 +32,22 @@ export function OnboardingHost() {
     setSetsUpSalon(getCurrentUser()?.role !== "staff");
   }, []);
 
+  // Impersonated by KiraRoom staff (the token says so): the overlay hid
+  // their "Exit impersonation" banner. Read after mount, as the role.
+  const [impersonating, setImpersonating] = useState(false);
+  useEffect(() => {
+    try {
+      const token = getToken();
+      const claims = token ? (decodeJwtToken(token) as { impersonatedBy?: string } | null) : null;
+      setImpersonating(!!claims?.impersonatedBy);
+    } catch {
+      setImpersonating(false);
+    }
+  }, []);
+  // Read-only salon (trial over, subscription cancelled or suspended).
+  const tenantCtx = useTenantContext();
+  const readOnly = readOnlyNotice(tenantCtx) !== null;
+
   const qc = useQueryClient();
   const { data, isLoading } = useOnboardingState({ enabled: setsUpSalon === true });
   const settled = onboardingSettled(data);
@@ -46,7 +65,16 @@ export function OnboardingHost() {
   if (!setsUpSalon || isLoading || !data) return null;
 
   const linearDefs = data.defs.filter((d) => d.group === "linear_required");
-  const showLinear = !data.finishedAt && data.currentStep < linearDefs.length;
+  // Not while read-only (every save would fail, and the overlay hid the way
+  // to Facturación: the read-only banner shows instead) nor while
+  // impersonating (O3).
+  const showLinear = showLinearOverlay({
+    finishedAt: data.finishedAt,
+    currentStep: data.currentStep,
+    linearSteps: linearDefs.length,
+    readOnly,
+    impersonating,
+  });
 
   return (
     <>

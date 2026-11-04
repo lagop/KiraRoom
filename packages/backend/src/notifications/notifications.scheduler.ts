@@ -11,6 +11,7 @@ import { WhatsAppTemplateService } from '../whatsapp/whatsapp-template.service';
 import { withBookedService } from '../appointments/appointment-snapshot';
 import { bookingPlace } from '../multi-location/client-locations';
 import { publicBookingSmsHeld } from '../appointments/public-booking-sms-cap';
+import { NOT_TEST_APPOINTMENT } from '../onboarding/test-booking';
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -154,6 +155,8 @@ export class NotificationsScheduler {
         status: { in: ACTIVE_STATUSES },
         [kind.sentField]: false,
         [kind.attemptsField]: { lt: MAX_REMINDER_ATTEMPTS },
+        // Not the onboarding test booking, nor a test client (O5).
+        ...NOT_TEST_APPOINTMENT,
       },
       include: reminderInclude,
       orderBy: { startTime: 'asc' },

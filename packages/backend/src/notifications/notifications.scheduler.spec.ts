@@ -13,7 +13,13 @@ const NOW = new Date("2026-11-02T09:00:00.000Z");
 function matches(row: any, where: any): boolean {
   return Object.entries(where).every(([key, cond]: [string, any]) => {
     const value = row[key];
+    // A row with no isTest is not a test booking (the column defaults to false).
+    if (key === "isTest") return (value ?? false) === cond;
     if (cond instanceof Date) return value instanceof Date && value.getTime() === cond.getTime();
+    // A relation filter (client: { isTest: false }).
+    if (cond && typeof cond === "object" && !["in", "gt", "gte", "lt", "lte"].some((op) => op in cond)) {
+      return matches(value ?? {}, cond);
+    }
     if (cond && typeof cond === "object") {
       if ("in" in cond) return cond.in.includes(value);
       if (value === null || value === undefined) return false;
@@ -418,5 +424,21 @@ describe("reminder emails at a salon with several locations", () => {
     const sent: any = email.sendAppointmentReminder.mock.calls[0][0];
     expect(sent.salonAddress).toBe("Calle Sede 9, Madrid, ES");
     expect(sent).not.toHaveProperty("locationName");
+  });
+});
+
+describe("the onboarding test booking (O5)", () => {
+  it("gets no reminder, nor does an appointment of a test client", async () => {
+    const real = appointment();
+    const testBooking = appointment({ isTest: true });
+    const testClient = appointment();
+    testClient.client = { ...testClient.client, isTest: true };
+    const prisma = makePrisma([real, testBooking, testClient]);
+    const { scheduler, email } = makeScheduler(prisma);
+    const counts = await scheduler.send24HourReminders(NOW);
+    expect(counts.sent).toBe(1);
+    expect(email.sendAppointmentReminder).toHaveBeenCalledTimes(1);
+    expect(testBooking.reminder24hSent).toBe(false);
+    expect(testClient.reminder24hSent).toBe(false);
   });
 });

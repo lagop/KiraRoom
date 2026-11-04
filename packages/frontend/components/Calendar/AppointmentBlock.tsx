@@ -158,6 +158,11 @@ export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
         onContextMenu={handleContextMenu}
       >
         <div className="text-xs font-medium truncate">
+          {appointment.isTest && (
+            <span className="mr-1 rounded bg-amber-200 px-1 text-[10px] font-semibold uppercase text-amber-900">
+              {t("appointments.calendarView.test")}
+            </span>
+          )}
           {appointment.clientName || t("appointments.calendarView.blocked")}
         </div>
         <div className="text-xs opacity-80 truncate">
@@ -212,6 +217,11 @@ export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
         </div>
       )}
       <div className="text-xs font-medium truncate">
+        {appointment.isTest && (
+          <span className="mr-1 rounded bg-amber-200 px-1 text-[10px] font-semibold uppercase text-amber-900">
+            {t("appointments.calendarView.test")}
+          </span>
+        )}
         {appointment.clientName || t("appointments.calendarView.blocked")}
       </div>
       <div className="text-xs opacity-80 truncate">
