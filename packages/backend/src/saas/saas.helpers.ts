@@ -50,6 +50,39 @@ export function slugify(name: string): string {
 
 const UUID_SHAPED = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+/**
+ * Words a salon's address may not contain, anywhere in it: they make
+ * <slug>.kiraroom.net look like KiraRoom's own (soporte-kiraroom,
+ * kiraroom-login, support-pagos...). The reserved list only blocks exact
+ * names. Checked on the slugified form, so accents, capitals and spaces do
+ * not get round it ("Kira Room" is kira-room).
+ */
+export const PLATFORM_LOOKALIKE_WORDS = ["kiraroom", "kira-room", "soporte", "support"] as const;
+
+/**
+ * The slug with the platform's words taken out, so signup never fails over
+ * a name: "Soporte KiraRoom Lucía" becomes "lucia". Removing a word can
+ * join two pieces into a new one ("kirakiraroomroom"), so it repeats until
+ * none is left. A name made only of those words comes back empty and the
+ * caller falls back to "salon"; either way the free-slug search then adds
+ * "-2", "-3"... as for any name that is taken.
+ */
+export function withoutPlatformWords(slug: string): string {
+  let out = slug;
+  for (let guard = 0; guard < 10; guard++) {
+    let next = out;
+    for (const word of PLATFORM_LOOKALIKE_WORDS) next = next.split(word).join("-");
+    next = next.replace(/-+/g, "-").replace(/(^-|-$)/g, "");
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
+export function containsPlatformWord(slug: string): boolean {
+  return PLATFORM_LOOKALIKE_WORDS.some((w) => slug.includes(w));
+}
+
 export async function assertTenantSlugAvailable(
   prisma: PrismaService,
   slug: string,
@@ -91,9 +124,12 @@ export async function availableTenantSlug(
   name: string,
   skip: ReadonlySet<string> = new Set(),
 ): Promise<string> {
-  const base = slugify(name) || "salon";
+  const base = withoutPlatformWords(slugify(name)) || "salon";
   const usable = (slug: string) =>
-    !skip.has(slug) && !RESERVED_SUBDOMAINS.has(slug) && !UUID_SHAPED.test(slug);
+    !skip.has(slug) &&
+    !RESERVED_SUBDOMAINS.has(slug) &&
+    !UUID_SHAPED.test(slug) &&
+    !containsPlatformWord(slug);
   for (let n = 1; n <= SLUG_NUMBERED_TRIES; n++) {
     const slug = tenantSlugCandidate(base, n);
     if (!usable(slug)) continue;
@@ -149,6 +185,13 @@ export interface CreateTenantWithOwnerInput {
   ownerLastName: string;
   ownerRole?: "saas_owner" | "owner" | "admin" | "staff" | "client";
   ownerLanguage?: string;
+  /**
+   * The terms (with the art. 28 GDPR processing agreement) and the privacy
+   * policy, accepted by the owner being created: written in the same
+   * transaction as the salon. Signup and invite acceptance pass it; the
+   * console's createTenant does not (nobody accepted anything there).
+   */
+  legalAcceptance?: { termsVersion: string; ip?: string | null; source: "signup" | "invite" };
 }
 
 export interface CreateTenantWithOwnerResult {
@@ -229,7 +272,8 @@ async function createTenantAndUserOnTx(
   const user = await tx.user.create({
     data: {
       tenantId: tenant.id,
-      email: input.ownerEmail,
+      // Lower-case like every account email (auth/email-normalize.ts).
+      email: input.ownerEmail.trim().toLowerCase(),
       firstName: input.ownerFirstName,
       lastName: input.ownerLastName,
       role: finalOwnerRole,
@@ -239,6 +283,19 @@ async function createTenantAndUserOnTx(
     },
     select: { id: true, email: true, role: true },
   });
+
+  if (input.legalAcceptance) {
+    await tx.legalAcceptance.create({
+      data: {
+        tenantId: tenant.id,
+        acceptedByUserId: user.id,
+        termsVersion: input.legalAcceptance.termsVersion,
+        ip: input.legalAcceptance.ip ? input.legalAcceptance.ip.slice(0, 64) : null,
+        source: input.legalAcceptance.source,
+        acceptedAt: now,
+      },
+    });
+  }
 
   return {
     tenant,

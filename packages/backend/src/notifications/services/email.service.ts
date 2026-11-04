@@ -1102,11 +1102,11 @@ export class EmailService {
 
     const firstName = data.ownerName?.split(" ")[0] ?? "";
     const greeting = firstName ? `Hola ${firstName},` : "Hola,";
-    const subject = `Multicanal ya esta activo en tu cuenta de KiraRoom`;
+    const subject = `Multicanal ya está activo en tu cuenta de KiraRoom`;
 
     const html = `
       <p>${greeting}</p>
-      <p>Confirmamos la activacion del <strong>add-on Multicanal</strong>
+      <p>Confirmamos la activación del <strong>add-on Multicanal</strong>
       en <strong>${this.escapeHtml(data.tenantName)}</strong>. Ya puedes
       conectar Messenger, Instagram y Telegram a tu recepcionista virtual
       para responder a tus clientas en su canal favorito.</p>
@@ -1115,12 +1115,12 @@ export class EmailService {
         Configurar canales ahora
       </a></p>
       <p style="color:#6b7280;font-size:14px;">
-        Esta misma URL esta disponible en tu dashboard:
+        Esta misma URL está disponible en tu dashboard:
         <strong>Ajustes &rarr; Canales del recepcionista virtual</strong>.
       </p>
       <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;">
       <p style="font-size:13px;color:#6b7280;">
-        Guias paso a paso:
+        Guías paso a paso:
       </p>
       <ul style="font-size:13px;color:#6b7280;">
         <li><a href="${data.metaDocsUrl}">Conectar Facebook Messenger + Instagram</a></li>
@@ -1134,7 +1134,7 @@ export class EmailService {
     const text = [
       greeting,
       "",
-      `Confirmamos la activacion del add-on Multicanal en ${data.tenantName}.`,
+      `Confirmamos la activación del add-on Multicanal en ${data.tenantName}.`,
       "Ya puedes conectar Messenger, Instagram y Telegram a tu recepcionista virtual.",
       "",
       `Configurar canales ahora:`,
@@ -1601,7 +1601,10 @@ export class EmailService {
     const greeting = data.ownerName
       ? `Hola ${this.escapeHtml(data.ownerName)},`
       : "Hola,";
-    const subject = `Bienvenida a KiraRoom, ${data.tenantName}`;
+    // No user text in the subject: anyone can sign up with someone else's
+    // address, and the salon name went straight into a subject sent from
+    // KiraRoom's domain (S7). The name stays in the body, escaped.
+    const subject = "Te damos la bienvenida a KiraRoom";
     const steps = [
       "Configura tus datos, tus servicios y el horario del equipo.",
       "Comparte tu enlace de reservas o imprime tu QR.",
@@ -1621,10 +1624,10 @@ export class EmailService {
       <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:12px;padding:32px;">
         <tr><td>
           <div style="font-size:24px;font-weight:700;margin-bottom:8px;">KiraRoom</div>
-          <p style="font-size:14px;color:#64748b;margin:0 0 24px 0;">Tu prueba de 14 dias ya esta activa</p>
+          <p style="font-size:14px;color:#64748b;margin:0 0 24px 0;">Tu prueba de 14 días ya está activa</p>
           <p style="font-size:16px;line-height:1.6;margin:0 0 16px 0;">${greeting}</p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
-            <strong>${this.escapeHtml(data.tenantName)}</strong> ya esta creado. Tienes 14 dias
+            <strong>${this.escapeHtml(data.tenantName)}</strong> ya está creado. Tienes 14 días
             con todo el plan Pro incluido, sin tarjeta.
           </p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 8px 0;">Tres pasos y empiezas a recibir reservas:</p>
@@ -1633,7 +1636,7 @@ export class EmailService {
           </ol>
           <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 24px 0;">
             <tr><td style="background:#4f46e5;border-radius:8px;">
-              <a href="${data.dashboardUrl}" style="display:inline-block;padding:14px 28px;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;">Entrar en mi salon</a>
+              <a href="${data.dashboardUrl}" style="display:inline-block;padding:14px 28px;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;">Entrar en mi salón</a>
             </td></tr>
           </table>
           ${verifyBlock}
@@ -1643,7 +1646,7 @@ export class EmailService {
           </p>
         </td></tr>
       </table>
-      <p style="font-size:11px;color:#94a3b8;margin:16px 0 0 0;">(c) ${new Date().getFullYear()} KiraRoom SaaS - Espana</p>
+      <p style="font-size:11px;color:#94a3b8;margin:16px 0 0 0;">(c) ${new Date().getFullYear()} KiraRoom SaaS - España</p>
     </td></tr>
   </table>
 </body>
@@ -1652,18 +1655,22 @@ export class EmailService {
     const text = [
       greeting,
       ``,
-      `${data.tenantName} ya esta creado en KiraRoom. Tienes 14 dias con todo el plan Pro incluido, sin tarjeta.`,
+      `${data.tenantName} ya está creado en KiraRoom. Tienes 14 días con todo el plan Pro incluido, sin tarjeta.`,
       ``,
       `Tres pasos y empiezas a recibir reservas:`,
       ...steps.map((s, i) => `${i + 1}. ${s}`),
       ``,
-      `Entra en tu salon: ${data.dashboardUrl}`,
+      `Entra en tu salón: ${data.dashboardUrl}`,
       ...(data.verifyUrl ? [``, `Confirma tu correo: ${data.verifyUrl}`] : []),
       ``,
       `Responde a este correo si te atascas. Contesta una persona.`,
     ].join("\n");
 
-    return this.sendEmail({ to: data.to, subject, html, text, listUnsubscribe: true });
+    // "Responde a este correo": the answer goes to a mailbox someone reads
+    // (SUPPORT_EMAIL), not to the sender, which may be a noreply@. Unset:
+    // no Reply-To, as before.
+    const replyTo = (process.env.SUPPORT_EMAIL ?? "").trim() || undefined;
+    return this.sendEmail({ to: data.to, subject, html, text, listUnsubscribe: true, replyTo });
   }
 
   /**

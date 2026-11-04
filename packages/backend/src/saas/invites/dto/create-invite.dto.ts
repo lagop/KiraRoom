@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { IsEmail, IsEnum, IsOptional, IsString, MaxLength } from "class-validator";
+import { IsEmail, IsEnum, IsIn, IsOptional, IsString, MaxLength } from "class-validator";
+import { NormalizeEmail } from "../../../auth/email-normalize";
 import { SubscriptionPlan, UserRole } from "@prisma/client";
 
 /**
@@ -13,6 +14,7 @@ import { SubscriptionPlan, UserRole } from "@prisma/client";
  */
 export class CreateInviteDto {
   @ApiProperty({ example: "owner@glamour-studio.com" })
+  @NormalizeEmail()
   @IsEmail()
   email: string;
 
@@ -37,8 +39,14 @@ export class CreateInviteDto {
   @MaxLength(80)
   lastName?: string;
 
-  @ApiPropertyOptional({ enum: UserRole, default: "owner" })
+  /**
+   * The invite creates a salon and its first user, who is its owner. Any
+   * role used to be accepted, saas_owner included: a slip in the console
+   * would have handed platform-wide permissions to the invited person. The
+   * console sends no role at all.
+   */
+  @ApiPropertyOptional({ enum: ["owner"], default: "owner" })
   @IsOptional()
-  @IsEnum(UserRole)
+  @IsIn([UserRole.owner], { message: "Una invitación solo puede crear la cuenta de la dueña del salón (owner)." })
   role?: UserRole;
 }

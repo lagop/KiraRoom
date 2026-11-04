@@ -1,9 +1,11 @@
-import { BadRequestException, Injectable, Logger } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger, Optional } from "@nestjs/common";
 import { createHash, randomBytes } from "crypto";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { EmailService } from "../notifications/services/email.service";
 import { hashPassword } from "../saas/saas.helpers";
 import { sessionRevocations } from "./sessions/session-revocations";
+import { AuthRateLimitsService } from "./abuse/auth-rate-limits.service";
+import { normalizeEmail } from "./email-normalize";
 
 /**
  * Password reset by email, for salon users. (Clients had accounts too;
@@ -20,15 +22,23 @@ import { sessionRevocations } from "./sessions/session-revocations";
  * - Asking for a reset says nothing about whether the address exists.
  * - A successful reset signs out every session (tokenVersion) and clears
  *   any failed-login lockout.
+ * - At most 3 emails an hour to one address (counted in Redis, whatever
+ *   the IP), and none while a link sent under 5 minutes ago is still
+ *   valid: the form could be used to fill someone's inbox.
+ * - The email is sent without waiting for the provider, so the answer
+ *   takes as long whether or not the address has an account.
  */
 @Injectable()
 export class PasswordResetService {
   static readonly TTL_MS = 60 * 60 * 1000;
+  /** A link younger than this is not replaced by a new one. */
+  static readonly RESEND_GAP_MS = 5 * 60 * 1000;
   private readonly logger = new Logger(PasswordResetService.name);
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly email: EmailService,
+    @Optional() private readonly limits?: AuthRateLimitsService,
   ) {}
 
   static hash(token: string): string {
@@ -37,22 +47,40 @@ export class PasswordResetService {
 
   /** Sends a reset link to the salon user with this email, if there is one. */
   async request(rawEmail: string, _tenantSlug?: string): Promise<void> {
-    const email = (rawEmail ?? "").trim();
+    const email = normalizeEmail(rawEmail);
     if (!email) return;
     const expires = new Date(Date.now() + PasswordResetService.TTL_MS);
     const base = (process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, "");
 
     const user = await this.prisma.user.findFirst({
       where: { email: { equals: email, mode: "insensitive" }, isActive: true },
-      select: { id: true, email: true, firstName: true },
+      select: { id: true, email: true, firstName: true, passwordResetToken: true, passwordResetExpires: true },
     });
     if (user) {
+      // A valid link created under 5 minutes ago: that email is on its way.
+      const createdAt = user.passwordResetExpires
+        ? user.passwordResetExpires.getTime() - PasswordResetService.TTL_MS
+        : null;
+      if (
+        user.passwordResetToken &&
+        createdAt !== null &&
+        user.passwordResetExpires!.getTime() > Date.now() &&
+        Date.now() - createdAt < PasswordResetService.RESEND_GAP_MS
+      ) {
+        return;
+      }
+      if (this.limits && !(await this.limits.allowPasswordResetEmail(email))) {
+        this.logger.warn("password reset: hourly limit for this address reached; no email sent");
+        return;
+      }
       const token = randomBytes(32).toString("hex");
       await this.prisma.user.update({
         where: { id: user.id },
         data: { passwordResetToken: PasswordResetService.hash(token), passwordResetExpires: expires },
       });
-      await this.send(user.email, user.firstName, null, `${base}/reset-password?token=${token}`);
+      // Not awaited: waiting for the provider made the answer slower when
+      // the address had an account. send() never throws.
+      void this.send(user.email, user.firstName, null, `${base}/reset-password?token=${token}`);
       return;
     }
   }

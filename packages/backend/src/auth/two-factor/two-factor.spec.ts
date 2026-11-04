@@ -1,3 +1,4 @@
+import { noLimits, noTurnstile } from "../abuse/abuse-checks.testing";
 import { ForbiddenException, UnauthorizedException } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import * as bcrypt from "bcryptjs";
@@ -234,7 +235,7 @@ describe("AuthController with two-step verification", () => {
     };
     const twoFactor = { status: jest.fn(async () => ({ enabled: false, recoveryCodesLeft: 0 })) };
     const res = { cookie: jest.fn() };
-    return { c: new AuthController(authService as any, {} as any, twoFactor as any), res, authService };
+    return { c: new AuthController(authService as any, {} as any, twoFactor as any, noTurnstile(), noLimits()), res, authService };
   }
 
   it("a challenge sets no cookie; the verified code does", async () => {
@@ -304,7 +305,7 @@ describe("two-step verification on or off ends the other sessions", () => {
     };
     const res = { cookie: jest.fn() };
     const req = { headers: { cookie: `${STAFF_REFRESH_COOKIE}=old-refresh` } };
-    const c = new AuthController(authService as any, {} as any, twoFactor as any);
+    const c = new AuthController(authService as any, {} as any, twoFactor as any, noTurnstile(), noLimits());
     return { c, authService, twoFactor, res, req, panelUser: { id: "u1", role: "owner", ...user } };
   }
 
@@ -361,7 +362,7 @@ describe("two-step verification on or off ends the other sessions", () => {
   it("support can still see whether it is on", async () => {
     const authService = {};
     const twoFactor = { status: jest.fn(async () => ({ enabled: true, recoveryCodesLeft: 3 })) };
-    const c = new AuthController(authService as any, {} as any, twoFactor as any);
+    const c = new AuthController(authService as any, {} as any, twoFactor as any, noTurnstile(), noLimits());
     await expect(c.twoFactorStatus({ id: "u1", role: "owner", impersonatedBy: "x" } as any)).resolves.toEqual({
       enabled: true,
       recoveryCodesLeft: 3,

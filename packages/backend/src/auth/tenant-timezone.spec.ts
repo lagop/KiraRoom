@@ -118,6 +118,7 @@ describe("register: the browser's zone", () => {
           return { id: "t1" };
         }),
       },
+      legalAcceptance: { create: jest.fn(async () => ({})) },
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
     };
     const auth = new AuthService(
