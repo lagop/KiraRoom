@@ -25,6 +25,7 @@ import {
   slugify,
 } from "./saas.helpers";
 import { AuditLogService } from "./audit-log.service";
+import { loadSharedIdentityWarnings, type SharedIdentityWarning } from "./shared-identity";
 import { invalidateTenantWidgets } from "../widget/widget.service";
 import { SubscriptionsService } from "../payments/services/subscriptions.service";
 import { normalizePlan, PLAN_PRICES, PlanId } from "@kira/shared";
@@ -140,9 +141,12 @@ export class SaasService {
       this.prisma.tenant.count({ where }),
     ]);
 
+    const shared = await this.sharedIdentity(tenants.map((t) => t.id));
     return {
       data: tenants.map((tenant) => ({
         ...tenant,
+        // Another salon has the same phone or NIF (D9): shown, never blocked.
+        sharedIdentity: shared.get(tenant.id) ?? [],
         userCount: tenant._count.users,
         clientCount: tenant._count.clients,
         appointmentCount: tenant._count.appointments,
@@ -156,6 +160,16 @@ export class SaasService {
         totalPages: Math.ceil(total / limit),
       },
     };
+  }
+
+  /** Shared phone / NIF warnings (D9); an error here never breaks the console. */
+  private async sharedIdentity(ids: string[]): Promise<Map<string, SharedIdentityWarning[]>> {
+    try {
+      return await loadSharedIdentityWarnings(this.prisma, ids);
+    } catch (err) {
+      this.logger.warn(`Shared identity check failed: ${(err as Error).message}`);
+      return new Map();
+    }
   }
 
   async getTenantById(id: string) {
@@ -183,8 +197,10 @@ export class SaasService {
       throw new NotFoundException("Tenant not found");
     }
 
+    const shared = await this.sharedIdentity([tenant.id]);
     return {
       ...tenant,
+      sharedIdentity: shared.get(tenant.id) ?? [],
       userCount: tenant._count.users,
       clientCount: tenant._count.clients,
       appointmentCount: tenant._count.appointments,

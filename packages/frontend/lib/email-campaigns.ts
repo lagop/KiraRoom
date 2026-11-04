@@ -70,10 +70,10 @@ export function quotaSummary(q: EmailMarketingQuota): { title: string; detail: s
   return { title, detail: parts.join(" "), exhausted: q.remaining <= 0 };
 }
 
-/** "Bono de 1.000 emails por 15,00 € + IVA": the bono as the page offers it. */
+/** "Bono de 1.000 emails por 15,00 €": the bono as the page offers it (a final price: KiraRoom adds no VAT, D6). */
 export function packOfferText(pack: { emails: number; priceCents: number }): string {
   const price = new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(pack.priceCents / 100);
-  return `Bono de ${formatCount(pack.emails)} emails por ${price} + IVA`;
+  return `Bono de ${formatCount(pack.emails)} emails por ${price}`;
 }
 
 /**
