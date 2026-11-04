@@ -17,6 +17,8 @@ import { Check, Loader2, Sparkles, X } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
 import { useToast } from "@/components/ui/use-toast";
 import { addOnDisplayName, formatSubscriptionAmount } from "@/lib/billing-plan";
+import { checkoutReturnMessage, shouldKeepPolling } from "@/lib/checkout-return";
+import { forgetDesiredPlan, readDesiredPlan } from "@/lib/desired-plan";
 
 function BillingPageContent() {
   const t = useTranslations();
@@ -41,6 +43,16 @@ function BillingPageContent() {
   const [error, setError] = useState<string | null>(null);
   const [invoices, setInvoices] = useState<SubscriptionInvoice[] | null>(null);
   const dateLocale = t("billing.invoices.dateFmt") || "es-ES";
+  // The plan picked on the website before signing up (B12): its card is
+  // highlighted until the salon pays for a plan.
+  const [desiredPlan, setDesiredPlan] = useState<PlanId | null>(null);
+  useEffect(() => setDesiredPlan(readDesiredPlan()), []);
+  useEffect(() => {
+    if (desiredPlan && paysSubscription(sub)) {
+      forgetDesiredPlan();
+      setDesiredPlan(null);
+    }
+  }, [desiredPlan, sub]);
 
   // P2A-receptionist-v2 -- AI counter + add-ons + message bundles
   const [addOns, setAddOns] = useState<any[] | null>(null);
@@ -187,24 +199,68 @@ function BillingPageContent() {
   }, [searchParams, t, cleanupQueryParams]);
 
   // Back from the plan checkout (subscriptions.service createCheckoutSession:
-  // ?subscription=success|cancelled). Stripe's webhook activates the plan,
-  // which can take a few seconds: the page says so and loads the
-  // subscription again now and twice more, instead of staying on "En
-  // prueba" or "Cancelada" without a word.
+  // ?subscription=success&session_id=...|cancelled). The page asks the
+  // backend what Stripe says about that session (B15): in the free trial
+  // only the card was saved, so it says when the first charge comes instead
+  // of "Pago recibido". Stripe's webhook applies the plan, which can take a
+  // while: the session is asked again until the plan is applied (about 40
+  // seconds), and the page reloads the subscription when it is.
   useEffect(() => {
     if (!isOwner(role)) return;
     const result = searchParams?.get("subscription");
     if (!result) return;
+    const sessionId = searchParams?.get("session_id");
     const timers: ReturnType<typeof setTimeout>[] = [];
-    if (result === "success") {
+    let stopped = false;
+    if (result === "success" && sessionId) {
+      const MAX_ATTEMPTS = 10;
+      const ask = async (attempt: number) => {
+        const session = await apiClient.getCheckoutSessionStatus(sessionId).catch(() => null);
+        if (stopped) return;
+        if (attempt === 0) {
+          const message = checkoutReturnMessage(session);
+          if (message.kind === "cardSaved") {
+            toast({
+              title: t("billing.checkoutReturn.cardSavedTitle", {
+                date: new Date(message.firstChargeAt).toLocaleDateString(dateLocale, {
+                  day: "numeric",
+                  month: "long",
+                  year: "numeric",
+                }),
+              }),
+              description: t("billing.checkoutReturn.cardSavedBody"),
+            });
+          } else if (message.kind === "paid") {
+            toast({ title: t("billing.checkoutReturn.successTitle"), description: t("billing.checkoutReturn.successBody") });
+          } else {
+            toast({ title: t("billing.checkoutReturn.pendingTitle"), description: t("billing.checkoutReturn.pendingBody") });
+          }
+        }
+        if (session?.applied) {
+          load();
+          return;
+        }
+        if (shouldKeepPolling(session, attempt + 1, MAX_ATTEMPTS)) {
+          timers.push(setTimeout(() => ask(attempt + 1), 4000));
+        } else if (session?.status === "complete") {
+          load();
+          toast({ title: t("billing.checkoutReturn.pendingTitle"), description: t("billing.checkoutReturn.slowBody") });
+        }
+      };
+      ask(0);
+    } else if (result === "success") {
+      // An older return link without the session: as before.
       toast({ title: t("billing.checkoutReturn.successTitle"), description: t("billing.checkoutReturn.successBody") });
       load();
       timers.push(setTimeout(() => load(), 4000), setTimeout(() => load(), 10000));
     } else if (result === "cancelled" || result === "cancel") {
       toast({ title: t("billing.checkoutReturn.cancelTitle"), description: t("billing.checkoutReturn.cancelBody") });
     }
-    cleanupQueryParams(["subscription"]);
-    return () => timers.forEach(clearTimeout);
+    cleanupQueryParams(["subscription", "session_id"]);
+    return () => {
+      stopped = true;
+      timers.forEach(clearTimeout);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, role]);
 
@@ -700,11 +756,21 @@ function BillingPageContent() {
             // In trial the highlighted card is the Pro of the trial.
             const isCurrent = p.id === (inTrial ? shownPlan : currentPlan);
             const action = planAction(sub, p.id);
+            const isDesired = desiredPlan === p.id && !paysSubscription(sub);
             return (
               <div
                 key={p.id}
-                className={"rounded-lg border p-5 shadow-sm " + (isCurrent ? "border-violet-300 bg-violet-50/40" : "border-gray-200 bg-white")}
+                className={
+                  "rounded-lg border p-5 shadow-sm " +
+                  (isCurrent ? "border-violet-300 bg-violet-50/40" : "border-gray-200 bg-white") +
+                  (isDesired ? " ring-2 ring-violet-400" : "")
+                }
               >
+                {isDesired && (
+                  <span className="mb-2 inline-block rounded bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700">
+                    {t("billing.desiredPlanBadge")}
+                  </span>
+                )}
                 <div className="flex items-baseline justify-between">
                   <h3 className="text-lg font-semibold text-gray-900">
                     {t(`plans.${p.id}`)}

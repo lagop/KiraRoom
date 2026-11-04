@@ -19,7 +19,11 @@ const READ_ONLY_DAYS = 30;
  * and kept using it free, indefinitely -- a perpetual free tier the plan
  * document explicitly rules out, and a conversion rate of zero.
  *
- * Both jobs run at 04:00 so they batch with `GracePeriodScheduler`.
+ * The read-only archival runs at 04:00 so it batches with
+ * `GracePeriodScheduler`. Trial expiry runs every hour (B9): a trial ends at
+ * the exact time of the signup, and with a daily run the salon spent up to
+ * a day still `trialing` but no longer Pro, writable and without either
+ * banner.
  */
 @Injectable()
 export class BillingScheduler {
@@ -46,8 +50,20 @@ export class BillingScheduler {
    * it becomes `active` instead, on the plan it pays for. Stripe's own
    * webhook usually gets there first; this covers the last-two-days case,
    * where Stripe was already charging, and a webhook that never arrived.
+   * If that subscription was cancelled at the end of its period and the
+   * end has passed, the salon is cancelled instead (B11): the webhook for
+   * the end of the subscription was lost, and making it active would give
+   * the plan away for good.
+   *
+   * Hourly rather than daily (B9). Running it hourly is safe: every change
+   * is a conditional update on `trialing`, so overlapping or repeated runs
+   * neither flip a salon twice nor email it twice. Handling "trialing with
+   * a past trialEnd" in the guards and the panel instead would mean
+   * teaching every reader of the status (guards, feature flags, limits,
+   * the panel) a second meaning of `trialing`; keeping one transition in
+   * one place leaves at most an hour of slack.
    */
-  @Cron(CronExpression.EVERY_DAY_AT_4AM)
+  @Cron(CronExpression.EVERY_HOUR)
   async expireTrials(): Promise<void> {
     const now = new Date();
     const readOnlyUntil = new Date(now.getTime() + READ_ONLY_DAYS * MS_PER_DAY);
@@ -61,7 +77,14 @@ export class BillingScheduler {
           trialEnd: { lt: now },
           deletedAt: null,
         },
-        select: { id: true, name: true, plan: true, trialEnd: true, stripeSubscriptionId: true },
+        select: {
+          id: true,
+          name: true,
+          plan: true,
+          trialEnd: true,
+          stripeSubscriptionId: true,
+          subscriptionCancelAt: true,
+        },
       }),
     );
 
@@ -69,6 +92,26 @@ export class BillingScheduler {
 
     const flipped: typeof expired = [];
     for (const t of expired) {
+      if (t.stripeSubscriptionId && t.subscriptionCancelAt && t.subscriptionCancelAt <= now) {
+        const { count } = await runUnscoped(() =>
+          this.prisma.tenant.updateMany({
+            where: { id: t.id, subscriptionStatus: 'trialing', deletedAt: null },
+            data: {
+              subscriptionStatus: 'cancelled',
+              cancelledAt: now,
+              subscriptionCancelAt: null,
+              readOnlyUntil,
+            },
+          }),
+        );
+        if (count === 1) {
+          this.logger.warn(
+            `Trial of ${t.name} (${t.id}) ended with its subscription ${t.stripeSubscriptionId} cancelled at ${t.subscriptionCancelAt.toISOString()} and no webhook for it: cancelled`,
+          );
+          await this.notices.notify(t.id, 'cancelled', readOnlyUntil);
+        }
+        continue;
+      }
       if (t.stripeSubscriptionId) {
         const { count } = await runUnscoped(() =>
           this.prisma.tenant.updateMany({
