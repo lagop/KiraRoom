@@ -70,11 +70,16 @@ describe("SalonBookingAlertsService", () => {
     expect(DEFAULT_PREFERENCES[SALON_BOOKING_ALERT].email).toBe(true);
   });
 
-  it("never throws: a failed email or a deleted salon is just nothing sent", async () => {
+  it("never throws: a failed email, a deleted salon or a test booking is just nothing sent", async () => {
     expect(await harness({ emailFails: true }).service.notify("booked", "apt-1")).toBe(0);
     const gone = harness({ appointment: { id: "apt-1", tenantId: "t1", tenant: { deletedAt: new Date() } } });
     expect(await gone.service.notify("booked", "apt-1")).toBe(0);
     expect(gone.email.sendSalonBookingAlert).not.toHaveBeenCalled();
+    const test = harness({ appointment: { id: "apt-1", tenantId: "t1", isTest: true, tenant: { deletedAt: null } } });
+    expect(await test.service.notify("booked", "apt-1")).toBe(0);
+    const testClient = harness({ appointment: { id: "apt-1", tenantId: "t1", client: { isTest: true }, tenant: { deletedAt: null } } });
+    expect(await testClient.service.notify("cancelled", "apt-1")).toBe(0);
+    expect(testClient.email.sendSalonBookingAlert).not.toHaveBeenCalled();
     const broken = harness();
     broken.prisma.appointment.findUnique.mockRejectedValueOnce(new Error("db down"));
     expect(await broken.service.notify("booked", "apt-1")).toBe(0);

@@ -5,6 +5,7 @@ import { runUnscoped } from "../common/tenancy/tenant.context";
 import { EmailService } from "../notifications/services/email.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { clockOf } from "./visit-totals";
+import { isTestBooking } from "../onboarding/test-booking";
 
 /**
  * The per-user preference key (NotificationPreference.preferences, email
@@ -49,14 +50,15 @@ export class SalonBookingAlertsService {
       (this.prisma.appointment.findUnique as any)({
         where: { id: appointmentId },
         include: {
-          client: { select: { firstName: true, lastName: true } },
+          client: { select: { firstName: true, lastName: true, isTest: true } },
           service: { select: { name: true } },
           professional: { select: { firstName: true } },
           tenant: { select: { name: true, timezone: true, deletedAt: true } },
         },
       }),
     );
-    if (!appointment || appointment.tenant?.deletedAt) return 0;
+    // The onboarding's test booking is nobody's news (onboarding/test-booking.ts).
+    if (!appointment || appointment.tenant?.deletedAt || isTestBooking(appointment)) return 0;
 
     const users: Array<{ id: string; email: string }> = await runUnscoped(() =>
       this.prisma.user.findMany({
