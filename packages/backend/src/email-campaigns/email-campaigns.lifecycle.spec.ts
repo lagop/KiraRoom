@@ -249,7 +249,8 @@ describe("the recipient picker's audience", () => {
 
     const audience = await service.getAudience("t1");
 
-    expect(prisma.client.findMany.mock.calls[0][0].where).toEqual({ tenantId: "t1" });
+    // Not the onboarding test client (O5).
+    expect(prisma.client.findMany.mock.calls[0][0].where).toEqual({ tenantId: "t1", isTest: false });
     expect(audience).toEqual({
       reachable: 1,
       excluded: { inactive: 1, no_email: 1, refused: 1, suppressed: 1, no_visit: 1 },

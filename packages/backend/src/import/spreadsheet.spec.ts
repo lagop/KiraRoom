@@ -195,3 +195,94 @@ describe("xlsx request body", () => {
     );
   });
 });
+
+/**
+ * O2: a small .xlsx whose insides unpack to hundreds of MB took the backend
+ * out of memory, for every salon. The zip is now checked before ExcelJS
+ * opens it, the sheet is streamed, and cells are cut. The "bombs" here are
+ * built at runtime: a few KB of deflated zeros.
+ */
+describe("xlsx import: oversized files", () => {
+  jest.setTimeout(60_000);
+
+  /** A minimal zip: each entry deflated; `declare` overrides the uncompressed size its headers state. */
+  function zip(entries: Array<{ name: string; data: Buffer; declare?: number }>): Buffer {
+    const { deflateRawSync } = require("zlib") as typeof import("zlib");
+    const locals: Buffer[] = [];
+    const centrals: Buffer[] = [];
+    let offset = 0;
+    for (const e of entries) {
+      const name = Buffer.from(e.name);
+      const body = deflateRawSync(e.data);
+      const size = e.declare ?? e.data.length;
+      const local = Buffer.alloc(30);
+      local.writeUInt32LE(0x04034b50, 0);
+      local.writeUInt16LE(20, 4);
+      local.writeUInt16LE(8, 8);
+      local.writeUInt32LE(body.length, 18);
+      local.writeUInt32LE(size, 22);
+      local.writeUInt16LE(name.length, 26);
+      const central = Buffer.alloc(46);
+      central.writeUInt32LE(0x02014b50, 0);
+      central.writeUInt16LE(20, 4);
+      central.writeUInt16LE(20, 6);
+      central.writeUInt16LE(8, 10);
+      central.writeUInt32LE(body.length, 20);
+      central.writeUInt32LE(size, 24);
+      central.writeUInt16LE(name.length, 28);
+      central.writeUInt32LE(offset, 42);
+      locals.push(local, name, body);
+      centrals.push(central, name);
+      offset += local.length + name.length + body.length;
+    }
+    const cd = Buffer.concat(centrals);
+    const end = Buffer.alloc(22);
+    end.writeUInt32LE(0x06054b50, 0);
+    end.writeUInt16LE(entries.length, 8);
+    end.writeUInt16LE(entries.length, 10);
+    end.writeUInt32LE(cd.length, 12);
+    end.writeUInt32LE(offset, 16);
+    return Buffer.concat([...locals, cd, end]);
+  }
+
+  const MB = 1024 * 1024;
+  const zeros = (n: number) => Buffer.alloc(n, 0x20);
+
+  it("refuses an entry that unpacks past 20 MB, before ExcelJS opens it", async () => {
+    const bomb = zip([{ name: "xl/sharedStrings.xml", data: zeros(25 * MB) }]);
+    expect(bomb.length).toBeLessThan(100 * 1024);
+    await expect(readXlsxRows(bomb)).rejects.toThrow(/demasiado grande por dentro/);
+  });
+
+  it("refuses entries that together unpack past 50 MB", async () => {
+    const bomb = zip([
+      { name: "a.xml", data: zeros(18 * MB) },
+      { name: "b.xml", data: zeros(18 * MB) },
+      { name: "c.xml", data: zeros(18 * MB) },
+    ]);
+    await expect(readXlsxRows(bomb)).rejects.toThrow(/demasiado grande por dentro/);
+  });
+
+  it("does not trust the sizes the headers declare", async () => {
+    const liar = zip([{ name: "xl/worksheets/sheet1.xml", data: zeros(25 * MB), declare: 1000 }]);
+    await expect(readXlsxRows(liar)).rejects.toThrow(/demasiado grande por dentro/);
+  });
+
+  it("goes through ImportService as a 400 with the message", async () => {
+    const bomb = zip([{ name: "xl/sharedStrings.xml", data: zeros(25 * MB) }]);
+    const svc = new ImportService(prisma() as any);
+    await expect(svc.dryRunClients("t1", { xlsx: bomb }, "bomba.xlsx")).rejects.toThrow(BadRequestException);
+  });
+
+  it("cuts a cell to 1,000 characters", async () => {
+    const file = await xlsx([[["Nombre", "Notas"], ["Ana", "x".repeat(50_000)]]]);
+    const [row] = await readXlsxRows(file);
+    expect(row.Notas).toHaveLength(1000);
+  });
+
+  it("stops past 5,000 rows with the usual message", async () => {
+    const rows: Cell[][] = [["Nombre", "Teléfono"]];
+    for (let i = 0; i < 5002; i++) rows.push([`Clienta ${i}`, 600000000 + i]);
+    await expect(readXlsxRows(await xlsx([rows]))).rejects.toThrow(/más de 5.000 filas/);
+  });
+});

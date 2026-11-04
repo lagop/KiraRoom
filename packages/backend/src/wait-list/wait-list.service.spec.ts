@@ -30,6 +30,11 @@ function matches(row: any, where: any): boolean {
       continue;
     }
     const val = row[k];
+    // isTest defaults to false in the database.
+    if (k === "isTest") {
+      if ((val ?? false) !== v) return false;
+      continue;
+    }
     if (v === null) {
       if (val !== null && val !== undefined) return false;
       continue;
