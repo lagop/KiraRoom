@@ -101,6 +101,7 @@ export const EXPORT_SECRET_LOOKALIKES_KEPT: Readonly<Record<string, string>> = {
 export const EXPORT_GLOBAL_MODELS = [
   "AddOn",
   "AuthSession",
+  "MaintenanceTask",
   "OnboardingStepDef",
   "PlatformStripeConfig",
   "PlatformEmailConfig",
@@ -309,6 +310,7 @@ export class GdprService {
   async anonymize(
     tenantId: string,
     requestId: string,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _opts: { keepFiscalData?: boolean } = {},
   ): Promise<GdprRequest> {
     this.logger.warn(
