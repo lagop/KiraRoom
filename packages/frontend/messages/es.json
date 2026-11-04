@@ -976,7 +976,7 @@
       "status_past_due": "Pago fallido",
       "status_suspended": "Suspendidos",
       "status_cancelled": "Dados de baja",
-      "excluded_note": "No cuentan los salones eliminados ni los de prueba (dirección que empieza por «zz-»).",
+      "excluded_note": "No cuentan los salones eliminados ni los marcados como internos o de prueba.",
       "no_salons": "Aún no hay salones",
       "no_data": "Aún no hay datos",
       "analytics_title": "Analítica de la plataforma",
@@ -1263,7 +1263,21 @@
     "totalSalons": "Total de salones",
     "totalUsers": "Total de usuarios",
     "monthlyRecurringRevenue": "Ingresos recurrentes mensuales",
-    "usersGrowth": "Crecimiento de usuarios"
+    "usersGrowth": "Crecimiento de usuarios",
+    "internal_salon": {
+      "title": "Salón interno o de pruebas",
+      "on": "Es uno de nuestros salones: no cuenta en las cifras ni en las alertas de la plataforma.",
+      "off": "Salón real: cuenta en las cifras y alertas de la plataforma.",
+      "mark": "Marcar como interno",
+      "unmark": "Marcar como salón real",
+      "confirm_mark": "¿Marcar este salón como interno o de pruebas?",
+      "confirm_mark_body": "{name} dejará de contar en las cifras y alertas de la plataforma. El cambio queda registrado.",
+      "confirm_unmark": "¿Marcar este salón como salón real?",
+      "confirm_unmark_body": "{name} volverá a contar en las cifras y alertas de la plataforma. El cambio queda registrado.",
+      "saved_on": "Salón marcado como interno",
+      "saved_off": "Salón marcado como real",
+      "failed": "No se pudo cambiar. Inténtalo de nuevo."
+    }
   },
   "dashboard": {
     "title": "Panel",

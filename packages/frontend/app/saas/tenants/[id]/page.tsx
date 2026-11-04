@@ -22,12 +22,14 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/components/ui/use-toast";
 import { GrowthIndicator } from "../../components/metric-card";
 import { SharedIdentityNotice } from "../../components/shared-identity-notice";
+import { InternalSalonCard } from "../../components/internal-salon-card";
 import type { SharedIdentityWarning } from "@/lib/shared-identity";
 
 interface Tenant {
   id: string;
   name: string;
   slug: string;
+  isInternal?: boolean;
   description: string;
   logo: string;
   website: string;
@@ -249,6 +251,13 @@ export default function TenantDetailPage() {
       </div>
 
       <SharedIdentityNotice warnings={tenant.sharedIdentity} />
+
+      <InternalSalonCard
+        tenantId={tenant.id}
+        name={tenant.name}
+        isInternal={!!tenant.isInternal}
+        onChange={(isInternal) => setTenant((cur) => (cur ? { ...cur, isInternal } : cur))}
+      />
 
       {/* Stats with Growth */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">

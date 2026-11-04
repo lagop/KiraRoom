@@ -2,6 +2,7 @@ import { BadRequestException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { monthStart, salonToday } from "../analytics/analytics-metrics";
 import { salonInstant } from "../appointments/salon-time";
+import { COUNTABLE_TENANT_WHERE } from "./saas.constants";
 
 /**
  * Pure helpers behind the console's platform figures (audit 8 D4, D5, D12).
@@ -13,18 +14,10 @@ export const CONSOLE_TIME_ZONE = "Europe/Madrid";
 
 /**
  * Salons that count in the platform figures: not deleted and not one of
- * our own test salons.
- *
- * There is no "internal / test salon" flag on Tenant yet (owner decision
- * pending, audit 8 D5). Until there is, test salons are the ones whose slug
- * starts with "zz-", the convention used for them so far. Replace this with
- * the flag when it lands.
+ * our own salons (Tenant.isInternal: the Platform tenant and our test
+ * salons, audit 8 D11). Same predicate as countableTenantWhere.
  */
-export const INTERNAL_TENANT_SLUG_PREFIX = "zz-";
-export const PLATFORM_TENANT_WHERE: Prisma.TenantWhereInput = {
-  deletedAt: null,
-  NOT: { slug: { startsWith: INTERNAL_TENANT_SLUG_PREFIX } },
-};
+export const PLATFORM_TENANT_WHERE: Prisma.TenantWhereInput = { ...COUNTABLE_TENANT_WHERE };
 
 /**
  * A salon pays KiraRoom when it is `active` on a Stripe subscription. An

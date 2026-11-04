@@ -104,6 +104,11 @@ model Tenant {
   /// but its data (users, appointments, payments, etc.) is preserved so
   /// an accidental delete can be reversed via Prisma Studio.
   deletedAt              DateTime?
+  /// Audit 8 D11: one of KiraRoom's own salons (the Platform tenant and our
+  /// test salons). Left out of platform figures and alerts
+  /// (countableTenantWhere) and allowed to use Stripe test mode. Set from
+  /// the console, audit-logged.
+  isInternal             Boolean            @default(false)
   /// P2A-ia-fairuse - virtual receptionist usage counter (Esencial cap)
   /// Messages in `aiConversationsPeriod` (YYYY-MM, UTC); another month reads as 0.
   aiConversationsUsed    Int                @default(0)

@@ -5431,6 +5431,14 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
+  /** Audit 8 D11: one of KiraRoom's own salons, left out of platform figures. Audit-logged. */
+  async setSaasTenantInternal(id: string, isInternal: boolean): Promise<{ id: string; isInternal: boolean }> {
+    return this.request(`/saas/tenants/${id}/internal`, {
+      method: "PATCH",
+      body: JSON.stringify({ isInternal }),
+    });
+  }
+
   async suspendSaasTenant(id: string): Promise<any> {
     return this.request(`/saas/tenants/${id}/suspend`, {
       method: "POST",

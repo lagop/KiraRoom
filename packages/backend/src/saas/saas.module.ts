@@ -7,6 +7,7 @@ import { SaasAnalyticsService } from "./saas-analytics.service";
 import { AuditLogService } from "./audit-log.service";
 import { SaaSRetentionScheduler } from "./saas-retention.scheduler";
 import { BugReportAdminController } from "./bug-report-admin.controller";
+import { TenantInternalController } from "./tenant-internal.controller";
 import { PrismaModule } from "../common/prisma/prisma.module";
 import { PaymentsModule } from "../payments/payments.module";
 import { GdprModule } from "./gdpr/gdpr.module";
@@ -37,7 +38,7 @@ import { AuthRateLimitsService } from "../auth/abuse/auth-rate-limits.service";
     PasswordResetService,
     AuthRateLimitsService,
   ],
-  controllers: [SaasController, BugReportAdminController],
+  controllers: [SaasController, BugReportAdminController, TenantInternalController],
   exports: [SaasService, AuditLogService],
 })
 export class SaasModule {}

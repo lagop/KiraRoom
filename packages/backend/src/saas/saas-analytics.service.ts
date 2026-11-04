@@ -190,7 +190,7 @@ export class SaasAnalyticsService {
       trialConversionRateThisMonth: month.trialConversionRate,
       topCountries: countryAggregation.map((c) => ({ country: c.country, count: c._count })),
       planDistribution: planAggregation.map((p) => ({ plan: p.plan, count: p._count })),
-      excludedTenantsRule: "deleted, or slug starting with zz-",
+      excludedTenantsRule: "deleted, or marked internal",
     };
   }
 
