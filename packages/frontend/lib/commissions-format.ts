@@ -58,3 +58,45 @@ export function defaultPayrollRange(now: Date = new Date()): { startDate: string
   const m = pad(now.getMonth() + 1);
   return { startDate: `${y}-${m}-01`, endDate: `${y}-${m}-${pad(now.getDate())}` };
 }
+
+/**
+ * "Fin del mes pasado" in the "Pagar" dialog: the last day of the month
+ * before the given salon day ("2026-11-04" -> "2026-10-31").
+ */
+export function lastDayOfPreviousMonth(day: string): string {
+  const m = DAY_RE.exec(day);
+  if (!m) return day;
+  // Day 0 of this month is the last day of the previous one.
+  const last = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, 0));
+  return `${last.getUTCFullYear()}-${pad(last.getUTCMonth() + 1)}-${pad(last.getUTCDate())}`;
+}
+
+/**
+ * A percent typed in the commission settings ("10", "12,5"): the number, or
+ * null when it is not one between 0 and 100 (two decimals at most).
+ */
+export function percentFromField(text: string): number | null {
+  const value = text.trim().replace(",", ".");
+  if (!/^\d{1,3}(\.\d{1,2})?$/.test(value)) return null;
+  const n = Number(value);
+  return n >= 0 && n <= 100 ? n : null;
+}
+
+/**
+ * The rate that applies to a professional: their own (0 included) or, when
+ * they have none, the salon's default -- what the professional's file shows,
+ * "10 % (por defecto del salón)".
+ */
+export function effectiveProfessionalRate(
+  own: number | string | null | undefined,
+  salonDefault: number | null | undefined,
+): { rate: number | null; fromSalon: boolean } {
+  const parsed = own === null || own === undefined || own === "" ? NaN : Number(own);
+  if (Number.isFinite(parsed)) return { rate: parsed, fromSalon: false };
+  return { rate: typeof salonDefault === "number" && Number.isFinite(salonDefault) ? salonDefault : null, fromSalon: true };
+}
+
+/** 12.5 -> "12,5 %". */
+export function formatPercent(rate: number): string {
+  return `${new Intl.NumberFormat("es-ES", { maximumFractionDigits: 2 }).format(rate)} %`;
+}

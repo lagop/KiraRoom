@@ -8,6 +8,10 @@ import {
   defaultPayrollRange,
   formatCommissionCents,
   formatCommissionDay,
+  effectiveProfessionalRate,
+  formatPercent,
+  lastDayOfPreviousMonth,
+  percentFromField,
 } from "./commissions-format";
 
 let pass = 0;
@@ -41,6 +45,23 @@ const range = defaultPayrollRange(new Date(2026, 10, 1, 0, 30));
 check("default period: 1st of the month to today, local calendar", range.startDate === "2026-11-01" && range.endDate === "2026-11-01", range);
 const later = defaultPayrollRange(new Date(2026, 1, 28, 23, 50));
 check("late in the day it is still today", later.startDate === "2026-02-01" && later.endDate === "2026-02-28", later);
+
+// "Pagar hasta": "Fin del mes pasado".
+check("end of last month", lastDayOfPreviousMonth("2026-11-04") === "2026-10-31", lastDayOfPreviousMonth("2026-11-04"));
+check("end of last month in January is December", lastDayOfPreviousMonth("2027-01-15") === "2026-12-31");
+check("end of February in a leap year", lastDayOfPreviousMonth("2028-03-01") === "2028-02-29");
+
+// The commission settings' percent fields.
+check("a percent with a decimal comma", percentFromField("12,5") === 12.5);
+check("0 is a rate", percentFromField("0") === 0);
+check("over 100 or not a number is refused", percentFromField("101") === null && percentFromField("abc") === null && percentFromField("") === null);
+check("three decimals are refused", percentFromField("1.234") === null);
+
+// The professional's file: their rate, or the salon's default.
+check("own rate, 0 included", JSON.stringify(effectiveProfessionalRate("0", 10)) === JSON.stringify({ rate: 0, fromSalon: false }));
+check("no rate of their own: the salon's", JSON.stringify(effectiveProfessionalRate(null, 10)) === JSON.stringify({ rate: 10, fromSalon: true }));
+check("salon default unknown", effectiveProfessionalRate(undefined, undefined).rate === null);
+check("percent the Spanish way", plain(formatPercent(12.5)) === "12,5 %", formatPercent(12.5));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

@@ -78,6 +78,13 @@ export class CreateProfessionalDto {
   @IsOptional()
   commissionRate?: number | null;
 
+  @ApiProperty({ description: '"Comisión de productos": percent of the products sold at the till (0-100); null: the salon default', example: 40 })
+  @IsNumber({}, { message: 'La comisión de productos debe ser un número.' })
+  @Min(0, { message: 'La comisión de productos va de 0 a 100 (%).' })
+  @Max(100, { message: 'La comisión de productos va de 0 a 100 (%).' })
+  @IsOptional()
+  productCommissionRate?: number | null;
+
   @ApiProperty({ description: 'Hire date', example: '2020-01-01' })
   @IsDateString({}, { message: 'La fecha de alta no es válida.' })
   @IsOptional()

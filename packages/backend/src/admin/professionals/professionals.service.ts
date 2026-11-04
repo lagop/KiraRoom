@@ -174,6 +174,7 @@ export class AdminProfessionalsService {
           position: professionalData.position,
           // 0 is a rate: only "not given" (or null) means none.
           commissionRate: commissionRateUpdate(professionalData.commissionRate) ?? null,
+          productCommissionRate: commissionRateUpdate(professionalData.productCommissionRate) ?? null,
           hireDate: requiredDateUpdate(professionalData.hireDate) ?? new Date(),
           terminationDate: optionalDateUpdate(professionalData.terminationDate) ?? null,
           workingHours: professionalData.workingHours || [],

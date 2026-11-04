@@ -3,6 +3,9 @@ import { PosService } from "./pos.service";
 import { appointmentCommission } from "../commissions/appointment-commission";
 import { saleTables, salonTenant } from "./pos-test-kit.testing";
 
+/** Terms under which the commission base is the visit's total (no tax rate): what these tests compare. */
+const SAME_BASE = { defaultRate: 10, productDefaultRate: 0, base: "net" as const, pricesIncludeTax: true, taxRatePercent: 0 };
+
 /**
  * Discounts at the till, end to end through PosService.processCheckout:
  * the server works the amounts out from its own prices, refuses staff past
@@ -460,7 +463,7 @@ describe("POS discounts: an appointment", () => {
     } as any);
     // 20 % of the 30,00 EUR charged, not of the 40,00 list price.
     const visit: any = t.committed.appointments.get("a1")!;
-    expect(appointmentCommission({ ...visit, commissionPaid: false }, visit.professional.commissionRate)).toEqual({ rate: 20, amount: 600 });
+    expect(appointmentCommission({ ...visit, commissionPaid: false }, visit.professional.commissionRate, SAME_BASE)).toEqual({ rate: 20, amount: 600 });
   });
 
   it("a staff member charging their own appointment is held to the same limit", async () => {

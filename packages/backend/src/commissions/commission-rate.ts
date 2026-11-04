@@ -10,8 +10,13 @@
  * stored commission amount of 0, which was recomputed.
  */
 
-/** The rate when neither the appointment nor the professional has one. */
-export const DEFAULT_COMMISSION_RATE = 10;
+/**
+ * The last resort when not even the salon's "Comisión por defecto" is known
+ * (a row read without it). Every real read passes the salon's default as the
+ * last candidate (commission-terms.ts); the 10 % that used to be hard-coded
+ * here is now that setting's value for the salons that existed before it.
+ */
+export const DEFAULT_COMMISSION_RATE = 0;
 
 /** A stored or given amount or rate as a number; null, undefined, "" or not a number: null. Decimals are read with Number(). */
 export function numberOrNull(value: unknown): number | null {
@@ -21,7 +26,11 @@ export function numberOrNull(value: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** The first rate that is set (0 included), most specific first; none: DEFAULT_COMMISSION_RATE. */
+/**
+ * The first rate that is set (0 included), most specific first: the
+ * appointment's or line's own, the professional's, the salon's default.
+ * None: DEFAULT_COMMISSION_RATE.
+ */
 export function effectiveCommissionRate(...candidates: unknown[]): number {
   for (const candidate of candidates) {
     const rate = numberOrNull(candidate);

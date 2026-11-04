@@ -911,6 +911,32 @@ export interface ServiceWrite {
   maxAdvanceBooking?: number;
 }
 
+/** A commission payout, as the "Pagos" tab lists it. Amounts in cents. */
+export interface CommissionPayout {
+  id: string;
+  createdAt: string;
+  professionalId: string;
+  professionalName: string;
+  amountCents: number;
+  itemCount: number;
+  /** "YYYY-MM-DD" the payout ran up to; null when paid by ids. */
+  upTo: string | null;
+  createdByName: string | null;
+  undoneAt: string | null;
+  undoneByName: string | null;
+  /** The latest payout of its professional not undone: "Deshacer último pago" applies. */
+  canUndo: boolean;
+}
+
+/** The salon's commission terms (rates in percent). */
+export interface CommissionSettings {
+  defaultRate: number;
+  productDefaultRate: number;
+  /** "net": on the price without the tax; "gross": with it. */
+  base: "net" | "gross";
+  pricesIncludeTax: boolean;
+}
+
 export interface Professional {
   id: string;
   createdAt: string;
@@ -931,6 +957,8 @@ export interface Professional {
   // End of portfolio fields
   position?: string;
   commissionRate?: number;
+  /** "Comisión de productos" (percent); null: the salon default. */
+  productCommissionRate?: number | string | null;
   hireDate?: string;
   isActive: boolean;
   /** The team member's user account, when the professional has one (managers see it). */
@@ -2010,6 +2038,7 @@ export interface ApiClientInterface {
     certifications?: string[];
     position?: string;
     commissionRate?: number;
+    productCommissionRate?: number;
     hireDate?: string;
     serviceIds?: string[];
     /** Multi-local: the locations they work at and the main one; left out keeps them. */
@@ -2034,6 +2063,8 @@ export interface ApiClientInterface {
       position?: string;
       /** 0 is a rate; null clears it (the salon default applies); left out keeps it. */
       commissionRate?: number | null;
+      /** "Comisión de productos": the same rules. */
+      productCommissionRate?: number | null;
       hireDate?: string;
       isActive: boolean;
       serviceIds?: string[];
@@ -3319,6 +3350,7 @@ class ApiClient implements ApiClientInterface {
     certifications?: string[];
     position?: string;
     commissionRate?: number;
+    productCommissionRate?: number;
     hireDate?: string;
     serviceIds?: string[];
     /** Multi-local: the locations they work at and the main one; left out keeps them. */
@@ -3350,6 +3382,8 @@ class ApiClient implements ApiClientInterface {
       position?: string;
       /** 0 is a rate; null clears it (the salon default applies); left out keeps it. */
       commissionRate?: number | null;
+      /** "Comisión de productos": the same rules. */
+      productCommissionRate?: number | null;
       hireDate?: string;
       isActive: boolean;
       serviceIds?: string[];
@@ -4018,19 +4052,77 @@ class ApiClient implements ApiClientInterface {
   }
 
   /**
-   * Marks a professional's commission paid. Without dates or ids: all that is
-   * pending up to the end of today (the summary's "Pagar"). `expectedAmount`
-   * is the figure the dialog showed, in cents: if it is no longer what is
-   * pending the server pays nothing and answers 409.
+   * A professional's pending commission, up to today or to `upTo` ("Pagar
+   * hasta", "YYYY-MM-DD"): the figure the "Pagar" dialog shows and sends.
+   */
+  async getCommissionSummary(professionalId: string, upTo?: string): Promise<any> {
+    const qs = upTo ? `?upTo=${encodeURIComponent(upTo)}` : "";
+    return this.request<any>(`/commissions/summary/${professionalId}${qs}`);
+  }
+
+  /** "Mis comisiones" (staff): their own summary and payouts, read-only. */
+  async getMyCommissions(): Promise<any> {
+    return this.request<any>("/commissions/me");
+  }
+
+  /** The payout history ("Pagos"), newest first. */
+  async getCommissionPayouts(professionalId?: string): Promise<CommissionPayout[]> {
+    const qs = professionalId ? `?professionalId=${professionalId}` : "";
+    return this.request<CommissionPayout[]>(`/commissions/payouts${qs}`);
+  }
+
+  /** "Deshacer último pago": only a professional's latest payout (409 otherwise). */
+  async undoCommissionPayout(payoutId: string): Promise<{ payoutId: string; amountCents: number; itemCount: number }> {
+    return this.request(`/commissions/payouts/${payoutId}/undo`, { method: "POST" });
+  }
+
+  /** "Ver extracto": one professional's period, line by line. */
+  async getCommissionStatement(professionalId: string, startDate: string, endDate: string): Promise<any> {
+    const qs = new URLSearchParams({ startDate, endDate });
+    return this.request<any>(`/commissions/statement/${professionalId}?${qs}`);
+  }
+
+  /** The payroll report as a CSV file (the server escapes every cell). */
+  async downloadPayrollCsv(startDate: string, endDate: string): Promise<{ blob: Blob; filename: string }> {
+    const qs = new URLSearchParams({ startDate, endDate });
+    return this.downloadWithToken(
+      `${API_BASE_URL}/commissions/payroll.csv?${qs}`,
+      `comisiones_${startDate}_${endDate}.csv`,
+    );
+  }
+
+  /** "Comisión por defecto", products by default and "Comisión sobre". */
+  async getCommissionSettings(): Promise<CommissionSettings> {
+    return this.request<CommissionSettings>("/commissions/settings");
+  }
+
+  async updateCommissionSettings(
+    patch: Partial<Pick<CommissionSettings, "defaultRate" | "productDefaultRate" | "base">>,
+  ): Promise<CommissionSettings> {
+    return this.request<CommissionSettings>("/commissions/settings", {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
+  }
+
+  /**
+   * Marks a professional's commission paid and records the payout. Without
+   * dates or ids: all that is pending up to the end of today; with
+   * `endDate` ("Pagar hasta"), up to that day. `expectedAmount` is the
+   * figure the dialog showed, in cents: if it is no longer what is pending
+   * the server pays nothing and answers 409.
    */
   async payCommission(
     professionalId: string,
     opts: { appointmentIds?: string[]; startDate?: string; endDate?: string; expectedAmount?: number } = {},
-  ): Promise<{ count: number; totalAmount: number }> {
-    return this.request<{ count: number; totalAmount: number }>(`/commissions/pay/${professionalId}`, {
-      method: "POST",
-      body: JSON.stringify(opts),
-    });
+  ): Promise<{ count: number; totalAmount: number; payoutId?: string | null }> {
+    return this.request<{ count: number; totalAmount: number; payoutId?: string | null }>(
+      `/commissions/pay/${professionalId}`,
+      {
+        method: "POST",
+        body: JSON.stringify(opts),
+      },
+    );
   }
 
   async getPayrollReport(startDate: string, endDate: string): Promise<any> {

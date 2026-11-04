@@ -80,7 +80,7 @@ describe("recordRefundClawbacks", () => {
         posSaleLine: {
           findMany: jest.fn(async ({ where }: any) =>
             [opts.line].filter(
-              (l) => l && where.id.in.includes(l.id) && l.kind === where.kind && l.commissionPaid === where.commissionPaid,
+              (l) => l && where.id.in.includes(l.id) && where.kind.in.includes(l.kind) && l.commissionPaid === where.commissionPaid,
             ),
           ),
         },
@@ -114,6 +114,13 @@ describe("recordRefundClawbacks", () => {
         settled: false,
       }),
     ]);
+  });
+
+  it("a product sold at the till earns a commission, so its refund takes it back too", async () => {
+    const { db: d, store } = db({ line: { ...paidLine, kind: "product" } });
+    const n = await recordRefundClawbacks(d, { tenantId: "t1", refundId: "r1", amount: 1000, lines: [{ lineId: "l1", cents: 1000 }] });
+    expect(n).toBe(1);
+    expect(store.rows).toEqual([expect.objectContaining({ posSaleLineId: "l1", amount: -100 })]);
   });
 
   it("is idempotent per refund: recording the same refund again adds nothing", async () => {
