@@ -9,6 +9,7 @@ import { SaasService, PaginatedResult } from "./saas.service";
 import { CreateTenantDto } from "./dto/create-tenant.dto";
 import { UpdateTenantDto } from "./dto/update-tenant.dto";
 import { TenantFilterDto } from "./dto/tenant-filter.dto";
+import { ReactivateTenantDto } from "./dto/console-actions.dto";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { SaasOwnerGuard } from "./guards/saas-owner.guard";
 import { SaasOwner } from "./decorators/saas-owner.decorator";
@@ -51,10 +52,11 @@ export class SaasController {
   @ApiResponse({ status: 200, description: "Tenant updated successfully" })
   @ApiResponse({ status: 404, description: "Tenant not found" })
   async updateTenant(
+    @Req() req: any,
     @Param("id", ParseUUIDPipe) id: string,
     @Body() updateTenantDto: UpdateTenantDto,
   ) {
-    return this.saasService.updateTenant(id, updateTenantDto);
+    return this.saasService.updateTenant(id, updateTenantDto, req.user?.id);
   }
 
   @Delete("tenants/:id")
@@ -94,8 +96,13 @@ export class SaasController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: "Reactivate tenant (SaaS Owner only)" })
   @ApiResponse({ status: 200, description: "Tenant reactivated successfully" })
-  async reactivateTenant(@Param("id", ParseUUIDPipe) id: string) {
-    return this.saasService.reactivateTenant(id);
+  @ApiResponse({ status: 409, description: "The owner asked to delete it: send cancelDeletion to cancel that too" })
+  async reactivateTenant(
+    @Req() req: any,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() body: ReactivateTenantDto,
+  ) {
+    return this.saasService.reactivateTenant(id, { cancelDeletion: body?.cancelDeletion }, req.user?.id);
   }
 
   @Get("analytics/overview")
