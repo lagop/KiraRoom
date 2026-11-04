@@ -125,6 +125,9 @@ export class PublicSiteService {
           category: true,
           // Shown on the price list, but booked by phone when false.
           isOnlineBookable: true,
+          // How many days ahead it can be booked online (the booking window
+          // the date picker stops at; GET /appointments/booking-window).
+          maxAdvanceBooking: true,
         },
         orderBy: [{ category: "asc" }, { name: "asc" }],
       }),

@@ -3373,6 +3373,9 @@ class ApiClient implements ApiClientInterface {
     locationIds?: string[];
     primaryLocationId?: string | null;
     workingHours?: WorkingHoursEntry[];
+    /** "Mostrar en la web"; left out: name and initial, no photo. */
+    webNameDisplay?: "full" | "initial" | "hidden";
+    webShowPhoto?: boolean;
   }): Promise<Professional> {
     return this.request<Professional>("/admin/professionals", {
       method: "POST",
@@ -3408,6 +3411,9 @@ class ApiClient implements ApiClientInterface {
     primaryLocationId?: string | null;
       /** Owners and admins only; leave it out to keep the current schedule. */
       workingHours: WorkingHoursEntry[];
+      /** "Mostrar en la web" and "Mostrar foto". */
+      webNameDisplay: "full" | "initial" | "hidden";
+      webShowPhoto: boolean;
     }>,
   ): Promise<Professional> {
     return this.request<Professional>(`/admin/professionals/${id}`, {

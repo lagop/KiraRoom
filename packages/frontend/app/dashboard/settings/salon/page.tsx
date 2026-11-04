@@ -7,6 +7,7 @@ import { Loader2, Save, Upload } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
 import { CanaryTimezoneHint } from "@/components/settings/CanaryTimezoneHint";
 import { salonIdentityUpdate } from "@/lib/salon-identity";
+import { missingLegalIdentity, salonLegalNoticePath, salonPrivacyPath } from "@/lib/salon-legal";
 
 const LOGO_MAX_BYTES = 500 * 1024;
 const LOGO_RECOMMENDED_PX = 512;
@@ -47,6 +48,9 @@ export default function SalonSettingsPage() {
   const [phone, setPhone] = useState("");
   const [logo, setLogo] = useState("");
   const [coverImage, setCoverImage] = useState("");
+  const [website, setWebsite] = useState("");
+  const [whatsapp, setWhatsapp] = useState("");
+  const [privacyPolicyUrl, setPrivacyPolicyUrl] = useState("");
 
   useEffect(() => {
     if (!tenant.data) return;
@@ -60,6 +64,9 @@ export default function SalonSettingsPage() {
     setPhone(d.phone ?? "");
     setLogo(d.logo ?? "");
     setCoverImage(d.coverImage ?? "");
+    setWebsite(d.website ?? "");
+    setWhatsapp(d.whatsapp ?? "");
+    setPrivacyPolicyUrl(d.privacyPolicyUrl ?? "");
   }, [tenant.data]);
 
   // The form renders after the tenant loads, so a link to #branding (the
@@ -90,12 +97,42 @@ export default function SalonSettingsPage() {
         </p>
       </header>
 
+      {/* The aviso legal of the salon's page needs its business name and NIF
+          (LSSI art. 10). Publishing is not blocked: the page shows the trade
+          name and address meanwhile. */}
+      {tenant.data && missingLegalIdentity(tenant.data).length > 0 && (
+        <div
+          data-test="salon-legal-missing"
+          role="status"
+          className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"
+        >
+          <p className="font-medium">{t("settings.salon.legalMissingTitle")}</p>
+          <p className="mt-1">{t("settings.salon.legalMissing")}</p>
+          <a href="/dashboard/settings/fiscal" className="mt-2 inline-block font-medium underline">
+            {t("settings.salon.legalMissingLink")}
+          </a>
+        </div>
+      )}
+
       <form
         onSubmit={(e) => {
           e.preventDefault();
           // Blank optional fields go as null, which clears them.
           update.mutate(
-            salonIdentityUpdate({ name, description, street, city, postalCode, state, phone, logo, coverImage }),
+            salonIdentityUpdate({
+              name,
+              description,
+              street,
+              city,
+              postalCode,
+              state,
+              phone,
+              logo,
+              coverImage,
+              website,
+              whatsapp,
+              privacyPolicyUrl,
+            }),
           );
         }}
         className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm space-y-5"
@@ -183,6 +220,79 @@ export default function SalonSettingsPage() {
               className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
               required
             />
+          </div>
+        </div>
+
+        {/* The public page's links. */}
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+          <div>
+            <label htmlFor="salon-website" className="text-sm font-medium text-gray-900">
+              {t("settings.salon.website")}
+            </label>
+            <input
+              id="salon-website"
+              type="url"
+              inputMode="url"
+              placeholder="https://misalon.com"
+              value={website}
+              onChange={(e) => setWebsite(e.target.value)}
+              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+            />
+          </div>
+          <div>
+            <label htmlFor="salon-whatsapp" className="text-sm font-medium text-gray-900">
+              {t("settings.salon.whatsapp")}
+            </label>
+            <input
+              id="salon-whatsapp"
+              type="tel"
+              value={whatsapp}
+              onChange={(e) => setWhatsapp(e.target.value)}
+              aria-describedby="salon-whatsapp-hint"
+              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+            />
+            <p id="salon-whatsapp-hint" className="mt-1 text-xs text-gray-500">
+              {t("settings.salon.whatsappHint")}
+            </p>
+          </div>
+          <div className="md:col-span-2">
+            <label htmlFor="salon-privacy-url" className="text-sm font-medium text-gray-900">
+              {t("settings.salon.privacyPolicyUrl")}
+            </label>
+            <input
+              id="salon-privacy-url"
+              type="url"
+              inputMode="url"
+              placeholder="https://misalon.com/privacidad"
+              value={privacyPolicyUrl}
+              onChange={(e) => setPrivacyPolicyUrl(e.target.value)}
+              aria-describedby="salon-privacy-url-hint"
+              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+            />
+            <p id="salon-privacy-url-hint" className="mt-1 text-xs text-gray-500">
+              {t("settings.salon.privacyPolicyUrlHint")}{" "}
+              {tenant.data?.slug && (
+                <>
+                  <a
+                    href={salonPrivacyPath(tenant.data.slug)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline"
+                  >
+                    {t("settings.salon.seePrivacy")}
+                  </a>
+                  {" · "}
+                  <a
+                    href={salonLegalNoticePath(tenant.data.slug)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline"
+                  >
+                    {t("settings.salon.seeLegalNotice")}
+                  </a>
+                </>
+              )}
+            </p>
           </div>
         </div>
 

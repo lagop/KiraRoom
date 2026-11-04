@@ -16,6 +16,7 @@ import {
 import { WeeklyScheduleEditor } from '@/components/professionals/WeeklyScheduleEditor';
 import { TimeOffManager } from '@/components/time-off/TimeOffManager';
 import { LocationsPicker } from '@/components/professionals/LocationsPicker';
+import { WebVisibilityFields, type WebNameDisplay } from '@/components/professionals/WebVisibilityFields';
 import { NO_LOCATIONS, locationsOf, locationsPayload, type LocationChoice } from '@/lib/professional-locations';
 import {
   defaultSchedule,
@@ -28,6 +29,9 @@ import {
 const statusOptions = ['active', 'inactive', 'blocked'] as const;
 
 interface FormData {
+  /** "Mostrar en la web" (WebVisibilityFields). */
+  webNameDisplay: WebNameDisplay;
+  webShowPhoto: boolean;
   firstName: string;
   lastName: string;
   email: string;
@@ -60,6 +64,8 @@ function EditProfessionalForm() {
   const professionalId = params?.id as string;
 
   const [formData, setFormData] = useState<FormData>({
+    webNameDisplay: 'initial',
+    webShowPhoto: false,
     firstName: '',
     lastName: '',
     email: '',
@@ -126,6 +132,8 @@ function EditProfessionalForm() {
           setOriginalSpecialty(specialty);
           setWasActive(!!professional.isActive);
           setFormData({
+            webNameDisplay: ((professional as any).webNameDisplay as WebNameDisplay) || 'full',
+            webShowPhoto: (professional as any).webShowPhoto !== false,
             firstName: professional.firstName || '',
             lastName: professional.lastName || '',
             email: professional.email || '',
@@ -213,6 +221,8 @@ function EditProfessionalForm() {
         bio: formData.bio || undefined,
         isActive: formData.status === 'active',
         serviceIds: formData.serviceIds,
+        webNameDisplay: formData.webNameDisplay,
+        webShowPhoto: formData.webShowPhoto,
         ...(scheduleTouched && schedule ? { workingHours: workingHoursFromSchedule(schedule) } : {}),
         ...locationsPayload(locations, locationsTouched),
       };
@@ -446,6 +456,15 @@ function EditProfessionalForm() {
               placeholder={t('professionals.fields.bioPlaceholder')}
             />
             <p className="mt-1 text-sm text-gray-500">{t('professionals.fields.bioHint')}</p>
+          </div>
+
+          <div className="mt-6">
+            <WebVisibilityFields
+              nameDisplay={formData.webNameDisplay}
+              showPhoto={formData.webShowPhoto}
+              onChange={(next) => setFormData((prev) => ({ ...prev, ...next }))}
+              t={t}
+            />
           </div>
 
           {/* Services Selection */}

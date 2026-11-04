@@ -1576,7 +1576,17 @@
       "saveError": "The salon details could not be saved.",
       "cover": "Cover image",
       "coverHint": "Shown at the top of your booking page and widget. Recommended: landscape, 1500×500 px, ≤ 1 MB. PNG, JPG or WebP.",
-      "coverRemove": "Remove image"
+      "coverRemove": "Remove image",
+      "legalMissingTitle": "Add your salon's business name and tax ID",
+      "legalMissing": "The legal notice of your booking page needs them (LSSI). Meanwhile we show your trade name and address; your page stays published.",
+      "legalMissingLink": "Add them in your tax details",
+      "website": "Your website (if you have one)",
+      "whatsapp": "WhatsApp for your clients",
+      "whatsappHint": "Shows the \"Message us on WhatsApp\" button on your booking page. Empty: not shown.",
+      "privacyPolicyUrl": "URL of my own privacy policy (optional)",
+      "privacyPolicyUrlHint": "If set, your page, the widget and the chat link to it. Otherwise they use the one we generate from your details.",
+      "seePrivacy": "See the generated policy",
+      "seeLegalNotice": "See the legal notice"
     },
     "saved": "Saved",
     "theme": "Theme",
@@ -1908,7 +1918,16 @@
       "cancel": "Cancel"
     },
     "product_commission_rate": "Product commission (%)",
-    "product_commission_rate_empty": "Empty: the salon's default"
+    "product_commission_rate_empty": "Empty: the salon's default",
+    "web": {
+      "title": "Show on the website",
+      "full": "Full name",
+      "initial": "First name and initial",
+      "hidden": "Do not show",
+      "photo": "Show photo",
+      "consent": "To show their full name or photo on your booking page you need this person's consent.",
+      "hiddenHint": "Not listed in the team on your page. Clients can still book with them, as \"Professional\"."
+    }
   },
   "services": {
     "addNew": "Add New Service",
@@ -2974,7 +2993,12 @@
       "title": "We can't show this page right now",
       "description": "Please try again in a few minutes.",
       "retry": "Try again"
-    }
+    },
+    "directions": "Get directions",
+    "whatsappUs": "Message us on WhatsApp",
+    "legalNotice": "Legal notice",
+    "privacy": "Privacy",
+    "poweredBy": "Booking site run by KiraRoom"
   },
   "platform_llm": {
     "title": "Chatbot AI provider",

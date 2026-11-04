@@ -26,6 +26,8 @@ export interface PublicSalonService {
   category: string;
   /** False: on the price list, but booked by phone (the server refuses it online). */
   isOnlineBookable?: boolean;
+  /** Days ahead it can be booked online (Service.maxAdvanceBooking). Absent from older servers. */
+  maxAdvanceBooking?: number;
 }
 
 export interface PublicSalonProfessional {
