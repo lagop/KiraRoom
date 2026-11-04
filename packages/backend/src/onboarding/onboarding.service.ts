@@ -452,7 +452,7 @@ export class OnboardingService {
             // (reminders, review requests, the wait list...; isTestBooking),
             // and the cleanup job deletes it the next salon day.
             isTest: true,
-            notes: "Cita de prueba del configurador: se borra sola mañana.",
+            notes: "Cita de prueba del configurador: se borra sola mañana si no se cobra ni se factura.",
           },
         });
         saved.appointment = true;

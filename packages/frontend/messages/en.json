@@ -375,6 +375,7 @@
       "later": "Rather carry on later? Whatever you have saved stays."
     },
     "checklist": {
+      "more_settings": "More settings",
       "title": "Optimize your salon",
       "subtitle": "Recommendations to unlock the full power of Kira.",
       "dismiss": "Close checklist",
@@ -395,6 +396,10 @@
     "schedule_set": {
       "title": "Set working hours",
       "desc": "Configure weekly availability for each professional so slots become visible."
+    },
+    "legal_data": {
+      "title": "Legal details (company name, tax ID and email)",
+      "desc": "They appear in your website's legal notice and on your invoices."
     },
     "branding": {
       "title": "Cover image and description",
