@@ -101,6 +101,8 @@ export class ClientCadenceService {
         clientId,
         status: "completed",
         completionTime: { not: null },
+        // The onboarding test booking is not a visit (O5).
+        isTest: false,
       },
       orderBy: { completionTime: "desc" },
       take: LOOKBACK_APPOINTMENTS * 3, // safety upper bound
@@ -208,7 +210,7 @@ export class ClientCadenceService {
     let cursor: string | undefined;
     for (;;) {
       const page = await this.prisma.client.findMany({
-        where: { tenantId, appointments: { some: { status: "completed" } } },
+        where: { tenantId, isTest: false, appointments: { some: { status: "completed", isTest: false } } },
         select: { id: true },
         orderBy: { id: "asc" },
         take: TENANT_RECOMPUTE_PAGE,

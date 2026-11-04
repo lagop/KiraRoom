@@ -23,6 +23,8 @@ function matches(row: Row, where: Row = {}): boolean {
     // The salon relation: only its deletedAt is asked about (tenantDeletedAt on the row).
     if (key === "tenant") return matches({ deletedAt: row.tenantDeletedAt ?? null }, cond);
     const value = row[key];
+    // isTest defaults to false in the database.
+    if (key === "isTest") return (value ?? false) === cond;
     if (cond === null) return value === null || value === undefined;
     if (cond && typeof cond === "object" && !(cond instanceof Date)) {
       if ("in" in cond) return (cond.in as unknown[]).includes(value);

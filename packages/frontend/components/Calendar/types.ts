@@ -31,6 +31,8 @@ export type Appointment = {
   commissionRate?: number;
   /** The visit's location (multi-local), for the agenda's location filter. */
   locationId?: string | null;
+  /** The onboarding test booking: tagged «Prueba» in the agenda. */
+  isTest?: boolean;
 };
 
 export type TimeSlot = {

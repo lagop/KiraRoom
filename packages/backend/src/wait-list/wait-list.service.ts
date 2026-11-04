@@ -473,8 +473,8 @@ export class WaitListService {
       where: {
         tenantId: args.tenantId,
         serviceId: args.serviceId,
-        // Blocked clients and removed (anonymised) ones are not told.
-        client: { status: 'active' },
+        // Blocked clients, removed (anonymised) ones and test clients are not told.
+        client: { status: 'active', isTest: false },
         AND: [
           {
             OR: [

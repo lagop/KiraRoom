@@ -128,6 +128,7 @@ export class EmailCampaignsScheduler {
         tenantId: campaign.tenantId,
         email: { not: null },
         status: 'active',
+        isTest: false,
         lastVisit: { lt: thresholdDate },
       },
     });

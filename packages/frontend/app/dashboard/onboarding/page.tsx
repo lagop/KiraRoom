@@ -20,7 +20,7 @@ import {
   workingHoursFromSchedule,
   type WeeklySchedule,
 } from "@/lib/weekly-schedule";
-import { wizardHoursToSend } from "@/lib/onboarding-wizard";
+import { customServiceProblem, todayIn, wizardHoursToSend, wizardOutcome } from "@/lib/onboarding-wizard";
 
 type WizardData = {
   tenantId: string;
@@ -36,7 +36,11 @@ type WizardData = {
     durationMinutes: number;
     price: number;
   }>;
+  /** The salon's active services (the test booking's picker). */
+  services?: Array<{ id: string; name: string }>;
 };
+
+type SubmitResult = Awaited<ReturnType<typeof apiClient.submitOwnerOnboardingWizard>>;
 
 export default function OwnerOnboardingWizardPage() {
   const router = useRouter();
@@ -45,8 +49,8 @@ export default function OwnerOnboardingWizardPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [skipWarning, setSkipWarning] = useState<string | null>(null);
-  const [done, setDone] = useState(false);
+  // What the server says it saved: the closing screen is built from it (O4).
+  const [result, setResult] = useState<SubmitResult | null>(null);
 
   const [selectedTemplates, setSelectedTemplates] = useState<Set<string>>(new Set());
   const [customServices, setCustomServices] = useState<
@@ -65,6 +69,9 @@ export default function OwnerOnboardingWizardPage() {
   const [clientName, setClientName] = useState("");
   const [apDate, setApDate] = useState("");
   const [apTime, setApTime] = useState("10:00");
+  // The test booking's service, from the salon's real ones and those ticked
+  // or typed above (it used to be the first ticked, or "Corte de cabello").
+  const [apService, setApService] = useState("");
 
   useEffect(() => {
     apiClient
@@ -113,12 +120,26 @@ export default function OwnerOnboardingWizardPage() {
   async function submit() {
     if (!data) return;
     setSubmitError(null);
-    setSkipWarning(null);
     // A shift that ends before it starts (or two that overlap) is refused
     // here, next to the day it is on, before anything is saved. A week with
     // no open day is fine: no salon hours are stored, as before.
     if (Object.keys(scheduleProblems(hours).days).length > 0) {
       setSubmitError("Revisa el horario de apertura: hay tramos que no se pueden guardar.");
+      return;
+    }
+    // Checked here, in Spanish, before the server refuses it (O14).
+    const customProblem = customServices.map(customServiceProblem).find(Boolean);
+    if (customProblem) {
+      setSubmitError(customProblem);
+      return;
+    }
+    const wantsAppointment = Boolean(clientName.trim() && apDate && apTime) && data.hasStaff;
+    if (wantsAppointment && !apService) {
+      setSubmitError("Elige el servicio de la cita de prueba.");
+      return;
+    }
+    if (wantsAppointment && apDate < todayIn(data.timezone)) {
+      setSubmitError("La cita de prueba tiene que ser de hoy en adelante.");
       return;
     }
     setSubmitting(true);
@@ -144,8 +165,7 @@ export default function OwnerOnboardingWizardPage() {
     // skips the create (FK constraint) and returns
     // skipped.appointment='no_staff'. Gate the input on the snapshot
     // so the user knows *before* submitting why the field is dead.
-    const appointmentRequested =
-      Boolean(clientName.trim() && apDate && apTime) && data.hasStaff;
+    const appointmentRequested = wantsAppointment;
 
     try {
       const res = await apiClient.submitOwnerOnboardingWizard({
@@ -154,27 +174,13 @@ export default function OwnerOnboardingWizardPage() {
         firstAppointment: appointmentRequested
           ? {
               clientName: clientName.trim(),
-              serviceName:
-                services[0]?.name ?? data.serviceTemplates[0]?.name ?? "",
+              serviceName: apService,
               date: apDate,
               time: apTime,
             }
           : undefined,
       });
-      // Surface any silent skip from the server so the user knows
-      // the appointment step wasn't actually completed.
-      if (res?.skipped?.appointment === "no_staff") {
-        setSkipWarning(
-          "Has rellenado los datos de la primera cita, pero la cuenta aún no tiene profesionales. " +
-            "Añade al menos un miembro del equipo desde el panel y vuelve aquí para registrar la cita.",
-        );
-      } else if (res?.skipped?.appointment === "no_service") {
-        setSkipWarning(
-          "El servicio de la cita de prueba no coincide con ninguno de los servicios que has añadido. " +
-            "Marca o crea el servicio correspondiente en el paso 1 antes de continuar.",
-        );
-      }
-      setDone(true);
+      setResult(res);
     } catch (e: any) {
       const msg =
         e?.response?.data?.message ||
@@ -208,30 +214,76 @@ export default function OwnerOnboardingWizardPage() {
 
   if (!data) return null;
 
-  if (done) {
+  if (result) {
+    // Built from what was actually saved, with the reason a test booking was
+    // not created (it used to say "¡Tu salón está listo!" whatever happened).
+    const outcome = wizardOutcome(result, data);
     return (
       <div className="p-8">
         <div className="max-w-xl mx-auto text-center py-12">
           <div className="inline-flex items-center justify-center w-12 h-12 bg-emerald-100 rounded-full mb-3">
             <Check className="w-6 h-6 text-emerald-600" />
           </div>
-          <h1 className="text-2xl font-bold mb-2">
-            ¡Tu salón está listo!
-          </h1>
+          <h1 className="text-2xl font-bold mb-2">{outcome.title}</h1>
+          {outcome.lines.length > 0 && (
+            <ul className="text-slate-600 mb-4 space-y-1">
+              {outcome.lines.map((l) => (
+                <li key={l}>{l}</li>
+              ))}
+            </ul>
+          )}
+          {outcome.warning && (
+            <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded text-amber-900 text-sm flex items-start gap-2 text-left">
+              <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+              <span>{outcome.warning}</span>
+            </div>
+          )}
           <p className="text-slate-600 mb-6">
-            Ya puedes empezar a recibir reservas.
+            {outcome.readyForBookings
+              ? "Comparte tu enlace de reservas o el QR para que tus clientas reserven solas."
+              : "Para recibir reservas online necesitas servicios, al menos un profesional activo y el horario de apertura."}
           </p>
-          <button
-            type="button"
-            onClick={() => router.push("/dashboard")}
-            className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
-          >
-            Ir al panel
-          </button>
+          <div className="flex flex-wrap justify-center gap-2">
+            {outcome.readyForBookings && (
+              <Link
+                href="/dashboard/compartir"
+                className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
+              >
+                Comparte tu página
+              </Link>
+            )}
+            <button
+              type="button"
+              onClick={() => router.push("/dashboard")}
+              className={
+                outcome.readyForBookings
+                  ? "px-4 py-2 border border-slate-300 rounded-md hover:bg-slate-50"
+                  : "px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
+              }
+            >
+              Ir al panel
+            </button>
+          </div>
         </div>
       </div>
     );
   }
+
+  // The test booking's service: the salon's own, plus those ticked or typed
+  // above (matched on the server without case, as here).
+  const serviceOptions: string[] = [];
+  const seenOption = new Set<string>();
+  for (const name of [
+    ...(data.services ?? []).map((s) => s.name),
+    ...data.serviceTemplates.filter((t) => selectedTemplates.has(t.name)).map((t) => t.name),
+    ...customServices.map((c) => c.name.trim()).filter(Boolean),
+  ]) {
+    const key = name.trim().replace(/\s+/g, " ").toLowerCase();
+    if (seenOption.has(key)) continue;
+    seenOption.add(key);
+    serviceOptions.push(name);
+  }
+  const today = todayIn(data.timezone);
 
   const alreadyDone = data.hasServices && data.hasStaff && data.hasWorkingHours && data.hasFirstAppointment;
 
@@ -248,13 +300,6 @@ export default function OwnerOnboardingWizardPage() {
       {alreadyDone && (
         <div className="mb-4 p-3 bg-emerald-50 border border-emerald-200 rounded text-emerald-800 text-sm">
           Ya tienes todo configurado. Vuelve al panel o añade más detalles.
-        </div>
-      )}
-
-      {skipWarning && (
-        <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded text-amber-900 text-sm flex items-start gap-2">
-          <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-          <span>{skipWarning}</span>
         </div>
       )}
 
@@ -398,8 +443,25 @@ export default function OwnerOnboardingWizardPage() {
         )}
         <fieldset
           disabled={!data.hasStaff}
-          className="grid grid-cols-1 md:grid-cols-3 gap-3"
+          className="grid grid-cols-1 md:grid-cols-4 gap-3"
         >
+          <label className="block">
+            <span className="block text-xs text-slate-600 mb-1">Servicio</span>
+            <select
+              value={apService}
+              onChange={(e) => setApService(e.target.value)}
+              className="w-full px-2 py-1.5 text-sm border border-slate-300 rounded bg-white"
+            >
+              <option value="">
+                {serviceOptions.length > 0 ? "Elige un servicio" : "Marca o crea un servicio arriba"}
+              </option>
+              {serviceOptions.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
           <label className="block">
             <span className="block text-xs text-slate-600 mb-1">
               Cliente
@@ -415,6 +477,8 @@ export default function OwnerOnboardingWizardPage() {
             <span className="block text-xs text-slate-600 mb-1">Fecha</span>
             <input
               type="date"
+              // From today on the salon's clock (the server refuses past ones too).
+              min={today}
               value={apDate}
               onChange={(e) => setApDate(e.target.value)}
               className="w-full px-2 py-1.5 text-sm border border-slate-300 rounded"
