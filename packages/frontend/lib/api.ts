@@ -4,7 +4,14 @@ import type { TaxRegime } from "@kira/shared";
 import type { PublicSalonPage } from "./salon-seo";
 import type { WorkingHoursEntry } from "./weekly-schedule";
 import { requestBody } from "./time-off";
-import type { TimeOff, TimeOffConflict, TimeOffInput, TimeOffStatus, UpcomingTimeOffConflict } from "./time-off";
+import type {
+  FreeProfessionals,
+  TimeOff,
+  TimeOffConflict,
+  TimeOffInput,
+  TimeOffStatus,
+  UpcomingTimeOffConflict,
+} from "./time-off";
 import type { CreateClientPayload, UpdateClientPayload } from "./client-form";
 import type { RefundableSaleLine } from "./payments-format";
 import type { InvoiceIssuerStatus } from "./invoice-issuer";
@@ -2024,6 +2031,8 @@ export interface ApiClientInterface {
     input: Omit<TimeOffInput, "professionalId">,
   ): Promise<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }>;
   getUpcomingTimeOffConflicts(): Promise<{ count: number; appointments: UpcomingTimeOffConflict[] }>;
+  getFreeProfessionalsForAppointment(id: string): Promise<FreeProfessionals>;
+  cancelAppointmentForTimeOff(id: string, reason?: string | null): Promise<Appointment>;
   previewApproveTimeOff(id: string): Promise<{ conflicts: TimeOffConflict[] }>;
   getMyTimeOff(): Promise<TimeOff[]>;
   previewTimeOffRequest(input: TimeOffInput): Promise<{ conflicts: TimeOffConflict[] }>;
@@ -3290,6 +3299,20 @@ class ApiClient implements ApiClientInterface {
   // Appointments still booked inside approved time off and closures, from today on.
   async getUpcomingTimeOffConflicts(): Promise<{ count: number; appointments: UpcomingTimeOffConflict[] }> {
     return this.request<{ count: number; appointments: UpcomingTimeOffConflict[] }>("/time-off/conflicts");
+  }
+
+  // An appointment time off caught: who is free to take it (then PATCH it
+  // with their professionalId), or cancel it and tell the client with a
+  // link to book again (its slot is not offered to the wait list).
+  async getFreeProfessionalsForAppointment(id: string): Promise<FreeProfessionals> {
+    return this.request<FreeProfessionals>(`/appointments/${id}/free-professionals`);
+  }
+
+  async cancelAppointmentForTimeOff(id: string, reason?: string | null): Promise<Appointment> {
+    return this.request<Appointment>(`/appointments/${id}/cancel-for-time-off`, {
+      method: "PUT",
+      body: JSON.stringify(reason ? { reason } : {}),
+    });
   }
 
   // Time off requests. A professional asks for their own (who it is for comes
@@ -4927,6 +4950,7 @@ class ApiClient implements ApiClientInterface {
     bookingSlotMinutes?: number;
     /** Online bookings start confirmed instead of pending. */
     autoConfirmOnlineBookings?: boolean;
+    timeOffEmailNotices?: boolean;
   }> {
     return this.request("/auth/tenant");
   }
@@ -4956,6 +4980,7 @@ class ApiClient implements ApiClientInterface {
     facebook?: string;
     bookingSlotMinutes?: number;
     autoConfirmOnlineBookings?: boolean;
+    timeOffEmailNotices?: boolean;
   }): Promise<{
     id: string;
     name: string;

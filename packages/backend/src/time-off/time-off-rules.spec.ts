@@ -129,9 +129,10 @@ describe("timeOffProblem", () => {
 describe("timeOffInputProblem", () => {
   const ok = { professionalId: ANA, kind: "vacation", startDate: "2026-12-01", endDate: "2026-12-05" };
 
-  it("accepts all day over several days, or hours on one day", () => {
+  it("accepts all day over several days, or hours on one day or the same hours over several", () => {
     expect(timeOffInputProblem(ok)).toBeNull();
     expect(timeOffInputProblem({ ...ok, endDate: ok.startDate, startTime: "10:00", endTime: "12:00" })).toBeNull();
+    expect(timeOffInputProblem({ ...ok, startTime: "09:00", endTime: "14:00" })).toBeNull();
     expect(timeOffInputProblem({ kind: "closure", startDate: "2026-12-25", endDate: "2026-12-25" })).toBeNull();
   });
 
@@ -139,8 +140,7 @@ describe("timeOffInputProblem", () => {
     expect(timeOffInputProblem({ ...ok, endDate: "2026-11-30" })).toMatch(/anterior a la de inicio/);
   });
 
-  it("refuses hours over several days, one time without the other, or an end before the start", () => {
-    expect(timeOffInputProblem({ ...ok, startTime: "10:00", endTime: "12:00" })).toMatch(/un único día/);
+  it("refuses one time without the other, or an end before the start", () => {
     expect(timeOffInputProblem({ ...ok, endDate: ok.startDate, startTime: "10:00" })).toMatch(/todo el día/);
     expect(timeOffInputProblem({ ...ok, endDate: ok.startDate, startTime: "12:00", endTime: "10:00" })).toMatch(/posterior/);
     expect(timeOffInputProblem({ ...ok, endDate: ok.startDate, startTime: "10:00", endTime: "10:00" })).toMatch(/posterior/);
@@ -191,6 +191,9 @@ describe("requests: only approved time off blocks", () => {
     expect(periodLabel(block({}))).toBe("el 14/12/2026");
     expect(periodLabel(block({ endDate: "2026-12-16" }))).toBe("del 14/12/2026 al 16/12/2026");
     expect(periodLabel(block({ startTime: "10:00", endTime: "12:00" }))).toBe("el 14/12/2026 de 10:00 a 12:00");
+    expect(periodLabel(block({ endDate: "2026-12-18", startTime: "09:00", endTime: "14:00" }))).toBe(
+      "del 14/12/2026 al 18/12/2026 de 09:00 a 14:00",
+    );
     expect(requestSummary(block({ kind: "day_off" }))).toBe("un día libre el 14/12/2026");
     expect(requestSummary(block({ kind: "other", startTime: "10:00", endTime: "12:00" }))).toBe(
       "una ausencia el 14/12/2026 de 10:00 a 12:00",

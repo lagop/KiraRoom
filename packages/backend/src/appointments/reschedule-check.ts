@@ -47,6 +47,12 @@ export interface RescheduleTarget {
   /** The appointment being moved: never a clash with itself. Absent for a new one. */
   appointmentId?: string;
   professionalId: string;
+  /**
+   * The location booked at (multi-local), when known: its closures and the
+   * general ones apply. Unknown: a location's closure stops whoever works
+   * there (timeOffBetween).
+   */
+  locationId?: string | null;
   /** YYYY-MM-DD, the salon's calendar day. */
   day: string;
   /** HH:MM, the salon's clock. */
@@ -282,7 +288,7 @@ async function scheduleCheckInput(
       timeZone,
       excludeAppointmentId: target.appointmentId,
     }),
-    timeOffBetween(prisma, target.tenantId, target.day),
+    timeOffBetween(prisma, target.tenantId, target.day, target.day, { locationId: target.locationId }),
   ]);
   const startMinutes = minutesOf(target.time);
   const noon = new Date(`${target.day}T12:00:00.000Z`);

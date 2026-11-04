@@ -127,7 +127,7 @@ export class PublicSiteService {
           endDate: { gte: dateOfDay(today)! },
           startDate: { lte: horizon },
         },
-        select: { professionalId: true, kind: true, startDate: true, endDate: true },
+        select: { professionalId: true, locationId: true, kind: true, startDate: true, endDate: true },
       }),
       salonWhatsAppConnected(this.prisma, tenant.id),
       // Two or more locations someone can be booked at: the client picks one
@@ -137,11 +137,14 @@ export class PublicSiteService {
       salonOffersWhatsAppPromotions(this.prisma, this.featureFlags, tenant.id),
     ]);
     const horizonDay = horizon.toISOString().slice(0, 10);
-    const closedDays = [
-      ...new Set(
-        closures.flatMap((c) => daysOf(c).filter((day) => day >= today && day <= horizonDay)),
-      ),
-    ].sort();
+    const daysClosed = (rows: typeof closures) =>
+      [...new Set(rows.flatMap((c) => daysOf(c).filter((day) => day >= today && day <= horizonDay)))].sort();
+    // The whole salon's closures; a location's own (multi-local) close only
+    // that location, for a client who picked it.
+    const closedDays = daysClosed(closures.filter((c) => !c.locationId));
+    const closedDaysByLocation: Record<string, string[]> = Object.fromEntries(
+      where.locations.map((l) => [l.id, daysClosed(closures.filter((c) => !c.locationId || c.locationId === l.id))]),
+    );
 
     // The salon's own hours when it set them, else derived from its
     // professionals' schedules as before. openingHours keeps one window per
@@ -209,6 +212,9 @@ export class PublicSiteService {
       // "YYYY-MM-DD" days the salon is closed all day (holidays, closures),
       // so the booking page can say so instead of "no times left".
       closedDays,
+      // With locations to pick from: the days each one is closed all day,
+      // the whole salon's closures included. Empty otherwise.
+      closedDaysByLocation,
       customDomain: this.liveDomain(tenant.customDomain),
       // salon-lucia.kiraroom.net, once subdomains serve over HTTPS.
       subdomainHost: this.webDomain.liveSubdomain(tenant.slug),

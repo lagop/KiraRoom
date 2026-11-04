@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -30,6 +31,14 @@ import {
   timeOffInputProblem,
 } from "./time-off-rules";
 import { CreateTimeOffDto, TimeOffQueryDto, UpdateTimeOffDto } from "./dto/time-off.dto";
+import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
+import { LOCATION_NOT_FOUND } from "../multi-location/professional-locations";
+
+/** Who a block is about, and the location of a closure of one location. */
+const ROW_INCLUDE = {
+  professional: { select: { firstName: true, lastName: true } },
+  location: { select: { name: true } },
+} as const;
 
 /** Where the panel lists the requests (the notification's link). */
 export const REQUESTS_PAGE = "/dashboard/solicitudes-ausencia";
@@ -71,6 +80,8 @@ export interface UpcomingTimeOffConflict extends TimeOffConflict {
     endDate: string;
     startTime: string | null;
     endTime: string | null;
+    locationId: string | null;
+    locationName: string | null;
   };
 }
 
@@ -107,6 +118,8 @@ export class TimeOffService {
     // The professional is told when the salon changes or removes time off
     // they asked for. Optional: specs that do not care leave it out.
     @Optional() private readonly notifications?: NotificationsService,
+    // Closures of one location are for salons with multi-local.
+    @Optional() private readonly flags?: FeatureFlagService,
   ) {}
 
   /** The salon's calendar day now ("YYYY-MM-DD", in its time zone). */
@@ -125,7 +138,7 @@ export class TimeOffService {
     const today = await this.salonToday(user.tenantId);
     const rows = await this.prisma.timeOff.findMany({
       where: { tenantId: user.tenantId, status: "approved", endDate: { gte: dateOfDay(today)! } },
-      include: { professional: { select: { firstName: true, lastName: true } } },
+      include: ROW_INCLUDE,
       orderBy: [{ startDate: "asc" }, { startTime: "asc" }],
       take: UPCOMING_LIMIT,
     });
@@ -150,6 +163,8 @@ export class TimeOffService {
             endDate: view.endDate,
             startTime: view.startTime,
             endTime: view.endTime,
+            locationId: view.locationId,
+            locationName: view.locationName,
           },
         });
       }
@@ -224,7 +239,7 @@ export class TimeOffService {
         status: isManager(user) && query.includePending ? { in: ["approved", "pending"] } : "approved",
         ...(query.professionalId ? { professionalId: query.professionalId } : {}),
       },
-      include: { professional: { select: { firstName: true, lastName: true } } },
+      include: ROW_INCLUDE,
       orderBy: [{ startDate: "asc" }, { startTime: "asc" }],
     });
     const audience: TimeOffAudience = isManager(user) ? "manager" : "colleague";
@@ -243,6 +258,7 @@ export class TimeOffService {
       data: {
         tenantId: user.tenantId,
         professionalId: input.professionalId ?? null,
+        locationId: input.locationId ?? null,
         kind: input.kind as TimeOffKind,
         startDate: dateOfDay(input.startDate)!,
         endDate: dateOfDay(input.endDate)!,
@@ -253,7 +269,7 @@ export class TimeOffService {
         // What the salon records is decided already.
         status: "approved",
       },
-      include: { professional: { select: { firstName: true, lastName: true } } },
+      include: ROW_INCLUDE,
     });
     return { timeOff: timeOffView(row, "manager"), conflicts: await this.conflicts(user.tenantId, input) };
   }
@@ -276,8 +292,9 @@ export class TimeOffService {
         startTime: input.startTime ?? null,
         endTime: input.endTime ?? null,
         note: input.note ?? null,
+        locationId: input.locationId ?? null,
       },
-      include: { professional: { select: { firstName: true, lastName: true } } },
+      include: ROW_INCLUDE,
     });
     const moved = (["kind", "startDate", "endDate", "startTime", "endTime"] as const).some(
       (key) => (before[key] ?? null) !== (input[key] ?? null),
@@ -295,6 +312,7 @@ export class TimeOffService {
       dto[key] !== undefined ? dto[key] : current;
     const input: TimeOffInput = {
       professionalId: existing.professionalId,
+      locationId: (pick("locationId", existing.locationId ?? null) as string | null) || null,
       kind: pick("kind", existing.kind) as string,
       startDate: pick("startDate", dayOf(existing.startDate)) as string,
       endDate: pick("endDate", dayOf(existing.endDate)) as string,
@@ -304,6 +322,9 @@ export class TimeOffService {
     };
     const problem = timeOffInputProblem(input);
     if (problem) throw new BadRequestException(problem);
+    if (input.locationId && input.locationId !== existing.locationId) {
+      await this.assertLocation(user.tenantId, input.locationId);
+    }
     // A rejected request blocks nothing, so it cannot double anything up.
     if (existing.status !== "rejected") {
       await this.assertNoOverlap(user.tenantId, input, { excludeId: existing.id });
@@ -340,6 +361,9 @@ export class TimeOffService {
    */
   async conflicts(tenantId: string, block: TimeOffInput): Promise<TimeOffConflict[]> {
     const professionalId = block.professionalId ?? null;
+    // A location's closure: the visits there, and those with no location
+    // recorded (they may be there).
+    const locationId = professionalId ? null : (block.locationId ?? null);
     const [tenant, appointments] = await Promise.all([
       this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } }),
       (this.prisma.appointment.findMany as any)({
@@ -353,6 +377,7 @@ export class TimeOffService {
           ...(professionalId
             ? { OR: [{ professionalId }, { services: { some: { professionalId } } }] }
             : {}),
+          ...(locationId ? { OR: [{ locationId }, { locationId: null }] } : {}),
         },
         select: {
           id: true,
@@ -420,6 +445,7 @@ export class TimeOffService {
   private async validInput(user: TimeOffUser, dto: CreateTimeOffDto): Promise<TimeOffInput> {
     const input: TimeOffInput = {
       professionalId: dto.professionalId || null,
+      locationId: dto.locationId || null,
       kind: dto.kind,
       startDate: dto.startDate,
       endDate: dto.endDate,
@@ -436,8 +462,21 @@ export class TimeOffService {
       });
       if (!professional) throw new NotFoundException("Profesional no encontrado en este salón");
     }
+    if (input.locationId) await this.assertLocation(user.tenantId, input.locationId);
     await this.assertNoOverlap(user.tenantId, input);
     return input;
+  }
+
+  /** A closure of one location: multi-local, and an open location of this salon. */
+  private async assertLocation(tenantId: string, locationId: string) {
+    if (this.flags && !(await this.flags.isEnabled(tenantId, "multi_location"))) {
+      throw new ForbiddenException("Los cierres por local son parte del plan Empresa (multi-local).");
+    }
+    const location = await this.prisma.location.findFirst({
+      where: { id: locationId, tenantId, isActive: true },
+      select: { id: true },
+    });
+    if (!location) throw new BadRequestException(LOCATION_NOT_FOUND);
   }
 
   /**
@@ -475,6 +514,7 @@ export class TimeOffService {
 export function inputOfRow(row: any): TimeOffInput {
   return {
     professionalId: row.professionalId,
+    locationId: row.locationId ?? null,
     kind: row.kind,
     startDate: dayOf(row.startDate),
     endDate: dayOf(row.endDate),
@@ -508,6 +548,9 @@ export function timeOffView(row: any, audience: TimeOffAudience) {
     id: row.id,
     professionalId: row.professionalId,
     professionalName: personal ? fullName(row.professional) || null : null,
+    /** A closure of one location only (multi-local); null: every location. */
+    locationId: row.locationId ?? null,
+    locationName: row.location?.name ?? null,
     kind,
     status: row.status ?? "approved",
     startDate: dayOf(row.startDate),

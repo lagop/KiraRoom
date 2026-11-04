@@ -160,3 +160,16 @@ export function choiceAtLocation<S extends { id: string }, T extends LocatedProf
     professionalId: professionalStays ? picked.professionalId : "",
   };
 }
+
+/**
+ * The days closed all day for the location the client picked: the whole
+ * salon's closures plus that location's own (closedDaysByLocation). Before
+ * picking one, or from an older server, the salon's.
+ */
+export function closedDaysAt(
+  page: { closedDays?: string[] | null; closedDaysByLocation?: Record<string, string[]> | null },
+  locationId: string,
+): string[] {
+  const own = locationId ? page.closedDaysByLocation?.[locationId] : undefined;
+  return own ?? page.closedDays ?? [];
+}

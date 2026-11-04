@@ -82,6 +82,7 @@ import { bookedAddon, bookedService, bookedServiceName, snapshotAddons, snapshot
 import { VISIT_LINE_PROFESSIONAL, colleagueProfessional } from "./appointment-response";
 import { appointmentLocationId } from "../multi-location/appointment-location";
 import { assertProfessionalsAt, professionalsAt } from "../multi-location/professional-locations";
+import { salonPublicUrlFromEnv } from "../web-domain/public-url";
 import {
   bookingPlace,
   clientLocations,
@@ -174,7 +175,32 @@ export interface StatusChangeOptions {
   notes?: string;
   /** Further columns written with the status, for internal callers (the copilot's no-show fee). */
   data?: Record<string, unknown>;
+  /**
+   * Cancelled because the professional is away or the salon is closed: the
+   * freed slot is not offered to the wait list (nobody can be booked in it),
+   * and the client's notice links to the booking page to book again.
+   */
+  blockedSlot?: boolean;
 }
+
+/** Appointments that still hold their time: the ones a time off clash can still move or cancel. */
+const LIVE_APPOINTMENT_STATUSES: string[] = [
+  AppointmentStatus.pending,
+  AppointmentStatus.confirmed,
+  AppointmentStatus.in_progress,
+];
+
+/** The salon's booking page with the service picked: where a cancelled client books again. */
+function rebookUrl(slug: string, serviceId?: string | null): string {
+  const base = salonPublicUrlFromEnv(slug, null);
+  if (!serviceId) return base;
+  const url = new URL(base);
+  url.searchParams.set("serviceId", serviceId);
+  return url.toString();
+}
+
+/** What the client reads when the salon cancels for time off and no reason is given. */
+export const TIME_OFF_CANCEL_REASON = "No podremos atenderte en ese horario.";
 
 export interface PendingPaymentFiltersDto {
   searchQuery?: string;
@@ -1121,6 +1147,7 @@ export class AppointmentsService {
             {
               tenantId,
               professionalId: s.professionalId,
+              locationId: (booking as { locationId?: string | null }).locationId || null,
               day: at.day,
               time: at.time,
               durationMinutes: Math.round((s.end.getTime() - s.start.getTime()) / 60_000),
@@ -1866,6 +1893,99 @@ export class AppointmentsService {
     return this.changeStatus(user, id, AppointmentStatus.cancelled, { reason });
   }
 
+  /**
+   * Cancels an appointment that time off or a closure caught, and tells the
+   * client (the usual cancellation notices, each channel only as she allows)
+   * with a link to book again. Its slot is not offered to the wait list: the
+   * time off blocks it. Only when the salon asks for it: nothing is
+   * cancelled on its own.
+   */
+  async cancelForTimeOff(user: any, id: string, reason?: string) {
+    return this.changeStatus(user, id, AppointmentStatus.cancelled, {
+      reason: reason?.trim() || TIME_OFF_CANCEL_REASON,
+      blockedSlot: true,
+    });
+  }
+
+  /**
+   * Who else could take the appointment as it stands -- the same day, time
+   * and length: active professionals who do its services, work at its
+   * location (multi-local) and pass the same check a move does (their
+   * hours, their time off, the salon's closures, their agenda). For the
+   * "pass it to a free colleague" action on a time off clash; the move
+   * itself is PATCH /appointments/:id with the professionalId, checked again.
+   *
+   * A visit with services on their own professionals is moved from the
+   * agenda instead (reassignable false): one name cannot move them all.
+   */
+  async freeProfessionalsFor(
+    user: any,
+    id: string,
+  ): Promise<{ reassignable: boolean; reason?: string; professionals: Array<{ id: string; name: string }> }> {
+    const appointment: any = await (this.prisma.appointment.findFirst as any)({
+      where: { id, tenantId: user.tenantId },
+      include: {
+        tenant: { select: { timezone: true } },
+        service: { select: { bufferTime: true } },
+        services: { select: { professionalId: true, serviceId: true, status: true } },
+      },
+    });
+    if (!appointment) throw new NotFoundException("Cita no encontrada");
+    if (!LIVE_APPOINTMENT_STATUSES.includes(appointment.status)) {
+      return { reassignable: false, reason: "La cita ya no está pendiente.", professionals: [] };
+    }
+    const rows = ((appointment.services ?? []) as any[]).filter((r) => r.status !== "cancelled");
+    if (rows.some((r) => r.professionalId)) {
+      return {
+        reassignable: false,
+        reason: "Sus servicios tienen cada uno su profesional: cámbiala desde la agenda.",
+        professionals: [],
+      };
+    }
+    const serviceIds = [...new Set(rows.length ? rows.map((r) => r.serviceId) : [appointment.serviceId])].filter(
+      Boolean,
+    ) as string[];
+    const team: any[] = await (this.prisma.professional.findMany as any)({
+      where: { tenantId: user.tenantId, isActive: true },
+      select: { id: true, firstName: true, lastName: true, services: { select: { serviceId: true } } },
+      orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
+    });
+    // As findFreeProfessional: a service nobody is linked to is everyone's.
+    const doesAll = (p: any) =>
+      serviceIds.every(
+        (sid) =>
+          !team.some((x) => (x.services ?? []).some((s: any) => s.serviceId === sid)) ||
+          (p.services ?? []).some((s: any) => s.serviceId === sid),
+      );
+    const here: Set<string> | null = appointment.locationId
+      ? await professionalsAt(this.prisma as any, user.tenantId, appointment.locationId).catch(() => null)
+      : null;
+    const timeZone = appointment.tenant?.timezone || "Europe/Madrid";
+    const day = new Date(appointment.scheduledDate).toISOString().slice(0, 10);
+    const time = clockOf(appointment.scheduledTime, timeZone) ?? appointment.scheduledTime;
+    const free: Array<{ id: string; name: string }> = [];
+    for (const p of team) {
+      if (p.id === appointment.professionalId || !doesAll(p)) continue;
+      if (here && here.size > 0 && !here.has(p.id)) continue;
+      try {
+        await assertCanReschedule(this.prisma as any, {
+          tenantId: user.tenantId,
+          appointmentId: appointment.id,
+          professionalId: p.id,
+          locationId: appointment.locationId ?? null,
+          day,
+          time,
+          durationMinutes: appointment.duration,
+          cleanupMinutes: cleanupMinutesOf(appointment.service),
+        });
+        free.push({ id: p.id, name: `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim() });
+      } catch (err) {
+        if (!(err instanceof ConflictException)) throw err;
+      }
+    }
+    return { reassignable: true, professionals: free };
+  }
+
   async complete(user: any, id: string, notes?: string) {
     return this.changeStatus(user, id, AppointmentStatus.completed, { notes });
   }
@@ -2006,8 +2126,11 @@ export class AppointmentsService {
         await this.logAppointmentActivity(id, "appointment_cancelled", user, {
           reason: opts.reason,
         });
-        await this.sendAppointmentCancelledNotifications(updated, opts.reason);
-        this.offerFreedSlot(updated);
+        await (opts.blockedSlot
+          ? this.sendAppointmentCancelledNotifications(updated, opts.reason, { rebook: true })
+          : this.sendAppointmentCancelledNotifications(updated, opts.reason));
+        // A slot time off blocks is nobody's to take.
+        if (!opts.blockedSlot) this.offerFreedSlot(updated);
         break;
 
       case AppointmentStatus.completed:
@@ -2837,7 +2960,10 @@ export class AppointmentsService {
     // closed has nothing to offer, whoever is asked for; otherwise each
     // professional's shifts lose their own blocks and the salon's partial
     // closures, and a professional away all day has no shifts left.
-    const timeOff = await timeOffBetween(this.prisma as any, tenantId, dateString);
+    // At a location: its own closures and the general ones (multi-local).
+    const timeOff = await timeOffBetween(this.prisma as any, tenantId, dateString, dateString, {
+      locationId: opts.locationId,
+    });
     if (salonClosedOn(timeOff, dateString)) return [];
     // The salon's own hours that weekday (working-hours.ts salonWindowsFor):
     // none recorded imposes nothing, a weekday without hours is closed --
@@ -3479,9 +3605,17 @@ export class AppointmentsService {
   private async sendAppointmentCancelledNotifications(
     appointment: any,
     reason?: string,
+    extra: { rebook?: boolean } = {},
   ) {
     // The service as booked, not as the catalog has it today.
     appointment = withBookedService(appointment);
+    // The salon's booking page, to book again (cancelForTimeOff).
+    const bookingUrl =
+      extra.rebook && appointment.tenant?.slug ? rebookUrl(appointment.tenant.slug, appointment.serviceId) : undefined;
+    // SMS and WhatsApp carry the link in the text.
+    const reasonWithLink = bookingUrl
+      ? `${reason ? `${reason} ` : ""}Reserva otra cita: ${bookingUrl}`
+      : reason;
     try {
       this.logger.log(
         `Sending appointment cancelled notifications for appointment ${appointment.id}`,
@@ -3542,6 +3676,7 @@ export class AppointmentsService {
               time: appointment.scheduledTime,
               salonName,
               ...(await this.emailPlace(appointment)),
+              ...(bookingUrl ? { bookingUrl } : {}),
             },
             reason,
           );
@@ -3572,7 +3707,7 @@ export class AppointmentsService {
               time: appointment.scheduledTime,
               salonName,
             },
-            reason,
+            reasonWithLink,
           );
           this.logger.log(
             `Sent cancellation SMS to client ${appointment.clientId}`,
@@ -3604,7 +3739,7 @@ export class AppointmentsService {
                 time: appointment.scheduledTime,
                 salonName,
               },
-              reason,
+              reasonWithLink,
             );
           }
           this.logger.log(

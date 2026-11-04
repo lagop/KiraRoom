@@ -19,6 +19,9 @@ import {
   canWithdraw,
   myAbsences,
   pendingBadge,
+  changesPendingRequests,
+  closureWhere,
+  freeForAll,
   requestBody,
   statusOf,
   agendaLink,
@@ -27,6 +30,8 @@ import {
   othersAway,
   type TimeOff,
 } from "./time-off";
+import * as fs from "fs";
+import * as path from "path";
 
 let pass = 0;
 let fail = 0;
@@ -49,6 +54,8 @@ eq("across months", dateRangeLabel("2026-11-30", "2026-12-02"), "30 nov – 2 di
 eq("across years", dateRangeLabel("2026-12-30", "2027-01-02"), "30 dic 2026 – 2 ene 2027");
 eq("all day", hoursLabel({ startTime: null, endTime: null }), "Todo el día");
 eq("hours", hoursLabel({ startTime: "10:00", endTime: "12:30" }), "10:00–12:30");
+eq("the same hours over several days", hoursLabel({ startDate: "2026-12-14", endDate: "2026-12-18", startTime: "09:00", endTime: "14:00" }), "09:00–14:00 cada día");
+eq("all day over several days", hoursLabel({ startDate: "2026-12-14", endDate: "2026-12-18", startTime: null, endTime: null }), "Todo el día");
 eq("a personal block by kind", calendarLabel({ professionalId: "p", kind: "sick_leave", note: "x" }), "Baja");
 eq("a closure with its note", calendarLabel({ professionalId: null, kind: "closure", note: " Navidad " }), "Salón cerrado — Navidad");
 eq("a closure without one", calendarLabel({ professionalId: null, kind: "closure", note: undefined }), "Salón cerrado");
@@ -64,7 +71,7 @@ check("no dates", /fechas/.test(timeOffFormProblem({ ...form, startDate: "" }) ?
 check("end before start", /anterior/.test(timeOffFormProblem({ ...form, endDate: "2026-11-30" }) ?? ""));
 check("more than 366 days", /366/.test(timeOffFormProblem({ ...form, startDate: "2026-01-01", endDate: "2027-01-02" }) ?? ""));
 eq("exactly 366 days is fine", timeOffFormProblem({ ...form, startDate: "2026-01-01", endDate: "2027-01-01" }), null);
-check("hours over several days", /único día/.test(timeOffFormProblem({ ...form, allDay: false, startTime: "10:00", endTime: "12:00" }) ?? ""));
+eq("the same hours over several days are fine", timeOffFormProblem({ ...form, allDay: false, startTime: "10:00", endTime: "12:00" }), null);
 check("hours missing", /hora de inicio/.test(timeOffFormProblem({ ...form, endDate: form.startDate, allDay: false, startTime: "10:00" }) ?? ""));
 check("end hour before start hour", /posterior/.test(timeOffFormProblem({ ...form, endDate: form.startDate, allDay: false, startTime: "12:00", endTime: "12:00" }) ?? ""));
 check("a long note", /200/.test(timeOffFormProblem({ ...form, note: "x".repeat(201) }) ?? ""));
@@ -114,6 +121,17 @@ eq(
 eq("no badge for none", pendingBadge(0), null);
 eq("the badge counts", pendingBadge(3), "3");
 eq("and stops at 9+", pendingBadge(12), "9+");
+eq("a closure of one location says which", closureWhere({ locationId: "n", locationName: "Norte" }, true), "Solo Norte");
+eq("one of every location, with several", closureWhere({ locationId: null }, true), "Todos los locales");
+eq("nothing to say with one location", closureWhere({ locationId: null }, false), null);
+const bea = { id: "bea", name: "Bea" };
+const eva = { id: "eva", name: "Eva" };
+eq("one appointment: whoever is free for it", freeForAll([{ reassignable: true, professionals: [bea, eva] }]), [bea, eva]);
+eq("several: who is free for all of them", freeForAll([{ reassignable: true, professionals: [bea, eva] }, { reassignable: true, professionals: [eva] }]), [eva]);
+eq("one moved from the agenda only: nobody for the selection", freeForAll([{ reassignable: true, professionals: [eva] }, { reassignable: false, professionals: [] }]), []);
+eq("nothing selected: nobody", freeForAll([]), []);
+check("a new request recounts the badge", changesPendingRequests({ data: { event: "time_off_requested" } }));
+check("other notifications do not", !changesPendingRequests({ data: { event: "time_off_approved" } }) && !changesPendingRequests({ data: {} }) && !changesPendingRequests(null));
 eq("approved with nothing to move", approvedToast("Ana Gil", 0), {
   title: "Ausencia de Ana Gil aprobada",
   description: "Ya no se ofrecerán citas en ese tiempo.",
@@ -166,6 +184,20 @@ check(
     managerRowActions({ status: "approved" }) === "edit" &&
     managerRowActions({}) === "edit",
 );
+
+console.log("the clash actions in the panel");
+const read = (rel: string) => fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
+const page = read("app/dashboard/solicitudes-ausencia/page.tsx");
+check("the card and the approval dialog both offer the actions", (page.match(/<ConflictActions/g) ?? []).length === 2);
+const actions = read("components/time-off/ConflictActions.tsx");
+check("passing is the usual move, with the professional picked", actions.includes("apiClient.updateAppointment(id, { professionalId: open.pick })"));
+check("cancelling goes through the time off route (no wait list, a link to book again)", actions.includes("apiClient.cancelAppointmentForTimeOff(id, reason)"));
+const es = JSON.parse(read("messages/es.json")).timeOff.actions;
+const en = JSON.parse(read("messages/en.json")).timeOff.actions;
+check("es.json and en.json have the same timeOff.actions keys", JSON.stringify(Object.keys(es).sort()) === JSON.stringify(Object.keys(en).sort()));
+for (const key of actions.match(/timeOff\.actions\.[a-zA-Z]+/g) ?? []) {
+  check(`${key} is in es.json`, !!es[key.split(".")[2]]);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

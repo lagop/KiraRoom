@@ -555,7 +555,7 @@ export class SalonToolsService {
         typeof s === 'string' ? s : s?.time,
       ).filter((t: unknown): t is string => typeof t === 'string');
       if (flat.length === 0) {
-        const why = await this.whyNoSlots(ctx, input.serviceId, input.date, input.professionalId);
+        const why = await this.whyNoSlots(ctx, input.serviceId, input.date, input.professionalId, input.locationId);
         if (why) return { date: input.date, serviceId: input.serviceId, ...here, slots: [], ...why };
       }
       return { date: input.date, serviceId: input.serviceId, ...here, slots: flat as any };
@@ -582,8 +582,10 @@ export class SalonToolsService {
     serviceId: string,
     date: string,
     professionalId?: string,
+    /** The location asked about (multi-local): its closures and the general ones. */
+    locationId?: string,
   ): Promise<{ reason: string; message: string } | null> {
-    const closures = await this.timeOffOn(ctx, date);
+    const closures = await this.timeOffOn(ctx, date, locationId);
     if (salonClosedOn(closures, date)) {
       return {
         reason: 'salon_closed',
@@ -619,9 +621,9 @@ export class SalonToolsService {
   }
 
   /** The salon's time off and closures on `date`; none when it cannot be read. */
-  private async timeOffOn(ctx: SalonToolContext, date: string) {
+  private async timeOffOn(ctx: SalonToolContext, date: string, locationId?: string) {
     try {
-      return await timeOffBetween(ctx.prisma as any, ctx.tenantId, date);
+      return await timeOffBetween(ctx.prisma as any, ctx.tenantId, date, date, { locationId });
     } catch (err) {
       // Only the explanation is lost: availability itself already read it.
       this.logger.warn(`timeOffOn failed tenant=${ctx.tenantId} date=${date}: ${(err as Error).message}`);

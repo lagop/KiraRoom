@@ -3291,7 +3291,31 @@
       "absenceReason": "{kind} of {name} ({dates})",
       "closureReason": "Salon closed ({dates})",
       "more": "and {count} more.",
-      "goToAgenda": "Go to the calendar"
+      "goToAgenda": "Go to the calendar",
+      "closureReasonAt": "{location} closed ({dates})"
+    },
+    "actions": {
+      "pass": "Pass to a free colleague",
+      "passSelected": "Pass the {count} selected",
+      "cancel": "Cancel and tell the client",
+      "cancelSelected": "Cancel and tell ({count})",
+      "selectAll": "Select all",
+      "select": "Select {line}",
+      "loadingFree": "Looking for who is free…",
+      "noneFree": "Nobody who does that service is free at that time.",
+      "noneFreeAll": "Nobody is free for all the chosen appointments: pass them one by one.",
+      "choose": "Professional",
+      "confirmPass": "Pass",
+      "confirmPassMany": "Pass the {count}",
+      "passed": "Passed to {name}",
+      "reasonLabel": "Reason the client will read (we add a link to book again)",
+      "channels": "We only write through the channels she accepted. The slot is not offered to the wait list.",
+      "confirmCancel": "Cancel the appointment",
+      "confirmCancelMany": "Cancel {count} appointments",
+      "cancelled": "Cancelled; the client was told",
+      "failed": "Could not be done: {error}",
+      "back": "Back",
+      "approveHelp": "They are not cancelled on their own: pass or cancel them here, approve and do it later, or go back."
     }
   }
 }

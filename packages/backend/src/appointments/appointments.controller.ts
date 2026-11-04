@@ -218,6 +218,26 @@ export class AppointmentsController {
     return this.appointmentsService.cancel(req.user, id, body?.reason);
   }
 
+  // The actions on an appointment that time off or a closure caught
+  // (Solicitudes de ausencia): whoever runs the salon decides each one.
+  @Get(":id/free-professionals")
+  @Roles(UserRole.owner, UserRole.admin)
+  @ApiOperation({ summary: "Professionals free to take the appointment at its day and time" })
+  async freeProfessionals(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
+    return this.appointmentsService.freeProfessionalsFor(req.user, id);
+  }
+
+  @Put(":id/cancel-for-time-off")
+  @Roles(UserRole.owner, UserRole.admin)
+  @ApiOperation({ summary: "Cancel an appointment caught by time off and tell the client, with a link to book again" })
+  async cancelForTimeOff(
+    @Req() req: any,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() body: CancelAppointmentDto,
+  ) {
+    return this.appointmentsService.cancelForTimeOff(req.user, id, body?.reason);
+  }
+
   @Put(":id/complete")
   @Roles(UserRole.owner, UserRole.admin, UserRole.staff) // staff: their own, via findOne
   @ApiOperation({ summary: "Mark appointment as completed" })
