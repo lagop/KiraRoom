@@ -28,7 +28,7 @@ For (2), the SaaS owner clicks "Add salon" in the SaaS dashboard (`/saas/tenants
 
 - Salon name, slug (auto-generated if blank), country, language, currency.
 - Owner email, first name, last name.
-- Initial password (or use the default `ChangeMe123!` placeholder, which the owner must reset on first login).
+- Initial password (8 to 128 characters), or leave it empty: the owner then gets an email with a link to choose her own, and no password works until she does.
 
 The endpoint `POST /saas/tenants` returns the new `tenant.id`. Seed the owner user with the same endpoint — that flow is `SaasService.createTenant`.
 

@@ -12,6 +12,7 @@ import {
   Mail,
 } from "lucide-react";
 import apiClient from "@/lib/api";
+import { safeHttpUrl } from "@/lib/safe-url";
 import { useTranslations } from "@/lib/use-translation";
 
 interface BugReport {
@@ -366,6 +367,8 @@ function BugReportDrawer({
   const [resolution, setResolution] = useState(report.resolution ?? "");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Rows saved before the API checked the scheme can hold anything.
+  const reportUrl = safeHttpUrl(report.currentUrl);
 
   useEffect(() => {
     setStatus(report.status);
@@ -468,15 +471,20 @@ function BugReportDrawer({
             </Field>
             {report.currentUrl && (
               <Field label="URL">
-                <a
-                  href={report.currentUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-blue-600 hover:underline inline-flex items-center gap-1 break-all"
-                >
-                  {report.currentUrl}
-                  <ExternalLink className="w-3 h-3" />
-                </a>
+                {/* Typed by the reporter: a link only when it is http(s). */}
+                {reportUrl ? (
+                  <a
+                    href={reportUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 hover:underline inline-flex items-center gap-1 break-all"
+                  >
+                    {report.currentUrl}
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                ) : (
+                  <span className="break-all text-gray-700">{report.currentUrl}</span>
+                )}
               </Field>
             )}
             {report.appVersion && (

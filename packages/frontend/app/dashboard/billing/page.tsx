@@ -11,6 +11,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { PlanId } from "@/lib/plans";
 import { empresaLocations, planAction, paysSubscription, scheduledCancellation, subscribedInTrial } from "@/lib/billing-plan";
 import { getCurrentUser } from "@/lib/utils";
+import { safeHttpUrl } from "@/lib/safe-url";
 import { isOwner } from "@/lib/dashboard-nav";
 import { aiConversationsApprox } from "@kira/shared";
 import { Check, Loader2, Sparkles, X } from "lucide-react";
@@ -1070,9 +1071,9 @@ function InvoicesList({
                     <InvoiceStatusBadge status={inv.status} t={t} />
                   </td>
                   <td className="px-4 py-2 text-right">
-                    {inv.invoiceUrl ? (
+                    {safeHttpUrl(inv.invoiceUrl) ? (
                       <a
-                        href={inv.invoiceUrl}
+                        href={safeHttpUrl(inv.invoiceUrl)!}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-violet-600 underline hover:text-violet-700"
