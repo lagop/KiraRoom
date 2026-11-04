@@ -5,7 +5,7 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { bindActor, bindTenant } from '../../common/tenancy/tenant.context';
 import { isAccessTokenPayload, supportClaims } from '../session-token';
-import { SALON_DELETED_MESSAGE } from '../salon-deleted';
+import { SALON_BLOCKED_MESSAGE, SALON_DELETED_MESSAGE } from '../salon-deleted';
 
 export interface JwtPayload {
   sub: string;      // userId
@@ -70,6 +70,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
               plan: true,
               subscriptionStatus: true,
               deletedAt: true,
+              blockedAt: true,
             },
           },
         },
@@ -79,6 +80,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       // deactivates the team and ends their sessions; this holds regardless).
       if (user?.tenant?.deletedAt && user.role !== 'saas_owner') {
         throw new UnauthorizedException(SALON_DELETED_MESSAGE);
+      }
+      // Blocked from the console (audit 8 D4): its sessions end now. A
+      // support session of the platform owner can still look into it.
+      if (user?.tenant?.blockedAt && user.role !== 'saas_owner' && !payload.impersonatedBy) {
+        throw new UnauthorizedException(SALON_BLOCKED_MESSAGE);
       }
       if (!user || !user.isActive) {
         throw new UnauthorizedException('Invalid token or user inactive');

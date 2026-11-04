@@ -29,6 +29,8 @@ interface SalonContact {
   phone: string | null;
   language: 'es' | 'en';
   subscriptionStatus: string | null;
+  /** Blocked from the console (audit 8 D4): nothing is answered either. */
+  blocked?: boolean;
 }
 
 /**
@@ -98,7 +100,7 @@ export class VirtualReceptionistService {
       // gets the salon's phone. (Other channels are already off for it:
       // they check the virtual_receptionist feature, which a read-only
       // salon does not have.)
-      if (salon && isReadOnlyStatus(salon.subscriptionStatus)) {
+      if (salon && (isReadOnlyStatus(salon.subscriptionStatus) || salon.blocked)) {
         this.logger.log(`Salon ${dto.salonId} is read-only; chat not answered (${who})`);
         return {
           id: 'salon-unavailable',
@@ -546,7 +548,7 @@ export class VirtualReceptionistService {
     try {
       const t = await this.prisma.tenant.findUnique({
         where: { id: tenantId },
-        select: { name: true, phone: true, language: true, subscriptionStatus: true },
+        select: { name: true, phone: true, language: true, subscriptionStatus: true, blockedAt: true },
       });
       if (!t) return null;
       return {
@@ -554,6 +556,7 @@ export class VirtualReceptionistService {
         phone: t.phone?.trim() || null,
         language: t.language === 'en' ? 'en' : 'es',
         subscriptionStatus: (t.subscriptionStatus as string | null) ?? null,
+        blocked: !!t.blockedAt,
       };
     } catch (err) {
       this.logger.warn(`Salon details not loaded for ${tenantId}: ${(err as Error).message}`);

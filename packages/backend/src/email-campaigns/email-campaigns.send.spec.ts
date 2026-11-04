@@ -20,14 +20,17 @@ type Row = Record<string, any>;
 function matches(row: Row, where: Row = {}): boolean {
   return Object.entries(where).every(([key, cond]) => {
     if (key === "OR") return (cond as Row[]).some((c) => matches(row, c));
-    // The salon relation: only its deletedAt is asked about (tenantDeletedAt on the row).
-    if (key === "tenant") return matches({ deletedAt: row.tenantDeletedAt ?? null }, cond);
+    // The salon relation (send-policy.ts): tenantDeletedAt, tenantBlockedAt and tenantStatus on the row.
+    if (key === "tenant") {
+      return matches({ deletedAt: row.tenantDeletedAt ?? null, blockedAt: row.tenantBlockedAt ?? null, subscriptionStatus: row.tenantStatus ?? "active" }, cond);
+    }
     const value = row[key];
     // isTest defaults to false in the database.
     if (key === "isTest") return (value ?? false) === cond;
     if (cond === null) return value === null || value === undefined;
     if (cond && typeof cond === "object" && !(cond instanceof Date)) {
       if ("in" in cond) return (cond.in as unknown[]).includes(value);
+      if ("notIn" in cond) return !(cond.notIn as unknown[]).includes(value);
       if ("not" in cond) return cond.not === null ? value !== null && value !== undefined : value !== cond.not;
       if ("lt" in cond) return value !== null && value !== undefined && value < cond.lt;
       if ("lte" in cond) return value !== null && value !== undefined && value <= cond.lte;
@@ -56,7 +59,7 @@ function fakeDb() {
     clients: [] as Row[],
     refusals: [] as Row[],
     // The salon's plan and clock, its month counters and its bono.
-    tenant: { id: "t1", plan: "pro", subscriptionStatus: "active", trialEnd: null, maxLocations: 1, timezone: "Europe/Madrid", tenantAddOns: [] } as Row,
+    tenant: { id: "t1", plan: "pro", subscriptionStatus: "active", stripeSubscriptionId: "sub_1", trialEnd: null, maxLocations: 1, timezone: "Europe/Madrid", tenantAddOns: [] } as Row,
     usage: [] as Row[],
     wallets: [] as Row[],
     purchases: [] as Row[],
@@ -445,6 +448,21 @@ describe("EmailCampaignSender: the dispatcher", () => {
     expect(byId("empty")).toMatchObject({ status: "draft", scheduledAt: null });
     expect(byId("empty").lastError).toMatch(/no tenía destinatarias/);
     expect(byId("later").status).toBe("scheduled");
+  });
+
+  it("D5: a read-only or blocked salon's campaign is neither started nor sent", async () => {
+    for (const salon of [{ tenantStatus: "cancelled" }, { tenantStatus: "suspended" }, { tenantBlockedAt: new Date("2026-11-01") }]) {
+      const t = setup();
+      Object.assign(t.campaign(), salon, { status: "scheduled", scheduledAt: new Date(NOW.getTime() - 60_000) });
+      t.client("k1");
+      t.recipient("r1", "k1", "ana@example.test");
+      await t.sender.startDue(NOW);
+      expect(t.campaign().status).toBe("scheduled");
+      t.campaign().status = "sending";
+      await t.sender.sendBatches(NOW);
+      expect(t.email.sendEmail).not.toHaveBeenCalled();
+      expect(t.row("r1").status).toBe("pending");
+    }
   });
 
   it("does nothing while email sending is not configured", async () => {

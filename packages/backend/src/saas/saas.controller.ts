@@ -11,7 +11,7 @@ import { parseMonthsParam } from "./platform-metrics";
 import { CreateTenantDto } from "./dto/create-tenant.dto";
 import { UpdateTenantDto } from "./dto/update-tenant.dto";
 import { TenantFilterDto } from "./dto/tenant-filter.dto";
-import { ReactivateTenantDto } from "./dto/console-actions.dto";
+import { BlockTenantDto, CourtesyTenantDto } from "./dto/console-actions.dto";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { SaasOwnerGuard } from "./guards/saas-owner.guard";
 import { SaasOwner } from "./decorators/saas-owner.decorator";
@@ -61,7 +61,7 @@ export class SaasController {
   @ApiResponse({ status: 201, description: "Tenant created successfully" })
   @ApiResponse({ status: 400, description: "Invalid input or slug already exists" })
   async createTenant(@Req() req: any, @Body() createTenantDto: CreateTenantDto) {
-    const tenant = await this.saasService.createTenant(createTenantDto);
+    const tenant = await this.saasService.createTenant(createTenantDto, req.user);
     // C9: who created it. The owner's email is not copied into the row (C15);
     // the tenant id leads to it while the salon exists.
     await this.auditLog.record("tenant.create", {
@@ -118,17 +118,26 @@ export class SaasController {
     return this.saasService.suspendTenant(id, req.user);
   }
 
-  @Post("tenants/:id/reactivate")
+  @Post("tenants/:id/block")
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: "Reactivate tenant (SaaS Owner only)" })
-  @ApiResponse({ status: 200, description: "Tenant reactivated successfully" })
+  @ApiOperation({ summary: "Block tenant for abuse: access cut now, nothing sent, Stripe collection paused (SaaS Owner only)" })
+  async blockTenant(@Req() req: any, @Param("id", ParseUUIDPipe) id: string, @Body() body: BlockTenantDto) {
+    return this.saasService.blockTenant(id, body.reason, req.user);
+  }
+
+  @Post("tenants/:id/unblock")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Unblock tenant (SaaS Owner only)" })
+  async unblockTenant(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
+    return this.saasService.unblockTenant(id, req.user);
+  }
+
+  @Post("tenants/:id/courtesy")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Courtesy: active without paying on a plan until a date (SaaS Owner only)" })
   @ApiResponse({ status: 409, description: "The owner asked to delete it: send cancelDeletion to cancel that too" })
-  async reactivateTenant(
-    @Req() req: any,
-    @Param("id", ParseUUIDPipe) id: string,
-    @Body() body: ReactivateTenantDto,
-  ) {
-    return this.saasService.reactivateTenant(id, { cancelDeletion: body?.cancelDeletion }, req.user);
+  async courtesyTenant(@Req() req: any, @Param("id", ParseUUIDPipe) id: string, @Body() body: CourtesyTenantDto) {
+    return this.saasService.courtesyTenant(id, { plan: body.plan, until: body.until, cancelDeletion: body.cancelDeletion }, req.user);
   }
 
   @Get("analytics/overview")

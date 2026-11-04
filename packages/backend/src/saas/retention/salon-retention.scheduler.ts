@@ -45,7 +45,10 @@ export interface RetentionRun {
  *   readOnlyUntil it read), recorded as a GdprRequest and run by
  *   GdprService.anonymize with the invoices kept. A failure marks the request
  *   failed and gives the claim back.
- * Anonymising sets deletedAt, so a salon is never picked up again.
+ * Salons deleted from the console are picked up too (audit 8 D3): deleting
+ * follows the same 60 days as "Borrar mi salón", and their owner is warned
+ * without the links her team can no longer use. anonymizedAt, set by the
+ * anonymisation, is what keeps a salon from being picked up again.
  */
 @Injectable()
 export class SalonRetentionScheduler {
@@ -75,18 +78,18 @@ export class SalonRetentionScheduler {
     const enabled = retentionEnabled(this.config.get<string>(RETENTION_FLAG));
     const out: RetentionRun = { enabled, warned: [], anonymized: [], wouldWarn: [], wouldAnonymize: [], failed: [] };
 
-    const candidates: Array<RetentionCandidate & { name: string }> = await runUnscoped(() =>
+    const candidates: Array<RetentionCandidate & { name: string; deletedAt?: Date | null }> = await runUnscoped(() =>
       this.prisma.tenant.findMany({
         where: {
           subscriptionStatus: { in: ["cancelled", "suspended"] },
           readOnlyUntil: { not: null },
-          deletedAt: null,
           anonymizedAt: null,
         },
         select: {
           id: true,
           name: true,
           subscriptionStatus: true,
+          deletedAt: true,
           readOnlyUntil: true,
           anonymizationWarnedAt: true,
           anonymizationWarnedFor: true,
@@ -132,7 +135,7 @@ export class SalonRetentionScheduler {
     return out;
   }
 
-  private async warn(t: RetentionCandidate & { name: string }, step: RetentionStep, now: Date): Promise<boolean> {
+  private async warn(t: RetentionCandidate & { name: string; deletedAt?: Date | null }, step: RetentionStep, now: Date): Promise<boolean> {
     const claimed = await runUnscoped(() =>
       this.prisma.tenant.updateMany({
         where: {
@@ -157,6 +160,7 @@ export class SalonRetentionScheduler {
           anonymizeOn: step.anonymizeOn,
           exportUrl: `${base}/dashboard/settings/seguridad`,
           billingUrl: `${base}/dashboard/billing`,
+          deleted: !!t.deletedAt,
         })
       : { success: false, error: "no owner email" };
     if (!sent.success && !(sent as { skipped?: boolean }).skipped) {
@@ -180,7 +184,6 @@ export class SalonRetentionScheduler {
         where: {
           id: t.id,
           anonymizedAt: null,
-          deletedAt: null,
           readOnlyUntil: t.readOnlyUntil,
           subscriptionStatus: { in: ["cancelled", "suspended"] },
         },

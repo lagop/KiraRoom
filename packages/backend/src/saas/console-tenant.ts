@@ -1,7 +1,7 @@
 import { ConflictException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { RESERVED_SUBDOMAINS } from "@kira/shared";
-import { slugify } from "./saas.helpers";
+import { containsPlatformWord, slugify } from "./saas.helpers";
 import { WEB_ADDRESS_MAX, WEB_ADDRESS_MIN, type WebAddressProblem } from "../web-address/web-address-rules";
 import { anonymizationDate, retentionStep } from "./retention/salon-retention";
 
@@ -49,6 +49,11 @@ export const CONSOLE_TENANT_SELECT = {
   anonymizedAt: true,
   deletionRequestedAt: true,
   deletedAt: true,
+  // Audit 8 D4 / D6: blocked for abuse, and the courtesy period.
+  blockedAt: true,
+  blockedReason: true,
+  courtesyUntil: true,
+  courtesyPlan: true,
   // Only whether there is one (consoleTenantView): ids are not shown.
   stripeSubscriptionId: true,
   createdAt: true,
@@ -109,18 +114,45 @@ export function retentionView(
 const UUID_SHAPED = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /**
- * The console's check of a new salon's address (audit 8 T7): length and
- * shape, plus the reserved names it already refused. The platform words
- * ("kiraroom", "soporte") are not refused here: whether the platform may
- * use them for its own salons is the owner's pending decision.
+ * Reserved names a platform address may take (audit 8 D7): the platform's
+ * own brand names. The other reserved names are real hosts or routes (app,
+ * api, www, login...): a salon there would never be reached, so not even a
+ * platform address can have them.
  */
-export function consoleSlugProblem(slug: string): WebAddressProblem | null {
+export const PLATFORM_ADDRESS_RESERVED_OK: ReadonlySet<string> = new Set([
+  "kiraroom",
+  "kira",
+  "kairikos",
+  "soporte",
+  "support",
+  "ayuda",
+  "help",
+  "demo",
+]);
+
+/**
+ * The console's check of a salon's address (audit 8 T7, D7): the same rules
+ * as the owner's (length, shape, reserved names, no platform words). With
+ * "Dirección de la plataforma" ticked, a salon of the platform itself may use
+ * the platform's words and brand names; the caller audit-logs it.
+ */
+export function consoleSlugProblem(slug: string, opts: { platformAddress?: boolean } = {}): WebAddressProblem | null {
   if (slug.length < WEB_ADDRESS_MIN) return "too_short";
   if (slug.length > WEB_ADDRESS_MAX) return "too_long";
   if (slugify(slug) !== slug) return "format";
-  if (RESERVED_SUBDOMAINS.has(slug) || UUID_SHAPED.test(slug)) return "reserved";
+  if (UUID_SHAPED.test(slug)) return "reserved";
+  if (RESERVED_SUBDOMAINS.has(slug) && !(opts.platformAddress && PLATFORM_ADDRESS_RESERVED_OK.has(slug))) return "reserved";
+  if (containsPlatformWord(slug) && !opts.platformAddress) return "platform_word";
   return null;
 }
+
+/** Whether an address needs "Dirección de la plataforma" (and its audit row). */
+export function isPlatformAddress(slug: string): boolean {
+  return RESERVED_SUBDOMAINS.has(slug) || containsPlatformWord(slug);
+}
+
+export const PLATFORM_ADDRESS_HINT =
+  " Si es un salón de la propia plataforma, marca «Dirección de la plataforma».";
 
 /** A unique column already taken (P2002) is a Spanish 409, not a 500 (audit 8 T22). */
 export function rethrowUniqueConflict(err: unknown): never {
@@ -144,12 +176,20 @@ export const CONSOLE_EDIT_MESSAGES = {
   trialEndPast: "La nueva fecha de fin de prueba tiene que ser posterior a hoy.",
   cancelInStripe:
     "Este salón tiene una suscripción activa en Stripe: darlo de baja aquí no deja de cobrarle. Cancélala en Stripe (o pide a la dueña que lo haga desde Facturación).",
+  /** Audit 8 D4 / D6: status changes have their own buttons now. */
+  useCourtesy: "Para que un salón funcione sin pagar, usa «Cortesía» (con plan y fecha de fin).",
+  useSuspend: "Para dar de baja un salón, usa «Suspender»: cancela su cobro y le avisa por email.",
+  deleted: "Este salón está eliminado: no se puede cambiar.",
+  blocked: "Este salón está bloqueado. Desbloquéalo antes.",
+  alreadyBlocked: "Este salón ya está bloqueado.",
+  notBlocked: "Este salón no está bloqueado.",
+  alreadyReadOnly: "Este salón ya está de baja (solo lectura).",
 } as const;
 
 /** Reactivating a salon whose owner asked to delete it (audit 8 T4). */
 export function pendingDeletionMessage(requestedAt: Date): string {
   const day = requestedAt.toLocaleDateString("es-ES", { timeZone: "Europe/Madrid", day: "numeric", month: "long", year: "numeric" });
-  return `La dueña pidió borrar este salón el ${day}. Reactivarlo anula esa petición: marca «Anular también el borrado pendiente» para confirmarlo.`;
+  return `La dueña pidió borrar este salón el ${day}. Darle cortesía anula esa petición: marca «Anular también el borrado pendiente» para confirmarlo.`;
 }
 
 /**

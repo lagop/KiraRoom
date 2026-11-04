@@ -872,9 +872,10 @@ export class AppointmentsService {
     // receptionist either. ReadOnlyTenantGuard covers the team's own routes.
     const tenant = await db.tenant.findUnique({
       where: { id: tenantId },
-      select: { subscriptionStatus: true, autoConfirmOnlineBookings: true },
+      select: { subscriptionStatus: true, autoConfirmOnlineBookings: true, blockedAt: true },
     });
-    if (isReadOnlyStatus(tenant?.subscriptionStatus)) {
+    // Blocked from the console (audit 8 D4): no bookings either.
+    if (isReadOnlyStatus(tenant?.subscriptionStatus) || tenant?.blockedAt) {
       throw new ForbiddenException({
         code: "SALON_NOT_ACCEPTING_BOOKINGS",
         message: "Este salón no acepta reservas en este momento.",
@@ -2135,7 +2136,8 @@ export class AppointmentsService {
         createdAt: { lte: new Date(now.getTime() - hours * 3_600_000) },
         // Ahead only; a booking already past is the salon's to sort out.
         scheduledDate: { gte: new Date(now.toISOString().slice(0, 10)) },
-        tenant: { deletedAt: null },
+        // Not a deleted or blocked salon: it sends nothing (audit 8 D5).
+        tenant: { deletedAt: null, blockedAt: null },
       },
       select: {
         id: true,

@@ -15,6 +15,7 @@ import {
 import { EmailSuppressionService } from "../email-campaigns/email-suppression.service";
 import { EmailUnsubscribeService } from "../email-campaigns/email-unsubscribe.service";
 import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
+import { MARKETING_SENDS_TENANT_WHERE } from "../common/tenancy/send-policy";
 
 interface SendResult {
   ok: boolean;
@@ -134,8 +135,8 @@ export class RebookingDispatcherService {
         where: {
           optedOut: false,
           nextRecommendedReminderAt: { gte: from, lt: until },
-          // Not for a salon deleted from the console (audit 7 N7).
-          tenant: { deletedAt: null },
+          // Not for a deleted, blocked or read-only salon (audit 7 N7, audit 8 D5).
+          tenant: MARKETING_SENDS_TENANT_WHERE,
           OR: [{ dispatchClaimedAt: null }, { dispatchClaimedAt: { lt: claimableBefore } }],
         },
         select: {

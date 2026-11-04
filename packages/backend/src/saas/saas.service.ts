@@ -35,9 +35,15 @@ import { assertNotPlatformTenant, NOT_PLATFORM_TENANT_WHERE } from "./platform-t
 import { isReadOnlyStatus } from "../common/guards/read-only-tenant.guard";
 import { normalizeWebAddress, WEB_ADDRESS_MESSAGES } from "../web-address/web-address-rules";
 import { DAY_MS, READ_ONLY_DAYS } from "./retention/salon-retention";
+import { EmailService } from "../notifications/services/email.service";
+import { ConfigService } from "@nestjs/config";
+import { moveTenantSlug, webAddressTaken } from "../web-address/web-address.service";
+import { COURTESY_MESSAGES, courtesyUntilProblem } from "./retention/courtesy";
 import {
   CONSOLE_EDIT_MESSAGES,
   CONSOLE_TENANT_SELECT,
+  PLATFORM_ADDRESS_HINT,
+  isPlatformAddress,
   STALE_RETENTION_RESET,
   consoleSlugProblem,
   consoleTenantView,
@@ -73,6 +79,12 @@ export function changedFields(
   return out;
 }
 
+/** The Spanish message of a refused address; the platform words say how a platform salon can have them (D7). */
+function slugProblemMessage(problem: keyof typeof WEB_ADDRESS_MESSAGES): string {
+  const base = WEB_ADDRESS_MESSAGES[problem];
+  return problem === "platform_word" ? base + PLATFORM_ADDRESS_HINT : base;
+}
+
 export interface PaginatedResult<T> {
   data: T[];
   meta: {
@@ -93,6 +105,9 @@ export class SaasService {
     private readonly auditLog: AuditLogService,
     private readonly subscriptions: SubscriptionsService,
     @Optional() private readonly passwordReset?: PasswordResetService,
+    // The salon's email when "Suspender" ends its subscription (audit 8 D4).
+    @Optional() private readonly email?: EmailService,
+    @Optional() private readonly config?: ConfigService,
   ) {}
 
   async getAllTenants(filter: TenantFilterDto): Promise<PaginatedResult<any>> {
@@ -168,6 +183,9 @@ export class SaasService {
           createdAt: true,
           // "Mostrar eliminados" marks them, and their actions are hidden (T9).
           deletedAt: true,
+          blockedAt: true,
+          courtesyUntil: true,
+          courtesyPlan: true,
           anonymizedAt: true,
           deletionRequestedAt: true,
           users: {
@@ -271,15 +289,16 @@ export class SaasService {
     };
   }
 
-  async createTenant(createTenantDto: CreateTenantDto) {
+  async createTenant(createTenantDto: CreateTenantDto, actor?: ConsoleActor) {
     // At least 3 characters, letters without accents, digits and hyphens:
     // the form used to keep only the first letter typed ("s") and the API
     // took it (audit 8 T7). The reserved names stay as they were.
     const slug = createTenantDto.slug?.trim().length
       ? normalizeWebAddress(createTenantDto.slug)
       : slugify(createTenantDto.name);
-    const shape = consoleSlugProblem(slug);
-    if (shape) throw new BadRequestException(WEB_ADDRESS_MESSAGES[shape]);
+    const platformAddress = !!createTenantDto.platformAddress;
+    const shape = consoleSlugProblem(slug, { platformAddress });
+    if (shape) throw new BadRequestException(slugProblemMessage(shape));
 
     await assertTenantSlugAvailable(this.prisma, slug);
 
@@ -317,6 +336,18 @@ export class SaasService {
       ownerLastName: createTenantDto.ownerLastName,
     }).catch(rethrowUniqueConflict);
 
+    // D7: a platform address is on the audit log.
+    if (platformAddress && isPlatformAddress(slug) && actor?.id) {
+      await this.auditLog
+        .record("tenant.platform_address", {
+          actorId: actor.id,
+          actorRole: UserRole.saas_owner,
+          tenantId: tenant.id,
+          metadata: { slug, on: "create" },
+        })
+        .catch((err) => this.logger.warn(`Audit log tenant.platform_address for ${tenant.id} failed: ${(err as Error).message}`));
+    }
+
     if (setPasswordByEmail && createTenantDto.ownerEmail) {
       // The reset flow: one-hour single-use link, same email and rate limits.
       // Expired, the owner asks for another from "¿Olvidaste tu contraseña?".
@@ -346,7 +377,7 @@ export class SaasService {
 
     // P2A — Normalize NIF before persisting. Don't accept malformed
     // identifiers because AEAT / diputaciones reject them silently.
-    const { cancelDeletion, ...fields } = updateTenantDto;
+    const { platformAddress, slug: rawSlug, ...fields } = updateTenantDto;
     const patch: any = { ...fields };
     if (patch.taxId !== undefined) {
       const { validateNif } = await import("../common/validation/nif.validator");
@@ -360,8 +391,18 @@ export class SaasService {
     }
 
     Object.assign(patch, this.subscriptionPatch(existing, patch, now));
-    if (isReadOnlyStatus(existing.subscriptionStatus) && !isReadOnlyStatus(patch.subscriptionStatus ?? existing.subscriptionStatus)) {
-      Object.assign(patch, this.leaveReadOnly(existing, !!cancelDeletion));
+
+    // T21 / D7: a new address goes through tenant_slug_redirects, as the
+    // owner's own change does: the old one keeps redirecting for 12 months.
+    let newSlug: string | null = null;
+    if (rawSlug !== undefined) {
+      const slug = normalizeWebAddress(rawSlug);
+      if (slug !== existing.slug) {
+        const shape = consoleSlugProblem(slug, { platformAddress: !!platformAddress });
+        if (shape) throw new BadRequestException(slugProblemMessage(shape));
+        if (await webAddressTaken(this.prisma, slug, id)) throw new ConflictException(WEB_ADDRESS_MESSAGES.taken);
+        newSlug = slug;
+      }
     }
 
     // Audit 8, C8/C9: what changed, before and after, by the platform owner
@@ -376,6 +417,26 @@ export class SaasService {
     const taxIdBefore = existing.taxId ?? null;
     try {
       return await this.prisma.$transaction(async (tx) => {
+        if (newSlug) {
+          const oldSlug = existing.slug;
+          const redirectsUntil = await moveTenantSlug(tx, { tenantId: id, from: oldSlug, to: newSlug, now, ownerChange: false });
+          await this.auditLog.record(
+            "tenant.web_address_changed",
+            {
+              actorId: actor.id,
+              actorRole: UserRole.saas_owner,
+              tenantId: id,
+              metadata: {
+                from: oldSlug,
+                to: newSlug,
+                redirectsUntil: redirectsUntil?.toISOString() ?? null,
+                source: "saas/console",
+                platformAddress: !!platformAddress && isPlatformAddress(newSlug),
+              },
+            },
+            tx,
+          );
+        }
         const updated = await tx.tenant.update({ where: { id }, data: patch, select: CONSOLE_TENANT_SELECT });
         if (Object.keys(changes).length > 0) {
           await this.auditLog.record(
@@ -420,12 +481,25 @@ export class SaasService {
     if (statusChanged && (to === "past_due" || to === "suspended")) {
       throw new BadRequestException(CONSOLE_EDIT_MESSAGES.stripeOwnedStatus);
     }
+    // Audit 8 D4 / D6: leaving read-only, or active without Stripe, is a
+    // courtesy (plan and end date); entering read-only is "Suspender".
+    if (statusChanged && isReadOnlyStatus(to) && !isReadOnlyStatus(from)) {
+      throw new BadRequestException(CONSOLE_EDIT_MESSAGES.useSuspend);
+    }
+    if (statusChanged && isReadOnlyStatus(from)) {
+      throw new BadRequestException(CONSOLE_EDIT_MESSAGES.useCourtesy);
+    }
+    if (statusChanged && to === "active" && !existing.stripeSubscriptionId) {
+      throw new BadRequestException(CONSOLE_EDIT_MESSAGES.useCourtesy);
+    }
 
     const planChanged = patch.plan !== undefined && normalizePlan(patch.plan) !== normalizePlan(existing.plan);
     if (planChanged && stripeLive) {
       throw new BadRequestException(CONSOLE_EDIT_MESSAGES.planInStripe);
     }
     if (patch.plan !== undefined) out.plan = normalizePlan(patch.plan);
+    // A courtesy in course goes on with the new plan.
+    if (planChanged && existing.courtesyUntil) out.courtesyPlan = out.plan;
     if (to === "active" && !normalizePlan((out.plan as string | undefined) ?? existing.plan)) {
       throw new BadRequestException(CONSOLE_EDIT_MESSAGES.activeNeedsPlan);
     }
@@ -443,23 +517,17 @@ export class SaasService {
       throw new BadRequestException(CONSOLE_EDIT_MESSAGES.trialEndPast);
     }
 
-    if (statusChanged && isReadOnlyStatus(to) && !isReadOnlyStatus(from)) {
-      if (stripeLive && !existing.subscriptionCancelAt) {
-        throw new BadRequestException(CONSOLE_EDIT_MESSAGES.cancelInStripe);
-      }
-      Object.assign(out, STALE_RETENTION_RESET);
-    }
     return out;
   }
 
   /**
-   * Back from read-only (Reactivar, or an edit to Activo / En prueba): the
+   * Back from read-only (Cortesía, audit 8 D6; an edit no longer can): the
    * retention dates of the old read-only period go (audit 8 T4). Left
    * there, a later suspension saw a read-only end long past and a warning
    * "already given", and the next 04:40 run anonymised the salon. The
    * owner's own "Borrar mi salón" is not dropped silently: refused unless
    * cancelDeletion, which also cancels it (the change is on the
-   * tenant.update or tenant.reactivate audit row).
+   * tenant.courtesy audit row).
    * subscriptionCancelAt is Stripe's and stays.
    */
   private leaveReadOnly(tenant: Tenant, cancelDeletion: boolean): Record<string, unknown> {
@@ -540,31 +608,185 @@ export class SaasService {
     };
   }
 
-  async suspendTenant(id: string, actor: ConsoleActor) {
+  /**
+   * "Suspender" (audit 8 D4, owner's decision 2026-11-04): a real end of the
+   * subscription. Stripe is cancelled first (a failure is a Spanish 503 and
+   * nothing changes), then the salon is read-only for READ_ONLY_DAYS like any
+   * salon that left, cancelledAt set (the churn figures count by it), and its
+   * owner is emailed in Spanish. The retention job anonymises it 30 days
+   * after the read-only end.
+   */
+  async suspendTenant(id: string, actor: ConsoleActor, now: Date = new Date()) {
     const tenant = await getActiveTenant(this.prisma, id);
     await assertNotPlatformTenant(this.prisma, id);
-    // Stale retention dates of an earlier read-only period go (audit 8 T4).
-    return this.setStatusWithAudit(
+    if (tenant.blockedAt) throw new BadRequestException(CONSOLE_EDIT_MESSAGES.blocked);
+    if (isReadOnlyStatus(tenant.subscriptionStatus)) throw new BadRequestException(CONSOLE_EDIT_MESSAGES.alreadyReadOnly);
+
+    const stripe = await this.subscriptions.cancelStripeSubscriptionNow(id);
+    const readOnlyUntil = new Date(now.getTime() + READ_ONLY_DAYS * DAY_MS);
+    const view = await this.setStatusWithAudit(
       id,
       tenant.subscriptionStatus,
       "cancelled",
       "tenant.suspend",
       actor,
-      isReadOnlyStatus(tenant.subscriptionStatus) ? {} : { ...STALE_RETENTION_RESET },
+      {
+        cancelledAt: now,
+        readOnlyUntil,
+        subscriptionCancelAt: null,
+        courtesyUntil: null,
+        courtesyPlan: null,
+        courtesyWarnedAt: null,
+        anonymizationWarnedAt: null,
+        anonymizationWarnedFor: null,
+      },
+      { readOnlyUntil: readOnlyUntil.toISOString(), stripeCancelled: stripe.cancelled },
     );
+    await this.emailOwner(id, (to) =>
+      this.email!.sendAccountReadOnly({
+        to,
+        tenantName: tenant.name,
+        reason: "platform_cancelled",
+        readOnlyUntil,
+        billingUrl: `${this.appBase()}/dashboard/billing`,
+      }),
+    );
+    return view;
   }
 
   /**
-   * "Reactivar" (audit 8 T4): active again, without the retention dates of
-   * the read-only period it leaves. A pending "Borrar mi salón" is refused
-   * unless cancelDeletion, which cancels it too.
+   * "Bloquear" (audit 8 D4, abuse): access ends now (sign-in refused with a
+   * neutral message, sessions ended), its page is offline, nothing is sent
+   * and nothing is charged (Stripe collection paused; a Stripe failure is a
+   * Spanish 503 and nothing changes). The status stays as it was, so
+   * "Desbloquear" puts everything back.
    */
-  async reactivateTenant(id: string, opts: { cancelDeletion?: boolean }, actor: ConsoleActor) {
+  async blockTenant(id: string, reason: string, actor: ConsoleActor, now: Date = new Date()) {
     const tenant = await getActiveTenant(this.prisma, id);
-    const extra = this.leaveReadOnly(tenant, !!opts.cancelDeletion);
-    return this.setStatusWithAudit(id, tenant.subscriptionStatus, "active", "tenant.reactivate", actor, extra, {
-      ...(tenant.deletionRequestedAt ? { deletionCancelled: { requestedAt: tenant.deletionRequestedAt.toISOString() } } : {}),
+    await assertNotPlatformTenant(this.prisma, id);
+    if (tenant.blockedAt) throw new BadRequestException(CONSOLE_EDIT_MESSAGES.alreadyBlocked);
+    const stripe = await this.subscriptions.setStripeCollectionPaused(id, true);
+    const why = reason.trim().slice(0, 500);
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.tenant.update({
+        where: { id },
+        data: { blockedAt: now, blockedReason: why },
+        select: CONSOLE_TENANT_SELECT,
+      });
+      // Every open session of its team ends now (jwt.strategy compares tokenVersion).
+      const users = await tx.user.updateMany({
+        where: { tenantId: id, role: { not: UserRole.saas_owner } },
+        data: { tokenVersion: { increment: 1 } },
+      });
+      await invalidateTenantWidgets(tx, id);
+      await this.auditLog.record(
+        "tenant.block",
+        {
+          actorId: actor.id,
+          actorRole: UserRole.saas_owner,
+          tenantId: id,
+          metadata: { reason: why, sessionsEnded: users.count, stripeCollectionPaused: stripe.changed },
+        },
+        tx,
+      );
+      return consoleTenantView(updated);
     });
+  }
+
+  /** "Desbloquear": back as it was before the block; Stripe collection resumes first. */
+  async unblockTenant(id: string, actor: ConsoleActor) {
+    const tenant = await getActiveTenant(this.prisma, id);
+    const blockedAt = tenant.blockedAt;
+    if (!blockedAt) throw new BadRequestException(CONSOLE_EDIT_MESSAGES.notBlocked);
+    const stripe = await this.subscriptions.setStripeCollectionPaused(id, false);
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.tenant.update({
+        where: { id },
+        data: { blockedAt: null, blockedReason: null },
+        select: CONSOLE_TENANT_SELECT,
+      });
+      await this.auditLog.record(
+        "tenant.unblock",
+        {
+          actorId: actor.id,
+          actorRole: UserRole.saas_owner,
+          tenantId: id,
+          metadata: { blockedAt: blockedAt.toISOString(), stripeCollectionResumed: stripe.changed },
+        },
+        tx,
+      );
+      return consoleTenantView(updated);
+    });
+  }
+
+  /**
+   * "Cortesía" (audit 8 D6): active without paying, on a plan, until a date.
+   * Replaces "Reactivar" without payment. Also extends a courtesy in course.
+   * Leaving read-only clears the old retention dates (T4); a pending
+   * "Borrar mi salón" is refused unless cancelDeletion, which cancels it too.
+   * Not paying: out of MRR, and the never-paid email cap still applies.
+   * CourtesyScheduler emails the owner 3 days before the end and puts it
+   * back to read-only at the end.
+   */
+  async courtesyTenant(
+    id: string,
+    input: { plan: string; until: Date; cancelDeletion?: boolean },
+    actor: ConsoleActor,
+    now: Date = new Date(),
+  ) {
+    const tenant = await getActiveTenant(this.prisma, id);
+    await assertNotPlatformTenant(this.prisma, id);
+    if (tenant.blockedAt) throw new BadRequestException(COURTESY_MESSAGES.blocked);
+    if (tenant.stripeSubscriptionId && !isReadOnlyStatus(tenant.subscriptionStatus)) {
+      throw new BadRequestException(COURTESY_MESSAGES.paysInStripe);
+    }
+    const plan = normalizePlan(input.plan);
+    if (!plan) throw new BadRequestException(COURTESY_MESSAGES.planNeeded);
+    const problem = courtesyUntilProblem(input.until, now);
+    if (problem) throw new BadRequestException(problem);
+
+    const extra: Record<string, unknown> = isReadOnlyStatus(tenant.subscriptionStatus)
+      ? this.leaveReadOnly(tenant, !!input.cancelDeletion)
+      : {};
+    return this.setStatusWithAudit(
+      id,
+      tenant.subscriptionStatus,
+      "active",
+      "tenant.courtesy",
+      actor,
+      {
+        ...extra,
+        plan,
+        courtesyPlan: plan,
+        courtesyUntil: input.until,
+        courtesyWarnedAt: null,
+        currentPeriodEnd: input.until,
+        // A Stripe subscription that ended with the read-only period is gone.
+        ...(isReadOnlyStatus(tenant.subscriptionStatus) ? { stripeSubscriptionId: null, subscriptionCancelAt: null } : {}),
+      },
+      {
+        courtesy: { plan, until: input.until.toISOString(), previousUntil: tenant.courtesyUntil?.toISOString() ?? null },
+        ...(tenant.deletionRequestedAt && extra.deletionRequestedAt === null
+          ? { deletionCancelled: { requestedAt: tenant.deletionRequestedAt.toISOString() } }
+          : {}),
+      },
+    );
+  }
+
+  /** The owner's email, sent best-effort: the console action is already done. */
+  private async emailOwner(tenantId: string, send: (to: string) => Promise<unknown>) {
+    if (!this.email) return;
+    try {
+      const owner = await this.prisma.user.findFirst({ where: { tenantId, role: UserRole.owner }, select: { email: true } });
+      if (owner?.email) await send(owner.email);
+    } catch (err) {
+      this.logger.warn(`Email to the owner of ${tenantId} not sent: ${(err as Error).message}`);
+    }
+  }
+
+  private appBase(): string {
+    const base = this.config?.get<string>("APP_BASE_URL") || this.config?.get<string>("FRONTEND_URL") || "https://app.kiraroom.net";
+    return base.replace(/\/+$/, "");
   }
 
   /** The status change and its audit row, together (C9). */

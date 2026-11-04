@@ -4,3 +4,10 @@
  */
 export const SALON_DELETED_MESSAGE =
   "Este salón se ha dado de baja en KiraRoom y ya no se puede entrar. Si crees que es un error, escríbenos.";
+
+/**
+ * A salon blocked from the console (audit 8 D4, abuse). Neutral on purpose:
+ * it does not say why, nor that it was blocked.
+ */
+export const SALON_BLOCKED_MESSAGE =
+  "Ahora mismo no se puede entrar en este salón. Si crees que es un error, escríbenos a info@kiraroom.com.";

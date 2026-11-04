@@ -33,6 +33,7 @@ import {
   withinSendingHours,
 } from "./review-rules";
 import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
+import { MARKETING_SENDS_TENANT_WHERE } from "../common/tenancy/send-policy";
 
 /** The add-on that pays for automatic review requests. */
 export const REVIEW_ADDON_KEY = "google_reviews_auto" as const;
@@ -600,7 +601,8 @@ export class ReviewsService {
     );
     try {
       const profiles = await this.prisma.googleBusinessProfile.findMany({
-        where: { enableReviewRequests: true, tenant: { deletedAt: null } },
+        // Not for a deleted, blocked or read-only salon (audit 8 D5).
+        where: { enableReviewRequests: true, tenant: MARKETING_SENDS_TENANT_WHERE },
         select: { tenantId: true },
       });
       for (const { tenantId } of profiles) {

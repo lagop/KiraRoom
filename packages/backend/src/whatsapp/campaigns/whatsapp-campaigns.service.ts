@@ -15,6 +15,7 @@ import {
 } from "./campaign-template";
 import { DISCONNECTED_REASON, TOKEN_EXPIRED_REASON, accountLevelReason } from "./meta-account-errors";
 import { MonitoredJob } from "../../common/ops-alerts/ops-alert-sink";
+import { MARKETING_SENDS_TENANT_WHERE } from "../../common/tenancy/send-policy";
 
 export interface CampaignInput {
   name: string;
@@ -365,8 +366,8 @@ export class WhatsAppCampaignsService {
         status: WhatsAppCampaignStatus.scheduled,
         templateStatus: "APPROVED",
         OR: [{ scheduledAt: null }, { scheduledAt: { lte: now } }],
-        // Not for a salon deleted from the console (audit 7 N7).
-        tenant: { deletedAt: null },
+        // Not for a deleted, blocked or read-only salon (audit 7 N7, audit 8 D5).
+        tenant: MARKETING_SENDS_TENANT_WHERE,
       },
       include: { tenant: { select: { timezone: true } } },
       take: 20,
@@ -417,7 +418,7 @@ export class WhatsAppCampaignsService {
   /** One batch per sending campaign; finishes the ones with nobody left. */
   async sendBatches(now = new Date()): Promise<void> {
     const sending = await this.prisma.whatsAppCampaign.findMany({
-      where: { status: WhatsAppCampaignStatus.sending, tenant: { deletedAt: null } },
+      where: { status: WhatsAppCampaignStatus.sending, tenant: MARKETING_SENDS_TENANT_WHERE },
       include: { tenant: { select: { country: true, timezone: true } } },
       take: 20,
     });

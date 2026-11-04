@@ -172,6 +172,15 @@ describe("SalonRetentionScheduler", () => {
     expect(t.gdpr.anonymize).toHaveBeenCalledTimes(1);
   });
 
+  it("D3: a salon deleted from the console is warned (no links) and anonymised like any other", async () => {
+    const r = row({ deletedAt: at(READ_ONLY_UNTIL, -30) });
+    const t = harness([r], { flag: "true" });
+    expect((await t.job.run(at(ANONYMIZE_ON, -7))).warned).toEqual(["t1"]);
+    expect(t.email.sendAnonymizationWarning).toHaveBeenCalledWith(expect.objectContaining({ deleted: true }));
+    expect((await t.job.run(ANONYMIZE_ON)).anonymized).toEqual(["t1"]);
+    expect(t.gdpr.anonymize).toHaveBeenCalledWith("t1", "req-1", { keepFiscalData: true });
+  });
+
   it("a salon that came back (active again) is left alone", async () => {
     const t = harness([row({ subscriptionStatus: "active", anonymizationWarnedAt: at(ANONYMIZE_ON, -7), anonymizationWarnedFor: READ_ONLY_UNTIL })], { flag: "true" });
     expect(await t.job.run(at(ANONYMIZE_ON, 3))).toMatchObject({ anonymized: [], warned: [] });

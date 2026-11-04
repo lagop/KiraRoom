@@ -1,6 +1,7 @@
 /**
  * Audit 8 part B: managing salons from the SaaS console (T4, T5, T7, T9,
- * T13, T14, T17, T22, T24). In-memory Prisma mocks, no third-party calls.
+ * T13, T14, T17, T21, T22, T24, and the owner's decisions D3, D4, D6, D7).
+ * In-memory Prisma mocks, no third-party calls.
  */
 import { BadRequestException, ConflictException, ServiceUnavailableException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
@@ -36,6 +37,11 @@ function tenantRow(over: Record<string, unknown> = {}) {
     deletionRequestedAt: null,
     deletionRestore: null,
     deletedAt: null,
+    blockedAt: null,
+    blockedReason: null,
+    courtesyUntil: null,
+    courtesyPlan: null,
+    courtesyWarnedAt: null,
     taxId: null,
     ...over,
   } as any;
@@ -44,19 +50,38 @@ function tenantRow(over: Record<string, unknown> = {}) {
 function makeService(row: any, opts: { stripeFails?: boolean } = {}) {
   const tenants = new Map<string, any>([[row.id, row]]);
   const audit: any[] = [];
-  const stripe = { calls: 0 };
+  const stripe = { calls: 0, paused: [] as boolean[] };
+  const emails: any[] = [];
+  const redirects: any[] = [];
+  const userUpdates: any[] = [];
   const prisma: any = {
     tenant: {
       findFirst: async ({ where }: any) => {
         const t = tenants.get(where.id);
         return t && (where.deletedAt === null ? !t.deletedAt : true) ? t : null;
       },
-      findUnique: async ({ where }: any) => tenants.get(where.id) ?? null,
+      findUnique: async ({ where }: any) =>
+        where.id ? (tenants.get(where.id) ?? null) : ([...tenants.values()].find((t) => t.slug === where.slug) ?? null),
       update: async ({ where, data }: any) => Object.assign(tenants.get(where.id), data),
+      updateMany: async () => ({ count: 1 }),
       findMany: async () => [],
       count: async () => 0,
     },
-    user: { updateMany: async () => ({ count: 2 }) },
+    tenantSlugRedirect: {
+      findFirst: async ({ where }: any) => redirects.find((r) => r.oldSlug === where.oldSlug) ?? null,
+      deleteMany: async () => ({ count: 0 }),
+      create: async ({ data }: any) => {
+        redirects.push(data);
+        return data;
+      },
+    },
+    user: {
+      updateMany: async (args: any) => {
+        userUpdates.push(args);
+        return { count: 2 };
+      },
+      findFirst: async () => ({ email: "duena@example.com" }),
+    },
     widgetInstance: { findMany: async () => [], updateMany: async () => ({ count: 0 }) },
     $transaction: async (fn: any) => fn(prisma),
   };
@@ -66,18 +91,31 @@ function makeService(row: any, opts: { stripeFails?: boolean } = {}) {
       if (opts.stripeFails) throw new ServiceUnavailableException("No se ha podido cancelar el cobro en Stripe.");
       return { cancelled: true };
     },
+    setStripeCollectionPaused: async (_id: string, paused: boolean) => {
+      stripe.paused.push(paused);
+      if (opts.stripeFails) throw new ServiceUnavailableException("No se ha podido pausar el cobro en Stripe.");
+      return { changed: true };
+    },
+  };
+  const email: any = {
+    sendAccountReadOnly: async (d: any) => {
+      emails.push(d);
+      return { success: true };
+    },
   };
   const auditLog: any = { record: async (action: string, params: any) => { audit.push({ action, ...params }); return { id: `a-${audit.length}` }; } };
-  const real = new SaasService(prisma, null as any, auditLog, subscriptions);
+  const real = new SaasService(prisma, null as any, auditLog, subscriptions, undefined, email, undefined);
   // The console actor (#276) defaults to one platform owner in these tests.
   const svc: any = Object.create(real);
   svc.updateTenant = (id: string, dto: any, actor: any = ACTOR) => real.updateTenant(id, dto, actor);
   svc.suspendTenant = (id: string, actor: any = ACTOR) => real.suspendTenant(id, actor);
-  svc.reactivateTenant = (id: string, opts: any = {}, actor: any = ACTOR) => real.reactivateTenant(id, opts, actor);
-  return { svc, tenants, audit, stripe, prisma };
+  svc.courtesyTenant = (id: string, input: any, actor: any = ACTOR) => real.courtesyTenant(id, input, actor);
+  svc.blockTenant = (id: string, reason: string, actor: any = ACTOR) => real.blockTenant(id, reason, actor);
+  svc.unblockTenant = (id: string, actor: any = ACTOR) => real.unblockTenant(id, actor);
+  return { svc, tenants, audit, stripe, prisma, emails, redirects, userUpdates };
 }
 
-describe("T4: Reactivar clears the old retention state", () => {
+describe("T4: Cortesía clears the old retention state", () => {
   // The case from the report: trial ended (read-only until 1 July), owner
   // warned, reactivated by hand, suspended months later.
   const readOnlyUntil = new Date("2026-07-01T00:00:00Z");
@@ -88,60 +126,206 @@ describe("T4: Reactivar clears the old retention state", () => {
     anonymizationWarnedAt: new Date("2026-07-24T04:40:00Z"),
     anonymizationWarnedFor: readOnlyUntil,
   };
+  const until = () => new Date(Date.now() + 30 * DAY);
 
   it("reproduces the bug: with those dates, a later suspension is anonymised at once", () => {
     const step = retentionStep({ id: "t-1", name: "S", ...stale } as any, NOW);
     expect(step?.kind).toBe("anonymize");
   });
 
-  it("after Reactivar and Suspender the next run does nothing", async () => {
+  it("after Cortesía and Suspender the next run does nothing", async () => {
     const { svc, tenants } = makeService(tenantRow(stale));
-    await svc.reactivateTenant("t-1");
+    await svc.courtesyTenant("t-1", { plan: "pro", until: until() });
     const t = tenants.get("t-1");
     expect(t).toMatchObject({ subscriptionStatus: "active", readOnlyUntil: null, cancelledAt: null, anonymizationWarnedAt: null, anonymizationWarnedFor: null });
     await svc.suspendTenant("t-1");
     expect(retentionStep(t, NOW)).toBeNull();
   });
 
-  it("Suspender on a salon with stale dates (reactivated before this fix) clears them too", async () => {
+  it("Suspender on a salon with stale dates (reactivated before this fix) resets them too", async () => {
     const { svc, tenants } = makeService(tenantRow({ ...stale, subscriptionStatus: "active" }));
     await svc.suspendTenant("t-1");
     expect(retentionStep(tenants.get("t-1"), NOW)).toBeNull();
+    expect(tenants.get("t-1").anonymizationWarnedFor).toBeNull();
   });
 
-  it("Editar to Activo clears them as well", async () => {
+  it("an edit can no longer leave read-only: that is Cortesía", async () => {
     const { svc, tenants } = makeService(tenantRow(stale));
-    await svc.updateTenant("t-1", { subscriptionStatus: "active" as any });
-    expect(tenants.get("t-1").readOnlyUntil).toBeNull();
-    expect(tenants.get("t-1").anonymizationWarnedFor).toBeNull();
+    await expect(svc.updateTenant("t-1", { subscriptionStatus: "active" as any })).rejects.toThrow(/Cortesía/);
+    await expect(svc.updateTenant("t-1", { subscriptionStatus: "trialing" as any, trialEnd: until() })).rejects.toThrow(/Cortesía/);
+    expect(tenants.get("t-1").subscriptionStatus).toBe("cancelled");
   });
 
   it("refuses to drop a pending 'Borrar mi salón' silently", async () => {
     const requested = new Date("2026-10-20T09:00:00Z");
     const { svc, tenants } = makeService(tenantRow({ ...stale, deletionRequestedAt: requested, deletionRestore: { status: "active" } }));
-    await expect(svc.reactivateTenant("t-1")).rejects.toThrow(ConflictException);
-    await expect(svc.reactivateTenant("t-1")).rejects.toThrow(/pidió borrar este salón/);
-    await expect(svc.updateTenant("t-1", { subscriptionStatus: "active" as any })).rejects.toThrow(ConflictException);
+    await expect(svc.courtesyTenant("t-1", { plan: "pro", until: until() })).rejects.toThrow(ConflictException);
+    await expect(svc.courtesyTenant("t-1", { plan: "pro", until: until() })).rejects.toThrow(/pidió borrar este salón/);
     expect(tenants.get("t-1").subscriptionStatus).toBe("cancelled");
     expect(tenants.get("t-1").deletionRequestedAt).toBe(requested);
   });
 
-  it("with the explicit checkbox it cancels the deletion too, on the one reactivate audit row", async () => {
+  it("with the explicit checkbox it cancels the deletion too, on the one courtesy audit row", async () => {
     const { svc, tenants, audit } = makeService(tenantRow({ ...stale, deletionRequestedAt: new Date("2026-10-20T09:00:00Z") }));
-    await svc.reactivateTenant("t-1", { cancelDeletion: true }, { id: "saas-2" });
+    await svc.courtesyTenant("t-1", { plan: "pro", until: until(), cancelDeletion: true }, { id: "saas-2" });
     expect(tenants.get("t-1").deletionRequestedAt).toBeNull();
     expect(tenants.get("t-1").deletionRestore).toBe(Prisma.DbNull);
-    expect(audit.map((a) => a.action)).toEqual(["tenant.reactivate"]);
+    expect(audit.map((x) => x.action)).toEqual(["tenant.courtesy"]);
     expect(audit[0].actorId).toBe("saas-2");
     expect(audit[0].metadata.deletionCancelled).toEqual({ requestedAt: "2026-10-20T09:00:00.000Z" });
   });
+});
 
-  it("an edit that cancels the deletion writes one tenant.update row with it", async () => {
-    const { svc, audit } = makeService(tenantRow({ ...stale, deletionRequestedAt: new Date("2026-10-20T09:00:00Z") }));
-    await svc.updateTenant("t-1", { subscriptionStatus: "active" as any, cancelDeletion: true } as any);
-    expect(audit.map((a) => a.action)).toEqual(["tenant.update"]);
-    expect(audit[0].metadata.changes.deletionRequestedAt).toEqual({ before: "2026-10-20T09:00:00.000Z", after: null });
-    expect(audit[0].metadata.changes).not.toHaveProperty("deletionRestore");
+describe("D6: Cortesía", () => {
+  it("stores the plan and the end date, active until then, on a tenant.courtesy row", async () => {
+    const end = new Date(Date.now() + 20 * DAY);
+    const { svc, tenants, audit } = makeService(tenantRow({ subscriptionStatus: "cancelled", readOnlyUntil: new Date(), stripeSubscriptionId: "sub_old" }));
+    await svc.courtesyTenant("t-1", { plan: "empresa", until: end });
+    expect(tenants.get("t-1")).toMatchObject({
+      subscriptionStatus: "active",
+      plan: "empresa",
+      courtesyPlan: "empresa",
+      courtesyUntil: end,
+      currentPeriodEnd: end,
+      courtesyWarnedAt: null,
+      // The old, ended Stripe subscription no longer counts it as paying.
+      stripeSubscriptionId: null,
+    });
+    expect(audit[0]).toMatchObject({ action: "tenant.courtesy", metadata: { subscriptionStatus: { before: "cancelled", after: "active" } } });
+    expect(audit[0].metadata.courtesy).toMatchObject({ plan: "empresa", until: end.toISOString() });
+  });
+
+  it("needs a future end date, at most a year away", async () => {
+    const { svc } = makeService(tenantRow({ subscriptionStatus: "cancelled" }));
+    await expect(svc.courtesyTenant("t-1", { plan: "pro", until: new Date(Date.now() - DAY) })).rejects.toThrow(/posterior a hoy/);
+    await expect(svc.courtesyTenant("t-1", { plan: "pro", until: new Date(Date.now() + 400 * DAY) })).rejects.toThrow(/como mucho/);
+  });
+
+  it("is refused for a salon that pays in Stripe and for a blocked one", async () => {
+    const paying = makeService(tenantRow({ stripeSubscriptionId: "sub_1" }));
+    await expect(paying.svc.courtesyTenant("t-1", { plan: "pro", until: new Date(Date.now() + DAY * 5) })).rejects.toThrow(/paga en Stripe/);
+    const blocked = makeService(tenantRow({ subscriptionStatus: "cancelled", blockedAt: new Date() }));
+    await expect(blocked.svc.courtesyTenant("t-1", { plan: "pro", until: new Date(Date.now() + DAY * 5) })).rejects.toThrow(/bloqueado/);
+  });
+
+  it("an edit cannot make a salon active without Stripe", async () => {
+    const { svc } = makeService(tenantRow({ subscriptionStatus: "trialing", trialEnd: new Date(Date.now() + DAY) }));
+    await expect(svc.updateTenant("t-1", { subscriptionStatus: "active" as any })).rejects.toThrow(/Cortesía/);
+  });
+
+  it("a plan change during a courtesy moves the courtesy plan too", async () => {
+    const { svc, tenants } = makeService(tenantRow({ courtesyUntil: new Date(Date.now() + 9 * DAY), courtesyPlan: "pro" }));
+    await svc.updateTenant("t-1", { plan: "empresa" as any });
+    expect(tenants.get("t-1")).toMatchObject({ plan: "empresa", courtesyPlan: "empresa" });
+  });
+});
+
+describe("D4: Suspender ends the subscription", () => {
+  it("cancels Stripe, sets cancelledAt and 30 days read-only, and emails the owner in Spanish", async () => {
+    const { svc, tenants, audit, stripe, emails } = makeService(tenantRow({ stripeSubscriptionId: "sub_1", courtesyUntil: new Date() }));
+    const before = Date.now();
+    await svc.suspendTenant("t-1");
+    const t = tenants.get("t-1");
+    expect(stripe.calls).toBe(1);
+    expect(t.subscriptionStatus).toBe("cancelled");
+    expect(t.cancelledAt).toBeInstanceOf(Date);
+    expect(t.readOnlyUntil.getTime() - before).toBeGreaterThanOrEqual(30 * DAY - 1000);
+    expect(t.courtesyUntil).toBeNull();
+    expect(audit.map((x) => x.action)).toEqual(["tenant.suspend"]);
+    expect(audit[0].metadata).toMatchObject({ subscriptionStatus: { before: "active", after: "cancelled" }, stripeCancelled: true });
+    expect(emails).toEqual([expect.objectContaining({ to: "duena@example.com", reason: "platform_cancelled", readOnlyUntil: t.readOnlyUntil })]);
+  });
+
+  it("changes nothing when Stripe fails", async () => {
+    const { svc, tenants, audit, emails } = makeService(tenantRow({ stripeSubscriptionId: "sub_1" }), { stripeFails: true });
+    await expect(svc.suspendTenant("t-1")).rejects.toThrow(ServiceUnavailableException);
+    expect(tenants.get("t-1").subscriptionStatus).toBe("active");
+    expect(audit).toEqual([]);
+    expect(emails).toEqual([]);
+  });
+
+  it("an edit to De baja is refused: that is Suspender", async () => {
+    const { svc } = makeService(tenantRow());
+    await expect(svc.updateTenant("t-1", { subscriptionStatus: "cancelled" as any })).rejects.toThrow(/Suspender/);
+  });
+
+  it("refuses a salon already read-only", async () => {
+    const { svc } = makeService(tenantRow({ subscriptionStatus: "cancelled" }));
+    await expect(svc.suspendTenant("t-1")).rejects.toThrow(/ya está de baja/);
+  });
+});
+
+describe("D4: Bloquear and Desbloquear", () => {
+  it("blocks at once: sessions end, Stripe collection paused, the status stays, on a tenant.block row", async () => {
+    const { svc, tenants, audit, stripe, userUpdates, emails } = makeService(tenantRow({ stripeSubscriptionId: "sub_1" }));
+    await svc.blockTenant("t-1", "  Spam a clientas  ");
+    const t = tenants.get("t-1");
+    expect(t.blockedAt).toBeInstanceOf(Date);
+    expect(t.blockedReason).toBe("Spam a clientas");
+    expect(t.subscriptionStatus).toBe("active");
+    expect(stripe.paused).toEqual([true]);
+    expect(userUpdates[0]).toMatchObject({ where: { tenantId: "t-1" }, data: { tokenVersion: { increment: 1 } } });
+    expect(audit.map((x) => x.action)).toEqual(["tenant.block"]);
+    expect(audit[0].metadata).toMatchObject({ reason: "Spam a clientas", stripeCollectionPaused: true });
+    expect(emails).toEqual([]);
+  });
+
+  it("does not block when Stripe cannot pause the collection", async () => {
+    const { svc, tenants, audit } = makeService(tenantRow({ stripeSubscriptionId: "sub_1" }), { stripeFails: true });
+    await expect(svc.blockTenant("t-1", "x")).rejects.toThrow(ServiceUnavailableException);
+    expect(tenants.get("t-1").blockedAt).toBeNull();
+    expect(audit).toEqual([]);
+  });
+
+  it("unblocks: Stripe resumes and a tenant.unblock row is written", async () => {
+    const { svc, tenants, audit, stripe } = makeService(tenantRow({ blockedAt: new Date("2026-11-01T00:00:00Z"), blockedReason: "x" }));
+    await svc.unblockTenant("t-1");
+    expect(tenants.get("t-1")).toMatchObject({ blockedAt: null, blockedReason: null });
+    expect(stripe.paused).toEqual([false]);
+    expect(audit[0]).toMatchObject({ action: "tenant.unblock", metadata: { blockedAt: "2026-11-01T00:00:00.000Z" } });
+  });
+
+  it("refuses to block twice, to unblock one not blocked, and to suspend a blocked one", async () => {
+    const blocked = makeService(tenantRow({ blockedAt: new Date() }));
+    await expect(blocked.svc.blockTenant("t-1", "x")).rejects.toThrow(/ya está bloqueado/);
+    await expect(blocked.svc.suspendTenant("t-1")).rejects.toThrow(/bloqueado/);
+    const free = makeService(tenantRow());
+    await expect(free.svc.unblockTenant("t-1")).rejects.toThrow(/no está bloqueado/);
+  });
+});
+
+describe("T21 / D7: the console's address change", () => {
+  it("goes through tenant_slug_redirects and its own audit row, leaving the owner's once-only change", async () => {
+    const { svc, tenants, audit, redirects } = makeService(tenantRow({ slugChangedAt: null }));
+    await svc.updateTenant("t-1", { slug: "Salon-Lucia-Centro" } as any);
+    expect(tenants.get("t-1").slug).toBe("salon-lucia-centro");
+    expect(tenants.get("t-1").slugChangedAt).toBeNull();
+    expect(redirects).toEqual([expect.objectContaining({ oldSlug: "salon-lucia", tenantId: "t-1" })]);
+    expect(audit.map((x) => x.action)).toEqual(["tenant.web_address_changed"]);
+    expect(audit[0].metadata).toMatchObject({ from: "salon-lucia", to: "salon-lucia-centro", source: "saas/console", platformAddress: false });
+  });
+
+  it("refuses an address still redirecting to another salon", async () => {
+    const { svc, redirects } = makeService(tenantRow());
+    redirects.push({ oldSlug: "salon-ana", tenantId: "t-2", expiresAt: new Date(Date.now() + DAY) });
+    await expect(svc.updateTenant("t-1", { slug: "salon-ana" } as any)).rejects.toThrow(ConflictException);
+  });
+
+  it("a platform word needs the «Dirección de la plataforma» checkbox, and is on the audit row", async () => {
+    const { svc, tenants, audit } = makeService(tenantRow());
+    await expect(svc.updateTenant("t-1", { slug: "kiraroom-demo" } as any)).rejects.toThrow(/Dirección de la plataforma/);
+    await svc.updateTenant("t-1", { slug: "kiraroom-demo", platformAddress: true } as any);
+    expect(tenants.get("t-1").slug).toBe("kiraroom-demo");
+    expect(audit[0].metadata.platformAddress).toBe(true);
+  });
+
+  it("technical reserved names stay refused even with the checkbox; brand ones are allowed with it", () => {
+    expect(consoleSlugProblem("api", { platformAddress: true })).toBe("reserved");
+    expect(consoleSlugProblem("www", { platformAddress: true })).toBe("reserved");
+    expect(consoleSlugProblem("soporte")).toBe("reserved");
+    expect(consoleSlugProblem("soporte", { platformAddress: true })).toBeNull();
+    expect(consoleSlugProblem("kiraroom-demo")).toBe("platform_word");
+    expect(consoleSlugProblem("kiraroom-demo", { platformAddress: true })).toBeNull();
   });
 });
 
@@ -154,12 +338,12 @@ describe("T13: plan and status edits stay consistent", () => {
 
   it("refuses En prueba with a trial that has ended, unless a new end date extends it", async () => {
     const past = new Date(Date.now() - 2 * DAY);
-    const { svc, tenants } = makeService(tenantRow({ subscriptionStatus: "cancelled", trialEnd: past }));
+    const { svc, tenants } = makeService(tenantRow({ subscriptionStatus: "trialing", trialEnd: past }));
     await expect(svc.updateTenant("t-1", { subscriptionStatus: "trialing" as any })).rejects.toThrow(/ya ha terminado/);
     await expect(svc.updateTenant("t-1", { subscriptionStatus: "trialing" as any, trialEnd: past })).rejects.toThrow(/posterior a hoy/);
     const future = new Date(Date.now() + 7 * DAY);
     await svc.updateTenant("t-1", { subscriptionStatus: "trialing" as any, trialEnd: future });
-    expect(tenants.get("t-1")).toMatchObject({ subscriptionStatus: "trialing", trialEnd: future, currentPeriodEnd: future, readOnlyUntil: null });
+    expect(tenants.get("t-1")).toMatchObject({ subscriptionStatus: "trialing", trialEnd: future, currentPeriodEnd: future });
   });
 
   it("refuses a plan change on a salon that pays in Stripe", async () => {
@@ -169,15 +353,10 @@ describe("T13: plan and status edits stay consistent", () => {
     await expect(svc.updateTenant("t-1", { plan: "pro" as any, name: "Otro" })).resolves.toBeDefined();
   });
 
-  it("refuses De baja while Stripe still charges it", async () => {
-    const { svc } = makeService(tenantRow({ stripeSubscriptionId: "sub_1" }));
-    await expect(svc.updateTenant("t-1", { subscriptionStatus: "cancelled" as any })).rejects.toThrow(/no deja de cobrarle/);
-  });
-
-  it("never stores cancelDeletion", async () => {
+  it("never stores platformAddress", async () => {
     const { svc, tenants } = makeService(tenantRow());
-    await svc.updateTenant("t-1", { name: "Nuevo", cancelDeletion: true } as any);
-    expect(tenants.get("t-1")).not.toHaveProperty("cancelDeletion");
+    await svc.updateTenant("t-1", { name: "Nuevo", platformAddress: true } as any);
+    expect(tenants.get("t-1")).not.toHaveProperty("platformAddress");
   });
 });
 

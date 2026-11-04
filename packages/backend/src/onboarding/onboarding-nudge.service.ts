@@ -79,6 +79,8 @@ export class OnboardingNudgeService {
           createdAt: { gt: from, lte: to },
           onboardingNudgeSentAt: null,
           deletedAt: null,
+          // Audit 8 D5: a salon blocked from the console gets nothing.
+          blockedAt: null,
           subscriptionStatus: { in: ["trialing", "active"] },
         },
         select: { id: true, name: true },
