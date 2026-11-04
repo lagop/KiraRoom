@@ -7,6 +7,7 @@ import { PrismaService } from "../common/prisma/prisma.service";
 import { runUnscoped } from "../common/tenancy/tenant.context";
 import { EmailService } from "../notifications/services/email.service";
 import { OnboardingService } from "./onboarding.service";
+import { appBaseUrl } from "../common/app-base-url";
 
 const HOUR_MS = 3_600_000;
 /** Day 2 after signup: from 48 hours, for one day (the job runs hourly). */
@@ -216,11 +217,7 @@ export class OnboardingNudgeService {
   }
 
   private appBase(): string {
-    return (
-      this.config.get<string>("APP_BASE_URL") ||
-      this.config.get<string>("FRONTEND_URL") ||
-      "https://app.kiraroom.net"
-    ).replace(/\/+$/, "");
+    return appBaseUrl((k) => this.config.get<string>(k));
   }
 
   private sign(payload: string): string {

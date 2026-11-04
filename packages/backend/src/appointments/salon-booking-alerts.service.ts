@@ -6,6 +6,7 @@ import { EmailService } from "../notifications/services/email.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { clockOf } from "./visit-totals";
 import { isTestBooking } from "../onboarding/test-booking";
+import { appBaseUrl } from "../common/app-base-url";
 
 /**
  * The per-user preference key (NotificationPreference.preferences, email
@@ -71,11 +72,7 @@ export class SalonBookingAlertsService {
     const tz = appointment.tenant?.timezone || "Europe/Madrid";
     const clientName =
       [appointment.client?.firstName, appointment.client?.lastName].filter(Boolean).join(" ").trim() || "Una clienta";
-    const base = (
-      this.config.get<string>("APP_BASE_URL") ||
-      this.config.get<string>("FRONTEND_URL") ||
-      "https://app.kiraroom.net"
-    ).replace(/\/+$/, "");
+    const base = appBaseUrl((k) => this.config.get<string>(k));
     const details = {
       kind,
       tenantName: appointment.tenant?.name || "tu salón",
