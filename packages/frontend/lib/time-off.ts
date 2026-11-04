@@ -276,8 +276,39 @@ export function conflictLine(c: TimeOffConflict): string {
 export interface UpcomingTimeOffConflict extends TimeOffConflict {
   timeOff: Pick<
     TimeOff,
-    "id" | "professionalId" | "professionalName" | "kind" | "startDate" | "endDate" | "startTime" | "endTime"
+    | "id"
+    | "professionalId"
+    | "professionalName"
+    | "kind"
+    | "startDate"
+    | "endDate"
+    | "startTime"
+    | "endTime"
+    | "locationId"
+    | "locationName"
   >;
+}
+
+/** GET /appointments/:id/free-professionals: who could take a caught appointment. */
+export interface FreeProfessionals {
+  /** False: a visit whose services each have their professional (moved from the agenda). */
+  reassignable: boolean;
+  reason?: string;
+  professionals: Array<{ id: string; name: string }>;
+}
+
+/** What the client reads when the salon cancels for time off and writes no reason (the server's default). */
+export const TIME_OFF_CANCEL_REASON = "No podremos atenderte en ese horario.";
+
+/**
+ * Who is free for every one of several appointments: the colleagues the
+ * whole selection can go to at once, in the first list's order. A list
+ * that cannot be reassigned leaves nobody.
+ */
+export function freeForAll(lists: ReadonlyArray<FreeProfessionals>): Array<{ id: string; name: string }> {
+  if (lists.length === 0 || lists.some((l) => !l.reassignable)) return [];
+  const [first, ...rest] = lists;
+  return first.professionals.filter((p) => rest.every((l) => l.professionals.some((q) => q.id === p.id)));
 }
 
 /**

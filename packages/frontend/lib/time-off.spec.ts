@@ -21,6 +21,7 @@ import {
   pendingBadge,
   changesPendingRequests,
   closureWhere,
+  freeForAll,
   requestBody,
   statusOf,
   agendaLink,
@@ -29,6 +30,8 @@ import {
   othersAway,
   type TimeOff,
 } from "./time-off";
+import * as fs from "fs";
+import * as path from "path";
 
 let pass = 0;
 let fail = 0;
@@ -121,6 +124,12 @@ eq("and stops at 9+", pendingBadge(12), "9+");
 eq("a closure of one location says which", closureWhere({ locationId: "n", locationName: "Norte" }, true), "Solo Norte");
 eq("one of every location, with several", closureWhere({ locationId: null }, true), "Todos los locales");
 eq("nothing to say with one location", closureWhere({ locationId: null }, false), null);
+const bea = { id: "bea", name: "Bea" };
+const eva = { id: "eva", name: "Eva" };
+eq("one appointment: whoever is free for it", freeForAll([{ reassignable: true, professionals: [bea, eva] }]), [bea, eva]);
+eq("several: who is free for all of them", freeForAll([{ reassignable: true, professionals: [bea, eva] }, { reassignable: true, professionals: [eva] }]), [eva]);
+eq("one moved from the agenda only: nobody for the selection", freeForAll([{ reassignable: true, professionals: [eva] }, { reassignable: false, professionals: [] }]), []);
+eq("nothing selected: nobody", freeForAll([]), []);
 check("a new request recounts the badge", changesPendingRequests({ data: { event: "time_off_requested" } }));
 check("other notifications do not", !changesPendingRequests({ data: { event: "time_off_approved" } }) && !changesPendingRequests({ data: {} }) && !changesPendingRequests(null));
 eq("approved with nothing to move", approvedToast("Ana Gil", 0), {
@@ -175,6 +184,20 @@ check(
     managerRowActions({ status: "approved" }) === "edit" &&
     managerRowActions({}) === "edit",
 );
+
+console.log("the clash actions in the panel");
+const read = (rel: string) => fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
+const page = read("app/dashboard/solicitudes-ausencia/page.tsx");
+check("the card and the approval dialog both offer the actions", (page.match(/<ConflictActions/g) ?? []).length === 2);
+const actions = read("components/time-off/ConflictActions.tsx");
+check("passing is the usual move, with the professional picked", actions.includes("apiClient.updateAppointment(id, { professionalId: open.pick })"));
+check("cancelling goes through the time off route (no wait list, a link to book again)", actions.includes("apiClient.cancelAppointmentForTimeOff(id, reason)"));
+const es = JSON.parse(read("messages/es.json")).timeOff.actions;
+const en = JSON.parse(read("messages/en.json")).timeOff.actions;
+check("es.json and en.json have the same timeOff.actions keys", JSON.stringify(Object.keys(es).sort()) === JSON.stringify(Object.keys(en).sort()));
+for (const key of actions.match(/timeOff\.actions\.[a-zA-Z]+/g) ?? []) {
+  check(`${key} is in es.json`, !!es[key.split(".")[2]]);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
