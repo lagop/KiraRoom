@@ -290,8 +290,14 @@ export default function NewTenantPage() {
                 name="ownerPassword"
                 value={formData.ownerPassword}
                 onChange={handleChange}
+                minLength={8}
+                maxLength={128}
+                autoComplete="new-password"
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
+              <p className="mt-1 text-xs text-gray-500">
+                Mínimo 8 caracteres. Déjala vacía y le enviaremos a la dueña un enlace para elegir la suya.
+              </p>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">

@@ -10,12 +10,17 @@ import { BugReportAdminController } from "./bug-report-admin.controller";
 import { PrismaModule } from "../common/prisma/prisma.module";
 import { PaymentsModule } from "../payments/payments.module";
 import { GdprModule } from "./gdpr/gdpr.module";
+import { NotificationsModule } from "../notifications/notifications.module";
+import { PasswordResetService } from "../auth/password-reset.service";
+import { AuthRateLimitsService } from "../auth/abuse/auth-rate-limits.service";
 
 @Module({
   imports: [
     PrismaModule,
     PaymentsModule,
     GdprModule,
+    // The set-password email for an owner created without a password.
+    NotificationsModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -24,7 +29,14 @@ import { GdprModule } from "./gdpr/gdpr.module";
       }),
     }),
   ],
-  providers: [SaasService, SaasAnalyticsService, AuditLogService, SaaSRetentionScheduler],
+  providers: [
+    SaasService,
+    SaasAnalyticsService,
+    AuditLogService,
+    SaaSRetentionScheduler,
+    PasswordResetService,
+    AuthRateLimitsService,
+  ],
   controllers: [SaasController, BugReportAdminController],
   exports: [SaasService, AuditLogService],
 })
