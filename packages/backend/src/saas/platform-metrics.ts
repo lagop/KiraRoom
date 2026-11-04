@@ -13,20 +13,13 @@ import { COUNTABLE_TENANT_WHERE } from "./saas.constants";
 export const CONSOLE_TIME_ZONE = "Europe/Madrid";
 
 /**
- * Salons that count in the platform figures: not deleted and not one of
- * our own salons (Tenant.isInternal: the Platform tenant and our test
- * salons, audit 8 D11). Same predicate as countableTenantWhere.
- */
-export const PLATFORM_TENANT_WHERE: Prisma.TenantWhereInput = { ...COUNTABLE_TENANT_WHERE };
-
-/**
  * A salon pays KiraRoom when it is `active` on a Stripe subscription. An
  * `active` salon without one (reactivated by hand from the console, or a
  * manual grant) bills nothing: it is counted apart, as "active without
  * billing", and stays out of MRR.
  */
 export const PAYING_TENANT_WHERE: Prisma.TenantWhereInput = {
-  ...PLATFORM_TENANT_WHERE,
+  ...COUNTABLE_TENANT_WHERE,
   subscriptionStatus: "active",
   stripeSubscriptionId: { not: null },
 };

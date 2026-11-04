@@ -713,7 +713,7 @@ export class SaasService {
     });
 
     if (!owner) {
-      throw new BadRequestException("Este salón no tiene dueña: no hay cuenta en la que entrar.");
+      throw new BadRequestException("Este salón no tiene cuenta principal: no hay cuenta en la que entrar.");
     }
 
     // Issue a short-lived (60 s) impersonation token. The actual session

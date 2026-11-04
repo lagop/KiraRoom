@@ -7,7 +7,7 @@ import { ForbiddenException } from "@nestjs/common";
  */
 export const SUPPORT_ACCESS_OFF_CODE = "SUPPORT_ACCESS_OFF";
 export const SUPPORT_ACCESS_OFF_MESSAGE =
-  "La dueña de este salón no permite que soporte de KiraRoom entre en su panel. Puede activarlo en Ajustes > Seguridad.";
+  "Este salón no permite que soporte de KiraRoom entre en su panel. Quien lo gestiona puede activarlo en Ajustes > Seguridad.";
 
 /** Whether the salon lets support in: only an explicit false says no. */
 export function supportAccessAllowed(tenant: { allowSupportAccess?: boolean | null } | null | undefined): boolean {

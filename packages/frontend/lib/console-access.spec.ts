@@ -38,7 +38,7 @@ const storage = require("./auth-storage") as typeof import("./auth-storage");
 // C17
 check("a reason is required", supportReasonProblem("  ab ") !== null, true);
 check("a long reason is refused", supportReasonProblem("x".repeat(201)) !== null, true);
-check("a normal reason passes", supportReasonProblem("La dueña pidió ayuda con la agenda"), null);
+check("a normal reason passes", supportReasonProblem("El salón pidió ayuda con la agenda"), null);
 
 // C10: the token travels in the fragment, never the query
 const url = supportEntryUrl({ token: "a.b.c", tenantId: "t-1", tenantName: "Salón Lucía", ownerName: "Lucía" });

@@ -1,7 +1,6 @@
 import { NotFoundException } from "@nestjs/common";
 import { TENANT_INTERNAL_AUDIT_ACTION, TenantInternalController } from "./tenant-internal.controller";
 import { COUNTABLE_TENANT_WHERE, countableTenantWhere } from "./saas.constants";
-import { PLATFORM_TENANT_WHERE } from "./platform-metrics";
 
 function setup(seed: { id: string; slug: string; isInternal: boolean } | null) {
   const tenants = new Map<string, any>();
@@ -75,6 +74,5 @@ describe("countableTenantWhere", () => {
     expect(countableTenantWhere({ plan: "pro" })).toEqual({ plan: "pro", deletedAt: null, isInternal: false });
     // The flag cannot be overridden by the caller's conditions.
     expect(countableTenantWhere({ isInternal: true } as any)).toEqual({ deletedAt: null, isInternal: false });
-    expect(PLATFORM_TENANT_WHERE).toEqual(COUNTABLE_TENANT_WHERE);
   });
 });
