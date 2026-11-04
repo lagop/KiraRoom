@@ -20,7 +20,7 @@ import { CreateProfessionalDto as AdminCreateProfessionalDto } from "../../admin
 
 const SECRET = "test-secret";
 const bearer = (claims: object, secret = SECRET) => ({
-  headers: { authorization: `Bearer ${sign(claims, secret)}` },
+  headers: { authorization: `Bearer ${sign({ typ: "access", ...claims }, secret)}` },
 });
 const OWNER_A = { sub: "user-a", role: "owner", tenantId: "tenant-a" };
 const CLIENT_A = { sub: "client-a", role: "client", tenantId: "tenant-a" };

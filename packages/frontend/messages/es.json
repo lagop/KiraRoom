@@ -952,7 +952,8 @@
       "analytics": "Analítica",
       "bugReports": "Reportes de bugs",
       "settings": "Ajustes",
-      "security": "Seguridad"
+      "security": "Seguridad",
+      "activity": "Actividad"
     },
     "platform_analytics": "Analítica de plataforma",
     "metrics": {
@@ -1263,7 +1264,76 @@
     "totalSalons": "Total de salones",
     "totalUsers": "Total de usuarios",
     "monthlyRecurringRevenue": "Ingresos recurrentes mensuales",
-    "usersGrowth": "Crecimiento de usuarios"
+    "usersGrowth": "Crecimiento de usuarios",
+    "support": {
+      "title": "Abrir el panel de {name} como soporte",
+      "explain": "Se abrirá en una pestaña nueva; tu sesión de la consola sigue abierta aquí. La sesión de soporte dura como máximo 2 horas, y lo que hagas queda en el registro de actividad a tu nombre.",
+      "reason_label": "Motivo",
+      "reason_placeholder": "Por ejemplo: la dueña pidió ayuda para configurar los horarios",
+      "open": "Abrir panel"
+    },
+    "security": {
+      "title": "Seguridad",
+      "subtitle": "Tu contraseña, tus sesiones y la verificación en dos pasos.",
+      "sign_out_all_title": "Cerrar todas las sesiones",
+      "sign_out_all_body": "Cierra la consola en todos los dispositivos, también en este, y termina las sesiones de soporte abiertas. Úsalo si pierdes un portátil o crees que alguien ha entrado.",
+      "sign_out_all_button": "Cerrar todas las sesiones",
+      "sign_out_all_confirm_title": "¿Cerrar todas las sesiones?",
+      "sign_out_all_confirm_body": "Tendrás que volver a entrar con tu contraseña (y el código, si tienes la verificación en dos pasos).",
+      "sign_out_all_failed": "No se han podido cerrar las sesiones."
+    },
+    "audit": {
+      "title": "Actividad",
+      "subtitle": "Registro de lo que se ha hecho desde la consola y en las sesiones de soporte. Solo lectura.",
+      "filter_salon": "Salón",
+      "filter_salon_placeholder": "Nombre o dirección web",
+      "filter_actor": "Quién",
+      "filter_actor_placeholder": "Email o nombre",
+      "filter_action": "Acción",
+      "all_actions": "Todas",
+      "filter_from": "Desde",
+      "filter_to": "Hasta",
+      "apply": "Filtrar",
+      "clear": "Quitar filtros",
+      "col_when": "Cuándo",
+      "col_action": "Acción",
+      "col_actor": "Quién",
+      "col_salon": "Salón",
+      "col_details": "Detalles",
+      "loading": "Cargando…",
+      "empty": "No hay actividad con estos filtros.",
+      "load_failed": "No se ha podido cargar la actividad.",
+      "on_behalf_of": "en nombre de {name}",
+      "show_details": "Ver detalles",
+      "hide_details": "Ocultar",
+      "total": "{total} registros",
+      "page_of": "Página {page} de {pages}",
+      "previous": "Anterior",
+      "next": "Siguiente",
+      "actions": {
+        "saas_impersonate": "Entrada como soporte en un salón",
+        "saas_impersonate_end": "Salida del modo soporte",
+        "tenant_create": "Salón creado desde la consola",
+        "tenant_update": "Salón editado desde la consola",
+        "tenant_suspend": "Salón suspendido",
+        "tenant_reactivate": "Salón reactivado",
+        "tenant_soft_delete": "Salón borrado",
+        "tenant_anonymize": "Salón anonimizado",
+        "tenant_taxId_change": "Cambio de NIF del salón",
+        "tenant_addon_grant": "Add-on regalado",
+        "tenant_addon_revoke": "Add-on retirado",
+        "tenant_credits_topup": "Créditos de mensajes añadidos",
+        "tenant_invite_create": "Invitación enviada",
+        "tenant_invite_revoke": "Invitación anulada",
+        "platform_llm_config_updated": "Ajustes del LLM cambiados",
+        "platform_stripe_config_updated": "Ajustes de Stripe cambiados",
+        "platform_email_config_updated": "Ajustes de email cambiados",
+        "bug_report_status_changed": "Estado de un informe de error cambiado",
+        "client_gdpr_export": "Datos de una clienta exportados",
+        "client_anonymize": "Clienta anonimizada",
+        "invoice_emailed": "Factura enviada por email"
+      }
+    }
   },
   "dashboard": {
     "title": "Panel",
@@ -3006,7 +3076,8 @@
     "create_account": "Crear cuenta gratis",
     "failed": "No se pudo iniciar sesión",
     "invalid_credentials": "Email o contraseña incorrectos",
-    "server_error": "Error del servidor. Inténtalo de nuevo más tarde."
+    "server_error": "Error del servidor. Inténtalo de nuevo más tarde.",
+    "support_ended": "La sesión de soporte ha terminado: dura como máximo 2 horas y se cierra si cierras tus sesiones de la consola. Vuelve a abrir el salón desde la consola si lo necesitas."
   },
   "bookingPublic": {
     "title": "Reservar cita",
@@ -3672,5 +3743,14 @@
     "title": "Confirma tu email para enviar campañas",
     "ownerBody": "Puedes preparar campañas, pero no enviarlas hasta confirmar {email} con el enlace que te enviamos. Tampoco podrás conectar Stripe, y tu web no aparecerá en Google hasta entonces.",
     "teamBody": "La dueña del salón tiene que confirmar su email antes de que se puedan enviar campañas. Puede pedir otro enlace desde el aviso de arriba del panel."
+  },
+  "supportBanner": {
+    "title": "Estás dentro del panel de {salon} como soporte de KiraRoom.",
+    "this_salon": "este salón",
+    "attribution": "Lo que hagas queda registrado a tu nombre, en nombre de la dueña, y la dueña sigue con su sesión aparte.",
+    "ends_at": "La sesión se cierra sola a las {time}.",
+    "ends_max": "La sesión se cierra sola como máximo 2 horas después de entrar.",
+    "session_id": "sesión",
+    "exit": "Salir del modo soporte"
   }
 }

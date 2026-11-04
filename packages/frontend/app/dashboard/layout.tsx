@@ -15,6 +15,8 @@ import { TermsAcceptanceModal } from "@/components/auth/terms-acceptance-modal";
 import { managersOnlyPage } from "@/lib/dashboard-nav";
 import { getCurrentUser } from "@/lib/utils";
 import { ManagersOnlyNotice } from "./components/managers-only-notice";
+import { endSupportTab, supportTab } from "@/lib/auth-storage";
+import { useTranslations } from "@/lib/use-translation";
 
 /**
  * Decode the current access token's impersonation claims and update
@@ -65,6 +67,12 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   } | null>(null);
   const router = useRouter();
   const pathname = usePathname();
+  const t = useTranslations();
+  // The salon and the end of this support session, kept by this tab (C10).
+  const [support, setSupport] = useState<{ tenantName: string; endsAt?: string } | null>(null);
+  useEffect(() => {
+    setSupport(supportTab());
+  }, [pathname]);
 
   // Close the mobile drawer on every navigation so it doesn't stay
   // pinned open after the user picks a link.
@@ -110,8 +118,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
   // Effect 2: cross-tab sync. If the user logs out in another tab, the
   // `storage` event fires here so this tab's banner disappears too.
-  // The impersonated session is single-tab anyway (JWT in localStorage
-  // only), but the cleanup is cheap and prevents ghost banners.
+  // A support session lives in its own tab (sessionStorage, C10), so this
+  // only matters for normal sessions; the cleanup is cheap either way.
   useEffect(() => {
     if (typeof window === "undefined") return;
     const onStorage = (e: StorageEvent) => {
@@ -130,20 +138,26 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const closeMobileSidebar = () => setMobileSidebarOpen(false);
 
   const exitImpersonation = async () => {
-    // Server first, while the access token still exists: it ends the
-    // impersonated session and clears its cookie. apiClient.logout empties
-    // the local tokens either way.
+    // Server first, while the access token still exists: it ends the support
+    // session, clears its own cookie and records the end (C4). The console's
+    // session was never touched (C10): this tab closes, or goes back to it.
     try {
       await apiClient.logout();
     } catch {
       removeToken();
       removeRefreshToken();
     }
+    endSupportTab();
     if (typeof window !== "undefined") {
-      localStorage.removeItem("user");
+      window.close();
+      // A tab the script did not open cannot close itself: back to the console.
+      router.replace("/saas/tenants");
     }
-    router.replace("/saas/login");
   };
+
+  const endsAtLabel = support?.endsAt
+    ? new Date(support.endsAt).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })
+    : null;
 
   return (
     <div className="flex min-h-screen bg-gray-50">
@@ -196,22 +210,21 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
               <ShieldAlert className="w-5 h-5 flex-shrink-0 mt-0.5 sm:mt-0" />
               <div className="text-sm">
                 <strong className="font-semibold">
-                  You are impersonating this tenant.
+                  {t("supportBanner.title", { salon: support?.tenantName || t("supportBanner.this_salon") })}
                 </strong>{" "}
-                Every action you take is attributed to your account in the
-                <code className="mx-1 bg-red-700 px-1 rounded">audit_logs</code>
-                table (impersonation id{" "}
-                <code className="bg-red-700 px-1 rounded break-all">
-                  {impersonation.id}
-                </code>
-                ). End the session when you are done.
+                {t("supportBanner.attribution")}{" "}
+                {endsAtLabel ? t("supportBanner.ends_at", { time: endsAtLabel }) : t("supportBanner.ends_max")}{" "}
+                <span className="opacity-80">
+                  ({t("supportBanner.session_id")}{" "}
+                  <code className="bg-red-700 px-1 rounded break-all">{impersonation.id}</code>)
+                </span>
               </div>
             </div>
             <button
               onClick={exitImpersonation}
               className="bg-white text-red-700 px-3 py-1 rounded font-medium text-sm hover:bg-red-50 self-start sm:self-auto flex-shrink-0"
             >
-              Exit impersonation
+              {t("supportBanner.exit")}
             </button>
           </div>
         )}

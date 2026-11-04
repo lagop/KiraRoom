@@ -1,5 +1,6 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { authStorage } from "@/lib/auth-storage";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -64,7 +65,7 @@ export function decodeJwtToken(token: string): any {
 export function getCurrentUser() {
   if (typeof window === "undefined") return null;
 
-  const token = localStorage.getItem("kira_auth_token");
+  const token = authStorage().getItem("kira_auth_token");
   if (!token) return null;
 
   const decoded = decodeJwtToken(token);

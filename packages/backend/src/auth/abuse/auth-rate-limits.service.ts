@@ -23,6 +23,10 @@ export const AUTH_LIMITS = {
   loginFailuresPerIpBeforeCaptcha: 10,
   /** How long failed sign-ins are remembered. */
   loginFailureWindowSeconds: HOUR,
+  /** Wrong passwords for the platform owner from one address before that address is locked out (C12). */
+  platformOwnerFailuresPerIp: 5,
+  /** How long that address stays locked out of the platform owner account. */
+  platformOwnerLockSeconds: 30 * 60,
 } as const;
 
 /** Emails and IPs go into Redis keys hashed, not in clear. */
@@ -91,6 +95,31 @@ export class AuthRateLimitsService {
   /** A successful sign-in clears the email's failures (the IP's age out). */
   async loginSucceeded(email: string): Promise<void> {
     await this.redis.del(this.loginEmailKey(email));
+  }
+
+  /**
+   * Audit 8, C12: the platform owner (saas_owner) is not locked account-wide
+   * by wrong passwords, or anyone who knows the address could keep the
+   * console shut. The lock is per address instead: 5 wrong passwords from
+   * one IP lock that IP out of the account for 30 minutes, and the owner
+   * still gets in from anywhere else. The captcha after 3 failures and the
+   * route throttle apply as for everyone.
+   */
+  async platformOwnerLockedFrom(userId: string, ip: string | null | undefined): Promise<boolean> {
+    const n = Number((await this.redis.get(this.ownerIpKey(userId, ip))) ?? 0);
+    return n >= AUTH_LIMITS.platformOwnerFailuresPerIp;
+  }
+
+  async platformOwnerFailedFrom(userId: string, ip: string | null | undefined): Promise<void> {
+    await this.redis.increment(this.ownerIpKey(userId, ip), AUTH_LIMITS.platformOwnerLockSeconds);
+  }
+
+  async platformOwnerSignedInFrom(userId: string, ip: string | null | undefined): Promise<void> {
+    await this.redis.del(this.ownerIpKey(userId, ip));
+  }
+
+  private ownerIpKey(userId: string, ip: string | null | undefined): string {
+    return `auth:owner-fail:${userId}:${keyPart(ip || "unknown")}`;
   }
 
   private loginEmailKey(email: string): string {

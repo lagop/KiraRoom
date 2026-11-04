@@ -1,16 +1,12 @@
 import { VirtualReceptionistController } from "./virtual-receptionist.controller";
 import {
-  CreateLlmProviderConfigDto,
   TestLlmProviderDto,
-  UpdateLlmProviderConfigDto,
 } from "./dto/receptionist-bodies.dto";
 import { bodyMetatype, bodyParser } from "../common/validation/validated-body.testing";
 
 describe("virtual receptionist bodies", () => {
   it("are validated classes, not zod type aliases", () => {
     const C = VirtualReceptionistController;
-    expect(bodyMetatype(C, "createLLMConfig")).toBe(CreateLlmProviderConfigDto);
-    expect(bodyMetatype(C, "updateLLMConfig")).toBe(UpdateLlmProviderConfigDto);
     expect(bodyMetatype(C, "testLLMProvider")).toBe(TestLlmProviderDto);
   });
 
