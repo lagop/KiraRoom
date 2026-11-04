@@ -660,6 +660,150 @@ export class EmailService {
   // short-circuit. See `shouldSkipBouncedUser` below.
 
   /**
+   * To the salon's owner and admins (audit 7 D12): a client booked online
+   * (salon page, widget, virtual receptionist) or cancelled her appointment
+   * herself, with a link to it in the panel. Each user can turn these off
+   * in Ajustes > Seguridad (SALON_BOOKING_ALERT, salon-booking-alerts.ts).
+   */
+  async sendSalonBookingAlert(data: {
+    to: string;
+    kind: "booked" | "cancelled";
+    tenantName: string;
+    clientName: string;
+    serviceName: string | null;
+    professionalName: string | null;
+    /** The salon's calendar day, YYYY-MM-DD. */
+    date: string;
+    time: string | null;
+    appointmentUrl: string;
+    settingsUrl: string;
+  }): Promise<{ success: boolean; id?: string; error?: string; skipped?: boolean }> {
+    if (await this.shouldSkipBouncedUser(data.to)) {
+      return { success: false, skipped: true, error: "email_bounced" };
+    }
+    const booked = data.kind === "booked";
+    const when = `${displayDate(data.date)}${data.time ? ` a las ${data.time}` : ""}`;
+    const what = [data.serviceName, data.professionalName ? `con ${data.professionalName}` : null].filter(Boolean).join(" ");
+    const subject = booked
+      ? `Nueva reserva online: ${data.clientName}, ${when}`
+      : `${data.clientName} ha anulado su cita del ${when}`;
+    const lead = booked
+      ? `<strong>${this.escapeHtml(data.clientName)}</strong> ha reservado online en <strong>${this.escapeHtml(data.tenantName)}</strong>.`
+      : `<strong>${this.escapeHtml(data.clientName)}</strong> ha anulado su cita en <strong>${this.escapeHtml(data.tenantName)}</strong> desde el enlace del email.`;
+    const html = `
+<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:12px;padding:32px;">
+        <tr><td>
+          <div style="font-size:24px;font-weight:700;color:#0f172a;margin-bottom:16px;">KiraRoom</div>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 12px 0;">${lead}</p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 24px 0;">
+            ${what ? `${this.escapeHtml(what)}<br>` : ""}<strong>${this.escapeHtml(when)}</strong>
+          </p>
+          <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 24px 0;">
+            <tr><td style="background:#4f46e5;border-radius:8px;">
+              <a href="${this.escapeHtml(data.appointmentUrl)}"
+                 style="display:inline-block;padding:12px 24px;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;">
+                Ver la cita
+              </a>
+            </td></tr>
+          </table>
+          <p style="font-size:12px;color:#64748b;line-height:1.5;margin:0;">
+            Te llega porque eres dueña o administradora del salón. Puedes dejar de recibir estos avisos en
+            <a href="${this.escapeHtml(data.settingsUrl)}" style="color:#64748b;">Ajustes &gt; Seguridad</a>.
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`.trim();
+    const text = [
+      booked
+        ? `${data.clientName} ha reservado online en ${data.tenantName}.`
+        : `${data.clientName} ha anulado su cita en ${data.tenantName} desde el enlace del email.`,
+      what,
+      when,
+      "",
+      `Ver la cita: ${data.appointmentUrl}`,
+      "",
+      `Puedes dejar de recibir estos avisos en Ajustes > Seguridad: ${data.settingsUrl}`,
+    ].join("\n");
+    return this.sendEmail({ to: data.to, subject, html, text });
+  }
+
+  /**
+   * Day 2 after signup, to the owner, when a mandatory onboarding step is
+   * still missing (audit 7 D17, OnboardingNudgeService): what is missing,
+   * with a link to each. A tip from KiraRoom, so it carries an unsubscribe
+   * link and the RFC 8058 one-click headers.
+   */
+  async sendOnboardingReminder(data: {
+    to: string;
+    firstName: string | null;
+    tenantName: string;
+    missing: Array<{ label: string; url: string }>;
+    unsubscribeUrl: string;
+    headers: Record<string, string>;
+  }): Promise<{ success: boolean; id?: string; error?: string; skipped?: boolean }> {
+    if (await this.shouldSkipBouncedUser(data.to)) {
+      return { success: false, skipped: true, error: "email_bounced" };
+    }
+    const one = data.missing.length === 1;
+    const subject = one
+      ? `Te falta un paso para recibir reservas en ${data.tenantName}`
+      : `Te faltan ${data.missing.length} pasos para recibir reservas en ${data.tenantName}`;
+    const hello = data.firstName ? `Hola, ${this.escapeHtml(data.firstName)}:` : "Hola:";
+    const items = data.missing
+      .map(
+        (m) =>
+          `<li style="margin:0 0 8px 0;"><a href="${this.escapeHtml(m.url)}" style="color:#4f46e5;font-weight:600;">${this.escapeHtml(m.label)}</a></li>`,
+      )
+      .join("");
+    const html = `
+<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:12px;padding:32px;">
+        <tr><td>
+          <div style="font-size:24px;font-weight:700;color:#0f172a;margin-bottom:16px;">KiraRoom</div>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 12px 0;">${hello}</p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 12px 0;">
+            Para que tus clientas puedan reservar en <strong>${this.escapeHtml(data.tenantName)}</strong>, ${one ? "te falta esto" : "te falta lo siguiente"}:
+          </p>
+          <ul style="font-size:15px;line-height:1.6;margin:0 0 20px 0;padding-left:20px;">${items}</ul>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 24px 0;">Son unos minutos. Si te atascas, responde a este email y te ayudamos.</p>
+          <p style="font-size:12px;color:#64748b;line-height:1.5;margin:0;">
+            Es el único recordatorio de este tipo que te enviaremos.
+            <a href="${this.escapeHtml(data.unsubscribeUrl)}" style="color:#64748b;">No quiero recibir consejos de KiraRoom</a>.
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`.trim();
+    const text = [
+      data.firstName ? `Hola, ${data.firstName}:` : "Hola:",
+      "",
+      `Para que tus clientas puedan reservar en ${data.tenantName}, ${one ? "te falta esto" : "te falta lo siguiente"}:`,
+      ...data.missing.map((m) => `- ${m.label}: ${m.url}`),
+      "",
+      "Son unos minutos. Si te atascas, responde a este email y te ayudamos.",
+      "",
+      `No quiero recibir consejos de KiraRoom: ${data.unsubscribeUrl}`,
+    ].join("\n");
+    return this.sendEmail({ to: data.to, subject, html, text, headers: data.headers });
+  }
+
+  /**
    * T-3 / T-1 warning that the free trial is about to end.
    * Sent by `TrialExpiryScheduler` (new in 2.3) once per trial window.
    */

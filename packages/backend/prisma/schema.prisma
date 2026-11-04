@@ -217,6 +217,8 @@ model Tenant {
 
   /// P1.3 Ã¢â‚¬â€ Onboarding wizard state (one row per tenant)
   onboardingState      OnboardingState?
+  /// When the day-2 onboarding reminder went to the owner (audit 7 D17). Once per salon; also the claim that makes it idempotent.
+  onboardingNudgeSentAt DateTime?
   /// P1.4 Ã¢â‚¬â€ Rebooking per-tenant settings (analogous to `features` / `addons`)
   rebookingSettings    Json                   @default("{\"enabled\": false, \"leadDays\": 3, \"channelFallback\": \"both\", \"minVisits\": 3}")
   /// P1.4 Ã¢â‚¬â€ Cadence / reminder log relations
@@ -528,6 +530,8 @@ model User {
   /// the address is updated and the field is cleared manually.
   emailBouncedAt           DateTime?
   emailBounceReason        String?
+  /// The user unsubscribed from KiraRoom's tips (the onboarding reminder, audit 7 D17), from the link in that email.
+  productTipsOptOutAt      DateTime?
   lastLoginAt              DateTime?
   passwordHash             String
   profileImage             String?

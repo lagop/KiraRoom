@@ -789,3 +789,59 @@ describe("Appointment emails go out in the salon's name (audit 7 N5, N15)", () =
     expect(calls[1].html).not.toContain("Puedes cancelar online");
   });
 });
+
+describe("EmailService.sendSalonBookingAlert (audit 7 D12)", () => {
+  const base = {
+    to: "duena@salon.test",
+    tenantName: "Salón <Luna>",
+    clientName: "Lucía García",
+    serviceName: "Corte",
+    professionalName: "Marta",
+    date: "2026-11-20",
+    time: "10:30",
+    appointmentUrl: "https://app.kiraroom.com/dashboard/appointments/apt-1",
+    settingsUrl: "https://app.kiraroom.com/dashboard/settings/seguridad",
+  };
+
+  it("an online booking: who, what, when and a link to the appointment, in Spanish", async () => {
+    const { service, calls } = makeService();
+    await service.sendSalonBookingAlert({ ...base, kind: "booked" });
+    const sent = calls[0];
+    expect(sent.subject).toBe("Nueva reserva online: Lucía García, viernes, 20 de noviembre de 2026 a las 10:30");
+    expect(sent.html).toContain("ha reservado online");
+    expect(sent.html).toContain("Salón &lt;Luna&gt;");
+    expect(sent.html).toContain(base.appointmentUrl);
+    expect(sent.html).toContain("Ajustes &gt; Seguridad");
+    expect(sent.text).toContain(`Ver la cita: ${base.appointmentUrl}`);
+  });
+
+  it("a cancellation by the client herself", async () => {
+    const { service, calls } = makeService();
+    await service.sendSalonBookingAlert({ ...base, kind: "cancelled", time: null });
+    expect(calls[0].subject).toBe("Lucía García ha anulado su cita del viernes, 20 de noviembre de 2026");
+    expect(calls[0].text).toContain("desde el enlace del email");
+  });
+});
+
+describe("EmailService.sendOnboardingReminder (audit 7 D17)", () => {
+  it("lists what is missing with links, and carries the unsubscribe link and headers", async () => {
+    const { service, calls } = makeService();
+    await service.sendOnboardingReminder({
+      to: "duena@salon.test",
+      firstName: "Ana",
+      tenantName: "Salón Luna",
+      missing: [
+        { label: "Tu primer servicio", url: "https://app.kiraroom.com/dashboard/services/new" },
+        { label: "El horario de tu equipo", url: "https://app.kiraroom.com/dashboard/professionals" },
+      ],
+      unsubscribeUrl: "https://app.kiraroom.com/public/baja-consejos/tok",
+      headers: { "List-Unsubscribe": "<https://api.kiraroom.com/x>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" },
+    });
+    const sent = calls[0];
+    expect(sent.subject).toBe("Te faltan 2 pasos para recibir reservas en Salón Luna");
+    expect(sent.html).toContain('href="https://app.kiraroom.com/dashboard/services/new"');
+    expect(sent.html).toContain("No quiero recibir consejos de KiraRoom");
+    expect(sent.text).toContain("- El horario de tu equipo: https://app.kiraroom.com/dashboard/professionals");
+    expect(sent.headers["List-Unsubscribe-Post"]).toBe("List-Unsubscribe=One-Click");
+  });
+});

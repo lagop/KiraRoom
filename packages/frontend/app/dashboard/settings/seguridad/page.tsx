@@ -2,8 +2,9 @@
 
 import { ChangePasswordForm } from "@/src/components/auth/change-password-form";
 import { TwoFactorSettings } from "@/src/components/auth/two-factor-settings";
+import { BookingAlertsSettings } from "@/src/components/auth/booking-alerts-settings";
 
-/** The signed-in user's own security: their password and two-step verification. */
+/** The signed-in user's own account: their password, two-step verification and, for owners and admins, their booking emails. */
 export default function SecurityPage() {
   return (
     <div className="space-y-6">
@@ -13,6 +14,7 @@ export default function SecurityPage() {
       </div>
       <ChangePasswordForm />
       <TwoFactorSettings />
+      <BookingAlertsSettings />
     </div>
   );
 }

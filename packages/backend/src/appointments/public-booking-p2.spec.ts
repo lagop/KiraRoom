@@ -325,3 +325,57 @@ describe("'Cualquier profesional' from the salon page (D4)", () => {
     await expect(svc.createOnline({ serviceId: "s1" } as any)).rejects.toThrow("Elige un profesional");
   });
 });
+
+describe("the salon's owner and admins hear of online bookings and self-cancellations (audit 7 D12)", () => {
+  const row = () => ({
+    id: APT,
+    tenantId: "t1",
+    status: "confirmed",
+    source: "online",
+    scheduledDate: new Date("2026-12-10T00:00:00.000Z"),
+    scheduledTime: "10:00",
+    service: { name: "Corte" },
+    professional: { firstName: "Ana" },
+    tenant: { name: "Salón Luna", phone: null, timezone: "Europe/Madrid", minCancelHours: 24, deletedAt: null },
+  });
+  function harness(apt: any) {
+    const prisma: any = {
+      appointment: { findUnique: jest.fn(async () => apt) },
+      $transaction: jest.fn(async (fn: any) => fn({ $executeRaw: jest.fn(async () => 1) })),
+    };
+    const alerts = { notify: jest.fn(async () => 1) };
+    const svc = new AppointmentsService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    (svc as any).salonAlerts = alerts;
+    return { svc, alerts };
+  }
+
+  it("a cancellation from the link", async () => {
+    const apt = row();
+    const { svc, alerts } = harness(apt);
+    jest.spyOn(svc, "changeStatus").mockImplementation(async () => {
+      apt.status = "cancelled";
+      return {} as any;
+    });
+    await svc.cancelFromLink(appointmentCancelToken(APT, SECRET), new Date("2026-12-01T10:00:00Z"));
+    expect(alerts.notify).toHaveBeenCalledWith("cancelled", APT);
+  });
+
+  it("not when nothing was cancelled (inside the salon's window)", async () => {
+    const { svc, alerts } = harness(row());
+    await svc.cancelFromLink(appointmentCancelToken(APT, SECRET), new Date("2026-12-09T12:00:00Z"));
+    expect(alerts.notify).not.toHaveBeenCalled();
+  });
+
+  it("an online booking (site, widget, receptionist all go through bookOnline)", async () => {
+    const { svc, alerts } = harness(row());
+    const s: any = svc;
+    jest.spyOn(s, "assertBookableOnline").mockResolvedValue(undefined);
+    jest.spyOn(s, "onlineBookingWindow").mockResolvedValue({ minHours: 0, maxHours: 24 * 60 });
+    jest.spyOn(s, "fitsOnlineWindow").mockReturnValue("ok");
+    jest.spyOn(s, "isSlotFree").mockResolvedValue(true);
+    jest.spyOn(s, "insertAppointment").mockResolvedValue({ id: "apt-new", clientId: "c1" });
+    jest.spyOn(s, "afterAppointmentCreated").mockResolvedValue({ emailSent: true, smsSent: false });
+    await svc.bookOnline("t1", { professionalId: "p1", serviceId: "s1", scheduledDate: "2026-12-10", scheduledTime: "10:00" } as any);
+    expect(alerts.notify).toHaveBeenCalledWith("booked", "apt-new");
+  });
+});

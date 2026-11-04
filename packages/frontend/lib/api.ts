@@ -1160,6 +1160,9 @@ export interface NotificationPreferences {
 
 export type NotificationChannel = "email" | "sms" | "whatsapp" | "inApp";
 
+/** The preference key of the owner's and admins' online booking emails (backend salon-booking-alerts.service.ts). */
+export const SALON_BOOKING_ALERT = "salon_booking_alert";
+
 // Payment types
 export interface Payment {
   id: string;
@@ -3691,6 +3694,24 @@ class ApiClient implements ApiClientInterface {
     return this.request<NotificationPreferences>("/notifications/preferences", {
       method: "PUT",
       body: JSON.stringify(preferences),
+    });
+  }
+
+  /**
+   * Whether the signed-in owner/admin gets an email for each online booking
+   * and each cancellation a client makes herself (audit 7 D12). On unless
+   * she turned it off.
+   */
+  async getSalonBookingAlerts(): Promise<boolean> {
+    const res = await this.request<{ preferences?: Record<string, { email?: boolean }> }>("/notifications/preferences");
+    return res?.preferences?.[SALON_BOOKING_ALERT]?.email !== false;
+  }
+
+  /** Turns those emails on or off for the signed-in user only (merged, her other choices stay). */
+  async setSalonBookingAlerts(email: boolean): Promise<void> {
+    await this.request("/notifications/preferences", {
+      method: "PATCH",
+      body: JSON.stringify({ preferences: { [SALON_BOOKING_ALERT]: { email } } }),
     });
   }
 
