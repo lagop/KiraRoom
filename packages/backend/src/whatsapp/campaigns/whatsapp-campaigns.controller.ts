@@ -9,6 +9,7 @@ import { FeatureGuard } from "../../common/guards/feature.guard";
 import { Feature } from "../../common/decorators/feature.decorator";
 import { MAX_BODY_LENGTH } from "./campaign-template";
 import { WhatsAppCampaignsService } from "./whatsapp-campaigns.service";
+import { VerifiedOwnerEmailGuard } from "../../auth/email-verified/verified-owner-email.guard";
 
 export class CreateWhatsAppCampaignDto {
   @IsString()
@@ -148,6 +149,7 @@ export class WhatsAppCampaignsController {
   /** Sends the text to Meta for review and schedules the campaign. */
   @Post(":id/submit")
   @Roles(...SALON_MANAGERS)
+  @UseGuards(VerifiedOwnerEmailGuard)
   submit(@Req() req: AuthedRequest, @Param("id", ParseUUIDPipe) id: string) {
     return this.campaigns.submit(req.user.tenantId, id);
   }
@@ -162,6 +164,7 @@ export class WhatsAppCampaignsController {
   /** Carries on a campaign paused by an account-level Meta error, once the cause is fixed. */
   @Post(":id/resume")
   @Roles(...SALON_MANAGERS)
+  @UseGuards(VerifiedOwnerEmailGuard)
   resume(@Req() req: AuthedRequest, @Param("id", ParseUUIDPipe) id: string) {
     return this.campaigns.resume(req.user.tenantId, id);
   }

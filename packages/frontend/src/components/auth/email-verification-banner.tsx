@@ -18,7 +18,8 @@ function readDismissedAt(): string | null {
 /**
  * S1(a): "Confirma tu email" across the panel for an owner whose address is
  * not confirmed, with a button that emails a new link (3 an hour). Closing
- * it hides it for 3 days. Nothing is blocked for an unconfirmed email yet.
+ * it hides it for 3 days. Until the owner confirms, campaigns, mass sends
+ * and Stripe are blocked (D1; email-verification-required.tsx on those pages).
  */
 export function EmailVerificationBanner() {
   const t = useTranslations();

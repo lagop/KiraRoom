@@ -1545,6 +1545,8 @@ export interface EmailMarketingQuota {
   resetsOn: string;
   /** The bono on sale, or null while it has no price. */
   pack: { emails: number; priceCents: number } | null;
+  /** The salon has not paid yet: the cap is the 200 a month of the trial. */
+  neverPaidCap?: boolean;
 }
 
 /**
@@ -2755,8 +2757,23 @@ class ApiClient implements ApiClientInterface {
   }
 
   /** Whether the signed-in user's email is confirmed (the panel's notice). */
-  async getEmailVerification(): Promise<{ verified: boolean; email: string | null }> {
+  async getEmailVerification(): Promise<{
+    verified: boolean;
+    email: string | null;
+    /** The salon has an owner with a confirmed email (campaigns, mass sends and Stripe need it). Absent from older servers. */
+    salonVerified?: boolean;
+  }> {
     return this.request("/auth/email-verification");
+  }
+
+  /** D3: whether the owner must accept the current terms (salons from before, or a new version). */
+  async getTermsStatus(): Promise<{ required: boolean; version: string; lastUpdated: string }> {
+    return this.request("/auth/terms");
+  }
+
+  /** D3: "He leído y acepto los términos actualizados". */
+  async acceptTerms(): Promise<{ accepted: true; version: string }> {
+    return this.request("/auth/terms/accept", { method: "POST", body: JSON.stringify({ accept: true }) });
   }
 
   /** A new confirmation link by email, for the signed-in user (3 an hour). */

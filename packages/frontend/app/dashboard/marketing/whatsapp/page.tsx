@@ -10,6 +10,7 @@ import apiClient, {
 } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { EmailVerificationRequired } from "@/components/auth/email-verification-required";
 import {
   BILLING_HREF,
   CAMPAIGN_FOOTER,
@@ -309,6 +310,8 @@ export default function WhatsAppCampaignsPage() {
           <Plus className="h-4 w-4" /> Nueva campaña
         </button>
       </div>
+
+      <EmailVerificationRequired />
 
       {planIncludes === false && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800" role="status">

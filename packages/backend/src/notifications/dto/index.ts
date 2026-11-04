@@ -122,6 +122,8 @@ export class NotificationPreferenceDto {
 }
 
 export class BulkNotificationDto {
+  /** Ignored: the salon is the signed-in user's. */
+  @IsOptional()
   @IsUUID()
   tenantId: string;
 

@@ -41,6 +41,7 @@ import {
   WalletWithdrawDto,
 } from "./dto/payment-bodies.dto";
 import { PaymentFiltersDto, PaymentsListQueryDto } from "./payments-query";
+import { VerifiedOwnerEmailGuard } from "../auth/email-verified/verified-owner-email.guard";
 
 /**
  * Who sees which payments:
@@ -543,6 +544,7 @@ export class PaymentsController {
   @Patch("stripe/settings")
   @Roles(...SALON_MANAGERS)
   @ApiOperation({ summary: "Update Stripe configuration for tenant" })
+  @UseGuards(VerifiedOwnerEmailGuard)
   async updateStripeSettings(
     @Req() req: any,
     @Body() dto: UpdateStripeSettingsDto,
