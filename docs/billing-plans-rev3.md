@@ -447,11 +447,10 @@ Controller: `packages/backend/src/sms/`. FeatureKey: `sms_notifications`.
 | Metodo | Ruta             | Roles          | Gate                       |
 |--------|------------------|----------------|----------------------------|
 | GET    | `/sms/status`    | autenticado    | (no gate; solo `{configured}`) |
-| POST   | `/sms/test`      | owner, admin   | `@Feature('sms_notifications')` |
 
 `sms.service.ts` (en `notifications/`) sigue siendo el entry point de Twilio.
-`SmsController` expone un endpoint admin para verificar wiring sin abrir un
-ticket de soporte.
+`SmsController` solo dice si el SMS está configurado: `POST /sms/test` se eliminó
+(auditoría de canales, M8).
 
 ### 18.4 WhatsApp gating (`whatsapp_notifications` y `whatsapp_marketing`)
 

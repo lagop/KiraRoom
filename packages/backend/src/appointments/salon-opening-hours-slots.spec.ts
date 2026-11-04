@@ -59,7 +59,7 @@ function build(opts: {
     timeOff: { findMany: jest.fn(async () => []) },
   };
   const stub = {} as any;
-  return new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
+  return new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub);
 }
 
 const times = (slots: Array<{ time: string }>) => slots.map((s) => s.time);

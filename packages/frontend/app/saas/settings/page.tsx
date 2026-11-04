@@ -1,6 +1,6 @@
 "use client";
 
-import { Settings as SettingsIcon, Key, Mail, CreditCard, ArrowRight } from "lucide-react";
+import { Settings as SettingsIcon, Key, Mail, CreditCard, ArrowRight, MessageCircle } from "lucide-react";
 import Link from "next/link";
 
 export default function SaasSettingsPage() {
@@ -28,6 +28,14 @@ export default function SaasSettingsPage() {
       description:
         "Claves, webhook e IVA de la cuenta de Stripe con la que pagan los salones.",
       badge: "Stripe",
+    },
+    {
+      href: "/saas/settings/meta",
+      icon: MessageCircle,
+      title: "App de Meta de la plataforma",
+      description:
+        "Si KiraRoom puede recibir los mensajes de WhatsApp, Messenger e Instagram, y las URL de webhook para Meta.",
+      badge: "Meta",
     },
   ];
 

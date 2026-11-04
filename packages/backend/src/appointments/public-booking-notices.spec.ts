@@ -33,7 +33,7 @@ function harness(opts: { tenant?: any; smsAllowed?: boolean; locations?: any[] }
     shouldSendNotification: jest.fn(async (_c: string, _t: string, ch: string) => ch === "email" || ch === "sms"),
   };
   const stub = {} as any;
-  const svc = new AppointmentsService(prisma, stub, notifications as any, email as any, sms as any, stub, stub, stub);
+  const svc = new AppointmentsService(prisma, stub, notifications as any, email as any, sms as any, stub, stub);
   const appointment = {
     id: "apt-1",
     tenantId: "t1",

@@ -90,7 +90,7 @@ describe("availability counts every service of a visit", () => {
   it("Bea is busy during the rinse she does in Ana's visit", async () => {
     const reads = salonReads([colourWithRinse()]);
     const prisma: any = { ...reads, service: { findFirst: jest.fn(async () => ({ id: "cut", duration: 30, isActive: true })) } };
-    const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
+    const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub);
     const times = (await svc.getAvailableSlots(TENANT, DATE, "bea", "cut")).map((s: any) => s.time);
     // The rinse is 11:00-11:15: a 30-minute cut at 11:00 would clash; one at
     // 10:30 ends as the rinse starts.
@@ -111,7 +111,7 @@ describe("availability counts every service of a visit", () => {
       ...salonReads([colourWithRinse()]),
       service: { findFirst: jest.fn(async () => ({ id: "fringe", duration: 15, isActive: true })) },
     };
-    const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
+    const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub);
     const times = (await svc.getAvailableSlots(TENANT, DATE, "ana", "fringe")).map((s: any) => s.time);
     expect(times).not.toContain("10:30");
     expect(times).toContain("11:00");
@@ -170,7 +170,7 @@ function editHarness(appointment: any, catalog: any[] = [], others: any[] = []) 
     },
     $transaction: jest.fn(async (fn: any) => fn(asTx(prisma, tx))),
   };
-  const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
+  const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub);
   for (const m of ["sendAppointmentRescheduledNotifications", "logAppointmentActivity"]) (svc as any)[m] = jest.fn();
   return { svc, prisma, writes };
 }
@@ -385,7 +385,7 @@ function calendarVisit() {
     appointment: { ...salonReads([]).appointment, findFirst: jest.fn(async () => appointment) },
     $transaction: async (fn: any) => fn(asTx(prisma, tx)),
   };
-  const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
+  const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub);
   jest.spyOn(svc as any, "sendAppointmentRescheduledNotifications").mockResolvedValue(undefined);
   return { svc, writes };
 }
@@ -469,7 +469,7 @@ describe("the copilot's reschedule_appointment takes the panel's path", () => {
       $executeRaw: jest.fn(async () => 0),
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
     };
-    const appointments = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
+    const appointments = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub);
     for (const m of ["sendAppointmentRescheduledNotifications", "logAppointmentActivity"]) (appointments as any)[m] = jest.fn();
     const tools = new SalonCopilotToolsService(prisma, undefined, appointments);
     const run = (time: string) =>
@@ -590,7 +590,7 @@ describe("lists", () => {
       professional: { findFirst: jest.fn() },
       client: { findFirst: jest.fn() },
     };
-    return { svc: new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub), prisma };
+    return { svc: new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub), prisma };
   }
 
   it("pending payment: unpaid, owed visits up to today, with something left to pay", async () => {

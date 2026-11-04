@@ -97,9 +97,8 @@ function setup(
     deleteWebhook: jest.fn(async () => ({ ok: true, result: true })),
     ...(over.bot ?? {}),
   } as any;
-  const prisma = {} as any;
   const redis = new RedisService({ get: () => undefined } as any);
-  const svc = new ChannelConnectionsService(prisma, config, encryption, credentials, graph, bot, redis);
+  const svc = new ChannelConnectionsService(config, encryption, credentials, graph, bot, redis);
   /** What the panel's GET meta/connect hands the browser: the state (in the URL) and the cookie's nonce. */
   const start = () => {
     const { url, nonce } = svc.startMetaLogin(TENANT, USER);

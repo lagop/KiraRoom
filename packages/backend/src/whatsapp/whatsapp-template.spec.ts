@@ -236,36 +236,26 @@ describe("NotificationsScheduler WhatsApp reminder", () => {
     scheduledDate: new Date("2026-10-08T00:00:00.000Z"),
     scheduledTime: "10:30",
   };
-  function scheduler(result: any, twilio = true) {
+  function scheduler(result: any) {
     const s = Object.create(NotificationsScheduler.prototype) as any;
     s.logger = { log: jest.fn(), error: jest.fn() };
     s.whatsappTemplates = { sendAppointmentReminder: jest.fn(async () => result) };
-    s.whatsappService = {
-      isConfigured: jest.fn(() => twilio),
-      sendAppointmentReminder: jest.fn(async () => ({ success: true })),
-    };
     return s;
   }
 
-  it("uses the salon's template and skips Twilio when it went out", async () => {
-    const s = scheduler({ sent: true });
-    expect(await s.sendWhatsAppReminder(appointment, 24)).toBe("sent");
-    expect(s.whatsappService.sendAppointmentReminder).not.toHaveBeenCalled();
+  it("uses the salon's template", async () => {
+    expect(await scheduler({ sent: true }).sendWhatsAppReminder(appointment)).toBe("sent");
   });
 
-  it("falls back to the Twilio sender otherwise", async () => {
-    const s = scheduler({ sent: false, reason: "not_connected" });
-    expect(await s.sendWhatsAppReminder(appointment, 1)).toBe("sent");
-    expect(s.whatsappService.sendAppointmentReminder).toHaveBeenCalledWith(expect.objectContaining({ clientPhone: "600111222" }), 1);
+  // Channels audit M7: the platform's Twilio WhatsApp sender is gone; the
+  // salon's number with its approved template is the only WhatsApp.
+  it("is no channel at all when the salon has no WhatsApp or the template is not approved", async () => {
+    expect(await scheduler({ sent: false, reason: "not_connected" }).sendWhatsAppReminder(appointment)).toBe("skipped");
+    expect(await scheduler({ sent: false, reason: "template_pending" }).sendWhatsAppReminder(appointment)).toBe("skipped");
   });
 
-  it("is no channel at all when the salon has no WhatsApp and Twilio is not set up", async () => {
-    expect(await scheduler({ sent: false, reason: "not_connected" }, false).sendWhatsAppReminder(appointment, 1)).toBe("skipped");
-    expect(await scheduler({ sent: false, reason: "template_pending" }, false).sendWhatsAppReminder(appointment, 1)).toBe("skipped");
-  });
-
-  it("is a failed send when Meta refused it and there is no Twilio to fall back on", async () => {
-    expect(await scheduler({ sent: false, reason: "meta_131026" }, false).sendWhatsAppReminder(appointment, 1)).toBe("failed");
+  it("is a failed send when Meta refused it", async () => {
+    expect(await scheduler({ sent: false, reason: "meta_131026" }).sendWhatsAppReminder(appointment)).toBe("failed");
   });
 });
 

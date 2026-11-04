@@ -49,8 +49,7 @@ function setup(preferences: unknown) {
   const templates = { sendAppointmentReminder: jest.fn(async () => ({ sent: true, messageId: "wamid.1" })) };
   const email = { isConfigured: () => true, sendAppointmentReminder: jest.fn(async () => ({ success: true })) };
   const sms = { isConfigured: () => false, sendAppointmentReminder: jest.fn() };
-  const whatsapp = { isConfigured: () => false, sendAppointmentReminder: jest.fn() };
-  const scheduler = new NotificationsScheduler(prisma, email as any, sms as any, whatsapp as any, notifications, templates as any);
+  const scheduler = new NotificationsScheduler(prisma, email as any, sms as any, notifications, templates as any);
   return { scheduler, templates, row };
 }
 

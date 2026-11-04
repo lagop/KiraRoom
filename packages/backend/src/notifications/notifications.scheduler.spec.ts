@@ -93,10 +93,6 @@ function makeScheduler(prisma: any, opts: { sms?: boolean; prefs?: (channel: str
     isConfigured: jest.fn(() => !!opts.sms),
     sendAppointmentReminder: jest.fn(async () => ({ success: true, id: "sms-1" })),
   };
-  const whatsapp = {
-    isConfigured: jest.fn(() => false),
-    sendAppointmentReminder: jest.fn(async () => ({ success: false })),
-  };
   const notifications = {
     create: jest.fn(async () => ({})),
     // Defaults: everything but WhatsApp, as DEFAULT_PREFERENCES.
@@ -111,11 +107,10 @@ function makeScheduler(prisma: any, opts: { sms?: boolean; prefs?: (channel: str
     prisma,
     email as any,
     sms as any,
-    whatsapp as any,
     notifications as any,
     templates as any,
   );
-  return { scheduler, email, sms, whatsapp, notifications, templates };
+  return { scheduler, email, sms, notifications, templates };
 }
 
 

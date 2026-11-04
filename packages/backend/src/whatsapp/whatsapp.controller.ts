@@ -1,6 +1,7 @@
 import { Controller, Get, Post, Delete, Body, Req, UseGuards, Query, Headers, Res, GoneException, HttpCode, HttpStatus, Logger } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
+import { ConfigService } from "@nestjs/config";
 import type { Request, Response } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
@@ -85,6 +86,21 @@ export class WhatsAppController {
     return this.whatsapp.getConnection(req.user.tenantId);
   }
 
+  /** Whether KiraRoom can receive WhatsApp messages at all (the platform's Meta app), for the guide. */
+  @Get("setup")
+  @Roles(...SALON_MANAGERS)
+  setup() {
+    return this.whatsapp.setupStatus();
+  }
+
+  /** "Probar recepción": the time from which an event from Meta proves reception. */
+  @Post("connection/reception-test")
+  @Roles(...SALON_MANAGERS)
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  async receptionTest(@Req() req: AuthedRequest) {
+    return this.whatsapp.startReceptionTest(req.user.tenantId);
+  }
+
   /** Checks the stored token and number with Meta again and re-subscribes the webhook. */
   @Post("connection/check")
   @Roles(...SALON_MANAGERS)
@@ -118,6 +134,34 @@ export class WhatsAppController {
   }
 
   // Campaigns: WhatsAppCampaignsController (campaigns/), scoped to the salon.
+}
+
+/**
+ * The platform console's view of KiraRoom's Meta app: which settings are
+ * present (never their values) and the webhook URLs to give Meta.
+ */
+@ApiTags("platform-meta")
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Controller("platform/meta-status")
+export class PlatformMetaStatusController {
+  constructor(
+    private readonly whatsapp: WhatsAppService,
+    private readonly config: ConfigService,
+  ) {}
+
+  @Get()
+  @Roles("saas_owner")
+  get() {
+    const raw = this.config.get<string>("API_BASE_URL")?.trim();
+    const base = raw ? raw.replace(/\/+$/, "").replace(/\/api\/v1$/, "") + "/api/v1" : null;
+    return {
+      ...this.whatsapp.platformStatus(),
+      webhookUrls: base
+        ? { whatsapp: `${base}/webhooks/meta/whatsapp`, messengerInstagram: `${base}/channels/webhooks/meta` }
+        : null,
+    };
+  }
 }
 
 @ApiTags("whatsapp-webhooks")

@@ -73,7 +73,7 @@ function makePrisma(opts: {
 /** The appointments' own status path over the same fake database, notices off. */
 function appointmentsOver(prisma: any): AppointmentsService {
   const stub = {} as any;
-  const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
+  const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub);
   (svc as any).logAppointmentActivity = jest.fn(async () => undefined);
   (svc as any).sendAppointmentNoShowNotifications = jest.fn(async () => undefined);
   return svc;

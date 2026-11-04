@@ -24,7 +24,7 @@ function build(professionals: Array<{ id: string; workingHours?: unknown }>, app
     },
   };
   const stub = {} as any;
-  return new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
+  return new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub);
 }
 
 const times = async (svc: AppointmentsService) =>

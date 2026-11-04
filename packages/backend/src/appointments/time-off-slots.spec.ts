@@ -97,7 +97,7 @@ function build(opts: {
     },
   };
   const stub = {} as any;
-  return { svc: new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub), prisma };
+  return { svc: new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub), prisma };
 }
 
 const times = (slots: Array<{ time: string }>) => slots.map((s) => s.time);

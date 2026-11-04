@@ -665,6 +665,31 @@ export interface WhatsAppConnection {
   /** What to tell the salon about the refused token, in Spanish; null while it works. */
   accessProblem?: string | null;
 }
+/** GET /whatsapp/setup. */
+export interface WhatsAppSetupStatus {
+  receivingAvailable: boolean;
+  /** Why nothing can be received, in Spanish, ready to show. */
+  receivingProblem: string | null;
+}
+
+/** POST /whatsapp/connection/reception-test. */
+export interface WhatsAppReceptionTest extends WhatsAppSetupStatus {
+  startedAt: string;
+  /** An event at or after this time proves reception. */
+  since: string;
+  subscribed: boolean;
+  webhookError?: string | null;
+}
+
+/** GET /platform/meta-status (saas_owner). */
+export interface PlatformMetaStatus {
+  appIdSet: boolean;
+  appSecretSet: boolean;
+  verifyTokenSet: boolean;
+  receiving: boolean;
+  webhookUrls: { whatsapp: string; messengerInstagram: string } | null;
+}
+
 /** A quarterly tax return draft (Modelo 303 / 420): box -> value. */
 export interface TaxReportDraft {
   id: string;
@@ -5634,6 +5659,14 @@ class ApiClient implements ApiClientInterface {
   async checkWhatsAppConnection(): Promise<WhatsAppConnection> {
     return this.request(`/whatsapp/connection/check`, { method: "POST" });
   }
+  /** Whether KiraRoom can receive WhatsApp at all (the platform's Meta app). */
+  async getWhatsAppSetup(): Promise<WhatsAppSetupStatus> {
+    return this.request(`/whatsapp/setup`);
+  }
+  /** "Probar recepción": from when an event from Meta proves that messages arrive. */
+  async startWhatsAppReceptionTest(): Promise<WhatsAppReceptionTest> {
+    return this.request(`/whatsapp/connection/reception-test`, { method: "POST" });
+  }
   async disconnectWhatsApp(): Promise<{ disconnected: boolean }> {
     return this.request(`/whatsapp/connection`, { method: "DELETE" });
   }
@@ -6020,6 +6053,11 @@ class ApiClient implements ApiClientInterface {
 
   // Platform email (Resend). The key and the webhook secret are write-only:
   // GET says where each setting comes from, never its value.
+  /** KiraRoom's Meta app: which settings exist (never their values) and the webhook URLs. */
+  async getPlatformMetaStatus(): Promise<PlatformMetaStatus> {
+    return this.request(`/platform/meta-status`);
+  }
+
   async getPlatformEmailConfig(): Promise<PlatformEmailConfig> {
     return this.request(`/platform/email-config`);
   }

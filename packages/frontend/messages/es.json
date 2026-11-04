@@ -3225,7 +3225,7 @@
       "displayName": "Nombre que verán tus clientas (opcional)"
     },
     "templatesTitle": "Plantillas de mensaje",
-    "templatesIntro": "A quien no te ha escrito en las últimas 24 horas, WhatsApp solo le entrega mensajes con una plantilla aprobada por Meta: recordatorios, confirmaciones, cancelaciones y cambios de cita, avisos de la lista de espera y peticiones de reseña. Las enviamos a revisión al conectar; suelen aprobarse en unas horas. Mientras una no esté aprobada, ese aviso sale por el canal de siempre (email, SMS o el WhatsApp de la plataforma).",
+    "templatesIntro": "A quien no te ha escrito en las últimas 24 horas, WhatsApp solo le entrega mensajes con una plantilla aprobada por Meta: recordatorios, confirmaciones, cancelaciones y cambios de cita, avisos de la lista de espera y peticiones de reseña. Las enviamos a revisión al conectar; suelen aprobarse en unas horas. Mientras una no esté aprobada, ese aviso sale por el canal de siempre (email o SMS).",
     "templateNames": {
       "reminder": "Recordatorio de cita",
       "confirmed": "Cita confirmada",
@@ -3276,7 +3276,26 @@
     "reconnectTitle": "Actualizar el token de acceso",
     "reconnectIntro": "Pega un token nuevo (un token de usuario del sistema que no caduque) del Administrador comercial de Meta. Los demás datos de la conexión se mantienen.",
     "reconnect": "Guardar el token nuevo",
-    "webhookWarning": "Conectado, pero Meta no envía los mensajes a KiraRoom"
+    "webhookWarning": "Conectado, pero Meta no envía los mensajes a KiraRoom",
+    "sendOnlyTitle": "Conectado solo para enviar",
+    "receptionTest": {
+      "cta": "Probar recepción",
+      "waiting": "Envía ahora un WhatsApp a tu número desde otro móvil (por ejemplo «hola»). Esperamos hasta 3 minutos a que Meta nos lo haga llegar.",
+      "received": "Recibido: Meta nos ha hecho llegar un mensaje de tu número ({date}). La recepcionista puede contestar.",
+      "timeout": "No ha llegado nada en 3 minutos. Comprueba que enviaste el mensaje al número conectado y vuelve a probar; si sigue sin llegar, escríbenos a soporte.",
+      "unavailable": "KiraRoom no puede recibir mensajes de este número todavía.",
+      "error": "No se ha podido empezar la prueba"
+    },
+    "guide": {
+      "title": "Cómo conseguir estos datos (unos 10 minutos)",
+      "step1": "Entra en business.facebook.com con la cuenta que administra el WhatsApp Business del salón y abre «Configuración del negocio».",
+      "step2": "En «Usuarios» → «Usuarios del sistema», crea uno con rol de administrador (o usa el que ya tengas).",
+      "step3": "Pulsa «Asignar activos», elige tu cuenta de WhatsApp y dale control total.",
+      "step4": "Pulsa «Generar nuevo token», marca los permisos whatsapp_business_messaging y whatsapp_business_management y elige que no caduque. Copia el token: es el «Token de acceso».",
+      "step5": "En el Administrador de WhatsApp, en «Números de teléfono», copia el identificador del número («ID del número en Meta») y el de la cuenta de WhatsApp Business.",
+      "step6": "Pégalos aquí y pulsa «Conectar». Comprobamos los datos con Meta antes de guardarlos; después pulsa «Probar recepción» para ver que los mensajes llegan.",
+      "note": "No uses el token temporal de «Configuración de la API»: caduca en 24 horas. Si el token es de otra app de Meta, los envíos funcionan pero los mensajes recibidos van a esa app; te avisaremos al conectar."
+    }
   },
   "notifications": {
     "title": "Notificaciones",

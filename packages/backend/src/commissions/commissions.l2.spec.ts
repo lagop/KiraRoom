@@ -78,7 +78,7 @@ beforeAll(async () => {
 
   const stub = {} as any;
   const consent: any = { hasValidConsent: jest.fn(async () => true), getRequiredForms: jest.fn(async () => []) };
-  agenda = new AppointmentsService(db, stub, stub, stub, stub, stub, stub, consent);
+  agenda = new AppointmentsService(db, stub, stub, stub, stub, stub, consent);
   // Notices are not what this is about.
   (agenda as any).sendAppointmentCreatedNotifications = jest.fn(async () => ({ emailSent: false, smsSent: false }));
   (agenda as any).sendAppointmentCompletedNotifications = jest.fn(async () => undefined);

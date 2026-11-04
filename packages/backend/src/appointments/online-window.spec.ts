@@ -34,7 +34,7 @@ function build(service: Record<string, unknown> = {}) {
     appointment: { findMany: async () => [] },
   };
   const stub = {} as any;
-  return new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
+  return new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub);
 }
 
 const slots = (svc: AppointmentsService, date: Date, online: boolean) =>
@@ -133,7 +133,7 @@ describe("publicBookingWindow", () => {
       },
     };
     const stub = {} as any;
-    return new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
+    return new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub);
   }
   const NOW = Date.parse("2026-11-04T23:30:00Z"); // 00:30 on the 5th in Madrid
 

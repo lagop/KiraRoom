@@ -107,7 +107,7 @@ function build(opts: {
     },
   };
   const stub = {} as any;
-  return new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
+  return new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub);
 }
 
 const OWNER = { id: "u1", role: "owner", tenantId: TENANT };

@@ -158,7 +158,7 @@ describe("online booking never books into time off", () => {
       $transaction: jest.fn(async (fn: any) => fn({ ...prisma, $executeRaw: async () => 0 })),
     };
     const stub = {} as any;
-    const service = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
+    const service = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub);
     (service as any).insertAppointment = insert.mockResolvedValue({ id: "apt-1" });
     (service as any).afterAppointmentCreated = jest.fn();
     return { service, insert };

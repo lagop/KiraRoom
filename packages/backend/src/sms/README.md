@@ -1,6 +1,6 @@
 # SMS module
 
-Owner/admin endpoint for sending a single test SMS. Closes the gap in the Kind-sailor (Rev. 3) plan §18.3.
+Whether the platform SMS provider is configured. The test-send endpoint (`POST /sms/test`) was removed in the channels audit (M8): it let a salon send any text to any number at the platform's cost.
 
 ## Source of truth
 
@@ -14,29 +14,10 @@ Owner/admin endpoint for sending a single test SMS. Closes the gap in the Kind-s
 | Method | Path          | Roles          | `@Feature` gate        |
 |--------|---------------|----------------|------------------------|
 | GET    | `/sms/status` | authenticated  | (none)                 |
-| POST   | `/sms/test`   | owner, admin   | `sms_notifications`    |
 
 ### `GET /sms/status`
 
 Returns `{ configured: boolean }` — whether the Twilio env vars are present. Intentionally ungated so an Esencial tenant can verify wiring before deciding to upgrade.
-
-### `POST /sms/test`
-
-Sends a single SMS to the address in the body. Gated by `sms_notifications` so an Esencial tenant without the add-on gets a 403.
-
-Request:
-```json
-{ "to": "+34612345678", "body": "Test desde KiraRoom" }
-```
-
-Response:
-```json
-{
-  "success": true,
-  "id": "SMxxxxxxxxxxxx",
-  "tenantId": "..."
-}
-```
 
 ## Pattern note
 

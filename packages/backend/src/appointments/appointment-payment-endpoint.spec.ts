@@ -73,7 +73,7 @@ describe("PATCH /appointments/:id/payment: who and how much", () => {
       professional: { findFirst: jest.fn(async () => ({ id: "p1" })) },
     };
     const stub = {} as any;
-    const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
+    const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub);
     return { svc, prisma };
   }
 

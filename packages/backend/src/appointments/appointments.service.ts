@@ -36,7 +36,6 @@ import { LoyaltyService } from "../loyalty/loyalty.service";
 import { InvoiceService } from "../invoices/invoices.service";
 import { EmailService } from "../notifications/services/email.service";
 import { SmsService } from "../notifications/services/sms.service";
-import { WhatsAppService } from "../notifications/services/whatsapp.service";
 import {
   AppointmentNoticeKind,
   WhatsAppTemplateService,
@@ -257,7 +256,6 @@ export class AppointmentsService {
     private notificationsService: NotificationsService,
     private emailService: EmailService,
     private smsService: SmsService,
-    private whatsappService: WhatsAppService,
     private translationsService: TranslationsService,
     private consentService: ConsentService,
     @Optional() private clientCadenceService?: ClientCadenceService,
@@ -3495,20 +3493,15 @@ export class AppointmentsService {
       // Send confirmation WhatsApp to client: the salon's template first.
       if (appointment.client?.phone && canSendWhatsapp) {
         try {
-          if (!(await this.sendWhatsAppViaSalon("confirmed", appointment))) {
-            await this.whatsappService.sendAppointmentConfirmation({
-              clientName,
-              clientPhone: appointment.client.phone,
-              serviceName,
-              professionalName,
-              date: dateStr,
-              time: appointment.scheduledTime,
-              salonName,
-            });
+          // Only from the salon's own number with its approved template: the
+          // platform's Twilio WhatsApp sender is gone (channels audit M7).
+          if (await this.sendWhatsAppViaSalon("confirmed", appointment)) {
+            this.logger.log(`Sent confirmation WhatsApp to client ${appointment.clientId}`);
+          } else {
+            this.logger.log(
+              `No confirmation WhatsApp for client ${appointment.clientId}: the salon has no WhatsApp connected or the template is not approved`,
+            );
           }
-          this.logger.log(
-            `Sent confirmation WhatsApp to client ${appointment.clientId}`,
-          );
         } catch (error) {
           this.logger.error(
             `Failed to send confirmation WhatsApp: ${error.message}`,
@@ -3876,23 +3869,15 @@ export class AppointmentsService {
         try {
           // The salon's template first (the free text is refused outside
           // WhatsApp's 24-hour window).
-          if (!(await this.sendWhatsAppViaSalon("cancelled", appointment))) {
-            await this.whatsappService.sendAppointmentCancellation(
-              {
-                clientName,
-                clientPhone: appointment.client.phone,
-                serviceName,
-                professionalName,
-                date: dateStr,
-                time: appointment.scheduledTime,
-                salonName,
-              },
-              reasonWithLink,
+          // Only from the salon's own number with its approved template: the
+          // platform's Twilio WhatsApp sender is gone (channels audit M7).
+          if (await this.sendWhatsAppViaSalon("cancelled", appointment)) {
+            this.logger.log(`Sent cancellation WhatsApp to client ${appointment.clientId}`);
+          } else {
+            this.logger.log(
+              `No cancellation WhatsApp for client ${appointment.clientId}: the salon has no WhatsApp connected or the template is not approved`,
             );
           }
-          this.logger.log(
-            `Sent cancellation WhatsApp to client ${appointment.clientId}`,
-          );
         } catch (error) {
           this.logger.error(
             `Failed to send cancellation WhatsApp: ${error.message}`,
@@ -4123,24 +4108,15 @@ export class AppointmentsService {
         try {
           // The salon's template first (the free text is refused outside
           // WhatsApp's 24-hour window).
-          if (!(await this.sendWhatsAppViaSalon("rescheduled", appointment))) {
-            await this.whatsappService.sendAppointmentRescheduled(
-              {
-                clientName,
-                clientPhone: appointment.client.phone,
-                serviceName,
-                professionalName,
-                date: newDateStr,
-                time: appointment.scheduledTime,
-                salonName,
-              },
-              oldDateStr,
-              oldTime,
+          // Only from the salon's own number with its approved template: the
+          // platform's Twilio WhatsApp sender is gone (channels audit M7).
+          if (await this.sendWhatsAppViaSalon("rescheduled", appointment)) {
+            this.logger.log(`Sent rescheduled WhatsApp to client ${appointment.clientId}`);
+          } else {
+            this.logger.log(
+              `No rescheduled WhatsApp for client ${appointment.clientId}: the salon has no WhatsApp connected or the template is not approved`,
             );
           }
-          this.logger.log(
-            `Sent rescheduled WhatsApp to client ${appointment.clientId}`,
-          );
         } catch (error) {
           this.logger.error(
             `Failed to send rescheduled WhatsApp: ${error.message}`,
@@ -4448,20 +4424,15 @@ export class AppointmentsService {
         try {
           // The salon's template first (the free text is refused outside
           // WhatsApp's 24-hour window).
-          if (!(await this.sendWhatsAppViaSalon("confirmed", appointment))) {
-            await this.whatsappService.sendAppointmentConfirmation({
-              clientName,
-              clientPhone: appointment.client.phone,
-              serviceName,
-              professionalName,
-              date: dateStr,
-              time: appointment.scheduledTime,
-              salonName,
-            });
+          // Only from the salon's own number with its approved template: the
+          // platform's Twilio WhatsApp sender is gone (channels audit M7).
+          if (await this.sendWhatsAppViaSalon("confirmed", appointment)) {
+            this.logger.log(`Sent confirmation WhatsApp to client ${appointment.clientId}`);
+          } else {
+            this.logger.log(
+              `No confirmation WhatsApp for client ${appointment.clientId}: the salon has no WhatsApp connected or the template is not approved`,
+            );
           }
-          this.logger.log(
-            `Sent confirmation WhatsApp to client ${appointment.clientId}`,
-          );
         } catch (error) {
           this.logger.error(
             `Failed to send confirmation WhatsApp: ${error.message}`,

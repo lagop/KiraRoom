@@ -48,7 +48,7 @@ function build(
     },
   };
   const stub = {} as any;
-  return new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
+  return new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub);
 }
 
 async function named(professionalWorkingHours: unknown, appointments: any[] = []): Promise<string[]> {
