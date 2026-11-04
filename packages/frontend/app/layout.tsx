@@ -6,10 +6,12 @@ import { Providers } from './providers'
 
 const inter = Inter({ subsets: ['latin'] })
 
+// In Spanish, like the app: every page without its own title (the widget,
+// the legal pages, errors) showed the English one.
 export const metadata: Metadata = {
-  title: 'KiraRoom - Beauty Salon Management',
-  description: 'Professional beauty salon management platform with appointment booking, client management, and more.',
-  keywords: 'beauty salon, appointment booking, salon management, beauty business',
+  title: 'KiraRoom · Gestión de salones de belleza',
+  description: 'Programa para salones de belleza: agenda y reservas online, clientas, caja y facturación.',
+  keywords: 'salón de belleza, reservas online, agenda, programa para peluquerías, gestión de salones',
 }
 
 export default function RootLayout({
