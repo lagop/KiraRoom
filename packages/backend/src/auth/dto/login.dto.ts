@@ -1,14 +1,18 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEmail, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsEmail, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { NormalizeEmail } from '../email-normalize';
 
 export class LoginDto {
-  @ApiProperty({ description: 'Email address', example: 'owner@example.com' })
-  @IsEmail()
+  @ApiProperty({ description: 'Email address (trimmed and lower-cased)', example: 'owner@example.com' })
+  @NormalizeEmail()
+  @IsEmail({}, { message: 'Escribe un email válido.' })
+  @MaxLength(254, { message: 'El email es demasiado largo.' })
   email: string;
 
   @ApiProperty({ description: 'Password', example: 'securePassword123' })
-  @IsString()
-  @MinLength(8)
+  @IsString({ message: 'Escribe la contraseña.' })
+  @MinLength(8, { message: 'Email o contraseña incorrectos.' })
+  @MaxLength(200, { message: 'Email o contraseña incorrectos.' })
   password: string;
 
   /**
@@ -21,4 +25,11 @@ export class LoginDto {
   @IsOptional()
   @IsString()
   tenantSlug?: string;
+
+  /** Cloudflare Turnstile response: asked for after 3 failed sign-ins. */
+  @ApiProperty({ required: false, description: 'Cloudflare Turnstile token (after repeated failures)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(4096)
+  turnstileToken?: string;
 }

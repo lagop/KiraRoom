@@ -24,7 +24,7 @@ function client(status: string) {
 
 function auth(row: any, verified: any = null) {
   const prisma: any = {
-    user: { findUnique: jest.fn(async () => null), findFirst: jest.fn(async () => null), update: jest.fn() },
+    user: { findUnique: jest.fn(async () => null), findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []), update: jest.fn() },
     client: { findFirst: jest.fn(async () => row), findUnique: jest.fn(async () => row) },
     tenant: { findFirst: jest.fn(async () => null) },
     auditLog: { create: jest.fn() },

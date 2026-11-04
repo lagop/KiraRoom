@@ -31,7 +31,12 @@ function directives(csp: string): Record<string, string[]> {
 const API = "https://api.kiraroom.net/api/v1";
 const prod = directives(buildCsp({ apiUrl: API }));
 
-check("scripts only from the app (inline kept for Next.js)", prod["script-src"].join(" ") === "'self' 'unsafe-inline'", prod["script-src"]);
+check(
+  "scripts only from the app (inline kept for Next.js) and the Turnstile captcha",
+  prod["script-src"].join(" ") === "'self' 'unsafe-inline' https://challenges.cloudflare.com",
+  prod["script-src"],
+);
+check("frames only from the app and the Turnstile captcha", prod["frame-src"].join(" ") === "'self' https://challenges.cloudflare.com", prod["frame-src"]);
 check("no eval in production", !prod["script-src"].includes("'unsafe-eval'"));
 check(
   "connections only to the app and the API, including its WebSocket for live notifications",

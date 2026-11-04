@@ -38,6 +38,12 @@ function socketOriginOf(origin) {
  * @param {{ apiUrl?: string, dev?: boolean }} opts
  * @returns {string}
  */
+/**
+ * Cloudflare Turnstile, the captcha on signup, forgot-password and (after
+ * failures) login: its script and its iframe come from this origin.
+ */
+const TURNSTILE_ORIGIN = 'https://challenges.cloudflare.com';
+
 function buildCsp({ apiUrl, dev = false } = {}) {
   const api = apiUrl ? originOf(apiUrl) : null;
   const apiSocket = socketOriginOf(api);
@@ -46,14 +52,14 @@ function buildCsp({ apiUrl, dev = false } = {}) {
   const directives = {
     'default-src': ["'self'"],
     // 'unsafe-eval' only for next dev (React Refresh evaluates modules).
-    'script-src': ["'self'", "'unsafe-inline'", ...(dev ? ["'unsafe-eval'"] : [])],
+    'script-src': ["'self'", "'unsafe-inline'", TURNSTILE_ORIGIN, ...(dev ? ["'unsafe-eval'"] : [])],
     'style-src': ["'self'", "'unsafe-inline'"],
     'img-src': ["'self'", 'data:', 'blob:', 'https:'],
     'font-src': ["'self'", 'data:'],
     // The API, also over WebSocket for live notifications (an http(s)
     // source does not cover ws(s)); next dev reloads over a WebSocket too.
     'connect-src': ["'self'", ...(api ? [api, apiSocket] : []), ...(dev ? ['ws:', 'wss:'] : [])],
-    'frame-src': ["'self'"],
+    'frame-src': ["'self'", TURNSTILE_ORIGIN],
     'worker-src': ["'self'", 'blob:'],
     'manifest-src': ["'self'"],
     'object-src': ["'none'"],

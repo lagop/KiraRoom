@@ -40,8 +40,12 @@ docker build \
   .
 
 echo "==> Building kiraroom-frontend:local"
+# NEXT_PUBLIC_* values are baked into the bundle at build time. The
+# Turnstile site key (public) comes from the deploy .env; empty = no captcha.
+TURNSTILE_SITE_KEY="${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-$(grep -E '^NEXT_PUBLIC_TURNSTILE_SITE_KEY=' .env 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '"' || true)}"
 docker build \
   -f packages/frontend/Dockerfile \
+  --build-arg NEXT_PUBLIC_TURNSTILE_SITE_KEY="${TURNSTILE_SITE_KEY}" \
   -t kiraroom-frontend:local \
   .
 

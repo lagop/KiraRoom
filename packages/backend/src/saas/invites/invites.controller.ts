@@ -52,8 +52,11 @@ export class PublicInvitesController {
     @Param("token") token: string,
     @Body() dto: AcceptInviteDto,
     @Res({ passthrough: true }) res: Response,
+    @Req() req?: any,
   ) {
-    return deliverTokens(res, "staff", await this.invites.acceptInvite(token, dto));
+    // The address is kept with the terms acceptance (LegalAcceptance).
+    const ip: string | null = req?.ip ?? req?.socket?.remoteAddress ?? null;
+    return deliverTokens(res, "staff", await this.invites.acceptInvite(token, dto, { ip }));
   }
 }
 

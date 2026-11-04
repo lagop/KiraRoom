@@ -489,13 +489,24 @@
     },
     "languageEs": "Español",
     "languageEn": "Inglés",
-    "terms": "Acepto los términos y condiciones y la política de privacidad.",
+    "terms": "Acepto los Términos del servicio (incluido el encargo del tratamiento, art. 28 RGPD) y la Política de privacidad.",
     "termsRequired": "Acepta los términos para continuar.",
     "submit": "Crear cuenta gratis",
     "submitting": "Creando cuenta...",
     "errorGeneric": "No se pudo crear la cuenta.",
     "loginLink": "Ya tengo cuenta",
-    "loginCta": "Iniciar sesión"
+    "loginCta": "Iniciar sesión",
+    "termsBefore": "Acepto los",
+    "termsLink": "Términos del servicio",
+    "termsDpa": "(incluido el encargo del tratamiento, art. 28 RGPD) y la",
+    "privacyLink": "Política de privacidad",
+    "webPreview": "Tu web:",
+    "showPassword": "Mostrar contraseña",
+    "hidePassword": "Ocultar contraseña",
+    "passwordTooShort": "La contraseña debe tener al menos 8 caracteres.",
+    "captchaRequired": "Confirma que no eres un robot y vuelve a intentarlo.",
+    "emailTakenLogin": "Iniciar sesión",
+    "emailTakenReset": "He olvidado la contraseña"
   },
   "billing": {
     "title": "Facturación y plan",
@@ -3146,7 +3157,12 @@
     "invalid": "Este enlace ha caducado, ya se ha usado o no es válido. Los enlaces de confirmación duran 48 horas.",
     "error": "No se ha podido comprobar el enlace. Inténtalo de nuevo en unos minutos.",
     "retry": "Reintentar",
-    "back_to_login": "Volver a iniciar sesión"
+    "back_to_login": "Volver a iniciar sesión",
+    "resend": "Reenviar el email",
+    "resend_sent": "Te hemos enviado un enlace nuevo. Dura 48 horas; revisa también la carpeta de spam.",
+    "already_verified": "Tu email ya está confirmado. No tienes que hacer nada más.",
+    "resend_failed": "No hemos podido enviar el email. Inténtalo de nuevo en unos minutos.",
+    "resend_signed_out": "Inicia sesión y pide otro enlace desde el aviso «Confirma tu email» del panel."
   },
   "waitList": {
     "title": "Lista de espera",
@@ -3527,5 +3543,14 @@
     "you": "Clienta",
     "assistant": "Asistente",
     "notFound": "Esta conversación ya no existe."
+  },
+  "emailVerifyNotice": {
+    "title": "Confirma tu email.",
+    "body": "Te enviamos un enlace a {email} al crear la cuenta. Si no lo encuentras o ha caducado, pide otro.",
+    "sent": "Enlace enviado a {email}. Dura 48 horas; revisa también la carpeta de spam.",
+    "resend": "Reenviar el email",
+    "sending": "Enviando...",
+    "failed": "No hemos podido enviar el email. Inténtalo de nuevo en unos minutos.",
+    "dismiss": "Ocultar este aviso"
   }
 }

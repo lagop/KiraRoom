@@ -1,7 +1,10 @@
 import { IsEmail, IsOptional, IsString, MaxLength, MinLength } from "class-validator";
+import { NormalizeEmail } from "../email-normalize";
 
 export class ForgotPasswordDto {
-  @IsEmail()
+  @NormalizeEmail()
+  @IsEmail({}, { message: "Escribe un email válido." })
+  @MaxLength(254, { message: "El email es demasiado largo." })
   email!: string;
 
   /** A client resetting from a salon's site: only that salon's account. */
@@ -9,17 +12,23 @@ export class ForgotPasswordDto {
   @IsString()
   @MaxLength(120)
   tenantSlug?: string;
+
+  /** Cloudflare Turnstile response, when the captcha is configured. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(4096)
+  turnstileToken?: string;
 }
 
 export class ResetPasswordDto {
-  @IsString()
-  @MinLength(32)
-  @MaxLength(128)
+  @IsString({ message: "El enlace no es válido o ha caducado. Pide uno nuevo." })
+  @MinLength(32, { message: "El enlace no es válido o ha caducado. Pide uno nuevo." })
+  @MaxLength(128, { message: "El enlace no es válido o ha caducado. Pide uno nuevo." })
   token!: string;
 
-  @IsString()
-  @MinLength(8)
-  @MaxLength(128)
+  @IsString({ message: "Escribe una contraseña." })
+  @MinLength(8, { message: "La contraseña debe tener al menos 8 caracteres." })
+  @MaxLength(128, { message: "La contraseña es demasiado larga (máximo 128 caracteres)." })
   password!: string;
 }
 
