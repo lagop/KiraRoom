@@ -20,6 +20,8 @@ import {
 import apiClient from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { SharedIdentityBadge } from "../components/shared-identity-notice";
+import type { SharedIdentityWarning } from "@/lib/shared-identity";
 import { useToast } from "@/components/ui/use-toast";
 
 interface TenantProgress {
@@ -55,6 +57,8 @@ interface Tenant {
   // the row entirely, but the field is typed so future "show deleted"
   // UIs can render a badge without a refactor.
   deletedAt?: string | null;
+  /** Other salons with the same phone or NIF (D9). */
+  sharedIdentity?: SharedIdentityWarning[];
   userCount: number;
   clientCount: number;
   appointmentCount: number;
@@ -403,6 +407,7 @@ export default function TenantsPage() {
                           <div className="ml-4">
                             <div className="text-sm font-medium text-gray-900">
                               {tenant.name}
+                              <SharedIdentityBadge warnings={tenant.sharedIdentity} />
                             </div>
                             <div className="text-sm text-gray-500">
                               {tenant.email || t("saas.no_email")}

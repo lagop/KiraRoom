@@ -3331,6 +3331,11 @@ class ApiClient implements ApiClientInterface {
     return this.request<Professional>(`/admin/professionals/${id}`);
   }
 
+  /** Deactivates a professional; allowed while the salon is read-only (D8). */
+  async deactivateProfessional(id: string): Promise<Professional> {
+    return this.request<Professional>(`/admin/professionals/${id}/deactivate`, { method: "POST" });
+  }
+
   /** Appointments still to happen (today on) of a professional: what deactivating leaves to reassign. */
   async getProfessionalUpcomingCount(id: string): Promise<{ count: number }> {
     return this.request<{ count: number }>(`/admin/professionals/${id}/upcoming-appointments`);

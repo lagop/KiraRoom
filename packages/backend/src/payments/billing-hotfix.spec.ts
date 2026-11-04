@@ -28,6 +28,9 @@ describe("reactivating a cancelled plan (B1)", () => {
         update: jest.fn(async () => ({})),
         updateMany: jest.fn(async () => ({ count: 1 })),
       },
+      // Reactivating checks the plan's limits (D8): a salon that fits.
+      professional: { count: jest.fn(async () => 1) },
+      location: { count: jest.fn(async () => 1) },
     };
     const config: any = { get: (_k: string, d?: string) => d };
     const platformStripe: any = { client: () => stripe, current: () => ({ taxEnabled: false }) };
