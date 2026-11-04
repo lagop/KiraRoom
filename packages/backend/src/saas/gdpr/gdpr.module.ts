@@ -10,6 +10,7 @@ import { GdprConsoleService } from "./gdpr-console.service";
   // PaymentsModule: the console's erasure cancels the Stripe subscription first.
   imports: [PrismaModule, PaymentsModule],
   controllers: [GdprController],
+  // AuditLogService: the console's erasure is on the audit log (audit 8, C9).
   providers: [GdprService, GdprConsoleService, AuditLogService],
   exports: [GdprService],
 })

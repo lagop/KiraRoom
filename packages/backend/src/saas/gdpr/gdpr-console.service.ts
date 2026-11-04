@@ -4,6 +4,7 @@ import { PrismaService } from "../../common/prisma/prisma.service";
 import { SubscriptionsService } from "../../payments/services/subscriptions.service";
 import { isReadOnlyStatus } from "../../common/guards/read-only-tenant.guard";
 import { AuditLogService } from "../audit-log.service";
+import { assertNotPlatformTenant } from "../platform-tenant";
 import { GdprService } from "./gdpr.service";
 
 export const GDPR_CONSOLE_MESSAGES = {
@@ -68,6 +69,8 @@ export class GdprConsoleService {
       select: { id: true, name: true, subscriptionStatus: true, deletedAt: true, anonymizedAt: true, stripeSubscriptionId: true },
     });
     if (!tenant) throw new NotFoundException(GDPR_CONSOLE_MESSAGES.notFound);
+    // The Platform tenant holds the platform owner's own account (C14).
+    await assertNotPlatformTenant(this.prisma, tenantId);
     if (!sameSalonName(input.confirmName, tenant.name)) {
       throw new BadRequestException(GDPR_CONSOLE_MESSAGES.nameMismatch);
     }
@@ -89,18 +92,19 @@ export class GdprConsoleService {
       throw err;
     }
     await this.auditLog
-      .record("tenant.gdpr_anonymize", {
+      // C9: one row, written after the scrub, so it carries nothing personal itself.
+      .record("tenant.anonymize", {
         actorId,
         actorRole: UserRole.saas_owner,
         tenantId,
         metadata: {
-          requestId: rec.id,
+          gdprRequestId: rec.id,
           forced: stillActive,
           previousStatus: tenant.subscriptionStatus,
           stripeSubscription: !!tenant.stripeSubscriptionId,
         },
       })
-      .catch((err) => this.logger.warn(`Audit log tenant.gdpr_anonymize for ${tenantId} failed: ${(err as Error).message}`));
+      .catch((err) => this.logger.warn(`Audit log tenant.anonymize for ${tenantId} failed: ${(err as Error).message}`));
     return { ok: true, requestId: rec.id };
   }
 

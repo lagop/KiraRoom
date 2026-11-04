@@ -952,7 +952,8 @@
       "analytics": "Analytics",
       "bugReports": "Bug reports",
       "settings": "Settings",
-      "security": "Security"
+      "security": "Security",
+      "activity": "Activity"
     },
     "platform_analytics": "Platform analytics",
     "metrics": {
@@ -1396,6 +1397,75 @@
       "all_statuses": "All statuses",
       "owner_section_desc": "Create the owner account for this salon. Leave it empty to create it later.",
       "owner_password_hint": "At least 8 characters. Leave it empty and we will email the owner a link to choose her own."
+    },
+    "support": {
+      "title": "Open {name}'s panel as support",
+      "explain": "It opens in a new tab; your console session stays open here. The support session lasts at most 2 hours, and what you do goes into the activity log under your name.",
+      "reason_label": "Reason",
+      "reason_placeholder": "For example: the owner asked for help setting up the opening hours",
+      "open": "Open panel"
+    },
+    "security": {
+      "title": "Security",
+      "subtitle": "Your password, your sessions and two-step verification.",
+      "sign_out_all_title": "Sign out everywhere",
+      "sign_out_all_body": "Signs the console out on every device, this one included, and ends any open support sessions. Use it if you lose a laptop or think someone got in.",
+      "sign_out_all_button": "Sign out everywhere",
+      "sign_out_all_confirm_title": "Sign out everywhere?",
+      "sign_out_all_confirm_body": "You will have to sign in again with your password (and the code, if two-step verification is on).",
+      "sign_out_all_failed": "The sessions could not be closed."
+    },
+    "audit": {
+      "title": "Activity",
+      "subtitle": "Log of what was done from the console and in support sessions. Read-only.",
+      "filter_salon": "Salon",
+      "filter_salon_placeholder": "Name or web address",
+      "filter_actor": "Who",
+      "filter_actor_placeholder": "Email or name",
+      "filter_action": "Action",
+      "all_actions": "All",
+      "filter_from": "From",
+      "filter_to": "To",
+      "apply": "Filter",
+      "clear": "Clear filters",
+      "col_when": "When",
+      "col_action": "Action",
+      "col_actor": "Who",
+      "col_salon": "Salon",
+      "col_details": "Details",
+      "loading": "Loading…",
+      "empty": "No activity with these filters.",
+      "load_failed": "The activity could not be loaded.",
+      "on_behalf_of": "on behalf of {name}",
+      "show_details": "Show details",
+      "hide_details": "Hide",
+      "total": "{total} records",
+      "page_of": "Page {page} of {pages}",
+      "previous": "Previous",
+      "next": "Next",
+      "actions": {
+        "saas_impersonate": "Entered a salon as support",
+        "saas_impersonate_end": "Left support mode",
+        "tenant_create": "Salon created from the console",
+        "tenant_update": "Salon edited from the console",
+        "tenant_suspend": "Salon suspended",
+        "tenant_reactivate": "Salon reactivated",
+        "tenant_soft_delete": "Salon deleted",
+        "tenant_anonymize": "Salon anonymised",
+        "tenant_taxId_change": "Salon tax ID changed",
+        "tenant_addon_grant": "Add-on granted",
+        "tenant_addon_revoke": "Add-on removed",
+        "tenant_credits_topup": "Message credits added",
+        "tenant_invite_create": "Invitation sent",
+        "tenant_invite_revoke": "Invitation revoked",
+        "platform_llm_config_updated": "LLM settings changed",
+        "platform_stripe_config_updated": "Stripe settings changed",
+        "platform_email_config_updated": "Email settings changed",
+        "bug_report_status_changed": "Bug report status changed",
+        "client_gdpr_export": "Client data exported",
+        "client_anonymize": "Client anonymised",
+        "invoice_emailed": "Invoice emailed"
+      }
     }
   },
   "dashboard": {
@@ -3139,7 +3209,8 @@
     "create_account": "Create a free account",
     "failed": "Could not sign in",
     "invalid_credentials": "Wrong email or password",
-    "server_error": "Server error. Please try again later."
+    "server_error": "Server error. Please try again later.",
+    "support_ended": "The support session has ended: it lasts at most 2 hours and closes if you sign out of your console sessions. Open the salon again from the console if you need to."
   },
   "bookingPublic": {
     "title": "Book an appointment",
@@ -3805,5 +3876,14 @@
     "title": "Confirm your email to send campaigns",
     "ownerBody": "You can prepare campaigns, but not send them until you confirm {email} with the link we sent you. Until then you also can't connect Stripe, and your website won't show up on Google.",
     "teamBody": "The salon owner has to confirm their email before campaigns can be sent. They can ask for a new link from the notice at the top of the panel."
+  },
+  "supportBanner": {
+    "title": "You are inside {salon}'s panel as KiraRoom support.",
+    "this_salon": "this salon",
+    "attribution": "What you do is recorded under your name, on behalf of the owner, and the owner keeps her own session.",
+    "ends_at": "The session closes by itself at {time}.",
+    "ends_max": "The session closes by itself at most 2 hours after entering.",
+    "session_id": "session",
+    "exit": "Leave support mode"
   }
 }

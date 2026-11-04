@@ -25,6 +25,7 @@ import { SharedIdentityBadge } from "../components/shared-identity-notice";
 import type { SharedIdentityWarning } from "@/lib/shared-identity";
 import { useToast } from "@/components/ui/use-toast";
 import { formatDateEs, tenantStatusClass, tenantStatusKey } from "@/lib/saas-tenant";
+import { SUPPORT_REASON_MAX, supportEntryUrl, supportReasonProblem } from "@/lib/support-session";
 
 interface TenantProgress {
   tenantId: string;
@@ -141,6 +142,49 @@ export default function TenantsPage() {
   const { toast } = useToast();
   // The tenant about to be deleted, confirmed in the panel's dialog.
   const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
+  // "Abrir panel" asks why first (C17); the salon opens in a new tab (C10).
+  const [pendingSupport, setPendingSupport] = useState<{ id: string; name: string } | null>(null);
+  const [supportReason, setSupportReason] = useState("");
+  const [supportError, setSupportError] = useState("");
+  const [launching, setLaunching] = useState(false);
+
+  const openSupportSession = async () => {
+    if (!pendingSupport) return;
+    const reason = supportReason.trim();
+    const problem = supportReasonProblem(reason);
+    if (problem) {
+      setSupportError(problem);
+      return;
+    }
+    // Opened now, inside the click, or the browser blocks it as a popup; it
+    // is pointed at the salon once the token is here.
+    const tab = window.open("about:blank", "_blank");
+    setLaunching(true);
+    try {
+      const res = await apiClient.launchSalonDashboard(pendingSupport.id, reason);
+      const url = supportEntryUrl({
+        token: res.token,
+        tenantId: res.tenantId,
+        tenantName: res.tenantName,
+        ownerName: res.ownerName,
+      });
+      if (tab) {
+        tab.opener = null;
+        tab.location.href = url;
+      } else {
+        // Popups blocked: this tab goes in; the console session is kept anyway.
+        window.location.href = url;
+      }
+      setPendingSupport(null);
+      setSupportReason("");
+      setSupportError("");
+    } catch (err) {
+      tab?.close();
+      setSupportError(err instanceof Error && err.message ? err.message : t("saas.failedToLoadTenant"));
+    } finally {
+      setLaunching(false);
+    }
+  };
   const [deleting, setDeleting] = useState(false);
   // Why the last delete failed (Stripe could not stop billing): shown in
   // the dialog, whose button then retries (audit 8 T14).
@@ -472,16 +516,10 @@ export default function TenantsPage() {
                         <div className="flex items-center justify-end space-x-2">
                           {!tenant.deletedAt && (
                             <button
-                              onClick={async () => {
-                                try {
-                                  const res = await apiClient.launchSalonDashboard(tenant.id);
-                                  window.location.href = `/login?as_owner=${tenant.id}&token=${encodeURIComponent(res.token)}&owner=${encodeURIComponent(res.ownerName)}`;
-                                } catch (err) {
-                                  toast({
-                                    title: t("saas.failed_to_load") || t("saas.failedToLoadTenant"),
-                                    variant: "destructive",
-                                  });
-                                }
+                              onClick={() => {
+                                setSupportReason("");
+                                setSupportError("");
+                                setPendingSupport({ id: tenant.id, name: tenant.name });
                               }}
                               className="p-2 text-gray-400 hover:text-indigo-600 rounded-lg hover:bg-indigo-50"
                               title={t("saas.launch")}
@@ -575,6 +613,40 @@ export default function TenantsPage() {
         </>
       )}
 
+      <ConfirmDialog
+        open={!!pendingSupport}
+        title={pendingSupport ? t("saas.support.title", { name: pendingSupport.name }) : ""}
+        description={
+          <div className="space-y-2">
+            <p>{t("saas.support.explain")}</p>
+            <label htmlFor="support-reason" className="block font-medium text-gray-800">
+              {t("saas.support.reason_label")}
+            </label>
+            <textarea
+              id="support-reason"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              rows={3}
+              maxLength={SUPPORT_REASON_MAX}
+              placeholder={t("saas.support.reason_placeholder")}
+              value={supportReason}
+              onChange={(e) => setSupportReason(e.target.value)}
+            />
+            <p className="text-xs text-gray-500">
+              {supportReason.trim().length}/{SUPPORT_REASON_MAX}
+            </p>
+            {supportError && (
+              <p role="alert" className="text-sm text-red-600">
+                {supportError}
+              </p>
+            )}
+          </div>
+        }
+        confirmLabel={t("saas.support.open")}
+        cancelLabel={t("common.cancel")}
+        loading={launching}
+        onCancel={() => setPendingSupport(null)}
+        onConfirm={openSupportSession}
+      />
       <ConfirmDialog
         open={!!pendingDelete}
         title={pendingDelete ? t("saas.deleteConfirm", { name: pendingDelete.name }) : ""}

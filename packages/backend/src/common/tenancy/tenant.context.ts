@@ -26,6 +26,20 @@ export interface TenantStore {
   tenantId: string | null;
   /** When true the Prisma extension does not filter anything. */
   bypass: boolean;
+  /**
+   * Who is signed in on this request, set with the tenant by JwtStrategy.
+   * During a support session (impersonation) it says which saas_owner is
+   * really acting, so AuditLogService can record them (audit 8, C4).
+   */
+  actor?: RequestActor;
+}
+
+export interface RequestActor {
+  userId: string;
+  role: string;
+  /** The saas_owner acting as this user in a support session. */
+  impersonatedBy?: string;
+  impersonationId?: string;
 }
 
 export const tenantStorage = new AsyncLocalStorage<TenantStore>();
@@ -48,16 +62,27 @@ export function bindTenant(tenantId: string | null, role?: string): void {
   store.bypass = !tenantId || role === "saas_owner";
 }
 
+/** Records who the request is signed in as (JwtStrategy, after bindTenant). */
+export function bindActor(actor: RequestActor): void {
+  const store = tenantStorage.getStore();
+  if (!store) return;
+  store.actor = actor;
+}
+
+/** The signed-in actor of the current request, if any. */
+export const currentRequestActor = (): RequestActor | undefined => tenantStorage.getStore()?.actor;
+
 /**
  * Run `fn` with tenant filtering disabled. For code that must cross
  * tenants on purpose outside a request (schedulers, migrations,
  * maintenance scripts).
  */
 export function runUnscoped<T>(fn: () => T): T {
-  return tenantStorage.run({ tenantId: null, bypass: true }, fn);
+  // The request's actor goes along: an audit row written inside still names them.
+  return tenantStorage.run({ tenantId: null, bypass: true, actor: tenantStorage.getStore()?.actor }, fn);
 }
 
 /** Run `fn` scoped to `tenantId`, for schedulers that loop over tenants. */
 export function runAsTenant<T>(tenantId: string, fn: () => T): T {
-  return tenantStorage.run({ tenantId, bypass: false }, fn);
+  return tenantStorage.run({ tenantId, bypass: false, actor: tenantStorage.getStore()?.actor }, fn);
 }

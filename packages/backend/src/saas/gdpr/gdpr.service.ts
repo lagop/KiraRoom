@@ -2,10 +2,11 @@ import { Injectable, Logger } from "@nestjs/common";
 import { createHash } from "crypto";
 import { createGzip } from "zlib";
 import { Readable } from "stream";
-import { GdprRequest, GdprRequestStatus, Prisma } from "@prisma/client";
+import { GdprRequest, GdprRequestStatus, Prisma, UserRole } from "@prisma/client";
 import { PrismaService } from "../../common/prisma/prisma.service";
 import { CLIENT_SECRET_COLUMNS } from "../../clients/client-select";
 import { anonymizeClients } from "../../clients/client-anonymize";
+import { scrubTenantAuditLogs } from "./audit-log-scrub";
 
 /**
  * GDPR data export (Art. 15 RGPD) and right-to-erasure (Art. 17 RGPD).
@@ -328,7 +329,12 @@ export class GdprService {
       // Users — replace email + PII, mark inactive. The email is unique
       // across the platform, so each user gets their own placeholder (one
       // shared address failed as soon as a salon had two users).
-      const users = await tx.user.findMany({ where: { tenantId }, select: { id: true } });
+      // Never a saas_owner (audit 8, C14): the platform owner's own account
+      // is not the salon's data, and anonymising it would lock the console.
+      const users = await tx.user.findMany({
+        where: { tenantId, role: { not: UserRole.saas_owner } },
+        select: { id: true },
+      });
       for (const user of users) {
         await tx.user.update({
           where: { id: user.id },
@@ -399,6 +405,10 @@ export class GdprService {
           deletedAt: tenant.deletedAt ?? now,
         },
       });
+
+      // The audit trail stays, without the personal data in it (C15).
+      // Fiscal data is always kept here, so the NIF change rows keep it too.
+      await scrubTenantAuditLogs(tx, tenantId, { keepFiscalData: true });
 
       return tx.gdprRequest.update({
         where: { id: requestId },

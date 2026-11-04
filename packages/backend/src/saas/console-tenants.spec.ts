@@ -14,6 +14,7 @@ import { UpdateTenantDto } from "./dto/update-tenant.dto";
 import { GdprConsoleService, sameSalonName } from "./gdpr/gdpr-console.service";
 
 const DAY = 24 * 60 * 60 * 1000;
+const ACTOR = { id: "saas-1", role: "saas_owner" };
 const NOW = new Date("2026-11-04T10:00:00Z");
 
 function tenantRow(over: Record<string, unknown> = {}) {
@@ -67,7 +68,12 @@ function makeService(row: any, opts: { stripeFails?: boolean } = {}) {
     },
   };
   const auditLog: any = { record: async (action: string, params: any) => { audit.push({ action, ...params }); return { id: `a-${audit.length}` }; } };
-  const svc = new SaasService(prisma, null as any, auditLog, subscriptions);
+  const real = new SaasService(prisma, null as any, auditLog, subscriptions);
+  // The console actor (#276) defaults to one platform owner in these tests.
+  const svc: any = Object.create(real);
+  svc.updateTenant = (id: string, dto: any, actor: any = ACTOR) => real.updateTenant(id, dto, actor);
+  svc.suspendTenant = (id: string, actor: any = ACTOR) => real.suspendTenant(id, actor);
+  svc.reactivateTenant = (id: string, opts: any = {}, actor: any = ACTOR) => real.reactivateTenant(id, opts, actor);
   return { svc, tenants, audit, stripe, prisma };
 }
 
@@ -120,13 +126,22 @@ describe("T4: Reactivar clears the old retention state", () => {
     expect(tenants.get("t-1").deletionRequestedAt).toBe(requested);
   });
 
-  it("with the explicit checkbox it cancels the deletion too, audit-logged", async () => {
+  it("with the explicit checkbox it cancels the deletion too, on the one reactivate audit row", async () => {
     const { svc, tenants, audit } = makeService(tenantRow({ ...stale, deletionRequestedAt: new Date("2026-10-20T09:00:00Z") }));
-    await svc.reactivateTenant("t-1", { cancelDeletion: true }, "saas-1");
+    await svc.reactivateTenant("t-1", { cancelDeletion: true }, { id: "saas-2" });
     expect(tenants.get("t-1").deletionRequestedAt).toBeNull();
     expect(tenants.get("t-1").deletionRestore).toBe(Prisma.DbNull);
-    expect(audit.map((a) => a.action)).toEqual(["tenant.deletion_cancelled"]);
-    expect(audit[0].actorId).toBe("saas-1");
+    expect(audit.map((a) => a.action)).toEqual(["tenant.reactivate"]);
+    expect(audit[0].actorId).toBe("saas-2");
+    expect(audit[0].metadata.deletionCancelled).toEqual({ requestedAt: "2026-10-20T09:00:00.000Z" });
+  });
+
+  it("an edit that cancels the deletion writes one tenant.update row with it", async () => {
+    const { svc, audit } = makeService(tenantRow({ ...stale, deletionRequestedAt: new Date("2026-10-20T09:00:00Z") }));
+    await svc.updateTenant("t-1", { subscriptionStatus: "active" as any, cancelDeletion: true } as any);
+    expect(audit.map((a) => a.action)).toEqual(["tenant.update"]);
+    expect(audit[0].metadata.changes.deletionRequestedAt).toEqual({ before: "2026-10-20T09:00:00.000Z", after: null });
+    expect(audit[0].metadata.changes).not.toHaveProperty("deletionRestore");
   });
 });
 
@@ -260,9 +275,9 @@ describe("T6 / T7 / T22: create and edit validation", () => {
 });
 
 describe("T5: the console's GDPR erasure", () => {
-  function makeGdpr(row: any, opts: { stripeFails?: boolean } = {}) {
+  function makeGdpr(row: any, opts: { stripeFails?: boolean; platform?: boolean } = {}) {
     const calls: string[] = [];
-    const prisma: any = { tenant: { findUnique: async () => row } };
+    const prisma: any = { tenant: { findUnique: async () => row, count: async () => (opts.platform ? 1 : 0) } };
     const gdpr: any = {
       recordRequest: async () => { calls.push("record"); return { id: "req-1" }; },
       anonymize: async (_t: string, _r: string, o: any) => { calls.push(`anonymize:${o.keepFiscalData}`); },
@@ -279,6 +294,12 @@ describe("T5: the console's GDPR erasure", () => {
     return { svc: new GdprConsoleService(prisma, gdpr, subs, audit), calls };
   }
 
+  it("refuses the Platform tenant (#276 guard) before anything else", async () => {
+    const { svc, calls } = makeGdpr(tenantRow({ subscriptionStatus: "cancelled" }), { platform: true });
+    await expect(svc.anonymize("t-1", "saas-1", undefined, { confirmName: "Salón Lucía" })).rejects.toThrow(/Platform/);
+    expect(calls).toEqual([]);
+  });
+
   it("needs the salon's name typed", async () => {
     const { svc, calls } = makeGdpr(tenantRow({ subscriptionStatus: "cancelled" }));
     await expect(svc.anonymize("t-1", "saas-1", undefined, { confirmName: "Otro" })).rejects.toThrow(/no coincide/);
@@ -291,7 +312,7 @@ describe("T5: the console's GDPR erasure", () => {
     await expect(svc.anonymize("t-1", "saas-1", undefined, { confirmName: "Salón Lucía" })).rejects.toThrow(/sigue activo/);
     expect(calls).toEqual([]);
     await svc.anonymize("t-1", "saas-1", undefined, { confirmName: "Salón Lucía", force: true });
-    expect(calls).toEqual(["stripe", "record", "anonymize:true", "tenant.gdpr_anonymize"]);
+    expect(calls).toEqual(["stripe", "record", "anonymize:true", "tenant.anonymize"]);
   });
 
   it("cancels Stripe first and anonymises nothing if that fails", async () => {

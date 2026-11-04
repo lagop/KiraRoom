@@ -61,23 +61,26 @@ Time-series charts at `/saas/analytics/growth?months=6` and per-salon at `/saas/
 
 ---
 
-## 5. Impersonating a tenant owner
+## 5. Entering a salon as support (impersonation)
 
-The "external-link" button on a tenant row is the SaaS-support escape hatch. It logs you in as that tenant's owner so you can investigate a problem from their seat.
+The "external-link" button on a tenant row opens that salon's panel as its owner, to investigate a problem from her seat. Since audit 8 (console access):
 
 **Flow:**
-1. SaaS owner clicks the launch icon on `/saas/tenants`.
-2. Frontend calls `POST /saas/tenants/:id/launch`. Backend returns a signed JWT (TTL 60s, audience `impersonation`) and the owner's profile.
-3. Frontend redirects to `/login?as_owner=&token=&owner=` with the token in the URL.
-4. `/login` consumes the token via `POST /auth/impersonate`. The backend validates the audience + signature, mints a real session for the tenant owner, and writes an `AuditLog` row (`action: 'saas.impersonate'`).
-5. Browser is redirected to `/dashboard?impersonated=1`. The dashboard layout renders a persistent red banner: *"You are impersonating this tenant. Every action you take is attributed to your account in the `audit_logs` table."* with an **Exit** button.
-6. **Exit** removes both tokens, logs the user out, and routes to `/saas/login`. The SaaS owner must log in again (we cannot restore their session — the impersonation token was the only auth they had).
+1. SaaS owner clicks the launch icon on `/saas/tenants` and types the **reason** (required, 5–200 characters).
+2. Frontend calls `POST /saas/tenants/:id/launch { reason }`. Backend returns a signed one-shot JWT (TTL 60 s, audience `impersonation`) with the reason and the console's session version signed in it.
+3. The salon opens in a **new tab** at `/login#support=<token>&tenant=<id>&name=<salon>` (token in the fragment, never in the query, so it is not in server logs).
+4. `/login` consumes the token via `POST /auth/impersonate`. The backend checks the issuer is still an active saas_owner with the same session version, mints the support session, writes `audit_logs` `saas.impersonate` (reason, owner id, end time; not the owner's email) and sets its **own** refresh cookie `kr_support_<tenantId>`.
+5. That tab keeps its session in `sessionStorage`, so the console in the other tabs stays signed in (`kr_session` and `localStorage` are never touched). The red banner says which salon, that actions are recorded under the platform owner's name on behalf of the owner, and when the session ends.
+6. **Salir del modo soporte** ends the support session (`saas.impersonate.end` row) and closes the tab.
 
-**Audit trail:** every impersonation creates one `audit_logs` row with `actorId` = SaaS owner's user id, `tenantId` = impersonated tenant, `metadata.reason` = `support` (configurable from frontend in future).
+**Audit trail:** every row written during a support session has `actorId` = the saas_owner, `actorRole` = `saas_owner`, and `metadata.onBehalfOf` = the owner, plus `impersonatedBy` and `impersonationId`. `AuditLogService.record` does this from the request context; call sites keep passing the signed-in user. Read it at `/saas/actividad` (filters: salon, actor, action, dates).
 
 **Limits:**
-- JWT TTL hard-capped at 60s (`IMPERSONATION_TTL_SECONDS` in `saas.constants.ts`).
-- Impersonation only works against tenants where `deletedAt IS NULL`.
+- Entry token: 60 s, single use (`used_impersonation_tokens`).
+- Support session: **2 hours hard cap** from entry (`SUPPORT_SESSION_MAX_SECONDS`, `auth/session-token.ts`). Neither the access nor the refresh token lives past it; a refresh after it is refused.
+- It also ends when the platform owner signs out everywhere, changes the password, or is deactivated (the owner's `tokenVersion` at entry is in the token).
+- What support can do inside the salon is unchanged for now (pending owner decision, audit 8 C2).
+- Not for the "Platform" tenant (the platform owner's own account): it is hidden from the salon list and cannot be deleted, suspended, anonymised or entered.
 
 ---
 
