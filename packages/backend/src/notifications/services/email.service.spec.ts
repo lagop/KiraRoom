@@ -362,7 +362,7 @@ describe("EmailService.sendAccountSuspended (Sprint 2.2)", () => {
     expect(calls[0].html).toMatch(/modo lectura/);
   });
 
-  it("promises what the account really keeps: the read-only window, no anonymising", async () => {
+  it("says the same period as the terms: export until the end of read-only, anonymised 30 days after (audit 7 D7)", async () => {
     const { service, calls } = makeService();
     await service.sendAccountSuspended({
       to: "owner@salon.com",
@@ -372,8 +372,8 @@ describe("EmailService.sendAccountSuspended (Sprint 2.2)", () => {
       updatePaymentUrl: "https://app.kiraroom.com/dashboard/billing",
     });
     for (const body of [calls[0].html, calls[0].text]) {
-      expect(body.replace(/<\/?strong>/g, "")).toMatch(/se conservan hasta el 16 de agosto de 2026/);
-      expect(body).not.toMatch(/60 días|anonimiz/);
+      expect(body).toMatch(/Puedes exportar tus datos hasta el 16 de agosto de 2026; después se anonimizan, el 15 de septiembre de 2026/);
+      expect(body).not.toMatch(/se conservan hasta/);
     }
   });
 
@@ -424,7 +424,7 @@ describe("EmailService.sendAccountReadOnly", () => {
     for (const body of [html, text]) {
       expect(body).toMatch(/consultar y exportar/);
       expect(body).toMatch(/no acepta reservas/);
-      expect(body).toMatch(/se conservan hasta el 22 de noviembre de 2026/);
+      expect(body).toMatch(/Puedes exportar tus datos hasta el 22 de noviembre de 2026; después se anonimizan/);
       expect(body).toMatch(/Elegir un plan/);
       expect(body).toContain(base.billingUrl);
     }

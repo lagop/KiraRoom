@@ -6,6 +6,7 @@ import { PrismaService } from "../../common/prisma/prisma.service";
 import { PlatformEmailConfigService } from "../../platform/platform-email-config.service";
 import { EmailSettings, senderWithName } from "../../platform/email-settings";
 import { isPlaceholderEmail } from "../../common/placeholder-email";
+import { anonymizationDate } from "../../saas/retention/salon-retention";
 import { escapeHtml } from "../../common/html-escape";
 
 /**
@@ -133,6 +134,16 @@ export interface AppointmentEmailData {
    * salon's language today, and the dates they pass are already Spanish.
    */
   language?: string;
+}
+
+/**
+ * What every read-only email says about the data (audit 7 D7): it can be
+ * exported until the end of the read-only period, and is anonymised 30 days
+ * after (saas/retention/salon-retention.ts). The same wording as the terms,
+ * the privacy policy and the panel's read-only notice.
+ */
+export function retentionSentence(readOnlyUntil: Date): string {
+  return `Puedes exportar tus datos hasta el ${formatLongDateEs(readOnlyUntil)}; después se anonimizan, el ${formatLongDateEs(anonymizationDate(readOnlyUntil))}. Las facturas emitidas se conservan, como exige la ley.`;
 }
 
 /** "23 de noviembre de 2026", in Madrid time so a late-UTC instant shows the right day. */
@@ -941,7 +952,7 @@ export class EmailService {
 
     const subject = `Hemos suspendido tu cuenta de KiraRoom`;
     const formattedDate = formatLongDateEs(data.gracePeriodEndsAt);
-    const keptUntil = formatLongDateEs(data.readOnlyUntil);
+    const keep = retentionSentence(data.readOnlyUntil);
 
     const html = `
 <!DOCTYPE html>
@@ -968,7 +979,7 @@ export class EmailService {
             acepta reservas hasta que actualices tu método de pago.
           </p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 24px 0;">
-            Tus datos se conservan hasta el <strong>${keptUntil}</strong>.
+            ${this.escapeHtml(keep)}
           </p>
           <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 24px 0;">
             <tr><td style="background:#4f46e5;border-radius:8px;">
@@ -997,7 +1008,7 @@ export class EmailService {
       `puedes consultar y exportar tus datos, pero no emitir facturas, registrar citas`,
       `ni modificar información, y tu página no acepta reservas, hasta actualizar tu método de pago.`,
       ``,
-      `Tus datos se conservan hasta el ${keptUntil}.`,
+      keep,
       ``,
       `Reactivar:`,
       data.updatePaymentUrl,
@@ -1021,7 +1032,8 @@ export class EmailService {
   async sendAccountReadOnly(data: {
     to: string;
     tenantName: string;
-    reason: "trial_ended" | "cancelled";
+    /** deletion_requested: the owner asked to delete the salon (Ajustes > Seguridad). */
+    reason: "trial_ended" | "cancelled" | "deletion_requested";
     readOnlyUntil: Date;
     billingUrl: string;
   }): Promise<{ success: boolean; id?: string; error?: string; skipped?: boolean }> {
@@ -1030,21 +1042,27 @@ export class EmailService {
     }
 
     const trial = data.reason === "trial_ended";
+    const deletion = data.reason === "deletion_requested";
     const subject = trial
       ? `Tu prueba de KiraRoom ha terminado: tu cuenta está en modo lectura`
-      : `Hemos cancelado tu suscripción de KiraRoom`;
-    const heading = trial ? "Tu prueba gratuita ha terminado" : "Suscripción cancelada";
+      : deletion
+        ? `Hemos recibido tu petición para borrar tu salón de KiraRoom`
+        : `Hemos cancelado tu suscripción de KiraRoom`;
+    const heading = trial ? "Tu prueba gratuita ha terminado" : deletion ? "Borrado del salón solicitado" : "Suscripción cancelada";
     const lead = trial
       ? "La prueba gratuita de 14 días ha terminado sin un plan elegido, así que tu cuenta ha pasado a modo lectura."
-      : "Tu suscripción está cancelada y tu cuenta ha pasado a modo lectura. No se te volverá a cobrar.";
-    const cta = trial ? "Elegir un plan" : "Reactivar mi suscripción";
-    const keptUntil = formatLongDateEs(data.readOnlyUntil);
+      : deletion
+        ? "Has pedido borrar tu salón. Tu cuenta ha pasado a modo lectura y no se te volverá a cobrar."
+        : "Tu suscripción está cancelada y tu cuenta ha pasado a modo lectura. No se te volverá a cobrar.";
+    const cta = trial ? "Elegir un plan" : deletion ? "Anular el borrado" : "Reactivar mi suscripción";
     const meaning =
       "Puedes iniciar sesión, consultar y exportar tus datos y los de tus clientas, " +
       "pero no crear ni cambiar citas, clientas ni servicios, y tu página no acepta reservas.";
     const keep = trial
-      ? `Tus datos se conservan hasta el ${keptUntil}. Si eliges un plan antes, sigues donde lo dejaste, sin perder nada.`
-      : `Tus datos se conservan hasta el ${keptUntil}. Si reactivas la suscripción antes, sigues donde lo dejaste, sin perder nada.`;
+      ? `${retentionSentence(data.readOnlyUntil)} Si eliges un plan antes, sigues donde lo dejaste, sin perder nada.`
+      : deletion
+        ? `${retentionSentence(data.readOnlyUntil)} Hasta entonces puedes anular el borrado desde Ajustes > Seguridad.`
+        : `${retentionSentence(data.readOnlyUntil)} Si reactivas la suscripción antes, sigues donde lo dejaste, sin perder nada.`;
 
     const html = `
 <!DOCTYPE html>
@@ -1105,6 +1123,65 @@ export class EmailService {
       html,
       text,
     });
+  }
+
+  /**
+   * 7 days before a read-only salon's data is anonymised (audit 7 D7,
+   * saas/retention/salon-retention.scheduler.ts): what will go, what stays,
+   * and that exporting or choosing a plan before then keeps everything.
+   */
+  async sendAnonymizationWarning(data: {
+    to: string;
+    tenantName: string;
+    anonymizeOn: Date;
+    /** Ajustes > Seguridad (exports) or Facturación. */
+    exportUrl: string;
+    billingUrl: string;
+  }): Promise<{ success: boolean; id?: string; error?: string; skipped?: boolean }> {
+    if (await this.shouldSkipBouncedUser(data.to)) {
+      return { success: false, skipped: true, error: "email_bounced" };
+    }
+    const day = formatLongDateEs(data.anonymizeOn);
+    const subject = `El ${day} se anonimizan los datos de ${data.tenantName} en KiraRoom`;
+    const lines = [
+      `El ${day} anonimizaremos los datos personales de tu salón en KiraRoom: las fichas de tus clientas, sus citas y conversaciones, y los datos de tu equipo.`,
+      "Las facturas emitidas se conservan, como exige la ley.",
+      "Si quieres guardar una copia, expórtala antes de esa fecha. Si quieres seguir usando KiraRoom, elige un plan antes y no perderás nada.",
+    ];
+    const e = (v: unknown) => this.escapeHtml(v);
+    const html = `
+<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:12px;padding:32px;">
+        <tr><td>
+          <div style="font-size:24px;font-weight:700;color:#0f172a;margin-bottom:8px;">KiraRoom</div>
+          <p style="font-size:14px;color:#64748b;margin:0 0 24px 0;">Aviso: ${e(data.tenantName)}</p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">Hola,</p>
+          ${lines.map((l) => `<p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">${e(l)}</p>`).join("\n          ")}
+          <p style="font-size:15px;line-height:1.6;margin:0 0 8px 0;">
+            <a href="${e(data.exportUrl)}" style="color:#4f46e5;font-weight:600;">Exportar mis datos</a>
+            &nbsp;·&nbsp;
+            <a href="${e(data.billingUrl)}" style="color:#4f46e5;font-weight:600;">Elegir un plan</a>
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`.trim();
+    const text = [
+      "Hola,",
+      "",
+      ...lines,
+      "",
+      `Exportar mis datos: ${data.exportUrl}`,
+      `Elegir un plan: ${data.billingUrl}`,
+    ].join("\n");
+    return this.sendEmail({ to: data.to, subject, html, text });
   }
 
   /**

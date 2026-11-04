@@ -239,6 +239,24 @@ describe("GdprService.anonymize", () => {
     expect(t.deletedAt).toBeInstanceOf(Date);
   });
 
+  it("the retention job keeps the invoices and the salon's fiscal identity as they are (audit 7 D7)", async () => {
+    const m = makePrismaMock();
+    seedTenant(m);
+    const before = { ...m.invoices[0] };
+    const taxId = m.tenants.get("tenant-1").taxId;
+    const svc = new GdprService(m.prisma as any);
+    const request = await svc.recordRequest("tenant-1", "anonymize", "actor-1", undefined);
+    await svc.anonymize("tenant-1", request.id, { keepFiscalData: true });
+
+    expect(m.invoices[0]).toEqual(before);
+    const t = m.tenants.get("tenant-1");
+    expect(t.taxId).toBe(taxId);
+    expect(t.name).toContain("anonymized");
+    expect(t.email).toBe(null);
+    expect(t.deletedAt).toBeInstanceOf(Date);
+    expect(m.users.every((u: any) => u.firstName === "[anonymized]")).toBe(true);
+  });
+
   it("marks the GdprRequest as completed after anonymization", async () => {
     const m = makePrismaMock();
     seedTenant(m);
