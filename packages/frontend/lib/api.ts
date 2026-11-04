@@ -6382,6 +6382,9 @@ class ApiClient implements ApiClientInterface {
     });
   }
   /** What saving `input` would do (mode before and after, why it would be refused, salons affected), without saving. */
+  async getPlatformStripeTestModePlans(): Promise<PlatformStripeTestModePlans> {
+    return this.request(`/platform/stripe-config/test-mode-plans`);
+  }
   async previewPlatformStripeConfig(input: PlatformStripeUpdate): Promise<PlatformStripePreview> {
     return this.request(`/platform/stripe-config/preview`, {
       method: "POST",
@@ -6533,6 +6536,12 @@ export interface PlatformStripeUpdate {
   publishableKey?: string | null;
   webhookSecret?: string | null;
   otherWebhookSecret?: string | null;
+}
+
+/** Audit 8 D8: real salons whose plan was activated by a test-mode payment (nothing charged). */
+export interface PlatformStripeTestModePlans {
+  total: number;
+  salons: Array<{ id: string; name: string; slug: string | null; plan: string | null; subscriptionStatus: string | null }>;
 }
 
 export interface PlatformStripePreview {

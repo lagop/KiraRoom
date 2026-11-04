@@ -4,7 +4,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import Stripe from 'stripe';
 import { cancelAtOf, checkoutTrialEnd, hasLivePlanSubscription, isAddOnItem, planItemOf } from '../plan-activation';
 import { PlatformStripeConfigService } from '../../platform/platform-stripe-config.service';
-import { keyMode, livemodeOf, sameStripeMode } from '../../platform/stripe-settings';
+import { keyMode, livemodeOf, paymentsTestMode, sameStripeMode, TEST_MODE_PAYMENTS_REFUSED, testModeRefusesPayment } from '../../platform/stripe-settings';
 
 /** A salon whose plan was contracted with the other Stripe mode's keys (P2). */
 export const OTHER_MODE_SUBSCRIPTION =
@@ -269,6 +269,16 @@ export class SubscriptionsService {
     }
   }
 
+  /**
+   * Refuses a payment flow for a real salon while the platform's Stripe
+   * keys are test keys (audit 8 D8). Internal salons go through.
+   */
+  assertRealPaymentsAllowed(tenant: { isInternal?: boolean | null }) {
+    if (testModeRefusesPayment(this.activeLivemode(), tenant)) {
+      throw new ConflictException(TEST_MODE_PAYMENTS_REFUSED);
+    }
+  }
+
   // Define subscription plans (rev 3)
   readonly plans: Record<PlanId, SubscriptionPlanDetails> = {
     esencial: {
@@ -483,6 +493,10 @@ export class SubscriptionsService {
         tenant.subscriptionStatus === "active" &&
         !!tenant.stripeSubscriptionId &&
         sameStripeMode(tenant.stripeSubscriptionLivemode, this.activeLivemode()),
+      // Test keys in force (D8): the billing page says nothing is charged,
+      // and the contract buttons are refused for a real salon.
+      paymentsTestMode: paymentsTestMode(this.activeLivemode()),
+      paymentsBlocked: testModeRefusesPayment(this.activeLivemode(), tenant),
     };
   }
 
@@ -625,6 +639,7 @@ export class SubscriptionsService {
     if (!planDetails) {
       throw new Error('Invalid plan');
     }
+    this.assertRealPaymentsAllowed(tenant);
 
     // A subscription of the other Stripe mode does not count: it does not
     // exist for the keys in force, and the new checkout replaces it.
@@ -1073,6 +1088,7 @@ export class SubscriptionsService {
     if (!tenant || !tenant.stripeSubscriptionId) {
       throw new NotFoundException('No active subscription found');
     }
+    this.assertRealPaymentsAllowed(tenant);
     this.assertSubscriptionInMode(tenant);
 
     const planId = this.normalizePlan(newPlan);
@@ -1183,6 +1199,7 @@ export class SubscriptionsService {
     if (!tenant || !tenant.stripeSubscriptionId || tenant.subscriptionStatus === 'cancelled') {
       throw new NotFoundException('No tienes una suscripción activa: contrata el plan Empresa primero.');
     }
+    this.assertRealPaymentsAllowed(tenant);
     this.assertSubscriptionInMode(tenant);
     if (this.normalizePlan(tenant.plan) !== 'empresa') {
       throw new BadRequestException('Solo el plan Empresa se paga por local.');

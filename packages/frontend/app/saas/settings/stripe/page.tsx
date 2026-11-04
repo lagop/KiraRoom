@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AlertCircle, Check, CreditCard, FlaskConical, PlugZap, RotateCcw, Save } from "lucide-react";
-import apiClient, { PlatformStripeConfig, PlatformStripeUpdate } from "@/lib/api";
+import apiClient, { PlatformStripeConfig, PlatformStripeTestModePlans, PlatformStripeUpdate } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
@@ -54,6 +54,14 @@ export default function PlatformStripePage() {
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingSave, setPendingSave] = useState<PendingSave | null>(null);
+  const [testPlans, setTestPlans] = useState<PlatformStripeTestModePlans | null>(null);
+
+  function loadTestPlans() {
+    apiClient
+      .getPlatformStripeTestModePlans()
+      .then(setTestPlans)
+      .catch(() => setTestPlans(null));
+  }
 
   function show(next: PlatformStripeConfig) {
     setCfg(next);
@@ -65,6 +73,7 @@ export default function PlatformStripePage() {
       .getPlatformStripeConfig()
       .then(show)
       .catch((err: any) => setError(err?.message ?? "No se ha podido cargar la configuración."));
+    loadTestPlans();
   }, []);
 
   async function save(input: PlatformStripeUpdate) {
@@ -74,6 +83,7 @@ export default function PlatformStripePage() {
       show(await apiClient.updatePlatformStripeConfig(input));
       setTestResult(null);
       setPendingSave(null);
+      loadTestPlans();
       toast({ title: "Guardado", description: "Los cambios se aplican ya, sin reiniciar nada." });
     } catch (err: any) {
       setPendingSave(null);
@@ -161,6 +171,45 @@ export default function PlatformStripePage() {
         )}
         <span>{status.text}</span>
       </div>
+
+      {testPlans && (testPlans.total > 0 || cfg.mode === "test") && (
+        <div
+          className={`rounded-lg border p-4 text-sm ${
+            testPlans.total > 0 ? "border-amber-200 bg-amber-50 text-amber-900" : "border-gray-200 bg-white text-gray-700"
+          }`}
+        >
+          {cfg.mode === "test" && (
+            <p className="mb-1">
+              En modo de pruebas los salones ven «Pagos en modo de pruebas: no se cobra nada» en Facturación, y solo los
+              salones internos pueden contratar un plan, cambiarlo o comprar complementos y bonos.
+            </p>
+          )}
+          {testPlans.total === 0 ? (
+            <p>Ningún salón real tiene un plan activado con un pago de prueba.</p>
+          ) : (
+            <>
+              <p className="font-semibold">
+                {testPlans.total === 1
+                  ? "1 salón real tiene el plan activado con un pago de prueba (no se le ha cobrado nada):"
+                  : `${testPlans.total} salones reales tienen el plan activado con un pago de prueba (no se les ha cobrado nada):`}
+              </p>
+              <ul className="mt-2 space-y-1">
+                {testPlans.salons.map((s) => (
+                  <li key={s.id}>
+                    <Link href={`/saas/tenants/${s.id}`} className="underline">
+                      {s.name}
+                    </Link>
+                    {s.slug ? ` (/${s.slug})` : ""} · {s.plan ?? "sin plan"} · {s.subscriptionStatus ?? "?"}
+                  </li>
+                ))}
+              </ul>
+              {testPlans.total > testPlans.salons.length && (
+                <p className="mt-1 text-xs">Se muestran los {testPlans.salons.length} primeros.</p>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       <div className="bg-white border border-gray-200 rounded-xl p-6 space-y-6">
         <Field

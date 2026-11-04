@@ -232,6 +232,26 @@ describe("PlatformStripeConfigService", () => {
     expect(await service.testConnection(pkTest)).toEqual({ ok: false, message: expect.stringMatching(/sk_test_/) });
   });
 
+  it("lists the real salons whose plan was activated by a test-mode payment (D8)", async () => {
+    const { service, prisma } = build();
+    prisma.tenant.count.mockResolvedValue(1);
+    prisma.tenant.findMany.mockResolvedValue([
+      { id: "t1", name: "Salón", slug: "salon", plan: "pro", subscriptionStatus: "active" },
+    ]);
+    await expect(service.testModePlans()).resolves.toEqual({
+      total: 1,
+      salons: [{ id: "t1", name: "Salón", slug: "salon", plan: "pro", subscriptionStatus: "active" }],
+    });
+    const where = (prisma.tenant.count.mock.calls[0] as any[])[0].where;
+    expect(where).toMatchObject({
+      deletedAt: null,
+      isInternal: false,
+      stripeSubscriptionId: { not: null },
+      stripeSubscriptionLivemode: false,
+      subscriptionStatus: { in: ["active", "trialing", "past_due"] },
+    });
+  });
+
   it("keys never reach an error message", () => {
     expect(redactStripe(`Invalid API Key provided: ${skLive}`)).toBe("Invalid API Key provided: sk_live_***");
   });
