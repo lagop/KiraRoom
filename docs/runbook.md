@@ -533,7 +533,7 @@ Until revenue justifies PagerDuty (€21/user/mo), use:
 | --- | --- | --- |
 | Backend (OpsAlertService) | AEAT / TicketBAI / SII rejections, scheduled jobs that throw, more permanent bounces (20) or spam complaints (3) in a day than the threshold. One email per kind per hour. | `OPS_ALERT_EMAIL` (else `FOUNDER_EMAIL`, else admin@kiraroom.net), `OPS_ALERT_BOUNCES_PER_DAY`, `OPS_ALERT_COMPLAINTS_PER_DAY` |
 | GlitchTip | Every 5xx and unexpected exception (SentryExceptionFilter) and failed jobs | `SENTRY_DSN` on the backend; GlitchTip's own emails via `GLITCHTIP_EMAIL_URL` |
-| Alertmanager | The Prometheus rules in ops/prometheus/rules (API down, no inbound messages, outbound failures, gate) | docker-compose.observability.yml: `ALERTMANAGER_SMTP_PASSWORD` (the Resend API key), `OPS_ALERT_EMAIL`, `ALERTMANAGER_FROM` (a sender on a domain verified in Resend) |
+| Alertmanager | The Prometheus rules in ops/prometheus/rules (API down, no inbound messages, outbound failures, gate) | docker-compose.observability.yml: `ALERTMANAGER_SMTP_PASSWORD` (the Resend API key), `OPS_ALERT_EMAIL`, `ALERTMANAGER_FROM` (a sender on a domain verified in Resend; default `EMAIL_FROM`, else `noreply@kiraroom.net`) |
 | Uptime Kuma | The probes above | Its own UI (Telegram or email notification) |
 
 To activate the observability part on the server, next to

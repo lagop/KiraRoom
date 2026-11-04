@@ -23,9 +23,9 @@ import {
  * add-ons bill). "Salon takings" is something else: what the salons charged
  * their clients for appointments marked paid, in euros (Appointment.price is
  * a Decimal in euros, not cents). The console used to divide it by 100 and
- * show it next to MRR as "revenue". Where takings should live on the home
- * page is an owner decision still pending, so they stay there, labelled as
- * the salons' takings.
+ * show it next to MRR as "revenue". Owner decision (audit 8 D10): takings
+ * are shown only per salon (its detail and analytics pages), never as a
+ * platform total.
  *
  * Months are Madrid calendar months. Test appointments (`isTest`), deleted
  * salons and our own test salons (PLATFORM_TENANT_WHERE) are left out.
@@ -35,8 +35,6 @@ export interface SaasAnalytics {
   totalUsers: number;
   totalClients: number;
   totalAppointments: number;
-  /** Paid appointments of all time, in euros: the salons' takings, not KiraRoom's. */
-  salonTakingsTotal: number;
   /** KiraRoom's monthly recurring revenue, in euros, from paying salons only. */
   mrr: number;
   arr: number;
@@ -89,7 +87,6 @@ export class SaasAnalyticsService {
       users,
       clients,
       appointments,
-      takings,
       paying,
       statusBreakdown,
       countryAggregation,
@@ -101,10 +98,6 @@ export class SaasAnalyticsService {
       this.prisma.user.count({ where: PLATFORM_USER_WHERE }),
       this.prisma.client.count({ where: { tenant: PLATFORM_TENANT_WHERE } }),
       this.prisma.appointment.count({ where: { isTest: false, tenant: PLATFORM_TENANT_WHERE } }),
-      this.prisma.appointment.aggregate({
-        where: { ...PAID_APPOINTMENT_WHERE, tenant: PLATFORM_TENANT_WHERE },
-        _sum: { price: true },
-      }),
       // Every paying tenant with its location count: Empresa is billed per
       // location, so a per-plan count undercounts it.
       this.prisma.tenant.findMany({
@@ -170,7 +163,6 @@ export class SaasAnalyticsService {
       totalUsers: users,
       totalClients: clients,
       totalAppointments: appointments,
-      salonTakingsTotal: euros(takings._sum.price),
       mrr: mrrRounded,
       arr: Math.round(mrrRounded * 12 * 100) / 100,
       payingTenants,
@@ -217,7 +209,6 @@ export class SaasAnalyticsService {
       period: `${months}_months`,
       timeZone: "Europe/Madrid",
       salonsEvolution: visible.map((r) => ({ month: r.month, total: r.totalSalons, new: r.newSalons })),
-      salonTakingsEvolution: visible.map((r) => ({ month: r.month, value: r.takings })),
       usersEvolution: visible.map((r) => ({ month: r.month, total: r.totalUsers, new: r.newUsers })),
       appointmentsEvolution: visible.map((r) => ({ month: r.month, value: r.appointments })),
       lifecycleEvolution: visible.map((r) => ({
@@ -229,9 +220,6 @@ export class SaasAnalyticsService {
         trialConversionRate: r.trialConversionRate,
       })),
       summary: {
-        salonTakingsThisMonth: current.takings,
-        salonTakingsLastMonth: previous.takings,
-        salonTakingsChangePercent: percentChange(current.takings, previous.takings),
         newSalonsThisMonth: current.newSalons,
         newSalonsLastMonth: previous.newSalons,
         newSalonsChangePercent: percentChange(current.newSalons, previous.newSalons),
@@ -337,19 +325,15 @@ export class SaasAnalyticsService {
   }
 
   private async platformMonth(w: ConsoleMonth) {
-    const [totalSalons, takings, totalUsers, newUsers, appointments] = await Promise.all([
+    const [totalSalons, totalUsers, newUsers, appointments] = await Promise.all([
       this.prisma.tenant.count({ where: { ...PLATFORM_TENANT_WHERE, createdAt: { lt: w.end } } }),
-      this.prisma.appointment.aggregate({
-        where: { ...PAID_APPOINTMENT_WHERE, tenant: PLATFORM_TENANT_WHERE, scheduledDate: scheduledInMonth(w) },
-        _sum: { price: true },
-      }),
       this.prisma.user.count({ where: { ...PLATFORM_USER_WHERE, createdAt: { lt: w.end } } }),
       this.prisma.user.count({ where: { ...PLATFORM_USER_WHERE, createdAt: { gte: w.start, lt: w.end } } }),
       this.prisma.appointment.count({
         where: { isTest: false, tenant: PLATFORM_TENANT_WHERE, scheduledDate: scheduledInMonth(w) },
       }),
     ]);
-    return { totalSalons, takings: euros(takings._sum.price), totalUsers, newUsers, appointments };
+    return { totalSalons, totalUsers, newUsers, appointments };
   }
 
   /** A salon's appointments and takings in a month, by the visit's date. */

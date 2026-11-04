@@ -5565,6 +5565,11 @@ class ApiClient implements ApiClientInterface {
     return this.request("/saas/analytics/overview");
   }
 
+  /** "Esta semana" in the console (audit 8 D12). */
+  async getSaasWeekly(): Promise<any> {
+    return this.request("/saas/weekly");
+  }
+
   async getSaasUsers(filter?: {
     page?: number;
     limit?: number;

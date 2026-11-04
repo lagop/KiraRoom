@@ -8,6 +8,9 @@ import { AuditLogService } from "./audit-log.service";
 import { SaaSRetentionScheduler } from "./saas-retention.scheduler";
 import { BugReportAdminController } from "./bug-report-admin.controller";
 import { TenantInternalController } from "./tenant-internal.controller";
+import { WeeklyDigestService } from "./weekly/weekly-digest.service";
+import { WeeklyDigestScheduler } from "./weekly/weekly-digest.scheduler";
+import { WeeklyDigestController } from "./weekly/weekly-digest.controller";
 import { AuditLogAdminController } from "./audit/audit-log-admin.controller";
 import { PrismaModule } from "../common/prisma/prisma.module";
 import { PaymentsModule } from "../payments/payments.module";
@@ -36,10 +39,12 @@ import { AuthRateLimitsService } from "../auth/abuse/auth-rate-limits.service";
     SaasAnalyticsService,
     AuditLogService,
     SaaSRetentionScheduler,
+    WeeklyDigestService,
+    WeeklyDigestScheduler,
     PasswordResetService,
     AuthRateLimitsService,
   ],
-  controllers: [SaasController, BugReportAdminController, AuditLogAdminController, TenantInternalController],
+  controllers: [SaasController, BugReportAdminController, AuditLogAdminController, WeeklyDigestController, TenantInternalController],
   exports: [SaasService, AuditLogService],
 })
 export class SaasModule {}
