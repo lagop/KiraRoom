@@ -8,6 +8,7 @@ import {
   PlatformStripeConfigService,
   PlatformStripeConfigUpdate,
   StripeChangePreview,
+  StripeTestModePlans,
 } from "./platform-stripe-config.service";
 import { TestPlatformStripeDto, UpdatePlatformStripeConfigDto } from "./platform-stripe-config.dto";
 
@@ -39,6 +40,13 @@ export class PlatformStripeConfigController {
   @Roles("saas_owner")
   get(): PlatformStripeConfigPublic {
     return this.service.getConfig();
+  }
+
+  /** Real salons with a plan activated by a test-mode payment (nothing charged), to review. */
+  @Get("test-mode-plans")
+  @Roles("saas_owner")
+  testModePlans(): Promise<StripeTestModePlans> {
+    return this.service.testModePlans();
   }
 
   @Put()

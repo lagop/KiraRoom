@@ -10,8 +10,9 @@ CREATE INDEX IF NOT EXISTS "tenants_courtesyUntil_idx" ON "tenants"("courtesyUnt
 -- Salons active without a Stripe subscription (reactivated or activated by
 -- hand from the console) become a courtesy that ends 30 days after this
 -- migration runs, on the plan they have. Not the Platform tenant (slug
--- "platform", or the one a platform owner belongs to), not deleted or
--- anonymised ones.
+-- "platform", or the one a platform owner belongs to), not KiraRoom's test
+-- salons (address starting "zz-", as 20261105030000_tenant_is_internal marks
+-- them internal), not deleted or anonymised ones.
 UPDATE "tenants" t
 SET "courtesyUntil" = NOW() + INTERVAL '30 days',
     "courtesyPlan" = t."plan",
@@ -22,6 +23,7 @@ WHERE t."subscriptionStatus" = 'active'
   AND t."deletedAt" IS NULL
   AND t."anonymizedAt" IS NULL
   AND t."slug" <> 'platform'
+  AND t."slug" NOT LIKE 'zz-%'
   AND NOT EXISTS (
     SELECT 1 FROM "users" u WHERE u."tenantId" = t."id" AND u."role" = 'saas_owner'
   );

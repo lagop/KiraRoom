@@ -774,7 +774,10 @@
       "confirmDescription": "{price} al mes por local, precio final, sin impuestos añadidos. Stripe prorratea el cambio en tu próxima factura.",
       "done": "Listo: ahora pagas {count} locales.",
       "error": "No se ha podido cambiar el número de locales."
-    }
+    },
+    "test_mode_title": "Pagos en modo de pruebas: no se cobra nada",
+    "test_mode_blocked": "Por ahora no se puede contratar ni cambiar el plan, ni comprar complementos o bonos. Te avisaremos cuando los pagos estén activos.",
+    "test_mode_internal": "Este es un salón interno: puedes probar los pagos con las tarjetas de prueba de Stripe."
   },
   "plans": {
     "esencial": "Esencial",
@@ -976,7 +979,7 @@
       "status_past_due": "Pago fallido",
       "status_suspended": "Suspendidos",
       "status_cancelled": "Dados de baja",
-      "excluded_note": "No cuentan los salones eliminados ni los de prueba (dirección que empieza por «zz-»).",
+      "excluded_note": "No cuentan los salones eliminados ni los marcados como internos o de prueba.",
       "no_salons": "Aún no hay salones",
       "no_data": "Aún no hay datos",
       "analytics_title": "Analítica de la plataforma",
@@ -1537,7 +1540,21 @@
         "tenant_web_address_changed": "Dirección web cambiada"
       }
     },
-    "forgot_password": "¿Has olvidado la contraseña?"
+    "forgot_password": "¿Has olvidado la contraseña?",
+    "internal_salon": {
+      "title": "Salón interno o de pruebas",
+      "on": "Es uno de nuestros salones: no cuenta en las cifras ni en las alertas de la plataforma.",
+      "off": "Salón real: cuenta en las cifras y alertas de la plataforma.",
+      "mark": "Marcar como interno",
+      "unmark": "Marcar como salón real",
+      "confirm_mark": "¿Marcar este salón como interno o de pruebas?",
+      "confirm_mark_body": "{name} dejará de contar en las cifras y alertas de la plataforma. El cambio queda registrado.",
+      "confirm_unmark": "¿Marcar este salón como salón real?",
+      "confirm_unmark_body": "{name} volverá a contar en las cifras y alertas de la plataforma. El cambio queda registrado.",
+      "saved_on": "Salón marcado como interno",
+      "saved_off": "Salón marcado como real",
+      "failed": "No se pudo cambiar. Inténtalo de nuevo."
+    }
   },
   "dashboard": {
     "title": "Panel",
@@ -3397,8 +3414,6 @@
     "subtitle": "Configura el modelo y la API key que usará el Asistente Virtual para responder a los clientes de todos los salones. Esta configuración es global y no es visible para los propietarios de los salones.",
     "provider_label": "Proveedor",
     "provider_anthropic": "Anthropic (Claude Haiku 5.5, Sonnet 5.5, Opus 5.5)",
-    "provider_openai": "OpenAI (GPT-4o, GPT-4o-mini)",
-    "provider_google": "Google Gemini",
     "model_label": "Modelo por defecto",
     "model_recommended": "Recomendado: claude-haiku-5-5 (rápido y barato para chatbot).",
     "api_key_label": "API key",
@@ -3421,8 +3436,6 @@
     "security_notice": "La API key se cifra en reposo (AES-256-GCM) y nunca vuelve al navegador. Cambiarla pide la verificación en dos pasos y queda en la auditoría. Los cambios se aplican en el siguiente mensaje del chatbot, sin reiniciar.",
     "how_to_get_title": "Cómo obtener una API key",
     "how_to_get_anthropic": "Anthropic:",
-    "how_to_get_openai": "OpenAI:",
-    "how_to_get_google": "Google:",
     "api_key_unreadable": "Hay una API key guardada aquí, pero no se puede descifrar (¿ha cambiado META_TOKEN_ENCRYPTION_KEY?). El chatbot y el copiloto están parados: vuelve a escribirla, o quítala para usar la del servidor.",
     "api_key_no_key_server": "No hay API key guardada aquí: se usa la del servidor (ANTHROPIC_API_KEY en el .env).",
     "api_key_no_key_none": "No hay API key, ni aquí ni en el servidor: el chatbot y el copiloto no pueden responder.",
@@ -3440,7 +3453,9 @@
     "discover_found": "Elige el workspace:",
     "discover_default": "por defecto",
     "show_key": "Mostrar la clave",
-    "hide_key": "Ocultar la clave"
+    "hide_key": "Ocultar la clave",
+    "provider_only_anthropic": "La recepcionista y el copiloto funcionan solo con Anthropic.",
+    "stored_other_provider": "Lo guardado ({stored}) no es un modelo de Claude: ahora se usa {model}. Guarda para dejarlo así."
   },
   "copilot": {
     "title": "Copiloto del salón",

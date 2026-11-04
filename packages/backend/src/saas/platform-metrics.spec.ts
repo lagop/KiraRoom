@@ -106,7 +106,7 @@ describe("platform metrics", () => {
   });
 
   it("keeps test salons and unbilled active salons out of MRR", () => {
-    expect(PLATFORM_TENANT_WHERE).toEqual({ deletedAt: null, NOT: { slug: { startsWith: "zz-" } } });
+    expect(PLATFORM_TENANT_WHERE).toEqual({ deletedAt: null, isInternal: false });
     expect(PAYING_TENANT_WHERE).toMatchObject({
       subscriptionStatus: "active",
       stripeSubscriptionId: { not: null },

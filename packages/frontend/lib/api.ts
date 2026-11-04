@@ -5523,6 +5523,14 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
+  /** Audit 8 D11: one of KiraRoom's own salons, left out of platform figures. Audit-logged. */
+  async setSaasTenantInternal(id: string, isInternal: boolean): Promise<{ id: string; isInternal: boolean }> {
+    return this.request(`/saas/tenants/${id}/internal`, {
+      method: "PATCH",
+      body: JSON.stringify({ isInternal }),
+    });
+  }
+
   /** "Cerrar todas las sesiones": every session of this account ends, this one too. */
   async logoutEverywhere(): Promise<void> {
     try {
@@ -6550,6 +6558,9 @@ class ApiClient implements ApiClientInterface {
     });
   }
   /** What saving `input` would do (mode before and after, why it would be refused, salons affected), without saving. */
+  async getPlatformStripeTestModePlans(): Promise<PlatformStripeTestModePlans> {
+    return this.request(`/platform/stripe-config/test-mode-plans`);
+  }
   async previewPlatformStripeConfig(input: PlatformStripeUpdate): Promise<PlatformStripePreview> {
     return this.request(`/platform/stripe-config/preview`, {
       method: "POST",
@@ -6701,6 +6712,12 @@ export interface PlatformStripeUpdate {
   publishableKey?: string | null;
   webhookSecret?: string | null;
   otherWebhookSecret?: string | null;
+}
+
+/** Audit 8 D8: real salons whose plan was activated by a test-mode payment (nothing charged). */
+export interface PlatformStripeTestModePlans {
+  total: number;
+  salons: Array<{ id: string; name: string; slug: string | null; plan: string | null; subscriptionStatus: string | null }>;
 }
 
 export interface PlatformStripePreview {

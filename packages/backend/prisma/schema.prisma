@@ -120,6 +120,11 @@ model Tenant {
   courtesyUntil          DateTime?
   courtesyPlan           SubscriptionPlan?
   courtesyWarnedAt       DateTime?
+  /// Audit 8 D11: one of KiraRoom's own salons (the Platform tenant and our
+  /// test salons). Left out of platform figures and alerts
+  /// (countableTenantWhere) and allowed to use Stripe test mode. Set from
+  /// the console, audit-logged.
+  isInternal             Boolean            @default(false)
   /// P2A-ia-fairuse - virtual receptionist usage counter (Esencial cap)
   /// Messages in `aiConversationsPeriod` (YYYY-MM, UTC); another month reads as 0.
   aiConversationsUsed    Int                @default(0)

@@ -17,6 +17,24 @@ export const IMPERSONATION_DEFAULT_REASON = "support";
 export const TENANT_ACTIVE_WHERE = { deletedAt: null } as const;
 
 /**
+ * Canonical predicate for "a salon that counts" in platform figures,
+ * alerts and anything else that should ignore our own salons: not
+ * soft-deleted and not flagged internal (Tenant.isInternal: the Platform
+ * tenant and our test salons, audit 8 D11). Spread it, or pass the extra
+ * conditions:
+ *
+ *   prisma.tenant.count({ where: countableTenantWhere({ plan: "pro" }) })
+ *   prisma.client.count({ where: { tenant: COUNTABLE_TENANT_WHERE } })
+ */
+export const COUNTABLE_TENANT_WHERE = { deletedAt: null, isInternal: false } as const;
+
+export function countableTenantWhere<T extends object>(
+  where?: T,
+): T & typeof COUNTABLE_TENANT_WHERE {
+  return { ...(where ?? ({} as T)), ...COUNTABLE_TENANT_WHERE };
+}
+
+/**
  * Trial window (rev 3). Every new tenant gets this many days of Pro
  * access regardless of the plan they selected; pricing starts after
  * `trialEnd`. Single source of truth — both `saas.service.createTenant`

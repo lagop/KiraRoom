@@ -8,19 +8,19 @@ import { useToast } from "@/components/ui/use-toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useTranslations } from "@/lib/use-translation";
 
-const PROVIDER_OPTIONS = ["anthropic", "openai", "google"];
-
-const MODEL_PRESETS: Record<string, string[]> = {
-  anthropic: [
-    "claude-haiku-5-5",
-    "claude-sonnet-5-5",
-    "claude-opus-5-5",
-    // Legacy: ten times the price of Haiku 5.5.
-    "claude-haiku-4-5",
-  ],
-  openai: ["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"],
-  google: ["gemini-2.5-pro", "gemini-2.5-flash"],
-};
+// Anthropic only (audit 8 D9). Same ids as the backend's CLAUDE_MODELS
+// (virtual-receptionist/providers/anthropic-models.ts), which the server
+// enforces at save.
+const PROVIDER = "anthropic";
+const DEFAULT_MODEL = "claude-haiku-5-5";
+const CLAUDE_MODELS: Array<{ id: string; name: string }> = [
+  { id: "claude-haiku-5-5", name: "Claude Haiku 5.5" },
+  { id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5" },
+  { id: "claude-opus-5-5", name: "Claude Opus 5.5" },
+  // Legacy: ten times the price of Haiku 5.5.
+  { id: "claude-haiku-4-5", name: "Claude Haiku 4.5 (legacy)" },
+];
+const isClaudeModel = (m: string) => CLAUDE_MODELS.some((x) => x.id === m);
 
 /**
  * The AI provider of the receptionist and the copilot, for the saas_owner.
@@ -39,8 +39,9 @@ export default function PlatformLlmConfigPage() {
   const [cfg, setCfg] = useState<PlatformLlmConfig | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const [provider, setProvider] = useState("anthropic");
-  const [defaultModel, setDefaultModel] = useState("claude-haiku-5-5");
+  const [defaultModel, setDefaultModel] = useState(DEFAULT_MODEL);
+  // A row saved before D9 (another provider or model): runs on the default.
+  const [storedOther, setStoredOther] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [workspaceId, setWorkspaceId] = useState("");
   const [showKey, setShowKey] = useState(false);
@@ -56,8 +57,9 @@ export default function PlatformLlmConfigPage() {
 
   function show(next: PlatformLlmConfig) {
     setCfg(next);
-    setProvider(next.provider);
-    setDefaultModel(next.defaultModel);
+    const valid = next.provider === PROVIDER && isClaudeModel(next.defaultModel);
+    setStoredOther(valid ? null : `${next.provider} / ${next.defaultModel}`);
+    setDefaultModel(valid ? next.defaultModel : DEFAULT_MODEL);
     setWorkspaceId(next.workspaceId ?? "");
     // The key is never received back.
     setApiKey("");
@@ -83,7 +85,7 @@ export default function PlatformLlmConfigPage() {
     setError(null);
     try {
       const next = await apiClient.updatePlatformLlmConfig({
-        provider,
+        provider: PROVIDER,
         defaultModel,
         apiKey: apiKey.trim() || undefined,
         workspaceId: workspaceId.trim() || null,
@@ -123,7 +125,7 @@ export default function PlatformLlmConfigPage() {
     try {
       // What is typed, without saving it; empty fields use what is saved.
       const res = await apiClient.testPlatformLlmConnection({
-        provider,
+        provider: PROVIDER,
         defaultModel: defaultModel.trim() || undefined,
         apiKey: apiKey.trim() || undefined,
         workspaceId: workspaceId.trim() || null,
@@ -168,8 +170,6 @@ export default function PlatformLlmConfigPage() {
     return <div className="text-gray-500">Cargando…</div>;
   }
 
-  const modelPresets = MODEL_PRESETS[provider] ?? [];
-
   return (
     <div className="space-y-6">
       <div>
@@ -188,34 +188,31 @@ export default function PlatformLlmConfigPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">{t("platform_llm.provider_label")}</label>
-            <select
-              value={provider}
-              onChange={(e) => setProvider(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
-            >
-              {PROVIDER_OPTIONS.map((p) => (
-                <option key={p} value={p}>
-                  {t(`platform_llm.provider_${p}`)}
-                </option>
-              ))}
-            </select>
+            <p className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-gray-50 text-gray-700">
+              {t("platform_llm.provider_anthropic")}
+            </p>
+            <p className="text-xs text-gray-500 mt-1">{t("platform_llm.provider_only_anthropic")}</p>
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">{t("platform_llm.model_label")}</label>
-            <input
-              list={`models-${provider}`}
+            <select
               value={defaultModel}
               onChange={(e) => setDefaultModel(e.target.value)}
-              placeholder="claude-haiku-5-5"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono"
-            />
-            <datalist id={`models-${provider}`}>
-              {modelPresets.map((m) => (
-                <option key={m} value={m} />
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+            >
+              {CLAUDE_MODELS.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name} ({m.id})
+                </option>
               ))}
-            </datalist>
+            </select>
             <p className="text-xs text-gray-500 mt-1">{t("platform_llm.model_recommended")}</p>
+            {storedOther && (
+              <p className="text-xs text-amber-700 mt-1">
+                {tr("platform_llm.stored_other_provider", { stored: storedOther, model: DEFAULT_MODEL })}
+              </p>
+            )}
           </div>
 
           <div className="md:col-span-2">
@@ -284,55 +281,53 @@ export default function PlatformLlmConfigPage() {
             </p>
           </div>
 
-          {provider === "anthropic" && (
-            <div className="md:col-span-2">
-              <label className="block text-sm font-medium text-gray-700 mb-1">{t("platform_llm.workspace_id_label")}</label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={workspaceId}
-                  onChange={(e) => setWorkspaceId(e.target.value)}
-                  placeholder="00000000-0000-0000-0000-000000000000"
-                  className="flex-1 min-w-0 border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono"
-                />
-                <button
-                  type="button"
-                  onClick={discoverWorkspaces}
-                  disabled={discovering}
-                  className="bg-white border border-gray-300 text-gray-700 px-3 py-2 rounded-lg hover:bg-gray-50 disabled:opacity-50 inline-flex items-center gap-2 text-sm whitespace-nowrap"
-                >
-                  <Key className="w-4 h-4" />
-                  {discovering ? t("platform_llm.discover_searching") : t("platform_llm.discover")}
-                </button>
-              </div>
-              {discoverMsg && (
-                <p className={`text-xs mt-1 ${discoverMsg.ok ? "text-gray-700" : "text-red-700"}`}>{discoverMsg.text}</p>
-              )}
-              {workspaces.length > 1 && (
-                <div className="mt-2 border border-gray-200 rounded-lg divide-y divide-gray-100 max-h-48 overflow-y-auto">
-                  {workspaces.map((w) => (
-                    <button
-                      key={w.id}
-                      type="button"
-                      onClick={() => setWorkspaceId(w.id)}
-                      className="w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center justify-between gap-2"
-                    >
-                      <span className="text-sm min-w-0 truncate">
-                        <span className="font-mono text-xs text-gray-700">{w.id}</span>
-                        {w.name && <span className="ml-2 text-gray-500">{w.name}</span>}
-                      </span>
-                      {w.default && (
-                        <span className="text-xs px-2 py-0.5 bg-purple-100 text-purple-700 rounded">
-                          {t("platform_llm.discover_default")}
-                        </span>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
-              <p className="text-xs text-gray-500 mt-1">{t("platform_llm.workspace_id_help")}</p>
+          <div className="md:col-span-2">
+            <label className="block text-sm font-medium text-gray-700 mb-1">{t("platform_llm.workspace_id_label")}</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={workspaceId}
+                onChange={(e) => setWorkspaceId(e.target.value)}
+                placeholder="00000000-0000-0000-0000-000000000000"
+                className="flex-1 min-w-0 border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono"
+              />
+              <button
+                type="button"
+                onClick={discoverWorkspaces}
+                disabled={discovering}
+                className="bg-white border border-gray-300 text-gray-700 px-3 py-2 rounded-lg hover:bg-gray-50 disabled:opacity-50 inline-flex items-center gap-2 text-sm whitespace-nowrap"
+              >
+                <Key className="w-4 h-4" />
+                {discovering ? t("platform_llm.discover_searching") : t("platform_llm.discover")}
+              </button>
             </div>
-          )}
+            {discoverMsg && (
+              <p className={`text-xs mt-1 ${discoverMsg.ok ? "text-gray-700" : "text-red-700"}`}>{discoverMsg.text}</p>
+            )}
+            {workspaces.length > 1 && (
+              <div className="mt-2 border border-gray-200 rounded-lg divide-y divide-gray-100 max-h-48 overflow-y-auto">
+                {workspaces.map((w) => (
+                  <button
+                    key={w.id}
+                    type="button"
+                    onClick={() => setWorkspaceId(w.id)}
+                    className="w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center justify-between gap-2"
+                  >
+                    <span className="text-sm min-w-0 truncate">
+                      <span className="font-mono text-xs text-gray-700">{w.id}</span>
+                      {w.name && <span className="ml-2 text-gray-500">{w.name}</span>}
+                    </span>
+                    {w.default && (
+                      <span className="text-xs px-2 py-0.5 bg-purple-100 text-purple-700 rounded">
+                        {t("platform_llm.discover_default")}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+            <p className="text-xs text-gray-500 mt-1">{t("platform_llm.workspace_id_help")}</p>
+          </div>
         </div>
 
         {error && (
@@ -398,18 +393,6 @@ export default function PlatformLlmConfigPage() {
               console.anthropic.com
             </a>{" "}
             → Settings → API Keys → Create Key.
-          </li>
-          <li>
-            <strong>{t("platform_llm.how_to_get_openai")}</strong>{" "}
-            <a className="text-purple-700 underline" href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer">
-              platform.openai.com/api-keys
-            </a>
-          </li>
-          <li>
-            <strong>{t("platform_llm.how_to_get_google")}</strong>{" "}
-            <a className="text-purple-700 underline" href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">
-              aistudio.google.com/apikey
-            </a>
           </li>
         </ul>
       </div>

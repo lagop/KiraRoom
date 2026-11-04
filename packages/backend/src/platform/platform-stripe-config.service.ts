@@ -5,6 +5,7 @@ import Stripe from "stripe";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { EncryptionService } from "../common/encryption/encryption.service";
 import { AuditLogService } from "../saas/audit-log.service";
+import { COUNTABLE_TENANT_WHERE } from "../saas/saas.constants";
 import { lastFour } from "./email-settings";
 import {
   SettingSource,
@@ -58,6 +59,12 @@ export interface StripeModeImpact {
   /** Their plans still counted as paid (active, trial with a subscription, past due). */
   activePlansTotal: number;
   activePlans: Array<{ id: string; name: string; slug: string | null; plan: string | null; subscriptionStatus: string | null }>;
+}
+
+/** Real salons whose plan was activated by a test-mode payment (audit 8 D8). */
+export interface StripeTestModePlans {
+  total: number;
+  salons: StripeModeImpact["activePlans"];
 }
 
 export interface StripeChangePreview {
@@ -300,6 +307,39 @@ export class PlatformStripeConfigService implements OnModuleInit {
     } catch (err) {
       return { ok: false, message: `Stripe: ${redactStripe((err as Error).message ?? "error desconocido")}` };
     }
+  }
+
+  /**
+   * Real (not internal, not deleted) salons whose plan is in force through
+   * a test-mode subscription: nothing was ever charged to them (D8). Listed
+   * on the console's Stripe page so the owner can review them.
+   */
+  async testModePlans(): Promise<StripeTestModePlans> {
+    const where: Prisma.TenantWhereInput = {
+      ...COUNTABLE_TENANT_WHERE,
+      stripeSubscriptionId: { not: null },
+      stripeSubscriptionLivemode: false,
+      subscriptionStatus: { in: ACTIVE_PLAN_STATUSES as any },
+    };
+    const [total, rows] = await Promise.all([
+      this.prisma.tenant.count({ where }),
+      this.prisma.tenant.findMany({
+        where,
+        select: { id: true, name: true, slug: true, plan: true, subscriptionStatus: true },
+        orderBy: { name: "asc" },
+        take: 50,
+      }),
+    ]);
+    return {
+      total,
+      salons: rows.map((t) => ({
+        id: t.id,
+        name: t.name,
+        slug: t.slug ?? null,
+        plan: t.plan ? String(t.plan) : null,
+        subscriptionStatus: t.subscriptionStatus ? String(t.subscriptionStatus) : null,
+      })),
+    };
   }
 
   /** Salons left with the other mode's customer or subscription when `mode` is in force. */

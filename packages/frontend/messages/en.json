@@ -774,7 +774,10 @@
       "confirmDescription": "{price} a month per location, final price with no taxes added. Stripe prorates the change on your next invoice.",
       "done": "Done: you now pay for {count} locations.",
       "error": "The number of locations could not be changed."
-    }
+    },
+    "test_mode_title": "Payments in test mode: nothing is charged",
+    "test_mode_blocked": "For now you cannot contract or change the plan, or buy add-ons or packs. We will let you know when payments are live.",
+    "test_mode_internal": "This is an internal salon: you can try payments with Stripe's test cards."
   },
   "plans": {
     "esencial": "Esencial",
@@ -976,7 +979,7 @@
       "status_past_due": "Payment failed",
       "status_suspended": "Suspended",
       "status_cancelled": "Cancelled",
-      "excluded_note": "Deleted salons and test salons (address starting with \"zz-\") are not counted.",
+      "excluded_note": "Deleted salons and salons marked internal or test are not counted.",
       "no_salons": "No salons yet",
       "no_data": "No data yet",
       "analytics_title": "Platform analytics",
@@ -1537,7 +1540,21 @@
         "tenant_web_address_changed": "Web address changed"
       }
     },
-    "forgot_password": "Forgot your password?"
+    "forgot_password": "Forgot your password?",
+    "internal_salon": {
+      "title": "Internal or test salon",
+      "on": "One of our own salons: left out of the platform figures and alerts.",
+      "off": "A real salon: counted in the platform figures and alerts.",
+      "mark": "Mark as internal",
+      "unmark": "Mark as a real salon",
+      "confirm_mark": "Mark this salon as internal or test?",
+      "confirm_mark_body": "{name} will no longer count in the platform figures and alerts. The change is logged.",
+      "confirm_unmark": "Mark this salon as a real salon?",
+      "confirm_unmark_body": "{name} will count again in the platform figures and alerts. The change is logged.",
+      "saved_on": "Salon marked as internal",
+      "saved_off": "Salon marked as real",
+      "failed": "Could not change it. Try again."
+    }
   },
   "dashboard": {
     "title": "Dashboard",
@@ -3397,8 +3414,6 @@
     "subtitle": "Configure the model and API key used by the Virtual Assistant to answer clients of all salons. This is a global setting and is NOT visible to salon owners.",
     "provider_label": "Provider",
     "provider_anthropic": "Anthropic (Claude Haiku 5.5, Sonnet 5.5, Opus 5.5)",
-    "provider_openai": "OpenAI (GPT-4o, GPT-4o-mini)",
-    "provider_google": "Google Gemini",
     "model_label": "Default model",
     "model_recommended": "Recommended: claude-haiku-5-5 (fast and cheap for chatbot).",
     "api_key_label": "API key",
@@ -3421,8 +3436,6 @@
     "security_notice": "The API key is encrypted at rest (AES-256-GCM) and never returned to the browser. Changing it needs two-step sign-in and is audited. Changes apply to the chatbot's next message, without a restart.",
     "how_to_get_title": "How to get an API key",
     "how_to_get_anthropic": "Anthropic:",
-    "how_to_get_openai": "OpenAI:",
-    "how_to_get_google": "Google:",
     "api_key_unreadable": "An API key is stored here but cannot be decrypted (did META_TOKEN_ENCRYPTION_KEY change?). The chatbot and the copilot are stopped: type it again, or remove it to use the server's.",
     "api_key_no_key_server": "No API key stored here: the server's is used (ANTHROPIC_API_KEY in .env).",
     "api_key_no_key_none": "No API key, here or on the server: the chatbot and the copilot cannot answer.",
@@ -3440,7 +3453,9 @@
     "discover_found": "Choose the workspace:",
     "discover_default": "default",
     "show_key": "Show the key",
-    "hide_key": "Hide the key"
+    "hide_key": "Hide the key",
+    "provider_only_anthropic": "The receptionist and the copilot run on Anthropic only.",
+    "stored_other_provider": "What is saved ({stored}) is not a Claude model: {model} is used now. Save to keep it that way."
   },
   "copilot": {
     "title": "Salon Copilot",

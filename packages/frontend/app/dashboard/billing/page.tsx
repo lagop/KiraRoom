@@ -14,7 +14,7 @@ import { getCurrentUser } from "@/lib/utils";
 import { safeHttpUrl } from "@/lib/safe-url";
 import { isOwner } from "@/lib/dashboard-nav";
 import { aiConversationsApprox } from "@kira/shared";
-import { Check, Loader2, Sparkles, X } from "lucide-react";
+import { Check, FlaskConical, Loader2, Sparkles, X } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
 import { useToast } from "@/components/ui/use-toast";
 import { addOnDisplayName, formatSubscriptionAmount } from "@/lib/billing-plan";
@@ -570,6 +570,20 @@ function BillingPageContent() {
           {t("billing.subtitle")}
         </p>
       </header>
+
+      {/* KiraRoom's Stripe on test keys (audit 8 D8): nothing is charged. */}
+      {sub?.paymentsTestMode && (
+        <div
+          role="status"
+          className="flex items-start gap-3 rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"
+        >
+          <FlaskConical className="mt-0.5 h-5 w-5 flex-shrink-0" aria-hidden="true" />
+          <div>
+            <p className="font-semibold">{t("billing.test_mode_title")}</p>
+            <p>{t(sub?.paymentsBlocked ? "billing.test_mode_blocked" : "billing.test_mode_internal")}</p>
+          </div>
+        </div>
+      )}
 
       {/* Already subscribed in the trial: nothing left to choose. */}
       {ctx.inTrial && !paysSubscription(sub) && <TrialBanner />}
