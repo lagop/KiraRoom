@@ -8,7 +8,6 @@ import { PlatformLlmConfigService } from '../../platform/platform-llm-config.ser
 import { LLMProvider, LLMGenerationConfig, LLMCompletion } from '@kira/shared';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { FAQService } from './faq.service';
 import { FeatureFlagService } from '../../common/feature-flags/feature-flag.service';
 import { LlmUsageService } from '../../common/telemetry/llm-usage.service';
 import {
@@ -167,9 +166,6 @@ interface SalonContext {
   language?: string;
   cancellationPolicy?: string;
   minCancelHours?: number;
-  // Populated by FAQService (in-memory default set today). Capped
-  // in buildSystemPrompt() to keep the prompt under ~2k tokens.
-  faqs?: Array<{ question: string; answer: string }>;
   /** `price` is what the client pays, tax included (common/public-price.ts). */
   services: Array<{ name: string; duration: number; price: number; category: string }>;
   professionals: Array<{ firstName: string; lastName: string; position?: string; specialties: string[] }>;
@@ -199,7 +195,6 @@ export class LLMService {
     private readonly providerFactory: LLMProviderFactory,
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
-    private readonly faqService: FAQService,
     private readonly flags: FeatureFlagService,
     private readonly platformLlmConfig: PlatformLlmConfigService,
     private readonly llmUsage: LlmUsageService,
@@ -607,11 +602,6 @@ export class LLMService {
           position: p.position || undefined,
           specialties: p.specialties as string[],
         })),
-        // FAQs are currently in-memory (FAQService seeds a default set).
-        // Once they move to Prisma, query them in the same transaction.
-        faqs: (await this.faqService
-          .getFAQs(tenant.id)
-          .catch(() => [])) as Array<{ question: string; answer: string }>,
         // The salon's real week: its own opening hours when the owner set
         // them (settings), else derived from its professionals' schedules.
         // This used to be hardcoded to
@@ -773,10 +763,6 @@ export class LLMService {
    * live data (getDynamicContext). One source of truth shared by
    * every provider, so an OpenAI reply reads identically to an
    * Anthropic or Google one for the same salon + message.
-   *
-   * FAQs are capped at 20 entries with truncated Q/A so a salon
-   * with hundreds of them cannot blow the prompt beyond ~2k tokens
-   * with gpt-4o-mini.
    */
   private buildSystemPrompt(context: SalonContext | null): string {
     if (!context) {
@@ -790,13 +776,6 @@ export class LLMService {
     const baseSystem = getSystemPrompt(language, salonName, assistantName);
 
     const workingHours: Record<string, DayHours | DayHours[]> = context.workingHours ?? {};
-
-    const faqs = (context.faqs ?? [])
-      .slice(0, 20)
-      .map((f) => ({
-        question: f.question.slice(0, 200),
-        answer: f.answer.slice(0, 200),
-      }));
 
 const dynamicContext = getDynamicContext(language, {
       salonName,
@@ -824,15 +803,6 @@ const dynamicContext = getDynamicContext(language, {
       // (which the L-1 e2e suite catches as "tool not called").
       services: [],
       professionals: [],
-      // FAQs are different, and used to be dropped here by mistake: they
-      // were loaded, capped at 20 and truncated just above, and then
-      // thrown away. No tool retrieves them either — SALON_TOOLS covers
-      // services, professionals, availability and salon info, and nothing
-      // else — so the receptionist could not answer a single FAQ a salon
-      // had entered. The prompt is also the right home for them: FAQs are
-      // static reference text, so putting them behind a tool would spend a
-      // whole extra round-trip on every question.
-      faqs,
     });
 
     // The booking flow and the escalation rules were written for this

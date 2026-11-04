@@ -23,7 +23,7 @@ import { LLMService } from "./llm.service";
 function promptFor(context: Record<string, unknown>): string {
   const configService = { get: (): undefined => undefined } as unknown as ConfigService;
   const stub = {} as any;
-  const service = new LLMService(stub, configService, stub, stub, stub, stub, stub);
+  const service = new LLMService(stub, configService, stub, stub, stub, stub);
   return (service as any).buildSystemPrompt(context);
 }
 
@@ -39,7 +39,6 @@ const BASE = {
   assistantName: "Kira",
   timezone: "Atlantic/Canary",
   minCancelHours: 24,
-  faqs: [],
 };
 
 describe("the Spanish prompt carries the real hours", () => {
@@ -247,10 +246,9 @@ describe("the salon's own opening hours, when the owner set them", () => {
         })),
       },
     };
-    const faqs = { getFAQs: async () => [] };
     const flags = { isFeatureUnlocked: async () => false };
     const stub = {} as any;
-    const service = new LLMService(stub, configService, prisma as any, faqs as any, flags as any, stub, stub);
+    const service = new LLMService(stub, configService, prisma as any, flags as any, stub, stub);
     const context = await (service as any).getSalonContext("tenant-1");
     return { context, prompt: (service as any).buildSystemPrompt(context) as string };
   }

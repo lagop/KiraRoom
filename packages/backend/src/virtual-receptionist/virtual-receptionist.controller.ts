@@ -8,7 +8,6 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { UserRole } from '@prisma/client';
 import { VirtualReceptionistService } from './virtual-receptionist.service';
 import { ConversationService } from './services/conversation.service';
-import { FAQService } from './services/faq.service';
 import { BookingService } from './services/booking.service';
 import { LLMService } from './services/llm.service';
 import { ReceptionistStatsService } from './services/receptionist-stats.service';
@@ -19,11 +18,9 @@ import { logId } from './log-id';
 import { SendMessageDto } from '@kira/shared';
 import {
   CreateConversationBodyDto,
-  CreateFaqItemDto,
   CreateLlmProviderConfigDto,
   TestLlmProviderDto,
   UpdateConversationBodyDto,
-  UpdateFaqItemDto,
   UpdateLlmProviderConfigDto,
 } from './dto/receptionist-bodies.dto';
 import { FeatureGuard } from '../common/guards/feature.guard';
@@ -41,7 +38,6 @@ export class VirtualReceptionistController {
   constructor(
     private readonly virtualReceptionistService: VirtualReceptionistService,
     private readonly conversationService: ConversationService,
-    private readonly faqService: FAQService,
     private readonly bookingService: BookingService,
     private readonly llmService: LLMService,
     private readonly statsService: ReceptionistStatsService,
@@ -195,68 +191,6 @@ export class VirtualReceptionistController {
   async getConversationMessages(@Param('id', ParseUUIDPipe) id: string) {
     this.logger.log(`Getting messages for conversation: ${id}`);
     return this.conversationService.getConversationMessages(id);
-  }
-
-  // FAQ Management. Always the caller's own salon: these took no tenant at
-  // all, so any signed-in user -- a client of another salon included --
-  // could write a FAQ that every salon's receptionist then repeated.
-  @Post('faqs')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.owner, UserRole.admin)
-  @ApiOperation({ summary: 'Create FAQ item' })
-  async createFAQ(@CurrentUser() user: any, @Body() faq: CreateFaqItemDto) {
-    this.logger.log('Creating FAQ item');
-    return this.faqService.createFAQ(user.tenantId, {
-      question: faq.question,
-      answer: faq.answer,
-      category: faq.category,
-      keywords: faq.keywords ?? [],
-      priority: faq.priority ?? 5,
-    });
-  }
-
-  @Get('faqs')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.owner, UserRole.admin)
-  @ApiOperation({ summary: 'Get FAQ items' })
-  async getFAQs(@CurrentUser() user: any) {
-    return this.faqService.getFAQs(user.tenantId);
-  }
-
-  // FAQ ids are not UUIDs (see FAQService.generateId), so no ParseUUIDPipe:
-  // it rejected every one of them.
-  @Get('faqs/:id')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.owner, UserRole.admin)
-  @ApiOperation({ summary: 'Get FAQ item' })
-  async getFAQ(@CurrentUser() user: any, @Param('id') id: string) {
-    return this.faqService.getFAQ(user.tenantId, id);
-  }
-
-  @Put('faqs/:id')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.owner, UserRole.admin)
-  @ApiOperation({ summary: 'Update FAQ item' })
-  async updateFAQ(@CurrentUser() user: any, @Param('id') id: string, @Body() faq: UpdateFaqItemDto) {
-    this.logger.log(`Updating FAQ item: ${id}`);
-    // Only the fields sent: the FAQ is merged in memory, where an
-    // undefined would overwrite the stored value.
-    return this.faqService.updateFAQ(user.tenantId, id, {
-      ...(faq.question !== undefined && { question: faq.question }),
-      ...(faq.answer !== undefined && { answer: faq.answer }),
-      ...(faq.category !== undefined && { category: faq.category }),
-      ...(faq.keywords !== undefined && { keywords: faq.keywords }),
-      ...(faq.priority !== undefined && { priority: faq.priority }),
-    });
-  }
-
-  @Delete('faqs/:id')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.owner, UserRole.admin)
-  @ApiOperation({ summary: 'Delete FAQ item' })
-  async deleteFAQ(@CurrentUser() user: any, @Param('id') id: string) {
-    this.logger.log(`Deleting FAQ item: ${id}`);
-    return this.faqService.deleteFAQ(user.tenantId, id);
   }
 
   // Booking Management

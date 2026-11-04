@@ -29,40 +29,6 @@ import { LLMProvider } from "@kira/shared";
  * the same rules as the shared schemas, plus length limits.
  */
 
-export class CreateFaqItemDto {
-  @IsString() @IsNotEmpty() @MaxLength(500)
-  question!: string;
-
-  @IsString() @IsNotEmpty() @MaxLength(5000)
-  answer!: string;
-
-  @IsString() @IsNotEmpty() @MaxLength(100)
-  category!: string;
-
-  @IsOptional() @IsArray() @ArrayMaxSize(50) @IsString({ each: true }) @MaxLength(100, { each: true })
-  keywords?: string[];
-
-  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(10)
-  priority?: number;
-}
-
-export class UpdateFaqItemDto {
-  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(500)
-  question?: string;
-
-  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(5000)
-  answer?: string;
-
-  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(100)
-  category?: string;
-
-  @IsOptional() @IsArray() @ArrayMaxSize(50) @IsString({ each: true }) @MaxLength(100, { each: true })
-  keywords?: string[];
-
-  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(10)
-  priority?: number;
-}
-
 /**
  * A conversation opened from the panel. The salon is the caller's (the
  * controller sets it): the body used to name `salonId` and `tenantId`.

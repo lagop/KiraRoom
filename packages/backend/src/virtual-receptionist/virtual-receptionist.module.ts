@@ -7,8 +7,6 @@ import { VirtualReceptionistController } from './virtual-receptionist.controller
 import { VirtualReceptionistService } from './virtual-receptionist.service';
 import { LLMService } from './services/llm.service';
 import { ConversationService } from './services/conversation.service';
-import { FAQService } from './services/faq.service';
-import { FAQCacheService } from './services/faq-cache.service';
 import { AiConversationCounterService } from './services/ai-conversation-counter.service';
 import { BookingService } from './services/booking.service';
 import { ReceptionistStatsService } from './services/receptionist-stats.service';
@@ -59,8 +57,6 @@ import { PublicChatAccessService } from './public-chat/public-chat-access.servic
     VirtualReceptionistService,
     LLMService,
     ConversationService,
-    FAQService,
-    FAQCacheService,
     AiConversationCounterService,
     BookingService,
     ReceptionistStatsService,
@@ -94,7 +90,6 @@ import { PublicChatAccessService } from './public-chat/public-chat-access.servic
     VirtualReceptionistService,
     LLMService,
     ConversationService,
-    FAQService,
     BookingService,
     AnalysisService,
     ChannelRegistry,

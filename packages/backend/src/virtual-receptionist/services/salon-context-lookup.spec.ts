@@ -43,10 +43,9 @@ function build(rows: Row[]) {
   });
   const prisma = { tenant: { findFirst }, timeOff: { findMany: async () => [] } };
   const configService = { get: (): undefined => undefined } as unknown as ConfigService;
-  const faqs = { getFAQs: async () => [] };
   const flags = { isFeatureUnlocked: async () => false };
   const stub = {} as any;
-  const service = new LLMService(stub, configService, prisma as any, faqs as any, flags as any, stub, stub);
+  const service = new LLMService(stub, configService, prisma as any, flags as any, stub, stub);
   const contextFor = (salonId: string) => (service as any).getSalonContext(salonId);
   return { contextFor, findFirst };
 }

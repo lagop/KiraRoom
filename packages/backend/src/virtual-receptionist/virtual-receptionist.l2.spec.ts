@@ -174,8 +174,6 @@ function buildService({
     prismaStub as any,
     llmService as any,
     conversationService as any,
-    { findFAQMatch: jest.fn().mockResolvedValue(null) } as any,
-    { getCachedAnswer: jest.fn().mockResolvedValue(null), cacheAnswer: jest.fn() } as any,
     { suggest: jest.fn().mockResolvedValue(null) } as any,
     {} as any, // bookingService
     analysisService as any,

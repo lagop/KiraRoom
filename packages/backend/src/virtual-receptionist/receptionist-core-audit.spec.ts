@@ -28,7 +28,7 @@ const TOOLS = [{ name: "list_services", input_schema: { type: "object" } }];
 function promptFor(context: Record<string, unknown>): string {
   const configService = { get: (): undefined => undefined } as unknown as ConfigService;
   const stub = {} as any;
-  const service = new LLMService(stub, configService, stub, stub, stub, stub, stub);
+  const service = new LLMService(stub, configService, stub, stub, stub, stub);
   return (service as any).buildSystemPrompt(context);
 }
 
@@ -86,7 +86,7 @@ function llm(opts: {
   const platform: any = { resolveEffective: async () => opts.platform ?? null };
   const usage = { record: jest.fn() };
   const prisma: any = { tenant: { findFirst: async () => null } };
-  const service = new LLMService(factory, config, prisma, {} as any, {} as any, platform, usage as any);
+  const service = new LLMService(factory, config, prisma, {} as any, platform, usage as any);
   return { service, usage };
 }
 

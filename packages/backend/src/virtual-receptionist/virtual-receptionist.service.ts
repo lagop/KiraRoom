@@ -3,7 +3,6 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { LLMService } from './services/llm.service';
 import { ConversationService } from './services/conversation.service';
-import { FAQService } from './services/faq.service';
 import { BookingService } from './services/booking.service';
 import { claimsBooking, looksLikeSummary } from './tools/booking-claims';
 import { recentHistory } from './recent-history';
@@ -12,7 +11,6 @@ import { AnalysisService } from './services/analysis.service';
 import { ProfessionalsService } from '../professionals/professionals.service';
 import { SendMessageDto, MessageResponseDto } from '@kira/shared';
 import { ChatIntent, LLMProvider } from '@kira/shared';
-import { FAQCacheService } from './services/faq-cache.service';
 import { UpsellService } from '../upsell/upsell.service';
 import { AiConversationCounterService, FairUseDecision } from './services/ai-conversation-counter.service';
 import { FeatureFlagService } from '../common/feature-flags/feature-flag.service';
@@ -61,8 +59,6 @@ export class VirtualReceptionistService {
     private readonly prisma: PrismaService,
     private readonly llmService: LLMService,
     private readonly conversationService: ConversationService,
-    private readonly faqService: FAQService,
-    private readonly faqCacheService: FAQCacheService,
     private readonly upsellService: UpsellService,
     private readonly bookingService: BookingService,
     private readonly analysisService: AnalysisService,
@@ -156,9 +152,6 @@ export class VirtualReceptionistService {
         case ChatIntent.HOURS_INFO:
         case ChatIntent.LOCATION_INFO:
         case ChatIntent.CONTACT_INFO:
-          // The FAQ service is still injected so it can be wired into the
-          // system prompt later if a hybrid (FAQ + tools) answer is desired.
-          void this.faqService;
           break;
 
         case ChatIntent.COMPLAINT:

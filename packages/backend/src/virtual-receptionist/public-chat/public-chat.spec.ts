@@ -140,7 +140,7 @@ describe("POST /virtual-receptionist/messages", () => {
   function controller(sent = 0) {
     const receptionist = { sendMessage: jest.fn(async () => ({ id: "m1", content: "¡Hola!", requiresHandoff: false })) };
     const { svc } = accessService({ sent });
-    const c = new VirtualReceptionistController(receptionist as any, {} as any, {} as any, {} as any, {} as any, {} as any, svc);
+    const c = new VirtualReceptionistController(receptionist as any, {} as any, {} as any, {} as any, {} as any, svc);
     return { c, receptionist };
   }
 

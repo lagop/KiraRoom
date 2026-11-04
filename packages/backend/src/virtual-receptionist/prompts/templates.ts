@@ -248,16 +248,6 @@ export const DYNAMIC_CONTEXT_ES = `
 
 ---
 
-## PREGUNTAS FRECUENTES (FAQs)
-
-{{#each FAQS}}
-**P: {{question}}**
-R: {{answer}}
-
-{{/each}}
-
----
-
 ## POLÍTICAS DEL SALÓN
 
 {{CANCELLATION_POLICY}}
@@ -372,16 +362,6 @@ export const DYNAMIC_CONTEXT_EN = `
 {{#each PROFESSIONALS}}
 - **{{full_name}}** — {{position}}
   Specialties: {{specialties}}
-{{/each}}
-
----
-
-## FREQUENTLY ASKED QUESTIONS (FAQs)
-
-{{#each FAQS}}
-**Q: {{question}}**
-A: {{answer}}
-
 {{/each}}
 
 ---
@@ -927,7 +907,6 @@ export function getDynamicContext(
     bookingUrl?: string;
     services: Array<{ name: string; category: string; duration: number; price: number; currency: string }>;
     professionals: Array<{ full_name: string; position: string; specialties: string }>;
-    faqs: Array<{ question: string; answer: string }>;
   }
 ): string {
   const template = language === 'es' ? DYNAMIC_CONTEXT_ES : DYNAMIC_CONTEXT_EN;
@@ -969,16 +948,6 @@ export function getDynamicContext(
     result = result.replace(/{{#each PROFESSIONALS}}[\s\S]*?{{\/each}}/g, professionalsSection);
   } else {
     result = result.replace(/{{#each PROFESSIONALS}}[\s\S]*?{{\/each}}/g, '- No professionals available');
-  }
-
-  // Add FAQs
-  if (context.faqs && context.faqs.length > 0) {
-    const faqsSection = context.faqs
-      .map(f => `**Q: ${f.question}**\nA: ${f.answer}`)
-      .join('\n\n');
-    result = result.replace(/{{#each FAQS}}[\s\S]*?{{\/each}}/g, faqsSection);
-  } else {
-    result = result.replace(/{{#each FAQS}}[\s\S]*?{{\/each}}/g, 'No FAQs available');
   }
 
   // Last: the salon's own text goes in as written, never scanned for the

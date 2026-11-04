@@ -22,7 +22,7 @@ function setup(fallback: string) {
   const config: any = { get: (key: string) => (key === "LLM_FALLBACK_PROVIDER" ? fallback : undefined) };
   const platform: any = { resolveEffective: async () => ({ provider: LLMProvider.ANTHROPIC, model: "m" }) };
   const stub: any = {};
-  const service = new LLMService(providerFactory, config, stub, stub, stub, platform, stub);
+  const service = new LLMService(providerFactory, config, stub, stub, platform, stub);
   return { service, calls };
 }
 
