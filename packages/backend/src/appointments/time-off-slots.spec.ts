@@ -27,6 +27,7 @@ const MON_10_TO_14 = [{ day: "monday", openTime: "10:00", closeTime: "14:00" }];
 interface Row {
   tenantId?: string;
   professionalId: string | null;
+  locationId?: string | null;
   kind: string;
   startDate: string;
   endDate: string;
@@ -41,12 +42,15 @@ function build(opts: {
   timeOff?: Row[];
   openingHours?: unknown;
   duration?: number;
+  /** Who works where (multi-local). */
+  links?: Array<{ professionalId: string; locationId: string }>;
 }) {
   const timeOff = (opts.timeOff ?? []).map((r) => ({
     tenantId: TENANT_ID,
     startTime: null,
     endTime: null,
     note: null,
+    locationId: null,
     ...r,
     startDate: new Date(`${r.startDate}T00:00:00.000Z`),
     endDate: new Date(`${r.endDate}T00:00:00.000Z`),
@@ -60,8 +64,10 @@ function build(opts: {
       })),
     },
     professional: {
-      findMany: jest.fn(async () =>
-        opts.professionals.map((p) => ({ tenantId: TENANT_ID, isActive: true, workingHours: null, services: [], ...p })),
+      findMany: jest.fn(async ({ where }: any = {}) =>
+        opts.professionals
+          .filter((p) => !where?.id?.in || where.id.in.includes(p.id))
+          .map((p) => ({ tenantId: TENANT_ID, isActive: true, workingHours: null, services: [], ...p })),
       ),
     },
     service: {
@@ -73,7 +79,19 @@ function build(opts: {
     timeOff: {
       findMany: jest.fn(async ({ where }: any) =>
         timeOff.filter(
-          (r) => r.tenantId === where.tenantId && r.startDate <= where.startDate.lte && r.endDate >= where.endDate.gte,
+          (r) =>
+            r.tenantId === where.tenantId &&
+            r.startDate <= where.startDate.lte &&
+            r.endDate >= where.endDate.gte &&
+            (!where.OR || where.OR.some((o: any) => o.locationId === r.locationId)),
+        ),
+      ),
+    },
+    location: { findFirst: jest.fn(async ({ where }: any) => ({ id: where.id })) },
+    professionalLocation: {
+      findMany: jest.fn(async ({ where }: any) =>
+        (opts.links ?? []).filter((l) =>
+          typeof where.locationId === "string" ? l.locationId === where.locationId : where.locationId.in.includes(l.locationId),
         ),
       ),
     },
@@ -139,6 +157,51 @@ describe("availability on a salon closure", () => {
     expect(salon).toContain("11:00");
     expect(salon).not.toContain("11:30");
     expect(salon).not.toContain("15:00");
+  });
+});
+
+describe("a closure of one location (multi-local)", () => {
+  const CENTRO = "loc-centro";
+  const NORTE = "loc-norte";
+  const pros = [
+    { id: ANA, workingHours: MON_10_TO_14 },
+    { id: BEA, workingHours: MON_10_TO_14 },
+  ];
+  const links = [
+    { professionalId: ANA, locationId: CENTRO },
+    { professionalId: BEA, locationId: NORTE },
+  ];
+  const norteClosed = closure({ locationId: NORTE });
+  const at = async (locationId: string, professionalId?: string) => {
+    const { svc } = build({ professionals: pros, timeOff: [norteClosed], links });
+    return times(
+      await svc.getAvailableSlots(TENANT_ID, new Date(`${MONDAY}T00:00:00.000Z`), professionalId, SERVICE_ID, 60, undefined, {
+        locationId,
+      }),
+    );
+  };
+
+  it("closes that location only", async () => {
+    expect(await at(NORTE)).toEqual([]);
+    expect(await at(NORTE, BEA)).toEqual([]);
+    expect(await at(CENTRO)).toContain("10:00");
+    expect(await at(CENTRO, ANA)).toContain("10:00");
+  });
+
+  it("asked without a location, it stops who works there and leaves the rest open", async () => {
+    const { svc } = build({ professionals: pros, timeOff: [norteClosed], links });
+    const day = new Date(`${MONDAY}T00:00:00.000Z`);
+    expect(times(await svc.getAvailableSlots(TENANT_ID, day, BEA, SERVICE_ID))).toEqual([]);
+    expect(times(await svc.getAvailableSlots(TENANT_ID, day, ANA, SERVICE_ID))).toContain("10:00");
+    expect(times(await svc.getAvailableSlots(TENANT_ID, day, undefined, SERVICE_ID))).toContain("10:00");
+  });
+
+  it("a closure of the whole salon still closes every location", async () => {
+    const { svc } = build({ professionals: pros, timeOff: [closure()], links });
+    const day = new Date(`${MONDAY}T00:00:00.000Z`);
+    for (const locationId of [CENTRO, NORTE]) {
+      expect(await svc.getAvailableSlots(TENANT_ID, day, undefined, SERVICE_ID, 60, undefined, { locationId })).toEqual([]);
+    }
   });
 });
 
@@ -321,5 +384,23 @@ describe("freedSlotBookable (the wait list's check)", () => {
     expect(await svc.freedSlotBookable(TENANT_ID, day, ANA, SERVICE_ID, "10:10", 60)).toBe(true);
     // 13:10 for 10 minutes holds no grid start, and 13:30 for an hour runs past 14:00.
     expect(await svc.freedSlotBookable(TENANT_ID, day, ANA, SERVICE_ID, "13:10", 10)).toBe(false);
+  });
+});
+
+describe("the same hours over several days", () => {
+  it("takes those hours out of every day of the range", async () => {
+    const mornings: Row = {
+      professionalId: ANA,
+      kind: "other",
+      startDate: "2026-10-30",
+      endDate: "2026-11-06",
+      startTime: "10:00",
+      endTime: "12:00",
+    };
+    expect(await named({ professionals: [{ id: ANA, workingHours: MON_10_TO_14 }], timeOff: [mornings] })).toEqual([
+      "12:00",
+      "12:30",
+      "13:00",
+    ]);
   });
 });

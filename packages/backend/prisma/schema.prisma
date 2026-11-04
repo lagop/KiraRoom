@@ -175,6 +175,10 @@ model Tenant {
   /// straight away instead of leaving it to the "Avisar" button.
   waitListAutoNotify Boolean @default(false)
 
+  /// Time off requests by email too (Resend), besides the panel: each new
+  /// request to the owner and admins, each answer to the professional.
+  timeOffEmailNotices Boolean @default(true)
+
   /// Till (POS) discounts: the most a staff member may take off a line, in
   /// percent (0-100). 0, the default: only the owner or a manager discount.
   /// Edited by them in the till settings (PUT /pos/settings).
@@ -2513,6 +2517,8 @@ model Location {
 
   appointments  Appointment[]
   professionals ProfessionalLocation[]
+  /// Closures of this location only.
+  timeOff       TimeOff[]
 
   @@unique([tenantId, slug])
   @@index([tenantId])
@@ -3668,7 +3674,7 @@ model TimeOff {
   startDate      DateTime      @db.Date
   /// Inclusive.
   endDate        DateTime      @db.Date
-  /// "HH:MM"; with endTime, only on a single day.
+  /// "HH:MM"; with endTime, the same hours on every day of the range.
   startTime      String?
   endTime        String?
   note           String?       @db.VarChar(200)
@@ -3685,12 +3691,17 @@ model TimeOff {
   decidedAt      DateTime?
   /// Why it was rejected (or a word on approval), for the requester.
   decisionNote   String?       @db.VarChar(200)
+  /// A closure of one location only (multi-local); null: every location.
+  /// Never set on a professional's time off.
+  locationId     String?
   tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   professional   Professional? @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+  location       Location?     @relation(fields: [locationId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, startDate, endDate])
   @@index([tenantId, status])
   @@index([professionalId])
+  @@index([locationId])
   @@map("time_off")
 }
 

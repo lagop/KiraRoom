@@ -3221,7 +3221,31 @@
       "absenceReason": "{kind} de {name} ({dates})",
       "closureReason": "Salón cerrado ({dates})",
       "more": "y {count} más.",
-      "goToAgenda": "Ir a la agenda"
+      "goToAgenda": "Ir a la agenda",
+      "closureReasonAt": "{location} cerrado ({dates})"
+    },
+    "actions": {
+      "pass": "Pasar a otra profesional libre",
+      "passSelected": "Pasar las {count} seleccionadas",
+      "cancel": "Cancelar y avisar a la clienta",
+      "cancelSelected": "Cancelar y avisar ({count})",
+      "selectAll": "Seleccionar todas",
+      "select": "Seleccionar {line}",
+      "loadingFree": "Buscando quién está libre…",
+      "noneFree": "Nadie que haga ese servicio está libre a esa hora.",
+      "noneFreeAll": "Nadie está libre para todas las citas elegidas: pásalas una a una.",
+      "choose": "Profesional",
+      "confirmPass": "Pasar",
+      "confirmPassMany": "Pasar las {count}",
+      "passed": "Pasada a {name}",
+      "reasonLabel": "Motivo que leerá la clienta (le añadimos un enlace para reservar otra cita)",
+      "channels": "Le escribimos solo por los canales que ha aceptado. El hueco no se ofrece a la lista de espera.",
+      "confirmCancel": "Cancelar la cita",
+      "confirmCancelMany": "Cancelar {count} citas",
+      "cancelled": "Cancelada; avisamos a la clienta",
+      "failed": "No se ha podido: {error}",
+      "back": "Volver",
+      "approveHelp": "No se cancelan solas: pásalas o cancélalas aquí, apruébala y hazlo luego, o vuelve atrás."
     }
   }
 }

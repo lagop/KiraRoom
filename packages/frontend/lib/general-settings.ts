@@ -42,6 +42,8 @@ export function settingsFromTenant(tenant: TenantSettingsRow): Record<string, an
     bookingSlotMinutes: String(tenant.bookingSlotMinutes ?? 30),
     // Switches hold "true" / "false".
     autoConfirmOnlineBookings: tenant.autoConfirmOnlineBookings ? "true" : "false",
+    // On unless the salon turned it off (older answers lack the field).
+    timeOffEmailNotices: tenant.timeOffEmailNotices === false ? "false" : "true",
   };
 }
 
@@ -70,6 +72,9 @@ export function tenantUpdateFrom(
   if (changed("bookingSlotMinutes")) update.bookingSlotMinutes = Number(settings.bookingSlotMinutes);
   if (changed("autoConfirmOnlineBookings")) {
     update.autoConfirmOnlineBookings = settings.autoConfirmOnlineBookings === "true";
+  }
+  if (changed("timeOffEmailNotices")) {
+    update.timeOffEmailNotices = settings.timeOffEmailNotices === "true";
   }
   if (settings.salonHours && !sameSalonHours(settings.salonHours, saved.salonHours)) {
     update.openingHours = openingHoursForSave(settings.salonHours);

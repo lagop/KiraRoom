@@ -117,6 +117,11 @@ export interface AppointmentEmailData {
    */
   locationName?: string;
   /**
+   * The salon's booking page, when the email invites to book again (a
+   * cancellation because the professional is away or the salon is closed).
+   */
+  bookingUrl?: string;
+  /**
    * Not used: the appointment emails are in Spanish. No caller knows the
    * salon's language today, and the dates they pass are already Spanish.
    */
@@ -1328,7 +1333,9 @@ export class EmailService {
       intro: "Tu cita ha sido cancelada. Estos eran sus datos:",
       card: { title: "❌ Cita cancelada", background: "#fef2f2", border: "#fecaca", titleColor: "#991b1b", accent: "#f87171" },
       rows: [...this.appointmentRows(data), ["Motivo", reason || undefined]],
-      closing: "¿Quieres reservar otra cita? Escríbenos o llámanos, o reserva en nuestra web.",
+      closing: data.bookingUrl
+        ? `Sentimos las molestias. <a href="${this.escapeHtml(data.bookingUrl)}" style="color: #7c3aed; font-weight: 600;">Reserva otra cita</a> cuando te venga bien, o escríbenos.`
+        : "¿Quieres reservar otra cita? Escríbenos o llámanos, o reserva en nuestra web.",
     });
   }
 
@@ -1406,7 +1413,9 @@ export class EmailService {
       intro: "Tu cita ha sido cancelada. Estos eran sus datos:",
       cardTitle: "Cita cancelada",
       extraRows: reason ? [`Motivo: ${reason}`] : [],
-      closing: "¿Quieres reservar otra cita? Escríbenos o llámanos, o reserva en nuestra web.",
+      closing: data.bookingUrl
+        ? `Sentimos las molestias. Reserva otra cita cuando te venga bien: ${data.bookingUrl}`
+        : "¿Quieres reservar otra cita? Escríbenos o llámanos, o reserva en nuestra web.",
     });
   }
 

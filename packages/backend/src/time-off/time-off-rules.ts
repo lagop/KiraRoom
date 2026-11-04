@@ -12,8 +12,8 @@ import {
  * receptionist. Pure, so the rules are tested once (time-off-rules.spec.ts).
  *
  * A block is a range of the salon's calendar days ("YYYY-MM-DD", inclusive),
- * all day or -- on one single day only -- a stretch of hours on the salon's
- * clock: the same reading as an appointment's scheduledDate + scheduledTime,
+ * all day or a stretch of hours on the salon's clock -- the same hours on
+ * every day of the range (the mornings of a week): the same reading as an appointment's scheduledDate + scheduledTime,
  * with no timezone math. A block with no professional closes the salon for
  * everyone.
  */
@@ -46,6 +46,8 @@ export interface TimeOffBlock {
   status?: TimeOffStatusName | string | null;
   /** Null: the whole salon is closed. */
   professionalId: string | null;
+  /** A closure of one location only (multi-local); null or absent: every location. */
+  locationId?: string | null;
   kind: TimeOffKindName | string;
   startDate: Date | string;
   endDate: Date | string;
@@ -219,6 +221,8 @@ export function timeOffProblem(input: {
 /** What a create or an edit may store, before it reaches the database. */
 export interface TimeOffInput {
   professionalId?: string | null;
+  /** Closures only: one location (multi-local); null for every location. */
+  locationId?: string | null;
   kind: string;
   startDate: string;
   endDate: string;
@@ -237,6 +241,7 @@ export function timeOffInputProblem(input: TimeOffInput): string | null {
   const salonWide = !input.professionalId;
   if (salonWide && input.kind !== "closure") return "Elige un profesional, o registra un cierre del salón.";
   if (!salonWide && input.kind === "closure") return "Un cierre es de todo el salón: no lleva profesional.";
+  if (!salonWide && input.locationId) return "Solo un cierre puede ser de un local.";
 
   if (!dateOfDay(input.startDate ?? "") || !dateOfDay(input.endDate ?? "")) {
     return "Las fechas tienen que ser días válidos (AAAA-MM-DD).";
@@ -253,7 +258,6 @@ export function timeOffInputProblem(input: TimeOffInput): string | null {
     if (!TIME_PATTERN.test(input.startTime as string) || !TIME_PATTERN.test(input.endTime as string)) {
       return "Las horas tienen que ser HH:MM.";
     }
-    if (input.startDate !== input.endDate) return "Las horas solo se pueden indicar para un único día.";
     if ((input.endTime as string) <= (input.startTime as string)) {
       return "La hora de fin tiene que ser posterior a la de inicio.";
     }
@@ -291,13 +295,14 @@ function spanishDay(value: Date | string): string {
 
 /**
  * The days and hours of a block as a sentence ends: "el 24/12/2026",
- * "del 24/12/2026 al 26/12/2026", "el 24/12/2026 de 10:00 a 12:00".
+ * "del 24/12/2026 al 26/12/2026", "el 24/12/2026 de 10:00 a 12:00",
+ * "del 14/12/2026 al 18/12/2026 de 09:00 a 14:00" (those hours each day).
  */
 export function periodLabel(block: TimeOffBlock): string {
   const start = dayOf(block.startDate);
   const end = dayOf(block.endDate);
-  if (start !== end) return `del ${spanishDay(start)} al ${spanishDay(end)}`;
   const hours = isAllDay(block) ? "" : ` de ${block.startTime} a ${block.endTime}`;
+  if (start !== end) return `del ${spanishDay(start)} al ${spanishDay(end)}${hours}`;
   return `el ${spanishDay(start)}${hours}`;
 }
 

@@ -5,11 +5,15 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from "@nestjs/common";
 import { TimeOffKind } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { NotificationType } from "../notifications/dto";
+import { EmailService } from "../notifications/services/email.service";
+import { escapeHtml } from "../common/html-escape";
+import { salonDayAndTime } from "../appointments/reschedule-check";
 import {
   MY_TIME_OFF_PAGE,
   REQUESTS_PAGE,
@@ -37,6 +41,13 @@ export { MY_TIME_OFF_PAGE, REQUESTS_PAGE };
 const MINE_LOOKBACK_DAYS = 60;
 /** Enough for any salon's open requests; a list, not an export. */
 const LIST_LIMIT = 200;
+/** What an unanswered request whose days are gone says when it expires. */
+export const EXPIRED_NOTE = "Caducada: no se respondió a tiempo";
+/** How many expired requests one run closes at most (the next run takes the rest). */
+const EXPIRY_BATCH = 500;
+
+const panelUrl = (path: string) =>
+  `${String(process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/+$/, "")}${path}`;
 
 const PROFESSIONAL = { professional: { select: { firstName: true, lastName: true } } } as const;
 
@@ -50,7 +61,10 @@ const fullName = (p?: { firstName?: string | null; lastName?: string | null } | 
  * for comes from the session, never from the body. It is stored pending and
  * blocks nothing until whoever runs the salon (owner, admin) approves it;
  * then it is ordinary time off. A rejected one stays, for the record, and
- * blocks nothing either. Both sides are told in the panel's notifications.
+ * blocks nothing either. Both sides are told in the panel's notifications,
+ * and by email unless the salon turned that off (Tenant.timeOffEmailNotices).
+ * A request nobody answered before its last day is closed as rejected
+ * ("Caducada") by expireStale, run every hour.
  *
  * Nothing already booked is moved: the request and the approval answer with
  * the appointments that fall inside it, as recording time off does.
@@ -63,7 +77,47 @@ export class TimeOffRequestsService {
     private readonly prisma: PrismaService,
     private readonly timeOff: TimeOffService,
     private readonly notifications: NotificationsService,
+    // Optional: specs that do not care about email leave it out.
+    @Optional() private readonly email?: EmailService,
   ) {}
+
+  /** Now, replaceable in specs. */
+  clock: () => Date = () => new Date();
+
+  /**
+   * Pending requests whose last day is already gone, in each salon's own
+   * calendar, are closed as rejected with EXPIRED_NOTE, and the professional
+   * is told (panel and email). Idempotent: only rows still pending change,
+   * so two runs or two instances close nothing twice.
+   */
+  async expireStale(): Promise<number> {
+    const now = this.clock();
+    // A day ahead of UTC covers every salon's today (Pacific/Kiritimati is UTC+14).
+    const latest = new Date(now.getTime() + 86_400_000).toISOString().slice(0, 10);
+    const rows = await this.prisma.timeOff.findMany({
+      where: { status: "pending", requestedById: { not: null }, endDate: { lt: dateOfDay(latest)! } },
+      include: { ...PROFESSIONAL, tenant: { select: { timezone: true } } },
+      orderBy: { endDate: "asc" },
+      take: EXPIRY_BATCH,
+    });
+    let closed = 0;
+    for (const row of rows as any[]) {
+      const today = salonDayAndTime(now, row.tenant?.timezone || "Europe/Madrid").day;
+      if (!(dayOf(row.endDate) < today)) continue;
+      const { count } = await this.prisma.timeOff.updateMany({
+        where: { id: row.id, tenantId: row.tenantId, status: "pending" },
+        data: { status: "rejected", decidedById: null, decidedAt: now, decisionNote: EXPIRED_NOTE },
+      });
+      if (count === 0) continue;
+      closed++;
+      await this.tellRequester(
+        { id: "", tenantId: row.tenantId, role: "system" },
+        { ...row, status: "rejected", decisionNote: EXPIRED_NOTE, decidedAt: now },
+        { expired: true },
+      );
+    }
+    return closed;
+  }
 
   /** The appointments the request would clash with, before it is sent. */
   async preview(user: TimeOffUser, dto: CreateTimeOffRequestDto) {
@@ -244,12 +298,15 @@ export class TimeOffRequestsService {
     });
   }
 
-  /** In the panel of every owner and admin of the salon. Never fails the request. */
+  /**
+   * In the panel of every owner and admin of the salon, and by email unless
+   * the salon turned that off. Never fails the request.
+   */
   private async tellManagers(user: TimeOffUser, row: any, professionalName: string, clashes: number) {
     try {
       const managers = await this.prisma.user.findMany({
         where: { tenantId: user.tenantId, role: { in: ["owner", "admin"] }, isActive: true },
-        select: { id: true },
+        select: { id: true, email: true, firstName: true },
       });
       const who = professionalName || "Un profesional";
       const clashText =
@@ -270,27 +327,50 @@ export class TimeOffRequestsService {
             this.logger.warn(`Could not notify ${manager.id} of time off request ${row.id}: ${err.message}`),
           );
       }
+      if (await this.emailsOn(user.tenantId)) {
+        const summary = requestSummary(row as TimeOffBlock);
+        for (const manager of managers) {
+          if (manager.id === user.id || !manager.email) continue;
+          await this.sendEmail(
+            manager.email,
+            `Nueva solicitud de ausencia de ${who}`,
+            `<p>Hola${manager.firstName ? ` ${escapeHtml(manager.firstName)}` : ""},</p>
+<p><strong>${escapeHtml(who)}</strong> ha pedido ${escapeHtml(summary)}.${escapeHtml(clashText)}</p>
+<p>No bloquea la agenda hasta que la apruebes.</p>
+<p><a href="${escapeHtml(panelUrl(REQUESTS_PAGE))}">Aprobar o rechazar la solicitud</a></p>`,
+            `time-off-requested-${row.id}-${manager.id}`,
+          );
+        }
+      }
     } catch (err) {
       this.logger.warn(`Could not notify the managers of time off request ${row.id}: ${(err as Error).message}`);
     }
   }
 
-  /** In the requester's panel: approved or rejected, and why. Never fails the answer. */
-  private async tellRequester(user: TimeOffUser, row: any) {
+  /**
+   * In the requester's panel, and by email unless the salon turned that off:
+   * approved or rejected, and why -- or expired, nobody having answered.
+   * Never fails the answer.
+   */
+  private async tellRequester(user: TimeOffUser, row: any, opts: { expired?: boolean } = {}) {
     if (!row.requestedById || row.requestedById === user.id) return;
+    const approved = row.status === "approved";
+    const summary = requestSummary(row as TimeOffBlock);
+    const title = opts.expired ? "Solicitud caducada" : approved ? "Ausencia aprobada" : "Ausencia rechazada";
+    const message = opts.expired
+      ? `Tu solicitud de ${summary} ha caducado: nadie la respondió antes de esas fechas.`
+      : approved
+        ? `Tu solicitud de ${summary} ha sido aprobada.${row.decisionNote ? ` Nota: ${row.decisionNote}` : ""}`
+        : `Tu solicitud de ${summary} ha sido rechazada.${row.decisionNote ? ` Motivo: ${row.decisionNote}` : ""}`;
     try {
-      const approved = row.status === "approved";
-      const reason = row.decisionNote ? ` Motivo: ${row.decisionNote}` : "";
       await this.notifications.create({
         tenantId: user.tenantId,
         userId: row.requestedById,
         type: NotificationType.SCHEDULE_CHANGE,
-        title: approved ? "Ausencia aprobada" : "Ausencia rechazada",
-        message: approved
-          ? `Tu solicitud de ${requestSummary(row as TimeOffBlock)} ha sido aprobada.${row.decisionNote ? ` Nota: ${row.decisionNote}` : ""}`
-          : `Tu solicitud de ${requestSummary(row as TimeOffBlock)} ha sido rechazada.${reason}`,
+        title,
+        message,
         data: {
-          event: approved ? "time_off_approved" : "time_off_rejected",
+          event: opts.expired ? "time_off_expired" : approved ? "time_off_approved" : "time_off_rejected",
           timeOffId: row.id,
           link: MY_TIME_OFF_PAGE,
         },
@@ -298,5 +378,41 @@ export class TimeOffRequestsService {
     } catch (err) {
       this.logger.warn(`Could not notify the requester of time off ${row.id}: ${(err as Error).message}`);
     }
+    try {
+      if (!(await this.emailsOn(user.tenantId))) return;
+      const requester = await this.prisma.user.findFirst({
+        where: { id: row.requestedById, tenantId: user.tenantId, isActive: true },
+        select: { email: true, firstName: true },
+      });
+      if (!requester?.email) return;
+      await this.sendEmail(
+        requester.email,
+        title,
+        `<p>Hola${requester.firstName ? ` ${escapeHtml(requester.firstName)}` : ""},</p>
+<p>${escapeHtml(message)}</p>
+<p><a href="${escapeHtml(panelUrl(MY_TIME_OFF_PAGE))}">Ver mis ausencias</a></p>`,
+        `time-off-${opts.expired ? "expired" : row.status}-${row.id}`,
+      );
+    } catch (err) {
+      this.logger.warn(`Could not email the requester of time off ${row.id}: ${(err as Error).message}`);
+    }
+  }
+
+  /** Whether the salon wants the requests by email too (on unless turned off), and email can be sent. */
+  private async emailsOn(tenantId: string): Promise<boolean> {
+    if (!this.email?.isConfigured()) return false;
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { timeOffEmailNotices: true },
+    });
+    return tenant?.timeOffEmailNotices !== false;
+  }
+
+  private async sendEmail(to: string, subject: string, html: string, idempotencyKey: string) {
+    const res = await this.email!.sendEmail({ to, subject, html, idempotencyKey }).catch((err: Error) => ({
+      success: false,
+      error: err.message,
+    }));
+    if (!res.success) this.logger.warn(`time off email to a user failed: ${(res as any).error ?? "unknown"}`);
   }
 }

@@ -91,6 +91,11 @@ export class UpdateTenantDto {
   @IsBoolean()
   autoConfirmOnlineBookings?: boolean;
 
+  @ApiPropertyOptional({ description: "Time off requests and answers by email too, besides the panel" })
+  @IsOptional()
+  @IsBoolean()
+  timeOffEmailNotices?: boolean;
+
   // Linked from the salon's public page. A handle ("@salonana") or a profile
   // link is stored as the canonical URL; blank or null clears it.
   @ApiPropertyOptional({ description: "Instagram: @handle or profile URL; blank clears it", nullable: true })

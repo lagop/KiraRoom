@@ -7,6 +7,7 @@ import apiClient from "@/lib/api";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/components/ui/use-toast";
 import { useTranslations } from "@/lib/use-translation";
+import { ConflictActions } from "@/components/time-off/ConflictActions";
 import {
   TIME_OFF_KIND_LABELS,
   TIME_OFF_REQUESTS_CHANGED,
@@ -14,7 +15,6 @@ import {
   TIME_OFF_STATUS_STYLES,
   agendaLink,
   approvedToast,
-  conflictLine,
   conflictTitle,
   dateRangeLabel,
   hoursLabel,
@@ -38,23 +38,14 @@ const who = (b: Pick<TimeOff, "professionalName">) => b.professionalName?.trim()
 
 type Translate = (key: string, params?: Record<string, any>) => string;
 
-function ConflictList({ conflicts }: { conflicts: TimeOffConflict[] }) {
-  return (
-    <>
-      <ul className="max-h-60 space-y-1 overflow-y-auto">
-        {conflicts.slice(0, LISTED_CONFLICTS).map((c) => (
-          <li key={c.id}>{conflictLine(c)}</li>
-        ))}
-      </ul>
-      {conflicts.length > LISTED_CONFLICTS && <p>y {conflicts.length - LISTED_CONFLICTS} más.</p>}
-    </>
-  );
-}
-
 /** What an appointment of the card falls inside: "Vacaciones de Ana Gil (14–16 dic 2026)". */
 function reasonOf(c: UpcomingTimeOffConflict, t: Translate): string {
   const dates = dateRangeLabel(c.timeOff.startDate, c.timeOff.endDate);
-  if (c.timeOff.professionalId === null) return t("timeOff.upcoming.closureReason", { dates });
+  if (c.timeOff.professionalId === null) {
+    return c.timeOff.locationName
+      ? t("timeOff.upcoming.closureReasonAt", { location: c.timeOff.locationName, dates })
+      : t("timeOff.upcoming.closureReason", { dates });
+  }
   return t("timeOff.upcoming.absenceReason", {
     kind: TIME_OFF_KIND_LABELS[c.timeOff.kind] ?? "Ausencia",
     name: who(c.timeOff),
@@ -210,22 +201,12 @@ export default function TimeOffRequestsPage() {
                   : t("timeOff.upcoming.titleMany", { count: upcoming.length })}
               </p>
               <p>{t("timeOff.upcoming.help")}</p>
-              <ul className="max-h-72 space-y-1 overflow-y-auto">
-                {upcoming.slice(0, LISTED_UPCOMING).map((c) => (
-                  <li key={c.id}>
-                    <Link
-                      href={agendaLink(c.date, c.id)}
-                      className="underline decoration-amber-400 underline-offset-2 hover:decoration-amber-700"
-                    >
-                      {conflictLine(c)}
-                    </Link>
-                    <span className="text-amber-800"> · {reasonOf(c, t)}</span>
-                  </li>
-                ))}
-              </ul>
-              {upcoming.length > LISTED_UPCOMING && (
-                <p>{t("timeOff.upcoming.more", { count: upcoming.length - LISTED_UPCOMING })}</p>
-              )}
+              <ConflictActions
+                conflicts={upcoming}
+                limit={LISTED_UPCOMING}
+                onChanged={() => void load()}
+                extra={(c) => <span className="text-amber-800"> · {reasonOf(c as UpcomingTimeOffConflict, t)}</span>}
+              />
               <Link href={agendaLink(upcoming[0].date)} className="inline-block font-medium underline">
                 {t("timeOff.upcoming.goToAgenda")}
               </Link>
@@ -345,8 +326,12 @@ export default function TimeOffRequestsPage() {
               </p>
               {approving.conflicts.length > 0 ? (
                 <>
-                  <ConflictList conflicts={approving.conflicts} />
-                  <p>No se cancelan: apruébala y muévelas o avisa a los clientes, o vuelve atrás.</p>
+                  <ConflictActions
+                    conflicts={approving.conflicts}
+                    limit={LISTED_CONFLICTS}
+                    onChanged={() => void load()}
+                  />
+                  <p>{t("timeOff.actions.approveHelp")}</p>
                 </>
               ) : (
                 <p>No coincide con ninguna cita. Desde ahora no se ofrecerán citas en ese tiempo.</p>

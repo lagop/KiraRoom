@@ -17,6 +17,9 @@ export interface TimeOff {
   /** Null: the whole salon is closed. */
   professionalId: string | null;
   professionalName?: string | null;
+  /** A closure of one location only (multi-local); null: every location. */
+  locationId?: string | null;
+  locationName?: string | null;
   kind: TimeOffKind;
   startDate: string;
   endDate: string;
@@ -35,6 +38,8 @@ export interface TimeOff {
 
 export interface TimeOffInput {
   professionalId?: string | null;
+  /** Closures only, multi-local: one location, or null for every location. Absent: not sent. */
+  locationId?: string | null;
   kind: TimeOffKind;
   startDate: string;
   endDate: string;
@@ -123,11 +128,26 @@ export function requestBody(input: TimeOffInput): Omit<TimeOffInput, "profession
     startTime: input.startTime ?? null,
     endTime: input.endTime ?? null,
     note: input.note ?? null,
+    ...(input.locationId !== undefined ? { locationId: input.locationId } : {}),
   };
 }
 
-/** Fired on window when a request is answered, so the menu badge recounts. */
+/** Which locations a closure closes, for a salon with several; null otherwise. */
+export function closureWhere(block: Pick<TimeOff, "locationId" | "locationName">, severalLocations: boolean): string | null {
+  if (block.locationId) return `Solo ${block.locationName?.trim() || "un local"}`;
+  return severalLocations ? "Todos los locales" : null;
+}
+
+/**
+ * Fired on window when a request is answered here, or a new one arrives by
+ * the live notifications, so the menu badge recounts.
+ */
 export const TIME_OFF_REQUESTS_CHANGED = "kira:time-off-requests-changed";
+
+/** Whether a live notification changes the requests waiting for an answer (a new one came in). */
+export function changesPendingRequests(notification: { data?: Record<string, unknown> | null } | null | undefined): boolean {
+  return notification?.data?.event === "time_off_requested";
+}
 
 /** The menu badge: nothing for none, "9+" past nine. */
 export function pendingBadge(count: number): string | null {
@@ -187,9 +207,13 @@ export function dateRangeLabel(startDate: string, endDate: string): string {
   return `${shortDay(startDate)} – ${shortDay(endDate)}`;
 }
 
-/** "Todo el día" or "10:00–12:00". */
-export function hoursLabel(block: Pick<TimeOff, "startTime" | "endTime">): string {
-  return block.startTime && block.endTime ? `${block.startTime}–${block.endTime}` : "Todo el día";
+/** "Todo el día", "10:00–12:00", or "10:00–12:00 cada día" over several days. */
+export function hoursLabel(
+  block: Pick<TimeOff, "startTime" | "endTime"> & Partial<Pick<TimeOff, "startDate" | "endDate">>,
+): string {
+  if (!(block.startTime && block.endTime)) return "Todo el día";
+  const hours = `${block.startTime}–${block.endTime}`;
+  return block.startDate && block.endDate && block.startDate !== block.endDate ? `${hours} cada día` : hours;
 }
 
 /** What the calendar writes on a block: "Vacaciones", "Salón cerrado — Navidad". */
@@ -226,7 +250,6 @@ export function timeOffFormProblem(input: {
     return `Una ausencia puede durar como máximo ${MAX_SPAN_DAYS} días.`;
   }
   if (!input.allDay) {
-    if (input.startDate !== input.endDate) return "Las horas solo se pueden indicar para un único día.";
     if (!/^\d{2}:\d{2}$/.test(input.startTime) || !/^\d{2}:\d{2}$/.test(input.endTime)) {
       return "Indica la hora de inicio y la de fin.";
     }
@@ -253,8 +276,39 @@ export function conflictLine(c: TimeOffConflict): string {
 export interface UpcomingTimeOffConflict extends TimeOffConflict {
   timeOff: Pick<
     TimeOff,
-    "id" | "professionalId" | "professionalName" | "kind" | "startDate" | "endDate" | "startTime" | "endTime"
+    | "id"
+    | "professionalId"
+    | "professionalName"
+    | "kind"
+    | "startDate"
+    | "endDate"
+    | "startTime"
+    | "endTime"
+    | "locationId"
+    | "locationName"
   >;
+}
+
+/** GET /appointments/:id/free-professionals: who could take a caught appointment. */
+export interface FreeProfessionals {
+  /** False: a visit whose services each have their professional (moved from the agenda). */
+  reassignable: boolean;
+  reason?: string;
+  professionals: Array<{ id: string; name: string }>;
+}
+
+/** What the client reads when the salon cancels for time off and writes no reason (the server's default). */
+export const TIME_OFF_CANCEL_REASON = "No podremos atenderte en ese horario.";
+
+/**
+ * Who is free for every one of several appointments: the colleagues the
+ * whole selection can go to at once, in the first list's order. A list
+ * that cannot be reassigned leaves nobody.
+ */
+export function freeForAll(lists: ReadonlyArray<FreeProfessionals>): Array<{ id: string; name: string }> {
+  if (lists.length === 0 || lists.some((l) => !l.reassignable)) return [];
+  const [first, ...rest] = lists;
+  return first.professionals.filter((p) => rest.every((l) => l.professionals.some((q) => q.id === p.id)));
 }
 
 /**

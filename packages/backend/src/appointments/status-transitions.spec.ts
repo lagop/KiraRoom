@@ -272,6 +272,19 @@ describe("the dedicated endpoints", () => {
     expect(slots).toHaveBeenLastCalledWith("t1", b.row.scheduledDate, undefined, "s1");
   });
 
+  it("cancel for time off: the client is told with a link to book again, and the blocked slot goes to nobody", async () => {
+    const b = build(S.confirmed);
+    await b.service.cancelForTimeOff(OWNER, "apt-1", "  ");
+    expect(b.row).toMatchObject({ status: S.cancelled, cancellationReason: "No podremos atenderte en ese horario." });
+    expect(b.sent.sendAppointmentCancelledNotifications).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "apt-1" }),
+      "No podremos atenderte en ese horario.",
+      { rebook: true },
+    );
+    expect(b.waitList.onAppointmentCancelled).not.toHaveBeenCalled();
+    await expect(b.service.cancelForTimeOff(OWNER, "apt-1")).rejects.toBeInstanceOf(ConflictException);
+  });
+
   it("cancel: a slot already past goes to nobody on the wait-list", async () => {
     const b = build(S.confirmed, { startsInMs: -2 * 3_600_000 });
     await b.service.cancel(OWNER, "apt-1");

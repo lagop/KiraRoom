@@ -42,6 +42,7 @@ import {
   bookingLocations,
   choiceAtLocation,
   chosenLocation,
+  closedDaysAt,
   confirmedPlace,
   locationForProfessional,
   locationFromQuery,
@@ -548,7 +549,7 @@ export default function SalonBookingPage({
     date: bookingData.date,
     loading: slotsLoading,
     slots: availableSlots,
-    closed: isClosedDay(bookingData.date, initialData.openingHours, initialData.closedDays),
+    closed: isClosedDay(bookingData.date, initialData.openingHours, closedDaysAt(initialData, bookingData.locationId)),
   });
 
   return (
