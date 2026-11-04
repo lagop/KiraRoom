@@ -98,7 +98,11 @@ export class SaasService {
   ) {}
 
   async getAllTenants(filter: TenantFilterDto): Promise<PaginatedResult<any>> {
-    const { page = 1, limit = 10, sortBy = "createdAt", sortOrder = "desc", search, plan, subscriptionStatus, country, createdAfter, createdBefore, includeDeleted } = filter;
+    const { page = 1, limit = 10, sortOrder = "desc", search, plan, subscriptionStatus, country, createdAfter, createdBefore, includeDeleted } = filter;
+    // Only listed columns: ordering by a secret column (payment keys) would leak it bit by bit.
+    const sortBy = (CONSOLE_TENANT_SORT_FIELDS as readonly string[]).includes(filter.sortBy ?? "")
+      ? filter.sortBy!
+      : "createdAt";
 
     // Not the Platform tenant: it is the platform owner's account, not a salon (C14).
     const where: any = { ...NOT_PLATFORM_TENANT_WHERE };
@@ -140,7 +144,7 @@ export class SaasService {
         where,
         skip: (page - 1) * limit,
         take: limit,
-        orderBy: { [sortBy]: sortOrder },
+        orderBy: { [sortBy]: sortOrder === "asc" ? "asc" : "desc" },
         select: {
           id: true,
           name: true,
@@ -1054,3 +1058,15 @@ export const CONSOLE_USER_SELECT = {
 
 /** Columns GET /saas/users may sort by. */
 export const CONSOLE_USER_SORT_FIELDS = ["createdAt", "email", "firstName", "lastName", "role", "lastLoginAt"] as const;
+
+/** Columns GET /saas/tenants may sort by. */
+export const CONSOLE_TENANT_SORT_FIELDS = [
+  "createdAt",
+  "updatedAt",
+  "name",
+  "slug",
+  "plan",
+  "subscriptionStatus",
+  "country",
+  "trialEnd",
+] as const;
