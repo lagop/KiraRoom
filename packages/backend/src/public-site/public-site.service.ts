@@ -9,7 +9,8 @@ import { salonOffersWhatsAppPromotions, salonWhatsAppConnected } from "../consen
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
 import { publicPrice, publicPriceSettings } from "../common/public-price";
 import { clientLocations, formatLocationAddress, professionalLocationsOf } from "../multi-location/client-locations";
-import { isReadOnlyStatus, publicPageGone } from "../common/guards/read-only-tenant.guard";
+import { publicPageGone } from "../common/guards/read-only-tenant.guard";
+import { bookingUnavailableReason } from "./booking-availability";
 import { imageVersion, parseImageDataUrl, portfolioIndex, publicImageUrl, type PublicImageKind } from "./public-images";
 import { publicProfessionals, showsPhoto } from "./public-professional";
 
@@ -89,6 +90,9 @@ export class PublicSiteService {
         language: true,
         // The salon's own words, shown next to its hours (informational).
         cancellationPolicy: true,
+        // Without policy text, the page says how long before an online
+        // cancellation is still possible (audit 7 N15).
+        minCancelHours: true,
         // Read into openingHours/openingShifts below, never sent as stored.
         openingHours: true,
         // Read for the prices (common/public-price.ts), never sent.
@@ -229,13 +233,22 @@ export class PublicSiteService {
       timezone: tenant.timezone,
       // Informational: nothing charges a fee or stops a cancellation.
       cancellationPolicy: tenant.cancellationPolicy?.trim() || null,
+      // The "Cancelar mi cita" link's deadline (appointments.service), for
+      // "Puedes cancelar online hasta N h antes" when there is no policy text.
+      minCancelHours: tenant.minCancelHours,
       language: tenant.language,
       updatedAt: tenant.updatedAt,
       // False while the salon is read-only (trial ended, cancelled,
       // suspended): the booking would be refused at the end
       // (appointments.service), so the page shows the phone instead of the
       // form and asks search engines not to index it. The page itself stays.
-      acceptsBookings: !isReadOnlyStatus(tenant.subscriptionStatus),
+      //
+      // Also false while it has no active professional (a new salon between
+      // its first service and its first professional): no slot can be booked
+      // (getAvailableSlots), so the page says "todavía no acepta reservas
+      // online" with its phone (audit 7 N11). bookingUnavailable says which.
+      acceptsBookings: bookingUnavailableReason(tenant.subscriptionStatus, professionals.length) === null,
+      bookingUnavailable: bookingUnavailableReason(tenant.subscriptionStatus, professionals.length),
       // The final price, tax included, whichever way the salon writes its
       // catalogue: 36.30 for a 30.00 net service at 21 % IVA.
       services: services.map((s) => ({ ...s, price: publicPrice(s.price, prices) })),

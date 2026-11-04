@@ -30,6 +30,7 @@ import {
 } from "@/lib/salon-legal";
 import {
   acceptsBookings,
+  cancelDeadlineHours,
   formatAddress,
   formatPrice,
   openingHoursRows,
@@ -249,6 +250,10 @@ export default function SalonBookingPage({
   // A read-only salon (trial ended, cancelled, suspended): its details and
   // phone, no form, which would be refused at the very end.
   const takesBookings = acceptsBookings(initialData);
+  // Nobody to book with yet (a new salon): "todavía no acepta reservas online".
+  const notTakingYet = initialData.bookingUnavailable === "no_professional";
+  // No policy text: how long before she can still cancel online.
+  const cancelHours = cancelDeadlineHours(initialData);
   const phoneHref = salonData.phone ? `tel:${salonData.phone.replace(/\s+/g, "")}` : null;
   const mapsHref = directionsUrl(salonData.address);
   const whatsAppHref = whatsappHref(initialData.whatsapp);
@@ -805,8 +810,14 @@ export default function SalonBookingPage({
           {/* No online booking while the salon is read-only: its phone. */}
           {!takesBookings && (
             <div data-test="booking-unavailable" className="bg-white rounded-2xl shadow-lg p-4 sm:p-8 text-center">
-              <h2 className="text-2xl font-bold text-purple-900 mb-3">{t("sites.noOnlineBookingTitle")}</h2>
-              <p className="text-gray-700">{t("sites.noOnlineBooking")}</p>
+              <h2 className="text-2xl font-bold text-purple-900 mb-3">
+                {t(notTakingYet ? "sites.notTakingBookingsYetTitle" : "sites.noOnlineBookingTitle")}
+              </h2>
+              <p className="text-gray-700">
+                {notTakingYet
+                  ? t(phoneHref ? "sites.notTakingBookingsYet" : "sites.notTakingBookingsYetNoPhone")
+                  : t("sites.noOnlineBooking")}
+              </p>
               {phoneHref && (
                 <a
                   href={phoneHref}
@@ -1404,6 +1415,13 @@ export default function SalonBookingPage({
                     <p className="whitespace-pre-line break-words text-sm text-gray-600">
                       {initialData.cancellationPolicy}
                     </p>
+                  </div>
+                )}
+                {/* No policy text: the online cancellation deadline it applies anyway. */}
+                {cancelHours !== null && takesBookings && (
+                  <div data-test="cancellation-deadline">
+                    <h3 className="font-semibold text-gray-900 mb-2">{t("sites.cancellationPolicy")}</h3>
+                    <p className="text-sm text-gray-600">{t("sites.cancelOnlineUntil", { hours: cancelHours })}</p>
                   </div>
                 )}
 

@@ -153,7 +153,7 @@ describe("availability on a salon closure", () => {
       "10:30",
       "11:00",
     ]);
-    const salon = await anyone({ professionals: [], timeOff: [afternoon] });
+    const salon = await anyone({ professionals: [{ id: ANA }], timeOff: [afternoon] });
     expect(salon).toContain("11:00");
     expect(salon).not.toContain("11:30");
     expect(salon).not.toContain("15:00");

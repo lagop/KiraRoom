@@ -34,7 +34,7 @@ describe("UpdateTenantDto timezone", () => {
   });
 });
 
-function serviceWith(current: Record<string, unknown>) {
+function serviceWith(current: Record<string, unknown>, invoices = 0) {
   const writes: any[] = [];
   const service = Object.create(AuthService.prototype);
   service.logger = { log: jest.fn() };
@@ -46,6 +46,7 @@ function serviceWith(current: Record<string, unknown>) {
         return { ...current, ...data };
       },
     },
+    invoice: { count: async () => invoices },
   };
   return { service, writes };
 }
@@ -159,5 +160,46 @@ describe("register: the browser's zone", () => {
       await auth.register({ ...form, timezone } as any);
       expect(created[0].timezone).toBe("Europe/Madrid");
     }
+  });
+});
+
+describe("updateTenant: the address decides the tax regime too (audit 7 N6)", () => {
+  const onMadrid = {
+    timezone: "Europe/Madrid",
+    street: null,
+    city: null,
+    postalCode: null,
+    state: null,
+    country: "ES",
+    fiscalSettings: { taxRegime: "iva", defaultTaxRate: 21, pricesIncludeTax: true, defaultSeries: "A" },
+  };
+
+  it("a Canarian postcode moves a salon with no invoices to IGIC 7 %", async () => {
+    const { service, writes } = serviceWith(onMadrid);
+    await service.updateTenant("t1", { street: "Calle Ficticia 1", city: "Telde", postalCode: "35200" });
+    expect(writes[0].fiscalSettings).toMatchObject({ taxRegime: "igic", defaultTaxRate: 7, defaultSeries: "A" });
+  });
+
+  it("Ceuta or Melilla: IPSI", async () => {
+    const { service, writes } = serviceWith(onMadrid);
+    await service.updateTenant("t1", { postalCode: "52001" });
+    expect(writes[0].fiscalSettings).toMatchObject({ taxRegime: "ipsi", defaultTaxRate: 10 });
+  });
+
+  it("not once it has issued invoices: the panel shows a notice instead", async () => {
+    const { service, writes } = serviceWith(onMadrid, 2);
+    await service.updateTenant("t1", { postalCode: "38001" });
+    expect(writes[0].fiscalSettings).toBeUndefined();
+    expect(writes[0].timezone).toBe("Atlantic/Canary");
+  });
+
+  it("a peninsular address, or the same territory saved again, leaves the regime alone", async () => {
+    const madrid = serviceWith(onMadrid);
+    await madrid.service.updateTenant("t1", { postalCode: "28013" });
+    expect(madrid.writes[0].fiscalSettings).toBeUndefined();
+    // Already in the Canaries, on IVA by the owner's choice: saving the address again keeps it.
+    const chosen = serviceWith({ ...onMadrid, timezone: "Atlantic/Canary", postalCode: "35001" });
+    await chosen.service.updateTenant("t1", { street: "Otra calle 2", postalCode: "35001" });
+    expect(chosen.writes[0].fiscalSettings).toBeUndefined();
   });
 });

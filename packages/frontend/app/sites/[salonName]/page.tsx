@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { fetchPublicReviews, fetchPublicSalonPage } from "@/lib/public-site-server";
 import {
-  acceptsBookings,
+  salonPageIndexable,
   canonicalUrl,
   metaDescription,
   metaTitle,
@@ -45,9 +45,10 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     title,
     description,
     alternates: { canonical: url },
-    // A salon that takes no bookings (trial ended, cancelled, suspended)
-    // keeps its page, with its phone, but out of search results.
-    ...(acceptsBookings(page) ? {} : { robots: { index: false, follow: true } }),
+    // A salon that takes no bookings (trial ended, cancelled, suspended, no
+    // professional yet) keeps its page, with its phone, but out of search
+    // results; so does one with no active service yet (audit 7 N12).
+    ...(salonPageIndexable(page) ? {} : { robots: { index: false, follow: true } }),
     // The salon's logo in the tab and bookmarks; else the app's icon.
     ...(logo ? { icons: { icon: logo } } : {}),
     openGraph: {

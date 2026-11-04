@@ -5,7 +5,8 @@ import { salonOffersWhatsAppPromotions, salonWhatsAppConnected } from "../consen
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
 import { publicPrice, publicPriceSettings } from "../common/public-price";
 import { frameAncestorOrigins } from "./frame-origins";
-import { isReadOnlyStatus, publicPageGone } from "../common/guards/read-only-tenant.guard";
+import { publicPageGone } from "../common/guards/read-only-tenant.guard";
+import { bookingUnavailableReason } from "../public-site/booking-availability";
 import { publicImageUrl } from "../public-site/public-images";
 import { publicProfessionals } from "../public-site/public-professional";
 import { ownPrivacyPolicyUrl } from "../public-site/public-site.service";
@@ -287,7 +288,9 @@ export class WidgetService {
       // False while the salon is read-only (trial ended, cancelled,
       // suspended), as on its public page: the booking would be refused at
       // the end, so the widget says to phone the salon instead.
-      acceptsBookings: !isReadOnlyStatus(widget.tenant.subscriptionStatus),
+      // Or while nobody on the widget is active: nothing to book (audit 7 N11).
+      acceptsBookings: bookingUnavailableReason(widget.tenant.subscriptionStatus, allProfessionals.length) === null,
+      bookingUnavailable: bookingUnavailableReason(widget.tenant.subscriptionStatus, allProfessionals.length),
       widget: {
         id: widget.id,
         name: widget.name,

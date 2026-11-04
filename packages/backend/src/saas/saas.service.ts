@@ -318,6 +318,12 @@ export class SaasService {
         data: { deletedAt },
         select: { id: true },
       });
+      // Its team can no longer sign in, and every open session ends now
+      // (jwt.strategy compares tokenVersion; login refuses a deleted salon).
+      const users = await tx.user.updateMany({
+        where: { tenantId: id, role: { not: UserRole.saas_owner } },
+        data: { isActive: false, tokenVersion: { increment: 1 } },
+      });
       // Its page answers 404 from now on; the iframe on its own site too.
       await invalidateTenantWidgets(tx, id);
       return this.auditLog.record(
@@ -326,7 +332,7 @@ export class SaasService {
           actorId: saasOwnerId,
           actorRole: UserRole.saas_owner,
           tenantId: id,
-          metadata: { deletedAt: deletedAt.toISOString() },
+          metadata: { deletedAt: deletedAt.toISOString(), usersDeactivated: users.count },
         },
         tx,
       );
