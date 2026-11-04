@@ -14,7 +14,7 @@ import { CreateProfessionalDto as AdminCreateProfessionalDto } from "../../admin
  * GET /services, GET /professionals and GET /professionals/:id are @Public(),
  * so the JWT guard never ran and the tenant scope never applied. Without a
  * ?tenantId= the lists returned every salon's rows; with one -- and a salon's
- * id is public via /public-site/tenant/:slug -- professionals still came with
+ * id is public via /public-site/page/:slug -- professionals still came with
  * email, phone and commission rate. By id, the same, to anyone.
  */
 
@@ -119,6 +119,24 @@ describe("GET /professionals", () => {
       where: { service: { isActive: true, isOnlineBookable: true } },
       select: { serviceId: true },
     });
+  });
+
+  it("names her as the salon shows her on the web (Mostrar en la web)", async () => {
+    const svc = new ProfessionalsService({
+      professional: {
+        findMany: async () => [
+          { id: "p1", firstName: "Ana", lastName: "García", profileImage: "data:image/png;base64,cG5n", webNameDisplay: "initial", webShowPhoto: false },
+          { id: "p2", firstName: "Bea", lastName: "López", profileImage: null, webNameDisplay: "hidden", webShowPhoto: true },
+        ],
+      },
+    } as any);
+    const rows: any[] = await svc.findAll("tenant-a", { staff: false });
+    expect(rows.map((r) => [r.firstName, r.lastName, r.profileImage, r.listed])).toEqual([
+      ["Ana", "G.", null, true],
+      ["Profesional", "", null, false],
+    ]);
+    expect(JSON.stringify(rows)).not.toContain("webNameDisplay");
+    expect(PUBLIC_PROFESSIONAL).toMatchObject({ webNameDisplay: true, webShowPhoto: true });
   });
 
   it("gives full rows to the salon's own staff", async () => {

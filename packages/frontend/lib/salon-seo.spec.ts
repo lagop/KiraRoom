@@ -123,6 +123,11 @@ check(
 );
 check("a data: URL from an older server is not used", publicImageSrc("data:image/png;base64,AAAA", API), null);
 check(
+  "a professional's photo is served by the API too",
+  publicImageSrc("/public-site/professional-image/p1/photo?v=abc", API),
+  "https://api.kiraroom.net/api/v1/public-site/professional-image/p1/photo?v=abc",
+);
+check(
   "an API base that is not absolute gives crawlers nothing",
   shareImage({ ...PAGE, logoUrl: "/public-site/image/t1/logo" }, "/api/v1"),
   null,
@@ -164,6 +169,11 @@ check("final prices are marked tax included", ldTax.hasOfferCatalog.itemListElem
   valueAddedTaxIncluded: true,
 });
 check("team", ld.employee, [{ "@type": "Person", name: "Ana García", jobTitle: "Estilista" }]);
+const ldHidden = salonJsonLd(
+  { ...PAGE, professionals: PAGE.professionals.map((p) => ({ ...p, listed: false })) },
+  "https://app.kiraroom.net/sites/salon-luna",
+) as any;
+check("a professional not shown on the web is not in the team", "employee" in ldHidden, false);
 check("no data: image", "image" in ld, false);
 
 console.log("\n=== a salon that closes for lunch ===");

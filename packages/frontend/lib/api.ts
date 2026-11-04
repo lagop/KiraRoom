@@ -3213,23 +3213,6 @@ class ApiClient implements ApiClientInterface {
     return this.request<Professional[]>(`/professionals${params}`);
   }
 
-  // Public tenant resolution (no auth required)
-  async getPublicTenant(slug: string): Promise<{
-    id: string;
-    name: string;
-    slug: string;
-    logo: string | null;
-    address: string | null;
-    city: string | null;
-    state: string | null;
-    country: string | null;
-    phone: string | null;
-    email: string | null;
-    description: string | null;
-  }> {
-    return this.request(`/public-site/tenant/${encodeURIComponent(slug)}`);
-  }
-
   // Everything the salon's public page shows, opening hours included (no auth).
   async getPublicSalonPage(slug: string): Promise<PublicSalonPage> {
     return this.request<PublicSalonPage>(`/public-site/page/${encodeURIComponent(slug)}`);
@@ -3429,6 +3412,9 @@ class ApiClient implements ApiClientInterface {
     locationIds?: string[];
     primaryLocationId?: string | null;
     workingHours?: WorkingHoursEntry[];
+    /** "Mostrar en la web"; left out: name and initial, no photo. */
+    webNameDisplay?: "full" | "initial" | "hidden";
+    webShowPhoto?: boolean;
   }): Promise<Professional> {
     return this.request<Professional>("/admin/professionals", {
       method: "POST",
@@ -3464,6 +3450,9 @@ class ApiClient implements ApiClientInterface {
     primaryLocationId?: string | null;
       /** Owners and admins only; leave it out to keep the current schedule. */
       workingHours: WorkingHoursEntry[];
+      /** "Mostrar en la web" and "Mostrar foto". */
+      webNameDisplay: "full" | "initial" | "hidden";
+      webShowPhoto: boolean;
     }>,
   ): Promise<Professional> {
     return this.request<Professional>(`/admin/professionals/${id}`, {
@@ -5000,6 +4989,11 @@ class ApiClient implements ApiClientInterface {
     /** Online bookings start confirmed instead of pending. */
     autoConfirmOnlineBookings?: boolean;
     timeOffEmailNotices?: boolean;
+    /** The public page's links (Ajustes > Salón). */
+    website?: string | null;
+    whatsapp?: string | null;
+    /** The salon's own privacy policy; null: the one generated for it. */
+    privacyPolicyUrl?: string | null;
   }> {
     return this.request("/auth/tenant");
   }
@@ -5030,6 +5024,10 @@ class ApiClient implements ApiClientInterface {
     bookingSlotMinutes?: number;
     autoConfirmOnlineBookings?: boolean;
     timeOffEmailNotices?: boolean;
+    /** null clears them. */
+    website?: string | null;
+    whatsapp?: string | null;
+    privacyPolicyUrl?: string | null;
   }): Promise<{
     id: string;
     name: string;

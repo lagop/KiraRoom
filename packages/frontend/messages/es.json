@@ -1584,7 +1584,17 @@
       "saveError": "No se han podido guardar los datos del salón.",
       "cover": "Imagen de portada",
       "coverHint": "Sale arriba en tu página de reservas y en el widget. Recomendado: horizontal, 1500×500 px, ≤ 1 MB. PNG, JPG o WebP.",
-      "coverRemove": "Quitar imagen"
+      "coverRemove": "Quitar imagen",
+      "legalMissingTitle": "Completa la razón social y el NIF de tu salón",
+      "legalMissing": "El aviso legal de tu página de reservas los necesita (LSSI). Mientras tanto mostramos el nombre comercial y la dirección; tu página sigue publicada.",
+      "legalMissingLink": "Añadirlos en tus datos fiscales",
+      "website": "Tu web (si tienes)",
+      "whatsapp": "WhatsApp para tus clientes",
+      "whatsappHint": "Muestra el botón «Escríbenos por WhatsApp» en tu página de reservas. Vacío: no se muestra.",
+      "privacyPolicyUrl": "URL de mi propia política de privacidad (opcional)",
+      "privacyPolicyUrlHint": "Si la pones, tu página, el widget y el chat enlazan a ella. Si no, usan la que generamos con tus datos.",
+      "seePrivacy": "Ver la política generada",
+      "seeLegalNotice": "Ver el aviso legal"
     },
     "saved": "Guardado",
     "theme": "Tema",
@@ -1916,7 +1926,16 @@
       "cancel": "Cancelar"
     },
     "product_commission_rate": "Comisión de productos (%)",
-    "product_commission_rate_empty": "Vacío: la del salón por defecto"
+    "product_commission_rate_empty": "Vacío: la del salón por defecto",
+    "web": {
+      "title": "Mostrar en la web",
+      "full": "Nombre completo",
+      "initial": "Nombre e inicial",
+      "hidden": "No mostrar",
+      "photo": "Mostrar foto",
+      "consent": "Para mostrar su nombre completo o su foto en tu página de reservas necesitas el consentimiento de esta persona.",
+      "hiddenHint": "No aparece en el equipo de tu página. Tus clientes pueden reservar con ella igualmente, como «Profesional»."
+    }
   },
   "services": {
     "addNew": "Añadir nuevo servicio",
@@ -2982,7 +3001,12 @@
       "title": "No podemos mostrar la página ahora",
       "description": "Inténtalo de nuevo en unos minutos.",
       "retry": "Volver a intentarlo"
-    }
+    },
+    "directions": "Cómo llegar",
+    "whatsappUs": "Escríbenos por WhatsApp",
+    "legalNotice": "Aviso legal",
+    "privacy": "Privacidad",
+    "poweredBy": "Web de reservas gestionada por KiraRoom"
   },
   "platform_llm": {
     "title": "Proveedor de IA del chatbot",

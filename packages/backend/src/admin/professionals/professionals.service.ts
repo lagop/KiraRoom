@@ -172,6 +172,9 @@ export class AdminProfessionalsService {
           isActive,
           isOwner: false,
           position: professionalData.position,
+          // Left out: the column defaults (name and initial, no photo).
+          webNameDisplay: professionalData.webNameDisplay,
+          webShowPhoto: professionalData.webShowPhoto,
           // 0 is a rate: only "not given" (or null) means none.
           commissionRate: commissionRateUpdate(professionalData.commissionRate) ?? null,
           productCommissionRate: commissionRateUpdate(professionalData.productCommissionRate) ?? null,
