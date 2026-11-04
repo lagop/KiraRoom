@@ -162,6 +162,8 @@ function WorkspaceBusinessStep({ onDone }: { onDone: () => Promise<unknown> }) {
   const [name, setName] = useState("");
   const [street, setStreet] = useState("");
   const [city, setCity] = useState("");
+  // The postcode decides the tax too: 35/38 IGIC, 51/52 IPSI (audit 7 N6).
+  const [postalCode, setPostalCode] = useState("");
   const [phone, setPhone] = useState("");
   const [logo, setLogo] = useState("");
   // The zone the salon signed up on: a Canarian address on Madrid time is
@@ -178,6 +180,7 @@ function WorkspaceBusinessStep({ onDone }: { onDone: () => Promise<unknown> }) {
         if (t?.name) setName(t.name);
         if (t?.street) setStreet(t.street);
         if (t?.city) setCity(t.city);
+        if (t?.postalCode) setPostalCode(t.postalCode);
         if (t?.phone) setPhone(t.phone);
         if (t?.logo) setLogo(t.logo);
         if (t?.timezone) setTimezone(t.timezone);
@@ -197,12 +200,17 @@ function WorkspaceBusinessStep({ onDone }: { onDone: () => Promise<unknown> }) {
       setError("Rellena el nombre, la dirección y el teléfono para continuar.");
       return;
     }
+    if (!/^\d{5}$/.test(postalCode.replace(/\s+/g, ""))) {
+      setError("Escribe el código postal del salón (5 números).");
+      return;
+    }
     setSubmitting(true);
     try {
       await apiClient.updateTenant({
         name: name.trim(),
         street: street.trim(),
         city: city.trim(),
+        postalCode: postalCode.replace(/\s+/g, ""),
         phone: phone.trim(),
         logo: logo.trim(),
       } as any);
@@ -229,9 +237,10 @@ function WorkspaceBusinessStep({ onDone }: { onDone: () => Promise<unknown> }) {
         <Field label="Teléfono" value={phone} onChange={setPhone} required type="tel" />
         <Field label="Dirección" value={street} onChange={setStreet} required className="md:col-span-2" />
         <Field label="Ciudad" value={city} onChange={setCity} required />
+        <Field label="Código postal" value={postalCode} onChange={setPostalCode} required placeholder="28001" />
         <LogoUpload value={logo} onChange={setLogo} className="md:col-span-2" />
       </div>
-      <CanaryTimezoneHint timezone={timezone} address={{ street, city }} />
+      <CanaryTimezoneHint timezone={timezone} address={{ street, city, postalCode }} />
       <ErrorBanner message={error} />
       <div className="flex justify-end">
         <StepSubmitButton submitting={submitting} label="Guardar y continuar" />

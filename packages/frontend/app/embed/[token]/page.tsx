@@ -119,6 +119,8 @@ interface WidgetConfig {
    * servers (= true).
    */
   acceptsBookings?: boolean;
+  /** Why acceptsBookings is false; "no_professional": nobody to book with yet. */
+  bookingUnavailable?: "read_only" | "no_professional" | null;
 }
 
 interface Slot {
@@ -435,9 +437,16 @@ export default function EmbedWidgetPage() {
         {/* No online booking while the salon is read-only: its phone. */}
         {!takesBookings && (
           <div data-test="widget-booking-unavailable" className="text-center space-y-4 py-8">
-            <p className="text-gray-700">
-              Ahora mismo no se puede reservar online. Llama al salón para pedir cita.
-            </p>
+            {config.bookingUnavailable === "no_professional" ? (
+              <p className="text-gray-700">
+                <span className="block font-semibold">Este salón todavía no acepta reservas online.</span>
+                {salonPhone ? "Llama al salón para pedir cita." : "Muy pronto podrás reservar aquí tu cita."}
+              </p>
+            ) : (
+              <p className="text-gray-700">
+                Ahora mismo no se puede reservar online. Llama al salón para pedir cita.
+              </p>
+            )}
             {salonPhone && (
               <a
                 href={`tel:${salonPhone.replace(/\s+/g, "")}`}

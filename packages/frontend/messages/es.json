@@ -273,6 +273,12 @@
       "done": "Rectificativa emitida",
       "error": "No se pudo emitir la rectificativa"
     },
+    "territoryTaxNotice": {
+      "title": "Revisa el impuesto de tus facturas",
+      "igic": "Tu salón está en Canarias, pero factura con {current}. Allí se aplica el IGIC (7 % general).",
+      "ipsi": "Tu salón está en Ceuta o Melilla, pero factura con {current}. Allí se aplica el IPSI.",
+      "link": "Cambiarlo en Ajustes fiscales"
+    },
     "issuerBanner": {
       "title": "Faltan datos del salón para tus facturas",
       "missing": "Toda factura tiene que llevar {fields} del salón.",
@@ -2989,6 +2995,10 @@
     "phoneOnly": "Reserva por teléfono",
     "noOnlineBooking": "Ahora mismo no se puede reservar online. Llama al salón para pedir cita.",
     "noOnlineBookingTitle": "Pide tu cita por teléfono",
+    "notTakingBookingsYetTitle": "Este salón todavía no acepta reservas online",
+    "notTakingBookingsYet": "Llama al salón para pedir cita.",
+    "notTakingBookingsYetNoPhone": "Muy pronto podrás reservar aquí tu cita.",
+    "cancelOnlineUntil": "Puedes cancelar online hasta {hours} h antes.",
     "callSalon": "Llamar al {phone}",
     "coverAlt": "Foto de {name}",
     "logoAlt": "Logo de {name}",

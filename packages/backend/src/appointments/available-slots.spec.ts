@@ -243,7 +243,7 @@ describe("getAvailableSlots with no professional named", () => {
     }
   });
 
-  it("imposes no shift limit when the salon has no professionals at all", async () => {
+  it("offers nothing when the salon has no active professional (audit 7 N11)", async () => {
     const { service } = build();
     // Override: the tenant has nobody on the books.
     (service as any).prisma.professional.findMany = jest.fn().mockResolvedValue([]);
@@ -256,7 +256,9 @@ describe("getAvailableSlots with no professional named", () => {
       30,
     );
 
-    expect(slots.length).toBeGreaterThan(0);
+    // A day of free times every booking then refused ("Ese horario ya no
+    // está disponible"): now none, and the page says it takes no bookings yet.
+    expect(slots).toEqual([]);
   });
 });
 

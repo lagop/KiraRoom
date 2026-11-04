@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { AppointmentStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -11,6 +11,8 @@ import { WhatsAppTemplateService } from '../whatsapp/whatsapp-template.service';
 import { withBookedService } from '../appointments/appointment-snapshot';
 import { bookingPlace } from '../multi-location/client-locations';
 import { publicBookingSmsHeld } from '../appointments/public-booking-sms-cap';
+import { FeatureFlagService } from '../common/feature-flags/feature-flag.service';
+import { salonHasSmsNotices } from './sms-plan-gate';
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -86,6 +88,8 @@ export class NotificationsScheduler {
     private readonly smsService: SmsService,
     private readonly notificationsService: NotificationsService,
     private readonly whatsappTemplates: WhatsAppTemplateService,
+    // The plan check of the automatic SMS (sms_notifications). Global FeatureFlagModule.
+    @Optional() private readonly featureFlags?: FeatureFlagService,
   ) {}
 
   /**
@@ -154,6 +158,8 @@ export class NotificationsScheduler {
         status: { in: ACTIVE_STATUSES },
         [kind.sentField]: false,
         [kind.attemptsField]: { lt: MAX_REMINDER_ATTEMPTS },
+        // A salon deleted from the console reminds no one (audit 7 N7).
+        tenant: { deletedAt: null },
       },
       include: reminderInclude,
       orderBy: { startTime: 'asc' },
@@ -291,6 +297,8 @@ export class NotificationsScheduler {
     if (
       appointment.client.phone &&
       (await this.allowed(appointment, kind, 'sms')) &&
+      // Only on a plan with SMS notices; otherwise the 1-hour one goes by email below.
+      (await salonHasSmsNotices(this.featureFlags, appointment.tenantId, this.logger)) &&
       !(await this.smsHeldAtBooking(appointment))
     ) {
       outcomes.push(
@@ -347,6 +355,8 @@ export class NotificationsScheduler {
         // And a number to call, as in the confirmation.
         ...(place?.phone || appointment.tenant?.phone ? { salonPhone: place?.phone || appointment.tenant.phone } : {}),
         ...(place ? { locationName: place.name } : {}),
+        // Replies reach the salon (email.service salonSender).
+        salonEmail: appointment.tenant.email,
       }, kind.hoursBefore, {
         // A retry after a send that timed out but went through is not delivered twice.
         idempotencyKey: `appointment-reminder-${kind.hoursBefore}h-${appointment.id}-${appointment.startTime!.getTime()}`,

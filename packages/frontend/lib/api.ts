@@ -1873,6 +1873,11 @@ export interface FiscalSettings {
   fiscalMode: "none" | "verifactu" | "ticketbai" | "sii_only";
   /** False while sending invoices to the AEAT is not available (production). */
   submissionAvailable?: boolean;
+  /**
+   * The regime the salon's address calls for (igic in the Canaries, ipsi in
+   * Ceuta and Melilla) when it is on another one; null otherwise.
+   */
+  territoryTaxRegime?: "igic" | "ipsi" | null;
   fiscalSettings: {
     enabled?: boolean;
     syncOnIssue?: boolean;

@@ -42,6 +42,7 @@ import { RESERVED_SERIES } from "./invoice-numbering";
 import { FISCAL_SETTINGS_SELECT, fiscalSettingsView, issuerIdentityPatch, normalizeSeries } from "./fiscal-identity";
 import { AuditLogService } from "../saas/audit-log.service";
 import { taxLabelOf, taxRegimeOf, TAX_REGIME_DEFAULT_RATE } from "@kira/shared";
+import { territoryTaxRegime } from "./salon-tax-settings";
 
 interface AuthedRequest extends Request {
   user: { tenantId?: string; id?: string; role?: UserRole; impersonatedBy?: string };
@@ -253,12 +254,31 @@ export class InvoicesController {
   async getFiscalSettings(@Req() req: AuthedRequest) {
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: this.requireTenantId(req) },
-      select: FISCAL_SETTINGS_SELECT,
+      select: {
+        ...FISCAL_SETTINGS_SELECT,
+        // For territoryTaxRegime below, never sent.
+        street: true,
+        city: true,
+        state: true,
+        postalCode: true,
+        country: true,
+        timezone: true,
+      },
     });
+    // The regime the salon's address calls for (IGIC in the Canaries, IPSI
+    // in Ceuta and Melilla) when it is on another one: the panel shows a
+    // notice, as the switch is only automatic before the first invoice
+    // (audit 7 N6). Null otherwise.
+    const territory = tenant ? territoryTaxRegime(tenant, tenant.timezone) : null;
+    const territoryRegime = territory && taxRegimeOf(tenant?.fiscalSettings) !== territory ? territory : null;
     // The NIF, its type and the razón social go too: the page loads its form
     // from this, and without them it saved them back empty.
     // submissionAvailable: the page says that nothing is sent to the AEAT yet.
-    return { ...fiscalSettingsView(tenant), submissionAvailable: fiscalSubmissionAvailable() };
+    return {
+      ...fiscalSettingsView(tenant),
+      submissionAvailable: fiscalSubmissionAvailable(),
+      territoryTaxRegime: territoryRegime,
+    };
   }
 
   @Patch("settings/fiscal")
