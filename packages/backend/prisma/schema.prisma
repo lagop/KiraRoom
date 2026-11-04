@@ -17,6 +17,10 @@ model Tenant {
   /// D4: when the owner changed the web address (once: Ajustes > Web).
   /// The old one redirects for 12 months (TenantSlugRedirect).
   slugChangedAt          DateTime?
+  /// Audit 8 D2: "Permitir que soporte de KiraRoom entre en mi panel"
+  /// (Ajustes > Seguridad, owner only). Off: the console cannot open a
+  /// support session, and an open one ends on its next request.
+  allowSupportAccess     Boolean            @default(true)
   /// P2A Ã¢â‚¬â€ Spanish tax compliance: NIF/CIF/NIE del emisor (obligatorio si fiscalMode != 'none')
   taxId                  String?
   taxIdType              NifType?

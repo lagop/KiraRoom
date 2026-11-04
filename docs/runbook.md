@@ -209,6 +209,18 @@ Then sign in at `/saas/login` and turn two-step verification on again in
 If only the password was lost and the authenticator app still works, add
 `--keep-2fa` to leave two-step verification as it is.
 
+A lost password with the authenticator still at hand can also go through
+"¿Has olvidado la contraseña?" on `/saas/login` (the usual reset email).
+
+**Mandatory 2FA for the platform owner (audit 8 D15).** `SAAS_OWNER_2FA_REQUIRED=true`
+in the backend's environment makes the console usable only with two-step
+verification on: without it, every console route answers 403
+`SAAS_OWNER_2FA_REQUIRED` and the console sends her to `/saas/seguridad`
+to set it up (sign-in, profile, 2FA setup, password change and sign-out keep
+working). Default `false`; turn it on only once 2FA is on and the recovery
+codes are kept somewhere safe. The seed recovery above still works with it on:
+it clears 2FA, and the next sign-in lands on the setup page.
+
 Wrong passwords for the platform owner lock the **address** they come from
 (5 in 30 minutes), not the account, so a stranger cannot keep you out; from
 another network you can still sign in.

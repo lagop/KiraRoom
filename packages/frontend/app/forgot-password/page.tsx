@@ -16,6 +16,8 @@ function ForgotPasswordPageContent() {
   const t = useTranslations();
   const searchParams = useSearchParams();
   const salon = searchParams?.get("salon") || undefined;
+  // From the platform console's sign-in: back there, not to the panel's.
+  const fromConsole = searchParams?.get("from") === "console";
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [sent, setSent] = useState(false);
@@ -91,7 +93,10 @@ function ForgotPasswordPageContent() {
         )}
 
         <p className="text-sm mt-6">
-          <a href={salon ? `/sites/${encodeURIComponent(salon)}` : "/login"} className="text-purple-600 hover:underline">
+          <a
+            href={salon ? `/sites/${encodeURIComponent(salon)}` : fromConsole ? "/saas/login" : "/login"}
+            className="text-purple-600 hover:underline"
+          >
             {t("password_reset.back_to_login")}
           </a>
         </p>

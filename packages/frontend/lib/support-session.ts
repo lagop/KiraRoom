@@ -31,3 +31,19 @@ export function supportEntryUrl(p: { token: string; tenantId: string; tenantName
   });
   return `/login#${hash.toString()}`;
 }
+
+/**
+ * How long a support session lasted, for Ajustes > Seguridad (audit 8 D2):
+ * minutes under an hour, hours and minutes above. Null when the session
+ * did not end with "Salir del modo soporte" (still open, or ended at its cap).
+ */
+export function supportSessionDuration(
+  seconds: number | null,
+  t: (key: string, params?: Record<string, string | number>) => string,
+): string | null {
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return null;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 1) return t("supportAccess.less_than_minute");
+  if (minutes < 60) return t("supportAccess.minutes", { n: minutes });
+  return t("supportAccess.hours_minutes", { h: Math.floor(minutes / 60), m: minutes % 60 });
+}

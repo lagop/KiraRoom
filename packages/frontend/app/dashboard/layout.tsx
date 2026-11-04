@@ -214,6 +214,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 </strong>{" "}
                 {t("supportBanner.attribution")}{" "}
                 {endsAtLabel ? t("supportBanner.ends_at", { time: endsAtLabel }) : t("supportBanner.ends_max")}{" "}
+                {t("supportBanner.limits")}{" "}
                 <span className="opacity-80">
                   ({t("supportBanner.session_id")}{" "}
                   <code className="bg-red-700 px-1 rounded break-all">{impersonation.id}</code>)

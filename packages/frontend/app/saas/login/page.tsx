@@ -174,6 +174,11 @@ export default function SaasLoginPage() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-slate-500"
                 required
               />
+              <p className="text-sm mt-2 text-right">
+                <a href="/forgot-password?from=console" className="text-slate-700 hover:underline">
+                  {t("saas.forgot_password")}
+                </a>
+              </p>
             </div>
 
             <button

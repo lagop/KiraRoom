@@ -7,6 +7,7 @@ import { Public } from "../auth/decorators/public.decorator";
 import { Roles } from "../auth/decorators/roles.decorator";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { WebAddressService } from "./web-address.service";
+import { NotDuringSupport } from "../common/decorators/not-during-support.decorator";
 
 export class ChangeWebAddressDto {
   @IsString()
@@ -48,6 +49,7 @@ export class WebAddressController {
   }
 
   /** Once; the old address redirects (301) for 12 months, then is free. */
+  @NotDuringSupport()
   @Patch()
   @Roles(UserRole.owner)
   @ApiBearerAuth()

@@ -1,6 +1,8 @@
 ﻿import { Module } from "@nestjs/common";
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import { APP_FILTER, APP_GUARD } from "@nestjs/core";
+import { SupportScopeGuard } from "./common/guards/support-scope.guard";
+import { SaasOwnerTwoFactorGuard } from "./common/guards/saas-owner-two-factor.guard";
 import { SentryExceptionFilter } from "./common/observability/sentry-exception.filter";
 import { JwtModule } from "@nestjs/jwt";
 import {
@@ -63,6 +65,7 @@ import { WebAddressService } from "./web-address/web-address.service";
 import { AuthSessionsModule } from "./auth/sessions/auth-sessions.module";
 import { SalonRetentionModule } from "./saas/retention/salon-retention.module";
 import { SalonDeletionController } from "./saas/retention/salon-deletion.controller";
+import { SupportAccessController, SupportAccessService } from "./auth/support-access/support-access.controller";
 import { SalonDeletionService } from "./saas/retention/salon-deletion.service";
 import { TwoFactorService } from "./auth/two-factor/two-factor.service";
 import { AppointmentsController } from "./appointments/appointments.controller";
@@ -267,6 +270,7 @@ import { OpsAlertsModule } from "./common/ops-alerts/ops-alerts.module";
     WebAddressController,
     // "Borrar mi salón" (Ajustes > Seguridad); needs TwoFactorService below.
     SalonDeletionController,
+    SupportAccessController,
     AppointmentsController,
     AppointmentServicesController,
     ClientsController,
@@ -298,11 +302,24 @@ import { OpsAlertsModule } from "./common/ops-alerts/ops-alerts.module";
       provide: APP_GUARD,
       useClass: ReadOnlyTenantGuard,
     },
+    // After JwtAuthGuard: a support session cannot pay, touch fiscal data,
+    // passwords, 2FA, exports or delete the salon (audit 8 D1).
+    {
+      provide: APP_GUARD,
+      useClass: SupportScopeGuard,
+    },
+    // After JwtAuthGuard: with SAAS_OWNER_2FA_REQUIRED=true, a platform
+    // owner without 2FA can only set it up (audit 8 D15). Off by default.
+    {
+      provide: APP_GUARD,
+      useClass: SaasOwnerTwoFactorGuard,
+    },
     AppService,
     AuthService,
     WebAddressService,
     TwoFactorService,
     SalonDeletionService,
+    SupportAccessService,
     PasswordResetService,
     DefaultPasswordSweepService,
     TurnstileService,
