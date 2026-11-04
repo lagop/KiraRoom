@@ -48,7 +48,7 @@ describe("client import", () => {
   });
 
   it("does not duplicate a client the salon already has, matched by phone", async () => {
-    const p = prisma([{ id: "c1", email: null, phone: "600112233" }]);
+    const p = prisma([{ id: "c1", email: null, phone: "600112233", firstName: "Lucía", lastName: "Pérez" }]);
     const out: any = await new ImportService(p).commitClients("t1", EXCEL, "export.csv");
     expect(p.client.create).toHaveBeenCalledTimes(1); // only Marta
     expect(p.client.create.mock.calls[0][0].data).toMatchObject({ firstName: "Marta", phone: "+34611223344", email: "marta@x.test" });
@@ -164,7 +164,7 @@ describe("client import: the advertising column", () => {
   });
 
   it("records the refusal of a client the salon already has, without changing anything else", async () => {
-    const { p, consent, service } = withConsent([{ id: "c-lucia", email: null, phone: "+34600112233" }]);
+    const { p, consent, service } = withConsent([{ id: "c-lucia", email: null, phone: "+34600112233", firstName: "Lucía", lastName: "Pérez" }]);
     await service.commitClients("t1", CSV, "export.csv", "user-1");
     expect(p.client.update).not.toHaveBeenCalled();
     expect(consent.recordMarketingChoice).toHaveBeenCalledWith(expect.objectContaining({ clientId: "c-lucia", accepts: false }));
@@ -234,5 +234,61 @@ describe("import request body", () => {
     const bodyType = Reflect.getMetadata("design:paramtypes", ImportController.prototype, "dryRun")[1];
     const body = await pipe.transform({ csv: "a,b\n1,2", filename: "x.csv" }, { type: "body", metatype: bodyType });
     expect(body.csv).toBe("a,b\n1,2");
+  });
+});
+
+/**
+ * O7: a mother who gives her phone for her daughter or her own mother is a
+ * second client, not a duplicate; the email alone still is. O8: the
+ * reasons a row was not imported come in Spanish, with the row itself.
+ */
+describe("client import: people who share a phone (O7)", () => {
+  const SHARED = "Nombre,Apellidos,Teléfono,Email\n" +
+    "Lucía,Pérez,600 11 22 33,\n" +
+    "Carmen,Pérez,600 11 22 33,\n" + // her mother, same phone
+    "Lucía,Pérez López,600112233,\n" + // Lucía again
+    "Ana,Ruiz,,ana@x.test\n" +
+    "Anita,Ruiz,,ana@x.test\n"; // the same email: the same person whatever the name
+
+  it("imports a relative with the same phone as a client of her own, with a note", async () => {
+    const p = prisma();
+    const out: any = await new ImportService(p).commitClients("t1", SHARED, "export.csv");
+    expect(out.stats).toMatchObject({ okCount: 3, duplicateCount: 2 });
+    const created = p.client.create.mock.calls.map((c: any) => c[0].data);
+    expect(created.map((d: any) => d.firstName)).toEqual(["Lucía", "Carmen", "Ana"]);
+    expect(created[1].notes).toBe("Comparte teléfono con Lucía Pérez.");
+    expect(out.preview[1].note).toMatch(/Comparte teléfono con Lucía Pérez/);
+  });
+
+  it("matches a client the salon has by phone only when the name fits too", async () => {
+    const p = prisma([{ id: "c1", email: null, phone: "+34600112233", firstName: "Lucía", lastName: "Pérez Gil" }]);
+    const out: any = await new ImportService(p).dryRunClients("t1", SHARED, "export.csv");
+    expect(out.preview.map((r: any) => r.status)).toEqual(["duplicate", "ok", "duplicate", "ok", "duplicate"]);
+    expect(out.preview[0].existingId).toBe("c1");
+    expect(out.preview[1].existingId).toBeUndefined();
+  });
+});
+
+describe("import errors (O8)", () => {
+  it("lists every invalid row with its reason and the row as it came, past the 50 previewed", async () => {
+    let csv = "Nombre,Teléfono\n";
+    for (let i = 0; i < 80; i++) csv += i % 2 ? `Clienta ${i},6000000${String(i).padStart(2, "0")}\n` : `Clienta ${i},\n`;
+    const out: any = await new ImportService(prisma()).dryRunClients("t1", csv, "export.csv");
+    expect(out.preview).toHaveLength(50);
+    expect(out.errors).toHaveLength(40);
+    expect(out.errors[39]).toMatchObject({ row: 80, data: { Nombre: "Clienta 78", Teléfono: "" } });
+    expect(out.errors[39].fields[0].msg).toMatch(/teléfono o un email/);
+  });
+
+  it("says a database failure in Spanish, and keeps the rows out of the job record", async () => {
+    const p = prisma();
+    p.client.create.mockRejectedValueOnce(Object.assign(new Error("Unique constraint failed on the fields: (`tenantId`,`email`)"), {
+      code: "P2002",
+      meta: { target: ["tenantId", "email"] },
+    }));
+    const out: any = await new ImportService(p).commitClients("t1", "Nombre,Email\nAna,ana@x.test\n", "export.csv");
+    expect(out.errors[0].fields[0]).toEqual({ col: "base de datos", msg: "Ese email ya lo tiene otra clienta." });
+    const job = p.importJob.create.mock.calls[0][0].data;
+    expect(job.errors[0]).toEqual({ row: 2, fields: out.errors[0].fields });
   });
 });
