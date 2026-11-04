@@ -121,7 +121,7 @@ All items below landed in the repo. Tick the box once the SHA on `develop` is me
   docker exec kiraroom-certbot certbot certonly \
     --webroot -w /var/www/certbot \
     -d app.kiraroom.net -d api.kiraroom.net -d admin.kiraroom.net \
-    --email ops@kiraroom.net --agree-tos --no-eff-email
+    --email admin@kiraroom.net --agree-tos --no-eff-email
   ```
 - [ ] Reload nginx to pick up certs: `docker exec kiraroom-nginx-prod nginx -s reload`.
 - [ ] Verify HTTPS: `curl -I https://api.kiraroom.net/api/v1/ping` → expect `200`.

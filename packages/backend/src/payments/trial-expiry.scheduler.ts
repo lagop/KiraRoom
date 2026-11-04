@@ -3,6 +3,7 @@ import { Cron, CronExpression } from "@nestjs/schedule";
 import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { EmailService } from "../notifications/services/email.service";
+import { appBaseUrl } from "../common/app-base-url";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /**
@@ -159,11 +160,7 @@ export class TrialExpiryScheduler {
       return;
     }
 
-    const baseUrl =
-      this.config.get<string>("APP_BASE_URL") ||
-      this.config.get<string>("FRONTEND_URL") ||
-      "https://app.kiraroom.com";
-    const upgradeUrl = `${baseUrl.replace(/\/+$/, "")}/dashboard/billing`;
+    const upgradeUrl = `${appBaseUrl((k) => this.config.get<string>(k))}/dashboard/billing`;
 
     const sent = await this.email.sendTrialExpiry({
       to: owner.email,

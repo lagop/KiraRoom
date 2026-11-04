@@ -5,6 +5,7 @@ import { PrismaService } from "../common/prisma/prisma.service";
 import { runUnscoped } from "../common/tenancy/tenant.context";
 import { NotificationsService } from "../notifications/notifications.service";
 import { EmailService } from "../notifications/services/email.service";
+import { appBaseUrl } from "../common/app-base-url";
 
 export type AttentionChannel = "whatsapp" | "facebook" | "telegram";
 
@@ -115,11 +116,7 @@ export class ChannelAttentionScheduler {
       }
       const owner = managers.find((m) => m.role === "owner");
       if (owner?.email) {
-        const base = (
-          this.config.get<string>("APP_BASE_URL") ||
-          this.config.get<string>("FRONTEND_URL") ||
-          "https://app.kiraroom.com"
-        ).replace(/\/+$/, "");
+        const base = appBaseUrl((k) => this.config.get<string>(k));
         const link = `${base}${notice.path}`;
         const res = await this.email.sendEmail({
           to: owner.email,

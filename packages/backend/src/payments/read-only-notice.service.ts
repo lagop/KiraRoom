@@ -3,6 +3,7 @@ import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { runUnscoped } from "../common/tenancy/tenant.context";
 import { EmailService } from "../notifications/services/email.service";
+import { appBaseUrl } from "../common/app-base-url";
 
 export type ReadOnlyReason = "trial_ended" | "cancelled";
 
@@ -41,10 +42,7 @@ export class ReadOnlyNoticeService {
         return;
       }
 
-      const baseUrl =
-        this.config.get<string>("APP_BASE_URL") ||
-        this.config.get<string>("FRONTEND_URL") ||
-        "https://app.kiraroom.com";
+      const baseUrl = appBaseUrl((k) => this.config.get<string>(k));
 
       const sent = await this.email.sendAccountReadOnly({
         to: owner.email,
