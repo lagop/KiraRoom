@@ -1041,13 +1041,13 @@ export class EmailService {
       <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:12px;padding:32px;">
         <tr><td>
           <div style="font-size:24px;font-weight:700;color:#0f172a;margin-bottom:8px;">KiraRoom</div>
-          <p style="font-size:14px;color:#64748b;margin:0 0 24px 0;">Recibido · te responderemos en menos de 24h</p>
+          <p style="font-size:14px;color:#64748b;margin:0 0 24px 0;">Recibido · te responderemos en 2-3 días laborables</p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">Hola,</p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
             Hemos recibido tu reporte: <em>${this.escapeHtml(excerpt)}</em>.
           </p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
-            El equipo técnico lo revisará durante el siguiente día laborable.
+            Te responderemos en 2-3 días laborables.
             Si necesitamos más información te responderemos a este mismo correo.
           </p>
           <p style="font-size:13px;color:#94a3b8;background:#f1f5f9;padding:12px;border-radius:6px;margin:0;">
@@ -1063,7 +1063,7 @@ export class EmailService {
 
     const text = [
       `Hemos recibido tu reporte: "${excerpt}".`,
-      `El equipo técnico lo revisará durante el siguiente día laborable.`,
+      `Te responderemos en 2-3 días laborables.`,
       ``,
       `Identificador de seguimiento: ${shortId}`,
     ].join("\n");

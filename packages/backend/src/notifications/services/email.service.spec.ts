@@ -863,3 +863,13 @@ describe("EmailService.sendBugReportAck excerpt (audit 8 D2)", () => {
     expect(bugReportExcerpt("a\r\nb\tc")).toBe("a b c");
   });
 });
+
+describe("EmailService.sendBugReportAck response time (audit 8 D13)", () => {
+  it("promises 2-3 working days, not 24 hours", async () => {
+    const { service, calls } = makeService();
+    await service.sendBugReportAck({ to: "user@example.com", reportId: "abc12345-6789", subject: "X" });
+    expect(calls[0].html).toContain("2-3 días laborables");
+    expect(calls[0].text).toContain("2-3 días laborables");
+    expect(calls[0].html).not.toContain("24h");
+  });
+});
