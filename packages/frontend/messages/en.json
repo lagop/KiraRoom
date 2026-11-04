@@ -565,7 +565,15 @@
       "metaResultNoPages": "Your Facebook account manages no Page, or permission to use it was not given. Create the salon's Page and try again.",
       "metaResultDenied": "Permission was not given on Facebook. Nothing was connected.",
       "metaResultError": "The Facebook connection could not be completed. Please try again.",
-      "telegramConnectedAs": "Bot: @{username}"
+      "telegramConnectedAs": "Bot: @{username}",
+      "metaResultNoInstagramPermission": "Page connected: the receptionist now answers on Messenger. Not on Instagram, because the Instagram messaging permission was not granted; reconnect and accept it to use it.",
+      "metaResultInstagramTaken": "Messenger connected. This Page's Instagram account is already connected to another KiraRoom salon, so Instagram was not connected.",
+      "metaResultPageTaken": "This Facebook Page is already connected to another KiraRoom salon. Nothing was connected.",
+      "metaResultSubscribeFailed": "Facebook did not let KiraRoom receive this Page's messages. Nothing was connected; check that you are an admin of the Page and try again.",
+      "metaResultMissingPermissions": "KiraRoom was not given permission to manage the Page's messages. Nothing was connected; reconnect and accept all the permissions.",
+      "metaResultSession": "The Facebook connection was started in another window or expired. Nothing was connected; press \"Connect\" again from here.",
+      "metaAccessLost": "Facebook no longer accepts KiraRoom's permission on this Page (it expired or was removed). The receptionist does not answer on Messenger or Instagram: reconnect it.",
+      "telegramAccessLost": "Telegram no longer recognises this bot's token (it was changed or revoked in @BotFather). The receptionist does not answer on Telegram: reconnect it."
     },
     "currentPlan": "Current plan",
     "currentPlanLabel": "Your current plan",
@@ -3168,7 +3176,6 @@
       "wabaId": "WhatsApp Business account ID",
       "phoneNumberId": "Phone number ID in Meta",
       "accessToken": "Access token",
-      "displayPhone": "Phone number (with country code, e.g. +34…)",
       "displayName": "Name your clients will see (optional)"
     },
     "templatesTitle": "Message templates",
@@ -3186,7 +3193,8 @@
       "approved": "Approved",
       "rejected": "Rejected",
       "pending": "In review",
-      "notSubmitted": "Not submitted"
+      "notSubmitted": "Not submitted",
+      "unknown": "Could not be checked"
     },
     "submitTemplates": "Submit for review",
     "templatesSubmitted": "Templates submitted to Meta for review",
@@ -3206,7 +3214,23 @@
     "connecting": "Connecting…",
     "connected": "WhatsApp connected",
     "connectError": "WhatsApp could not be connected",
-    "tokenStored": "The access token is stored encrypted and never shown again; it is only used to send your WhatsApp messages."
+    "tokenStored": "The access token is stored encrypted and never shown again; it is only used to send your WhatsApp messages.",
+    "templatesUnknown": "We could not ask Meta for the status of the templates. Try again later; meanwhile notices go out through the usual channel.",
+    "templatesSubmitPartial": "Meta did not accept some templates",
+    "receivingLabel": "Receiving messages",
+    "receivingYes": "Yes",
+    "receivingNo": "No",
+    "receivingNoHelp": "Meta does not send this number's messages to KiraRoom yet: the receptionist will not answer them and \"BAJA\" replies will not be recorded.",
+    "lastInbound": "Last event received from Meta: {date}",
+    "accessLostTitle": "Meta has withdrawn KiraRoom's access",
+    "checkAgain": "Check again",
+    "checking": "Checking…",
+    "checkOk": "The connection with Meta works",
+    "checkError": "The connection with Meta still does not work",
+    "reconnectTitle": "Update the access token",
+    "reconnectIntro": "Paste a new token (a system user token that does not expire) from Meta's Business Manager. The rest of the connection is kept.",
+    "reconnect": "Save the new token",
+    "webhookWarning": "Connected, but Meta does not send the messages to KiraRoom"
   },
   "notifications": {
     "title": "Notifications",

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { ChatChannel } from '@prisma/client';
 import {
@@ -10,6 +10,7 @@ import {
 import { ChannelCredentialsService } from './channel-credentials.service';
 import { TelegramBotClient } from './telegram-bot.client';
 import { CHANNEL_TEXT_LIMIT, splitForChannel, toPlainChatText } from './chat-text';
+import { ChannelHealthService } from '../../channel-health/channel-health.service';
 
 /**
  * Telegram: answers through the salon's own bot (created with @BotFather).
@@ -28,6 +29,7 @@ export class TelegramChannelProvider implements ChannelProvider {
   constructor(
     private readonly credentials: ChannelCredentialsService,
     private readonly bot: TelegramBotClient,
+    @Optional() private readonly health?: ChannelHealthService,
   ) {}
 
   /**
@@ -69,12 +71,17 @@ export class TelegramChannelProvider implements ChannelProvider {
     if (!creds) {
       throw new Error('Telegram bot token is not configured for this tenant');
     }
+    const parts = splitForChannel(toPlainChatText(args.text), CHANNEL_TEXT_LIMIT.telegram);
     let first: string | undefined;
-    for (const part of splitForChannel(toPlainChatText(args.text), CHANNEL_TEXT_LIMIT.telegram)) {
-      const res = await this.bot.sendMessage(creds.botToken, Number(args.externalUserId), part);
+    for (let i = 0; i < parts.length; i++) {
+      const res = await this.bot.sendMessage(creds.botToken, Number(args.externalUserId), parts[i]);
       if (!res.ok) {
+        await this.health?.botTokenError(args.ctx.tenantId, res.error_code);
         const err = new Error(`Telegram send failed: ${res.description ?? 'unknown error'}`);
         this.logger.error(err.message);
+        // Part of the answer already arrived: throwing would make the
+        // caller send the whole answer again, repeating that part.
+        if (i > 0) return { messageId: first ?? '', raw: { partial: true, sent: i, total: parts.length } };
         throw err;
       }
       first ??= res.result?.message_id !== undefined ? String(res.result.message_id) : undefined;

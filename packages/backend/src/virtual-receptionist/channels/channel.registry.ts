@@ -98,7 +98,7 @@ export class ChannelRegistry {
    * `['web', 'whatsapp']` for tenants that haven't configured multichannel
    * yet (backward compatibility with the pre-H-4 deployment).
    */
-  private async isChannelEnabled(tenantId: string, channel: ChatChannel): Promise<boolean> {
+  async isChannelEnabled(tenantId: string, channel: ChatChannel): Promise<boolean> {
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
       select: { features: true },
