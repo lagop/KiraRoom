@@ -18,8 +18,8 @@ const READ_ONLY_DAYS = 30;
  * chance to recover.
  *
  * Schedule: `@Cron(EVERY_DAY_AT_4AM)` — same hour as
- * `BillingScheduler.expireTrials` so the two daily jobs batch
- * together (one DB connection, one alert window if either fails).
+ * `BillingScheduler.archiveStaleReadOnly` so the daily jobs batch
+ * together (one alert window if either fails).
  *
  * The flipped tenant also receives an `sendAccountSuspended` email
  * (the second notification in the T+0 / T+7 cadence — the first one

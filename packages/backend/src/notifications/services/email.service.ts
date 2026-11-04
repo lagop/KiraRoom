@@ -136,12 +136,12 @@ export interface AppointmentEmailData {
 }
 
 /** "23 de noviembre de 2026", in Madrid time so a late-UTC instant shows the right day. */
-export function formatLongDateEs(date: Date): string {
+export function formatLongDateEs(date: Date, timeZone = "Europe/Madrid"): string {
   return date.toLocaleDateString("es-ES", {
     day: "numeric",
     month: "long",
     year: "numeric",
-    timeZone: "Europe/Madrid",
+    timeZone,
   });
 }
 
@@ -669,6 +669,10 @@ export class EmailService {
     daysLeft: 3 | 1;
     trialEnd: Date;
     upgradeUrl: string;
+    /** Length of this salon's trial; the console can create trials other than 14 days. */
+    trialDays?: number;
+    /** The salon's time zone, so a trial ending near midnight shows its own day. */
+    timeZone?: string;
   }): Promise<{ success: boolean; id?: string; error?: string; skipped?: boolean }> {
     if (await this.shouldSkipBouncedUser(data.to)) {
       return { success: false, skipped: true, error: "email_bounced" };
@@ -679,11 +683,19 @@ export class EmailService {
         ? `Mañana termina tu prueba gratuita en KiraRoom`
         : `Tu prueba gratuita en KiraRoom termina en ${data.daysLeft} días`;
 
-    const formattedDate = data.trialEnd.toLocaleDateString("es-ES", {
-      day: "2-digit",
-      month: "long",
-      year: "numeric",
-    });
+    let formattedDate: string;
+    try {
+      formattedDate = formatLongDateEs(data.trialEnd, data.timeZone || "Europe/Madrid");
+    } catch {
+      // An unknown time zone name: fall back to Madrid.
+      formattedDate = formatLongDateEs(data.trialEnd);
+    }
+    const trialLength =
+      data.trialDays && data.trialDays > 0
+        ? data.trialDays === 1
+          ? "1 día"
+          : `${data.trialDays} días`
+        : null;
 
     const html = `
 <!DOCTYPE html>
@@ -700,7 +712,7 @@ export class EmailService {
             Hola,
           </p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
-            Tu prueba gratuita de <strong>14 días</strong> de KiraRoom para
+            Tu prueba gratuita${trialLength ? ` de <strong>${trialLength}</strong>` : ""} de KiraRoom para
             <strong>${this.escapeHtml(data.tenantName)}</strong> termina el
             <strong>${formattedDate}</strong>.
             ${data.daysLeft === 1

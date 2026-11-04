@@ -18,7 +18,8 @@ interface PlanGateProps {
  * fallback).
  */
 export function PlanGate({ feature, fallback, children }: PlanGateProps) {
-  const { enabled, loading, plan, inTrial } = useFeatureAccess(feature);
+  const { enabled, loading, plan, inTrial, readOnly, subscriptionStatus, readOnlyUntil } =
+    useFeatureAccess(feature);
 
   if (loading) {
     // Don't flash upgrade CTA during the first paint
@@ -33,5 +34,12 @@ export function PlanGate({ feature, fallback, children }: PlanGateProps) {
     return <>{fallback}</>;
   }
 
-  return <UpgradeCTA feature={feature} plan={plan} inTrial={inTrial} />;
+  return (
+    <UpgradeCTA
+      feature={feature}
+      plan={plan}
+      inTrial={inTrial}
+      readOnly={readOnly ? { status: subscriptionStatus, readOnlyUntil } : null}
+    />
+  );
 }

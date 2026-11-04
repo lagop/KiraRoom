@@ -320,61 +320,58 @@ export class WebhooksController {
       `[WebhooksController] Subscription status for tenant ${tenantId}: ${subscription.status}`,
     );
 
-    try {
-      const tenant = await this.prisma.tenant.findUnique({
-        where: { id: tenantId },
-        select: { id: true, subscriptionStatus: true, stripeSubscriptionId: true } });
-      if (!tenant) return;
+    // No catch: a database error fails the event, so processStripeEvent
+    // releases it and Stripe retries (B4). The read-only email swallows
+    // its own errors.
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true, subscriptionStatus: true, stripeSubscriptionId: true } });
+    if (!tenant) return;
 
-      if (subscription.status === 'active') {
-        if (
-          tenant.subscriptionStatus === 'past_due' ||
-          tenant.subscriptionStatus === 'suspended'
-        ) {
-          await this.prisma.tenant.update({
-            where: { id: tenantId },
-            data: {
-              subscriptionStatus: 'active',
-              paymentFailedAt: null,
-              gracePeriodEndsAt: null,
-              readOnlyUntil: null } });
-          this.logger.log(
-            `Recovered tenant ${tenantId} via subscription update: ${tenant.subscriptionStatus} -> active`,
-          );
-        }
-      } else if (subscription.status === 'canceled') {
-        // An older subscription ending (the salon has since paid for
-        // another one) must not lock the account or email the owner.
-        if (tenant.stripeSubscriptionId && tenant.stripeSubscriptionId !== subscription.id) {
-          this.logger.log(
-            `Ignoring cancellation of ${subscription.id} for tenant ${tenantId}: its current subscription is ${tenant.stripeSubscriptionId}`,
-          );
-          return;
-        }
-        // The end of a subscription the owner cancelled at the end of its
-        // period (cancel_at_period_end) arrives here too: the salon kept
-        // full access until now, and its 30 days of read-only start now.
-        // Conditional, so a cancellation already applied here (an
-        // immediate one) is neither re-stamped nor emailed twice.
-        const readOnlyUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-        const { count } = await this.prisma.tenant.updateMany({
-          where: { id: tenantId, subscriptionStatus: { not: 'cancelled' } },
+    if (subscription.status === 'active') {
+      if (
+        tenant.subscriptionStatus === 'past_due' ||
+        tenant.subscriptionStatus === 'suspended'
+      ) {
+        await this.prisma.tenant.update({
+          where: { id: tenantId },
           data: {
-            subscriptionStatus: 'cancelled',
-            cancelledAt: new Date(),
-            subscriptionCancelAt: null,
-            readOnlyUntil } });
-        if (count === 1) {
-          this.logger.log(
-            `Tenant ${tenantId} marked cancelled via Stripe subscription update`,
-          );
-          await this.readOnlyNotices.notify(tenantId, 'cancelled', readOnlyUntil);
-        }
+            subscriptionStatus: 'active',
+            paymentFailedAt: null,
+            gracePeriodEndsAt: null,
+            readOnlyUntil: null } });
+        this.logger.log(
+          `Recovered tenant ${tenantId} via subscription update: ${tenant.subscriptionStatus} -> active`,
+        );
       }
-    } catch (err) {
-      this.logger.error(
-        `Failed to apply subscription update for tenant ${tenantId}: ${(err as Error).message}`,
-      );
+    } else if (subscription.status === 'canceled') {
+      // An older subscription ending (the salon has since paid for
+      // another one) must not lock the account or email the owner.
+      if (tenant.stripeSubscriptionId && tenant.stripeSubscriptionId !== subscription.id) {
+        this.logger.log(
+          `Ignoring cancellation of ${subscription.id} for tenant ${tenantId}: its current subscription is ${tenant.stripeSubscriptionId}`,
+        );
+        return;
+      }
+      // The end of a subscription the owner cancelled at the end of its
+      // period (cancel_at_period_end) arrives here too: the salon kept
+      // full access until now, and its 30 days of read-only start now.
+      // Conditional, so a cancellation already applied here (an
+      // immediate one) is neither re-stamped nor emailed twice.
+      const readOnlyUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      const { count } = await this.prisma.tenant.updateMany({
+        where: { id: tenantId, subscriptionStatus: { not: 'cancelled' } },
+        data: {
+          subscriptionStatus: 'cancelled',
+          cancelledAt: new Date(),
+          subscriptionCancelAt: null,
+          readOnlyUntil } });
+      if (count === 1) {
+        this.logger.log(
+          `Tenant ${tenantId} marked cancelled via Stripe subscription update`,
+        );
+        await this.readOnlyNotices.notify(tenantId, 'cancelled', readOnlyUntil);
+      }
     }
   }
 
@@ -518,6 +515,9 @@ export class WebhooksController {
     }
   }
 
+  // Database errors in the two invoice handlers are not caught: they fail
+  // the event, processStripeEvent releases it and Stripe retries it (B4).
+  // Only the email to the owner is allowed to fail quietly.
   private async handleInvoicePaid(invoice: Stripe.Invoice) {
     console.log(`[WebhooksController] Invoice paid: ${invoice.id}`);
 
@@ -532,73 +532,60 @@ export class WebhooksController {
       return;
     }
 
-    try {
-      const tenant = await this.prisma.tenant.findFirst({
-        where: { stripeCustomerId: customerId },
-        select: { id: true, name: true, subscriptionStatus: true } });
-      if (!tenant) {
-        this.logger.warn(
-          `No Tenant found for Stripe customer ${customerId}; skipping recovery.`,
-        );
-        return;
-      }
-
-      // Sprint 2 / 2.2 — a successful payment after past_due /
-      // suspended clears the grace state and reactivates the tenant.
-      // Skip if the tenant is in a different terminal state (cancelled,
-      // trialing) so we never overwrite an intentional SaaS-admin
-      // suspension or a fresh trial.
-      // P2A-receptionist-v2 — handle metered `message_bundles` top-ups.
-      // The Stripe invoice's line items include a per-bundle quantity;
-      // we only credit the wallet for items that map to the
-      // `message_bundles` add-on key. Multiplied by 100 to convert
-      // cents -> credit units (1 credit = €1 of WhatsApp marketing
-      // cost approximately; the SaaS-admin can configure this later
-      // via the catalog).
-      try {
-        const lines = invoice.lines?.data ?? [];
-        for (const line of lines) {
-          if (line.metadata?.kind !== 'addon') continue;
-          if (line.metadata?.addOnKey !== 'message_bundles') continue;
-          // The metered quantity is the *units* of credit the customer
-          // bought. We round to the nearest integer.
-          const qty = line.quantity ?? 0;
-          if (qty > 0) {
-            await this.messageBundles.creditTopUp({
-              tenantId: tenant.id,
-              credits: Math.floor(qty),
-              source: 'stripe',
-              stripeInvoiceId: invoice.id });
-            this.logger.log(
-              `message_bundles topup tenant=${tenant.id} credits=${Math.floor(qty)} invoice=${invoice.id}`,
-            );
-          }
-        }
-      } catch (err) {
-        this.logger.error(
-          `Failed to credit message-bundles wallet for invoice ${invoice.id}: ${(err as Error).message}`,
-        );
-      }
-
-      if (
-        tenant.subscriptionStatus === "past_due" ||
-        tenant.subscriptionStatus === "suspended"
-      ) {
-        await this.prisma.tenant.update({
-          where: { id: tenant.id },
-          data: {
-            subscriptionStatus: "active",
-            paymentFailedAt: null,
-            gracePeriodEndsAt: null,
-            readOnlyUntil: null } });
-        this.logger.log(
-          `Recovered tenant ${tenant.name} (${tenant.id}) from ${tenant.subscriptionStatus} → active after invoice ${invoice.id}`,
-        );
-      }
-    } catch (err) {
-      this.logger.error(
-        `Failed to clear grace state for invoice ${invoice.id}: ${(err as Error).message}`,
+    const tenant = await this.prisma.tenant.findFirst({
+      where: { stripeCustomerId: customerId },
+      select: { id: true, name: true, subscriptionStatus: true } });
+    if (!tenant) {
+      this.logger.warn(
+        `No Tenant found for Stripe customer ${customerId}; skipping recovery.`,
       );
+      return;
+    }
+
+    // Sprint 2 / 2.2 — a successful payment after past_due /
+    // suspended clears the grace state and reactivates the tenant.
+    // Skip if the tenant is in a different terminal state (cancelled,
+    // trialing) so we never overwrite an intentional SaaS-admin
+    // suspension or a fresh trial. Done before the wallet credit below:
+    // it is idempotent, so a retry after a failed credit repeats it
+    // harmlessly, while the credit is not repeated once it succeeded.
+    if (
+      tenant.subscriptionStatus === "past_due" ||
+      tenant.subscriptionStatus === "suspended"
+    ) {
+      await this.prisma.tenant.update({
+        where: { id: tenant.id },
+        data: {
+          subscriptionStatus: "active",
+          paymentFailedAt: null,
+          gracePeriodEndsAt: null,
+          readOnlyUntil: null } });
+      this.logger.log(
+        `Recovered tenant ${tenant.name} (${tenant.id}) from ${tenant.subscriptionStatus} → active after invoice ${invoice.id}`,
+      );
+    }
+
+    // P2A-receptionist-v2 — handle metered `message_bundles` top-ups.
+    // The Stripe invoice's line items include a per-bundle quantity;
+    // we only credit the wallet for items that map to the
+    // `message_bundles` add-on key.
+    const lines = invoice.lines?.data ?? [];
+    for (const line of lines) {
+      if (line.metadata?.kind !== 'addon') continue;
+      if (line.metadata?.addOnKey !== 'message_bundles') continue;
+      // The metered quantity is the *units* of credit the customer
+      // bought. We round to the nearest integer.
+      const qty = line.quantity ?? 0;
+      if (qty > 0) {
+        await this.messageBundles.creditTopUp({
+          tenantId: tenant.id,
+          credits: Math.floor(qty),
+          source: 'stripe',
+          stripeInvoiceId: invoice.id });
+        this.logger.log(
+          `message_bundles topup tenant=${tenant.id} credits=${Math.floor(qty)} invoice=${invoice.id}`,
+        );
+      }
     }
   }
 
@@ -616,77 +603,78 @@ export class WebhooksController {
       return;
     }
 
-    try {
-      const tenant = await this.prisma.tenant.findFirst({
-        where: { stripeCustomerId: customerId },
-        select: {
-          id: true,
-          name: true,
-          subscriptionStatus: true,
-          paymentFailedAt: true } });
-      if (!tenant) {
-        this.logger.warn(
-          `No Tenant found for Stripe customer ${customerId}; skipping payment-failed handling.`,
-        );
-        return;
-      }
+    const tenant = await this.prisma.tenant.findFirst({
+      where: { stripeCustomerId: customerId },
+      select: {
+        id: true,
+        name: true,
+        subscriptionStatus: true,
+        paymentFailedAt: true } });
+    if (!tenant) {
+      this.logger.warn(
+        `No Tenant found for Stripe customer ${customerId}; skipping payment-failed handling.`,
+      );
+      return;
+    }
 
-      // Idempotency: only stamp the grace state on the FIRST
-      // payment_failed for a given failure window. Subsequent retries
-      // from Stripe (typically over 3-5 days) must not push the
-      // gracePeriodEndsAt forward — that would let a tenant keep
-      // dodging suspension indefinitely.
-      const isFirstFailureForWindow = tenant.subscriptionStatus !== "past_due";
+    // A grace window opens only from a working account (active or in its
+    // trial). Stripe keeps retrying a failed invoice for weeks: a retry
+    // that fails after the grace ran out (suspended) or after the account
+    // ended (cancelled) only emails the owner again; it used to put the
+    // salon back in past_due with 7 fresh days of full access (B3).
+    // Inside an open window (past_due) the original window is kept, so
+    // retries never push the suspension forward.
+    const status = tenant.subscriptionStatus;
+    if (status === "active" || status === "trialing") {
       const now = new Date();
       const gracePeriodEndsAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-
       await this.prisma.tenant.update({
         where: { id: tenant.id },
         data: {
           subscriptionStatus: "past_due",
-          paymentFailedAt: isFirstFailureForWindow ? now : tenant.paymentFailedAt,
-          gracePeriodEndsAt: isFirstFailureForWindow
-            ? gracePeriodEndsAt
-            : undefined, // keep the original window if we're inside it
-        } });
+          paymentFailedAt: now,
+          gracePeriodEndsAt } });
+      this.logger.log(
+        `Started 7-day grace for tenant ${tenant.name} (${tenant.id}); gracePeriodEndsAt=${gracePeriodEndsAt.toISOString()}`,
+      );
+    } else {
+      this.logger.log(
+        `Payment failed again for tenant ${tenant.name} (${tenant.id}) while ${status}; status unchanged`,
+      );
+    }
 
-      if (isFirstFailureForWindow) {
-        this.logger.log(
-          `Started 7-day grace for tenant ${tenant.name} (${tenant.id}); gracePeriodEndsAt=${gracePeriodEndsAt.toISOString()}`,
-        );
-      }
+    // Notify the tenant owner on every failure so they're
+    // repeatedly reminded, not just on the first.
+    const owner =
+      (await this.prisma.user.findFirst({
+        where: { tenantId: tenant.id, role: "owner" },
+        select: { email: true, firstName: true } })) ??
+      (await this.prisma.user.findFirst({
+        where: { tenantId: tenant.id, isActive: true },
+        orderBy: { createdAt: "asc" },
+        select: { email: true, firstName: true } }));
 
-      // Notify the tenant owner on every failure so they're
-      // repeatedly reminded, not just on the first.
-      const owner =
-        (await this.prisma.user.findFirst({
-          where: { tenantId: tenant.id, role: "owner" },
-          select: { email: true, firstName: true } })) ??
-        (await this.prisma.user.findFirst({
-          where: { tenantId: tenant.id, isActive: true },
-          orderBy: { createdAt: "asc" },
-          select: { email: true, firstName: true } }));
+    if (!owner?.email) {
+      this.logger.warn(
+        `Tenant ${tenant.id} (${tenant.name}) has no owner email; skipping payment-failed notification.`,
+      );
+      return;
+    }
 
-      if (!owner?.email) {
-        this.logger.warn(
-          `Tenant ${tenant.id} (${tenant.name}) has no owner email; skipping payment-failed notification.`,
-        );
-        return;
-      }
+    const baseUrl =
+      this.configService.get<string>("APP_BASE_URL") ||
+      this.configService.get<string>("FRONTEND_URL") ||
+      "https://app.kiraroom.com";
 
-      const baseUrl =
-        this.configService.get<string>("APP_BASE_URL") ||
-        this.configService.get<string>("FRONTEND_URL") ||
-        "https://app.kiraroom.com";
+    const amountDue =
+      typeof invoice.amount_due === "number"
+        ? invoice.amount_due / 100
+        : 0;
+    const retryDate = invoice.next_payment_attempt
+      ? new Date(invoice.next_payment_attempt * 1000)
+      : undefined;
 
-      const amountDue =
-        typeof invoice.amount_due === "number"
-          ? invoice.amount_due / 100
-          : 0;
-      const retryDate = invoice.next_payment_attempt
-        ? new Date(invoice.next_payment_attempt * 1000)
-        : undefined;
-
+    try {
       await this.email.sendPaymentFailed({
         to: owner.email,
         tenantName: tenant.name,
@@ -696,8 +684,8 @@ export class WebhooksController {
         retryDate,
         updatePaymentUrl: `${baseUrl.replace(/\/+$/, "")}/dashboard/billing` });
     } catch (err) {
-      // Never let an email failure break the webhook ack — Stripe will
-      // retry the event if we return non-2xx.
+      // An email failure must not fail the event: the state above is
+      // already applied, and a retry would only send the email again.
       this.logger.error(
         `Failed to send payment-failed email for invoice ${invoice.id}: ${(err as Error).message}`,
       );

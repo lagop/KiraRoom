@@ -45,8 +45,9 @@ export default function TermsPage() {
           período salvo que el cliente cancele.
         </p>
         <p>
-          Durante el período de prueba (14 días), todas las funciones
-          están disponibles sin coste. Transcurrido el período, la cuenta
+          Durante el período de prueba (14 días) están disponibles sin
+          coste las funciones del plan Pro, con 500 mensajes de la
+          recepcionista IA. Transcurrido el período, la cuenta
           pasa a modo lectura si no se ha confirmado un método de pago.
         </p>
       </Section>
@@ -95,7 +96,7 @@ export default function TermsPage() {
           KiraRoom puede suspender o terminar el servicio en caso de:
         </p>
         <ul>
-          <li>Incumplimiento de pago tras 7 días desde el segundo aviso.</li>
+          <li>Impago que siga pendiente 7 días después del primer cobro fallido.</li>
           <li>Incumplimiento material de estos Términos.</li>
           <li>Actividad fraudulenta o ilegal detectada.</li>
         </ul>

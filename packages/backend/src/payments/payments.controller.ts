@@ -275,6 +275,28 @@ export class PaymentsController {
     return this.subscriptionsService.getSubscription(req.user.tenantId);
   }
 
+  /**
+   * The plan as the whole team's panel needs it (B2): plan, status, trial,
+   * read-only window and add-ons, without Stripe ids. Billing itself
+   * (subscription/current and the rest) stays the owner's.
+   */
+  @Get("subscription/context")
+  @AllowWhenReadOnly()
+  @Roles(...SALON_TEAM)
+  @ApiOperation({ summary: "Plan, status and trial of the salon, for its whole team" })
+  async getSubscriptionContext(@Req() req: any) {
+    return this.subscriptionsService.getSubscriptionContext(req.user.tenantId);
+  }
+
+  /** Back from a plan checkout: what Stripe says about that session (B15). */
+  @Get("subscription/checkout-session/:sessionId")
+  @AllowWhenReadOnly()
+  @Roles("owner")
+  @ApiOperation({ summary: "Status of one of the salon's plan checkout sessions" })
+  async getCheckoutSession(@Req() req: any, @Param("sessionId") sessionId: string) {
+    return this.subscriptionsService.getCheckoutSessionStatus(req.user.tenantId, sessionId);
+  }
+
   @Post("subscription/checkout")
   @AllowWhenReadOnly()
   @Roles("owner")
