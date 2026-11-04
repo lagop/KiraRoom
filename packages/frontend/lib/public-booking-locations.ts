@@ -142,6 +142,18 @@ export function confirmedPlace(
  * while the service stayed and they work there. Anything else is dropped,
  * so she is never offered times for someone at another location.
  */
+/**
+ * The salon page's "Cualquier profesional": no professional named, the
+ * server gives the booking to whoever offers the service and is free (as
+ * the widget's "Cualquiera"). Never sent as an id: see professionalToSend.
+ */
+export const ANY_PROFESSIONAL = "any";
+
+/** The professionalId a request carries: none for "Cualquier profesional". */
+export function professionalToSend(professionalId: string): string {
+  return professionalId === ANY_PROFESSIONAL ? "" : professionalId;
+}
+
 export function choiceAtLocation<S extends { id: string }, T extends LocatedProfessional>(
   picked: { serviceId: string; professionalId: string },
   services: S[],
@@ -154,7 +166,9 @@ export function choiceAtLocation<S extends { id: string }, T extends LocatedProf
     servicesAtLocation(services, professionals, locations, locationId).some((s) => s.id === picked.serviceId);
   const professional = professionals.find((p) => p.id === picked.professionalId);
   const professionalStays =
-    serviceStays && !!professional && professionalsAtLocation([professional], locations, locationId).length > 0;
+    serviceStays &&
+    (picked.professionalId === ANY_PROFESSIONAL ||
+      (!!professional && professionalsAtLocation([professional], locations, locationId).length > 0));
   return {
     serviceId: serviceStays ? picked.serviceId : "",
     professionalId: professionalStays ? picked.professionalId : "",

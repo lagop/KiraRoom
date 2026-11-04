@@ -1053,6 +1053,8 @@ export interface CreateAppointmentDto {
   wantsWhatsAppNotices?: boolean;
   /** Public booking only: she ticked the optional WhatsApp promotions box. */
   wantsWhatsAppPromotions?: boolean;
+  /** Public booking only: the hidden field people never see (HoneypotField). */
+  website?: string;
   /**
    * Public booking at one of the salon's locations, when it has several:
    * the professional must work there.

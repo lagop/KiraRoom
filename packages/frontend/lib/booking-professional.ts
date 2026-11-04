@@ -5,7 +5,7 @@
  * rule (professionalsForService): the professionals linked to the service,
  * or everyone when nobody is. Pure, tested in booking-professional.spec.ts.
  */
-import { LocatedProfessional, professionalsForService } from "./public-booking-locations";
+import { ANY_PROFESSIONAL, LocatedProfessional, professionalsForService } from "./public-booking-locations";
 
 /** Whether she can be booked for the service, by the same rule as the professional list. */
 export function performsService<T extends LocatedProfessional>(
@@ -41,7 +41,8 @@ export function professionalAfterServiceChange<T extends LocatedProfessional>(
   professionals: T[],
 ): string {
   if (!currentProfessionalId) return "";
-  if (!serviceId) return currentProfessionalId;
+  // "Cualquier profesional" fits any service.
+  if (!serviceId || currentProfessionalId === ANY_PROFESSIONAL) return currentProfessionalId;
   const pro = professionals.find((p) => p.id === currentProfessionalId);
   return performsService(pro, serviceId, professionals) ? currentProfessionalId : "";
 }

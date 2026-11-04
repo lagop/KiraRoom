@@ -122,6 +122,14 @@ export interface AppointmentEmailData {
    */
   bookingUrl?: string;
   /**
+   * The booking waits for the salon to confirm it: the confirmation email
+   * says the request was received ("te confirmará la cita"), not that the
+   * appointment is confirmed. The "confirmada" one goes when it confirms.
+   */
+  pending?: boolean;
+  /** The client's "Cancelar mi cita" page (appointments/public-cancel-link.ts), when she may use it. */
+  cancelUrl?: string;
+  /**
    * Not used: the appointment emails are in Spanish. No caller knows the
    * salon's language today, and the dates they pass are already Spanish.
    */
@@ -399,12 +407,45 @@ export class EmailService {
   async sendAppointmentConfirmation(
     data: AppointmentEmailData,
   ): Promise<{ success: boolean; id?: string; error?: string }> {
-    const subject = `Tu cita en ${data.salonName} está confirmada`;
+    const subject = data.pending
+      ? `Hemos recibido tu solicitud de cita en ${data.salonName}`
+      : `Tu cita en ${data.salonName} está confirmada`;
     return this.sendEmail({
       to: data.clientEmail,
       subject,
       html: this.generateConfirmationHtml(data),
       text: this.generateConfirmationText(data),
+    });
+  }
+
+  /**
+   * A booking the salon did not confirm in time (pending-booking-expiry):
+   * it has been cancelled, and the client is told so, with a link to book
+   * again when the salon has a booking page.
+   */
+  async sendBookingNotConfirmed(
+    data: AppointmentEmailData,
+  ): Promise<{ success: boolean; id?: string; error?: string }> {
+    return this.sendEmail({
+      to: data.clientEmail,
+      subject: `${data.salonName} no ha podido confirmar tu cita`,
+      html: this.appointmentHtml(data, {
+        title: "Cita no confirmada",
+        intro: `${this.escapeHtml(data.salonName)} no ha podido confirmar tu cita a tiempo y se ha anulado. Estos eran sus datos:`,
+        card: { title: "Solicitud anulada", background: "#fef2f2", border: "#fecaca", titleColor: "#991b1b", accent: "#f87171" },
+        rows: this.appointmentRows(data),
+        closing: data.bookingUrl
+          ? `Sentimos las molestias. <a href="${this.escapeHtml(data.bookingUrl)}" style="color: #7c3aed; font-weight: 600;">Pide otra cita</a> cuando te venga bien, o llama al salón.`
+          : "Sentimos las molestias. Puedes pedir otra cita cuando te venga bien, o llamar al salón.",
+      }),
+      text: this.appointmentText(data, {
+        title: "Cita no confirmada",
+        intro: `${data.salonName} no ha podido confirmar tu cita a tiempo y se ha anulado. Estos eran sus datos:`,
+        cardTitle: "Solicitud anulada",
+        closing: data.bookingUrl
+          ? `Sentimos las molestias. Pide otra cita cuando te venga bien: ${data.bookingUrl}`
+          : "Sentimos las molestias. Puedes pedir otra cita cuando te venga bien, o llamar al salón.",
+      }),
     });
   }
 
@@ -1302,13 +1343,24 @@ export class EmailService {
   }
 
   private generateConfirmationHtml(data: AppointmentEmailData): string {
+    const cancel = data.cancelUrl
+      ? ` <a href="${this.escapeHtml(data.cancelUrl)}" style="color: #7c3aed; font-weight: 600;">Cancelar mi cita</a>`
+      : "";
+    if (data.pending) {
+      return this.appointmentHtml(data, {
+        title: "Solicitud recibida",
+        intro: `Hemos recibido tu solicitud. ${this.escapeHtml(data.salonName)} te confirmará la cita.`,
+        card: CARD_DEFAULT,
+        rows: this.appointmentRows(data),
+        closing: `Te avisaremos en cuanto esté confirmada. Si ya no puedes ir, avísanos.${cancel}`,
+      });
+    }
     return this.appointmentHtml(data, {
       title: "Cita confirmada",
       intro: "Tu cita está confirmada. ¡Te esperamos!",
       card: CARD_DEFAULT,
       rows: this.appointmentRows(data),
-      closing:
-        "Te recomendamos llegar 5-10 minutos antes. Si necesitas cambiar o cancelar la cita, avísanos cuanto antes.",
+      closing: `Te recomendamos llegar 5-10 minutos antes. Si necesitas cambiar o cancelar la cita, avísanos cuanto antes.${cancel}`,
     });
   }
 
@@ -1386,12 +1438,20 @@ export class EmailService {
   }
 
   private generateConfirmationText(data: AppointmentEmailData): string {
+    const cancel = data.cancelUrl ? `\nCancelar mi cita: ${data.cancelUrl}` : "";
+    if (data.pending) {
+      return this.appointmentText(data, {
+        title: "Solicitud recibida",
+        intro: `Hemos recibido tu solicitud. ${data.salonName} te confirmará la cita.`,
+        cardTitle: "Detalles de la solicitud",
+        closing: `Te avisaremos en cuanto esté confirmada. Si ya no puedes ir, avísanos.${cancel}`,
+      });
+    }
     return this.appointmentText(data, {
       title: "Cita confirmada",
       intro: "Tu cita está confirmada. ¡Te esperamos!",
       cardTitle: "Detalles de la cita",
-      closing:
-        "Te recomendamos llegar 5-10 minutos antes. Si necesitas cambiar o cancelar la cita, avísanos cuanto antes.",
+      closing: `Te recomendamos llegar 5-10 minutos antes. Si necesitas cambiar o cancelar la cita, avísanos cuanto antes.${cancel}`,
     });
   }
 
