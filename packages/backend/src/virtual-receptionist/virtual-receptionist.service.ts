@@ -22,6 +22,7 @@ import { SalonToolsService, SALON_TOOLS, executeSalonTool } from './tools/salon-
 import { AppointmentsService } from '../appointments/appointments.service';
 import { isReadOnlyStatus } from '../common/guards/read-only-tenant.guard';
 import { logId } from './log-id';
+import { AI_USAGE_SELECT, aiUsageThisMonth } from '../common/ai-usage/ai-monthly-usage';
 
 /** What the fixed replies need to know about the salon. */
 interface SalonContact {
@@ -613,9 +614,9 @@ export class VirtualReceptionistService {
   async getCurrentAiCount(tenantId: string): Promise<number> {
     const t = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
-      select: { aiConversationsUsed: true },
+      select: AI_USAGE_SELECT,
     });
-    return t?.aiConversationsUsed ?? 0;
+    return aiUsageThisMonth(t);
   }
 
   /** Next monthly reset timestamp for the AI cap. Null = no cap (unlimited). */

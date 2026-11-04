@@ -8,6 +8,13 @@ import { SubscriptionsService } from '../../payments/services/subscriptions.serv
 import { MetricsService, COUNTERS } from '../../common/observability/metrics.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { AI_PACK_ADDON_KEYS, aiDailyCap } from '@kira/shared';
+import {
+  AI_USAGE_SELECT,
+  aiUsagePeriod,
+  aiUsageThisMonth,
+  incrementAiUsage,
+  nextAiUsagePeriodStart,
+} from '../../common/ai-usage/ai-monthly-usage';
 
 export interface FairUseDecision {
   allowed: boolean;
@@ -21,9 +28,10 @@ export interface FairUseDecision {
 /**
  * Count and gate AI conversations per tenant per month (Plan v2).
  *
- * Source of truth: `Tenant.aiConversationsUsed` (Postgres). Updated
- * with an atomic `UPDATE ... SET aiConversationsUsed = aiConversationsUsed + 1`
- * so the increment is correct under concurrent LLM calls.
+ * Source of truth: `Tenant.aiConversationsUsed` (Postgres), the count of
+ * the month in `aiConversationsPeriod`: a count from another month reads
+ * as 0 (see common/ai-usage/ai-monthly-usage.ts). Updated with one atomic
+ * statement, so the increment is correct under concurrent LLM calls.
  *
  * Cache layer: a Redis INCR shadowed by the same key shape
  * (`vrm:ai:cnt:{tenantId}:{YYYY-MM}`) so 99 % of decisions don't
@@ -156,8 +164,7 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
   async getUsage(tenantId: string): Promise<number> {
     if (this.redisAvailable && this.redis) {
       try {
-        const yyyymm = currentYearMonth();
-        const key = `vrm:ai:cnt:${tenantId}:${yyyymm}`;
+        const key = `vrm:ai:cnt:${tenantId}:${aiUsagePeriod()}`;
         const cached = await this.redis.get(key);
         if (cached !== null) return Number(cached);
       } catch (e) {
@@ -166,9 +173,9 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
     }
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
-      select: { aiConversationsUsed: true },
+      select: AI_USAGE_SELECT,
     });
-    return tenant?.aiConversationsUsed ?? 0;
+    return aiUsageThisMonth(tenant);
   }
 
 
@@ -187,8 +194,7 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
     if (cap === null) {
       return { newCount: 0, cappedBy: null };
     }
-    const yyyymm = currentYearMonth();
-    const redisKey = `vrm:ai:cnt:${tenantId}:${yyyymm}`;
+    const redisKey = `vrm:ai:cnt:${tenantId}:${aiUsagePeriod()}`;
     let newCount = 0;
 
     if (this.redisAvailable && this.redis) {
@@ -204,15 +210,12 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
     }
 
     try {
-      const updated = await this.prisma.tenant.update({
-        where: { id: tenantId },
-        data: { aiConversationsUsed: { increment: 1 } },
-        select: { aiConversationsUsed: true },
-      });
-      if (newCount === 0) newCount = updated.aiConversationsUsed;
-      // Align Redis if it under-reported (cache miss path).
-      if (this.redisAvailable && this.redis && newCount !== updated.aiConversationsUsed) {
-        await this.redis.set(redisKey, String(updated.aiConversationsUsed));
+      const used = await incrementAiUsage(this.prisma, tenantId);
+      if (newCount === 0) newCount = used;
+      // Align Redis with Postgres (cache miss path, or a stale key).
+      if (this.redisAvailable && this.redis && newCount !== used) {
+        newCount = used;
+        await this.redis.set(redisKey, String(used), { EX: 35 * 24 * 60 * 60 });
       }
     } catch (e) {
       this.logger.error(
@@ -348,22 +351,25 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
     }
   }
 
-  /** Resets the counter for a tenant (called by the monthly scheduler). */
-  async resetMonthly(tenantId: string): Promise<void> {
-    const now = new Date();
-    const next = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0);
+  /**
+   * Starts the month's count at 0 (the monthly scheduler). Usage is
+   * already 0 in a new month without it; this keeps the row tidy and
+   * drops the month's Redis key.
+   */
+  async resetMonthly(tenantId: string, now: Date = new Date()): Promise<void> {
     await this.prisma.tenant.update({
       where: { id: tenantId },
       data: {
         aiConversationsUsed: 0,
-        aiConversationsResetAt: next,
+        aiConversationsPeriod: aiUsagePeriod(now),
+        aiConversationsResetAt: nextAiUsagePeriodStart(now),
       },
     });
     // Drop this month's Redis key so the next call reads from
     // Postgres and stays consistent.
     if (this.redisAvailable && this.redis) {
       try {
-        await this.redis.del(`vrm:ai:cnt:${tenantId}:${currentYearMonth(now)}`);
+        await this.redis.del(`vrm:ai:cnt:${tenantId}:${aiUsagePeriod(now)}`);
       } catch {
         /* ignore */
       }
@@ -376,8 +382,3 @@ function currentDay(now: Date = new Date()): string {
   return now.toISOString().slice(0, 10);
 }
 
-function currentYearMonth(now: Date = new Date()): string {
-  const y = now.getUTCFullYear();
-  const m = String(now.getUTCMonth() + 1).padStart(2, '0');
-  return `${y}-${m}`;
-}

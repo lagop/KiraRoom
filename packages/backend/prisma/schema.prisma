@@ -76,7 +76,9 @@ model Tenant {
   /// an accidental delete can be reversed via Prisma Studio.
   deletedAt              DateTime?
   /// P2A-ia-fairuse - virtual receptionist usage counter (Esencial cap)
+  /// Messages in `aiConversationsPeriod` (YYYY-MM, UTC); another month reads as 0.
   aiConversationsUsed    Int                @default(0)
+  aiConversationsPeriod  String?
   aiConversationsResetAt DateTime?
   /// AI messages on `aiMessagesDay` (YYYY-MM-DD, UTC), for the daily cap
   /// that stops an attack or a runaway loop the same day.

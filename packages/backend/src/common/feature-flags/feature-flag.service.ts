@@ -7,6 +7,7 @@ import {
   SubscriptionsService,
 } from '../../payments/services/subscriptions.service';
 import { AiFairUseAction } from '@prisma/client';
+import { aiUsageThisMonth } from '../ai-usage/ai-monthly-usage';
 
 /**
  * Gating context returned by `getContext()`. v2 expands the legacy
@@ -83,6 +84,7 @@ export class FeatureFlagService {
         trialEnd: true,
         addons: true,
         aiConversationsUsed: true,
+        aiConversationsPeriod: true,
         aiFairUseAction: true,
         aiConversationsResetAt: true,
         locations: { select: { id: true } },
@@ -123,7 +125,7 @@ export class FeatureFlagService {
       addons: (tenant.addons as Record<string, any>) ?? {},
       planFeatures,
       addonsUnlocked,
-      aiConversationsUsed: tenant.aiConversationsUsed ?? 0,
+      aiConversationsUsed: aiUsageThisMonth(tenant),
       aiFairUseAction: (tenant.aiFairUseAction ?? 'degrade') as AiFairUseAction,
       aiConversationsResetAt: tenant.aiConversationsResetAt ?? null,
       locationsCount: tenant.locations?.length ?? 1,

@@ -86,6 +86,7 @@ import { PublicChatAccessService } from './public-chat/public-chat-access.servic
     TelegramBotClient,
     SalonToolsService,
     ConversationRetentionScheduler,
+    AiFairUseResetScheduler,
   ],
   exports: [
     ChannelReceptionistService,

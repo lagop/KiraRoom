@@ -20,6 +20,7 @@ describe('AiConversationCounterService.evaluate()', () => {
         findUnique: jest.fn().mockResolvedValue({
           plan: opts.plan ?? 'esencial',
           aiConversationsUsed: opts.used,
+          aiConversationsPeriod: new Date().toISOString().slice(0, 7),
           tenantAddOns: opts.hasAiExpansion
             ? [{ addOn: { key: 'ai_expansion' } }]
             : [],
@@ -102,6 +103,7 @@ describe('AiConversationCounterService caps', () => {
       maxLocations: 1,
       tenantAddOns: [],
       aiConversationsUsed: extra.used ?? 0,
+      aiConversationsPeriod: new Date().toISOString().slice(0, 7),
       aiMessagesToday: extra.usedToday ?? 0,
       aiMessagesDay: today,
       aiFairUseAction: 'degrade',
