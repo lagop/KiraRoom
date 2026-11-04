@@ -12,6 +12,8 @@ export interface ConfirmDialogProps {
   cancelLabel?: string
   destructive?: boolean
   loading?: boolean
+  /** Keeps the confirm button off until the dialog's own check passes (a typed name). */
+  confirmDisabled?: boolean
   onCancel: () => void
   onConfirm: () => void
 }
@@ -29,6 +31,7 @@ export function ConfirmDialog({
   cancelLabel = "Cancelar",
   destructive = false,
   loading = false,
+  confirmDisabled = false,
   onCancel,
   onConfirm,
 }: ConfirmDialogProps) {
@@ -81,7 +84,7 @@ export function ConfirmDialog({
             size="sm"
             variant={destructive ? "destructive" : "default"}
             onClick={onConfirm}
-            disabled={loading}
+            disabled={loading || confirmDisabled}
           >
             {confirmLabel}
           </Button>

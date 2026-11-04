@@ -11,6 +11,7 @@ import { parseMonthsParam } from "./platform-metrics";
 import { CreateTenantDto } from "./dto/create-tenant.dto";
 import { UpdateTenantDto } from "./dto/update-tenant.dto";
 import { TenantFilterDto } from "./dto/tenant-filter.dto";
+import { ReactivateTenantDto } from "./dto/console-actions.dto";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { SaasOwnerGuard } from "./guards/saas-owner.guard";
 import { SaasOwner } from "./decorators/saas-owner.decorator";
@@ -121,8 +122,13 @@ export class SaasController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: "Reactivate tenant (SaaS Owner only)" })
   @ApiResponse({ status: 200, description: "Tenant reactivated successfully" })
-  async reactivateTenant(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
-    return this.saasService.reactivateTenant(id, req.user);
+  @ApiResponse({ status: 409, description: "The owner asked to delete it: send cancelDeletion to cancel that too" })
+  async reactivateTenant(
+    @Req() req: any,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() body: ReactivateTenantDto,
+  ) {
+    return this.saasService.reactivateTenant(id, { cancelDeletion: body?.cancelDeletion }, req.user);
   }
 
   @Get("analytics/overview")
