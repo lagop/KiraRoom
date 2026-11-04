@@ -517,7 +517,7 @@ describe("the optional WhatsApp promotions box at booking", () => {
     expect(bookingWhatsAppPromotionsText("Salón Lucía")).toBe(SHOWN);
   });
 
-  it("the receptionist never collects it: its bookings carry no marketing choice", () => {
+  it("the receptionist never collects it: only the email promotions refusal (audit D17), never WhatsApp", () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const fs = require("fs");
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -526,7 +526,9 @@ describe("the optional WhatsApp promotions box at booking", () => {
       path.join(__dirname, "../virtual-receptionist/tools/receptionist-booking.ts"),
       "utf8",
     );
-    expect(source).not.toMatch(/wantsWhatsAppPromotions|refusesMarketingEmail|marketing_whatsapp/);
+    expect(source).not.toMatch(/wantsWhatsAppPromotions|marketing_whatsapp/);
+    // "No quiero recibir promociones", unticked: recorded only when she says so.
+    expect(source).toMatch(/refusesMarketingEmail: true/);
   });
 });
 
