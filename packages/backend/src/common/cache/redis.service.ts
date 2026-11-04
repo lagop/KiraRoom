@@ -94,6 +94,48 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.client!.del(key);
   }
 
+  /**
+   * SET key value NX EX ttl: true when the key was not there and is now
+   * set (the first to claim it), false when it already existed. Used to
+   * handle a webhook delivery once across restarts and instances. If Redis
+   * fails at that moment the in-memory map answers, so a message is still
+   * handled (at most once per instance) rather than dropped.
+   */
+  async setIfAbsent(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+    if (!this.usingFallback && this.client) {
+      try {
+        const res = await this.client.set(key, value, { NX: true, EX: ttlSeconds });
+        return res === 'OK';
+      } catch (err) {
+        this.logger.warn(`Redis SET NX failed, using the in-memory fallback: ${(err as Error).message}`);
+      }
+    }
+    if (this.fallbackGet(key) !== null) return false;
+    this.fallbackSet(key, value, ttlSeconds);
+    return true;
+  }
+
+  /**
+   * INCR, with the expiry set on the first increment: a counter for a fixed
+   * window (messages per sender and hour). Same fallback as setIfAbsent.
+   */
+  async increment(key: string, ttlSeconds: number): Promise<number> {
+    if (!this.usingFallback && this.client) {
+      try {
+        const n = await this.client.incr(key);
+        if (n === 1) await this.client.expire(key, ttlSeconds);
+        return n;
+      } catch (err) {
+        this.logger.warn(`Redis INCR failed, using the in-memory fallback: ${(err as Error).message}`);
+      }
+    }
+    const current = Number(this.fallbackGet(key) ?? 0) + 1;
+    const entry = this.fallback.get(key);
+    if (entry && current > 1) entry.value = String(current);
+    else this.fallbackSet(key, String(current), ttlSeconds);
+    return current;
+  }
+
   private fallbackGet(key: string): string | null {
     const entry = this.fallback.get(key);
     if (!entry) return null;
@@ -107,6 +149,12 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   private fallbackSet(key: string, value: string, ttlSeconds?: number): void {
     const expiresAt =
       ttlSeconds && ttlSeconds > 0 ? Date.now() + ttlSeconds * 1000 : null;
+    // Expired entries are only dropped when read: sweep them now and then,
+    // so per-message keys do not pile up for the life of the process.
+    if (this.fallback.size > 10_000) {
+      const now = Date.now();
+      for (const [k, e] of this.fallback) if (e.expiresAt !== null && now > e.expiresAt) this.fallback.delete(k);
+    }
     this.fallback.set(key, { value, expiresAt });
   }
 

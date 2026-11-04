@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ChatChannel } from '@prisma/client';
 import {
   ChannelProvider,
@@ -9,6 +9,7 @@ import {
 import { ChannelCredentialsService } from './channel-credentials.service';
 import { MetaGraphClient } from './meta-graph.client';
 import { CHANNEL_TEXT_LIMIT, splitForChannel, toPlainChatText } from './chat-text';
+import { ChannelHealthService } from '../../channel-health/channel-health.service';
 
 /**
  * Facebook Messenger: the receptionist's answers to people who write to the
@@ -28,6 +29,7 @@ export class FacebookMessengerProvider implements ChannelProvider {
   constructor(
     private readonly credentials: ChannelCredentialsService,
     private readonly graph: MetaGraphClient,
+    @Optional() private readonly health?: ChannelHealthService,
   ) {}
 
   /** Signatures are checked by the webhook controller (X-Hub-Signature-256). */
@@ -60,12 +62,17 @@ export class FacebookMessengerProvider implements ChannelProvider {
         `Facebook Messenger is not connected for tenant ${args.ctx.tenantId}; connect the Page first.`,
       );
     }
+    const parts = splitForChannel(toPlainChatText(args.text), CHANNEL_TEXT_LIMIT.facebook);
     let first: string | undefined;
-    for (const part of splitForChannel(toPlainChatText(args.text), CHANNEL_TEXT_LIMIT.facebook)) {
-      const res = await this.graph.sendMessengerText(creds.pageId, creds.pageToken, args.externalUserId, part);
+    for (let i = 0; i < parts.length; i++) {
+      const res = await this.graph.sendMessengerText(creds.pageId, creds.pageToken, args.externalUserId, parts[i]);
       if (!res.ok) {
+        await this.health?.pageTokenError(args.ctx.tenantId, res.error?.code);
         const err = new Error(`Facebook Messenger send failed: ${res.error?.message}`);
         this.logger.error(err.message);
+        // Part of the answer already arrived: throwing would make the
+        // caller send the whole answer again, repeating that part.
+        if (i > 0) return { messageId: first ?? '', raw: { partial: true, sent: i, total: parts.length } };
         throw err;
       }
       first ??= res.data?.message_id;

@@ -23,42 +23,6 @@ export class MetaCloudApiClient {
     return `https://graph.facebook.com/${version}`;
   }
 
-  buildOAuthUrl(state: string): string {
-    const appId = this.config.get<string>("META_APP_ID");
-    const redirect =
-      this.config.get<string>("FRONTEND_URL")?.replace(/\/$/, "") ||
-      "http://localhost:3000";
-    const cb = `${redirect}/api/v1/whatsapp/connect/callback`;
-    const params = new URLSearchParams({
-      client_id: appId || "",
-      redirect_uri: cb,
-      state,
-      scope: "whatsapp_business_management,whatsapp_business_messaging,business_management",
-      response_type: "code",
-    });
-    return `https://www.facebook.com/v20.0/dialog/oauth?${params.toString()}`;
-  }
-
-  async exchangeCodeForToken(code: string, redirectUri: string): Promise<{
-    access_token: string;
-    expires_in?: number;
-    token_type?: string;
-  }> {
-    const appId = this.config.get<string>("META_APP_ID");
-    const appSecret = this.config.get<string>("META_APP_SECRET");
-    const url = new URL(`${this.baseUrl()}/oauth/access_token`);
-    url.searchParams.set("client_id", appId || "");
-    url.searchParams.set("client_secret", appSecret || "");
-    url.searchParams.set("code", code);
-    url.searchParams.set("redirect_uri", redirectUri);
-    const resp = await fetch(url.toString(), { method: "GET" });
-    if (!resp.ok) {
-      const body = await resp.text();
-      throw new Error(`Meta token exchange failed (${resp.status}): ${body}`);
-    }
-    return resp.json() as any;
-  }
-
   encryptToken(plain: string): string {
     return this.encryption.encrypt(plain);
   }
@@ -181,4 +145,85 @@ export class MetaCloudApiClient {
     if (body?.error) throw new Error(body.error.message ?? "Meta error");
     return (body?.data ?? []).find((t: any) => t?.name === name) ?? null;
   }
+
+  // --- Checking a manual connection, and the webhook subscription ---------
+
+  /** The number as Meta knows it: its display number and verified name. */
+  getPhoneNumber(
+    accessToken: string,
+    phoneNumberId: string,
+  ): Promise<GraphCall<{ id: string; display_phone_number?: string; verified_name?: string; quality_rating?: string }>> {
+    return this.graph(
+      `${this.baseUrl()}/${encodeURIComponent(phoneNumberId)}?fields=id,display_phone_number,verified_name,quality_rating`,
+      accessToken,
+    );
+  }
+
+  /** The numbers of a WhatsApp Business account. */
+  listPhoneNumbers(
+    accessToken: string,
+    wabaId: string,
+  ): Promise<GraphCall<{ data: Array<{ id: string; display_phone_number?: string }> }>> {
+    return this.graph(
+      `${this.baseUrl()}/${encodeURIComponent(wabaId)}/phone_numbers?fields=id,display_phone_number&limit=100`,
+      accessToken,
+    );
+  }
+
+  /**
+   * Whether the token is valid and when it expires (0 = never), read with
+   * KiraRoom's app token. Only possible when the app is configured: null
+   * otherwise, and the caller goes on without it.
+   */
+  async debugToken(
+    accessToken: string,
+  ): Promise<GraphCall<{ data: { is_valid?: boolean; expires_at?: number; app_id?: string } }> | null> {
+    const appId = this.config.get<string>("META_APP_ID");
+    const appSecret = this.config.get<string>("META_APP_SECRET");
+    if (!appId || !appSecret) return null;
+    const url = new URL(`${this.baseUrl()}/debug_token`);
+    url.searchParams.set("input_token", accessToken);
+    return this.graph(url.toString(), `${appId}|${appSecret}`);
+  }
+
+  /**
+   * Subscribes the app the token belongs to to the account's webhooks
+   * (messages, delivery statuses, quality and template updates). Without
+   * it Meta delivers nothing to /webhooks/meta/whatsapp.
+   */
+  subscribeApp(accessToken: string, wabaId: string): Promise<GraphCall<{ success?: boolean }>> {
+    return this.graph(`${this.baseUrl()}/${encodeURIComponent(wabaId)}/subscribed_apps`, accessToken, "POST");
+  }
+
+  /** The apps subscribed to the account's webhooks. */
+  listSubscribedApps(
+    accessToken: string,
+    wabaId: string,
+  ): Promise<GraphCall<{ data: Array<{ whatsapp_business_api_data?: { id?: string; name?: string } }> }>> {
+    return this.graph(`${this.baseUrl()}/${encodeURIComponent(wabaId)}/subscribed_apps`, accessToken);
+  }
+
+  /** One Graph call: `{ ok, data }` or `{ ok: false, error }`, never throws. The URL is never logged. */
+  private async graph<T>(url: string, accessToken: string, method: "GET" | "POST" = "GET"): Promise<GraphCall<T>> {
+    try {
+      const resp = await fetch(url, { method, headers: { Authorization: `Bearer ${accessToken}` } });
+      const json: any = await resp.json().catch(() => ({}));
+      if (!resp.ok || json?.error) {
+        return {
+          ok: false,
+          error: { code: Number(json?.error?.code ?? resp.status), message: json?.error?.message ?? `HTTP ${resp.status}` },
+        };
+      }
+      return { ok: true, data: json as T };
+    } catch (err) {
+      return { ok: false, error: { code: -1, message: (err as Error).message, network: true } };
+    }
+  }
+}
+
+/** A Graph API answer: the body, or Meta's error. `network` when Meta could not be reached. */
+export interface GraphCall<T> {
+  ok: boolean;
+  data?: T;
+  error?: { code: number; message: string; network?: boolean };
 }

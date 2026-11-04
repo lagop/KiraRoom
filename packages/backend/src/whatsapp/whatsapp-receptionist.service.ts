@@ -1,20 +1,24 @@
-import { Inject, Injectable, Logger, forwardRef } from "@nestjs/common";
+import { Inject, Injectable, Logger, Optional, forwardRef } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
+import { RedisService } from "../common/cache/redis.service";
+import { InboundGuard } from "../common/cache/inbound-guard";
+import { ChannelHealthService } from "../channel-health/channel-health.service";
 import { VirtualReceptionistService } from "../virtual-receptionist/virtual-receptionist.service";
 import { MetaCloudApiClient } from "./meta-cloud-api.client";
+import { mediaReply } from "./inbound-kinds";
 
 /** One inbound WhatsApp message, as the Cloud API webhook delivers it. */
 export interface InboundWhatsApp {
   id: string;
   /** The sender's WhatsApp id: their phone number, digits only. */
   from: string;
+  /** "text", or "media" for a voice note, photo, file... (inbound-kinds.ts). */
   type: string;
   text?: string;
   profileName?: string;
 }
 
-const SEEN_TTL_MS = 60 * 60 * 1000;
 const PER_SENDER_PER_HOUR = 30;
 
 /**
@@ -28,7 +32,8 @@ const PER_SENDER_PER_HOUR = 30;
  * - The webhook is answered at once; the work happens afterwards, one
  *   message at a time per sender, so Meta never times out and replies keep
  *   their order.
- * - Meta retries deliveries: each message id is handled once.
+ * - Meta retries deliveries: each message id is handled once, and the cap
+ *   per sender holds, across restarts and instances (Redis, InboundGuard).
  * - The sender's phone is the conversation key and the booking phone, so
  *   the receptionist does not have to ask for it.
  * - A cap per sender and hour limits what a flood of messages can cost.
@@ -36,9 +41,8 @@ const PER_SENDER_PER_HOUR = 30;
 @Injectable()
 export class WhatsAppReceptionistService {
   private readonly logger = new Logger(WhatsAppReceptionistService.name);
-  private readonly seen = new Map<string, number>();
   private readonly chains = new Map<string, Promise<void>>();
-  private readonly recent = new Map<string, number[]>();
+  private readonly guard: InboundGuard;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -46,15 +50,24 @@ export class WhatsAppReceptionistService {
     private readonly flags: FeatureFlagService,
     @Inject(forwardRef(() => VirtualReceptionistService))
     private readonly receptionist: VirtualReceptionistService,
-  ) {}
+    redis: RedisService,
+    @Optional() private readonly health?: ChannelHealthService,
+  ) {
+    this.guard = new InboundGuard(redis, "vr:wa");
+  }
 
   /** Queues the message and returns at once. */
   enqueue(tenantId: string, message: InboundWhatsApp): Promise<void> {
-    if (!message.id || !message.from || this.alreadySeen(message.id)) return Promise.resolve();
+    if (!message.id || !message.from) return Promise.resolve();
     const key = `${tenantId}:${message.from}`;
     const previous = this.chains.get(key) ?? Promise.resolve();
+    // The repeat check runs inside the sender's chain, so messages keep
+    // their order even though it is asynchronous now.
     const next = previous
-      .then(() => this.handle(tenantId, message))
+      .then(async () => {
+        if (!(await this.guard.firstDelivery(`${tenantId}:${message.id}`))) return;
+        await this.handle(tenantId, message);
+      })
       .catch((err) => this.logger.error(`WhatsApp message ${message.id} failed: ${(err as Error).message}`))
       .finally(() => {
         if (this.chains.get(key) === next) this.chains.delete(key);
@@ -66,22 +79,28 @@ export class WhatsAppReceptionistService {
   private async handle(tenantId: string, message: InboundWhatsApp): Promise<void> {
     const connection = await this.prisma.whatsAppConnection.findUnique({
       where: { tenantId },
-      select: { phoneNumberId: true, accessTokenEnc: true, isActive: true },
+      select: { phoneNumberId: true, accessTokenEnc: true, isActive: true, authErrorAt: true },
     });
     if (!connection?.isActive) return;
+    // Meta refused the token: a reply cannot be sent, so no AI is spent.
+    if (connection.authErrorAt) {
+      this.logger.warn(`WhatsApp message for tenant ${tenantId} not answered: the access token was refused`);
+      return;
+    }
     if (!(await this.flags.isEnabled(tenantId, "virtual_receptionist" as any))) return;
 
     const token = this.meta.decryptToken(connection.accessTokenEnc);
     const reply = (body: string) => this.meta.sendText(token, connection.phoneNumberId, message.from, body);
     await this.meta.markRead(token, connection.phoneNumberId, message.id).catch(() => undefined);
 
-    if (!this.withinRate(`${tenantId}:${message.from}`)) {
+    if (!(await this.guard.withinHourlyCap(`${tenantId}:${message.from}`, PER_SENDER_PER_HOUR))) {
       this.logger.warn(`WhatsApp sender over ${PER_SENDER_PER_HOUR}/h for tenant ${tenantId}; ignored`);
       return;
     }
 
     if (message.type !== "text" || !message.text?.trim()) {
-      await reply("Por ahora solo puedo leer mensajes de texto. Escríbeme lo que necesites y te ayudo.");
+      const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { phone: true } });
+      await reply(mediaReply("whatsapp", tenant?.phone));
       return;
     }
 
@@ -106,6 +125,7 @@ export class WhatsAppReceptionistService {
     const sent = await reply(text);
     if (sent?.error) {
       this.logger.error(`WhatsApp reply to tenant ${tenantId} failed: ${sent.error.code} ${sent.error.message}`);
+      await this.health?.whatsAppError(tenantId, sent.error.code);
     }
   }
 
@@ -114,24 +134,6 @@ export class WhatsAppReceptionistService {
     return tenant?.phone
       ? `Ahora mismo no puedo responderte. Si es urgente, llama al salón al ${tenant.phone}.`
       : "Ahora mismo no puedo responderte. Vuelve a escribirme en unos minutos, por favor.";
-  }
-
-  private alreadySeen(id: string): boolean {
-    const now = Date.now();
-    if (this.seen.size > 5000) {
-      for (const [k, at] of this.seen) if (now - at > SEEN_TTL_MS) this.seen.delete(k);
-    }
-    if (this.seen.has(id)) return true;
-    this.seen.set(id, now);
-    return false;
-  }
-
-  private withinRate(key: string): boolean {
-    const now = Date.now();
-    const times = (this.recent.get(key) ?? []).filter((t) => now - t < 60 * 60 * 1000);
-    times.push(now);
-    this.recent.set(key, times);
-    return times.length <= PER_SENDER_PER_HOUR;
   }
 }
 

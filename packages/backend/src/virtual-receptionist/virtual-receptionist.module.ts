@@ -42,6 +42,7 @@ import { MetaGraphClient } from './channels/meta-graph.client';
 import { TelegramBotClient } from './channels/telegram-bot.client';
 import { PlatformModule } from '../platform/platform.module';
 import { PublicChatAccessService } from './public-chat/public-chat-access.service';
+import { ChannelHealthModule } from '../channel-health/channel-health.module';
 
 @Module({
   imports: [
@@ -53,6 +54,8 @@ import { PublicChatAccessService } from './public-chat/public-chat-access.servic
     PaymentsModule,
     AppointmentsModule,
     PlatformModule,
+    // Marks a Page or bot token Meta / Telegram refused (channel providers).
+    ChannelHealthModule,
   ],
   controllers: [VirtualReceptionistController, ChannelsConfigController, ChannelsMetaCallbackController],
   providers: [
