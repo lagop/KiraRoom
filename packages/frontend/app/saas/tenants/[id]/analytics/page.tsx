@@ -15,6 +15,7 @@ import {
 import apiClient from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
 import { formatChange, formatEuros } from "@/lib/console-metrics";
+import { tenantStatusKey } from "@/lib/saas-tenant";
 
 interface TenantStats {
   tenantId: string;
@@ -108,7 +109,7 @@ export default function TenantAnalyticsPage() {
       changeValue: stats.appointmentsChange,
     },
     {
-      title: t("saas.metrics.total_clients_salon"),
+      title: t("saas.metrics.total_clients"),
       value: stats.totalClients.toLocaleString("es-ES"),
       icon: Users,
       change: t("saas.registeredClients"),
@@ -117,7 +118,7 @@ export default function TenantAnalyticsPage() {
       title: t("saas.metrics.plan"),
       value: label(`saas.plan_${stats.plan}`, stats.plan),
       icon: Building2,
-      change: label(`saas.status_${stats.subscriptionStatus}`, stats.subscriptionStatus),
+      change: label(tenantStatusKey(stats.subscriptionStatus) ?? "", stats.subscriptionStatus),
     },
   ];
 
