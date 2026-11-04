@@ -7,10 +7,12 @@ import { ArrowLeft, Save } from "lucide-react";
 import apiClient from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
 import { SALON_TIMEZONES } from "@kira/shared";
-import { formatDateEs, isReadOnlyStatus, tenantStatusKey } from "@/lib/saas-tenant";
+import { editableStatuses, formatDateEs, tenantStatusKey } from "@/lib/saas-tenant";
 
 interface FormData {
   name: string;
+  /** The web address: a change keeps the old one redirecting for 12 months (T21). */
+  slug: string;
   description: string;
   email: string;
   phone: string;
@@ -26,6 +28,7 @@ interface FormData {
 
 const EMPTY: FormData = {
   name: "",
+  slug: "",
   description: "",
   email: "",
   phone: "",
@@ -37,9 +40,6 @@ const EMPTY: FormData = {
   subscriptionStatus: "",
   trialEnd: "",
 };
-
-/** Statuses the console can set; "Pago pendiente" and "Suspendido por impago" come from Stripe (T13). */
-const EDITABLE_STATUSES = ["active", "trialing", "cancelled"] as const;
 
 const inputClass =
   "w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500";
@@ -55,7 +55,8 @@ export default function EditTenantPage() {
   const [deleted, setDeleted] = useState(false);
   const [deletionRequestedAt, setDeletionRequestedAt] = useState<string | null>(null);
   const [currentTrialEnd, setCurrentTrialEnd] = useState<string | null>(null);
-  const [cancelDeletion, setCancelDeletion] = useState(false);
+  // D7: a platform word or brand name in the address, for the platform's own salons.
+  const [platformAddress, setPlatformAddress] = useState(false);
   const [original, setOriginal] = useState<FormData>(EMPTY);
   const [formData, setFormData] = useState<FormData>(EMPTY);
 
@@ -65,6 +66,7 @@ export default function EditTenantPage() {
         const tenant = await apiClient.getSaasTenant(tenantId);
         const data: FormData = {
           name: tenant.name || "",
+          slug: tenant.slug || "",
           description: tenant.description || "",
           email: tenant.email || "",
           phone: tenant.phone || "",
@@ -98,10 +100,6 @@ export default function EditTenantPage() {
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
-  const leavingReadOnly =
-    isReadOnlyStatus(original.subscriptionStatus) && !isReadOnlyStatus(formData.subscriptionStatus);
-  const needsDeletionChoice = leavingReadOnly && !!deletionRequestedAt;
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -114,7 +112,7 @@ export default function EditTenantPage() {
       if (formData[key] !== original[key]) body[key] = formData[key];
     }
     if (formData.trialEnd) body.trialEnd = new Date(`${formData.trialEnd}T23:59:59`).toISOString();
-    if (needsDeletionChoice && cancelDeletion) body.cancelDeletion = true;
+    if (body.slug !== undefined && platformAddress) body.platformAddress = true;
 
     try {
       await apiClient.updateSaasTenant(tenantId, body);
@@ -162,7 +160,7 @@ export default function EditTenantPage() {
     );
   }
 
-  const currentStatusEditable = (EDITABLE_STATUSES as readonly string[]).includes(original.subscriptionStatus);
+  const statusOptions = editableStatuses(original.subscriptionStatus);
   const statusLabel = (s: string) => {
     const key = tenantStatusKey(s);
     return key ? t(key) : s;
@@ -188,6 +186,22 @@ export default function EditTenantPage() {
                 {t("saas.console.salon_name")} *
               </label>
               <input id="name" type="text" name="name" required value={formData.name} onChange={handleChange} className={inputClass} />
+            </div>
+            <div>
+              <label htmlFor="slug" className="block text-sm font-medium text-gray-700 mb-1">
+                {t("saas.slug")} *
+              </label>
+              <input id="slug" type="text" name="slug" required value={formData.slug} onChange={handleChange} className={inputClass} />
+              {formData.slug !== original.slug && (
+                <p className="text-xs text-gray-500 mt-1">{t("saas.console.web_address_change_hint", { old: original.slug })}</p>
+              )}
+              <label className="mt-2 flex items-start gap-2 text-sm text-gray-700">
+                <input type="checkbox" className="mt-1" checked={platformAddress} onChange={(e) => setPlatformAddress(e.target.checked)} />
+                <span>
+                  {t("saas.console.platform_address")}
+                  <span className="block text-xs text-gray-500">{t("saas.console.platform_address_hint")}</span>
+                </span>
+              </label>
             </div>
             <div>
               <label htmlFor="description" className="block text-sm font-medium text-gray-700 mb-1">
@@ -303,16 +317,13 @@ export default function EditTenantPage() {
                 onChange={handleChange}
                 className={inputClass}
               >
-                {!currentStatusEditable && original.subscriptionStatus && (
-                  <option value={original.subscriptionStatus}>{statusLabel(original.subscriptionStatus)}</option>
-                )}
-                {EDITABLE_STATUSES.map((s) => (
+                {statusOptions.map((s) => (
                   <option key={s} value={s}>
                     {statusLabel(s)}
                   </option>
                 ))}
               </select>
-              <p className="text-xs text-gray-500 mt-1">{t("saas.console.status_stripe_hint")}</p>
+              <p className="text-xs text-gray-500 mt-1">{t("saas.console.status_buttons_hint")}</p>
             </div>
             {(formData.subscriptionStatus === "trialing" || original.subscriptionStatus === "trialing") && (
               <div>
@@ -334,14 +345,10 @@ export default function EditTenantPage() {
               </div>
             )}
           </div>
-          {needsDeletionChoice && (
-            <div className="mt-4 rounded border border-amber-200 bg-amber-50 p-3 text-amber-900">
-              <p>{t("saas.console.pending_deletion_warning", { date: formatDateEs(deletionRequestedAt) })}</p>
-              <label className="mt-2 flex items-center gap-2">
-                <input type="checkbox" checked={cancelDeletion} onChange={(e) => setCancelDeletion(e.target.checked)} />
-                {t("saas.console.cancel_deletion_checkbox")}
-              </label>
-            </div>
+          {deletionRequestedAt && (
+            <p className="mt-4 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              {t("saas.console.pending_deletion_notice", { date: formatDateEs(deletionRequestedAt) })}
+            </p>
           )}
         </div>
 
@@ -354,7 +361,7 @@ export default function EditTenantPage() {
           </Link>
           <button
             type="submit"
-            disabled={loading || (needsDeletionChoice && !cancelDeletion)}
+            disabled={loading}
             className="inline-flex items-center px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             <Save className="w-4 h-4 mr-2" />

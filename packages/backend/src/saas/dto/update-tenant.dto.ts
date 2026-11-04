@@ -142,13 +142,13 @@ export class UpdateTenantDto {
   stripeSubscriptionId?: string;
 
   /**
-   * Reactivating a salon whose owner asked "Borrar mi salón" also cancels
-   * that request, only when this is true (audit 8 T4). Never stored.
+   * "Dirección de la plataforma" (audit 8 D7): lets a new address use the
+   * platform's words or brand names. Audit-logged. Never stored.
    */
-  @ApiPropertyOptional({ description: "Also cancel the owner's pending deletion request" })
+  @ApiPropertyOptional({ description: "The new slug is a platform address (platform words allowed)" })
   @IsOptional()
-  @IsBoolean({ message: MSG.boolean("anular el borrado pendiente") })
-  cancelDeletion?: boolean;
+  @IsBoolean({ message: MSG.boolean("dirección de la plataforma") })
+  platformAddress?: boolean;
 
   // P2A — Spanish fiscal compliance.
 

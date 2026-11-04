@@ -55,7 +55,13 @@ describe("never-paid cap", () => {
     expect(hasPaidKiraRoom({ firstPaidAt: null, subscriptionStatus: "trialing" })).toBe(false);
     expect(hasPaidKiraRoom({ firstPaidAt: null, subscriptionStatus: "past_due" })).toBe(false);
     expect(hasPaidKiraRoom({ firstPaidAt: new Date(), subscriptionStatus: "past_due" })).toBe(true);
-    expect(hasPaidKiraRoom({ firstPaidAt: null, subscriptionStatus: "active" })).toBe(true);
+    // Active on a Stripe subscription: paying, even before firstPaidAt is set.
+    expect(hasPaidKiraRoom({ firstPaidAt: null, subscriptionStatus: "active", stripeSubscriptionId: "sub_1" })).toBe(true);
+    // Active by hand, without Stripe (a courtesy, audit 8 D6): not paying.
+    expect(hasPaidKiraRoom({ firstPaidAt: null, subscriptionStatus: "active" })).toBe(false);
+    expect(
+      hasPaidKiraRoom({ firstPaidAt: null, subscriptionStatus: "active", stripeSubscriptionId: null, courtesyUntil: new Date() }),
+    ).toBe(false);
   });
 
   it("a trial gets 200 instead of Pro's 2,000; once paid, the plan's", async () => {

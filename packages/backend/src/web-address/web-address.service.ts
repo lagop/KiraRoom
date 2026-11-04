@@ -44,6 +44,40 @@ export async function webAddressTaken(prisma: SlugLookupClient, slug: string, ex
   return (await redirectedTenantId(prisma, slug)) !== null;
 }
 
+type SlugMoveClient = {
+  tenant: { update: (args: any) => Promise<unknown>; updateMany: (args: any) => Promise<{ count: number }> };
+  tenantSlugRedirect: { deleteMany: (args: any) => Promise<unknown>; create: (args: any) => Promise<unknown> };
+};
+
+/**
+ * Moves a salon to a new address, inside the caller's transaction: the old
+ * one redirects for 12 months (tenant_slug_redirects). An expired row
+ * holding the new address (another salon's old one) is deleted first, and a
+ * stale row for the address being left too. The owner's once-only change
+ * claims slugChangedAt; the console's change (audit 8 D7, T21) leaves it, so
+ * the owner keeps hers. Returns when the redirect expires, or null when the
+ * owner's change had already been used.
+ */
+export async function moveTenantSlug(
+  tx: SlugMoveClient,
+  args: { tenantId: string; from: string; to: string; now: Date; ownerChange: boolean },
+): Promise<Date | null> {
+  const expiresAt = redirectExpiry(args.now);
+  await tx.tenantSlugRedirect.deleteMany({ where: { oldSlug: args.to, expiresAt: { lte: args.now } } });
+  await tx.tenantSlugRedirect.deleteMany({ where: { oldSlug: args.from } });
+  if (args.ownerChange) {
+    const claimed = await tx.tenant.updateMany({
+      where: { id: args.tenantId, slugChangedAt: null },
+      data: { slug: args.to, slugChangedAt: args.now },
+    });
+    if (claimed.count === 0) return null;
+  } else {
+    await tx.tenant.update({ where: { id: args.tenantId }, data: { slug: args.to }, select: { id: true } });
+  }
+  await tx.tenantSlugRedirect.create({ data: { oldSlug: args.from, tenantId: args.tenantId, expiresAt } });
+  return expiresAt;
+}
+
 @Injectable()
 export class WebAddressService {
   constructor(
@@ -107,15 +141,8 @@ export class WebAddressService {
     const expiresAt = redirectExpiry(now);
     try {
       await this.prisma.$transaction(async (tx) => {
-        await tx.tenantSlugRedirect.deleteMany({ where: { oldSlug: check.slug, expiresAt: { lte: now } } });
-        // A stale row for the address being left (expired) would block the new one.
-        await tx.tenantSlugRedirect.deleteMany({ where: { oldSlug: tenant.slug } });
-        const claimed = await tx.tenant.updateMany({
-          where: { id: tenantId, slugChangedAt: null },
-          data: { slug: check.slug, slugChangedAt: now },
-        });
-        if (claimed.count === 0) throw new BadRequestException(WEB_ADDRESS_ALREADY_CHANGED);
-        await tx.tenantSlugRedirect.create({ data: { oldSlug: tenant.slug, tenantId, expiresAt } });
+        const moved = await moveTenantSlug(tx, { tenantId, from: tenant.slug, to: check.slug, now, ownerChange: true });
+        if (!moved) throw new BadRequestException(WEB_ADDRESS_ALREADY_CHANGED);
         await this.auditLog.record(
           "tenant.web_address_changed",
           {

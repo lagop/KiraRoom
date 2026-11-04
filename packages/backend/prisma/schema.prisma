@@ -108,6 +108,18 @@ model Tenant {
   /// but its data (users, appointments, payments, etc.) is preserved so
   /// an accidental delete can be reversed via Prisma Studio.
   deletedAt              DateTime?
+  /// "Bloquear" from the console (audit 8 D4, abuse): nobody in the salon
+  /// signs in, its page is offline, nothing is sent and nothing is charged
+  /// (Stripe collection paused). "Desbloquear" clears it.
+  blockedAt              DateTime?
+  blockedReason          String?
+  /// "Cortesía" from the console (audit 8 D6): active without paying, on
+  /// courtesyPlan, until courtesyUntil; then read-only like any salon that
+  /// left (CourtesyScheduler). Not paying: out of MRR, and the never-paid
+  /// email cap still applies. courtesyWarnedAt: the email 3 days before.
+  courtesyUntil          DateTime?
+  courtesyPlan           SubscriptionPlan?
+  courtesyWarnedAt       DateTime?
   /// Audit 8 D11: one of KiraRoom's own salons (the Platform tenant and our
   /// test salons). Left out of platform figures and alerts
   /// (countableTenantWhere) and allowed to use Stripe test mode. Set from
@@ -280,6 +292,7 @@ model Tenant {
   slugRedirects        TenantSlugRedirect[]
 
   @@index([deletedAt])
+  @@index([courtesyUntil])
   @@index([subscriptionStatus, deletedAt])
   @@index([deletedAt, plan])
   @@index([deletedAt, country])

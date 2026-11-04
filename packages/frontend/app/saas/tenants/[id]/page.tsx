@@ -28,10 +28,11 @@ import { SharedIdentityNotice } from "../../components/shared-identity-notice";
 import { InternalSalonCard } from "../../components/internal-salon-card";
 import type { SharedIdentityWarning } from "@/lib/shared-identity";
 import { saveBlob } from "@/lib/share-download";
+import type { TenantAction } from "@/lib/saas-tenant";
+import { TenantStatusButtons, TenantStatusDialog, TenantStatusExtraBadges } from "../../components/tenant-status-actions";
 import {
   anonymizeNeedsForce,
   formatDateEs,
-  isReadOnlyStatus,
   sameSalonName,
   tenantStatusClass,
   tenantStatusKey,
@@ -61,6 +62,11 @@ interface Tenant {
   deletedAt: string | null;
   anonymizedAt: string | null;
   deletionRequestedAt: string | null;
+  /** Blocked from the console (D4) and the courtesy period (D6). */
+  blockedAt: string | null;
+  blockedReason: string | null;
+  courtesyUntil: string | null;
+  courtesyPlan: string | null;
   owner: { id: string; email: string; firstName: string | null; lastName: string | null; phone: string | null } | null;
   retention: {
     readOnlyUntil: string | null;
@@ -121,9 +127,7 @@ export default function TenantDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
 
-  const [pendingStatus, setPendingStatus] = useState<"suspend" | "reactivate" | null>(null);
-  const [cancelDeletion, setCancelDeletion] = useState(false);
-  const [statusBusy, setStatusBusy] = useState(false);
+  const [pendingStatus, setPendingStatus] = useState<TenantAction | null>(null);
 
   const [exporting, setExporting] = useState(false);
   const [anonymizeOpen, setAnonymizeOpen] = useState(false);
@@ -166,31 +170,6 @@ export default function TenantDetailPage() {
   useEffect(() => {
     void load();
   }, [load]);
-
-  const performStatus = async () => {
-    if (!pendingStatus) return;
-    setStatusBusy(true);
-    try {
-      if (pendingStatus === "suspend") {
-        await apiClient.suspendSaasTenant(tenantId);
-        toast({ title: t("saas.console.suspended_ok") });
-      } else {
-        await apiClient.reactivateSaasTenant(tenantId, { cancelDeletion });
-        toast({ title: t("saas.console.reactivated_ok") });
-      }
-      setPendingStatus(null);
-      await load();
-    } catch (err) {
-      console.error(`Error on ${pendingStatus}:`, err);
-      toast({
-        title: t(pendingStatus === "suspend" ? "saas.failedToSuspend" : "saas.failedToReactivate"),
-        description: (err as Error)?.message,
-        variant: "destructive",
-      });
-    } finally {
-      setStatusBusy(false);
-    }
-  };
 
   const handleExport = async () => {
     setExporting(true);
@@ -309,6 +288,7 @@ export default function TenantDetailPage() {
               {t("saas.deleted_badge")}
             </span>
           )}
+          <TenantStatusExtraBadges tenant={tenant} />
           {!deleted && (
             <>
               <Link
@@ -318,26 +298,7 @@ export default function TenantDetailPage() {
                 <Edit className="w-4 h-4 mr-2" />
                 {t("saas.console.edit")}
               </Link>
-              {isReadOnlyStatus(tenant.subscriptionStatus) ? (
-                <button
-                  onClick={() => {
-                    setCancelDeletion(false);
-                    setPendingStatus("reactivate");
-                  }}
-                  className="inline-flex items-center px-4 py-2 border border-indigo-200 rounded-lg text-indigo-700 hover:bg-indigo-50 transition-colors"
-                >
-                  <CheckCircle className="w-4 h-4 mr-2" />
-                  {t("saas.reactivate_action")}
-                </button>
-              ) : (
-                <button
-                  onClick={() => setPendingStatus("suspend")}
-                  className="inline-flex items-center px-4 py-2 border border-yellow-200 rounded-lg text-yellow-700 hover:bg-yellow-50 transition-colors"
-                >
-                  <AlertTriangle className="w-4 h-4 mr-2" />
-                  {t("saas.suspend_action")}
-                </button>
-              )}
+              <TenantStatusButtons tenant={tenant} onAsk={setPendingStatus} />
             </>
           )}
         </div>
@@ -564,39 +525,11 @@ export default function TenantDetailPage() {
         </Link>
       )}
 
-      <ConfirmDialog
-        open={!!pendingStatus}
-        title={t(
-          pendingStatus === "suspend" ? "saas.console.suspend_title" : "saas.console.reactivate_title",
-          { name: tenant.name },
-        )}
-        description={
-          pendingStatus === "suspend" ? (
-            t("saas.console.suspend_desc")
-          ) : (
-            <div className="space-y-3">
-              <p>{t("saas.console.reactivate_desc")}</p>
-              {tenant.deletionRequestedAt && (
-                <div className="rounded border border-amber-200 bg-amber-50 p-3 text-amber-900">
-                  <p>
-                    {t("saas.console.pending_deletion_warning", { date: formatDateEs(tenant.deletionRequestedAt) })}
-                  </p>
-                  <label className="mt-2 flex items-center gap-2">
-                    <input type="checkbox" checked={cancelDeletion} onChange={(e) => setCancelDeletion(e.target.checked)} />
-                    {t("saas.console.cancel_deletion_checkbox")}
-                  </label>
-                </div>
-              )}
-            </div>
-          )
-        }
-        confirmLabel={t(pendingStatus === "suspend" ? "saas.suspend_action" : "saas.reactivate_action")}
-        cancelLabel={t("common.cancel")}
-        destructive={pendingStatus === "suspend"}
-        loading={statusBusy}
-        confirmDisabled={pendingStatus === "reactivate" && !!tenant.deletionRequestedAt && !cancelDeletion}
-        onCancel={() => setPendingStatus(null)}
-        onConfirm={performStatus}
+      <TenantStatusDialog
+        tenant={pendingStatus ? tenant : null}
+        action={pendingStatus}
+        onClose={() => setPendingStatus(null)}
+        onDone={() => void load()}
       />
 
       <ConfirmDialog

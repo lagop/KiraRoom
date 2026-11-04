@@ -52,7 +52,7 @@ import {
 } from "../professionals/working-hours-input";
 import { TwoFactorService } from "./two-factor/two-factor.service";
 import { sessionRevocations } from "./sessions/session-revocations";
-import { SALON_DELETED_MESSAGE } from "./salon-deleted";
+import { SALON_BLOCKED_MESSAGE, SALON_DELETED_MESSAGE } from "./salon-deleted";
 import { fiscalSettingsForTerritory, territoryTaxRegime } from "../invoices/salon-tax-settings";
 import {
   ACCESS_TOKEN_TYPE,
@@ -573,13 +573,13 @@ export class AuthService {
   private async loginCandidates(email: string) {
     const exact = await this.prisma.user.findUnique({
       where: { email },
-      include: { professional: true, tenant: { select: { deletedAt: true } } },
+      include: { professional: true, tenant: { select: { deletedAt: true, blockedAt: true } } },
     });
     if (exact) return [exact];
     return (
       (await this.prisma.user.findMany({
         where: { email: { equals: email, mode: "insensitive" } },
-        include: { professional: true, tenant: { select: { deletedAt: true } } },
+        include: { professional: true, tenant: { select: { deletedAt: true, blockedAt: true } } },
         orderBy: { lastLoginAt: { sort: "desc", nulls: "last" } },
         take: 5,
       })) ?? []
@@ -642,6 +642,10 @@ export class AuthService {
       // A salon deleted from the platform console: nobody in it signs in.
       if (user.tenant?.deletedAt && user.role !== UserRole.saas_owner) {
         throw new UnauthorizedException(SALON_DELETED_MESSAGE);
+      }
+      // Blocked from the console (audit 8 D4): nobody signs in.
+      if (user.tenant?.blockedAt && user.role !== UserRole.saas_owner) {
+        throw new UnauthorizedException(SALON_BLOCKED_MESSAGE);
       }
       if (!user.isActive) {
         throw new UnauthorizedException("Esta cuenta está desactivada. Pide acceso a quien gestiona el salón.");

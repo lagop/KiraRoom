@@ -15,6 +15,7 @@ import { NOT_TEST_APPOINTMENT } from '../onboarding/test-booking';
 import { FeatureFlagService } from '../common/feature-flags/feature-flag.service';
 import { salonHasSmsNotices } from './sms-plan-gate';
 import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
+import { REMINDER_SENDS_TENANT_WHERE } from "../common/tenancy/send-policy";
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -164,8 +165,9 @@ export class NotificationsScheduler {
         [kind.attemptsField]: { lt: MAX_REMINDER_ATTEMPTS },
         // Not the onboarding test booking, nor a test client (O5).
         ...NOT_TEST_APPOINTMENT,
-        // A salon deleted from the console reminds no one (audit 7 N7).
-        tenant: { deletedAt: null },
+        // Reminders of booked appointments still go out from a read-only
+        // salon; not from a deleted or blocked one (audit 7 N7, audit 8 D5).
+        tenant: REMINDER_SENDS_TENANT_WHERE,
       },
       include: reminderInclude,
       orderBy: { startTime: 'asc' },

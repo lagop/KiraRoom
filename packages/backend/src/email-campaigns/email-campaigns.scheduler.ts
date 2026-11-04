@@ -18,6 +18,7 @@ import {
   withoutPromotion,
 } from './campaign-content';
 import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
+import { MARKETING_SENDS_TENANT_WHERE } from "../common/tenancy/send-policy";
 
 @Injectable()
 export class EmailCampaignsScheduler {
@@ -77,8 +78,8 @@ export class EmailCampaignsScheduler {
         where: {
           campaignType: 'reengagement' as CampaignType,
           status: 'active', // Campaigns must be activated manually
-          // Not for a salon deleted from the console (audit 7 N7).
-          tenant: { deletedAt: null },
+          // Not for a deleted, blocked or read-only salon (audit 7 N7, audit 8 D5).
+          tenant: MARKETING_SENDS_TENANT_WHERE,
         },
         include: {
           linkedPromotion: true,

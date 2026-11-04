@@ -76,13 +76,14 @@ export class PublicSiteService {
     select: S,
   ): Promise<Prisma.TenantGetPayload<{ select: S }> | null> {
     const found = await this.prisma.tenant.findFirst({
-      where: { OR: [{ slug: slugOrId }, { id: slugOrId }], deletedAt: null },
+      // A blocked salon (audit 8 D4) is offline, like a deleted one.
+      where: { OR: [{ slug: slugOrId }, { id: slugOrId }], deletedAt: null, blockedAt: null },
       select,
     });
     if (found) return found as Prisma.TenantGetPayload<{ select: S }>;
     const movedTo = await redirectedTenantId(this.prisma, slugOrId);
     if (!movedTo) return null;
-    return (await this.prisma.tenant.findFirst({ where: { id: movedTo, deletedAt: null }, select })) as Prisma.TenantGetPayload<{
+    return (await this.prisma.tenant.findFirst({ where: { id: movedTo, deletedAt: null, blockedAt: null }, select })) as Prisma.TenantGetPayload<{
       select: S;
     }> | null;
   }
@@ -349,7 +350,7 @@ export class PublicSiteService {
     const index = slot === "photo" ? null : portfolioIndex(slot);
     if (slot !== "photo" && index === null) return null;
     const pro = await this.prisma.professional.findFirst({
-      where: { id: professionalId, isActive: true, tenant: { deletedAt: null } },
+      where: { id: professionalId, isActive: true, tenant: { deletedAt: null, blockedAt: null } },
       select: {
         profileImage: slot === "photo",
         portfolioImages: slot !== "photo",
@@ -413,6 +414,7 @@ export class PublicSiteService {
     const rows = await this.prisma.tenant.findMany({
       where: {
         deletedAt: null,
+        blockedAt: null,
         subscriptionStatus: { in: LISTED_STATUSES },
         // A page with nothing to book is thin content; leave it out.
         services: { some: { isActive: true } },
@@ -443,7 +445,7 @@ export class PublicSiteService {
     const host = normalizeDomain(rawHost);
     if (!host) throw new NotFoundException("Domain not found");
     const row = await this.prisma.customDomain.findFirst({
-      where: { domain: host, verifiedAt: { not: null }, tenant: { deletedAt: null } },
+      where: { domain: host, verifiedAt: { not: null }, tenant: { deletedAt: null, blockedAt: null } },
       select: { tenant: { select: { slug: true } } },
       orderBy: { verifiedAt: "desc" },
     });

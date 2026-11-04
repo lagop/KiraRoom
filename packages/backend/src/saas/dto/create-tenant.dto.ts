@@ -27,6 +27,12 @@ export class CreateTenantDto {
   @IsString({ message: MSG.text("dirección web") })
   slug?: string;
 
+  /** "Dirección de la plataforma" (audit 8 D7): the address may use the platform's words. Audit-logged. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean({ message: MSG.boolean("dirección de la plataforma") })
+  platformAddress?: boolean;
+
   @ApiPropertyOptional({ example: "Best salon in town" })
   @IsOptional()
   @IsString({ message: MSG.text("descripción") })

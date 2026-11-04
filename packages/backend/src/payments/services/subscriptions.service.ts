@@ -998,6 +998,46 @@ export class SubscriptionsService {
   }
 
   /**
+   * "Bloquear" (audit 8 D4): nothing more is charged while the salon is
+   * blocked. Stripe keeps the subscription but voids its invoices
+   * (pause_collection, behavior "void"); "Desbloquear" resumes it. No
+   * subscription: nothing to do. A Stripe failure is a Spanish 503 and the
+   * console changes nothing.
+   */
+  async setStripeCollectionPaused(tenantId: string, paused: boolean): Promise<{ changed: boolean }> {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true, stripeSubscriptionId: true },
+    });
+    const subscriptionId = tenant?.stripeSubscriptionId;
+    if (!subscriptionId) return { changed: false };
+    const stripe = this.stripe;
+    if (!stripe) {
+      throw new ServiceUnavailableException(
+        'El sistema de pagos no está disponible ahora mismo. No se ha cambiado nada: inténtalo de nuevo en unos minutos.',
+      );
+    }
+    try {
+      await stripe.subscriptions.update(subscriptionId, {
+        pause_collection: paused ? { behavior: 'void' } : ('' as any),
+      });
+      return { changed: true };
+    } catch (err) {
+      if ((err as { code?: string })?.code === 'resource_missing') return { changed: false };
+      const current = await stripe.subscriptions.retrieve(subscriptionId).catch(() => null);
+      if (current && (current.status === 'canceled' || current.status === 'incomplete_expired')) {
+        return { changed: false };
+      }
+      console.warn('Stripe pause_collection failed for tenant', tenantId, err);
+      throw new ServiceUnavailableException(
+        paused
+          ? 'No se ha podido pausar el cobro en Stripe. No se ha bloqueado el salón: inténtalo de nuevo en unos minutos.'
+          : 'No se ha podido reanudar el cobro en Stripe. El salón sigue bloqueado: inténtalo de nuevo en unos minutos.',
+      );
+    }
+  }
+
+  /**
    * Cancels the tenant's plan subscription in Stripe, or throws a Spanish
    * 503 and leaves everything as it was. Nothing to cancel without a
    * subscription id; one Stripe no longer has counts as cancelled. A salon

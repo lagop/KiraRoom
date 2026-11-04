@@ -437,6 +437,7 @@ describe("PublicSiteService.listForSitemap", () => {
     const args = (prisma.tenant.findMany.mock.calls[0] as any[])[0];
     expect(args.where).toEqual({
       deletedAt: null,
+      blockedAt: null,
       subscriptionStatus: { in: ["active", "trialing", "past_due"] },
       services: { some: { isActive: true } },
       // D1: only once the owner has confirmed their email.
@@ -457,7 +458,7 @@ describe("PublicSiteService.resolveHost", () => {
     expect(args.where).toEqual({
       domain: "reservas.salonluna.es",
       verifiedAt: { not: null },
-      tenant: { deletedAt: null },
+      tenant: { deletedAt: null, blockedAt: null },
     });
   });
 
@@ -611,7 +612,7 @@ describe("PublicSiteService: the team as the salon shows it", () => {
     expect((await svc.professionalImage("p1", "portfolio-0"))?.contentType).toBe("image/jpeg");
     expect(await svc.professionalImage("p1", "portfolio-3")).toBeNull();
     expect(await svc.professionalImage("p1", "logo")).toBeNull();
-    expect(pros.findFirst.mock.calls[0][0].where).toEqual({ id: "p1", isActive: true, tenant: { deletedAt: null } });
+    expect(pros.findFirst.mock.calls[0][0].where).toEqual({ id: "p1", isActive: true, tenant: { deletedAt: null, blockedAt: null } });
 
     pros.findFirst = jest.fn(async () => ({ profileImage: photo, webNameDisplay: "full", webShowPhoto: false }));
     expect(await svc.professionalImage("p1", "photo")).toBeNull();
@@ -628,7 +629,7 @@ describe("D4: a salon's old web address", () => {
     (prisma as any).tenantSlugRedirect = { findFirst: jest.fn(async () => ({ tenantId: "t1" })) };
     const page = await svc.getPage("salon-luna-antes");
     expect(page.slug).toBe("salon-luna");
-    expect((prisma.tenant.findFirst.mock.calls[1] as any[])[0].where).toEqual({ id: "t1", deletedAt: null });
+    expect((prisma.tenant.findFirst.mock.calls[1] as any[])[0].where).toEqual({ id: "t1", deletedAt: null, blockedAt: null });
     const legal = await svc.legal("salon-luna-antes");
     expect(legal.slug).toBe("salon-luna");
   });

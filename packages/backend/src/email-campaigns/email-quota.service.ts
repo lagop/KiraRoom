@@ -55,10 +55,18 @@ export const NEVER_PAID_EMAIL_CAP = 200;
 
 /**
  * Whether the salon has paid KiraRoom: a paid Stripe invoice (firstPaidAt),
- * or an active subscription (also the ones the console activates by hand).
+ * or an active Stripe subscription (firstPaidAt was only backfilled for some
+ * older salons). A courtesy from the console (active without Stripe, audit 8
+ * D6) does not count: only paying lifts the never-paid cap.
  */
-export function hasPaidKiraRoom(tenant: { firstPaidAt?: Date | string | null; subscriptionStatus?: string | null }): boolean {
-  return !!tenant.firstPaidAt || tenant.subscriptionStatus === "active";
+export function hasPaidKiraRoom(tenant: {
+  firstPaidAt?: Date | string | null;
+  subscriptionStatus?: string | null;
+  stripeSubscriptionId?: string | null;
+  courtesyUntil?: Date | string | null;
+}): boolean {
+  if (tenant.firstPaidAt) return true;
+  return tenant.subscriptionStatus === "active" && !!tenant.stripeSubscriptionId && !tenant.courtesyUntil;
 }
 
 /** "YYYY-MM": the month `now` falls in on the salon's clock. */
@@ -158,6 +166,8 @@ export class EmailQuotaService {
         subscriptionStatus: true,
         trialEnd: true,
         firstPaidAt: true,
+        stripeSubscriptionId: true,
+        courtesyUntil: true,
         maxLocations: true,
         timezone: true,
         tenantAddOns: { where: { status: "active" }, select: { addOn: { select: { unlocks: true } } } },

@@ -5567,12 +5567,27 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  /** cancelDeletion: the owner asked "Borrar mi salón"; reactivating cancels it only with this (audit 8 T4). */
-  async reactivateSaasTenant(id: string, opts: { cancelDeletion?: boolean } = {}): Promise<any> {
-    return this.request(`/saas/tenants/${id}/reactivate`, {
+  /**
+   * "Cortesía" (audit 8 D6): active without paying, on a plan, until a date.
+   * cancelDeletion: the owner asked "Borrar mi salón"; a courtesy cancels it only with this (T4).
+   */
+  async courtesySaasTenant(id: string, body: { plan: string; until: string; cancelDeletion?: boolean }): Promise<any> {
+    return this.request(`/saas/tenants/${id}/courtesy`, {
       method: "POST",
-      body: JSON.stringify(opts),
+      body: JSON.stringify(body),
     });
+  }
+
+  /** "Bloquear" (audit 8 D4, abuse): access cut now, nothing sent, nothing charged. */
+  async blockSaasTenant(id: string, reason: string): Promise<any> {
+    return this.request(`/saas/tenants/${id}/block`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    });
+  }
+
+  async unblockSaasTenant(id: string): Promise<any> {
+    return this.request(`/saas/tenants/${id}/unblock`, { method: "POST" });
   }
 
   /** The salon's data as plain JSON, for the console's "Exportar datos" (audit 8 D14). */

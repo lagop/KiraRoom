@@ -2,7 +2,7 @@ import { UnauthorizedException } from "@nestjs/common";
 import * as bcrypt from "bcryptjs";
 import { AuthService, INVALID_CREDENTIALS } from "./auth.service";
 import { JwtStrategy } from "./strategies/jwt.strategy";
-import { SALON_DELETED_MESSAGE } from "./salon-deleted";
+import { SALON_BLOCKED_MESSAGE, SALON_DELETED_MESSAGE } from "./salon-deleted";
 import { SaasService } from "../saas/saas.service";
 
 /**
@@ -91,5 +91,45 @@ describe("a deleted salon's users", () => {
     await expect(
       strategy.validate({ typ: "access", sub: "u1", email: user.email, role: "owner", tenantId: "t1", tv: 0 }),
     ).resolves.toMatchObject({ id: "u1", tenantId: "t1" });
+  });
+});
+
+describe("D4: a blocked salon's users", () => {
+  const owner = (tenant: any) => ({
+    id: "u1",
+    email: "duena@salon.test",
+    firstName: "Ana",
+    lastName: "Gil",
+    role: "owner",
+    tenantId: "t1",
+    isActive: true,
+    tokenVersion: 0,
+    loginAttempts: 0,
+    lockedUntil: null,
+    passwordHash: bcrypt.hashSync("la-buena-clave", 4),
+    tenant,
+  });
+
+  it("cannot sign in, and read a neutral message in Spanish", async () => {
+    const service = Object.create(AuthService.prototype);
+    service.prisma = {
+      user: {
+        findUnique: jest.fn(async () => owner({ deletedAt: null, blockedAt: new Date("2026-11-04T00:00:00Z") })),
+        update: jest.fn(async () => ({})),
+      },
+    };
+    await expect(service.login({ email: "duena@salon.test", password: "la-buena-clave" })).rejects.toThrow(SALON_BLOCKED_MESSAGE);
+    expect(SALON_BLOCKED_MESSAGE).not.toMatch(/bloque|abuso|fraude/i);
+  });
+
+  it("have every request refused, except a platform support session", async () => {
+    const user = owner({ plan: "pro", subscriptionStatus: "active", deletedAt: null, blockedAt: new Date("2026-11-04T00:00:00Z") });
+    const prisma: any = { user: { findUnique: jest.fn(async () => user) } };
+    const strategy = new JwtStrategy({ get: () => SECRET } as any, prisma);
+    const payload: any = { typ: "access", sub: "u1", email: user.email, role: "owner", tenantId: "t1", tv: 0 };
+    await expect(strategy.validate(payload)).rejects.toThrow(SALON_BLOCKED_MESSAGE);
+    // A support session gets past the block and on to its own checks (here
+    // it has no live claims, so it is refused for that, not for the block).
+    await expect(strategy.validate({ ...payload, impersonatedBy: "saas-1" })).rejects.toThrow("La sesión de soporte ha terminado.");
   });
 });

@@ -7,6 +7,11 @@
  */
 import {
   anonymizeNeedsForce,
+  courtesyUntilIso,
+  courtesyUntilProblem,
+  dateInputValue,
+  editableStatuses,
+  tenantActions,
   formatDateEs,
   inviteCanResend,
   inviteCanRevoke,
@@ -84,6 +89,22 @@ check(
   }),
   "Comparte el NIF B12345678 con: Pelu Ana, Pelu Ana 2 (eliminado).",
 );
+
+console.log("\n=== status buttons and the courtesy date (D4, D6) ===");
+check("an active salon paying in Stripe: Suspender, Bloquear", tenantActions({ subscriptionStatus: "active", hasStripeSubscription: true }), ["suspend", "block"]);
+check("an active salon without Stripe: Suspender, Cortesía, Bloquear", tenantActions({ subscriptionStatus: "active" }), ["suspend", "courtesy", "block"]);
+check("a read-only salon: Cortesía, Bloquear", tenantActions({ subscriptionStatus: "cancelled", hasStripeSubscription: true }), ["courtesy", "block"]);
+check("a blocked salon: only Desbloquear", tenantActions({ subscriptionStatus: "active", blockedAt: "2026-11-04T00:00:00Z" }), ["unblock"]);
+check("a deleted salon: nothing", tenantActions({ subscriptionStatus: "cancelled", deletedAt: "2026-11-04T00:00:00Z" }), []);
+check("the edit form offers En prueba while not read-only", editableStatuses("active"), ["active", "trialing"]);
+check("a read-only salon keeps its own status only", editableStatuses("cancelled"), ["cancelled"]);
+const NOW_D = new Date("2026-11-04T10:00:00Z");
+check("a date 30 days on, in Spain", dateInputValue(NOW_D, 30), "2026-12-04");
+check("the end of the chosen day in Spain", courtesyUntilIso("2026-12-04"), "2026-12-04T22:59:00.000Z");
+check("a malformed date is missing", courtesyUntilProblem("4/12/2026", NOW_D), "missing");
+check("yesterday is past", courtesyUntilProblem("2026-11-03", NOW_D), "past");
+check("more than a year is too far", courtesyUntilProblem("2027-12-31", NOW_D), "too_far");
+check("a month is fine", courtesyUntilProblem("2026-12-04", NOW_D), null);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

@@ -9,6 +9,7 @@ import { EmailSuppressionService } from "./email-suppression.service";
 import { EmailUnsubscribeService } from "./email-unsubscribe.service";
 import { EmailQuotaService } from "./email-quota.service";
 import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
+import { MARKETING_SENDS_TENANT_WHERE } from "../common/tenancy/send-policy";
 
 /** How long a send in flight holds its recipient before a sweep may retry it. */
 export const SEND_LEASE_MS = 10 * 60_000;
@@ -134,7 +135,7 @@ export class EmailCampaignSender {
   /** Scheduled campaigns whose time has come: claimed, or back to draft when nobody is on the list. */
   async startDue(now: Date = new Date()): Promise<void> {
     const due = await this.prisma.emailCampaign.findMany({
-      where: { status: "scheduled", scheduledAt: { lte: now }, campaignType: { not: "reengagement" }, tenant: { deletedAt: null } },
+      where: { status: "scheduled", scheduledAt: { lte: now }, campaignType: { not: "reengagement" }, tenant: MARKETING_SENDS_TENANT_WHERE },
       select: { id: true },
       take: CAMPAIGNS_PER_RUN,
     });
@@ -162,7 +163,7 @@ export class EmailCampaignSender {
   /** One batch per sending campaign, sharing the minute's pace between them. */
   async sendBatches(now: Date = new Date()): Promise<void> {
     const sending = await this.prisma.emailCampaign.findMany({
-      where: { status: "sending", campaignType: { not: "reengagement" }, capPausedAt: null, tenant: { deletedAt: null } },
+      where: { status: "sending", campaignType: { not: "reengagement" }, capPausedAt: null, tenant: MARKETING_SENDS_TENANT_WHERE },
       orderBy: { updatedAt: "asc" },
       take: CAMPAIGNS_PER_RUN,
       select: {
