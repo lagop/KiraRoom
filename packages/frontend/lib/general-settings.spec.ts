@@ -59,6 +59,8 @@ console.log("\n=== fields -> save ===");
 check("nothing changed, nothing sent", tenantUpdateFrom(saved, saved), {});
 check("time off emails: on unless turned off", [saved.timeOffEmailNotices, settingsFromTenant({ ...TENANT, timeOffEmailNotices: false }).timeOffEmailNotices], ["true", "false"]);
 check("turning them off sends false", tenantUpdateFrom({ ...saved, timeOffEmailNotices: "false" }, saved), { timeOffEmailNotices: false });
+check("the web chat: on unless turned off", [saved.webChatEnabled, settingsFromTenant({ ...TENANT, webChatEnabled: false }).webChatEnabled], ["true", "false"]);
+check("turning the web chat off sends false", tenantUpdateFrom({ ...saved, webChatEnabled: "false" }, saved), { webChatEnabled: false });
 check(
   "the new fields, in the server's types",
   tenantUpdateFrom(

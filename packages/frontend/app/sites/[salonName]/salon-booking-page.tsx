@@ -1526,9 +1526,16 @@ export default function SalonBookingPage({
       </footer>
 
       {/* Virtual Receptionist Widget: it books, so not while the salon
-          takes no bookings (it would be refused at the end too). */}
-      {salonData && takesBookings && (
-        <ChatWidget salonId={salonData.id} salonName={salonData.name} salonPhone={salonData.phone} t={t} />
+          takes no bookings (it would be refused at the end too), nor when the
+          salon turned off Ajustes > Recepcionista "Chat en mi web". */}
+      {salonData && takesBookings && initialData.webChatEnabled !== false && (
+        <ChatWidget
+          salonId={salonData.id}
+          salonName={salonData.name}
+          salonPhone={salonData.phone}
+          privacyHref={privacyHref}
+          t={t}
+        />
       )}
     </div>
   );

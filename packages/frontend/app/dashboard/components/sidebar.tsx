@@ -50,6 +50,7 @@ import { getCurrentUser } from "@/lib/utils";
 import { NavBadge, NavGroup, NavLink, activeGroup, badgesIn, isActive, navFor } from "@/lib/dashboard-nav";
 import apiClient from "@/lib/api";
 import { TIME_OFF_REQUESTS_CHANGED, pendingBadge } from "@/lib/time-off";
+import { RECEPTIONIST_INBOX_CHANGED } from "@/lib/receptionist-inbox";
 import { signOut } from "@/lib/sign-out";
 import { BugReportModal } from "./bug-report-modal";
 import { ProBadge } from "@/components/ProBadge";
@@ -153,25 +154,37 @@ export function DashboardSidebar({
   const badgeKinds = useMemo(() => badgesIn(nav).join(","), [nav]);
   const [counts, setCounts] = useState<Partial<Record<NavBadge, number>>>({});
   useEffect(() => {
-    if (!badgeKinds.includes("time-off-requests")) {
+    const kinds = badgeKinds.split(",").filter(Boolean) as NavBadge[];
+    if (!kinds.length) {
       setCounts({});
       return;
     }
     let live = true;
-    const recount = () => {
-      apiClient
-        .getTimeOffRequestCount()
-        .then(({ count }) => {
-          if (live) setCounts((c) => ({ ...c, "time-off-requests": count }));
-        })
-        // Only a badge: a failure leaves the menu as it is.
-        .catch(() => undefined);
+    const fetchers: Record<NavBadge, () => Promise<{ count: number }>> = {
+      "time-off-requests": () => apiClient.getTimeOffRequestCount(),
+      // Conversations where a client asked for the salon or the assistant could not answer.
+      "receptionist-attention": () => apiClient.getReceptionistInboxAttentionCount(),
+    };
+    const recount = (only?: NavBadge) => {
+      for (const kind of kinds) {
+        if (only && kind !== only) continue;
+        fetchers[kind]()
+          .then(({ count }) => {
+            if (live) setCounts((c) => ({ ...c, [kind]: count }));
+          })
+          // Only a badge: a failure leaves the menu as it is.
+          .catch(() => undefined);
+      }
     };
     recount();
-    window.addEventListener(TIME_OFF_REQUESTS_CHANGED, recount);
+    const onTimeOff = () => recount("time-off-requests");
+    const onInbox = () => recount("receptionist-attention");
+    window.addEventListener(TIME_OFF_REQUESTS_CHANGED, onTimeOff);
+    window.addEventListener(RECEPTIONIST_INBOX_CHANGED, onInbox);
     return () => {
       live = false;
-      window.removeEventListener(TIME_OFF_REQUESTS_CHANGED, recount);
+      window.removeEventListener(TIME_OFF_REQUESTS_CHANGED, onTimeOff);
+      window.removeEventListener(RECEPTIONIST_INBOX_CHANGED, onInbox);
     };
   }, [badgeKinds, pathname]);
   const badgeOf = (item: NavLink) => (item.badge ? pendingBadge(counts[item.badge] ?? 0) : null);

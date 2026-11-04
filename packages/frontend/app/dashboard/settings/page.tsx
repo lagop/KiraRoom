@@ -7,6 +7,7 @@ import {
   Calendar,
   Users,
   Check,
+  MessageCircle,
 } from "lucide-react";
 import apiClient from "@/lib/api";
 import { getCurrentUser } from "@/lib/utils";
@@ -165,6 +166,17 @@ const defaultSettingsData = {
         "Cada solicitud nueva llega por email a la dueña y a los administradores, y cada respuesta al profesional que la pidió. Desactivado, solo se avisa en las notificaciones del panel.",
     },
   ],
+  receptionist: [
+    {
+      // Off: the page shows no chat and the public endpoint refuses it.
+      // WhatsApp, Instagram and the rest have their own switches (Canales).
+      id: "webChatEnabled",
+      label: "Chat en mi web",
+      type: "switch",
+      description:
+        "El chat con la recepcionista virtual en tu página de reservas. Desactivado, no se muestra y nadie puede escribir por él. Las conversaciones se leen en Conversaciones.",
+    },
+  ],
   users: [
     {
       id: "allowProfessionalCrossBooking",
@@ -191,6 +203,18 @@ const TAB_LINKS: Record<string, Array<{ text: string; href: string; label: strin
       text: "Los mensajes de confirmación y recordatorio de cita los envía KiraRoom; los de WhatsApp, con sus plantillas aprobadas por Meta, se gestionan en",
       href: "/dashboard/settings/whatsapp",
       label: "WhatsApp Business",
+    },
+  ],
+  receptionist: [
+    {
+      text: "WhatsApp, Instagram, Facebook y Telegram se conectan en",
+      href: "/dashboard/settings/channels",
+      label: "Canales",
+    },
+    {
+      text: "Lo que han hablado tus clientas con la recepcionista está en",
+      href: "/dashboard/conversaciones",
+      label: "Conversaciones",
     },
   ],
   users: [
@@ -446,6 +470,7 @@ export default function SettingsPage() {
     // No "Pagos" tab: it asked salons for their own Stripe keys, which no
     // flow uses (there are no online payments from clients yet). The keys
     // already saved stay stored, encrypted. The tax rate is in Ajustes fiscales.
+    { id: "receptionist", label: t("settings.receptionist"), icon: MessageCircle },
     { id: "users", label: t("settings.users"), icon: Users },
   ];
 

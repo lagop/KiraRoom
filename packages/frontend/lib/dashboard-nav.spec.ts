@@ -32,7 +32,13 @@ console.log("who sees what");
   check("staff see Mis comisiones, the owner the salon's Comisiones", staff.includes("my-commissions") && !staff.includes("commissions") && owner.includes("commissions") && !owner.includes("my-commissions"));
   check("the owner sees every screen but the staff-only ones", owner.length === links(DASHBOARD_NAV).length - staffOnly.length, owner);
   check("staff ask for their time off; the owner answers the requests", staff.includes("my-time-off") && !staff.includes("time-off-requests") && owner.includes("time-off-requests") && !owner.includes("my-time-off"));
-  check("only the owner and managers fetch the pending requests badge", badgesIn(navFor("owner")).join() === "time-off-requests" && badgesIn(navFor("admin")).join() === "time-off-requests" && badgesIn(navFor("staff")).length === 0);
+  check(
+    "only the owner and managers fetch the pending requests and conversations badges",
+    badgesIn(navFor("owner")).sort().join() === "receptionist-attention,time-off-requests" &&
+      badgesIn(navFor("admin")).sort().join() === "receptionist-attention,time-off-requests" &&
+      badgesIn(navFor("staff")).length === 0,
+  );
+  check("Conversaciones is for the owner and admins (the API agrees)", owner.includes("conversations") && ids(navFor("admin")).includes("conversations") && !staff.includes("conversations"));
   check("the owner finds the plan and subscription in the menu", owner.includes("billing"));
   check("admins do not see Facturación (billing is the owner's, B7)", !ids(navFor("admin")).includes("billing"));
   check("admins still see the invoices", ids(navFor("admin")).includes("invoices"));
@@ -98,6 +104,7 @@ console.log("management pages a professional opens by their address");
     "/dashboard/gift-cards",
     "/dashboard/reviews",
     "/dashboard/solicitudes-ausencia",
+    "/dashboard/conversaciones",
     "/dashboard/promotions",
     "/dashboard/loyalty",
     "/dashboard/email-campaigns",

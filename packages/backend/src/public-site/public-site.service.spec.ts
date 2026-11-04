@@ -490,6 +490,13 @@ describe("PublicSiteService: links on the page", () => {
     const none: any = await makeService().svc.getPage("x");
     expect([none.whatsapp, none.privacyPolicyUrl]).toEqual([null, null]);
   });
+
+  it("says whether the page shows the receptionist chat (Chat en mi web)", async () => {
+    const on: any = await makeService().svc.getPage("x");
+    expect(on.webChatEnabled).toBe(true);
+    const off: any = await makeService({ tenant: { webChatEnabled: false } }).svc.getPage("x");
+    expect(off.webChatEnabled).toBe(false);
+  });
 });
 
 describe("PublicSiteService.legal", () => {
