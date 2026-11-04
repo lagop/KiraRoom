@@ -330,7 +330,10 @@ function ProfessionalsPageContent() {
   const setActive = async (professional: Professional, isActive: boolean) => {
     setBusy(true);
     try {
-      await apiClient.updateProfessional(professional.id, { isActive });
+      // Deactivating has its own route, allowed while read-only: a salon
+      // over its plan's limit can bring its team down before paying (D8).
+      if (isActive) await apiClient.updateProfessional(professional.id, { isActive });
+      else await apiClient.deactivateProfessional(professional.id);
       fetchProfessionals();
     } catch (err) {
       // The real reason, e.g. the plan's limit of active professionals.

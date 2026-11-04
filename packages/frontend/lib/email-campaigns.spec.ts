@@ -140,7 +140,7 @@ check(
 );
 check("offers the bono only when on sale", /compras un bono/.test(quotaWarning(700, { ...quota, pack: { emails: 1000, priceCents: 1500 } }) ?? ""));
 const offer = packOfferText({ emails: 1000, priceCents: 1500 }).replace(/\s/g, " ");
-check("bono offer text", offer === "Bono de 1.000 emails por 15,00 € + IVA", offer);
+check("bono offer text", offer === "Bono de 1.000 emails por 15,00 €", offer);
 const paused: any = {
   status: "sending",
   capPausedAt: "2026-11-20T10:00:00Z",

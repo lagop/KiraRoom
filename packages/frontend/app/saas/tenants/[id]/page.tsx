@@ -20,6 +20,8 @@ import { useTranslations } from "@/lib/use-translation";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/components/ui/use-toast";
 import { GrowthIndicator } from "../../components/metric-card";
+import { SharedIdentityNotice } from "../../components/shared-identity-notice";
+import type { SharedIdentityWarning } from "@/lib/shared-identity";
 
 interface Tenant {
   id: string;
@@ -43,6 +45,8 @@ interface Tenant {
   appointmentCount: number;
   professionalCount: number;
   serviceCount: number;
+  /** Other salons with the same phone or NIF (D9). */
+  sharedIdentity?: SharedIdentityWarning[];
 }
 
 interface TenantStats {
@@ -241,6 +245,8 @@ export default function TenantDetailPage() {
           )}
         </div>
       </div>
+
+      <SharedIdentityNotice warnings={tenant.sharedIdentity} />
 
       {/* Stats with Growth */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
