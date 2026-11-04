@@ -186,7 +186,14 @@ test("a client books online and the salon completes and invoices the visit", asy
     await slot.click();
     await page.getByRole("button", { name: "Confirmar reserva" }).click();
 
-    await expect(page.getByText("Reserva confirmada").first()).toBeVisible();
+    // A summary that stays on screen (R9), not a toast; "confirmada" only
+    // when the salon confirms online bookings itself.
+    const done = page.getByTestId("booking-done");
+    await expect(done).toBeVisible();
+    await expect(done.getByText("Hemos recibido tu reserva")).toBeVisible();
+    await expect(done.getByText(bookingTime, { exact: true })).toBeVisible();
+    // Back to the form for the next step.
+    await page.getByTestId("booking-another").click();
   });
 
   await test.step("a closed day offers no times", async () => {

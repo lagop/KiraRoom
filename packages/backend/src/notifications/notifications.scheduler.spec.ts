@@ -264,6 +264,26 @@ describe("reminder retries", () => {
     expect(a.reminder24hSent).toBe(true);
     expect(a.reminder24hAttempts).toBe(0);
   });
+
+  // R3: a booking from outside the salon whose confirmation SMS went over the
+  // daily caps is not texted its reminders either; the email still goes.
+  it("no SMS for an online booking whose SMS were held back at booking", async () => {
+    const phone = { firstName: "Ana", lastName: "Gil", email: "ana@mail.test", phone: "600111222" };
+    const held = appointment({ source: "online", client: phone });
+    const fine = appointment({ source: "widget", client: phone });
+    const panel = appointment({ source: "staff", client: phone });
+    const prisma: any = makePrisma([held, fine, panel]);
+    prisma.publicBookingSms = {
+      findFirst: jest.fn(async ({ where }: any) => (where.appointmentId === held.id && where.allowed === false ? { id: "x" } : null)),
+    };
+    const { scheduler, sms, email } = makeScheduler(prisma, { sms: true });
+    await scheduler.send24HourReminders(NOW);
+    const texted = sms.sendAppointmentReminder.mock.calls.length;
+    expect(texted).toBe(2);
+    expect(email.sendAppointmentReminder).toHaveBeenCalledTimes(3);
+    // Booked in the panel: never looked up.
+    expect(prisma.publicBookingSms.findFirst).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("1-hour reminders", () => {

@@ -7,6 +7,8 @@ import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { ConsentService } from "./consent.service";
 import { CreateConsentFormDto, RevokeConsentDto, SignConsentDto, UpdateConsentFormDto } from "./consent.dto";
 import { Roles, SALON_TEAM, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
+// The signer's address from the trusted proxy, not the header she sends.
+import { clientIp } from "../common/client-ip";
 
 /** A choice about email promotions (the salon only records a refusal). */
 export class MarketingChoiceDto {
@@ -259,10 +261,3 @@ export class ConsentController {
   }
 }
 
-function clientIp(req: Request): string {
-  return (
-    (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
-    req.socket?.remoteAddress ||
-    ""
-  );
-}
