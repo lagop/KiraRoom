@@ -623,6 +623,8 @@ export interface ChannelsConfig {
     instagramUsername?: string;
     hasAccessToken: boolean;
     needsReconnect: boolean;
+    /** Facebook refused the Page token (expired or revoked): reconnect. */
+    accessLost?: boolean;
   } | null;
   metaPagesPending: boolean;
   telegram: {
@@ -630,6 +632,8 @@ export interface ChannelsConfig {
     botUsername?: string;
     hasBotToken: boolean;
     needsReconnect: boolean;
+    /** Telegram no longer accepts the bot token: reconnect. */
+    accessLost?: boolean;
   } | null;
   /** What the server can offer, and why not (e.g. "meta_app_not_configured"). */
   availability?: {
@@ -650,6 +654,16 @@ export interface WhatsAppConnection {
   qualityScore?: string | null;
   tokenExpiresAt?: string | null;
   isActive: boolean;
+  /** When Meta confirmed KiraRoom receives this number's messages (subscribed_apps). */
+  webhookSubscribedAt?: string | null;
+  /** Why the subscription failed, in Spanish, ready to show. */
+  webhookError?: string | null;
+  /** Last message or status Meta delivered for this number. */
+  lastInboundAt?: string | null;
+  /** When Meta refused the token (expired or revoked); null while it works. */
+  authErrorAt?: string | null;
+  /** What to tell the salon about the refused token, in Spanish; null while it works. */
+  accessProblem?: string | null;
 }
 /** A quarterly tax return draft (Modelo 303 / 420): box -> value. */
 export interface TaxReportDraft {
@@ -5046,7 +5060,7 @@ class ApiClient implements ApiClientInterface {
     return this.request("/virtual-receptionist/channels/meta/pages");
   }
 
-  async selectMetaChannelPage(pageId: string): Promise<{ connected: boolean }> {
+  async selectMetaChannelPage(pageId: string): Promise<{ connected: boolean; instagramTaken?: boolean; message?: string }> {
     return this.request("/virtual-receptionist/channels/meta/select", {
       method: "POST",
       body: JSON.stringify({ pageId }),
@@ -5603,20 +5617,20 @@ class ApiClient implements ApiClientInterface {
       throw err;
     }
   }
-  async startWhatsAppConnect(): Promise<{ url: string; state: string }> {
-    return this.request(`/whatsapp/connect/start`);
-  }
   async manualWhatsAppConnect(input: {
     accessToken: string;
     wabaId: string;
     phoneNumberId: string;
-    displayPhone: string;
     displayName?: string;
   }): Promise<WhatsAppConnection> {
     return this.request(`/whatsapp/connect/manual`, {
       method: "POST",
       body: JSON.stringify(input),
     });
+  }
+  /** Asks Meta again whether the stored token, number and subscription work. */
+  async checkWhatsAppConnection(): Promise<WhatsAppConnection> {
+    return this.request(`/whatsapp/connection/check`, { method: "POST" });
   }
   async disconnectWhatsApp(): Promise<{ disconnected: boolean }> {
     return this.request(`/whatsapp/connection`, { method: "DELETE" });

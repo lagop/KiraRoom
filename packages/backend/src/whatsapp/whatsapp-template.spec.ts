@@ -316,3 +316,62 @@ describe("WhatsAppTemplateService.submitTemplate (the review template, from the 
     expect(off.meta.createTemplate).not.toHaveBeenCalled();
   });
 });
+
+/** Channels audit M5 + the template status read (B20): errors say so and are not cached. */
+describe("WhatsAppTemplateService: a refused token", () => {
+  function withHealth(over: { connection?: any; listTemplates?: any } = {}) {
+    const prisma: any = {
+      whatsAppConnection: {
+        findUnique: jest.fn(async () => ({
+          wabaId: "waba1",
+          phoneNumberId: "pn1",
+          accessTokenEnc: "enc",
+          isActive: true,
+          authErrorAt: null,
+          authError: null,
+          ...(over.connection ?? {}),
+        })),
+      },
+    };
+    const meta: any = {
+      decryptToken: jest.fn(() => "token"),
+      listTemplates: over.listTemplates ?? jest.fn(async () => ({ data: [] })),
+      sendTemplate: jest.fn(async () => ({ messages: [{ id: "wamid.out" }] })),
+      createTemplate: jest.fn(async () => ({ id: "t1", status: "PENDING" })),
+    };
+    const health: any = { whatsAppError: jest.fn(async () => true) };
+    const service = new WhatsAppTemplateService(prisma, meta, health);
+    (service as any).logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+    return { service, meta, health };
+  }
+
+  it("shows UNKNOWN, not 'Sin enviar', when Meta could not be asked, marks the token and asks again next time", async () => {
+    const listTemplates = jest.fn(async () => ({ error: { code: 190, message: "expired" } }));
+    const { service, health } = withHealth({ listTemplates });
+    const out = await service.standardStatus("t1");
+    expect(out.every((t) => t.status === "UNKNOWN")).toBe(true);
+    expect(health.whatsAppError).toHaveBeenCalledWith("t1", 190);
+    await service.standardStatus("t1");
+    expect(listTemplates).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not send, submit or call Meta while the token is marked as refused", async () => {
+    const { service, meta } = withHealth({ connection: { authErrorAt: new Date(), authError: "meta_190" } });
+    expect(await service.sendAppointmentReminder("t1", reminder)).toEqual({ sent: false, reason: "meta_190" });
+    expect(await service.canSend("t1", APPOINTMENT_REMINDER)).toEqual({ ok: false, reason: "meta_190" });
+    const submitted = await service.submitStandardTemplates("t1");
+    expect(Object.values(submitted).every((v) => v.startsWith("ERROR: "))).toBe(true);
+    expect(meta.listTemplates).not.toHaveBeenCalled();
+    expect(meta.sendTemplate).not.toHaveBeenCalled();
+    expect(meta.createTemplate).not.toHaveBeenCalled();
+  });
+
+  it("a send refused for the token marks the connection", async () => {
+    const { service, meta, health } = withHealth({
+      listTemplates: jest.fn(async () => ({ data: [{ name: APPOINTMENT_REMINDER.name, language: "es", status: "APPROVED" }] })),
+    });
+    meta.sendTemplate.mockResolvedValueOnce({ error: { code: 190, message: "expired" } });
+    expect(await service.sendAppointmentReminder("t1", reminder)).toEqual({ sent: false, reason: "meta_190" });
+    expect(health.whatsAppError).toHaveBeenCalledWith("t1", 190);
+  });
+});

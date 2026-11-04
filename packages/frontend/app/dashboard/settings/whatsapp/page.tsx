@@ -7,6 +7,7 @@ import {
   AlertCircle,
   Check,
   ChevronDown,
+  RefreshCw,
 } from "lucide-react";
 import apiClient, { WhatsAppConnection } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
@@ -28,7 +29,15 @@ const TEMPLATE_STATUS_KEYS: Record<string, string> = {
   REJECTED: "whatsappSettings.templateStatus.rejected",
   PENDING: "whatsappSettings.templateStatus.pending",
   NOT_SUBMITTED: "whatsappSettings.templateStatus.notSubmitted",
+  // Meta could not be asked (expired token, wrong account...): not "Sin enviar".
+  UNKNOWN: "whatsappSettings.templateStatus.unknown",
 };
+
+const EMPTY_MANUAL = { accessToken: "", wabaId: "", phoneNumberId: "", displayName: "" };
+
+function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString("es-ES", { dateStyle: "short", timeStyle: "short" });
+}
 
 const QUALITY_KEYS: Record<string, string> = {
   GREEN: "whatsappSettings.quality.green",
@@ -44,14 +53,12 @@ export default function WhatsAppSettingsPage() {
   // A failed load is said as such: it used to show the connection forms to
   // a salon that is already connected.
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [manual, setManual] = useState({
-    accessToken: "",
-    wabaId: "",
-    phoneNumberId: "",
-    displayPhone: "",
-    displayName: "",
-  });
+  // The number shown to clients comes from Meta, not from a field here.
+  const [manual, setManual] = useState(EMPTY_MANUAL);
   const [busy, setBusy] = useState(false);
+  const [checking, setChecking] = useState(false);
+  // A new token for a connection Meta stopped accepting.
+  const [newToken, setNewToken] = useState("");
   // Disconnecting is confirmed in the panel's dialog.
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
@@ -74,9 +81,21 @@ export default function WhatsAppSettingsPage() {
   async function submitTemplates() {
     setBusy(true);
     try {
-      await apiClient.submitWhatsAppStandardTemplates();
+      const result = await apiClient.submitWhatsAppStandardTemplates();
       setTemplates(await apiClient.getWhatsAppStandardTemplates().catch(() => []));
-      toast({ title: t("whatsappSettings.templatesSubmitted") });
+      // Meta's refusals come back per template as "ERROR: <reason>".
+      const errors = Object.values(result ?? {})
+        .filter((v) => typeof v === "string" && v.startsWith("ERROR: "))
+        .map((v) => v.slice("ERROR: ".length));
+      if (errors.length > 0) {
+        toast({
+          title: t("whatsappSettings.templatesSubmitPartial"),
+          description: Array.from(new Set(errors)).join(" "),
+          variant: "destructive",
+        });
+      } else {
+        toast({ title: t("whatsappSettings.templatesSubmitted") });
+      }
     } catch (err: any) {
       toast({ title: t("whatsappSettings.templatesSubmitError"), description: err?.message, variant: "destructive" });
     } finally {
@@ -89,23 +108,42 @@ export default function WhatsAppSettingsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function connectManual() {
+  async function connect(input: typeof EMPTY_MANUAL) {
     setBusy(true);
     try {
-      await apiClient.manualWhatsAppConnect(manual);
-      toast({ title: t("whatsappSettings.connected") });
-      setManual({
-        accessToken: "",
-        wabaId: "",
-        phoneNumberId: "",
-        displayPhone: "",
-        displayName: "",
+      const saved = await apiClient.manualWhatsAppConnect({
+        ...input,
+        displayName: input.displayName || undefined,
       });
+      if (saved?.webhookError) {
+        toast({ title: t("whatsappSettings.webhookWarning"), description: saved.webhookError, variant: "destructive" });
+      } else {
+        toast({ title: t("whatsappSettings.connected") });
+      }
+      setManual(EMPTY_MANUAL);
+      setNewToken("");
       await load();
     } catch (err: any) {
       toast({ title: t("whatsappSettings.connectError"), description: err?.message, variant: "destructive" });
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function checkAgain() {
+    setChecking(true);
+    try {
+      const c = await apiClient.checkWhatsAppConnection();
+      if (c?.webhookError) {
+        toast({ title: t("whatsappSettings.webhookWarning"), description: c.webhookError, variant: "destructive" });
+      } else {
+        toast({ title: t("whatsappSettings.checkOk") });
+      }
+    } catch (err: any) {
+      toast({ title: t("whatsappSettings.checkError"), description: err?.message, variant: "destructive" });
+    } finally {
+      setChecking(false);
+      await load();
     }
   }
 
@@ -182,6 +220,69 @@ export default function WhatsAppSettingsPage() {
                 : t("whatsappSettings.quality.unknown")}
             </span>
           </div>
+          {conn.accessProblem && (
+            <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p className="font-medium">{t("whatsappSettings.accessLostTitle")}</p>
+                <p className="mt-1">{conn.accessProblem}</p>
+              </div>
+            </div>
+          )}
+          <div className="text-sm text-gray-700">
+            <span className="font-medium">{t("whatsappSettings.receivingLabel")}:</span>{" "}
+            {conn.webhookSubscribedAt && !conn.webhookError ? (
+              <span className="text-green-700">{t("whatsappSettings.receivingYes")}</span>
+            ) : (
+              <span className="text-red-700">{t("whatsappSettings.receivingNo")}</span>
+            )}
+            {conn.lastInboundAt && (
+              <span className="ml-2 text-xs text-gray-500">
+                {t("whatsappSettings.lastInbound", { date: formatDateTime(conn.lastInboundAt) })}
+              </span>
+            )}
+            {(!conn.webhookSubscribedAt || conn.webhookError) && (
+              <p className="mt-1 text-xs text-red-700">{conn.webhookError || t("whatsappSettings.receivingNoHelp")}</p>
+            )}
+          </div>
+          <button
+            onClick={checkAgain}
+            disabled={checking}
+            className="inline-flex items-center gap-2 rounded border border-gray-300 px-3 py-1.5 text-xs hover:bg-gray-50 disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3 w-3 ${checking ? "animate-spin" : ""}`} />
+            {checking ? t("whatsappSettings.checking") : t("whatsappSettings.checkAgain")}
+          </button>
+          {conn.accessProblem && (
+            <div className="rounded-lg border border-gray-200 p-3">
+              <div className="text-sm font-medium text-gray-900">{t("whatsappSettings.reconnectTitle")}</div>
+              <p className="mt-1 text-xs text-gray-500">{t("whatsappSettings.reconnectIntro")}</p>
+              <div className="mt-2">
+                <Input
+                  label={t("whatsappSettings.fields.accessToken")}
+                  type="password"
+                  value={newToken}
+                  onChange={setNewToken}
+                />
+              </div>
+              <div className="flex justify-end pt-2">
+                <button
+                  onClick={() =>
+                    connect({
+                      accessToken: newToken,
+                      wabaId: conn.wabaId,
+                      phoneNumberId: conn.phoneNumberId,
+                      displayName: "",
+                    })
+                  }
+                  disabled={busy || !newToken.trim()}
+                  className="bg-purple-600 text-white px-3 py-1.5 rounded-lg text-sm hover:bg-purple-700 disabled:opacity-50"
+                >
+                  {busy ? t("whatsappSettings.connecting") : t("whatsappSettings.reconnect")}
+                </button>
+              </div>
+            </div>
+          )}
           {conn.tokenExpiresAt && (
             <p className="text-sm text-gray-600">
               {t("whatsappSettings.accessExpires", {
@@ -222,7 +323,9 @@ export default function WhatsAppSettingsPage() {
                         ? "bg-green-100 text-green-700"
                         : tpl.status === "REJECTED"
                           ? "bg-red-100 text-red-700"
-                          : "bg-amber-100 text-amber-700"
+                          : tpl.status === "UNKNOWN"
+                            ? "bg-gray-100 text-gray-600"
+                            : "bg-amber-100 text-amber-700"
                     }`}
                   >
                     {TEMPLATE_STATUS_KEYS[tpl.status] ? t(TEMPLATE_STATUS_KEYS[tpl.status]) : tpl.status}
@@ -230,7 +333,13 @@ export default function WhatsAppSettingsPage() {
                 </li>
               ))}
             </ul>
-            {templates.some((tpl) => tpl.status !== "APPROVED" && tpl.status !== "PENDING") && (
+            {templates.some((tpl) => tpl.status === "UNKNOWN") && (
+              <p className="mt-2 text-xs text-gray-500">{t("whatsappSettings.templatesUnknown")}</p>
+            )}
+            {/* Nothing to submit while Meta cannot even be asked. */}
+            {!conn.accessProblem &&
+              !templates.some((tpl) => tpl.status === "UNKNOWN") &&
+              templates.some((tpl) => tpl.status !== "APPROVED" && tpl.status !== "PENDING") && (
               <button
                 onClick={submitTemplates}
                 disabled={busy}
@@ -274,12 +383,6 @@ export default function WhatsAppSettingsPage() {
                 onChange={(v) => setManual({ ...manual, phoneNumberId: v })}
               />
               <Input
-                label={t("whatsappSettings.fields.displayPhone")}
-                placeholder="+34600000000"
-                value={manual.displayPhone}
-                onChange={(v) => setManual({ ...manual, displayPhone: v })}
-              />
-              <Input
                 label={t("whatsappSettings.fields.displayName")}
                 value={manual.displayName}
                 onChange={(v) => setManual({ ...manual, displayName: v })}
@@ -287,7 +390,7 @@ export default function WhatsAppSettingsPage() {
             </div>
             <div className="flex justify-end pt-3">
               <button
-                onClick={connectManual}
+                onClick={() => connect(manual)}
                 disabled={busy}
                 className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 disabled:opacity-50 inline-flex items-center gap-2"
               >

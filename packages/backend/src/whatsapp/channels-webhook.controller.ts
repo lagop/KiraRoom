@@ -19,6 +19,8 @@ import { ApiTags } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
 import { ConfigService } from '@nestjs/config';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
+import { sendChallenge } from './whatsapp.controller';
+import { metaInbound, telegramInbound } from './inbound-kinds';
 import { FeatureFlagService } from '../common/feature-flags/feature-flag.service';
 import { MetricsService, COUNTERS } from '../common/observability/metrics.service';
 import { ChannelCredentialsService } from '../virtual-receptionist/channels/channel-credentials.service';
@@ -70,11 +72,9 @@ export class ChannelsWebhookController {
     @Query('hub.challenge') challenge: string,
     @Res() res: Response,
   ) {
-    const value = this.whatsapp.verifyChallenge(mode, token, challenge);
-    if (value === null || !this.config.get<string>('META_WEBHOOK_VERIFY_TOKEN')) {
-      return res.status(HttpStatus.FORBIDDEN).send('Forbidden');
-    }
-    return res.status(HttpStatus.OK).send(value);
+    // Same rules as /webhooks/meta/whatsapp: text/plain, refused while the
+    // verify token is unset or the example value.
+    return sendChallenge(res, this.whatsapp.verifyChallenge(mode, token, challenge));
   }
 
   /**
@@ -134,9 +134,13 @@ export class ChannelsWebhookController {
       for (const m of entry?.messaging ?? []) {
         const message = m?.message;
         // Deliveries, reads, reactions and our own replies (echoes) are not
-        // messages to answer.
-        if (!message || message.is_echo || message.is_deleted || !m?.sender?.id) continue;
+        // messages to answer; likes, stickers, story mentions and
+        // unsupported messages neither (inbound-kinds.ts). The "Empezar"
+        // button (a postback) is answered like "Hola".
+        if (!m?.sender?.id || message?.is_echo || message?.is_deleted) continue;
         if (m.sender.id === accountId) continue;
+        const kind = metaInbound(m);
+        if (kind.kind === 'ignore') continue;
         const tenantId =
           platform === 'instagram'
             ? await this.credentials.tenantForInstagram(accountId)
@@ -159,10 +163,10 @@ export class ChannelsWebhookController {
           .inc({ channel: platform });
         const inbound: InboundChatMessage = {
           channel: platform,
-          id: message.mid ?? `${m.sender.id}:${m.timestamp}`,
+          id: message?.mid ?? m.postback?.mid ?? `${m.sender.id}:${m.timestamp}`,
           from: String(m.sender.id),
-          text: typeof message.text === 'string' ? message.text : undefined,
-          hasAttachment: Array.isArray(message.attachments) && message.attachments.length > 0,
+          text: kind.kind === 'text' ? kind.text : undefined,
+          hasAttachment: kind.kind === 'media',
         };
         // Not awaited: Meta gets its 200 now, the answer follows.
         void this.receptionist.enqueue(tenantId, inbound);
@@ -209,6 +213,12 @@ export class ChannelsWebhookController {
       res.json({ received: true });
       return;
     }
+    // Stickers, GIFs, dice, service messages: no answer.
+    const kind = telegramInbound(message);
+    if (kind.kind === 'ignore') {
+      res.json({ received: true });
+      return;
+    }
     if (!(await this.isMultichannelEnabled(tenantId))) {
       this.logger.warn(
         `Telegram webhook: tenant ${tenantId} lacks the 'multichannel' feature; ignoring message from chat ${message.chat.id}`,
@@ -227,8 +237,8 @@ export class ChannelsWebhookController {
       channel: 'telegram',
       id: String(body.update_id ?? `${message.chat.id}:${message.message_id}`),
       from: String(message.chat.id),
-      text: typeof message.text === 'string' ? message.text : undefined,
-      hasAttachment: typeof message.text !== 'string',
+      text: kind.kind === 'text' ? kind.text : undefined,
+      hasAttachment: kind.kind === 'media',
       ...(name ? { name } : {}),
     });
     res.json({ received: true });

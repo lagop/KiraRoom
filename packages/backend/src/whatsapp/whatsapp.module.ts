@@ -9,14 +9,18 @@ import { WhatsAppMessagingModule } from "./whatsapp-messaging.module";
 import { ConsentModule } from "../consent/consent.module";
 import { WhatsAppCampaignsController } from "./campaigns/whatsapp-campaigns.controller";
 import { WhatsAppCampaignsService } from "./campaigns/whatsapp-campaigns.service";
+import { NotificationsModule } from "../notifications/notifications.module";
+import { ChannelAttentionScheduler } from "../channel-health/channel-attention.scheduler";
 
 @Module({
-  imports: [MessageBundlesModule, VirtualReceptionistModule, WhatsAppMessagingModule, ConsentModule],
+  imports: [MessageBundlesModule, VirtualReceptionistModule, WhatsAppMessagingModule, ConsentModule, NotificationsModule],
   controllers: [WhatsAppController, WhatsAppCampaignsController, MetaWebhookController, ChannelsWebhookController],
   // MetaCloudApiClient comes from WhatsAppMessagingModule; the Messenger,
   // Instagram and Telegram receptionist (ChannelReceptionistService) from
   // VirtualReceptionistModule.
-  providers: [WhatsAppService, WhatsAppReceptionistService, WhatsAppCampaignsService],
+  // ChannelAttentionScheduler tells owners when Meta or Telegram refused a
+  // channel token (marked by ChannelHealthService, from WhatsAppMessagingModule).
+  providers: [WhatsAppService, WhatsAppReceptionistService, WhatsAppCampaignsService, ChannelAttentionScheduler],
   exports: [WhatsAppService],
 })
 export class WhatsAppModule {}

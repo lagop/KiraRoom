@@ -19,44 +19,6 @@ export interface WhatsAppSendResult {
   error?: string;
 }
 
-export interface WhatsAppInteractiveMessage {
-  body: string;
-  buttons?: WhatsAppButton[];
-  list?: WhatsAppList;
-}
-
-export interface WhatsAppButton {
-  id: string;
-  title: string;
-}
-
-export interface WhatsAppList {
-  header: string;
-  sections: WhatsAppListSection[];
-}
-
-export interface WhatsAppListSection {
-  title: string;
-  rows: WhatsAppListRow[];
-}
-
-export interface WhatsAppListRow {
-  id: string;
-  title: string;
-  description?: string;
-}
-
-export interface TwilioWhatsAppWebhookEvent {
-  SmsSid: string;
-  SmsStatus: string;
-  MessageStatus: string;
-  To: string;
-  From: string;
-  Body: string;
-  NumMedia: string;
-  ApiVersion: string;
-}
-
 @Injectable()
 export class WhatsAppService {
   private readonly logger = new Logger(WhatsAppService.name);
@@ -121,74 +83,6 @@ export class WhatsAppService {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       this.logger.error(`Failed to send WhatsApp message: ${maskPhonesIn(errorMessage)}`);
       return { success: false, error: errorMessage };
-    }
-  }
-
-  /**
-   * Send an interactive message via WhatsApp
-   */
-  async sendInteractiveMessage(to: string, message: WhatsAppInteractiveMessage): Promise<WhatsAppSendResult> {
-    if (!this.isConfigured()) {
-      this.logger.warn('WhatsApp service not configured');
-      return { success: false, error: 'WhatsApp service not configured' };
-    }
-
-    const formattedPhone = this.formatPhoneNumber(to);
-    
-    if (!this.isValidPhoneNumber(formattedPhone)) {
-      this.logger.error(`Invalid phone number format: ${maskPhone(to)}`);
-      return { success: false, error: 'Invalid phone number format' };
-    }
-
-    // For Twilio WhatsApp, interactive messages are supported via templates
-    // This is a simplified implementation; actual interactive messages may require templates
-    try {
-      let messageOptions: any = {
-        from: `whatsapp:${this.fromNumber}`,
-        to: `whatsapp:${formattedPhone}`,
-        body: message.body,
-      };
-
-      // Add interactive elements if available
-      if (message.buttons) {
-        // Twilio supports quick replies for WhatsApp
-        // This is a simplified approach - actual implementation may vary
-        messageOptions.body += `\n\n${message.buttons.map(btn => `${btn.id}. ${btn.title}`).join('\n')}`;
-      }
-
-      const result = await this.twilioClient!.messages.create(messageOptions);
-
-      if (result.status === 'failed' || result.status === 'undelivered') {
-        const errorMsg = result.errorMessage || `WhatsApp message failed with status: ${result.status}`;
-        this.logger.error(`Failed to send WhatsApp interactive message: ${maskPhonesIn(errorMsg)}`);
-        return { success: false, error: errorMsg };
-      }
-
-      this.logger.log(`WhatsApp interactive message sent to ${maskPhone(to)}: ${result.sid}`);
-      return { success: true, id: result.sid };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.logger.error(`Failed to send WhatsApp interactive message: ${maskPhonesIn(errorMessage)}`);
-      return { success: false, error: errorMessage };
-    }
-  }
-
-  /**
-   * Handle incoming WhatsApp messages from Twilio webhook
-   */
-  async handleIncomingMessage(event: TwilioWhatsAppWebhookEvent): Promise<void> {
-    this.logger.log(`Received WhatsApp message from ${maskPhone(event.From)} (${(event.Body ?? '').length} characters)`);
-
-    try {
-      // Process the incoming message
-      // This is a placeholder - implement your message processing logic here
-      
-      // Example: Echo the message back to the sender
-      // await this.sendTextMessage(event.From, `You said: ${event.Body}`);
-      
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.logger.error(`Failed to handle incoming WhatsApp message: ${maskPhonesIn(errorMessage)}`);
     }
   }
 

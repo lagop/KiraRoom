@@ -43,7 +43,7 @@ export const META_MESSAGING_SCOPES = [
  * Endpoints, as documented by Meta:
  *  - Messenger send:   POST /{PAGE_ID}/messages?access_token=PAGE_TOKEN
  *  - Instagram send:   POST /me/messages?access_token=PAGE_TOKEN
- *  - Page webhooks:    POST /{PAGE_ID}/subscribed_apps?subscribed_fields=messages
+ *  - Page webhooks:    POST /{PAGE_ID}/subscribed_apps?subscribed_fields=messages,messaging_postbacks
  *  - Login:            facebook.com/{v}/dialog/oauth -> /oauth/access_token
  *  - Long-lived token: /oauth/access_token?grant_type=fb_exchange_token
  *  - Pages + tokens:   /me/accounts (Page tokens from a long-lived user token
@@ -102,10 +102,22 @@ export class MetaGraphClient {
     return this.call(url.toString(), { method: "GET" });
   }
 
-  /** Delivers the Page's Messenger (and linked Instagram) messages to the app's webhook. */
+  /** What the person granted and declined in Facebook Login. */
+  async listPermissions(
+    userToken: string,
+  ): Promise<GraphResult<{ data: Array<{ permission: string; status: string }> }>> {
+    const url = new URL(`${this.base()}/me/permissions`);
+    url.searchParams.set("access_token", userToken);
+    return this.call(url.toString(), { method: "GET" });
+  }
+
+  /**
+   * Delivers the Page's Messenger (and linked Instagram) messages to the
+   * app's webhook. messaging_postbacks too: the "Empezar" button is one.
+   */
   async subscribePage(pageId: string, pageToken: string): Promise<GraphResult<{ success: boolean }>> {
     const url = new URL(`${this.base()}/${encodeURIComponent(pageId)}/subscribed_apps`);
-    url.searchParams.set("subscribed_fields", "messages");
+    url.searchParams.set("subscribed_fields", "messages,messaging_postbacks");
     url.searchParams.set("access_token", pageToken);
     return this.call(url.toString(), { method: "POST" });
   }
