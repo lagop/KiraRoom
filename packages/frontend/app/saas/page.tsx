@@ -15,6 +15,7 @@ import apiClient from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
 import { countryName, formatEuros } from "@/lib/console-metrics";
 import Link from "next/link";
+import WeeklySummary from "./components/weekly-summary";
 
 /** GET /saas/analytics/overview (backend saas-analytics.service.ts). Amounts in euros. */
 interface SaasAnalytics {
@@ -22,7 +23,6 @@ interface SaasAnalytics {
   totalUsers: number;
   totalClients: number;
   totalAppointments: number;
-  salonTakingsTotal: number;
   mrr: number;
   arr: number;
   payingTenants: number;
@@ -181,7 +181,11 @@ export default function SaasOverviewPage() {
         ))}
       </div>
 
-      {/* Secondary Stats */}
+      {/* What needs looking at this week (audit 8 D12) */}
+      <WeeklySummary />
+
+      {/* Secondary Stats. The salons' takings are shown per salon only
+          (tenant detail and its analytics), never here (audit 8 D10). */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
         <div className="bg-white rounded-xl border border-gray-200 p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">
@@ -206,18 +210,6 @@ export default function SaasOverviewPage() {
                 <span className="font-semibold text-amber-600">{analytics?.activeWithoutBilling}</span>
               </div>
             )}
-          </div>
-          {/* Where the salons' takings belong in the console is still an
-              owner decision (audit 8 D3); until then they stay here, apart
-              from KiraRoom's revenue and labelled as what they are. */}
-          <div className="mt-4 pt-4 border-t border-gray-100">
-            <div className="flex justify-between items-center gap-3">
-              <span className="text-gray-600">{t("saas.metrics.salon_takings_title")}</span>
-              <span className="font-semibold text-gray-900">{formatEuros(analytics?.salonTakingsTotal)}</span>
-            </div>
-            <p className="text-xs text-gray-400 mt-1">
-              {t("saas.metrics.salon_takings_total")}. {t("saas.metrics.salon_takings_note")}
-            </p>
           </div>
         </div>
 

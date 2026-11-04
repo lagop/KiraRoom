@@ -20,6 +20,31 @@ import { inboxQuery } from "./receptionist-inbox";
 import { apiErrorMessage } from "./api-error-message";
 import { authStorage, endSupportTab, supportTab } from "./auth-storage";
 
+/** A GDPR request of a salon, for the console's history (audit 8 T12). */
+export interface SaasGdprRequest {
+  id: string;
+  action: "export" | "anonymize";
+  status: "processing" | "completed" | "failed";
+  actorId: string;
+  createdAt: string;
+  completedAt: string | null;
+  notes: string | null;
+}
+
+/** An invite in the console's list (audit 8 T15). */
+export interface SaasTenantInvite {
+  id: string;
+  email: string;
+  tenantName: string;
+  firstName: string | null;
+  lastName: string | null;
+  plan: string;
+  status: "pending" | "accepted" | "revoked" | "expired";
+  expiresAt: string;
+  acceptedAt: string | null;
+  createdAt: string;
+}
+
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1";
 
@@ -5534,14 +5559,38 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  async reactivateSaasTenant(id: string): Promise<any> {
+  /** cancelDeletion: the owner asked "Borrar mi salón"; reactivating cancels it only with this (audit 8 T4). */
+  async reactivateSaasTenant(id: string, opts: { cancelDeletion?: boolean } = {}): Promise<any> {
     return this.request(`/saas/tenants/${id}/reactivate`, {
       method: "POST",
+      body: JSON.stringify(opts),
     });
+  }
+
+  /** The salon's data as plain JSON, for the console's "Exportar datos" (audit 8 D14). */
+  async downloadSaasTenantExport(id: string): Promise<{ blob: Blob; filename: string }> {
+    return this.downloadWithToken(`${API_BASE_URL}/saas/tenants/${id}/export?format=json`, "datos-rgpd.json");
+  }
+
+  /** GDPR erasure from the console: the salon's name typed, and force for one still active (audit 8 T5). */
+  async anonymizeSaasTenant(id: string, body: { confirmName: string; force?: boolean }): Promise<{ ok: true; requestId: string }> {
+    return this.request(`/saas/tenants/${id}/anonymize`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async getSaasTenantGdprRequests(id: string): Promise<SaasGdprRequest[]> {
+    return this.request(`/saas/tenants/${id}/gdpr-requests`);
   }
 
   async getSaasAnalytics(): Promise<any> {
     return this.request("/saas/analytics/overview");
+  }
+
+  /** "Esta semana" in the console (audit 8 D12). */
+  async getSaasWeekly(): Promise<any> {
+    return this.request("/saas/weekly");
   }
 
   async getSaasUsers(filter?: {
@@ -5628,6 +5677,8 @@ class ApiClient implements ApiClientInterface {
     status: string;
     expiresAt: string;
     magicLink: string;
+    /** Whether the email really went out (audit 8 T15). */
+    emailSent?: boolean;
   }> {
     return this.request(`/saas/invites`, {
       method: "POST",
@@ -5635,7 +5686,7 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  async listTenantInvites(filter?: { status?: string; email?: string }): Promise<any[]> {
+  async listTenantInvites(filter?: { status?: string; email?: string }): Promise<SaasTenantInvite[]> {
     const params = new URLSearchParams();
     if (filter?.status) params.append("status", filter.status);
     if (filter?.email) params.append("email", filter.email);
@@ -5647,7 +5698,7 @@ class ApiClient implements ApiClientInterface {
     return this.request(`/saas/invites/${id}`, { method: "DELETE" });
   }
 
-  async resendTenantInvite(id: string): Promise<any> {
+  async resendTenantInvite(id: string): Promise<{ email: string; magicLink?: string; emailSent?: boolean }> {
     return this.request(`/saas/invites/${id}/resend`, { method: "POST" });
   }
 

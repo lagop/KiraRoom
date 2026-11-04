@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ConflictException,
   Logger,
   Optional,
 } from "@nestjs/common";
@@ -12,8 +13,8 @@ import { PrismaService } from "../common/prisma/prisma.service";
 import { CreateTenantDto } from "./dto/create-tenant.dto";
 import { UpdateTenantDto } from "./dto/update-tenant.dto";
 import { TenantFilterDto } from "./dto/tenant-filter.dto";
-import { UserRole } from "@prisma/client";
-import * as bcrypt from "bcryptjs";
+import { Prisma, UserRole } from "@prisma/client";
+import type { Tenant } from "@prisma/client";
 import {
   IMPERSONATION_TTL_SECONDS,
   IMPERSONATION_AUDIENCE,
@@ -29,9 +30,22 @@ import { AuditLogService } from "./audit-log.service";
 import { loadSharedIdentityWarnings, type SharedIdentityWarning } from "./shared-identity";
 import { invalidateTenantWidgets } from "../widget/widget.service";
 import { SubscriptionsService } from "../payments/services/subscriptions.service";
-import { normalizePlan, PLAN_PRICES, PlanId } from "@kira/shared";
+import { normalizePlan, PLAN_PRICES } from "@kira/shared";
 import { assertNotPlatformTenant, NOT_PLATFORM_TENANT_WHERE } from "./platform-tenant";
 import { supportAccessAllowed, supportAccessOffException } from "../auth/support-access/support-access";
+import { isReadOnlyStatus } from "../common/guards/read-only-tenant.guard";
+import { normalizeWebAddress, WEB_ADDRESS_MESSAGES } from "../web-address/web-address-rules";
+import { DAY_MS, READ_ONLY_DAYS } from "./retention/salon-retention";
+import {
+  CONSOLE_EDIT_MESSAGES,
+  CONSOLE_TENANT_SELECT,
+  STALE_RETENTION_RESET,
+  consoleSlugProblem,
+  consoleTenantView,
+  pendingDeletionMessage,
+  rethrowUniqueConflict,
+  retentionView,
+} from "./console-tenant";
 
 /** The platform owner doing something in the console, for the audit log. */
 export interface ConsoleActor {
@@ -97,10 +111,15 @@ export class SaasService {
     }
 
     if (search) {
+      const term = { contains: search, mode: "insensitive" } as const;
       where.OR = [
-        { name: { contains: search, mode: "insensitive" } },
-        { slug: { contains: search, mode: "insensitive" } },
-        { email: { contains: search, mode: "insensitive" } },
+        { name: term },
+        { slug: term },
+        { email: term },
+        { phone: term },
+        // A salon from the normal signup has no salon email: the owner
+        // writes from her own (audit 8 T17).
+        { users: { some: { role: UserRole.owner, OR: [{ email: term }, { firstName: term }, { lastName: term }] } } },
       ];
     }
 
@@ -148,6 +167,16 @@ export class SaasService {
           currentPeriodEnd: true,
           trialEnd: true,
           createdAt: true,
+          // "Mostrar eliminados" marks them, and their actions are hidden (T9).
+          deletedAt: true,
+          anonymizedAt: true,
+          deletionRequestedAt: true,
+          users: {
+            where: { role: UserRole.owner },
+            select: { email: true, firstName: true, lastName: true },
+            orderBy: { createdAt: "asc" },
+            take: 1,
+          },
           _count: {
             select: {
               users: true,
@@ -163,8 +192,9 @@ export class SaasService {
 
     const shared = await this.sharedIdentity(tenants.map((t) => t.id));
     return {
-      data: tenants.map((tenant) => ({
+      data: tenants.map(({ users, ...tenant }) => ({
         ...tenant,
+        owner: users?.[0] ?? null,
         // Another salon has the same phone or NIF (D9): shown, never blocked.
         sharedIdentity: shared.get(tenant.id) ?? [],
         userCount: tenant._count.users,
@@ -192,14 +222,23 @@ export class SaasService {
     }
   }
 
+  /**
+   * The salon's console page. Explicit columns (audit 8 T24): never its
+   * Stripe secret keys, channel credentials (features), fiscal or
+   * accounting settings or deletionRestore. A deleted salon opens too, read
+   * only, with its deletion and anonymisation dates (T9).
+   */
   async getTenantById(id: string) {
-    // Use the helper so the soft-delete predicate is canonical. We need
-    // the _count.include which the helper's Tenant shape doesn't carry,
-    // so we re-fetch with the include after the existence check.
-    await getActiveTenant(this.prisma, id);
-    const tenant = await this.prisma.tenant.findFirst({
-      where: { id, ...TENANT_ACTIVE_WHERE },
-      include: {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id },
+      select: {
+        ...CONSOLE_TENANT_SELECT,
+        users: {
+          where: { role: UserRole.owner },
+          select: { id: true, email: true, firstName: true, lastName: true, phone: true, lastLoginAt: true },
+          orderBy: { createdAt: "asc" },
+          take: 1,
+        },
         _count: {
           select: {
             users: true,
@@ -214,27 +253,34 @@ export class SaasService {
     });
 
     if (!tenant) {
-      throw new NotFoundException("Tenant not found");
+      throw new NotFoundException("Salón no encontrado");
     }
 
+    const { users, _count, ...rest } = tenant;
     const shared = await this.sharedIdentity([tenant.id]);
     return {
-      ...tenant,
+      ...consoleTenantView(rest),
+      owner: users?.[0] ?? null,
+      retention: retentionView(rest),
       sharedIdentity: shared.get(tenant.id) ?? [],
-      userCount: tenant._count.users,
-      clientCount: tenant._count.clients,
-      appointmentCount: tenant._count.appointments,
-      professionalCount: tenant._count.professionals,
-      serviceCount: tenant._count.services,
-      paymentCount: tenant._count.payments,
-      _count: undefined,
+      userCount: _count.users,
+      clientCount: _count.clients,
+      appointmentCount: _count.appointments,
+      professionalCount: _count.professionals,
+      serviceCount: _count.services,
+      paymentCount: _count.payments,
     };
   }
 
   async createTenant(createTenantDto: CreateTenantDto) {
-    const slug = createTenantDto.slug?.length
-      ? slugify(createTenantDto.slug)
+    // At least 3 characters, letters without accents, digits and hyphens:
+    // the form used to keep only the first letter typed ("s") and the API
+    // took it (audit 8 T7). The reserved names stay as they were.
+    const slug = createTenantDto.slug?.trim().length
+      ? normalizeWebAddress(createTenantDto.slug)
       : slugify(createTenantDto.name);
+    const shape = consoleSlugProblem(slug);
+    if (shape) throw new BadRequestException(WEB_ADDRESS_MESSAGES[shape]);
 
     await assertTenantSlugAvailable(this.prisma, slug);
 
@@ -270,7 +316,7 @@ export class SaasService {
       ownerPassword: createTenantDto.ownerPassword || unusablePassword(),
       ownerFirstName: createTenantDto.ownerFirstName,
       ownerLastName: createTenantDto.ownerLastName,
-    });
+    }).catch(rethrowUniqueConflict);
 
     if (setPasswordByEmail && createTenantDto.ownerEmail) {
       // The reset flow: one-hour single-use link, same email and rate limits.
@@ -282,15 +328,27 @@ export class SaasService {
       }
     }
 
-    return this.prisma.tenant.findUniqueOrThrow({ where: { id: tenant.id } });
+    return this.getTenantById(tenant.id);
   }
 
+  /**
+   * The console's edit form (audit 8 T13, T22). The plan and the status are
+   * checked against each other and against Stripe:
+   * - "Pago pendiente" and "Suspendido por impago" are Stripe's to set;
+   * - "En prueba" needs a trial end in the future (a new one extends it);
+   * - the plan of a salon that pays in Stripe changes in Stripe;
+   * - "De baja" on a salon Stripe still charges is refused.
+   * Leaving read-only clears the old retention dates, and a pending "Borrar
+   * mi salón" is not dropped silently (T4): see leaveReadOnly().
+   */
   async updateTenant(id: string, updateTenantDto: UpdateTenantDto, actor: ConsoleActor) {
     const existing = await getActiveTenant(this.prisma, id);
+    const now = new Date();
 
     // P2A — Normalize NIF before persisting. Don't accept malformed
     // identifiers because AEAT / diputaciones reject them silently.
-    const patch: any = { ...updateTenantDto };
+    const { cancelDeletion, ...fields } = updateTenantDto;
+    const patch: any = { ...fields };
     if (patch.taxId !== undefined) {
       const { validateNif } = await import("../common/validation/nif.validator");
       const v = validateNif(patch.taxId);
@@ -302,16 +360,24 @@ export class SaasService {
       patch.taxId = v.normalized;
     }
 
+    Object.assign(patch, this.subscriptionPatch(existing, patch, now));
+    if (isReadOnlyStatus(existing.subscriptionStatus) && !isReadOnlyStatus(patch.subscriptionStatus ?? existing.subscriptionStatus)) {
+      Object.assign(patch, this.leaveReadOnly(existing, !!cancelDeletion));
+    }
+
     // Audit 8, C8/C9: what changed, before and after, by the platform owner
     // who did it, in the same transaction as the change: a change is never
     // saved without its row. (The NIF row used to name "saas:system", which
     // is not a user: the foreign key refused it, and an empty catch hid it.)
-    const changes = changedFields(existing as unknown as Record<string, unknown>, patch);
+    // deletionRestore is a JSON marker, not a value to compare.
+    const { deletionRestore: _restore, ...comparable } = patch;
+    void _restore;
+    const changes = changedFields(existing as unknown as Record<string, unknown>, comparable);
     const taxIdChanged = patch.taxId !== undefined && patch.taxId !== existing.taxId;
     const taxIdBefore = existing.taxId ?? null;
     try {
       return await this.prisma.$transaction(async (tx) => {
-        const updated = await tx.tenant.update({ where: { id }, data: patch });
+        const updated = await tx.tenant.update({ where: { id }, data: patch, select: CONSOLE_TENANT_SELECT });
         if (Object.keys(changes).length > 0) {
           await this.auditLog.record(
             "tenant.update",
@@ -333,35 +399,100 @@ export class SaasService {
             tx,
           );
         }
-        return updated;
+        return consoleTenantView(updated);
       });
     } catch (err) {
       this.logger.error(`Console update of tenant ${id} by ${actor.id} failed: ${(err as Error).message}`);
-      throw err;
+      rethrowUniqueConflict(err);
     }
   }
 
+  /**
+   * The plan and status part of an edit, made consistent (audit 8 T13), or
+   * a Spanish 400. Returns the columns to write on top of the patch.
+   */
+  private subscriptionPatch(existing: Tenant, patch: UpdateTenantDto, now: Date): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    const from = existing.subscriptionStatus;
+    const to = patch.subscriptionStatus ?? from;
+    const statusChanged = to !== from;
+    const stripeLive = !!existing.stripeSubscriptionId && !isReadOnlyStatus(from);
+
+    if (statusChanged && (to === "past_due" || to === "suspended")) {
+      throw new BadRequestException(CONSOLE_EDIT_MESSAGES.stripeOwnedStatus);
+    }
+
+    const planChanged = patch.plan !== undefined && normalizePlan(patch.plan) !== normalizePlan(existing.plan);
+    if (planChanged && stripeLive) {
+      throw new BadRequestException(CONSOLE_EDIT_MESSAGES.planInStripe);
+    }
+    if (patch.plan !== undefined) out.plan = normalizePlan(patch.plan);
+    if (to === "active" && !normalizePlan((out.plan as string | undefined) ?? existing.plan)) {
+      throw new BadRequestException(CONSOLE_EDIT_MESSAGES.activeNeedsPlan);
+    }
+
+    if (to === "trialing") {
+      const trialEnd = patch.trialEnd ?? existing.trialEnd;
+      if (!trialEnd || trialEnd.getTime() <= now.getTime()) {
+        throw new BadRequestException(
+          patch.trialEnd ? CONSOLE_EDIT_MESSAGES.trialEndPast : CONSOLE_EDIT_MESSAGES.trialEnded,
+        );
+      }
+      // Extending: the trial jobs read currentPeriodEnd too.
+      if (patch.trialEnd) out.currentPeriodEnd = patch.trialEnd;
+    } else if (patch.trialEnd && patch.trialEnd.getTime() <= now.getTime() && from === "trialing" && !statusChanged) {
+      throw new BadRequestException(CONSOLE_EDIT_MESSAGES.trialEndPast);
+    }
+
+    if (statusChanged && isReadOnlyStatus(to) && !isReadOnlyStatus(from)) {
+      if (stripeLive && !existing.subscriptionCancelAt) {
+        throw new BadRequestException(CONSOLE_EDIT_MESSAGES.cancelInStripe);
+      }
+      Object.assign(out, STALE_RETENTION_RESET);
+    }
+    return out;
+  }
+
+  /**
+   * Back from read-only (Reactivar, or an edit to Activo / En prueba): the
+   * retention dates of the old read-only period go (audit 8 T4). Left
+   * there, a later suspension saw a read-only end long past and a warning
+   * "already given", and the next 04:40 run anonymised the salon. The
+   * owner's own "Borrar mi salón" is not dropped silently: refused unless
+   * cancelDeletion, which also cancels it (the change is on the
+   * tenant.update or tenant.reactivate audit row).
+   * subscriptionCancelAt is Stripe's and stays.
+   */
+  private leaveReadOnly(tenant: Tenant, cancelDeletion: boolean): Record<string, unknown> {
+    const data: Record<string, unknown> = {
+      readOnlyUntil: null,
+      cancelledAt: null,
+      anonymizationWarnedAt: null,
+      anonymizationWarnedFor: null,
+    };
+    if (tenant.deletionRequestedAt) {
+      if (!cancelDeletion) {
+        throw new ConflictException(pendingDeletionMessage(tenant.deletionRequestedAt));
+      }
+      data.deletionRequestedAt = null;
+      data.deletionRestore = Prisma.DbNull;
+    }
+    return data;
+  }
+
   async deleteTenant(id: string, saasOwnerId: string) {
-    await getActiveTenant(this.prisma, id);
+    const tenant = await getActiveTenant(this.prisma, id);
     await assertNotPlatformTenant(this.prisma, id);
 
     const deletedAt = new Date();
 
-    // Best-effort Stripe cancellation. Done BEFORE the local soft-delete
-    // so that a transient Stripe failure doesn't strand the tenant
-    // in a deleted state with an active subscription. If Stripe is
-    // unreachable, log and proceed — the local cancellation is the
-    // source of truth for SaaS-side visibility, and the daily cron /
-    // reconciliation job will sync Stripe later.
-    try {
-      // At once, not at the end of the paid period: the salon is deleted.
-      await this.subscriptions.cancelSubscription(id, true);
-    } catch (err) {
-      this.logger.warn(
-        `Stripe cancel failed during soft-delete of tenant ${id}; continuing with local soft-delete.`,
-        err instanceof Error ? err.stack : String(err),
-      );
-    }
+    // Stripe first, and nothing is deleted if it fails (audit 8 T14): a
+    // salon deleted here while Stripe kept its subscription was charged
+    // every month, and no job reconciles it. The Spanish 503 reaches the
+    // console, which offers to try again. Ended at once whatever the status
+    // here says: a salon suspended from the console is "cancelled" here
+    // and may still be charged.
+    await this.subscriptions.cancelStripeSubscriptionNow(id);
 
     // Soft delete + audit must be atomic: the audit_logs.actorId FK
     // requires a real User id; using a literal like "system" would
@@ -372,7 +503,15 @@ export class SaasService {
     const auditRow = await this.prisma.$transaction(async (tx) => {
       await tx.tenant.update({
         where: { id },
-        data: { deletedAt },
+        // As cancelling did before: cancelled now, its read-only window
+        // from today.
+        data: {
+          deletedAt,
+          subscriptionStatus: "cancelled",
+          cancelledAt: tenant.cancelledAt ?? deletedAt,
+          readOnlyUntil: new Date(deletedAt.getTime() + READ_ONLY_DAYS * DAY_MS),
+          subscriptionCancelAt: null,
+        },
         select: { id: true },
       });
       // Its team can no longer sign in, and every open session ends now
@@ -396,7 +535,7 @@ export class SaasService {
     });
 
     return {
-      message: "Tenant soft-deleted successfully",
+      message: "Salón eliminado",
       deletedAt,
       auditLogId: auditRow.id,
     };
@@ -405,12 +544,28 @@ export class SaasService {
   async suspendTenant(id: string, actor: ConsoleActor) {
     const tenant = await getActiveTenant(this.prisma, id);
     await assertNotPlatformTenant(this.prisma, id);
-    return this.setStatusWithAudit(id, tenant.subscriptionStatus, "cancelled", "tenant.suspend", actor);
+    // Stale retention dates of an earlier read-only period go (audit 8 T4).
+    return this.setStatusWithAudit(
+      id,
+      tenant.subscriptionStatus,
+      "cancelled",
+      "tenant.suspend",
+      actor,
+      isReadOnlyStatus(tenant.subscriptionStatus) ? {} : { ...STALE_RETENTION_RESET },
+    );
   }
 
-  async reactivateTenant(id: string, actor: ConsoleActor) {
+  /**
+   * "Reactivar" (audit 8 T4): active again, without the retention dates of
+   * the read-only period it leaves. A pending "Borrar mi salón" is refused
+   * unless cancelDeletion, which cancels it too.
+   */
+  async reactivateTenant(id: string, opts: { cancelDeletion?: boolean }, actor: ConsoleActor) {
     const tenant = await getActiveTenant(this.prisma, id);
-    return this.setStatusWithAudit(id, tenant.subscriptionStatus, "active", "tenant.reactivate", actor);
+    const extra = this.leaveReadOnly(tenant, !!opts.cancelDeletion);
+    return this.setStatusWithAudit(id, tenant.subscriptionStatus, "active", "tenant.reactivate", actor, extra, {
+      ...(tenant.deletionRequestedAt ? { deletionCancelled: { requestedAt: tenant.deletionRequestedAt.toISOString() } } : {}),
+    });
   }
 
   /** The status change and its audit row, together (C9). */
@@ -420,20 +575,26 @@ export class SaasService {
     after: "cancelled" | "active",
     action: string,
     actor: ConsoleActor,
+    extraData: Record<string, unknown> = {},
+    extraMetadata: Record<string, unknown> = {},
   ) {
     return this.prisma.$transaction(async (tx) => {
-      const updated = await tx.tenant.update({ where: { id }, data: { subscriptionStatus: after } });
+      const updated = await tx.tenant.update({
+        where: { id },
+        data: { subscriptionStatus: after, ...extraData },
+        select: CONSOLE_TENANT_SELECT,
+      });
       await this.auditLog.record(
         action,
         {
           actorId: actor.id,
           actorRole: UserRole.saas_owner,
           tenantId: id,
-          metadata: { subscriptionStatus: { before, after } },
+          metadata: { subscriptionStatus: { before, after }, ...extraMetadata },
         },
         tx,
       );
-      return updated;
+      return consoleTenantView(updated);
     });
   }
 

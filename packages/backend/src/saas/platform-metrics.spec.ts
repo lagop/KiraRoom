@@ -115,7 +115,7 @@ describe("platform metrics", () => {
 });
 
 describe("SaasAnalyticsService", () => {
-  it("reports takings in euros, MRR from paying salons only, and past_due / suspended", async () => {
+  it("no platform-wide salon takings (D10), MRR from paying salons only, and past_due / suspended", async () => {
     const prisma: any = {
       tenant: {
         count: jest.fn().mockResolvedValue(4),
@@ -145,7 +145,8 @@ describe("SaasAnalyticsService", () => {
     const svc = new SaasAnalyticsService(prisma);
     const out = await svc.getPlatformAnalytics(new Date("2026-11-04T10:00:00Z"));
 
-    expect(out.salonTakingsTotal).toBe(12345);
+    expect(out).not.toHaveProperty("salonTakingsTotal");
+    expect(prisma.appointment.aggregate).not.toHaveBeenCalled();
     expect(out.mrr).toBe(49);
     expect(out.arr).toBe(588);
     expect(out.payingTenants).toBe(1);
@@ -153,6 +154,5 @@ describe("SaasAnalyticsService", () => {
     expect(out.pastDueTenants).toBe(1);
     expect(out.suspendedTenants).toBe(1);
     expect(prisma.tenant.findMany.mock.calls[0][0].where).toMatchObject({ stripeSubscriptionId: { not: null } });
-    expect(prisma.appointment.aggregate.mock.calls[0][0].where).toMatchObject({ isTest: false, paymentStatus: "paid" });
   });
 });

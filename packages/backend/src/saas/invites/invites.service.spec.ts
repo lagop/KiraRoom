@@ -721,7 +721,42 @@ describe("InvitesService.resendInvite (atomicity)", () => {
     );
     await expect(
       svc.resendInvite(m.tenantInvites.get("tok-done").id, "saas-admin-1"),
-    ).rejects.toThrow(/already accepted/i);
+    ).rejects.toThrow(/ya se aceptó/i);
+  });
+
+  it("resends an expired invite with a fresh link (audit 8 T15)", async () => {
+    const m = makePrismaMock();
+    seedActiveInvite(m, "tok-old", { status: InviteStatus.expired, expiresAt: new Date(Date.now() - 60_000) });
+    const svc = new InvitesService(m.prisma, makeEmailMock(), makeAuditMock(), makeConfigMock(), makeJwtMock(), makeSessionsMock());
+    const view = await svc.resendInvite(m.tenantInvites.get("tok-old").id, "saas-admin-1");
+    expect(view.status).toBe(InviteStatus.pending);
+    expect(view.emailSent).toBe(true);
+    expect(m.tenantInvites.get("tok-old").status).toBe(InviteStatus.expired);
+  });
+
+  it("refuses to resend a revoked invite, in Spanish", async () => {
+    const m = makePrismaMock();
+    seedActiveInvite(m, "tok-rev", { status: InviteStatus.revoked });
+    const svc = new InvitesService(m.prisma, makeEmailMock(), makeAuditMock(), makeConfigMock(), makeJwtMock(), makeSessionsMock());
+    await expect(svc.resendInvite(m.tenantInvites.get("tok-rev").id, "saas-admin-1")).rejects.toThrow(/anulada/);
+  });
+});
+
+describe("InvitesService.createInvite emailSent (audit 8 T15)", () => {
+  it("says the email was not sent when the provider failed, and still returns the link", async () => {
+    const m = makePrismaMock();
+    const email = { sendTenantInvite: async () => ({ success: false, error: "down" }) } as any;
+    const svc = new InvitesService(m.prisma, email, makeAuditMock(), makeConfigMock(), makeJwtMock(), makeSessionsMock());
+    const view = await svc.createInvite({ email: "new@salon.test", tenantName: "Nuevo", plan: "esencial" as any }, "saas-admin-1");
+    expect(view.emailSent).toBe(false);
+    expect(view.magicLink).toContain("/accept-invite/");
+  });
+
+  it("says it was sent when the provider accepted it", async () => {
+    const m = makePrismaMock();
+    const svc = new InvitesService(m.prisma, makeEmailMock(), makeAuditMock(), makeConfigMock(), makeJwtMock(), makeSessionsMock());
+    const view = await svc.createInvite({ email: "new2@salon.test", tenantName: "Nuevo 2", plan: "esencial" as any }, "saas-admin-1");
+    expect(view.emailSent).toBe(true);
   });
 });
 

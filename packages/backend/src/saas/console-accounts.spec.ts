@@ -20,7 +20,12 @@ import * as path from "path";
 
 function makeService() {
   const prisma: any = {
-    tenant: { findUniqueOrThrow: jest.fn(async () => ({ id: "t1" })) },
+    tenant: {
+      findUniqueOrThrow: jest.fn(async () => ({ id: "t1" })),
+      // createTenant returns the console view (getTenantById, audit 8 T24).
+      findUnique: jest.fn(async () => ({ id: "t1", name: "S", subscriptionStatus: "trialing", readOnlyUntil: null, users: [], _count: { users: 1, clients: 0, appointments: 0, professionals: 0, services: 0, payments: 0 } })),
+      findMany: jest.fn(async () => []),
+    },
     user: { findMany: jest.fn(async () => []), count: jest.fn(async () => 0) },
   };
   const passwordReset = { request: jest.fn(async () => undefined) };

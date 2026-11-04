@@ -11,7 +11,8 @@
 #
 #   __OPS_ALERT_EMAIL__  OPS_ALERT_EMAIL, default admin@kiraroom.net
 #   __ALERT_FROM__       ALERTMANAGER_FROM, a sender on a domain verified in
-#                        Resend, default alertas@kiraroom.net
+#                        Resend; default EMAIL_FROM (the app's sender), else
+#                        noreply@kiraroom.net (no mailbox needed: it only sends)
 #
 # Check after editing:
 #   docker compose -f docker-compose.observability.yml exec alertmanager \
