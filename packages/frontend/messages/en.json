@@ -1440,7 +1440,8 @@
       "explain": "It opens in a new tab; your console session stays open here. The support session lasts at most 2 hours, and what you do goes into the activity log under your name.",
       "reason_label": "Reason",
       "reason_placeholder": "For example: the owner asked for help setting up the opening hours",
-      "open": "Open panel"
+      "open": "Open panel",
+      "owner_notified": "The owner gets an email with your name, the time and the reason."
     },
     "security": {
       "title": "Security",
@@ -1450,7 +1451,9 @@
       "sign_out_all_button": "Sign out everywhere",
       "sign_out_all_confirm_title": "Sign out everywhere?",
       "sign_out_all_confirm_body": "You will have to sign in again with your password (and the code, if two-step verification is on).",
-      "sign_out_all_failed": "The sessions could not be closed."
+      "sign_out_all_failed": "The sessions could not be closed.",
+      "two_factor_required_title": "Turn on two-step verification",
+      "two_factor_required_body": "The console requires two-step verification. Turn it on below and keep the recovery codes; then the rest of the console opens."
     },
     "audit": {
       "title": "Activity",
@@ -1504,6 +1507,7 @@
         "invoice_emailed": "Invoice emailed"
       }
     },
+    "forgot_password": "Forgot your password?",
     "internal_salon": {
       "title": "Internal or test salon",
       "on": "One of our own salons: left out of the platform figures and alerts.",
@@ -3935,6 +3939,33 @@
     "ends_at": "The session closes by itself at {time}.",
     "ends_max": "The session closes by itself at most 2 hours after entering.",
     "session_id": "session",
-    "exit": "Leave support mode"
+    "exit": "Leave support mode",
+    "limits": "In support mode you cannot pay or change the plan, touch fiscal data, passwords, access or two-step verification, export clients or delete the salon."
+  },
+  "supportAccess": {
+    "title": "KiraRoom support",
+    "body": "If you ask us for help, the support team can enter your panel to see it as you do. They can review everything and set up the agenda, services, team and website; they can never pay or change your plan, touch your fiscal data, passwords or access, or export your clients. We email you every time they enter.",
+    "toggle": "Allow KiraRoom support to enter my panel",
+    "on": "Support can enter your panel when needed.",
+    "off": "Support cannot enter your panel. If you ask us for help, turn this on first.",
+    "saved_on": "Support can enter your panel again",
+    "saved_off": "Support can no longer enter your panel",
+    "save_failed": "Could not save",
+    "confirm_off_title": "Stop support from entering your panel?",
+    "confirm_off_body": "An open support session, if any, ends now. You can turn this back on at any time.",
+    "confirm_off": "Stop access",
+    "support_mode": "Only the owner can change this, not a support session.",
+    "sessions_title": "Recent support sessions",
+    "sessions_empty": "Support has not entered your panel in the last 6 months.",
+    "col_date": "Date",
+    "col_reason": "Reason",
+    "col_duration": "Duration",
+    "col_who": "Who",
+    "status_active": "Open now",
+    "status_expired": "Ended on its own (max. 2 h)",
+    "minutes": "{n} min",
+    "less_than_minute": "Under 1 min",
+    "hours_minutes": "{h} h {m} min",
+    "no_reason": "No reason"
   }
 }

@@ -9,6 +9,12 @@ import {
   Optional,
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
+import { appBaseUrl } from "../common/app-base-url";
+import {
+  SUPPORT_ACCESS_SETTINGS_PATH,
+  supportAccessAllowed,
+  supportAccessOffException,
+} from "./support-access/support-access";
 import * as bcrypt from "bcryptjs";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { ProductEventsService, PRODUCT_EVENTS } from "../common/telemetry/product-events.service";
@@ -781,6 +787,14 @@ export class AuthService {
     if (support.impersonationEndsAt * 1000 <= Date.now()) {
       throw new UnauthorizedException("La sesión de soporte ha terminado.");
     }
+    // D2: the owner turned support access off: the session is over.
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: support.impersonatedTenantId },
+      select: { allowSupportAccess: true },
+    });
+    if (!supportAccessAllowed(tenant)) {
+      throw new UnauthorizedException("La sesión de soporte ha terminado.");
+    }
     const impersonator = await this.prisma.user.findUnique({
       where: { id: support.impersonatedBy },
       select: { role: true, isActive: true, tokenVersion: true },
@@ -920,6 +934,30 @@ export class AuthService {
    * written on the support session's own request, so AuditLogService names
    * the platform owner as the actor.
    */
+  /** D2's email to the owner; a failure is logged, never thrown. */
+  private async notifySupportSessionStarted(data: {
+    to: string;
+    tenantName: string;
+    supportName: string;
+    startedAt: Date;
+    endsAt: Date;
+    reason: string;
+    timeZone?: string | null;
+  }): Promise<void> {
+    try {
+      const result = await this.email.sendSupportSessionStarted({
+        ...data,
+        timeZone: data.timeZone || undefined,
+        settingsUrl: `${appBaseUrl()}${SUPPORT_ACCESS_SETTINGS_PATH}`,
+      });
+      if (result && !result.success && !result.skipped) {
+        this.logger.warn(`Support session email not sent: ${result.error ?? "unknown error"}`);
+      }
+    } catch (err) {
+      this.logger.error(`Support session email failed: ${(err as Error).message}`);
+    }
+  }
+
   async endSupportSession(
     refreshToken: string | undefined,
     user: { id: string; role: string; impersonatedTenantId?: string; impersonationId?: string },
@@ -1084,7 +1122,7 @@ export class AuthService {
     // the console's sessions, and so the way into a salon too).
     const impersonator = await this.prisma.user.findUnique({
       where: { id: String(payload.sub) },
-      select: { id: true, role: true, isActive: true, tokenVersion: true },
+      select: { id: true, role: true, isActive: true, tokenVersion: true, firstName: true, lastName: true },
     });
     if (
       !impersonator ||
@@ -1098,7 +1136,9 @@ export class AuthService {
     // (1) Validate FIRST. If the target went away since the token was
     // minted, we want to fail-fast without burning the one-shot jti so
     // the SaaS owner can re-launch and try again.
-    await getActiveTenant(this.prisma, tenantId);
+    const tenant = await getActiveTenant(this.prisma, tenantId);
+    // D2: the owner may have turned support access off since the launch.
+    if (!supportAccessAllowed(tenant)) throw supportAccessOffException();
 
     const owner = await this.prisma.user.findFirst({
       where: { id: ownerId, tenantId, role: "owner" },
@@ -1154,6 +1194,18 @@ export class AuthService {
       }
       throw e;
     }
+
+    // D2: the owner hears of every support session, by email, in Spanish.
+    // Not awaited past a failure: the session is open either way.
+    void this.notifySupportSessionStarted({
+      to: owner.email,
+      tenantName: tenant.name,
+      supportName: `${impersonator.firstName ?? ""} ${impersonator.lastName ?? ""}`.trim() || "Soporte de KiraRoom",
+      startedAt: new Date(),
+      endsAt: new Date(endsAt * 1000),
+      reason,
+      timeZone: tenant.timezone,
+    });
 
     // (3) Mint real owner session with impersonation claims baked in so the
     // dashboard can render the persistent "you are being impersonated"

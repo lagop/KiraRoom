@@ -6,6 +6,8 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { bindActor, bindTenant } from '../../common/tenancy/tenant.context';
 import { isAccessTokenPayload, supportClaims } from '../session-token';
 import { SALON_DELETED_MESSAGE } from '../salon-deleted';
+import { supportAccessAllowed } from '../support-access/support-access';
+import { saasOwnerTwoFactorRequired } from '../two-factor/saas-owner-two-factor';
 
 export interface JwtPayload {
   sub: string;      // userId
@@ -65,11 +67,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
           tenantId: true,
           isActive: true,
           tokenVersion: true,
+          twoFactorEnabled: true,
           tenant: {
             select: {
               plan: true,
               subscriptionStatus: true,
               deletedAt: true,
+              allowSupportAccess: true,
             },
           },
         },
@@ -98,6 +102,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       // everywhere, a new password, the account deactivated (C2, C13).
       if (payload.impersonatedBy) {
         await this.assertSupportSessionLive(payload);
+        // D2: the owner turned support access off: an open session ends.
+        if (!supportAccessAllowed(user.tenant)) {
+          throw new UnauthorizedException('La sesión de soporte ha terminado.');
+        }
       }
       bindActor({
         userId: user.id,
@@ -124,6 +132,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         impersonatedBy: payload.impersonatedBy,
         impersonationId: payload.impersonationId,
         impersonatedTenantId: payload.impersonatedTenantId,
+        // D15: the platform owner's 2FA, for SaasOwnerTwoFactorGuard and the
+        // console (it sends her to set it up when it is required).
+        ...(user.role === 'saas_owner' && {
+          twoFactorEnabled: user.twoFactorEnabled === true,
+          twoFactorRequired:
+            user.twoFactorEnabled !== true && saasOwnerTwoFactorRequired((key) => this.configService.get<string>(key)),
+        }),
       };
     }
   }

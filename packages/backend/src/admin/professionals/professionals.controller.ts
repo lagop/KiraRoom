@@ -18,6 +18,7 @@ import { RolesGuard } from "../../auth/guards/roles.guard";
 import { UserRole } from "@prisma/client";
 import { CurrentUser } from "../../auth/decorators/current-user.decorator";
 import { AllowWhenReadOnly } from "../../common/decorators/allow-when-read-only.decorator";
+import { NotDuringSupport } from "../../common/decorators/not-during-support.decorator";
 
 @ApiTags("Admin - Professionals")
 @ApiBearerAuth()
@@ -155,6 +156,7 @@ export class AdminProfessionalsController {
     return this.adminProfessionalsService.getAvailability(user.tenantId, id);
   }
 
+  @NotDuringSupport()
   @Patch(":id/password")
   @ApiOperation({ summary: "Change professional password" })
   @ApiResponse({ status: 200, description: "Password changed successfully" })
@@ -169,6 +171,7 @@ export class AdminProfessionalsController {
     return this.adminProfessionalsService.changePassword(user.tenantId, id, changePasswordDto);
   }
 
+  @NotDuringSupport()
   @Post(":id/access")
   @ApiOperation({ summary: "Give a professional their own login to the panel, with a first password" })
   @ApiResponse({ status: 201, description: "Access granted" })
@@ -181,6 +184,7 @@ export class AdminProfessionalsController {
     return this.adminProfessionalsService.grantPanelAccess(user.tenantId, id, dto.password);
   }
 
+  @NotDuringSupport()
   @Delete(":id/access")
   @ApiOperation({ summary: "Remove a professional's login (deactivated, sessions ended)" })
   async revokeAccess(@CurrentUser() user: any, @Param("id", ParseUUIDPipe) id: string) {
