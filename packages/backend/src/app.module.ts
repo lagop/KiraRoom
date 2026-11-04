@@ -57,6 +57,8 @@ import { SmsModule } from "./sms/sms.module";
 // Controllers
 import { AppController } from "./app.controller";
 import { AuthController } from "./auth/auth.controller";
+import { WebAddressController } from "./web-address/web-address.controller";
+import { WebAddressService } from "./web-address/web-address.service";
 import { AuthSessionsModule } from "./auth/sessions/auth-sessions.module";
 import { TwoFactorService } from "./auth/two-factor/two-factor.service";
 import { AppointmentsController } from "./appointments/appointments.controller";
@@ -249,6 +251,7 @@ import { PublicModule } from "./public-site/public.module";
   controllers: [
     AppController,
     AuthController,
+    WebAddressController,
     AppointmentsController,
     AppointmentServicesController,
     ClientsController,
@@ -277,6 +280,7 @@ import { PublicModule } from "./public-site/public.module";
     },
     AppService,
     AuthService,
+    WebAddressService,
     TwoFactorService,
     PasswordResetService,
     TurnstileService,
