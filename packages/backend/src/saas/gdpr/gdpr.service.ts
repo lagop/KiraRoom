@@ -6,6 +6,7 @@ import { GdprRequest, GdprRequestStatus } from "@prisma/client";
 import { PrismaService } from "../../common/prisma/prisma.service";
 import { CLIENT_SECRET_COLUMNS } from "../../clients/client-select";
 import { anonymizeClients } from "../../clients/client-anonymize";
+import { strippedBugReportData } from "../../bug-reports/bug-report-retention";
 
 /**
  * GDPR data export (Art. 15 RGPD) and right-to-erasure (Art. 17 RGPD).
@@ -154,6 +155,16 @@ export class GdprService {
       // wait-list, notifications... Appointments and FKs stay.
       const clients = await tx.client.findMany({ where: { tenantId }, select: { id: true } });
       await anonymizeClients(tx, tenantId, clients.map((c) => c.id));
+
+      // Bug reports from the salon or its users: their text, email, URL and
+      // context go too (audit 8 D14). The rows stay for the triage history.
+      await tx.bugReport.updateMany({
+        where: {
+          anonymizedAt: null,
+          OR: [{ tenantId }, { authorId: { in: users.map((u) => u.id) } }],
+        },
+        data: strippedBugReportData(new Date()),
+      });
 
       // Invoices — preserve (4-year fiscal retention). Replace recipient
       // name + taxId with placeholders so the audit trail still has

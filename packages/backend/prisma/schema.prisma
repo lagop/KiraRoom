@@ -3606,12 +3606,16 @@ model BugReport {
   resolvedById String?
   resolvedAt   DateTime?
   resolution   String?         @db.Text
+  /// When its personal data was removed (audit 8 D14): 12 months after it
+  /// was closed (resolvedAt), or when its salon was anonymised.
+  anonymizedAt DateTime?
   tenant       Tenant?         @relation(fields: [tenantId], references: [id], onDelete: SetNull)
   author       User?           @relation("BugReportAuthor", fields: [authorId], references: [id], onDelete: SetNull)
 
   @@index([createdAt])
   @@index([status, createdAt])
   @@index([tenantId, createdAt])
+  @@index([resolvedAt])
   @@map("bug_reports")
 }
 

@@ -80,6 +80,7 @@ function makePrismaMock() {
         return gdprRequests[idx];
       },
     },
+    bugReport: { updateMany: jest.fn(async () => ({ count: 1 })) },
     $transaction: async (fn: any) => fn(scoped),
   };
   // The models the client anonymisation also cleans (consents, chats,
@@ -185,6 +186,19 @@ describe("GdprService.anonymize", () => {
     expect(u.lastName).toBe("[anonymized]");
     expect(u.email).toContain("[anonymized]");
     expect(u.isActive).toBe(false);
+  });
+
+  it("strips the personal data of the salon's bug reports and its users' (audit 8 D14)", async () => {
+    const m = makePrismaMock();
+    seedTenant(m);
+    const svc = new GdprService(m.prisma as any);
+    const request = await svc.recordRequest("tenant-1", "anonymize", "actor-1", undefined);
+    await svc.anonymize("tenant-1", request.id);
+
+    const call = (m.prisma.bugReport.updateMany as jest.Mock).mock.calls[0][0];
+    expect(call.where).toEqual({ anonymizedAt: null, OR: [{ tenantId: "tenant-1" }, { authorId: { in: ["user-1"] } }] });
+    expect(call.data).toMatchObject({ subject: "[eliminado]", description: "[eliminado]", email: null, currentUrl: null });
+    expect(call.data.anonymizedAt).toBeInstanceOf(Date);
   });
 
   it("replaces client PII but keeps appointment FK references intact", async () => {
