@@ -183,6 +183,17 @@ model Tenant {
   /// percent (0-100). 0, the default: only the owner or a manager discount.
   /// Edited by them in the till settings (PUT /pos/settings).
   maxStaffDiscountPercent Int           @default(0)
+  /// Commissions (commissions/commission-terms.ts). The rate a service earns
+  /// when neither the appointment nor the professional sets one, in percent
+  /// (0-100). New salons: 0; salons that existed before this setting: 10,
+  /// the rate that used to be hard-coded.
+  commissionDefaultRate        Decimal @default(0) @db.Decimal(5, 2)
+  /// The rate a product sold at the till earns when the professional has no
+  /// "Comisión de productos" of their own, in percent. 0: products earn nothing.
+  productCommissionDefaultRate Decimal @default(0) @db.Decimal(5, 2)
+  /// What commissions are worked out on: "net" (the price without the tax,
+  /// the default) or "gross" (the price with the tax).
+  commissionBase               String  @default("net") @db.VarChar(10)
   /// Discounts given by hand at the till, one row each (audit).
   posDiscounts            PosDiscount[]
   posSales                PosSale[]
@@ -661,6 +672,9 @@ model Professional {
   isOwner             Boolean                @default(false)
   position            String?
   commissionRate      Decimal?
+  /// "Comisión de productos": percent of the products this professional sells
+  /// at the till. None: the salon's productCommissionDefaultRate.
+  productCommissionRate Decimal? @db.Decimal(5, 2)
   hireDate            DateTime
   terminationDate     DateTime?
   /// Version of this professional's calendar feed link (ics.controller.ts),
@@ -1481,6 +1495,32 @@ model CommissionAdjustment {
   @@index([appointmentId])
   @@index([posSaleLineId])
   @@map("commission_adjustments")
+}
+
+/// A commission payout ("Pagar", POST /commissions/pay): what was paid to a
+/// professional, up to which salon day, and exactly which items it marked
+/// paid, so "Deshacer último pago" can unmark them (commissions.service.ts).
+model CommissionPayout {
+  id             String    @id @default(uuid())
+  createdAt      DateTime  @default(now())
+  tenantId       String
+  professionalId String
+  /// What was paid, in cents (the commissions' own units); negative when refund
+  /// adjustments outweighed what was earned.
+  amountCents    Int
+  itemCount      Int
+  /// The salon day the payout ran up to ("Pagar hasta"); null when paid by ids.
+  upTo           DateTime? @db.Date
+  /// { appointments: [{ id, rate, amount, prevRate, prevAmount }], lines: [id], adjustments: [id] }
+  items          Json
+  /// The user who paid (no FK: the history outlives a deleted user).
+  createdById    String?
+  undoneAt       DateTime?
+  undoneById     String?
+
+  @@index([tenantId, professionalId, createdAt])
+  @@index([tenantId, createdAt])
+  @@map("commission_payouts")
 }
 
 model ClientWallet {

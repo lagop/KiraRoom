@@ -60,6 +60,8 @@ export const DASHBOARD_NAV: NavEntry[] = [
   link("wait-list", "/dashboard/wait-list", "nav.wait_list", "hourglass"),
   // A professional asks for their own time off; the salon answers in Solicitudes de ausencia.
   link("my-time-off", "/dashboard/mis-ausencias", "nav.my_time_off", "calendar-off", { staffOnly: true }),
+  // Their own commissions, read-only (GET /commissions/me); the salon pays them in Comisiones.
+  link("my-commissions", "/dashboard/mis-comisiones", "nav.my_commissions", "dollar", { staffOnly: true, pro: true }),
   {
     kind: "group",
     id: "team",

@@ -182,7 +182,7 @@ describe("CommissionsService periods", () => {
       startDate: new Date("2026-11-01"),
       endDate: new Date("2026-11-30"),
     });
-    expect(out).toEqual({ count: 3, totalAmount: 500 + 300 - 100 });
+    expect(out).toMatchObject({ count: 3, totalAmount: 500 + 300 - 100 });
     expect(where.appointment[0].scheduledDate.lt).toEqual(new Date("2026-12-01T00:00:00.000Z"));
     expect(where.posSaleLine[0].createdAt.lt).toEqual(new Date("2026-11-30T23:00:00.000Z"));
     expect(where.commissionAdjustment[0].createdAt.lt).toEqual(new Date("2026-11-30T23:00:00.000Z"));
@@ -193,12 +193,12 @@ describe("CommissionsService periods", () => {
     const { svc, where } = service();
     const lastDay = new Date("2026-11-30T12:00:00Z");
     const out = await svc.payCommission("t1", "p1", {}, lastDay);
-    expect(out).toEqual({ count: 3, totalAmount: 500 + 300 - 100 });
+    expect(out).toMatchObject({ count: 3, totalAmount: 500 + 300 - 100 });
     expect(where.appointment[0].scheduledDate).toEqual({ lt: new Date("2026-12-01T00:00:00.000Z") });
     expect(where.posSaleLine[0].createdAt).toEqual({ lt: new Date("2026-11-30T23:00:00.000Z") });
 
     // On the 29th none of them is due yet.
     const { svc: before } = service();
-    expect(await before.payCommission("t1", "p1", {}, new Date("2026-11-29T12:00:00Z"))).toEqual({ count: 0, totalAmount: 0 });
+    expect(await before.payCommission("t1", "p1", {}, new Date("2026-11-29T12:00:00Z"))).toMatchObject({ count: 0, totalAmount: 0 });
   });
 });

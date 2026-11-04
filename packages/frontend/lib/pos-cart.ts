@@ -45,7 +45,8 @@ export interface GiftCardSale {
 
 export function lineKey(line: Pick<CartLine, "kind" | "serviceId" | "productId" | "appointmentId" | "professionalId">): string {
   if (line.kind === "appointment") return `apt:${line.appointmentId}`;
-  if (line.kind === "product") return `prod:${line.productId}`;
+  // A product sold by someone named is its own line (their commission).
+  if (line.kind === "product") return line.professionalId ? `prod:${line.productId}:${line.professionalId}` : `prod:${line.productId}`;
   return `svc:${line.serviceId}:${line.professionalId ?? ""}`;
 }
 
@@ -70,10 +71,13 @@ export function removeLine(cart: CartLine[], key: string): CartLine[] {
   return cart.filter((l) => l.key !== key);
 }
 
-/** Changes who did a service line: it becomes the line of that professional (merged if there is one). */
+/**
+ * Changes who did a service line, or sold a product (its commission): it
+ * becomes the line of that professional (merged if there is one).
+ */
 export function setProfessional(cart: CartLine[], key: string, professionalId: string | undefined): CartLine[] {
   const line = cart.find((l) => l.key === key);
-  if (!line || line.kind !== "service") return cart;
+  if (!line || (line.kind !== "service" && line.kind !== "product")) return cart;
   const moved = { ...line, professionalId: professionalId || undefined };
   const newKey = lineKey(moved);
   if (newKey === key) return cart;
@@ -105,7 +109,7 @@ export function itemsForServer(cart: CartLine[]) {
     ...(l.serviceId ? { serviceId: l.serviceId } : {}),
     ...(l.productId ? { productId: l.productId } : {}),
     ...(l.appointmentId ? { appointmentId: l.appointmentId } : {}),
-    ...(l.kind === "service" && l.professionalId ? { professionalId: l.professionalId } : {}),
+    ...((l.kind === "service" || l.kind === "product") && l.professionalId ? { professionalId: l.professionalId } : {}),
     quantity: l.quantity,
     ...(l.discount ? { discount: l.discount } : {}),
   }));

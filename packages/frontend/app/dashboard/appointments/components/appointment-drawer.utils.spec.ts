@@ -137,7 +137,9 @@ check("out of range is not a rate", [parseRate(101), parseRate(-1), parseRate("x
 check("the appointment's own rate, 0 included", effectiveCommission(0, 30), { rate: 0, source: "appointment" });
 check("else the professional's", effectiveCommission(null, "25"), { rate: 25, source: "professional" });
 check("a professional at 0 % keeps 0", effectiveCommission(undefined, 0), { rate: 0, source: "professional" });
-check("else the salon's default", effectiveCommission(null, null), { rate: 10, source: "default" });
+check("else the salon's default", effectiveCommission(null, null, 10), { rate: 10, source: "default" });
+check("a new salon's default is 0 %", effectiveCommission(null, null, 0), { rate: 0, source: "default" });
+check("the salon's default not known: 0, never a hard-coded 10", effectiveCommission(null, null), { rate: 0, source: "default" });
 check("shown in Spanish", plain(formatRate(12.5)), "12,5 %");
 
 console.log("\n[salon terms]");

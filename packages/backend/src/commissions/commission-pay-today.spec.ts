@@ -20,6 +20,7 @@ function inRange(value: Date, f: any): boolean {
 
 function matches(row: Row, where: Row, dateField: string): boolean {
   return Object.entries(where).every(([key, cond]) => {
+    if (key === "isTest") return (row.isTest ?? false) === cond; // rows without it are not test bookings
     if (key === dateField) return inRange(row[key], cond);
     if (cond && typeof cond === "object" && "in" in cond) return (cond.in as unknown[]).includes(row[key]);
     if (cond && typeof cond === "object" && "not" in cond) return row[key] !== cond.not;
@@ -97,7 +98,7 @@ describe("Pagar pays exactly what the dialog shows", () => {
 
     const out = await svc.payCommission("t1", "p1", { expectedAmount: shown }, NOW);
 
-    expect(out).toEqual({ count: 4, totalAmount: shown });
+    expect(out).toMatchObject({ count: 4, totalAmount: shown });
     const paid = (id: string) => appointments.find((a) => a.id === id)!.commissionPaid;
     expect(paid("a-oct")).toBe(true);
     expect(paid("a-today")).toBe(true);
@@ -132,7 +133,7 @@ describe("Pagar pays exactly what the dialog shows", () => {
     lines.forEach((l) => (l.commissionPaid = true));
     const shown = (await svc.getCommissionSummary("t1", "p1", NOW)).pendingCommission;
     expect(shown).toBe(-150);
-    expect(await svc.payCommission("t1", "p1", { expectedAmount: -150 }, NOW)).toEqual({ count: 1, totalAmount: -150 });
+    expect(await svc.payCommission("t1", "p1", { expectedAmount: -150 }, NOW)).toMatchObject({ count: 1, totalAmount: -150 });
     expect(adjustments[0].settled).toBe(true);
   });
 });

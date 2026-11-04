@@ -3,13 +3,18 @@ import { numberOrNull } from "./commission-rate";
 import { keptShare, roundCommission } from "./commission-refunds";
 import { appointmentCommission } from "./appointment-commission";
 import { lockProfessionalCommissions } from "./commission-lock";
+import { commissionTermsOf } from "./commission-terms";
+
+/** The till line kinds that earn a commission (services and products). */
+const COMMISSION_LINE_KINDS = ["service", "product"];
 
 /**
  * Commission clawback: a refund given after the commission was paid.
  *
  * How commissions are paid (commissions.service.ts): nothing is stored per
  * period; each visit and each walk-in service line carries `commissionPaid`
- * and `commissionDate`, set by POST /commissions/pay, which pays what the
+ * and `commissionDate`, set by POST /commissions/pay (which records a
+ * CommissionPayout), which pays what the
  * item earns after the refunds made so far (commission-refunds.ts). A refund
  * made BEFORE that payout lowers what is paid. A refund made AFTER it used to
  * only lower the figures on the fly, rewriting the paid period and taking
@@ -107,7 +112,7 @@ export async function recordRefundClawbacks(db: Db, refund: RefundForClawback): 
     if (apt?.commissionPaid && apt.professionalId) {
       const { charged, refunded } = await appointmentMoney(db, refund.tenantId, apt.id);
       const amount = clawbackAmount(
-        appointmentCommission(apt, apt.professional?.commissionRate).amount,
+        appointmentCommission(apt, apt.professional?.commissionRate, await commissionTermsOf(db, refund.tenantId)).amount,
         charged,
         Math.max(0, refunded - refund.amount),
         refunded,
@@ -125,7 +130,7 @@ export async function recordRefundClawbacks(db: Db, refund: RefundForClawback): 
     }
   }
 
-  // Walk-in service lines of a till sale: each scaled by what is left of it.
+  // Walk-in service and product lines of a till sale: each scaled by what is left of it.
   const given = (refund.lines ?? []).filter((l) => l.cents > 0);
   if (given.length > 0) {
     const lines: Array<{
@@ -139,7 +144,7 @@ export async function recordRefundClawbacks(db: Db, refund: RefundForClawback): 
       where: {
         tenantId: refund.tenantId,
         id: { in: given.map((l) => l.lineId) },
-        kind: "service",
+        kind: { in: COMMISSION_LINE_KINDS },
         commissionPaid: true,
         professionalId: { not: null },
       },
@@ -206,7 +211,7 @@ export async function lockCommissionsOfRefund(
       : null;
   if (lineFilter && db.posSaleLine?.findMany) {
     const lines: Array<{ professionalId: string | null }> = await db.posSaleLine.findMany({
-      where: { tenantId: refund.tenantId, kind: "service", professionalId: { not: null }, ...lineFilter },
+      where: { tenantId: refund.tenantId, kind: { in: COMMISSION_LINE_KINDS }, professionalId: { not: null }, ...lineFilter },
       select: { professionalId: true },
     });
     ids.push(...(lines ?? []).map((l) => l.professionalId));

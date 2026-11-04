@@ -45,7 +45,7 @@ function harness(opts: { fiscal?: Row; clients?: Row[]; stock?: number; appointm
   ]);
   const clients = opts.clients ?? [{ id: "c1", tenantId: "t1", firstName: "Ana", lastName: "Prueba", taxId: null }];
   const appointments = new Map<string, Row>((opts.appointments ?? []).map((a) => [a.id, a]));
-  const pros = [
+  const pros: Row[] = [
     { id: "p-me", tenantId: "t1", userId: "u-me", commissionRate: 30 },
     { id: "p-other", tenantId: "t1", userId: "u-other", commissionRate: 40 },
   ];
@@ -186,7 +186,7 @@ function harness(opts: { fiscal?: Row; clients?: Row[]; stock?: number; appointm
   const pos = new PosService(prisma, wallet, undefined, invoices, giftCards);
   const sell = (body: Row, actor: Row = OWNER) => pos.processCheckout({ tenantId: "t1", actor, ...body } as any);
   const issued = () => [...store.invoices.values()];
-  return { prisma, store, pos, sell, issued, payments, movements, discounts, products, cards, giftCards, invoices, tables, appointments };
+  return { prisma, store, pos, sell, issued, payments, movements, discounts, products, cards, giftCards, invoices, tables, appointments, professionals: pros };
 }
 
 describe("gross charging: the till charges the invoice total", () => {
@@ -521,12 +521,54 @@ describe("commissions of services sold without an appointment", () => {
   });
 
   it("the owner may name who did it; staff only themselves", async () => {
+    // Prices with the tax, "Comisión sobre" the base without it (the
+    // default): 40 % of 33,06 (40,00 / 1,21).
     const t = harness();
     await t.sell({ items: [{ serviceId: "svc1", quantity: 1, professionalId: "p-other" }], payments: [{ method: "cash", amount: 4000 }] });
-    expect(t.tables.store.lines[0]).toMatchObject({ professionalId: "p-other", commissionRate: 40, commissionAmount: 1600 });
+    expect(t.tables.store.lines[0]).toMatchObject({
+      professionalId: "p-other",
+      commissionBaseCents: 3306,
+      commissionRate: 40,
+      commissionAmount: 1322,
+    });
     await expect(
       t.sell({ items: [{ serviceId: "svc1", quantity: 1, professionalId: "p-other" }], payments: [{ method: "cash", amount: 4000 }] }, STAFF),
     ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+});
+
+describe("Comisión sobre and product commissions at the till", () => {
+  it("\"gross\": the commission is on the price with the tax", async () => {
+    const t = harness({ tenant: { commissionBase: "gross" } });
+    await t.sell({ items: [{ serviceId: "svc1", quantity: 1, professionalId: "p-other" }], payments: [{ method: "cash", amount: 4000 }] });
+    expect(t.tables.store.lines[0]).toMatchObject({ commissionBaseCents: 4000, commissionRate: 40, commissionAmount: 1600 });
+  });
+
+  it("a professional with no rate of their own earns the salon's \"Comisión por defecto\"", async () => {
+    const t = harness({ tenant: { commissionDefaultRate: 10 } });
+    t.professionals[1].commissionRate = null;
+    await t.sell({ items: [{ serviceId: "svc1", quantity: 1, professionalId: "p-other" }], payments: [{ method: "cash", amount: 4000 }] });
+    expect(t.tables.store.lines[0]).toMatchObject({ commissionRate: 10, commissionAmount: 331 });
+  });
+
+  it("a product: its seller (the team member at the till) earns the salon's product rate", async () => {
+    const t = harness({ tenant: { productCommissionDefaultRate: 5 } });
+    await t.sell({ items: [{ productId: "prod1", quantity: 1 }], payments: [{ method: "cash", amount: 1000 }] }, STAFF);
+    // 5 % of 8,26 (10,00 without the 21 %).
+    expect(t.tables.store.lines[0]).toMatchObject({
+      kind: "product",
+      professionalId: "p-me",
+      commissionBaseCents: 826,
+      commissionRate: 5,
+      commissionAmount: 41,
+    });
+  });
+
+  it("a product: the professional's own \"Comisión de productos\" wins over the salon's", async () => {
+    const t = harness({ tenant: { productCommissionDefaultRate: 5 } });
+    t.professionals[1].productCommissionRate = 20;
+    await t.sell({ items: [{ productId: "prod1", quantity: 1, professionalId: "p-other" }], payments: [{ method: "cash", amount: 1000 }] });
+    expect(t.tables.store.lines[0]).toMatchObject({ professionalId: "p-other", commissionRate: 20, commissionAmount: 165 });
   });
 });
 

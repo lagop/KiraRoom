@@ -7,6 +7,7 @@ import { ArrowLeft, Edit, Mail, Phone, Calendar, Percent, Briefcase } from 'luci
 import apiClient from '@/lib/api';
 import { useTranslations } from '@/lib/use-translation';
 import { specialtyLabelKey } from '@/lib/professional-specialties';
+import { effectiveProfessionalRate, formatPercent } from '@/lib/commissions-format';
 
 function ProfessionalViewContent() {
   const params = useParams();
@@ -15,6 +16,9 @@ function ProfessionalViewContent() {
   const [professionalData, setProfessionalData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
+  // The salon's default rates, for a professional with none of their own
+  // (managers only; anyone else just does not see the default).
+  const [salonRates, setSalonRates] = useState<{ service: number; product: number } | null>(null);
 
   useEffect(() => {
     const fetchProfessional = async () => {
@@ -31,8 +35,21 @@ function ProfessionalViewContent() {
 
     if (professionalId) {
       fetchProfessional();
+      apiClient
+        .getCommissionSettings()
+        .then((s) => setSalonRates({ service: s.defaultRate, product: s.productDefaultRate }))
+        .catch(() => setSalonRates(null));
     }
   }, [professionalId]);
+
+  // Their own rate (0 included), else the salon's: "10 % (por defecto del salón)".
+  const rateText = (own: unknown, salonDefault: number | undefined) => {
+    const { rate, fromSalon } = effectiveProfessionalRate(own as any, salonDefault);
+    if (rate === null) return t('professionals.detailPage.notProvided');
+    return fromSalon
+      ? t('professionals.detailPage.salonDefaultRate', { rate: formatPercent(rate) })
+      : formatPercent(rate);
+  };
 
   if (isLoading) {
     return (
@@ -166,10 +183,10 @@ function ProfessionalViewContent() {
               </div>
               <div>
                 <p className="text-sm text-gray-500">{t('professionals.detailPage.commissionRate')}</p>
+                <p className="font-medium text-gray-900">{rateText(professionalData.commissionRate, salonRates?.service)}</p>
+                <p className="mt-1 text-sm text-gray-500">{t('professionals.detailPage.productCommissionRate')}</p>
                 <p className="font-medium text-gray-900">
-                  {professionalData.commissionRate
-                    ? `${professionalData.commissionRate}%`
-                    : t('professionals.detailPage.notProvided')}
+                  {rateText(professionalData.productCommissionRate, salonRates?.product)}
                 </p>
               </div>
             </div>

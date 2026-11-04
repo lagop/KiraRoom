@@ -84,6 +84,7 @@ import {
   type TillPromotion,
 } from '../promotions/promotion-at-till';
 import { effectiveCommissionRate } from '../commissions/commission-rate';
+import { CommissionTerms, commissionTermsOf, moneyCommissionBase } from '../commissions/commission-terms';
 import { commissionCents, snapshotAppointmentCommissions } from '../commissions/appointment-commission';
 import { safeTimeZone } from '../gift-cards/gift-card-expiry';
 import { salonInstant } from '../appointments/salon-time';
@@ -886,7 +887,8 @@ export class PosService {
     }
     const names = [...items.map((i) => i.name), ...giftCards.map(() => 'Tarjeta regalo')];
     const description = saleDescription(kind === 'quick_sale' ? 'Venta rápida' : 'Venta en caja', names);
-    const professionals = await this.commissionRates(tenantId, items);
+    const commissionTerms = await commissionTermsOf(this.prisma, tenantId);
+    const professionals = await this.commissionRates(tenantId, items, commissionTerms);
 
     const rectifications = new Map<string, IssuedInvoice>();
     const loyaltyRectifications = new Map<string, IssuedInvoice>();
@@ -1177,13 +1179,18 @@ export class PosService {
         const saleLines = [
           ...items.map((l, lineIndex) => {
             // The commission is on the line before the loyalty reward (paid
-            // with points, like an appointment's: commissions.service.ts).
-            const base = salon.basis.pricesIncludeTax ? l.netCents : l.netCents - includedTaxCents(l.netCents, l.taxRate);
+            // with points, like an appointment's: commissions.service.ts),
+            // with or without the tax as the salon's "Comisión sobre" says
+            // (commission-terms.ts).
+            const base = moneyCommissionBase(l.netCents, l.taxRate, commissionTerms.base);
             // What the line was charged, as the invoice says: after the reward.
             const loyalty = loyaltyOfLine.get(l) ?? 0;
             const charged = l.netCents - loyalty;
             const tax = includedTaxCents(charged, l.taxRate);
-            const prof = l.kind === 'service' && l.professionalId ? professionals.get(l.professionalId) : undefined;
+            // A service earns its professional's rate, a product their
+            // "Comisión de productos" (each with the salon's default behind it).
+            const rates = l.professionalId ? professionals.get(l.professionalId) : undefined;
+            const prof = l.kind === 'service' ? rates?.service : l.kind === 'product' ? rates?.product : undefined;
             return {
               saleId,
               tenantId,
@@ -1362,17 +1369,37 @@ export class PosService {
     return { id: client.id, taxId: client.taxId ?? null };
   }
 
-  /** The commission rate of each professional who did a walk-in service, by id. */
-  private async commissionRates(tenantId: string, lines: TicketLine[]): Promise<Map<string, number>> {
+  /**
+   * The commission rates of each professional named on a walk-in service or
+   * product line, by id: their own, else the salon's default
+   * ("Comisión por defecto", "Comisión de productos" by default).
+   */
+  private async commissionRates(
+    tenantId: string,
+    lines: TicketLine[],
+    terms: CommissionTerms,
+  ): Promise<Map<string, { service: number; product: number }>> {
     const ids = [
-      ...new Set(lines.filter((l) => l.kind === 'service' && l.professionalId).map((l) => l.professionalId as string)),
+      ...new Set(
+        lines
+          .filter((l) => (l.kind === 'service' || l.kind === 'product') && l.professionalId)
+          .map((l) => l.professionalId as string),
+      ),
     ];
     if (ids.length === 0) return new Map();
     const rows = await this.prisma.professional.findMany({
       where: { tenantId, id: { in: ids } },
-      select: { id: true, commissionRate: true },
+      select: { id: true, commissionRate: true, productCommissionRate: true },
     });
-    return new Map(rows.map((r: any) => [r.id, effectiveCommissionRate(r.commissionRate)]));
+    return new Map(
+      rows.map((r: any) => [
+        r.id,
+        {
+          service: effectiveCommissionRate(r.commissionRate, terms.defaultRate),
+          product: effectiveCommissionRate(r.productCommissionRate, terms.productDefaultRate),
+        },
+      ]),
+    );
   }
 
   /**
@@ -1526,8 +1553,9 @@ export class PosService {
     const inactive = products.find((p: any) => !p.isActive);
     if (inactive) throw new BadRequestException(`El producto "${inactive.name}" no está a la venta (desactivado).`);
 
-    // Who did each walk-in service: the one picked, else the team member at
-    // the till if they are a professional. Staff may only name themselves.
+    // Who did each walk-in service, or sold each product: the one picked,
+    // else the team member at the till if they are a professional. Staff may
+    // only name themselves.
     const own = actor
       ? await this.prisma.professional.findFirst({ where: { userId: actor.id, tenantId }, select: { id: true } })
       : null;
@@ -1563,9 +1591,12 @@ export class PosService {
         const p = productById.get(line.productId as string)!;
         const rate = productTaxRatePercent(p.taxRate, salonRate);
         const catalogue = Math.round(Number(p.price) * 100);
+        // A product earns its seller a commission ("Comisión de productos").
+        const professionalId = line.professionalId ?? own?.id;
         priced.push({
           kind: 'product',
           productId: line.productId,
+          ...(professionalId ? { professionalId } : {}),
           name: p.name,
           price: moneyOfCatalogueCents(catalogue, { ...salon.basis, ratePercent: rate }),
           catalogueUnitCents: catalogue,

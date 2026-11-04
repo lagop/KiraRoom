@@ -7,6 +7,9 @@ import { invoiceStore } from "../invoices/invoice-store.testing";
 import { appointmentCommission } from "../commissions/appointment-commission";
 import { cashDrawerRaw, saleTables } from "./pos-test-kit.testing";
 
+/** Terms under which the commission base is the visit's total (no tax rate): what these tests compare. */
+const SAME_BASE = { defaultRate: 10, productDefaultRate: 0, base: "net" as const, pricesIncludeTax: true, taxRatePercent: 0 };
+
 /**
  * A discount given at the till to an appointment whose invoice is already
  * issued. It used to be refused (409). The invoice cannot be edited (with
@@ -185,7 +188,7 @@ describe("a till discount on an appointment already invoiced", () => {
 
     // The commission follows what was charged: 20 % of 36,00.
     const visit: any = t.appointments.get("a1")!;
-    expect(appointmentCommission({ ...visit, commissionPaid: false }, visit.professional.commissionRate)).toEqual({ rate: 20, amount: 720 });
+    expect(appointmentCommission({ ...visit, commissionPaid: false }, visit.professional.commissionRate, SAME_BASE)).toEqual({ rate: 20, amount: 720 });
   });
 
   it("with the tax on top: the till works in money, 12,10 off is 10,00 + 2,10 credited", async () => {

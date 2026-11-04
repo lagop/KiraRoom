@@ -103,7 +103,7 @@ describe("commissions of the till's walk-in services", () => {
       appointment: { findMany: jest.fn(async () => []) },
       posSaleLine: {
         findMany: jest.fn(async ({ where }: any) => {
-          expect(where).toMatchObject({ kind: "service", tenantId: "t1", professionalId: "p1", commissionPaid: false });
+          expect(where).toMatchObject({ kind: { in: ["service", "product"] }, tenantId: "t1", professionalId: "p1", commissionPaid: false });
           return [
             {
               id: "l1",

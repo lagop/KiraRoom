@@ -100,8 +100,9 @@ export class PosCartItemDto {
   appointmentId?: string;
 
   /**
-   * Who did a service sold without an appointment (its commission). Left
-   * out: the professional of the team member at the till, if they have one.
+   * Who did a service sold without an appointment, or sold a product (its
+   * commission). Left out: the professional of the team member at the till,
+   * if they have one.
    */
   @IsOptional()
   @IsUUID()
