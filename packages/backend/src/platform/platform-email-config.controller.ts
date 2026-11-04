@@ -4,7 +4,7 @@ import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { Roles } from "../auth/decorators/roles.decorator";
 import { PlatformEmailConfigPublic, PlatformEmailConfigService } from "./platform-email-config.service";
-import { UpdatePlatformEmailConfigDto } from "./platform-email-config.dto";
+import { TestPlatformEmailDto, UpdatePlatformEmailConfigDto } from "./platform-email-config.dto";
 
 interface AuthedRequest {
   user: { id: string; role: string };
@@ -42,10 +42,10 @@ export class PlatformEmailConfigController {
     );
   }
 
-  /** Sends a test email to the signed-in admin with the settings in force. */
+  /** Sends a test email to the signed-in admin: with the typed key and sender if any (not saved), else those in force. */
   @Post("test")
   @Roles("saas_owner")
-  test(@Req() req: AuthedRequest): Promise<{ ok: boolean; message: string }> {
-    return this.service.sendTest({ id: req.user.id, role: req.user.role });
+  test(@Req() req: AuthedRequest, @Body() body: TestPlatformEmailDto): Promise<{ ok: boolean; message: string }> {
+    return this.service.sendTest({ id: req.user.id, role: req.user.role }, { apiKey: body?.apiKey, from: body?.from });
   }
 }

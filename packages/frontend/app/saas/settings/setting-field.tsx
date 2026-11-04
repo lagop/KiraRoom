@@ -5,7 +5,8 @@ import { sourceText } from "@/lib/platform-email";
 
 /**
  * One platform setting in the console: its label, where its value comes from
- * (and the last characters of a secret), a "Quitar" link when it is set here,
+ * (and the last characters of a secret; in red when it is stored but cannot
+ * be decrypted), a "Quitar" link when it is set here,
  * the input and a hint.
  */
 export function SettingField(props: {
@@ -20,7 +21,7 @@ export function SettingField(props: {
     <div>
       <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
         <label className="text-sm font-medium text-gray-700">{props.label}</label>
-        <span className="text-xs text-gray-500">
+        <span className={`text-xs ${props.source === "unreadable" ? "text-red-600 font-medium" : "text-gray-500"}`}>
           {sourceText(props.source)}
           {props.current ? ` · ${props.current}` : ""}
           {props.onClear && (

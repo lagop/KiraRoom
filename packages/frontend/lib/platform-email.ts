@@ -10,6 +10,8 @@ export function sourceText(source: EmailSettingSource): string {
       return "Configurada aquí";
     case "server":
       return "Del servidor (.env)";
+    case "unreadable":
+      return "Guardada aquí, pero no se puede leer: vuelve a escribirla";
     default:
       return "Sin configurar";
   }
@@ -17,6 +19,20 @@ export function sourceText(source: EmailSettingSource): string {
 
 /** One line on top of the page: can KiraRoom send email, and track it? */
 export function emailStatus(cfg: PlatformEmailConfig): { ok: boolean; text: string } {
+  // A stored value that cannot be decrypted (META_TOKEN_ENCRYPTION_KEY
+  // changed): not configured, and the server's .env is not used instead.
+  if (cfg.apiKey.source === "unreadable") {
+    return {
+      ok: false,
+      text: "No sale ningún email: la clave de Resend guardada aquí no se puede descifrar (¿ha cambiado META_TOKEN_ENCRYPTION_KEY?). Vuelve a escribirla, o quítala para usar la del servidor.",
+    };
+  }
+  if (cfg.webhookSecret.source === "unreadable") {
+    return {
+      ok: false,
+      text: "El secreto del webhook guardado aquí no se puede descifrar: las campañas no sabrán qué se entregó. Vuelve a escribirlo o quítalo.",
+    };
+  }
   if (cfg.apiKey.source === "none") {
     return { ok: false, text: "No sale ningún email: falta la clave de Resend." };
   }

@@ -387,7 +387,7 @@ export class AddOnsService {
 
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
-      select: { plan: true, subscriptionStatus: true, stripeSubscriptionId: true },
+      select: { plan: true, subscriptionStatus: true, stripeSubscriptionId: true, stripeSubscriptionLivemode: true },
     });
     if (!tenant) throw new NotFoundException('Salón no encontrado');
     if (tenant.subscriptionStatus !== 'active' || !tenant.stripeSubscriptionId) {
@@ -396,6 +396,8 @@ export class AddOnsService {
         'Los complementos se añaden a tu suscripción. Activa tu plan de pago primero.',
       );
     }
+    // Not to a subscription of the other Stripe mode (P2).
+    this.subs.assertSubscriptionInMode?.(tenant);
     const plan = this.subs.normalizePlan(tenant.plan);
     if (!this.isRelevantForPlan(this.toRow(addOn), plan)) {
       throw new BadRequestException(`Tu plan ya incluye «${addOn.name}».`);

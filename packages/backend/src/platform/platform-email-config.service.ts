@@ -202,12 +202,28 @@ export class PlatformEmailConfigService implements OnModuleInit {
   }
 
   /**
-   * Sends a short email to the signed-in admin with the settings in force,
-   * so a wrong key or an unverified domain shows up as Resend's own reason.
+   * Sends a short email to the signed-in admin, so a wrong key or an
+   * unverified domain shows up as Resend's own reason. With `typed` values
+   * (what is in the form, not saved yet) it tests those, each falling back
+   * to the one in force: a bad key can be caught before it is saved and
+   * stops every email of every salon.
    */
-  async sendTest(actor: Actor): Promise<{ ok: boolean; message: string }> {
-    const { apiKey, from } = this.current();
-    if (!apiKey) return { ok: false, message: "No hay clave de Resend, ni en la consola ni en el servidor." };
+  async sendTest(actor: Actor, typed: { apiKey?: string | null; from?: string | null } = {}): Promise<{ ok: boolean; message: string }> {
+    const typedKey = typed.apiKey?.trim() || null;
+    const typedFrom = typed.from?.trim() || null;
+    const problem = (typedKey && apiKeyProblem(typedKey)) || (typedFrom && senderProblem(typedFrom)) || null;
+    if (problem) return { ok: false, message: problem };
+    const apiKey = typedKey ?? this.current().apiKey;
+    const from = typedFrom ?? this.current().from;
+    if (!apiKey) {
+      return {
+        ok: false,
+        message:
+          this.settings.sources.apiKey === "unreadable"
+            ? "La clave de Resend guardada en la consola no se puede descifrar: vuelve a escribirla."
+            : "No hay clave de Resend, ni en la consola ni en el servidor.",
+      };
+    }
     if (!from || !parseSender(from)) return { ok: false, message: "Falta la dirección de envío." };
     const user = await this.prisma.user.findUnique({ where: { id: actor.id }, select: { email: true } });
     if (!user?.email) return { ok: false, message: "Tu cuenta no tiene email al que enviar la prueba." };
@@ -221,7 +237,8 @@ export class PlatformEmailConfigService implements OnModuleInit {
         html: `<p>Si lees esto, KiraRoom envía emails desde <strong>${parseSender(from)!.address}</strong>.</p>`,
       });
       if (error) return { ok: false, message: `Resend: ${redactSecrets(error.message)}` };
-      return { ok: true, message: `Enviado a ${user.email} (id ${data?.id ?? "?"}). Mira también la carpeta de spam.` };
+      const unsaved = typedKey || typedFrom ? " Es lo que has escrito: aún no está guardado." : "";
+      return { ok: true, message: `Enviado a ${user.email} (id ${data?.id ?? "?"}). Mira también la carpeta de spam.${unsaved}` };
     } catch (err) {
       return { ok: false, message: `Resend: ${redactSecrets((err as Error).message ?? "error desconocido")}` };
     }
@@ -231,26 +248,30 @@ export class PlatformEmailConfigService implements OnModuleInit {
     const row = await this.prisma.platformEmailConfig.findUnique({ where: { id: "global" } });
     this.stored = row ? { updatedAt: row.updatedAt, updatedBy: row.updatedBy } : null;
     this.pack = { emails: row?.marketingPackEmails ?? null, priceCents: row?.marketingPackPriceCents ?? null };
+    const unreadable: Partial<Record<keyof EmailSettings, boolean>> = {};
     this.settings = resolveEmailSettings(
       row
         ? {
-            apiKey: this.decrypt(row.apiKeyEncrypted, "API key"),
+            apiKey: this.decrypt(row.apiKeyEncrypted, "API key", () => (unreadable.apiKey = true)),
             from: row.fromAddress,
-            webhookSecret: this.decrypt(row.webhookSecretEncrypted, "webhook secret"),
+            webhookSecret: this.decrypt(row.webhookSecretEncrypted, "webhook secret", () => (unreadable.webhookSecret = true)),
           }
         : {},
       this.serverSettings(),
+      unreadable,
     );
   }
 
-  private decrypt(value: string | null, what: string): string | null {
+  private decrypt(value: string | null, what: string, onUnreadable: () => void): string | null {
     if (!value) return null;
     try {
       return this.encryption.decrypt(value);
     } catch (err) {
-      // The encryption key changed or the value is corrupt: fall back to
-      // the server's setting and say so, rather than failing every send.
-      this.logger.error(`Stored email ${what} cannot be decrypted; re-enter it in the console: ${(err as Error).message}`);
+      // The encryption key changed or the value is corrupt. Not the
+      // server's value instead: that could be another account. The setting
+      // is unconfigured until it is typed again, and the console says so.
+      onUnreadable();
+      this.logger.error(`Stored email ${what} cannot be decrypted; unconfigured until re-entered in the console: ${(err as Error).message}`);
       return null;
     }
   }

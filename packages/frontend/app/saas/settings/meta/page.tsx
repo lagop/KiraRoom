@@ -89,7 +89,10 @@ export default function PlatformMetaPage() {
         {status.webhookUrls ? (
           <dl className="space-y-2">
             <div>
-              <dt className="text-xs text-gray-500">WhatsApp (producto WhatsApp, campo «messages»)</dt>
+              <dt className="text-xs text-gray-500">
+                WhatsApp (producto WhatsApp, campos «messages» y «phone_number_quality_update»; este último actualiza la
+                calidad del número que ve el salón)
+              </dt>
               <dd className="break-all font-mono text-xs">{status.webhookUrls.whatsapp}</dd>
             </div>
             <div>
@@ -100,6 +103,10 @@ export default function PlatformMetaPage() {
         ) : (
           <p className="text-xs text-amber-800">Falta API_BASE_URL: sin ella no se puede mostrar la dirección pública.</p>
         )}
+        <p className="text-xs text-gray-500">
+          Estos valores solo se leen del servidor (.env). Tras cambiarlos hay que volver a crear el contenedor del backend:{" "}
+          <code className="font-mono">docker compose -f docker-compose.prod.yml --env-file .env.production up -d backend</code>.
+        </p>
       </div>
     </div>
   );

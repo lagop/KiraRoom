@@ -89,7 +89,14 @@ export default function PlatformEmailPage() {
     setTesting(true);
     setTestResult(null);
     try {
-      setTestResult(await apiClient.sendPlatformTestEmail());
+      // What is typed in the form (not saved yet) if anything, else what is in force.
+      const typedFrom = form.from.trim();
+      setTestResult(
+        await apiClient.sendPlatformTestEmail({
+          apiKey: form.apiKey.trim() || undefined,
+          from: typedFrom && typedFrom !== (cfg?.from.value ?? "") ? typedFrom : undefined,
+        }),
+      );
     } catch (err: any) {
       setTestResult({ ok: false, message: err?.message ?? "Error" });
     } finally {
@@ -138,7 +145,7 @@ export default function PlatformEmailPage() {
           source={cfg.apiKey.source}
           current={cfg.apiKey.lastFour ? `re_…${cfg.apiKey.lastFour}` : null}
           hint="Resend → API Keys. Mejor una clave con permiso solo para enviar desde tu dominio. Se guarda cifrada y no se vuelve a mostrar."
-          onClear={cfg.apiKey.source === "console" ? () => clear("apiKey", "la clave") : undefined}
+          onClear={cfg.apiKey.source === "console" || cfg.apiKey.source === "unreadable" ? () => clear("apiKey", "la clave") : undefined}
         >
           <input
             type="password"
@@ -171,7 +178,7 @@ export default function PlatformEmailPage() {
           source={cfg.webhookSecret.source}
           current={cfg.webhookSecret.lastFour ? `whsec_…${cfg.webhookSecret.lastFour}` : null}
           hint={`Para registrar entregas, clics y rebotes de las campañas (las aperturas no se usan). En Resend → Webhooks, crea uno a ${WEBHOOK_URL} y copia aquí su «Signing secret».`}
-          onClear={cfg.webhookSecret.source === "console" ? () => clear("webhookSecret", "el secreto") : undefined}
+          onClear={cfg.webhookSecret.source === "console" || cfg.webhookSecret.source === "unreadable" ? () => clear("webhookSecret", "el secreto") : undefined}
         >
           <input
             type="password"
@@ -213,11 +220,11 @@ export default function PlatformEmailPage() {
           <button
             type="button"
             onClick={sendTest}
-            disabled={testing || cfg.apiKey.source === "none"}
+            disabled={testing || ((cfg.apiKey.source === "none" || cfg.apiKey.source === "unreadable") && !form.apiKey.trim())}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-300 text-sm disabled:opacity-40"
           >
             <Send className="w-4 h-4" />
-            {testing ? "Enviando…" : "Enviarme un email de prueba"}
+            {testing ? "Enviando…" : pending ? "Probar lo escrito (sin guardar)" : "Enviarme un email de prueba"}
           </button>
         </div>
 

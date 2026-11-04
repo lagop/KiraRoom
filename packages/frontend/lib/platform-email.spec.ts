@@ -34,6 +34,12 @@ const sending: PlatformEmailConfig = {
 
 check("nothing set: says no email goes out", !emailStatus(none).ok && /clave de Resend/.test(emailStatus(none).text));
 check(
+  "a stored key that cannot be decrypted: no email, in red, not the server's",
+  !emailStatus({ ...none, apiKey: { source: "unreadable", lastFour: null } }).ok &&
+    /no se puede descifrar/.test(emailStatus({ ...none, apiKey: { source: "unreadable", lastFour: null } }).text) &&
+    /no se puede leer/.test(sourceText("unreadable")),
+);
+check(
   "a key without a sender is not enough",
   !emailStatus({ ...none, apiKey: sending.apiKey }).ok,
 );

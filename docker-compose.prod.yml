@@ -22,7 +22,6 @@
 #     POSTGRES_PASSWORD       - `openssl rand -hex 24`
 #     JWT_SECRET              - `openssl rand -hex 48`
 #     OAUTH_STATE_SECRET      - `openssl rand -hex 48`
-#     MINIMAX_API_KEY         - from your MiniMax dashboard
 #     STRIPE_SECRET_KEY       - sk_test_... initially
 #     STRIPE_WEBHOOK_SECRET   - from Stripe dashboard (webhook signing secret)
 #
@@ -213,8 +212,6 @@ services:
       LLM_RETRY_MAX_DELAY_MS: ${LLM_RETRY_MAX_DELAY_MS:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
-      MINIMAX_BASE_URL: ${MINIMAX_BASE_URL:-}
 
       # Billing
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}

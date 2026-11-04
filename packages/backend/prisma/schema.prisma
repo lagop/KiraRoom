@@ -66,6 +66,11 @@ model Tenant {
   trialEnd               DateTime?
   stripeCustomerId       String?
   stripeSubscriptionId   String?
+  /// Stripe mode (livemode) of KiraRoom's keys when the customer and the
+  /// subscription above were created: a test-mode customer does not exist
+  /// for the live keys, and the other way round. Null: unknown.
+  stripeCustomerLivemode     Boolean?
+  stripeSubscriptionLivemode Boolean?
   /// Plan rev3: cancellation lifecycle + add-ons + multi-location
   cancelledAt            DateTime?
   readOnlyUntil          DateTime?
@@ -3642,6 +3647,10 @@ model PlatformStripeConfig {
   secretKeyEncrypted     String?  @db.Text
   publishableKey         String?
   webhookSecretEncrypted String?  @db.Text
+  /// The other mode's webhook secret (test or live, whichever the secret
+  /// key is not): its events are verified and acknowledged, not applied.
+  otherWebhookSecretEncrypted String? @db.Text
+  /// Ignored: KiraRoom charges no VAT (D6). Kept for the column.
   taxEnabled             Boolean?
   updatedAt              DateTime @updatedAt
   updatedBy              String?
