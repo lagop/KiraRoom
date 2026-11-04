@@ -409,7 +409,6 @@ export class AnthropicProvider {
 /** A provider key handed to the provider for one request. */
 export interface ProviderCredentials {
   apiKey: string;
-  baseUrl?: string | null;
   workspaceId?: string | null;
 }
 
@@ -417,7 +416,7 @@ export interface ProviderCredentials {
  * The SDK's own retries are off (it retried every request twice more, under
  * our retries of the whole tool loop): LLMService retries each request.
  */
-function buildClient(apiKey: string, workspaceId: string | null | undefined): Anthropic {
+export function buildClient(apiKey: string, workspaceId: string | null | undefined): Anthropic {
   return new Anthropic({
     apiKey,
     maxRetries: 0,

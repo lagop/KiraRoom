@@ -6,6 +6,7 @@ import { formatCountEs } from "@kira/shared";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { PlatformEmailConfigService } from "../platform/platform-email-config.service";
 import { PlatformStripeConfigService } from "../platform/platform-stripe-config.service";
+import { keyMode, livemodeOf, sameStripeMode } from "../platform/stripe-settings";
 
 /** The Checkout metadata kind of a bono de emails, for the Stripe webhook. */
 export const EMAIL_PACK_KIND = "email_pack";
@@ -88,9 +89,14 @@ export class EmailPacksService {
     }
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
-      select: { id: true, email: true, stripeCustomerId: true },
+      select: { id: true, email: true, stripeCustomerId: true, stripeCustomerLivemode: true },
     });
     if (!tenant) throw new NotFoundException("Salón no encontrado");
+    // A customer created with the other Stripe mode's keys does not exist
+    // for these (P2): Checkout creates a new one instead.
+    const customerId = sameStripeMode(tenant.stripeCustomerLivemode, livemodeOf(keyMode(this.platformStripe.current().secretKey)))
+      ? tenant.stripeCustomerId
+      : null;
 
     const base = String(this.config.get("FRONTEND_URL") || "http://localhost:3000").replace(/\/+$/, "");
     const metadata = {
@@ -105,13 +111,13 @@ export class EmailPacksService {
       ? {
           automatic_tax: { enabled: true },
           tax_id_collection: { enabled: true },
-          ...(tenant.stripeCustomerId ? { customer_update: { name: "auto", address: "auto" } } : {}),
+          ...(customerId ? { customer_update: { name: "auto", address: "auto" } } : {}),
         }
       : {};
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
-      ...(tenant.stripeCustomerId
-        ? { customer: tenant.stripeCustomerId }
+      ...(customerId
+        ? { customer: customerId }
         : { customer_creation: "always", ...(tenant.email ? { customer_email: tenant.email } : {}) }),
       payment_method_types: ["card"],
       line_items: [

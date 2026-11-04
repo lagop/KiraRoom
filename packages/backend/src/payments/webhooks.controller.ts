@@ -13,6 +13,22 @@ import { ReadOnlyNoticeService } from './read-only-notice.service';
 import { PlatformStripeConfigService } from '../platform/platform-stripe-config.service';
 import { creditEmailPackFromCheckout, isEmailPackSession } from '../email-campaigns/email-packs.service';
 import { appBaseUrl } from '../common/app-base-url';
+import { livemodeOf, webhookSecretsFor } from '../platform/stripe-settings';
+
+/**
+ * The event's `livemode` read from the payload before it is verified: only
+ * to choose which webhook secret to try first. Null when it cannot be read.
+ */
+export function unverifiedLivemode(rawBody: string, body: unknown): boolean | null {
+  try {
+    const parsed = JSON.parse(rawBody);
+    if (typeof parsed?.livemode === 'boolean') return parsed.livemode;
+  } catch {
+    // fall through to the parsed body
+  }
+  const fromBody = (body as { livemode?: unknown } | null)?.livemode;
+  return typeof fromBody === 'boolean' ? fromBody : null;
+}
 
 @Controller('webhooks')
 export class WebhooksController {
@@ -95,21 +111,27 @@ export class WebhooksController {
       return this.processStripeEvent(body);
     }
 
-    // Verify webhook signature
+    // Verify webhook signature: with the secret of the event's mode first
+    // (test and live events are signed with different secrets; the other
+    // mode's is optional, see PlatformStripeConfigService).
     const rawBody = req.rawBody?.toString() || JSON.stringify(body);
-    
-    let event: Stripe.Event;
-    try {
-      event = this.stripe.webhooks.constructEvent(
-        rawBody,
-        signature,
-        this.webhookSecret,
-      );
-    } catch (err) {
+    const secrets = webhookSecretsFor(this.platformStripe.current(), unverifiedLivemode(rawBody, body));
+
+    let event: Stripe.Event | null = null;
+    let lastError: Error | null = null;
+    for (const secret of secrets) {
+      try {
+        event = this.stripe.webhooks.constructEvent(rawBody, signature, secret);
+        break;
+      } catch (err) {
+        lastError = err as Error;
+      }
+    }
+    if (!event) {
       // 400, not 200: a forged event is refused, and a real one signed with
       // another secret shows up as failing in the Stripe dashboard, which
       // retries it, instead of being acknowledged and lost.
-      this.logger.warn(`Stripe webhook signature verification failed: ${(err as Error).message}`);
+      this.logger.warn(`Stripe webhook signature verification failed: ${lastError?.message ?? 'no webhook secret'}`);
       throw new BadRequestException('Invalid Stripe signature');
     }
 
@@ -117,8 +139,27 @@ export class WebhooksController {
     return this.processStripeEvent(event);
   }
 
+  /**
+   * An event of the other mode than the secret key in force (test events
+   * while charging for real, or the other way round) is acknowledged and not
+   * applied: a test payment must never activate a plan while live keys are
+   * in force, and a live one is not KiraRoom's while it runs on test keys.
+   * 200, so Stripe stops retrying it. Null when the event is to be applied.
+   */
+  private otherModeEvent(event: Stripe.Event): { received: true; ignored: 'other_mode' } | null {
+    const mode = this.platformStripe?.mode?.() ?? 'none';
+    if (mode === 'none' || typeof event?.livemode !== 'boolean') return null;
+    if (event.livemode === (mode === 'live')) return null;
+    this.logger.warn(
+      `Ignoring Stripe event ${event.id} (${event.type}): it is ${event.livemode ? 'live' : 'test'} mode and the platform's keys are ${mode} mode`,
+    );
+    return { received: true, ignored: 'other_mode' };
+  }
+
   private async processStripeEvent(event: Stripe.Event) {
     console.log(`[WebhooksController] Processing Stripe event: ${event.type}`);
+    const ignored = this.otherModeEvent(event);
+    if (ignored) return ignored;
 
     // Stripe delivers each event at least once and retries it for days, so
     // the same event can arrive again long after it was applied (an old
@@ -403,6 +444,11 @@ export class WebhooksController {
    * Without a Stripe client (the unsigned dev/test path) the event's own
    * snapshot is used, with the same rules.
    */
+  /** Stripe's livemode for the keys in force; null without keys. */
+  private livemode(): boolean | null {
+    return livemodeOf(this.platformStripe?.mode?.() ?? 'none');
+  }
+
   private async activatePlan(activation: PlanActivation | null) {
     if (!activation) return;
     const tenant = await this.prisma.tenant.findUnique({
@@ -467,8 +513,11 @@ export class WebhooksController {
         ...(current.cancelAt !== undefined ? { subscriptionCancelAt: current.cancelAt } : {}),
         ...(current.plan ? { plan: current.plan as any } : {}),
         ...(current.locations ? { maxLocations: current.locations } : {}),
-        ...(current.customerId ? { stripeCustomerId: current.customerId } : {}),
-        ...(subscriptionId ? { stripeSubscriptionId: subscriptionId } : {}),
+        // With the mode they belong to (that of the keys in force: events of
+        // the other mode are not applied), so a switch of modes creates new
+        // ones instead of reusing these (P2).
+        ...(current.customerId ? { stripeCustomerId: current.customerId, stripeCustomerLivemode: this.livemode() } : {}),
+        ...(subscriptionId ? { stripeSubscriptionId: subscriptionId, stripeSubscriptionLivemode: this.livemode() } : {}),
         paymentFailedAt: null,
         gracePeriodEndsAt: null,
         readOnlyUntil: null,
