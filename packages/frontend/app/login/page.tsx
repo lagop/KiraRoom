@@ -2,7 +2,9 @@
 
 import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import apiClient, { setToken, removeRefreshToken, isTwoFactorRequired } from "@/lib/api";
+import apiClient, { ApiError, setToken, removeRefreshToken, isTwoFactorRequired } from "@/lib/api";
+import { CAPTCHA_REQUIRED_CODE } from "@/lib/signup-form";
+import { TurnstileWidget, isTurnstileConfigured } from "@/src/components/auth/turnstile-widget";
 import { TwoFactorStep } from "@/src/components/auth/two-factor-step";
 import { useTranslations } from "@/lib/use-translation";
 import { LanguageSwitcher } from "@/app/dashboard/components/language-switcher";
@@ -18,6 +20,10 @@ function LoginPageContent() {
   const [launchInfo, setLaunchInfo] = useState<{ tenantName: string; ownerName: string } | null>(null);
   // Set when the account has two-step verification: the code step replaces the form.
   const [challenge, setChallenge] = useState<string | null>(null);
+  // After 3 failed sign-ins the server asks for the captcha (CAPTCHA_REQUIRED).
+  const [captchaNeeded, setCaptchaNeeded] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const [captchaReset, setCaptchaReset] = useState(0);
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -76,7 +82,7 @@ function LoginPageContent() {
     setLoading(true);
 
     try {
-      const response = await apiClient.login(email, password);
+      const response = await apiClient.login(email, password, undefined, captchaToken ?? undefined);
       if (isTwoFactorRequired(response)) {
         setChallenge(response.challenge);
         return;
@@ -84,6 +90,14 @@ function LoginPageContent() {
       signedIn(response);
     } catch (err) {
       setError(err instanceof Error ? err.message : t("common.error"));
+      if (err instanceof ApiError && err.code === CAPTCHA_REQUIRED_CODE && isTurnstileConfigured()) {
+        setCaptchaNeeded(true);
+      }
+      // A token works once: a fresh challenge for the next try.
+      if (captchaToken) {
+        setCaptchaToken(null);
+        setCaptchaReset((n) => n + 1);
+      }
     } finally {
       setLoading(false);
     }
@@ -221,9 +235,13 @@ function LoginPageContent() {
               />
             </div>
 
+            {captchaNeeded && (
+              <TurnstileWidget onToken={setCaptchaToken} resetKey={captchaReset} action="login" />
+            )}
+
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || (captchaNeeded && !captchaToken)}
               className="w-full bg-purple-600 text-white py-2 px-4 rounded-lg hover:bg-purple-700 disabled:opacity-50"
             >
               {loading ? t("login.logging_in") : t("login.login")}

@@ -1,4 +1,5 @@
 import "reflect-metadata";
+import { noLimits, noTurnstile } from "./abuse/abuse-checks.testing";
 import { BadRequestException, ForbiddenException } from "@nestjs/common";
 import * as bcrypt from "bcryptjs";
 import { AuthService } from "./auth.service";
@@ -102,7 +103,7 @@ describe("PATCH /auth/password", () => {
       })),
       endSession: jest.fn(async () => undefined),
     };
-    return { ctl: new AuthController(authService, {} as any, {} as any), authService };
+    return { ctl: new AuthController(authService, {} as any, {} as any, noTurnstile(), noLimits()), authService };
   }
   const res = () => ({ cookie: jest.fn(), clearCookie: jest.fn() }) as any;
   const req = { headers: {}, cookies: {} } as any;

@@ -52,10 +52,12 @@
 import { ConflictException, ForbiddenException } from "@nestjs/common";
 import { InvitesService } from "./invites.service";
 import { InviteStatus, UserRole } from "@prisma/client";
+import { TERMS_VERSION } from "../../auth/legal-terms";
 
 // ────────────────────── mock helpers
 
 function makePrismaMock() {
+  const legalAcceptances: any[] = [];
   const tenantInvites = new Map<string, any>();
   const tenants = new Map<string, any>();
   const users = new Map<string, any>();
@@ -201,6 +203,19 @@ updateMany: async (args: any) => {
       },
     },
 user: {
+      // Case-insensitive email lookup (the service ignores case).
+      findFirst: async (args: any) => {
+        const e = args.where?.email;
+        const email = typeof e === "string" ? e : e?.equals;
+        const row = typeof email === "string" ? users.get(email.toLowerCase()) : undefined;
+        if (!row) return null;
+        if (args.select) {
+          const out: any = {};
+          for (const k of Object.keys(args.select)) out[k] = row[k];
+          return out;
+        }
+        return row;
+      },
       findUnique: async (args: any) => {
         const id =
           typeof args.where.email === "string"
@@ -234,14 +249,22 @@ user: {
     },
   };
 
+  (tx as any).legalAcceptance = {
+    create: async (args: any) => {
+      legalAcceptances.push(args.data);
+      return { id: `la-${legalAcceptances.length}`, ...args.data };
+    },
+  };
+
   const prisma: any = {
     tenantInvite: tx.tenantInvite,
     tenant: tx.tenant,
     user: tx.user,
+    legalAcceptance: (tx as any).legalAcceptance,
     $transaction: async (fn: any) => fn(tx),
   };
 
-  return { prisma, tenantInvites, tenants, users, tx };
+  return { prisma, tenantInvites, tenants, users, tx, legalAcceptances };
 }
 
 function makeConfigMock() {
@@ -488,6 +511,7 @@ describe("InvitesService.acceptInvite (TOCTOU race + edge cases)", () => {
     postalCode: "28013",
     country: "ES",
     timezone: "Europe/Madrid",
+    acceptTerms: true,
   };
 
   it("creates the tenant + owner user and returns tokens on first accept", async () => {
@@ -502,7 +526,7 @@ seedActiveInvite(m, "tok-accept-1-long-16");
       makeSessionsMock(),
     );
 
-    const result = await svc.acceptInvite("tok-accept-1-long-16", validAcceptDto as any);
+    const result = await svc.acceptInvite("tok-accept-1-long-16", validAcceptDto as any, { ip: "203.0.113.7" });
 
     expect(result.accessToken).toMatch(/^jwt\./);
     expect(result.refreshToken).toMatch(/^jwt\./);
@@ -513,6 +537,16 @@ seedActiveInvite(m, "tok-accept-1-long-16");
     const row = m.tenantInvites.get("tok-accept-1-long-16");
     expect(row.status).toBe(InviteStatus.accepted);
     expect(row.acceptedAt).toBeInstanceOf(Date);
+    // S3: the terms acceptance is recorded with the new salon and its owner.
+    expect(m.legalAcceptances).toEqual([
+      expect.objectContaining({
+        tenantId: result.tenantId,
+        acceptedByUserId: result.userId,
+        termsVersion: TERMS_VERSION,
+        ip: "203.0.113.7",
+        source: "invite",
+      }),
+    ]);
   });
 
   it("rejects a second accept of the same token (TOCTOU race protection)", async () => {

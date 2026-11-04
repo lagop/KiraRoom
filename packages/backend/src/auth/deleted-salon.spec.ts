@@ -1,5 +1,6 @@
 import { UnauthorizedException } from "@nestjs/common";
-import { AuthService } from "./auth.service";
+import * as bcrypt from "bcryptjs";
+import { AuthService, INVALID_CREDENTIALS } from "./auth.service";
 import { JwtStrategy } from "./strategies/jwt.strategy";
 import { SALON_DELETED_MESSAGE } from "./salon-deleted";
 import { SaasService } from "../saas/saas.service";
@@ -49,14 +50,22 @@ describe("a deleted salon's users", () => {
           email: "duena@salon.test",
           role: "owner",
           isActive: true,
+          loginAttempts: 0,
+          lockedUntil: null,
+          passwordHash: bcrypt.hashSync("la-buena-clave", 4),
           tenant: { deletedAt: new Date("2026-11-01T00:00:00Z") },
         })),
+        update: jest.fn(async () => ({})),
       },
     };
-    const attempt = service.login({ email: "duena@salon.test", password: "irrelevant" });
+    const attempt = service.login({ email: "duena@salon.test", password: "la-buena-clave" });
     await expect(attempt).rejects.toBeInstanceOf(UnauthorizedException);
-    await expect(service.login({ email: "duena@salon.test", password: "irrelevant" })).rejects.toThrow(
+    await expect(service.login({ email: "duena@salon.test", password: "la-buena-clave" })).rejects.toThrow(
       SALON_DELETED_MESSAGE,
+    );
+    // With a wrong password nothing about the salon is said (audit 7A, S10).
+    await expect(service.login({ email: "duena@salon.test", password: "otra-clave-1" })).rejects.toThrow(
+      INVALID_CREDENTIALS,
     );
   });
 

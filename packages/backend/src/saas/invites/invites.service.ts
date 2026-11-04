@@ -31,6 +31,7 @@ import {
   DEFAULT_ACCESS_TOKEN_SECONDS,
   DEFAULT_REFRESH_TOKEN_SECONDS,
 } from "../../common/jwt-duration";
+import { TERMS_VERSION } from "../../auth/legal-terms";
 
 const INVITE_TTL_DAYS = 7;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -147,8 +148,9 @@ export class InvitesService {
       );
     }
 
-    const existingUser = await tx.user.findUnique({
-      where: { email },
+    // Ignoring case: older accounts may still have capitals.
+    const existingUser = await tx.user.findFirst({
+      where: { email: { equals: email, mode: "insensitive" } },
       select: { tenantId: true },
     });
     if (existingUser) {
@@ -231,6 +233,7 @@ export class InvitesService {
   async acceptInvite(
     token: string,
     dto: AcceptInviteDto,
+    context: { ip?: string | null } = {},
   ): Promise<{
     tenantId: string;
     userId: string;
@@ -255,7 +258,7 @@ export class InvitesService {
         invite.expiresAt.getTime() <= Date.now()
       ) {
         throw new ForbiddenException(
-          "This invite link is no longer valid.",
+          "Esta invitación ya no es válida: ha caducado, se ha anulado o ya se ha usado. Pide una nueva a KiraRoom.",
         );
       }
 
@@ -270,6 +273,7 @@ export class InvitesService {
         invite,
         dto,
         finalSlug,
+        context.ip ?? null,
       );
 
       // Atomic accept: updateMany with the status filter so that two
@@ -292,7 +296,7 @@ export class InvitesService {
 
       if (flip.count === 0) {
         throw new ForbiddenException(
-          "This invite link was just consumed by another request.",
+          "Esta invitación se acaba de usar. Si has sido tú, inicia sesión.",
         );
       }
 
@@ -363,6 +367,7 @@ export class InvitesService {
     },
     dto: AcceptInviteDto,
     slug: string,
+    ip: string | null = null,
   ): Promise<{ tenantId: string; userId: string; email: string; role: UserRole }> {
     // Owner User — `email` is the invite email so the same person can
     // log in via the regular /auth/login endpoint after the trial ends.
@@ -394,7 +399,10 @@ export class InvitesService {
       ownerPassword: dto.password,
       ownerFirstName,
       ownerLastName,
-      ownerRole: invite.role,
+      // Invites only ever create the salon owner (CreateInviteDto); an old
+      // invite with another role still makes an owner, never a platform admin.
+      ownerRole: invite.role === UserRole.admin ? UserRole.admin : UserRole.owner,
+      legalAcceptance: { termsVersion: TERMS_VERSION, ip, source: "invite" },
     });
 
     // Mark the user as email-verified — accepted invite is the proof.

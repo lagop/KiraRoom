@@ -17,11 +17,14 @@ import {
   availableTenantSlug,
   createTenantWithOwner,
   getActiveTenant,
+  hashPassword,
   TENANT_SLUG_UNAVAILABLE,
 } from "../saas/saas.helpers";
+import { normalizeEmail } from "./email-normalize";
+import { TERMS_VERSION } from "./legal-terms";
 import { AuditLogService } from "../saas/audit-log.service";
 import { EmailService } from "../notifications/services/email.service";
-import { randomBytes } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { isKnownSalonTimezone, normalizePlan, suggestedSalonTimezone } from "@kira/shared";
 import {
   parseJwtDuration,
@@ -148,6 +151,66 @@ function targetIncludes(e: any, column: string): boolean {
   return typeof target === "string" ? target.includes(column) : true;
 }
 
+/** A sign-in with a wrong password, or with an address that has no account. */
+export const INVALID_CREDENTIALS = "Email o contraseña incorrectos.";
+
+/**
+ * Signup with an address that already has an account, maybe as part of
+ * another salon's team: the email is unique across KiraRoom (S11).
+ */
+export const EMAIL_ALREADY_REGISTERED =
+  "Este email ya tiene una cuenta en KiraRoom (quizá como parte del equipo de otro salón). Inicia sesión o usa otro email para tu salón.";
+
+/** Machine-readable code with EMAIL_ALREADY_REGISTERED, for the form's links. */
+export const EMAIL_ALREADY_REGISTERED_CODE = "EMAIL_ALREADY_REGISTERED";
+
+export function lockedMessage(lockedUntil: Date, now: number = Date.now()): string {
+  const minutes = Math.max(1, Math.ceil((lockedUntil.getTime() - now) / 60000));
+  return `Demasiados intentos: la cuenta está bloqueada. Vuelve a intentarlo en ${minutes} minuto${minutes === 1 ? "" : "s"}.`;
+}
+
+/**
+ * The write for one more failed attempt (password or code). A lock that has
+ * already run out starts the count again; otherwise the attempts stayed at 5
+ * after the 30 minutes and the next slip locked the account straight away.
+ */
+export function failedAttemptUpdate(
+  user: { loginAttempts: number; lockedUntil: Date | null },
+  now: number = Date.now(),
+): { loginAttempts: number | { increment: number }; lockedUntil: Date | null } {
+  const lockExpired = Boolean(user.lockedUntil && user.lockedUntil.getTime() <= now);
+  const before = lockExpired ? 0 : user.loginAttempts;
+  return {
+    // An increment, so two wrong passwords at once both count; after an
+    // expired lock the count starts again at this one.
+    loginAttempts: lockExpired ? 1 : { increment: 1 },
+    lockedUntil: before >= MAX_LOGIN_ATTEMPTS - 1 ? new Date(now + LOCKOUT_MS) : null,
+  };
+}
+
+function emailAlreadyRegistered(): ConflictException {
+  return new ConflictException({
+    statusCode: 409,
+    message: EMAIL_ALREADY_REGISTERED,
+    code: EMAIL_ALREADY_REGISTERED_CODE,
+  });
+}
+
+/** sha256 of an email-verification token: what is stored (S14). */
+export function hashVerificationToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+/**
+ * A bcrypt hash with the configured cost, for a sign-in with an unknown
+ * address: comparing against it takes as long as a real wrong password.
+ */
+let timingHashPromise: Promise<string> | null = null;
+function timingHash(): Promise<string> {
+  timingHashPromise ??= hashPassword(randomBytes(16).toString("hex"));
+  return timingHashPromise;
+}
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -164,15 +227,24 @@ export class AuthService {
 
   async register(
     registerDto: RegisterDto,
+    context: { ip?: string | null } = {},
   ): Promise<{ user: AuthUser; tokens: TokenResponse }> {
-    // Check if email already exists
-    const existingUser = await this.prisma.user.findUnique({
-      where: { email: registerDto.email },
+    // The DTO lower-cases the email; older rows may still have capitals
+    // (the lower-casing migration leaves case-insensitive duplicates as
+    // they were), so the check ignores case.
+    const email = normalizeEmail(registerDto.email);
+    const salonName = registerDto.salonName.trim();
+    const existingUser = await this.prisma.user.findFirst({
+      where: { email: { equals: email, mode: "insensitive" } },
+      select: { id: true },
     });
 
     if (existingUser) {
-      throw new ConflictException("Email already registered");
+      throw emailAlreadyRegistered();
     }
+    // Only a language the panel has (es, en); anything else is Spanish.
+    const language = registerDto.language === "en" ? "en" : "es";
+    const phone = registerDto.phone?.trim() || null;
 
     // Tenant+owner creation goes through the SaaS helpers so the three
     // creation paths (signup form / SaaS-admin createTenant / invite
@@ -194,13 +266,21 @@ export class AuthService {
     const lostRace = new Set<string>();
     let created: Awaited<ReturnType<typeof createTenantWithOwner>> | undefined;
     for (let attempt = 0; !created; attempt++) {
-      const slug = await availableTenantSlug(this.prisma, registerDto.salonName, lostRace);
+      const slug = await availableTenantSlug(this.prisma, salonName, lostRace);
       try {
         created = await createTenantWithOwner(this.prisma, {
-          name: registerDto.salonName,
+          name: salonName,
           slug,
           plan: "esencial",
-          ownerEmail: registerDto.email,
+          // The form asks for it (required): it is the salon's phone, which
+          // the public page, reminders and invoices show and the "datos del
+          // salón" checklist step looks for. It used to be dropped.
+          phone,
+          // The panel speaks Spanish and English; the owner's choice is the
+          // salon's language and hers.
+          language,
+          ownerLanguage: language,
+          ownerEmail: email,
           ownerPassword: registerDto.password,
           ownerFirstName: firstName,
           ownerLastName: lastName,
@@ -208,13 +288,16 @@ export class AuthService {
           // salon signing up from Las Palmas starts on Canary time instead of
           // Madrid's. Onboarding's address step corrects the rest.
           timezone: isKnownSalonTimezone(registerDto.timezone) ? registerDto.timezone : undefined,
+          // The terms (with the art. 28 processing agreement) and the privacy
+          // policy, accepted on the form: recorded with the salon, atomically.
+          legalAcceptance: { termsVersion: TERMS_VERSION, ip: context.ip ?? null, source: "signup" },
         });
       } catch (e: any) {
         if (e?.code !== "P2002") throw e;
         // The owner's email, registered by a signup a moment ago.
         const target = e?.meta?.target;
         if (Array.isArray(target) ? target.includes("email") : String(target ?? "").includes("email")) {
-          throw new ConflictException("Email already registered");
+          throw emailAlreadyRegistered();
         }
         if (!targetIncludes(e, "slug")) throw e;
         if (attempt >= 4) throw new ConflictException(TENANT_SLUG_UNAVAILABLE);
@@ -226,7 +309,7 @@ export class AuthService {
     // Funnel entry point: everything else in the activation funnel is
     // measured relative to this event.
     this.events.record(PRODUCT_EVENTS.TENANT_SIGNED_UP, createdTenant.id, {
-      language: registerDto.language ?? 'es',
+      language,
     });
 
     // Welcome email with the verification link folded in (A3 + A4).
@@ -241,7 +324,7 @@ export class AuthService {
     void this.sendActivationEmail({
       userId: user.id,
       email: user.email,
-      tenantName: registerDto.salonName,
+      tenantName: salonName,
       ownerName: firstName || null,
     }).catch((err: Error) => {
       this.logger.warn(`welcome email not sent: ${err.message}`);
@@ -270,26 +353,35 @@ export class AuthService {
   /** Token lifetime for the email-verification link. */
   private static readonly EMAIL_VERIFY_TTL_MS = 48 * 60 * 60 * 1000;
 
+  /**
+   * A new verification link for this user: only its sha256 is stored, like
+   * the password-reset link, so a copy of the database confirms nothing.
+   */
+  private async mintEmailVerificationToken(userId: string): Promise<{ token: string; expiresAt: Date }> {
+    const token = randomBytes(32).toString("hex");
+    const expiresAt = new Date(Date.now() + AuthService.EMAIL_VERIFY_TTL_MS);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        emailVerificationToken: hashVerificationToken(token),
+        emailVerificationExpires: expiresAt,
+      },
+    });
+    return { token, expiresAt };
+  }
+
+  private frontendUrl(): string {
+    return (process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, "");
+  }
+
   private async sendActivationEmail(args: {
     userId: string;
     email: string;
     tenantName: string;
     ownerName: string | null;
   }): Promise<void> {
-    const token = randomBytes(32).toString("hex");
-    const expiresAt = new Date(Date.now() + AuthService.EMAIL_VERIFY_TTL_MS);
-
-    await this.prisma.user.update({
-      where: { id: args.userId },
-      data: {
-        emailVerificationToken: token,
-        emailVerificationExpires: expiresAt,
-      },
-    });
-
-    const frontendUrl = (
-      process.env.FRONTEND_URL || "http://localhost:3000"
-    ).replace(/\/$/, "");
+    const { token } = await this.mintEmailVerificationToken(args.userId);
+    const frontendUrl = this.frontendUrl();
 
     await this.email.sendWelcome({
       to: args.email,
@@ -300,19 +392,69 @@ export class AuthService {
     });
   }
 
+  /** Whether the signed-in user's email is confirmed (for the panel's notice). */
+  async emailVerificationStatus(userId: string): Promise<{ verified: boolean; email: string | null }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { isEmailVerified: true, email: true },
+    });
+    return { verified: Boolean(user?.isEmailVerified), email: user?.email ?? null };
+  }
+
+  /**
+   * POST /auth/resend-verification: a new link for the signed-in user (the
+   * controller limits how often). The old link stops working, since only
+   * one token is kept. Already confirmed: nothing is sent.
+   */
+  async resendVerificationEmail(userId: string): Promise<{ sent: boolean; alreadyVerified: boolean }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        isEmailVerified: true,
+        isActive: true,
+        tenant: { select: { name: true } },
+      },
+    });
+    if (!user || !user.isActive) throw new NotFoundException();
+    if (user.isEmailVerified) return { sent: false, alreadyVerified: true };
+
+    const { token, expiresAt } = await this.mintEmailVerificationToken(user.id);
+    const result = await this.email.sendEmailVerification({
+      to: user.email,
+      tenantName: user.tenant?.name ?? "KiraRoom",
+      ownerName: user.firstName || null,
+      verifyUrl: `${this.frontendUrl()}/verify-email?token=${token}`,
+      expiresAt,
+    });
+    if (!result?.success) {
+      this.logger.warn(`verification email not sent: ${result?.error ?? "unknown"}`);
+      return { sent: false, alreadyVerified: false };
+    }
+    return { sent: true, alreadyVerified: false };
+  }
+
   /**
    * Confirms an email address from the link in the welcome email.
    *
    * Returns a boolean rather than throwing on a bad token: the caller is a
    * public endpoint, and telling an anonymous caller whether a token exists
    * is free information about who signed up.
+   *
+   * The link's token is looked up by its sha256. Links sent before tokens
+   * were hashed stored the token itself; they are still matched as they are
+   * until they expire (48 hours after they were sent), so nobody's welcome
+   * link breaks on the deploy. After that window the plain-token branch
+   * matches nothing new and can be removed.
    */
   async verifyEmail(token: string): Promise<boolean> {
-    if (!token || token.length < 32) return false;
+    if (!token || token.length < 32 || token.length > 128) return false;
 
     const user = await this.prisma.user.findFirst({
       where: {
-        emailVerificationToken: token,
+        emailVerificationToken: { in: [hashVerificationToken(token), token] },
         emailVerificationExpires: { gt: new Date() },
       },
       select: { id: true },
@@ -330,61 +472,79 @@ export class AuthService {
     return true;
   }
 
+  /**
+   * The account a sign-in names. Emails are stored lower-case (the DTO
+   * normalises them and a migration lower-cased the old rows), so an exact
+   * match is the rule. The migration left alone the rows whose lower-case
+   * form would collide with another account's; those are found ignoring
+   * case, and when there are several the password decides which it is.
+   */
+  private async loginCandidates(email: string) {
+    const exact = await this.prisma.user.findUnique({
+      where: { email },
+      include: { professional: true, tenant: { select: { deletedAt: true } } },
+    });
+    if (exact) return [exact];
+    return (
+      (await this.prisma.user.findMany({
+        where: { email: { equals: email, mode: "insensitive" } },
+        include: { professional: true, tenant: { select: { deletedAt: true } } },
+        orderBy: { lastLoginAt: { sort: "desc", nulls: "last" } },
+        take: 5,
+      })) ?? []
+    );
+  }
+
   async login(
     loginDto: LoginDto,
   ): Promise<{ user: AuthUser; tokens: TokenResponse } | TwoFactorChallenge> {
-    // First, try to find user by email
-    const user = await this.prisma.user.findUnique({
-      where: { email: loginDto.email },
-      include: { professional: true, tenant: { select: { deletedAt: true } } },
-    });
+    const email = normalizeEmail(loginDto.email);
+    const candidates = await this.loginCandidates(email);
+
+    // The password is checked before anything about the account is said
+    // (deactivated, locked): with a wrong password the answer is the same as
+    // for an address with no account, so a stranger learns nothing.
+    let user = candidates[0];
+    let isPasswordValid = false;
+    for (const candidate of candidates) {
+      if (await bcrypt.compare(loginDto.password ?? "", candidate.passwordHash)) {
+        user = candidate;
+        isPasswordValid = true;
+        break;
+      }
+    }
 
     if (user) {
+      const now = new Date();
+      // SEC-8: the lockout is honoured (it used to be written and never
+      // read). A lock still running stops even the right password, below.
+      const lockRunning = Boolean(user.lockedUntil && user.lockedUntil > now);
+
+      if (!isPasswordValid) {
+        // A locked or deactivated account does not count more failures: a
+        // caller cannot extend a lock by guessing on during it.
+        if (!lockRunning && user.isActive) {
+          // A lock that has run out starts the count again (S10): the next
+          // wrong password used to lock the account straight away, since the
+          // attempts stayed at 5 after the 30 minutes.
+          await this.prisma.user.update({
+            where: { id: user.id },
+            data: failedAttemptUpdate(user, now.getTime()),
+          });
+        }
+        throw new UnauthorizedException(INVALID_CREDENTIALS);
+      }
+
+      // The password is right: now the account's state can be told.
       // A salon deleted from the platform console: nobody in it signs in.
       if (user.tenant?.deletedAt && user.role !== UserRole.saas_owner) {
         throw new UnauthorizedException(SALON_DELETED_MESSAGE);
       }
-      // Check if user is active
       if (!user.isActive) {
         throw new UnauthorizedException("Esta cuenta está desactivada. Pide acceso a quien gestiona el salón.");
       }
-
-      // SEC-8: honour the lockout this method sets.
-      //
-      // The failed-password branch below has always written `lockedUntil`
-      // 30 minutes out after 5 attempts, and nothing ever read it. The
-      // lockout was decorative: the column filled up while bcrypt.compare
-      // kept answering every guess. The only real limit was the global
-      // throttle, 100 requests per minute, against an admin address an
-      // attacker can guess.
-      if (user.lockedUntil && user.lockedUntil > new Date()) {
-        const minutes = Math.ceil(
-          (user.lockedUntil.getTime() - Date.now()) / 60000,
-        );
-        throw new UnauthorizedException(
-          `Account locked after too many failed attempts. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`,
-        );
-      }
-
-      // Verify password
-      const isPasswordValid = await bcrypt.compare(
-        loginDto.password,
-        user.passwordHash,
-      );
-
-      if (!isPasswordValid) {
-        // Increment login attempts
-        await this.prisma.user.update({
-          where: { id: user.id },
-          data: {
-            loginAttempts: { increment: 1 },
-            lockedUntil:
-              user.loginAttempts >= 4
-                ? new Date(Date.now() + 30 * 60 * 1000)
-                : null, // Lock for 30 min after 5 attempts
-          },
-        });
-        throw new UnauthorizedException("Invalid credentials");
+      if (lockRunning) {
+        throw new UnauthorizedException(lockedMessage(user.lockedUntil!));
       }
 
       // Two-step sign-in: the password was right, now the code. The failed
@@ -436,7 +596,10 @@ export class AuthService {
     // Clients have no accounts: the salon's site has no sign-in any more and
     // nothing signs a client in, whatever password her record may still
     // hold from before. (Their data stays; only the sign-in went.)
-    throw new UnauthorizedException("Invalid credentials");
+    // Same time as a wrong password, so the answer does not say whether the
+    // address has an account.
+    await bcrypt.compare(loginDto.password ?? "", await timingHash());
+    throw new UnauthorizedException(INVALID_CREDENTIALS);
   }
 
   async refreshToken(refreshToken: string): Promise<TokenResponse> {
@@ -555,18 +718,14 @@ export class AuthService {
       throw new UnauthorizedException("Vuelve a escribir la contraseña.");
     }
     if (user.lockedUntil && user.lockedUntil > new Date()) {
-      const minutes = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 60000);
-      throw new UnauthorizedException(
-        `Cuenta bloqueada por demasiados intentos. Vuelve a intentarlo en ${minutes} minuto${minutes === 1 ? "" : "s"}.`,
-      );
+      throw new UnauthorizedException(lockedMessage(user.lockedUntil));
     }
 
     if (!(await this.twoFactor.verifyForLogin(user.id, code))) {
       await this.prisma.user.update({
         where: { id: user.id },
         data: {
-          loginAttempts: { increment: 1 },
-          lockedUntil: user.loginAttempts >= MAX_LOGIN_ATTEMPTS - 1 ? new Date(Date.now() + LOCKOUT_MS) : null,
+          ...failedAttemptUpdate(user),
         },
       });
       throw new UnauthorizedException("El código no es correcto.");
@@ -636,17 +795,13 @@ export class AuthService {
     });
     if (!user || !user.isActive) throw new UnauthorizedException();
     if (user.lockedUntil && user.lockedUntil > new Date()) {
-      const minutes = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 60000);
-      throw new BadRequestException(
-        `Demasiados intentos. Vuelve a intentarlo en ${minutes} minuto${minutes === 1 ? "" : "s"}.`,
-      );
+      throw new BadRequestException(lockedMessage(user.lockedUntil));
     }
     if (!(await bcrypt.compare(currentPassword, user.passwordHash))) {
       await this.prisma.user.update({
         where: { id: user.id },
         data: {
-          loginAttempts: { increment: 1 },
-          lockedUntil: user.loginAttempts >= MAX_LOGIN_ATTEMPTS - 1 ? new Date(Date.now() + LOCKOUT_MS) : null,
+          ...failedAttemptUpdate(user),
         },
       });
       // 400, not 401: the panel treats a 401 as an expired session and signs

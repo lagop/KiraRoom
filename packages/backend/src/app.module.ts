@@ -81,6 +81,8 @@ import { ThrottlerBehindProxyGuard } from "./common/guards/throttler-behind-prox
 import { JwtStrategy } from "./auth/strategies/jwt.strategy";
 import { JwtAuthGuard } from "./auth/guards/jwt-auth.guard";
 import { PasswordResetService } from "./auth/password-reset.service";
+import { TurnstileService } from "./auth/abuse/turnstile.service";
+import { AuthRateLimitsService } from "./auth/abuse/auth-rate-limits.service";
 import { RolesGuard } from "./auth/guards/roles.guard";
 import { ReadOnlyTenantGuard } from "./common/guards/read-only-tenant.guard";
 import { BugReportModule } from "./bug-reports/bug-report.module";
@@ -285,6 +287,8 @@ import { PublicModule } from "./public-site/public.module";
     TwoFactorService,
     SalonDeletionService,
     PasswordResetService,
+    TurnstileService,
+    AuthRateLimitsService,
     AuditLogService,
     ClientsService,
     AppointmentServicesService,
