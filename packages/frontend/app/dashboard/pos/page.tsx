@@ -976,6 +976,22 @@ export default function POSPage() {
                             ))}
                           </select>
                         )}
+                        {/* A product earns its seller a commission ("Comisión de productos"). */}
+                        {item.kind === "product" && isAdmin && professionals.length > 0 && (
+                          <select
+                            aria-label={`Quién vendió ${item.name}`}
+                            value={item.professionalId ?? ""}
+                            onChange={(e) => setCart((c) => setProfessional(c, item.key, e.target.value || undefined))}
+                            className="mt-1 w-full rounded border px-1 py-0.5 text-xs"
+                          >
+                            <option value="">Lo vendió: quien cobra</option>
+                            {professionals.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                Lo vendió: {p.firstName} {p.lastName}
+                              </option>
+                            ))}
+                          </select>
+                        )}
                         {canDiscount && line && (
                           <DiscountEditor
                             value={item.discount}

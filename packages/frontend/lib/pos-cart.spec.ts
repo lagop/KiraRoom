@@ -80,6 +80,15 @@ console.log("lines keyed by what they sell");
     ]),
     itemsForServer(byPro),
   );
+  // A product sold by someone named: its own line, their commission (Comisión de productos).
+  const soldBy = setProfessional(cart, lineKey(champu), "pro-2");
+  check("naming who sold a product re-keys it", soldBy.some((l) => l.key === "prod:p1:pro-2") && !soldBy.some((l) => l.key === "prod:p1"));
+  check(
+    "the server gets who sold the product",
+    same(itemsForServer(soldBy).filter((i: any) => i.productId), [{ productId: "p1", professionalId: "pro-2", quantity: 1 }]),
+    itemsForServer(soldBy),
+  );
+  check("back to quien cobra", setProfessional(soldBy, "prod:p1:pro-2", undefined).some((l) => l.key === "prod:p1"));
   check(
     "gift cards sold: blanks left out",
     same(giftCardsForServer([{ key: "g", amountCents: 5000, recipientName: " Eva ", recipientEmail: "" }]), [{ amountCents: 5000, recipientName: "Eva" }]),

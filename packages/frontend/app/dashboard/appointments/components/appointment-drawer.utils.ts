@@ -112,10 +112,11 @@ export function appointmentTotalCents(appointment: {
 // ----- Commission and deposit (the salon's terms) ---------------------------
 
 /**
- * The rate the server applies when neither the appointment nor the
- * professional sets one (commissions.service.ts).
+ * The rate when neither the appointment nor the professional sets one and
+ * the salon's "Comisión por defecto" (GET /commissions/settings) is not
+ * known: 0, what a new salon starts with (commission-terms.ts).
  */
-export const DEFAULT_COMMISSION_RATE = 10;
+export const DEFAULT_COMMISSION_RATE = 0;
 
 export type CommissionSource = "appointment" | "professional" | "default";
 
@@ -132,18 +133,19 @@ export function parseRate(value: unknown): number | null {
 
 /**
  * The commission that applies to an appointment, and where it comes from:
- * its own override (0 included), else the professional's, else the default.
- * The same order the server's commission calculation uses.
+ * its own override (0 included), else the professional's, else the salon's
+ * default. The same order the server's commission calculation uses.
  */
 export function effectiveCommission(
   appointmentRate: unknown,
   professionalRate: unknown,
+  salonDefault: number = DEFAULT_COMMISSION_RATE,
 ): { rate: number; source: CommissionSource } {
   const own = parseRate(appointmentRate);
   if (own !== null) return { rate: own, source: "appointment" };
   const professional = parseRate(professionalRate);
   if (professional !== null) return { rate: professional, source: "professional" };
-  return { rate: DEFAULT_COMMISSION_RATE, source: "default" };
+  return { rate: salonDefault, source: "default" };
 }
 
 /** 12.5 → "12,5 %". */

@@ -356,6 +356,8 @@ export class CommissionsService {
       where: {
         tenantId,
         professionalId: professional.id,
+        // A test booking from the onboarding (isTest) earns nobody anything.
+        isTest: false,
         status: "completed",
         paymentStatus: "paid",
         commissionPaid: false,
@@ -987,6 +989,7 @@ export class CommissionsService {
     const appointments: any[] = await this.prisma.appointment.findMany({
       where: {
         tenantId,
+        isTest: false,
         scheduledDate,
         status: "completed",
         OR: [{ paymentStatus: "paid" }, { commissionPaid: true }],
@@ -1128,7 +1131,7 @@ export class CommissionsService {
       "De ellas, productos",
       "Ajustes por devolución",
       "Comisión",
-      "Pagado en el periodo",
+      "Pagado en el período",
       "% sobre ventas",
     ];
     const share = (commission: number, sales: number) =>
@@ -1200,6 +1203,7 @@ export class CommissionsService {
       where: {
         tenantId,
         professionalId,
+        isTest: false,
         scheduledDate: range.scheduledDate,
         status: "completed",
         OR: [{ paymentStatus: "paid" }, { commissionPaid: true }],

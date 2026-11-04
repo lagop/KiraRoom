@@ -1,4 +1,5 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
+import apiClient from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
 import {
   effectiveCommission,
@@ -30,8 +31,20 @@ const inputClass =
 
 export function SalonTermsCard({ appointment, editMode, form, onChange }: SalonTermsCardProps) {
   const t = useTranslations();
-  const applied = effectiveCommission(appointment.commissionRate, appointment.professionalCommissionRate);
-  const fallback = effectiveCommission(null, appointment.professionalCommissionRate);
+  // The salon's "Comisión por defecto" (Comisiones > Ajustes).
+  const [salonDefault, setSalonDefault] = useState<number | undefined>(undefined);
+  useEffect(() => {
+    let alive = true;
+    apiClient
+      .getCommissionSettings()
+      .then((s) => alive && setSalonDefault(s.defaultRate))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const applied = effectiveCommission(appointment.commissionRate, appointment.professionalCommissionRate, salonDefault);
+  const fallback = effectiveCommission(null, appointment.professionalCommissionRate, salonDefault);
   const sourceLabel =
     applied.source === "appointment"
       ? t("appointments.commission_source_appointment")

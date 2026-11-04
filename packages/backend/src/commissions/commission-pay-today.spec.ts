@@ -20,6 +20,7 @@ function inRange(value: Date, f: any): boolean {
 
 function matches(row: Row, where: Row, dateField: string): boolean {
   return Object.entries(where).every(([key, cond]) => {
+    if (key === "isTest") return (row.isTest ?? false) === cond; // rows without it are not test bookings
     if (key === dateField) return inRange(row[key], cond);
     if (cond && typeof cond === "object" && "in" in cond) return (cond.in as unknown[]).includes(row[key]);
     if (cond && typeof cond === "object" && "not" in cond) return row[key] !== cond.not;

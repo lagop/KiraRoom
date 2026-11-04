@@ -47,7 +47,7 @@ describe("payroll CSV", () => {
     expect(csv.charCodeAt(0)).toBe(0xfeff);
     const rows = csv.slice(1).split("\r\n");
     expect(rows[0]).toBe(
-      "Profesional;Estado;Ventas;De ellas, productos;Ajustes por devolución;Comisión;Pagado en el periodo;% sobre ventas",
+      "Profesional;Estado;Ventas;De ellas, productos;Ajustes por devolución;Comisión;Pagado en el período;% sobre ventas",
     );
     // A name a spreadsheet would run is text; a ";" inside a name is quoted.
     expect(rows[1]).toBe(`"'=SUM(1)";Activa;1000,00;20,00;-1,50;123,45;100,00;12,3`);

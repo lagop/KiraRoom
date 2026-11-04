@@ -40,6 +40,8 @@ interface Professional {
   position?: string;
   /** Percent; Prisma's Decimal arrives as a string. None: the salon's default applies. */
   commissionRate?: number | string | null;
+  /** "Comisión de productos", the same way. */
+  productCommissionRate?: number | string | null;
   hireDate?: string;
   isActive: boolean;
   services?: {
@@ -75,6 +77,7 @@ function ProfessionalsPageContent() {
     specialties: "",
     position: "",
     commissionRate: "",
+    productCommissionRate: "",
     hireDate: "",
     isActive: true,
     serviceIds: [] as string[],
@@ -82,6 +85,7 @@ function ProfessionalsPageContent() {
 
   // The rate as the modal opened it: an update sends it only when changed.
   const [initialCommissionRate, setInitialCommissionRate] = useState("");
+  const [initialProductCommissionRate, setInitialProductCommissionRate] = useState("");
 
   // Why the drawer's save failed, shown inside the drawer: the page's own
   // error banner is behind it (the drawer covers the whole screen).
@@ -190,6 +194,12 @@ function ProfessionalsPageContent() {
         );
         if (commissionRate !== undefined)
           updateData.commissionRate = commissionRate;
+        const productCommissionRate = commissionRateForUpdate(
+          formData.productCommissionRate,
+          initialProductCommissionRate,
+        );
+        if (productCommissionRate !== undefined)
+          updateData.productCommissionRate = productCommissionRate;
         if (formData.hireDate) updateData.hireDate = formData.hireDate;
         updateData.isActive = formData.isActive;
         // Always sent, the form having loaded them: an empty list now
@@ -211,6 +221,7 @@ function ProfessionalsPageContent() {
           specialties: specialtiesArray,
           position: formData.position || undefined,
           commissionRate: commissionRateForCreate(formData.commissionRate),
+          productCommissionRate: commissionRateForCreate(formData.productCommissionRate),
           hireDate: formData.hireDate ? new Date(formData.hireDate) : undefined,
           serviceIds: formData.serviceIds,
         });
@@ -228,6 +239,7 @@ function ProfessionalsPageContent() {
         specialties: "",
         position: "",
         commissionRate: "",
+        productCommissionRate: "",
         hireDate: "",
         isActive: true,
         serviceIds: [],
@@ -260,6 +272,7 @@ function ProfessionalsPageContent() {
     setFormError(null);
     setEditingProfessional(professional);
     setInitialCommissionRate(commissionRateFieldValue(professional.commissionRate));
+    setInitialProductCommissionRate(commissionRateFieldValue(professional.productCommissionRate));
     setFormData({
       firstName: professional.firstName,
       lastName: professional.lastName,
@@ -270,6 +283,7 @@ function ProfessionalsPageContent() {
       specialties: professional.specialties.join(", "),
       position: professional.position || "",
       commissionRate: commissionRateFieldValue(professional.commissionRate),
+      productCommissionRate: commissionRateFieldValue(professional.productCommissionRate),
       hireDate: professional.hireDate
         ? professional.hireDate.split("T")[0]
         : "",
@@ -364,6 +378,7 @@ function ProfessionalsPageContent() {
       specialties: "",
       position: "",
       commissionRate: "",
+      productCommissionRate: "",
       hireDate: "",
       isActive: true,
       serviceIds: [],
@@ -724,6 +739,26 @@ function ProfessionalsPageContent() {
                       })
                     }
                     placeholder={t("professionals.commission_rate_empty")}
+                    min="0"
+                    max="100"
+                    step="0.01"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    {t("professionals.product_commission_rate")}
+                  </label>
+                  <Input
+                    type="number"
+                    value={formData.productCommissionRate}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        productCommissionRate: e.target.value,
+                      })
+                    }
+                    placeholder={t("professionals.product_commission_rate_empty")}
                     min="0"
                     max="100"
                     step="0.01"

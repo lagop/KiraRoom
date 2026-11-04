@@ -79,6 +79,7 @@ export const COMMISSION_SNAPSHOT_SELECT = {
   totalAmount: true,
   commissionRate: true,
   commissionAmount: true,
+  isTest: true,
   professional: { select: { commissionRate: true } },
 } as const;
 
@@ -102,7 +103,8 @@ export async function snapshotAppointmentCommission(
     where: { id: appointmentId, tenantId },
     select: COMMISSION_SNAPSHOT_SELECT,
   });
-  if (!apt || apt.commissionPaid) return false;
+  // A test booking from the onboarding (isTest) earns no commission.
+  if (!apt || apt.commissionPaid || apt.isTest) return false;
   if (apt.status !== AppointmentStatus.completed || apt.paymentStatus !== PaymentStatus.paid) return false;
   const { rate, amount } = appointmentCommission(
     apt,

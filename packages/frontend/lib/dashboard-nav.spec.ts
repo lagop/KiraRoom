@@ -28,7 +28,8 @@ console.log("who sees what");
   const owner = ids(navFor("owner"));
   const staff = ids(navFor("staff"));
   const staffOnly = links(DASHBOARD_NAV).filter((l) => l.staffOnly).map((l) => l.id);
-  check("the staff-only screens are their security and their own time off", staffOnly.join() === "my-time-off,security-staff", staffOnly);
+  check("the staff-only screens are their security, their own time off and their own commissions", staffOnly.join() === "my-time-off,my-commissions,security-staff", staffOnly);
+  check("staff see Mis comisiones, the owner the salon's Comisiones", staff.includes("my-commissions") && !staff.includes("commissions") && owner.includes("commissions") && !owner.includes("my-commissions"));
   check("the owner sees every screen but the staff-only ones", owner.length === links(DASHBOARD_NAV).length - staffOnly.length, owner);
   check("staff ask for their time off; the owner answers the requests", staff.includes("my-time-off") && !staff.includes("time-off-requests") && owner.includes("time-off-requests") && !owner.includes("my-time-off"));
   check("only the owner and managers fetch the pending requests badge", badgesIn(navFor("owner")).join() === "time-off-requests" && badgesIn(navFor("admin")).join() === "time-off-requests" && badgesIn(navFor("staff")).length === 0);
@@ -132,6 +133,7 @@ console.log("management pages a professional opens by their address");
     "/dashboard/clients/c-1",
     "/dashboard/wait-list",
     "/dashboard/mis-ausencias",
+    "/dashboard/mis-comisiones",
     "/dashboard/pos",
     "/dashboard/compartir",
     "/dashboard/settings/seguridad",

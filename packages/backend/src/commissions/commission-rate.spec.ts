@@ -142,6 +142,8 @@ describe("snapshotAppointmentCommission", () => {
       done({ status: "in_progress" }),
       done({ commissionPaid: true, commissionAmount: 0 }),
       done({ commissionRate: 15, commissionAmount: 900 }),
+      // A test booking from the onboarding earns nothing.
+      done({ isTest: true }),
       null,
     ]) {
       const t = db(row);
