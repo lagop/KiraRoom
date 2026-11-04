@@ -106,9 +106,10 @@ export default function TermsPage() {
           desde <code>/dashboard/billing</code>. Tras la cancelación:
         </p>
         <ul>
-          <li>Acceso de lectura durante 30 días para exportar datos.</li>
-          <li>Anonimización de PII tras 60 días de inactividad conforme a RGPD.</li>
-          <li>Conservación de facturas 4 años conforme a la normativa fiscal.</li>
+          <li>Acceso de lectura durante 30 días: puedes exportar tus datos hasta el final de ese plazo.</li>
+          <li>Después se anonimizan: 30 días más tarde (60 días en total desde la cancelación o el fin de la prueba) se borran los datos personales del salón, de su equipo y de sus clientes. Te avisamos por email 7 días antes.</li>
+          <li>Lo mismo si borras tu salón desde Ajustes &gt; Seguridad: 30 días para exportar y la anonimización 30 días después. Mientras tanto puedes anular el borrado.</li>
+          <li>Las facturas emitidas se conservan 4 años, como exige la normativa fiscal.</li>
         </ul>
       </Section>
 
@@ -198,9 +199,9 @@ export default function TermsPage() {
           </li>
           <li>
             <strong>Fin del encargo</strong>: al terminar el servicio, el
-            salón puede exportar sus datos durante el período de lectura;
-            después KiraRoom los suprime, salvo los que la ley obligue a
-            conservar. Las conversaciones de la recepcionista virtual se
+            salón puede exportar sus datos durante los 30 días de lectura;
+            30 días después KiraRoom los anonimiza, salvo los que la ley
+            obligue a conservar (las facturas emitidas). Las conversaciones de la recepcionista virtual se
             borran a los {CONVERSATION_RETENTION_MONTHS} meses.
           </li>
           <li>

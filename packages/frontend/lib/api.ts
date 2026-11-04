@@ -256,6 +256,19 @@ export interface TwoFactorRequired {
   challenge: string;
 }
 
+/** The exports offered before deleting the salon (backend exports.controller). */
+export type SalonExportKind = "clients" | "appointments" | "payments" | "services" | "professionals" | "gift-cards";
+
+export interface SalonDeletionStatus {
+  pending: boolean;
+  requestedAt: string | null;
+  /** Until when the data can be exported. */
+  exportUntil: string | null;
+  /** When the salon's personal data is anonymised. */
+  anonymizeOn: string | null;
+  twoFactorRequired: boolean;
+}
+
 export interface TwoFactorStatus {
   enabled: boolean;
   recoveryCodesLeft: number;
@@ -6074,6 +6087,32 @@ class ApiClient implements ApiClientInterface {
       `facturas-emitidas_${from}_${to}.${format}`,
     );
   }
+  /**
+   * One of the salon's data exports as a CSV (owner/admin), e.g. before
+   * deleting the salon (Ajustes > Seguridad). Everything, no filters.
+   */
+  async downloadSalonExport(kind: SalonExportKind): Promise<{ blob: Blob; filename: string }> {
+    return this.downloadWithToken(`${API_BASE_URL}/exports/${kind}.csv`, `${kind}.csv`);
+  }
+
+  /** "Borrar mi salón" (owner only): whether it is pending, and its dates. */
+  async getSalonDeletion(): Promise<SalonDeletionStatus> {
+    return this.request<SalonDeletionStatus>("/settings/salon-deletion");
+  }
+
+  /** Asks to delete the salon: read-only now, anonymised 30 days after. Password (and 2FA code). */
+  async requestSalonDeletion(password: string, code?: string): Promise<SalonDeletionStatus> {
+    return this.request<SalonDeletionStatus>("/settings/salon-deletion", {
+      method: "POST",
+      body: JSON.stringify({ password, ...(code ? { code } : {}) }),
+    });
+  }
+
+  /** Cancels a pending deletion: the salon is as it was. */
+  async cancelSalonDeletion(): Promise<SalonDeletionStatus> {
+    return this.request<SalonDeletionStatus>("/settings/salon-deletion", { method: "DELETE" });
+  }
+
   /** GET a file with the bearer token, refreshing the session once on a 401 like request() does. */
   private async downloadWithToken(url: string, fallbackName: string): Promise<{ blob: Blob; filename: string }> {
     const get = () => {

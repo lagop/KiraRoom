@@ -40,7 +40,8 @@ export function readOnlyNotice(ctx: {
       : "Tu cuenta está en modo solo lectura.",
     body:
       "Puedes consultar y exportar tus datos, pero no crear ni cambiar citas, clientas ni servicios, y tu página no acepta reservas." +
-      (until ? ` Tus datos se conservan hasta el ${until}.` : "") +
+      // The same period as the terms and the emails (audit 7 D7).
+      (until ? ` Puedes exportarlos hasta el ${until}; después se anonimizan.` : "") +
       (owner
         ? ""
         : suspended
