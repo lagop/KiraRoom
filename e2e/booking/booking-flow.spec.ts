@@ -135,6 +135,9 @@ test("a client books online and the salon completes and invoices the visit", asy
       data: {
         ...professional,
         email: `e2e-pro-${runId}@example.com`,
+        // Named in full on the public page, as the booking steps below look
+        // her up by full name (new professionals default to "Lucia P.").
+        webNameDisplay: "full",
         workingHours: WORK_DAYS.map((day) => ({ day, openTime: "09:00", closeTime: "19:00" })),
       },
     });
