@@ -4,9 +4,11 @@ import {
   BadRequestException,
   ConflictException,
   Logger,
+  Optional,
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
-import { randomUUID } from "crypto";
+import { randomBytes, randomUUID } from "crypto";
+import { PasswordResetService } from "../auth/password-reset.service";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { CreateTenantDto } from "./dto/create-tenant.dto";
 import { UpdateTenantDto } from "./dto/update-tenant.dto";
@@ -79,6 +81,7 @@ export class SaasService {
     private readonly jwtService: JwtService,
     private readonly auditLog: AuditLogService,
     private readonly subscriptions: SubscriptionsService,
+    @Optional() private readonly passwordReset?: PasswordResetService,
   ) {}
 
   async getAllTenants(filter: TenantFilterDto): Promise<PaginatedResult<any>> {
@@ -267,9 +270,12 @@ export class SaasService {
     // A1.3: route through the shared helper so the trial defaults
     // (rev 3: 14-day Pro trial, "trialing" status, currentPeriodEnd =
     // trialEnd) stay in lockstep with auth.register and
-    // invites.acceptWithSlug. The SaaS admin defaults the owner
-    // password when one isn't supplied so the SaaS admin can mint
-    // tenants and send a "set your password" magic link later.
+    // invites.acceptWithSlug.
+    //
+    // Without a password from the console the owner gets a random one
+    // nobody knows (so no shared default can sign in) and, below, an email
+    // with a link to choose her own.
+    const setPasswordByEmail = !createTenantDto.ownerPassword;
     const { tenant } = await createTenantWithOwner(this.prisma, {
       name: createTenantDto.name,
       slug,
@@ -290,10 +296,20 @@ export class SaasService {
       language: createTenantDto.language,
       plan: normalizePlan(createTenantDto.plan),
       ownerEmail: createTenantDto.ownerEmail,
-      ownerPassword: createTenantDto.ownerPassword || "ChangeMe123!",
+      ownerPassword: createTenantDto.ownerPassword || unusablePassword(),
       ownerFirstName: createTenantDto.ownerFirstName,
       ownerLastName: createTenantDto.ownerLastName,
     }).catch(rethrowUniqueConflict);
+
+    if (setPasswordByEmail && createTenantDto.ownerEmail) {
+      // The reset flow: one-hour single-use link, same email and rate limits.
+      // Expired, the owner asks for another from "¿Olvidaste tu contraseña?".
+      try {
+        await this.passwordReset?.request(createTenantDto.ownerEmail);
+      } catch (err) {
+        this.logger.warn(`set-password email for a new salon not sent: ${(err as Error).message}`);
+      }
+    }
 
     return this.getTenantById(tenant.id);
   }
@@ -794,7 +810,11 @@ export class SaasService {
   }
 
   async getAllUsers(filter: TenantFilterDto) {
-    const { page = 1, limit = 10, sortBy = "createdAt", sortOrder = "desc", search, tenantId } = filter;
+    const { page = 1, limit = 10, sortOrder = "desc", search, tenantId } = filter;
+    // Only listed columns: ordering by a secret column would leak it bit by bit.
+    const sortBy = (CONSOLE_USER_SORT_FIELDS as readonly string[]).includes(filter.sortBy ?? "")
+      ? filter.sortBy!
+      : "createdAt";
 
     const where: any = {};
 
@@ -815,16 +835,8 @@ export class SaasService {
         where,
         skip: (page - 1) * limit,
         take: limit,
-        orderBy: { [sortBy]: sortOrder },
-        include: {
-          tenant: {
-            select: {
-              id: true,
-              name: true,
-              slug: true,
-            },
-          },
-        },
+        orderBy: { [sortBy]: sortOrder === "asc" ? "asc" : "desc" },
+        select: CONSOLE_USER_SELECT,
       }),
       this.prisma.user.count({ where }),
     ]);
@@ -1113,3 +1125,33 @@ export function monthlyPlanRevenue(
   // Summed in cents: 12.90 + 24 in floating-point euros drifts.
   return Math.round(planRevenue * 100 + addOnCents) / 100;
 }
+
+/**
+ * A password for an owner the console created without one: 32 random bytes
+ * nobody is told, so the account cannot be signed into until the owner sets
+ * her own from the emailed link.
+ */
+export function unusablePassword(): string {
+  return randomBytes(32).toString("base64url");
+}
+
+/**
+ * The user columns the console's user list shows. An explicit select: the
+ * list used to send every column (password hash, 2FA secrets and recovery
+ * codes, reset and verification tokens, session version) to the browser.
+ */
+export const CONSOLE_USER_SELECT = {
+  id: true,
+  email: true,
+  firstName: true,
+  lastName: true,
+  role: true,
+  isActive: true,
+  createdAt: true,
+  lastLoginAt: true,
+  tenantId: true,
+  tenant: { select: { id: true, name: true, slug: true } },
+} as const;
+
+/** Columns GET /saas/users may sort by. */
+export const CONSOLE_USER_SORT_FIELDS = ["createdAt", "email", "firstName", "lastName", "role", "lastLoginAt"] as const;

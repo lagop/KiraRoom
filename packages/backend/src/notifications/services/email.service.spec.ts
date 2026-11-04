@@ -17,7 +17,13 @@
  * changed.
  */
 
-import { EmailService, EMAIL_SEND_TIMEOUT_MS, isRetryableSendError } from "./email.service";
+import {
+  EmailService,
+  EMAIL_SEND_TIMEOUT_MS,
+  isRetryableSendError,
+  bugReportExcerpt,
+  BUG_REPORT_ACK_EXCERPT_CHARS,
+} from "./email.service";
 import { isPlaceholderEmail, placeholderEmail, realEmail } from "../../common/placeholder-email";
 
 // ────────────────────── mock helpers
@@ -843,5 +849,17 @@ describe("EmailService.sendOnboardingReminder (audit 7 D17)", () => {
     expect(sent.html).toContain("No quiero recibir consejos de KiraRoom");
     expect(sent.text).toContain("- El horario de tu equipo: https://app.kiraroom.com/dashboard/professionals");
     expect(sent.headers["List-Unsubscribe-Post"]).toBe("List-Unsubscribe=One-Click");
+  });
+});
+
+describe("EmailService.sendBugReportAck excerpt (audit 8 D2)", () => {
+  it("keeps the reporter's text out of the subject and cuts it short in the body", async () => {
+    const { service, calls } = makeService();
+    const long = "Agenda ".repeat(40);
+    await service.sendBugReportAck({ to: "user@example.com", reportId: "abc12345-6789", subject: long });
+    expect(calls[0].subject).toBe("Hemos recibido tu reporte (abc12345)");
+    expect(calls[0].text).not.toContain(long.trim());
+    expect(bugReportExcerpt(long).length).toBeLessThanOrEqual(BUG_REPORT_ACK_EXCERPT_CHARS);
+    expect(bugReportExcerpt("a\r\nb\tc")).toBe("a b c");
   });
 });

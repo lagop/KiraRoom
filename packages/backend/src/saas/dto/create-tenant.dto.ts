@@ -8,6 +8,8 @@ import {
   IsUrl,
   IsArray,
   IsNotEmpty,
+  MaxLength,
+  MinLength,
 } from "class-validator";
 import { EmptyStringToUndefined } from "../../common/dto/empty-to-undefined";
 import { CONSOLE_DTO_MESSAGES as MSG } from "./console-dto-messages";
@@ -119,9 +121,16 @@ export class CreateTenantDto {
   @IsString()
   ownerEmail?: string;
 
-  @ApiPropertyOptional()
+  /**
+   * Left empty, the owner gets no usable password and an email with a link to
+   * choose one. When given, the same length rule as signup.
+   */
+  @ApiPropertyOptional({ description: "8 to 128 characters; empty sends the owner a link to choose one" })
+  @EmptyStringToUndefined()
   @IsOptional()
   @IsString()
+  @MinLength(8, { message: "La contraseña debe tener al menos 8 caracteres." })
+  @MaxLength(128, { message: "La contraseña es demasiado larga (máximo 128 caracteres)." })
   ownerPassword?: string;
 
   @ApiPropertyOptional()
