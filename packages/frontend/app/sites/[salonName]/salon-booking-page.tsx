@@ -13,6 +13,7 @@ import {
   Instagram,
   Facebook,
   CheckCircle,
+  Users,
 } from "lucide-react";
 import apiClient from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
@@ -46,6 +47,7 @@ import {
 } from "@/lib/public-booking";
 import { professionalAfterServiceChange, servicesForPinned } from "@/lib/booking-professional";
 import {
+  ANY_PROFESSIONAL,
   bookingLocations,
   choiceAtLocation,
   chosenLocation,
@@ -56,9 +58,11 @@ import {
   locationReady,
   professionalsAtLocation,
   professionalsForService,
+  professionalToSend,
   servicesAtLocation,
 } from "@/lib/public-booking-locations";
 import PublicReviewsSection from "./components/public-reviews";
+import { HoneypotField } from "@/components/booking/honeypot-field";
 import { ChatWidget } from "@/src/components/virtual-receptionist";
 
 interface BookingData {
@@ -252,6 +256,8 @@ export default function SalonBookingPage({
   });
   // The two boxes next to the button, both unticked (BOOKING_CHOICE_TEXT).
   const [refusesMarketingEmail, setRefusesMarketingEmail] = useState(false);
+  // The hidden field for bots (HoneypotField): a person leaves it empty.
+  const [website, setWebsite] = useState("");
   const [wantsWhatsAppNotices, setWantsWhatsAppNotices] = useState(false);
   // Only when the salon has its WhatsApp number connected.
   const offersWhatsAppNotices = initialData.whatsappNotices === true;
@@ -376,7 +382,8 @@ export default function SalonBookingPage({
         // working hours too.
         const slots = await apiClient.getAvailableSlots(
           salonData.id,
-          bookingData.professionalId,
+          // "Cualquier profesional": the times anyone who offers it is free.
+          professionalToSend(bookingData.professionalId),
           bookingData.serviceId,
           bookingData.date,
           undefined,
@@ -521,7 +528,8 @@ export default function SalonBookingPage({
           phone: bookingData.clientPhone,
         },
         serviceId: bookingData.serviceId,
-        professionalId: bookingData.professionalId,
+        // "Cualquier profesional" names nobody: the server picks who is free.
+        professionalId: professionalToSend(bookingData.professionalId),
         // The DTO's names, not the form's: it wants scheduledDate and
         // scheduledTime. The stub spread `bookingData` as-is, so even if it
         // had posted, the fields would not have matched.
@@ -533,6 +541,7 @@ export default function SalonBookingPage({
         ...(refusesMarketingEmail ? { refusesMarketingEmail: true } : {}),
         ...(offersWhatsAppNotices && wantsWhatsAppNotices ? { wantsWhatsAppNotices: true } : {}),
         ...(offersWhatsAppPromotions && wantsWhatsAppPromotions ? { wantsWhatsAppPromotions: true } : {}),
+        ...(website ? { website } : {}),
       });
 
       // Only now. The confirmation has to mean the appointment exists: a
@@ -783,7 +792,9 @@ export default function SalonBookingPage({
                 <div>
                   <h3 className="text-xl font-semibold text-gray-900">{t("bookingPublic.booking_received")}</h3>
                   <p data-test="booking-done-status" className="mt-1 text-gray-700">
-                    {confirmation.confirmed ? t("bookingPublic.status_confirmed") : t("bookingPublic.status_pending")}
+                    {confirmation.confirmed
+                      ? t("bookingPublic.status_confirmed")
+                      : t("bookingPublic.status_pending", { salon: salonData?.name ?? "" })}
                   </p>
                 </div>
                 <dl className="mx-auto grid max-w-md grid-cols-[auto,1fr] gap-x-4 gap-y-1 rounded-lg bg-purple-50 p-4 text-left text-sm">
@@ -860,7 +871,8 @@ export default function SalonBookingPage({
               </div>
             )}
 
-            <form onSubmit={handleSubmit} className="space-y-8">
+            <form onSubmit={handleSubmit} className="relative space-y-8">
+              <HoneypotField value={website} onChange={setWebsite} />
               {/* Step 1: Client Information */}
               <div className="space-y-4">
                 <h3 className="text-lg font-semibold text-gray-900 flex items-center">
@@ -1011,6 +1023,38 @@ export default function SalonBookingPage({
 
                 {bookingData.serviceId ? (
                   <div role="group" aria-labelledby="booking-professional-heading" className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                    {/* As the widget's "Cualquiera": whoever offers the
+                        service and is free at that time. Not when a link
+                        or QR code chose one professional. */}
+                    {filteredProfessionals.length > 1 && !pinnedProfessionalId && (
+                      <button
+                        type="button"
+                        data-test="booking-any-professional"
+                        aria-pressed={bookingData.professionalId === ANY_PROFESSIONAL}
+                        onClick={() =>
+                          setBookingData((prev) => ({
+                            ...prev,
+                            professionalId: ANY_PROFESSIONAL,
+                            time: prev.professionalId === ANY_PROFESSIONAL ? prev.time : "",
+                          }))
+                        }
+                        className={`p-4 border rounded-lg transition-colors text-left ${
+                          bookingData.professionalId === ANY_PROFESSIONAL
+                            ? "border-purple-500 bg-purple-50"
+                            : "border-gray-200 hover:border-purple-300"
+                        }`}
+                      >
+                        <div className="flex items-center space-x-3">
+                          <div className="w-12 h-12 shrink-0 rounded-full bg-purple-100 flex items-center justify-center">
+                            <Users className="w-6 h-6 text-purple-600" aria-hidden="true" />
+                          </div>
+                          <div className="min-w-0 break-words">
+                            <p className="font-medium text-gray-900">{t("bookingPublic.any_professional")}</p>
+                            <p className="text-sm text-gray-500">{t("bookingPublic.any_professional_hint")}</p>
+                          </div>
+                        </div>
+                      </button>
+                    )}
                     {filteredProfessionals.map((professional) => (
                       <button
                         key={professional.id}

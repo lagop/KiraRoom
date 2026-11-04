@@ -106,7 +106,8 @@ import { appointmentDeleteBlocker, deleteAppointmentRow } from "./appointment-de
 import { isForeignKeyViolation } from "../common/prisma/history-deletes";
 import { snapshotAppointmentCommissions } from "../commissions/appointment-commission";
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
-import { reservePublicBookingSms } from "./public-booking-sms-cap";
+import { publicBookingSmsHeld, reservePublicBookingSms } from "./public-booking-sms-cap";
+import { appointmentCancelUrl, bookedOnline, parseAppointmentCancelToken } from "./public-cancel-link";
 import {
   assertTransition,
   concurrentChange,
@@ -169,6 +170,30 @@ export interface AppointmentFiltersDto {
 }
 
 /** What a status change may carry besides the status. */
+/** How long an online booking may wait for the salon to confirm it: then it is cancelled. */
+export const PENDING_BOOKING_MAX_HOURS = 48;
+
+/** The reason recorded when the client cancels from her link. */
+export const CLIENT_LINK_CANCEL_REASON = "Cancelada por el cliente desde el enlace del aviso";
+
+/** What the public "Cancelar mi cita" page shows. */
+export interface CancelLinkInfo {
+  /** cancellable; too_late (inside minCancelHours: call the salon); cancelled; closed (past, done, no-show). */
+  state: "cancellable" | "too_late" | "cancelled" | "closed";
+  canCancel: boolean;
+  status: string;
+  salonName: string;
+  salonPhone: string | null;
+  serviceName: string | null;
+  /** First name only. */
+  professionalName: string | null;
+  /** YYYY-MM-DD, the salon's day. */
+  date: string;
+  /** HH:mm, the salon's clock. */
+  time: string;
+  minCancelHours: number;
+}
+
 export interface StatusChangeOptions {
   /** Cancellation reason. */
   reason?: string;
@@ -182,6 +207,12 @@ export interface StatusChangeOptions {
    * and the client's notice links to the booking page to book again.
    */
   blockedSlot?: boolean;
+  /**
+   * An online booking the salon left pending too long, cancelled by the
+   * expiry job (pending-booking-expiry.scheduler.ts): the client is told the
+   * salon could not confirm it, with a link to book again.
+   */
+  notConfirmed?: boolean;
 }
 
 /** Appointments that still hold their time: the ones a time off clash can still move or cancel. */
@@ -411,17 +442,26 @@ export class AppointmentsService {
       if (!professional) throw new NotFoundException("Profesional no encontrado");
       tenantId = professional.tenantId;
     } else {
-      // "Any professional" is the widget's option; the widget says which salon.
-      if (!dto.widgetInstanceId) {
-        throw new BadRequestException("Elige un profesional");
+      // "Any professional": the widget says which salon (and narrows the
+      // team to its list); the salon page sends its salon. Either way the
+      // service must be that salon's (assertBookableOnline).
+      if (dto.widgetInstanceId) {
+        const widget = await this.prisma.widgetInstance.findUnique({
+          where: { id: dto.widgetInstanceId },
+          select: { tenantId: true, professionals: true },
+        });
+        if (!widget) throw new NotFoundException("Widget no encontrado");
+        tenantId = widget.tenantId;
+        widgetProfessionals = widget.professionals ?? [];
+      } else {
+        if (!dto.tenantId) throw new BadRequestException("Elige un profesional");
+        const tenant = await this.prisma.tenant.findFirst({
+          where: { id: dto.tenantId, deletedAt: null },
+          select: { id: true },
+        });
+        if (!tenant) throw new NotFoundException("Salón no encontrado");
+        tenantId = tenant.id;
       }
-      const widget = await this.prisma.widgetInstance.findUnique({
-        where: { id: dto.widgetInstanceId },
-        select: { tenantId: true, professionals: true },
-      });
-      if (!widget) throw new NotFoundException("Widget no encontrado");
-      tenantId = widget.tenantId;
-      widgetProfessionals = widget.professionals ?? [];
     }
 
     return this.bookOnline(tenantId, dto, widgetProfessionals, meta);
@@ -1975,6 +2015,156 @@ export class AppointmentsService {
     });
   }
 
+  // ------------------------------------------- "Cancelar mi cita" link
+
+  /**
+   * What the client's "Cancelar mi cita" page shows (public-cancel-link.ts).
+   * Never changes anything: mail scanners and link previews open links.
+   * Null for a token that is not ours. No client data: the salon, the
+   * service, the day and time, and whether she may still cancel online.
+   */
+  async describeCancelLink(token: string, now: Date = new Date()): Promise<CancelLinkInfo | null> {
+    const found = await this.appointmentForCancelLink(token);
+    return found ? this.cancelLinkInfo(found, now) : null;
+  }
+
+  /**
+   * The client cancels her appointment from the link: only while it is live,
+   * still ahead, and outside the salon's minCancelHours. The usual
+   * cancellation path follows (the salon's notices, the freed slot for the
+   * wait list, the audit trail). Inside the window nothing changes: the page
+   * tells her to call the salon.
+   */
+  async cancelFromLink(token: string, now: Date = new Date()): Promise<CancelLinkInfo | null> {
+    const found = await this.appointmentForCancelLink(token);
+    if (!found) return null;
+    const info = this.cancelLinkInfo(found, now);
+    if (!info.canCancel) return info;
+    const actor = { role: "system", tenantId: found.tenantId, via: "client_cancel_link" };
+    try {
+      await this.changeStatus(actor, found.id, AppointmentStatus.cancelled, {
+        reason: CLIENT_LINK_CANCEL_REASON,
+      });
+    } catch (err) {
+      // Changed meanwhile (the salon cancelled or confirmed it, a second
+      // click): say how it stands now.
+      this.logger.warn(`Cancel from link for appointment ${found.id} not applied: ${(err as Error).message}`);
+    }
+    const after = await this.appointmentForCancelLink(token);
+    return after ? this.cancelLinkInfo(after, now) : info;
+  }
+
+  private async appointmentForCancelLink(token: string): Promise<any | null> {
+    const secret = process.env.JWT_SECRET;
+    const id = secret ? parseAppointmentCancelToken(token, secret) : null;
+    if (!id) return null;
+    const appointment: any = await (this.prisma.appointment.findUnique as any)({
+      where: { id },
+      include: {
+        service: { select: { name: true } },
+        professional: { select: { firstName: true } },
+        tenant: { select: { name: true, phone: true, timezone: true, minCancelHours: true, deletedAt: true } },
+      },
+    });
+    if (!appointment || appointment.tenant?.deletedAt || !bookedOnline(appointment)) return null;
+    return appointment;
+  }
+
+  private cancelLinkInfo(appointment: any, now: Date): CancelLinkInfo {
+    const tz = appointment.tenant?.timezone || "Europe/Madrid";
+    const day = new Date(appointment.scheduledDate).toISOString().slice(0, 10);
+    const time = clockOf(appointment.scheduledTime ?? "", tz) ?? appointment.scheduledTime;
+    const startsAt = salonInstant(day, time || "00:00", tz);
+    const minCancelHours = Math.max(0, Number(appointment.tenant?.minCancelHours) || 0);
+    const live = LIVE_APPOINTMENT_STATUSES.includes(appointment.status);
+    const state: CancelLinkInfo["state"] =
+      appointment.status === AppointmentStatus.cancelled
+        ? "cancelled"
+        : !live || startsAt.getTime() <= now.getTime()
+          ? "closed"
+          : startsAt.getTime() - now.getTime() < minCancelHours * 3_600_000
+            ? "too_late"
+            : "cancellable";
+    return {
+      state,
+      canCancel: state === "cancellable",
+      status: appointment.status,
+      salonName: appointment.tenant?.name || "el salón",
+      salonPhone: (appointment.tenant?.phone ?? "").trim() || null,
+      serviceName: appointment.serviceName || appointment.service?.name || null,
+      professionalName: appointment.professional?.firstName || null,
+      date: day,
+      time,
+      minCancelHours,
+    };
+  }
+
+  // ------------------------------------- pending bookings left unattended
+
+  /**
+   * Online bookings (salon page, widget) still pending `hours` after they
+   * were made, and still ahead: cancelled, and the client is told the salon
+   * could not confirm them (pending-booking-expiry.scheduler.ts). Each one
+   * through the usual cancellation path, so the salon sees it, the slot goes
+   * to the wait list and the audit trail says why. Returns how many.
+   */
+  async expireUnconfirmedOnlineBookings(
+    now: Date = new Date(),
+    hours: number = PENDING_BOOKING_MAX_HOURS,
+    batch = 100,
+  ): Promise<number> {
+    const rows: Array<{
+      id: string;
+      tenantId: string;
+      scheduledDate: Date;
+      scheduledTime: string;
+      tenant: { name: string; timezone: string | null } | null;
+    }> = await (
+      this.prisma.appointment.findMany as any
+    )({
+      where: {
+        status: AppointmentStatus.pending,
+        source: { in: ["online", "widget"] },
+        createdAt: { lte: new Date(now.getTime() - hours * 3_600_000) },
+        // Ahead only; a booking already past is the salon's to sort out.
+        scheduledDate: { gte: new Date(now.toISOString().slice(0, 10)) },
+        tenant: { deletedAt: null },
+      },
+      select: {
+        id: true,
+        tenantId: true,
+        scheduledDate: true,
+        scheduledTime: true,
+        tenant: { select: { name: true, timezone: true } },
+      },
+      orderBy: { createdAt: "asc" },
+      take: batch,
+    });
+    let expired = 0;
+    for (const row of rows) {
+      const tz = row.tenant?.timezone || "Europe/Madrid";
+      const day = new Date(row.scheduledDate).toISOString().slice(0, 10);
+      const time = clockOf(row.scheduledTime ?? "", tz) ?? row.scheduledTime;
+      if (salonInstant(day, time || "00:00", tz).getTime() <= now.getTime()) continue;
+      try {
+        await this.changeStatus(
+          { role: "system", tenantId: row.tenantId, via: "pending_booking_expiry" },
+          row.id,
+          AppointmentStatus.cancelled,
+          {
+            reason: `${row.tenant?.name || "El salón"} no ha podido confirmar tu cita a tiempo.`,
+            notConfirmed: true,
+          },
+        );
+        expired += 1;
+      } catch (err) {
+        // Confirmed or cancelled meanwhile: nothing to do.
+        this.logger.warn(`Pending booking ${row.id} not expired: ${(err as Error).message}`);
+      }
+    }
+    return expired;
+  }
+
   /**
    * Who else could take the appointment as it stands -- the same day, time
    * and length: active professionals who do its services, work at its
@@ -2196,7 +2386,9 @@ export class AppointmentsService {
         });
         await (opts.blockedSlot
           ? this.sendAppointmentCancelledNotifications(updated, opts.reason, { rebook: true })
-          : this.sendAppointmentCancelledNotifications(updated, opts.reason));
+          : opts.notConfirmed
+            ? this.sendAppointmentCancelledNotifications(updated, opts.reason, { notConfirmed: true })
+            : this.sendAppointmentCancelledNotifications(updated, opts.reason));
         // A slot time off blocks is nobody's to take.
         if (!opts.blockedSlot) this.offerFreedSlot(updated);
         break;
@@ -3381,6 +3573,13 @@ export class AppointmentsService {
         : "Profesional";
       const serviceName = appointment.service?.name || "Servicio";
       const salonName = appointment.tenant?.name || "KiraRoom";
+      // Waiting for the salon: the email and SMS say the request was
+      // received and the salon will confirm it; "confirmada" goes when it
+      // does (sendAppointmentConfirmedNotifications), and only then.
+      const pending = appointment.status === AppointmentStatus.pending;
+      // Booked online by the client: her notices carry "Cancelar mi cita".
+      const cancelUrl = (bookedOnline(appointment) && appointmentCancelUrl(appointment.id)) || undefined;
+      const extra = { ...(pending ? { pending: true } : {}), ...(cancelUrl ? { cancelUrl } : {}) };
 
       // Check client notification preferences before sending
       const canSendEmail =
@@ -3418,6 +3617,7 @@ export class AppointmentsService {
             date: dateStr,
             time: appointment.scheduledTime,
             salonName,
+            ...extra,
             // Which location and its address, when the salon has several.
             ...(await this.emailPlace(appointment)),
           });
@@ -3456,7 +3656,7 @@ export class AppointmentsService {
         ).allowed;
       if (smsHeld) {
         this.logger.warn(
-          `Confirmation SMS for public booking ${appointment.id} (salon ${appointment.tenantId}) held back: daily SMS cap`,
+          `Confirmation SMS for public booking ${appointment.id} (salon ${appointment.tenantId}) held back: daily SMS cap or country`,
         );
       }
 
@@ -3472,6 +3672,7 @@ export class AppointmentsService {
             date: dateStr,
             time: appointment.scheduledTime,
             salonName,
+            ...extra,
           });
           if (sent?.success === false) {
             this.logger.warn(
@@ -3493,7 +3694,11 @@ export class AppointmentsService {
       }
 
       // Send confirmation WhatsApp to client: the salon's template first.
-      if (appointment.client?.phone && canSendWhatsapp) {
+      // Its texts say "confirmada": a pending booking gets it when the salon
+      // confirms it (sendAppointmentConfirmedNotifications).
+      if (appointment.client?.phone && canSendWhatsapp && pending) {
+        this.logger.log(`Confirmation WhatsApp for appointment ${appointment.id} waits for the salon to confirm it`);
+      } else if (appointment.client?.phone && canSendWhatsapp) {
         try {
           if (!(await this.sendWhatsAppViaSalon("confirmed", appointment))) {
             await this.whatsappService.sendAppointmentConfirmation({
@@ -3753,13 +3958,16 @@ export class AppointmentsService {
   private async sendAppointmentCancelledNotifications(
     appointment: any,
     reason?: string,
-    extra: { rebook?: boolean } = {},
+    extra: { rebook?: boolean; notConfirmed?: boolean } = {},
   ) {
     // The service as booked, not as the catalog has it today.
     appointment = withBookedService(appointment);
-    // The salon's booking page, to book again (cancelForTimeOff).
+    // The salon's booking page, to book again (cancelForTimeOff, and a
+    // booking the salon did not confirm in time).
     const bookingUrl =
-      extra.rebook && appointment.tenant?.slug ? rebookUrl(appointment.tenant.slug, appointment.serviceId) : undefined;
+      (extra.rebook || extra.notConfirmed) && appointment.tenant?.slug
+        ? rebookUrl(appointment.tenant.slug, appointment.serviceId)
+        : undefined;
     // SMS and WhatsApp carry the link in the text.
     const reasonWithLink = bookingUrl
       ? `${reason ? `${reason} ` : ""}Reserva otra cita: ${bookingUrl}`
@@ -3811,23 +4019,28 @@ export class AppointmentsService {
           "whatsapp",
         ));
 
+      // An online booking whose SMS were held back is not texted now either.
+      const smsHeld =
+        !!(appointment.client?.phone && canSendSms && bookedOnline(appointment)) &&
+        (await publicBookingSmsHeld(this.prisma as any, appointment.id));
+
       // Send cancellation email to client
       if (appointment.client?.email && canSendEmail) {
         try {
-          await this.emailService.sendAppointmentCancellation(
-            {
-              clientName,
-              clientEmail: appointment.client.email,
-              serviceName,
-              professionalName,
-              date: dateStr,
-              time: appointment.scheduledTime,
-              salonName,
-              ...(await this.emailPlace(appointment)),
-              ...(bookingUrl ? { bookingUrl } : {}),
-            },
-            reason,
-          );
+          const data = {
+            clientName,
+            clientEmail: appointment.client.email,
+            serviceName,
+            professionalName,
+            date: dateStr,
+            time: appointment.scheduledTime,
+            salonName,
+            ...(await this.emailPlace(appointment)),
+            ...(bookingUrl ? { bookingUrl } : {}),
+          };
+          await (extra.notConfirmed
+            ? this.emailService.sendBookingNotConfirmed(data)
+            : this.emailService.sendAppointmentCancellation(data, reason));
           this.logger.log(
             `Sent cancellation email to client ${appointment.clientId}`,
           );
@@ -3843,20 +4056,22 @@ export class AppointmentsService {
       }
 
       // Send cancellation SMS to client
-      if (appointment.client?.phone && canSendSms) {
+      if (smsHeld) {
+        this.logger.warn(`Cancellation SMS for appointment ${appointment.id} held back at booking: not sent`);
+      } else if (appointment.client?.phone && canSendSms) {
         try {
-          await this.smsService.sendAppointmentCancellation(
-            {
-              clientName,
-              clientPhone: appointment.client.phone,
-              serviceName,
-              professionalName,
-              date: dateStr,
-              time: appointment.scheduledTime,
-              salonName,
-            },
-            reasonWithLink,
-          );
+          const smsData = {
+            clientName,
+            clientPhone: appointment.client.phone,
+            serviceName,
+            professionalName,
+            date: dateStr,
+            time: appointment.scheduledTime,
+            salonName,
+          };
+          await (extra.notConfirmed
+            ? this.smsService.sendBookingNotConfirmed(smsData)
+            : this.smsService.sendAppointmentCancellation(smsData, reasonWithLink));
           this.logger.log(
             `Sent cancellation SMS to client ${appointment.clientId}`,
           );
@@ -4360,6 +4575,8 @@ export class AppointmentsService {
         : "Profesional";
       const serviceName = appointment.service?.name || "Servicio";
       const salonName = appointment.tenant?.name || "KiraRoom";
+      // Booked online by the client: "Cancelar mi cita" again.
+      const cancelUrl = (bookedOnline(appointment) && appointmentCancelUrl(appointment.id)) || undefined;
 
       // Check client notification preferences before sending
       const canSendEmail =
@@ -4376,6 +4593,11 @@ export class AppointmentsService {
           "appointment_confirmed",
           "sms",
         ));
+      // An online booking whose SMS were held back (daily caps, a number
+      // outside the EU/EEA) is not texted now either.
+      const smsHeld =
+        !!(appointment.client?.phone && canSendSms && bookedOnline(appointment)) &&
+        (await publicBookingSmsHeld(this.prisma as any, appointment.id));
 
       // Send confirmation email to client
       if (appointment.client?.email && canSendEmail) {
@@ -4388,6 +4610,7 @@ export class AppointmentsService {
             date: dateStr,
             time: appointment.scheduledTime,
             salonName,
+            ...(cancelUrl ? { cancelUrl } : {}),
             // Which location and its address, when the salon has several.
             ...(await this.emailPlace(appointment)),
           });
@@ -4406,7 +4629,9 @@ export class AppointmentsService {
       }
 
       // Send confirmation SMS to client
-      if (appointment.client?.phone && canSendSms) {
+      if (smsHeld) {
+        this.logger.warn(`Confirmation SMS for appointment ${appointment.id} held back at booking: not sent`);
+      } else if (appointment.client?.phone && canSendSms) {
         try {
           // Like the email: failure comes back in the result, not as a throw.
           const sent: any = await this.smsService.sendAppointmentConfirmation({
@@ -4417,6 +4642,7 @@ export class AppointmentsService {
             date: dateStr,
             time: appointment.scheduledTime,
             salonName,
+            ...(cancelUrl ? { cancelUrl } : {}),
           });
           if (sent?.success === false) {
             this.logger.warn(

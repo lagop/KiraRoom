@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { formatPrice, priceOnRequest, publicImageSrc, type PublicSalonLocation } from "@/lib/salon-seo";
 import { postEmbedHeight } from "@/lib/embed-snippet";
+import { HoneypotField } from "@/components/booking/honeypot-field";
 import {
   BOOKING_CHOICE_TEXT,
   bookingErrorMessage,
@@ -141,6 +142,8 @@ export default function EmbedWidgetPage() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [notes, setNotes] = useState("");
+  // The hidden field for bots (HoneypotField): a person leaves it empty.
+  const [website, setWebsite] = useState("");
   // The two boxes, both unticked (BOOKING_CHOICE_TEXT).
   const [refusesMarketingEmail, setRefusesMarketingEmail] = useState(false);
   const [wantsWhatsAppNotices, setWantsWhatsAppNotices] = useState(false);
@@ -295,6 +298,7 @@ export default function EmbedWidgetPage() {
         ...(refusesMarketingEmail ? { refusesMarketingEmail: true } : {}),
         ...(config.whatsappNotices && wantsWhatsAppNotices ? { wantsWhatsAppNotices: true } : {}),
         ...(config.whatsappPromotions && wantsWhatsAppPromotions ? { wantsWhatsAppPromotions: true } : {}),
+        ...(website ? { website } : {}),
       };
       const res = await fetch(`${API}/appointments`, {
         method: "POST",
@@ -582,7 +586,8 @@ export default function EmbedWidgetPage() {
         )}
 
         {takesBookings && step === "details" && (
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="relative space-y-4">
+            <HoneypotField value={website} onChange={setWebsite} />
             <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 text-sm">
               <strong>{selectedService?.name}</strong> · {time || "--:--"} · {date}
               {locationHere && ` · ${locationHere.name}`}

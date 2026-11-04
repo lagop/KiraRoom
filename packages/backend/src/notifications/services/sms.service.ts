@@ -5,6 +5,20 @@ import { MessageBundlesService } from '../../message-bundles/message-bundles.ser
 import { displayDate } from './email.service';
 import { maskPhone, maskPhonesIn } from '../../common/phone';
 
+/**
+ * A number as an SMS goes to it, in E.164: "+34..." as typed, "00..." as
+ * "+...", a Spanish nine-digit number with +34, ten digits or more with a
+ * "+" in front; anything else as typed (and refused as invalid).
+ */
+export function smsE164(phone: string): string {
+  const cleaned = phone.replace(/[^\d+]/g, '');
+  if (cleaned.startsWith('+')) return cleaned;
+  if (cleaned.startsWith('00')) return '+' + cleaned.substring(2);
+  if (/^[6789]\d{8}$/.test(cleaned)) return '+34' + cleaned;
+  if (cleaned.length >= 10) return '+' + cleaned;
+  return cleaned;
+}
+
 export interface SmsOptions {
   to: string;
   body: string;
@@ -18,6 +32,14 @@ export interface AppointmentSmsData {
   date: string;
   time: string;
   salonName: string;
+  /**
+   * The booking waits for the salon to confirm it: the text says the
+   * request was received, not that the appointment is confirmed. The
+   * "confirmada" text goes when the salon confirms it.
+   */
+  pending?: boolean;
+  /** The client's "Cancelar mi cita" link (public-cancel-link.ts), when she may use it. */
+  cancelUrl?: string;
 }
 
 @Injectable()
@@ -152,36 +174,9 @@ export class SmsService {
     });
   }
 
-  /**
-   * Format phone number to E.164 format
-   * Handles Spanish phone numbers (+34 prefix) and other formats
-   */
+  /** The number as the SMS goes to it, in E.164 (smsE164). */
   private formatPhoneNumber(phone: string): string {
-    // Remove all non-numeric characters except +
-    let cleaned = phone.replace(/[^\d+]/g, '');
-
-    // If it already starts with +, assume it's in E.164 format
-    if (cleaned.startsWith('+')) {
-      return cleaned;
-    }
-
-    // If it starts with 00, replace with +
-    if (cleaned.startsWith('00')) {
-      return '+' + cleaned.substring(2);
-    }
-
-    // Spanish phone numbers: if it starts with 6, 7, 8, or 9 and has 9 digits, add +34
-    if (/^[6789]\d{8}$/.test(cleaned)) {
-      return '+34' + cleaned;
-    }
-
-    // If it's a 10+ digit number without prefix, assume it needs +
-    if (cleaned.length >= 10) {
-      return '+' + cleaned;
-    }
-
-    // Return as-is if we can't determine the format
-    return cleaned;
+    return smsE164(phone);
   }
 
   /**
@@ -210,13 +205,43 @@ export class SmsService {
   private generateConfirmationBody(data: AppointmentSmsData): string {
     const from = this.signature(data);
     const date = displayDate(data.date);
+    // The link goes after the text, never cut: the text is shortened instead.
+    // A pending one names the salon in the sentence, so no "Salón:" first.
+    const link = data.cancelUrl ? ` Cancelar: ${data.cancelUrl}` : '';
+    const room = 160 - link.length;
+    if (data.pending) {
+      const message = `Hemos recibido tu solicitud. ${from} te confirmará la cita: ${data.serviceName} el ${date} a las ${data.time}.`;
+      if (message.length <= room) return message + link;
+      return `${from}: Solicitud recibida (${date}, ${data.time}). Te confirmaremos la cita.${link}`;
+    }
     const message = `${from}: Tu cita está confirmada. ${data.serviceName} con ${data.professionalName} el ${date} a las ${data.time}. ¡Gracias!`;
 
     // Truncate if too long (preserve key info)
-    if (message.length > 160) {
-      return `${from}: Cita confirmada. ${data.serviceName} el ${date} a las ${data.time}. ¡Gracias!`;
+    if (message.length > room) {
+      const short = `${from}: Cita confirmada. ${data.serviceName} el ${date} a las ${data.time}. ¡Gracias!`;
+      // With the link, a long service name goes before the link does.
+      if (link && short.length > room) return `${from}: Cita confirmada el ${date} a las ${data.time}.${link}`;
+      return short + link;
     }
 
+    return message + link;
+  }
+
+  /**
+   * A booking the salon did not confirm in time (pending-booking-expiry):
+   * it is cancelled, and the client is told so.
+   */
+  async sendBookingNotConfirmed(data: AppointmentSmsData): Promise<{ success: boolean; id?: string; error?: string }> {
+    return this.sendSms({ to: data.clientPhone, body: this.generateNotConfirmedBody(data) });
+  }
+
+  private generateNotConfirmedBody(data: AppointmentSmsData): string {
+    const from = this.signature(data);
+    const date = displayDate(data.date);
+    const message = `${from} no ha podido confirmar tu cita del ${date} a las ${data.time} y se ha anulado. Puedes pedir otra cuando quieras.`;
+    if (message.length > 160) {
+      return `${from}: No hemos podido confirmar tu cita del ${date} y se ha anulado. Pide otra cuando quieras.`;
+    }
     return message;
   }
 

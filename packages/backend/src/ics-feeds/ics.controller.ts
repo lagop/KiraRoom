@@ -25,7 +25,7 @@ const ICS_MAX_EVENTS = 20_000;
 
 /**
  * What a feed shows: pending online bookings (marked as tentative, since
- * autoConfirmOnlineBookings is off by default and they used to be left out
+ * autoConfirmOnlineBookings is off for many salons and they used to be left out
  * until someone confirmed them) and every appointment that goes ahead.
  * Cancelled ones and no-shows are not in it.
  */
