@@ -7,6 +7,7 @@ import { AppointmentServicesService } from "./appointment-services.service";
 import { HomeSummaryService } from "./home-summary.service";
 import { PublicAppointmentController } from "./public-appointment.controller";
 import { PendingBookingExpiryScheduler } from "./pending-booking-expiry.scheduler";
+import { SalonBookingAlertsService } from "./salon-booking-alerts.service";
 import { AnalyticsModule } from "../analytics/analytics.module";
 import { NotificationsModule } from "../notifications/notifications.module";
 import { TranslationsModule } from "../translations/translations.module";
@@ -35,7 +36,13 @@ import { WhatsAppMessagingModule } from "../whatsapp/whatsapp-messaging.module";
     AnalyticsModule,
   ],
   controllers: [AppointmentsController, AppointmentServicesController, PublicAppointmentController],
-  providers: [AppointmentsService, AppointmentServicesService, HomeSummaryService, PendingBookingExpiryScheduler],
+  providers: [
+    AppointmentsService,
+    AppointmentServicesService,
+    HomeSummaryService,
+    PendingBookingExpiryScheduler,
+    SalonBookingAlertsService,
+  ],
   exports: [AppointmentsService, AppointmentServicesService, HomeSummaryService],
 })
 export class AppointmentsModule {}

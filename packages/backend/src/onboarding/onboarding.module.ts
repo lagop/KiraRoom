@@ -5,15 +5,20 @@ import { OnboardingService } from "./onboarding.service";
 import { OnboardingDetectorService } from "./onboarding-detector.service";
 import { OnboardingStepSeeder } from "./onboarding-step.seeder";
 import { TestBookingCleanupService } from "./test-booking-cleanup.service";
+import { OnboardingNudgeService } from "./onboarding-nudge.service";
+import { OnboardingNudgeController } from "./onboarding-nudge.controller";
+import { NotificationsModule } from "../notifications/notifications.module";
 
 @Module({
-  imports: [PrismaModule],
-  controllers: [OnboardingController],
+  // NotificationsModule: the day-2 reminder's email (audit 7 D17).
+  imports: [PrismaModule, NotificationsModule],
+  controllers: [OnboardingController, OnboardingNudgeController],
   providers: [
     OnboardingService,
     OnboardingDetectorService,
     OnboardingStepSeeder,
     TestBookingCleanupService,
+    OnboardingNudgeService,
   ],
   exports: [OnboardingDetectorService, OnboardingService],
 })

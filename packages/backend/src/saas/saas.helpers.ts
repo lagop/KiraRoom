@@ -57,6 +57,18 @@ const UUID_SHAPED = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
  * names. Checked on the slugified form, so accents, capitals and spaces do
  * not get round it ("Kira Room" is kira-room).
  */
+/**
+ * A new salon starts with the rebooking reminders on (audit 7 D13): the
+ * column default (enabled: false) is what salons from before kept, and they
+ * are left as they are. Email only (rebookingChannelOf).
+ */
+export const NEW_SALON_REBOOKING_SETTINGS = Object.freeze({
+  enabled: true,
+  leadDays: 3,
+  channelFallback: "email",
+  minVisits: 3,
+});
+
 export const PLATFORM_LOOKALIKE_WORDS = ["kiraroom", "kira-room", "soporte", "support"] as const;
 
 /**
@@ -289,6 +301,7 @@ async function createTenantAndUserOnTx(
         { street: input.street, city: input.city, state: input.state, postalCode: input.postalCode, country: input.country ?? "ES" },
         input.timezone,
       ) as any,
+      rebookingSettings: { ...NEW_SALON_REBOOKING_SETTINGS },
     },
     select: { id: true },
   });

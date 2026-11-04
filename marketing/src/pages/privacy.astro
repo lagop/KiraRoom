@@ -102,6 +102,10 @@ import BaseLayout from "../layouts/BaseLayout.astro";
           <strong>Resend</strong> (transaccional de email) y <strong>GlitchTip</strong>
           (monitorización de errores) — ambos con servidores en la UE.
         </li>
+        <li>
+          <strong>Plausible Analytics</strong> (estadísticas de visitas de esta web, sin cookies, UE) y
+          <strong>Cloudflare Web Analytics</strong> (solo si aceptas la analítica, sin cookies).
+        </li>
       </ul>
       <p>KiraRoom no vende datos personales. No se realizan transferencias internacionales fuera del EEE.</p>
     </section>
@@ -149,9 +153,16 @@ import BaseLayout from "../layouts/BaseLayout.astro";
       <ul>
         <li><strong>Necesarias</strong> (siempre activas): sesión, autenticación, CSRF.</li>
         <li><strong>Preferencias</strong> (opt-in): idioma, tema.</li>
-        <li><strong>Analítica</strong> (opt-in): páginas vistas y errores (GlitchTip, UE).</li>
+        <li><strong>Analítica</strong> (opt-in): páginas vistas con Cloudflare Web Analytics, que no usa cookies ni guarda tu IP; solo se carga si aceptas esta categoría.</li>
         <li><strong>Marketing</strong> (opt-in, actualmente no utilizado).</li>
       </ul>
+      <p>
+        Además contamos las visitas con <strong>Plausible Analytics</strong>, alojado en la UE.
+        Plausible no usa cookies ni guarda nada en tu dispositivo, no recoge datos personales
+        (tu IP solo se usa, sin guardarla, para contar visitantes únicos del día) y no te sigue
+        entre sitios. Por eso funciona sin pedir consentimiento: solo vemos cifras agregadas,
+        como páginas vistas y de dónde llegan las visitas.
+      </p>
     </section>
 
     <section>

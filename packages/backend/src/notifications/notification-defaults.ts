@@ -67,4 +67,8 @@ export const DEFAULT_PREFERENCES: Record<
     sms: true,
     whatsapp: true,
   },
+  // To the salon's owner and admins: an online booking, or a client who
+  // cancelled herself (salon-booking-alerts.service.ts). On unless they turn
+  // it off in Ajustes > Seguridad.
+  salon_booking_alert: { inApp: false, email: true, sms: false, whatsapp: false },
 };

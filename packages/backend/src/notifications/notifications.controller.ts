@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, Request } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, UseGuards, Request } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service';
 import { NotificationQueue } from './queue/notification.queue';
@@ -81,6 +81,16 @@ export class NotificationsController {
   // ==========================================
   // Preferences Endpoints
   // ==========================================
+
+  @Patch('preferences')
+  @ApiOperation({ summary: "Merge some of the current user's notification preferences into the stored ones" })
+  @Roles(...SALON_TEAM)
+  async mergePreferencesForUser(
+    @CurrentUser() user: any,
+    @Body() dto: NotificationPreferenceDto,
+  ) {
+    return this.notificationsService.mergePreferencesForUser(user.id, user.tenantId, dto);
+  }
 
   @Get('preferences')
   @ApiOperation({ summary: 'Get notification preferences for the current user' })

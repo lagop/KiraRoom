@@ -47,6 +47,7 @@ import { TranslationsService } from "../translations/translations.service";
 import { ConsentService } from "../consent/consent.service";
 import { refreshClientStats } from "../clients/client-stats";
 import { salonInstant } from "./salon-time";
+import { SalonBookingAlertsService } from "./salon-booking-alerts.service";
 import { assertCanBook, assertCanReschedule, salonDayAndTime } from "./reschedule-check";
 import {
   MoveScope,
@@ -299,6 +300,8 @@ export class AppointmentsService {
     // Whether the salon still has multi-location (Empresa) for the booking
     // locations (client-locations.ts). Global FeatureFlagModule.
     @Optional() private readonly featureFlags?: FeatureFlagService,
+    // The owner's and admins' emails on online bookings and self-cancellations (audit 7 D12).
+    @Optional() private readonly salonAlerts?: SalonBookingAlertsService,
   ) {}
 
   /**
@@ -551,6 +554,8 @@ export class AppointmentsService {
     // From outside the salon: its SMS count against the daily caps
     // (public-booking-sms-cap.ts).
     const notified = await this.afterAppointmentCreated(appointment, dto.source, { publicBooking: true });
+    // The salon's owner and admins hear of it (their preference permitting).
+    void this.salonAlerts?.notify("booked", appointment.id);
     // Not columns: tell the chat receptionist whether it may say the
     // confirmation email or SMS was sent.
     return Object.assign(appointment, {
@@ -2045,6 +2050,8 @@ export class AppointmentsService {
       await this.changeStatus(actor, found.id, AppointmentStatus.cancelled, {
         reason: CLIENT_LINK_CANCEL_REASON,
       });
+      // She cancelled herself: the salon's owner and admins hear of it.
+      void this.salonAlerts?.notify("cancelled", found.id);
     } catch (err) {
       // Changed meanwhile (the salon cancelled or confirmed it, a second
       // click): say how it stands now.

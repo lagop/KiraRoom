@@ -250,6 +250,32 @@ export class NotificationsService {
   }
 
   /**
+   * Merges a user's choices into what is stored (PATCH): one toggle in the
+   * panel does not overwrite her other preferences.
+   */
+  async mergePreferencesForUser(
+    userId: string,
+    tenantId: string,
+    dto: NotificationPreferenceDto,
+  ) {
+    const current = await this.prisma.notificationPreference.findUnique({ where: { userId } });
+    const stored = ((current?.preferences as Record<string, Record<string, boolean>> | null) ?? {});
+    const merged: Record<string, Record<string, boolean>> = { ...stored };
+    for (const [type, channels] of Object.entries(dto.preferences ?? {})) {
+      const clean: Record<string, boolean> = {};
+      for (const [channel, value] of Object.entries(channels ?? {})) {
+        if (typeof value === "boolean") clean[channel] = value;
+      }
+      merged[type] = { ...(stored[type] ?? {}), ...clean };
+    }
+    return this.prisma.notificationPreference.upsert({
+      where: { userId },
+      create: { userId, tenantId, preferences: merged as any },
+      update: { preferences: merged as any },
+    });
+  }
+
+  /**
    * Send bulk notifications to clients
    */
   async sendBulkToClients(dto: BulkNotificationDto) {
