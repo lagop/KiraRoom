@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { AlertCircle, Building2, Loader2, Check } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
 import apiClient from "@/lib/api";
+import { rememberDesiredPlan } from "@/lib/desired-plan";
 
 /** The browser's IANA zone, if it can tell. */
 function browserTimeZone(): string | undefined {
@@ -30,6 +31,8 @@ export default function SignupPage() {
   const [acceptTerms, setAcceptTerms] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The plan picked on the website (/signup?plan=pro): Facturación highlights it later (B12).
+  useEffect(() => rememberDesiredPlan(window.location.search), []);
 
 
   const handleSubmit = async (e: React.FormEvent) => {
