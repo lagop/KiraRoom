@@ -69,6 +69,18 @@ model Tenant {
   /// Plan rev3: cancellation lifecycle + add-ons + multi-location
   cancelledAt            DateTime?
   readOnlyUntil          DateTime?
+  /// Retention (audit 7 D7): the salon's data is anonymised 30 days after
+  /// readOnlyUntil. The owner is warned 7 days before; the warning is for
+  /// the readOnlyUntil it was sent for (a later cancellation warns again).
+  anonymizationWarnedAt  DateTime?
+  anonymizationWarnedFor DateTime?
+  /// When the retention job anonymised it (also sets deletedAt).
+  anonymizedAt           DateTime?
+  /// "Borrar mi salón": when the owner asked, and what to restore if she
+  /// changes her mind ({ status, readOnlyUntil, cancelledAt,
+  /// subscriptionCancelAt, stripeScheduled }).
+  deletionRequestedAt    DateTime?
+  deletionRestore        Json?
   /// When the paid subscription ends because the owner cancelled it
   /// (Stripe cancel_at_period_end): full access until then, read-only
   /// after. Null when it renews.
@@ -79,6 +91,10 @@ model Tenant {
   /// daily GracePeriodScheduler flips status to `suspended`.
   paymentFailedAt        DateTime?
   gracePeriodEndsAt      DateTime?
+  /// First time the salon paid KiraRoom (a Stripe invoice with an amount
+  /// paid). Null while it never has: its trial sends at most 200 campaign
+  /// emails a month (owner decision D2, 2026-11-04).
+  firstPaidAt            DateTime?
   /// Soft-delete (rev): when set, the tenant is hidden from SaaS listings
   /// but its data (users, appointments, payments, etc.) is preserved so
   /// an accidental delete can be reversed via Prisma Studio.
@@ -520,7 +536,7 @@ model LegalAcceptance {
   termsVersion     String
   acceptedAt       DateTime @default(now())
   ip               String?
-  /// "signup" | "invite"
+  /// "signup" | "invite" | "login_prompt" (auth/legal-terms.ts)
   source           String
 
   @@index([tenantId, acceptedAt])

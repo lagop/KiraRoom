@@ -3570,11 +3570,27 @@
   },
   "emailVerifyNotice": {
     "title": "Confirm your email.",
-    "body": "We sent a link to {email} when you signed up. If you can't find it or it expired, ask for another.",
+    "body": "We sent a link to {email} when you signed up. Until you confirm it you can't send campaigns or connect Stripe, and your website won't show up on Google. If you can't find it or it expired, ask for another.",
     "sent": "Link sent to {email}. It lasts 48 hours; check your spam folder too.",
     "resend": "Resend the email",
     "sending": "Sending...",
     "failed": "We couldn't send the email. Please try again in a few minutes.",
     "dismiss": "Hide this notice"
+  },
+  "termsUpdate": {
+    "title": "We have updated our terms",
+    "body": "The terms of service (with the data processing agreement) and the privacy policy were updated on {date}. To keep using KiraRoom, please read and accept them.",
+    "checkbox": "I have read and accept the updated terms",
+    "terms": "Terms of service",
+    "privacy": "Privacy policy",
+    "accept": "Accept and continue",
+    "saving": "Saving...",
+    "signOut": "Sign out",
+    "failed": "We couldn't save your acceptance. Please try again."
+  },
+  "emailVerifyRequired": {
+    "title": "Confirm your email to send campaigns",
+    "ownerBody": "You can prepare campaigns, but not send them until you confirm {email} with the link we sent you. Until then you also can't connect Stripe, and your website won't show up on Google.",
+    "teamBody": "The salon owner has to confirm their email before campaigns can be sent. They can ask for a new link from the notice at the top of the panel."
   }
 }

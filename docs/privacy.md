@@ -14,7 +14,7 @@ Esta política también está publicada en formato web en [`packages/frontend/ap
 
 **KiraRoom SaaS** (en adelante, "KiraRoom"), con sede en España, es el responsable del tratamiento de los datos personales recabados a través de la plataforma `app.kiraroom.com`.
 
-Para cualquier consulta relativa al tratamiento de datos, puede escribir a `privacy@kiraroom.com`.
+Para cualquier consulta relativa al tratamiento de datos, puede escribir a `info@kiraroom.com`.
 
 ## 2. Datos que recabamos
 
@@ -73,7 +73,7 @@ Como titular de los datos, usted puede ejercer en cualquier momento:
 - **Oposición** (Art. 21): oposición al tratamiento basado en interés legítimo.
 - **Reclamación ante la AEPD** (Art. 77): si considera que hemos vulnerado sus derechos.
 
-Para ejercer estos derechos: `privacy@kiraroom.com`. Responderemos en un plazo máximo de **30 días**.
+Para ejercer estos derechos: `info@kiraroom.com`. Responderemos en un plazo máximo de **30 días**.
 
 ## 8. Cookies
 

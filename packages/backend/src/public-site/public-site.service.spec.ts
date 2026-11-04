@@ -352,6 +352,11 @@ describe("PublicSiteService.getPage", () => {
     expect((await makeService().svc.getPage("x")).bookingUnavailable).toBeNull();
   });
 
+  it("is indexable only once the owner has confirmed their email (D1)", async () => {
+    expect((await makeService({ tenant: { users: [{ id: "u1" }] } }).svc.getPage("x")).indexable).toBe(true);
+    expect((await makeService({ tenant: { users: [] } }).svc.getPage("x")).indexable).toBe(false);
+  });
+
   it("sends the online cancellation deadline (audit 7 N15)", async () => {
     expect((await makeService({ tenant: { minCancelHours: 12 } }).svc.getPage("x")).minCancelHours).toBe(12);
   });
@@ -434,6 +439,8 @@ describe("PublicSiteService.listForSitemap", () => {
       deletedAt: null,
       subscriptionStatus: { in: ["active", "trialing", "past_due"] },
       services: { some: { isActive: true } },
+      // D1: only once the owner has confirmed their email.
+      users: { some: { role: "owner", isEmailVerified: true } },
     });
     expect(selectKeys(args.select).sort()).toEqual(
       ["customDomain", "customDomain.domain", "customDomain.verifiedAt", "slug", "updatedAt"].sort(),

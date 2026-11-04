@@ -11,6 +11,7 @@ import CookieBanner from "../components/cookie-banner";
 import { ReadOnlyBanner } from "@/components/billing/ReadOnlyBanner";
 import { TrialEndingBanner } from "@/components/billing/TrialEndingBanner";
 import { EmailVerificationBanner } from "@/components/auth/email-verification-banner";
+import { TermsAcceptanceModal } from "@/components/auth/terms-acceptance-modal";
 import { managersOnlyPage } from "@/lib/dashboard-nav";
 import { getCurrentUser } from "@/lib/utils";
 import { ManagersOnlyNotice } from "./components/managers-only-notice";
@@ -235,6 +236,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       </div>
       {/* P1 — Onboarding wizard surfaces */}
       <OnboardingHost />
+      {/* Owner of a salon without an acceptance of the current terms (D3). */}
+      <TermsAcceptanceModal />
       {/* GDPR — Cookie consent banner */}
       <CookieBanner />
     </div>

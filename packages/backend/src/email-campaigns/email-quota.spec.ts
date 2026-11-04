@@ -1,4 +1,12 @@
-import { capPauseReason, marketingEmailCap, nextMonthStart, salonMonth } from "./email-quota.service";
+import {
+  EmailQuotaService,
+  NEVER_PAID_EMAIL_CAP,
+  capPauseReason,
+  hasPaidKiraRoom,
+  marketingEmailCap,
+  nextMonthStart,
+  salonMonth,
+} from "./email-quota.service";
 
 /** The cap's arithmetic: plans, locations, the salon's month. */
 describe("marketing email cap", () => {
@@ -28,5 +36,58 @@ describe("marketing email cap", () => {
         "Lo que falta sigue pendiente y se enviará solo el 1 de diciembre, o antes si compras un bono de emails.",
     );
     expect(capPauseReason({ cap: 2000, resetsOn: "2026-12-01" }, false)).not.toMatch(/bono/);
+  });
+});
+
+/** D2: a salon that has never paid sends at most 200 campaign emails a month. */
+describe("never-paid cap", () => {
+  const now = new Date("2026-11-10T10:00:00Z");
+
+  function serviceFor(tenant: Record<string, unknown>) {
+    const prisma = {
+      tenant: { findUnique: jest.fn().mockResolvedValue({ timezone: "Europe/Madrid", maxLocations: 1, tenantAddOns: [], ...tenant }) },
+      emailMarketingUsage: { createMany: jest.fn().mockResolvedValue({ count: 1 }) },
+    };
+    return new EmailQuotaService(prisma as never, { marketingPack: () => null } as never);
+  }
+
+  it("has paid: a paid invoice, or an active subscription", () => {
+    expect(hasPaidKiraRoom({ firstPaidAt: null, subscriptionStatus: "trialing" })).toBe(false);
+    expect(hasPaidKiraRoom({ firstPaidAt: null, subscriptionStatus: "past_due" })).toBe(false);
+    expect(hasPaidKiraRoom({ firstPaidAt: new Date(), subscriptionStatus: "past_due" })).toBe(true);
+    expect(hasPaidKiraRoom({ firstPaidAt: null, subscriptionStatus: "active" })).toBe(true);
+  });
+
+  it("a trial gets 200 instead of Pro's 2,000; once paid, the plan's", async () => {
+    const trial = await serviceFor({
+      plan: "pro",
+      subscriptionStatus: "trialing",
+      trialEnd: new Date("2026-11-20T00:00:00Z"),
+      firstPaidAt: null,
+    }).limits("t1", now);
+    expect(trial.cap).toBe(NEVER_PAID_EMAIL_CAP);
+    expect(trial.neverPaidCap).toBe(true);
+
+    const paid = await serviceFor({
+      plan: "pro",
+      subscriptionStatus: "past_due",
+      trialEnd: null,
+      firstPaidAt: new Date("2026-10-01T00:00:00Z"),
+    }).limits("t1", now);
+    expect(paid.cap).toBe(2000);
+    expect(paid.neverPaidCap).toBe(false);
+  });
+
+  it("a plan with fewer emails than 200 keeps its own (Esencial: none)", async () => {
+    const limits = await serviceFor({ plan: "esencial", subscriptionStatus: "past_due", trialEnd: null, firstPaidAt: null }).limits("t1", now);
+    expect(limits.cap).toBe(0);
+    expect(limits.neverPaidCap).toBe(false);
+  });
+
+  it("the pause says it is the trial's limit", () => {
+    expect(capPauseReason({ cap: 200, resetsOn: "2026-12-01", neverPaidCap: true }, false)).toBe(
+      "En pausa: hasta que pagues tu primera cuota, puedes enviar 200 emails de marketing al mes y ya se han enviado. " +
+        "Lo que falta sigue pendiente y se enviará cuando actives tu suscripción, o solo el 1 de diciembre.",
+    );
   });
 });

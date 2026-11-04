@@ -5,6 +5,7 @@ import {
   ConflictException,
   BadRequestException,
   NotFoundException,
+  ForbiddenException,
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import * as bcrypt from "bcryptjs";
@@ -21,12 +22,11 @@ import {
   TENANT_SLUG_UNAVAILABLE,
 } from "../saas/saas.helpers";
 import { normalizeEmail } from "./email-normalize";
-import { TERMS_VERSION } from "./legal-terms";
+import { tenantOwnerEmailVerified } from "./email-verified/owner-email-verified";
+import { TERMS_LAST_UPDATED_LABEL, TERMS_VERSION } from "./legal-terms";
 import { normalizeWebAddress, WEB_ADDRESS_MESSAGES, webAddressShapeProblem } from "../web-address/web-address-rules";
 import { webAddressTaken } from "../web-address/web-address.service";
 
-/** D4: the chosen web address cannot be used (the form shows the message next to it). */
-export const WEB_ADDRESS_UNAVAILABLE_CODE = "WEB_ADDRESS_UNAVAILABLE";
 import { AuditLogService } from "../saas/audit-log.service";
 import { EmailService } from "../notifications/services/email.service";
 import { createHash, randomBytes } from "crypto";
@@ -46,6 +46,9 @@ import { TwoFactorService } from "./two-factor/two-factor.service";
 import { sessionRevocations } from "./sessions/session-revocations";
 import { SALON_DELETED_MESSAGE } from "./salon-deleted";
 import { fiscalSettingsForTerritory, territoryTaxRegime } from "../invoices/salon-tax-settings";
+
+/** D4: the chosen web address cannot be used (the form shows the message next to it). */
+export const WEB_ADDRESS_UNAVAILABLE_CODE = "WEB_ADDRESS_UNAVAILABLE";
 
 /** Audience of the short-lived token that stands between password and code. */
 const TWO_FACTOR_AUDIENCE = "kira-2fa-login";
@@ -409,13 +412,64 @@ export class AuthService {
     });
   }
 
-  /** Whether the signed-in user's email is confirmed (for the panel's notice). */
-  async emailVerificationStatus(userId: string): Promise<{ verified: boolean; email: string | null }> {
+  /**
+   * D3: whether the panel must ask this user to accept the current terms.
+   * Only an owner is asked (not support signed in as the salon), and only
+   * while the salon has no acceptance of TERMS_VERSION: salons from before
+   * acceptances were recorded, and all of them again when the version moves.
+   */
+  async termsStatus(user: {
+    id: string;
+    role: string;
+    impersonatedBy?: string;
+  }): Promise<{ required: boolean; version: string; lastUpdated: string }> {
+    const answer = (required: boolean) => ({ required, version: TERMS_VERSION, lastUpdated: TERMS_LAST_UPDATED_LABEL });
+    if (user.role !== "owner" || user.impersonatedBy) return answer(false);
+    const row = await this.prisma.user.findUnique({ where: { id: user.id }, select: { tenantId: true } });
+    if (!row) return answer(false);
+    const accepted = await this.prisma.legalAcceptance.count({
+      where: { tenantId: row.tenantId, termsVersion: TERMS_VERSION },
+    });
+    return answer(accepted === 0);
+  }
+
+  /** D3: records the owner's acceptance of the current terms. Once per version. */
+  async acceptCurrentTerms(userId: string, ip: string | null): Promise<{ accepted: true; version: string }> {
+    const row = await this.prisma.user.findUnique({ where: { id: userId }, select: { tenantId: true, role: true } });
+    if (!row || row.role !== "owner") {
+      throw new ForbiddenException("Solo la dueña del salón puede aceptar los términos.");
+    }
+    const already = await this.prisma.legalAcceptance.count({
+      where: { tenantId: row.tenantId, termsVersion: TERMS_VERSION },
+    });
+    if (already === 0) {
+      await this.prisma.legalAcceptance.create({
+        data: {
+          tenantId: row.tenantId,
+          acceptedByUserId: userId,
+          termsVersion: TERMS_VERSION,
+          ip,
+          source: "login_prompt",
+        },
+      });
+    }
+    return { accepted: true, version: TERMS_VERSION };
+  }
+
+  /**
+   * Whether the signed-in user's email is confirmed (for the panel's notice),
+   * and whether the salon has an owner with a confirmed email: until it has,
+   * campaigns, mass sends and Stripe are blocked (D1, VerifiedOwnerEmailGuard).
+   */
+  async emailVerificationStatus(
+    userId: string,
+  ): Promise<{ verified: boolean; email: string | null; salonVerified: boolean }> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { isEmailVerified: true, email: true },
+      select: { isEmailVerified: true, email: true, tenantId: true },
     });
-    return { verified: Boolean(user?.isEmailVerified), email: user?.email ?? null };
+    const salonVerified = user ? await tenantOwnerEmailVerified(this.prisma, user.tenantId) : false;
+    return { verified: Boolean(user?.isEmailVerified), email: user?.email ?? null, salonVerified };
   }
 
   /**

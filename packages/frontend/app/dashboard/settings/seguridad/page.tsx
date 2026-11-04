@@ -2,8 +2,9 @@
 
 import { ChangePasswordForm } from "@/src/components/auth/change-password-form";
 import { TwoFactorSettings } from "@/src/components/auth/two-factor-settings";
+import { DeleteSalonSettings } from "@/src/components/auth/delete-salon-settings";
 
-/** The signed-in user's own security: their password and two-step verification. */
+/** The signed-in user's own security: their password and two-step verification; the owner can also delete the salon. */
 export default function SecurityPage() {
   return (
     <div className="space-y-6">
@@ -13,6 +14,7 @@ export default function SecurityPage() {
       </div>
       <ChangePasswordForm />
       <TwoFactorSettings />
+      <DeleteSalonSettings />
     </div>
   );
 }

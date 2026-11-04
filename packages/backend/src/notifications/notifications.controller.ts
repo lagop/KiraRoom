@@ -12,6 +12,7 @@ import {
 } from './dto';
 import { Roles, SALON_TEAM, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 import { AllowWhenReadOnly } from "../common/decorators/allow-when-read-only.decorator";
+import { VerifiedOwnerEmailGuard } from "../auth/email-verified/verified-owner-email.guard";
 
 @ApiTags('notifications')
 @ApiBearerAuth()
@@ -109,8 +110,10 @@ export class NotificationsController {
   @Post('bulk')
   @ApiOperation({ summary: 'Send bulk notifications to clients' })
   @Roles(...SALON_MANAGERS)
-  async sendBulkToClients(@Body() dto: BulkNotificationDto) {
-    return this.notificationsService.sendBulkToClients(dto);
+  @UseGuards(VerifiedOwnerEmailGuard)
+  async sendBulkToClients(@CurrentUser() user: any, @Body() dto: BulkNotificationDto) {
+    // The salon is the signed-in user's, never the one in the body.
+    return this.notificationsService.sendBulkToClients({ ...dto, tenantId: user.tenantId });
   }
 
   // ==========================================

@@ -312,6 +312,8 @@ check("a read-only salon lists nothing", salonSitemapXml({ ...PAGE, acceptsBooki
 check("a salon with services that takes bookings is indexable", salonPageIndexable(PAGE), PAGE.services.length > 0);
 check("one with no active service is not", salonPageIndexable({ ...PAGE, services: [] }), false);
 check("nor one that takes no bookings", salonPageIndexable({ ...PAGE, acceptsBookings: false }), false);
+check("nor one whose owner has not confirmed their email (D1)", salonPageIndexable({ ...PAGE, indexable: false }), false);
+check("an unconfirmed salon lists nothing in its sitemap", salonSitemapXml({ ...PAGE, indexable: false }, "https://x/").includes("<url>"), false);
 check("no policy text: the online cancellation deadline", cancelDeadlineHours({ cancellationPolicy: null, minCancelHours: 24 }), 24);
 check("with a policy of its own: none", cancelDeadlineHours({ cancellationPolicy: "Avísanos", minCancelHours: 24 }), null);
 check("an older server that does not send it: none", cancelDeadlineHours({ cancellationPolicy: null }), null);

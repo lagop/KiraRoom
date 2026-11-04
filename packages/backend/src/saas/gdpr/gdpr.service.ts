@@ -109,7 +109,18 @@ export class GdprService {
    * placeholder values in a single Prisma transaction. Invoice records
    * are preserved for fiscal compliance (4-year retention).
    */
-  async anonymize(tenantId: string, requestId: string): Promise<GdprRequest> {
+  async anonymize(
+    tenantId: string,
+    requestId: string,
+    /**
+     * keepFiscalData: the retention job (salon-retention.scheduler.ts). The
+     * invoices keep their recipient, and the salon its razón social and
+     * NIF: issued invoices are fiscal records that must be kept for
+     * INVOICE_RETENTION_YEARS, unchanged. The console's erasure keeps
+     * the invoices too, but without the recipient's data.
+     */
+    opts: { keepFiscalData?: boolean } = {},
+  ): Promise<GdprRequest> {
     this.logger.warn(
       `GDPR anonymize: tenant=${tenantId} request=${requestId}`,
     );
@@ -147,14 +158,16 @@ export class GdprService {
       // Invoices — preserve (4-year fiscal retention). Replace recipient
       // name + taxId with placeholders so the audit trail still has
       // matching series + number + totals, but no personal data.
-      await tx.invoice.updateMany({
-        where: { tenantId },
-        data: {
-          recipientName: ANON,
-          recipientTaxId: null,
-          recipientAddress: null,
-        },
-      });
+      if (!opts.keepFiscalData) {
+        await tx.invoice.updateMany({
+          where: { tenantId },
+          data: {
+            recipientName: ANON,
+            recipientTaxId: null,
+            recipientAddress: null,
+          },
+        });
+      }
 
       // Tenant itself — rename, remove taxId, null out personal fields.
       // Preserve slug as `anon-<short-id>` for any internal references.
@@ -162,8 +175,7 @@ export class GdprService {
         where: { id: tenantId },
         data: {
           name: `[anonymized tenant ${tenantId.slice(0, 8)}]`,
-          taxId: null,
-          legalName: null,
+          ...(opts.keepFiscalData ? {} : { taxId: null, legalName: null }),
           slug: `anon-${tenantId.slice(0, 8)}`,
           stripeCustomerId: null,
           email: null,

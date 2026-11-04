@@ -60,6 +60,9 @@ import { AuthController } from "./auth/auth.controller";
 import { WebAddressController } from "./web-address/web-address.controller";
 import { WebAddressService } from "./web-address/web-address.service";
 import { AuthSessionsModule } from "./auth/sessions/auth-sessions.module";
+import { SalonRetentionModule } from "./saas/retention/salon-retention.module";
+import { SalonDeletionController } from "./saas/retention/salon-deletion.controller";
+import { SalonDeletionService } from "./saas/retention/salon-deletion.service";
 import { TwoFactorService } from "./auth/two-factor/two-factor.service";
 import { AppointmentsController } from "./appointments/appointments.controller";
 import { AppointmentServicesController } from "./appointments/appointment-services.controller";
@@ -203,6 +206,8 @@ import { PublicModule } from "./public-site/public.module";
 
     // SaaS Owner module
     SaasModule,
+    // Audit 7 D7: the retention job (warn, then anonymise, a salon that left).
+    SalonRetentionModule,
 
     // Multi-location (plan Empresa)
     MultiLocationModule,
@@ -252,6 +257,8 @@ import { PublicModule } from "./public-site/public.module";
     AppController,
     AuthController,
     WebAddressController,
+    // "Borrar mi salón" (Ajustes > Seguridad); needs TwoFactorService below.
+    SalonDeletionController,
     AppointmentsController,
     AppointmentServicesController,
     ClientsController,
@@ -282,6 +289,7 @@ import { PublicModule } from "./public-site/public.module";
     AuthService,
     WebAddressService,
     TwoFactorService,
+    SalonDeletionService,
     PasswordResetService,
     TurnstileService,
     AuthRateLimitsService,

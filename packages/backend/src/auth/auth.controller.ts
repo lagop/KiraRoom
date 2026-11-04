@@ -51,6 +51,7 @@ import { TurnstileService, CAPTCHA_MESSAGE, CAPTCHA_REQUIRED_CODE } from "./abus
 import { AuthRateLimitsService } from "./abuse/auth-rate-limits.service";
 import { isDisposableEmail } from "./abuse/disposable-email-domains";
 import { normalizeEmail } from "./email-normalize";
+import { AcceptTermsDto } from "./dto/accept-terms.dto";
 
 /** The caller's address, as Express derives it behind the trusted proxies. */
 function clientIp(req: Request | undefined): string | null {
@@ -148,6 +149,31 @@ export class AuthController {
     return { verified };
   }
 
+  /** D3: whether the panel asks the owner to accept the updated terms. */
+  @Get("terms")
+  @SignedIn()
+  @AllowWhenReadOnly()
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Whether the signed-in owner must accept the current terms" })
+  async termsStatus(@CurrentUser() user: PanelUser) {
+    staffOnly(user);
+    return this.authService.termsStatus(user);
+  }
+
+  /** D3: "He leído y acepto los términos actualizados". Owner only, not support. */
+  @Post("terms/accept")
+  @SignedIn()
+  @AllowWhenReadOnly()
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Accept the current terms (owner)" })
+  async acceptTerms(@CurrentUser() user: PanelUser, @Body() _dto: AcceptTermsDto, @Req() req: Request) {
+    staffOnly(user);
+    if (user.impersonatedBy) {
+      throw new ForbiddenException("Los términos los acepta la dueña del salón, no una sesión de soporte.");
+    }
+    return this.authService.acceptCurrentTerms(user.id, clientIp(req));
+  }
+
   /** Whether the signed-in user's email is confirmed: the panel's "Confirma tu email" notice. */
   @Get("email-verification")
   @SignedIn()
@@ -161,8 +187,8 @@ export class AuthController {
 
   /**
    * A new confirmation link for the signed-in user, by email. At most 3 an
-   * hour per account (Redis). Nothing is blocked yet for an unconfirmed
-   * email; this only lets someone whose link expired get another.
+   * hour per account (Redis). Until the owner confirms, campaigns, mass
+   * sends and Stripe stay blocked (D1); this lets them get a new link.
    */
   @Post("resend-verification")
   @SignedIn()

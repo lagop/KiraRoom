@@ -256,6 +256,19 @@ export interface TwoFactorRequired {
   challenge: string;
 }
 
+/** The exports offered before deleting the salon (backend exports.controller). */
+export type SalonExportKind = "clients" | "appointments" | "payments" | "services" | "professionals" | "gift-cards";
+
+export interface SalonDeletionStatus {
+  pending: boolean;
+  requestedAt: string | null;
+  /** Until when the data can be exported. */
+  exportUntil: string | null;
+  /** When the salon's personal data is anonymised. */
+  anonymizeOn: string | null;
+  twoFactorRequired: boolean;
+}
+
 export interface TwoFactorStatus {
   enabled: boolean;
   recoveryCodesLeft: number;
@@ -1564,6 +1577,8 @@ export interface EmailMarketingQuota {
   resetsOn: string;
   /** The bono on sale, or null while it has no price. */
   pack: { emails: number; priceCents: number } | null;
+  /** The salon has not paid yet: the cap is the 200 a month of the trial. */
+  neverPaidCap?: boolean;
 }
 
 /**
@@ -2774,8 +2789,23 @@ class ApiClient implements ApiClientInterface {
   }
 
   /** Whether the signed-in user's email is confirmed (the panel's notice). */
-  async getEmailVerification(): Promise<{ verified: boolean; email: string | null }> {
+  async getEmailVerification(): Promise<{
+    verified: boolean;
+    email: string | null;
+    /** The salon has an owner with a confirmed email (campaigns, mass sends and Stripe need it). Absent from older servers. */
+    salonVerified?: boolean;
+  }> {
     return this.request("/auth/email-verification");
+  }
+
+  /** D3: whether the owner must accept the current terms (salons from before, or a new version). */
+  async getTermsStatus(): Promise<{ required: boolean; version: string; lastUpdated: string }> {
+    return this.request("/auth/terms");
+  }
+
+  /** D3: "He leído y acepto los términos actualizados". */
+  async acceptTerms(): Promise<{ accepted: true; version: string }> {
+    return this.request("/auth/terms/accept", { method: "POST", body: JSON.stringify({ accept: true }) });
   }
 
   /** A new confirmation link by email, for the signed-in user (3 an hour). */
@@ -6172,6 +6202,32 @@ class ApiClient implements ApiClientInterface {
       `facturas-emitidas_${from}_${to}.${format}`,
     );
   }
+  /**
+   * One of the salon's data exports as a CSV (owner/admin), e.g. before
+   * deleting the salon (Ajustes > Seguridad). Everything, no filters.
+   */
+  async downloadSalonExport(kind: SalonExportKind): Promise<{ blob: Blob; filename: string }> {
+    return this.downloadWithToken(`${API_BASE_URL}/exports/${kind}.csv`, `${kind}.csv`);
+  }
+
+  /** "Borrar mi salón" (owner only): whether it is pending, and its dates. */
+  async getSalonDeletion(): Promise<SalonDeletionStatus> {
+    return this.request<SalonDeletionStatus>("/settings/salon-deletion");
+  }
+
+  /** Asks to delete the salon: read-only now, anonymised 30 days after. Password (and 2FA code). */
+  async requestSalonDeletion(password: string, code?: string): Promise<SalonDeletionStatus> {
+    return this.request<SalonDeletionStatus>("/settings/salon-deletion", {
+      method: "POST",
+      body: JSON.stringify({ password, ...(code ? { code } : {}) }),
+    });
+  }
+
+  /** Cancels a pending deletion: the salon is as it was. */
+  async cancelSalonDeletion(): Promise<SalonDeletionStatus> {
+    return this.request<SalonDeletionStatus>("/settings/salon-deletion", { method: "DELETE" });
+  }
+
   /** GET a file with the bearer token, refreshing the session once on a 401 like request() does. */
   private async downloadWithToken(url: string, fallbackName: string): Promise<{ blob: Blob; filename: string }> {
     const get = () => {

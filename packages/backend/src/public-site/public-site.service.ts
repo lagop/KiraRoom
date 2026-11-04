@@ -2,6 +2,7 @@ import { GoneException, Injectable, NotFoundException, Optional } from "@nestjs/
 import { Prisma, SubscriptionStatus } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { redirectedTenantId } from "../web-address/web-address.service";
+import { TENANT_OWNER_EMAIL_VERIFIED } from "../auth/email-verified/owner-email-verified";
 import { salonOpenShifts, salonOpenWeek, SalonDayWindow } from "../appointments/working-hours";
 import { normalizeDomain } from "../web-domain/custom-domain";
 import { WebDomainService } from "../web-domain/web-domain.service";
@@ -127,6 +128,8 @@ export class PublicSiteService {
         webChatEnabled: true,
         updatedAt: true,
         customDomain: { select: { domain: true, verifiedAt: true } },
+        // D1: read for indexable below, never sent.
+        users: { where: { role: "owner", isEmailVerified: true }, select: { id: true }, take: 1 },
     });
     if (!tenant) throw new NotFoundException("Salon not found");
     // Past its read-only period (or cancelled with none): the page is gone,
@@ -267,6 +270,10 @@ export class PublicSiteService {
       // (getAvailableSlots), so the page says "todavía no acepta reservas
       // online" with its phone (audit 7 N11). bookingUnavailable says which.
       acceptsBookings: bookingUnavailableReason(tenant.subscriptionStatus, professionals.length) === null,
+      // D1: false until the salon's owner confirms their email. The page
+      // works and takes bookings, but says noindex and stays out of the
+      // sitemaps.
+      indexable: (tenant.users ?? []).length > 0,
       bookingUnavailable: bookingUnavailableReason(tenant.subscriptionStatus, professionals.length),
       // The final price, tax included, whichever way the salon writes its
       // catalogue: 36.30 for a 30.00 net service at 21 % IVA.
@@ -409,6 +416,8 @@ export class PublicSiteService {
         subscriptionStatus: { in: LISTED_STATUSES },
         // A page with nothing to book is thin content; leave it out.
         services: { some: { isActive: true } },
+        // D1: not until the owner has confirmed their email.
+        ...TENANT_OWNER_EMAIL_VERIFIED,
       },
       select: {
         slug: true,

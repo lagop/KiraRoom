@@ -147,8 +147,8 @@ export default function PrivacyPage() {
 
       <Section title="6. Conservación de los datos">
         <ul>
-          <li>Datos de cuenta del salón: mientras dure la relación contractual + 5 años (prescripción de acciones contractuales, Art. 1964 CC).</li>
-          <li>Datos de clientes finales: mientras el salón mantenga la cuenta + 2 años desde la última interacción.</li>
+          <li>Datos de cuenta del salón: mientras dure la relación contractual. Al terminar, 30 días para exportarlos; después se anonimizan (60 días en total).</li>
+          <li>Datos de clientes finales: mientras el salón mantenga la cuenta. Si el salón se va (cancela, termina su prueba o borra su cuenta), puede exportarlos durante 30 días; después se anonimizan, 60 días después del final.</li>
           <li>Facturas y datos fiscales: <strong>4 años</strong> (Art. 66 RGGI).</li>
           <li>Registros fiscales de las facturas: mientras esté vigente la obligación fiscal.</li>
         </ul>
