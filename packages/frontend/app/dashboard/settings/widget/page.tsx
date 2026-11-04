@@ -18,14 +18,8 @@ import apiClient, {
 import { useToast } from "@/components/ui/use-toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { draftFrom, parseOrigins, toggleId, widgetUpdateFrom, type WidgetDraft } from "@/lib/widget-edit";
-
-function buildEmbedSnippet(token: string, frontendUrl?: string) {
-  const base = (frontendUrl ||
-    (typeof window !== "undefined" ? window.location.origin : "https://app.kiraroom.net")
-  ).replace(/\/$/, "");
-  const url = `${base}/embed/${token}`;
-  return `<iframe src="${url}" width="100%" height="640" style="border:0;border-radius:12px" loading="lazy"></iframe>`;
-}
+// The iframe, named for the salon, and the script that sizes it to the widget.
+import { buildEmbedSnippet } from "@/lib/embed-snippet";
 
 export default function WidgetSettingsPage() {
   const { toast } = useToast();
@@ -43,6 +37,8 @@ export default function WidgetSettingsPage() {
   // The widget about to be revoked, confirmed in the panel's dialog.
   const [pendingRevoke, setPendingRevoke] = useState<WidgetInstance | null>(null);
   const [revoking, setRevoking] = useState(false);
+  // For the iframe title in the snippet ("Reservar cita en <salón>").
+  const [salonName, setSalonName] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -54,6 +50,11 @@ export default function WidgetSettingsPage() {
         setServices(svcs);
       } catch {
         setServices([]);
+      }
+      try {
+        setSalonName((await apiClient.getTenant()).name ?? null);
+      } catch {
+        setSalonName(null);
       }
       try {
         const profs = await apiClient.getProfessionals();
@@ -225,7 +226,9 @@ export default function WidgetSettingsPage() {
         ) : (
           <div className="space-y-4">
             {instances.map((w) => {
-              const snippet = w.token ? buildEmbedSnippet(w.token, frontendUrl) : "";
+              const snippet = w.token
+                ? buildEmbedSnippet(w.token, frontendUrl || "https://app.kiraroom.net", salonName)
+                : "";
               return (
                 <div
                   key={w.id}

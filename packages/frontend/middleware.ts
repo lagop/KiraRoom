@@ -184,7 +184,10 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   // Every page; not Next's own assets nor files (anything with an
-  // extension: favicon.ico, robots.txt, sitemap.xml, images in public/),
-  // which are the same on every host.
-  matcher: ["/((?!_next/|.*\\.).*)"],
+  // extension: favicon.ico, images in public/), which are the same on every
+  // host. Except robots.txt and sitemap.xml: on a salon's host they are the
+  // salon's own (app/sites/[salonName]/robots.txt and sitemap.xml, through
+  // rewritePathFor); on the platform's they go on to app/robots.ts and
+  // app/sitemap.ts untouched.
+  matcher: ["/((?!_next/|.*\\.).*)", "/robots.txt", "/sitemap.xml"],
 };

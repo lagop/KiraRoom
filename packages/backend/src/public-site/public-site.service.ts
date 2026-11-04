@@ -9,6 +9,8 @@ import { salonOffersWhatsAppPromotions, salonWhatsAppConnected } from "../consen
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
 import { publicPrice, publicPriceSettings } from "../common/public-price";
 import { clientLocations, formatLocationAddress, professionalLocationsOf } from "../multi-location/client-locations";
+import { isReadOnlyStatus } from "../common/guards/read-only-tenant.guard";
+import { imageVersion, parseImageDataUrl, publicImageUrl, type PublicImageKind } from "./public-images";
 
 /**
  * Salons whose page is worth listing in the sitemap. A cancelled or
@@ -70,6 +72,8 @@ export class PublicSiteService {
         openingHours: true,
         // Read for the prices (common/public-price.ts), never sent.
         fiscalSettings: true,
+        // Read for acceptsBookings below, never sent.
+        subscriptionStatus: true,
         updatedAt: true,
         customDomain: { select: { domain: true, verifiedAt: true } },
       },
@@ -160,8 +164,10 @@ export class PublicSiteService {
       name: tenant.name,
       slug: tenant.slug,
       description: tenant.description,
-      logo: tenant.logo,
-      coverImage: tenant.coverImage,
+      // URLs, never the stored data: URLs (public-images.ts): an http(s)
+      // URL as stored, or the API path that serves the image.
+      logoUrl: publicImageUrl(tenant.id, "logo", tenant.logo),
+      coverImageUrl: publicImageUrl(tenant.id, "cover", tenant.coverImage),
       website: tenant.website,
       instagram: tenant.instagram,
       facebook: tenant.facebook,
@@ -183,6 +189,11 @@ export class PublicSiteService {
       cancellationPolicy: tenant.cancellationPolicy?.trim() || null,
       language: tenant.language,
       updatedAt: tenant.updatedAt,
+      // False while the salon is read-only (trial ended, cancelled,
+      // suspended): the booking would be refused at the end
+      // (appointments.service), so the page shows the phone instead of the
+      // form and asks search engines not to index it. The page itself stays.
+      acceptsBookings: !isReadOnlyStatus(tenant.subscriptionStatus),
       // The final price, tax included, whichever way the salon writes its
       // catalogue: 36.30 for a 30.00 net service at 21 % IVA.
       services: services.map((s) => ({ ...s, price: publicPrice(s.price, prices) })),
@@ -225,6 +236,23 @@ export class PublicSiteService {
       // optional "Quiero recibir promociones de <salón> por WhatsApp".
       whatsappPromotions,
     };
+  }
+
+  /**
+   * The salon's logo or cover photo, for GET /public-site/image/:tenantId/:kind.
+   * Null when the salon has none, stored a web URL (the page links to it
+   * directly) or is deleted.
+   */
+  async image(tenantId: string, kind: PublicImageKind) {
+    const tenant = await this.prisma.tenant.findFirst({
+      where: { id: tenantId, deletedAt: null },
+      // Only the one asked for: a cover can weigh more than a megabyte.
+      select: { logo: kind === "logo", coverImage: kind === "cover" },
+    });
+    const stored = (kind === "logo" ? tenant?.logo : tenant?.coverImage)?.trim();
+    const image = parseImageDataUrl(stored);
+    if (!stored || !image) return null;
+    return { ...image, version: imageVersion(stored) };
   }
 
   /** Salons for the sitemap: slug, last change and live domain only. */

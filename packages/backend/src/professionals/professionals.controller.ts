@@ -77,15 +77,16 @@ export class ProfessionalsController {
     const professional = await this.professionalsService.findOne(id);
     // Anyone holding a professional's id (it is in ICS and QR URLs) used to
     // get the full row. The salon's owner and admins still do, and a
-    // professional their own; other staff get the public projection (also
+    // professional their own; other staff get the colleague projection (also
     // of an inactive colleague, who is on past appointments); everyone else
-    // too, and an inactive professional is not public.
+    // the public one (no schedule, services by id), and an inactive
+    // professional is not public.
     const viewer = await this.publicViewer.resolve(req, professional.tenantId);
     if (seesFullRows(viewer)) return professional;
     if (viewer.staff) {
       return viewer.userId && professional.userId === viewer.userId
         ? professional
-        : this.professionalsService.toPublic(professional);
+        : this.professionalsService.toColleague(professional);
     }
     if (!professional.isActive) throw new NotFoundException("Profesional no encontrado");
     return this.professionalsService.toPublic(professional);

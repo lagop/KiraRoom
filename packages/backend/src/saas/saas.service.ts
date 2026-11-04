@@ -25,6 +25,7 @@ import {
   slugify,
 } from "./saas.helpers";
 import { AuditLogService } from "./audit-log.service";
+import { invalidateTenantWidgets } from "../widget/widget.service";
 import { SubscriptionsService } from "../payments/services/subscriptions.service";
 import { normalizePlan, PLAN_PRICES, PlanId } from "@kira/shared";
 
@@ -317,6 +318,8 @@ export class SaasService {
         data: { deletedAt },
         select: { id: true },
       });
+      // Its page answers 404 from now on; the iframe on its own site too.
+      await invalidateTenantWidgets(tx, id);
       return this.auditLog.record(
         "tenant.soft_delete",
         {

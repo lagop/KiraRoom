@@ -55,3 +55,33 @@ export async function fetchSitemapSalons(): Promise<SitemapSalon[]> {
     return [];
   }
 }
+
+/** The salon's public reviews (GET /public/reviews/tenant/:id). */
+export interface PublicReviews {
+  /** Every answered rating except those rejected for breaking the rules. */
+  averageRating: number;
+  total: number;
+  /** Approved reviews whose author agreed to show them, with first name and initial. */
+  reviews: Array<{ id: string; rating: number; comment: string | null; author: string; date: string }>;
+  /** The only reasons a review is not published (absent from older servers). */
+  rejectionReasons?: string[];
+}
+
+/**
+ * The reviews, fetched with the page so they are in its HTML (crawlers saw
+ * none, and the block pushed the footer down once it loaded). Undefined when
+ * the API did not answer: the page then asks for them from the browser, as
+ * before, rather than keep "no reviews" for the whole cache window.
+ */
+export async function fetchPublicReviews(tenantId: string): Promise<PublicReviews | undefined> {
+  try {
+    const res = await fetch(`${SERVER_API_URL}/public/reviews/tenant/${encodeURIComponent(tenantId)}`, {
+      headers: { accept: "application/json" },
+      next: { revalidate: SALON_PAGE_REVALIDATE_SECONDS },
+    });
+    if (!res.ok) return undefined;
+    return (await res.json()) as PublicReviews;
+  } catch {
+    return undefined;
+  }
+}
