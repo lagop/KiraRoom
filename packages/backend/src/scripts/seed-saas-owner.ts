@@ -118,6 +118,8 @@ export async function seedSaasOwner(): Promise<void> {
           name: 'Platform',
           slug: 'platform',
           description: 'SaaS Platform Owner Account',
+          // One of our own salons: out of the platform figures (audit 8 D11).
+          isInternal: true,
           plan: 'empresa',
           subscriptionStatus: 'active',
           currentPeriodStart: new Date(),

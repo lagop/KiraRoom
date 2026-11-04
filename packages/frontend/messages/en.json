@@ -976,7 +976,7 @@
       "status_past_due": "Payment failed",
       "status_suspended": "Suspended",
       "status_cancelled": "Cancelled",
-      "excluded_note": "Deleted salons and test salons (address starting with \"zz-\") are not counted.",
+      "excluded_note": "Deleted salons and salons marked internal or test are not counted.",
       "no_salons": "No salons yet",
       "no_data": "No data yet",
       "analytics_title": "Platform analytics",
@@ -1507,7 +1507,21 @@
         "invoice_emailed": "Invoice emailed"
       }
     },
-    "forgot_password": "Forgot your password?"
+    "forgot_password": "Forgot your password?",
+    "internal_salon": {
+      "title": "Internal or test salon",
+      "on": "One of our own salons: left out of the platform figures and alerts.",
+      "off": "A real salon: counted in the platform figures and alerts.",
+      "mark": "Mark as internal",
+      "unmark": "Mark as a real salon",
+      "confirm_mark": "Mark this salon as internal or test?",
+      "confirm_mark_body": "{name} will no longer count in the platform figures and alerts. The change is logged.",
+      "confirm_unmark": "Mark this salon as a real salon?",
+      "confirm_unmark_body": "{name} will count again in the platform figures and alerts. The change is logged.",
+      "saved_on": "Salon marked as internal",
+      "saved_off": "Salon marked as real",
+      "failed": "Could not change it. Try again."
+    }
   },
   "dashboard": {
     "title": "Dashboard",

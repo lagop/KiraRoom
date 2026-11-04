@@ -5523,6 +5523,14 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
+  /** Audit 8 D11: one of KiraRoom's own salons, left out of platform figures. Audit-logged. */
+  async setSaasTenantInternal(id: string, isInternal: boolean): Promise<{ id: string; isInternal: boolean }> {
+    return this.request(`/saas/tenants/${id}/internal`, {
+      method: "PATCH",
+      body: JSON.stringify({ isInternal }),
+    });
+  }
+
   /** "Cerrar todas las sesiones": every session of this account ends, this one too. */
   async logoutEverywhere(): Promise<void> {
     try {

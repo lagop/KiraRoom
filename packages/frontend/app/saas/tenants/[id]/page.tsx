@@ -25,6 +25,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/components/ui/use-toast";
 import { GrowthIndicator } from "../../components/metric-card";
 import { SharedIdentityNotice } from "../../components/shared-identity-notice";
+import { InternalSalonCard } from "../../components/internal-salon-card";
 import type { SharedIdentityWarning } from "@/lib/shared-identity";
 import { saveBlob } from "@/lib/share-download";
 import {
@@ -40,6 +41,7 @@ interface Tenant {
   id: string;
   name: string;
   slug: string;
+  isInternal?: boolean;
   description: string | null;
   logo: string | null;
   website: string | null;
@@ -358,6 +360,15 @@ export default function TenantDetailPage() {
       )}
 
       <SharedIdentityNotice warnings={tenant.sharedIdentity} />
+
+      {!deleted && (
+        <InternalSalonCard
+          tenantId={tenant.id}
+          name={tenant.name}
+          isInternal={!!tenant.isInternal}
+          onChange={(isInternal) => setTenant((cur) => (cur ? { ...cur, isInternal } : cur))}
+        />
+      )}
 
       {/* Stats with Growth */}
       {stats && (
