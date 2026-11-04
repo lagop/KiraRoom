@@ -3,6 +3,7 @@ import {
   ApiTags,
   ApiOperation,
   ApiResponse } from "@nestjs/swagger";
+import { Throttle } from "@nestjs/throttler";
 import { BugReportService } from "./bug-report.service";
 import { SignedIn } from "../auth/decorators/signed-in.decorator";
 import { BugReportDto, MAX_BUG_CONTEXT_BYTES } from "./bug-report.dto";
@@ -40,6 +41,9 @@ export class BugReportController {
       "Submit a bug report. Anonymous-friendly. The report is emailed to the founder and persisted for the SaaS admin dashboard." })
   @ApiResponse({ status: 202, description: "Bug report accepted" })
   @SignedIn()
+  // Each report sends two emails: 5 an hour per address, with per-user and
+  // per-salon counters in the service.
+  @Throttle({ default: { ttl: 3_600_000, limit: 5 } })
   async submit(
     @Body() dto: BugReportDto,
     @Req() req?: any,
@@ -56,7 +60,8 @@ export class BugReportController {
       email: dto.email,
       context: dto.context,
       tenantId: user?.tenantId ?? null,
-      authorId: user?.id ?? null });
+      authorId: user?.id ?? null,
+      accountEmail: user?.email ?? null });
     return { ok: true, id };
   }
 }
