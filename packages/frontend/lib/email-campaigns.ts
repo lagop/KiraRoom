@@ -66,7 +66,13 @@ export function quotaSummary(q: EmailMarketingQuota): { title: string; detail: s
       `Incluye ${formatCount(q.packRemaining)} del bono de emails, que no caducan y se usan cuando se acaban los del mes.`,
     );
   }
-  parts.push(`El ${spanishDay(q.resetsOn)} vuelves a tener ${formatCount(q.cap)}.`);
+  if (q.neverPaidCap) {
+    parts.push(
+      `Hasta que pagues tu primera cuota, el límite es de ${formatCount(q.cap)} al mes; al activar tu suscripción tendrás los de tu plan.`,
+    );
+  } else {
+    parts.push(`El ${spanishDay(q.resetsOn)} vuelves a tener ${formatCount(q.cap)}.`);
+  }
   return { title, detail: parts.join(" "), exhausted: q.remaining <= 0 };
 }
 

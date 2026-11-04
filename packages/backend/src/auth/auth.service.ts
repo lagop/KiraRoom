@@ -21,6 +21,7 @@ import {
   TENANT_SLUG_UNAVAILABLE,
 } from "../saas/saas.helpers";
 import { normalizeEmail } from "./email-normalize";
+import { tenantOwnerEmailVerified } from "./email-verified/owner-email-verified";
 import { TERMS_VERSION } from "./legal-terms";
 import { AuditLogService } from "../saas/audit-log.service";
 import { EmailService } from "../notifications/services/email.service";
@@ -392,13 +393,20 @@ export class AuthService {
     });
   }
 
-  /** Whether the signed-in user's email is confirmed (for the panel's notice). */
-  async emailVerificationStatus(userId: string): Promise<{ verified: boolean; email: string | null }> {
+  /**
+   * Whether the signed-in user's email is confirmed (for the panel's notice),
+   * and whether the salon has an owner with a confirmed email: until it has,
+   * campaigns, mass sends and Stripe are blocked (D1, VerifiedOwnerEmailGuard).
+   */
+  async emailVerificationStatus(
+    userId: string,
+  ): Promise<{ verified: boolean; email: string | null; salonVerified: boolean }> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { isEmailVerified: true, email: true },
+      select: { isEmailVerified: true, email: true, tenantId: true },
     });
-    return { verified: Boolean(user?.isEmailVerified), email: user?.email ?? null };
+    const salonVerified = user ? await tenantOwnerEmailVerified(this.prisma, user.tenantId) : false;
+    return { verified: Boolean(user?.isEmailVerified), email: user?.email ?? null, salonVerified };
   }
 
   /**

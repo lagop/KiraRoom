@@ -134,6 +134,12 @@ export interface PublicSalonPage {
    */
   acceptsBookings?: boolean;
   /**
+   * False until the salon's owner has confirmed their email (D1): the page
+   * works, but says noindex and is left out of the sitemaps. Absent from
+   * older servers (= true).
+   */
+  indexable?: boolean;
+  /**
    * Why acceptsBookings is false: "read_only" (as above) or
    * "no_professional" (nobody active to book with yet: "Este salón todavía
    * no acepta reservas online"). Null when it takes bookings; absent from
@@ -198,8 +204,8 @@ export function publicImageSrc(url: string | null | undefined, apiBase = publicA
  * bookings, nor while it has no active service yet (a page created a minute
  * ago, with nothing on it).
  */
-export function salonPageIndexable(page: Pick<PublicSalonPage, "acceptsBookings" | "services">): boolean {
-  return acceptsBookings(page) && page.services.length > 0;
+export function salonPageIndexable(page: Pick<PublicSalonPage, "acceptsBookings" | "services" | "indexable">): boolean {
+  return acceptsBookings(page) && page.indexable !== false && page.services.length > 0;
 }
 
 /**
@@ -512,11 +518,11 @@ const xmlEscape = (s: string) =>
 
 /** Empty while the salon takes no bookings (the page itself says noindex then). */
 export function salonSitemapXml(
-  page: Pick<PublicSalonPage, "acceptsBookings" | "updatedAt">,
+  page: Pick<PublicSalonPage, "acceptsBookings" | "updatedAt" | "indexable">,
   canonical: string,
 ): string {
   const lastmod = new Date(page.updatedAt);
-  const entry = acceptsBookings(page)
+  const entry = acceptsBookings(page) && page.indexable !== false
     ? `  <url>\n    <loc>${xmlEscape(canonical)}</loc>\n${
         Number.isNaN(lastmod.getTime()) ? "" : `    <lastmod>${lastmod.toISOString()}</lastmod>\n`
       }  </url>\n`

@@ -76,6 +76,10 @@ model Tenant {
   /// daily GracePeriodScheduler flips status to `suspended`.
   paymentFailedAt        DateTime?
   gracePeriodEndsAt      DateTime?
+  /// First time the salon paid KiraRoom (a Stripe invoice with an amount
+  /// paid). Null while it never has: its trial sends at most 200 campaign
+  /// emails a month (owner decision D2, 2026-11-04).
+  firstPaidAt            DateTime?
   /// Soft-delete (rev): when set, the tenant is hidden from SaaS listings
   /// but its data (users, appointments, payments, etc.) is preserved so
   /// an accidental delete can be reversed via Prisma Studio.

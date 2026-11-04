@@ -3544,11 +3544,16 @@
   },
   "emailVerifyNotice": {
     "title": "Confirma tu email.",
-    "body": "Te enviamos un enlace a {email} al crear la cuenta. Si no lo encuentras o ha caducado, pide otro.",
+    "body": "Te enviamos un enlace a {email} al crear la cuenta. Hasta que lo confirmes no podrás enviar campañas ni conectar Stripe, y tu web no aparecerá en Google. Si no lo encuentras o ha caducado, pide otro.",
     "sent": "Enlace enviado a {email}. Dura 48 horas; revisa también la carpeta de spam.",
     "resend": "Reenviar el email",
     "sending": "Enviando...",
     "failed": "No hemos podido enviar el email. Inténtalo de nuevo en unos minutos.",
     "dismiss": "Ocultar este aviso"
+  },
+  "emailVerifyRequired": {
+    "title": "Confirma tu email para enviar campañas",
+    "ownerBody": "Puedes preparar campañas, pero no enviarlas hasta confirmar {email} con el enlace que te enviamos. Tampoco podrás conectar Stripe, y tu web no aparecerá en Google hasta entonces.",
+    "teamBody": "La dueña del salón tiene que confirmar su email antes de que se puedan enviar campañas. Puede pedir otro enlace desde el aviso de arriba del panel."
   }
 }

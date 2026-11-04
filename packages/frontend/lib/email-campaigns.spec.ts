@@ -131,6 +131,12 @@ check(
   "bono emails mentioned only when there are some",
   !/bono/.test(quotaSum.detail) && /bono de emails, que no caducan/.test(quotaSummary({ ...quota, packRemaining: 300, remaining: 800 }).detail),
 );
+const trialSum = quotaSummary({ ...quota, cap: 200, planSent: 50, planRemaining: 150, remaining: 150, neverPaidCap: true });
+check(
+  "never paid: says the 200 last until the first payment",
+  /Hasta que pagues tu primera cuota, el límite es de 200 al mes/.test(trialSum.detail) && !/vuelves a tener/.test(trialSum.detail),
+  trialSum.detail,
+);
 check("fits: no warning", quotaWarning(400, quota) === null);
 const warning = quotaWarning(700, quota) ?? "";
 check(

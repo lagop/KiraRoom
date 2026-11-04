@@ -161,8 +161,8 @@ export class AuthController {
 
   /**
    * A new confirmation link for the signed-in user, by email. At most 3 an
-   * hour per account (Redis). Nothing is blocked yet for an unconfirmed
-   * email; this only lets someone whose link expired get another.
+   * hour per account (Redis). Until the owner confirms, campaigns, mass
+   * sends and Stripe stay blocked (D1); this lets them get a new link.
    */
   @Post("resend-verification")
   @SignedIn()
