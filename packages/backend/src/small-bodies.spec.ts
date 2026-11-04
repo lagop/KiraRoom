@@ -72,13 +72,13 @@ describe("small bodies", () => {
     await expect(parse({ credits: 0.5 })).rejects.toBeDefined();
   });
 
-  it("the platform LLM form: strings, a URL or null", async () => {
+  it("the platform LLM form: strings or null, and no base URL (audit 8 P5)", async () => {
     const parse = bodyParser(PlatformLlmConfigController, "update");
     // What app/saas/settings/platform-llm/page.tsx saves.
-    const body = { provider: "anthropic", defaultModel: "claude-haiku-4-5", baseUrl: null, workspaceId: null };
-    expect(await parse(body)).toEqual(body);
-    expect((await parse({ baseUrl: "http://localhost:11434" })).baseUrl).toBe("http://localhost:11434");
+    const body = { provider: "anthropic", defaultModel: "claude-haiku-4-5", workspaceId: null };
+    expect({ ...(await parse(body)) }).toEqual(body);
+    // A base URL is no longer a setting: it is dropped, never stored.
+    expect((await parse({ baseUrl: "http://localhost:11434" })).baseUrl).toBeUndefined();
     await expect(parse({ apiKey: 12345 })).rejects.toBeDefined();
-    await expect(parse({ baseUrl: "not a url" })).rejects.toBeDefined();
   });
 });

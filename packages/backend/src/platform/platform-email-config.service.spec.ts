@@ -100,14 +100,21 @@ describe("PlatformEmailConfigService", () => {
     expect(service.getConfig().apiKey.source).toBe("server");
   });
 
-  it("a stored value that cannot be decrypted falls back to the server's", async () => {
+  it("a stored value that cannot be decrypted leaves email unconfigured, not on the server's key (P4)", async () => {
     const { service, encryption } = build({ env: { RESEND_API_KEY: otherKey } });
     await service.update({ apiKey: key }, admin);
     encryption.decrypt.mockImplementation(() => {
       throw new Error("bad auth tag");
     });
     await service.onModuleInit();
-    expect(service.current().apiKey).toBe(otherKey);
+    expect(service.current().apiKey).toBeNull();
+    expect(service.getConfig().apiKey.source).toBe("unreadable");
+    expect((await service.sendTest(admin)).message).toMatch(/no se puede descifrar/);
+  });
+
+  it("the test checks a typed key before sending anything", async () => {
+    const { service } = build();
+    expect(await service.sendTest(admin, { apiKey: "not-a-resend-key" })).toEqual({ ok: false, message: expect.stringMatching(/re_/) });
   });
 
   it("the test email needs a key and a sender", async () => {

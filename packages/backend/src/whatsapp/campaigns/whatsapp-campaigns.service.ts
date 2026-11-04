@@ -14,6 +14,7 @@ import {
   withinCampaignWindow,
 } from "./campaign-template";
 import { DISCONNECTED_REASON, TOKEN_EXPIRED_REASON, accountLevelReason } from "./meta-account-errors";
+import { MonitoredJob } from "../../common/ops-alerts/ops-alert-sink";
 
 export interface CampaignInput {
   name: string;
@@ -309,6 +310,7 @@ export class WhatsAppCampaignsService {
   // ─── Dispatcher ───────────────────────────────────────────────────────
 
   @Cron(CronExpression.EVERY_MINUTE)
+  @MonitoredJob("WhatsAppCampaignsService.dispatch")
   async dispatch(): Promise<void> {
     if (this.running) return;
     this.running = true;

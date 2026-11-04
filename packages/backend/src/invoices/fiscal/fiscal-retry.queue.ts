@@ -1,7 +1,8 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Optional } from "@nestjs/common";
 import { PrismaService } from "../../common/prisma/prisma.service";
 import { EmailService } from "../../notifications/services/email.service";
 import { appBaseUrl } from "../../common/app-base-url";
+import { OpsAlertService } from "../../common/ops-alerts/ops-alert.service";
 
 /**
  * In-process retry scheduler for fiscal Spain dispatches.
@@ -38,6 +39,7 @@ export class FiscalRetryQueue {
   constructor(
     private readonly prisma: PrismaService,
     private readonly email: EmailService,
+    @Optional() private readonly opsAlerts?: OpsAlertService,
   ) {}
 
   /**
@@ -88,6 +90,15 @@ export class FiscalRetryQueue {
             invoiceId,
             result.error ?? lastError,
           );
+          // The owner is emailed above; the platform owner hears too (audit 8 D15).
+          await this.opsAlerts
+            ?.notify(
+              "fiscal_rejected",
+              `factura ${invoiceId} sin enviar tras ${FISCAL_RETRY_MAX_ATTEMPTS} intentos`,
+              `Factura: ${invoiceId}
+Último error: ${result.error ?? lastError ?? "sin detalle"}`,
+            )
+            .catch(() => undefined);
           return;
         }
         await this.schedule(

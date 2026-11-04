@@ -150,7 +150,7 @@ export function BugReportModal({ open, onClose }: BugReportModalProps) {
             <p style={{ color: "#64748b", marginBottom: 16 }}>
               {email.trim() ? (
                 <>
-                  Te hemos enviado un correo de confirmación a{" "}
+                  Te llegará un acuse a{" "}
                   <strong>{email.trim()}</strong>.
                 </>
               ) : (

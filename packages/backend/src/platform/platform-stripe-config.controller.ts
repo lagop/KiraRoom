@@ -3,16 +3,30 @@ import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { Roles } from "../auth/decorators/roles.decorator";
-import { PlatformStripeConfigPublic, PlatformStripeConfigService } from "./platform-stripe-config.service";
-import { UpdatePlatformStripeConfigDto } from "./platform-stripe-config.dto";
+import {
+  PlatformStripeConfigPublic,
+  PlatformStripeConfigService,
+  PlatformStripeConfigUpdate,
+  StripeChangePreview,
+} from "./platform-stripe-config.service";
+import { TestPlatformStripeDto, UpdatePlatformStripeConfigDto } from "./platform-stripe-config.dto";
 
 interface AuthedRequest {
   user: { id: string; role: string };
 }
 
+function updateOf(body: UpdatePlatformStripeConfigDto): PlatformStripeConfigUpdate {
+  return {
+    secretKey: body.secretKey,
+    publishableKey: body.publishableKey,
+    webhookSecret: body.webhookSecret,
+    otherWebhookSecret: body.otherWebhookSecret,
+  };
+}
+
 /**
  * KiraRoom's own Stripe account settings, for the saas_owner only. GET never
- * returns the secret key or the webhook secret; PUT takes them write-only.
+ * returns the secret key or the webhook secrets; PUT takes them write-only.
  */
 @ApiTags("platform-stripe-config")
 @ApiBearerAuth()
@@ -30,21 +44,24 @@ export class PlatformStripeConfigController {
   @Put()
   @Roles("saas_owner")
   update(@Req() req: AuthedRequest, @Body() body: UpdatePlatformStripeConfigDto): Promise<PlatformStripeConfigPublic> {
-    return this.service.update(
-      {
-        secretKey: body.secretKey,
-        publishableKey: body.publishableKey,
-        webhookSecret: body.webhookSecret,
-        taxEnabled: body.taxEnabled,
-      },
-      { id: req.user.id, role: req.user.role },
-    );
+    return this.service.update(updateOf(body), { id: req.user.id, role: req.user.role });
   }
 
-  /** Reads the Stripe account the key belongs to (name, mode, can it charge). */
+  /**
+   * What PUT with this body would do, without saving: the resulting mode,
+   * why it would be refused, and on a mode change the salons with the
+   * other mode's customer or subscription.
+   */
+  @Post("preview")
+  @Roles("saas_owner")
+  preview(@Body() body: UpdatePlatformStripeConfigDto): Promise<StripeChangePreview> {
+    return this.service.preview(updateOf(body));
+  }
+
+  /** Reads the Stripe account a key belongs to (name, mode, can it charge): the typed one, else the one in force. */
   @Post("test")
   @Roles("saas_owner")
-  test(): Promise<{ ok: boolean; message: string }> {
-    return this.service.testConnection();
+  test(@Body() body: TestPlatformStripeDto): Promise<{ ok: boolean; message: string }> {
+    return this.service.testConnection(body?.secretKey);
   }
 }

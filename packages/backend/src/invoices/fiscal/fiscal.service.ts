@@ -7,6 +7,7 @@ import { SiiService } from "./sii.service";
 import { FiscalRetryQueue } from "./fiscal-retry.queue";
 import { FiscalMode, Invoice, InvoiceFiscalStatus } from "@prisma/client";
 import { createHash } from "crypto";
+import { OpsAlertService } from "../../common/ops-alerts/ops-alert.service";
 
 export interface FiscalDispatchInput {
   invoiceId: string;
@@ -89,7 +90,30 @@ export class FiscalService {
     private readonly sii: SiiService,
     @Optional() private readonly retryQueue?: FiscalRetryQueue,
     @Optional() private readonly invoiceServiceRef?: any,
+    @Optional() private readonly opsAlerts?: OpsAlertService,
   ) {}
+
+  /**
+   * An invoice the tax authority rejected, or that failed for good (not
+   * retried): the platform owner hears about it by email, at most one an
+   * hour (audit 8 D15). Best effort; never throws.
+   */
+  private async alertFinalFailure(invoice: any, mode: string, error?: string | null): Promise<void> {
+    if (!this.opsAlerts) return;
+    await this.opsAlerts
+      .notify(
+        "fiscal_rejected",
+        `${mode}: factura ${invoice.series ?? ""}${invoice.number ?? ""}`,
+        `Salón (tenantId): ${invoice.tenantId}
+Factura: ${invoice.id}
+Modo: ${mode}
+Error: ${error ?? "sin detalle"}
+
+` +
+          "Revisa la factura en el panel del salón y el certificado o los datos fiscales antes de reenviarla.",
+      )
+      .catch(() => undefined);
+  }
 
   /**
    * Dispatch an invoice through its configured fiscal pipeline. Idempotent
@@ -322,6 +346,7 @@ export class FiscalService {
           fiscalError: result.error ?? null,
         },
       });
+      await this.alertFinalFailure(invoice, "envío a Hacienda", result.error);
       return;
     }
     // result.status === 'error'
@@ -338,6 +363,7 @@ export class FiscalService {
         fiscalError: result.error ?? null,
       },
     });
+    await this.alertFinalFailure(invoice, "envío a Hacienda", result.error);
   }
 
   private async dispatchVerifactu(invoice: any) {
@@ -414,7 +440,9 @@ export class FiscalService {
 
     if (this.isRetryableError(result.error)) {
       await this.enqueueRetry(invoice, result.error);
+      return;
     }
+    await this.alertFinalFailure(invoice, "Verifactu", result.error);
   }
 
   private async dispatchTicketBai(invoice: any) {
@@ -493,7 +521,9 @@ export class FiscalService {
 
     if (this.isRetryableError(result.error)) {
       await this.enqueueRetry(invoice, result.error);
+      return;
     }
+    await this.alertFinalFailure(invoice, "TicketBAI", result.error);
   }
 
   private async dispatchSii(invoice: any) {

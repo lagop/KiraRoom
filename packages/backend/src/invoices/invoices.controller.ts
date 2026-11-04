@@ -42,6 +42,7 @@ import { RESERVED_SERIES } from "./invoice-numbering";
 import { FISCAL_SETTINGS_SELECT, fiscalSettingsView, issuerIdentityPatch, normalizeSeries } from "./fiscal-identity";
 import { AuditLogService } from "../saas/audit-log.service";
 import { PlatformStripeConfigService } from "../platform/platform-stripe-config.service";
+import { livemodeOf, sameStripeMode } from "../platform/stripe-settings";
 import { BILLING_IDENTITY_SELECT, syncBillingCustomer } from "../payments/billing-customer";
 import { taxLabelOf, taxRegimeOf, TAX_REGIME_DEFAULT_RATE } from "@kira/shared";
 import { territoryTaxRegime } from "./salon-tax-settings";
@@ -370,9 +371,11 @@ export class InvoicesController {
       if (!stripe) return;
       const tenant = await this.prisma.tenant.findUnique({
         where: { id: tenantId },
-        select: { ...BILLING_IDENTITY_SELECT, stripeCustomerId: true },
+        select: { ...BILLING_IDENTITY_SELECT, stripeCustomerId: true, stripeCustomerLivemode: true },
       });
       if (!tenant?.stripeCustomerId) return;
+      // A customer of the other Stripe mode does not exist for these keys.
+      if (!sameStripeMode(tenant.stripeCustomerLivemode, livemodeOf(this.platformStripe?.mode?.() ?? "none"))) return;
       await syncBillingCustomer(stripe, tenant.stripeCustomerId, tenant, this.logger);
     } catch (err) {
       this.logger.warn(`Stripe billing identity of tenant ${tenantId} not updated: ${(err as Error).message}`);

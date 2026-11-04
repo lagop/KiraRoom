@@ -14,6 +14,7 @@ import {
 } from "../consent/marketing-consent";
 import { EmailSuppressionService } from "../email-campaigns/email-suppression.service";
 import { EmailUnsubscribeService } from "../email-campaigns/email-unsubscribe.service";
+import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
 
 interface SendResult {
   ok: boolean;
@@ -103,6 +104,7 @@ export class RebookingDispatcherService {
   ) {}
 
   @Cron(CronExpression.EVERY_HOUR)
+  @MonitoredJob("RebookingDispatcherService.runHourlyTick")
   async runHourlyTick() {
     return this.runDailyTick();
   }

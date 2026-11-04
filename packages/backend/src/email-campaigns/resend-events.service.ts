@@ -1,4 +1,5 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Optional } from "@nestjs/common";
+import { OpsAlertService } from "../common/ops-alerts/ops-alert.service";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { EmailSuppressionService } from "./email-suppression.service";
@@ -72,11 +73,20 @@ export class ResendEventsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly suppressions: EmailSuppressionService,
+    @Optional() private readonly opsAlerts?: OpsAlertService,
   ) {}
 
   async handle(event: ResendWebhookEvent, eventId: string): Promise<void> {
     const emailId = event.data?.email_id;
     if (!emailId || !TRACKED[event.type]) return;
+
+    // A spike of bounces or complaints puts the shared Resend account at
+    // risk: the platform owner is emailed past a daily threshold (audit 8 D15).
+    if (event.type === "email.complained") {
+      await this.opsAlerts?.recordEmailEvent("complaint", eventId);
+    } else if (event.type === "email.bounced" && isPermanent(event.data?.bounce?.type)) {
+      await this.opsAlerts?.recordEmailEvent("bounce", eventId);
+    }
 
     const recipient = await this.prisma.emailCampaignRecipient.findFirst({
       where: { messageId: emailId },

@@ -4,6 +4,11 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import Stripe from 'stripe';
 import { cancelAtOf, checkoutTrialEnd, hasLivePlanSubscription, isAddOnItem, planItemOf } from '../plan-activation';
 import { PlatformStripeConfigService } from '../../platform/platform-stripe-config.service';
+import { keyMode, livemodeOf, sameStripeMode } from '../../platform/stripe-settings';
+
+/** A salon whose plan was contracted with the other Stripe mode's keys (P2). */
+export const OTHER_MODE_SUBSCRIPTION =
+  'Tu suscripción se contrató cuando KiraRoom cobraba en otro modo de Stripe (de pruebas o real) y ya no se puede gestionar aquí: contrata el plan de nuevo desde Facturación.';
 import { billingCustomerDetails, syncBillingCustomer, syncBillingTaxId } from '../billing-customer';
 import { aiConversationsApprox, aiMessageCap, formatCountEs, PLAN_AI_CONVERSATIONS } from '@kira/shared';
 
@@ -248,6 +253,22 @@ export class SubscriptionsService {
     return this.stripe !== null;
   }
 
+  /** Stripe's livemode for the keys in force (null without keys). */
+  private activeLivemode(): boolean | null {
+    return livemodeOf(keyMode(this.platformStripe.current().secretKey));
+  }
+
+  /**
+   * A subscription created with the other mode's keys (test while live is
+   * in force, or the other way round) does not exist for these keys: it
+   * cannot be changed here, and the salon contracts the plan again (P2).
+   */
+  assertSubscriptionInMode(tenant: { stripeSubscriptionLivemode?: boolean | null }) {
+    if (!sameStripeMode(tenant.stripeSubscriptionLivemode, this.activeLivemode())) {
+      throw new ConflictException(OTHER_MODE_SUBSCRIPTION);
+    }
+  }
+
   // Define subscription plans (rev 3)
   readonly plans: Record<PlanId, SubscriptionPlanDetails> = {
     esencial: {
@@ -458,7 +479,10 @@ export class SubscriptionsService {
       effectivePlan: this.effectivePlan(tenant.plan, inTrial),
       // Add-ons are items of the paid subscription (AddOnsService.purchase):
       // in trial, or without a subscription, they cannot be bought yet.
-      canBuyAddOns: tenant.subscriptionStatus === "active" && !!tenant.stripeSubscriptionId,
+      canBuyAddOns:
+        tenant.subscriptionStatus === "active" &&
+        !!tenant.stripeSubscriptionId &&
+        sameStripeMode(tenant.stripeSubscriptionLivemode, this.activeLivemode()),
     };
   }
 
@@ -602,7 +626,9 @@ export class SubscriptionsService {
       throw new Error('Invalid plan');
     }
 
-    if (hasLivePlanSubscription(tenant)) {
+    // A subscription of the other Stripe mode does not count: it does not
+    // exist for the keys in force, and the new checkout replaces it.
+    if (hasLivePlanSubscription(tenant) && sameStripeMode(tenant.stripeSubscriptionLivemode, this.activeLivemode())) {
       throw new BadRequestException(
         'Ya tienes una suscripción activa: cambia de plan en lugar de contratar otra.',
       );
@@ -621,7 +647,10 @@ export class SubscriptionsService {
     // which charged 298 EUR at a checkout advertised as 149 EUR.)
     const quantity = await this.billedLocations(tenantId, planId, locationCount);
 
-    let customerId = tenant.stripeCustomerId;
+    // A customer created with the other mode's keys does not exist for
+    // these: a new one is created (P2), and its mode stored with it.
+    const livemode = this.activeLivemode();
+    let customerId = sameStripeMode(tenant.stripeCustomerLivemode, livemode) ? tenant.stripeCustomerId : null;
 
     // Billed as the razón social, with the NIF and address from Ajustes >
     // Fiscal when the salon has them (B1).
@@ -639,7 +668,7 @@ export class SubscriptionsService {
 
       await this.prisma.tenant.update({
         where: { id: tenantId },
-        data: { stripeCustomerId: customerId },
+        data: { stripeCustomerId: customerId, stripeCustomerLivemode: livemode },
       });
       // Separately and best effort: Stripe refusing the NIF must not stop
       // the checkout (Checkout then asks for it).
@@ -886,6 +915,7 @@ export class SubscriptionsService {
         'Tu suscripción ya ha terminado: para volver, reactiva el plan desde Facturación.',
       );
     }
+    this.assertSubscriptionInMode(tenant);
     const stripe = this.stripe;
     if (!stripe) {
       throw new ServiceUnavailableException(
@@ -1081,6 +1111,7 @@ export class SubscriptionsService {
     if (!tenant || !tenant.stripeSubscriptionId) {
       throw new NotFoundException('No active subscription found');
     }
+    this.assertSubscriptionInMode(tenant);
 
     const planId = this.normalizePlan(newPlan);
     const planDetails = this.plans[planId];
@@ -1190,6 +1221,7 @@ export class SubscriptionsService {
     if (!tenant || !tenant.stripeSubscriptionId || tenant.subscriptionStatus === 'cancelled') {
       throw new NotFoundException('No tienes una suscripción activa: contrata el plan Empresa primero.');
     }
+    this.assertSubscriptionInMode(tenant);
     if (this.normalizePlan(tenant.plan) !== 'empresa') {
       throw new BadRequestException('Solo el plan Empresa se paga por local.');
     }
@@ -1471,6 +1503,9 @@ export class SubscriptionsService {
         "El tenant no tiene un cliente de Stripe asociado. Completa un pago primero.",
       );
     }
+    if (!sameStripeMode(tenant.stripeCustomerLivemode, this.activeLivemode())) {
+      throw new ConflictException(OTHER_MODE_SUBSCRIPTION);
+    }
     const session = await this.stripe.billingPortal.sessions.create({
       customer: tenant.stripeCustomerId,
       return_url: returnUrl,
@@ -1487,7 +1522,8 @@ export class SubscriptionsService {
       where: { id: tenantId },
     });
 
-    if (!tenant || !tenant.stripeCustomerId) {
+    // A customer of the other Stripe mode has no invoices for these keys.
+    if (!tenant || !tenant.stripeCustomerId || !sameStripeMode(tenant.stripeCustomerLivemode, this.activeLivemode())) {
       return [];
     }
 

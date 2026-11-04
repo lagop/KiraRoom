@@ -120,9 +120,9 @@ For DNS + HTTPS, see [docs/runbook.md](docs/runbook.md) "Deploy flow" and "Failu
 |---|---|
 | `JWT_SECRET` | **≥ 32 random chars.** SEC-1 refuses to boot otherwise. Generate with `openssl rand -base64 48`. |
 | `DATABASE_URL` | Postgres connection string |
-| `MINIMAX_API_KEY` | **Primary LLM provider key.** MiniMax is the Anthropic-API-compatible gateway used as the default for the virtual receptionist and Staff Copilot. `MINIMAX_BASE_URL` overrides the gateway URL (leave blank for the public endpoint). |
+| `ANTHROPIC_API_KEY` | LLM key for the virtual receptionist and Staff Copilot (Anthropic). Usually saved in the platform console (Ajustes > IA) instead, which overrides this one. |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Stripe payments. SEC-3 refuses to boot when `STRIPE_SECRET_KEY` is set but `STRIPE_WEBHOOK_SECRET` is missing in production. |
-| `META_TOKEN_ENCRYPTION_KEY` | AES key for Meta access tokens (≥ 32 chars) |
+| `META_TOKEN_ENCRYPTION_KEY` | **The master key that encrypts every stored secret** (base64 of 32 bytes, `openssl rand -base64 32`), not only Meta tokens: the console Stripe/Resend/AI keys, salons Stripe keys, WhatsApp/Meta/Telegram tokens, fiscal certificates, two-step secrets. **Never change it without re-encrypting** with `scripts/reencrypt-secrets.ts` (dry run first); see docs/runbook.md "Rotating META_TOKEN_ENCRYPTION_KEY". |
 | `OAUTH_STATE_SECRET` | **≥ 16 random chars.** Boot validator refuses to start in production without it. Generate with `openssl rand -base64 48`. |
 | `CORS_ALLOWED_ORIGINS` | Comma-separated exact origins. **No wildcards.** |
 | `NODE_ENV` | Must be `production` |
@@ -142,7 +142,7 @@ Full env template: `packages/backend/.env.example`.
 | Lint | `npx eslint src packages` (backend) / `npx eslint app components lib src` (frontend) | Every PR |
 | Type-check | `npx tsc --noEmit` | Every PR |
 | L4 unit | `npm test -- --testPathPattern=l4` | Every PR (CI gates on this) |
-| L1 e2e (real LLM) | `RUN_LLM_E2E_TESTS=1 MINIMAX_API_KEY=... npm test -- --testPathPattern=co-pilot-scenarios.spec` | Manual dispatch in CI (see `.github/workflows/ci-cd.yml`) |
+| L1 e2e (real LLM) | `RUN_LLM_E2E_TESTS=1 ANTHROPIC_API_KEY=... npm test -- --testPathPattern=co-pilot-scenarios.spec` | Manual dispatch in CI (see `.github/workflows/ci-cd.yml`) |
 | Playwright UX | `npx playwright test` | TODO — see RFC §15.2 |
 
 ## Documentation

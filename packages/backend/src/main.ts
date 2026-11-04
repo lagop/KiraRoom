@@ -1,9 +1,11 @@
-import { NestFactory } from "@nestjs/core";
+// Must stay the first import: Sentry has to be initialised before Nest,
+// Express and the HTTP modules load so their integrations can hook in.
+import "./instrument";
 import { Logger } from "@nestjs/common";
 import { createGlobalValidationPipe } from "./common/validation/global-validation-pipe";
 import { SwaggerModule, DocumentBuilder } from "@nestjs/swagger";
 import { json, urlencoded } from "express";
-import * as Sentry from "@sentry/node";
+import { NestFactory } from "@nestjs/core";
 import { Logger as PinoLogger } from "nestjs-pino";
 import { AppModule } from "./app.module";
 import { applyHttpHardening, swaggerEnabled } from "./common/http-hardening";
@@ -21,69 +23,6 @@ import {
 } from "./common/cors";
 import { WebDomainService } from "./web-domain/web-domain.service";
 
-const SENTRY_DSN = process.env.SENTRY_DSN || process.env.GLITCHTIP_DSN;
-const SENTRY_TRACES_SAMPLE_RATE = Number(
-  process.env.SENTRY_TRACES_SAMPLE_RATE || "0.1",
-);
-
-function initSentry(): void {
-  if (!SENTRY_DSN) {
-    // No DSN configured — silently skip. This keeps `npm run dev`,
-    // `npm test`, and CI builds running without an outbound network
-    // dependency. Setting SENTRY_DSN or GLITCHTIP_DSN in the
-    // environment is the entire activation step.
-    return;
-  }
-  Sentry.init({
-    dsn: SENTRY_DSN,
-    environment: process.env.NODE_ENV || "development",
-    release: process.env.SENTRY_RELEASE || undefined,
-    tracesSampleRate: SENTRY_TRACES_SAMPLE_RATE,
-    // Strip PII before sending. Anything in `event.request.data` is
-    // either a request body (which may contain PII: tax IDs, names,
-    // emails) or a payload we explicitly do not want a third-party
-    // Sentry-compatible host to see. The host is self-hosted
-    // (GlitchTip), but defense in depth is cheap.
-    beforeSend(event) {
-      if (event.request) {
-        if (event.request.data) delete event.request.data;
-        if (event.request.cookies) delete event.request.cookies;
-        // Spanish endpoints commonly accept PII via query parameters
-        // (e.g. `GET /clients?taxId=B12345678`). Strip the querystring
-        // before the URL leaves the box.
-        if (event.request.url) {
-          try {
-            const u = new URL(event.request.url);
-            u.search = "";
-            event.request.url = u.toString();
-          } catch {
-            /* not a parseable URL — leave alone */
-          }
-        }
-        if (event.request.query_string) delete event.request.query_string;
-      }
-      if (event.user) {
-        // Replace with a tenant-scoped opaque id; never send email.
-        if (event.user.email) delete event.user.email;
-        if (event.user.ip_address) delete event.user.ip_address;
-      }
-      return event;
-    },
-    // Same scrubbing applies to breadcrumbs (e.g. fetch() calls).
-    beforeBreadcrumb(breadcrumb) {
-      if (breadcrumb.data?.url) {
-        try {
-          const u = new URL(breadcrumb.data.url);
-          u.search = "";
-          breadcrumb.data.url = u.toString();
-        } catch {
-          /* not a parseable URL — leave alone */
-        }
-      }
-      return breadcrumb;
-    },
-  });
-}
 
 /**
  * SEC-1 (P2A-staff-copilot GA): JWT secret strength check at startup.
@@ -96,7 +35,6 @@ function initSentry(): void {
  */
 
 async function bootstrap(): Promise<void> {
-  initSentry();
 
   // SEC-1: fail fast on a missing or weak JWT secret. Tests can opt
   // out via ALLOW_WEAK_JWT_SECRET=1.
@@ -134,9 +72,10 @@ async function bootstrap(): Promise<void> {
   // instantiated, which happens during NestFactory.create above.
   app.useLogger(app.get(PinoLogger));
 
-  if (SENTRY_DSN) {
-    Sentry.setupExpressErrorHandler(app);
-  }
+  // Errors reach GlitchTip through SentryExceptionFilter (APP_FILTER in
+  // AppModule) and the scheduled-job wrapper. Sentry.setupExpressErrorHandler
+  // used to be mounted here, before Nest added its routes, where Nest's own
+  // exception handling meant it never saw an error (audit 8 D6).
 
   applyHttpHardening(app);
 

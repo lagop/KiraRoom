@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { Cron } from "@nestjs/schedule";
 import { AppointmentsService, PENDING_BOOKING_MAX_HOURS } from "./appointments.service";
+import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
 
 /**
  * Online bookings the salon has not confirmed within 48 hours are cancelled,
@@ -19,6 +20,7 @@ export class PendingBookingExpiryScheduler {
   constructor(private readonly appointments: AppointmentsService) {}
 
   @Cron("35 * * * *")
+  @MonitoredJob("PendingBookingExpiryScheduler.run")
   async run(): Promise<number> {
     try {
       const expired = await this.appointments.expireUnconfirmedOnlineBookings(new Date(), PENDING_BOOKING_MAX_HOURS);

@@ -5,6 +5,7 @@ import { salonToday } from "../analytics/analytics-metrics";
 import { safeTimeZone } from "../gift-cards/gift-card-expiry";
 import { deleteAppointmentRow } from "../appointments/appointment-delete";
 import { clientHasHistory, isForeignKeyViolation } from "../common/prisma/history-deletes";
+import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
 
 /** Rows looked at per run: the wizard makes at most one per salon. */
 const BATCH = 200;
@@ -35,6 +36,7 @@ export class TestBookingCleanupService {
   constructor(private readonly prisma: PrismaService) {}
 
   @Cron("17 * * * *")
+  @MonitoredJob("TestBookingCleanupService.runScheduled")
   async runScheduled(): Promise<void> {
     try {
       const r = await this.cleanup();

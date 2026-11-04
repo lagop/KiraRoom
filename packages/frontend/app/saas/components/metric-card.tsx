@@ -1,11 +1,13 @@
 "use client";
 
 import { TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { formatChange } from "@/lib/console-metrics";
 
 interface MetricCardProps {
   title: string;
   value: string | number;
-  change?: number;
+  /** Percent change; null when there is nothing to compare with (shows "—"). */
+  change?: number | null;
   changeLabel?: string;
   subtitle?: string;
   icon?: React.ReactNode;
@@ -22,7 +24,7 @@ export function MetricCard({
   valueColor = "text-gray-900",
 }: MetricCardProps) {
   const getTrendIcon = () => {
-    if (change === undefined || change === 0) {
+    if (change === undefined || change === null || change === 0) {
       return <Minus className="w-4 h-4 text-gray-400" />;
     }
     return change > 0 ? (
@@ -33,7 +35,7 @@ export function MetricCard({
   };
 
   const getTrendColor = () => {
-    if (change === undefined || change === 0) return "text-gray-500";
+    if (change === undefined || change === null || change === 0) return "text-gray-500";
     return change > 0 ? "text-indigo-600" : "text-red-600";
   };
 
@@ -44,13 +46,13 @@ export function MetricCard({
         {icon && <div className="text-gray-400">{icon}</div>}
       </div>
       <div className={`text-2xl font-bold ${valueColor} mb-1`}>
-        {typeof value === "number" ? value.toLocaleString() : value}
+        {typeof value === "number" ? value.toLocaleString("es-ES") : value}
       </div>
       {change !== undefined && (
         <div className="flex items-center space-x-1">
           {getTrendIcon()}
           <span className={`text-sm font-medium ${getTrendColor()}`}>
-            {change > 0 ? "+" : ""}{change.toFixed(1)}%
+            {formatChange(change)}
           </span>
           {changeLabel && (
             <span className="text-xs text-gray-400 ml-1">{changeLabel}</span>
@@ -63,14 +65,16 @@ export function MetricCard({
 }
 
 interface GrowthIndicatorProps {
-  value: number;
+  /** Percent change; null when there is nothing to compare with (shows "—"). */
+  value: number | null | undefined;
   suffix?: string;
   label?: string;
 }
 
-export function GrowthIndicator({ value, suffix = "%", label }: GrowthIndicatorProps) {
-  const isPositive = value > 0;
-  const isNeutral = value === 0;
+export function GrowthIndicator({ value, label }: GrowthIndicatorProps) {
+  const known = value !== null && value !== undefined && Number.isFinite(value);
+  const isPositive = known && (value as number) > 0;
+  const isNeutral = !known || value === 0;
 
   return (
     <div className="flex items-center space-x-1">
@@ -82,7 +86,7 @@ export function GrowthIndicator({ value, suffix = "%", label }: GrowthIndicatorP
         <TrendingDown className="w-3 h-3 text-red-500" />
       )}
       <span className={`text-sm font-medium ${isNeutral ? "text-gray-500" : isPositive ? "text-indigo-600" : "text-red-600"}`}>
-        {isPositive ? "+" : ""}{value.toFixed(1)}{suffix}
+        {formatChange(value)}
       </span>
       {label && <span className="text-xs text-gray-400">{label}</span>}
     </div>
