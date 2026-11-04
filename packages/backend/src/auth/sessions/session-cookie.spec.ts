@@ -1,3 +1,4 @@
+import { noLimits, noTurnstile } from "../abuse/abuse-checks.testing";
 import { UnauthorizedException } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import { AuthSessionsService, ROTATION_GRACE_MS } from "./auth-sessions.service";
@@ -219,7 +220,7 @@ describe("AuthController refresh, login and logout", () => {
       endSession: jest.fn(async () => undefined),
       logoutEverywhere: jest.fn(async () => undefined),
     };
-    const c = new AuthController(authService as any, {} as any, {} as any);
+    const c = new AuthController(authService as any, {} as any, {} as any, noTurnstile(), noLimits());
     const res = { cookie: jest.fn(), clearCookie: jest.fn() };
     return { c, authService, res };
   }

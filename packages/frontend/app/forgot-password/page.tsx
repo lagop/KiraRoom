@@ -3,7 +3,8 @@
 import { useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { AlertCircle, CheckCircle2 } from "lucide-react";
-import apiClient from "@/lib/api";
+import apiClient, { ApiError } from "@/lib/api";
+import { TurnstileWidget, isTurnstileConfigured } from "@/src/components/auth/turnstile-widget";
 import { useTranslations } from "@/lib/use-translation";
 
 /**
@@ -19,16 +20,25 @@ function ForgotPasswordPageContent() {
   const [loading, setLoading] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState("");
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const [captchaReset, setCaptchaReset] = useState(0);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    if (isTurnstileConfigured() && !captchaToken) {
+      setError(t("signup.captchaRequired"));
+      return;
+    }
     setLoading(true);
     try {
-      await apiClient.forgotPassword(email.trim(), salon);
+      await apiClient.forgotPassword(email.trim(), salon, captchaToken ?? undefined);
       setSent(true);
-    } catch {
-      setError(t("password_reset.error"));
+    } catch (err) {
+      // The server's own Spanish reason (captcha, too many tries) when it gave one.
+      setError(err instanceof ApiError && err.status < 500 && err.message ? err.message : t("password_reset.error"));
+      setCaptchaToken(null);
+      setCaptchaReset((n) => n + 1);
     } finally {
       setLoading(false);
     }
@@ -68,6 +78,7 @@ function ForgotPasswordPageContent() {
                   required
                 />
               </div>
+              <TurnstileWidget onToken={setCaptchaToken} resetKey={captchaReset} action="forgot-password" />
               <button
                 type="submit"
                 disabled={loading}

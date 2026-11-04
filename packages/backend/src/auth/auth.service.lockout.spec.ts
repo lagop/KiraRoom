@@ -1,6 +1,6 @@
 import { UnauthorizedException } from "@nestjs/common";
 import * as bcrypt from "bcryptjs";
-import { AuthService } from "./auth.service";
+import { AuthService, INVALID_CREDENTIALS } from "./auth.service";
 
 /**
  * SEC-8: the failed-login lockout was written and never read.
@@ -99,8 +99,8 @@ describe("SEC-8: AuthService.login honours lockedUntil", () => {
     );
 
     await expect(
-      auth.login({ email: "owner@salon.test", password: "whatever" }),
-    ).rejects.toThrow(/Try again in 10 minutes/);
+      auth.login({ email: "owner@salon.test", password: "correct-horse-battery" }),
+    ).rejects.toThrow(/Vuelve a intentarlo en 10 minutos/);
   });
 
   it("uses the singular for the last minute", async () => {
@@ -109,8 +109,87 @@ describe("SEC-8: AuthService.login honours lockedUntil", () => {
     );
 
     await expect(
-      auth.login({ email: "owner@salon.test", password: "whatever" }),
-    ).rejects.toThrow(/Try again in 1 minute\./);
+      auth.login({ email: "owner@salon.test", password: "correct-horse-battery" }),
+    ).rejects.toThrow(/Vuelve a intentarlo en 1 minuto\./);
+  });
+
+  it("S10: with a wrong password a locked account answers like any wrong password", async () => {
+    // Saying "locked" before checking the password told a stranger the
+    // account exists. Now only the right password learns about the lock.
+    const { auth, prisma } = buildAuth(
+      activeUser({ loginAttempts: 5, lockedUntil: new Date(Date.now() + 20 * 60 * 1000) }),
+    );
+
+    await expect(
+      auth.login({ email: "owner@salon.test", password: "wrong-password" }),
+    ).rejects.toThrow(INVALID_CREDENTIALS);
+    // ...and does not extend the lock.
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it("S10: a deactivated account with a wrong password says nothing about being deactivated", async () => {
+    const { auth } = buildAuth(activeUser({ isActive: false }));
+
+    await expect(
+      auth.login({ email: "owner@salon.test", password: "wrong-password" }),
+    ).rejects.toThrow(INVALID_CREDENTIALS);
+  });
+
+  it("S10: once the lock has run out the count starts again", async () => {
+    // loginAttempts stayed at 5 after the 30 minutes, so the first slip
+    // after the lock locked the account straight away.
+    const { auth, prisma } = buildAuth(
+      activeUser({ loginAttempts: 5, lockedUntil: new Date(Date.now() - 60 * 1000) }),
+    );
+
+    await expect(
+      auth.login({ email: "owner@salon.test", password: "wrong-password" }),
+    ).rejects.toThrow(INVALID_CREDENTIALS);
+
+    const written = prisma.user.update.mock.calls[0][0].data;
+    expect(written.loginAttempts).toBe(1);
+    expect(written.lockedUntil).toBeNull();
+  });
+
+  it("S4: an address typed with capitals finds the account", async () => {
+    const { auth, prisma } = buildAuth(activeUser());
+
+    await auth.login({ email: "  Owner@Salon.TEST ", password: "correct-horse-battery" });
+
+    expect(prisma.user.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { email: "owner@salon.test" } }),
+    );
+  });
+
+  it("S4: a row the migration left with capitals is still found, ignoring case", async () => {
+    const { auth, prisma } = buildAuth(null);
+    prisma.user.findMany = jest.fn().mockResolvedValue([activeUser({ email: "Owner@Salon.test" })]);
+
+    const result = await auth.login({ email: "owner@salon.test", password: "correct-horse-battery" });
+
+    expect((result as any).user.email).toBe("Owner@Salon.test");
+    expect(prisma.user.findMany.mock.calls[0][0].where).toEqual({
+      email: { equals: "owner@salon.test", mode: "insensitive" },
+    });
+  });
+
+  it("S4: with two such rows the password decides which account it is", async () => {
+    const { auth, prisma } = buildAuth(null);
+    const other = activeUser({ id: "user-2", email: "OWNER@salon.test", passwordHash: bcrypt.hashSync("another-one-1", 4) });
+    prisma.user.findMany = jest.fn().mockResolvedValue([other, activeUser({ email: "Owner@Salon.test" })]);
+
+    const result = await auth.login({ email: "owner@salon.test", password: "correct-horse-battery" });
+
+    expect((result as any).user.id).toBe("user-1");
+  });
+
+  it("an unknown address gets the same answer as a wrong password", async () => {
+    const { auth, prisma } = buildAuth(null);
+    prisma.user.findMany = jest.fn().mockResolvedValue([]);
+
+    await expect(
+      auth.login({ email: "nobody@salon.test", password: "whatever-1" }),
+    ).rejects.toThrow(INVALID_CREDENTIALS);
   });
 
   it("lets an expired lock through", async () => {

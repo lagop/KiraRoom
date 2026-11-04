@@ -488,13 +488,24 @@
     },
     "languageEs": "Spanish",
     "languageEn": "English",
-    "terms": "I accept the terms of service and the privacy policy.",
+    "terms": "I accept the Terms of Service (including the data processing agreement, art. 28 GDPR) and the Privacy Policy.",
     "termsRequired": "Please accept the terms.",
     "submit": "Create free account",
     "submitting": "Creating account...",
     "errorGeneric": "Could not create account.",
     "loginLink": "I already have an account",
-    "loginCta": "Log in"
+    "loginCta": "Log in",
+    "termsBefore": "I accept the",
+    "termsLink": "Terms of Service",
+    "termsDpa": "(including the data processing agreement, art. 28 GDPR) and the",
+    "privacyLink": "Privacy Policy",
+    "webPreview": "Your website:",
+    "showPassword": "Show password",
+    "hidePassword": "Hide password",
+    "passwordTooShort": "The password must be at least 8 characters.",
+    "captchaRequired": "Please confirm you are not a robot and try again.",
+    "emailTakenLogin": "Log in",
+    "emailTakenReset": "I forgot my password"
   },
   "billing": {
     "title": "Billing and plan",
@@ -3144,7 +3155,12 @@
     "invalid": "This link has expired, has already been used or isn't valid. Confirmation links last 48 hours.",
     "error": "We couldn't check the link. Please try again in a few minutes.",
     "retry": "Try again",
-    "back_to_login": "Back to log in"
+    "back_to_login": "Back to log in",
+    "resend": "Resend the email",
+    "resend_sent": "We've sent you a new link. It lasts 48 hours; check your spam folder too.",
+    "already_verified": "Your email is already confirmed. Nothing else to do.",
+    "resend_failed": "We couldn't send the email. Please try again in a few minutes.",
+    "resend_signed_out": "Log in and ask for a new link from the \"Confirm your email\" notice in the dashboard."
   },
   "waitList": {
     "title": "Waiting list",
@@ -3525,5 +3541,14 @@
     "you": "Client",
     "assistant": "Assistant",
     "notFound": "This conversation no longer exists."
+  },
+  "emailVerifyNotice": {
+    "title": "Confirm your email.",
+    "body": "We sent a link to {email} when you signed up. If you can't find it or it expired, ask for another.",
+    "sent": "Link sent to {email}. It lasts 48 hours; check your spam folder too.",
+    "resend": "Resend the email",
+    "sending": "Sending...",
+    "failed": "We couldn't send the email. Please try again in a few minutes.",
+    "dismiss": "Hide this notice"
   }
 }

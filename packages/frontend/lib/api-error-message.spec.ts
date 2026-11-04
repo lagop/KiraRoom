@@ -4,7 +4,7 @@
  * Run: npx ts-node --project tsconfig.test.json --transpile-only lib/api-error-message.spec.ts
  */
 
-import { FORBIDDEN_MESSAGE, apiErrorMessage } from "./api-error-message";
+import { FORBIDDEN_MESSAGE, TOO_MANY_REQUESTS_MESSAGE, apiErrorMessage } from "./api-error-message";
 
 let pass = 0;
 let fail = 0;
@@ -34,6 +34,15 @@ check("a validation failure, one sentence per field", apiErrorMessage(400, ["a i
 check("a 404's message", apiErrorMessage(404, "Cita no encontrada", "x"), "Cita no encontrada");
 check("no message: the fallback", apiErrorMessage(500, undefined, "API Error: 500 Internal Server Error"), "API Error: 500 Internal Server Error");
 check("'Forbidden resource' on another status is left alone", apiErrorMessage(400, "Forbidden resource", "x"), "Forbidden resource");
+
+console.log("too many requests in Spanish");
+check("the throttler's default", apiErrorMessage(429, "ThrottlerException: Too Many Requests", "x"), TOO_MANY_REQUESTS_MESSAGE);
+check("a 429 with no message", apiErrorMessage(429, undefined, "API Error: 429"), TOO_MANY_REQUESTS_MESSAGE);
+check(
+  "a 429 the server explained",
+  apiErrorMessage(429, "Ya te hemos enviado varios emails de confirmación en la última hora.", "x"),
+  "Ya te hemos enviado varios emails de confirmación en la última hora.",
+);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

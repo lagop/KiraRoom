@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
+  Equals,
   IsEmail,
   IsOptional,
   IsString,
@@ -92,4 +93,13 @@ export class AcceptInviteDto {
   @IsString()
   @MaxLength(40)
   phone?: string;
+
+  /**
+   * The Terms (with the art. 28 GDPR processing agreement) and the Privacy
+   * Policy: the invited owner accepts them on the last step, as on signup.
+   * Recorded in LegalAcceptance.
+   */
+  @ApiProperty({ example: true })
+  @Equals(true, { message: "Tienes que aceptar los términos para crear la cuenta." })
+  acceptTerms: boolean;
 }

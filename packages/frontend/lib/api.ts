@@ -2541,7 +2541,12 @@ class ApiClient implements ApiClientInterface {
     // navigated away from the form. See isCredentialEndpoint.
     if (response.status === 401 && isCredentialEndpoint(endpoint)) {
       const errorData = await response.json().catch(() => ({}));
-      throw new ApiError(errorData.message || "Invalid credentials", 401);
+      // The code says when the sign-in needs the captcha next (CAPTCHA_REQUIRED).
+      throw new ApiError(
+        errorData.message || "Email o contraseña incorrectos.",
+        401,
+        typeof errorData.code === "string" ? errorData.code : undefined,
+      );
     }
 
     if (response.status === 401 && retryCount === 0) {
@@ -2623,12 +2628,23 @@ class ApiClient implements ApiClientInterface {
    * `tenantSlug`: pass it when a client signs in on a salon's site, so a
    * client of two salons lands in this one.
    */
-  async login(email: string, password: string, tenantSlug?: string): Promise<LoginResponse | TwoFactorRequired> {
+  async login(
+    email: string,
+    password: string,
+    tenantSlug?: string,
+    /** Cloudflare Turnstile token, once the server asks for it (CAPTCHA_REQUIRED). */
+    turnstileToken?: string,
+  ): Promise<LoginResponse | TwoFactorRequired> {
     const response = await this.request<{ user: any; tokens: any } | TwoFactorRequired>(
       "/auth/login",
       {
         method: "POST",
-        body: JSON.stringify({ email, password, ...(tenantSlug && { tenantSlug }) }),
+        body: JSON.stringify({
+          email: email.trim(),
+          password,
+          ...(tenantSlug && { tenantSlug }),
+          ...(turnstileToken && { turnstileToken }),
+        }),
       },
     );
     // Two-step verification: no session yet, the code comes next.
@@ -2704,10 +2720,10 @@ class ApiClient implements ApiClientInterface {
   }
 
   /** Emails a reset link if the address has an account (same answer either way). */
-  async forgotPassword(email: string, tenantSlug?: string): Promise<{ message: string }> {
+  async forgotPassword(email: string, tenantSlug?: string, turnstileToken?: string): Promise<{ message: string }> {
     return this.request("/auth/forgot-password", {
       method: "POST",
-      body: JSON.stringify({ email, ...(tenantSlug && { tenantSlug }) }),
+      body: JSON.stringify({ email, ...(tenantSlug && { tenantSlug }), ...(turnstileToken && { turnstileToken }) }),
     });
   }
 
@@ -2726,6 +2742,16 @@ class ApiClient implements ApiClientInterface {
    */
   async verifyEmail(token: string): Promise<{ verified: boolean }> {
     return this.request(`/auth/verify-email?token=${encodeURIComponent(token)}`);
+  }
+
+  /** Whether the signed-in user's email is confirmed (the panel's notice). */
+  async getEmailVerification(): Promise<{ verified: boolean; email: string | null }> {
+    return this.request("/auth/email-verification");
+  }
+
+  /** A new confirmation link by email, for the signed-in user (3 an hour). */
+  async resendVerificationEmail(): Promise<{ sent: boolean; alreadyVerified: boolean }> {
+    return this.request("/auth/resend-verification", { method: "POST" });
   }
 
   /**
@@ -2806,6 +2832,8 @@ class ApiClient implements ApiClientInterface {
     acceptTerms: boolean;
     /** The browser's IANA zone, a first guess at the salon's. */
     timezone?: string;
+    /** Cloudflare Turnstile token, when the captcha is configured. */
+    turnstileToken?: string;
   }): Promise<LoginResponse> {
     /*
      * Signing up did not log anyone in.
@@ -5451,6 +5479,8 @@ class ApiClient implements ApiClientInterface {
       language?: string;
       contactEmail?: string;
       phone?: string;
+      /** The terms (with the art. 28 processing agreement) and the privacy policy. */
+      acceptTerms: boolean;
     },
   ): Promise<{
     tenantId: string;

@@ -1,7 +1,23 @@
 import { Throttle } from "@nestjs/throttler";
 import { PasswordResetService } from "./password-reset.service";
 import { ChangeOwnPasswordDto, ForgotPasswordDto, ResetPasswordDto } from "./dto/password-reset.dto";
-import { Controller, Post, Body, UseGuards, HttpCode, HttpStatus, Get, Patch, Query, Req, Res, UnauthorizedException, ForbiddenException } from "@nestjs/common";
+import {
+  BadRequestException,
+  Controller,
+  Post,
+  Body,
+  UseGuards,
+  HttpCode,
+  HttpException,
+  HttpStatus,
+  Get,
+  Patch,
+  Query,
+  Req,
+  Res,
+  UnauthorizedException,
+  ForbiddenException,
+} from "@nestjs/common";
 import type { Request, Response } from "express";
 import {
   ApiTags,
@@ -31,6 +47,26 @@ import {
   readRefreshCookie,
 } from "./sessions/refresh-cookie";
 import { ImpersonateDto, LogoutDto, RefreshTokenDto } from "./dto/session-bodies.dto";
+import { TurnstileService, CAPTCHA_MESSAGE, CAPTCHA_REQUIRED_CODE } from "./abuse/turnstile.service";
+import { AuthRateLimitsService } from "./abuse/auth-rate-limits.service";
+import { isDisposableEmail } from "./abuse/disposable-email-domains";
+import { normalizeEmail } from "./email-normalize";
+
+/** The caller's address, as Express derives it behind the trusted proxies. */
+function clientIp(req: Request | undefined): string | null {
+  return req?.ip ?? req?.socket?.remoteAddress ?? null;
+}
+
+export const DISPOSABLE_EMAIL_MESSAGE =
+  "No admitimos direcciones de email temporales. Usa el email que consultas a diario: ahí te llegarán los avisos del salón.";
+export const TOO_MANY_SIGNUPS_MESSAGE =
+  "Se han creado demasiadas cuentas seguidas desde aquí. Espera un rato y vuelve a probar, o escríbenos.";
+export const TOO_MANY_VERIFICATION_EMAILS =
+  "Ya te hemos enviado varios emails de confirmación en la última hora. Revisa también la carpeta de spam y vuelve a probar más tarde.";
+
+function captchaRequired(message: string = CAPTCHA_MESSAGE): UnauthorizedException {
+  return new UnauthorizedException({ statusCode: 401, message, code: CAPTCHA_REQUIRED_CODE });
+}
 
 function deliverSession(res: Response, result: { user: AuthUser; tokens: TokenResponse }) {
   return { ...result, tokens: deliverTokens(res, cookieKindForRole(result.user.role), result.tokens) };
@@ -66,6 +102,8 @@ export class AuthController {
     private readonly authService: AuthService,
     private readonly passwordReset: PasswordResetService,
     private readonly twoFactor: TwoFactorService,
+    private readonly turnstile: TurnstileService,
+    private readonly limits: AuthRateLimitsService,
   ) {}
 
   /**
@@ -74,10 +112,15 @@ export class AuthController {
    */
   @Public()
   @Post("forgot-password")
-  @Throttle({ default: { ttl: 900_000, limit: 5 } }) // 5 per 15 min per address
+  // 5 per 15 min per IP here; per destination address, 3 an hour in Redis
+  // (PasswordResetService).
+  @Throttle({ default: { ttl: 900_000, limit: 5 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: "Email a password reset link" })
-  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+  async forgotPassword(@Body() dto: ForgotPasswordDto, @Req() req?: Request) {
+    if ((await this.turnstile.verify(dto.turnstileToken, clientIp(req))) !== "ok") {
+      throw new BadRequestException(CAPTCHA_MESSAGE);
+    }
     await this.passwordReset.request(dto.email, dto.tenantSlug);
     return { message: "Si hay una cuenta con ese email, te hemos enviado un enlace para restablecer la contraseña." };
   }
@@ -105,15 +148,70 @@ export class AuthController {
     return { verified };
   }
 
+  /** Whether the signed-in user's email is confirmed: the panel's "Confirma tu email" notice. */
+  @Get("email-verification")
+  @SignedIn()
+  @AllowWhenReadOnly()
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Whether the signed-in user's email address is confirmed" })
+  async emailVerification(@CurrentUser() user: PanelUser) {
+    staffOnly(user);
+    return this.authService.emailVerificationStatus(user.id);
+  }
+
+  /**
+   * A new confirmation link for the signed-in user, by email. At most 3 an
+   * hour per account (Redis). Nothing is blocked yet for an unconfirmed
+   * email; this only lets someone whose link expired get another.
+   */
+  @Post("resend-verification")
+  @SignedIn()
+  @AllowWhenReadOnly()
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Email the signed-in user a new email-confirmation link (3 an hour)" })
+  async resendVerification(@CurrentUser() user: PanelUser) {
+    staffOnly(user);
+    // Support signed in as the salon is not the owner checking her inbox.
+    if (user.impersonatedBy) {
+      throw new ForbiddenException("No se puede pedir el email de confirmación desde una sesión de soporte.");
+    }
+    const status = await this.authService.emailVerificationStatus(user.id);
+    if (status.verified) return { sent: false, alreadyVerified: true };
+    if (!(await this.limits.allowVerificationResend(user.id))) {
+      throw new HttpException(TOO_MANY_VERIFICATION_EMAILS, HttpStatus.TOO_MANY_REQUESTS);
+    }
+    return this.authService.resendVerificationEmail(user.id);
+  }
+
   @Public()
   @Post("register")
-  @Throttle({ default: { ttl: 3_600_000, limit: 5 } }) // 5 sign-ups an hour per address
+  @Throttle({ default: { ttl: 3_600_000, limit: 5 } }) // 5 sign-ups an hour per IP, in memory
   @ApiOperation({ summary: "Register a new tenant with owner account" })
   @ApiResponse({ status: 201, description: "Successfully registered" })
   @ApiResponse({ status: 409, description: "Email already registered" })
-  @ApiResponse({ status: 400, description: "Invalid input" })
-  async register(@Body() registerDto: RegisterDto, @Res({ passthrough: true }) res: Response) {
-    return deliverSession(res, await this.authService.register(registerDto));
+  @ApiResponse({ status: 400, description: "Invalid input, disposable email or captcha not passed" })
+  @ApiResponse({ status: 429, description: "Too many signups from this IP or email domain" })
+  async register(
+    @Body() registerDto: RegisterDto,
+    @Res({ passthrough: true }) res: Response,
+    @Req() req?: Request,
+  ) {
+    const ip = clientIp(req);
+    // Cloudflare Turnstile, when configured (TURNSTILE_SECRET_KEY).
+    if ((await this.turnstile.verify(registerDto.turnstileToken, ip)) !== "ok") {
+      throw new BadRequestException(CAPTCHA_MESSAGE);
+    }
+    if (isDisposableEmail(registerDto.email)) {
+      throw new BadRequestException(DISPOSABLE_EMAIL_MESSAGE);
+    }
+    // Per IP and per email domain, in Redis: the throttle above lives in
+    // this process's memory and starts again on every deploy.
+    if (await this.limits.signupAttempt(ip, normalizeEmail(registerDto.email))) {
+      throw new HttpException(TOO_MANY_SIGNUPS_MESSAGE, HttpStatus.TOO_MANY_REQUESTS);
+    }
+    return deliverSession(res, await this.authService.register(registerDto, { ip }));
   }
 
   @Public()
@@ -123,8 +221,27 @@ export class AuthController {
   @ApiOperation({ summary: "Login and get access/refresh tokens" })
   @ApiResponse({ status: 200, description: "Successfully logged in" })
   @ApiResponse({ status: 401, description: "Invalid credentials" })
-  async login(@Body() loginDto: LoginDto, @Res({ passthrough: true }) res: Response) {
-    return deliverLogin(res, await this.authService.login(loginDto));
+  async login(@Body() loginDto: LoginDto, @Res({ passthrough: true }) res: Response, @Req() req?: Request) {
+    const ip = clientIp(req);
+    const email = normalizeEmail(loginDto.email);
+    // After 3 failed sign-ins for this email (or 10 from this IP) in an
+    // hour, the form must also pass Turnstile. Only when it is configured.
+    if (this.turnstile.isEnabled() && (await this.limits.loginNeedsCaptcha(email, ip))) {
+      if ((await this.turnstile.verify(loginDto.turnstileToken, ip)) !== "ok") throw captchaRequired();
+    }
+    let result: Awaited<ReturnType<AuthService["login"]>>;
+    try {
+      result = await this.authService.login(loginDto);
+    } catch (err) {
+      if (err instanceof UnauthorizedException) {
+        const needsCaptcha = await this.limits.loginFailed(email, ip);
+        // Same message; the code tells the form to show the captcha next time.
+        if (needsCaptcha && this.turnstile.isEnabled()) throw captchaRequired(err.message);
+      }
+      throw err;
+    }
+    await this.limits.loginSucceeded(email);
+    return deliverLogin(res, result);
   }
 
   /** Second step of a sign-in with two-step verification. */

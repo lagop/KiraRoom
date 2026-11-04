@@ -3,7 +3,7 @@
  * next free address instead of "Salon name already exists".
  */
 import { ConflictException } from "@nestjs/common";
-import { AuthService } from "./auth.service";
+import { AuthService, EMAIL_ALREADY_REGISTERED } from "./auth.service";
 import { availableTenantSlug, tenantSlugCandidate, TENANT_SLUG_UNAVAILABLE } from "../saas/saas.helpers";
 
 function p2002(target: string[]) {
@@ -29,6 +29,7 @@ function buildAuth(taken: string[], opts: { failCreate?: (slug: string) => Error
         return { id: "t1" };
       }),
     },
+    legalAcceptance: { create: jest.fn(async ({ data }: any) => data) },
     $transaction: jest.fn(async (fn: any) => fn(prisma)),
   };
   const auth = new AuthService(
@@ -86,7 +87,7 @@ describe("signup with a salon name that is taken", () => {
     const { auth, prisma } = buildAuth([], { failCreate: () => p2002(["email"]) });
     const err = await auth.register(form as any).catch((e) => e);
     expect(err).toBeInstanceOf(ConflictException);
-    expect(err.message).toBe("Email already registered");
+    expect(err.message).toBe(EMAIL_ALREADY_REGISTERED);
     expect(prisma.tenant.create).toHaveBeenCalledTimes(1);
   });
 

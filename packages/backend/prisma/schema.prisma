@@ -240,6 +240,8 @@ model Tenant {
   /// we've sent so the daily cron doesn't re-email a tenant who has
   /// already received the warning for this trial window.
   trialNotifications   TrialNotificationLog[]
+  /// Terms (with the art. 28 GDPR processing agreement) and privacy policy acceptances.
+  legalAcceptances     LegalAcceptance[]
 
   @@index([deletedAt])
   @@index([subscriptionStatus, deletedAt])
@@ -483,12 +485,37 @@ model TenantInvite {
   @@map("tenant_invites")
 }
 
+/// Who accepted which version of the Terms of Service (which include the
+/// art. 28 GDPR data processing agreement) and the Privacy Policy, when and
+/// from where: KiraRoom's evidence that the processing contract exists.
+/// Written on signup and on invite acceptance. acceptedByUserId is a plain
+/// id, not a relation, so the record outlives a removed user; it goes with
+/// the salon.
+model LegalAcceptance {
+  id               String   @id @default(uuid())
+  tenantId         String
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  acceptedByUserId String?
+  /// TERMS_VERSION (auth/legal-terms.ts): the terms page's "Última actualización".
+  termsVersion     String
+  acceptedAt       DateTime @default(now())
+  ip               String?
+  /// "signup" | "invite"
+  source           String
+
+  @@index([tenantId, acceptedAt])
+  @@map("legal_acceptances")
+}
+
 model User {
   id                       String                  @id @default(uuid())
   createdAt                DateTime                @default(now())
   updatedAt                DateTime                @updatedAt
   tenantId                 String
   professionalId           String?                 @unique
+  /// Stored trimmed and lower-case (auth/email-normalize.ts). Migration
+  /// 20261104101000_users_email_lowercase adds a unique index on lower(email)
+  /// when no case-insensitive duplicates exist; schema.prisma cannot express it.
   email                    String                  @unique
   firstName                String
   lastName                 String
