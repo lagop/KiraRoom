@@ -1,4 +1,7 @@
+import { plainToInstance } from "class-transformer";
+import { validateSync } from "class-validator";
 import { PlatformLlmConfigService, StoredLlmKeyUnreadableError } from "./platform-llm-config.service";
+import { TestPlatformLlmConfigDto, UpdatePlatformLlmConfigDto } from "./platform-llm-config.dto";
 
 /**
  * L-4 unit tests for PlatformLlmConfigService.
@@ -158,13 +161,13 @@ describe("PlatformLlmConfigService (L-4)", () => {
       const svc = new PlatformLlmConfigService(prisma as any, encryption, {} as any);
 
       encryption.encrypt.mockClear();
-      await svc.updateConfig({ defaultModel: "claude-sonnet-4-5" }, admin);
+      await svc.updateConfig({ defaultModel: "claude-sonnet-5-5" }, admin);
 
       expect(encryption.encrypt).not.toHaveBeenCalled();
       // The update object should NOT contain apiKeyEncrypted.
       const upsertArg = prisma.platformLlmConfig.upsert.mock.calls[0][0];
       expect(upsertArg.update).not.toHaveProperty("apiKeyEncrypted");
-      expect(upsertArg.update.defaultModel).toBe("claude-sonnet-4-5");
+      expect(upsertArg.update.defaultModel).toBe("claude-sonnet-5-5");
     });
   });
 
@@ -219,6 +222,43 @@ describe("PlatformLlmConfigService (L-4)", () => {
       const eff = await svc.resolveEffective();
       expect(eff).toMatchObject({ provider: "anthropic", model: "claude-haiku-5-5" });
       expect(eff).not.toHaveProperty("baseUrl");
+    });
+
+    it("runs a stored OpenAI / Google config, or an unknown model, on Anthropic's default (D9)", async () => {
+      for (const row of [
+        { ...REAL_ROW, provider: "openai", defaultModel: "gpt-4o" },
+        { ...REAL_ROW, provider: "google", defaultModel: "gemini-pro" },
+        { ...REAL_ROW, provider: "anthropic", defaultModel: "claude-2" },
+      ]) {
+        const svc = new PlatformLlmConfigService(makePrisma({ row }) as any, makeEncryption(), {} as any);
+        expect(await svc.resolveEffective()).toMatchObject({ provider: "anthropic", model: "claude-haiku-5-5" });
+      }
+    });
+  });
+
+  describe("Anthropic only (D9)", () => {
+    it("refuses another provider or a model outside CLAUDE_MODELS at save", async () => {
+      const prisma = makePrisma({ row: REAL_ROW });
+      const svc = new PlatformLlmConfigService(prisma as any, makeEncryption(), {} as any);
+      await expect(svc.updateConfig({ provider: "openai" }, admin)).rejects.toThrow("solo funciona con Anthropic");
+      await expect(svc.updateConfig({ defaultModel: "gpt-4o" }, admin)).rejects.toThrow("modelos de Claude");
+      expect(prisma.platformLlmConfig.upsert).not.toHaveBeenCalled();
+    });
+
+    it("the DTOs accept only anthropic and the Claude models", () => {
+      const errs = (cls: any, body: object) => validateSync(plainToInstance(cls, body)).map((e) => e.property);
+      for (const cls of [UpdatePlatformLlmConfigDto, TestPlatformLlmConfigDto]) {
+        expect(errs(cls, { provider: "anthropic", defaultModel: "claude-sonnet-5-5" })).toEqual([]);
+        expect(errs(cls, { provider: "openai" })).toEqual(["provider"]);
+        expect(errs(cls, { provider: "google" })).toEqual(["provider"]);
+        expect(errs(cls, { defaultModel: "gpt-4o" })).toEqual(["defaultModel"]);
+      }
+    });
+
+    it("does not test another provider or model", async () => {
+      const svc = new PlatformLlmConfigService(makePrisma({ row: REAL_ROW }) as any, makeEncryption(), {} as any);
+      await expect(svc.testConnection({ provider: "openai", apiKey: "k" })).resolves.toMatchObject({ ok: false });
+      await expect(svc.testConnection({ defaultModel: "gpt-4o", apiKey: "k" })).resolves.toMatchObject({ ok: false });
     });
   });
 

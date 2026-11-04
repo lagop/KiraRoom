@@ -157,6 +157,28 @@ export function sameStripeMode(storedLivemode: boolean | null | undefined, activ
 }
 
 /**
+ * Audit 8 D8: while the platform's Stripe keys are test keys nothing is
+ * charged, so a real salon must not "contract" anything that would look
+ * paid: checkout, plan or location changes, add-ons and packs are refused.
+ * KiraRoom's own salons (Tenant.isInternal) may still try every flow.
+ * Nothing changes with live keys, or without keys (Stripe not configured
+ * is handled where it was).
+ */
+export const TEST_MODE_PAYMENTS_REFUSED =
+  "Los pagos de KiraRoom están en modo de pruebas: no se cobra nada, y por eso todavía no se puede contratar ni cambiar el plan, los complementos ni los bonos.";
+
+export function paymentsTestMode(activeLivemode: boolean | null): boolean {
+  return activeLivemode === false;
+}
+
+export function testModeRefusesPayment(
+  activeLivemode: boolean | null,
+  tenant: { isInternal?: boolean | null },
+): boolean {
+  return paymentsTestMode(activeLivemode) && tenant.isInternal !== true;
+}
+
+/**
  * The webhook secrets to verify an event with, the one of the event's mode
  * first. `livemode` is read from the unverified payload only to pick the
  * order; the verified event's own livemode decides what is applied.

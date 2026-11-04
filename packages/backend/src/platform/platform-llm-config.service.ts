@@ -1,12 +1,11 @@
-import { ForbiddenException, Injectable, Logger, OnApplicationBootstrap } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, Injectable, Logger, OnApplicationBootstrap } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type { UserRole } from "@prisma/client";
-import OpenAI from "openai";
 import { LLMProvider } from "@kira/shared";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { EncryptionService } from "../common/encryption/encryption.service";
 import { AuditLogService } from "../saas/audit-log.service";
-import { DEFAULT_CLAUDE_MODEL } from "../virtual-receptionist/providers/anthropic-models";
+import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL } from "../virtual-receptionist/providers/anthropic-models";
 import { buildClient } from "../virtual-receptionist/providers/anthropic.provider";
 
 /**
@@ -30,6 +29,17 @@ import { buildClient } from "../virtual-receptionist/providers/anthropic.provide
  * change is audited (`platform.llm_config.updated`, which fields, never
  * the key), like the email and Stripe settings.
  */
+
+/**
+ * Audit 8 D9: the receptionist runs on Anthropic only. The console offers
+ * no other provider, and the model is one of CLAUDE_MODELS.
+ */
+export const PLATFORM_LLM_PROVIDERS = ["anthropic"] as const;
+export const PLATFORM_LLM_MODELS: readonly string[] = CLAUDE_MODELS.map((m) => m.id);
+
+export function isPlatformLlmModel(model: string | null | undefined): boolean {
+  return !!model && PLATFORM_LLM_MODELS.includes(model);
+}
 
 /** Where the key in use comes from. */
 export type LlmKeySource = "console" | "server" | "none" | "unreadable";
@@ -115,17 +125,7 @@ export class PlatformLlmConfigService implements OnApplicationBootstrap {
         this.logger.log("No platform LLM key in the console: using the server's .env.");
         return;
       }
-      switch (eff.provider) {
-        case LLMProvider.ANTHROPIC:
-          if (eff.apiKey) process.env.ANTHROPIC_API_KEY = eff.apiKey;
-          break;
-        case LLMProvider.OPENAI:
-          if (eff.apiKey) process.env.OPENAI_API_KEY = eff.apiKey;
-          break;
-        case LLMProvider.GOOGLE:
-          if (eff.apiKey) process.env.GOOGLE_API_KEY = eff.apiKey;
-          break;
-      }
+      if (eff.apiKey) process.env.ANTHROPIC_API_KEY = eff.apiKey;
       // P2A-anthropic-workspace: identity-linked keys need this header.
       if (eff.workspaceId) {
         process.env.ANTHROPIC_WORKSPACE_ID = eff.workspaceId;
@@ -172,18 +172,21 @@ export class PlatformLlmConfigService implements OnApplicationBootstrap {
    */
   async updateConfig(input: PlatformLlmConfigUpdate, actor: Actor): Promise<PlatformLlmConfigPublic> {
     const email = await this.assertTwoFactor(actor);
+    // Anthropic only, with a Claude model (D9). The DTO refuses the rest
+    // already; this keeps any other caller to the same closed lists.
+    if (input.provider !== undefined && !(PLATFORM_LLM_PROVIDERS as readonly string[]).includes(input.provider)) {
+      throw new BadRequestException("La recepcionista solo funciona con Anthropic.");
+    }
+    if (input.defaultModel !== undefined && !isPlatformLlmModel(input.defaultModel)) {
+      throw new BadRequestException("Elige uno de los modelos de Claude de la lista.");
+    }
     const existing = await this.prisma.platformLlmConfig.findUnique({
       where: { id: "global" },
     });
 
     const data: Record<string, unknown> = {};
 
-    if (input.provider !== undefined) {
-      // P2A-platform-llm: keep the provider enum in lockstep with the
-      // shared LLMProvider enum, but accept any string here for forward
-      // compatibility (e.g. a new provider hasn't been added yet).
-      data.provider = input.provider;
-    }
+    if (input.provider !== undefined) data.provider = input.provider;
     if (input.defaultModel !== undefined) data.defaultModel = input.defaultModel;
     if (input.workspaceId !== undefined) {
       // Empty string clears the field; otherwise store as-is.
@@ -285,31 +288,14 @@ export class PlatformLlmConfigService implements OnApplicationBootstrap {
     const apiKey = row.apiKeyEncrypted ? this.openKey(row.apiKeyEncrypted) : null;
     if (!apiKey) return null;
 
-    // Map the stored provider string to the shared enum.
-    const normalized = (row.provider || "").toLowerCase();
-    let provider: LLMProvider;
-    switch (normalized) {
-      case "anthropic":
-        provider = LLMProvider.ANTHROPIC;
-        break;
-      case "openai":
-        provider = LLMProvider.OPENAI;
-        break;
-      case "google":
-        provider = LLMProvider.GOOGLE;
-        break;
-      default:
-        // MiniMax (removed in November 2026) or anything unknown: the
-        // receptionist and the copilot run on Anthropic. A MiniMax row's
-        // model would send a wrong model id to Anthropic, so it is not
-        // used; its key must be replaced in the console.
-        provider = LLMProvider.ANTHROPIC;
-    }
-    const known = provider !== LLMProvider.ANTHROPIC || normalized === "anthropic";
-
+    // Anthropic only (D9). A row saved for another provider (MiniMax,
+    // removed in November 2026, or OpenAI / Google, removed from the
+    // console) runs on Anthropic with the default Claude model: its model
+    // id would be wrong for Anthropic, and its key must be replaced.
+    const anthropic = (row.provider || "").toLowerCase() === "anthropic";
     return {
-      provider,
-      model: known ? row.defaultModel : DEFAULT_CLAUDE_MODEL,
+      provider: LLMProvider.ANTHROPIC,
+      model: anthropic && isPlatformLlmModel(row.defaultModel) ? row.defaultModel : DEFAULT_CLAUDE_MODEL,
       apiKey,
       workspaceId: row.workspaceId ?? null,
     };
@@ -338,9 +324,14 @@ export class PlatformLlmConfigService implements OnApplicationBootstrap {
       config = null;
     }
     const typedKey = typed.apiKey?.trim();
-    const provider = typed.provider ? normalizeProvider(typed.provider) : config?.provider ?? LLMProvider.ANTHROPIC;
-    const apiKey = typedKey || config?.apiKey || (provider === LLMProvider.ANTHROPIC ? this.serverAnthropicKey : undefined);
+    if (typed.provider && !(PLATFORM_LLM_PROVIDERS as readonly string[]).includes(typed.provider)) {
+      return { ok: false, message: "La recepcionista solo funciona con Anthropic." };
+    }
+    const apiKey = typedKey || config?.apiKey || this.serverAnthropicKey;
     const model = typed.defaultModel?.trim() || config?.model || DEFAULT_CLAUDE_MODEL;
+    if (!isPlatformLlmModel(model)) {
+      return { ok: false, message: "Elige uno de los modelos de Claude de la lista." };
+    }
     const workspaceId = typed.workspaceId !== undefined ? typed.workspaceId?.trim() || null : config?.workspaceId ?? null;
     if (!apiKey) {
       return { ok: false, message: "No hay API key: ni escrita aquí, ni guardada en la consola, ni en el servidor (.env)." };
@@ -349,37 +340,17 @@ export class PlatformLlmConfigService implements OnApplicationBootstrap {
 
     const start = Date.now();
     try {
-      if (provider === LLMProvider.ANTHROPIC) {
-        const client = buildClient(apiKey, workspaceId);
-        const res = await client.messages.create({
-          model,
-          max_tokens: 16,
-          messages: [{ role: "user", content: "ping" }],
-        });
-        return {
-          ok: true,
-          message: `Conectado con el modelo ${res.model}${unsaved}.`,
-          model: res.model,
-          latencyMs: Date.now() - start,
-        };
-      }
-      if (provider === LLMProvider.OPENAI) {
-        const client = new OpenAI({ apiKey });
-        const res = await client.chat.completions.create({
-          model,
-          max_tokens: 16,
-          messages: [{ role: "user", content: "ping" }],
-        });
-        return {
-          ok: true,
-          message: `Conectado con el modelo ${res.model}${unsaved}.`,
-          model: res.model,
-          latencyMs: Date.now() - start,
-        };
-      }
+      const client = buildClient(apiKey, workspaceId);
+      const res = await client.messages.create({
+        model,
+        max_tokens: 16,
+        messages: [{ role: "user", content: "ping" }],
+      });
       return {
-        ok: false,
-        message: `La prueba de conexión no está disponible para el proveedor «${provider}».`,
+        ok: true,
+        message: `Conectado con el modelo ${res.model}${unsaved}.`,
+        model: res.model,
+        latencyMs: Date.now() - start,
       };
     } catch (err: any) {
       const message =
@@ -388,7 +359,7 @@ export class PlatformLlmConfigService implements OnApplicationBootstrap {
         "Error desconocido al contactar con el proveedor";
       return {
         ok: false,
-        message: this.sanitizeProviderError(providerLabel(provider), message),
+        message: this.sanitizeProviderError("anthropic", message),
         latencyMs: Date.now() - start,
       };
     }
@@ -561,29 +532,5 @@ export class PlatformLlmConfigService implements OnApplicationBootstrap {
       updatedAt: row.updatedAt.toISOString(),
       updatedBy: row.updatedBy,
     };
-  }
-}
-
-function normalizeProvider(p: string): LLMProvider {
-  switch (p.toLowerCase()) {
-    case "openai":
-      return LLMProvider.OPENAI;
-    case "google":
-      return LLMProvider.GOOGLE;
-    default:
-      return LLMProvider.ANTHROPIC;
-  }
-}
-
-function providerLabel(p: LLMProvider | null): string {
-  switch (p) {
-    case LLMProvider.ANTHROPIC:
-      return "anthropic";
-    case LLMProvider.OPENAI:
-      return "openai";
-    case LLMProvider.GOOGLE:
-      return "google";
-    default:
-      return String(p);
   }
 }

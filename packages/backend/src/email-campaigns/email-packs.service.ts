@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Prisma } from "@prisma/client";
 import type Stripe from "stripe";
@@ -6,7 +6,13 @@ import { formatCountEs } from "@kira/shared";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { PlatformEmailConfigService } from "../platform/platform-email-config.service";
 import { PlatformStripeConfigService } from "../platform/platform-stripe-config.service";
-import { keyMode, livemodeOf, sameStripeMode } from "../platform/stripe-settings";
+import {
+  keyMode,
+  livemodeOf,
+  sameStripeMode,
+  TEST_MODE_PAYMENTS_REFUSED,
+  testModeRefusesPayment,
+} from "../platform/stripe-settings";
 
 /** The Checkout metadata kind of a bono de emails, for the Stripe webhook. */
 export const EMAIL_PACK_KIND = "email_pack";
@@ -89,9 +95,13 @@ export class EmailPacksService {
     }
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
-      select: { id: true, email: true, stripeCustomerId: true, stripeCustomerLivemode: true },
+      select: { id: true, email: true, stripeCustomerId: true, stripeCustomerLivemode: true, isInternal: true },
     });
     if (!tenant) throw new NotFoundException("Salón no encontrado");
+    // Nothing is charged with test keys: a real salon cannot buy (D8).
+    if (testModeRefusesPayment(livemodeOf(keyMode(this.platformStripe.current().secretKey)), tenant)) {
+      throw new ConflictException(TEST_MODE_PAYMENTS_REFUSED);
+    }
     // A customer created with the other Stripe mode's keys does not exist
     // for these (P2): Checkout creates a new one instead.
     const customerId = sameStripeMode(tenant.stripeCustomerLivemode, livemodeOf(keyMode(this.platformStripe.current().secretKey)))
