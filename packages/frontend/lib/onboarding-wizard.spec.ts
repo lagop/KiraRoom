@@ -7,6 +7,7 @@ import {
   checklistStartsOpen,
   onboardingSettled,
   pendingChecklistSteps,
+  salonHoursFromProfessional,
   customServiceProblem,
   showChecklistRestore,
   showLinearOverlay,
@@ -15,6 +16,7 @@ import {
   wizardOutcome,
   type OnboardingStateLike,
 } from "./onboarding-wizard";
+import { defaultSchedule } from "./weekly-schedule";
 
 let pass = 0;
 let fail = 0;
@@ -112,6 +114,19 @@ check("ready when services, staff and hours exist", all.readyForBookings, true);
 check("lists what was saved", all.lines.length, 3);
 const noStaff = wizardOutcome({ saved: { services: 1, hours: true, appointment: false }, skipped: { appointment: "no_staff" } }, none);
 check("not ready without a professional", noStaff.title, "Configuración guardada");
+
+// D10: the salon's hours proposed from the professional's.
+const pro = defaultSchedule();
+const fromPro = salonHoursFromProfessional(pro);
+check("salon hours copy the professional's week", fromPro, pro);
+fromPro.monday.shifts[0].end = "14:00";
+check("a copy: editing it leaves the professional's", pro.monday.shifts[0].end, "19:00");
+const noWeek = salonHoursFromProfessional(null);
+check("no professional week: Monday to Saturday open", [noWeek.monday.works, noWeek.saturday.works, noWeek.sunday.works], [true, true, false]);
+check("no professional week: 09:00 to 20:00", noWeek.saturday.shifts, [{ start: "09:00", end: "20:00" }]);
+const closed = defaultSchedule();
+for (const k of Object.keys(closed) as Array<keyof typeof closed>) closed[k] = { works: false, shifts: [] };
+check("a week with no working day falls back too", salonHoursFromProfessional(closed).friday.shifts, [{ start: "09:00", end: "20:00" }]);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

@@ -31,6 +31,7 @@ import { LocationSelector } from "./analytics/components/Toolbar";
 import { InlineSpinner } from "./analytics/components/ui";
 import { IssuerDataBanner } from "@/components/invoices/issuer-data-banner";
 import { TerritoryTaxNotice } from "@/components/invoices/territory-tax-notice";
+import { ContactEmailNotice } from "@/components/onboarding/ContactEmailNotice";
 
 export default function DashboardPage() {
   const t = useTranslations();
@@ -124,6 +125,8 @@ export default function DashboardPage() {
     <div className="space-y-6">
       {/* No NIF, razón social or address for the invoices: owner and admins only. */}
       <IssuerDataBanner />
+      {/* No contact email for the web and the aviso legal (D15): owner and admins only. */}
+      <ContactEmailNotice />
       {/* In the Canaries, Ceuta or Melilla but invoicing with another tax. */}
       <TerritoryTaxNotice />
       {/* Header */}

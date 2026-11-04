@@ -156,7 +156,11 @@ export function OnboardingChecklist() {
         })}
       </ul>
 
-      <div className="border-t border-gray-100 p-2 text-right">
+      <div className="flex items-center justify-between border-t border-gray-100 p-2">
+        {/* D10: the test booking and the links to every setting. */}
+        <a href="/dashboard/onboarding" className="px-2 text-[11px] font-medium text-violet-600 hover:underline">
+          {t("onboarding.checklist.more_settings")} →
+        </a>
         <button
           type="button"
           onClick={() => setOpen(false)}
