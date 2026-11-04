@@ -6,7 +6,7 @@ import {
   ApiBearerAuth } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../../auth/guards/roles.guard";
-import { Roles } from "../../auth/decorators/roles.decorator";
+import { Roles, SALON_TEAM } from "../../auth/decorators/roles.decorator";
 import { UserRole } from "@prisma/client";
 import { AdminSettingsService } from "./settings.service";
 import { Request } from "express";
@@ -34,7 +34,13 @@ interface AuthenticatedRequest extends Request {
 export class AdminSettingsController {
   constructor(private readonly adminSettingsService: AdminSettingsService) {}
 
+  /**
+   * Read by the whole team: a professional's booking form lists their
+   * colleagues when the salon allows it (the backend checks it again when
+   * they book). Changing it stays with owner and admin (PATCH).
+   */
   @Get("professional-cross-booking")
+  @Roles(...SALON_TEAM)
   @ApiOperation({ summary: "Get professional cross-booking setting" })
   @ApiResponse({ status: 200, description: "Setting retrieved successfully" })
   @ApiResponse({ status: 403, description: "Forbidden" })

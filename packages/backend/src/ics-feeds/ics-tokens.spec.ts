@@ -1,5 +1,5 @@
 import { BadRequestException, NotFoundException } from "@nestjs/common";
-import { IcsController, icsFeedVersion } from "./ics.controller";
+import { IcsController, icsFeedVersion, professionalFeedVersion } from "./ics.controller";
 
 /**
  * The calendar-feeds page handed out ?token=REEMPLAZAR_CON_TOKEN and pointed
@@ -14,8 +14,10 @@ import { IcsController, icsFeedVersion } from "./ics.controller";
 
 const SECRET = "ics-secret";
 
-function build(features: any = {}, { professionalActive = true } = {}) {
+function build(features: any = {}, { professionalActive = true, professionalVersion = 0 } = {}) {
   const tenant = { id: "t1", slug: "salon-ana", name: "Salón Ana", features };
+  // Professional.icsFeedVersion: "Quitar acceso" bumps it (see professionals.service.ts).
+  const pro = { icsFeedVersion: professionalVersion };
   const raw: Array<{ sql: string; values: unknown[] }> = [];
   const prisma: any = {
     tenant: {
@@ -24,9 +26,11 @@ function build(features: any = {}, { professionalActive = true } = {}) {
     },
     professional: {
       findMany: async ({ where }: any) =>
-        where.tenantId === "t1" ? [{ id: "pro-1", firstName: "Ana", lastName: "López" }] : [],
+        where.tenantId === "t1" ? [{ id: "pro-1", firstName: "Ana", lastName: "López", icsFeedVersion: pro.icsFeedVersion }] : [],
       findUnique: async ({ where }: any) =>
-        where.id === "pro-1" ? { id: "pro-1", isActive: professionalActive, tenant: { ...tenant } } : null,
+        where.id === "pro-1"
+          ? { id: "pro-1", isActive: professionalActive, icsFeedVersion: pro.icsFeedVersion, tenant: { ...tenant } }
+          : null,
     },
     appointment: { findMany: async () => [] },
     // Stands in for the jsonb_set UPDATE: bumps the version like Postgres would.
@@ -41,7 +45,7 @@ function build(features: any = {}, { professionalActive = true } = {}) {
     },
   };
   const config: any = { get: (k: string) => (k === "ICS_TOKEN_SECRET" ? SECRET : undefined) };
-  return { controller: new IcsController(prisma, config), raw, tenant };
+  return { controller: new IcsController(prisma, config), raw, tenant, pro };
 }
 
 function res() {
@@ -167,5 +171,51 @@ describe("ICS feeds of someone who has left", () => {
 
   it("there is no staff feed: nothing ever issued its tokens", () => {
     expect((IcsController.prototype as any).staffFeed).toBeUndefined();
+  });
+});
+
+describe("one professional's feed, cut when their access is removed (D21)", () => {
+  const legacyPro = IcsController.signToken("professional:pro-1", SECRET);
+
+  it("a bumped professional version stops their old link and the salon's stays", async () => {
+    const { controller, pro } = build();
+    const legacySalon = IcsController.signToken("salon:salon-ana", SECRET);
+
+    pro.icsFeedVersion = 1; // "Quitar acceso"
+
+    await expect(controller.professionalFeed("pro-1", legacyPro, res() as any)).rejects.toThrow("Invalid token");
+    expect((await controller.salonFeed("salon-ana", legacySalon, res() as any)).statusCode).toBe(200);
+  });
+
+  it("the link handed out afterwards is signed with the new version, and works", async () => {
+    const { controller, pro } = build();
+    pro.icsFeedVersion = 1;
+
+    const out = await controller.tokens({ user: { tenantId: "t1" } });
+    const token = out.professionals[0].token;
+
+    expect(token).toBe(IcsController.signToken("professional:pro-1", SECRET, 1));
+    expect((await controller.professionalFeed("pro-1", token, res() as any)).statusCode).toBe(200);
+  });
+
+  it("the salon's rotation and the professional's version add up: either one moving cuts the link", async () => {
+    const { controller, pro } = build({}, { professionalVersion: 2 });
+    const before = (await controller.tokens({ user: { tenantId: "t1" } })).professionals[0].token;
+    expect((await controller.professionalFeed("pro-1", before, res() as any)).statusCode).toBe(200);
+
+    const rotated = await controller.rotateTokens({ user: { tenantId: "t1" } });
+    await expect(controller.professionalFeed("pro-1", before, res() as any)).rejects.toThrow("Invalid token");
+    const after = rotated.professionals[0].token;
+    expect(after).toBe(IcsController.signToken("professional:pro-1", SECRET, 3));
+
+    pro.icsFeedVersion = 3;
+    await expect(controller.professionalFeed("pro-1", after, res() as any)).rejects.toThrow("Invalid token");
+  });
+
+  it("never-rotated salon and professional: 0, the links calendars already hold", () => {
+    expect(professionalFeedVersion({}, 0)).toBe(0);
+    expect(professionalFeedVersion(undefined, null)).toBe(0);
+    expect(professionalFeedVersion({ icsFeed: { version: 2 } }, 1)).toBe(3);
+    expect(professionalFeedVersion({}, -4)).toBe(0);
   });
 });

@@ -60,6 +60,8 @@ export const CLIENT_COLUMN_ON_ERASURE: Record<ClientColumn, "kept" | "erased"> =
   firstVisit: "kept",
   lastVisit: "kept",
   lastReengagementSent: "kept",
+  // The wizard's test-client marker (D27): not personal data.
+  isTest: "kept",
   source: "kept",
   allergies: "erased",
   medicalConditions: "erased",

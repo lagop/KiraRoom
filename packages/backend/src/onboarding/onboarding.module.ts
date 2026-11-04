@@ -4,6 +4,7 @@ import { OnboardingController } from "./onboarding.controller";
 import { OnboardingService } from "./onboarding.service";
 import { OnboardingDetectorService } from "./onboarding-detector.service";
 import { OnboardingStepSeeder } from "./onboarding-step.seeder";
+import { TestBookingCleanupService } from "./test-booking-cleanup.service";
 
 @Module({
   imports: [PrismaModule],
@@ -12,6 +13,7 @@ import { OnboardingStepSeeder } from "./onboarding-step.seeder";
     OnboardingService,
     OnboardingDetectorService,
     OnboardingStepSeeder,
+    TestBookingCleanupService,
   ],
   exports: [OnboardingDetectorService, OnboardingService],
 })

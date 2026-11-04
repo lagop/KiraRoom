@@ -146,9 +146,14 @@ describe("who says the sessions ended", () => {
   it("their access removed, or their password changed by the owner", async () => {
     const pro = { id: "p1", tenantId: "t1", isActive: true, userId: "u-ana", user: { id: "u-ana", role: "staff" } };
     const db: any = {
-      professional: { findFirst: jest.fn(async () => pro), findUnique: jest.fn(async () => pro) },
+      professional: {
+        findFirst: jest.fn(async () => pro),
+        findUnique: jest.fn(async () => pro),
+        update: jest.fn(async () => ({})),
+      },
       user: { update: jest.fn(async () => ({})) },
     };
+    db.$transaction = async (fn: any) => fn(db);
     const team = new AdminProfessionalsService(db);
     await team.revokePanelAccess("t1", "p1");
     expect(revoke).toHaveBeenCalledWith({ userId: "u-ana" });

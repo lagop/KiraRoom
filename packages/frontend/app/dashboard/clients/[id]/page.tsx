@@ -395,9 +395,13 @@ function asList(value: unknown): string[] {
   return Array.isArray(value) ? value.map((v) => String(v)).filter(Boolean) : [];
 }
 
-/** Her visits, most recent first, with what each one was charged. */
+/**
+ * Her visits, most recent first, with what each one was charged. A
+ * professional sees a colleague's visit without its amounts (`restricted`).
+ */
 function VisitHistory({ appointments }: { appointments: ClientAppointmentSummary[] }) {
   const t = useTranslations();
+  const someRestricted = appointments.some((a) => a.restricted);
   return (
     <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
       <h2 className="text-base font-semibold text-gray-900">{t("clients.visit_history")}</h2>
@@ -444,10 +448,12 @@ function VisitHistory({ appointments }: { appointments: ClientAppointmentSummary
                       </td>
                       <td className="whitespace-nowrap py-2 pr-3 text-right font-medium">
                         {/* totalAmount (cents), else the price (euros). */}
-                        {formatCents(appointmentTotalCents({ totalAmount: a.totalAmount, price: a.price }))}
+                        {a.restricted
+                          ? "—"
+                          : formatCents(appointmentTotalCents({ totalAmount: a.totalAmount, price: a.price }))}
                       </td>
                       <td className="whitespace-nowrap py-2 text-right text-gray-600">
-                        {formatCents(a.amountPaid)}
+                        {a.restricted ? "—" : formatCents(a.amountPaid)}
                       </td>
                     </tr>
                   );
@@ -455,6 +461,9 @@ function VisitHistory({ appointments }: { appointments: ClientAppointmentSummary
               </tbody>
             </table>
           </div>
+          {someRestricted && (
+            <p className="mt-2 text-xs text-gray-500">{t("clients.others_visits_restricted")}</p>
+          )}
           {appointments.length >= HISTORY_LIMIT && (
             <p className="mt-2 text-xs text-gray-500">
               {t("clients.history_limit", { count: HISTORY_LIMIT })}

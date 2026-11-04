@@ -52,8 +52,9 @@ export class PosController {
     @Req() req: any,
     @Query('search') search?: string,
   ) {
-    // Staff: only with a search of two characters or more (PosService.getClients).
-    return this.posService.getClients(req.user.tenantId, search, { role: req.user.role });
+    // Staff: only with a search of two characters or more, and the clients
+    // who are not theirs reduced to name and masked phone (PosService.getClients).
+    return this.posService.getClients(req.user.tenantId, search, { id: req.user.id, role: req.user.role });
   }
 
   /** The till's settings; staff read them too, to know their discount limit. */
@@ -147,9 +148,11 @@ export class PosController {
 
   // ============ PRODUCTS ============
 
+  // The catalogue with its cost price: managers (the staff till reads
+  // /pos/sale-products, without it).
   @Get('products')
   @ApiOperation({ summary: 'Get all products' })
-  @Roles(...SALON_TEAM)
+  @Roles(...SALON_MANAGERS)
   async getProducts(
     @Req() req: any,
     @Query('category') category?: string,
@@ -172,7 +175,7 @@ export class PosController {
 
   @Get('products/:id')
   @ApiOperation({ summary: 'Get a single product' })
-  @Roles(...SALON_TEAM)
+  @Roles(...SALON_MANAGERS)
   async getProduct(@Req() req: any, @Param('id', ParseUUIDPipe) id: string) {
     return this.productService.getProduct(req.user.tenantId, id);
   }

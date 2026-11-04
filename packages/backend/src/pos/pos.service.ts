@@ -56,6 +56,7 @@ import { productTaxRatePercent, salonTaxRate } from '../invoices/salon-tax-setti
 import { issuerSkippedMessage } from '../invoices/invoice-issuer';
 import { taxLabelOf } from '@kira/shared';
 import { CLIENT_POS_SELECT } from '../clients/client-select';
+import { clientReachWhere, maskedPhone } from '../clients/client-reach';
 import {
   clientEmailFilter,
   countryForPhone,
@@ -408,32 +409,61 @@ export class PosService {
    * The till finds any client of the salon (a product sale, a walk-in), but
    * staff only by a search of two characters or more: with no search the
    * first 50 came back, and one-letter searches walked a professional
-   * through the whole client base with contact details. Managers unchanged.
+   * through the whole client base with contact details.
+   *
+   * A client who is not the professional's (no appointment with them that
+   * is not cancelled, clients/client-reach.ts) comes back as the till needs
+   * her and no more: id, name and a masked phone ("···· 222"), no email,
+   * status or points (the till reads her points on its own once she is
+   * picked). Searching by email finds only their own clients. Managers
+   * unchanged.
    */
-  async getClients(tenantId: string, search?: string, actor?: Pick<PosActor, 'role'>) {
+  async getClients(tenantId: string, search?: string, actor?: PosActor | Pick<PosActor, 'role'>) {
     search = search?.trim() || undefined;
-    if (actor && !(SALON_MANAGERS as string[]).includes(actor.role) && (search?.length ?? 0) < POS_STAFF_CLIENT_SEARCH_MIN) {
+    const staff = !!actor && !(SALON_MANAGERS as string[]).includes(actor.role);
+    if (staff && (search?.length ?? 0) < POS_STAFF_CLIENT_SEARCH_MIN) {
       return [];
     }
+    // Staff: their professional (null when the account has none: no client is theirs).
+    const own = staff && 'id' in actor! ? (await this.staffScope(tenantId, actor as PosActor))?.professionalId ?? null : null;
+    const theirs = own ? clientReachWhere({ professionalId: own }) : null;
 
     const where: any = { tenantId, status: 'active' };
 
     if (search) {
+      const byEmail = { email: { contains: search, mode: 'insensitive' } };
       where.OR = [
         { firstName: { contains: search, mode: 'insensitive' } },
         { lastName: { contains: search, mode: 'insensitive' } },
         { phone: { contains: search, mode: 'insensitive' } },
-        { email: { contains: search, mode: 'insensitive' } },
+        ...(!staff ? [byEmail] : theirs ? [{ ...byEmail, ...theirs }] : []),
       ];
     }
 
-    return this.prisma.client.findMany({
+    const rows = await this.prisma.client.findMany({
       where,
       orderBy: { firstName: 'asc' },
       take: 50,
       // Who, how to reach, points: never her sign-in secrets or health data.
       select: CLIENT_POS_SELECT,
     });
+    if (!staff || rows.length === 0) return rows;
+
+    const mine = theirs
+      ? new Set(
+          (
+            await this.prisma.client.findMany({
+              where: { tenantId, id: { in: rows.map((r) => r.id) }, ...theirs },
+              select: { id: true },
+            })
+          ).map((r) => r.id),
+        )
+      : new Set<string>();
+    return rows.map((r) =>
+      mine.has(r.id)
+        ? r
+        : { id: r.id, firstName: r.firstName, lastName: r.lastName, phone: maskedPhone(r.phone), masked: true },
+    );
   }
 
   // ------------------------------------------------------------------ pricing

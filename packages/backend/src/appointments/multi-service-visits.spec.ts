@@ -585,6 +585,8 @@ describe("lists", () => {
     const where = prisma.appointment.findMany.mock.calls[0][0].where;
     expect(where.paymentStatus).toEqual({ in: ["pending", "failed"] });
     expect(where.status).toEqual({ notIn: ["cancelled", "no_show"] });
+    // The onboarding wizard's test booking is nothing to collect (D27).
+    expect(where.isTest).toBe(false);
     expect(where.scheduledDate.lte).toBeInstanceOf(Date);
     expect(out.map((a: any) => a.id)).toEqual(["a"]);
   });

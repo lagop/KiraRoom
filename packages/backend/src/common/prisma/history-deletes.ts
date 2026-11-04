@@ -57,6 +57,20 @@ async function deleteOrDeactivate(
 const anyOf = async (...counts: Promise<number>[]) =>
   (await Promise.all(counts)).some((n) => n > 0);
 
+/** Whether a client has appointments, payments, purchases or a balance owed to her. */
+export function clientHasHistory(prisma: PrismaService, tenantId: string, id: string): Promise<boolean> {
+  return anyOf(
+    prisma.appointment.count({ where: { tenantId, clientId: id } }),
+    prisma.payment.count({ where: { tenantId, clientId: id } }),
+    prisma.order.count({ where: { tenantId, clientId: id } }),
+    // A balance or points she has not used yet is owed to her.
+    prisma.clientWallet.count({
+      where: { tenantId, clientId: id, OR: [{ balance: { not: 0 } }, { loyaltyPoints: { not: 0 } }] },
+    }),
+    prisma.loyaltyMember.count({ where: { clientId: id, currentPoints: { not: 0 } } }),
+  );
+}
+
 export async function deleteClientKeepingHistory(
   prisma: PrismaService,
   tenantId: string,
@@ -65,17 +79,7 @@ export async function deleteClientKeepingHistory(
   const client = await prisma.client.findFirst({ where: { id, tenantId }, select: { id: true } });
   if (!client) throw new NotFoundException("Cliente no encontrado");
   return deleteOrDeactivate(
-    () =>
-      anyOf(
-        prisma.appointment.count({ where: { tenantId, clientId: id } }),
-        prisma.payment.count({ where: { tenantId, clientId: id } }),
-        prisma.order.count({ where: { tenantId, clientId: id } }),
-        // A balance or points she has not used yet is owed to her.
-        prisma.clientWallet.count({
-          where: { tenantId, clientId: id, OR: [{ balance: { not: 0 } }, { loyaltyPoints: { not: 0 } }] },
-        }),
-        prisma.loyaltyMember.count({ where: { clientId: id, currentPoints: { not: 0 } } }),
-      ),
+    () => clientHasHistory(prisma, tenantId, id),
     () => prisma.client.update({ where: { id, tenantId }, data: { status: ClientStatus.inactive } }),
     () => prisma.client.delete({ where: { id, tenantId } }),
     CLIENT_HAS_HISTORY,

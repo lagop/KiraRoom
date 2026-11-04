@@ -459,7 +459,8 @@ export class SalonCopilotToolsService {
         },
       }),
       this.prisma.appointment.findMany({
-        where: { clientId },
+        // The wizard's test booking is left out of everything the copilot reads (D27).
+        where: { clientId, isTest: false },
         orderBy: { scheduledDate: 'desc' },
         take: maxVisits,
         select: {
@@ -508,6 +509,7 @@ export class SalonCopilotToolsService {
       const agg = await this.prisma.appointment.aggregate({
         where: {
           clientId,
+          isTest: false,
           status: 'completed',
           scheduledDate: { gte: since },
         },
@@ -569,6 +571,7 @@ export class SalonCopilotToolsService {
 
     const where: Record<string, unknown> = {
       tenantId: ctx.tenantId,
+      isTest: false,
       scheduledDate: { gte: dayStart, lt: dayEnd },
       status: { in: ['confirmed', 'pending', 'in_progress'] },
     };
@@ -691,6 +694,7 @@ export class SalonCopilotToolsService {
     const appointments = await ctx.prisma.appointment.findMany({
       where: {
         tenantId: ctx.tenantId,
+        isTest: false,
         scheduledDate: { gte: today, lt: horizon },
         status: { in: ['confirmed', 'pending'] },
         ...(ownProfessionalId ? { professionalId: ownProfessionalId } : {}),
@@ -860,6 +864,7 @@ export class SalonCopilotToolsService {
     const candidates = await ctx.prisma.appointment.findMany({
       where: {
         tenantId: ctx.tenantId,
+        isTest: false,
         status: 'no_show',
         scheduledDate: { gte: since },
       },
@@ -936,8 +941,8 @@ export class SalonCopilotToolsService {
     // default — for "recency" we exclude not-yet-returned clients.
     const where =
       metric === 'recency'
-        ? { tenantId: ctx.tenantId, status: 'active' as const, lastVisit: { not: null } }
-        : { tenantId: ctx.tenantId, status: 'active' as const };
+        ? { tenantId: ctx.tenantId, status: 'active' as const, isTest: false, lastVisit: { not: null } }
+        : { tenantId: ctx.tenantId, status: 'active' as const, isTest: false };
 
     const clients = await ctx.prisma.client.findMany({
       where,

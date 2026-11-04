@@ -19,6 +19,7 @@ import { addDays, salonToday } from '../analytics/analytics-metrics';
 import { safeTimeZone } from '../gift-cards/gift-card-expiry';
 import { timeOffBetween } from '../time-off/time-off-query';
 import { briefingGaps, salonNowMinutes } from './briefing-gaps';
+import { clientScopeWhere } from '../clients/clients.service';
 
 /**
  * P2A-staff-copilot sprint 16 — billing hook.
@@ -606,6 +607,8 @@ export class AssistantService {
     // 1. Today's appointments — staff sees only their own.
     const apptWhere: Record<string, unknown> = {
       tenantId: user.tenantId,
+      // The wizard's test booking is not part of the day (D27).
+      isTest: false,
       scheduledDate: { gte: today, lt: tomorrow },
       status: { in: ['confirmed', 'pending', 'in_progress'] },
     };
@@ -710,7 +713,11 @@ export class AssistantService {
         where: {
           tenantId: user.tenantId,
           status: 'active',
+          isTest: false,
           lastVisit: { lt: cutoff },
+          // Staff: only their own clients, as in Clientas. It was the whole
+          // salon's list.
+          ...(staffProfessionalId ? clientScopeWhere({ professionalId: staffProfessionalId }) : {}),
         },
         orderBy: { lastVisit: 'asc' },
         take: 5,
@@ -792,6 +799,7 @@ export class AssistantService {
       const appts = await this.prisma.appointment.findMany({
         where: {
           tenantId,
+          isTest: false,
           scheduledDate: { gte: today, lt: tomorrow },
           status: { in: ['confirmed', 'pending'] },
         },

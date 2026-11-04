@@ -553,6 +553,8 @@ model Client {
   lastVisit                DateTime?
   lastReengagementSent     DateTime? /// Last time a re-engagement email was sent
   source                   String?
+  /// Created by the onboarding wizard for its test booking (D27): not counted, deleted with it.
+  isTest                   Boolean                  @default(false)
   allergies                Json                     @default("[]")
   medicalConditions        Json                     @default("[]")
   notes                    String?
@@ -661,6 +663,9 @@ model Professional {
   commissionRate      Decimal?
   hireDate            DateTime
   terminationDate     DateTime?
+  /// Version of this professional's calendar feed link (ics.controller.ts),
+  /// added to the salon's: "Quitar acceso" bumps it, so the link stops working.
+  icsFeedVersion      Int                    @default(0)
   workingHours        Json                   @default("[]")
   availability        Json                   @default("{}")
   settings            Json                   @default("{}")
@@ -731,6 +736,8 @@ model Appointment {
   amountPaid             Decimal             @default(0)
   amountDue              Decimal             @default(0)
   source                 AppointmentSource   @default(online)
+  /// The onboarding wizard's test booking (D27): kept out of every figure and deleted the next salon day.
+  isTest                 Boolean             @default(false)
   utmSource              String?
   utmMedium              String?
   utmCampaign            String?
