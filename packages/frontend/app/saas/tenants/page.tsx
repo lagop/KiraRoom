@@ -16,6 +16,7 @@ import {
   XCircle,
   ExternalLink,
   Loader2,
+  Mail,
 } from "lucide-react";
 import apiClient from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
@@ -23,6 +24,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SharedIdentityBadge } from "../components/shared-identity-notice";
 import type { SharedIdentityWarning } from "@/lib/shared-identity";
 import { useToast } from "@/components/ui/use-toast";
+import { formatDateEs, tenantStatusClass, tenantStatusKey } from "@/lib/saas-tenant";
 
 interface TenantProgress {
   tenantId: string;
@@ -57,6 +59,11 @@ interface Tenant {
   // the row entirely, but the field is typed so future "show deleted"
   // UIs can render a badge without a refactor.
   deletedAt?: string | null;
+  anonymizedAt?: string | null;
+  /** The owner asked "Borrar mi salón" (audit 8 T4). */
+  deletionRequestedAt?: string | null;
+  /** The owner's account: salons from the normal signup have no salon email (T17). */
+  owner?: { email: string; firstName: string; lastName: string } | null;
   /** Other salons with the same phone or NIF (D9). */
   sharedIdentity?: SharedIdentityWarning[];
   userCount: number;
@@ -135,6 +142,14 @@ export default function TenantsPage() {
   // The tenant about to be deleted, confirmed in the panel's dialog.
   const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
+  // Why the last delete failed (Stripe could not stop billing): shown in
+  // the dialog, whose button then retries (audit 8 T14).
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  // Suspend and reactivate are confirmed too (T19); reactivating a salon
+  // whose owner asked to delete it needs the checkbox (T4).
+  const [pendingStatus, setPendingStatus] = useState<{ tenant: Tenant; action: "suspend" | "reactivate" } | null>(null);
+  const [cancelDeletion, setCancelDeletion] = useState(false);
+  const [statusBusy, setStatusBusy] = useState(false);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -218,74 +233,62 @@ export default function TenantsPage() {
   const performDelete = async () => {
     if (!pendingDelete) return;
     setDeleting(true);
+    setDeleteError(null);
     try {
       await apiClient.deleteSaasTenant(pendingDelete.id);
+      setPendingDelete(null);
+      toast({ title: t("saas.console.deleted_ok") });
       fetchTenants();
     } catch (err) {
       console.error("Error deleting tenant:", err);
-      toast({ title: t("saas.failedToDelete"), variant: "destructive" });
+      // Nothing was deleted: the dialog stays, with why, and retries.
+      setDeleteError((err as Error)?.message || t("saas.failedToDelete"));
     } finally {
       setDeleting(false);
-      setPendingDelete(null);
     }
   };
 
-  const handleSuspend = async (id: string) => {
+  const performStatus = async () => {
+    if (!pendingStatus) return;
+    const { tenant, action } = pendingStatus;
+    setStatusBusy(true);
     try {
-      await apiClient.suspendSaasTenant(id);
+      if (action === "suspend") {
+        await apiClient.suspendSaasTenant(tenant.id);
+        toast({ title: t("saas.console.suspended_ok") });
+      } else {
+        await apiClient.reactivateSaasTenant(tenant.id, { cancelDeletion });
+        toast({ title: t("saas.console.reactivated_ok") });
+      }
+      setPendingStatus(null);
       fetchTenants();
     } catch (err) {
-      console.error("Error suspending tenant:", err);
-      toast({ title: t("saas.failedToSuspend"), variant: "destructive" });
+      console.error(`Error on ${action}:`, err);
+      toast({
+        title: t(action === "suspend" ? "saas.failedToSuspend" : "saas.failedToReactivate"),
+        description: (err as Error)?.message,
+        variant: "destructive",
+      });
+    } finally {
+      setStatusBusy(false);
     }
   };
 
-  const handleReactivate = async (id: string) => {
-    try {
-      await apiClient.reactivateSaasTenant(id);
-      fetchTenants();
-    } catch (err) {
-      console.error("Error reactivating tenant:", err);
-      toast({ title: t("saas.failedToReactivate"), variant: "destructive" });
-    }
+  const askStatus = (tenant: Tenant, action: "suspend" | "reactivate") => {
+    setCancelDeletion(false);
+    setPendingStatus({ tenant, action });
   };
 
   const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "active":
-        return (
-          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
-            <CheckCircle className="w-3 h-3 mr-1" />
-            {t("common.active")}
-          </span>
-        );
-      case "trialing":
-        return (
-          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-            {t("saas.trial")}
-          </span>
-        );
-      case "cancelled":
-        return (
-          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
-            <XCircle className="w-3 h-3 mr-1" />
-            {t("appointments.status_cancelled")}
-          </span>
-        );
-      case "past_due":
-        return (
-          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-            <AlertTriangle className="w-3 h-3 mr-1" />
-            {t("payments.status_pending")}
-          </span>
-        );
-      default:
-        return (
-          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-            {status}
-          </span>
-        );
-    }
+    const key = tenantStatusKey(status);
+    return (
+      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${tenantStatusClass(status)}`}>
+        {status === "active" && <CheckCircle className="w-3 h-3 mr-1" />}
+        {status === "cancelled" && <XCircle className="w-3 h-3 mr-1" />}
+        {(status === "past_due" || status === "suspended") && <AlertTriangle className="w-3 h-3 mr-1" />}
+        {key ? t(key) : status}
+      </span>
+    );
   };
 
   const getPlanBadge = (plan: string) => {
@@ -311,13 +314,28 @@ export default function TenantsPage() {
           <h1 className="text-2xl font-bold text-gray-900 truncate">{t("saas.tenants")}</h1>
           <p className="text-gray-500 mt-1">{t("saas.tenants_count", { count: total })}</p>
         </div>
-        <Link
-          href="/saas/tenants/new"
-          className="inline-flex items-center px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors self-start sm:self-auto"
-        >
-          <Plus className="w-4 h-4 mr-2" />
-          {t("saas.create_tenant")}
-        </Link>
+        <div className="flex flex-wrap gap-2 self-start sm:self-auto">
+          <Link
+            href="/saas/tenants/invites"
+            className="inline-flex items-center px-4 py-2 border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            {t("saas.console.invites")}
+          </Link>
+          <Link
+            href="/saas/tenants/invite"
+            className="inline-flex items-center px-4 py-2 border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            <Mail className="w-4 h-4 mr-2" />
+            {t("saas.console.invite_salon")}
+          </Link>
+          <Link
+            href="/saas/tenants/new"
+            className="inline-flex items-center px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors"
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            {t("saas.create_tenant")}
+          </Link>
+        </div>
       </div>
 
       {/* Filters */}
@@ -410,8 +428,13 @@ export default function TenantsPage() {
                               <SharedIdentityBadge warnings={tenant.sharedIdentity} />
                             </div>
                             <div className="text-sm text-gray-500">
-                              {tenant.email || t("saas.no_email")}
+                              {tenant.email || tenant.owner?.email || t("saas.no_email")}
                             </div>
+                            {tenant.email && tenant.owner?.email && tenant.owner.email !== tenant.email && (
+                              <div className="text-xs text-gray-400">
+                                {t("saas.console.owner")}: {tenant.owner.email}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -425,7 +448,7 @@ export default function TenantsPage() {
                             <span
                               className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800"
                               title={t("saas.deleted_badge_title", {
-                                at: new Date(tenant.deletedAt).toLocaleString(),
+                                at: formatDateEs(tenant.deletedAt, true),
                               })}
                             >
                               {t("saas.deleted_badge")}
@@ -485,7 +508,7 @@ export default function TenantsPage() {
                           {!tenant.deletedAt &&
                             (tenant.subscriptionStatus === "active" || tenant.subscriptionStatus === "trialing" ? (
                               <button
-                                onClick={() => handleSuspend(tenant.id)}
+                                onClick={() => askStatus(tenant, "suspend")}
                                 className="p-2 text-gray-400 hover:text-yellow-600 rounded-lg hover:bg-yellow-50"
                                 title={t("saas.suspend_action")}
                               >
@@ -493,7 +516,7 @@ export default function TenantsPage() {
                               </button>
                             ) : (
                               <button
-                                onClick={() => handleReactivate(tenant.id)}
+                                onClick={() => askStatus(tenant, "reactivate")}
                                 className="p-2 text-gray-400 hover:text-indigo-600 rounded-lg hover:bg-indigo-50"
                                 title={t("saas.reactivate_action")}
                               >
@@ -502,7 +525,10 @@ export default function TenantsPage() {
                             ))}
                           {!tenant.deletedAt && (
                             <button
-                              onClick={() => setPendingDelete({ id: tenant.id, name: tenant.name })}
+                              onClick={() => {
+                                setDeleteError(null);
+                                setPendingDelete({ id: tenant.id, name: tenant.name });
+                              }}
                               className="p-2 text-gray-400 hover:text-indigo-600 rounded-lg hover:bg-indigo-50"
                               title={t("saas.delete_action")}
                             >
@@ -552,12 +578,64 @@ export default function TenantsPage() {
       <ConfirmDialog
         open={!!pendingDelete}
         title={pendingDelete ? t("saas.deleteConfirm", { name: pendingDelete.name }) : ""}
-        confirmLabel={t("saas.delete_tenant")}
+        description={
+          deleteError ? (
+            <p role="alert" className="text-red-700">
+              <strong>{t("saas.console.delete_failed")}:</strong> {deleteError}
+            </p>
+          ) : undefined
+        }
+        confirmLabel={deleteError ? t("saas.console.retry") : t("saas.delete_tenant")}
         cancelLabel={t("common.cancel")}
         destructive
         loading={deleting}
-        onCancel={() => setPendingDelete(null)}
+        onCancel={() => {
+          setPendingDelete(null);
+          setDeleteError(null);
+        }}
         onConfirm={performDelete}
+      />
+
+      <ConfirmDialog
+        open={!!pendingStatus}
+        title={
+          pendingStatus
+            ? t(pendingStatus.action === "suspend" ? "saas.console.suspend_title" : "saas.console.reactivate_title", {
+                name: pendingStatus.tenant.name,
+              })
+            : ""
+        }
+        description={
+          pendingStatus?.action === "suspend" ? (
+            t("saas.console.suspend_desc")
+          ) : pendingStatus ? (
+            <div className="space-y-3">
+              <p>{t("saas.console.reactivate_desc")}</p>
+              {pendingStatus.tenant.deletionRequestedAt && (
+                <div className="rounded border border-amber-200 bg-amber-50 p-3 text-amber-900">
+                  <p>
+                    {t("saas.console.pending_deletion_warning", {
+                      date: formatDateEs(pendingStatus.tenant.deletionRequestedAt),
+                    })}
+                  </p>
+                  <label className="mt-2 flex items-center gap-2">
+                    <input type="checkbox" checked={cancelDeletion} onChange={(e) => setCancelDeletion(e.target.checked)} />
+                    {t("saas.console.cancel_deletion_checkbox")}
+                  </label>
+                </div>
+              )}
+            </div>
+          ) : undefined
+        }
+        confirmLabel={t(pendingStatus?.action === "suspend" ? "saas.suspend_action" : "saas.reactivate_action")}
+        cancelLabel={t("common.cancel")}
+        destructive={pendingStatus?.action === "suspend"}
+        loading={statusBusy}
+        confirmDisabled={
+          pendingStatus?.action === "reactivate" && !!pendingStatus.tenant.deletionRequestedAt && !cancelDeletion
+        }
+        onCancel={() => setPendingStatus(null)}
+        onConfirm={performStatus}
       />
     </div>
   );

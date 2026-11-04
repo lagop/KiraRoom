@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import apiClient from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
+import { tenantStatusKey } from "@/lib/saas-tenant";
 
 interface TenantStats {
   tenantId: string;
@@ -70,7 +71,7 @@ export default function TenantAnalyticsPage() {
         <div className="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
           <p className="text-red-600">{error || t("saas.statsNotFound")}</p>
           <Link href="/saas/tenants" className="text-indigo-600 hover:underline mt-4 inline-block">
-            Back to Salons
+            {t("saas.console.back_to_salons")}
           </Link>
         </div>
       </div>
@@ -83,32 +84,35 @@ export default function TenantAnalyticsPage() {
 
   const statCards = [
     {
-      title: "Total Revenue",
+      title: t("saas.console.total_revenue"),
       value: formatCurrency(stats.totalRevenue),
       icon: DollarSign,
-      change: `${formatCurrency(stats.revenueThisMonth)} this month`,
+      change: t("saas.console.this_month_amount", { amount: formatCurrency(stats.revenueThisMonth) }),
       changeValue: stats.revenueChange,
-      changeLabel: "vs last month",
+      changeLabel: t("saas.console.vs_last_month"),
     },
     {
-      title: "Total Appointments",
-      value: stats.totalAppointments.toLocaleString(),
+      title: t("saas.console.total_appointments"),
+      value: stats.totalAppointments.toLocaleString("es-ES"),
       icon: Calendar,
-      change: `${stats.appointmentsThisMonth} this month`,
+      change: t("saas.console.this_month_count", { count: stats.appointmentsThisMonth }),
       changeValue: stats.appointmentsChange,
-      changeLabel: "vs last month",
+      changeLabel: t("saas.console.vs_last_month"),
     },
     {
-      title: "Total Clients",
-      value: stats.totalClients.toLocaleString(),
+      title: t("saas.console.total_clients"),
+      value: stats.totalClients.toLocaleString("es-ES"),
       icon: Users,
       change: t("saas.registeredClients"),
     },
     {
-      title: "Subscription Plan",
+      title: t("saas.console.subscription_plan"),
       value: stats.plan.charAt(0).toUpperCase() + stats.plan.slice(1),
       icon: Building2,
-      change: stats.subscriptionStatus,
+      change: (() => {
+        const key = tenantStatusKey(stats.subscriptionStatus);
+        return key ? t(key) : stats.subscriptionStatus;
+      })(),
     },
   ];
 
@@ -117,12 +121,13 @@ export default function TenantAnalyticsPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:space-x-4">
         <Link
           href={`/saas/tenants/${tenantId}`}
+          aria-label={t("saas.back")}
           className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors self-start sm:self-auto"
         >
           <ArrowLeft className="w-5 h-5" />
         </Link>
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold text-gray-900 truncate">Analytics</h1>
+          <h1 className="text-2xl font-bold text-gray-900 truncate">{t("saas.console.analytics")}</h1>
           <p className="text-gray-500 truncate">{stats.tenantName}</p>
         </div>
       </div>
@@ -158,18 +163,18 @@ export default function TenantAnalyticsPage() {
       {/* Monthly Comparison */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
         <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Revenue Comparison</h2>
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">{t("saas.console.revenue_comparison")}</h2>
           <div className="space-y-4">
             <div className="flex justify-between items-center">
-              <span className="text-gray-600">This Month</span>
+              <span className="text-gray-600">{t("saas.console.this_month")}</span>
               <span className="font-semibold text-gray-900">{formatCurrency(stats.revenueThisMonth)}</span>
             </div>
             <div className="flex justify-between items-center">
-              <span className="text-gray-600">Last Month</span>
+              <span className="text-gray-600">{t("saas.console.last_month")}</span>
               <span className="font-semibold text-gray-900">{formatCurrency(stats.revenueLastMonth)}</span>
             </div>
             <div className="border-t pt-4 flex justify-between items-center">
-              <span className="text-gray-600">Change</span>
+              <span className="text-gray-600">{t("saas.console.change")}</span>
               <span className={`font-semibold ${stats.revenueChange >= 0 ? "text-indigo-600" : "text-red-600"}`}>
                 {stats.revenueChange >= 0 ? "+" : ""}{stats.revenueChange}%
               </span>
@@ -178,18 +183,18 @@ export default function TenantAnalyticsPage() {
         </div>
 
         <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Appointments Comparison</h2>
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">{t("saas.console.appointments_comparison")}</h2>
           <div className="space-y-4">
             <div className="flex justify-between items-center">
-              <span className="text-gray-600">This Month</span>
+              <span className="text-gray-600">{t("saas.console.this_month")}</span>
               <span className="font-semibold text-gray-900">{stats.appointmentsThisMonth}</span>
             </div>
             <div className="flex justify-between items-center">
-              <span className="text-gray-600">Last Month</span>
+              <span className="text-gray-600">{t("saas.console.last_month")}</span>
               <span className="font-semibold text-gray-900">{stats.appointmentsLastMonth}</span>
             </div>
             <div className="border-t pt-4 flex justify-between items-center">
-              <span className="text-gray-600">Change</span>
+              <span className="text-gray-600">{t("saas.console.change")}</span>
               <span className={`font-semibold ${stats.appointmentsChange >= 0 ? "text-indigo-600" : "text-red-600"}`}>
                 {stats.appointmentsChange >= 0 ? "+" : ""}{stats.appointmentsChange}%
               </span>
