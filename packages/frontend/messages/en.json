@@ -471,7 +471,7 @@
   "signup": {
     "badge": "14-day free trial",
     "title": "Create your account",
-    "subtitle": "Start in 30 seconds. No card, no commitment.",
+    "subtitle": "Start in 30 seconds, no card and no commitment. For 14 days you get the Pro plan's features, with 500 AI receptionist messages.",
     "fields": {
       "salon": "Salon name",
       "owner": "Your name",
@@ -714,10 +714,16 @@
     "checkoutReturn": {
       "successTitle": "Payment received",
       "successBody": "We are activating your plan: you will see it here in a few seconds.",
+      "cardSavedTitle": "Card saved: the first charge will be on {date}",
+      "cardSavedBody": "Until then you keep your trial and nothing is charged.",
+      "pendingTitle": "Stripe has not confirmed the payment yet",
+      "pendingBody": "We are checking it. If your plan does not show here in a few minutes, reload the page or write to us.",
+      "slowBody": "Stripe has confirmed the payment, but your plan is taking a while to activate. Reload the page in a minute.",
       "cancelTitle": "The payment was not completed",
       "cancelBody": "Nothing was charged and your plan is as it was."
     },
     "plusVat": "+ VAT",
+    "desiredPlanBadge": "Your pick",
     "trialSubscribedNote": "You have subscribed to {plan}. You keep the Pro trial until {date}; your plan and the first charge start that day.",
     "limits": {
       "title": "Before moving to {plan}",

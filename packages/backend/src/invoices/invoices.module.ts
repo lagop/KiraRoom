@@ -18,6 +18,8 @@ import { SiiService } from "./fiscal/sii.service";
 import { XadesService } from "./fiscal/xades.service";
 import { QrService } from "./fiscal/qr.service";
 import { TaxReportsModule } from "./tax-reports/tax-reports.module";
+// Saving the fiscal identity updates the salon's Stripe customer (B1).
+import { PlatformModule } from "../platform/platform.module";
 
 /**
  * Bind the dispatch callback the retry queue needs on module init.
@@ -53,7 +55,7 @@ class InvoicesModuleInit implements OnModuleInit {
 }
 
 @Module({
-  imports: [PrismaModule, AccountingModule, NotificationsModule, TaxReportsModule],
+  imports: [PrismaModule, AccountingModule, NotificationsModule, TaxReportsModule, PlatformModule],
   controllers: [InvoicesController],
   providers: [
     InvoiceService,

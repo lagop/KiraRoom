@@ -1,9 +1,10 @@
-﻿import { Injectable, NotFoundException, BadRequestException, ConflictException, HttpException, ServiceUnavailableException } from '@nestjs/common';
+﻿import { Injectable, Logger, NotFoundException, BadRequestException, ConflictException, HttpException, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import Stripe from 'stripe';
 import { cancelAtOf, checkoutTrialEnd, hasLivePlanSubscription, isAddOnItem, planItemOf } from '../plan-activation';
 import { PlatformStripeConfigService } from '../../platform/platform-stripe-config.service';
+import { billingCustomerDetails, syncBillingCustomer, syncBillingTaxId } from '../billing-customer';
 import { aiConversationsApprox, aiMessageCap, formatCountEs, PLAN_AI_CONVERSATIONS } from '@kira/shared';
 
 /** "500 mensajes al mes, unas 70 conversaciones", as kiraroom.com puts it. */
@@ -228,8 +229,13 @@ export const PLAN_MATRIX: Record<PlanId, ReadonlyArray<FeatureKey>> = {
   enterprise: ['whatsapp_notifications','sms_notifications','email_marketing','whatsapp_marketing','virtual_receptionist','loyalty','promotions','gift_cards','wallet','commissions','advanced_analytics','agenda_shifts','multi_location','consolidated_reports','api_access','white_label','custom_branding'],
 };
 
+/** A Stripe Checkout session id, as Stripe puts it in the success URL. */
+const CHECKOUT_SESSION_ID = /^cs_(test|live)_[A-Za-z0-9]{1,200}$/;
+
 @Injectable()
 export class SubscriptionsService {
+  private readonly logger = new Logger(SubscriptionsService.name);
+
   /**
    * KiraRoom's Stripe account, set in the platform console (else .env).
    * Read on every use, so a new key or a switch to live works at once.
@@ -354,10 +360,22 @@ export class SubscriptionsService {
    * correctly for EU business customers outside Spain.
    */
   private taxOptions(): Record<string, unknown> {
-    if (!this.platformStripe.current().taxEnabled) return {};
+    // The NIF is asked whatever the tax switch says (B1): a Spanish payer
+    // must give it (required "if_supported", Stripe asks it in the
+    // countries where it can check one), and Checkout saves the business
+    // name and NIF on the customer (customer_update.name, which Stripe
+    // requires with tax_id_collection on an existing customer). Whether the
+    // prices carry VAT on top (tax_behavior) is still an open decision, so
+    // it is not set here.
+    const taxId = {
+      tax_id_collection: { enabled: true, required: 'if_supported' },
+    };
+    if (!this.platformStripe.current().taxEnabled) {
+      return { ...taxId, customer_update: { name: 'auto' } };
+    }
     return {
       automatic_tax: { enabled: true },
-      tax_id_collection: { enabled: true },
+      ...taxId,
       customer_update: { name: "auto", address: "auto" },
     };
   }
@@ -444,6 +462,123 @@ export class SubscriptionsService {
     };
   }
 
+  /**
+   * What the whole team's panel needs to know about the plan (B2): the plan
+   * in force, the status, the trial and the read-only window, and the
+   * add-ons. No Stripe ids, prices or invoices: those stay on the owner's
+   * getSubscription. Admins and staff used to get a 403 here, and their
+   * panel fell back to "esencial / cancelled": paid features locked on
+   * screen and no read-only notice.
+   */
+  async getSubscriptionContext(tenantId: string) {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: {
+        plan: true,
+        subscriptionStatus: true,
+        trialEnd: true,
+        readOnlyUntil: true,
+        cancelledAt: true,
+        subscriptionCancelAt: true,
+        stripeSubscriptionId: true,
+        addons: true,
+        tenantAddOns: {
+          where: { status: 'active' },
+          select: { addOn: { select: { key: true, unlocks: true } } },
+        },
+      },
+    });
+    if (!tenant) {
+      throw new NotFoundException('Tenant not found');
+    }
+    const inTrial =
+      tenant.subscriptionStatus === 'trialing' &&
+      !!tenant.trialEnd &&
+      tenant.trialEnd.getTime() > Date.now();
+
+    const addOnKeys: string[] = [];
+    const unlocks = new Set<string>();
+    for (const row of tenant.tenantAddOns ?? []) {
+      if (row.addOn?.key) addOnKeys.push(row.addOn.key);
+      if (Array.isArray(row.addOn?.unlocks)) {
+        for (const k of row.addOn.unlocks) if (typeof k === 'string') unlocks.add(k);
+      }
+    }
+    // The legacy JSON column only ever mattered for web_domain; nothing
+    // else of it goes out.
+    const legacy = (tenant.addons as Record<string, any> | null) ?? {};
+    if (legacy?.web_domain?.enabled) unlocks.add('web_domain');
+
+    return {
+      plan: this.normalizePlan(tenant.plan),
+      effectivePlan: this.effectivePlan(tenant.plan, inTrial),
+      status: tenant.subscriptionStatus,
+      inTrial,
+      trialEnd: tenant.trialEnd,
+      readOnlyUntil: tenant.readOnlyUntil,
+      cancelledAt: tenant.cancelledAt,
+      cancelAt: tenant.subscriptionCancelAt ?? null,
+      // A paid subscription exists (it may have been taken in the trial).
+      subscribed: !!tenant.stripeSubscriptionId && tenant.subscriptionStatus !== 'cancelled',
+      addOns: addOnKeys,
+      addOnFeatures: [...unlocks],
+    };
+  }
+
+  /**
+   * Back from a plan checkout (B15): what Stripe says about that session,
+   * so the billing page can tell "card saved, first charge on <date>" from
+   * "paid", and keep waiting for the webhook only when Stripe has really
+   * completed it. Only the salon's own sessions are answered; the plan
+   * itself is still applied by the webhook alone.
+   */
+  async getCheckoutSessionStatus(tenantId: string, sessionId: string) {
+    if (!CHECKOUT_SESSION_ID.test(sessionId ?? '')) {
+      throw new BadRequestException('Sesión de pago no válida.');
+    }
+    const stripe = this.requireStripe();
+    let session: Stripe.Checkout.Session;
+    try {
+      session = await stripe.checkout.sessions.retrieve(sessionId, { expand: ['subscription'] });
+    } catch (err) {
+      if ((err as { code?: string })?.code === 'resource_missing') {
+        throw new NotFoundException('No encontramos esa sesión de pago.');
+      }
+      throw new ServiceUnavailableException('No hemos podido consultar el pago con Stripe. Vuelve a cargar la página en un momento.');
+    }
+    const owner = session.metadata?.tenantId ?? session.client_reference_id ?? null;
+    if (owner !== tenantId || session.mode !== 'subscription') {
+      throw new NotFoundException('No encontramos esa sesión de pago.');
+    }
+
+    const subscription =
+      session.subscription && typeof session.subscription === 'object'
+        ? (session.subscription as Stripe.Subscription)
+        : null;
+    const subscriptionId =
+      typeof session.subscription === 'string' ? session.subscription : subscription?.id ?? null;
+    const trialEndUnix = subscription?.trial_end ?? null;
+    const firstChargeAt =
+      subscription?.status === 'trialing' && trialEndUnix ? new Date(trialEndUnix * 1000) : null;
+
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { stripeSubscriptionId: true },
+    });
+
+    return {
+      // open: not finished; complete: card taken (and paid unless in trial); expired.
+      status: session.status,
+      paymentStatus: session.payment_status,
+      plan: this.normalizePlan(session.metadata?.plan),
+      // Subscribed during the free trial: nothing charged, the first charge
+      // comes the day the trial ends.
+      firstChargeAt,
+      // The webhook has applied it: the salon's stored subscription is this one.
+      applied: !!subscriptionId && tenant?.stripeSubscriptionId === subscriptionId,
+    };
+  }
+
   async createCheckoutSession(
     tenantId: string,
     plan: string,
@@ -489,13 +624,17 @@ export class SubscriptionsService {
 
     let customerId = tenant.stripeCustomerId;
 
+    // Billed as the razón social, with the NIF and address from Ajustes >
+    // Fiscal when the salon has them (B1).
+    const billing = billingCustomerDetails(tenant);
     if (!customerId) {
       const customer = await this.stripe.customers.create({
         metadata: {
           tenantId,
         },
         email: tenant.email,
-        name: tenant.name,
+        name: billing.name,
+        ...(billing.address ? { address: billing.address } : {}),
       });
       customerId = customer.id;
 
@@ -503,7 +642,14 @@ export class SubscriptionsService {
         where: { id: tenantId },
         data: { stripeCustomerId: customerId },
       });
+      // Separately and best effort: Stripe refusing the NIF must not stop
+      // the checkout (Checkout then asks for it).
+      if (billing.taxId) {
+        await syncBillingTaxId(this.stripe, customerId, billing.taxId, this.logger);
+      }
     } else {
+      // The identity may have changed since the customer was created.
+      await syncBillingCustomer(this.stripe, customerId, tenant, this.logger);
       // Two plan checkouts left open side by side could both be paid: two
       // subscriptions billing the same salon. Only the newest stays open
       // (the webhook also cancels a second one that gets through).
@@ -554,7 +700,9 @@ export class SubscriptionsService {
           locationCount: String(quantity),
         },
       },
-      success_url: `${this.configService.get('FRONTEND_URL', 'http://localhost:3000')}/dashboard/billing?subscription=success`,
+      // Stripe fills {CHECKOUT_SESSION_ID} in: the page checks that session
+      // on return (getCheckoutSessionStatus) instead of guessing (B15).
+      success_url: `${this.configService.get('FRONTEND_URL', 'http://localhost:3000')}/dashboard/billing?subscription=success&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${this.configService.get('FRONTEND_URL', 'http://localhost:3000')}/dashboard/billing?subscription=cancelled`,
       // VAT (H5). Nothing added the 21% or collected a NIF, so a product
       // whose whole pitch is Spanish tax compliance was not charging tax on
